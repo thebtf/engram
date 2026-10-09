@@ -1,10 +1,10 @@
-import { onBeforeUnmount, onMounted, ref, unref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, unref, watch } from 'vue'
 import { operatorApiUrl } from './useOperatorApi'
 
 export type CodeBootstrapPhase = 'idle' | 'binding' | 'ready' | 'collision' | 'ambiguous' | 'reload-pending' | 'denied' | 'secure-origin-required' | 'identity-unavailable' | 'error'
 export type CodePresentationKind = 'idle' | 'loading' | 'ready' | 'empty' | 'partial' | 'stale' | 'denied' | 'unsupported' | 'timeout' | 'offline' | 'error'
 
-export type CodeCatalogState = 'idle' | 'loading' | 'ready' | 'empty' | 'denied' | 'unavailable' | 'offline'
+export type CodeCatalogState = 'idle' | 'loading' | 'ready' | 'empty' | 'denied' | 'unavailable' | 'offline' | 'switch-rejected' | 'snapshot-rejected'
 
 export interface CodeResponseContext {
   sourceId: string
@@ -901,6 +901,7 @@ export function useOperatorCode() {
   const contextState = ref<CodeCatalogState>('idle')
   const contextCandidate = ref<CodeSafeContext | null>(null)
   const pinnedContext = ref<CodeSafeContext | null>(null)
+  const suspendedContext = ref<{ pin: CodeSafeContext; response: CodeResponseContext | null } | null>(null)
   const status = ref<CodeStatus | null>(null)
   const structureEnvelope = ref<CodeEnvelope | null>(null)
   const searchEnvelope = ref<CodeEnvelope | null>(null)
@@ -921,6 +922,7 @@ export function useOperatorCode() {
   const indexIntentState = ref<IndexIntentPresentationState>(indexIntentNotice('idle'))
   const indexIntentPending = ref(false)
   const indexIntentResume = ref<IndexIntentResume | null>(loadIndexIntentResume())
+  const indexIntentVisible = computed(() => suspendedContext.value === null || indexIntentResume.value?.target !== undefined)
   let indexIntentPollTimer: number | null = null
   let indexIntentPollGeneration = 0
   let indexIntentPollCount = 0
@@ -939,9 +941,9 @@ export function useOperatorCode() {
   function contextualRequestOwner(): () => boolean {
     const generation = contextualGeneration
     const current = binding.value
-    const pinned = pinnedContext.value ?? remountState?.pinnedContext ?? null
+    const pinned = pinnedContext.value ?? suspendedContext.value?.pin ?? remountState?.pinnedContext ?? null
     return () => !unmounted && generation === contextualGeneration && binding.value === current
-      && (pinnedContext.value ?? remountState?.pinnedContext ?? null) === pinned
+      && (pinnedContext.value ?? suspendedContext.value?.pin ?? remountState?.pinnedContext ?? null) === pinned
   }
 
   watch(pending, (busy) => {
@@ -983,10 +985,7 @@ export function useOperatorCode() {
     }
     stopLeaseRenewal()
     binding.value = null
-    pinnedContext.value = null
-    clearContextualResults()
-    clearIndexIntent()
-    clearPersistedPinCandidate()
+    clearPinnedContext()
     bootstrapPhase.value = result.kind === 'denied' ? 'denied' : 'error'
     bootstrapEvidence.value = { ...bootstrapEvidence.value, transition: 'TAB_LEASE_RENEWAL_FAILED' }
   }
@@ -1055,6 +1054,7 @@ export function useOperatorCode() {
   }
 
   function clearPinnedContext(): void {
+    suspendedContext.value = null
     pinnedContext.value = null
     remountState = null
     clearContextualResults()
@@ -1063,6 +1063,11 @@ export function useOperatorCode() {
   }
 
   function matchesPinnedResponse(envelope: CodeEnvelope): boolean {
+    if (envelope.status === 'context_required' || envelope.status === 'forbidden') {
+      clearPinnedContext()
+      contextState.value = 'snapshot-rejected'
+      return false
+    }
     if (envelope.context === null) return false
     if (pinnedResponseContext.value !== null && !sameView(pinnedResponseContext.value, envelope.context)) return false
     pinnedResponseContext.value = envelope.context
@@ -1268,6 +1273,7 @@ export function useOperatorCode() {
     contextState.value = 'idle'
     contextCandidate.value = null
     pinnedContext.value = null
+    suspendedContext.value = null
     clearContextualResults()
     if (transition.state === 'RELOAD_PENDING') {
       bootstrapPhase.value = 'reload-pending'
@@ -1347,8 +1353,8 @@ export function useOperatorCode() {
     const payload = bindingPayload()
     if (payload === null || pending.value) return
     const selected = contextCandidate.value
-    const pinned = pinnedContext.value ?? remountState?.pinnedContext ?? null
-    const restoring = pinnedContext.value === null && pinned !== null
+    const pinned = pinnedContext.value ?? suspendedContext.value?.pin ?? remountState?.pinnedContext ?? null
+    const restoring = pinnedContext.value === null && suspendedContext.value === null && pinned !== null
     contextCandidate.value = null
     contextCatalog.value = []
     contextState.value = 'loading'
@@ -1374,7 +1380,7 @@ export function useOperatorCode() {
       contextCandidate.value = refreshedContext(catalog, selected)
       if (contextCandidate.value === null && pinned === null) clearPersistedPinCandidate()
     }
-    if (pinned !== null) {
+    if (pinned !== null && suspendedContext.value === null) {
       const refreshed = restoring ? null : refreshedContext(catalog, pinned)
       if (refreshed !== null) {
         pinnedContext.value = refreshed
@@ -1390,6 +1396,13 @@ export function useOperatorCode() {
   }
 
   function selectContext(context: CodeSafeContext | null): void {
+    if (context === null || context.viewRef !== pinnedContext.value?.viewRef) {
+      if (pinnedContext.value !== null) suspendedContext.value = { pin: pinnedContext.value, response: pinnedResponseContext.value }
+      pinnedContext.value = null
+      clearContextualResults()
+      stopIndexIntentPolling()
+      indexIntentPending.value = false
+    }
     contextCandidate.value = context
   }
 
@@ -1491,6 +1504,7 @@ export function useOperatorCode() {
     const selected = contextCandidate.value
     if (binding.value === null || contextState.value !== 'ready' || selected === null || pending.value) return
     const ownsRequest = contextualRequestOwner()
+    const previous = suspendedContext.value
     pending.value = true
     const result = await request(`/code/tabs/${encodeURIComponent(binding.value.tabBindingId)}/context`, 'PUT', {
       document_proof: binding.value.documentProof,
@@ -1499,11 +1513,28 @@ export function useOperatorCode() {
     if (!ownsRequest()) return
     pending.value = false
     if (result.kind !== 'success' || result.status !== 204) {
-      contextState.value = result.kind === 'denied' ? 'denied' : result.kind === 'offline' ? 'offline' : 'unavailable'
+      if (previous !== null) {
+        suspendedContext.value = null
+        pinnedContext.value = previous.pin
+        contextCandidate.value = previous.pin
+        clearContextualResults()
+        pinnedResponseContext.value = previous.response
+        const ownsRestore = contextualRequestOwner()
+        if (await refreshStatus() && ownsRestore()) {
+          await requestStructure(null)
+          if (!ownsRestore()) return
+          await refreshIndexIntent()
+        }
+        if (ownsRestore() && pinnedContext.value !== null) contextState.value = 'switch-rejected'
+      } else {
+        clearPinnedContext()
+        contextState.value = result.kind === 'offline' ? 'offline' : result.kind === 'denied' || result.status === 409 ? 'snapshot-rejected' : 'unavailable'
+      }
       return
     }
     clearIndexIntent()
     remountState = null
+    suspendedContext.value = null
     pinnedContext.value = selected
     persistPinnedContext(selected)
     clearContextualResults()
@@ -1518,7 +1549,7 @@ export function useOperatorCode() {
     const payload = bindingPayload()
     const pinned = pinnedContext.value ?? remountState?.pinnedContext ?? null
     const restoring = pinnedContext.value === null
-    if (payload === null || pinned === null || pending.value
+    if (payload === null || pinned === null || pending.value || suspendedContext.value !== null
       || restoring && current?.tabBindingId !== remountState?.tabBindingId) return false
     const ownsRequest = contextualRequestOwner()
     pending.value = true
@@ -1527,8 +1558,10 @@ export function useOperatorCode() {
     pending.value = false
     const checkedStatus = result.kind === 'success' ? parseStatus(result.body) : null
     if (checkedStatus === null) {
-      if (result.kind === 'denied' || result.status === 409) clearPinnedContext()
-      contextState.value = result.kind === 'denied' ? 'denied' : result.kind === 'offline' ? 'offline' : 'unavailable'
+      if (result.kind === 'denied' || result.status === 409) {
+        clearPinnedContext()
+        contextState.value = 'snapshot-rejected'
+      } else contextState.value = result.kind === 'offline' ? 'offline' : 'unavailable'
       return false
     }
     status.value = checkedStatus
@@ -1557,6 +1590,7 @@ export function useOperatorCode() {
     if (!ownsRequest()) return
     pending.value = false
     if (result.kind !== 'success') {
+      if (result.status === 409) { clearPinnedContext(); contextState.value = 'snapshot-rejected'; return }
       if (continuation !== null && result.kind === 'denied') structureContinuationNotice.value = 'denied'
       if (continuation !== null && result.kind === 'error') structureContinuationNotice.value = 'unavailable'
       structureState.value = presentation(result.kind, 'No contextual structure was released.')
@@ -1592,11 +1626,15 @@ export function useOperatorCode() {
     searchEnvelope.value = null
     graphEnvelope.value = null
     sourceEnvelope.value = null
+    activeGraphRequest.value = null
+    graphState.value = presentation('idle', 'Choose a released result to explore relationships.')
+    sourceState.value = presentation('idle', 'Choose a released result to read an exact source span.')
     searchContinuationNotice.value = null
     const result = await request('/code/search', 'POST', payload)
     if (!ownsRequest()) return
     pending.value = false
     if (result.kind !== 'success') {
+      if (result.status === 409) { clearPinnedContext(); contextState.value = 'snapshot-rejected'; return }
       if (continuation !== null && result.kind === 'denied') searchContinuationNotice.value = 'denied'
       if (continuation !== null && result.kind === 'error') searchContinuationNotice.value = 'unavailable'
       searchState.value = presentation(result.kind, 'No contextual search body was released.')
@@ -1642,10 +1680,14 @@ export function useOperatorCode() {
     const ownsRequest = contextualRequestOwner()
     pending.value = true
     graphState.value = presentation('loading', 'Waiting for the server to release graph evidence.')
+    graphEnvelope.value = null
+    sourceEnvelope.value = null
+    sourceState.value = presentation('idle', 'Choose a released result to read an exact source span.')
     const result = await request('/code/graph', 'POST', payload)
     if (!ownsRequest()) return
     pending.value = false
     if (result.kind !== 'success') {
+      if (result.status === 409) { clearPinnedContext(); contextState.value = 'snapshot-rejected'; return }
       graphEnvelope.value = null
       activeGraphRequest.value = null
       graphState.value = presentation(result.kind, 'No relationship facts were released.')
@@ -1697,10 +1739,12 @@ export function useOperatorCode() {
     const ownsRequest = contextualRequestOwner()
     pending.value = true
     sourceState.value = presentation('loading', 'Waiting for the server to release the exact source span.')
+    sourceEnvelope.value = null
     const result = await request('/code/source', 'POST', payload)
     if (!ownsRequest()) return
     pending.value = false
     if (result.kind !== 'success') {
+      if (result.status === 409) { clearPinnedContext(); contextState.value = 'snapshot-rejected'; return }
       sourceEnvelope.value = null
       sourceState.value = presentation(result.kind, 'No source body was released.')
       return
@@ -1740,7 +1784,7 @@ export function useOperatorCode() {
       const retained = spaRemount ?? remountState
       spaRemount = {
         tabBindingId: binding.value?.tabBindingId ?? retained?.tabBindingId ?? null,
-        pinnedContext: pinnedContext.value ?? retained?.pinnedContext ?? null,
+        pinnedContext: pinnedContext.value ?? suspendedContext.value?.pin ?? retained?.pinnedContext ?? null,
       }
     }
     stopIndexIntentPolling()
@@ -1756,6 +1800,7 @@ export function useOperatorCode() {
     contextState,
     contextCandidate,
     pinnedContext,
+    indexIntentVisible,
     status,
     structureEnvelope,
     searchEnvelope,

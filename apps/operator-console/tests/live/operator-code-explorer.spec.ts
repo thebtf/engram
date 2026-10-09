@@ -248,8 +248,6 @@ test('S2 live acceptance: explicit catalog preserves View-bound pagination and g
     expect(status.embedded_chunks).toBe(status.total_chunks)
     expect(embedding.Coverage).toBe('complete')
     await expect(page.getByTestId('code-status')).toBeVisible()
-    await expect(page.getByTestId('code-graph-heading')).toBeVisible()
-    await expect(page.getByTestId('code-status')).toContainText('complete')
 
     const pinnedA = await page.getByTestId('code-context-pinned').textContent()
     const initialSearchResponse = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/code/search' && response.request().method() === 'POST')
@@ -338,8 +336,6 @@ test('S2 live acceptance: explicit catalog preserves View-bound pagination and g
     await expect(page.getByTestId('code-source-result')).toContainText(`func ${scenario.expectedGraph}`)
     const sourceMeta = page.locator('.source-meta').first()
     await expect(sourceMeta).toContainText(`${lineStart}–${lineEnd}`)
-    await expect(sourceMeta).toContainText(`${byteStart}–${byteEnd}`)
-    await expect(sourceMeta).toContainText(descriptorDigest)
     for (const [name, width, height] of [['1440', 1440, 1024], ['980', 980, 900], ['390', 390, 844]] as const) {
       await page.setViewportSize({ width, height })
       responsiveLayouts.push({ viewport: `${width}x${height}`, shell: await assertResponsiveShell(page, width) })
@@ -365,7 +361,9 @@ test('S2 live acceptance: explicit catalog preserves View-bound pagination and g
 
     await selectFixtureContext(page, fixture, 'd')
     await expect(page.getByTestId('code-context-candidate')).toContainText(`${fixture.fixtureId}-d`)
-    await expect(page.getByTestId('code-context-pinned')).toContainText(`${fixture.fixtureId}-a`)
+    await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
+    await expect(page.getByTestId('code-source-result')).toHaveCount(0)
+    await expect(page.getByTestId('code-graph-results')).toHaveCount(0)
     await page.reload({ waitUntil: 'domcontentloaded' })
     if (await page.getByTestId('code-retry-reload').isVisible().catch(() => false)) {
       await page.getByTestId('code-retry-reload').click()

@@ -56,6 +56,13 @@ The [responsive-layout receipt](../../specs/011-operator-code-console/acceptance
   graph/book records are not relabeled as code facts.
 - Manual graph writers and plaintext book intake are retired at UI and executable
   boundaries; their historical documents/provenance/readers remain governed by Feature 011.
+- Workspace uses one result area with related relation/source panels. Mobile panel controls,
+  Back and Escape preserve the query and selection; source code scrolls inside its viewer.
+- Choosing another context hides the previous released bodies and readiness immediately.
+  The previous server-confirmed pin remains private until the switch is accepted. A refused
+  switch returns to that scope and rechecks it; rejection of the current snapshot clears its
+  authority and requires fresh catalog selection and explicit confirmation.
+
 
 ## Build and host boundary
 
@@ -105,3 +112,8 @@ unique `mock-rule-session` cookie before loading Rules so parallel contexts cann
 one another's selected operation. Secrets browser tests use a separate `mock-vault-session`
 cookie so concurrent reveal and delete journeys do not mutate one another's fixture vault.
 These mock cookies are test-only and grant no authority.
+
+The focused `tests/browser/code-workbench.spec.ts` fixture exercises keyboard/mobile
+navigation, same-View source descriptors, late-response isolation, refused historical
+switch recovery, and current-snapshot rejection. This is UI-layer smoke evidence, not a
+real-API, physical-LAN, semantic-provider, installed or release acceptance claim.

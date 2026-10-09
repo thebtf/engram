@@ -421,7 +421,7 @@ for (const reauthorization of ['ready', 'unavailable', 'malformed', 'denied', 'm
     await page.locator('a[href="/code"]').first().click()
     await expect(page).toHaveURL(/\/code$/)
     if (reauthorization !== 'ready') {
-      await expect(page.locator('main.code-page')).toHaveAttribute('data-catalog-state', reauthorization === 'denied' ? 'denied' : 'unavailable')
+      await expect(page.locator('main.code-page')).toHaveAttribute('data-catalog-state', reauthorization === 'denied' || reauthorization === 'mismatch' ? 'snapshot-rejected' : 'unavailable')
       await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
       await expect(page.getByTestId('code-query-input')).toHaveCount(0)
       await expect(page.getByRole('button', { name: 'Обновить статус', exact: true })).toBeDisabled()

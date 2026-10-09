@@ -619,11 +619,6 @@ test('Code Explorer resumes a same-document SPA remount but isolates copied stor
   expect(pinPayloads).toEqual([{ document_proof: DOCUMENT_PROOF, selection_ref: 'context-current' }])
   await expect(page.getByTestId('code-context-pinned')).toContainText('Current snapshot')
   await expect(page.locator('.readiness')).toHaveAttribute('data-state', 'unknown')
-  await page.getByTestId('code-context-repository').selectOption({ label: 'Other repository' })
-  await page.getByTestId('code-context-working-copy').selectOption({ label: 'D working copy' })
-  await page.getByTestId('code-context-snapshot').selectOption({ label: 'D snapshot' })
-  await expect(page.getByTestId('code-context-candidate')).toContainText('D snapshot')
-  await expect(page.getByTestId('code-context-pinned')).toContainText('Current snapshot')
   await page.getByTestId('index-intent-reindex').click()
   await expect(page.getByTestId('index-intent-state')).toHaveAttribute('data-state', 'queued')
 
