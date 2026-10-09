@@ -26,7 +26,7 @@ Recovery is delivered through the operator-required AR-1 through AR-7 installed 
 
 ## Technical Context
 
-**Language/Version**: Go 1.26.6; JavaScript hooks and TypeScript client/UI consumers remain
+**Language/Version**: Go 1.26.9; JavaScript hooks and TypeScript client/UI consumers remain
 compatibility boundaries.  
 **Primary Dependencies**: GORM/gormigrate, PostgreSQL driver, gRPC/protobuf, Chi HTTP router,
 MCP proxy/daemon modules, existing provider ports.  

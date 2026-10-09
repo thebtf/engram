@@ -254,7 +254,7 @@ export ENGRAM_URL=http://your-server:37777
 
 ### Сборка из исходников
 
-Требуется Go 1.26.6+ и Node.js (для dashboard).
+Требуется Go 1.26.9+ и Node.js (для dashboard).
 
 ```bash
 git clone https://github.com/thebtf/engram.git && cd engram

@@ -462,8 +462,8 @@ func assertNoFloatingProvenance(t *testing.T, rawManifest []byte, dependencies [
 func assertToolchainProvenance(t *testing.T, toolchain parserToolchain) {
 	t.Helper()
 
-	if toolchain.ModuleGoVersion != "1.26.6" {
-		t.Fatalf("module_go_version = %q, want 1.26.6", toolchain.ModuleGoVersion)
+	if toolchain.ModuleGoVersion != "1.26.9" {
+		t.Fatalf("module_go_version = %q, want 1.26.9", toolchain.ModuleGoVersion)
 	}
 	if !toolchain.RequiresCGO {
 		t.Fatal("parser manifest must declare the CGO requirement")
@@ -494,7 +494,7 @@ func assertDependencyProvenance(t *testing.T, repoRoot string, dependencies []pa
 	if goMod.Go == nil {
 		t.Fatal("go.mod does not declare a Go version")
 	}
-	if got, want := goMod.Go.Version, "1.26.6"; got != want {
+	if got, want := goMod.Go.Version, "1.26.9"; got != want {
 		t.Fatalf("go.mod Go version = %q, want %q", got, want)
 	}
 
