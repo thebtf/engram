@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -307,6 +308,93 @@ func TestProjectInitProtectsVisibleSiblingIndexAnchor(t *testing.T) {
 				if err != nil || !bytes.Equal(indexBefore, indexAfter) {
 					t.Fatalf("inspection altered sibling index: %v", err)
 				}
+			}
+		})
+	}
+}
+
+func TestProjectInitBindsGitEvidenceDespiteLocationOverrides(t *testing.T) {
+	for _, state := range []string{"foreign-directory", "foreign-common", "foreign-index", "accepted-anchor"} {
+		t.Run(state, func(t *testing.T) {
+			root, foreign := t.TempDir(), t.TempDir()
+			for _, repository := range []string{root, foreign} {
+				gitProjectInit(t, repository, "init", "--quiet")
+				gitProjectInit(t, repository, "-c", "user.name=Anchor Test", "-c", "user.email=anchor@example.test", "-c", "commit.gpgsign=false", "commit", "--quiet", "--allow-empty", "-m", "Existing repository")
+			}
+			anchor := []byte(`{"version":3,"project_id":"22222222-2222-4222-8222-222222222222","name":"existing","scope":"repository"}`)
+			if state == "foreign-index" {
+				linked := filepath.Join(t.TempDir(), "indexed sibling")
+				gitProjectInit(t, root, "worktree", "add", "--quiet", "--detach", linked, "HEAD")
+				if err := os.WriteFile(filepath.Join(linked, ".engram-project"), anchor, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				gitProjectInit(t, linked, "add", "--", ".engram-project")
+				if _, err := projectidentity.DiscoverAnchorV3(linked, "repository"); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err := os.WriteFile(filepath.Join(root, ".engram-project"), anchor, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				gitProjectInit(t, root, "add", "--", ".engram-project")
+				gitProjectInit(t, root, "-c", "user.name=Anchor Test", "-c", "user.email=anchor@example.test", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "Tracked anchor")
+				if state != "accepted-anchor" {
+					gitProjectInit(t, root, "rm", "--quiet", "--", ".engram-project")
+				}
+			}
+			overrides := map[string]string{}
+			switch state {
+			case "foreign-directory":
+				overrides["GIT_DIR"] = filepath.Join(foreign, ".git")
+				overrides["GIT_WORK_TREE"] = root
+			case "foreign-common":
+				overrides["GIT_COMMON_DIR"] = filepath.Join(foreign, ".git")
+			case "foreign-index":
+				overrides["GIT_INDEX_FILE"] = filepath.Join(foreign, ".git", "index")
+			case "accepted-anchor":
+				overrides = map[string]string{
+					"GIT_DIR": filepath.Join(foreign, ".git"), "GIT_WORK_TREE": root,
+					"GIT_INDEX_FILE": filepath.Join(foreign, ".git", "index"), "GIT_COMMON_DIR": filepath.Join(foreign, ".git"),
+					"GIT_OBJECT_DIRECTORY":             filepath.Join(foreign, ".git", "objects"),
+					"GIT_ALTERNATE_OBJECT_DIRECTORIES": filepath.Join(foreign, ".git", "objects"), "GIT_NAMESPACE": "foreign",
+				}
+			}
+			for key, value := range overrides {
+				t.Setenv(key, value)
+			}
+			t.Setenv("GIT_CONFIG_COUNT", "1")
+			t.Setenv("GIT_CONFIG_KEY_0", "user.name")
+			t.Setenv("GIT_CONFIG_VALUE_0", "Preserved non-location configuration")
+			var output bytes.Buffer
+			if state == "accepted-anchor" {
+				observed, err := projectidentity.DiscoverAnchorV3(root, "repository")
+				if err != nil || observed.ProjectID != "22222222-2222-4222-8222-222222222222" {
+					t.Fatalf("selected accepted anchor was redirected: %v", err)
+				}
+				if err := runProjectInit([]string{"--name", "Replacement"}, root, &output); err != nil || !strings.Contains(output.String(), "TRACKED") || strings.Contains(output.String(), "UNTRACKED") {
+					t.Fatalf("accepted selected anchor replay = %v: %q", err, output.String())
+				}
+			} else {
+				_, discoveryErr := projectidentity.DiscoverAnchorV3(root, "repository")
+				initErr := runProjectInit([]string{"--name", "Replacement"}, root, &output)
+				t.Logf("selected-root discovery missing=%t initialization refused=%t", errors.Is(discoveryErr, projectidentity.ErrAnchorMissingV3), initErr != nil)
+				if discoveryErr == nil || errors.Is(discoveryErr, projectidentity.ErrAnchorMissingV3) {
+					t.Errorf("foreign Git metadata admitted fresh discovery: %v", discoveryErr)
+				}
+				if initErr == nil {
+					t.Error("foreign Git metadata minted replacement UUID")
+				}
+				if _, err := os.Lstat(filepath.Join(root, ".engram-project")); !os.IsNotExist(err) {
+					t.Errorf("refusal created a replacement anchor: %v", err)
+				}
+			}
+			for key, value := range overrides {
+				if os.Getenv(key) != value {
+					t.Fatalf("producer mutated process environment key %s", key)
+				}
+			}
+			if os.Getenv("GIT_CONFIG_VALUE_0") != "Preserved non-location configuration" {
+				t.Fatal("producer mutated non-location Git configuration")
 			}
 		})
 	}

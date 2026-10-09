@@ -32,7 +32,7 @@ func TestV3MissingAnchorToolsList(t *testing.T) {
 	go func() { _ = backend.Serve(listener) }()
 	t.Cleanup(backend.GracefulStop)
 
-	for _, state := range []string{"absent", "neveranchored-linked", "neveranchored-packed", "neveranchored-untracked-sibling", "sibling-index-anchor", "sibling-index-error", "malformed", "untracked", "unreadable", "tracked-deletion", "staged-deletion", "git-index-error", "git-detached-head-error", "git-symbolic-head-error", "git-malformed-head-ref", "git-missing-head-ref", "visible-branch-anchor", "packed-branch-anchor", "linked-preanchor", "detached-sibling-anchor", "dangling-symlink", "unauthenticated"} {
+	for _, state := range []string{"absent", "neveranchored-linked", "neveranchored-packed", "neveranchored-untracked-sibling", "sibling-index-anchor", "sibling-index-error", "git-foreign-directory", "git-foreign-discovery", "git-foreign-common", "malformed", "untracked", "unreadable", "tracked-deletion", "staged-deletion", "git-index-error", "git-detached-head-error", "git-symbolic-head-error", "git-malformed-head-ref", "git-missing-head-ref", "visible-branch-anchor", "packed-branch-anchor", "linked-preanchor", "detached-sibling-anchor", "dangling-symlink", "unauthenticated"} {
 		t.Run(state, func(t *testing.T) {
 			root := t.TempDir()
 			git := func(args ...string) {
@@ -115,6 +115,27 @@ func TestV3MissingAnchorToolsList(t *testing.T) {
 						if state == "packed-branch-anchor" {
 							git("pack-refs", "--all")
 						}
+					}
+				}
+			case "git-foreign-directory", "git-foreign-discovery", "git-foreign-common":
+				if err := os.WriteFile(anchorPath, validAnchor, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				git("add", "--", ".engram-project")
+				git("-c", "user.name=Anchor Test", "-c", "user.email=anchor@example.test", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "Tracked anchor")
+				git("rm", "--quiet", "--", ".engram-project")
+				foreign := t.TempDir()
+				for _, args := range [][]string{{"init", "--quiet"}, {"-c", "user.name=Anchor Test", "-c", "user.email=anchor@example.test", "-c", "commit.gpgsign=false", "commit", "--quiet", "--allow-empty", "-m", "Foreign empty repository"}} {
+					if out, err := exec.Command("git", append([]string{"-C", foreign}, args...)...).CombinedOutput(); err != nil {
+						t.Fatalf("foreign fixture: %v: %s", err, out)
+					}
+				}
+				if state == "git-foreign-common" {
+					t.Setenv("GIT_COMMON_DIR", filepath.Join(foreign, ".git"))
+				} else {
+					t.Setenv("GIT_DIR", filepath.Join(foreign, ".git"))
+					if state == "git-foreign-directory" {
+						t.Setenv("GIT_WORK_TREE", root)
 					}
 				}
 			case "git-index-error":

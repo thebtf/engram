@@ -133,3 +133,21 @@ func TestInitRepositoryAnchorV3RefusesSymlink(t *testing.T) {
 		t.Fatalf("symlink refusal = %v", err)
 	}
 }
+
+func TestRepositoryGitEnvironmentV3PreservesConfiguration(t *testing.T) {
+	root := t.TempDir()
+	runGit(t, root, "init", "--quiet")
+	for _, name := range []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_NAMESPACE"} {
+		t.Setenv(name, "foreign-location")
+	}
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "user.name")
+	t.Setenv("GIT_CONFIG_VALUE_0", "Preserved non-location configuration")
+	output, err := anchorGitCommandV3(root, "config", "--get", "user.name").Output()
+	if err != nil || strings.TrimSpace(string(output)) != "Preserved non-location configuration" {
+		t.Fatalf("non-location Git configuration was lost: %v", err)
+	}
+	if os.Getenv("GIT_DIR") != "foreign-location" || os.Getenv("GIT_CONFIG_VALUE_0") != "Preserved non-location configuration" {
+		t.Fatal("Git proof mutated the process environment")
+	}
+}

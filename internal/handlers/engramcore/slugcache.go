@@ -445,7 +445,9 @@ func legacySelectedScopeUnchanged(selected, root string) bool {
 }
 
 func repositoryRootV3(cwd string) (string, error) {
-	output, err := exec.Command("git", "-C", cwd, gitRevParse, gitShowTopLevel).Output()
+	command := exec.Command("git", "-C", cwd, gitRevParse, gitShowTopLevel)
+	command.Env = projectidentity.RepositoryGitEnvironmentV3()
+	output, err := command.Output()
 	root := strings.TrimSpace(string(output))
 	if err != nil || root == "" {
 		return "", v3InputError("PROJECT_ANCHOR_INVALID")
@@ -464,12 +466,16 @@ func verifiedAnchorlessDirectoryV3(cwd string) bool {
 			return false
 		}
 	}
-	output, err := exec.Command("git", "-C", root, gitRevParse, gitShowTopLevel).Output()
+	command := exec.Command("git", "-C", root, gitRevParse, gitShowTopLevel)
+	command.Env = projectidentity.RepositoryGitEnvironmentV3()
+	output, err := command.Output()
 	return err != nil && strings.TrimSpace(string(output)) == ""
 }
 
 func normalizedGitRemotesV3(root string) ([]string, error) {
-	output, err := exec.Command("git", "-C", root, "config", "--get-regexp", `^remote\..*\.url$`).Output()
+	command := exec.Command("git", "-C", root, "config", "--get-regexp", `^remote\..*\.url$`)
+	command.Env = projectidentity.RepositoryGitEnvironmentV3()
+	output, err := command.Output()
 	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
