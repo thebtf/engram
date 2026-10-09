@@ -30,6 +30,7 @@ import (
 	"github.com/thebtf/engram/internal/module/dispatcher"
 	"github.com/thebtf/engram/internal/module/lifecycle"
 	"github.com/thebtf/engram/internal/module/registry"
+	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/internal/uci"
 	"github.com/thebtf/engram/internal/version"
 	pb "github.com/thebtf/engram/proto/engram/v1"
@@ -532,9 +533,14 @@ func TestContract_ToolsList_V3GitDiscoveryHonorsContext(t *testing.T) {
 	for _, mode := range []string{"cancel", "deadline"} {
 		t.Run(mode, func(t *testing.T) {
 			root := t.TempDir()
+			foreign := t.TempDir()
+			t.Setenv("GIT_DIR", foreign)
+			t.Setenv("GIT_INDEX_FILE", filepath.Join(foreign, "index"))
 			git := func(args ...string) {
 				t.Helper()
-				if output, err := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput(); err != nil {
+				command := exec.Command("git", append([]string{"-C", root}, args...)...)
+				command.Env = projectidentity.RepositoryGitEnvironmentV3()
+				if output, err := command.CombinedOutput(); err != nil {
 					t.Fatalf("git %v: %v: %s", args, err, output)
 				}
 			}
@@ -588,9 +594,10 @@ func TestContract_ToolsList_V3GitDiscoveryHonorsContext(t *testing.T) {
 			started := time.Now()
 			tools, err := mod.ProxyTools(ctx, project)
 			elapsed := time.Since(started)
+			finished := time.Now()
 			// Let the owned finite hook exit before removing its fixture.
 			t.Cleanup(func() {
-				if remaining := 4*time.Second - time.Since(started); remaining > 0 {
+				if remaining := 4*time.Second - time.Since(finished); remaining > 0 {
 					time.Sleep(remaining)
 				}
 			})
