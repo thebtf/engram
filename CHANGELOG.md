@@ -7,9 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.50.5] - 2026-10-09
+
+Prepare the next patch after the immutable `v6.50.4` tag failed its release Node gate. Carry forward the accepted onboarding and Go 1.26.9 security repairs without changing installer validation, dependencies, migrations or OpenClaw. Canonical client/parser policies and release acceptance remain pending; this entry does not claim publication or installed-memory recovery.
+
+### Fixed
+
+- Build historical direct-installer test archives with their release-specific Go contract instead of the current policy factory's Go 1.26.9 tuple. Preserve the real shell and PowerShell boundary: a relay-less v6.48 archive is accepted, while v6.49 requires the OMP relay helper.
+- Bind the synthetic generator/archive gate to the current package version, so pending canonical policy regeneration cannot select a stale fixture version. Keep actual generated-policy, raw-asset and archive validation unchanged.
+
 ## [6.50.4] - 2026-10-08
 
-Prepare the accepted missing-anchor onboarding repair for the unified release. The actual merged PR number is pending. This version adds no migration, historical-memory adoption or OpenClaw release; publication alone does not prove installed-client recovery.
+The accepted missing-anchor onboarding and security repairs reached immutable tag `v6.50.4` at `59d8eebe4457df8dfff58d83666180bd766c6887`. Release workflow `37976473572` failed at "Test plugin scripts" (337 tests: 332 passed, 1 failed, 4 skipped), before policy verification, build/sign/upload or a GitHub release object. Preserve this failed tag and its evidence; v6.50.5 is the next patch. This version adds no migration, historical-memory adoption or OpenClaw release and does not establish installed-client recovery.
 
 ### Fixed
 
@@ -2159,7 +2168,8 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v6.50.4...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v6.50.5...HEAD
+[6.50.5]: https://github.com/thebtf/engram/compare/v6.50.4...v6.50.5
 [6.50.4]: https://github.com/thebtf/engram/compare/v6.50.3...v6.50.4
 [6.50.3]: https://github.com/thebtf/engram/compare/v6.50.3-rc.1...v6.50.3
 [6.50.3-rc.1]: https://github.com/thebtf/engram/compare/v6.50.2...v6.50.3-rc.1
