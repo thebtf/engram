@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [6.50.5] - 2026-10-09
 
-Prepare the next patch after the immutable `v6.50.4` tag failed its release Node gate. Carry forward the accepted onboarding and Go 1.26.9 security repairs without changing installer validation, dependencies, migrations or OpenClaw. Canonical client/parser policies and release acceptance remain pending; this entry does not claim publication or installed-memory recovery.
+Correct the release-specific historical-installer fixtures and regenerate the version-bound client/parser policies with Go 1.26.9. Carry forward the accepted onboarding and security repairs from the immutable failed `v6.50.4` tag without changing installer validation, dependencies, migrations or OpenClaw. Canonical raw-policy coherence and the full release Node gate are verified locally; publication and installed-memory recovery remain unproven.
 
 ### Fixed
 
