@@ -2288,7 +2288,9 @@
         "empty": "此标签页的目录中没有可用仓库。通过已安装代理连接 Git 副本。",
         "denied": "服务器拒绝访问目录。请重试服务器检查；未选择新上下文。",
         "unavailable": "无法读取目录或状态。已确认的快照未被替换。请重试刷新。",
-        "offline": "浏览器无法连接服务器以获取授权选项。"
+        "offline": "浏览器无法连接服务器以获取授权选项。",
+        "switch-rejected": "快照切换失败。此标签页已恢复使用此前确认的快照；新选择未被接受。请刷新选项并重新选择快照后重试。",
+        "snapshot-rejected": "服务器拒绝了快照或不再确认它。代码已隐藏。请刷新选项，选择可用快照并重新固定。"
       },
       "phases": {
         "idle": "等待中",
@@ -2577,6 +2579,14 @@
     "repository": "仓库",
     "workingCopy": "工作副本",
     "indexedSnapshot": "索引快照",
+    "workbench": {
+      "navigation": "代码调查面板",
+      "results": "结果",
+      "relation": "关系",
+      "back": "返回",
+      "snapshotDetails": "选中的快照详情",
+      "relationOptions": "关系方向和筛选条件"
+    },
     "embeddingState": "代码向量索引",
     "embeddingError": "原因",
     "embeddingRecovery": "向量索引错误：{reason}。检查提供方和模型，再请求重新索引或核对，并刷新状态。固定快照不会改变。",
