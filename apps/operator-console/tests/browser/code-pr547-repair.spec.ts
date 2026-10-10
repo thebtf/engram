@@ -306,7 +306,7 @@ for (const failure of ['unavailable', 'timeout', 'offline', 'malformed'] as cons
     const pins: string[] = []
     const newer = { ...entry, indexed_snapshot: { label: 'Newer snapshot' }, view_ref: 'newer-view', selection_ref: 'newer-selection' }
     const context = { source_id: 'source-1', checkout_id: 'checkout-1', view_id: 'view-1', profile_id: 'profile-1', generation: 1 }
-    const item = { ref: { source_id: context.source_id, view_id: context.view_id, entity_key: 'old-result' }, path: 'src/old-view.ts', span: { byte_start: 0, byte_end: 12, line_start: 1, line_end: 1 }, content_digest: 'old-digest', kind: 'function', language: 'typescript', excerpt: 'old result', match_sources: ['lexical'], score: 1 }
+    const item = { ref: { source_id: context.source_id, view_id: context.view_id, entity_key: 'old-result' }, membership_id: '60000000-0000-4000-8000-000000000001', path: 'src/old-view.ts', span: { byte_start: 0, byte_end: 12, line_start: 1, line_end: 1 }, content_digest: 'old-digest', kind: 'function', language: 'typescript', excerpt: 'old result', match_sources: ['lexical'], score: 1 }
     const envelope = { schema: 'engram.code-query/1', status: 'ok', contexts: [context], items: [item], warnings: [], retrieval: { mode: 'lexical' }, freshness: { state: 'historical' }, coverage: {}, truncated: false }
     const intent = { intent_ref: 'historical-intent', state: 'queued', attempt: 1, retryable: false, created_at: '2026-09-15T00:00:00Z', updated_at: '2026-09-15T00:00:00Z' }
     await page.clock.install()
@@ -377,11 +377,11 @@ for (const reauthorization of ['ready', 'unavailable', 'malformed', 'denied', 'm
     const ref = { source_id: context.source_id, view_id: context.view_id, entity_key: 'historical-caller' }
     const related = { ...ref, entity_key: 'historical-callee' }
     const span = { byte_start: 0, byte_end: 12, line_start: 1, line_end: 1 }
-    const item = { ref, path: 'src/old-view.ts', span, content_digest: 'old-digest', kind: 'function', language: 'typescript', excerpt: 'oldCall()', match_sources: ['lexical'], score: 1 }
+    const item = { ref, membership_id: '60000000-0000-4000-8000-000000000001', path: 'src/old-view.ts', span, content_digest: 'old-digest', kind: 'function', language: 'typescript', excerpt: 'oldCall()', match_sources: ['lexical'], score: 1 }
     const envelope = { schema: 'engram.code-query/1', status: 'ok', contexts: [context], items: [item], warnings: [], retrieval: { mode: 'lexical' }, freshness: { state: 'historical' }, coverage: {}, truncated: false }
     const referenceSiteId = '50000000-0000-4000-8000-000000000005'
     const evidence = { ref, precision: 'reference_site', reference_site_id: referenceSiteId }
-    const callerNode = { entity: ref, context_ref: { ...context, analysis_profile_id: context.profile_id }, source_state: 'available', source_read: { entity_key: ref.entity_key, span, content_digest: item.content_digest } }
+    const callerNode = { entity: ref, context_ref: { ...context, analysis_profile_id: context.profile_id }, source_state: 'available', source_read: { entity_key: ref.entity_key, membership_id: item.membership_id, span, content_digest: item.content_digest } }
     const calleeNode = { entity: related, context_ref: callerNode.context_ref, source_state: 'unavailable' }
     await page.route('**/api/auth/me', route => route.fulfill({ json: { auth_disabled: true } }))
     await page.route('**/api/code/**', async route => {
@@ -457,7 +457,7 @@ for (const reauthorization of ['ready', 'unavailable', 'malformed', 'denied', 'm
     await expect(page.getByTestId('code-graph-evidence')).toContainText('reference_site')
     await page.getByTestId('code-graph-reference-source').click()
     await expect(page.getByTestId('code-source-result')).toHaveText('oldCall()')
-    expect(sourceRequests).toEqual([{ tab_binding_id: binding.tab_binding_id, document_proof: 'resumed-proof', entity_key: ref.entity_key, span, content_digest: item.content_digest, reference_site_id: referenceSiteId }])
+    expect(sourceRequests).toEqual([{ tab_binding_id: binding.tab_binding_id, document_proof: 'resumed-proof', entity_key: ref.entity_key, membership_id: item.membership_id, span, content_digest: item.content_digest, reference_site_id: referenceSiteId }])
     expect(await page.evaluate(() => sessionStorage.getItem('engram.operator-code.view-candidate.v2'))).toBe(stored)
     expect(pins).toEqual(['selection'])
   })
@@ -584,12 +584,12 @@ for (const boundary of ['structure', 'search', 'graph', 'source'] as const) {
         const ref = { source_id: context.source_id, view_id: context.view_id, entity_key: marker }
         const related = { ...ref, entity_key: `${marker}-callee` }
         const span = { byte_start: 0, byte_end: 12, line_start: 1, line_end: 1 }
-        const source = { entity_key: ref.entity_key, span, content_digest: `${marker}-digest` }
+        const source = { entity_key: ref.entity_key, membership_id: '60000000-0000-4000-8000-000000000001', span, content_digest: `${marker}-digest` }
         const node = { entity: ref, context_ref: { ...context, analysis_profile_id: context.profile_id }, source_state: 'available', source_read: source }
         const callee = { entity: related, context_ref: node.context_ref, source_state: 'unavailable' }
         return {
           schema: 'engram.code-query/1', status: 'partial', contexts: [context],
-          items: [{ ref, path: `src/${marker}.ts`, span, content_digest: source.content_digest, kind: 'function', language: 'typescript', excerpt: `${marker}()`, match_sources: ['lexical'], score: 1 }],
+          items: [{ ref, membership_id: '60000000-0000-4000-8000-000000000001', path: `src/${marker}.ts`, span, content_digest: source.content_digest, kind: 'function', language: 'typescript', excerpt: `${marker}()`, match_sources: ['lexical'], score: 1 }],
           warnings: [`${marker}-warning`], retrieval: { mode: `${marker}-mode` }, freshness: { state: 'observed_current' }, coverage: {}, truncated: true, continuation: `${marker}-next`,
           graph: { nodes: [ref, related], edges: [{ from: ref, to: related, relation: 'calls', evidence_kind: 'RESOLVED', evidence: [] }], stop_reason: 'budget' },
           navigation: { nodes: [node, callee], edges: [{ from: node, to: callee, relation: 'calls', evidence_kind: 'RESOLVED', evidence: [] }] },
@@ -807,7 +807,7 @@ for (const { boundary, invalidated } of [
     const newer = { ...entry, indexed_snapshot: { label: 'Newly published snapshot' }, view_ref: 'new-view', selection_ref: 'new-selection' }
     const intent = { intent_ref: 'publication-intent', state: 'queued', attempt: 1, retryable: false, created_at: '2026-09-15T00:00:00Z', updated_at: '2026-09-15T00:00:00Z' }
     const context = { source_id: 'source-1', checkout_id: 'checkout-1', view_id: 'view-1', profile_id: 'profile-1', generation: 1 }
-    const item = { ref: { source_id: context.source_id, view_id: context.view_id, entity_key: 'old-result' }, path: 'src/old-view.ts', span: { byte_start: 0, byte_end: 12, line_start: 1, line_end: 1 }, content_digest: 'old-digest', kind: 'function', language: 'typescript', excerpt: 'old result', match_sources: ['lexical'], score: 1 }
+    const item = { ref: { source_id: context.source_id, view_id: context.view_id, entity_key: 'old-result' }, membership_id: '60000000-0000-4000-8000-000000000001', path: 'src/old-view.ts', span: { byte_start: 0, byte_end: 12, line_start: 1, line_end: 1 }, content_digest: 'old-digest', kind: 'function', language: 'typescript', excerpt: 'old result', match_sources: ['lexical'], score: 1 }
     const envelope = { schema: 'engram.code-query/1', status: 'ok', contexts: [context], items: [item], warnings: [], retrieval: { mode: 'lexical' }, freshness: { state: 'historical' }, coverage: {}, truncated: false }
     await page.clock.install({ time: new Date('2026-09-15T00:00:00Z') })
     await page.route('**/api/auth/me', route => route.fulfill({ json: { auth_disabled: true } }))

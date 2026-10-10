@@ -732,7 +732,8 @@ func (fixture *uciProductMeasurementFixture) read(t *testing.T, observation *uci
 	observation.reads++
 	response, err := fixture.application.ReadCodebase(fixture.callerContext, authorized, mcp.CodebaseReadInput{
 		Ref: item.Ref, Span: item.Span, ContentDigest: item.ContentDigest,
-		MaxBytes: int(item.Span.ByteEnd - item.Span.ByteStart), VerifyWorkingCopy: true,
+		MembershipID: item.MembershipID,
+		MaxBytes:     int(item.Span.ByteEnd - item.Span.ByteStart), VerifyWorkingCopy: true,
 	})
 	if err != nil {
 		t.Fatalf("read exact product measurement source: %v", err)

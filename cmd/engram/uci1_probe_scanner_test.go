@@ -698,6 +698,7 @@ func uci1ScannerVerifyExactRead(ctx context.Context, runtime uciInstalledAccepta
 			"view_id":    item.Ref.ViewID,
 			"entity_key": item.Ref.EntityKey,
 		},
+		"membership_id": item.MembershipID,
 		"span": map[string]any{
 			"byte_start": item.Span.ByteStart,
 			"byte_end":   item.Span.ByteEnd,
@@ -719,7 +720,7 @@ func uci1ScannerVerifyExactRead(ctx context.Context, runtime uciInstalledAccepta
 		return errors.New("installed scanner read did not return one exact Unicode source span")
 	}
 	readItem := (*read.Items)[0]
-	if readItem.Ref != item.Ref || readItem.Path != item.Path || readItem.Span != item.Span || readItem.ContentDigest != item.ContentDigest || readItem.Excerpt != spanText {
+	if readItem.Ref != item.Ref || readItem.MembershipID != item.MembershipID || readItem.Path != item.Path || readItem.Span != item.Span || readItem.ContentDigest != item.ContentDigest || readItem.Excerpt != spanText {
 		return errors.New("installed scanner read did not preserve its exact Unicode CRLF citation")
 	}
 	return nil

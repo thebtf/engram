@@ -213,6 +213,7 @@ func adapterUCIRequestIdentityQueryResponse(t *testing.T, ref uci.ContextRef) uc
 			ViewID:    ref.ViewID,
 			EntityKey: "Fixture.Symbol",
 		},
+		MembershipID:  "60000000-0000-4000-8000-000000000001",
 		Path:          "internal/fixture.go",
 		Span:          uci.QuerySpan{ByteStart: 0, ByteEnd: 12, LineStart: 1, LineEnd: 1},
 		ContentDigest: uci.QueryContentDigest("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),

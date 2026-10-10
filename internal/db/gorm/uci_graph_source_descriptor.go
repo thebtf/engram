@@ -140,6 +140,7 @@ func (s *UCIProjectionStore) DescribeGraphEvidence(ctx context.Context, authoriz
 }
 
 type uciGraphReferenceDescriptorRow struct {
+	MembershipID    string `gorm:"column:membership_id"`
 	EntityKey       string `gorm:"column:entity_key"`
 	ContentDigest   string `gorm:"column:content_digest"`
 	ReferenceSiteID string `gorm:"column:reference_site_id"`
@@ -158,6 +159,7 @@ func (row uciGraphReferenceDescriptorRow) spec(ref ucidomain.ContextRef, referen
 	copy := row.ReferenceSiteID
 	descriptor := ucidomain.VersionedReadSpec{
 		Entity:          ucidomain.QueryEntityRef{SourceID: ref.SourceID, ViewID: ref.ViewID, EntityKey: row.EntityKey},
+		MembershipID:    row.MembershipID,
 		Span:            ucidomain.QuerySpan{ByteStart: span.ByteStart, ByteEnd: span.ByteEnd, LineStart: int64(span.LineStart), LineEnd: int64(span.LineEnd)},
 		ContentDigest:   ucidomain.QueryContentDigest(digest),
 		MaxBytes:        int(span.ByteEnd - span.ByteStart),
@@ -188,6 +190,7 @@ func decodeUCIIndexAdmissionSpan(value string) (ucidomain.IndexSpan, bool) {
 }
 
 type uciGraphSourceDescriptorRow struct {
+	MembershipID  string `gorm:"column:membership_id"`
 	EntityKey     string `gorm:"column:entity_key"`
 	ByteStart     int64  `gorm:"column:byte_start"`
 	ByteEnd       int64  `gorm:"column:byte_end"`
@@ -199,6 +202,7 @@ type uciGraphSourceDescriptorRow struct {
 func (row uciGraphSourceDescriptorRow) spec(ref ucidomain.ContextRef) (ucidomain.VersionedReadSpec, bool) {
 	digest := strings.TrimPrefix(row.ContentDigest, "sha256:")
 	descriptor := ucidomain.VersionedReadSpec{
+		MembershipID: row.MembershipID,
 		Entity: ucidomain.QueryEntityRef{
 			SourceID:  ref.SourceID,
 			ViewID:    ref.ViewID,
@@ -232,48 +236,53 @@ func browserCodeGraphSourceDescriptorSQL() string {
 				AND view_row.profile_id = ?
 				AND view_row.generation = ?
 				AND view_row.state IN (?, ?)
-		)
-		SELECT
-			COALESCE(NULLIF(definition.qualified_local_name, ''), NULLIF(chunk.symbol_key, ''), membership.path_key) AS entity_key,
-			chunk.byte_start,
-			chunk.byte_end,
+		),
+		candidates AS (
+			SELECT membership.membership_id, membership.display_path,
+				COALESCE(NULLIF(definition.qualified_local_name, ''), NULLIF(chunk.symbol_key, ''), membership.path_key) AS entity_key,
+				chunk.chunk_id, chunk.byte_start, chunk.byte_end,
+				blob.blob_id, blob.source_id, blob.content_digest
+			FROM selected_view AS view_row
+			JOIN ci_memberships AS membership
+				ON membership.source_id = view_row.source_id
+				AND membership.checkout_id = view_row.checkout_id
+				AND membership.valid_from_generation <= view_row.generation
+				AND (membership.valid_to_generation IS NULL OR membership.valid_to_generation > view_row.generation)
+			JOIN ci_parse_artifacts AS artifact
+				ON artifact.source_id = membership.source_id
+				AND artifact.artifact_id = membership.artifact_id
+				AND artifact.extraction_profile_digest = view_row.parser_bundle_digest
+			JOIN ci_blobs AS blob
+				ON blob.source_id = artifact.source_id
+				AND blob.blob_id = artifact.blob_id
+			JOIN ci_chunks AS chunk
+				ON chunk.source_id = artifact.source_id
+				AND chunk.artifact_id = artifact.artifact_id
+			LEFT JOIN ci_definitions AS definition
+				ON definition.artifact_id = chunk.artifact_id
+				AND definition.local_symbol_key = chunk.symbol_key
+			WHERE blob.storage_state = ?
+				AND blob.safe_content IS NOT NULL
+				AND membership.file_state = ?
+				AND artifact.status IN (?, ?)
+				AND artifact.sealed_at IS NOT NULL
+				AND artifact.facts_digest IS NOT NULL
+				AND COALESCE(NULLIF(definition.qualified_local_name, ''), NULLIF(chunk.symbol_key, ''), membership.path_key) = ?
+		),
+		locations AS (SELECT DISTINCT membership_id FROM candidates LIMIT 2)
+		SELECT candidate.membership_id, candidate.entity_key, candidate.byte_start, candidate.byte_end,
 			array_length(regexp_split_to_array(
-				convert_from(substring(blob.safe_content FROM 1 FOR chunk.byte_start::integer), replace(upper(blob.encoding), '-', '')),
-				E'\n'
+				convert_from(substring(blob.safe_content FROM 1 FOR candidate.byte_start::integer), replace(upper(blob.encoding), '-', '')), E'\n'
 			), 1) AS line_start,
 			array_length(regexp_split_to_array(
-				convert_from(substring(blob.safe_content FROM 1 FOR chunk.byte_end::integer), replace(upper(blob.encoding), '-', '')),
-				E'\n'
+				convert_from(substring(blob.safe_content FROM 1 FOR candidate.byte_end::integer), replace(upper(blob.encoding), '-', '')), E'\n'
 			), 1) AS line_end,
-			blob.content_digest
-		FROM selected_view AS view_row
-		JOIN ci_memberships AS membership
-			ON membership.source_id = view_row.source_id
-			AND membership.checkout_id = view_row.checkout_id
-			AND membership.valid_from_generation <= view_row.generation
-			AND (membership.valid_to_generation IS NULL OR membership.valid_to_generation > view_row.generation)
-		JOIN ci_parse_artifacts AS artifact
-			ON artifact.source_id = membership.source_id
-			AND artifact.artifact_id = membership.artifact_id
-			AND artifact.extraction_profile_digest = view_row.parser_bundle_digest
-		JOIN ci_blobs AS blob
-			ON blob.source_id = artifact.source_id
-			AND blob.blob_id = artifact.blob_id
-		JOIN ci_chunks AS chunk
-			ON chunk.source_id = artifact.source_id
-			AND chunk.artifact_id = artifact.artifact_id
-		LEFT JOIN ci_definitions AS definition
-			ON definition.artifact_id = chunk.artifact_id
-			AND definition.local_symbol_key = chunk.symbol_key
-		WHERE blob.storage_state = ?
-			AND blob.safe_content IS NOT NULL
-			AND membership.file_state = ?
-			AND artifact.status IN (?, ?)
-			AND artifact.sealed_at IS NOT NULL
-			AND artifact.facts_digest IS NOT NULL
-			AND COALESCE(NULLIF(definition.qualified_local_name, ''), NULLIF(chunk.symbol_key, ''), membership.path_key) = ?
-			AND chunk.byte_end - chunk.byte_start BETWEEN 1 AND ?
-		ORDER BY membership.display_path ASC, chunk.byte_start ASC, chunk.chunk_id ASC
+			candidate.content_digest
+		FROM candidates AS candidate
+		JOIN ci_blobs AS blob ON blob.blob_id = candidate.blob_id AND blob.source_id = candidate.source_id
+		WHERE (SELECT COUNT(*) FROM locations) = 1
+			AND candidate.byte_end - candidate.byte_start BETWEEN 1 AND ?
+		ORDER BY candidate.display_path ASC, candidate.byte_start ASC, candidate.chunk_id ASC
 		LIMIT 1`
 }
 
@@ -293,8 +302,11 @@ func browserCodeGraphReferenceDescriptorSQL() string {
 				AND view_row.profile_id = ?
 				AND view_row.generation = ?
 				AND view_row.state IN (?, ?)
-		)
+		),
+		candidates AS (
 		SELECT
+			membership.membership_id,
+			edge.resolved_edge_id,
 			COALESCE(NULLIF(definition.qualified_local_name, ''), NULLIF(edge.source_symbol, ''), membership.path_key) AS entity_key,
 			blob.content_digest,
 			reference.reference_site_id,
@@ -333,6 +345,11 @@ func browserCodeGraphReferenceDescriptorSQL() string {
 			AND artifact.sealed_at IS NOT NULL
 			AND artifact.facts_digest IS NOT NULL
 			AND COALESCE(NULLIF(definition.qualified_local_name, ''), NULLIF(edge.source_symbol, ''), membership.path_key) = ?
-		ORDER BY edge.resolved_edge_id ASC
+		),
+		locations AS (SELECT DISTINCT membership_id FROM candidates LIMIT 2)
+		SELECT membership_id, entity_key, content_digest, reference_site_id, reference_span
+		FROM candidates
+		WHERE (SELECT COUNT(*) FROM locations) = 1
+		ORDER BY resolved_edge_id ASC
 		LIMIT 1`
 }

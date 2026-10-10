@@ -4,7 +4,7 @@ import type { Page } from '@playwright/test'
 const binding = { state: 'TAB_BINDING_READY', tab_binding_id: '60000000-0000-4000-8000-000000000041', document_proof: 'proof', resume_nonce: 'resume', reload_token: 'reload' }
 const span = { byte_start: 0, byte_end: 12, line_start: 1, line_end: 1 }
 
-async function workbench(page: Page) {
+async function workbench(page: Page, duplicateLocations = false) {
   let selected = 'a'
   let catalogCopies = ['a', 'b']
   const intent = { intent_ref: 'intent-a', state: 'queued', attempt: 1, retryable: false, created_at: '2026-10-09T00:00:00Z', updated_at: '2026-10-09T00:00:00Z' }
@@ -12,6 +12,8 @@ async function workbench(page: Page) {
   let releaseSource: (() => void) | null = null
   let holdSource = false
   let sourceHeld = false
+  let misboundSource = false
+  let invalidMembership: { value: unknown } | null = null
   const reads: Array<{ path: string; view: string; body: Record<string, unknown> }> = []
   await page.route('**/api/auth/me', route => route.fulfill({ json: { auth_disabled: true } }))
   await page.route('**/api/code/**', async route => {
@@ -27,12 +29,17 @@ async function workbench(page: Page) {
       const copy = selected
       const context = { source_id: 'source', checkout_id: copy, view_id: `view-${copy}`, profile_id: 'profile', generation: 1 }
       const ref = { source_id: context.source_id, view_id: context.view_id, entity_key: `implementation-${copy}` }
-      const descriptor = { entity_key: ref.entity_key, span, content_digest: `digest-${copy}` }
-      const item = { ref, path: `src/${copy}.ts`, span, content_digest: descriptor.content_digest, kind: 'function', language: 'typescript', excerpt: `${copy}()`, match_sources: ['lexical'], score: 1 }
+      const membershipId = copy === 'a' ? '60000000-0000-4000-8000-000000000001' : '60000000-0000-4000-8000-000000000002'
+      const descriptor = { entity_key: ref.entity_key, membership_id: membershipId, span, content_digest: `digest-${copy}` }
+      const item = { ref, membership_id: membershipId, path: `src/${copy}.ts`, span, content_digest: descriptor.content_digest, kind: 'function', language: 'typescript', excerpt: `${copy}()`, match_sources: ['lexical'], score: 1 }
+      const other = { ...item, membership_id: '60000000-0000-4000-8000-000000000003', path: 'src/same-body.ts' }
+      const sourceItem = route.request().postDataJSON().membership_id === other.membership_id ? other : item
+      const items = path.endsWith('/source') ? [{ ...sourceItem, ...(misboundSource ? { membership_id: sourceItem === other ? item.membership_id : other.membership_id } : {}) }] : duplicateLocations ? [item, other] : [item]
+      if (invalidMembership !== null && path.endsWith('/search')) Reflect.set(items[0], 'membership_id', invalidMembership.value)
       const node = { entity: ref, context_ref: { ...context, analysis_profile_id: context.profile_id }, source_state: 'available', source_read: descriptor }
       reads.push({ path, view: context.view_id, body: route.request().postDataJSON() })
       if (path.endsWith('/source') && holdSource) await new Promise<void>(resolve => { sourceHeld = true; releaseSource = resolve })
-      return route.fulfill({ json: { schema: 'engram.code-query/1', status: 'ok', contexts: [context], items: [item], warnings: [], retrieval: { mode: 'lexical' }, freshness: { state: 'observed_current' }, coverage: {}, truncated: false, ...(path.endsWith('/graph') ? { graph: { nodes: [ref], edges: [], stop_reason: 'complete' }, navigation: { nodes: [node], edges: [] } } : {}) } })
+      return route.fulfill({ json: { schema: 'engram.code-query/1', status: 'ok', contexts: [context], items, warnings: [], retrieval: { mode: 'lexical' }, freshness: { state: 'observed_current' }, coverage: {}, truncated: false, ...(path.endsWith('/graph') ? { graph: { nodes: [ref], edges: [], stop_reason: 'complete' }, navigation: { nodes: [node], edges: [] } } : {}) } })
     }
     return route.fulfill({ status: 204 })
   })
@@ -52,6 +59,8 @@ async function workbench(page: Page) {
     hold() { holdSource = true },
     held() { return sourceHeld },
     release() { releaseSource?.() },
+    misbindSource() { misboundSource = true },
+    invalidateMembership(value: unknown) { invalidMembership = { value } },
   }
 }
 
@@ -66,7 +75,7 @@ test('keyboard mobile result → relation → same-View source → back stays re
   await expect(page.locator('#code-work-source h3')).toBeFocused()
   await expect(page.getByTestId('code-source-result')).toHaveText('a()')
   expect(state.reads.filter(read => /\/(search|graph|source)$/.test(read.path)).map(read => read.view)).toEqual(['view-a', 'view-a', 'view-a'])
-  expect(state.reads.find(read => read.path.endsWith('/source'))?.body).toMatchObject({ entity_key: 'implementation-a', content_digest: 'digest-a', span })
+  expect(state.reads.find(read => read.path.endsWith('/source'))?.body).toMatchObject({ entity_key: 'implementation-a', membership_id: '60000000-0000-4000-8000-000000000001', content_digest: 'digest-a', span })
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   await page.keyboard.press('Escape')
   await expect(page.getByTestId('code-graph-heading')).toBeFocused()
@@ -162,3 +171,32 @@ test('actual-current409 clears its authority and requires explicit catalogue sel
   await expect(page.getByTestId('code-structure-results')).toContainText('src/b.ts')
   await expect(page.getByTestId('code-source-result')).toHaveCount(0)
 })
+
+test('same-body search locations retain their membership and a misbound read is concealed', async ({ page }) => {
+  const state = await workbench(page, true)
+  await expect(page.getByTestId('code-search-source')).toHaveCount(2)
+  await page.getByTestId('code-search-source').nth(0).click()
+  await expect(page.getByTestId('code-source-result')).toHaveText('a()')
+  await expect(page.locator('.source-meta').first()).toContainText('src/a.ts')
+  await page.getByTestId('code-panel-back').click()
+  await page.getByTestId('code-search-source').nth(1).click()
+  await expect(page.getByTestId('code-source-result')).toHaveText('a()')
+  await expect(page.locator('.source-meta').first()).toContainText('src/same-body.ts')
+  expect(state.reads.filter(read => read.path.endsWith('/source')).map(read => read.body.membership_id)).toEqual(['60000000-0000-4000-8000-000000000001', '60000000-0000-4000-8000-000000000003'])
+  await page.getByTestId('code-panel-back').click()
+  state.misbindSource()
+  await page.getByTestId('code-search-source').nth(1).click()
+  await expect(page.locator('#code-work-source [data-state]')).toHaveAttribute('data-state', 'error')
+  await expect(page.getByTestId('code-source-result')).toHaveCount(0)
+})
+
+for (const membership of [undefined, null, '', 'not-a-uuid', '{60000000-0000-4000-8000-000000000001}', ' 60000000-0000-4000-8000-000000000001 ', '00000000-0000-0000-0000-000000000000']) {
+  test(`search does not render a citation with invalid membership ${String(membership)}`, async ({ page }) => {
+    const state = await workbench(page)
+    state.invalidateMembership(membership)
+    await page.getByTestId('code-query-input').fill('invalid citation')
+    await page.getByTestId('code-query-input').press('Enter')
+    await expect(page.locator('#code-work-results [data-state]')).toHaveAttribute('data-state', 'error')
+    await expect(page.getByTestId('code-search-source')).toHaveCount(0)
+  })
+}

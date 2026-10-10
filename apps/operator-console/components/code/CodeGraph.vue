@@ -118,7 +118,7 @@ watch(() => props.graph, () => {
         <span>{{ t('codeExplorer.graph.target') }}</span>
         <select :disabled="pending" @change="selectTarget">
           <option value="" selected disabled>{{ t('codeExplorer.graph.chooseTarget') }}</option>
-          <option v-for="(item, index) in search.items" :key="item.ref.entityKey" :value="index">{{ item.ref.entityKey }}</option>
+          <option v-for="(item, index) in search.items" :key="`${item.membershipId}:${item.ref.entityKey}:${item.span.byteStart}`" :value="index">{{ item.ref.entityKey }}</option>
         </select>
       </label>
     </details>

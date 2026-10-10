@@ -21,6 +21,7 @@ const (
 // IndexedSpan is set, Span selects a bounded byte subspan of that chunk.
 type VersionedReadSpec struct {
 	Entity            QueryEntityRef
+	MembershipID      string
 	Span              QuerySpan
 	IndexedSpan       *QuerySpan
 	ContentDigest     QueryContentDigest
@@ -34,6 +35,9 @@ type VersionedReadSpec struct {
 func (spec VersionedReadSpec) Validate() error {
 	if err := spec.Entity.Validate(); err != nil {
 		return fmt.Errorf("uci versioned read: invalid entity: %w", err)
+	}
+	if !canonicalContextUUID(spec.MembershipID) {
+		return fmt.Errorf("uci versioned read: invalid membership_id")
 	}
 	if err := spec.Span.Validate(); err != nil {
 		return fmt.Errorf("uci versioned read: invalid span: %w", err)
@@ -80,6 +84,7 @@ type VersionedReadStoreResult struct {
 // service independently checks every cited field before constructing a response.
 type VersionedReadHit struct {
 	Entity           QueryEntityRef
+	MembershipID     string
 	Path             string
 	Span             QuerySpan
 	ContentDigest    QueryContentDigest
@@ -165,7 +170,7 @@ func validateVersionedReadStoreResult(ref ContextRef, spec VersionedReadSpec, re
 	}
 
 	hit := result.Hit
-	if hit.Entity != spec.Entity || (spec.IndexedSpan == nil && hit.Span != spec.Span) || hit.ContentDigest != spec.ContentDigest {
+	if hit.Entity != spec.Entity || hit.MembershipID != spec.MembershipID || (spec.IndexedSpan == nil && hit.Span != spec.Span) || hit.ContentDigest != spec.ContentDigest {
 		return fmt.Errorf("uci versioned read: store returned a mismatched hit")
 	}
 	if hit.Entity.SourceID != ref.SourceID || hit.Entity.ViewID != ref.ViewID {
@@ -189,6 +194,7 @@ func versionedReadAvailableResponse(ref ContextRef, spec VersionedReadSpec, resu
 		hit := result.Hit
 		items = append(items, QueryItem{
 			Ref:           hit.Entity,
+			MembershipID:  hit.MembershipID,
 			Path:          hit.Path,
 			Span:          hit.Span,
 			ContentDigest: hit.ContentDigest,

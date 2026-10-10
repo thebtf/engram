@@ -728,7 +728,8 @@ type queryTestCandidateInput struct {
 
 func queryTestCandidate(input queryTestCandidateInput) QueryCandidate {
 	return QueryCandidate{
-		Context: input.contextRef,
+		Context:      input.contextRef,
+		MembershipID: input.artifactID,
 		Proof: IndexArtifactProof{
 			ArtifactID:         input.artifactID,
 			ContentDigest:      queryTestDigest(input.digestCharacter),
@@ -918,6 +919,9 @@ func queryTestAssertCitation(t *testing.T, item QueryItem, candidate QueryCandid
 		EntityKey: candidate.EntityKey,
 	}); got != want {
 		t.Fatalf("item ref = %#v, want %#v", got, want)
+	}
+	if item.MembershipID != candidate.MembershipID {
+		t.Fatalf("item membership = %q, want %q", item.MembershipID, candidate.MembershipID)
 	}
 	if got, want := item.Path, candidate.RelativePath; got != want {
 		t.Fatalf("item path = %q, want %q", got, want)

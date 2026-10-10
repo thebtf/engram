@@ -89,7 +89,7 @@ function submitSearch(): void {
 }
 
 function sourceDescriptor(item: CodeItem): CodeSourceDescriptor {
-  return { entityKey: item.ref.entityKey, span: item.span, contentDigest: item.contentDigest }
+  return { entityKey: item.ref.entityKey, membershipId: item.membershipId, span: item.span, contentDigest: item.contentDigest }
 }
 
 async function copy(value: string): Promise<void> {
@@ -156,7 +156,7 @@ async function copy(value: string): Promise<void> {
         <div class="panel-head"><h3 tabindex="-1">{{ t('codeExplorer.structure.title') }}</h3><span :data-state="structureState.kind">{{ t(`codeExplorer.states.${structureState.kind}.label`) }}</span></div>
         <p class="state-message">{{ t(`codeExplorer.states.${structureState.kind}.structure`) }}</p>
         <ul v-if="structure !== null && structure.items.length > 0" class="items" data-testid="code-structure-results">
-          <li v-for="item in structure.items" :key="`${item.ref.entityKey}:${item.span.byteStart}`">
+          <li v-for="item in structure.items" :key="`${item.membershipId}:${item.ref.entityKey}:${item.span.byteStart}`">
             <div class="item-copy">
               <strong>{{ item.ref.entityKey }}</strong>
               <p><code>{{ item.path }}:{{ item.span.lineStart }}–{{ item.span.lineEnd }}</code> · {{ item.language }}</p>
@@ -190,7 +190,7 @@ async function copy(value: string): Promise<void> {
           <ul v-if="search.degradationReasons.length > 0" class="warnings"><li v-for="reason in search.degradationReasons" :key="reason">{{ reason }}</li></ul>
         </div>
         <ul v-if="search !== null && search.items.length > 0" class="items" data-testid="code-search-results">
-          <li v-for="item in search.items" :key="`${item.ref.entityKey}:${item.span.byteStart}`">
+          <li v-for="item in search.items" :key="`${item.membershipId}:${item.ref.entityKey}:${item.span.byteStart}`">
             <div class="item-copy">
               <strong>{{ item.ref.entityKey }}</strong>
               <p><code>{{ item.path }}:{{ item.span.lineStart }}–{{ item.span.lineEnd }}</code> · {{ item.language }} · {{ item.matchSources.join(', ') }}</p>

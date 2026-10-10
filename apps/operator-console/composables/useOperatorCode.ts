@@ -66,6 +66,7 @@ export interface CodeEntityRef {
 
 export interface CodeSourceDescriptor {
   entityKey: string
+  membershipId: string
   span: CodeSpan
   contentDigest: string
   referenceSiteId?: string
@@ -73,6 +74,7 @@ export interface CodeSourceDescriptor {
 
 export interface CodeItem {
   ref: CodeEntityRef
+  membershipId: string
   path: string
   span: CodeSpan
   contentDigest: string
@@ -293,9 +295,15 @@ function parseSpan(value: unknown): CodeSpan | null {
   return { byteStart, byteEnd, lineStart, lineEnd }
 }
 
+function canonicalUUID(value: unknown): string | null {
+  const parsed = text(value)
+  return parsed !== null && parsed === value && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(parsed) && parsed !== '00000000-0000-0000-0000-000000000000' ? parsed : null
+}
+
 function parseItem(value: unknown): CodeItem | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
   const ref = parseEntityRef(Reflect.get(value, 'ref'))
+  const membershipId = canonicalUUID(Reflect.get(value, 'membership_id'))
   const path = text(Reflect.get(value, 'path'))
   const span = parseSpan(Reflect.get(value, 'span'))
   const contentDigest = text(Reflect.get(value, 'content_digest'))
@@ -307,10 +315,10 @@ function parseItem(value: unknown): CodeItem | null {
   const scoreValue = Reflect.get(value, 'score')
   const score = scoreValue === undefined || scoreValue === null ? null : finiteNumber(scoreValue)
   if (
-    ref === null || path === null || span === null || contentDigest === null || kind === null
+    ref === null || membershipId === null || path === null || span === null || contentDigest === null || kind === null
     || language === null || excerpt === null || matchSources === null || (scoreValue !== undefined && scoreValue !== null && score === null)
   ) return null
-  return { ref, path, span, contentDigest, kind, language, excerpt, matchSources, score }
+  return { ref, membershipId, path, span, contentDigest, kind, language, excerpt, matchSources, score }
 }
 
 function parseResponseContext(value: unknown): CodeResponseContext | null {
@@ -450,11 +458,12 @@ function parseGraph(value: unknown): CodeGraph | null {
 function parseSourceDescriptor(value: unknown): CodeSourceDescriptor | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
   const entityKey = text(Reflect.get(value, 'entity_key'))
+  const membershipId = canonicalUUID(Reflect.get(value, 'membership_id'))
   const span = parseSpan(Reflect.get(value, 'span'))
   const contentDigest = text(Reflect.get(value, 'content_digest'))
   const referenceSiteIdValue = Reflect.get(value, 'reference_site_id')
   const referenceSiteId = referenceSiteIdValue === undefined ? undefined : text(referenceSiteIdValue)
-  return entityKey === null || span === null || contentDigest === null || referenceSiteId === null ? null : { entityKey, span, contentDigest, ...(referenceSiteId === undefined ? {} : { referenceSiteId }) }
+  return entityKey === null || membershipId === null || span === null || contentDigest === null || referenceSiteId === null ? null : { entityKey, membershipId, span, contentDigest, ...(referenceSiteId === undefined ? {} : { referenceSiteId }) }
 }
 
 function parseGraphNavigation(value: unknown, context: CodeResponseContext, graph: CodeGraph): CodeGraphNavigation | null {
@@ -1730,6 +1739,7 @@ export function useOperatorCode() {
     const indexedSpan = { byte_start: descriptor.span.byteStart, byte_end: descriptor.span.byteEnd, line_start: descriptor.span.lineStart, line_end: descriptor.span.lineEnd }
     const payload = bindingPayload({
       entity_key: descriptor.entityKey,
+      membership_id: descriptor.membershipId,
       span: oversized ? { ...indexedSpan, byte_end: indexedSpan.byte_start + 8192 } : indexedSpan,
       ...(oversized ? { indexed_span: indexedSpan } : {}),
       content_digest: descriptor.contentDigest,
@@ -1750,7 +1760,13 @@ export function useOperatorCode() {
       return
     }
     const envelope = parseEnvelope(result.body)
-    if (envelope === null || !matchesPinnedResponse(envelope)) {
+    const item = envelope?.items[0]
+    const sameCitation = item === undefined ? envelope?.items.length === 0 : item.ref.entityKey === descriptor.entityKey
+      && item.membershipId === descriptor.membershipId && item.contentDigest === descriptor.contentDigest
+      && item.span.byteStart === descriptor.span.byteStart
+      && (oversized ? item.span.byteEnd > item.span.byteStart && item.span.byteEnd <= descriptor.span.byteStart + 8192 && item.span.lineStart >= descriptor.span.lineStart && item.span.lineEnd <= descriptor.span.lineEnd
+        : item.span.byteEnd === descriptor.span.byteEnd && item.span.lineStart === descriptor.span.lineStart && item.span.lineEnd === descriptor.span.lineEnd)
+    if (envelope === null || !matchesPinnedResponse(envelope) || envelope.items.length > 1 || !sameCitation) {
       sourceEnvelope.value = null
       sourceState.value = presentation('error', 'The source response did not prove the selected snapshot, so no body was rendered.')
       return

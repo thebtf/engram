@@ -205,6 +205,7 @@ func (application *UCIApplication) ReadCodebase(ctx context.Context, authorized 
 
 	response, err := application.versionedReadService.Read(ctx, authorized, uci.VersionedReadSpec{
 		Entity:            input.Ref,
+		MembershipID:      input.MembershipID,
 		Span:              input.Span,
 		IndexedSpan:       input.IndexedSpan,
 		ContentDigest:     input.ContentDigest,
