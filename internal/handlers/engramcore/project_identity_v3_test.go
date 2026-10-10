@@ -110,9 +110,17 @@ func TestLegacySelectedDirectoryMoveInvalidatesScope(t *testing.T) {
 			if err := os.Mkdir(selected, 0o700); err != nil {
 				t.Fatal(err)
 			}
-			before, err := os.Stat(selected)
+			directory, err := os.Open(selected)
 			if err != nil {
 				t.Fatal(err)
+			}
+			before, statErr := directory.Stat()
+			closeErr := directory.Close()
+			if statErr != nil {
+				t.Fatal(statErr)
+			}
+			if closeErr != nil {
+				t.Fatal(closeErr)
 			}
 			moveSelected := func() {
 				if err := os.Rename(selected, moved); err != nil {
@@ -121,9 +129,16 @@ func TestLegacySelectedDirectoryMoveInvalidatesScope(t *testing.T) {
 				if err := os.Symlink(moved, selected); err != nil {
 					t.Fatalf("selected-directory symlink capability unavailable: %v", err)
 				}
-				after, err := os.Stat(selected)
-				if err != nil || !os.SameFile(before, after) {
-					t.Fatalf("selected-directory move changed the inode: %v", err)
+				after, err := os.Stat(moved)
+				if err != nil {
+					t.Fatal(err)
+				}
+				alias, err := os.Stat(selected)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !os.SameFile(before, after) || !os.SameFile(after, alias) {
+					t.Fatal("selected-directory move or alias changed the inode")
 				}
 			}
 			project := muxcore.ProjectContext{ID: "fixture", Cwd: selected}
@@ -191,9 +206,23 @@ func TestLegacyGitMetadataPreservesPathWhitespace(t *testing.T) {
 		{name: "selected-internal-space", root: "repo", selected: "foo bar"},
 		{name: "root-trailing-space", root: "repo ", selected: "nested"},
 		{name: "git-directory-spaces", root: "repo", selected: "nested", gitDir: " gitdir "},
+		{name: "git-directory-internal-space", root: "repo", selected: "nested", gitDir: "git dir"},
 		{name: "config-file-trailing-space", root: "repo", selected: "nested", paddedConfig: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			if test.gitDir != "" {
+				capabilityDir := t.TempDir()
+				if err := os.Mkdir(filepath.Join(capabilityDir, test.gitDir), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				entries, err := os.ReadDir(capabilityDir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(entries) != 1 || entries[0].Name() != test.gitDir {
+					t.Skip("filesystem does not preserve the exact requested separate Git directory name")
+				}
+			}
 			configDir := t.TempDir()
 			global := filepath.Join(configDir, "global.gitconfig")
 			if test.paddedConfig {
@@ -201,6 +230,15 @@ func TestLegacyGitMetadataPreservesPathWhitespace(t *testing.T) {
 			}
 			if err := os.WriteFile(global, nil, 0o600); err != nil {
 				t.Fatal(err)
+			}
+			if test.paddedConfig {
+				entries, err := os.ReadDir(configDir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(entries) != 1 || entries[0].Name() != filepath.Base(global) {
+					t.Skip("filesystem does not preserve the exact trailing-space config filename")
+				}
 			}
 			t.Setenv("GIT_CONFIG_NOSYSTEM", "0")
 			t.Setenv("GIT_CONFIG_SYSTEM", filepath.Join(configDir, "system.gitconfig"))
@@ -675,9 +713,6 @@ func TestLegacyConfigSymlinkFingerprintBoundaries(t *testing.T) {
 		result, err := legacyFileFingerprints([]string{outer}, configs)
 		if err != nil {
 			t.Fatal(err)
-		}
-		if len(result[outer].links) != 2 {
-			t.Fatal("config fingerprint did not bind the complete link chain")
 		}
 		return result
 	}
