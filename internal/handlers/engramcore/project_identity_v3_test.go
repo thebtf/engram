@@ -59,7 +59,11 @@ func TestLegacySelectedScopeAcceptsFilesystemAliases(t *testing.T) {
 			if filepath.Clean(selectedRoot) == filepath.Clean(gitRoot) {
 				t.Fatal("fixture did not produce distinct Git and selected root spellings")
 			}
-			if !legacySelectedScopeUnchanged(selected, gitRoot) {
+			prefix := ""
+			if suffix != "" {
+				prefix = suffix + "/"
+			}
+			if !legacySelectedScopeUnchanged(selected, gitRoot, prefix) {
 				t.Fatal("same filesystem repository was refused for a different path spelling")
 			}
 		})
@@ -87,6 +91,94 @@ func TestLegacySelectedScopeAcceptsFilesystemAliases(t *testing.T) {
 		if srv.callReq.GetProjectIdentity().GetRelativePath() != "nested/" {
 			t.Fatal("retargeted filesystem alias reused the previous selected prefix")
 		}
+	}
+}
+
+func TestLegacySelectedDirectoryMoveInvalidatesScope(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "0")
+	t.Setenv("GIT_CONFIG_SYSTEM", filepath.Join(configDir, "system.gitconfig"))
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(configDir, "global.gitconfig"))
+	t.Setenv("GIT_CONFIG_COUNT", "0")
+	for _, phase := range []string{"during-resolution", "warm"} {
+		t.Run(phase, func(t *testing.T) {
+			root := daemonV3Repository(t)
+			if err := os.WriteFile(filepath.Join(root, ".engram-project"), []byte(`{"name":"engram"}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			selected, moved := filepath.Join(root, "old"), filepath.Join(root, "new")
+			if err := os.Mkdir(selected, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.Stat(selected)
+			if err != nil {
+				t.Fatal(err)
+			}
+			moveSelected := func() {
+				if err := os.Rename(selected, moved); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(moved, selected); err != nil {
+					t.Fatalf("selected-directory symlink capability unavailable: %v", err)
+				}
+				after, err := os.Stat(selected)
+				if err != nil || !os.SameFile(before, after) {
+					t.Fatalf("selected-directory move changed the inode: %v", err)
+				}
+			}
+			project := muxcore.ProjectContext{ID: "fixture", Cwd: selected}
+			mod := NewModuleWithClientInstanceID("fixture-daemon-install")
+			key := cacheKey(project)
+			if phase == "warm" {
+				if _, enabled, err := mod.v3Identity(context.Background(), project); err != nil || enabled {
+					t.Fatalf("initial legacy admission: %v", err)
+				}
+				if !mod.cache.legacy[key].cacheEligible {
+					t.Fatal("fixture did not exercise warm cache reuse")
+				}
+				moveSelected()
+			} else {
+				original := resolveLegacyGitIdentity
+				t.Cleanup(func() { resolveLegacyGitIdentity = original })
+				changed := false
+				resolveLegacyGitIdentity = func(ctx context.Context, cwd, name, prefix string) (string, proxy.ProjectIdentityV2, error) {
+					if prefix != "old/" {
+						t.Fatalf("race did not capture the old batched prefix: %q", prefix)
+					}
+					changed = true
+					moveSelected()
+					return original(ctx, cwd, name, prefix)
+				}
+				if _, _, err := mod.v3Identity(context.Background(), project); err == nil || !changed {
+					slug, identity, _ := mod.proxyV2Identity(context.Background(), project)
+					t.Fatalf("moved selected directory admitted stale scope: slug=%s prefix=%q changed=%t err=%v", slug, identity.GetRelativePath(), changed, err)
+				}
+				if _, ok := mod.cache.legacy[key]; ok {
+					t.Fatal("unstable admission retained legacy scope")
+				}
+				if _, ok := mod.cache.entries.Load(key); ok {
+					t.Fatal("unstable admission retained a slug")
+				}
+				if _, ok := mod.cache.identities.Load(key); ok {
+					t.Fatal("unstable admission retained V2 metadata")
+				}
+				resolveLegacyGitIdentity = original
+			}
+			output, err := exec.Command("git", "-C", selected, "rev-parse", "--show-prefix").Output()
+			if err != nil || strings.TrimSpace(string(output)) != "new/" {
+				t.Fatalf("Git did not select the moved relative scope: %v: %s", err, output)
+			}
+			for range 2 {
+				if _, enabled, err := mod.v3Identity(context.Background(), project); err != nil || enabled {
+					t.Fatalf("refreshed legacy admission: %v", err)
+				}
+				slug, identity, err := mod.proxyV2Identity(context.Background(), project)
+				want := fmt.Sprintf("%x", sha256.Sum256([]byte("https://git.example.test/Platform/Daemon.git/new/")))[:8]
+				if err != nil || slug != want || identity.GetRelativePath() != "new/" {
+					t.Fatalf("moved directory reused old scope: slug=%s prefix=%q err=%v", slug, identity.GetRelativePath(), err)
+				}
+			}
+		})
 	}
 }
 
