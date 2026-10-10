@@ -172,14 +172,17 @@ func ResolveProjectIdentityV2(ctx context.Context, cwd string) (ProjectIdentityV
 	return identity, nil
 }
 
-// ResolveGitProjectIdentityV2 derives the existing Git-only V2 scope without
-// creating or staging either project marker. It never enters the non-Git path.
-func ResolveGitProjectIdentityV2(ctx context.Context, cwd, displayName string) (string, ProjectIdentityV2, error) {
+// ResolveGitProjectIdentityV2 derives the existing Git-only V2 scope using the
+// selected prefix already inspected by the caller. It never creates or stages
+// either project marker and never enters the non-Git path.
+func ResolveGitProjectIdentityV2(ctx context.Context, cwd, displayName, prefix string) (string, ProjectIdentityV2, error) {
 	resolved, err := filepath.Abs(cwd)
 	if err != nil {
 		return "", ProjectIdentityV2{}, err
 	}
-	remote, prefix, err := getGitInfo(ctx, resolved)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	remote, err := getGitRemote(ctx, resolved)
 	if err != nil {
 		return "", ProjectIdentityV2{}, err
 	}
@@ -410,19 +413,9 @@ func getGitInfo(ctx context.Context, cwd string) (remoteURL, relativePath string
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	rawRemote, err := runGit(ctx, cwd, "remote", "get-url", "origin")
-	if err != nil {
-		if isMissingGitIdentityError(err) {
-			return "", "", fmt.Errorf("%w: %v", errGitIdentityAbsent, err)
-		}
-		return "", "", err
-	}
-	remoteURL, err = normalizeGitRemote(strings.TrimSpace(rawRemote))
+	remoteURL, err = getGitRemote(ctx, cwd)
 	if err != nil {
 		return "", "", err
-	}
-	if remoteURL == "" {
-		return "", "", errGitIdentityAbsent
 	}
 
 	rawPrefix, err := runGit(ctx, cwd, "rev-parse", "--show-prefix")
@@ -432,6 +425,24 @@ func getGitInfo(ctx context.Context, cwd string) (remoteURL, relativePath string
 	relativePath = strings.TrimSpace(rawPrefix)
 
 	return remoteURL, relativePath, nil
+}
+
+func getGitRemote(ctx context.Context, cwd string) (string, error) {
+	rawRemote, err := runGit(ctx, cwd, "remote", "get-url", "origin")
+	if err != nil {
+		if isMissingGitIdentityError(err) {
+			return "", fmt.Errorf("%w: %v", errGitIdentityAbsent, err)
+		}
+		return "", err
+	}
+	remote, err := normalizeGitRemote(strings.TrimSpace(rawRemote))
+	if err != nil {
+		return "", err
+	}
+	if remote == "" {
+		return "", errGitIdentityAbsent
+	}
+	return remote, nil
 }
 
 func normalizeGitRemote(value string) (string, error) {

@@ -2,8 +2,10 @@ package engramcore
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +19,7 @@ import (
 	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/internal/proxy"
 	pb "github.com/thebtf/engram/proto/engram/v1"
+	muxcore "github.com/thebtf/mcp-mux/muxcore"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -56,7 +59,11 @@ func TestLegacySelectedScopeAcceptsFilesystemAliases(t *testing.T) {
 			if filepath.Clean(selectedRoot) == filepath.Clean(gitRoot) {
 				t.Fatal("fixture did not produce distinct Git and selected root spellings")
 			}
-			if !legacySelectedScopeUnchanged(selected, gitRoot) {
+			prefix := ""
+			if suffix != "" {
+				prefix = suffix + "/"
+			}
+			if !legacySelectedScopeUnchanged(selected, gitRoot, prefix) {
 				t.Fatal("same filesystem repository was refused for a different path spelling")
 			}
 		})
@@ -84,6 +91,241 @@ func TestLegacySelectedScopeAcceptsFilesystemAliases(t *testing.T) {
 		if srv.callReq.GetProjectIdentity().GetRelativePath() != "nested/" {
 			t.Fatal("retargeted filesystem alias reused the previous selected prefix")
 		}
+	}
+}
+
+func TestLegacySelectedDirectoryMoveInvalidatesScope(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "0")
+	t.Setenv("GIT_CONFIG_SYSTEM", filepath.Join(configDir, "system.gitconfig"))
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(configDir, "global.gitconfig"))
+	t.Setenv("GIT_CONFIG_COUNT", "0")
+	for _, phase := range []string{"during-resolution", "warm"} {
+		t.Run(phase, func(t *testing.T) {
+			root := daemonV3Repository(t)
+			if err := os.WriteFile(filepath.Join(root, ".engram-project"), []byte(`{"name":"engram"}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			selected, moved := filepath.Join(root, "old"), filepath.Join(root, "new")
+			if err := os.Mkdir(selected, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			directory, err := os.Open(selected)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before, statErr := directory.Stat()
+			closeErr := directory.Close()
+			if statErr != nil {
+				t.Fatal(statErr)
+			}
+			if closeErr != nil {
+				t.Fatal(closeErr)
+			}
+			moveSelected := func() {
+				if err := os.Rename(selected, moved); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(moved, selected); err != nil {
+					t.Fatalf("selected-directory symlink capability unavailable: %v", err)
+				}
+				after, err := os.Stat(moved)
+				if err != nil {
+					t.Fatal(err)
+				}
+				alias, err := os.Stat(selected)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !os.SameFile(before, after) || !os.SameFile(after, alias) {
+					t.Fatal("selected-directory move or alias changed the inode")
+				}
+			}
+			project := muxcore.ProjectContext{ID: "fixture", Cwd: selected}
+			mod := NewModuleWithClientInstanceID("fixture-daemon-install")
+			key := cacheKey(project)
+			if phase == "warm" {
+				if _, enabled, err := mod.v3Identity(context.Background(), project); err != nil || enabled {
+					t.Fatalf("initial legacy admission: %v", err)
+				}
+				if !mod.cache.legacy[key].cacheEligible {
+					t.Fatal("fixture did not exercise warm cache reuse")
+				}
+				moveSelected()
+			} else {
+				original := resolveLegacyGitIdentity
+				t.Cleanup(func() { resolveLegacyGitIdentity = original })
+				changed := false
+				resolveLegacyGitIdentity = func(ctx context.Context, cwd, name, prefix string) (string, proxy.ProjectIdentityV2, error) {
+					if prefix != "old/" {
+						t.Fatalf("race did not capture the old batched prefix: %q", prefix)
+					}
+					changed = true
+					moveSelected()
+					return original(ctx, cwd, name, prefix)
+				}
+				if _, _, err := mod.v3Identity(context.Background(), project); err == nil || !changed {
+					slug, identity, _ := mod.proxyV2Identity(context.Background(), project)
+					t.Fatalf("moved selected directory admitted stale scope: slug=%s prefix=%q changed=%t err=%v", slug, identity.GetRelativePath(), changed, err)
+				}
+				if _, ok := mod.cache.legacy[key]; ok {
+					t.Fatal("unstable admission retained legacy scope")
+				}
+				if _, ok := mod.cache.entries.Load(key); ok {
+					t.Fatal("unstable admission retained a slug")
+				}
+				if _, ok := mod.cache.identities.Load(key); ok {
+					t.Fatal("unstable admission retained V2 metadata")
+				}
+				resolveLegacyGitIdentity = original
+			}
+			output, err := exec.Command("git", "-C", selected, "rev-parse", "--show-prefix").Output()
+			if err != nil || strings.TrimSpace(string(output)) != "new/" {
+				t.Fatalf("Git did not select the moved relative scope: %v: %s", err, output)
+			}
+			for range 2 {
+				if _, enabled, err := mod.v3Identity(context.Background(), project); err != nil || enabled {
+					t.Fatalf("refreshed legacy admission: %v", err)
+				}
+				slug, identity, err := mod.proxyV2Identity(context.Background(), project)
+				want := fmt.Sprintf("%x", sha256.Sum256([]byte("https://git.example.test/Platform/Daemon.git/new/")))[:8]
+				if err != nil || slug != want || identity.GetRelativePath() != "new/" {
+					t.Fatalf("moved directory reused old scope: slug=%s prefix=%q err=%v", slug, identity.GetRelativePath(), err)
+				}
+			}
+		})
+	}
+}
+
+func TestLegacyGitMetadataPreservesPathWhitespace(t *testing.T) {
+	for _, test := range []struct {
+		name, root, selected, gitDir string
+		paddedConfig                 bool
+	}{
+		{name: "selected-leading-space-refused", root: "repo", selected: " foo"},
+		{name: "selected-internal-space", root: "repo", selected: "foo bar"},
+		{name: "root-trailing-space", root: "repo ", selected: "nested"},
+		{name: "git-directory-spaces", root: "repo", selected: "nested", gitDir: " gitdir "},
+		{name: "git-directory-internal-space", root: "repo", selected: "nested", gitDir: "git dir"},
+		{name: "config-file-trailing-space", root: "repo", selected: "nested", paddedConfig: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if test.gitDir != "" {
+				capabilityDir := t.TempDir()
+				if err := os.Mkdir(filepath.Join(capabilityDir, test.gitDir), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				entries, err := os.ReadDir(capabilityDir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(entries) != 1 || entries[0].Name() != test.gitDir {
+					t.Skip("filesystem does not preserve the exact requested separate Git directory name")
+				}
+			}
+			configDir := t.TempDir()
+			global := filepath.Join(configDir, "global.gitconfig")
+			if test.paddedConfig {
+				global += " "
+			}
+			if err := os.WriteFile(global, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if test.paddedConfig {
+				entries, err := os.ReadDir(configDir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(entries) != 1 || entries[0].Name() != filepath.Base(global) {
+					t.Skip("filesystem does not preserve the exact trailing-space config filename")
+				}
+			}
+			t.Setenv("GIT_CONFIG_NOSYSTEM", "0")
+			t.Setenv("GIT_CONFIG_SYSTEM", filepath.Join(configDir, "system.gitconfig"))
+			t.Setenv("GIT_CONFIG_GLOBAL", global)
+			t.Setenv("GIT_CONFIG_COUNT", "0")
+			parent := t.TempDir()
+			root := filepath.Join(parent, test.root)
+			if err := os.Rename(daemonV3Repository(t), root); err != nil {
+				t.Fatal(err)
+			}
+			entries, err := os.ReadDir(parent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 1 || entries[0].Name() != test.root {
+				t.Skip("filesystem does not preserve the requested repository name")
+			}
+			if test.gitDir != "" {
+				gitDir := filepath.Join(parent, test.gitDir)
+				if output, err := exec.Command("git", "-C", root, "init", "--quiet", "--separate-git-dir", gitDir).CombinedOutput(); err != nil {
+					t.Fatalf("separate Git directory: %v: %s", err, output)
+				}
+			}
+			if err := os.WriteFile(filepath.Join(root, ".engram-project"), []byte(`{"name":"engram"}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			selected := filepath.Join(root, test.selected)
+			if err := os.Mkdir(selected, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			prefix := test.selected + "/"
+			project := muxcore.ProjectContext{ID: "fixture", Cwd: selected}
+			mod := NewModuleWithClientInstanceID("fixture-daemon-install")
+			key := cacheKey(project)
+			if test.selected == " foo" {
+				original := resolveLegacyGitIdentity
+				t.Cleanup(func() { resolveLegacyGitIdentity = original })
+				var observedPrefix string
+				var validationErr error
+				resolveLegacyGitIdentity = func(ctx context.Context, cwd, name, prefix string) (string, proxy.ProjectIdentityV2, error) {
+					observedPrefix = prefix
+					slug, identity, err := original(ctx, cwd, name, prefix)
+					validationErr = err
+					return slug, identity, err
+				}
+				for range 2 {
+					observedPrefix, validationErr = "", nil
+					_, enabled, err := mod.v3Identity(context.Background(), project)
+					var refusal *module.ModuleError
+					if !enabled || !errors.As(err, &refusal) || refusal.Code != "PROJECT_ANCHOR_INVALID" || observedPrefix != prefix ||
+						validationErr == nil || !strings.Contains(validationErr.Error(), "PROJECT_IDENTITY_INVALID") {
+						t.Fatalf("leading-space scope was normalized or bypassed V2 refusal: observed=%q validation=%v err=%v", observedPrefix, validationErr, err)
+					}
+					_, legacy := mod.cache.legacy[key]
+					_, slug := mod.cache.entries.Load(key)
+					_, identity := mod.cache.identities.Load(key)
+					if legacy || slug || identity {
+						t.Fatal("unsupported leading-space scope retained a normalized identity cache")
+					}
+				}
+				return
+			}
+			remote := "https://git.example.test/Platform/Daemon.git"
+			for round := range 3 {
+				if round == 1 && test.paddedConfig {
+					if err := os.WriteFile(global, []byte("[url \"https://example.invalid/changed/\"]\n\tinsteadOf = https://git.example.test/Platform/\n"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+					remote = "https://example.invalid/changed/Daemon.git"
+				}
+				if round == 2 {
+					t.Setenv("PATH", t.TempDir())
+				}
+				if _, enabled, err := mod.v3Identity(context.Background(), project); err != nil || enabled {
+					t.Fatalf("supported whitespace legacy admission: enabled=%t err=%v", enabled, err)
+				}
+				slug, identity, err := mod.proxyV2Identity(context.Background(), project)
+				want := fmt.Sprintf("%x", sha256.Sum256([]byte(remote+"/"+prefix)))[:8]
+				if err != nil || slug != want || identity.GetRelativePath() != prefix || identity.GetGitRemote() != remote {
+					t.Fatalf("supported path bytes changed: slug=%s prefix=%q remote=%q err=%v", slug, identity.GetRelativePath(), identity.GetGitRemote(), err)
+				}
+				cached := mod.cache.legacy[key]
+				if _, ok := cached.files[global]; !ok || !cached.cacheEligible {
+					t.Fatal("Git config path bytes were lost or warm reuse was disabled")
+				}
+			}
+		})
 	}
 }
 
@@ -146,8 +388,8 @@ func TestProxyLegacyColdScopeRefusesConfigTransition(t *testing.T) {
 	original := resolveLegacyGitIdentity
 	t.Cleanup(func() { resolveLegacyGitIdentity = original })
 	changed := false
-	resolveLegacyGitIdentity = func(ctx context.Context, cwd, name string) (string, proxy.ProjectIdentityV2, error) {
-		slug, identity, err := original(ctx, cwd, name)
+	resolveLegacyGitIdentity = func(ctx context.Context, cwd, name, prefix string) (string, proxy.ProjectIdentityV2, error) {
+		slug, identity, err := original(ctx, cwd, name, prefix)
 		if err == nil && !changed {
 			changed = true
 			if output, err := exec.Command("git", "-C", cwd, "remote", "set-url", "origin", "https://git.example.test/new/repo.git").CombinedOutput(); err != nil {
@@ -169,6 +411,420 @@ func TestProxyLegacyColdScopeRefusesConfigTransition(t *testing.T) {
 		if srv.callReq.GetProjectIdentity().GetGitRemote() != "https://git.example.test/new/repo.git" {
 			t.Fatal("subsequent request reused stale origin")
 		}
+	}
+}
+
+func TestLegacyBatchedMetadataPreservesSelectedScope(t *testing.T) {
+	root := daemonV3Repository(t)
+	if err := os.WriteFile(filepath.Join(root, ".engram-project"), []byte(`{"name":"engram"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"config", "user.name", "identity-fixture"},
+		{"config", "user.email", "identity@example.invalid"},
+		{"remote", "set-url", "origin", "fixture:repo.git"},
+		{"config", "url.https://fixture-user:fixture-credential@example.invalid/acme/.insteadOf", "fixture:"},
+		{"add", ".engram-project"},
+		{"commit", "--quiet", "-m", "identity fixture"},
+	} {
+		if output, err := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("fixture Git: %v: %s", err, output)
+		}
+	}
+	linked := filepath.Join(t.TempDir(), "linked")
+	if output, err := exec.Command("git", "-C", root, "worktree", "add", "--quiet", "--detach", linked, "HEAD").CombinedOutput(); err != nil {
+		t.Fatalf("fixture worktree: %v: %s", err, output)
+	}
+	for _, selectedRoot := range []string{root, linked} {
+		for _, prefix := range []string{"", "nested/"} {
+			t.Run(filepath.Base(selectedRoot)+"/"+prefix, func(t *testing.T) {
+				selected := filepath.Join(selectedRoot, prefix)
+				if err := os.MkdirAll(selected, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				index, err := exec.Command("git", "-C", selectedRoot, "rev-parse", "--path-format=absolute", "--git-path", "index").Output()
+				if err != nil {
+					t.Fatal(err)
+				}
+				indexPath := strings.TrimSpace(string(index))
+				before, err := os.ReadFile(indexPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				project := muxcore.ProjectContext{ID: "fixture", Cwd: selected}
+				mod := NewModuleWithClientInstanceID("fixture-daemon-install")
+				identity, enabled, err := mod.v3Identity(context.Background(), project)
+				if err != nil || enabled || identity != nil {
+					t.Fatalf("legacy classification: enabled=%t err=%v", enabled, err)
+				}
+				slug, metadata, err := mod.proxyV2Identity(context.Background(), project)
+				const remote = "https://example.invalid/acme/repo.git"
+				want := fmt.Sprintf("%x", sha256.Sum256([]byte(remote+"/"+prefix)))[:8]
+				if err != nil || slug != want || metadata.GetGitRemote() != remote || metadata.GetRelativePath() != prefix {
+					t.Fatalf("selected scope or normalized origin changed: slug=%s prefix=%q err=%v", slug, metadata.GetRelativePath(), err)
+				}
+				for _, name := range []string{"config", "index", "HEAD", "config.worktree"} {
+					output, err := exec.Command("git", "-C", selectedRoot, "rev-parse", "--path-format=absolute", "--git-path", name).Output()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, ok := mod.cache.legacy[cacheKey(project)].files[filepath.Clean(strings.TrimSpace(string(output)))]; !ok {
+						t.Fatalf("batched metadata lost %s dependency", name)
+					}
+				}
+				after, err := os.ReadFile(indexPath)
+				if err != nil || string(before) != string(after) {
+					t.Fatal("metadata resolution changed the index")
+				}
+				if prefix != "" {
+					for _, marker := range []string{".engram-project", ".engram-project-v2.json"} {
+						if _, err := os.Stat(filepath.Join(selected, marker)); !os.IsNotExist(err) {
+							t.Fatal("metadata resolution created a selected-directory marker")
+						}
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestLegacyConfigAbsenceCreationInvalidatesScope(t *testing.T) {
+	for _, variable := range []string{"GIT_CONFIG_SYSTEM", "GIT_CONFIG_GLOBAL"} {
+		for _, phase := range []string{"warm", "during-resolution"} {
+			t.Run(variable+"/"+phase, func(t *testing.T) {
+				configDir := t.TempDir()
+				t.Setenv("GIT_CONFIG_NOSYSTEM", "0")
+				t.Setenv("GIT_CONFIG_SYSTEM", filepath.Join(configDir, "system.gitconfig"))
+				t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(configDir, "global.gitconfig"))
+				root := daemonV3Repository(t)
+				if err := os.WriteFile(filepath.Join(root, ".engram-project"), []byte(`{"name":"engram"}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				project := muxcore.ProjectContext{ID: "fixture", Cwd: root}
+				mod := NewModuleWithClientInstanceID("fixture-daemon-install")
+				createConfig := func() {
+					if err := os.WriteFile(os.Getenv(variable), []byte("[url \"https://example.invalid/changed/\"]\n\tinsteadOf = https://git.example.test/Platform/\n"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if phase == "warm" {
+					if _, enabled, err := mod.v3Identity(context.Background(), project); err != nil || enabled {
+						t.Fatalf("initial legacy admission: %v", err)
+					}
+					createConfig()
+				} else {
+					original := resolveLegacyGitIdentity
+					t.Cleanup(func() { resolveLegacyGitIdentity = original })
+					resolveLegacyGitIdentity = func(ctx context.Context, cwd, name, prefix string) (string, proxy.ProjectIdentityV2, error) {
+						slug, identity, err := original(ctx, cwd, name, prefix)
+						if err == nil {
+							createConfig()
+						}
+						return slug, identity, err
+					}
+					if _, _, err := mod.v3Identity(context.Background(), project); err == nil {
+						t.Fatal("config created during resolution granted stale scope")
+					}
+					if _, ok := mod.cache.legacy[cacheKey(project)]; ok {
+						t.Fatal("unstable scope remained cached")
+					}
+					resolveLegacyGitIdentity = original
+				}
+				if _, enabled, err := mod.v3Identity(context.Background(), project); err != nil || enabled {
+					t.Fatalf("refreshed legacy admission: %v", err)
+				}
+				slug, identity, err := mod.proxyV2Identity(context.Background(), project)
+				const remote = "https://example.invalid/changed/Daemon.git"
+				want := fmt.Sprintf("%x", sha256.Sum256([]byte(remote+"/")))[:8]
+				if err != nil || slug != want || identity.GetGitRemote() != remote {
+					t.Fatalf("created config reused stale scope: slug=%s err=%v", slug, err)
+				}
+			})
+		}
+	}
+}
+
+func TestLegacyGitEnvironmentVariableCase(t *testing.T) {
+	t.Setenv("git_config_legacy_fingerprint_test", "before")
+	before := legacyGitEnvironment()
+	t.Setenv("git_config_legacy_fingerprint_test", "after")
+	changed := before != legacyGitEnvironment()
+	if changed != (runtime.GOOS == "windows") {
+		t.Fatal("Git environment fingerprint does not follow platform variable-name case semantics")
+	}
+}
+
+func TestLegacyWindowsLowercaseConfigSwitchInvalidatesScope(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows environment variable names are case-insensitive")
+	}
+	for _, variable := range []string{"GIT_CONFIG_SYSTEM", "GIT_CONFIG_GLOBAL"} {
+		for _, phase := range []string{"warm", "during-resolution"} {
+			t.Run(variable+"/"+phase, func(t *testing.T) {
+				root := daemonV3Repository(t)
+				if err := os.WriteFile(filepath.Join(root, ".engram-project"), []byte(`{"name":"engram"}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				dir := t.TempDir()
+				initial, replacement := filepath.Join(dir, "initial.gitconfig"), filepath.Join(dir, "replacement.gitconfig")
+				if err := os.WriteFile(initial, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(replacement, []byte("[url \"https://example.invalid/changed/\"]\n\tinsteadOf = https://git.example.test/Platform/\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				originalValue, present := os.LookupEnv(variable)
+				if err := os.Unsetenv(variable); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() {
+					if present {
+						if err := os.Setenv(variable, originalValue); err != nil {
+							t.Fatal(err)
+						}
+					}
+				})
+				lowercase := strings.ToLower(variable)
+				t.Setenv(lowercase, initial)
+				t.Setenv("GIT_CONFIG_NOSYSTEM", "0")
+				project := muxcore.ProjectContext{ID: "fixture", Cwd: root}
+				mod := NewModuleWithClientInstanceID("fixture-daemon-install")
+				if phase == "warm" {
+					if _, enabled, err := mod.v3Identity(context.Background(), project); err != nil || enabled {
+						t.Fatalf("initial legacy admission: %v", err)
+					}
+					t.Setenv(lowercase, replacement)
+				} else {
+					original := resolveLegacyGitIdentity
+					t.Cleanup(func() { resolveLegacyGitIdentity = original })
+					changed := false
+					resolveLegacyGitIdentity = func(ctx context.Context, cwd, name, prefix string) (string, proxy.ProjectIdentityV2, error) {
+						slug, identity, err := original(ctx, cwd, name, prefix)
+						if err == nil {
+							changed = true
+							t.Setenv(lowercase, replacement)
+						}
+						return slug, identity, err
+					}
+					if _, _, err := mod.v3Identity(context.Background(), project); err == nil || !changed {
+						t.Fatalf("config environment switched during resolution was not refused: changed=%t err=%v", changed, err)
+					}
+					if _, ok := mod.cache.legacy[cacheKey(project)]; ok {
+						t.Fatal("unstable environment retained legacy scope")
+					}
+					resolveLegacyGitIdentity = original
+				}
+				if _, enabled, err := mod.v3Identity(context.Background(), project); err != nil || enabled {
+					t.Fatalf("refreshed legacy admission: %v", err)
+				}
+				_, identity, err := mod.proxyV2Identity(context.Background(), project)
+				if err != nil || identity.GetGitRemote() != "https://example.invalid/changed/Daemon.git" {
+					t.Fatal("lowercase config switch reused stale project scope")
+				}
+			})
+		}
+	}
+}
+
+func TestLegacySymlinkConfigTargetTransition(t *testing.T) {
+	for _, phase := range []string{"warm", "during-resolution"} {
+		t.Run(phase, func(t *testing.T) {
+			root := daemonV3Repository(t)
+			if err := os.WriteFile(filepath.Join(root, ".engram-project"), []byte(`{"name":"engram"}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			dir := t.TempDir()
+			target, link := filepath.Join(dir, "config.target"), filepath.Join(dir, "global.gitconfig")
+			if err := os.WriteFile(target, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink("config.target", link); err != nil {
+				t.Fatalf("config symlink capability unavailable: %v", err)
+			}
+			t.Setenv("GIT_CONFIG_GLOBAL", link)
+			project := muxcore.ProjectContext{ID: "fixture", Cwd: root}
+			mod := NewModuleWithClientInstanceID("fixture-daemon-install")
+			replaceTarget := func() {
+				replacement := filepath.Join(dir, "replacement.target")
+				if err := os.WriteFile(replacement, []byte("[url \"https://example.invalid/changed/\"]\n\tinsteadOf = https://git.example.test/Platform/\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Rename(replacement, target); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if phase == "warm" {
+				if _, enabled, err := mod.v3Identity(context.Background(), project); err != nil || enabled {
+					t.Fatalf("ordinary symlinked config refused: %v", err)
+				}
+				replaceTarget()
+				if legacyFilesUnchanged(mod.cache.legacy[cacheKey(project)].files) {
+					t.Fatal("replaced config target passed the cached fingerprint")
+				}
+			} else {
+				original := resolveLegacyGitIdentity
+				t.Cleanup(func() { resolveLegacyGitIdentity = original })
+				changed := false
+				resolveLegacyGitIdentity = func(ctx context.Context, cwd, name, prefix string) (string, proxy.ProjectIdentityV2, error) {
+					slug, identity, err := original(ctx, cwd, name, prefix)
+					if err == nil {
+						changed = true
+						replaceTarget()
+					}
+					return slug, identity, err
+				}
+				if _, _, err := mod.v3Identity(context.Background(), project); err == nil || !changed {
+					t.Fatalf("target changed during resolution was not inspected and refused: changed=%t err=%v", changed, err)
+				}
+				if _, ok := mod.cache.legacy[cacheKey(project)]; ok {
+					t.Fatal("unstable symlink target retained legacy scope")
+				}
+				resolveLegacyGitIdentity = original
+			}
+			if _, enabled, err := mod.v3Identity(context.Background(), project); err != nil || enabled {
+				t.Fatalf("refreshed symlink config refused: %v", err)
+			}
+			_, identity, err := mod.proxyV2Identity(context.Background(), project)
+			if err != nil || identity.GetGitRemote() != "https://example.invalid/changed/Daemon.git" {
+				t.Fatal("symlink target replacement reused stale project scope")
+			}
+		})
+	}
+}
+
+func TestLegacyConfigSymlinkFingerprintBoundaries(t *testing.T) {
+	dir := t.TempDir()
+	first, second := filepath.Join(dir, "first.target"), filepath.Join(dir, "second.target")
+	content := []byte("[fixture]\nvalue = same\n")
+	for _, filename := range []string{first, second} {
+		if err := os.WriteFile(filename, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inner, outer := filepath.Join(dir, "inner.link"), filepath.Join(dir, "global.gitconfig")
+	for link, target := range map[string]string{inner: "first.target", outer: "inner.link"} {
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatal(err)
+		}
+	}
+	configs := map[string]bool{outer: true}
+	snapshot := func() map[string]legacyFileState {
+		t.Helper()
+		result, err := legacyFileFingerprints([]string{outer}, configs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	t.Run("same-content-target-replacement", func(t *testing.T) {
+		before := snapshot()
+		replacement := filepath.Join(dir, "replacement.target")
+		if err := os.WriteFile(replacement, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(replacement, first); err != nil {
+			t.Fatal(err)
+		}
+		if legacyFilesUnchanged(before) {
+			t.Fatal("same-content config target replacement did not invalidate identity")
+		}
+	})
+	t.Run("same-target-link-replacement", func(t *testing.T) {
+		before := snapshot()
+		replacement := filepath.Join(dir, "replacement.link")
+		if err := os.Symlink("first.target", replacement); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(replacement, inner); err != nil {
+			t.Fatal(err)
+		}
+		if legacyFilesUnchanged(before) {
+			t.Fatal("same-target intermediate link replacement did not invalidate identity")
+		}
+	})
+	t.Run("retargeted-link", func(t *testing.T) {
+		before := snapshot()
+		replacement := filepath.Join(dir, "retargeted.link")
+		if err := os.Symlink("second.target", replacement); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(replacement, inner); err != nil {
+			t.Fatal(err)
+		}
+		if legacyFilesUnchanged(before) {
+			t.Fatal("retargeted config link did not invalidate identity")
+		}
+	})
+	t.Run("non-config-link-remains-refused", func(t *testing.T) {
+		if _, err := legacyFileFingerprints([]string{outer}, nil); err == nil {
+			t.Fatal("config-link support weakened the non-config file guard")
+		}
+	})
+	t.Run("loop-refused", func(t *testing.T) {
+		loop := filepath.Join(dir, "loop.gitconfig")
+		if err := os.Symlink("loop.gitconfig", loop); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := legacyFileFingerprints([]string{loop}, map[string]bool{loop: true}); err == nil {
+			t.Fatal("config symlink loop was accepted")
+		}
+	})
+	t.Run("absent-target-creation", func(t *testing.T) {
+		link, target := filepath.Join(dir, "absent.gitconfig"), filepath.Join(dir, "absent.target")
+		if err := os.Symlink("absent.target", link); err != nil {
+			t.Fatal(err)
+		}
+		before, err := legacyFileFingerprints([]string{link}, map[string]bool{link: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(target, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if legacyFilesUnchanged(before) {
+			t.Fatal("creation of absent config-link target reused a cache entry")
+		}
+	})
+	t.Run("oversized-target-refused", func(t *testing.T) {
+		target, link := filepath.Join(dir, "oversized.target"), filepath.Join(dir, "oversized.gitconfig")
+		if err := os.WriteFile(target, make([]byte, 1024*1024+1), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("oversized.target", link); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := legacyFileFingerprints([]string{link}, map[string]bool{link: true}); err == nil {
+			t.Fatal("config symlink bypassed the dependency size bound")
+		}
+	})
+}
+
+func TestLegacyConfigDependenciesRequireFullDerivation(t *testing.T) {
+	root := daemonV3Repository(t)
+	if output, err := exec.Command("git", "-C", root, "config", "fixture.multiline", "first\nGIT_CONFIG_GLOBAL=not-a-path\nlast").CombinedOutput(); err != nil {
+		t.Fatalf("multiline config: %v: %s", err, output)
+	}
+	if _, eligible, err := legacyConfigDependencies(context.Background(), root); err != nil || !eligible {
+		t.Fatalf("file-only config is not complete: %v", err)
+	}
+	for _, key := range []string{"include.path", "includeIf.gitdir:/not-selected/.path"} {
+		t.Run(key, func(t *testing.T) {
+			if output, err := exec.Command("git", "-C", root, "config", key, filepath.Join(root, "absent.gitconfig")).CombinedOutput(); err != nil {
+				t.Fatalf("include config: %v: %s", err, output)
+			}
+			if _, eligible, err := legacyConfigDependencies(context.Background(), root); err != nil || eligible {
+				t.Fatalf("incomplete include config was reusable: eligible=%t err=%v", eligible, err)
+			}
+			if output, err := exec.Command("git", "-C", root, "config", "--unset", key).CombinedOutput(); err != nil {
+				t.Fatalf("remove fixture include: %v: %s", err, output)
+			}
+		})
+	}
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "fixture.command")
+	t.Setenv("GIT_CONFIG_VALUE_0", "value")
+	if _, eligible, err := legacyConfigDependencies(context.Background(), root); err != nil || eligible {
+		t.Fatalf("command-origin config was reusable: eligible=%t err=%v", eligible, err)
 	}
 }
 
