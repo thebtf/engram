@@ -28,14 +28,16 @@ import (
 const (
 	// TreeSitterWorkerProtocolVersion is the single framed child-process protocol.
 	TreeSitterWorkerProtocolVersion           = "uci-tree-sitter/v2"
-	TreeSitterFactsExtractionContractRevision = "uci-tree-sitter-facts/v8"
+	TreeSitterFactsExtractionContractRevision = "uci-tree-sitter-facts/v9"
 	TreeSitterBundleSchemaRevision            = "uci-tree-sitter-bundle/v2"
 	treeSitterWorkerMaxIdentifierBytes        = 4 << 10
-	treeSitterWorkerHardMaxInputBytes         = 4 << 20
-	treeSitterWorkerHardMaxOutputBytes        = 16 << 20
-	treeSitterWorkerMaxProfileBytes           = 256
-	treeSitterWorkerMaxDefinitions            = 2_048
-	treeSitterWorkerMaxReferences             = 8_192
+	// Longest lexical prefix, four offsets within the 4 MiB source cap, and separators.
+	treeSitterWorkerMaxReferenceKeyBytes = treeSitterWorkerMaxIdentifierBytes + len("typescript:lexical_function_binding:") + 4*len("4194304") + len("::@:")
+	treeSitterWorkerHardMaxInputBytes    = 4 << 20
+	treeSitterWorkerHardMaxOutputBytes   = 16 << 20
+	treeSitterWorkerMaxProfileBytes      = 256
+	treeSitterWorkerMaxDefinitions       = 2_048
+	treeSitterWorkerMaxReferences        = 8_192
 	// TreeSitterMaxLexicalFacts bounds resolver evidence independently of user references.
 	TreeSitterMaxLexicalFacts          = 16_384
 	treeSitterWorkerMaxChunks          = 64
@@ -785,8 +787,8 @@ func treeSitterValidateReferences(source []byte, lineStarts []int, references []
 
 func treeSitterReferenceValid(source []byte, lineStarts []int, reference TreeSitterReferenceSite) bool {
 	return reference.Kind != "" && reference.SymbolKey != "" && reference.LocalKey != "" && reference.RawTarget != "" && reference.TargetKey == "" &&
-		treeSitterReferenceKindValid(reference.Kind) && treeSitterBoundedText(reference.SymbolKey, treeSitterWorkerMaxIdentifierBytes) &&
-		treeSitterBoundedText(reference.LocalKey, treeSitterWorkerMaxIdentifierBytes) && treeSitterBoundedText(reference.OwnerLocalKey, treeSitterWorkerMaxIdentifierBytes) &&
+		treeSitterReferenceKindValid(reference.Kind) && treeSitterBoundedText(reference.SymbolKey, treeSitterWorkerMaxReferenceKeyBytes) &&
+		treeSitterBoundedText(reference.LocalKey, treeSitterWorkerMaxReferenceKeyBytes) && treeSitterBoundedText(reference.OwnerLocalKey, treeSitterWorkerMaxIdentifierBytes) &&
 		treeSitterBoundedText(reference.RawTarget, treeSitterWorkerMaxIdentifierBytes) && treeSitterReferenceResolutionValid(reference.Resolution) &&
 		treeSitterSpanValid(source, lineStarts, reference.Span, false) && treeSitterReferenceSiteIdentityValid(reference) &&
 		(reference.Kind != "binding_write" || reference.Resolution == TreeSitterResolutionSyntaxOnly &&

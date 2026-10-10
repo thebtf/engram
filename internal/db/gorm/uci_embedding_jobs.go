@@ -66,6 +66,7 @@ type uciEmbeddingCandidateRow struct {
 
 func (row uciEmbeddingCandidateRow) candidate(ref ucidomain.ContextRef, profile ucidomain.VectorProfile) (ucidomain.EmbeddingCandidate, bool) {
 	candidate, ok := (uciQueryCandidateRow{
+		MembershipID:       row.MembershipID,
 		ArtifactID:         row.ArtifactID,
 		ChunkContentDigest: row.ChunkContentDigest,
 		FactsDigest:        row.FactsDigest,

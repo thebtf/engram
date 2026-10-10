@@ -130,6 +130,7 @@ func TestUCIApplicationMCPUsesExactPostgreSQLViews(t *testing.T) {
 			"view_id":    historicalItem.Ref.ViewID,
 			"entity_key": historicalItem.Ref.EntityKey,
 		},
+		"membership_id": historicalItem.MembershipID,
 		"span": map[string]any{
 			"byte_start": historicalItem.Span.ByteStart,
 			"byte_end":   historicalItem.Span.ByteEnd,
@@ -173,6 +174,7 @@ func TestUCIApplicationMCPUsesExactPostgreSQLViews(t *testing.T) {
 			"view_id":    historicalItem.Ref.ViewID,
 			"entity_key": historicalItem.Ref.EntityKey,
 		},
+		"membership_id": historicalItem.MembershipID,
 		"span": map[string]any{
 			"byte_start": historicalItem.Span.ByteStart,
 			"byte_end":   historicalItem.Span.ByteEnd,
@@ -1018,6 +1020,7 @@ func TestUCIApplicationOperatorPortsKeepStructureAndRelationsInOneView(t *testin
 			require.Equal(t, "Beta", read.Hit.Text)
 			responseRead, err := composition.application.ReadCodebase(context.Background(), authorized, mcp.CodebaseReadInput{
 				Ref: descriptor.Entity, Span: descriptor.Span, ContentDigest: descriptor.ContentDigest,
+				MembershipID:    descriptor.MembershipID,
 				ReferenceSiteID: descriptor.ReferenceSiteID, MaxBytes: int(descriptor.Span.ByteEnd - descriptor.Span.ByteStart),
 			})
 			require.NoError(t, err)
@@ -1654,7 +1657,8 @@ func (store *workerUCIApplicationStatusStore) LoadIndexStatus(context.Context, u
 func workerUCIApplicationSemanticCandidate(ref uci.ContextRef, artifactID, name, path string) uci.SemanticCandidate {
 	text := "func " + name + "() {}"
 	return uci.SemanticCandidate{Candidate: uci.QueryCandidate{
-		Context: ref,
+		Context:      ref,
+		MembershipID: artifactID,
 		Proof: uci.IndexArtifactProof{
 			ArtifactID:      artifactID,
 			ContentDigest:   uci.IndexDigest(workerUCIApplicationDigest(text)),
@@ -1711,4 +1715,129 @@ func workerUCIApplicationStatusSnapshot(ref uci.ContextRef, embeddingCoverage uc
 			EnrichmentWatermark: uci.QueryEnrichmentWatermark{Sequence: ref.Generation, State: uci.QueryEnrichmentCurrent},
 		},
 	}
+}
+
+func TestUCIApplicationCitationMembershipMCPAndHTTPRoundTrip(t *testing.T) {
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
+	t.Setenv("ENGRAM_EMBEDDING_URL", "")
+	t.Setenv("ENGRAM_EMBEDDING_MODEL", "")
+	store := openWorkerUCIContextCompositionStore(t)
+	mcpServer := mcp.NewServer(mcp.ServerOptions{Version: "citation-membership-postgres"})
+	composition, err := composeUCIContext(true, store.GetDB(), mcpServer, workerUCISemanticConfig())
+	require.NoError(t, err)
+	fixture := newWorkerUCIApplicationFixture(t, composition)
+	publisher, err := composition.projectionStore.Publisher(composition.authorizer, uci.IndexPublicationConfig{Limits: uci.DefaultIndexPublicationLimits()})
+	require.NoError(t, err)
+	caller := uci.IndexCaller{AuthRealm: string(auth.SourceClient), Principal: fixture.principal, OwnerInstance: "citation-membership-runtime"}
+	shared := workerUCIApplicationAddArtifact(t, composition.projectionStore, workerUCIApplicationArtifactInput{sourceID: fixture.source.SourceID, profileDigest: fixture.profile.ParserBundleDigest, label: "citation-runtime-shared", name: "SharedCitation", symbol: "shared", source: "func SharedCitation() { SharedCitation() }\n", rawTarget: "SharedCitation"})
+	paths := []string{"a-before.tsx", "a-after.tsx"}
+	memberships := []uci.IndexMembership{workerUCIApplicationMembership(paths[0], shared), workerUCIApplicationMembership(paths[1], shared)}
+	replacements := []uci.IndexEdgeReplacement{workerUCIApplicationReplacement(t, paths[0], shared, paths[1], shared), workerUCIApplicationReplacement(t, paths[1], shared, paths[0], shared)}
+	parent := fixture.current.Context
+	published := workerUCIApplicationPublish(t, publisher, caller, workerUCIApplicationPublicationInput{checkout: fixture.checkout, profileID: fixture.profile.ProfileID, key: "citation-runtime-shared", jobKind: uci.IndexJobReconcile, parent: &parent, part: workerUCIApplicationPart([]workerUCIApplicationArtifact{shared}, memberships, replacements), memberships: memberships, replacements: replacements, sequence: 3})
+	identity := auth.ClientWithPrincipal("read-write", fixture.workstationID, fixture.principal, auth.PrincipalKindAgent)
+	ctx := auth.WithIdentity(mcp.ContextWithSession(context.Background(), fixture.clientSessionID+"-membership"), identity)
+	handle := workerUCIApplicationSelectContext(t, mcpServer, ctx, published.Context)
+	adapter, browserFixture := newOperatorCodeHTTPTestAdapter(t)
+	bindHTTP := func(ref uci.ContextRef) {
+		browserFixture.ref = ref
+		browserFixture.binding.pinned = &BrowserBindingContext{SourceID: ref.SourceID, CheckoutID: ref.CheckoutID, ViewID: ref.ViewID, AnalysisProfileID: ref.AnalysisProfileID, Generation: ref.Generation}
+		browserFixture.grants.current.SourceID = ref.SourceID
+		browserFixture.grants.current.CheckoutID = ref.CheckoutID
+		browserFixture.grants.current.AuthRealm = string(auth.SourceClient)
+		adapter.authority = newOperatorCodeServerAuthorizer(composition.contextStore, composition.resolver)
+	}
+	bindHTTP(published.Context)
+	adapter.app = composition.application
+	adapter.graphSources = composition.projectionStore
+	adapter.recorder = composition.exposureRecorder
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: "browser-session-41"})
+		r = r.WithContext(auth.WithIdentity(r.Context(), browserFixture.identity))
+		switch r.URL.Path {
+		case "/api/code/search":
+			adapter.HandleSearch(w, r)
+		case "/api/code/source":
+			adapter.HandleVersionedRead(w, r)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer api.Close()
+	httpCall := func(path string, body map[string]any) uci.QueryResponse {
+		body["tab_binding_id"] = operatorCodeHTTPTestBindingID
+		body["document_proof"] = "proof-current"
+		payload, err := json.Marshal(body)
+		require.NoError(t, err)
+		request, err := http.NewRequest(http.MethodPost, api.URL+path, strings.NewReader(string(payload)))
+		require.NoError(t, err)
+		request.Header.Set("X-Engram-Request-ID", uuid.NewString())
+		response, err := api.Client().Do(request)
+		require.NoError(t, err)
+		defer response.Body.Close()
+		require.Equal(t, http.StatusOK, response.StatusCode)
+		var released uci.QueryResponse
+		require.NoError(t, json.NewDecoder(response.Body).Decode(&released))
+		require.NoError(t, released.Validate())
+		return released
+	}
+	readBoth := func(item uci.QueryItem, selectedHandle string, expectedStatus uci.QueryResponseStatus, expectedPath string) {
+		mcpRead := workerUCIApplicationQueryResponse(t, workerUCIApplicationToolResponse(t, mcpServer, ctx, "codebase_read", map[string]any{"context_handle": selectedHandle, "ref": item.Ref, "membership_id": item.MembershipID, "span": item.Span, "content_digest": item.ContentDigest}))
+		httpRead := httpCall("/api/code/source", map[string]any{"entity_key": item.Ref.EntityKey, "membership_id": item.MembershipID, "span": item.Span, "content_digest": item.ContentDigest})
+		for _, read := range []uci.QueryResponse{mcpRead, httpRead} {
+			require.Equal(t, expectedStatus, read.Status)
+			if expectedStatus == uci.QueryStatusEmpty {
+				require.Empty(t, *read.Items)
+				continue
+			}
+			require.Len(t, *read.Items, 1)
+			actual := (*read.Items)[0]
+			require.Equal(t, item.Ref, actual.Ref)
+			require.Equal(t, item.MembershipID, actual.MembershipID)
+			require.Equal(t, expectedPath, actual.Path)
+			require.Equal(t, item.Span, actual.Span)
+			require.Equal(t, item.ContentDigest, actual.ContentDigest)
+			require.Equal(t, item.Excerpt, actual.Excerpt)
+		}
+	}
+	citations := make([]uci.QueryItem, 0, 2)
+	for _, path := range paths {
+		search := workerUCIApplicationQueryResponse(t, workerUCIApplicationToolResponse(t, mcpServer, ctx, "codebase_search", map[string]any{"context_handle": handle, "query": "SharedCitation", "path_prefix": path, "limit": 10}))
+		require.Len(t, *search.Items, 1)
+		item := (*search.Items)[0]
+		citations = append(citations, item)
+		httpSearch := httpCall("/api/code/search", map[string]any{"query": "SharedCitation", "path_prefix": path, "limit": 10})
+		require.Len(t, *httpSearch.Items, 1)
+		require.Equal(t, item.MembershipID, (*httpSearch.Items)[0].MembershipID)
+		require.Equal(t, path, (*httpSearch.Items)[0].Path)
+		readBoth(item, handle, uci.QueryStatusOK, path)
+	}
+	require.Equal(t, citations[0].Ref, citations[1].Ref)
+	require.Equal(t, citations[0].Span, citations[1].Span)
+	require.Equal(t, citations[0].ContentDigest, citations[1].ContentDigest)
+	require.NotEqual(t, citations[0].MembershipID, citations[1].MembershipID)
+	unknown := citations[0]
+	unknown.MembershipID = uuid.NewString()
+	readBoth(unknown, handle, uci.QueryStatusEmpty, "")
+	foreign := newWorkerUCIApplicationFixture(t, composition)
+	var foreignMembership gormstore.UCIMembership
+	require.NoError(t, store.GetDB().Where("source_id = ? AND valid_to_generation IS NULL", foreign.source.SourceID).First(&foreignMembership).Error)
+	unknown.MembershipID = foreignMembership.MembershipID
+	readBoth(unknown, handle, uci.QueryStatusEmpty, "")
+	changed := workerUCIApplicationAddArtifact(t, composition.projectionStore, workerUCIApplicationArtifactInput{sourceID: fixture.source.SourceID, profileDigest: fixture.profile.ParserBundleDigest, label: "citation-runtime-changed", name: "SharedCitation", symbol: "shared", source: "func SharedCitation() { /* new generation */ }\n"})
+	currentMemberships := []uci.IndexMembership{workerUCIApplicationMembership(paths[0], changed), memberships[1]}
+	currentReplacements := []uci.IndexEdgeReplacement{{SourcePath: paths[0]}, workerUCIApplicationReplacement(t, paths[1], shared, paths[0], changed)}
+	parent = published.Context
+	current := workerUCIApplicationPublish(t, publisher, caller, workerUCIApplicationPublicationInput{checkout: fixture.checkout, profileID: fixture.profile.ProfileID, key: "citation-runtime-current", jobKind: uci.IndexJobReconcile, parent: &parent, part: workerUCIApplicationPart([]workerUCIApplicationArtifact{shared, changed}, currentMemberships, currentReplacements), memberships: currentMemberships, replacements: currentReplacements, sequence: 4})
+	currentHandle := workerUCIApplicationSelectContext(t, mcpServer, ctx, current.Context)
+	bindHTTP(current.Context)
+	inactive := citations[0]
+	inactive.Ref.ViewID = current.Context.ViewID
+	readBoth(inactive, currentHandle, uci.QueryStatusEmpty, "")
+	handle = workerUCIApplicationSelectContext(t, mcpServer, ctx, published.Context)
+	bindHTTP(published.Context)
+	for index, item := range citations {
+		readBoth(item, handle, uci.QueryStatusOK, paths[index])
+	}
+	t.Log("REAL_POSTGRES_MCP_HTTP_SELECTED_MEMBERSHIP_PASS aliases=2 unknown=denied foreign=denied inactive=denied historical=exact")
 }

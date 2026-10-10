@@ -61,7 +61,7 @@ func TestOperatorCodeRoutesDelegateFiveEndpoints(t *testing.T) {
 		{
 			name: "versioned read",
 			path: "/api/code/source",
-			body: `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current","entity_key":"Fixture.Symbol","span":{"byte_start":0,"byte_end":12,"line_start":1,"line_end":1},"content_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`,
+			body: `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current","entity_key":"Fixture.Symbol","membership_id":"60000000-0000-4000-8000-000000000001","span":{"byte_start":0,"byte_end":12,"line_start":1,"line_end":1},"content_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`,
 			configure: func(app *operatorCodeRouteTestApplication, ref uci.ContextRef) {
 				app.read = operatorCodeHTTPTestQueryResponse(t, ref, uci.QueryRetrievalExact)
 			},
@@ -352,7 +352,7 @@ func TestOperatorCodeRoutes_BindingLifecyclePinsExactCatalogContext(t *testing.T
 	require.Empty(t, pinned.Body.String())
 	require.Equal(t, []BrowserBindingContext{browserBindingContext(fixture.ref)}, fixture.binding.pinnedTo)
 
-	read := call(http.MethodPost, "/api/code/source", `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","entity_key":"Fixture.Symbol","span":{"byte_start":0,"byte_end":12,"line_start":1,"line_end":1},"content_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`)
+	read := call(http.MethodPost, "/api/code/source", `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","entity_key":"Fixture.Symbol","membership_id":"60000000-0000-4000-8000-000000000001","span":{"byte_start":0,"byte_end":12,"line_start":1,"line_end":1},"content_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`)
 	require.Equal(t, http.StatusOK, read.Code, read.Body.String())
 	require.Contains(t, read.Body.String(), `"excerpt":"package demo"`)
 

@@ -194,6 +194,7 @@ func uci1SemanticRUReadCitation(ctx context.Context, runtime uciInstalledAccepta
 			"view_id":    citation.Ref.ViewID,
 			"entity_key": citation.Ref.EntityKey,
 		},
+		"membership_id": citation.MembershipID,
 		"span": map[string]any{
 			"byte_start": citation.Span.ByteStart,
 			"byte_end":   citation.Span.ByteEnd,
@@ -215,7 +216,7 @@ func uci1SemanticRUReadCitation(ctx context.Context, runtime uciInstalledAccepta
 		return uci.QueryItem{}, errors.New("U16 Russian semantic citation readback is not a one-item current-View result")
 	}
 	item := (*read.Items)[0]
-	if item.Ref != citation.Ref || item.Span != citation.Span || item.ContentDigest != citation.ContentDigest {
+	if item.Ref != citation.Ref || item.MembershipID != citation.MembershipID || item.Path != citation.Path || item.Span != citation.Span || item.ContentDigest != citation.ContentDigest {
 		return uci.QueryItem{}, errors.New("U16 Russian semantic citation did not read back exactly")
 	}
 	return item, nil

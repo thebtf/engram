@@ -448,6 +448,7 @@ func TestUCIGraphReferenceDescriptorStaysPinnedToEvidenceSite(t *testing.T) {
 	referenceSiteID := "50000000-0000-4000-8000-000000000005"
 	span := `{"byte_start":4,"byte_end":12,"line_start":2,"line_end":2}`
 	row := uciGraphReferenceDescriptorRow{
+		MembershipID:    "60000000-0000-4000-8000-000000000001",
 		EntityKey:       "fixture.Source",
 		ContentDigest:   "sha256:" + fmt.Sprintf("%064x", 1),
 		ReferenceSiteID: referenceSiteID,
@@ -457,6 +458,7 @@ func TestUCIGraphReferenceDescriptorStaysPinnedToEvidenceSite(t *testing.T) {
 	descriptor, ok := row.spec(ref, referenceSiteID)
 	require.True(t, ok)
 	require.Equal(t, ucidomain.QueryEntityRef{SourceID: ref.SourceID, ViewID: ref.ViewID, EntityKey: "fixture.Source"}, descriptor.Entity)
+	require.Equal(t, row.MembershipID, descriptor.MembershipID)
 	require.Equal(t, ucidomain.QuerySpan{ByteStart: 4, ByteEnd: 12, LineStart: 2, LineEnd: 2}, descriptor.Span)
 	require.Equal(t, &referenceSiteID, descriptor.ReferenceSiteID)
 	require.Equal(t, 8, descriptor.MaxBytes)

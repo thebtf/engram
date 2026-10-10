@@ -15,15 +15,21 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	gormstore "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/grpcserver"
+	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/module"
 	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/internal/proxy"
+	"github.com/thebtf/engram/internal/uci"
+	"github.com/thebtf/engram/internal/worker"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 const daemonV3CanonicalProject = "11111111-1111-4111-8111-111111111111"
@@ -1251,8 +1257,9 @@ func TestProxyV3RefusalClearsCompatibilityCacheAndExposesOnlyTypedOutcome(t *tes
 
 func TestV3OnboardingKeepsStaticRegistrationVisibleAndResumesProxy(t *testing.T) {
 	srv := &mockEngramServer{
-		initErr:      typedV3Refusal(t, "PROJECT_ONBOARDING_REQUIRED"),
-		registerResp: &pb.RegisterProjectIdentityV3Response{ProjectResolutionV3: resolvedV3Response()},
+		initErr:          typedV3Refusal(t, "PROJECT_ONBOARDING_REQUIRED"),
+		unscopedInitResp: &pb.InitializeResponse{},
+		registerResp:     &pb.RegisterProjectIdentityV3Response{ProjectResolutionV3: resolvedV3Response()},
 		callResp: &pb.CallToolResponse{
 			ContentJson:         []byte(`[]`),
 			CanonicalProject:    daemonV3CanonicalProject,
@@ -1273,6 +1280,117 @@ func TestV3OnboardingKeepsStaticRegistrationVisibleAndResumesProxy(t *testing.T)
 	}
 	assertV3OnboardingStaticRegistration(t, srv, project.ID, project.Cwd, assertCache, invoke)
 	assertV3OnboardingProxy(t, srv, assertCache, invoke)
+}
+
+func TestV3OnboardingDiscoversAuthoritativeUCICatalogWithoutMemoryAuthority(t *testing.T) {
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
+	contexts := gormstore.NewUCIContextStore(nil)
+	contextApplication, err := mcp.NewUCIContextApplication(
+		uci.NewContextResolver(contexts, gormstore.NewUCIContextAuthorizer(contexts), contexts), contexts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projections := gormstore.NewUCIProjectionStore(nil)
+	application, err := worker.NewUCIApplication(contextApplication,
+		uci.NewAliasResolver(contexts.LookupLegacyAliasRecords), uci.NewQueryService(projections), nil,
+		uci.NewGraphService(projections), uci.NewVersionedReadService(projections), uci.NewIndexStatusService(projections, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := mcp.NewServer(mcp.ServerOptions{Version: daemonClientVersion})
+	catalog.SetCodebaseContextApplication(application)
+	handler := &onboardingCatalogHandler{server: catalog}
+	server, backend := grpcserver.New(handler, nil)
+	t.Cleanup(server.Stop)
+	srv := &onboardingCatalogRPC{
+		mockEngramServer: &mockEngramServer{initErr: typedV3Refusal(t, "PROJECT_ONBOARDING_REQUIRED"), callErr: typedV3Refusal(t, "PROJECT_ONBOARDING_REQUIRED")},
+		catalog:          backend,
+	}
+	_, mod, project := buildV3ContractDispatcher(t, startMockGRPC(t, srv))
+	project.Cwd = daemonV3Repository(t)
+	tools, err := mod.ProxyTools(context.Background(), project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tools) != 4 {
+		t.Fatalf("onboarding UCI catalog has %d tools, want 4 authoritative definitions", len(tools))
+	}
+	expected := make(map[string]mcp.Tool)
+	for _, tool := range catalog.ListTools() {
+		if isUCIProxyTool(tool.Name) {
+			expected[tool.Name] = tool
+		}
+	}
+	for _, tool := range tools {
+		definition, ok := expected[tool.Name]
+		if !ok {
+			t.Fatalf("onboarding exposed non-UCI tool %q", tool.Name)
+		}
+		schema, err := json.Marshal(definition.InputSchema)
+		if err != nil || tool.Description != definition.Description || string(tool.InputSchema) != string(schema) {
+			t.Fatalf("onboarding altered authoritative descriptor for %q: %v", tool.Name, err)
+		}
+		var object map[string]any
+		if err := json.Unmarshal(tool.InputSchema, &object); err != nil || object["type"] != "object" || object["additionalProperties"] != false {
+			t.Fatalf("onboarding descriptor %q is not a closed object schema", tool.Name)
+		}
+		delete(expected, tool.Name)
+	}
+	if len(expected) != 0 || handler.fetches != 1 || len(srv.requests) != 2 {
+		t.Fatalf("catalog missing=%d fetches=%d Initialize calls=%d", len(expected), handler.fetches, len(srv.requests))
+	}
+	assertV3InitializeRequest(t, srv.requests[0])
+	second := srv.requests[1]
+	if second.GetProjectIdentityV3() != nil || second.GetProjectIdentity() != nil || second.GetProject() != "" || second.GetClientName() != srv.requests[0].GetClientName() || second.GetClientVersion() != srv.requests[0].GetClientVersion() {
+		t.Fatal("fallback changed the client or invented project authority")
+	}
+	_, err = mod.ProxyHandleTool(context.Background(), project, "recall_memory", json.RawMessage(`{}`))
+	var refusal *module.ModuleError
+	if !errors.As(err, &refusal) || refusal.Code != "PROJECT_ONBOARDING_REQUIRED" {
+		t.Fatalf("memory call error=%v, want unchanged onboarding refusal", err)
+	}
+	assertV3CallRequest(t, srv.callReq)
+	if srv.registerCalls != 0 || mod.cache.HasEntry(project.ID) {
+		t.Fatal("catalog discovery registered a project or cached memory authority")
+	}
+}
+
+type onboardingCatalogRPC struct {
+	*mockEngramServer
+	catalog  *grpcserver.Server
+	requests []*pb.InitializeRequest
+}
+
+func (server *onboardingCatalogRPC) Initialize(ctx context.Context, request *pb.InitializeRequest) (*pb.InitializeResponse, error) {
+	server.requests = append(server.requests, proto.Clone(request).(*pb.InitializeRequest))
+	if request.GetProjectIdentityV3() != nil {
+		return server.mockEngramServer.Initialize(ctx, request)
+	}
+	return server.catalog.Initialize(ctx, request)
+}
+
+type onboardingCatalogHandler struct {
+	server  *mcp.Server
+	fetches int
+}
+
+func (handler *onboardingCatalogHandler) ToolDefinitions() []grpcserver.ToolDef {
+	handler.fetches++
+	tools := handler.server.ListTools()
+	definitions := make([]grpcserver.ToolDef, len(tools))
+	for i, tool := range tools {
+		schema, _ := json.Marshal(tool.InputSchema)
+		definitions[i] = grpcserver.ToolDef{Name: tool.Name, Description: tool.Description, InputSchemaJSON: schema}
+	}
+	return definitions
+}
+
+func (handler *onboardingCatalogHandler) ServerInfo() (string, string) {
+	return "engram", daemonClientVersion
+}
+
+func (handler *onboardingCatalogHandler) HandleToolCall(context.Context, string, []byte) ([]byte, bool, error) {
+	return nil, true, errors.New("catalog discovery must not execute a data handler")
 }
 
 func assertV3OnboardingStaticRegistration(t *testing.T, srv *mockEngramServer, projectID, projectCWD string, hasCache func() bool, invoke func([]byte) ([]byte, error)) {
@@ -1306,7 +1424,7 @@ func assertV3OnboardingStaticRegistration(t *testing.T, srv *mockEngramServer, p
 	initCalls := srv.initCalls
 	callReq := srv.callReq
 	srv.mu.Unlock()
-	if initCalls != 1 || callReq != nil {
+	if initCalls != 2 || callReq != nil {
 		t.Fatalf("registration bypassed static dispatch: Initialize calls=%d CallTool request=%#v", initCalls, callReq)
 	}
 	if registerCalls != 2 {

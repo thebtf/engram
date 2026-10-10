@@ -606,6 +606,7 @@ func (fixture *uciAuthorizationMatrixFixture) operationArguments(operation, hand
 				"view_id":    item.Ref.ViewID,
 				"entity_key": item.Ref.EntityKey,
 			},
+			"membership_id": item.MembershipID,
 			"span": map[string]any{
 				"byte_start": item.Span.ByteStart,
 				"byte_end":   item.Span.ByteEnd,
@@ -1512,7 +1513,8 @@ func uciAuthorizationItem(ref uci.ContextRef, entityKey string) uci.QueryItem {
 			ViewID:    ref.ViewID,
 			EntityKey: entityKey,
 		},
-		Path: uciAuthorizationMatrixRawPath,
+		MembershipID: "60000000-0000-4000-8000-000000000001",
+		Path:         uciAuthorizationMatrixRawPath,
 		Span: uci.QuerySpan{
 			ByteStart: 0,
 			ByteEnd:   int64(len(uciAuthorizationMatrixRawSource)),

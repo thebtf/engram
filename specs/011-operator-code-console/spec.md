@@ -3,14 +3,14 @@
 **Feature Branch**: `feature/operator-workspace-da`
 
 **Created**: 2026-09-10
-**Amended**: 2026-09-17
-**Status**: Implemented and source-accepted; installed exact-head D-A release proof is pending
+**Amended**: 2026-10-07
+**Status**: Prior D-A source baseline accepted; M1 native first-use integration and installed exact-candidate proof pending
 
 **Input**: Deliver the first independently useful operator workspace over existing Engram authority. The operator must be able to investigate code from the normal homepage without inventing a second authority, a manual graph, or a plaintext-book workflow.
 
 ## Outcome and completion boundary
 
-**D-A — Select a working copy and explain a real code relationship** is the first installable Feature 011 outcome. From the normal homepage, an operator finds Workspace, selects an authorized repository and working copy by human identity, sees the selected indexed snapshot's freshness and coverage, searches, opens source, follows an automatically derived direct or reverse relation, and opens that relation's evidence. The investigation stays in one authorized immutable Source/Checkout/View context and never asks for a UUID, hidden route, SQL, or a manual graph write.
+**D-A — Connect a working copy and explain a real code relationship** is the first installable Feature 011 outcome. From the normal homepage, an operator finds Workspace, connects a real repository or another Git worktree through the ordinary installed native host, reads back the server catalog, selects a repository and working copy by human identity, sees the indexed snapshot's freshness and coverage, searches, opens source, follows an automatically derived direct or reverse relation, and opens its evidence. The investigation stays in one authorized immutable Source/Checkout/View context and never asks for a UUID, hidden route, SQL, browser filesystem registration, or a manual graph write.
 
 The former honest-shell/design-fidelity-scaffold result is **not** a D-A completion boundary. Truthful loading, bounded counts, lazy settings work, and state labels remain quality constraints where the D-A surface uses them; they do not substitute for the homepage-to-evidence journey.
 
@@ -44,6 +44,15 @@ The [responsive-layout receipt](acceptance/da-workspace-responsive-layout-receip
 - Q: What is D-A's first usable result? → A: The normal homepage-to-workspace investigation of one named working copy through source, direct or reverse derived relation, and evidence, with old manual graph and plaintext-book writers retired.
 - Q: Which browser origin is supported for installed D-A acceptance? → A: The configured single-user HTTP LAN origin with auth disabled. HTTPS, proxy, sign-in, and grant issuance are not prerequisites for this path; auth-enabled behavior remains a separate deferred path.
 
+### Session 2026-10-07 — M1 forward integration
+
+- First use must start with an empty browser catalog, not a source pre-registered by an acceptance fixture. The visible Add / connect repository action supplies an ordinary installed-agent task. The native host resolves its current real Git root and uses existing `codebase_context register`; the browser sends neither a local path nor authority derived from labels.
+- A second worktree uses a Source selected from a fresh native server response. Its server-issued handle/current binding supplies the Source; the operator does not enter `source_id`. Ambiguous names never authorize merging Sources.
+- Tab connection, empty catalog, registered checkout without View, active indexing, failed/provider-degraded embedding, historical/offline View, and a genuinely empty query remain distinct. Null candidate and null pin cannot produce a pinned success label.
+- M0's installed 6.50.3 ordinary memory proof is retained in its accepted scope. M1 is the next main product slice. Useful-data migration/contraction follows as M2, measured quality/language coverage as M3, and Book Context/cognitive evolution as M4. Fresh-host automatic context remains an independent acceptance item.
+- Preserve the incumbent static Vue/Vite implementation and visual world. This is Operate refinement, not init, redesign, or wholesale Nuxt donor integration. Existing accepted mechanisms and historical evidence keep their original scope.
+
+
 ## User Scenarios & Testing
 
 ### User Story 1 — Find a named working copy from Home (Priority: P1)
@@ -58,8 +67,10 @@ An operator starts at the normal homepage, finds Workspace, selects an accessibl
 
 1. **Given** a configured no-auth source and two working copies, **When** the operator opens Home on the configured HTTP LAN origin, **Then** Workspace offers repository and working-copy choices without login or grants.
 2. **Given** a working copy has a published snapshot, **When** the operator selects it, **Then** Workspace shows its snapshot revision/time, indexed coverage where known, supported-language scope, and one truthful state: Ready, Updating, Needs indexing, Failed, or Newer snapshot available.
-3. **Given** there are no registered repositories, no published snapshot, or an offline owner, **When** the operator reaches Workspace, **Then** it distinguishes those states without presenting a generic binding error, localhost substitution, or empty successful result. An auth-enabled realm continues to distinguish missing grants.
+3. **Given** there are no registered repositories, no published snapshot, or an offline owner, **When** the operator reaches Workspace, **Then** it distinguishes those states and offers the ordinary native connection task plus catalog readback, without a generic binding error, localhost substitution, or empty successful result. An auth-enabled realm continues to distinguish missing grants.
 
+4. **Given** an empty catalog, **When** an independent engineer follows Add / connect repository in an ordinary installed agent from the real Git root, **Then** native registration/index/status yields a server catalog choice without hidden author fixture setup, a local browser path, project-marker rewrite, UUID, or SQL.
+5. **Given** two real dirty worktrees, **When** A is saved, renamed, deleted, and the confirmed owning daemon is restarted through supported control, **Then** B and historical pinned Views stay independent, and a fresh native session resolves server-issued contexts again.
 ---
 
 ### User Story 2 — Inspect source, relation, and evidence in one snapshot (Priority: P1)
@@ -105,7 +116,7 @@ An operator no longer encounters manual graph construction or plaintext book int
 
 ### Functional Requirements
 
-- **FR-001**: Home and primary navigation MUST expose Workspace as the normal entry to D-A. Completion MUST NOT require a direct hidden route, UUID, SQL, manual binding registration, manual node/edge creation, or technical proof entry.
+- **FR-001**: Home and primary navigation MUST expose Workspace and visible Add / connect repository as the normal entry to D-A. The empty-catalog next action MUST be executable in the ordinary installed native host and followed by server catalog readback. Completion MUST NOT require a direct hidden route, UUID, SQL, browser filesystem registration, hidden author setup, manual binding registration, manual node/edge creation, or technical proof entry.
 - **FR-002**: Workspace MUST present repository, working-copy, and indexed-snapshot identities in human language. Source/Checkout/View, grants, and opaque references remain server-resolved authority; labels, paths, remotes, branches, and device/location text MUST NOT authorize access.
 - **FR-003**: Every contextual code request MUST use one authorized Source, Checkout, and immutable View. Search, structure, graph/relation, evidence, and exact-source responses shown together MUST remain View-pinned; tabs and MCP contexts remain independent.
 - **FR-004**: Workspace MUST show selected-snapshot freshness, coverage where available, supported scope, and Ready, Updating, Needs indexing, Failed, or Newer snapshot available distinctly. Requesting indexing is not completion; browser code MUST NOT receive a workstation secret or remote working-copy path.
@@ -117,7 +128,7 @@ An operator no longer encounters manual graph construction or plaintext book int
 - **FR-010**: D-A MUST remove plaintext book-job admission, uploader page, runtime pipeline startup, and worker execution path. In the existing single-container deployment, no old book-writer process may be live before it idempotently terminalizes residual nonterminal jobs as `failed` with an interrupted-by-retirement reason; it MUST preserve `source_book_job_id` and partial historical documents, prove rerun idempotence, and MUST NOT add a lease/heartbeat subsystem, replay unavailable plaintext, or invoke compensation that deletes historical rows.
 - **FR-011**: D-A MUST preserve PostgreSQL/pgvector, UCI, Source/Checkout/View ACL and release boundaries, versioned Documents, Rules, Issues, historical graph/book data, and named retained readers. It MUST NOT rewrite applied historical migrations, drop storage, or create a universal graph/library replacement.
 - **FR-012**: Loading, empty, denied, error, stale, partial, unsupported, timeout, and offline states MUST remain distinct wherever D-A exposes them. The journey MUST be keyboard-operable with visible focus and live status text, usable at 1440, 980, and 390 CSS-pixel widths and at 200% zoom, with complete RU/EN task language and no zh regression.
-- **FR-013**: D-A design work MUST update private `.od` authoring first and promote only its curated reviewed snapshot under `design/operator-console/PROMOTION-CONTRACT.md`. The old search → graph → Source shape and scaffold-fidelity instruction MUST NOT constrain the D-A runtime; no raw export may overwrite `apps/operator-console/`.
+- **FR-013**: New D-A visual-world work MUST update private `.od` authoring first and promote only its curated reviewed snapshot under `design/operator-console/PROMOTION-CONTRACT.md`. M1 refines the incumbent static Vue/Vite world and does not require init, redesign, assets, or an unrelated promotion program. No raw donor export may overwrite `apps/operator-console/`.
 - **FR-014**: Installed D-A acceptance MUST use the configured single-user no-auth HTTP LAN origin without requiring HTTPS, proxy, browser sign-in, or grants. Auth-enabled browser behavior remains deferred, not removed. Source acceptance alone MUST NOT claim installed normal-homepage DA01–DA04 proof.
 
 ### Key entities
@@ -132,9 +143,9 @@ An operator no longer encounters manual graph construction or plaintext book int
 
 ### Measurable outcomes
 
-- **SC-001**: From the normal homepage, an operator finds Workspace and selects two different accessible working copies by repository, branch, and device/location identity without direct `/code` navigation, UUID entry, SQL, or manual graph setup.
+- **SC-001**: From the normal homepage and an empty catalog, an independent engineer connects a repository and two real worktrees through the visible ordinary native-host task, reads back readable server labels, and selects each working copy without direct `/code` navigation, UUID entry, SQL, browser paths, project-marker mutation, or hidden author preparation.
 - **SC-002**: For a selected snapshot, the operator can read freshness/coverage/limitation state, search a corpus with more than one result page, open source, follow one direct and one reverse derived relation, and open released evidence for an off-page neighbor in that same View.
-- **SC-003**: In a two-worktree, two-tab, concurrent-MCP fixture, no result crosses a selected View boundary; an explicit newer snapshot transition is required. Absent, revoked, expired, ambiguous, or mismatched authority reveals no contextual source, identifier, count, relation, or evidence.
+- **SC-003**: In two dirty worktrees with independent tabs and concurrent MCP contexts, save/rename/delete and a confirmed supported owning-daemon restart do not cross View boundaries. An explicit newer snapshot transition is required. Fresh native sessions re-resolve server-returned contexts. Absent, revoked, expired, ambiguous, or mismatched authority reveals no unrelated contextual source, identifier, count, relation, or evidence.
 - **SC-004**: The D-A source-acceptance fixture demonstrates a symbol query and one real-provider non-lexical conceptual query over more than 50 eligible candidates. Lexical or degraded output is `NOT_PROVEN` and cannot satisfy this criterion. Supported-language, dynamic-call, partial-coverage, and unavailable-evidence limitations are labeled honestly.
 - **SC-005**: After single-container quiescence, every writer in the approved nonempty manual-graph/book consumer map remains unavailable through visible UI, direct old HTTP/MCP calls, and prior flags after restart. A residual book job becomes `failed` with its retirement reason while preserving `source_book_job_id` and partial historical documents; repeating that transition is idempotent. `internal/retrieval/hybrid.go` Tier2 `Traverse`, historical graph readers, `/api/context/search`, UCI graph, Rules, Issues, and two document versions remain readable under existing ACL.
 - **SC-006**: DA01–DA04 work at 1440, 980, and 390 CSS-pixel widths and actual 200% browser zoom in RU and EN with keyboard-only context selection, source, relation, evidence, retry, and explicit newer-snapshot transition. Existing zh navigation receives a regression check.

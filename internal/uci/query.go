@@ -98,6 +98,7 @@ type QueryStoreResult struct {
 // QueryCandidate is one source-grounded candidate selected from an immutable View.
 type QueryCandidate struct {
 	Context         ContextRef
+	MembershipID    string
 	Proof           IndexArtifactProof
 	EntityKey       string
 	LocalName       string
@@ -476,7 +477,8 @@ func queryItemFromCandidate(candidate QueryCandidate, spec QuerySpec) (QueryItem
 			ViewID:    candidate.Context.ViewID,
 			EntityKey: candidate.EntityKey,
 		},
-		Path: candidate.RelativePath,
+		MembershipID: candidate.MembershipID,
+		Path:         candidate.RelativePath,
 		Span: QuerySpan{
 			ByteStart: candidate.Span.ByteStart,
 			ByteEnd:   candidate.Span.ByteEnd,

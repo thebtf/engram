@@ -642,10 +642,11 @@ func contextAwareProtoIndexScope(scope uci.IndexScope, profileID string) *pb.Cod
 
 func contextAwareBindCodeContextResponse(handle string, binding uci.IndexBinding) *pb.BindCodeContextResponse {
 	response := &pb.BindCodeContextResponse{
-		ContextHandle: handle,
-		IndexScope:    contextAwareProtoIndexScope(binding.Scope, binding.ProfileID),
-		LocalRootId:   binding.LocalRootID,
-		WorkstationId: binding.WorkstationID,
+		ContextHandle:           handle,
+		IndexScope:              contextAwareProtoIndexScope(binding.Scope, binding.ProfileID),
+		LocalRootId:             binding.LocalRootID,
+		WorkstationId:           binding.WorkstationID,
+		ExtractionProfileDigest: string(binding.ExtractionProfileDigest),
 	}
 	if binding.Context != nil {
 		response.Context = contextAwareProtoContextRef(*binding.Context)

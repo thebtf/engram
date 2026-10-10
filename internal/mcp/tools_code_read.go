@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/thebtf/engram/internal/uci"
 )
 
@@ -34,6 +35,7 @@ type CodebaseReadCompatibilityApplication interface {
 // MCP callers continue to request exact spans. No working-copy bytes are read.
 type CodebaseReadInput struct {
 	Ref               uci.QueryEntityRef
+	MembershipID      string
 	Span              uci.QuerySpan
 	IndexedSpan       *uci.QuerySpan
 	ContentDigest     uci.QueryContentDigest
@@ -59,6 +61,7 @@ type codebaseReadArgs struct {
 	ContextHandle     *string                    `json:"context_handle"`
 	Project           *string                    `json:"project"`
 	Ref               *codebaseReadEntityRefArgs `json:"ref"`
+	MembershipID      *string                    `json:"membership_id"`
 	Span              *codebaseReadSpanArgs      `json:"span"`
 	ContentDigest     *string                    `json:"content_digest"`
 	VerifyWorkingCopy *bool                      `json:"verify_working_copy"`
@@ -76,7 +79,7 @@ func codebaseReadTool() Tool {
 		InputSchema: map[string]any{
 			"type":                 "object",
 			"additionalProperties": false,
-			"required":             []string{"ref", "span", "content_digest"},
+			"required":             []string{"ref", "membership_id", "span", "content_digest"},
 			"properties": map[string]any{
 				"context_handle": map[string]any{
 					"type":        "string",
@@ -95,6 +98,12 @@ func codebaseReadTool() Tool {
 						"view_id":    map[string]any{"type": "string"},
 						"entity_key": map[string]any{"type": "string"},
 					},
+				},
+				"membership_id": map[string]any{
+					"type": "string", "format": "uuid",
+					"pattern":     "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+					"not":         map[string]any{"const": "00000000-0000-0000-0000-000000000000"},
+					"description": "Server-issued temporal file membership from the selected View citation",
 				},
 				"span": map[string]any{
 					"type":                 "object",
@@ -191,6 +200,13 @@ func decodeCodebaseReadArgs(raw json.RawMessage) (codebaseReadArgs, error) {
 	if args.Ref == nil || args.Ref.SourceID == nil || args.Ref.ViewID == nil || args.Ref.EntityKey == nil {
 		return codebaseReadArgs{}, errors.New("ref is required")
 	}
+	if args.MembershipID == nil {
+		return codebaseReadArgs{}, errors.New("invalid membership_id")
+	}
+	membershipID, err := uuid.Parse(*args.MembershipID)
+	if err != nil || membershipID == uuid.Nil || membershipID.String() != *args.MembershipID {
+		return codebaseReadArgs{}, errors.New("invalid membership_id")
+	}
 	if args.Span == nil || args.Span.ByteStart == nil || args.Span.ByteEnd == nil || args.Span.LineStart == nil || args.Span.LineEnd == nil {
 		return codebaseReadArgs{}, errors.New("span is required")
 	}
@@ -226,6 +242,7 @@ func (args codebaseReadArgs) readInput() CodebaseReadInput {
 			ViewID:    *args.Ref.ViewID,
 			EntityKey: *args.Ref.EntityKey,
 		},
+		MembershipID: *args.MembershipID,
 		Span: uci.QuerySpan{
 			ByteStart: *args.Span.ByteStart,
 			ByteEnd:   *args.Span.ByteEnd,
@@ -302,11 +319,15 @@ func validCodebaseReadPreExposureResponse(response uci.QueryResponse, authorized
 
 	switch response.Status {
 	case uci.QueryStatusOK, uci.QueryStatusPartial, uci.QueryStatusStale:
-		if response.Retrieval == nil || response.Retrieval.Mode != uci.QueryRetrievalExact || response.Items == nil || len(*response.Items) != 1 || response.Truncated == nil || *response.Truncated {
+		if response.Retrieval == nil || response.Retrieval.Mode != uci.QueryRetrievalExact || response.Items == nil || len(*response.Items) > 1 || response.Truncated == nil || *response.Truncated {
 			return false
+		}
+		if len(*response.Items) == 0 {
+			return response.Status == uci.QueryStatusPartial
 		}
 		item := (*response.Items)[0]
 		return item.Ref == input.Ref &&
+			item.MembershipID == input.MembershipID &&
 			item.Span == input.Span &&
 			item.ContentDigest == input.ContentDigest &&
 			len(item.Excerpt) == int(input.Span.ByteEnd-input.Span.ByteStart) &&

@@ -1461,7 +1461,8 @@ func semanticTestContextRef(sourceID, checkoutID, viewID, profileID string, gene
 
 func semanticTestCandidate(contextRef ContextRef, artifactID, entityKey, localName, qualifiedSymbol, relativePath, text string) QueryCandidate {
 	return QueryCandidate{
-		Context: contextRef,
+		Context:      contextRef,
+		MembershipID: artifactID,
 		Proof: IndexArtifactProof{
 			ArtifactID:         artifactID,
 			ContentDigest:      semanticTestDigest(text),
@@ -1689,4 +1690,25 @@ func semanticTestContinuation(t *testing.T, result QueryResult) string {
 		t.Fatalf("continuation = %#v, want opaque value", result.Response.Continuation)
 	}
 	return *result.Response.Continuation.Value
+}
+
+func TestUCISemanticCitationPreservesMembershipWithoutChangingEmbeddingInput(t *testing.T) {
+	candidate := newSemanticTestFixture().current
+	profile := semanticTestProfile("uci-semantic-test-model")
+	input, digest, err := SemanticEmbeddingInput(profile, candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate.MembershipID = "60000000-0000-4000-8000-000000000099"
+	otherInput, otherDigest, err := SemanticEmbeddingInput(profile, candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input != otherInput || digest != otherDigest {
+		t.Fatal("membership changed canonical embedding input")
+	}
+	item, _ := semanticQueryItem(SemanticCandidate{Candidate: candidate, MatchSources: []QueryMatchSource{QueryMatchVector}}, semanticTestQuerySpec("citation"))
+	if item.MembershipID != candidate.MembershipID {
+		t.Fatalf("vector citation membership = %q, want %q", item.MembershipID, candidate.MembershipID)
+	}
 }

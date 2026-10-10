@@ -270,8 +270,12 @@ func TestRuntimeConfigGoOnlyUsesNativeExtractionProfileIdentity(t *testing.T) {
 	if configuration.ParserBundleDigest != profile.ExtractionProfileDigest {
 		t.Fatalf("Go-only bundle identity = %q, want %q", configuration.ParserBundleDigest, profile.ExtractionProfileDigest)
 	}
-	if _, err := newUCIRuntime(engramcore.NewModuleWithClientInstanceID(configuration.ClientInstanceID), configuration); err != nil {
+	runtimeState, err := newUCIRuntime(engramcore.NewModuleWithClientInstanceID(configuration.ClientInstanceID), configuration)
+	if err != nil {
 		t.Fatalf("ordinary Go-only runtime refused: %v", err)
+	}
+	if runtimeState.treeSitterParser != nil {
+		t.Fatal("unconfigured parser was boxed into a nonnil interface")
 	}
 }
 

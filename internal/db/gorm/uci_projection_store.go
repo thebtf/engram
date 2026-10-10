@@ -1874,6 +1874,7 @@ func uciHybridUnavailableResult(code ucidomain.QueryErrorCode) ucidomain.Semanti
 }
 
 type uciHybridQueryCandidateRow struct {
+	MembershipID       string  `gorm:"column:membership_id"`
 	ArtifactID         string  `gorm:"column:artifact_id"`
 	ChunkContentDigest string  `gorm:"column:chunk_content_digest"`
 	FactsDigest        string  `gorm:"column:facts_digest"`
@@ -1897,6 +1898,7 @@ type uciHybridQueryCandidateRow struct {
 
 func (row uciHybridQueryCandidateRow) queryCandidate(ref ucidomain.ContextRef) (ucidomain.QueryCandidate, bool) {
 	return uciQueryCandidateRow{
+		MembershipID:       row.MembershipID,
 		ArtifactID:         row.ArtifactID,
 		ChunkContentDigest: row.ChunkContentDigest,
 		FactsDigest:        row.FactsDigest,
@@ -2123,6 +2125,7 @@ func buildUCISemanticScopedCandidatesSQL(ref ucidomain.ContextRef, spec ucidomai
 				view_row.source_id,
 				view_row.checkout_id,
 				view_row.analysis_profile_id,
+				membership.membership_id,
 				artifact.artifact_id,
 				blob.content_digest AS chunk_content_digest,
 				artifact.facts_digest,
@@ -2323,6 +2326,7 @@ func buildUCIHybridCandidatesSQL(ref ucidomain.ContextRef, profile ucidomain.Vec
 			LIMIT ? OFFSET ?
 		)
 		SELECT
+			page.membership_id,
 			page.artifact_id,
 			page.chunk_content_digest,
 			page.facts_digest,
@@ -2368,6 +2372,7 @@ func uciHybridCandidateColumns(alias string) string {
 		alias + uciHybridSourceIDColumn,
 		alias + ".checkout_id",
 		alias + ".analysis_profile_id",
+		alias + ".membership_id",
 		alias + uciHybridArtifactIDColumn,
 		alias + uciHybridChunkContentDigestColumn,
 		alias + ".facts_digest",
@@ -2387,6 +2392,7 @@ func uciHybridCandidateColumns(alias string) string {
 func uciHybridIdentityColumns(alias string) string {
 	return strings.Join([]string{
 		alias + uciHybridSourceIDColumn,
+		alias + ".membership_id",
 		alias + uciHybridArtifactIDColumn,
 		alias + uciHybridChunkContentDigestColumn,
 		alias + uciHybridEntityKeyColumn,
@@ -2399,6 +2405,7 @@ func uciHybridIdentityColumns(alias string) string {
 func uciHybridIdentityJoin(left, right string) string {
 	return strings.Join([]string{
 		left + uciHybridSourceIDColumn + " = " + right + uciHybridSourceIDColumn,
+		left + ".membership_id = " + right + ".membership_id",
 		left + uciHybridArtifactIDColumn + " = " + right + uciHybridArtifactIDColumn,
 		left + uciHybridChunkContentDigestColumn + " = " + right + uciHybridChunkContentDigestColumn,
 		left + uciHybridEntityKeyColumn + " = " + right + uciHybridEntityKeyColumn,
@@ -2701,6 +2708,7 @@ func loadUCIQueryViewMetadata(db *gorm.DB, ref ucidomain.ContextRef) (uciQueryVi
 }
 
 type uciQueryCandidateRow struct {
+	MembershipID       string  `gorm:"column:membership_id"`
 	ArtifactID         string  `gorm:"column:artifact_id"`
 	ChunkContentDigest string  `gorm:"column:chunk_content_digest"`
 	FactsDigest        string  `gorm:"column:facts_digest"`
@@ -2722,7 +2730,7 @@ type uciQueryCandidateRow struct {
 }
 
 func (row uciQueryCandidateRow) queryCandidate(ref ucidomain.ContextRef) (ucidomain.QueryCandidate, bool) {
-	if validateUCIUUID("artifact_id", row.ArtifactID) != nil || row.ByteStart < 0 || row.ByteEnd <= row.ByteStart || row.LineStart < 1 || row.LineEnd < row.LineStart ||
+	if validateUCIUUID("membership_id", row.MembershipID) != nil || validateUCIUUID("artifact_id", row.ArtifactID) != nil || row.ByteStart < 0 || row.ByteEnd <= row.ByteStart || row.LineStart < 1 || row.LineEnd < row.LineStart ||
 		row.EntityKey == "" || row.RelativePath == "" || row.Language == "" || !isUCIDigest(row.ChunkContentDigest) {
 		return ucidomain.QueryCandidate{}, false
 	}
@@ -2730,7 +2738,8 @@ func (row uciQueryCandidateRow) queryCandidate(ref ucidomain.ContextRef) (ucidom
 		return ucidomain.QueryCandidate{}, false
 	}
 	return ucidomain.QueryCandidate{
-		Context: ref,
+		Context:      ref,
+		MembershipID: row.MembershipID,
 		Proof: ucidomain.IndexArtifactProof{
 			ArtifactID:         row.ArtifactID,
 			ContentDigest:      ucidomain.IndexDigest(row.ChunkContentDigest),
@@ -2829,6 +2838,7 @@ func buildUCIQueryCandidatesSQL(ref ucidomain.ContextRef, spec ucidomain.QuerySp
 				AND view_row.state IN (?, ?)
 		)
 		SELECT
+			membership.membership_id,
 			artifact.artifact_id,
 			blob.content_digest AS chunk_content_digest,
 			artifact.facts_digest,

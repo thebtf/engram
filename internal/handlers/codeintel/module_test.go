@@ -169,7 +169,26 @@ func (f *fakeCore) ProxyHandleTool(_ context.Context, _ codeintel.ResolvedIndexT
 		"total_chunks":    int64(10),
 		"embedded_chunks": int64(8),
 		"last_indexed_at": "2026-06-16T00:00:00Z",
+		"freshness":       uci.QueryFreshness{State: uci.QueryFreshnessObservedCurrent, Method: uci.QueryFreshnessWatchWatermark, PendingChanges: new(int64), EnrichmentWatermark: uci.QueryEnrichmentWatermark{State: uci.QueryEnrichmentCurrent}},
 	})
+}
+
+func (f *fakeCore) ReadCodebaseStatus(ctx context.Context, _ muxcore.ProjectContext, contextHandle string) (json.RawMessage, error) {
+	f.mu.Lock()
+	binding, found := f.bindings[contextHandle]
+	if f.resolveBinding != nil {
+		binding = f.resolveBinding(0, contextHandle)
+		found = true
+	}
+	f.mu.Unlock()
+	if found && binding.Context == nil {
+		return nil, testUnpublishedStatusError()
+	}
+	return f.ProxyHandleTool(ctx, codeintel.ResolvedIndexTarget{}, "codebase_status", nil)
+}
+
+func testUnpublishedStatusError() error {
+	return &module.ProxyIsError{RawContent: json.RawMessage(`{"type":"text","text":"{\"code\":-32000,\"data\":\"CONTEXT_REQUIRED\"}"}`)}
 }
 
 func (f *fakeCore) callCounts() (int, int) {
@@ -306,7 +325,7 @@ func TestCodebaseIndexAcceptsServerIssuedHandleForUnboundContext(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &result))
 	require.Equal(t, "started", result["status"])
 	require.Equal(t, []string{""}, core.resolvedHandles())
-	drainIndex(t, h, p)
+	drainIndex(t, h, p, result["run_id"].(string))
 }
 
 func TestCodebaseIndexSchemaLeavesContextHandleOptional(t *testing.T) {
@@ -355,7 +374,7 @@ func TestCodebaseIndex_ReturnsStartedImmediately(t *testing.T) {
 
 	// Drain the background goroutine before returning: it logs into the harness
 	// logger (t.Log-backed), which panics if invoked after the test exits.
-	drainIndex(t, h, p)
+	drainIndex(t, h, p, result["run_id"].(string))
 }
 
 // drainIndex polls codebase_status until the project's index run reaches idle (or
@@ -363,11 +382,11 @@ func TestCodebaseIndex_ReturnsStartedImmediately(t *testing.T) {
 // stopped logging — before the test function returns. Without this, the harness
 // logger (backed by t.Log) panics with "Log in goroutine after test has completed"
 // under the race detector.
-func drainIndex(t *testing.T, h *moduletest.Harness, p muxcore.ProjectContext) {
+func drainIndex(t *testing.T, h *moduletest.Harness, p muxcore.ProjectContext, runID string) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		raw, err := h.CallToolWithProject(testTransportContext(p), p, "codebase_status", testStatusArgs(p))
+		raw, err := h.CallToolWithProject(testTransportContext(p), p, "codebase_status", testStatusArgsWithBarrier("handle-"+p.ID, runID, 500))
 		if err == nil {
 			var st map[string]any
 			if json.Unmarshal(raw, &st) == nil {
@@ -375,6 +394,8 @@ func drainIndex(t *testing.T, h *moduletest.Harness, p muxcore.ProjectContext) {
 					return
 				}
 			}
+		} else if strings.Contains(err.Error(), "after_barrier run failed") || strings.Contains(err.Error(), "satisfied after_barrier requires a published View") {
+			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -412,7 +433,7 @@ func TestCodebaseIndex_ConcurrentCallReturnsAlreadyRunning(t *testing.T) {
 	assert.Equal(t, "already_running", r2["status"], "second concurrent call must return 'already_running'")
 	assert.Equal(t, r1["run_id"], r2["run_id"], "run_id must match the running session")
 
-	drainIndex(t, h, p)
+	drainIndex(t, h, p, r1["run_id"].(string))
 }
 
 // TestCodebaseIndex_RaceAdmitsExactlyOne fires many concurrent codebase_index
@@ -437,6 +458,7 @@ func TestCodebaseIndex_RaceAdmitsExactlyOne(t *testing.T) {
 	const n = 16
 	var wg sync.WaitGroup
 	var startedCount, alreadyCount atomic.Int32
+	var admittedRun atomic.Value
 	wg.Add(n)
 	for i := 0; i < n; i++ {
 		go func() {
@@ -452,6 +474,7 @@ func TestCodebaseIndex_RaceAdmitsExactlyOne(t *testing.T) {
 			switch r["status"] {
 			case "started":
 				startedCount.Add(1)
+				admittedRun.Store(r["run_id"].(string))
 			case "already_running":
 				alreadyCount.Add(1)
 			}
@@ -464,7 +487,7 @@ func TestCodebaseIndex_RaceAdmitsExactlyOne(t *testing.T) {
 
 	// Drain the spawned index goroutine before the test returns (it logs into the
 	// harness logger, which panics if invoked after the test exits).
-	drainIndex(t, h, p)
+	drainIndex(t, h, p, admittedRun.Load().(string))
 
 	// The fake's IndexCodebase must have been entered exactly once.
 	core.mu.Lock()
@@ -527,7 +550,7 @@ func TestCodebaseStatus_TransitionsRunningToIdle(t *testing.T) {
 	var finalStatus string
 	for time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
-		raw2, err2 := h.CallToolWithProject(testTransportContext(p), p, "codebase_status", testStatusArgs(p))
+		raw2, err2 := h.CallToolWithProject(testTransportContext(p), p, "codebase_status", testStatusArgsWithBarrier("handle-"+p.ID, startResult["run_id"].(string), 500))
 		if err2 != nil {
 			continue
 		}
@@ -560,6 +583,11 @@ func TestCodebaseStatusDecodesBoundedProxyPayloads(t *testing.T) {
 			mod := newTestModule(&fakeCore{statusResponse: test.response})
 			p := testProjectContext("proj-status-"+strings.ReplaceAll(test.name, " ", "-"), t.TempDir())
 			raw, err := mod.HandleTool(testTransportContext(p), p, "codebase_status", testStatusArgs(p))
+			if !test.wantAvailable {
+				require.Nil(t, raw)
+				require.EqualError(t, err, "failed to parse server response")
+				return
+			}
 			require.NoError(t, err)
 			var status struct {
 				TotalChunks    int64 `json:"total_chunks"`
@@ -576,11 +604,6 @@ func TestCodebaseStatusDecodesBoundedProxyPayloads(t *testing.T) {
 				ServerCountsError     string `json:"server_counts_error"`
 			}
 			require.NoError(t, json.Unmarshal(raw, &status))
-			if !test.wantAvailable {
-				require.False(t, status.ServerCountsAvailable)
-				require.Equal(t, "failed to parse server response", status.ServerCountsError)
-				return
-			}
 			require.True(t, status.ServerCountsAvailable)
 			require.Equal(t, int64(17), status.TotalChunks)
 			require.Equal(t, int64(13), status.EmbeddedChunks)
@@ -713,7 +736,7 @@ func TestCodebaseStatusKeepsRunAcrossNoViewPublication(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &started))
 	runID, _ := started["run_id"].(string)
 	require.NotEmpty(t, runID)
-	drainIndex(t, h, p)
+	drainIndex(t, h, p, runID)
 
 	raw, err = h.CallToolWithProject(ctx, p, "codebase_status", testStatusArgsForHandle(contextHandle))
 	require.NoError(t, err)
@@ -727,7 +750,7 @@ func TestCodebaseStatusKeepsRunAcrossNoViewPublication(t *testing.T) {
 	require.Zero(t, proxyCalls, "no-View status must return liveness before server proxying")
 
 	isPublished.Store(true)
-	raw, err = h.CallToolWithProject(ctx, p, "codebase_status", testStatusArgsForHandle(contextHandle))
+	raw, err = h.CallToolWithProject(ctx, p, "codebase_status", testStatusArgsWithBarrier(contextHandle, runID, 500))
 	require.NoError(t, err)
 	var afterPublication map[string]any
 	require.NoError(t, json.Unmarshal(raw, &afterPublication))
@@ -869,10 +892,16 @@ func TestCodebaseStatusBarrierReportsRunningBeforeInitialViewPublication(t *test
 	require.NoError(t, json.Unmarshal(raw, &started))
 	require.NotEmpty(t, started.RunID)
 
-	raw, err = h.CallToolWithProject(ctx, p, "codebase_status", testStatusArgsWithBarrier(contextHandle, started.RunID, 10))
+	boundedCtx, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
+	defer cancel()
+	before := time.Now()
+	raw, err = h.CallToolWithProject(boundedCtx, p, "codebase_status", testStatusArgsWithBarrier(contextHandle, started.RunID, 60_000))
+	elapsed := time.Since(before)
+	t.Logf("HandleTool no-View wait_ms=60000 elapsed_ms=%d raw=%s err=%v", elapsed.Milliseconds(), raw, err)
 	close(releaseIndex)
-	drainIndex(t, h, p)
+	drainIndex(t, h, p, started.RunID)
 	require.NoError(t, err)
+	require.Less(t, elapsed, 750*time.Millisecond)
 	var status struct {
 		Status                string `json:"status"`
 		RunID                 string `json:"run_id"`
@@ -936,8 +965,7 @@ func TestCodebaseStatusKeepsCapacityFailureClosedWithoutStaleFreshness(t *testin
 	}
 	require.NoError(t, json.Unmarshal(startedRaw, &started))
 	require.NotEmpty(t, started.RunID)
-	drainIndex(t, h, p)
-	_, proxyCallsBeforeTerminalStatus := core.callCounts()
+	drainIndex(t, h, p, started.RunID)
 	barrierRaw, barrierErr := h.CallToolWithProject(ctx, p, "codebase_status", testStatusArgsWithBarrier("handle-proj-capacity-status", started.RunID, 500))
 	require.Nil(t, barrierRaw)
 	require.EqualError(t, barrierErr, "codebase_status: after_barrier run failed: INDEX_CAPACITY_EXCEEDED")
@@ -946,18 +974,9 @@ func TestCodebaseStatusKeepsCapacityFailureClosedWithoutStaleFreshness(t *testin
 	require.NoError(t, err)
 	var status map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(raw, &status))
-	var state, code string
-	require.NoError(t, json.Unmarshal(status["status"], &state))
-	require.NoError(t, json.Unmarshal(status["error"], &code))
-	require.Equal(t, "error", state)
-	require.Equal(t, string(uci.IndexCapacityExceeded), code)
-	_, hasFreshness := status["freshness"]
-	require.False(t, hasFreshness, "capacity failure must not merge a retained View into observed_current")
-	var countsAvailable bool
-	require.NoError(t, json.Unmarshal(status["server_counts_available"], &countsAvailable))
-	require.False(t, countsAvailable)
-	_, proxyCallsAfterTerminalStatus := core.callCounts()
-	require.Equal(t, proxyCallsBeforeTerminalStatus, proxyCallsAfterTerminalStatus, "capacity failure must not proxy stale server status")
+	require.Equal(t, json.RawMessage("null"), status["status"], "a selected-View read must not impersonate the failed index run")
+	_, hasRunError := status["error"]
+	require.False(t, hasRunError)
 }
 
 func TestCodebaseToolsRejectMissingTransportSessionWithoutEnvironmentFallback(t *testing.T) {
@@ -1046,18 +1065,14 @@ func TestCodebaseStatusPropagatesProxyIsError(t *testing.T) {
 	require.Same(t, expected, err, "the dispatcher must receive the original ProxyIsError sentinel")
 }
 
-func TestCodebaseStatusDegradesGenericProxyFailure(t *testing.T) {
+func TestCodebaseStatusRejectsGenericReadFailure(t *testing.T) {
 	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
 	mod := newTestModule(&fakeCore{statusErr: context.DeadlineExceeded})
 	p := testProjectContext("proj-generic-proxy-error", t.TempDir())
 
 	raw, err := mod.HandleTool(testTransportContext(p), p, "codebase_status", testStatusArgs(p))
-	require.NoError(t, err)
-	var status map[string]any
-	require.NoError(t, json.Unmarshal(raw, &status))
-	require.Equal(t, "never_indexed", status["status"])
-	require.Equal(t, false, status["server_counts_available"])
-	require.Contains(t, status["server_counts_error"], context.DeadlineExceeded.Error())
+	require.Nil(t, raw)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
 func TestCodebaseStatusPreservesCallerCancellation(t *testing.T) {
@@ -1077,7 +1092,7 @@ func TestCodebaseStatusRejectsForeignResolvedHandleBeforeProxying(t *testing.T) 
 	p := testProjectContext("proj-foreign-status-handle", t.TempDir())
 	core := &fakeCore{resolveHandle: func(string) string { return "foreign-handle" }}
 
-	raw, err := newTestModule(core).HandleTool(testTransportContext(p), p, "codebase_status", testStatusArgs(p))
+	raw, err := newTestModule(core).HandleTool(testTransportContext(p), p, "codebase_status", testStatusArgsWithBarrier("handle-"+p.ID, "owned-run-token", 1))
 	require.Nil(t, raw)
 	require.ErrorContains(t, err, "resolved target does not match the requesting client handle")
 	resolved, proxied := core.callCounts()
@@ -1105,7 +1120,7 @@ func TestCodebaseStatusBarrierRejectsSatisfiedRunWithoutPublishedView(t *testing
 	}
 	require.NoError(t, json.Unmarshal(raw, &started))
 	require.NotEmpty(t, started.RunID)
-	drainIndex(t, h, p)
+	drainIndex(t, h, p, started.RunID)
 
 	raw, err = h.CallToolWithProject(ctx, p, "codebase_status", testStatusArgsWithBarrier(contextHandle, started.RunID, 1))
 	require.Nil(t, raw)
@@ -1160,7 +1175,7 @@ func TestCodebaseIndexRejectsMalformedRequestsBeforeResolution(t *testing.T) {
 	}
 }
 
-func TestCodebaseStatusDegradesMalformedServerPayloads(t *testing.T) {
+func TestCodebaseStatusRejectsMalformedReadPayloads(t *testing.T) {
 	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
 	p := testProjectContext("proj-malformed-status", t.TempDir())
 
@@ -1172,14 +1187,8 @@ func TestCodebaseStatusDegradesMalformedServerPayloads(t *testing.T) {
 	} {
 		mod := newTestModule(&fakeCore{statusResponse: response})
 		raw, err := mod.HandleTool(testTransportContext(p), p, "codebase_status", testStatusArgs(p))
-		require.NoError(t, err)
-		var status struct {
-			ServerCountsAvailable bool   `json:"server_counts_available"`
-			ServerCountsError     string `json:"server_counts_error"`
-		}
-		require.NoError(t, json.Unmarshal(raw, &status))
-		require.False(t, status.ServerCountsAvailable)
-		require.Contains(t, status.ServerCountsError, "failed to parse server response")
+		require.Nil(t, raw)
+		require.ErrorContains(t, err, "failed to parse server response")
 	}
 }
 
@@ -1219,7 +1228,7 @@ func TestCodebaseStatusBarrierRejectsChangedTargetAndUnavailableServerEvidence(t
 			RunID string `json:"run_id"`
 		}
 		require.NoError(t, json.Unmarshal(startedRaw, &started))
-		drainIndex(t, h, p)
+		drainIndex(t, h, p, started.RunID)
 		_, proxyCallsBeforeBarrier := core.callCounts()
 		changeAfterBarrierResolution.Store(true)
 
@@ -1243,7 +1252,13 @@ func TestCodebaseStatusBarrierRejectsChangedTargetAndUnavailableServerEvidence(t
 			RunID string `json:"run_id"`
 		}
 		require.NoError(t, json.Unmarshal(startedRaw, &started))
-		drainIndex(t, h, p)
+		core.mu.Lock()
+		core.statusErr = nil
+		core.mu.Unlock()
+		drainIndex(t, h, p, started.RunID)
+		core.mu.Lock()
+		core.statusErr = context.DeadlineExceeded
+		core.mu.Unlock()
 
 		raw, err := h.CallToolWithProject(testTransportContext(p), p, "codebase_status", testStatusArgsWithBarrier(contextHandle, started.RunID, 1))
 		require.Nil(t, raw)
@@ -1270,17 +1285,17 @@ func TestCodebaseToolsFailClosedForUnavailableAndUnresolvableCore(t *testing.T) 
 			require.Nil(t, raw)
 			require.ErrorContains(t, err, "SOURCE_UNAVAILABLE")
 		})
-		t.Run("resolution failure "+test.name, func(t *testing.T) {
-			expected := errors.New("authoritative target unavailable")
-			core := &fakeCore{resolveErr: expected}
-			raw, err := newTestModule(core).HandleTool(ctx, p, test.tool, test.args)
-			require.Nil(t, raw)
-			require.ErrorIs(t, err, expected)
-			resolved, proxied := core.callCounts()
-			require.Equal(t, 1, resolved)
-			require.Zero(t, proxied)
-		})
 	}
+	t.Run("resolution failure index", func(t *testing.T) {
+		expected := errors.New("authoritative target unavailable")
+		core := &fakeCore{resolveErr: expected}
+		raw, err := newTestModule(core).HandleTool(ctx, p, "codebase_index", testIndexArgs(p))
+		require.Nil(t, raw)
+		require.ErrorIs(t, err, expected)
+		resolved, proxied := core.callCounts()
+		require.Equal(t, 1, resolved)
+		require.Zero(t, proxied)
+	})
 
 	raw, err := newTestModule(&fakeCore{}).HandleTool(ctx, p, "unknown", json.RawMessage(`{}`))
 	require.Nil(t, raw)

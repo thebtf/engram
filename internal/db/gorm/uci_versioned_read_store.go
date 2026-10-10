@@ -61,6 +61,7 @@ func (s *UCIProjectionStore) ReadExact(ctx context.Context, authorized ucidomain
 }
 
 type uciVersionedReadRow struct {
+	MembershipID     string `gorm:"column:membership_id"`
 	EntityKey        string `gorm:"column:entity_key"`
 	RelativePath     string `gorm:"column:relative_path"`
 	ByteStart        int64  `gorm:"column:byte_start"`
@@ -82,7 +83,7 @@ func (row uciVersionedReadRow) hit(spec ucidomain.VersionedReadSpec) (ucidomain.
 		row.LineStart += int64(bytes.Count(row.Prefix, []byte{'\n'}))
 	}
 	row.LineEnd = row.LineStart + int64(bytes.Count(row.Text, []byte{'\n'}))
-	if row.EntityKey != spec.Entity.EntityKey ||
+	if row.MembershipID != spec.MembershipID || row.EntityKey != spec.Entity.EntityKey ||
 		row.ByteStart != spec.Span.ByteStart || row.ByteEnd != spec.Span.ByteEnd ||
 		(spec.IndexedSpan == nil && (row.LineStart != spec.Span.LineStart || row.LineEnd != spec.Span.LineEnd)) ||
 		row.ContentDigest != "sha256:"+string(spec.ContentDigest) ||
@@ -104,6 +105,7 @@ func (row uciVersionedReadRow) hit(spec ucidomain.VersionedReadSpec) (ucidomain.
 	}
 	return ucidomain.VersionedReadHit{
 		Entity:           spec.Entity,
+		MembershipID:     row.MembershipID,
 		Path:             row.RelativePath,
 		Span:             ucidomain.QuerySpan{ByteStart: row.ByteStart, ByteEnd: row.ByteEnd, LineStart: row.LineStart, LineEnd: row.LineEnd},
 		ContentDigest:    spec.ContentDigest,
@@ -151,6 +153,7 @@ func buildUCIVersionedReadSQL(ref ucidomain.ContextRef, spec ucidomain.Versioned
 		UCIViewPublished,
 		UCIViewSuperseded,
 		spec.Entity.EntityKey,
+		spec.MembershipID,
 		UCIBlobStored,
 		UCIFilePresent,
 		UCIParseArtifactComplete,
@@ -193,6 +196,7 @@ func buildUCIVersionedReadSQL(ref ucidomain.ContextRef, spec ucidomain.Versioned
 			SELECT
 				blob.blob_id,
 				blob.source_id,
+				membership.membership_id,
 				membership.display_path AS relative_path,
 				COALESCE(NULLIF(definition.qualified_local_name, ''), NULLIF(chunk.symbol_key, ''), CASE WHEN membership.path_key = ? THEN membership.path_key ELSE membership.path_key || ':' || chunk.ordinal::text END) AS entity_key,
 				chunk.byte_start,
@@ -204,6 +208,7 @@ func buildUCIVersionedReadSQL(ref ucidomain.ContextRef, spec ucidomain.Versioned
 			JOIN ci_memberships AS membership
 				ON membership.source_id = view_row.source_id
 				AND membership.checkout_id = view_row.checkout_id
+				AND membership.membership_id = ?
 				AND membership.valid_from_generation <= view_row.generation
 				AND (membership.valid_to_generation IS NULL OR membership.valid_to_generation > view_row.generation)
 			JOIN ci_parse_artifacts AS artifact
@@ -235,6 +240,7 @@ func buildUCIVersionedReadSQL(ref ucidomain.ContextRef, spec ucidomain.Versioned
 		bounded_bytes AS (
 			SELECT
 				candidate.entity_key,
+				candidate.membership_id,
 				candidate.relative_path,
 			?::bigint AS byte_start,
 			?::bigint + ?::bigint AS byte_end,
@@ -259,6 +265,7 @@ func buildUCIVersionedReadSQL(ref ucidomain.ContextRef, spec ucidomain.Versioned
 		)
 		SELECT
 			entity_key,
+			membership_id,
 			relative_path,
 			byte_start,
 			byte_end,
@@ -287,6 +294,7 @@ func buildUCIVersionedReferenceReadSQL(ref ucidomain.ContextRef, spec ucidomain.
 		spec.Entity.SourceID,
 		UCIViewPublished,
 		UCIViewSuperseded,
+		spec.MembershipID,
 		*spec.ReferenceSiteID,
 		UCIBlobStored,
 		UCIFilePresent,
@@ -325,6 +333,7 @@ func buildUCIVersionedReferenceReadSQL(ref ucidomain.ContextRef, spec ucidomain.
 			SELECT
 				blob.blob_id,
 				blob.source_id,
+				membership.membership_id,
 				membership.display_path AS relative_path,
 				COALESCE(NULLIF(definition.qualified_local_name, ''), NULLIF(reference.owner_symbol_key, ''), membership.path_key) AS entity_key,
 				blob.content_digest,
@@ -336,6 +345,7 @@ func buildUCIVersionedReferenceReadSQL(ref ucidomain.ContextRef, spec ucidomain.
 			JOIN ci_memberships AS membership
 				ON membership.source_id = view_row.source_id
 				AND membership.checkout_id = view_row.checkout_id
+				AND membership.membership_id = ?
 				AND membership.valid_from_generation <= view_row.generation
 				AND (membership.valid_to_generation IS NULL OR membership.valid_to_generation > view_row.generation)
 			JOIN ci_parse_artifacts AS artifact
@@ -364,6 +374,7 @@ func buildUCIVersionedReferenceReadSQL(ref ucidomain.ContextRef, spec ucidomain.
 		bounded_bytes AS (
 			SELECT
 				candidate.entity_key,
+				candidate.membership_id,
 				candidate.relative_path,
 				candidate.content_digest,
 				candidate.chunk_kind,
@@ -379,6 +390,7 @@ func buildUCIVersionedReferenceReadSQL(ref ucidomain.ContextRef, spec ucidomain.
 		)
 		SELECT
 			entity_key,
+			membership_id,
 			relative_path,
 			?::bigint AS byte_start,
 			?::bigint AS byte_end,

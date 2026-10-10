@@ -508,6 +508,23 @@ func (a *UCIIndexAdapter) IndexCodebase(ctx context.Context, target ResolvedInde
 	return result, nil
 }
 
+// ReadCodebaseStatus uses the selected-View read authority, not an index binding.
+func (a *UCIIndexAdapter) ReadCodebaseStatus(ctx context.Context, project muxcore.ProjectContext, contextHandle string) (json.RawMessage, error) {
+	if a == nil || a.module == nil {
+		return nil, uciIndexSourceUnavailable(uciClientServerUnavailableMessage)
+	}
+	if !validUCIClientIdentifier(contextHandle, 128) {
+		return nil, uciIndexSourceUnavailable("resolved context handle is unavailable")
+	}
+	args, err := json.Marshal(struct {
+		ContextHandle string `json:"context_handle"`
+	}{ContextHandle: contextHandle})
+	if err != nil {
+		return nil, err
+	}
+	return a.module.ProxyHandleTool(ctx, project, "codebase_status", args)
+}
+
 // ProxyHandleTool forwards a typed target call without a raw project field.
 // The caller owns the typed context arguments; this method supplies only the
 // per-session provenance and connection established during resolution.
@@ -563,6 +580,7 @@ func sameUCIResolvedIndexIdentity(previous, current uci.IndexBinding) bool {
 		previous.Scope.CheckoutID == current.Scope.CheckoutID &&
 		previous.Scope.IncarnationID == current.Scope.IncarnationID &&
 		previous.ProfileID == current.ProfileID &&
+		previous.ExtractionProfileDigest == current.ExtractionProfileDigest &&
 		previous.LocalRootID == current.LocalRootID &&
 		previous.WorkstationID == current.WorkstationID
 }
@@ -587,6 +605,9 @@ func uciClientIndexBindingFromBindResponse(response *pb.BindCodeContextResponse)
 	if response == nil {
 		return uci.IndexBinding{}, errUCIClientEmptyResponse
 	}
+	if !validUCIClientSHA256Digest(response.GetExtractionProfileDigest()) {
+		return uci.IndexBinding{}, errUCIClientInvalidResponse
+	}
 	scope := response.GetIndexScope()
 	binding := uci.IndexBinding{
 		Scope: uci.IndexScope{
@@ -594,9 +615,10 @@ func uciClientIndexBindingFromBindResponse(response *pb.BindCodeContextResponse)
 			CheckoutID:    scope.GetCheckoutId(),
 			IncarnationID: scope.GetIncarnationId(),
 		},
-		ProfileID:     scope.GetAnalysisProfileId(),
-		LocalRootID:   response.GetLocalRootId(),
-		WorkstationID: response.GetWorkstationId(),
+		ProfileID:               scope.GetAnalysisProfileId(),
+		LocalRootID:             response.GetLocalRootId(),
+		WorkstationID:           response.GetWorkstationId(),
+		ExtractionProfileDigest: uci.IndexDigest(response.GetExtractionProfileDigest()),
 	}
 	if context := response.GetContext(); context != nil {
 		contextRef := uci.ContextRef{

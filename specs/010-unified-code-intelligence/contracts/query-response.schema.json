@@ -325,6 +325,7 @@
         "additionalProperties": false,
         "required": [
           "ref",
+          "membership_id",
           "path",
           "span",
           "content_digest",
@@ -356,6 +357,14 @@
                 "minLength": 1,
                 "maxLength": 256
               }
+            }
+          },
+          "membership_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "not": {
+              "const": "00000000-0000-0000-0000-000000000000"
             }
           },
           "path": {

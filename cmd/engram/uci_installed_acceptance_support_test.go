@@ -3220,6 +3220,7 @@ func uciInstalledAcceptanceReadCitation(ctx context.Context, client *uciInstalle
 		"ref": map[string]any{
 			"source_id": searchItem.Ref.SourceID, "view_id": searchItem.Ref.ViewID, "entity_key": searchItem.Ref.EntityKey,
 		},
+		"membership_id": searchItem.MembershipID,
 		"span": map[string]any{
 			"byte_start": searchItem.Span.ByteStart, "byte_end": searchItem.Span.ByteEnd, "line_start": searchItem.Span.LineStart, "line_end": searchItem.Span.LineEnd,
 		},
@@ -3236,7 +3237,7 @@ func uciInstalledAcceptanceReadCitation(ctx context.Context, client *uciInstalle
 		return uci.QueryItem{}, errors.New("installed standard MCP read did not return one exact selected-View artifact")
 	}
 	readItem := (*read.Items)[0]
-	if readItem.Ref != searchItem.Ref || readItem.Span != searchItem.Span || readItem.ContentDigest != searchItem.ContentDigest {
+	if readItem.Ref != searchItem.Ref || readItem.MembershipID != searchItem.MembershipID || readItem.Path != searchItem.Path || readItem.Span != searchItem.Span || readItem.ContentDigest != searchItem.ContentDigest {
 		return uci.QueryItem{}, errors.New("installed standard MCP read did not preserve the search citation")
 	}
 	return readItem, nil

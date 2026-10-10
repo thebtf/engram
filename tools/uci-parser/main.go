@@ -434,6 +434,7 @@ func (collector *parserCollector) collectVariableDefinitions(node *tree_sitter.N
 	if kind == "" {
 		return
 	}
+	bindingScope := parserBindingScope(node.Parent(), kind == "var")
 	for index := uint(0); index < node.NamedChildCount(); index++ {
 		declarator := node.NamedChild(index)
 		if declarator == nil || declarator.Kind() != "variable_declarator" {
@@ -460,11 +461,12 @@ func (collector *parserCollector) collectVariableDefinitions(node *tree_sitter.N
 				continue
 			}
 			qualifiedName := qualified(scope.namespace, name)
+			localKey := parserDefinitionLocalKey(kind, qualifiedName, bindingScope, span)
 			collector.addDefinition(uci.TreeSitterDefinition{
 				Kind:      kind,
 				Name:      name,
-				SymbolKey: string(collector.language) + ":" + kind + ":" + qualifiedName,
-				LocalKey:  kind + ":" + qualifiedName,
+				SymbolKey: string(collector.language) + ":" + localKey,
+				LocalKey:  localKey,
 				Span:      span,
 			})
 		}
@@ -486,11 +488,7 @@ func (collector *parserCollector) definition(node *tree_sitter.Node, scope parse
 		return uci.TreeSitterDefinition{}, false
 	}
 	qualifiedName := qualified(scope.namespace, name)
-	localKey := kind + ":" + qualifiedName
-	// These declarations can share a name legally; retain each source occurrence.
-	if kind == "method" || kind == "interface" || kind == "namespace" {
-		localKey = uci.TreeSitterReferenceSiteKey(localKey, span)
-	}
+	localKey := parserDefinitionLocalKey(kind, qualifiedName, parserBindingScope(node.Parent(), false), span)
 	return uci.TreeSitterDefinition{
 		Kind:      kind,
 		Name:      name,
@@ -643,14 +641,34 @@ func parserFunctionNode(kind string) bool {
 	}
 }
 
+func parserDefinitionLocalKey(kind, name string, bindingScope *tree_sitter.Node, span uci.IndexSpan) string {
+	key := kind + ":" + name
+	if bindingScope != nil && bindingScope.Kind() != "program" {
+		parent := bindingScope.Parent()
+		if bindingScope.Kind() != "statement_block" || parent == nil ||
+			(parent.Kind() != "internal_module" && parent.Kind() != "module") {
+			key += "#scope:" + strconv.FormatUint(uint64(bindingScope.StartByte()), 10) + ":" + strconv.FormatUint(uint64(bindingScope.EndByte()), 10)
+		}
+	}
+	// Legal merged declarations retain each occurrence before the final key bound.
+	if kind == "method" || kind == "interface" || kind == "namespace" {
+		key = uci.TreeSitterReferenceSiteKey(key, span)
+	}
+	if len(key) <= 4<<10-len("typescript:") {
+		return key
+	}
+	digest := sha256.Sum256([]byte(key))
+	return kind + ":#scope:" + hex.EncodeToString(digest[:])
+}
+
 func parserBindingScope(node *tree_sitter.Node, functionScoped bool) *tree_sitter.Node {
 	for current := node; current != nil; current = current.Parent() {
-		if current.Kind() == "program" || parserFunctionNode(current.Kind()) {
+		if current.Kind() == "program" || current.Kind() == "class_static_block" || parserFunctionNode(current.Kind()) {
 			return current
 		}
 		if !functionScoped {
 			switch current.Kind() {
-			case "statement_block", "switch_body", "for_statement", "for_in_statement", "catch_clause", "class_static_block":
+			case "statement_block", "switch_body", "for_statement", "for_in_statement", "catch_clause":
 				return current
 			}
 		}

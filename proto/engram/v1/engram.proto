@@ -895,6 +895,8 @@ message BindCodeContextResponse {
   CodeIndexScope index_scope = 3;
   string local_root_id = 4;
   string workstation_id = 5;
+  // Server-selected analysis profile's extraction contract; never client input.
+  string extraction_profile_digest = 6;
 }
 
 message CodeIndexIntentTarget {

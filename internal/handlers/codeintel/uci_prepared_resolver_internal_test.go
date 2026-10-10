@@ -2,6 +2,7 @@ package codeintel
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -209,6 +210,103 @@ func TestUCIPreparedIndexBuiltParserDoesNotResolveReboundLocalCalls(t *testing.T
 			require.Len(t, part.EdgeReplacements[0].Edges, 1)
 			require.Equal(t, files[0].edges[0].ResolutionState, part.EdgeReplacements[0].Edges[0].ResolutionState)
 			require.NotNil(t, part.EdgeReplacements[0].Edges[0].Evidence.ReferenceSiteID)
+		})
+	}
+}
+
+func TestUCIPreparedIndexScopedDeclarationsPreserveDirectModuleCalls(t *testing.T) {
+	repoRoot := filepath.Clean(filepath.Join("..", "..", ".."))
+	body, err := os.ReadFile(filepath.Join(repoRoot, "ui", "src", "utils", "formatters.ts"))
+	require.NoError(t, err)
+	executable := filepath.Join(t.TempDir(), "uci-parser")
+	if runtime.GOOS == "windows" {
+		executable += ".exe"
+	}
+	command := exec.Command("go", "build", "-p=1", "-o", executable, "./tools/uci-parser")
+	command.Dir = repoRoot
+	command.Env = append(os.Environ(), "CGO_ENABLED=1")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build current isolated parser: %v: %s", err, output)
+	}
+	parser, err := uci.NewTreeSitterWorker(uci.TreeSitterWorkerConfig{
+		ExecutablePath: executable, ExpectedBundleDigest: uci.TreeSitterBundleDigest(),
+		MaxInputBytes: 1 << 20, MaxOutputBytes: 1 << 20, Timeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+	profile, err := uci.TreeSitterIndexAdmissionArtifactProfile(uci.TreeSitterLanguageTypeScript, uci.TreeSitterBundleDigest())
+	require.NoError(t, err)
+	for _, test := range []struct {
+		name     string
+		body     []byte
+		caller   string
+		callee   string
+		coverage uci.IndexCoverageState
+		resolved bool
+	}{
+		{name: "var stays inside class static blocks", body: []byte("class A{static{var value=1;}}class B{static{var value=2;}}export function helper(){return 1;}export function caller(){return helper();}"), caller: "caller", callee: "helper", coverage: uci.IndexCoverageComplete, resolved: true},
+		{name: "long scoped identifier remains accepted", body: []byte("export function helper(){return 1;}export function caller(){const " + strings.Repeat("x", 4070) + "=1;return helper();}"), caller: "caller", callee: "helper", coverage: uci.IndexCoverageComplete, resolved: true},
+		{name: "long nested method occurrence keys remain distinct", body: []byte("export function helper(){return 1;}export function caller(){class A{" + strings.Repeat("x", 4057) + "(){return 1;}" + strings.Repeat("x", 4057) + "(){return 2;}}return helper();}"), caller: "caller", callee: "helper", coverage: uci.IndexCoverageComplete, resolved: true},
+		{name: "long nested interface occurrence keys remain accepted", body: []byte("export function helper(){return 1;}export function caller(){interface " + strings.Repeat("x", 4057) + "{value:number;}return helper();}"), caller: "caller", callee: "helper", coverage: uci.IndexCoverageComplete, resolved: true},
+		{name: "long namespace occurrence keys remain accepted", body: []byte("namespace Outer{export namespace " + strings.Repeat("x", 4057) + "{}}export function helper(){return 1;}export function caller(){return helper();}"), caller: "caller", callee: "helper", coverage: uci.IndexCoverageComplete, resolved: true},
+		{name: "real formatter repeated function locals", body: body, caller: "safeDateFormat", callee: "formatRelativeTime", coverage: uci.IndexCoverageComplete, resolved: true},
+		{name: "independent sibling block locals", body: []byte("export function helper(){return 1;} export function caller(){if(true){const value=1;}if(false){const value=2;}return helper();}"), caller: "caller", callee: "helper", coverage: uci.IndexCoverageComplete, resolved: true},
+		{name: "nested sibling declarations", body: []byte("export function helper(){return 1;} export function caller(){function nested(){const value=1;return value;}return helper();} function sibling(){function nested(){const value=2;return value;}return nested();}"), caller: "caller", callee: "helper", coverage: uci.IndexCoverageComplete, resolved: true},
+		{name: "actual module collision stays partial", body: []byte("export function helper(){return 1;} export function helper(){return 2;} export function caller(){return helper();}"), caller: "caller", callee: "helper", coverage: uci.IndexCoveragePartial},
+		{name: "local shadow cannot become module call", body: []byte("export function helper(){return 1;} export function caller(){const helper=()=>2;return helper();}"), caller: "caller", callee: "helper", coverage: uci.IndexCoverageComplete},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			parsed, err := parser.Parse(context.Background(), uci.TreeSitterParseRequest{
+				Language: uci.TreeSitterLanguageTypeScript, ProfileKey: "scoped-declaration-call-regression/v1", Source: test.body,
+			})
+			require.NoError(t, err)
+			require.Equal(t, test.coverage, parsed.Coverage, "%+v", parsed.Diagnostics)
+			if test.name == "long nested method occurrence keys remain distinct" {
+				keys := make(map[string]struct{})
+				for _, definition := range parsed.Definitions {
+					if definition.Kind == "method" && definition.Name == strings.Repeat("x", 4057) {
+						keys[definition.LocalKey] = struct{}{}
+					}
+				}
+				require.Len(t, keys, 2, "full final-key digests must retain distinct method source occurrences")
+			}
+			if test.name == "real formatter repeated function locals" {
+				locals := make(map[string]struct{})
+				for _, definition := range parsed.Definitions {
+					if definition.Name == "date" {
+						require.Contains(t, definition.LocalKey, "#scope:")
+						locals[definition.LocalKey] = struct{}{}
+					}
+				}
+				require.Len(t, locals, 2, "sibling local declarations must not collide or disappear")
+			}
+			artifact, err := uci.NewIndexAdmissionArtifactFromTreeSitter("11111111-1111-4111-8111-111111111111", profile, test.body, parsed)
+			require.NoError(t, err)
+			id := artifact.ArtifactID
+			files := []uciPreparedAdmissionFile{{path: "formatter.ts", membership: uci.IndexAdmissionMembership{PathKey: "formatter.ts", DisplayPath: "formatter.ts", Mode: "100644", State: uci.IndexAdmissionMembershipPresent, ArtifactID: &id}, artifact: &artifact}}
+			_, err = uciPreparedAddResolvedTreeSitterEdges(files)
+			require.NoError(t, err)
+			frames, _, err := uciPreparedPackFrames("44444444-4444-4444-8444-444444444444", files)
+			require.NoError(t, err)
+			require.NoError(t, uci.ValidateIndexAdmissionFrames(frames))
+			require.Len(t, frames, 1)
+			part, err := frames[0].PublicationPart()
+			require.NoError(t, err)
+			var matches []uci.IndexEdge
+			for _, replacement := range part.EdgeReplacements {
+				for _, edge := range replacement.Edges {
+					if edge.Relation == uci.IndexRelation("calls") && edge.SourceSymbolKey != nil && *edge.SourceSymbolKey == "function:"+test.caller && edge.Target != nil && edge.Target.SymbolKey != nil && *edge.Target.SymbolKey == "function:"+test.callee && edge.ResolutionState == uci.IndexResolutionState("resolved") {
+						matches = append(matches, edge)
+					}
+				}
+			}
+			if test.resolved {
+				require.Len(t, matches, 1, "supported call must survive actual parsing, resolution and publication")
+				require.Equal(t, uci.IndexEvidenceKind("resolved"), matches[0].EvidenceKind)
+				require.NotNil(t, matches[0].Evidence.ReferenceSiteID)
+				t.Logf("source_bytes=%d coverage=%s caller=%s callee=%s published_resolved_calls=%d bundle=%s", len(test.body), parsed.Coverage, test.caller, test.callee, len(matches), parsed.BundleDigest)
+			} else {
+				require.Empty(t, matches, "partial or shadowed bindings must not emit a guessed module call")
+			}
 		})
 	}
 }
@@ -639,7 +737,7 @@ func TestUCIPreparedIndexBuiltParserIgnoresDeclarationTextInTrivia(t *testing.T)
 	}
 }
 
-func TestUCIPreparedIndexBuiltParserRejectsNestedSameKeyCalls(t *testing.T) {
+func TestUCIPreparedIndexBuiltParserRejectsHoistedLocalShadowCalls(t *testing.T) {
 	executable := filepath.Join(t.TempDir(), "uci-parser")
 	if runtime.GOOS == "windows" {
 		executable += ".exe"
@@ -657,28 +755,16 @@ func TestUCIPreparedIndexBuiltParserRejectsNestedSameKeyCalls(t *testing.T) {
 	body := []byte("export function helper(){helper();function helper(){}}")
 	parsed, err := parser.Parse(context.Background(), uci.TreeSitterParseRequest{Language: uci.TreeSitterLanguageJavaScript, ProfileKey: "nested-same-key/v1", Source: body})
 	require.NoError(t, err)
-	require.Equal(t, uci.IndexCoveragePartial, parsed.Coverage, "%+v", parsed.Diagnostics)
-	require.Contains(t, parsed.Diagnostics, uci.TreeSitterDiagnostic{Code: "DUPLICATE_DEFINITION", Message: "multiple declarations share a parser symbol key"})
-	require.Len(t, parsed.Definitions, 1)
-	require.Equal(t, "function:helper", parsed.Definitions[0].LocalKey)
-	var callCount int
-	for _, reference := range parsed.References {
-		if reference.Kind == "call" && reference.OwnerLocalKey == "function:helper" {
-			callCount++
-		}
-	}
-	require.Equal(t, 1, callCount)
 	profile, err := uci.TreeSitterIndexAdmissionArtifactProfile(uci.TreeSitterLanguageJavaScript, uci.TreeSitterBundleDigest())
 	require.NoError(t, err)
 	artifact, err := uci.NewIndexAdmissionArtifactFromTreeSitter("11111111-1111-4111-8111-111111111111", profile, body, parsed)
 	require.NoError(t, err)
-	require.Equal(t, uci.IndexAdmissionArtifactPartial, artifact.Status)
 	id := artifact.ArtifactID
 	files := []uciPreparedAdmissionFile{{path: "calls.js", membership: uci.IndexAdmissionMembership{PathKey: "calls.js", DisplayPath: "calls.js", Mode: "100644", State: uci.IndexAdmissionMembershipPresent, ArtifactID: &id}, artifact: &artifact}}
 	unresolved, err := uciPreparedAddResolvedTreeSitterEdges(files)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), unresolved)
-	require.Empty(t, files[0].edges, "ambiguous nested declaration cannot publish a resolved self-edge")
+	require.Empty(t, files[0].edges, "hoisted local function must not publish a resolved call to the outer module function")
 	frames, _, err := uciPreparedPackFrames("44444444-4444-4444-8444-444444444444", files)
 	require.NoError(t, err)
 	require.NoError(t, uci.ValidateIndexAdmissionFrames(frames))

@@ -261,6 +261,24 @@ func (core *uciCutoverCore) ProxyHandleTool(ctx context.Context, target codeinte
 	return append(json.RawMessage(nil), payload...), nil
 }
 
+func (core *uciCutoverCore) ReadCodebaseStatus(ctx context.Context, _ muxcore.ProjectContext, contextHandle string) (json.RawMessage, error) {
+	key := uciCutoverTargetKey{ClientSessionID: auditcontext.UCITransportSession(ctx), ContextHandle: contextHandle}
+	core.mu.Lock()
+	target, found := core.targets[key]
+	core.mu.Unlock()
+	if !found {
+		return nil, fmt.Errorf("context handle is not owned by this client")
+	}
+	if target.ContextClone() == nil {
+		return nil, testUnpublishedStatusError()
+	}
+	args, err := json.Marshal(map[string]any{"context_handle": contextHandle})
+	if err != nil {
+		return nil, err
+	}
+	return core.ProxyHandleTool(ctx, target, "codebase_status", args)
+}
+
 func (core *uciCutoverCore) setResult(target codeintel.ResolvedIndexTarget, result codeintel.IndexResult) {
 	core.mu.Lock()
 	core.results[uciCutoverKeyForTarget(target)] = result
@@ -343,6 +361,7 @@ type uciCutoverFixture struct {
 	t       *testing.T
 	harness *moduletest.Harness
 	core    *uciCutoverCore
+	runIDs  sync.Map
 
 	projectA muxcore.ProjectContext
 	projectB muxcore.ProjectContext
@@ -610,23 +629,45 @@ func TestUCICutoverStatusWaitsForLocalBarrierAndReplaysExactToken(t *testing.T) 
 }
 
 func TestUCICutoverStatusBarrierTimesOutWithoutClaimingCompletion(t *testing.T) {
-	fixture := newUCICutoverFixture(t)
-	started, err := fixture.start(fixture.ctxA, fixture.projectA, fixture.rootA, uciCutoverHandleA)
-	require.NoError(t, err)
-	fixture.core.awaitStarted(t, fixture.targetA)
+	for _, test := range []struct {
+		name   string
+		waitMS int64
+	}{
+		{name: "minimum", waitMS: 1},
+		{name: "maximum", waitMS: 60_000},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newUCICutoverFixture(t)
+			started, err := fixture.start(fixture.ctxA, fixture.projectA, fixture.rootA, uciCutoverHandleA)
+			require.NoError(t, err)
+			fixture.core.awaitStarted(t, fixture.targetA)
 
-	status, err := fixture.barrierStatus(fixture.ctxA, fixture.projectA, uciCutoverHandleA, uciCutoverAfterBarrier{Token: started.RunID, WaitMS: 1})
-	require.NoError(t, err)
-	require.Equal(t, "running", status.Status)
-	require.Equal(t, started.RunID, status.RunID)
-	require.Equal(t, fixture.statusA.Context, status.Context)
-	requireUCICutoverBarrierFreshness(t, status.Freshness, fixture.statusA.Freshness, 1, uci.QueryBarrierTimedOut)
-	calls := fixture.core.proxyCallsSnapshot()
-	require.Len(t, calls, 1)
-	requireUCICutoverProxyArgs(t, calls[0])
+			ctx, cancel := context.WithTimeout(fixture.ctxA, 750*time.Millisecond)
+			defer cancel()
+			before := time.Now()
+			status, err := fixture.barrierStatus(ctx, fixture.projectA, uciCutoverHandleA, uciCutoverAfterBarrier{Token: started.RunID, WaitMS: test.waitMS})
+			elapsed := time.Since(before)
+			t.Logf("HandleTool wait_ms=%d elapsed_ms=%d status=%+v err=%v", test.waitMS, elapsed.Milliseconds(), status, err)
+			require.NoError(t, err)
+			require.Less(t, elapsed, 750*time.Millisecond)
+			require.Equal(t, "running", status.Status)
+			require.Equal(t, started.RunID, status.RunID)
+			require.Equal(t, fixture.statusA.Context, status.Context)
+			requireUCICutoverBarrierFreshness(t, status.Freshness, fixture.statusA.Freshness, test.waitMS, uci.QueryBarrierTimedOut)
+			calls := fixture.core.proxyCallsSnapshot()
+			require.Len(t, calls, 1)
+			require.Equal(t, fixture.targetA, calls[0].Target)
+			requireUCICutoverProxyArgs(t, calls[0])
 
-	fixture.core.release(t, fixture.targetA)
-	fixture.core.awaitCompleted(t, fixture.targetA)
+			fixture.core.release(t, fixture.targetA)
+			fixture.waitForStatus(fixture.ctxA, fixture.projectA, uciCutoverHandleA, "idle")
+			replayed, err := fixture.barrierStatus(fixture.ctxA, fixture.projectA, uciCutoverHandleA, uciCutoverAfterBarrier{Token: started.RunID, WaitMS: test.waitMS})
+			require.NoError(t, err)
+			require.Equal(t, "idle", replayed.Status)
+			require.Equal(t, started.RunID, replayed.RunID)
+			requireUCICutoverBarrierFreshness(t, replayed.Freshness, fixture.statusA.Freshness, test.waitMS, uci.QueryBarrierSatisfied)
+		})
+	}
 }
 
 func TestUCICutoverStatusRejectsForeignAndStaleBarrierTokens(t *testing.T) {
@@ -697,9 +738,8 @@ func TestUCICutoverRejectsMismatchedIndexResult(t *testing.T) {
 	fixture.core.release(t, fixture.targetA)
 	fixture.core.awaitCompleted(t, fixture.targetA)
 
-	status := fixture.waitForStatus(fixture.ctxA, fixture.projectA, uciCutoverHandleA, "error")
-	require.NotEmpty(t, status.Error)
-	require.NotEqual(t, "idle", status.Status, "a mismatched returned ContextRef must not become idle success")
+	_, err = fixture.barrierStatus(fixture.ctxA, fixture.projectA, uciCutoverHandleA, uciCutoverAfterBarrier{Token: started.RunID, WaitMS: 500})
+	require.ErrorContains(t, err, "after_barrier run failed: codebase_index: index result context does not match resolved target")
 
 	indexCalls := fixture.core.indexCallsSnapshot()
 	require.Len(t, indexCalls, 1)
@@ -718,6 +758,7 @@ func (fixture *uciCutoverFixture) start(ctx context.Context, project muxcore.Pro
 	if err := json.Unmarshal(raw, &started); err != nil {
 		return uciCutoverStart{}, fmt.Errorf("decode codebase_index result: %w", err)
 	}
+	fixture.runIDs.Store(uciCutoverTargetKey{ClientSessionID: auditcontext.UCITransportSession(ctx), ContextHandle: contextHandle}, started.RunID)
 	return started, nil
 }
 
@@ -742,6 +783,9 @@ func (fixture *uciCutoverFixture) waitForStatus(ctx context.Context, project mux
 }
 
 func (fixture *uciCutoverFixture) status(ctx context.Context, project muxcore.ProjectContext, contextHandle string) (uciCutoverStatus, error) {
+	if runID, found := fixture.runIDs.Load(uciCutoverTargetKey{ClientSessionID: auditcontext.UCITransportSession(ctx), ContextHandle: contextHandle}); found {
+		return fixture.barrierStatus(ctx, project, contextHandle, uciCutoverAfterBarrier{Token: runID.(string), WaitMS: 500})
+	}
 	raw, err := fixture.call(ctx, project, "codebase_status", map[string]any{"context_handle": contextHandle})
 	if err != nil {
 		return uciCutoverStatus{}, err
@@ -901,7 +945,7 @@ func requireUCICutoverStatus(t *testing.T, got uciCutoverStatus, want, forbidden
 	require.Equal(t, want.TotalChunks, got.TotalChunks)
 	require.Equal(t, want.EmbeddedChunks, got.EmbeddedChunks)
 	require.Equal(t, want.LastIndexedAt, got.LastIndexedAt)
-	require.Equal(t, want.Freshness, got.Freshness)
+	requireUCICutoverBarrierFreshness(t, got.Freshness, want.Freshness, 500, uci.QueryBarrierSatisfied)
 	require.Len(t, got.Rows, 1)
 	require.Equal(t, uciCutoverRelativePath, got.Rows[0].RelativePath)
 	require.Equal(t, uciCutoverLabel, got.Rows[0].Label)

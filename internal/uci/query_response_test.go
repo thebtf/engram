@@ -213,6 +213,24 @@ func TestUCIQueryResponseContractRejectsInvalidMutations(t *testing.T) {
 		fixture string
 		mutate  func(t *testing.T, response map[string]any, fixtures map[string]json.RawMessage)
 	}{
+		{name: "missing membership", fixture: "synthetic_hybrid_hit", mutate: func(t *testing.T, response map[string]any, _ map[string]json.RawMessage) {
+			delete(uciQueryResponseFirstItem(t, response), "membership_id")
+		}},
+		{name: "null membership", fixture: "synthetic_hybrid_hit", mutate: func(t *testing.T, response map[string]any, _ map[string]json.RawMessage) {
+			uciQueryResponseFirstItem(t, response)["membership_id"] = nil
+		}},
+		{name: "empty membership", fixture: "synthetic_hybrid_hit", mutate: func(t *testing.T, response map[string]any, _ map[string]json.RawMessage) {
+			uciQueryResponseFirstItem(t, response)["membership_id"] = ""
+		}},
+		{name: "malformed membership", fixture: "synthetic_hybrid_hit", mutate: func(t *testing.T, response map[string]any, _ map[string]json.RawMessage) {
+			uciQueryResponseFirstItem(t, response)["membership_id"] = "not-a-uuid"
+		}},
+		{name: "noncanonical membership", fixture: "synthetic_hybrid_hit", mutate: func(t *testing.T, response map[string]any, _ map[string]json.RawMessage) {
+			uciQueryResponseFirstItem(t, response)["membership_id"] = "{55555555-5555-4555-8555-555555555555}"
+		}},
+		{name: "nil UUID membership", fixture: "synthetic_hybrid_hit", mutate: func(t *testing.T, response map[string]any, _ map[string]json.RawMessage) {
+			uciQueryResponseFirstItem(t, response)["membership_id"] = "00000000-0000-0000-0000-000000000000"
+		}},
 		{
 			name:    "unknown response field",
 			fixture: "synthetic_hybrid_hit",

@@ -1562,6 +1562,7 @@ func uciRealCorpusSemanticProof(ctx context.Context, client *uciInstalledAccepta
 	readPayload, err := client.Tool(ctx, "codebase_read", map[string]any{
 		"context_handle": selection.contextHandle,
 		"ref":            map[string]any{"source_id": item.Ref.SourceID, "view_id": item.Ref.ViewID, "entity_key": item.Ref.EntityKey},
+		"membership_id":  item.MembershipID,
 		"span":           map[string]any{"byte_start": item.Span.ByteStart, "byte_end": item.Span.ByteEnd, "line_start": item.Span.LineStart, "line_end": item.Span.LineEnd},
 		"content_digest": string(item.ContentDigest), "verify_working_copy": false, "max_bytes": 8192,
 	})
@@ -1569,7 +1570,7 @@ func uciRealCorpusSemanticProof(ctx context.Context, client *uciInstalledAccepta
 		return proof, err
 	}
 	read, err := uciDecodeInstalledAcceptanceQuery(readPayload)
-	if err != nil || read.Items == nil || len(*read.Items) != 1 || (*read.Items)[0].Ref != item.Ref || (*read.Items)[0].ContentDigest != item.ContentDigest {
+	if err != nil || read.Items == nil || len(*read.Items) != 1 || (*read.Items)[0].Ref != item.Ref || (*read.Items)[0].MembershipID != item.MembershipID || (*read.Items)[0].Path != item.Path || (*read.Items)[0].Span != item.Span || (*read.Items)[0].ContentDigest != item.ContentDigest {
 		return proof, errors.New("real-corpus semantic citation did not read back exactly")
 	}
 	proof.CitationReadBack = true
