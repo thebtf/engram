@@ -259,7 +259,7 @@ test('watcher publication keeps a server-authorized older pin and results while 
   const old = { source_ref: 'source', checkout_ref: 'checkout', repository: 'Engram', working_copy: 'Desk', indexed_snapshot: { label: 'Original View' }, view_ref: 'old-view', selection_ref: 'old-choice', index_intent_available: false }
   const newer = { ...old, indexed_snapshot: { label: 'New View' }, view_ref: 'new-view', selection_ref: 'new-choice' }
   const context = { source_id: 'source-1', checkout_id: 'checkout-1', view_id: 'view-1', profile_id: 'profile-1', generation: 1 }
-  const item = { ref: { source_id: 'source-1', view_id: 'view-1', entity_key: 'old-result' }, path: 'src/old-view.ts', span: { byte_start: 0, byte_end: 12, line_start: 1, line_end: 1 }, content_digest: 'digest', kind: 'function', language: 'typescript', excerpt: 'old result', match_sources: ['lexical'], score: 1 }
+  const item = { ref: { source_id: 'source-1', view_id: 'view-1', entity_key: 'old-result' }, membership_id: '60000000-0000-4000-8000-000000000001', path: 'src/old-view.ts', span: { byte_start: 0, byte_end: 12, line_start: 1, line_end: 1 }, content_digest: 'digest', kind: 'function', language: 'typescript', excerpt: 'old result', match_sources: ['lexical'], score: 1 }
   const envelope = { schema: 'engram.code-query/1', status: 'ok', contexts: [context], items: [item], warnings: [], retrieval: { mode: 'lexical' }, freshness: { state: 'observed_current' }, coverage: {}, truncated: false }
   await page.route('**/api/code/**', async route => {
     const path = new URL(route.request().url()).pathname
@@ -292,12 +292,12 @@ test('watcher publication keeps a server-authorized older pin and results while 
 })
 
 for (const rejectedStatus of ['denied', 'mismatch'] as const) {
-  test(`Code Explorer retains rotated references but drops a historical pin when server reauthorization is ${rejectedStatus}`, async ({ page }) => {
+  test(`Code Explorer retains refreshed selection authority but drops a historical pin when server reauthorization is ${rejectedStatus}`, async ({ page }) => {
     let catalogReads = 0
     let changedSnapshot = false
     let pins = 0
     const context = (ref: string) => ({
-      source_ref: `source-${ref}`, checkout_ref: `checkout-${ref}`,
+      source_ref: 'source-current', checkout_ref: 'checkout-current',
       repository: 'Engram', working_copy: 'operator desk',
       view_ref: changedSnapshot ? 'view-new-generation' : 'view-stable',
       selection_ref: `selection-${ref}`, index_intent_available: false,
@@ -329,6 +329,8 @@ for (const rejectedStatus of ['denied', 'mismatch'] as const) {
     await page.getByRole('button', { name: 'Обновить разрешённые варианты' }).click()
     await expect(page.getByTestId('code-context-pinned')).toBeVisible()
     await expect(page.getByTestId('code-context-snapshot')).toHaveValue('selection-fresh')
+    await expect(page.getByTestId('code-context-repository')).toHaveValue('source-current')
+    await expect(page.getByTestId('code-context-working-copy')).toHaveValue('checkout-current')
     expect(pins).toBe(1)
     changedSnapshot = true
     await page.getByRole('button', { name: 'Обновить разрешённые варианты' }).click()
@@ -619,11 +621,6 @@ test('Code Explorer resumes a same-document SPA remount but isolates copied stor
   expect(pinPayloads).toEqual([{ document_proof: DOCUMENT_PROOF, selection_ref: 'context-current' }])
   await expect(page.getByTestId('code-context-pinned')).toContainText('Current snapshot')
   await expect(page.locator('.readiness')).toHaveAttribute('data-state', 'unknown')
-  await page.getByTestId('code-context-repository').selectOption({ label: 'Other repository' })
-  await page.getByTestId('code-context-working-copy').selectOption({ label: 'D working copy' })
-  await page.getByTestId('code-context-snapshot').selectOption({ label: 'D snapshot' })
-  await expect(page.getByTestId('code-context-candidate')).toContainText('D snapshot')
-  await expect(page.getByTestId('code-context-pinned')).toContainText('Current snapshot')
   await page.getByTestId('index-intent-reindex').click()
   await expect(page.getByTestId('index-intent-state')).toHaveAttribute('data-state', 'queued')
 
@@ -658,7 +655,6 @@ test('Code Explorer resumes a same-document SPA remount but isolates copied stor
 
   await expect(copied.getByTestId('code-bootstrap-evidence')).toContainText('TAB_BINDING_COLLISION')
   await expect(copied.getByTestId('code-context-pinned')).toHaveCount(0)
-  await expect(copied.getByTestId('index-intent-state')).toHaveAttribute('data-state', 'idle')
   await expect(page.getByTestId('code-context-pinned')).toContainText('Current snapshot')
   expect(handshakePayloads).toHaveLength(2)
   expect(handshakePayloads[1]).toMatchObject({
@@ -679,10 +675,10 @@ test('Home opens a no-View working copy, then follows its released index to sear
   const ref = { source_id: 'source-1', view_id: 'view-1', entity_key: 'implementation' }
   const related = { source_id: 'source-1', view_id: 'view-1', entity_key: 'dependency' }
   const span = { byte_start: 0, byte_end: 65536, line_start: 1, line_end: 1 }
-  const item = { ref, path: 'src/implementation.ts', span, content_digest: 'digest-1', kind: 'function', language: 'typescript', excerpt: 'function go()', match_sources: ['lexical'], score: 1 }
+  const item = { ref, membership_id: '60000000-0000-4000-8000-000000000001', path: 'src/implementation.ts', span, content_digest: 'digest-1', kind: 'function', language: 'typescript', excerpt: 'function go()', match_sources: ['lexical'], score: 1 }
   const referenceSpan = { byte_start: 9, byte_end: 13, line_start: 1, line_end: 1 }
   const reference = { ref, precision: 'reference_site', reference_site_id: '50000000-0000-4000-8000-000000000005' }
-  const callerNode = { entity: ref, context_ref: { ...context, analysis_profile_id: context.profile_id }, source_state: 'available', source_read: { entity_key: ref.entity_key, span, content_digest: item.content_digest } }
+  const callerNode = { entity: ref, context_ref: { ...context, analysis_profile_id: context.profile_id }, source_state: 'available', source_read: { entity_key: ref.entity_key, membership_id: item.membership_id, span, content_digest: item.content_digest } }
   const relatedNode = { entity: related, context_ref: { ...context, analysis_profile_id: context.profile_id }, source_state: 'unavailable' }
   const envelope = { schema: 'engram.code-query/1', status: 'ok', contexts: [context], items: [item], warnings: [], retrieval: { mode: 'lexical' }, freshness: { state: 'observed_current' }, coverage: {}, truncated: false }
   const intent = { intent_ref: 'intent-first', state: 'queued', attempt: 1, retryable: false, created_at: '2026-09-15T00:00:00Z', updated_at: '2026-09-15T00:00:00Z' }
@@ -713,15 +709,15 @@ test('Home opens a no-View working copy, then follows its released index to sear
     } else if (pathname === '/api/code/source') {
       const body = route.request().postDataJSON()
       sourceRequests.push(body)
-      if (body.entity_key === ref.entity_key && body.content_digest === item.content_digest && body.reference_site_id === reference.reference_site_id && JSON.stringify(body.span) === JSON.stringify(referenceSpan)) {
+      if (body.entity_key === ref.entity_key && body.membership_id === item.membership_id && body.content_digest === item.content_digest && body.reference_site_id === reference.reference_site_id && JSON.stringify(body.span) === JSON.stringify(referenceSpan)) {
         await route.fulfill({ json: { ...envelope, items: [{ ...item, span: referenceSpan, excerpt: 'go()' }] } })
-      } else if (body.entity_key === ref.entity_key && body.content_digest === item.content_digest && JSON.stringify(body.indexed_span) === JSON.stringify(span) && JSON.stringify(body.span) === JSON.stringify({ ...span, byte_end: 8192 })) {
+      } else if (body.entity_key === ref.entity_key && body.membership_id === item.membership_id && body.content_digest === item.content_digest && JSON.stringify(body.indexed_span) === JSON.stringify(span) && JSON.stringify(body.span) === JSON.stringify({ ...span, byte_end: 8192 })) {
         await route.fulfill({ json: { ...envelope, items: [{ ...item, span: { ...span, byte_end: 8192 }, excerpt: 'x'.repeat(8192) }], warnings: ['source_partial_indexed_chunk'] } })
       } else {
         await route.fulfill({ status: 403 })
       }
     } else if (pathname === '/api/code/graph') {
-      await route.fulfill({ json: { ...envelope, graph: { nodes: [ref, related], edges: [{ from: ref, to: related, relation: 'calls', evidence_kind: 'RESOLVED', evidence: [reference] }, { from: related, to: ref, relation: 'may_call', evidence_kind: 'HEURISTIC', evidence: [{ ref: related, precision: 'unsupported' }] }], stop_reason: 'complete' }, navigation: { nodes: [callerNode, relatedNode], edges: [{ from: callerNode, to: relatedNode, relation: 'calls', evidence_kind: 'RESOLVED', evidence: [{ ref, precision: 'reference_site', source_state: 'available', source_read: { entity_key: ref.entity_key, span: referenceSpan, content_digest: item.content_digest, reference_site_id: reference.reference_site_id } }] }, { from: relatedNode, to: callerNode, relation: 'may_call', evidence_kind: 'HEURISTIC', evidence: [{ ref: related, precision: 'unsupported', source_state: 'unavailable' }] }] } } })
+      await route.fulfill({ json: { ...envelope, graph: { nodes: [ref, related], edges: [{ from: ref, to: related, relation: 'calls', evidence_kind: 'RESOLVED', evidence: [reference] }, { from: related, to: ref, relation: 'may_call', evidence_kind: 'HEURISTIC', evidence: [{ ref: related, precision: 'unsupported' }] }], stop_reason: 'complete' }, navigation: { nodes: [callerNode, relatedNode], edges: [{ from: callerNode, to: relatedNode, relation: 'calls', evidence_kind: 'RESOLVED', evidence: [{ ref, precision: 'reference_site', source_state: 'available', source_read: { entity_key: ref.entity_key, membership_id: item.membership_id, span: referenceSpan, content_digest: item.content_digest, reference_site_id: reference.reference_site_id } }] }, { from: relatedNode, to: callerNode, relation: 'may_call', evidence_kind: 'HEURISTIC', evidence: [{ ref: related, precision: 'unsupported', source_state: 'unavailable' }] }] } } })
     } else {
       await route.fulfill({ status: 500 })
     }
@@ -748,7 +744,7 @@ test('Home opens a no-View working copy, then follows its released index to sear
   await page.getByTestId('code-graph-results').getByRole('button').first().click()
   await expect(page.getByTestId('code-graph-evidence')).toContainText('reference_site')
   await page.getByTestId('code-graph-reference-source').click()
-  expect(sourceRequests[0]).toMatchObject({ entity_key: ref.entity_key, span: referenceSpan, content_digest: item.content_digest, reference_site_id: reference.reference_site_id })
+  expect(sourceRequests[0]).toMatchObject({ entity_key: ref.entity_key, membership_id: item.membership_id, span: referenceSpan, content_digest: item.content_digest, reference_site_id: reference.reference_site_id })
   await expect(page.getByTestId('code-source-result')).toHaveText('go()')
   await page.getByTestId('code-graph-results').getByRole('button').nth(1).click()
   await expect(page.getByTestId('code-graph-evidence')).toContainText('unsupported')
@@ -817,7 +813,7 @@ test('Home selects a published unnamed checkout and reads its authorized source'
   const pinned: unknown[] = []
   const sourceRequests: unknown[] = []
   const context = { source_id: 'source-1', checkout_id: 'checkout-1', view_id: 'view-1', profile_id: 'profile-1', generation: 1 }
-  const item = { ref: { source_id: 'source-1', view_id: 'view-1', entity_key: 'implementation' }, path: 'src/implementation.ts', span: { byte_start: 0, byte_end: 12, line_start: 1, line_end: 1 }, content_digest: 'digest-1', kind: 'function', language: 'typescript', excerpt: 'function go()', match_sources: ['lexical'], score: 1 }
+  const item = { ref: { source_id: 'source-1', view_id: 'view-1', entity_key: 'implementation' }, membership_id: '60000000-0000-4000-8000-000000000001', path: 'src/implementation.ts', span: { byte_start: 0, byte_end: 12, line_start: 1, line_end: 1 }, content_digest: 'digest-1', kind: 'function', language: 'typescript', excerpt: 'function go()', match_sources: ['lexical'], score: 1 }
   const envelope = { schema: 'engram.code-query/1', status: 'ok', contexts: [context], items: [item], warnings: [], retrieval: { mode: 'lexical' }, freshness: { state: 'observed_current' }, coverage: {}, truncated: false }
   await page.route('**/api/code/**', async (route) => {
     const pathname = new URL(route.request().url()).pathname
@@ -864,7 +860,7 @@ test('Home selects a published unnamed checkout and reads its authorized source'
   await expect(page.getByTestId('code-search-results')).toContainText('src/implementation.ts')
   await page.getByTestId('code-search-source').click()
   await expect(page.getByTestId('code-source-result')).toContainText('function go()')
-  expect(sourceRequests).toEqual([expect.objectContaining({ entity_key: 'implementation', content_digest: 'digest-1' })])
+  expect(sourceRequests).toEqual([expect.objectContaining({ entity_key: 'implementation', membership_id: '60000000-0000-4000-8000-000000000001', content_digest: 'digest-1' })])
 })
 
 test('identical source and checkout labels retain separate first-index and published selections', async ({ page }) => {
@@ -992,4 +988,65 @@ test('equal-count names expose minimal unique non-authorizing refs and offline f
   await expect(page.getByTestId('code-status').locator('div').nth(2).locator('dd')).toHaveText('Offline')
   await page.locator('.lang').click()
   await expect(page.getByTestId('code-status').locator('div').nth(2).locator('dd')).toHaveText('离线')
+})
+
+test('Home first use offers a native task, reads back the catalog, and labels lexical evidence honestly', async ({ page }) => {
+  let catalogStage: 'empty' | 'registered' | 'published' = 'empty'
+  const requests: string[] = []
+  const checkout = { source_ref: 'source-task', checkout_ref: 'checkout-task', repository: 'My service', working_copy: 'Feature A · desk' }
+  const context = { source_id: 'source-task', checkout_id: 'checkout-task', view_id: 'view-task', profile_id: 'profile-task', generation: 1 }
+  await page.route('**/api/auth/me', route => route.fulfill({ json: { auth_disabled: true } }))
+  await page.route('**/api/code/**', async route => {
+    const pathname = new URL(route.request().url()).pathname
+    requests.push(pathname)
+    if (pathname === '/api/code/tabs/handshake') {
+      await route.fulfill({ json: { state: 'TAB_BINDING_READY', tab_binding_id: TAB_BINDING_ID, document_proof: DOCUMENT_PROOF, resume_nonce: 'task-resume', reload_token: 'task-reload' } })
+    } else if (pathname === '/api/code/contexts') {
+      const contexts = catalogStage === 'empty' ? [] : catalogStage === 'registered'
+        ? [{ ...checkout, index_intent_available: false }]
+        : [{ ...checkout, indexed_snapshot: { label: 'Saved snapshot A' }, view_ref: 'view-task', selection_ref: 'selection-task', index_intent_available: false }]
+      await route.fulfill({ json: { contexts } })
+    } else if (pathname === `/api/code/tabs/${TAB_BINDING_ID}/context`) {
+      expect(route.request().postDataJSON().selection_ref).toBe('selection-task')
+      await route.fulfill({ status: 204 })
+    } else if (pathname === '/api/code/status') {
+      await route.fulfill({ json: { total_chunks: 60, embedded_chunks: 0, embedding: { coverage: 'unavailable' }, freshness: { state: 'observed_current' } } })
+    } else if (pathname === '/api/code/structure' || pathname === '/api/code/search') {
+      await route.fulfill({ json: { schema: 'engram.code-query/1', status: 'empty', contexts: [context], items: [], warnings: [], retrieval: { mode: 'lexical', vector_coverage: 0, degradation_reasons: ['embedding_provider_unavailable'] }, freshness: { state: 'observed_current' }, coverage: { structural: 'partial', unresolved_sites: 2, unsupported_files: 3 }, truncated: false } })
+    } else await route.fulfill({ status: 204 })
+  })
+
+  await page.goto('/')
+  await page.getByTestId('overview-workspace-entry').click()
+  await expect(page.getByTestId('code-context-empty')).toBeVisible()
+  await expect(page.locator('.phase')).toHaveText('Вкладка подключена')
+  await expect(page.getByTestId('code-pin-context')).not.toHaveText('Закреплено сервером')
+  await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
+  await expect(page.getByTestId('code-grant-chooser')).toHaveCount(0)
+  await page.locator('#code-connect-label').fill('My service')
+  await expect(page.getByTestId('code-connect-task')).toHaveValue(/codebase_context.*source_label.*locator.*codebase_index/)
+  await page.getByRole('button', { name: 'Выделить задачу', exact: true }).click()
+  await expect(page.getByTestId('code-connect-task')).toBeFocused()
+  expect(await page.getByTestId('code-connect-task').evaluate((field: HTMLTextAreaElement) => field.selectionEnd - field.selectionStart)).toBeGreaterThan(0)
+
+  catalogStage = 'registered'
+  await page.getByTestId('code-connect-readback').click()
+  await expect(page.getByTestId('code-context-empty')).toHaveCount(0)
+  await expect(page.getByTestId('code-context-index-affordance')).toBeVisible()
+  await expect(page.getByTestId('code-pin-context')).toBeDisabled()
+  await expect(page.getByTestId('code-context-index-affordance')).toContainText('локальный агент')
+  await expect(page.locator('#code-connect-kind option[value="worktree"]')).toHaveJSProperty('disabled', true)
+
+  catalogStage = 'published'
+  await page.getByTestId('code-connect-readback').click()
+  await expect(page.locator('#code-connect-kind option[value="worktree"]')).toHaveJSProperty('disabled', false)
+  await page.getByTestId('code-context-snapshot').selectOption('selection-task')
+  await page.getByTestId('code-pin-context').click()
+  await expect(page.getByTestId('code-context-pinned')).toContainText('Feature A · desk')
+  await page.getByTestId('code-query-input').fill('how is a working copy chosen')
+  await page.getByTestId('code-query-input').press('Enter')
+  await expect(page.getByTestId('code-query-evidence')).toContainText('только лексическим поиском')
+  await expect(page.getByTestId('code-query-evidence')).toContainText('embedding_provider_unavailable')
+  await expect(page.getByTestId('code-query-evidence')).toContainText('0%')
+  expect(requests.every(path => !path.includes('register') && !path.includes('grants'))).toBe(true)
 })

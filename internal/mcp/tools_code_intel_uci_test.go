@@ -1094,7 +1094,8 @@ func uciCodeIntelCompatibilityQueryResponse(t *testing.T, ref uci.ContextRef, ex
 			ViewID:    ref.ViewID,
 			EntityKey: uciCodeIntelCompatibilityQuery,
 		},
-		Path: uciCodeIntelCompatibilityPathPrefix + "shared.go",
+		MembershipID: "60000000-0000-4000-8000-000000000001",
+		Path:         uciCodeIntelCompatibilityPathPrefix + "shared.go",
 		Span: uci.QuerySpan{
 			ByteStart: 0,
 			ByteEnd:   int64(len(excerpt)),

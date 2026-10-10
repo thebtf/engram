@@ -518,6 +518,51 @@ func TestUCIPreparedIndexRefusesUnprovenLocalEvidenceBeforeScanning(t *testing.T
 	})
 }
 
+func TestUCIPreparedIndexUsesAuthorizedExtractionProfile(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		digest    uci.IndexDigest
+		parser    bool
+		path      string
+		wantError bool
+	}{
+		{name: "Go without parser", digest: preparedNativeGoProfileDigest(), path: "main.go"},
+		{name: "explicit Go with available parser", digest: preparedNativeGoProfileDigest(), parser: true, path: "main.go"},
+		{name: "semantic with available parser", digest: uci.TreeSitterSemanticContractDigest(), parser: true, path: "main.go"},
+		{name: "semantic without parser", digest: uci.TreeSitterSemanticContractDigest(), path: "main.go", wantError: true},
+		{name: "parser required without parser", digest: preparedNativeGoProfileDigest(), path: "main.ts", wantError: true},
+		{name: "Go profile cannot admit parser source", digest: preparedNativeGoProfileDigest(), parser: true, path: "main.ts", wantError: true},
+		{name: "missing selected digest", path: "main.go", wantError: true},
+		{name: "malformed selected digest", digest: "bad", path: "main.go", wantError: true},
+		{name: "unknown selected digest", digest: preparedParserBundleDigest, path: "main.go", wantError: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var parser codeintel.UCIPreparedTreeSitterParser
+			if test.parser {
+				parser = &preparedTreeSitterParser{}
+			}
+			fixture := newPreparedIndexFixtureWithTreeSitter(t, parser)
+			fixture.target.Binding.ExtractionProfileDigest = test.digest
+			fixture.client.binding = fixture.target.Binding.Clone()
+			fixture.client.profileDigest = test.digest
+			fixture.scanner.result.Files = []uci.ScannerFile{{Path: test.path, State: uci.IndexFilePresent, Body: []byte("package sample\nfunc Main() {}\n")}}
+			result, err := fixture.collaborator.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
+			if test.wantError {
+				require.Error(t, err)
+				require.Nil(t, result)
+				require.Empty(t, fixture.client.beginRequests)
+				require.Zero(t, fixture.client.stageCalls)
+				require.Zero(t, fixture.client.finalizeCalls)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, fixture.published, result.Context)
+			artifact := preparedArtifactForPath(t, preparedFrames(t, fixture.client.stagePayloadSets[0]), test.path)
+			require.Equal(t, test.digest, artifact.Profile.ExtractionProfileDigest)
+		})
+	}
+}
+
 func TestUCIPreparedIndexRequiresSelectedParserBundleDigest(t *testing.T) {
 	fixture := newPreparedIndexFixture(t)
 	_, err := codeintel.NewUCIPreparedIndexCollaborator(codeintel.UCIPreparedIndexConfig{
@@ -976,6 +1021,7 @@ func newPreparedIndexFixtureWithTreeSitter(t *testing.T, parser codeintel.UCIPre
 	if parser != nil {
 		profileDigest = uci.TreeSitterSemanticContractDigest()
 	}
+	binding.ExtractionProfileDigest = profileDigest
 	return preparedIndexFixture{
 		collaborator: collaborator,
 		registry:     registry,

@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.51.0] - 2026-10-10
+
+Ordinary Home → Workspace onboarding and representative-corpus capacity calibration, composed on the released v6.50.6 source. These source and release inputs do not establish publication, installed-client adoption, semantic retrieval or full-index acceptance; coordinated native/server delivery and ordinary consumer proof remain required.
+
+### Added
+
+- Expose ordinary repository/worktree connection from Home → Workspace with localized native-agent tasks, real server catalog readback, and the existing authorized index/pinned-View flow. Local Git remains native-host owned; the browser does not submit filesystem paths, create no-auth grants, request UUIDs, or initialize project identity.
+- Display query retrieval mode, vector coverage, structural coverage, unresolved references, unsupported files, and degradation reasons without presenting lexical fallback or page languages as semantic/language certification. Add Russian first-use and independent dirty-worktree save/rename/delete/restart instructions over the current Vue/Vite console.
+
+### Fixed
+
+- Bind source citations and exact reads to the server-issued temporal file `membership_id`. Shared artifacts at different paths can no longer substitute one location for another; ambiguous graph locations release no source descriptor. MCP, HTTP and Console consumers require the same canonical UUID with ref/span/digest. Old selectors without it are invalid and require a fresh search citation. No migration, parser/entity identity or embedding input changes; matched server/client delivery and focused runtime proof remain required.
+- Preserve a truly nil unconfigured parser and derive UCI artifact extraction identity from the server-authorized selected analysis profile, not global parser availability. Add the server-owned `BindCodeContextResponse.extraction_profile_digest` at protobuf tag 6; validate and retain it through the native adapter and rebind. Missing or unrecognized profiles and parser-required mismatches refuse before index admission without changing schema, profile rows, parser policy or publication guards. This internal contract requires coordinated native-client/server delivery. Bounded Go-only QA proves publication, lexical query, a resolved call edge, stored source read and profile/artifact digest equality in one View; full browser, semantic parser/provider, installed memory/history and release remain unproven.
+- Integrate the accepted v6.50.6 slug-cache, proxy, identity, cancellation, installer and Go 1.26.9 security inputs with the prospective 6.51.0 Core/console source. Integrate canonical v6.51.0 bootstrap/parser policies with their generated asset hashes. These source and package inputs do not establish publication, installation or ordinary consumer proof.
+- Keep empty catalogs, connected tabs, absent snapshots, indexing, failure, and historical pins distinct; null selections no longer render a server-pinned success. Preserve keyboard focus during connection readback and accessible graph controls/evidence warnings.
+- Keep authorized Workspace catalog readback and historical-snapshot retry available while daemon indexing is queued or running. Preserve confirmed pins, released results, explicit newer-snapshot selection, and duplicate-intent protection; browser regressions assert catalog state rather than retired wording. Reconcile residual planning gates with the already selected no-auth HTTP LAN origin while retaining required installed proof.
+- Calibrate the shared complete-build UCI admission/Stage budget to 384 MiB after a representative repository produced 296,433,353 bytes of unique complete facts and relationship evidence. Keep the 4 MiB frame, 1,024-frame, 1 MiB source-body and exact overflow guards; do not prune references, change identity, weaken atomic publication or introduce a new protocol. This source change requires coordinated native/server delivery and fresh installed indexing proof.
+- Bound code-job embedding requests by a 64 KiB padded UTF-8 cost proxy while retaining the 128-input ceiling. Send an oversized canonical input alone without trimming or skipping text; preserve candidate order, vector mapping, cache/profile identity, provider deadlines/retries/concurrency, and exact-View coverage requirements. This source repair does not prove recovery of historical provider failures or deployment.
+- Qualify JS/TS/TSX local declaration identities by their actual lexical scope so repeated names in sibling functions or blocks no longer falsely downgrade a whole source file and suppress supported same-file calls. Preserve public module identities, strict partial/ambiguity/shadow guards, and wire protocol v2; advance the facts extraction contract to v9 so corrected facts do not reuse stale artifact/profile/cache identities.
+- Keep `var` declarations in separate class static blocks distinct and preserve valid long local, method, interface and namespace identifiers through parser, parent validation and publication. Apply the identity bound after the complete lexical scope and occurrence suffix are constructed; digest the full overlong key without collapsing distinct sites or shortening names. Derive the separate reference-identity allowance from fixed metadata and bounded offsets without raising source/name limits.
+- Clarify the store tool's principal-visibility schema and `invalid_agent_visibility` guidance: both explicit `private` and `shared` require an authenticated principal. Document omission of `agent_visibility` for ordinary no-auth project memory, without accepting caller-supplied ownership, weakening private-memory checks, or changing persisted privacy semantics.
+- Read plain published-View status through the existing authenticated UCI read path without requiring index-workstation ownership; report unavailable local daemon liveness as `null`. Preserve owned unpublished-checkout preparation, index mutations and local token barriers under their stronger authority. Keep top-level status counts in conservative unique-chunk units while membership-candidate progress remains unchanged; shared chunk occurrences no longer invalidate readable snapshot status.
+- Validate the frozen release module graph with maintained `go mod tidy -diff`, rejecting any required module changes without rewriting `go.mod` or `go.sum` during packaging.
+- Measure dispatcher observability overhead with symmetric per-call timing and balanced provider batches, using actual nanosecond p50/p99 rather than mismatched averages or truncated milliseconds. Preserve the 5%/50 µs overhead budgets and 1-second p99 bound, and require one real recording per recorder-mode call; production dispatch and metric emission remain unchanged. Retain zero elapsed samples, report the undefined percentage for a zero baseline and enforce its unchanged absolute budget; reject negative elapsed samples.
+- Localize known structural-coverage states in Workspace using the existing RU/EN/zh messages while retaining unknown future values, and align current parser-release instructions with facts/v9 without relabeling historical facts/v8 evidence.
+- Keep Windows parser-worker cancellation tests synchronized with child-audit publication by retrying only native sharing violations within the existing readiness deadline; preserve rejection of other errors and the validated-child cancellation and Wait checks.
+
 ## [6.50.6] - 2026-10-10
 
 Prepare the next patch after the published and installed v6.50.5 basic-initialization release; ordinary memory recall and automatic-context recovery remain unproven. Focused source checks cover the identity changes below, not the unchanged metadata-only resolver deadline failure. Canonical v6.50.6 client/parser policies, SDK-bound raw artifacts and the full release Node gate remain pending. Preserve the published v6.50.5 and failed v6.50.4 history; no dependency, migration or OpenClaw change is included.
@@ -2177,7 +2204,8 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v6.50.6...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v6.51.0...HEAD
+[6.51.0]: https://github.com/thebtf/engram/compare/v6.50.6...v6.51.0
 [6.50.6]: https://github.com/thebtf/engram/compare/v6.50.5...v6.50.6
 [6.50.5]: https://github.com/thebtf/engram/compare/v6.50.4...v6.50.5
 [6.50.4]: https://github.com/thebtf/engram/compare/v6.50.3...v6.50.4

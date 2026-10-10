@@ -74,7 +74,7 @@ func TestOperatorCodeHTTPAdapter_ReleasesFiveBoundEndpoints(t *testing.T) {
 		},
 		{
 			name:   "versioned read",
-			body:   `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current","entity_key":"Fixture.Symbol","span":{"byte_start":0,"byte_end":12,"line_start":1,"line_end":1},"content_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`,
+			body:   `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current","entity_key":"Fixture.Symbol","membership_id":"60000000-0000-4000-8000-000000000001","span":{"byte_start":0,"byte_end":12,"line_start":1,"line_end":1},"content_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`,
 			invoke: (*OperatorCodeHTTPAdapter).HandleVersionedRead,
 			configure: func(app *operatorCodeHTTPTestApplication, ref uci.ContextRef) {
 				app.read = operatorCodeHTTPTestQueryResponse(t, ref, uci.QueryRetrievalExact)
@@ -286,6 +286,7 @@ func TestOperatorCodeHTTPAdapter_GraphNavigationPublishesOnlyStoredSourceDescrip
 	fixture.app.graph = response
 	descriptor := uci.VersionedReadSpec{
 		Entity:        available,
+		MembershipID:  "60000000-0000-4000-8000-000000000001",
 		Span:          uci.QuerySpan{ByteStart: 0, ByteEnd: 12, LineStart: 1, LineEnd: 1},
 		ContentDigest: uci.QueryContentDigest("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
 		MaxBytes:      12,
@@ -317,7 +318,7 @@ func TestOperatorCodeHTTPAdapter_GraphNavigationReleasesExactRelationSiteOnly(t 
 	}
 	require.NoError(t, response.ValidatePreExposure())
 	fixture.app.graph = response
-	descriptor := uci.VersionedReadSpec{Entity: caller, Span: uci.QuerySpan{ByteStart: 18, ByteEnd: 25, LineStart: 2, LineEnd: 2}, ContentDigest: uci.QueryContentDigest(strings.Repeat("a", 64)), MaxBytes: 7, ReferenceSiteID: &site}
+	descriptor := uci.VersionedReadSpec{Entity: caller, MembershipID: "60000000-0000-4000-8000-000000000001", Span: uci.QuerySpan{ByteStart: 18, ByteEnd: 25, LineStart: 2, LineEnd: 2}, ContentDigest: uci.QueryContentDigest(strings.Repeat("a", 64)), MaxBytes: 7, ReferenceSiteID: &site}
 	adapter.graphSources = &operatorCodeHTTPTestGraphSources{evidenceDescriptors: map[string]uci.VersionedReadSpec{site: descriptor}}
 	recorder := httptest.NewRecorder()
 	adapter.HandleGraph(recorder, operatorCodeHTTPTestRequest(t, `{"tab_binding_id":"`+operatorCodeHTTPTestBindingID+`","document_proof":"proof-current","action":"neighbors","target":{"entity_key":"Fixture.Caller"}}`, fixture.identity))
@@ -327,7 +328,7 @@ func TestOperatorCodeHTTPAdapter_GraphNavigationReleasesExactRelationSiteOnly(t 
 	}
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
 	require.Len(t, body.Navigation.Edges, 2)
-	require.Equal(t, &operatorCodeSourceReadDescriptor{EntityKey: caller.EntityKey, Span: descriptor.Span, ContentDigest: descriptor.ContentDigest, ReferenceSiteID: &site}, body.Navigation.Edges[0].Evidence[0].SourceRead)
+	require.Equal(t, &operatorCodeSourceReadDescriptor{EntityKey: caller.EntityKey, MembershipID: descriptor.MembershipID, Span: descriptor.Span, ContentDigest: descriptor.ContentDigest, ReferenceSiteID: &site}, body.Navigation.Edges[0].Evidence[0].SourceRead)
 	require.Equal(t, "available", body.Navigation.Edges[0].Evidence[0].SourceState)
 	require.Nil(t, body.Navigation.Edges[1].Evidence[0].SourceRead)
 	require.Equal(t, "unavailable", body.Navigation.Edges[1].Evidence[0].SourceState)
@@ -338,12 +339,13 @@ func TestOperatorCodeHTTPAdapter_ReferenceSiteSourceReadUsesExactPinnedKey(t *te
 	adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
 	fixture.app.read = operatorCodeHTTPTestQueryResponse(t, fixture.ref, uci.QueryRetrievalExact)
 	site := uuid.NewString()
-	request := `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current","entity_key":"Fixture.Symbol","span":{"byte_start":0,"byte_end":12,"line_start":1,"line_end":1},"content_digest":"` + strings.Repeat("a", 64) + `","reference_site_id":"` + site + `"}`
+	request := `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current","entity_key":"Fixture.Symbol","membership_id":"60000000-0000-4000-8000-000000000001","span":{"byte_start":0,"byte_end":12,"line_start":1,"line_end":1},"content_digest":"` + strings.Repeat("a", 64) + `","reference_site_id":"` + site + `"}`
 	recorder := httptest.NewRecorder()
 	adapter.HandleVersionedRead(recorder, operatorCodeHTTPTestRequest(t, request, fixture.identity))
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
 	require.Len(t, fixture.app.readInputs, 1)
 	require.Equal(t, site, *fixture.app.readInputs[0].ReferenceSiteID)
+	require.Equal(t, "60000000-0000-4000-8000-000000000001", fixture.app.readInputs[0].MembershipID)
 	require.Equal(t, fixture.ref.SourceID, fixture.app.readInputs[0].Ref.SourceID)
 	require.Equal(t, fixture.ref.ViewID, fixture.app.readInputs[0].Ref.ViewID)
 }
@@ -517,7 +519,7 @@ func TestOperatorCodeHTTPAdapter_BindsReleasedReadsToBrowserSession(t *testing.T
 		},
 		{
 			name:   "versioned read",
-			body:   `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current","entity_key":"Fixture.Symbol","span":{"byte_start":0,"byte_end":12,"line_start":1,"line_end":1},"content_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`,
+			body:   `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current","entity_key":"Fixture.Symbol","membership_id":"60000000-0000-4000-8000-000000000001","span":{"byte_start":0,"byte_end":12,"line_start":1,"line_end":1},"content_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`,
 			invoke: (*OperatorCodeHTTPAdapter).HandleVersionedRead,
 			configure: func(app *operatorCodeHTTPTestApplication, ref uci.ContextRef) {
 				app.read = operatorCodeHTTPTestQueryResponse(t, ref, uci.QueryRetrievalExact)
@@ -602,12 +604,12 @@ func TestOperatorCodeHTTPAdapter_RejectsClientSelectorsAndBoundsWithoutBody(t *t
 		},
 		{
 			name:   "read context selector",
-			body:   `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current","entity_key":"Fixture.Symbol","source_id":"` + uuid.NewString() + `","span":{"byte_start":0,"byte_end":12,"line_start":1,"line_end":1},"content_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`,
+			body:   `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current","entity_key":"Fixture.Symbol","membership_id":"60000000-0000-4000-8000-000000000001","source_id":"` + uuid.NewString() + `","span":{"byte_start":0,"byte_end":12,"line_start":1,"line_end":1},"content_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`,
 			invoke: (*OperatorCodeHTTPAdapter).HandleVersionedRead,
 		},
 		{
 			name:   "read byte limit",
-			body:   `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current","entity_key":"Fixture.Symbol","span":{"byte_start":0,"byte_end":12,"line_start":1,"line_end":1},"content_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","max_bytes":8193}`,
+			body:   `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current","entity_key":"Fixture.Symbol","membership_id":"60000000-0000-4000-8000-000000000001","span":{"byte_start":0,"byte_end":12,"line_start":1,"line_end":1},"content_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","max_bytes":8193}`,
 			invoke: (*OperatorCodeHTTPAdapter).HandleVersionedRead,
 		},
 	} {
@@ -2190,6 +2192,7 @@ func operatorCodeHTTPTestQueryResponse(t *testing.T, ref uci.ContextRef, mode uc
 	contexts := uci.QueryContexts{{SourceID: ref.SourceID, CheckoutID: ref.CheckoutID, ViewID: ref.ViewID, Generation: ref.Generation, ProfileID: ref.AnalysisProfileID}}
 	items := uci.QueryItems{{
 		Ref:           uci.QueryEntityRef{SourceID: ref.SourceID, ViewID: ref.ViewID, EntityKey: "Fixture.Symbol"},
+		MembershipID:  "60000000-0000-4000-8000-000000000001",
 		Path:          "internal/fixture.go",
 		Span:          uci.QuerySpan{ByteStart: 0, ByteEnd: 12, LineStart: 1, LineEnd: 1},
 		ContentDigest: uci.QueryContentDigest("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
@@ -2253,4 +2256,62 @@ func operatorCodeHTTPTestGraphResponse(t *testing.T, ref uci.ContextRef) uci.Que
 
 func operatorCodeHTTPTestRefsEqual(left, right uci.ContextRef) bool {
 	return left.SpaceID == nil && right.SpaceID == nil && left.SourceID == right.SourceID && left.CheckoutID == right.CheckoutID && left.ViewID == right.ViewID && left.AnalysisProfileID == right.AnalysisProfileID && left.Generation == right.Generation
+}
+
+func TestOperatorCodeHTTPAdapter_SourceMembershipFailsClosed(t *testing.T) {
+	for index, value := range []any{nil, "", "not-a-uuid", "{60000000-0000-4000-8000-000000000001}", "00000000-0000-0000-0000-000000000000"} {
+		t.Run(strconv.Itoa(index), func(t *testing.T) {
+			adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+			body := map[string]any{"tab_binding_id": operatorCodeHTTPTestBindingID, "document_proof": "proof-current", "entity_key": "Fixture.Symbol", "span": uci.QuerySpan{ByteStart: 0, ByteEnd: 12, LineStart: 1, LineEnd: 1}, "content_digest": strings.Repeat("a", 64)}
+			if value != nil {
+				body["membership_id"] = value
+			}
+			payload, err := json.Marshal(body)
+			require.NoError(t, err)
+			recorder := httptest.NewRecorder()
+			adapter.HandleVersionedRead(recorder, operatorCodeHTTPTestRequest(t, string(payload), fixture.identity))
+			require.Equal(t, http.StatusBadRequest, recorder.Code)
+			require.Empty(t, recorder.Body.String())
+			require.Zero(t, fixture.app.readCalls)
+			require.Empty(t, fixture.recorder.inputs)
+			body["membership_id"] = nil
+			payload, err = json.Marshal(body)
+			require.NoError(t, err)
+			recorder = httptest.NewRecorder()
+			adapter.HandleVersionedRead(recorder, operatorCodeHTTPTestRequest(t, string(payload), fixture.identity))
+			require.Equal(t, http.StatusBadRequest, recorder.Code)
+			require.Empty(t, recorder.Body.String())
+			require.Zero(t, fixture.app.readCalls)
+		})
+	}
+}
+
+func TestOperatorCodeHTTPAdapter_SourceRejectsOtherMembershipAndPreservesPartialMiss(t *testing.T) {
+	for _, mismatch := range []bool{true, false} {
+		adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+		response := operatorCodeHTTPTestQueryResponse(t, fixture.ref, uci.QueryRetrievalExact)
+		if mismatch {
+			(*response.Items)[0].MembershipID = "60000000-0000-4000-8000-000000000002"
+		} else {
+			items := uci.QueryItems{}
+			response.Items = &items
+			response.Status = uci.QueryStatusPartial
+			response.Coverage.Structural = uci.IndexCoveragePartial
+		}
+		fixture.app.read = response
+		request := `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current","entity_key":"Fixture.Symbol","membership_id":"60000000-0000-4000-8000-000000000001","span":{"byte_start":0,"byte_end":12,"line_start":1,"line_end":1},"content_digest":"` + strings.Repeat("a", 64) + `"}`
+		recorder := httptest.NewRecorder()
+		adapter.HandleVersionedRead(recorder, operatorCodeHTTPTestRequest(t, request, fixture.identity))
+		if mismatch {
+			require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+			require.Empty(t, recorder.Body.String())
+			require.Empty(t, fixture.recorder.inputs)
+		} else {
+			require.Equal(t, http.StatusOK, recorder.Code)
+			var read uci.QueryResponse
+			require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &read))
+			require.Equal(t, uci.QueryStatusPartial, read.Status)
+			require.Empty(t, *read.Items)
+		}
+	}
 }

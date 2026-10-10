@@ -311,6 +311,7 @@ func uci1GraphReadItem(ctx context.Context, client *uciInstalledAcceptanceMCPCli
 	payload, err := client.Tool(ctx, "codebase_read", map[string]any{
 		"context_handle": selection.contextHandle,
 		"ref":            uci1GraphTarget(item.Ref),
+		"membership_id":  item.MembershipID,
 		"span": map[string]any{
 			"byte_start": item.Span.ByteStart,
 			"byte_end":   item.Span.ByteEnd,
@@ -332,7 +333,7 @@ func uci1GraphReadItem(ctx context.Context, client *uciInstalledAcceptanceMCPCli
 		return uci.QueryResponse{}, errors.New("installed graph probe read is not one current selected-View item")
 	}
 	read := (*response.Items)[0]
-	if read.Ref != item.Ref || read.Span != item.Span || read.ContentDigest != item.ContentDigest {
+	if read.Ref != item.Ref || read.MembershipID != item.MembershipID || read.Path != item.Path || read.Span != item.Span || read.ContentDigest != item.ContentDigest {
 		return uci.QueryResponse{}, errors.New("installed graph probe read did not preserve its search citation")
 	}
 	return response, nil

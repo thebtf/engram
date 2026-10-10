@@ -849,7 +849,7 @@ func (adapter *OperatorCodeHTTPAdapter) HandleGraph(w http.ResponseWriter, r *ht
 }
 
 // HandleVersionedRead reads one bounded persisted span. A client may name only
-// the entity key from a result it already received; the source and View come
+// the entity and membership from a result it already received; Source and View come
 // exclusively from the guarded binding pin.
 func (adapter *OperatorCodeHTTPAdapter) HandleVersionedRead(w http.ResponseWriter, r *http.Request) {
 	var request operatorCodeVersionedReadRequest
@@ -877,6 +877,7 @@ func (adapter *OperatorCodeHTTPAdapter) HandleVersionedRead(w http.ResponseWrite
 			ViewID:    ref.ViewID,
 			EntityKey: request.EntityKey,
 		},
+		MembershipID:      request.MembershipID,
 		Span:              request.Span,
 		IndexedSpan:       request.IndexedSpan,
 		ContentDigest:     uci.QueryContentDigest(request.ContentDigest),
@@ -1717,6 +1718,7 @@ func operatorCodeUniqueEvidenceKinds(values []uci.QueryEvidenceKind) []uci.Query
 type operatorCodeVersionedReadRequest struct {
 	operatorCodeProofRequest
 	EntityKey         string         `json:"entity_key"`
+	MembershipID      string         `json:"membership_id"`
 	Span              uci.QuerySpan  `json:"span"`
 	IndexedSpan       *uci.QuerySpan `json:"indexed_span,omitempty"`
 	ContentDigest     string         `json:"content_digest"`
@@ -1726,7 +1728,7 @@ type operatorCodeVersionedReadRequest struct {
 }
 
 func (request operatorCodeVersionedReadRequest) valid() bool {
-	if !operatorCodeText(request.EntityKey) || !operatorCodeDigest(request.ContentDigest) || request.Span.Validate() != nil {
+	if !operatorCodeUUID(request.MembershipID) || !operatorCodeText(request.EntityKey) || !operatorCodeDigest(request.ContentDigest) || request.Span.Validate() != nil {
 		return false
 	}
 	if request.ReferenceSiteID != nil && uuid.Validate(*request.ReferenceSiteID) != nil {
@@ -2328,10 +2330,11 @@ func (adapter *OperatorCodeHTTPAdapter) graphNavigation(ctx context.Context, aut
 		entry := operatorCodeGraphNavigationRef{Entity: node, ContextRef: contextRef, SourceState: "unavailable"}
 		if adapter != nil && adapter.graphSources != nil {
 			descriptor, available, err := adapter.graphSources.DescribeGraphSource(ctx, authorized, node)
-			if err == nil && available {
+			if err == nil && available && descriptor.Entity == node && descriptor.Validate() == nil {
 				entry.SourceState = "available"
 				entry.SourceRead = &operatorCodeSourceReadDescriptor{
 					EntityKey:     descriptor.Entity.EntityKey,
+					MembershipID:  descriptor.MembershipID,
 					Span:          descriptor.Span,
 					ContentDigest: descriptor.ContentDigest,
 				}
@@ -2353,7 +2356,7 @@ func (adapter *OperatorCodeHTTPAdapter) graphNavigation(ctx context.Context, aut
 				descriptor, available, err := adapter.graphSources.DescribeGraphEvidence(ctx, authorized, evidence)
 				if err == nil && available && descriptor.Entity == evidence.Ref && descriptor.ReferenceSiteID != nil && evidence.ReferenceSiteID != nil && *descriptor.ReferenceSiteID == *evidence.ReferenceSiteID && descriptor.Validate() == nil && descriptor.Span.ByteEnd-descriptor.Span.ByteStart <= operatorCodeReadMax {
 					item.SourceState = "available"
-					item.SourceRead = &operatorCodeSourceReadDescriptor{EntityKey: descriptor.Entity.EntityKey, Span: descriptor.Span, ContentDigest: descriptor.ContentDigest, ReferenceSiteID: descriptor.ReferenceSiteID}
+					item.SourceRead = &operatorCodeSourceReadDescriptor{EntityKey: descriptor.Entity.EntityKey, MembershipID: descriptor.MembershipID, Span: descriptor.Span, ContentDigest: descriptor.ContentDigest, ReferenceSiteID: descriptor.ReferenceSiteID}
 				}
 			}
 			entry.Evidence = append(entry.Evidence, item)
@@ -2519,11 +2522,14 @@ func operatorCodeReadResponseValid(response uci.QueryResponse, authorized uci.Au
 	}
 	switch response.Status {
 	case uci.QueryStatusOK, uci.QueryStatusPartial, uci.QueryStatusStale:
-		if response.Retrieval == nil || response.Retrieval.Mode != uci.QueryRetrievalExact || response.Items == nil || len(*response.Items) != 1 || response.Truncated == nil || *response.Truncated {
+		if response.Retrieval == nil || response.Retrieval.Mode != uci.QueryRetrievalExact || response.Items == nil || len(*response.Items) > 1 || response.Truncated == nil || *response.Truncated {
 			return false
 		}
+		if len(*response.Items) == 0 {
+			return response.Status == uci.QueryStatusPartial
+		}
 		item := (*response.Items)[0]
-		if item.Ref != input.Ref || item.ContentDigest != input.ContentDigest || len(item.Excerpt) != int(item.Span.ByteEnd-item.Span.ByteStart) || len(item.Excerpt) > input.MaxBytes {
+		if item.Ref != input.Ref || item.MembershipID != input.MembershipID || item.ContentDigest != input.ContentDigest || len(item.Excerpt) != int(item.Span.ByteEnd-item.Span.ByteStart) || len(item.Excerpt) > input.MaxBytes {
 			return false
 		}
 		if input.IndexedSpan == nil {
@@ -2798,6 +2804,7 @@ func operatorCodeGrantDTO(grant gormdb.BrowserReadGrant) operatorCodeGrantRespon
 
 type operatorCodeSourceReadDescriptor struct {
 	EntityKey       string                 `json:"entity_key"`
+	MembershipID    string                 `json:"membership_id"`
 	Span            uci.QuerySpan          `json:"span"`
 	ContentDigest   uci.QueryContentDigest `json:"content_digest"`
 	ReferenceSiteID *string                `json:"reference_site_id,omitempty"`

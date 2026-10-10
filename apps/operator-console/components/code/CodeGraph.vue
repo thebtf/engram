@@ -25,7 +25,7 @@ const selectedEdge = ref<CodeGraphEdge | null>(null)
 
 const relationTypes = ['contains', 'imports', 'exports', 'references', 'calls', 'may_call', 'inherits', 'implements', 'documents', 'mentions', 'configures', 'schema_references', 'tests', 'depends_on']
 const graph = computed(() => props.graph?.graph ?? null)
-const visibleContinuation = computed(() => props.graph?.continuation !== null)
+const visibleContinuation = computed(() => props.graph?.continuation != null)
 const edges = computed(() => graph.value?.edges ?? [])
 const nodes = computed(() => graph.value?.nodes.map((ref, index) => {
   const count = Math.max(graph.value?.nodes.length ?? 0, 1)
@@ -91,13 +91,14 @@ watch(() => props.graph, () => {
   <article class="panel graph-panel" aria-live="polite">
     <div class="panel-head">
       <div>
-        <h3 data-testid="code-graph-heading">{{ t('codeExplorer.graph.title') }}</h3>
+        <h3 tabindex="-1" data-testid="code-graph-heading">{{ t('codeExplorer.graph.title') }}</h3>
         <p>{{ t(`codeExplorer.states.${state.kind}.graph`) }}</p>
       </div>
       <span :data-state="state.kind">{{ t(`codeExplorer.states.${state.kind}.label`) }}</span>
     </div>
 
-    <div v-if="search !== null && search.items.length > 0" class="graph-controls">
+    <details v-if="search !== null && search.items.length > 0" class="graph-controls">
+      <summary>{{ t('workspace.workbench.relationOptions') }}</summary>
       <label>
         <span>{{ t('codeExplorer.graph.direction') }}</span>
         <select v-model="direction" :disabled="pending">
@@ -117,10 +118,10 @@ watch(() => props.graph, () => {
         <span>{{ t('codeExplorer.graph.target') }}</span>
         <select :disabled="pending" @change="selectTarget">
           <option value="" selected disabled>{{ t('codeExplorer.graph.chooseTarget') }}</option>
-          <option v-for="(item, index) in search.items" :key="item.ref.entityKey" :value="index">{{ item.ref.entityKey }}</option>
+          <option v-for="(item, index) in search.items" :key="`${item.membershipId}:${item.ref.entityKey}:${item.span.byteStart}`" :value="index">{{ item.ref.entityKey }}</option>
         </select>
       </label>
-    </div>
+    </details>
 
     <div v-if="graph !== null" class="graph-toolbar">
       <button class="btn" type="button" :aria-pressed="mode === 'graph'" :disabled="pending" @click="mode = 'graph'">{{ t('codeExplorer.graph.visual') }}</button>
@@ -128,7 +129,7 @@ watch(() => props.graph, () => {
       <button v-if="selectedTarget !== null || visibleContinuation" class="btn" type="button" :disabled="pending" data-testid="code-graph-continue" @click="emit('continue', selectedTarget)">{{ t('codeExplorer.graph.continue') }}</button>
     </div>
 
-    <svg v-if="graph !== null && mode === 'graph'" class="graph-canvas" viewBox="0 0 320 260" role="img" data-testid="code-graph-results" :aria-label="t('codeExplorer.graph.canvasLabel', { count: nodes.length })">
+    <svg v-if="graph !== null && mode === 'graph'" class="graph-canvas" viewBox="0 0 320 260" role="group" data-testid="code-graph-results" :aria-label="t('codeExplorer.graph.canvasLabel', { count: nodes.length })">
       <desc>{{ edges.map((edge) => `${edge.from.entityKey} ${edge.relation} ${edge.to.entityKey} ${edge.explanation ?? ''}`).join(' ') }}</desc>
       <defs><marker id="code-arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L6,3 z" /></marker></defs>
       <path
@@ -186,6 +187,7 @@ watch(() => props.graph, () => {
       <p v-else data-testid="code-graph-no-source">{{ t('codeExplorer.graph.noPublishedSource') }}</p>
     </section>
 
+    <ul v-if="props.graph !== null && props.graph.warnings.length > 0" class="warnings"><li v-for="warning in props.graph.warnings" :key="warning">{{ warning }}</li></ul>
     <p v-if="graph !== null" class="stop">{{ t('codeExplorer.graph.traversal', { stop: graph.stopReason }) }}</p>
   </article>
 </template>
@@ -199,5 +201,8 @@ h3 { margin:0; color:var(--fg); font-size:var(--text-sm); font-weight:800; }.pan
 .graph-toolbar { display:flex; flex-wrap:wrap; gap:7px; margin-top:14px; }.btn { min-height:36px; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--surface); color:var(--fg); padding:8px 12px; font:inherit; font-size:var(--text-sm); font-weight:700; cursor:pointer; }.btn[aria-pressed='true'] { border-color:var(--accent); box-shadow:inset 0 0 0 1px var(--accent); }.btn:disabled { cursor:not-allowed; opacity:.55; }
 .graph-canvas { display:block; width:100%; min-height:260px; margin-top:14px; border:1px solid var(--border-soft); border-radius:var(--r-sm); background:var(--bg); }.edge { fill:none; stroke:var(--border); stroke-width:2; cursor:pointer; }.edge.selected { stroke:var(--accent); stroke-width:3; }.edge:focus-visible, .node:focus-visible { outline:none; }.edge:focus-visible { stroke:var(--accent); stroke-width:4; }.node { cursor:pointer; }.node circle { fill:var(--surface-warm); stroke:var(--border); stroke-width:2; }.node.selected circle, .node:focus-visible circle { stroke:var(--accent); stroke-width:3; }.node text { fill:var(--fg-2); font-family:var(--font-mono); font-size:8px; pointer-events:none; }.graph-canvas marker path { fill:var(--border); }
 .edges { display:grid; gap:8px; margin:14px 0 0; padding:0; list-style:none; }.edge-list { display:grid; width:100%; gap:4px; border:1px solid var(--border-soft); border-radius:var(--r-sm); background:var(--bg); padding:10px; color:var(--fg); text-align:left; cursor:pointer; }.edge-list[aria-pressed='true'] { border-color:var(--accent); }.edge-list span, .edge-list small { color:var(--muted); font-size:var(--text-xs); }.edge-list code { overflow-wrap:anywhere; }.selection { display:grid; gap:6px; margin-top:14px; border-top:1px solid var(--border-soft); padding-top:12px; }.selection strong { color:var(--fg); font-family:var(--font-mono); font-size:var(--text-sm); }.selection p { margin:0; }
+.btn:focus-visible, select:focus-visible, input:focus-visible, .edge-list:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }.warnings { color:var(--warn); font-size:var(--text-sm); }
+.graph-controls summary { color:var(--fg-2); cursor:pointer; font-size:var(--text-sm); font-weight:700; }.graph-controls[open] > label, .graph-controls[open] > fieldset { margin-top:10px; }summary:focus-visible, h3:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }.selection strong, .selection p, .warnings, .stop { overflow-wrap:anywhere; }.btn, select { max-width:100%; }.graph-controls select { width:100%; box-sizing:border-box; }.btn:hover:not(:disabled), .edge-list:hover { background:var(--surface-warm); }
+@media (pointer:coarse) { .btn, select, .edge-list, .relation { min-height:44px; } }
 @media (max-width:720px) { .panel-head { display:grid; }.panel-head span { justify-self:start; white-space:normal; } }
 </style>

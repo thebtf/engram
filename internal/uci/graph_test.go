@@ -991,7 +991,8 @@ func graphTestContextRef(sourceID, checkoutID, viewID, profileID string, generat
 func graphTestCandidate(contextRef ContextRef, artifactID, digestCharacter, entityKey, localName, qualifiedSymbol, relativePath string) QueryCandidate {
 	text := "func " + localName + "() {}"
 	return QueryCandidate{
-		Context: contextRef,
+		Context:      contextRef,
+		MembershipID: artifactID,
 		Proof: IndexArtifactProof{
 			ArtifactID:         artifactID,
 			ContentDigest:      IndexDigest(strings.Repeat(digestCharacter, 64)),

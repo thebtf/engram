@@ -1095,6 +1095,10 @@ func uciContextIntegrationScope(ref uci.ContextRef, incarnationID string) *pb.Co
 }
 
 func uciContextIntegrationBinding(ref uci.ContextRef, incarnationID, localRootID, workstationID string) uci.IndexBinding {
+	profile, err := uci.GoIndexAdmissionArtifactProfile(uci.GoExtractionProfile{ProfileKey: "go-structure-v1", ParserKey: "go-parser-v1"})
+	if err != nil {
+		panic(err)
+	}
 	contextRef := ref
 	return uci.IndexBinding{
 		Context: &contextRef,
@@ -1103,9 +1107,10 @@ func uciContextIntegrationBinding(ref uci.ContextRef, incarnationID, localRootID
 			CheckoutID:    ref.CheckoutID,
 			IncarnationID: incarnationID,
 		},
-		ProfileID:     ref.AnalysisProfileID,
-		LocalRootID:   localRootID,
-		WorkstationID: workstationID,
+		ProfileID:               ref.AnalysisProfileID,
+		LocalRootID:             localRootID,
+		WorkstationID:           workstationID,
+		ExtractionProfileDigest: profile.ExtractionProfileDigest,
 	}
 }
 
@@ -1214,6 +1219,7 @@ func requireUCIContextIntegrationBinding(t *testing.T, want uci.IndexBinding, go
 	}, got.GetIndexScope()), "scope got=%v want=%v", got.GetIndexScope(), want.Scope)
 	require.Equal(t, want.LocalRootID, got.GetLocalRootId())
 	require.Equal(t, want.WorkstationID, got.GetWorkstationId())
+	require.Equal(t, string(want.ExtractionProfileDigest), got.GetExtractionProfileDigest())
 }
 
 func requireUCIContextIntegrationObservedViewFacts(t *testing.T, request *pb.FinalizeCodeIndexRequest) {

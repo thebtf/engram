@@ -22,6 +22,7 @@ const (
 
 type uciCodeReadArtifact struct {
 	Ref           uci.QueryEntityRef
+	MembershipID  string
 	Path          string
 	Span          uci.QuerySpan
 	ContentDigest uci.QueryContentDigest
@@ -88,11 +89,11 @@ func TestUCICodebaseReadToolDefinitionIsBoundedAndReadOnly(t *testing.T) {
 
 	required, ok := tool.InputSchema["required"].([]string)
 	require.True(t, ok, "codebase_read must declare its required source citation fields")
-	assert.ElementsMatch(t, []string{"ref", "span", "content_digest"}, required)
+	assert.ElementsMatch(t, []string{"ref", "membership_id", "span", "content_digest"}, required)
 
 	properties, ok := tool.InputSchema["properties"].(map[string]any)
 	require.True(t, ok, "codebase_read must expose an object property schema")
-	for _, requiredProperty := range []string{"context_handle", "ref", "span", "content_digest", "project", "verify_working_copy", "max_bytes"} {
+	for _, requiredProperty := range []string{"context_handle", "ref", "membership_id", "span", "content_digest", "project", "verify_working_copy", "max_bytes"} {
 		require.Contains(t, properties, requiredProperty)
 	}
 
@@ -163,6 +164,7 @@ func TestUCICodebaseReadReturnsExactStoredArtifactForAuthorizedContext(t *testin
 	assert.Equal(t, fixture.refA, fixture.application.readCalls[0].ref)
 	assert.Equal(t, CodebaseReadInput{
 		Ref:           artifact.Ref,
+		MembershipID:  artifact.MembershipID,
 		Span:          artifact.Span,
 		ContentDigest: artifact.ContentDigest,
 		MaxBytes:      uciCodeReadTestDefaultMaxBytes,
@@ -196,6 +198,7 @@ func TestUCICodebaseReadWorkingCopyVerificationIsMetadataOnly(t *testing.T) {
 			require.Len(t, fixture.application.readCalls, 1)
 			assert.Equal(t, CodebaseReadInput{
 				Ref:               artifact.Ref,
+				MembershipID:      artifact.MembershipID,
 				Span:              artifact.Span,
 				ContentDigest:     artifact.ContentDigest,
 				VerifyWorkingCopy: true,
@@ -328,6 +331,11 @@ func TestUCICodebaseReadRejectsInvalidBoundsAndUnknownArgumentsBeforeApplication
 		name   string
 		mutate func(map[string]any)
 	}{
+		{name: "missing membership", mutate: func(arguments map[string]any) { delete(arguments, "membership_id") }},
+		{name: "null membership", mutate: func(arguments map[string]any) { arguments["membership_id"] = nil }},
+		{name: "empty membership", mutate: func(arguments map[string]any) { arguments["membership_id"] = "" }},
+		{name: "malformed membership", mutate: func(arguments map[string]any) { arguments["membership_id"] = "not-a-uuid" }},
+		{name: "noncanonical membership", mutate: func(arguments map[string]any) { arguments["membership_id"] = "{60000000-0000-4000-8000-000000000001}" }},
 		{
 			name: "missing source citation",
 			mutate: func(arguments map[string]any) {
@@ -456,6 +464,17 @@ func TestUCICodebaseReadRejectsUnclosedOrInexactApplicationResponses(t *testing.
 		configure func(t *testing.T, fixture *uciCodeReadFixture, requested uciCodeReadArtifact) string
 	}{
 		{
+			name: "different response membership",
+			configure: func(t *testing.T, fixture *uciCodeReadFixture, requested uciCodeReadArtifact) string {
+				wrong := requested
+				wrong.MembershipID = "60000000-0000-4000-8000-000000000002"
+				fixture.application.readResponse = func(_ uci.AuthorizedContext, _ CodebaseReadInput) (uci.QueryResponse, error) {
+					return uciCodeReadQueryResponse(t, fixture.refA, &wrong, uci.QueryStatusOK, "", nil, false), nil
+				}
+				return wrong.Excerpt
+			},
+		},
+		{
 			name: "different response citation",
 			configure: func(t *testing.T, fixture *uciCodeReadFixture, requested uciCodeReadArtifact) string {
 				wrong := requested
@@ -521,7 +540,8 @@ func uciCodeReadArtifactFor(ref uci.ContextRef, source, entityKey string) uciCod
 			ViewID:    ref.ViewID,
 			EntityKey: entityKey,
 		},
-		Path: "internal/fixture/versioned.go",
+		MembershipID: "60000000-0000-4000-8000-000000000001",
+		Path:         "internal/fixture/versioned.go",
 		Span: uci.QuerySpan{
 			ByteStart: int64(len(prefix)),
 			ByteEnd:   int64(len(source)),
@@ -546,6 +566,7 @@ func uciCodeReadArguments(handle string, artifact uciCodeReadArtifact) map[strin
 			"view_id":    artifact.Ref.ViewID,
 			"entity_key": artifact.Ref.EntityKey,
 		},
+		"membership_id": artifact.MembershipID,
 		"span": map[string]any{
 			"byte_start": artifact.Span.ByteStart,
 			"byte_end":   artifact.Span.ByteEnd,
@@ -573,6 +594,7 @@ func uciCodeReadQueryResponse(t *testing.T, ref uci.ContextRef, artifact *uciCod
 	if artifact != nil {
 		items = append(items, uci.QueryItem{
 			Ref:           artifact.Ref,
+			MembershipID:  artifact.MembershipID,
 			Path:          artifact.Path,
 			Span:          artifact.Span,
 			ContentDigest: artifact.ContentDigest,
@@ -650,6 +672,7 @@ func requireUCICodeReadResponse(t *testing.T, response *Response, wantRef uci.Co
 	require.Len(t, *payload.Items, 1)
 	assert.Equal(t, uci.QueryItem{
 		Ref:           wantArtifact.Ref,
+		MembershipID:  wantArtifact.MembershipID,
 		Path:          wantArtifact.Path,
 		Span:          wantArtifact.Span,
 		ContentDigest: wantArtifact.ContentDigest,
@@ -749,4 +772,23 @@ func requireUCICodeReadSafeToolError(t *testing.T, response *Response, fixture *
 	} {
 		assert.NotContains(t, string(raw), forbidden, "safe tool error must not disclose %q", forbidden)
 	}
+}
+
+func TestUCICodebaseReadPreservesPartialCoverageMiss(t *testing.T) {
+	fixture := newUCICodeReadFixture(t)
+	artifact := uciCodeReadArtifactFor(fixture.refA, uciCodeReadTestStoredArtifact, "fixture.StoredVersion")
+	fixture.application.readResponse = func(_ uci.AuthorizedContext, _ CodebaseReadInput) (uci.QueryResponse, error) {
+		response := uciCodeReadQueryResponse(t, fixture.refA, nil, uci.QueryStatusPartial, "", nil, false)
+		response.Coverage.Structural = uci.IndexCoveragePartial
+		return response, nil
+	}
+	handle := fixture.selectContext(t, fixture.clientA, fixture.refA)
+	response := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_read", uciCodeReadArguments(handle, artifact))
+	var released uci.QueryResponse
+	require.NoError(t, json.Unmarshal([]byte(uciCodeIntelToolText(t, response)), &released))
+	require.NoError(t, released.Validate())
+	require.Equal(t, uci.QueryStatusPartial, released.Status)
+	require.Equal(t, uci.IndexCoveragePartial, released.Coverage.Structural)
+	require.Empty(t, *released.Items)
+	require.NotNil(t, released.Exposure)
 }

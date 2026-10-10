@@ -23,8 +23,9 @@ const (
 	IndexAdmissionMaxEncodedFrameBytes = 4 << 20
 	// IndexAdmissionMaxFrames is the maximum number of frames admitted in one build.
 	IndexAdmissionMaxFrames = 1024
-	// IndexAdmissionMaxTotalEncodedBytes is the maximum exact payload bytes admitted in one build.
-	IndexAdmissionMaxTotalEncodedBytes = 256 << 20
+	// IndexAdmissionMaxTotalEncodedBytes bounds exact complete-build payloads;
+	// source bodies, fact JSON and relationship evidence share this protocol budget.
+	IndexAdmissionMaxTotalEncodedBytes = 384 << 20
 	// IndexAdmissionMaxArtifactBodyBytes bounds the private source bytes retained for one artifact.
 	IndexAdmissionMaxArtifactBodyBytes = 1 << 20
 

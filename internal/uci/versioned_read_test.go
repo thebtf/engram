@@ -55,7 +55,7 @@ func versionedReadRequireExactItem(t *testing.T, response QueryResponse, fixture
 		t.Fatalf("items = %#v, want one exact item", response.Items)
 	}
 	item := (*response.Items)[0]
-	if item.Ref != fixture.spec.Entity || item.Span != fixture.spec.Span || item.ContentDigest != fixture.spec.ContentDigest {
+	if item.Ref != fixture.spec.Entity || item.MembershipID != fixture.spec.MembershipID || item.Span != fixture.spec.Span || item.ContentDigest != fixture.spec.ContentDigest {
 		t.Fatalf("item citation = %#v, want entity/span/digest from exact spec", item)
 	}
 	if item.Excerpt != fixture.hit.Text || item.MatchSources[0] != QueryMatchExact {
@@ -135,6 +135,9 @@ func TestUCIVersionedReadValidatesIdentifiersSpanDigestAndBounds(t *testing.T) {
 		name   string
 		mutate func(*VersionedReadSpec)
 	}{
+		{name: "missing membership", mutate: func(spec *VersionedReadSpec) { spec.MembershipID = "" }},
+		{name: "malformed membership", mutate: func(spec *VersionedReadSpec) { spec.MembershipID = "not-a-uuid" }},
+		{name: "noncanonical membership", mutate: func(spec *VersionedReadSpec) { spec.MembershipID = "{60000000-0000-4000-8000-000000000091}" }},
 		{
 			name: "entity source",
 			mutate: func(spec *VersionedReadSpec) {
@@ -248,6 +251,7 @@ func newVersionedReadTestFixture() versionedReadTestFixture {
 	entity := QueryEntityRef{SourceID: contextRef.SourceID, ViewID: contextRef.ViewID, EntityKey: "fixture.VersionedReadFixture"}
 	spec := VersionedReadSpec{
 		Entity:        entity,
+		MembershipID:  "60000000-0000-4000-8000-000000000091",
 		Span:          span,
 		ContentDigest: contentDigest,
 		MaxBytes:      len(body),
@@ -257,6 +261,7 @@ func newVersionedReadTestFixture() versionedReadTestFixture {
 		spec:    spec,
 		hit: VersionedReadHit{
 			Entity:           entity,
+			MembershipID:     spec.MembershipID,
 			Path:             "fixture/versioned_read.go",
 			Span:             span,
 			ContentDigest:    contentDigest,
@@ -299,5 +304,15 @@ func TestUCIVersionedReadStaleOrForeignEvidenceCannotLeakFakeStoreBody(t *testin
 				t.Fatalf("response = %#v, want an exposure-free empty result", response)
 			}
 		})
+	}
+}
+
+func TestUCIVersionedReadRejectsMismatchedStoreMembership(t *testing.T) {
+	fixture := newVersionedReadTestFixture()
+	fixture.hit.MembershipID = "60000000-0000-4000-8000-000000000092"
+	store := &versionedReadTestStore{result: VersionedReadStoreResult{Hit: &fixture.hit, Coverage: IndexCoverageComplete}}
+	response, err := NewVersionedReadService(store).Read(context.Background(), newAuthorizedContext(fixture.context), fixture.spec)
+	if err == nil || response.Items != nil {
+		t.Fatalf("mismatched membership released a body: response=%#v err=%v", response, err)
 	}
 }

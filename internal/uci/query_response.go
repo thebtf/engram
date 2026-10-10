@@ -274,6 +274,7 @@ const (
 // QueryItem is one bounded, context-scoped query hit.
 type QueryItem struct {
 	Ref           QueryEntityRef     `json:"ref"`
+	MembershipID  string             `json:"membership_id"`
 	Path          string             `json:"path"`
 	Span          QuerySpan          `json:"span"`
 	ContentDigest QueryContentDigest `json:"content_digest"`
@@ -894,6 +895,9 @@ func (span QuerySpan) Validate() error {
 func (item QueryItem) Validate(contexts queryContextSet) error {
 	if err := item.Ref.Validate(); err != nil {
 		return err
+	}
+	if !canonicalContextUUID(item.MembershipID) {
+		return fmt.Errorf("uci query response: item membership_id is invalid")
 	}
 	if !contexts.contains(item.Ref) {
 		return fmt.Errorf("uci query response: item reference is outside selected contexts")
@@ -1622,6 +1626,7 @@ func (span *QuerySpan) UnmarshalJSON(data []byte) error {
 func (item *QueryItem) UnmarshalJSON(data []byte) error {
 	var wire struct {
 		Ref           json.RawMessage `json:"ref"`
+		MembershipID  json.RawMessage `json:"membership_id"`
 		Path          json.RawMessage `json:"path"`
 		Span          json.RawMessage `json:"span"`
 		ContentDigest json.RawMessage `json:"content_digest"`
@@ -1637,6 +1642,13 @@ func (item *QueryItem) UnmarshalJSON(data []byte) error {
 	ref, err := queryDecodeRequired[QueryEntityRef](wire.Ref, "ref")
 	if err != nil {
 		return err
+	}
+	membershipID, err := queryDecodeRequired[string](wire.MembershipID, "membership_id")
+	if err != nil {
+		return err
+	}
+	if !canonicalContextUUID(membershipID) {
+		return fmt.Errorf("uci query item: invalid membership_id")
 	}
 	path, err := queryDecodeRequired[string](wire.Path, "path")
 	if err != nil {
@@ -1670,7 +1682,7 @@ func (item *QueryItem) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	*item = QueryItem{Ref: ref, Path: path, Span: span, ContentDigest: contentDigest, Kind: kind, Language: language, Excerpt: excerpt, MatchSources: matchSources, Score: score}
+	*item = QueryItem{Ref: ref, MembershipID: membershipID, Path: path, Span: span, ContentDigest: contentDigest, Kind: kind, Language: language, Excerpt: excerpt, MatchSources: matchSources, Score: score}
 	return nil
 }
 

@@ -2305,6 +2305,7 @@ func uciWatcherSLOSearchablePayloads(t *testing.T, publication uciInstalledAccep
 	contexts := uci.QueryContexts{{SourceID: publication.sourceID, CheckoutID: publication.checkoutID, ViewID: publication.viewID, Generation: publication.generation, ProfileID: publication.profileID}}
 	items := uci.QueryItems{{
 		Ref:           uci.QueryEntityRef{SourceID: publication.sourceID, ViewID: publication.viewID, EntityKey: "go:pkg/watcher.go/func:UCIWatcherCanary"},
+		MembershipID:  "60000000-0000-4000-8000-000000000001",
 		Path:          "pkg/watcher.go",
 		Span:          uci.QuerySpan{ByteStart: 0, ByteEnd: 1, LineStart: 1, LineEnd: 1},
 		ContentDigest: uci.QueryContentDigest(strings.Repeat("a", 64)),
@@ -2445,6 +2446,13 @@ func uciWatcherSLORequireSearchableResult(t *testing.T, expected, publication uc
 	t.Helper()
 	if publication.sourceID != expected.sourceID || publication.checkoutID != expected.checkoutID || publication.profileID != expected.profileID || publication.viewID != expected.viewID || publication.generation != expected.generation || publication.runID != expected.runID || publication.freshnessState != "observed_current" || publication.barrierState != "" || response.Status != uci.QueryStatusOK || !uciInstalledAcceptanceQueryMatchesPublication(response, publication) {
 		t.Fatalf("retained canary response = %#v for publication %#v", response, publication)
+	}
+	if response.Items == nil || len(*response.Items) != 1 {
+		t.Fatalf("retained canary items = %#v, want one citation", response.Items)
+	}
+	item := (*response.Items)[0]
+	if item.Ref != (uci.QueryEntityRef{SourceID: expected.sourceID, ViewID: expected.viewID, EntityKey: "go:pkg/watcher.go/func:UCIWatcherCanary"}) || item.MembershipID != "60000000-0000-4000-8000-000000000001" || item.Path != "pkg/watcher.go" || item.Span != (uci.QuerySpan{ByteStart: 0, ByteEnd: 1, LineStart: 1, LineEnd: 1}) || item.ContentDigest != uci.QueryContentDigest(strings.Repeat("a", 64)) {
+		t.Fatalf("retained canary citation = %#v, want exact selected membership and read target", item)
 	}
 }
 

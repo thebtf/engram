@@ -46,3 +46,63 @@ func TestStoreMemory_PrincipalOwnerDerivedFromIdentity(t *testing.T) {
 	require.Equal(t, models.AgentVisibilityPrivate, got.AgentVisibility)
 	require.Equal(t, "memory-lab", got.Domain)
 }
+
+func TestApplyPrincipalMemoryMetadata_Visibility(t *testing.T) {
+	t.Parallel()
+	for _, identity := range []struct {
+		name  string
+		ctx   context.Context
+		owner string
+	}{
+		{"missing_identity", context.Background(), ""},
+		{"auth_disabled", auth.WithIdentity(context.Background(), auth.AuthDisabled()), ""},
+		{"unowned_keycard", auth.WithIdentity(context.Background(), auth.Client("read-write", "keycard-unowned")), ""},
+		{"owned_keycard", auth.WithIdentity(context.Background(), auth.ClientWithPrincipal("read-write", "keycard-owned", "agent/alice", auth.PrincipalKindAgent)), "agent/alice"},
+	} {
+		for _, visibility := range []struct {
+			name  string
+			value string
+		}{
+			{"omitted", ""},
+			{"private", models.AgentVisibilityPrivate},
+			{"shared", models.AgentVisibilityShared},
+		} {
+			t.Run(identity.name+"/"+visibility.name, func(t *testing.T) {
+				workstation := ""
+				if id, ok := auth.IdentityFrom(identity.ctx); ok {
+					workstation = id.WorkstationID()
+				}
+				mem := &models.Memory{
+					Project:             "testproj",
+					PrivacyScope:        "project",
+					SourceWorkstationID: workstation,
+					SourceSessions:      []string{"session-fixture"},
+				}
+				err := applyPrincipalMemoryMetadata(identity.ctx, mem, visibility.value, "")
+				if identity.owner == "" && visibility.value != "" {
+					require.Error(t, err)
+					require.Contains(t, err.Error(), "invalid_agent_visibility:")
+					require.Empty(t, mem.AgentVisibility)
+				} else {
+					require.NoError(t, err)
+					wantVisibility := visibility.value
+					if identity.owner != "" && wantVisibility == "" {
+						wantVisibility = models.AgentVisibilityShared
+					}
+					require.Equal(t, wantVisibility, mem.AgentVisibility)
+				}
+				require.Equal(t, identity.owner, mem.OwnerPrincipal)
+				if identity.owner == "" {
+					require.Empty(t, mem.OwnerPrincipalKind)
+				} else {
+					require.Equal(t, "agent", mem.OwnerPrincipalKind)
+				}
+				require.Empty(t, mem.Domain)
+				require.Equal(t, "testproj", mem.Project)
+				require.Equal(t, "project", mem.PrivacyScope)
+				require.Equal(t, workstation, mem.SourceWorkstationID)
+				require.Equal(t, []string{"session-fixture"}, mem.SourceSessions)
+			})
+		}
+	}
+}

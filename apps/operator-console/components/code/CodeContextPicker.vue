@@ -30,7 +30,7 @@ const selectionDirty = ref(false)
 const repositories = computed(() => [...new Map(props.catalog.map((entry) => [entry.sourceRef, entry])).values()])
 const workingCopies = computed(() => [...new Map(props.catalog.filter((entry) => entry.sourceRef === repository.value).map((entry) => [entry.checkoutRef, entry])).values()])
 const snapshotEntries = computed(() => workingCopyChosen.value ? props.catalog.filter((entry) => entry.sourceRef === repository.value && entry.checkoutRef === workingCopy.value && entry.view !== null) : [])
-const noViewEntry = computed(() => workingCopyChosen.value ? props.catalog.find((entry) => entry.sourceRef === repository.value && entry.checkoutRef === workingCopy.value && entry.view === null) ?? null : null)
+const noViewEntry = computed(() => workingCopyChosen.value && snapshotEntries.value.length === 0 ? props.catalog.find((entry) => entry.sourceRef === repository.value && entry.checkoutRef === workingCopy.value && entry.view === null) ?? null : null)
 const duplicateRepositories = computed(() => new Set(repositories.value.filter((entry) => repositories.value.filter((other) => other.repository === entry.repository).length > 1).map((entry) => entry.repository)))
 const duplicateWorkingCopies = computed(() => new Set(workingCopies.value.filter((entry) => workingCopies.value.filter((other) => other.workingCopy === entry.workingCopy).length > 1).map((entry) => entry.workingCopy)))
 function indexedCopies(sourceRef: string): number { return new Set(props.catalog.filter((entry) => entry.sourceRef === sourceRef && entry.view !== null).map((entry) => entry.checkoutRef)).size }
@@ -56,13 +56,17 @@ function workingCopyLabel(entry: CodeCatalogEntry): string {
   const peers = workingCopies.value.filter((other) => other.workingCopy === entry.workingCopy && indexedSnapshots(other.checkoutRef) === count)
   return `${label} · ${t('codeExplorer.context.indexedSnapshots', { count })}${peers.length > 1 ? ` · ${uniquePrefix(entry.checkoutRef, peers.map((other) => other.checkoutRef))}` : ''}`
 }
-const samePinned = computed(() => props.candidate?.selectionRef === props.pinned?.selectionRef)
+const samePinned = computed(() => props.candidate !== null && props.pinned !== null && props.candidate.viewRef === props.pinned.viewRef)
 const phaseLabel = computed(() => t(`codeExplorer.context.phases.${props.phase}`))
 const phaseMessage = computed(() => {
   if (props.phase !== 'ready') return t(`codeExplorer.context.messages.${props.phase}`)
   if (props.state !== 'ready') return t(`codeExplorer.context.catalogStates.${props.state}`)
-  if (props.candidate === null) return noViewEntry.value === null ? t('codeExplorer.context.selectPrompt') : t('codeExplorer.context.noViewOnlyBody')
-  return props.pinned === null ? t('codeExplorer.context.selectedPrompt') : t('codeExplorer.context.pinnedMessage')
+  if (samePinned.value) return t('codeExplorer.context.pinnedMessage')
+  if (props.candidate !== null) return t('codeExplorer.context.selectedPrompt')
+  if (props.pinned !== null) return t('codeExplorer.context.pinnedMessage')
+  if (repository.value === '') return t('codeExplorer.context.chooseRepository')
+  if (!workingCopyChosen.value) return t('codeExplorer.context.chooseWorkingCopy')
+  return noViewEntry.value === null ? t('codeExplorer.context.chooseSnapshot') : t('codeExplorer.context.noViewOnlyBody')
 })
 
 watch([() => props.catalog, () => props.candidate, () => props.pinned], ([catalog, candidate], [previousCatalog]) => {
@@ -143,7 +147,7 @@ function chooseSnapshot(event: Event): void {
         </select>
       </label>
     </div>
-    <div v-else class="empty" data-testid="code-context-empty">
+    <div v-else-if="state === 'empty' && pinned === null" class="empty" data-testid="code-context-empty">
       <strong>{{ t('codeExplorer.context.emptyTitle') }}</strong>
       <p>{{ t('codeExplorer.context.emptyBody') }}</p>
     </div>
@@ -161,18 +165,21 @@ function chooseSnapshot(event: Event): void {
       >{{ t('codeExplorer.context.requestIndex') }}</button>
     </div>
 
-    <dl v-if="candidate !== null" class="context-values" data-testid="code-context-candidate">
-      <div><dt>{{ t('workspace.repository') }}</dt><dd>{{ candidate.repository }}</dd></div>
-      <div><dt>{{ t('workspace.workingCopy') }}</dt><dd>{{ candidate.workingCopy || t('codeExplorer.context.unnamedWorkingCopy') }}</dd></div>
-      <div><dt>{{ t('workspace.indexedSnapshot') }}</dt><dd>{{ candidate.snapshot.label }}</dd></div>
-      <div v-if="candidate.snapshot.revision !== null"><dt>{{ t('codeExplorer.context.revision') }}</dt><dd>{{ candidate.snapshot.revision }}</dd></div>
-      <div v-if="candidate.snapshot.publishedAt !== null"><dt>{{ t('codeExplorer.context.publishedAt') }}</dt><dd>{{ candidate.snapshot.publishedAt }}</dd></div>
-    </dl>
+    <details v-if="candidate !== null" class="snapshot-evidence" data-testid="code-context-candidate">
+      <summary>{{ t('workspace.workbench.snapshotDetails') }}</summary>
+      <dl class="context-values">
+        <div><dt>{{ t('workspace.repository') }}</dt><dd>{{ candidate.repository }}</dd></div>
+        <div><dt>{{ t('workspace.workingCopy') }}</dt><dd>{{ candidate.workingCopy || t('codeExplorer.context.unnamedWorkingCopy') }}</dd></div>
+        <div><dt>{{ t('workspace.indexedSnapshot') }}</dt><dd>{{ candidate.snapshot.label }}</dd></div>
+        <div v-if="candidate.snapshot.revision !== null"><dt>{{ t('codeExplorer.context.revision') }}</dt><dd>{{ candidate.snapshot.revision }}</dd></div>
+        <div v-if="candidate.snapshot.publishedAt !== null"><dt>{{ t('codeExplorer.context.publishedAt') }}</dt><dd>{{ candidate.snapshot.publishedAt }}</dd></div>
+      </dl>
+    </details>
 
     <div class="actions">
       <button class="btn" type="button" :disabled="pending || phase !== 'ready' && phase !== 'collision' && phase !== 'ambiguous'" @click="emit('refresh')">{{ t('codeExplorer.context.refresh') }}</button>
-      <button v-if="phase === 'reload-pending' || phase === 'identity-unavailable' || phase === 'error' && evidence.transition === 'TAB_LEASE_RENEWAL_FAILED'" class="btn" type="button" :disabled="pending" :data-testid="phase === 'reload-pending' ? 'code-retry-reload' : phase === 'error' ? 'code-retry-lease' : 'code-retry-identity'" @click="emit('retry')">{{ phase === 'reload-pending' ? t('codeExplorer.context.retryReload') : t('codeExplorer.context.retryIdentity') }}</button>
-      <button class="btn primary" type="button" :disabled="pending || candidate === null || samePinned" data-testid="code-pin-context" @click="emit('pin')">
+      <button v-if="phase === 'reload-pending' || phase === 'identity-unavailable' || phase === 'error' || phase === 'denied'" class="btn" type="button" :disabled="pending" :data-testid="phase === 'reload-pending' ? 'code-retry-reload' : phase === 'error' ? 'code-retry-lease' : 'code-retry-identity'" @click="emit('retry')">{{ phase === 'reload-pending' ? t('codeExplorer.context.retryReload') : t('codeExplorer.context.retryIdentity') }}</button>
+      <button class="btn primary" type="button" :disabled="pending || state !== 'ready' || candidate === null || samePinned" data-testid="code-pin-context" @click="emit('pin')">
         {{ samePinned ? t('codeExplorer.context.pinned') : pinned === null ? t('codeExplorer.context.pin') : t('codeExplorer.context.switch') }}
       </button>
     </div>
@@ -194,7 +201,7 @@ function chooseSnapshot(event: Event): void {
 </template>
 
 <style scoped>
-.context-picker { display:grid; gap:14px; border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); padding:16px; }
+.context-picker { display:grid; gap:12px; min-width:0; border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); padding:16px; }
 .section-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
 h2 { margin:0; color:var(--fg); font-size:var(--text-sm); font-weight:800; }
 .section-head p, .message, .empty p, .no-view p, .pinned { margin:4px 0 0; color:var(--muted); font-size:var(--text-sm); }
@@ -203,8 +210,8 @@ h2 { margin:0; color:var(--fg); font-size:var(--text-sm); font-weight:800; }
 .selectors { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
 .selector { display:grid; gap:5px; min-width:0; }
 .selector > span, dt { color:var(--muted); font-size:var(--text-xs); font-weight:700; letter-spacing:.04em; text-transform:uppercase; }
-.selector select { min-height:40px; min-width:0; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--bg); color:var(--fg); padding:8px; font:inherit; }
-.selector select:focus-visible, .btn:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.selector select { width:100%; box-sizing:border-box; min-height:40px; min-width:0; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--bg); color:var(--fg); padding:8px; font:inherit; }
+.selector select:focus-visible, .btn:focus-visible, summary:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 .context-values { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin:0; }
 .context-values div { min-width:0; }
 dd { margin:4px 0 0; color:var(--fg); font-family:var(--font-mono); font-size:var(--text-xs); overflow-wrap:anywhere; }
@@ -214,6 +221,7 @@ dd { margin:4px 0 0; color:var(--fg); font-family:var(--font-mono); font-size:va
 .btn { min-height:36px; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--surface); color:var(--fg); padding:8px 12px; font:inherit; font-size:var(--text-sm); font-weight:700; cursor:pointer; }
 .btn.primary { border-color:var(--accent); background:var(--accent); color:var(--accent-on); }
 .btn:disabled { cursor:not-allowed; opacity:.55; }
+.snapshot-evidence summary { color:var(--fg-2); font-size:var(--text-sm); cursor:pointer; }.snapshot-evidence dl { margin-top:10px; }
 .bootstrap-evidence { border-top:1px solid var(--border-soft); padding-top:10px; }
 .bootstrap-evidence summary { color:var(--fg-2); cursor:pointer; font-size:var(--text-sm); font-weight:700; }
 .bootstrap-evidence dl { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin:10px 0 0; }

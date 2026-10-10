@@ -245,7 +245,7 @@ type codebaseContextSelection struct {
 func codebaseContextTool() Tool {
 	return Tool{
 		Name:        "codebase_context",
-		Description: "Resolve, list, or select an authorized codebase context. Context handles are client-scoped and opaque.",
+		Description: "Register, resolve, list, or select an authorized codebase context. In the native client, register with source_label and no locator to use the current Git worktree; omit source selectors or pass an owned context_handle to add a worktree to the selected Source. Then use codebase_index and codebase_status. Handles are client-scoped and opaque.",
 		tier:        tierUseful,
 		InputSchema: map[string]any{
 			"type":                 "object",
@@ -255,11 +255,11 @@ func codebaseContextTool() Tool {
 				"action": map[string]any{
 					"type":        "string",
 					"enum":        []string{"resolve", "list", "select", "register"},
-					"description": "resolve reuses the caller binding; list returns authorized contexts; select chooses a typed reference, registered checkout, or opaque handle",
+					"description": "register onboards a native Git worktree; resolve reuses the caller binding; list returns authorized contexts; select chooses a typed reference, registered checkout, or opaque handle",
 				},
 				"context_handle": map[string]any{
 					"type":        "string",
-					"description": "Opaque handle returned for this client by a previous codebase_context response",
+					"description": "Opaque handle returned for this client; select chooses it, native register reuses its server-authorized Source without accepting a user-manufactured source ID",
 				},
 				"space_id": map[string]any{
 					"type":        "string",
@@ -269,8 +269,8 @@ func codebaseContextTool() Tool {
 					"type":        "string",
 					"description": "ContextRef source UUID for action=select",
 				},
-				"source_label":  map[string]any{"type": "string", "description": "Label for a new Git source"},
-				"locator":       map[string]any{"type": "string", "description": "Private canonical file URI for the local Git worktree"},
+				"source_label":  map[string]any{"type": "string", "description": "Human label for a new Git Source; omit source_label/source_id/context_handle in native register to reuse the current server selection"},
+				"locator":       map[string]any{"type": "string", "description": "Private canonical file URI; omit in the native client to derive the real Git root from its current working directory. Direct server registration still requires a locator and source_label or source_id."},
 				"parser_bundle": map[string]any{"type": "boolean", "description": "Explicit parser profile request; omitted selects verified installed Tree-sitter on first registration, native Go otherwise, and preserves existing profiles on replay"},
 				"checkout_id": map[string]any{
 					"type":        "string",

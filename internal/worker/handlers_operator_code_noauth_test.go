@@ -98,7 +98,7 @@ func TestNoAuthOperatorCodeFirstUseAndAuthEnabledCannotForge(t *testing.T) {
 	require.Equal(t, http.StatusOK, graph.Code, graph.Body.String())
 	require.Contains(t, graph.Body.String(), `"navigation"`)
 	fixture.app.read = operatorCodeHTTPTestQueryResponse(t, fixture.ref, uci.QueryRetrievalExact)
-	read := invoke(`{"tab_binding_id":"`+transition.TabBindingID+`","document_proof":"`+transition.DocumentProof+`","entity_key":"Fixture.Symbol","span":{"byte_start":0,"byte_end":12,"line_start":1,"line_end":1},"content_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`, noauth, adapter.HandleVersionedRead)
+	read := invoke(`{"tab_binding_id":"`+transition.TabBindingID+`","document_proof":"`+transition.DocumentProof+`","entity_key":"Fixture.Symbol","membership_id":"60000000-0000-4000-8000-000000000001","span":{"byte_start":0,"byte_end":12,"line_start":1,"line_end":1},"content_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`, noauth, adapter.HandleVersionedRead)
 	require.Equal(t, http.StatusOK, read.Code, read.Body.String())
 	require.Contains(t, read.Body.String(), `"excerpt":"package demo"`)
 	missingCookie := operatorCodeHTTPTestRequest(t, proof, auth.SessionForBrowserUser("viewer", 41))

@@ -158,6 +158,11 @@ func TestUCIProjectionStoreSemanticMethodsKeepVectorsScopedAndCovered(t *testing
 	})
 	for _, candidate := range complete.Candidates {
 		require.Equal(t, currentPublished.Context, candidate.Candidate.Context, "semantic citations must retain the exact current ContextRef")
+		wantMembership := currentCandidate.MembershipID
+		if candidate.Candidate.RelativePath == otherCurrentCandidate.RelativePath {
+			wantMembership = otherCurrentCandidate.MembershipID
+		}
+		require.Equal(t, wantMembership, candidate.Candidate.MembershipID, "hybrid/vector citations must retain the persisted membership")
 		require.Equal(t, []ucidomain.QueryMatchSource{ucidomain.QueryMatchFTS, ucidomain.QueryMatchVector}, candidate.MatchSources)
 	}
 	require.NotEqual(t, oldArtifact.Artifact.ArtifactID, complete.Candidates[0].Candidate.Proof.ArtifactID)
@@ -666,6 +671,7 @@ func uciSemanticCandidateAtPath(t *testing.T, store *UCIProjectionStore, authori
 	candidate := selected.Candidates[0]
 	require.Equal(t, artifactID, candidate.Proof.ArtifactID)
 	require.Equal(t, authorized.Ref(), candidate.Context)
+	require.NoError(t, validateUCIUUID("membership_id", candidate.MembershipID))
 	return candidate
 }
 

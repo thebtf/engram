@@ -177,8 +177,10 @@ function codeResponseContext(workspace) {
 }
 
 function codeItem(workspace, entityKey, path, excerpt) {
+  const membership = createHash('sha256').update(`${workspace.context.sourceId}:${workspace.context.viewId}:${path}`).digest('hex')
   return {
     ref: { source_id: workspace.context.sourceId, view_id: workspace.context.viewId, entity_key: entityKey },
+    membership_id: `${membership.slice(0, 8)}-${membership.slice(8, 12)}-${membership.slice(12, 16)}-${membership.slice(16, 20)}-${membership.slice(20, 32)}`,
     path,
     span: { byte_start: 0, byte_end: excerpt.length, line_start: 1, line_end: 1 },
     content_digest: `sha256:${entityKey.toLowerCase().replaceAll('.', '-')}`,
@@ -316,7 +318,7 @@ async function handleCodeRequest(req, res, path) {
         generation: workspace.context.generation,
       },
       source_state: 'available',
-      source_read: { entity_key: source.ref.entity_key, span: source.span, content_digest: source.content_digest },
+      source_read: { entity_key: source.ref.entity_key, membership_id: source.membership_id, span: source.span, content_digest: source.content_digest },
     })
     json(res, 200, codeEnvelope(workspace, [], graph, {
       nodes: [navigationRef(item), navigationRef(neighbor)],
@@ -325,7 +327,11 @@ async function handleCodeRequest(req, res, path) {
     return true
   }
   if (req.method === 'POST' && path === '/api/code/source') {
-    json(res, 200, codeEnvelope(workspace, [body.entity_key === neighbor.ref.entity_key ? neighbor : item]))
+    if (typeof body.membership_id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(body.membership_id) || body.membership_id === '00000000-0000-0000-0000-000000000000') {
+      res.writeHead(400); res.end(); return true
+    }
+    const source = [item, neighbor].find(candidate => candidate.membership_id === body.membership_id && candidate.ref.entity_key === body.entity_key && candidate.content_digest === body.content_digest && JSON.stringify(candidate.span) === JSON.stringify(body.span))
+    json(res, 200, { ...codeEnvelope(workspace, source === undefined ? [] : [source]), status: source === undefined ? 'empty' : 'ok' })
     return true
   }
   return false

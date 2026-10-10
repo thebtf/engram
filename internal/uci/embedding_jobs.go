@@ -12,6 +12,9 @@ import (
 
 const embeddingWorkerClientSessionPrefix = "embedding-worker"
 
+// ponytail: UTF-8 padding proxy; verified provider token limits can replace this bound.
+const embeddingProviderMaxBatchCostBytes = 64 << 10
+
 var (
 	ErrEmbeddingJobLeaseLost  = errors.New("uci embedding job: lease lost")
 	ErrEmbeddingJobObsolete   = errors.New("uci embedding job: obsolete")
@@ -677,15 +680,18 @@ func (worker *EmbeddingWorker) embeddingProviderBatches(inputs []embeddingProvid
 func (worker *EmbeddingWorker) embeddingProviderBatchAt(inputs []embeddingProviderInput, start int) (embeddingProviderBatch, int, error) {
 	end := start
 	bytes := 0
+	maxInputBytes := 0
 	for end < len(inputs) && end-start < worker.limits.ProviderBatchSize {
 		inputBytes := len(inputs[end].input)
 		if inputBytes > worker.limits.MaxProviderBatchBytes {
 			return embeddingProviderBatch{}, 0, ErrEmbeddingInputCapacity
 		}
-		if end > start && bytes+inputBytes > worker.limits.MaxProviderBatchBytes {
+		nextMaxInputBytes := max(maxInputBytes, inputBytes)
+		if end > start && (bytes+inputBytes > worker.limits.MaxProviderBatchBytes || nextMaxInputBytes > embeddingProviderMaxBatchCostBytes/(end-start+1)) {
 			break
 		}
 		bytes += inputBytes
+		maxInputBytes = nextMaxInputBytes
 		end++
 	}
 	if end == start {

@@ -985,7 +985,8 @@ func (s *UCIContextStore) loadUCIIndexBindingForContext(ctx context.Context, ref
 	if err := s.validateUCIIndexBindingSpace(ctx, source, ref.SpaceID); err != nil {
 		return uci.IndexBinding{}, err
 	}
-	if _, err := s.loadUCIIndexBindingProfile(ctx, ref.AnalysisProfileID); err != nil {
+	profile, err := s.loadUCIIndexBindingProfile(ctx, ref.AnalysisProfileID)
+	if err != nil {
 		return uci.IndexBinding{}, err
 	}
 
@@ -1003,7 +1004,7 @@ func (s *UCIContextStore) loadUCIIndexBindingForContext(ctx context.Context, ref
 	if view.State != UCIViewPublished {
 		return uci.IndexBinding{}, fmt.Errorf("uci context load index binding: view state %q is not published", view.State)
 	}
-	return uciIndexBindingFromRows(checkout, ref.AnalysisProfileID, &view, ref.SpaceID)
+	return uciIndexBindingFromRows(checkout, profile, &view, ref.SpaceID)
 }
 
 func (s *UCIContextStore) loadUCIIndexBindingForCheckout(ctx context.Context, scope uci.IndexScope, profileID string) (uci.IndexBinding, error) {
@@ -1011,7 +1012,8 @@ func (s *UCIContextStore) loadUCIIndexBindingForCheckout(ctx context.Context, sc
 	if err != nil {
 		return uci.IndexBinding{}, err
 	}
-	if _, err := s.loadUCIIndexBindingProfile(ctx, profileID); err != nil {
+	profile, err := s.loadUCIIndexBindingProfile(ctx, profileID)
+	if err != nil {
 		return uci.IndexBinding{}, err
 	}
 
@@ -1022,7 +1024,7 @@ func (s *UCIContextStore) loadUCIIndexBindingForCheckout(ctx context.Context, sc
 	if view != nil && view.ProfileID != profileID {
 		return uci.IndexBinding{}, fmt.Errorf("uci context load index binding: current view profile %q does not match selector profile %q", view.ProfileID, profileID)
 	}
-	return uciIndexBindingFromRows(checkout, profileID, view, nil)
+	return uciIndexBindingFromRows(checkout, profile, view, nil)
 }
 
 func (s *UCIContextStore) loadUCIIndexBindingCheckout(ctx context.Context, sourceID, checkoutID, incarnationID string) (*UCISource, *UCICheckout, error) {
@@ -1101,16 +1103,17 @@ func (s *UCIContextStore) validateUCIIndexBindingSpace(ctx context.Context, sour
 	return nil
 }
 
-func uciIndexBindingFromRows(checkout *UCICheckout, profileID string, view *UCIView, spaceID *string) (uci.IndexBinding, error) {
+func uciIndexBindingFromRows(checkout *UCICheckout, profile *UCIAnalysisProfile, view *UCIView, spaceID *string) (uci.IndexBinding, error) {
 	binding := uci.IndexBinding{
 		Scope: uci.IndexScope{
 			SourceID:      checkout.SourceID,
 			CheckoutID:    checkout.CheckoutID,
 			IncarnationID: checkout.IncarnationID,
 		},
-		ProfileID:     profileID,
-		LocalRootID:   checkout.LocatorRef,
-		WorkstationID: checkout.WorkstationID,
+		ProfileID:               profile.ProfileID,
+		ExtractionProfileDigest: uci.IndexDigest(profile.ParserBundleDigest),
+		LocalRootID:             checkout.LocatorRef,
+		WorkstationID:           checkout.WorkstationID,
 	}
 	if view != nil {
 		contextRef := uci.ContextRef{

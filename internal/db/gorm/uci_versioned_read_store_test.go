@@ -2,6 +2,7 @@ package gorm
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -275,6 +276,7 @@ func uciVersionedReadSpecForPathAndSpan(t *testing.T, fixture *uciPublicationFix
 				ViewID:    candidate.Context.ViewID,
 				EntityKey: candidate.EntityKey,
 			},
+			MembershipID: candidate.MembershipID,
 			Span: ucidomain.QuerySpan{
 				ByteStart: candidate.Span.ByteStart,
 				ByteEnd:   candidate.Span.ByteEnd,
@@ -291,4 +293,140 @@ func uciVersionedReadSpecForPathAndSpan(t *testing.T, fixture *uciPublicationFix
 	}
 	t.Fatalf("no candidate at %d:%d for %q", start, end, path)
 	return ucidomain.VersionedReadSpec{}
+}
+
+func TestUCIVersionedReadStorePreservesSelectedMembershipForSharedArtifact(t *testing.T) {
+	fixture := openUCIPublicationFixture(t)
+	ctx := context.Background()
+	artifact := fixture.admitArtifact(t, fixture.source.SourceID, "citation-shared", "func SharedCitation() { SharedCitation() }\n", UCIParseArtifactComplete)
+	paths := []string{"a-before.tsx", "a-after.tsx"}
+	memberships := []ucidomain.IndexMembership{uciPublicationPresentMembership(paths[0], artifact), uciPublicationPresentMembership(paths[1], artifact)}
+	replacements := []ucidomain.IndexEdgeReplacement{
+		{SourcePath: paths[0], Edges: []ucidomain.IndexEdge{uciPublicationResolvedEdge(artifact, paths[0], artifact, paths[1])}},
+		{SourcePath: paths[1], Edges: []ucidomain.IndexEdge{uciPublicationResolvedEdge(artifact, paths[1], artifact, paths[0])}},
+	}
+	draft := newUCIPublicationDraft([]ucidomain.IndexPart{uciPublicationPart([]uciPublicationArtifact{artifact}, memberships, nil, replacements)}, memberships, replacements)
+	_, published := fixture.publish(t, fixture.publisher, fixture.caller("citation-shared-v1"), fixture.publishInput("citation-shared-v1", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial, draft))
+	authorized := uciSemanticAuthorize(t, fixture, published.Context)
+	query := ucidomain.NewQueryService(fixture.projection)
+	reader := ucidomain.NewVersionedReadService(fixture.projection)
+	selectors := make([]ucidomain.VersionedReadSpec, 0, len(paths))
+	for _, path := range paths {
+		result, err := query.Query(ctx, authorized, ucidomain.QuerySpec{
+			ClientSessionID: "citation-shared-client", Mode: ucidomain.QueryModeExactQualifiedSymbol,
+			Text: artifact.Definition.QualifiedLocalName, Filter: ucidomain.QueryFilter{PathPrefix: path}, Order: ucidomain.QueryOrderPath, Limit: 10,
+		})
+		require.NoError(t, err)
+		payload, err := json.Marshal(result.Response)
+		require.NoError(t, err)
+		var citation ucidomain.QueryResponse
+		require.NoError(t, json.Unmarshal(payload, &citation))
+		require.NoError(t, citation.ValidatePreExposure())
+		require.Len(t, *citation.Items, 1)
+		item := (*citation.Items)[0]
+		require.Equal(t, path, item.Path)
+		spec := ucidomain.VersionedReadSpec{Entity: item.Ref, MembershipID: item.MembershipID, Span: item.Span, ContentDigest: item.ContentDigest, MaxBytes: ucidomain.VersionedReadMaxBytes}
+		selectors = append(selectors, spec)
+		read, err := reader.Read(ctx, authorized, spec)
+		require.NoError(t, err)
+		require.Len(t, *read.Items, 1)
+		readItem := (*read.Items)[0]
+		require.Equal(t, item.Ref, readItem.Ref)
+		require.Equal(t, item.MembershipID, readItem.MembershipID)
+		require.Equal(t, path, readItem.Path)
+		require.Equal(t, item.Span, readItem.Span)
+		require.Equal(t, item.ContentDigest, readItem.ContentDigest)
+		require.Equal(t, string(artifact.Body), readItem.Excerpt)
+	}
+	require.Equal(t, selectors[0].Entity, selectors[1].Entity)
+	require.Equal(t, selectors[0].Span, selectors[1].Span)
+	require.Equal(t, selectors[0].ContentDigest, selectors[1].ContentDigest)
+	require.NotEqual(t, selectors[0].MembershipID, selectors[1].MembershipID)
+	_, available, err := fixture.projection.DescribeGraphSource(ctx, authorized, selectors[0].Entity)
+	require.NoError(t, err)
+	require.False(t, available, "a pathless graph ref must not choose one of two memberships")
+	site := artifact.Reference.ReferenceSiteID
+	evidence := ucidomain.QueryRelationEvidence{Ref: selectors[0].Entity, Precision: ucidomain.QueryEvidencePrecisionReferenceSite, ReferenceSiteID: &site}
+	_, available, err = fixture.projection.DescribeGraphEvidence(ctx, authorized, evidence)
+	require.NoError(t, err)
+	require.False(t, available, "a shared reference site cannot choose an arbitrary source edge path")
+
+	missing := selectors[0]
+	missing.MembershipID = ""
+	_, err = fixture.projection.ReadExact(ctx, authorized, missing)
+	require.Error(t, err)
+	sibling := uciVersionedReadPublish(t, fixture, uciVersionedReadPublishInput{key: "citation-sibling", path: paths[0], checkout: fixture.sibling, kind: ucidomain.IndexJobInitial, artifact: artifact})
+	siblingSpec := uciVersionedReadSpecForPathAndSpan(t, fixture, uciSemanticAuthorize(t, fixture, sibling.Context), paths[0], 0, int64(len(artifact.Body)))
+	foreignCheckout := fixture.registerCheckout(t, fixture.foreign, "citation-foreign")
+	foreignArtifact := fixture.admitArtifact(t, fixture.foreign.SourceID, "citation-shared", strings.TrimPrefix(string(artifact.Body), "package fixture\n"), UCIParseArtifactComplete)
+	fixture.authorizer.allowedSources[fixture.foreign.SourceID] = true
+	foreign := uciVersionedReadPublish(t, fixture, uciVersionedReadPublishInput{key: "citation-foreign", path: paths[0], checkout: foreignCheckout, kind: ucidomain.IndexJobInitial, artifact: foreignArtifact})
+	foreignSpec := uciVersionedReadSpecForPathAndSpan(t, fixture, uciSemanticAuthorize(t, fixture, foreign.Context), paths[0], 0, int64(len(artifact.Body)))
+	require.Equal(t, artifact.Body, foreignArtifact.Body)
+	require.Equal(t, selectors[0].ContentDigest, foreignSpec.ContentDigest)
+	delete(fixture.authorizer.allowedSources, fixture.foreign.SourceID)
+	for _, testCase := range []struct {
+		name   string
+		mutate func(*ucidomain.VersionedReadSpec)
+	}{
+		{"unknown membership", func(spec *ucidomain.VersionedReadSpec) { spec.MembershipID = "60000000-0000-4000-8000-000000000099" }},
+		{"foreign membership", func(spec *ucidomain.VersionedReadSpec) { spec.MembershipID = foreignSpec.MembershipID }},
+		{"other checkout membership", func(spec *ucidomain.VersionedReadSpec) { spec.MembershipID = siblingSpec.MembershipID }},
+		{"wrong source", func(spec *ucidomain.VersionedReadSpec) { spec.Entity.SourceID = foreign.Context.SourceID }},
+		{"wrong view", func(spec *ucidomain.VersionedReadSpec) { spec.Entity.ViewID = sibling.Context.ViewID }},
+		{"wrong entity", func(spec *ucidomain.VersionedReadSpec) { spec.Entity.EntityKey = "not-the-selected-entity" }},
+		{"wrong span", func(spec *ucidomain.VersionedReadSpec) { spec.Span.ByteEnd-- }},
+		{"wrong digest", func(spec *ucidomain.VersionedReadSpec) {
+			spec.ContentDigest = ucidomain.QueryContentDigest(strings.Repeat("0", 64))
+		}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			spec := selectors[0]
+			testCase.mutate(&spec)
+			read, err := reader.Read(ctx, authorized, spec)
+			require.NoError(t, err)
+			require.Equal(t, ucidomain.QueryStatusEmpty, read.Status)
+			require.Empty(t, *read.Items)
+		})
+	}
+
+	changed := fixture.admitArtifact(t, fixture.source.SourceID, "citation-shared", "func SharedCitation() { /* changed */ }\n", UCIParseArtifactComplete)
+	currentMemberships := []ucidomain.IndexMembership{uciPublicationPresentMembership(paths[0], changed), memberships[1]}
+	edge := uciPublicationResolvedEdge(artifact, paths[1], changed, paths[0])
+	secondEdge := edge
+	secondEdge.EdgeKey += ":second"
+	current := uciGraphStorePublish(t, fixture, uciGraphStorePublishInput{
+		key: "citation-shared-v2", checkout: fixture.checkout, parent: uciPublicationParent(published), artifacts: []uciPublicationArtifact{changed, artifact}, memberships: currentMemberships,
+		replacements: []ucidomain.IndexEdgeReplacement{{SourcePath: paths[0]}, {SourcePath: paths[1], Edges: []ucidomain.IndexEdge{edge, secondEdge}}},
+		coverage:     uciGraphStoreCoverage(ucidomain.IndexCoveragePartial),
+	})
+	currentAuthorized := uciSemanticAuthorize(t, fixture, current.Context)
+	inactive := selectors[0]
+	inactive.Entity.ViewID = current.Context.ViewID
+	miss, err := reader.Read(ctx, currentAuthorized, inactive)
+	require.NoError(t, err)
+	require.Equal(t, ucidomain.QueryStatusPartial, miss.Status)
+	require.Empty(t, *miss.Items, "an inactive membership cannot fall back to the still-active same-body path")
+	for index, spec := range selectors {
+		read, err := reader.Read(ctx, authorized, spec)
+		require.NoError(t, err)
+		require.Equal(t, paths[index], (*read.Items)[0].Path)
+		require.Equal(t, spec.MembershipID, (*read.Items)[0].MembershipID)
+		require.Equal(t, string(artifact.Body), (*read.Items)[0].Excerpt)
+	}
+	evidence.Ref.ViewID = current.Context.ViewID
+	descriptor, available, err := fixture.projection.DescribeGraphEvidence(ctx, currentAuthorized, evidence)
+	require.NoError(t, err)
+	require.True(t, available, "multiple edges of one membership are still one location")
+	require.Equal(t, selectors[1].MembershipID, descriptor.MembershipID)
+	read, err := reader.Read(ctx, currentAuthorized, descriptor)
+	require.NoError(t, err)
+	require.Len(t, *read.Items, 1)
+	require.Equal(t, paths[1], (*read.Items)[0].Path)
+	require.Equal(t, string(artifact.Body[descriptor.Span.ByteStart:descriptor.Span.ByteEnd]), (*read.Items)[0].Excerpt)
+	wrongReferenceMembership := descriptor
+	wrongReferenceMembership.MembershipID = selectors[0].MembershipID
+	miss, err = reader.Read(ctx, currentAuthorized, wrongReferenceMembership)
+	require.NoError(t, err)
+	require.Empty(t, *miss.Items, "reference-site reads must enforce the same membership interval")
 }

@@ -13,7 +13,7 @@ package dispatcher
 //     spec's requirement to "measure REAL recording overhead, not a no-op path"
 //     with zero new external dependencies.
 //
-// NFR-9: metric overhead < 5% of HandleTool p50 latency.
+// NFR-9: metric overhead <= 5% of HandleTool p50 latency, or <= 50 µs.
 // NFR-1: p99 HandleTool wall-clock < 1 000 ms.
 //
 // The TestBenchmarkResults_OverheadWithinBudget test enforces both NFRs.
@@ -30,11 +30,11 @@ import (
 	"github.com/thebtf/engram/internal/module"
 	"github.com/thebtf/engram/internal/module/obs"
 	"github.com/thebtf/engram/internal/module/registry"
+	muxcore "github.com/thebtf/mcp-mux/muxcore"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/embedded"
 	"go.opentelemetry.io/otel/metric/noop"
-	muxcore "github.com/thebtf/mcp-mux/muxcore"
 )
 
 // ---------------------------------------------------------------------------
@@ -44,7 +44,7 @@ import (
 // benchMod is a zero-I/O ToolProvider that returns a fixed JSON payload.
 type benchMod struct{}
 
-func (b *benchMod) Name() string                                       { return "bench" }
+func (b *benchMod) Name() string                                      { return "bench" }
 func (b *benchMod) Init(_ context.Context, _ module.ModuleDeps) error { return nil }
 func (b *benchMod) Shutdown(_ context.Context) error                  { return nil }
 func (b *benchMod) Tools() []module.ToolDef {
@@ -54,6 +54,7 @@ func (b *benchMod) Tools() []module.ToolDef {
 		InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
 	}}
 }
+
 func (b *benchMod) HandleTool(_ context.Context, _ muxcore.ProjectContext, _ string, _ json.RawMessage) (json.RawMessage, error) {
 	return json.RawMessage(`"ok"`), nil
 }
@@ -139,7 +140,7 @@ func (u *countingUpDown) Enabled(_ context.Context) bool { return true }
 // ---------------------------------------------------------------------------
 
 // buildBenchDispatcher creates a Dispatcher with the bench module registered.
-func buildBenchDispatcher(b *testing.B) *Dispatcher {
+func buildBenchDispatcher(b testing.TB) *Dispatcher {
 	b.Helper()
 	r := registry.New()
 	if err := r.Register(&benchMod{}); err != nil {
@@ -170,8 +171,9 @@ var benchProject = projectCtx("bench-project")
 // registered, which is the production default unless OTEL_EXPORTER_OTLP_ENDPOINT
 // is set. Metric calls are effectively free.
 func BenchmarkHandleTool_NoExporter(b *testing.B) {
-	// Ensure no custom provider is registered from a previous test run.
-	otel.SetMeterProvider(otel.GetMeterProvider()) // keep whatever the default is
+	restoreBenchProviderAfter(b)
+	otel.SetMeterProvider(noop.NewMeterProvider())
+	resetInstruments()
 	d := buildBenchDispatcher(b)
 	ctx := context.Background()
 	b.ResetTimer()
@@ -180,6 +182,7 @@ func BenchmarkHandleTool_NoExporter(b *testing.B) {
 		resp, _ := d.HandleRequest(ctx, benchProject, benchRequest)
 		_ = resp
 	}
+	b.StopTimer()
 }
 
 // ---------------------------------------------------------------------------
@@ -198,17 +201,10 @@ func BenchmarkHandleTool_NoExporter(b *testing.B) {
 // The counting provider records REAL atomic writes for each metric call,
 // satisfying the "measure REAL recording overhead, not a no-op path" requirement.
 func BenchmarkHandleTool_StdoutExporter(b *testing.B) {
-	original := otel.GetMeterProvider()
+	restoreBenchProviderAfter(b)
 	cp := &countingProvider{}
 	otel.SetMeterProvider(cp)
-	defer func() {
-		otel.SetMeterProvider(original)
-		resetInstruments()
-	}()
-
-	// Reset the obs instruments so they are recreated against the new provider.
 	resetInstruments()
-
 	d := buildBenchDispatcher(b)
 	ctx := context.Background()
 	b.ResetTimer()
@@ -217,6 +213,10 @@ func BenchmarkHandleTool_StdoutExporter(b *testing.B) {
 		resp, _ := d.HandleRequest(ctx, benchProject, benchRequest)
 		_ = resp
 	}
+	b.StopTimer()
+	if calls := cp.calls.Load(); calls != int64(b.N) {
+		b.Fatalf("recorder metric calls: got %d, want %d", calls, b.N)
+	}
 	b.ReportMetric(float64(cp.calls.Load())/float64(b.N), "metrics/op")
 }
 
@@ -224,113 +224,158 @@ func BenchmarkHandleTool_StdoutExporter(b *testing.B) {
 // TestBenchmarkResults_OverheadWithinBudget — NFR-1 + NFR-9 enforcement
 // ---------------------------------------------------------------------------
 
-// TestBenchmarkResults_OverheadWithinBudget runs both benchmark functions at a
-// small iteration count and enforces the two observability NFRs:
-//
-//   - NFR-9: metric recording overhead < 5% of baseline latency.
-//   - NFR-1: p99 HandleTool wall-clock latency < 1 000 ms.
-//
-// This test is skipped when -short is set so CI quick-pass jobs are unaffected.
+// TestBenchmarkResults_OverheadWithinBudget measures both providers with the
+// same per-call clock and alternates which provider runs first in each batch.
+// All samples contribute to nearest-rank p50/p99; no millisecond truncation.
 func TestBenchmarkResults_OverheadWithinBudget(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping overhead budget test in -short mode")
 	}
 
 	const iterations = 1000
-
-	// --- Run baseline (no-op provider) ---
-	original := otel.GetMeterProvider()
-	resetInstruments()
-	baselineNsPerOp := runBenchmarkIterations(iterations, false)
-
-	// --- Run with recorder ---
+	const batchSize = 100
+	restoreBenchProviderAfter(t)
+	d := buildBenchDispatcher(t)
 	cp := &countingProvider{}
-	otel.SetMeterProvider(cp)
-	resetInstruments()
-	recorderNsPerOp, p99Ms := runBenchmarkIterationsWithP99(iterations)
-	// Restore original provider.
-	otel.SetMeterProvider(original)
-	resetInstruments()
-
-	t.Logf("baseline ns/op: %.1f", baselineNsPerOp)
-	t.Logf("recorder ns/op: %.1f", recorderNsPerOp)
-	t.Logf("overhead: %.3f%%", (recorderNsPerOp-baselineNsPerOp)/baselineNsPerOp*100)
-	t.Logf("p99 durationMs: %d ms", p99Ms)
-	t.Logf("recorder metric calls: %d", cp.calls.Load())
-
-	// NFR-9: metric recording overhead must be "< 5% of baseline" OR the
-	// absolute delta must be under 50 µs. The dual criterion exists because
-	// the benchmark fake has zero tool work (sub-10µs baseline), where a
-	// strict percentage cap would be triggered by any fixed-cost instrument
-	// emission path. On a realistic 10ms tool call, 50µs delta == 0.5% which
-	// is comfortably within the 5% NFR-9 budget. This absolute floor keeps
-	// the test meaningful for regression detection (the metric emission
-	// implementation must stay O(µs) per call) while avoiding false positives
-	// from the artificial benchmark baseline.
-	absDeltaNs := recorderNsPerOp - baselineNsPerOp
-	if baselineNsPerOp > 0 {
-		overhead := absDeltaNs / baselineNsPerOp
-		const absoluteBudgetNs = 50_000.0 // 50 µs
-		if overhead > 0.05 && absDeltaNs > absoluteBudgetNs {
-			t.Errorf("NFR-9 FAIL: metric overhead %.2f%% AND %.0f ns absolute delta exceeds both percentage (5%%) and absolute (50000 ns) budgets (baseline=%.1f ns/op, recorder=%.1f ns/op)",
-				overhead*100, absDeltaNs, baselineNsPerOp, recorderNsPerOp)
+	providers := [2]metric.MeterProvider{noop.NewMeterProvider(), cp}
+	samples := [2][]time.Duration{make([]time.Duration, iterations), make([]time.Duration, iterations)}
+	for batch := range iterations / batchSize {
+		for offset := range providers {
+			mode := (batch + offset) % len(providers)
+			otel.SetMeterProvider(providers[mode])
+			resetInstruments()
+			runHandleRequestSamples(t, d, samples[mode][batch*batchSize:(batch+1)*batchSize])
 		}
 	}
+	if calls := cp.calls.Load(); calls != iterations {
+		t.Fatalf("recorder metric calls: got %d, want %d", calls, iterations)
+	}
 
-	// NFR-1: p99 < 1 000 ms.
-	if p99Ms >= 1000 {
-		t.Errorf("NFR-1 FAIL: p99 latency %d ms exceeds 1000 ms budget", p99Ms)
+	zeroSamples := [2]int{}
+	for mode := range samples {
+		for index, duration := range samples[mode] {
+			if duration < 0 {
+				t.Fatalf("NFR-9: negative elapsed sample (mode=%d, index=%d, duration=%s)", mode, index, duration)
+			}
+			if duration == 0 {
+				zeroSamples[mode]++
+			}
+		}
+	}
+	baselineP50, baselineP99 := handleToolLatencyPercentiles(samples[0])
+	recorderP50, recorderP99 := handleToolLatencyPercentiles(samples[1])
+	delta := recorderP50 - baselineP50
+	t.Logf("baseline p50: %s; recorder p50: %s; delta: %s", baselineP50, recorderP50, delta)
+	if baselineP50 == 0 {
+		t.Log("overhead percentage: undefined (baseline p50=0); enforcing the unchanged 50000 ns absolute budget")
+	} else {
+		t.Logf("overhead: %.3f%%", float64(delta)/float64(baselineP50)*100)
+	}
+	t.Logf("samples per mode: %d; baseline zero samples: %d; recorder zero samples: %d", iterations, zeroSamples[0], zeroSamples[1])
+	t.Logf("baseline p99: %s; recorder p99: %s; recorder metric calls: %d", baselineP99, recorderP99, cp.calls.Load())
+
+	// Keep the existing 5% OR 50 µs budget for the zero-work tool fixture.
+	if metricOverheadExceeded(baselineP50, recorderP50) {
+		t.Errorf("NFR-9 FAIL: %d ns absolute delta exceeds 50000 ns and is not within 5%% of baseline (baseline p50=%d ns, recorder p50=%d ns)",
+			delta.Nanoseconds(), baselineP50.Nanoseconds(), recorderP50.Nanoseconds())
+	}
+	if baselineP99 >= time.Second || recorderP99 >= time.Second {
+		t.Errorf("NFR-1 FAIL: p99 latency exceeds 1000 ms budget (baseline=%s, recorder=%s)", baselineP99, recorderP99)
 	}
 }
 
-// runBenchmarkIterations runs n iterations of HandleRequest against the bench
-// module and returns the average ns/op.
-func runBenchmarkIterations(n int, _ bool) float64 {
-	d := buildBenchDispatcherForTest()
+func runHandleRequestSamples(t testing.TB, d *Dispatcher, durations []time.Duration) {
+	t.Helper()
 	ctx := context.Background()
-	start := time.Now()
-	for i := 0; i < n; i++ {
-		resp, _ := d.HandleRequest(ctx, benchProject, benchRequest)
-		_ = resp
-	}
-	elapsed := time.Since(start)
-	return float64(elapsed.Nanoseconds()) / float64(n)
-}
-
-// runBenchmarkIterationsWithP99 runs n iterations, records individual
-// durations, and returns (avg ns/op, p99 ms).
-func runBenchmarkIterationsWithP99(n int) (float64, int64) {
-	d := buildBenchDispatcherForTest()
-	ctx := context.Background()
-	durations := make([]int64, n)
-	total := time.Duration(0)
-	for i := 0; i < n; i++ {
+	for i := range durations {
 		start := time.Now()
-		resp, _ := d.HandleRequest(ctx, benchProject, benchRequest)
-		_ = resp
-		dur := time.Since(start)
-		total += dur
-		durations[i] = dur.Milliseconds()
+		resp, err := d.HandleRequest(ctx, benchProject, benchRequest)
+		durations[i] = time.Since(start)
+		if err != nil || len(resp) == 0 {
+			t.Fatalf("HandleRequest: error=%v, response=%q", err, resp)
+		}
 	}
-	sort.Slice(durations, func(i, j int) bool { return durations[i] < durations[j] })
-	p99Idx := int(float64(n)*0.99) - 1
-	if p99Idx < 0 {
-		p99Idx = 0
-	}
-	if p99Idx >= n {
-		p99Idx = n - 1
-	}
-	avgNs := float64(total.Nanoseconds()) / float64(n)
-	return avgNs, durations[p99Idx]
 }
 
-// buildBenchDispatcherForTest creates a Dispatcher without the benchmark
-// helper (which uses b.Helper / b.Fatal — unavailable in plain test context).
-func buildBenchDispatcherForTest() *Dispatcher {
-	r := registry.New()
-	_ = r.Register(&benchMod{})
-	r.Freeze()
-	return New(r, slog.New(slog.NewTextHandler(devNull{}, nil)))
+func handleToolLatencyPercentiles(durations []time.Duration) (time.Duration, time.Duration) {
+	sort.Slice(durations, func(i, j int) bool { return durations[i] < durations[j] })
+	return durations[(len(durations)+1)/2-1], durations[(99*len(durations)+99)/100-1]
+}
+
+func metricOverheadExceeded(baseline, recorder time.Duration) bool {
+	if baseline < 0 || recorder < 0 {
+		return true
+	}
+	delta := recorder - baseline
+	return delta > 50*time.Microsecond && (baseline == 0 || float64(delta)/float64(baseline) > 0.05)
+}
+
+func restoreBenchProviderAfter(t testing.TB) {
+	original := otel.GetMeterProvider()
+	t.Cleanup(func() {
+		otel.SetMeterProvider(original)
+		resetInstruments()
+	})
+}
+
+func TestHandleToolLatencyPercentiles(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		samples  []time.Duration
+		p50, p99 time.Duration
+	}{
+		{"submillisecond singleton", []time.Duration{37 * time.Nanosecond}, 37 * time.Nanosecond, 37 * time.Nanosecond},
+		{"zero singleton", []time.Duration{0}, 0, 0},
+		{"zero median with nonzero tail", []time.Duration{40 * time.Microsecond, 0, 0, 0, 10 * time.Microsecond}, 0, 40 * time.Microsecond},
+		{"odd with outlier", []time.Duration{90, 10, 70, 30, 20, 72 * time.Millisecond, 40, 80, 50, 60, 100}, 60, 72 * time.Millisecond},
+		{"even nearest rank", []time.Duration{4, 1, 3, 2}, 2, 4},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			p50, p99 := handleToolLatencyPercentiles(test.samples)
+			if p50 != test.p50 || p99 != test.p99 {
+				t.Fatalf("got p50=%s p99=%s, want p50=%s p99=%s", p50, p99, test.p50, test.p99)
+			}
+		})
+	}
+
+	samples := make([]time.Duration, 100)
+	for i := range samples {
+		samples[i] = time.Duration(100 - i)
+	}
+	if p50, p99 := handleToolLatencyPercentiles(samples); p50 != 50 || p99 != 99 {
+		t.Fatalf("100-sample nearest ranks: got p50=%s p99=%s, want 50ns/99ns", p50, p99)
+	}
+	zeroSamples := make([]time.Duration, 1000)
+	if p50, p99 := handleToolLatencyPercentiles(zeroSamples); p50 != 0 || p99 != 0 {
+		t.Fatalf("1000 zero samples: got p50=%s p99=%s, want 0/0", p50, p99)
+	}
+}
+
+func TestMetricOverheadBudget(t *testing.T) {
+	for _, test := range []struct {
+		name               string
+		baseline, recorder time.Duration
+		wantExceeded       bool
+	}{
+		{"retained CI breach", 113528 * time.Nanosecond, 186134 * time.Nanosecond, true},
+		{"both boundaries", time.Millisecond, 1050 * time.Microsecond, false},
+		{"percentage boundary", 2 * time.Millisecond, 2100 * time.Microsecond, false},
+		{"absolute allowance", 100 * time.Microsecond, 140 * time.Microsecond, false},
+		{"one ns over both", time.Millisecond, 1050*time.Microsecond + time.Nanosecond, true},
+		{"recorder faster", time.Millisecond, 900 * time.Microsecond, false},
+		{"both zero", 0, 0, false},
+		{"zero baseline absolute allowance", 0, 49 * time.Microsecond, false},
+		{"zero baseline absolute boundary", 0, 50 * time.Microsecond, false},
+		{"zero baseline absolute breach", 0, 50*time.Microsecond + time.Nanosecond, true},
+		{"negative baseline", -time.Nanosecond, 0, true},
+		{"negative recorder", 0, -time.Nanosecond, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := metricOverheadExceeded(test.baseline, test.recorder); got != test.wantExceeded {
+				t.Fatalf("baseline=%s recorder=%s: budget exceeded=%v, want %v", test.baseline, test.recorder, got, test.wantExceeded)
+			}
+		})
+	}
 }
 
 // resetInstruments clears the lazily-initialised instrument singletons so
@@ -338,10 +383,8 @@ func buildBenchDispatcherForTest() *Dispatcher {
 // registered MeterProvider. This is needed in tests that swap the global
 // provider mid-run.
 //
-// It accesses the package-level `global` variable in the obs package via the
-// exported ResetInstrumentsForTesting hook (added in metrics.go for test use
-// only). If no such hook is available, a no-op sync.Once reset is performed
-// by replacing the global with a zero value.
+// ResetInstrumentsForTesting clears the obs singletons before each provider
+// transition and after restoring the original provider.
 func resetInstruments() {
 	obs.ResetInstrumentsForTesting()
 }

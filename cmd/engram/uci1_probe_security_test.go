@@ -47,6 +47,7 @@ func uci1ProbeSecurityInstalled(ctx context.Context, runtime uciInstalledAccepta
 
 type uci1SecurityCitation struct {
 	ref           uci.QueryEntityRef
+	membershipID  string
 	span          uci.QuerySpan
 	contentDigest uci.QueryContentDigest
 }
@@ -141,6 +142,7 @@ func uci1SecurityObserveAuthorizationHops(ctx context.Context, runtime uciInstal
 						"view_id":    citation.ref.ViewID,
 						"entity_key": citation.ref.EntityKey,
 					},
+					"membership_id": citation.membershipID,
 					"span": map[string]any{
 						"byte_start": citation.span.ByteStart,
 						"byte_end":   citation.span.ByteEnd,
@@ -232,7 +234,7 @@ func uci1SecurityFindCitation(ctx context.Context, client *uciInstalledAcceptanc
 	for _, item := range *response.Items {
 		name, ok := uciInstalledAcceptanceGoFunctionName(item.Ref.EntityKey)
 		if item.Path == fixture.RelativePath && ok && name == fixture.SharedSymbol {
-			return uci1SecurityCitation{ref: item.Ref, span: item.Span, contentDigest: item.ContentDigest}, nil
+			return uci1SecurityCitation{ref: item.Ref, membershipID: item.MembershipID, span: item.Span, contentDigest: item.ContentDigest}, nil
 		}
 	}
 	return uci1SecurityCitation{}, errors.New("installed security citation search omitted fixture symbol")

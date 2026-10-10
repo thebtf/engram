@@ -98,6 +98,7 @@ func TestUCIRetrievalSlice(t *testing.T) {
 
 	read, err := fixture.application.ReadCodebase(fixture.callerContext, authorized, mcp.CodebaseReadInput{
 		Ref:               exactItem.Ref,
+		MembershipID:      exactItem.MembershipID,
 		Span:              exactItem.Span,
 		ContentDigest:     exactItem.ContentDigest,
 		VerifyWorkingCopy: true,
@@ -117,6 +118,7 @@ func TestUCIRetrievalSlice(t *testing.T) {
 
 	staleRead, err := fixture.application.ReadCodebase(fixture.callerContext, authorized, mcp.CodebaseReadInput{
 		Ref:               exactItem.Ref,
+		MembershipID:      exactItem.MembershipID,
 		Span:              exactItem.Span,
 		ContentDigest:     uci.QueryContentDigest(strings.Repeat("0", 64)),
 		VerifyWorkingCopy: true,

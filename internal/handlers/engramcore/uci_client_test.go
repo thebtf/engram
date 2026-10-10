@@ -347,6 +347,36 @@ func TestUCIClientRejectsInconsistentStageFrames(t *testing.T) {
 	}
 }
 
+func TestUCIClientStageCalibratedAggregateCapacity(t *testing.T) {
+	payload := make([]byte, 4<<20)
+	framesFor := func(total int) []*pb.StageCodeIndexFrame {
+		frames := make([]*pb.StageCodeIndexFrame, 0, (total+len(payload)-1)/len(payload))
+		for remaining := total; remaining > 0; {
+			frame := uciClientTestStageFrame(uciClientTestScopeA(), uciClientTestServerBuildID, uciClientTestLeaseEpoch, uint64(len(frames)))
+			frame.Payload = payload[:min(remaining, len(payload))]
+			frames = append(frames, frame)
+			remaining -= len(frame.Payload)
+		}
+		return frames
+	}
+	for _, test := range []struct {
+		name  string
+		bytes int
+		valid bool
+	}{
+		{name: "measured complete repository wire size", bytes: 296_433_353, valid: true},
+		{name: "exact aggregate bound", bytes: 384 << 20, valid: true},
+		{name: "one byte over aggregate bound", bytes: (384 << 20) + 1, valid: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.valid, validUCIClientStageFrames(framesFor(test.bytes)))
+		})
+	}
+	oversized := framesFor(1)
+	oversized[0].Payload = make([]byte, (4<<20)+1)
+	require.False(t, validUCIClientStageFrames(oversized), "aggregate calibration must not raise the per-frame bound")
+}
+
 func TestUCIClientValidatesFinalizeObservation(t *testing.T) {
 	newRequest := func() *pb.FinalizeCodeIndexRequest {
 		return uciClientTestFinalizeRequest(uciClientTestScopeA(), uciClientTestServerBuildID, uciClientTestLeaseEpoch, uciClientTestContextA(), uciClientTestAggregatePartsDigest)
@@ -1315,13 +1345,28 @@ func uciClientTestScope(checkoutID, incarnationID string) *pb.CodeIndexScope {
 	}
 }
 
+func TestUCIClientSelectedExtractionProfileBinding(t *testing.T) {
+	for _, digest := range []string{uciClientTestFrameDigest, "", "bad", "sha256:" + strings.Repeat("A", 64)} {
+		response := uciClientTestBindResponse(&pb.BindCodeContextRequest{ClientSessionId: "client-a"})
+		response.ExtractionProfileDigest = digest
+		binding, err := uciClientIndexBindingFromBindResponse(response)
+		if digest != uciClientTestFrameDigest {
+			require.Error(t, err)
+			continue
+		}
+		require.NoError(t, err)
+		require.Equal(t, uci.IndexDigest(digest), binding.ExtractionProfileDigest)
+	}
+}
+
 func uciClientTestBindResponse(request *pb.BindCodeContextRequest) *pb.BindCodeContextResponse {
 	response := &pb.BindCodeContextResponse{
-		ContextHandle: "context-handle-" + request.GetClientSessionId(),
-		Context:       request.GetRequestedContext(),
-		IndexScope:    uciClientTestScopeA(),
-		LocalRootId:   uciClientTestLocalRootID,
-		WorkstationId: uciClientTestWorkstationID,
+		ContextHandle:           "context-handle-" + request.GetClientSessionId(),
+		Context:                 request.GetRequestedContext(),
+		IndexScope:              uciClientTestScopeA(),
+		LocalRootId:             uciClientTestLocalRootID,
+		WorkstationId:           uciClientTestWorkstationID,
+		ExtractionProfileDigest: uciClientTestFrameDigest,
 	}
 	if request.GetContextHandle() != "" {
 		response.ContextHandle = request.GetContextHandle()
@@ -1353,9 +1398,10 @@ func uciClientTestIndexBinding(reference *pb.ContextRef) uci.IndexBinding {
 			CheckoutID:    scope.GetCheckoutId(),
 			IncarnationID: scope.GetIncarnationId(),
 		},
-		ProfileID:     scope.GetAnalysisProfileId(),
-		LocalRootID:   uciClientTestLocalRootID,
-		WorkstationID: uciClientTestWorkstationID,
+		ProfileID:               scope.GetAnalysisProfileId(),
+		LocalRootID:             uciClientTestLocalRootID,
+		WorkstationID:           uciClientTestWorkstationID,
+		ExtractionProfileDigest: uci.IndexDigest(uciClientTestFrameDigest),
 	}
 	if reference != nil {
 		contextRef := uciClientTestDomainContext(reference)

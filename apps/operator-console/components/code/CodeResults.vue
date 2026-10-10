@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import type { CodeEntityRef, CodeEnvelope, CodeGraphOptions, CodeItem, CodePresentationState, CodeSafeContext, CodeSourceDescriptor, CodeStatus } from '~/composables/useOperatorCode'
 
 const { t } = useI18n()
@@ -34,6 +34,40 @@ const query = ref('')
 const sourceItem = computed(() => props.source?.items[0] ?? null)
 const candidates = computed(() => props.search ?? props.structure)
 const copyNotice = ref<'copied' | 'unavailable' | null>(null)
+type WorkPanel = 'results' | 'relation' | 'source'
+const activePanel = ref<WorkPanel>('results')
+const sourceBack = ref<WorkPanel>('results')
+const selectedItem = ref<CodeItem | null>(null)
+const workbench = ref<HTMLElement | null>(null)
+const hasSearch = computed(() => props.searchState.kind !== 'idle')
+const relationAvailable = computed(() => props.graphState.kind !== 'idle')
+const sourceAvailable = computed(() => props.sourceState.kind !== 'idle')
+async function showPanel(panel: WorkPanel): Promise<void> {
+  activePanel.value = panel
+  await nextTick()
+  workbench.value?.querySelector<HTMLElement>(`[data-work-panel="${panel}"] h3`)?.focus()
+}
+function exploreItem(item: CodeItem, options: CodeGraphOptions): void {
+  selectedItem.value = item
+  emit('explore', item, options)
+  void showPanel('relation')
+}
+function openSource(descriptor: CodeSourceDescriptor, from: WorkPanel): void {
+  sourceBack.value = from
+  emit('source', descriptor)
+  void showPanel('source')
+}
+function back(): void {
+  void showPanel(activePanel.value === 'source' && sourceBack.value === 'relation' && relationAvailable.value ? 'relation' : 'results')
+}
+watch(() => props.pinned?.viewRef, () => {
+  activePanel.value = 'results'
+  selectedItem.value = null
+  copyNotice.value = null
+})
+watch(() => props.source, () => { copyNotice.value = null })
+const queryEvidence = computed(() => props.search === null ? null : props.search.retrievalMode === 'hybrid' ? 'hybrid' : props.search.retrievalMode === 'lexical' ? 'lexical' : 'other')
+const pageLanguages = computed(() => [...new Set(props.search?.items.map(item => item.language) ?? [])].join(', '))
 const readiness = computed(() => {
   if (props.status === null) return null
   if (props.status.embeddingJobState === 'failed_terminal' || props.status.freshnessState === 'failed') return 'failed'
@@ -47,26 +81,31 @@ const readiness = computed(() => {
 })
 const indexEmpty = computed(() => props.status !== null && props.status.totalChunks === 0 && readiness.value !== 'failed')
 function submitSearch(): void {
-  if (query.value.trim() !== '') emit('search', query.value)
+  if (query.value.trim() !== '') {
+    selectedItem.value = null
+    activePanel.value = 'results'
+    emit('search', query.value)
+  }
 }
 
 function sourceDescriptor(item: CodeItem): CodeSourceDescriptor {
-  return { entityKey: item.ref.entityKey, span: item.span, contentDigest: item.contentDigest }
+  return { entityKey: item.ref.entityKey, membershipId: item.membershipId, span: item.span, contentDigest: item.contentDigest }
 }
 
 async function copy(value: string): Promise<void> {
+  const source = props.source
   try {
     await navigator.clipboard.writeText(value)
-    copyNotice.value = 'copied'
+    if (props.source === source) copyNotice.value = 'copied'
   } catch {
-    copyNotice.value = 'unavailable'
+    if (props.source === source) copyNotice.value = 'unavailable'
   }
 }
 </script>
 
 <template>
   <section class="results" aria-labelledby="code-results-heading">
-    <header class="section-head">
+    <header v-if="pinned !== null" class="section-head">
       <div>
         <h2 id="code-results-heading">{{ t('codeExplorer.results.title') }}</h2>
         <p v-if="pinned === null">{{ t('codeExplorer.results.unpinned') }}</p>
@@ -95,30 +134,37 @@ async function copy(value: string): Promise<void> {
     <form v-if="pinned !== null" class="search-form" @submit.prevent="submitSearch">
       <label for="code-query">{{ t('codeExplorer.search.label') }}</label>
       <div>
-        <input id="code-query" v-model="query" name="code-query" autocomplete="off" :placeholder="t('codeExplorer.search.placeholder')" :disabled="pending" data-testid="code-query-input">
+        <input id="code-query" v-model="query" name="code-query" autocomplete="off" :placeholder="t('codeExplorer.search.placeholder')" :disabled="pending" aria-describedby="code-query-help" data-testid="code-query-input">
         <button class="btn primary" type="submit" :disabled="pending || query.trim() === ''" data-testid="code-search-submit">{{ t('codeExplorer.search.action') }}</button>
       </div>
+      <p id="code-query-help" class="state-message">{{ t('workspace.query.help') }}</p>
     </form>
 
-    <div v-else class="unselected" data-testid="code-results-unselected">
-      <strong>{{ t('codeExplorer.unselected.title') }}</strong>
-      <p>{{ t('codeExplorer.unselected.body') }}</p>
-    </div>
+    <p v-else id="code-results-heading" class="state-message" data-testid="code-results-unselected">{{ t('codeExplorer.results.unpinned') }}</p>
 
-    <div v-if="pinned !== null" class="result-grid">
-      <article class="panel structure-panel" aria-live="polite">
-        <div class="panel-head"><h3>{{ t('codeExplorer.structure.title') }}</h3><span :data-state="structureState.kind">{{ t(`codeExplorer.states.${structureState.kind}.label`) }}</span></div>
+    <nav v-if="pinned !== null" class="panel-navigation" :aria-label="t('workspace.workbench.navigation')">
+      <button class="btn" type="button" :aria-pressed="activePanel === 'results'" aria-controls="code-work-results" data-testid="code-panel-results" @click="showPanel('results')">{{ t('workspace.workbench.results') }}</button>
+      <button class="btn" type="button" :aria-pressed="activePanel === 'relation'" :disabled="!relationAvailable" aria-controls="code-work-relation" data-testid="code-panel-relation" @click="showPanel('relation')">{{ t('workspace.workbench.relation') }}</button>
+      <button class="btn" type="button" :aria-pressed="activePanel === 'source'" :disabled="!sourceAvailable" aria-controls="code-work-source" data-testid="code-panel-source" @click="showPanel('source')">{{ t('codeExplorer.source.title') }}</button>
+      <button v-if="activePanel !== 'results'" class="btn back" type="button" data-testid="code-panel-back" @click="back">{{ t('workspace.workbench.back') }}</button>
+    </nav>
+    <p v-if="selectedItem !== null" class="selected-result" data-testid="code-selected-result"><strong>{{ selectedItem.ref.entityKey }}</strong> · {{ selectedItem.path }}:{{ selectedItem.span.lineStart }}–{{ selectedItem.span.lineEnd }}</p>
+
+    <div v-if="pinned !== null" ref="workbench" class="result-grid" :data-active-panel="activePanel" @keydown.esc.stop.prevent="back">
+      <div id="code-work-results" class="result-list" data-work-panel="results">
+      <article v-if="!hasSearch" class="panel structure-panel" aria-live="polite">
+        <div class="panel-head"><h3 tabindex="-1">{{ t('codeExplorer.structure.title') }}</h3><span :data-state="structureState.kind">{{ t(`codeExplorer.states.${structureState.kind}.label`) }}</span></div>
         <p class="state-message">{{ t(`codeExplorer.states.${structureState.kind}.structure`) }}</p>
         <ul v-if="structure !== null && structure.items.length > 0" class="items" data-testid="code-structure-results">
-          <li v-for="item in structure.items" :key="`${item.ref.entityKey}:${item.span.byteStart}`">
+          <li v-for="item in structure.items" :key="`${item.membershipId}:${item.ref.entityKey}:${item.span.byteStart}`">
             <div class="item-copy">
               <strong>{{ item.ref.entityKey }}</strong>
               <p><code>{{ item.path }}:{{ item.span.lineStart }}–{{ item.span.lineEnd }}</code> · {{ item.language }}</p>
               <pre>{{ item.excerpt }}</pre>
             </div>
             <div class="item-actions">
-              <button class="btn" type="button" :disabled="pending" @click="emit('explore', item, { direction: 'both', relations: [] })">{{ t('codeExplorer.search.explore') }}</button>
-              <button class="btn" type="button" :disabled="pending" @click="emit('source', sourceDescriptor(item))">{{ t('codeExplorer.search.source') }}</button>
+              <button class="btn" type="button" :disabled="pending" @click="exploreItem(item, { direction: 'both', relations: [] })">{{ t('codeExplorer.search.explore') }}</button>
+              <button class="btn" type="button" :disabled="pending" @click="selectedItem = item; openSource(sourceDescriptor(item), 'results')">{{ t('codeExplorer.search.source') }}</button>
             </div>
           </li>
         </ul>
@@ -128,11 +174,23 @@ async function copy(value: string): Promise<void> {
         <p v-if="structureContinuationNotice !== null" class="continuation-gap" role="status">{{ t(`codeExplorer.continuation.structure.${structureContinuationNotice}`) }}</p>
       </article>
 
-      <article class="panel search-panel" aria-live="polite">
-        <div class="panel-head"><h3>{{ t('codeExplorer.search.title') }}</h3><span :data-state="searchState.kind">{{ t(`codeExplorer.states.${searchState.kind}.label`) }}</span></div>
+      <article v-else class="panel search-panel" aria-live="polite">
+        <div class="panel-head"><h3 tabindex="-1">{{ t('codeExplorer.search.title') }}</h3><span :data-state="searchState.kind">{{ t(`codeExplorer.states.${searchState.kind}.label`) }}</span></div>
         <p class="state-message">{{ t(`codeExplorer.states.${searchState.kind}.search`) }}</p>
+        <div v-if="search !== null" class="query-evidence" data-testid="code-query-evidence">
+          <p class="state-message">{{ t(`workspace.query.${queryEvidence}`, { mode: search.retrievalMode ?? t('codeExplorer.status.unknown') }) }}</p>
+          <dl class="status">
+            <div><dt>{{ t('workspace.query.mode') }}</dt><dd>{{ search.retrievalMode ?? t('codeExplorer.status.unknown') }}</dd></div>
+            <div><dt>{{ t('workspace.query.vectorCoverage') }}</dt><dd>{{ search.vectorCoverage === null ? t('codeExplorer.status.unknown') : `${Math.round(search.vectorCoverage * 100)}%` }}</dd></div>
+            <div><dt>{{ t('workspace.query.structuralCoverage') }}</dt><dd>{{ search.structuralCoverage === 'complete' || search.structuralCoverage === 'partial' || search.structuralCoverage === 'unavailable' ? t(`workspace.coverage.${search.structuralCoverage}`) : search.structuralCoverage ?? t('codeExplorer.status.unknown') }}</dd></div>
+            <div><dt>{{ t('workspace.query.unresolved') }}</dt><dd>{{ search.unresolvedSites ?? t('codeExplorer.status.unknown') }}</dd></div>
+            <div><dt>{{ t('workspace.query.unsupported') }}</dt><dd>{{ search.unsupportedFiles ?? t('codeExplorer.status.unknown') }}</dd></div>
+          </dl>
+          <p class="state-message">{{ t('workspace.query.page', { count: search.items.length, languages: pageLanguages || t('codeExplorer.status.unknown') }) }}</p>
+          <ul v-if="search.degradationReasons.length > 0" class="warnings"><li v-for="reason in search.degradationReasons" :key="reason">{{ reason }}</li></ul>
+        </div>
         <ul v-if="search !== null && search.items.length > 0" class="items" data-testid="code-search-results">
-          <li v-for="item in search.items" :key="`${item.ref.entityKey}:${item.span.byteStart}`">
+          <li v-for="item in search.items" :key="`${item.membershipId}:${item.ref.entityKey}:${item.span.byteStart}`">
             <div class="item-copy">
               <strong>{{ item.ref.entityKey }}</strong>
               <p><code>{{ item.path }}:{{ item.span.lineStart }}–{{ item.span.lineEnd }}</code> · {{ item.language }} · {{ item.matchSources.join(', ') }}</p>
@@ -140,8 +198,8 @@ async function copy(value: string): Promise<void> {
               <p class="result-evidence">{{ t('codeExplorer.search.evidence', { mode: search.retrievalMode ?? t('codeExplorer.status.unknown'), freshness: search.freshnessState ?? t('codeExplorer.status.unknown'), score: item.score ?? '—' }) }}</p>
             </div>
             <div class="item-actions">
-              <button class="btn" type="button" :disabled="pending" data-testid="code-search-explore" @click="emit('explore', item, { direction: 'both', relations: [] })">{{ t('codeExplorer.search.explore') }}</button>
-              <button class="btn" type="button" :disabled="pending" data-testid="code-search-source" @click="emit('source', sourceDescriptor(item))">{{ t('codeExplorer.search.source') }}</button>
+              <button class="btn" type="button" :disabled="pending" data-testid="code-search-explore" @click="exploreItem(item, { direction: 'both', relations: [] })">{{ t('codeExplorer.search.explore') }}</button>
+              <button class="btn" type="button" :disabled="pending" data-testid="code-search-source" @click="selectedItem = item; openSource(sourceDescriptor(item), 'results')">{{ t('codeExplorer.search.source') }}</button>
             </div>
           </li>
         </ul>
@@ -150,22 +208,28 @@ async function copy(value: string): Promise<void> {
         <button v-if="search !== null && search.continuation !== null" class="btn" type="button" :disabled="pending" data-testid="code-search-next" @click="emit('continueSearch')">{{ t('codeExplorer.continuation.next') }}</button>
         <p v-if="searchContinuationNotice !== null" class="continuation-gap" role="status">{{ t(`codeExplorer.continuation.search.${searchContinuationNotice}`) }}</p>
       </article>
+      </div>
 
       <CodeGraph
+        v-if="relationAvailable"
+        id="code-work-relation"
+        class="panel relation-panel"
+        data-work-panel="relation"
         :graph="graph"
         :search="candidates"
         :state="graphState"
         :pending="pending"
-        @explore="(item, options) => emit('explore', item, options)"
+        @explore="exploreItem"
         @continue="(target) => emit('continueGraph', target)"
-        @source="(descriptor) => emit('source', descriptor)"
+        @source="(descriptor) => openSource(descriptor, 'relation')"
       />
 
-      <article class="panel source" aria-live="polite">
-        <div class="panel-head"><h3>{{ t('codeExplorer.source.title') }}</h3><span :data-state="sourceState.kind">{{ t(`codeExplorer.states.${sourceState.kind}.label`) }}</span></div>
+      <article v-if="sourceAvailable" id="code-work-source" class="panel source" data-work-panel="source" aria-live="polite">
+        <div class="panel-head"><h3 tabindex="-1">{{ t('codeExplorer.source.title') }}</h3><span :data-state="sourceState.kind">{{ t(`codeExplorer.states.${sourceState.kind}.label`) }}</span></div>
         <p class="state-message">{{ t(`codeExplorer.states.${sourceState.kind}.source`) }}</p>
         <template v-if="sourceItem !== null">
-          <p class="source-meta"><code>{{ sourceItem.path }}:{{ sourceItem.span.lineStart }}–{{ sourceItem.span.lineEnd }} · {{ sourceItem.span.byteStart }}–{{ sourceItem.span.byteEnd }} · {{ sourceItem.contentDigest }}</code></p>
+          <p class="source-meta"><code>{{ sourceItem.path }}:{{ sourceItem.span.lineStart }}–{{ sourceItem.span.lineEnd }}</code></p>
+          <details class="source-receipt"><summary>{{ t('codeExplorer.evidence.title') }}</summary><code>{{ sourceItem.span.byteStart }}–{{ sourceItem.span.byteEnd }} · {{ sourceItem.contentDigest }}</code></details>
           <p class="source-meta">{{ sourceItem.language }} · {{ t('codeExplorer.source.exactPublished') }}</p>
           <p v-if="source?.warnings.includes('source_partial_indexed_chunk')" class="source-meta" role="status" data-testid="code-source-partial">{{ t('codeExplorer.source.partialIndexed') }}</p>
           <div class="item-actions">
@@ -195,12 +259,13 @@ dd { margin:4px 0 0; color:var(--fg); font-family:var(--font-mono); font-size:va
 .readiness[data-state='updating'], .readiness[data-state='newer-snapshot'] { border-color:color-mix(in oklab,var(--warn),transparent 35%); }
 .readiness[data-state='failed'], .readiness[data-state='degraded'] { border-color:color-mix(in oklab,var(--danger),transparent 35%); }
 .diagnosis { margin:0; color:var(--danger); font-size:var(--text-sm); }
+.query-evidence { border-block:1px solid var(--border-soft); padding:10px 0; margin-top:10px; }.query-evidence .status { margin:10px 0; }
 .search-form { display:grid; gap:5px; }
 .search-form > label { color:var(--muted); font-size:var(--text-xs); font-weight:700; letter-spacing:.04em; text-transform:uppercase; }
 .search-form > div { display:flex; gap:8px; }
 .search-form input { min-width:0; flex:1; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--bg); color:var(--fg); padding:9px 10px; font:inherit; }
 .search-form input:focus-visible, .btn:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
-.result-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+.result-grid { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); align-items:start; gap:14px; }.result-list { grid-column:1; grid-row:1 / span 2; min-width:0; }.relation-panel { grid-column:2; grid-row:1; }.source { grid-column:2; grid-row:2; }.result-grid:not(:has(.relation-panel, .source)) .result-list { grid-column:1 / -1; }
 .panel { min-width:0; border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); padding:14px; }
 .panel-head { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; }
 .panel-head span { border:1px solid var(--border); border-radius:var(--radius-pill); padding:3px 7px; color:var(--muted); font-size:var(--text-xs); }
@@ -210,7 +275,9 @@ dd { margin:4px 0 0; color:var(--fg); font-family:var(--font-mono); font-size:va
 .items li { display:flex; justify-content:space-between; gap:12px; border-top:1px solid var(--border-soft); padding-top:10px; }
 .item-copy { min-width:0; }.item-copy strong { color:var(--fg); font-family:var(--font-mono); font-size:var(--text-sm); }.item-copy p { margin:4px 0 0; color:var(--muted); font-size:var(--text-xs); }.item-copy pre, .source pre { overflow:auto; margin:8px 0 0; border:1px solid var(--border-soft); border-radius:var(--r-sm); background:var(--bg); padding:9px; color:var(--fg-2); font-size:var(--text-xs); white-space:pre-wrap; overflow-wrap:anywhere; }.item-actions { display:flex; flex-wrap:wrap; align-content:flex-start; gap:7px; }
 .btn { min-height:36px; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--surface); color:var(--fg); padding:8px 12px; font:inherit; font-size:var(--text-sm); font-weight:700; cursor:pointer; }.btn.primary { border-color:var(--accent); background:var(--accent); color:var(--accent-on); }.btn:disabled { cursor:not-allowed; opacity:.55; }
-.warnings { color:var(--warn); font-size:var(--text-xs); }.source { grid-column:1 / -1; }
+.warnings { color:var(--warn); font-size:var(--text-xs); }
+.panel-navigation { display:flex; flex-wrap:wrap; gap:8px; }.panel-navigation .btn[aria-pressed='true'] { border-color:var(--accent); }.back { margin-inline-start:auto; }.selected-result { margin:0; color:var(--fg-2); font-size:var(--text-sm); overflow-wrap:anywhere; }.selected-result strong { color:var(--fg); }.source-receipt { margin-top:8px; color:var(--muted); font-size:var(--text-xs); }.source-receipt summary { cursor:pointer; }.source-receipt code { display:block; overflow-wrap:anywhere; margin-top:6px; }
+.results, .result-grid, .search-form, .search-form > div { min-width:0; }.item-copy p, .source-meta, dd, .warnings { overflow-wrap:anywhere; }.status div { min-width:0; }.source pre { white-space:pre; overflow-wrap:normal; max-width:100%; }.btn, .source-receipt summary { max-width:100%; overflow-wrap:anywhere; }.btn:hover:not(:disabled) { background:var(--surface-warm); }.btn.primary:hover:not(:disabled) { background:var(--accent); filter:brightness(1.1); }.source-receipt summary:focus-visible, h3:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 @media (pointer:coarse) { .btn, .search-form input { min-height:44px; } }
-@media (max-width:720px) { .section-head, .search-form > div, .result-grid, .status, .empty-index, .readiness, .items li { display:grid; grid-template-columns:1fr; }.source { grid-column:auto; }.empty-index .btn { justify-self:start; } }
+@media (max-width:720px) { .section-head, .search-form > div, .result-grid, .status, .empty-index, .readiness, .items li { display:grid; grid-template-columns:1fr; }.result-list, .relation-panel, .source { grid-column:auto; grid-row:auto; }.result-grid [data-work-panel] { display:none; }.result-grid[data-active-panel='results'] [data-work-panel='results'], .result-grid[data-active-panel='relation'] [data-work-panel='relation'], .result-grid[data-active-panel='source'] [data-work-panel='source'] { display:block; }.panel-navigation .btn { min-height:44px; }.empty-index .btn { justify-self:start; } }
 </style>

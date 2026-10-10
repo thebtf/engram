@@ -55,7 +55,8 @@ type mockEngramServer struct {
 	mu sync.Mutex
 
 	// initResp is the response returned by Initialize.
-	initResp *pb.InitializeResponse
+	initResp         *pb.InitializeResponse
+	unscopedInitResp *pb.InitializeResponse
 	// initErr, if non-nil, is returned as an error from Initialize.
 	initErr error
 	// callResp is the response returned by CallTool.
@@ -82,6 +83,9 @@ func (s *mockEngramServer) Initialize(ctx context.Context, req *pb.InitializeReq
 	s.initMetadata, _ = metadata.FromIncomingContext(ctx)
 	s.initCalls++
 	resp, err := s.initResp, s.initErr
+	if req.GetProjectIdentityV3() == nil && s.unscopedInitResp != nil {
+		resp, err = s.unscopedInitResp, nil
+	}
 	s.mu.Unlock()
 	if err != nil {
 		return nil, err
@@ -125,7 +129,7 @@ func (s *mockEngramServer) RegisterProjectIdentityV3(ctx context.Context, req *p
 // startMockGRPC starts a mock gRPC server on an ephemeral port, waits for its
 // transport handshake, and returns the listener address ("host:port"). The
 // server and readiness probe are registered for cleanup via t.Cleanup.
-func startMockGRPC(t *testing.T, srv *mockEngramServer) string {
+func startMockGRPC(t *testing.T, srv pb.EngramServiceServer) string {
 	t.Helper()
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
