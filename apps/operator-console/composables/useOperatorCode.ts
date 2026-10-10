@@ -763,6 +763,13 @@ function sameView(left: CodeResponseContext | null, right: CodeResponseContext |
     && left.generation === right.generation
 }
 
+function sameContext(left: Pick<CodeSafeContext, 'sourceRef' | 'checkoutRef' | 'viewRef'> | null, right: Pick<CodeSafeContext, 'sourceRef' | 'checkoutRef' | 'viewRef'> | null): boolean {
+  return left !== null && right !== null
+    && left.sourceRef === right.sourceRef
+    && left.checkoutRef === right.checkoutRef
+    && left.viewRef === right.viewRef
+}
+
 function navigationType(): string {
   const entry = globalThis.performance?.getEntriesByType('navigation')[0]
   return entry instanceof PerformanceNavigationTiming ? entry.type : 'unknown'
@@ -1353,7 +1360,7 @@ export function useOperatorCode() {
   }
 
   function refreshedContext(catalog: CodeCatalogEntry[], previous: CodeSafeContext): CodeSafeContext | null {
-    const matches = catalog.flatMap((entry) => entry.view === null ? [] : [entry.view]).filter((view) => view.viewRef === previous.viewRef)
+    const matches = catalog.flatMap((entry) => entry.view === null ? [] : [entry.view]).filter((view) => sameContext(view, previous))
     return matches.length === 1 ? matches[0] ?? null : null
   }
 
@@ -1396,7 +1403,7 @@ export function useOperatorCode() {
         persistPinnedContext(refreshed)
       } else {
         // The current-only catalog cannot authorize or revoke this tab's historical pin.
-        if (await refreshStatus() && ownsRequest() && (restoring || selected?.viewRef === pinned.viewRef)) {
+        if (await refreshStatus() && ownsRequest() && (restoring || sameContext(selected, pinned))) {
           contextCandidate.value = refreshedContext(catalog, pinned)
             ?? catalog.find((entry) => entry.sourceRef === pinned.sourceRef && entry.checkoutRef === pinned.checkoutRef && entry.view !== null)?.view ?? null
         }
@@ -1405,7 +1412,7 @@ export function useOperatorCode() {
   }
 
   function selectContext(context: CodeSafeContext | null): void {
-    if (context === null || context.viewRef !== pinnedContext.value?.viewRef) {
+    if (!sameContext(context, pinnedContext.value)) {
       if (pinnedContext.value !== null) suspendedContext.value = { pin: pinnedContext.value, response: pinnedResponseContext.value }
       pinnedContext.value = null
       clearContextualResults()
@@ -1514,6 +1521,9 @@ export function useOperatorCode() {
     if (binding.value === null || contextState.value !== 'ready' || selected === null || pending.value) return
     const ownsRequest = contextualRequestOwner()
     const previous = suspendedContext.value
+    const stored = loadPersistedPinCandidate()
+    const previousPin = previous?.pin ?? pinnedContext.value ?? remountState?.pinnedContext ?? (typeof stored === 'string' ? null : stored)
+    const retainIntent = sameContext(selected, previousPin)
     pending.value = true
     const result = await request(`/code/tabs/${encodeURIComponent(binding.value.tabBindingId)}/context`, 'PUT', {
       document_proof: binding.value.documentProof,
@@ -1522,7 +1532,7 @@ export function useOperatorCode() {
     if (!ownsRequest()) return
     pending.value = false
     if (result.kind !== 'success' || result.status !== 204) {
-      if (previous !== null) {
+      if (previous !== null && result.kind === 'denied' && result.status === 403) {
         suspendedContext.value = null
         pinnedContext.value = previous.pin
         contextCandidate.value = previous.pin
@@ -1541,16 +1551,22 @@ export function useOperatorCode() {
       }
       return
     }
-    clearIndexIntent()
+    if (retainIntent) {
+      stopIndexIntentPolling()
+      indexIntentPending.value = false
+    } else clearIndexIntent()
     remountState = null
     suspendedContext.value = null
     pinnedContext.value = selected
     persistPinnedContext(selected)
     clearContextualResults()
+    if (retainIntent && previous !== null) pinnedResponseContext.value = previous.response
     const ownsPin = contextualRequestOwner()
     await refreshStatus()
     if (!ownsPin()) return
     await requestStructure(null)
+    if (!ownsPin()) return
+    if (retainIntent) await refreshIndexIntent()
 
   }
   async function refreshStatus(): Promise<boolean> {

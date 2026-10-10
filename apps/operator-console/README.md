@@ -59,9 +59,13 @@ The [responsive-layout receipt](../../specs/011-operator-code-console/acceptance
 - Workspace uses one result area with related relation/source panels. Mobile panel controls,
   Back and Escape preserve the query and selection; source code scrolls inside its viewer.
 - Choosing another context hides the previous released bodies and readiness immediately.
-  The previous server-confirmed pin remains private until the switch is accepted. A refused
-  switch returns to that scope and rechecks it; rejection of the current snapshot clears its
-  authority and requires fresh catalog selection and explicit confirmation.
+  A definitive HTTP 403 pin refusal leaves the server pin unchanged; the Console may restore
+  the previously confirmed scope and recheck it. A lost, timed-out, or otherwise ambiguous
+  pin response clears local pin authority and contextual results, even if the server committed
+  the switch. Refresh choices and explicitly confirm a snapshot before reading code again.
+- Reconfirming the same Source/Checkout/View retains the tracked index intent, its durable
+  reload resume and bounded status polling. Only an actual switch to another context clears
+  that tracking; publication still never selects a newer View automatically.
 
 ## Работа с кодом: инструкция оператора
 
@@ -301,6 +305,8 @@ cookie so concurrent reveal and delete journeys do not mutate one another's fixt
 These mock cookies are test-only and grant no authority.
 
 The focused `tests/browser/code-workbench.spec.ts` fixture exercises keyboard/mobile
-navigation, same-View source descriptors, late-response isolation, refused historical
-switch recovery, and current-snapshot rejection. This is UI-layer smoke evidence, not a
-real-API, physical-LAN, semantic-provider, installed or release acceptance claim.
+navigation, same-View source descriptors, late-response isolation, definitive historical
+switch refusal, committed switches with lost/timed-out responses, same-context intent
+continuity across reconfirmation/reload, and current-snapshot rejection. This is UI-layer
+smoke evidence, not a real-API, physical-LAN, semantic-provider, installed or release
+acceptance claim.

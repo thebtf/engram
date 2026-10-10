@@ -4,11 +4,15 @@ import type { Page } from '@playwright/test'
 const binding = { state: 'TAB_BINDING_READY', tab_binding_id: '60000000-0000-4000-8000-000000000041', document_proof: 'proof', resume_nonce: 'resume', reload_token: 'reload' }
 const span = { byte_start: 0, byte_end: 12, line_start: 1, line_end: 1 }
 
-async function workbench(page: Page, duplicateLocations = false) {
+async function workbench(page: Page, duplicateLocations = false, initialContext = true) {
   let selected = 'a'
   let catalogCopies = ['a', 'b']
-  const intent = { intent_ref: 'intent-a', state: 'queued', attempt: 1, retryable: false, created_at: '2026-10-09T00:00:00Z', updated_at: '2026-10-09T00:00:00Z' }
+  let intent = { intent_ref: 'intent-a', state: 'queued', attempt: 1, retryable: false, created_at: '2026-10-09T00:00:00Z', updated_at: '2026-10-09T00:00:00Z' }
   let failure: { path: string; status: number } | null = null
+  let lostPinResponse: 'lost' | 'timeout' | null = null
+  let structureOffline = !initialContext
+  const contextualRequests: Array<{ path: string; view: string }> = []
+  const pins: string[] = []
   let releaseSource: (() => void) | null = null
   let holdSource = false
   let sourceHeld = false
@@ -18,10 +22,20 @@ async function workbench(page: Page, duplicateLocations = false) {
   await page.route('**/api/auth/me', route => route.fulfill({ json: { auth_disabled: true } }))
   await page.route('**/api/code/**', async route => {
     const path = new URL(route.request().url()).pathname
+    if (['status', 'structure', 'search', 'graph', 'source'].some(action => path.endsWith(`/${action}`))) contextualRequests.push({ path, view: `view-${selected}` })
     if (failure?.path === path) return route.fulfill({ status: failure.status })
     if (path.endsWith('/tabs/handshake') || path.endsWith('/tabs/resume')) return route.fulfill({ json: { ...binding, state: route.request().postDataJSON().ambiguous ? 'TAB_BOOTSTRAP_AMBIGUOUS' : 'TAB_BINDING_READY' } })
     if (path.endsWith('/contexts')) return route.fulfill({ json: { contexts: catalogCopies.map(copy => ({ source_ref: 'repository', checkout_ref: copy, repository: 'Repository', working_copy: `Copy ${copy}`, indexed_snapshot: { label: `Snapshot ${copy}` }, view_ref: `view-${copy}`, selection_ref: copy, index_intent_available: false })) } })
-    if (path.endsWith('/context')) { selected = route.request().postDataJSON().selection_ref; return route.fulfill({ status: 204 }) }
+    if (path.endsWith('/context')) {
+      selected = route.request().postDataJSON().selection_ref
+      pins.push(selected)
+      const lost = lostPinResponse
+      lostPinResponse = null
+      if (lost === 'lost') return route.abort('failed')
+      if (lost === 'timeout') return route.fulfill({ status: 408 })
+      return route.fulfill({ status: 204 })
+    }
+    if (path.endsWith('/structure') && structureOffline) return route.abort('failed')
     if (path.endsWith('/status')) return route.fulfill({ json: { total_chunks: 1, embedded_chunks: 1, embedding: { coverage: 'complete' }, freshness: { state: 'observed_current' } } })
     if (path.endsWith('/index-intents')) return route.fulfill({ status: 202, json: intent })
     if (path.endsWith('/index-intents/intent-a')) return route.fulfill({ json: intent })
@@ -47,15 +61,27 @@ async function workbench(page: Page, duplicateLocations = false) {
   await page.getByTestId('code-context-working-copy').selectOption('a')
   await page.getByTestId('code-context-snapshot').selectOption('a')
   await page.getByTestId('code-pin-context').press('Enter')
-  await expect(page.getByTestId('code-structure-results')).toBeVisible()
-  await page.getByTestId('code-query-input').fill('implementation')
-  await page.getByTestId('code-query-input').press('Enter')
-  await expect(page.getByTestId('code-search-results')).toBeVisible()
+  if (initialContext) {
+    await expect(page.getByTestId('code-structure-results')).toBeVisible()
+    await page.getByTestId('code-query-input').fill('implementation')
+    await page.getByTestId('code-query-input').press('Enter')
+    await expect(page.getByTestId('code-search-results')).toBeVisible()
+  } else {
+    await expect(page.getByTestId('code-context-pinned')).toContainText('Snapshot a')
+    await expect(page.getByTestId('code-pin-context')).toBeDisabled()
+    await expect(page.locator('main.code-page')).toHaveAttribute('data-catalog-state', 'ready')
+    await expect(page.locator('.result-grid [data-state="offline"]')).toBeVisible()
+  }
   return {
     reads,
+    contextualRequests,
+    pins,
+    selected() { return selected },
+    loseNextPinResponse(mode: 'lost' | 'timeout') { lostPinResponse = mode },
+    runIntent() { intent = { ...intent, state: 'running' } },
     fail(path: string, status: number) { failure = { path, status } },
     publishOnlyB() { catalogCopies = ['b'] },
-    recover() { failure = null; holdSource = false },
+    recover() { failure = null; holdSource = false; structureOffline = false },
     hold() { holdSource = true },
     held() { return sourceHeld },
     release() { releaseSource?.() },
@@ -170,6 +196,82 @@ test('actual-current409 clears its authority and requires explicit catalogue sel
   await page.getByTestId('code-pin-context').click()
   await expect(page.getByTestId('code-structure-results')).toContainText('src/b.ts')
   await expect(page.getByTestId('code-source-result')).toHaveCount(0)
+})
+
+for (const initialContext of [false, true]) {
+  for (const response of ['lost', 'timeout'] as const) {
+    test(`committed B with ${response} PUT response clears ${initialContext ? 'known' : 'unknown'} A authority until explicit confirmation`, async ({ page }) => {
+      const state = await workbench(page, false, initialContext)
+      await page.getByTestId('code-context-working-copy').selectOption('b')
+      await page.getByTestId('code-context-snapshot').selectOption('b')
+      const before = [...state.contextualRequests]
+      state.loseNextPinResponse(response)
+      await page.getByTestId('code-pin-context').click()
+      await expect(page.locator('main.code-page')).toHaveAttribute('data-catalog-state', response === 'lost' ? 'offline' : 'unavailable')
+      expect(state.selected()).toBe('b')
+      expect(state.pins).toEqual(['a', 'b'])
+      await expect(page.getByTestId('code-release-state')).toHaveAttribute('data-state', 'unselected')
+      await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
+      await expect(page.locator('.result-grid')).toHaveCount(0)
+      await expect(page.getByTestId('code-pin-context')).toBeDisabled()
+      expect(state.contextualRequests).toEqual(before)
+      expect(await page.evaluate(() => sessionStorage.getItem('engram.operator-code.view-candidate.v2'))).toBeNull()
+      await page.reload()
+      await expect(page.getByTestId('code-context-snapshot')).toHaveValue('')
+      await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
+      expect(state.contextualRequests).toEqual(before)
+      state.recover()
+      await page.getByTestId('code-context-working-copy').selectOption('a')
+      await page.getByTestId('code-context-snapshot').selectOption('a')
+      await page.getByTestId('code-pin-context').click()
+      await expect(page.getByTestId('code-context-pinned')).toContainText('Snapshot a')
+      await expect(page.getByTestId('code-structure-results')).toContainText('src/a.ts')
+      expect(state.pins).toEqual(['a', 'b', 'a'])
+      expect(state.contextualRequests.slice(before.length)).toEqual([
+        { path: '/api/code/status', view: 'view-a' },
+        { path: '/api/code/structure', view: 'view-a' },
+      ])
+    })
+  }
+}
+
+test('same-A confirmation retains durable intent and resumes polling across reload; actual B switch clears it', async ({ page }) => {
+  const state = await workbench(page)
+  await page.getByTestId('index-intent-reindex').click()
+  await expect(page.getByTestId('index-intent-state')).toHaveAttribute('data-state', 'queued')
+  const saved = await page.evaluate(() => sessionStorage.getItem('engram.operator-code.index-intent.v1'))
+  expect(JSON.parse(saved!)).toMatchObject({ kind: 'reindex', intentRef: 'intent-a' })
+  await page.getByTestId('code-context-working-copy').selectOption('b')
+  await page.getByTestId('code-context-snapshot').selectOption('b')
+  await expect(page.getByTestId('index-intent-status')).toHaveCount(0)
+  await page.getByTestId('code-context-working-copy').selectOption('a')
+  await page.getByTestId('code-context-snapshot').selectOption('a')
+  await page.getByTestId('code-pin-context').click()
+  await expect(page.getByTestId('code-context-pinned')).toContainText('Snapshot a')
+  await expect(page.getByTestId('index-intent-state')).toHaveAttribute('data-state', 'queued')
+  await expect(page.getByTestId('index-intent-reindex')).toBeDisabled()
+  expect(await page.evaluate(() => sessionStorage.getItem('engram.operator-code.index-intent.v1'))).toBe(saved)
+  state.runIntent()
+  await expect(page.getByTestId('index-intent-state')).toHaveAttribute('data-state', 'running')
+  await page.reload()
+  await expect(page.getByTestId('code-context-snapshot')).toHaveValue('a')
+  await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
+  await expect(page.getByTestId('index-intent-state')).toHaveAttribute('data-state', 'running')
+  expect(await page.evaluate(() => sessionStorage.getItem('engram.operator-code.index-intent.v1'))).toBe(saved)
+  await page.getByTestId('code-pin-context').click()
+  await expect(page.getByTestId('code-structure-results')).toContainText('src/a.ts')
+  await expect(page.getByTestId('index-intent-state')).toHaveAttribute('data-state', 'running')
+  await expect(page.getByTestId('index-intent-reindex')).toBeDisabled()
+  expect(await page.evaluate(() => sessionStorage.getItem('engram.operator-code.index-intent.v1'))).toBe(saved)
+  await page.getByTestId('code-context-working-copy').selectOption('b')
+  await page.getByTestId('code-context-snapshot').selectOption('b')
+  await page.getByTestId('code-pin-context').click()
+  await expect(page.getByTestId('code-context-pinned')).toContainText('Snapshot b')
+  await expect(page.getByTestId('code-structure-results')).toContainText('src/b.ts')
+  await expect(page.getByTestId('index-intent-state')).toHaveAttribute('data-state', 'idle')
+  await expect(page.getByTestId('index-intent-reindex')).toBeEnabled()
+  expect(await page.evaluate(() => sessionStorage.getItem('engram.operator-code.index-intent.v1'))).toBeNull()
+  expect(state.pins).toEqual(['a', 'a', 'a', 'b'])
 })
 
 test('same-body search locations retain their membership and a misbound read is concealed', async ({ page }) => {
