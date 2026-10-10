@@ -305,6 +305,264 @@ func TestLegacyConfigAbsenceCreationInvalidatesScope(t *testing.T) {
 	}
 }
 
+func TestLegacyGitEnvironmentVariableCase(t *testing.T) {
+	t.Setenv("git_config_legacy_fingerprint_test", "before")
+	before := legacyGitEnvironment()
+	t.Setenv("git_config_legacy_fingerprint_test", "after")
+	changed := before != legacyGitEnvironment()
+	if changed != (runtime.GOOS == "windows") {
+		t.Fatal("Git environment fingerprint does not follow platform variable-name case semantics")
+	}
+}
+
+func TestLegacyWindowsLowercaseConfigSwitchInvalidatesScope(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows environment variable names are case-insensitive")
+	}
+	for _, variable := range []string{"GIT_CONFIG_SYSTEM", "GIT_CONFIG_GLOBAL"} {
+		for _, phase := range []string{"warm", "during-resolution"} {
+			t.Run(variable+"/"+phase, func(t *testing.T) {
+				root := daemonV3Repository(t)
+				if err := os.WriteFile(filepath.Join(root, ".engram-project"), []byte(`{"name":"engram"}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				dir := t.TempDir()
+				initial, replacement := filepath.Join(dir, "initial.gitconfig"), filepath.Join(dir, "replacement.gitconfig")
+				if err := os.WriteFile(initial, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(replacement, []byte("[url \"https://example.invalid/changed/\"]\n\tinsteadOf = https://git.example.test/Platform/\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				originalValue, present := os.LookupEnv(variable)
+				if err := os.Unsetenv(variable); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() {
+					if present {
+						if err := os.Setenv(variable, originalValue); err != nil {
+							t.Fatal(err)
+						}
+					}
+				})
+				lowercase := strings.ToLower(variable)
+				t.Setenv(lowercase, initial)
+				t.Setenv("GIT_CONFIG_NOSYSTEM", "0")
+				project := muxcore.ProjectContext{ID: "fixture", Cwd: root}
+				mod := NewModuleWithClientInstanceID("fixture-daemon-install")
+				if phase == "warm" {
+					if _, enabled, err := mod.v3Identity(context.Background(), project); err != nil || enabled {
+						t.Fatalf("initial legacy admission: %v", err)
+					}
+					t.Setenv(lowercase, replacement)
+				} else {
+					original := resolveLegacyGitIdentity
+					t.Cleanup(func() { resolveLegacyGitIdentity = original })
+					changed := false
+					resolveLegacyGitIdentity = func(ctx context.Context, cwd, name, prefix string) (string, proxy.ProjectIdentityV2, error) {
+						slug, identity, err := original(ctx, cwd, name, prefix)
+						if err == nil {
+							changed = true
+							t.Setenv(lowercase, replacement)
+						}
+						return slug, identity, err
+					}
+					if _, _, err := mod.v3Identity(context.Background(), project); err == nil || !changed {
+						t.Fatalf("config environment switched during resolution was not refused: changed=%t err=%v", changed, err)
+					}
+					if _, ok := mod.cache.legacy[cacheKey(project)]; ok {
+						t.Fatal("unstable environment retained legacy scope")
+					}
+					resolveLegacyGitIdentity = original
+				}
+				if _, enabled, err := mod.v3Identity(context.Background(), project); err != nil || enabled {
+					t.Fatalf("refreshed legacy admission: %v", err)
+				}
+				_, identity, err := mod.proxyV2Identity(context.Background(), project)
+				if err != nil || identity.GetGitRemote() != "https://example.invalid/changed/Daemon.git" {
+					t.Fatal("lowercase config switch reused stale project scope")
+				}
+			})
+		}
+	}
+}
+
+func TestLegacySymlinkConfigTargetTransition(t *testing.T) {
+	for _, phase := range []string{"warm", "during-resolution"} {
+		t.Run(phase, func(t *testing.T) {
+			root := daemonV3Repository(t)
+			if err := os.WriteFile(filepath.Join(root, ".engram-project"), []byte(`{"name":"engram"}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			dir := t.TempDir()
+			target, link := filepath.Join(dir, "config.target"), filepath.Join(dir, "global.gitconfig")
+			if err := os.WriteFile(target, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink("config.target", link); err != nil {
+				t.Fatalf("config symlink capability unavailable: %v", err)
+			}
+			t.Setenv("GIT_CONFIG_GLOBAL", link)
+			project := muxcore.ProjectContext{ID: "fixture", Cwd: root}
+			mod := NewModuleWithClientInstanceID("fixture-daemon-install")
+			replaceTarget := func() {
+				replacement := filepath.Join(dir, "replacement.target")
+				if err := os.WriteFile(replacement, []byte("[url \"https://example.invalid/changed/\"]\n\tinsteadOf = https://git.example.test/Platform/\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Rename(replacement, target); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if phase == "warm" {
+				if _, enabled, err := mod.v3Identity(context.Background(), project); err != nil || enabled {
+					t.Fatalf("ordinary symlinked config refused: %v", err)
+				}
+				replaceTarget()
+				if legacyFilesUnchanged(mod.cache.legacy[cacheKey(project)].files) {
+					t.Fatal("replaced config target passed the cached fingerprint")
+				}
+			} else {
+				original := resolveLegacyGitIdentity
+				t.Cleanup(func() { resolveLegacyGitIdentity = original })
+				changed := false
+				resolveLegacyGitIdentity = func(ctx context.Context, cwd, name, prefix string) (string, proxy.ProjectIdentityV2, error) {
+					slug, identity, err := original(ctx, cwd, name, prefix)
+					if err == nil {
+						changed = true
+						replaceTarget()
+					}
+					return slug, identity, err
+				}
+				if _, _, err := mod.v3Identity(context.Background(), project); err == nil || !changed {
+					t.Fatalf("target changed during resolution was not inspected and refused: changed=%t err=%v", changed, err)
+				}
+				if _, ok := mod.cache.legacy[cacheKey(project)]; ok {
+					t.Fatal("unstable symlink target retained legacy scope")
+				}
+				resolveLegacyGitIdentity = original
+			}
+			if _, enabled, err := mod.v3Identity(context.Background(), project); err != nil || enabled {
+				t.Fatalf("refreshed symlink config refused: %v", err)
+			}
+			_, identity, err := mod.proxyV2Identity(context.Background(), project)
+			if err != nil || identity.GetGitRemote() != "https://example.invalid/changed/Daemon.git" {
+				t.Fatal("symlink target replacement reused stale project scope")
+			}
+		})
+	}
+}
+
+func TestLegacyConfigSymlinkFingerprintBoundaries(t *testing.T) {
+	dir := t.TempDir()
+	first, second := filepath.Join(dir, "first.target"), filepath.Join(dir, "second.target")
+	content := []byte("[fixture]\nvalue = same\n")
+	for _, filename := range []string{first, second} {
+		if err := os.WriteFile(filename, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inner, outer := filepath.Join(dir, "inner.link"), filepath.Join(dir, "global.gitconfig")
+	for link, target := range map[string]string{inner: "first.target", outer: "inner.link"} {
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatal(err)
+		}
+	}
+	configs := map[string]bool{outer: true}
+	snapshot := func() map[string]legacyFileState {
+		t.Helper()
+		result, err := legacyFileFingerprints([]string{outer}, configs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(result[outer].links) != 2 {
+			t.Fatal("config fingerprint did not bind the complete link chain")
+		}
+		return result
+	}
+	t.Run("same-content-target-replacement", func(t *testing.T) {
+		before := snapshot()
+		replacement := filepath.Join(dir, "replacement.target")
+		if err := os.WriteFile(replacement, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(replacement, first); err != nil {
+			t.Fatal(err)
+		}
+		if legacyFilesUnchanged(before) {
+			t.Fatal("same-content config target replacement did not invalidate identity")
+		}
+	})
+	t.Run("same-target-link-replacement", func(t *testing.T) {
+		before := snapshot()
+		replacement := filepath.Join(dir, "replacement.link")
+		if err := os.Symlink("first.target", replacement); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(replacement, inner); err != nil {
+			t.Fatal(err)
+		}
+		if legacyFilesUnchanged(before) {
+			t.Fatal("same-target intermediate link replacement did not invalidate identity")
+		}
+	})
+	t.Run("retargeted-link", func(t *testing.T) {
+		before := snapshot()
+		replacement := filepath.Join(dir, "retargeted.link")
+		if err := os.Symlink("second.target", replacement); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(replacement, inner); err != nil {
+			t.Fatal(err)
+		}
+		if legacyFilesUnchanged(before) {
+			t.Fatal("retargeted config link did not invalidate identity")
+		}
+	})
+	t.Run("non-config-link-remains-refused", func(t *testing.T) {
+		if _, err := legacyFileFingerprints([]string{outer}, nil); err == nil {
+			t.Fatal("config-link support weakened the non-config file guard")
+		}
+	})
+	t.Run("loop-refused", func(t *testing.T) {
+		loop := filepath.Join(dir, "loop.gitconfig")
+		if err := os.Symlink("loop.gitconfig", loop); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := legacyFileFingerprints([]string{loop}, map[string]bool{loop: true}); err == nil {
+			t.Fatal("config symlink loop was accepted")
+		}
+	})
+	t.Run("absent-target-creation", func(t *testing.T) {
+		link, target := filepath.Join(dir, "absent.gitconfig"), filepath.Join(dir, "absent.target")
+		if err := os.Symlink("absent.target", link); err != nil {
+			t.Fatal(err)
+		}
+		before, err := legacyFileFingerprints([]string{link}, map[string]bool{link: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(target, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if legacyFilesUnchanged(before) {
+			t.Fatal("creation of absent config-link target reused a cache entry")
+		}
+	})
+	t.Run("oversized-target-refused", func(t *testing.T) {
+		target, link := filepath.Join(dir, "oversized.target"), filepath.Join(dir, "oversized.gitconfig")
+		if err := os.WriteFile(target, make([]byte, 1024*1024+1), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("oversized.target", link); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := legacyFileFingerprints([]string{link}, map[string]bool{link: true}); err == nil {
+			t.Fatal("config symlink bypassed the dependency size bound")
+		}
+	})
+}
+
 func TestLegacyConfigDependenciesRequireFullDerivation(t *testing.T) {
 	root := daemonV3Repository(t)
 	if output, err := exec.Command("git", "-C", root, "config", "fixture.multiline", "first\nGIT_CONFIG_GLOBAL=not-a-path\nlast").CombinedOutput(); err != nil {
