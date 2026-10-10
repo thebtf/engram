@@ -2280,7 +2280,6 @@
       "requestIndex": "索引工作副本",
       "requestIndexFor": "索引 {source} / {checkout}",
       "noViewOnlyTitle": "此工作副本尚无索引快照。",
-      "noViewOnlyBody": "先为已连接的工作副本请求索引。请求被接受不等于快照已完成。",
       "catalogStates": {
         "idle": "等待请求已授权的选项。",
         "loading": "正在加载服务器授权的选项。",

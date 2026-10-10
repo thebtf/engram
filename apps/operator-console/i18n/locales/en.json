@@ -2285,7 +2285,6 @@
       "requestIndex": "Index working copy",
       "requestIndexFor": "Index {source} / {checkout}",
       "noViewOnlyTitle": "This working copy has no indexed snapshot yet.",
-      "noViewOnlyBody": "Request indexing for the connected working copy first. An accepted request is not a completed snapshot.",
       "catalogStates": {
         "idle": "Waiting to request authorized choices.",
         "loading": "Loading server-authorized choices.",
