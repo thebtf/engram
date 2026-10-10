@@ -292,12 +292,12 @@ test('watcher publication keeps a server-authorized older pin and results while 
 })
 
 for (const rejectedStatus of ['denied', 'mismatch'] as const) {
-  test(`Code Explorer retains rotated references but drops a historical pin when server reauthorization is ${rejectedStatus}`, async ({ page }) => {
+  test(`Code Explorer retains refreshed selection authority but drops a historical pin when server reauthorization is ${rejectedStatus}`, async ({ page }) => {
     let catalogReads = 0
     let changedSnapshot = false
     let pins = 0
     const context = (ref: string) => ({
-      source_ref: `source-${ref}`, checkout_ref: `checkout-${ref}`,
+      source_ref: 'source-current', checkout_ref: 'checkout-current',
       repository: 'Engram', working_copy: 'operator desk',
       view_ref: changedSnapshot ? 'view-new-generation' : 'view-stable',
       selection_ref: `selection-${ref}`, index_intent_available: false,
@@ -329,6 +329,8 @@ for (const rejectedStatus of ['denied', 'mismatch'] as const) {
     await page.getByRole('button', { name: 'Обновить разрешённые варианты' }).click()
     await expect(page.getByTestId('code-context-pinned')).toBeVisible()
     await expect(page.getByTestId('code-context-snapshot')).toHaveValue('selection-fresh')
+    await expect(page.getByTestId('code-context-repository')).toHaveValue('source-current')
+    await expect(page.getByTestId('code-context-working-copy')).toHaveValue('checkout-current')
     expect(pins).toBe(1)
     changedSnapshot = true
     await page.getByRole('button', { name: 'Обновить разрешённые варианты' }).click()

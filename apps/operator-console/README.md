@@ -43,6 +43,10 @@ The [responsive-layout receipt](../../specs/011-operator-code-console/acceptance
   uses the catalog's fresh `selection_ref` and requires a server success response. The owner grant
   list comes from paged `GET /api/code/grants` after reload; opaque `grant_ref` is used only for
   the displayed grant's revoke action, never as operator input or durable browser state.
+- The server derives `source_ref` and `checkout_ref` from their canonical identities and
+  `view_ref` from the exact subject/Source/Checkout/View/profile/generation tuple. These
+  presentation keys stay stable when the catalog refreshes the sealed `selection_ref`;
+  rotating selection authority does not imply a Source or Checkout switch.
 - Failed catalog refresh removes candidate pin authority until a fresh successful catalog
   rebind; an already server-confirmed pin may remain visible in the same binding. After
   a successful grant issue or revoke, failed inventory refresh preserves the mutation
