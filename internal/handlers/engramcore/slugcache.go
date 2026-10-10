@@ -243,8 +243,10 @@ func (c *slugCache) resolveLegacyWorkspace(ctx context.Context, p muxcore.Projec
 	if len(metadata) != 6 {
 		return false, nil
 	}
-	for index := range metadata {
-		metadata[index] = strings.TrimSpace(metadata[index])
+	if runtime.GOOS == "windows" {
+		for index := range metadata {
+			metadata[index] = strings.TrimSuffix(metadata[index], "\r")
+		}
 	}
 	root, prefix := metadata[0], metadata[1]
 	if root == "" {
@@ -287,7 +289,10 @@ func (c *slugCache) resolveLegacyWorkspace(ctx context.Context, p muxcore.Projec
 		if err != nil {
 			return false, ctx.Err()
 		}
-		for _, configPath := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		for _, configPath := range strings.Split(strings.TrimSuffix(string(output), "\n"), "\n") {
+			if runtime.GOOS == "windows" {
+				configPath = strings.TrimSuffix(configPath, "\r")
+			}
 			if configPath != "" {
 				if !filepath.IsAbs(configPath) {
 					configPath = filepath.Join(root, configPath)
@@ -381,7 +386,7 @@ func legacyFileFingerprints(paths []string, configFiles map[string]bool) (map[st
 	}
 	result := make(map[string]legacyFileState, len(paths))
 	for _, filename := range paths {
-		filename = filepath.Clean(strings.TrimSpace(filename))
+		filename = filepath.Clean(filename)
 		if configFiles[filename] {
 			state, err := legacyConfigFingerprint(filename)
 			if err != nil {

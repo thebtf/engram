@@ -182,6 +182,115 @@ func TestLegacySelectedDirectoryMoveInvalidatesScope(t *testing.T) {
 	}
 }
 
+func TestLegacyGitMetadataPreservesPathWhitespace(t *testing.T) {
+	for _, test := range []struct {
+		name, root, selected, gitDir string
+		paddedConfig                 bool
+	}{
+		{name: "selected-leading-space-refused", root: "repo", selected: " foo"},
+		{name: "selected-internal-space", root: "repo", selected: "foo bar"},
+		{name: "root-trailing-space", root: "repo ", selected: "nested"},
+		{name: "git-directory-spaces", root: "repo", selected: "nested", gitDir: " gitdir "},
+		{name: "config-file-trailing-space", root: "repo", selected: "nested", paddedConfig: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			configDir := t.TempDir()
+			global := filepath.Join(configDir, "global.gitconfig")
+			if test.paddedConfig {
+				global += " "
+			}
+			if err := os.WriteFile(global, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("GIT_CONFIG_NOSYSTEM", "0")
+			t.Setenv("GIT_CONFIG_SYSTEM", filepath.Join(configDir, "system.gitconfig"))
+			t.Setenv("GIT_CONFIG_GLOBAL", global)
+			t.Setenv("GIT_CONFIG_COUNT", "0")
+			parent := t.TempDir()
+			root := filepath.Join(parent, test.root)
+			if err := os.Rename(daemonV3Repository(t), root); err != nil {
+				t.Fatal(err)
+			}
+			entries, err := os.ReadDir(parent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 1 || entries[0].Name() != test.root {
+				t.Skip("filesystem does not preserve the requested repository name")
+			}
+			if test.gitDir != "" {
+				gitDir := filepath.Join(parent, test.gitDir)
+				if output, err := exec.Command("git", "-C", root, "init", "--quiet", "--separate-git-dir", gitDir).CombinedOutput(); err != nil {
+					t.Fatalf("separate Git directory: %v: %s", err, output)
+				}
+			}
+			if err := os.WriteFile(filepath.Join(root, ".engram-project"), []byte(`{"name":"engram"}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			selected := filepath.Join(root, test.selected)
+			if err := os.Mkdir(selected, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			prefix := test.selected + "/"
+			project := muxcore.ProjectContext{ID: "fixture", Cwd: selected}
+			mod := NewModuleWithClientInstanceID("fixture-daemon-install")
+			key := cacheKey(project)
+			if test.selected == " foo" {
+				original := resolveLegacyGitIdentity
+				t.Cleanup(func() { resolveLegacyGitIdentity = original })
+				var observedPrefix string
+				var validationErr error
+				resolveLegacyGitIdentity = func(ctx context.Context, cwd, name, prefix string) (string, proxy.ProjectIdentityV2, error) {
+					observedPrefix = prefix
+					slug, identity, err := original(ctx, cwd, name, prefix)
+					validationErr = err
+					return slug, identity, err
+				}
+				for range 2 {
+					observedPrefix, validationErr = "", nil
+					_, enabled, err := mod.v3Identity(context.Background(), project)
+					var refusal *module.ModuleError
+					if !enabled || !errors.As(err, &refusal) || refusal.Code != "PROJECT_ANCHOR_INVALID" || observedPrefix != prefix ||
+						validationErr == nil || !strings.Contains(validationErr.Error(), "PROJECT_IDENTITY_INVALID") {
+						t.Fatalf("leading-space scope was normalized or bypassed V2 refusal: observed=%q validation=%v err=%v", observedPrefix, validationErr, err)
+					}
+					_, legacy := mod.cache.legacy[key]
+					_, slug := mod.cache.entries.Load(key)
+					_, identity := mod.cache.identities.Load(key)
+					if legacy || slug || identity {
+						t.Fatal("unsupported leading-space scope retained a normalized identity cache")
+					}
+				}
+				return
+			}
+			remote := "https://git.example.test/Platform/Daemon.git"
+			for round := range 3 {
+				if round == 1 && test.paddedConfig {
+					if err := os.WriteFile(global, []byte("[url \"https://example.invalid/changed/\"]\n\tinsteadOf = https://git.example.test/Platform/\n"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+					remote = "https://example.invalid/changed/Daemon.git"
+				}
+				if round == 2 {
+					t.Setenv("PATH", t.TempDir())
+				}
+				if _, enabled, err := mod.v3Identity(context.Background(), project); err != nil || enabled {
+					t.Fatalf("supported whitespace legacy admission: enabled=%t err=%v", enabled, err)
+				}
+				slug, identity, err := mod.proxyV2Identity(context.Background(), project)
+				want := fmt.Sprintf("%x", sha256.Sum256([]byte(remote+"/"+prefix)))[:8]
+				if err != nil || slug != want || identity.GetRelativePath() != prefix || identity.GetGitRemote() != remote {
+					t.Fatalf("supported path bytes changed: slug=%s prefix=%q remote=%q err=%v", slug, identity.GetRelativePath(), identity.GetGitRemote(), err)
+				}
+				cached := mod.cache.legacy[key]
+				if _, ok := cached.files[global]; !ok || !cached.cacheEligible {
+					t.Fatal("Git config path bytes were lost or warm reuse was disabled")
+				}
+			}
+		})
+	}
+}
+
 func TestProxyLegacyColdScopeRefusesUntrackingDuringAdmission(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("real Git interposition requires a POSIX executable script")
