@@ -13,7 +13,7 @@ Prepare the next patch after the published and installed v6.50.5 basic-initializ
 
 ### Fixed
 
-- Batch bounded legacy Git identity observations instead of repeating per-config subprocesses; retain the caller's fixed deadline, cancellation and fail-closed identity admission.
+- Batch bounded legacy Git identity observations instead of repeating per-config subprocesses; retain the caller's fixed deadline, cancellation and fail-closed identity admission. Refuse stale selected relative prefixes at admission and invalidate warm slug/V2 caches when a selected directory is renamed and its old path becomes a symlink to the same inode.
 - Preserve Windows filesystem-equivalent path comparison and freshness checks for configuration-only symlinks without widening selected-root, slug-cache or proxy authority. Keep tracked-marker, Git config/index freshness, credential redaction and strict V3 refusal unchanged.
 
 ## [6.50.5] - 2026-10-09
