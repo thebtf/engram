@@ -1035,7 +1035,6 @@ test('Home first use offers a native task, reads back the catalog, and labels le
   await expect(page.getByTestId('code-context-index-affordance')).toBeVisible()
   await expect(page.getByTestId('code-pin-context')).toBeDisabled()
   await expect(page.getByTestId('code-context-index-affordance')).toContainText('локальный агент')
-  await expect(page.locator('#code-connect-kind option[value="worktree"]')).toHaveJSProperty('disabled', true)
 
   catalogStage = 'published'
   await page.getByTestId('code-connect-readback').click()

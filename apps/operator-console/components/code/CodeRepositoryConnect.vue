@@ -10,7 +10,7 @@ const label = ref('')
 const sourceRef = ref('')
 const taskField = ref<HTMLTextAreaElement | null>(null)
 const notice = ref<'copied' | 'select' | null>(null)
-const repositories = computed(() => [...new Map(props.catalog.filter(entry => entry.view !== null).map(entry => [entry.sourceRef, entry])).values()])
+const repositories = computed(() => [...new Map(props.catalog.map(entry => [entry.sourceRef, entry])).values()])
 const expanded = ref(false)
 watch(() => props.state, state => { if (state === 'empty') expanded.value = true }, { immediate: true })
 function disclosureChanged(event: Event): void {
