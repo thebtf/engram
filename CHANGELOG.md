@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.50.6] - 2026-10-10
+
+Prepare the next patch after the published and installed v6.50.5 basic-initialization release; ordinary memory recall and automatic-context recovery remain unproven. Focused source checks cover the identity changes below, not the unchanged metadata-only resolver deadline failure. Canonical v6.50.6 client/parser policies, SDK-bound raw artifacts and the full release Node gate remain pending. Preserve the published v6.50.5 and failed v6.50.4 history; no dependency, migration or OpenClaw change is included.
+
+### Fixed
+
+- Batch bounded legacy Git identity observations instead of repeating per-config subprocesses; retain the caller's fixed deadline, cancellation and fail-closed identity admission.
+- Preserve Windows filesystem-equivalent path comparison and freshness checks for configuration-only symlinks without widening selected-root, slug-cache or proxy authority. Keep tracked-marker, Git config/index freshness, credential redaction and strict V3 refusal unchanged.
+
 ## [6.50.5] - 2026-10-09
 
 Correct the release-specific historical-installer fixtures and regenerate the version-bound client/parser policies with Go 1.26.9. Carry forward the accepted onboarding and security repairs from the immutable failed `v6.50.4` tag without changing installer validation, dependencies, migrations or OpenClaw. Canonical raw-policy coherence and the full release Node gate are verified locally; publication and installed-memory recovery remain unproven.
@@ -2168,7 +2177,8 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v6.50.5...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v6.50.6...HEAD
+[6.50.6]: https://github.com/thebtf/engram/compare/v6.50.5...v6.50.6
 [6.50.5]: https://github.com/thebtf/engram/compare/v6.50.4...v6.50.5
 [6.50.4]: https://github.com/thebtf/engram/compare/v6.50.3...v6.50.4
 [6.50.3]: https://github.com/thebtf/engram/compare/v6.50.3-rc.1...v6.50.3
