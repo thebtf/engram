@@ -61,8 +61,11 @@ type ReaderPage<T> = { items: T[]; total: number; offset: number; limit: number;
 Memory and document inventories require `project=<exact selected canonical ID>`.
 Their server-side literal, case-insensitive `query` and authorized `total` apply before
 offset/limit. Ordering is `created_at DESC, id DESC`, not last-update order.
-Memory `filter=all|active|flagged|stale|low|chain` filters the full visible query set;
-unknown confidence is not zero. Document query searches `path`, `doc_type`, and `author`,
+Memory filters use repeated parameters, such as `filter=low&filter=chain`, with independently
+enabled chips combined by AND before the visible total and page. Values are
+`all|active|flagged|stale|low|chain`; omitted means all, and explicit all is neutral.
+The server validates at most six incoming values, deduplicates them, and rejects unknown,
+blank or CSV values. Unknown confidence is not zero. Document query searches `path`, `doc_type`, and `author`,
 never bodies or vault data. Documents choose the latest version per path before filters.
 No array, `details=true`, stored-alias, display-name, or client 500-body fallback exists.
 

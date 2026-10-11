@@ -893,7 +893,8 @@ export function useOperatorMemoryLab(project?: Ref<string>, autoLoad = true): {
       const limit = [10, 20, 50].includes(Number(route.query.size)) ? Number(route.query.size) : MEMORY_LIST_LIMIT
       const params = new URLSearchParams({ offset: String((page - 1) * limit), limit: String(limit) })
       if (typeof route.query.q === 'string' && route.query.q.trim()) params.set('query', route.query.q.trim())
-      if (typeof route.query.filter === 'string' && route.query.filter) params.set('filter', route.query.filter)
+      const filters = route.query.filter
+      if (filters !== undefined) for (const value of Array.isArray(filters) ? filters : [filters]) params.append('filter', value ?? '')
       const result = await loadKnowledgePage<ApiMemory>('/api/memories', scope, params, controller.signal)
       if (generation !== requestGeneration || scope !== selectedProject.value) return
       const nextRows = result.items.map(mapMemoryRow)

@@ -13,7 +13,15 @@ const context = useOperatorProjectContext()
 const { project } = context
 const { rows, loadState, pending, total, hasMore, refresh, loadMemoryByID, deleteMemory, suppressMemory, suppressMemories, unsuppressMemory, archiveMemory, auditMemory } = useOperatorMemoryLab(project, false)
 const query = computed(() => typeof route.query.q === 'string' ? route.query.q : '')
-const filter = computed(() => typeof route.query.filter === 'string' ? route.query.filter : '')
+const filter = computed(() => { const value = route.query.filter; return value === undefined ? [] : Array.isArray(value) ? value : [value] })
+const hasFilter = computed(() => filter.value.some((value) => value !== 'all'))
+const filterChoices = [
+  { value: 'active', label: 'memory.rowState.active' },
+  { value: 'flagged', label: 'memory.rowState.flagged' },
+  { value: 'stale', label: 'knowledge.notCurrent' },
+  { value: 'low', label: 'memory.filters.low' },
+  { value: 'chain', label: 'memory.filters.chain' },
+] as const
 const page = computed(() => Math.max(1, Number.parseInt(String(route.query.page || '1'), 10) || 1))
 const pageSize = computed(() => [10, 20, 50].includes(Number(route.query.size)) ? Number(route.query.size) : 20)
 const openId = computed(() => typeof route.query.memory === 'string' ? route.query.memory : '')
@@ -40,12 +48,22 @@ const filtered = computed(() => rows)
 const pageCount = computed(() => Math.max(1, Math.ceil((total.value || 0) / pageSize.value)))
 const pageRows = filtered
 
-function updateQuery(values: Record<string, string | undefined>, replace = false) {
+function updateQuery(values: Record<string, string | string[] | undefined>, replace = false) {
   const location = { path: '/memory', query: { ...route.query, project: project.value || undefined, ...values } }
   return replace ? router.replace(location) : router.push(location)
 }
+function toggleFilter(value: typeof filterChoices[number]['value']) {
+  const current = [...new Set(filter.value.filter((entry) => entry !== 'all').map((entry) => entry ?? ''))]
+  const next = current.includes(value) ? current.filter((entry) => entry !== value) : [...current, value]
+  return updateQuery({ filter: next.length ? next : undefined, page: '1', memory: undefined, memoryProject: undefined })
+}
 
-watch([project, query, filter, page, pageSize, () => route.query.allRead], () => {
+
+watch([project, query, filter, page, pageSize, () => route.query.allRead] as const, (next, previous) => {
+  if (previous?.length && next.every((value, index) => {
+    const before = previous[index]
+    return Array.isArray(value) && Array.isArray(before) ? value.length === before.length && value.every((entry, position) => entry === before[position]) : value === before
+  })) return
   selected.value = []
   confirmation.value = ''
   mutationResult.value = null
@@ -147,7 +165,7 @@ function time(value?: string) {
       <form class="toolbar" @submit.prevent="updateQuery({ q: draft.trim() || undefined, page: '1', memory: undefined, memoryProject: undefined, allRead: project === 'all' ? '1' : undefined })">
         <label class="search-field"><span>{{ t('knowledge.searchMemory') }}</span><input v-model="draft" type="search" /></label>
         <button class="btn primary" type="submit">{{ t('knowledge.find') }}</button>
-        <label><span>{{ t('knowledge.pageFilter') }}</span><select :value="filter" @change="updateQuery({ filter: ($event.target as HTMLSelectElement).value || undefined, page: '1', memory: undefined })"><option value="">{{ t('knowledge.anyState') }}</option><option value="active">{{ t('memory.rowState.active') }}</option><option value="flagged">{{ t('memory.rowState.flagged') }}</option><option value="stale">{{ t('knowledge.notCurrent') }}</option><option value="low">{{ t('memory.filters.low') }}</option><option value="chain">{{ t('memory.filters.chain') }}</option></select></label>
+        <fieldset class="memory-filters"><legend>{{ t('knowledge.pageFilter') }}</legend><div class="filter-chips"><button class="btn" type="button" :aria-pressed="!hasFilter" data-memory-filter="all" @click="updateQuery({ filter: undefined, page: '1', memory: undefined, memoryProject: undefined })">{{ t('knowledge.anyState') }}</button><button v-for="choice in filterChoices" :key="choice.value" class="btn" type="button" :aria-pressed="filter.includes(choice.value)" :data-memory-filter="choice.value" @click="toggleFilter(choice.value)">{{ t(choice.label) }}</button></div></fieldset>
         <RouterLink :to="{ ...context.to('/search'), query: { ...context.to('/search').query, q: query || undefined } }">{{ t('knowledge.similaritySearch') }}</RouterLink>
       </form>
       <div v-if="pending" class="state" role="status">{{ t('knowledge.loading') }}</div>
@@ -161,7 +179,7 @@ function time(value?: string) {
             <input v-model="selected" :value="memory.id" type="checkbox" :aria-label="t('knowledge.selectRecord', { id: memory.id })" />
             <button :data-memory-id="memory.id" :data-testid="`memory-row-${memory.id}`" :aria-pressed="openId === memory.id" @click="updateQuery({ memory: memory.id, memoryProject: project === 'all' ? memory.project : undefined })"><strong>{{ memory.content }}</strong><span>{{ t(`memory.rowState.${memory.status}`) }} · {{ memory.type }} · {{ memory.age }}<template v-if="project === 'all'"> · {{ projectName(memory.project) }}</template></span><span v-if="memory.tags.length" class="tags">{{ memory.tags.join(' · ') }}</span></button>
           </div>
-          <div v-if="!pending && loadState.kind === 'empty'" class="empty"><h2>{{ t(total && page > 1 ? 'knowledge.pageEmpty' : query || filter ? 'knowledge.noMatches' : 'knowledge.noMemory') }}</h2><p>{{ t(query || filter ? 'knowledge.noMatchesHelp' : 'knowledge.noMemoryHelp') }}</p><button v-if="total && page > 1" class="btn" @click="updateQuery({ page: '1', memory: undefined })">{{ t('knowledge.firstPage') }}</button><button v-else-if="query || filter" class="btn" @click="draft = ''; updateQuery({ q: undefined, filter: undefined, page: '1', memory: undefined })">{{ t('knowledge.clearFilters') }}</button><RouterLink v-else :to="context.to('/documents')">{{ t('knowledge.openDocuments') }}</RouterLink></div>
+          <div v-if="!pending && loadState.kind === 'empty'" class="empty"><h2>{{ t(total && page > 1 ? 'knowledge.pageEmpty' : query || hasFilter ? 'knowledge.noMatches' : 'knowledge.noMemory') }}</h2><p>{{ t(query || hasFilter ? 'knowledge.noMatchesHelp' : 'knowledge.noMemoryHelp') }}</p><button v-if="total && page > 1" class="btn" @click="updateQuery({ page: '1', memory: undefined })">{{ t('knowledge.firstPage') }}</button><button v-else-if="query || hasFilter" class="btn" @click="draft = ''; updateQuery({ q: undefined, filter: undefined, page: '1', memory: undefined })">{{ t('knowledge.clearFilters') }}</button><RouterLink v-else :to="context.to('/documents')">{{ t('knowledge.openDocuments') }}</RouterLink></div>
           <nav class="pagination" :aria-label="t('knowledge.pagination')"><button class="btn" :disabled="pending || page <= 1" @click="updateQuery({ page: String(page - 1), memory: undefined })">{{ t('knowledge.previous') }}</button><span>{{ total === null ? t('knowledge.unknown') : t('knowledge.pageOf', { page, total: pageCount }) }}</span><button class="btn" :disabled="pending || !hasMore" @click="updateQuery({ page: String(page + 1), memory: undefined })">{{ t('knowledge.next') }}</button></nav>
           <div v-if="selected.length" class="bulk"><span>{{ t('common.selectedCount', { count: selected.length }) }}</span><button class="btn" :disabled="busy" @click="act('bulk')">{{ t(confirmation.includes(':bulk:') ? 'memory.bulk.confirmHideNoise' : 'memory.bulk.hideNoise') }}</button><button class="btn" @click="selected = []; confirmation = ''">{{ t('common.clearSelection') }}</button></div>
         </section>
@@ -217,6 +235,10 @@ input:not([type=checkbox]), select { min-height:40px; padding:8px 10px; color:va
 .btn { display:inline-flex; align-items:center; justify-content:center; min-height:40px; padding:8px 12px; color:var(--fg); background:var(--surface); border:1px solid var(--border); border-radius:var(--r-sm); cursor:pointer; }
 .btn:hover:not(:disabled), .memory-row button:hover { background:var(--surface-warm); }
 .btn:disabled { opacity:.5; cursor:not-allowed; } .primary { background:var(--accent); color:var(--accent-on); } .danger { color:var(--state-danger); }
+.memory-filters { margin:0; padding:0; border:0; min-width:0; flex-basis:100%; }
+.memory-filters legend { margin-bottom:6px; color:var(--muted); font-size:var(--text-sm); }
+.filter-chips { display:flex; gap:8px; flex-wrap:wrap; }
+.filter-chips .btn[aria-pressed=true] { color:var(--accent); border-color:var(--accent); background:var(--surface-warm); }
 .state { padding:14px; border:1px solid var(--border); border-radius:var(--r-sm); display:flex; align-items:center; flex-wrap:wrap; gap:12px; color:var(--muted); } .state.error { color:var(--state-warn); }
 .knowledge-workspace { display:grid; gap:24px; min-width:0; }
 .knowledge-workspace.detail-open { grid-template-columns:minmax(0,.85fr) minmax(0,1.3fr); align-items:start; }

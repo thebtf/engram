@@ -2008,8 +2008,9 @@ const server = createServer(async (req, res) => {
         const project = url.searchParams.get('project') || ''
         const offset = Number(url.searchParams.get('offset') || 0)
         const limit = Number(url.searchParams.get('limit') || 50)
-        const filter = url.searchParams.get('filter') || 'all'
-        if (!project || !Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 500 || !['all', 'active', 'flagged', 'stale', 'low', 'chain'].includes(filter)) { json(res, 400, { error: 'invalid reader input' }); return }
+        const incomingFilters = url.searchParams.getAll('filter')
+        if (!project || !Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 500 || incomingFilters.length > 6 || incomingFilters.some((filter) => !['all', 'active', 'flagged', 'stale', 'low', 'chain'].includes(filter))) { json(res, 400, { error: 'invalid reader input' }); return }
+        const filters = [...new Set(incomingFilters)]
         if (!projectIds.includes(project)) { json(res, 403, { error: 'project is unavailable' }); return }
         const query = (url.searchParams.get('query') || '').trim().toLocaleLowerCase()
         const cutoff = Date.now() - 30 * 86_400_000
@@ -2017,14 +2018,17 @@ const server = createServer(async (req, res) => {
           if (query && !row.content.toLocaleLowerCase().includes(query)) return false
           const status = String(row.status || '').trim().toLowerCase()
           const mapped = ['active', 'flagged', 'superseded', 'archived'].includes(status) ? status : ['noise', 'suppressed'].includes(status) ? 'flagged' : row.superseded_by ? 'superseded' : 'unknown'
-          switch (filter) {
-            case 'active': return mapped === 'active'
-            case 'flagged': return mapped === 'flagged' || ['noise', 'suppressed'].includes(status)
-            case 'stale': return ['superseded', 'archived'].includes(mapped) || (Date.parse(row.updated_at || row.created_at) <= cutoff && (!('citation_count' in row || 'injection_count' in row) || !row.citation_count))
-            case 'low': return typeof row.confidence === 'number' && row.confidence < 0.85
-            case 'chain': return mapped === 'superseded' || Boolean(row.superseded_by) || row.tags.some((tag) => ['superseded', 'replace', 'replacement'].includes(tag))
-            default: return true
-          }
+          return filters.every((filter) => {
+            switch (filter) {
+              case 'all': return true
+              case 'active': return mapped === 'active'
+              case 'flagged': return mapped === 'flagged' || ['noise', 'suppressed'].includes(status)
+              case 'stale': return ['superseded', 'archived'].includes(mapped) || (Date.parse(row.updated_at || row.created_at) <= cutoff && (!('citation_count' in row || 'injection_count' in row) || !row.citation_count))
+              case 'low': return typeof row.confidence === 'number' && row.confidence < 0.85
+              case 'chain': return mapped === 'superseded' || Boolean(row.superseded_by) || row.tags.some((tag) => ['superseded', 'replace', 'replacement'].includes(tag))
+              default: return false
+            }
+          })
         }).sort((left, right) => String(right.created_at || '').localeCompare(String(left.created_at || '')) || right.id - left.id)
         const items = rows.slice(offset, offset + limit)
         json(res, 200, { items, total: rows.length, offset, limit, has_more: offset + items.length < rows.length })
