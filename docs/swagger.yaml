@@ -1592,10 +1592,15 @@ paths:
         in: query
         name: query
         type: string
-      - description: Exact latest-version document type
+      - collectionFormat: multi
+        description: Repeat literal latest-version document types; OR within types,
+          AND other criteria before count/page; at most six raw values, each 128 UTF-8
+          bytes
         in: query
+        items:
+          type: string
         name: doc_type
-        type: string
+        type: array
       - description: Literal path prefix
         in: query
         name: path_prefix
@@ -1843,6 +1848,19 @@ paths:
           - chain
           type: string
         name: filter
+        type: array
+      - collectionFormat: multi
+        description: Repeat exact memory types; OR within types, AND other criteria
+          before count/page; at most six raw values
+        in: query
+        items:
+          enum:
+          - fact
+          - experience
+          - opinion
+          - observation
+          type: string
+        name: epistemic_type
         type: array
       - description: Visible rows to skip (default 0)
         in: query

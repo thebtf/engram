@@ -31,7 +31,7 @@ type versionedDocumentStore interface {
 	ReadVersion(ctx context.Context, path, project string, version int) (*gormdb.VersionedDocument, error)
 	ReadByID(ctx context.Context, id int64) (*gormdb.VersionedDocument, error)
 	List(ctx context.Context, project, docType, pathPrefix string, limit int) ([]gormdb.VersionedDocument, error)
-	ListPage(context.Context, string, string, string, string, int, int) ([]gormdb.VersionedDocument, int64, error)
+	ListPage(context.Context, string, []string, string, string, int, int) ([]gormdb.VersionedDocument, int64, error)
 	GetHistory(ctx context.Context, path, project string, limit int) ([]gormdb.VersionedDocument, error)
 	AddComment(ctx context.Context, documentID int64, author, content string, lineStart, lineEnd *int) (int64, error)
 	GetComments(ctx context.Context, documentID int64) ([]gormdb.VersionedDocumentComment, error)
@@ -934,7 +934,7 @@ func writeDocumentOperationFailure(w http.ResponseWriter, status int, requestID,
 // @Security ApiKeyAuth
 // @Param project query string true "Existing canonical project ID"
 // @Param query query string false "Literal case-insensitive path/type/author substring, maximum 1024 UTF-8 bytes"
-// @Param doc_type query string false "Exact latest-version document type"
+// @Param doc_type query []string false "Repeat literal latest-version document types; OR within types, AND other criteria before count/page; at most six raw values, each 128 UTF-8 bytes" collectionFormat(multi)
 // @Param path_prefix query string false "Literal path prefix"
 // @Param offset query int false "Visible rows to skip (default 0)"
 // @Param limit query int false "Page size 1..500 (default 50)"
@@ -956,18 +956,16 @@ func (s *Service) handleListDocuments(w http.ResponseWriter, r *http.Request) {
 		writeDocumentError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	docType := r.URL.Query().Get("doc_type")
 	pathPrefix := r.URL.Query().Get("path_prefix")
-	if !boundedKnowledgeText(docType, 128) || !boundedKnowledgeText(pathPrefix, 4096) {
+	if !boundedKnowledgeText(pathPrefix, 4096) {
 		writeDocumentError(w, http.StatusBadRequest, "invalid document filters")
 		return
 	}
-	docType = strings.TrimSpace(docType)
 	pathPrefix = strings.TrimSpace(pathPrefix)
 	if !s.authorizeKnowledgeProject(w, r, page.project) {
 		return
 	}
-	docs, total, err := store.ListPage(r.Context(), page.project, docType, pathPrefix, page.query, page.limit, page.offset)
+	docs, total, err := store.ListPage(r.Context(), page.project, page.types, pathPrefix, page.query, page.limit, page.offset)
 	if err != nil {
 		if errors.Is(err, gormdb.ErrKnowledgeProjectForbidden) {
 			writeDocumentError(w, http.StatusForbidden, "project read forbidden")

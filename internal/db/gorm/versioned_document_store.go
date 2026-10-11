@@ -204,8 +204,8 @@ func (s *VersionedDocumentStore) List(ctx context.Context, project, docType, pat
 
 // ListPage searches public metadata on the latest version of each path. Count
 // and page share the same project and filter predicates; content is not loaded.
-func (s *VersionedDocumentStore) ListPage(ctx context.Context, project, docType, pathPrefix, query string, limit, offset int) ([]VersionedDocument, int64, error) {
-	if project == "" || limit < 1 || limit > 500 || offset < 0 {
+func (s *VersionedDocumentStore) ListPage(ctx context.Context, project string, docTypes []string, pathPrefix, query string, limit, offset int) ([]VersionedDocument, int64, error) {
+	if project == "" || limit < 1 || limit > 500 || offset < 0 || len(docTypes) > 6 {
 		return nil, 0, fmt.Errorf("invalid document page")
 	}
 	selectors, err := CanonicalProjectDataSelectors(ctx, s.db, project)
@@ -216,8 +216,8 @@ func (s *VersionedDocumentStore) ListPage(ctx context.Context, project, docType,
 		Select("id, path, project, version, doc_type, author, created_at, ROW_NUMBER() OVER (PARTITION BY path ORDER BY version DESC, id DESC) AS version_rank").
 		Where("project IN ?", selectors)
 	q := s.db.WithContext(ctx).Table("(?) AS latest", latest).Where("version_rank = 1")
-	if docType != "" {
-		q = q.Where("doc_type = ?", docType)
+	if len(docTypes) != 0 {
+		q = q.Where("doc_type IN ?", docTypes)
 	}
 	if pathPrefix != "" {
 		q = q.Where("path LIKE ? ESCAPE '\\'", escapeSQLLike(pathPrefix)+"%")

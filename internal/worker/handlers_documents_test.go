@@ -39,6 +39,7 @@ type fakeDocumentStore struct {
 	listRows []gormdb.VersionedDocument
 	listCall struct {
 		project, docType, pathPrefix string
+		docTypes                     []string
 		limit                        int
 		called                       bool
 	}
@@ -153,9 +154,13 @@ func (f *fakeDocumentStore) List(_ context.Context, project, docType, pathPrefix
 	return f.listRows, nil
 }
 
-func (f *fakeDocumentStore) ListPage(ctx context.Context, project, docType, pathPrefix, query string, limit, offset int) ([]gormdb.VersionedDocument, int64, error) {
-	rows, err := f.List(ctx, project, docType, pathPrefix, limit)
-	return rows, int64(len(rows)), err
+func (f *fakeDocumentStore) ListPage(_ context.Context, project string, docTypes []string, pathPrefix, _ string, limit, _ int) ([]gormdb.VersionedDocument, int64, error) {
+	f.listCall.called = true
+	f.listCall.project = project
+	f.listCall.docTypes = docTypes
+	f.listCall.pathPrefix = pathPrefix
+	f.listCall.limit = limit
+	return f.listRows, int64(len(f.listRows)), f.listErr
 }
 
 func (f *fakeDocumentStore) GetHistory(_ context.Context, path, project string, limit int) ([]gormdb.VersionedDocument, error) {
@@ -338,7 +343,7 @@ func TestHandlersDocuments_List(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	require.True(t, fake.listCall.called, "handler must call the document page store directly")
 	assert.Equal(t, "engram", fake.listCall.project)
-	assert.Equal(t, "markdown", fake.listCall.docType)
+	assert.Equal(t, []string{"markdown"}, fake.listCall.docTypes)
 	assert.Equal(t, "notes/", fake.listCall.pathPrefix)
 	assert.Equal(t, 25, fake.listCall.limit)
 

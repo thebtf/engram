@@ -218,6 +218,10 @@ func runKnowledgeReadersHTTP(t *testing.T, db *gorm.DB, sqliteFixture bool) {
 	memories := make([]gormdb.Memory, 501)
 	for i := range memories {
 		memories[i] = gormdb.Memory{Project: projectA, Content: fmt.Sprintf("Known decision %03d", i), Status: "active", Version: 1, PrivacyScope: "project", Tags: []string{}, SourceSessions: []string{}, CreatedAt: now, UpdatedAt: now, SourceAgent: "reader-fixture"}
+		memories[i].EpistemicType = "fact"
+		if i%2 != 0 {
+			memories[i].EpistemicType = "experience"
+		}
 	}
 	memories[0].Content = `Known decision 100%_safe\route`
 	memories[0].PrivacyScope, memories[0].SourceWorkstationID = "private", "fixture-card-a"
@@ -246,6 +250,7 @@ func runKnowledgeReadersHTTP(t *testing.T, db *gorm.DB, sqliteFixture bool) {
 		{Project: projectB, Content: "decision other project", PrivacyScope: "project"},
 	} {
 		hidden.Status, hidden.Version, hidden.Tags, hidden.SourceSessions = "active", 1, []string{}, []string{}
+		hidden.EpistemicType = "fact"
 		hidden.Tags = []string{"replace"}
 		hidden.CreatedAt, hidden.UpdatedAt = now.Add(time.Minute), now.Add(time.Minute)
 		require.NoError(t, db.Create(&hidden).Error)
@@ -442,6 +447,37 @@ func runKnowledgeReadersHTTP(t *testing.T, db *gorm.DB, sqliteFixture bool) {
 	for _, filters := range []string{"filter=", "filter=low&filter=unknown", "filter=chain&filter=", "filter=chain&filter=low,chain", "filter=chain&filter=LOW", strings.TrimPrefix(strings.Repeat("&filter=chain", 7), "&")} {
 		get(memoryURL+"&"+filters, tokenA, 400, nil)
 	}
+	for _, types := range []string{"epistemic_type=fact&epistemic_type=experience", "epistemic_type=experience&epistemic_type=fact&epistemic_type=fact"} {
+		body := get(memoryURL+"&"+types+"&limit=500", tokenA, 200, &memoryPage)
+		require.EqualValues(t, 501, memoryPage.Total, "type OR precedes count/page")
+		require.Len(t, memoryPage.Items, 500)
+		require.True(t, memoryPage.HasMore)
+		require.NotContains(t, body, "hidden")
+		get(memoryURL+"&"+types+"&offset=500&limit=500", tokenA, 200, &memoryPage)
+		require.EqualValues(t, 501, memoryPage.Total)
+		require.Len(t, memoryPage.Items, 1)
+		require.Equal(t, memories[0].ID, memoryPage.Items[0].ID)
+		require.False(t, memoryPage.HasMore)
+		get(memoryURL+"&"+types+"&filter=low&filter=chain&query=decision&limit=1", tokenA, 200, &memoryPage)
+		require.EqualValues(t, 1, memoryPage.Total, "type OR intersects query and quality/status filters")
+		require.Equal(t, memories[0].ID, memoryPage.Items[0].ID)
+		get(memoryURL+"&"+types+"&query=hidden", tokenA, 200, &memoryPage)
+		require.Zero(t, memoryPage.Total, "hidden selected types affect neither count nor page")
+		require.Empty(t, memoryPage.Items)
+		get(memoryURL+"&"+types+"&query="+url.QueryEscape(memories[0].Content), tokenB, 200, &memoryPage)
+		require.Zero(t, memoryPage.Total, "type filter cannot bypass workstation/principal/domain privacy")
+	}
+	get(memoryURL+"&epistemic_type=fact&limit=500", tokenA, 200, &memoryPage)
+	require.EqualValues(t, 251, memoryPage.Total)
+	get(memoryURL+strings.Repeat("&epistemic_type=fact", 6), tokenA, 200, &memoryPage)
+	require.EqualValues(t, 251, memoryPage.Total, "six raw duplicates deduplicate without broadening")
+	for _, types := range []string{"epistemic_type=opinion", "epistemic_type=observation"} {
+		get(memoryURL+"&"+types, tokenA, 200, &memoryPage)
+		require.Zero(t, memoryPage.Total, "valid absent types do not fall back")
+	}
+	for _, types := range []string{"epistemic_type=", "epistemic_type=fact&epistemic_type=decision", "epistemic_type=fact&epistemic_type=", "epistemic_type=fact,experience", "epistemic_type=FACT", "epistemic_type=%20fact", "epistemic_type=fact&epistemic_type=%00", "epistemic_type=fact&epistemic_type=%FF", "epistemic_type=fact&epistemic_type=%", strings.TrimPrefix(strings.Repeat("&epistemic_type=fact", 7), "&")} {
+		get(memoryURL+"&"+types, tokenA, 400, nil)
+	}
 	get("/api/memories?project="+memoryOnly, tokenA, 200, &memoryPage)
 	require.EqualValues(t, 1, memoryPage.Total)
 	require.Equal(t, memoryOnly, memoryPage.Items[0].Project)
@@ -473,6 +509,50 @@ func runKnowledgeReadersHTTP(t *testing.T, db *gorm.DB, sqliteFixture bool) {
 	for _, item := range documentPage.Items {
 		require.NotEqual(t, documents[1].ID, item.ID)
 	}
+	for _, types := range []string{"doc_type=markdown&doc_type=text", "doc_type=text&doc_type=markdown&doc_type=text"} {
+		get(documentURL+"&"+types+"&limit=500", tokenA, 200, &documentPage)
+		require.EqualValues(t, 501, documentPage.Total, "latest-type OR before count/page")
+		require.Len(t, documentPage.Items, 500)
+		require.True(t, documentPage.HasMore)
+		get(documentURL+"&"+types+"&limit=500&offset=500", tokenA, 200, &documentPage)
+		require.Len(t, documentPage.Items, 1)
+		require.EqualValues(t, 501, documentPage.Total)
+		require.False(t, documentPage.HasMore)
+		get(documentURL+"&"+types+"&query="+url.QueryEscape(`100%_SAFE\route`), tokenA, 200, &documentPage)
+		require.EqualValues(t, 1, documentPage.Total, "type OR AND literal query/path prefix")
+		get(documentURL+"&"+types+"&query=history-only-needle", tokenA, 200, &documentPage)
+		require.Zero(t, documentPage.Total, "matching old version is never admitted by type OR")
+	}
+	get(documentURL+"&doc_type=text", tokenA, 200, &documentPage)
+	require.EqualValues(t, 1, documentPage.Total)
+	require.Equal(t, documents[1].ID, documentPage.Items[0].ID)
+	get(documentURL+strings.Repeat("&doc_type=markdown", 6), tokenA, 200, &documentPage)
+	require.EqualValues(t, 500, documentPage.Total)
+	get(documentURL+"&doc_type="+url.QueryEscape("\u2003text\u00a0")+"&doc_type=text", tokenA, 200, &documentPage)
+	require.EqualValues(t, 1, documentPage.Total, "Unicode trimming precedes valid-value dedup")
+	for _, types := range []string{"doc_type=", "doc_type=markdown&doc_type=", "doc_type=text&doc_type=%20", "doc_type=text&doc_type=%00", "doc_type=text&doc_type=%FF", "doc_type=text&doc_type=%", "doc_type=text&doc_type=" + strings.Repeat("x", 129), "doc_type=" + url.QueryEscape(strings.Repeat("я", 65)), strings.TrimPrefix(strings.Repeat("&doc_type=text", 7), "&")} {
+		get(documentURL+"&"+types, tokenA, 400, nil)
+	}
+	literalTypes := []string{"markdown,text", "я", "%FF", `a%b_c\d`, strings.Repeat("я", 64)}
+	for i, docType := range literalTypes {
+		row := gormdb.VersionedDocument{Project: projectA, Path: fmt.Sprintf("types/literal-%d", i), Version: 1, DocType: docType, Author: "type-fixture", Content: "secret-type-body", Metadata: "{}", ContentHash: "fixture", CreatedAt: now}
+		require.NoError(t, db.Create(&row).Error)
+		body := get("/api/documents?project="+projectA+"&path_prefix=types/&doc_type="+url.QueryEscape(docType), tokenA, 200, &documentPage)
+		require.EqualValues(t, 1, documentPage.Total, "literal document type is not split or decoded again")
+		require.Equal(t, docType, documentPage.Items[0].DocType)
+		require.NotContains(t, body, "secret-type-body")
+	}
+	for _, row := range []gormdb.VersionedDocument{
+		{Project: projectA, Path: "types/latest-only", Version: 1, DocType: "markdown", Content: "old", Author: "type-fixture", Metadata: "{}", ContentHash: "old", CreatedAt: now},
+		{Project: projectA, Path: "types/latest-only", Version: 2, DocType: "html", Content: "new", Author: "type-fixture", Metadata: "{}", ContentHash: "new", CreatedAt: now},
+	} {
+		require.NoError(t, db.Create(&row).Error)
+	}
+	get("/api/documents?project="+projectA+"&path_prefix=types/latest&doc_type=markdown&doc_type=text", tokenA, 200, &documentPage)
+	require.Zero(t, documentPage.Total, "latest html excludes matching older markdown")
+	get("/api/documents?project="+projectA+"&path_prefix=types/latest&doc_type=markdown&doc_type=html", tokenA, 200, &documentPage)
+	require.EqualValues(t, 1, documentPage.Total)
+	require.Equal(t, "html", documentPage.Items[0].DocType)
 	get(documentURL+"&query="+url.QueryEscape(`100%_SAFE\route`), tokenA, 200, &documentPage)
 	require.EqualValues(t, 1, documentPage.Total)
 	require.Equal(t, documents[0].ID, documentPage.Items[0].ID)
@@ -560,5 +640,5 @@ func runKnowledgeReadersHTTP(t *testing.T, db *gorm.DB, sqliteFixture bool) {
 	get(detailURL+projectA, tokenA, 503, nil)
 	get(documentURL, tokenA, 503, nil)
 	get("/api/projects", tokenA, 503, nil)
-	t.Log("actual HTTP: canonical catalog; 501 memories and unique document paths; older alias detail; strict alias/cross-scope/history; repeated-filter AND/neutral-all/dedup/bounds; visible query/filter totals; literal bounds; privacy/auth PASS; PostgreSQL operators remain a separate DSN gate")
+	t.Log("actual HTTP: canonical/privacy; repeated type OR AND query/status/quality; visible counts/pages beyond500; strict all-value bounds/dedup; latest-version type negatives; comma/Unicode/percent literal types PASS; PostgreSQL operators remain a separate DSN gate")
 }

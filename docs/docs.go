@@ -1155,8 +1155,12 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
-                        "type": "string",
-                        "description": "Exact latest-version document type",
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "collectionFormat": "multi",
+                        "description": "Repeat literal latest-version document types; OR within types, AND other criteria before count/page; at most six raw values, each 128 UTF-8 bytes",
                         "name": "doc_type",
                         "in": "query"
                     },
@@ -1528,6 +1532,22 @@ const docTemplate = `{
                         "collectionFormat": "multi",
                         "description": "Repeat exact filter values (all, active, flagged, stale, low, chain); AND before count/page, at most six values; all is neutral",
                         "name": "filter",
+                        "in": "query"
+                    },
+                    {
+                        "type": "array",
+                        "items": {
+                            "enum": [
+                                "fact",
+                                "experience",
+                                "opinion",
+                                "observation"
+                            ],
+                            "type": "string"
+                        },
+                        "collectionFormat": "multi",
+                        "description": "Repeat exact memory types; OR within types, AND other criteria before count/page; at most six raw values",
+                        "name": "epistemic_type",
                         "in": "query"
                     },
                     {

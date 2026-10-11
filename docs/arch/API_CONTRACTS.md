@@ -157,6 +157,17 @@ JSON/CSV alternative or page-local filtering exists. The existing active-only
 eligible corpus is unchanged. Zero-valued `omitempty` confidence/citation metrics
 remain unknown, not new ratings. `chain` matches exact tags or a supersession link.
 
+Memory `epistemic_type` repeats exact existing values `fact`, `experience`,
+`opinion`, `observation`; document `doc_type` repeats literal type values.
+Selected types use **OR within the type set**, AND with every other query,
+filter, status and canonical/privacy predicate before count/page. Omission is
+unrestricted; one value is the scalar subset. Each parameter accepts at most
+six raw values before deduplication and validates every value, including later
+ones. Blank/control/malformed UTF-8 values are 400. Document values retain the
+128-byte raw UTF-8 bound and Unicode whitespace trimming; comma-containing
+types are literal values, not CSV. Types apply after latest-version-per-path
+selection, so matching only an older version never admits the document.
+
 `GET /api/memories/:id?project=<exact live canonical ID>` requires the same
 fresh project authorization and uniquely owned alias set before loading the ID.
 It returns the existing memory DTO with `project` set to that canonical ID.

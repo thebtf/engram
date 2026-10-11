@@ -10,12 +10,14 @@ import (
 	"unicode/utf8"
 
 	"github.com/thebtf/engram/internal/auth"
+	"github.com/thebtf/engram/internal/lifecycle"
 )
 
 type knowledgePage struct {
 	project string
 	query   string
 	filters []string
+	types   []string
 	offset  int
 	limit   int
 }
@@ -80,6 +82,47 @@ func parseKnowledgePage(r *http.Request) (knowledgePage, error) {
 			}
 		}
 		page.filters = values[:count]
+	}
+	typeField := ""
+	switch r.URL.Path {
+	case "/api/memories":
+		typeField = "epistemic_type"
+	case "/api/documents":
+		typeField = "doc_type"
+	}
+	if typeField != "" {
+		values := params[typeField]
+		if len(values) > 6 {
+			return page, fmt.Errorf("at most six %s values are allowed", typeField)
+		}
+		count := 0
+		for _, value := range values {
+			if !boundedKnowledgeText(value, 128) {
+				return page, fmt.Errorf("invalid %s value", typeField)
+			}
+			if typeField == "epistemic_type" {
+				if !lifecycle.ValidEpistemicType(value) {
+					return page, fmt.Errorf("each epistemic_type must be fact, experience, opinion or observation")
+				}
+			} else {
+				value = strings.TrimSpace(value)
+				if value == "" {
+					return page, fmt.Errorf("doc_type must not be blank")
+				}
+			}
+			duplicate := false
+			for _, selected := range values[:count] {
+				if selected == value {
+					duplicate = true
+					break
+				}
+			}
+			if !duplicate {
+				values[count] = value
+				count++
+			}
+		}
+		page.types = values[:count]
 	}
 	for _, field := range []string{"offset", "limit"} {
 		if !params.Has(field) {

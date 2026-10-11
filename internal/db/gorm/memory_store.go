@@ -650,8 +650,8 @@ func (s *MemoryStore) GetVisible(ctx context.Context, id int64, project string, 
 
 // ListVisiblePage applies the shared read policy before both count and page.
 // The caller supplies a server-authorized canonical project, never a label.
-func (s *MemoryStore) ListVisiblePage(ctx context.Context, project, query string, filters []string, caller scope.KeycardContext, opts scope.MemoryVisibilityOptions, limit, offset int) ([]*models.Memory, int64, error) {
-	if project == "" || limit < 1 || limit > 500 || offset < 0 || len(filters) > 6 {
+func (s *MemoryStore) ListVisiblePage(ctx context.Context, project, query string, filters, epistemicTypes []string, caller scope.KeycardContext, opts scope.MemoryVisibilityOptions, limit, offset int) ([]*models.Memory, int64, error) {
+	if project == "" || limit < 1 || limit > 500 || offset < 0 || len(filters) > 6 || len(epistemicTypes) > 6 {
 		return nil, 0, fmt.Errorf("invalid memory page")
 	}
 	q, err := s.visibleKnowledgeQuery(ctx, project, caller, opts)
@@ -659,6 +659,9 @@ func (s *MemoryStore) ListVisiblePage(ctx context.Context, project, query string
 		return nil, 0, err
 	}
 	q = baseMemoryListQuery(q).Where("m.status = 'active'")
+	if len(epistemicTypes) != 0 {
+		q = q.Where("m.epistemic_type IN ?", epistemicTypes)
+	}
 	if query != "" {
 		q = q.Where("LOWER(m.content) LIKE ? ESCAPE '\\'", "%"+escapeSQLLike(strings.ToLower(query))+"%")
 	}
