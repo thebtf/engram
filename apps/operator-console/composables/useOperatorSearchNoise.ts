@@ -217,7 +217,6 @@ export function useOperatorSearchNoise(): {
   error: ComputedRef<string | null>
   refresh: () => Promise<void>
   runSearch: (query: string, project?: string) => Promise<void>
-  tombstoneGap: ReturnType<typeof unsupportedOperatorAction>
   noiseTrendGap: ReturnType<typeof unsupportedOperatorAction>
 } {
   const projectsEvidence = endpointEvidence('/api/projects', 'search-projects')
@@ -375,11 +374,6 @@ export function useOperatorSearchNoise(): {
     }
   }
 
-  const tombstoneGap = unsupportedOperatorAction(
-    'search-collection-tombstone',
-    'search_collection',
-    'Legacy collection search is not a live operator-console result source; keep it as stale/tombstone evidence.',
-  )
 
   const noiseTrendGap = unsupportedOperatorAction(
     'noise-trend',
@@ -405,7 +399,6 @@ export function useOperatorSearchNoise(): {
     error,
     refresh,
     runSearch,
-    tombstoneGap,
     noiseTrendGap,
   }
 }

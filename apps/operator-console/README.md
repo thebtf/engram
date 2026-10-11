@@ -46,7 +46,7 @@ distinct. The knowledge project is not a code Source/Checkout/View selection or 
 | `/projects` | Choose one canonical project, enter memory/documents/code, and read up to 50 existing sessions. Project archive remains secondary and requires typing the exact selected ID. |
 | `/memory` | Server-filtered content search and paging, then the real ID reader, origin/currentness fields, source sessions, and up to 200 accessible audit events. Suppress, restore, archive, delete, and explicit bulk suppress use existing mutation/readback contracts. |
 | `/documents` | Metadata search, type/path-prefix filtering and paging, then current/version content, real version history, comparison, version-specific comments, and the existing export action. Download is exposed only after `committed_verified`; a new attempt or reader scope/version/state change clears its artifact. |
-| `/search` | Secondary similarity search through the existing context reader. Memory-backed results open the canonical scoped ID reader; guidance rows do not pretend to be memories. This bounded reader is not the complete memory inventory. |
+| `/search` | Optional project context search through the existing context reader. Memory-backed results open the canonical scoped ID reader and return to the original query. Unsupported, forbidden, stale and unavailable search offers the same literal query in real project-scoped memory content or document-metadata search; these are not semantic/similarity results. Request evidence and search diagnostics remain secondary. |
 | `/code` | Existing independently selected and server-pinned Workspace. Knowledge labels never establish repository linkage or source access. |
 | `/rules`, `/queue` | Retained supported actions follow the shared selected project. Rules retain their explicit global scope; candidates retain the existing flag and explicit all-project contract. |
 | `/noise` | Secondary server-wide retrieval/outcome diagnostics. Missing numeric fields stay unknown; unavailable decorative trends are not a primary task. |
@@ -68,6 +68,11 @@ The server validates at most six incoming values, deduplicates them, and rejects
 blank or CSV values. Unknown confidence is not zero. Document query searches `path`, `doc_type`, and `author`,
 never bodies or vault data. Documents choose the latest version per path before filters.
 No array, `details=true`, stored-alias, display-name, or client 500-body fallback exists.
+
+Repeated `filter` values are status/quality predicates, not memory epistemic types.
+The accepted document reader has one exact scalar `doc_type` filter. No independent
+repeated memory-type or multi-document-type interface is established by that contract;
+the UI does not guess parameters, filter one fetched page, or substitute owner kinds.
 
 `GET /api/memories/:id?project=<canonical ID>` uses that same selected context; its DTO
 `project` must be canonical. Document current/version/history requests likewise use the
@@ -109,8 +114,14 @@ operator, role, provider or current session. All JSON and raw-response API calle
 401 observation through the existing request seam, including mutation readback and code
 readers/grants. A protected-data or authMe 401 removes the prior verified identity and
 offers sign-in again. Credential-login 400/401 does not revoke a verified session; 403
-remains an authorization error, not a role upgrade. Protected diagnostic endpoints returning
-401 show sign-in required, not a fabricated server outage; initial server status is unknown.
+remains an authorization error, not a role upgrade. Diagnostic 401 still requires sign-in.
+Unsupported 404/405 and forbidden diagnostics do not declare a whole-server outage:
+the shared status reports unavailable diagnostics and leaves unknown health/count/version
+unknown. Two core transport/server failures report unavailable; one reports degraded.
+Observed unhealthy service checks also report degraded; healthy zero needs actual healthy
+selfcheck evidence. Session login/logout does not depend on diagnostic capability.
+The footer makes no database-engine/version claim; the existing selfcheck version is
+shown only when present, otherwise unknown. Technical failures remain in settings.
 A server-confirmed `auth_disabled` mode remains distinct from a human login session.
 
 The layout does not render its protected page slot or settings payload until authMe
@@ -135,6 +146,15 @@ session state and login-dialog submission/clearing with finite synthetic respons
 not proof of cookie persistence,
 native-dialog keyboard behavior or ordinary-user acceptance: those require the parent's
 fresh real-API Chrome journey against the integrated candidate.
+
+The F3/F4 regression subset in that same test file mounts the actual Vue search/layout/
+memory consumers and exercises real composable requests with finite synthetic responses.
+It checks unsupported/forbidden/outage recovery, literal canonical text links, retry,
+selected-memory return, unknown diagnostics and observed health/version. It is not new
+ordinary-credential, Chrome, production, PostgreSQL or installed-delivery proof. The
+original R3 ordinary journey remains an input; changed-surface acceptance still requires
+the parent's existing isolated Chrome target after coherent backend fixes. Memory audit
+availability and standalone multiple-type selection remain separate owner boundaries.
 
 
 

@@ -79,7 +79,7 @@ export interface ShellInfo {
   identityName: string
   identityInitials: string
   identityProvider: string
-  backendStatus: 'ready' | 'degraded' | 'unavailable' | 'auth-required' | 'unknown'
+  backendStatus: 'ready' | 'degraded' | 'unavailable' | 'auth-required' | 'diagnostics-unavailable' | 'unknown'
   activeMemoryCount: number | null
 }
 
@@ -202,7 +202,7 @@ export function useOperatorShellStatus() {
 
     if (selfcheckResult.status === 'fulfilled' && isLive(selfcheckResult.value)) {
       const selfcheck = selfcheckResult.value.data
-      next.version = selfcheck.version || next.version
+      next.version = typeof selfcheck.version === 'string' && selfcheck.version.trim() ? selfcheck.version : next.version
       next.uptime = selfcheck.uptime || next.uptime
       const degraded = (selfcheck.components || []).filter((component) => component.status && component.status !== 'healthy').length
       next.health = selfcheck.overall === 'healthy' ? 0 : degraded || selfcheck.overall || next.health
@@ -230,12 +230,17 @@ export function useOperatorShellStatus() {
     }
 
 
-    const coreFailures = failures.filter((path) => path === '/api/selfcheck' || path === '/api/stats').length
-    const coreAuthRequired = [selfcheckResult, statsResult].some((result) => result.status === 'fulfilled' && result.value.kind === 'error' && result.value.error.status === 401)
-    next.backendStatus = coreFailures === 2 && !coreAuthRequired ? 'unavailable' : info.value.authPosture === 'locked' || coreAuthRequired ? 'auth-required' : failures.length ? 'degraded' : 'ready'
+    const coreResults = [selfcheckResult, statsResult]
+    const coreAuthRequired = coreResults.some((result) => result.status === 'fulfilled' && result.value.kind === 'error' && result.value.error.status === 401)
+    const coreOutages = coreResults.filter((result) => result.status === 'fulfilled' && result.value.kind === 'error' && (result.value.error.category === 'unreachable' || result.value.error.category === 'server-unavailable')).length
+    next.backendStatus = info.value.authPosture === 'locked' || coreAuthRequired ? 'auth-required'
+      : coreOutages === 2 ? 'unavailable'
+        : coreOutages || (next.health !== '-' && next.health !== 0) ? 'degraded'
+          : failures.length ? 'diagnostics-unavailable'
+            : next.health === 0 ? 'ready' : 'unknown'
 
     info.value = { ...next, authDisabled: info.value.authDisabled, authenticated: info.value.authenticated, role: info.value.role, source: info.value.source, synthetic: info.value.synthetic, authPosture: info.value.authPosture, identityName: info.value.identityName, identityInitials: info.value.identityInitials, identityProvider: info.value.identityProvider }
-    error.value = failures.length ? `Unavailable shell endpoints: ${failures.join(', ')}` : null
+    error.value = failures.length ? `Diagnostic requests failed: ${failures.join(', ')}` : null
     pending.value = false
   }
 

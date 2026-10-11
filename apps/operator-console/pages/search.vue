@@ -1,5 +1,8 @@
 <script setup lang="ts">
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { operatorDiagnosisKey } from '../composables/useOperatorApi'
 import { useOperatorProjectContext, projectName } from '../composables/useOperatorProjectContext'
+import { useOperatorSearchNoise } from '../composables/useOperatorSearchNoise'
 const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
@@ -20,11 +23,16 @@ const {
   error,
   refresh,
   runSearch,
-  tombstoneGap,
 } = useOperatorSearchNoise()
 
 const hasProjects = computed(() => projects.value.length > 0)
 const hasRequestedProject = computed(() => Boolean(requestedProject.value) && projects.value.includes(requestedProject.value))
+const searchError = computed(() => context.error.value || (searchState.value.kind === 'error' ? searchState.value.error : null))
+
+async function refreshSearch() {
+  await refresh()
+  if (hasRequestedProject.value && requestedQuery.value && selectedProject.value === requestedProject.value) await runSearch(requestedQuery.value, requestedProject.value)
+}
 
 watch([requestedQuery, requestedProject, hasRequestedProject], async ([nextQuery, nextProject, projectAvailable]) => {
   query.value = typeof route.query.draftQ === 'string' ? route.query.draftQ : nextQuery
@@ -65,7 +73,7 @@ onBeforeUnmount(() => {
         <h1>{{ t('searchPage.title') }}</h1>
         <p>{{ t('searchPage.subtitle') }}</p>
       </div>
-      <button class="btn" type="button" :disabled="pending" @click="refresh">{{ t('searchPage.actions.refresh') }}</button>
+      <button class="btn" type="button" :disabled="pending" @click="refreshSearch">{{ t('searchPage.actions.refresh') }}</button>
     </header>
 
     <form class="search-panel" @submit.prevent="submitSearch">
@@ -86,26 +94,29 @@ onBeforeUnmount(() => {
       </button>
     </form>
 
-    <div v-if="pending" class="state pending">{{ t('searchPage.state.pending') }}</div>
-    <div v-if="error" class="state error">{{ t('searchPage.state.error', { message: error }) }}</div>
+    <div v-if="pending" class="state pending" role="status">{{ t('searchPage.state.pending') }}</div>
+    <div v-if="searchError" class="state error" role="status"><p>{{ t(operatorDiagnosisKey(searchError)) }}</p><button class="btn" type="button" :disabled="pending" @click="refreshSearch">{{ t('knowledge.retry') }}</button></div>
+    <nav v-if="hasRequestedProject && requestedQuery" class="text-recovery" :aria-label="t('searchPage.recovery.title')">
+      <p>{{ t('searchPage.recovery.body') }}</p>
+      <RouterLink class="btn" data-testid="search-text-memory" :to="{ path: '/memory', query: { project: requestedProject, q: requestedQuery, page: '1' } }">{{ t('knowledge.searchMemory') }}</RouterLink>
+      <RouterLink class="btn" data-testid="search-text-documents" :to="{ path: '/documents', query: { project: requestedProject, q: requestedQuery, page: '1' } }">{{ t('knowledge.searchDocuments') }}</RouterLink>
+    </nav>
 
     <section class="grid">
       <article class="card results">
         <div class="card-head">
           <div>
             <h2>{{ t('searchPage.results.title') }}</h2>
-            <p>{{ t('searchPage.results.source') }}</p>
           </div>
-          <HonestyBadge :cls="searchState.kind === 'stale' ? 'stale' : searchState.kind === 'error' ? 'dormant' : 'live'" :evidence="searchState.kind === 'stale' ? searchState.evidence.endpoint : searchState.kind === 'error' ? searchState.error.message : undefined" />
         </div>
 
-        <div v-if="searchState.kind === 'empty'" class="empty">
-          <strong>{{ t('searchPage.results.emptyTitle') }}</strong>
-          <p>{{ t('searchPage.results.emptyBody') }}</p>
+        <div v-if="searchError || searchState.kind === 'stale'" class="empty">
+          <strong>{{ t('searchPage.results.unavailableTitle') }}</strong>
+          <p>{{ t('searchPage.results.unavailableBody') }}</p>
         </div>
-        <div v-else-if="searchState.kind === 'stale'" class="empty stale">
-          <strong>{{ t('searchPage.results.staleTitle') }}</strong>
-          <p>{{ searchState.reason }}</p>
+        <div v-else-if="searchState.kind === 'empty'" class="empty">
+          <strong>{{ t(requestedQuery && appliedRouteSearch ? 'knowledge.noMatches' : 'searchPage.results.emptyTitle') }}</strong>
+          <p>{{ t('searchPage.results.emptyBody') }}</p>
         </div>
         <div v-else class="rows">
           <div v-for="row in searchResults" :key="row.id" class="result-row">
@@ -122,7 +133,12 @@ onBeforeUnmount(() => {
         </div>
       </article>
 
-      <aside class="side">
+      <details class="side card">
+        <summary>{{ t('knowledge.technical') }}</summary>
+        <code>{{ searchState.evidence.endpoint }}</code>
+        <p v-if="searchError">{{ searchError.message }}</p>
+        <p v-if="searchState.kind === 'stale'">{{ searchState.reason }}</p>
+        <p v-if="error && error !== searchError?.message">{{ error }}</p>
         <article class="card">
           <div class="card-head">
             <h2>{{ t('searchPage.recent.title') }}</h2>
@@ -154,12 +170,7 @@ onBeforeUnmount(() => {
           </dl>
         </article>
 
-        <details class="card">
-          <summary>{{ t('knowledge.technical') }}</summary>
-          <p>{{ t('searchPage.tombstone.body') }}</p>
-          <code>{{ tombstoneGap.evidence.endpoint }}</code>
-        </details>
-      </aside>
+      </details>
     </section>
   </div>
 </template>
@@ -175,6 +186,10 @@ onBeforeUnmount(() => {
 .search-panel { border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); padding:14px; display:grid; grid-template-columns:minmax(160px,220px) 1fr auto; gap:12px; align-items:end; }
 label { display:grid; gap:6px; color:var(--muted); font-size:var(--text-xs); text-transform:uppercase; letter-spacing:.04em; }
 input, select { width:100%; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--bg); color:var(--fg); padding:9px 10px; font:inherit; text-transform:none; letter-spacing:0; }
+.text-recovery { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+.text-recovery p { flex-basis:100%; margin:0; color:var(--muted); font-size:var(--text-sm); }
+.side summary { cursor:pointer; min-height:44px; display:flex; align-items:center; }
+.card code { overflow-wrap:anywhere; }
 .state { border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); padding:10px 12px; color:var(--fg-2); font-size:var(--text-sm); }
 .state.pending { border-color:color-mix(in oklab,var(--accent),transparent 55%); }
 .state.error { color:var(--state-warn); border-color:color-mix(in oklab,var(--state-warn),transparent 45%); }
@@ -188,7 +203,7 @@ input, select { width:100%; border:1px solid var(--border); border-radius:var(--
 .result-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:14px; border-top:1px solid var(--border-soft); padding:12px 0; }
 .result-row:first-child { border-top:0; padding-top:0; }
 .result-row strong { display:block; color:var(--fg); }
-.result-row p, .tombstone p { margin:4px 0 0; color:var(--muted); font-size:var(--text-sm); }
+.result-row p { margin:4px 0 0; color:var(--muted); font-size:var(--text-sm); }
 .meta { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:6px; color:var(--muted); font-size:var(--text-xs); }
 .recent-row { display:flex; justify-content:space-between; gap:10px; border-top:1px solid var(--border-soft); padding-top:8px; color:var(--fg-2); }
 .recent-row:first-child { border-top:0; padding-top:0; }
@@ -199,7 +214,6 @@ input, select { width:100%; border:1px solid var(--border); border-radius:var(--
 .empty strong { display:block; color:var(--fg); margin-bottom:5px; }
 .empty p { margin:0; }
 .empty.small { padding:16px; }
-.empty.stale { border-color:color-mix(in oklab,var(--class-stale),transparent 35%); }
 @media (max-width: 920px) {
   .search-panel, .grid { grid-template-columns:1fr; }
   .head { display:grid; }

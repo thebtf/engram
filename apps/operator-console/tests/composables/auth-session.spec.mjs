@@ -24,7 +24,7 @@ function evaluate(source, require, globals) {
   return module.exports
 }
 
-function session(t, identity = () => Response.json(verifiedUser), knowledgeFetch = () => undefined) {
+function session(t, identity = () => Response.json(verifiedUser), knowledgeFetch = () => undefined, diagnosticFetch = () => undefined) {
   const calls = []
   const storage = new Map()
   const scope = vue.effectScope()
@@ -36,6 +36,7 @@ function session(t, identity = () => Response.json(verifiedUser), knowledgeFetch
   const globals = {
     sessionStorage: { getItem: (key) => storage.get(key) || null, setItem: (key, value) => storage.set(key, value) },
     importMeta: { env: { DEV: false } },
+    computed: vue.computed, ref: vue.ref, onBeforeUnmount: vue.onBeforeUnmount,
     fetch: async (path, init) => {
       calls.push({ path, method: init.method || 'GET', credentials: init.credentials })
       if (path === '/api/auth/me') return identity()
@@ -47,6 +48,10 @@ function session(t, identity = () => Response.json(verifiedUser), knowledgeFetch
       if (path === '/api/auth/user-logout') return Response.json({}, { status: logoutStatus })
       if (path === '/api/projects') return Response.json({ items: [{ id: 'canonical-test', display_name: 'Synthetic project' }] }, { status: projectStatus })
       if (protectedDiagnostics && ['/api/selfcheck', '/api/stats', '/api/stats/vnext'].includes(path)) return Response.json({}, { status: 401 })
+      if (['/api/selfcheck', '/api/stats', '/api/stats/vnext'].includes(path)) {
+        const diagnostic = diagnosticFetch(path)
+        if (diagnostic) return diagnostic
+      }
       if (path === '/api/selfcheck') return Response.json({ overall: 'healthy' })
       if (path === '/api/stats') return Response.json({ uptime: '1m' })
       if (path === '/api/stats/vnext') return Response.json({ embedding: { active_memory_count: 0 } })
@@ -203,6 +208,57 @@ test('reachable protected diagnostics returning 401 show sign-in required, not a
   assertNoIdentity(consumer.shell.info.value, 'locked')
 })
 
+for (const status of [403, 404, 405]) test(`diagnostics ${status} do not declare an outage or fabricate health`, async (t) => {
+  const consumer = session(t, undefined, undefined, () => Response.json({}, { status }))
+  await consumer.shell.refresh()
+  assert.equal(consumer.shell.info.value.backendStatus, 'diagnostics-unavailable')
+  assert.equal(consumer.shell.info.value.authPosture, 'authenticated')
+  assert.equal(consumer.shell.info.value.health, '-')
+  assert.equal(consumer.shell.info.value.version, '-')
+  assert.equal(consumer.shell.info.value.activeMemoryCount, null)
+  assert.ok(consumer.shell.error.value.includes('/api/selfcheck'))
+})
+
+for (const failure of ['transport', 503]) test(`diagnostics ${failure} preserve genuine outage evidence`, async (t) => {
+  const consumer = session(t, undefined, undefined, () => {
+    if (failure === 'transport') throw new TypeError('Synthetic connection failure')
+    return Response.json({}, { status: failure })
+  })
+  await consumer.shell.refresh()
+  assert.equal(consumer.shell.info.value.backendStatus, 'unavailable')
+  assert.equal(consumer.shell.info.value.authPosture, 'authenticated')
+  assert.equal(consumer.shell.info.value.health, '-')
+  assert.ok(consumer.shell.error.value.includes('/api/stats'))
+})
+
+test('diagnostics distinguish a partial outage, absent health, and observed degraded health', async (t) => {
+  for (const [response, expected] of [
+    [(path) => path === '/api/selfcheck' ? Response.json({}, { status: 503 }) : undefined, 'degraded'],
+    [(path) => path === '/api/selfcheck' ? Response.json({}) : undefined, 'unknown'],
+    [(path) => path === '/api/selfcheck' ? Response.json({ overall: 'unhealthy' }) : undefined, 'degraded'],
+  ]) {
+    const consumer = session(t, undefined, undefined, response)
+    await consumer.shell.refresh()
+    assert.equal(consumer.shell.info.value.backendStatus, expected)
+    assert.notEqual(consumer.shell.info.value.health, 0)
+  }
+})
+
+test('diagnostics retain observed version and healthy zero only from a healthy response', async (t) => {
+  const consumer = session(t, undefined, undefined, (path) => path === '/api/selfcheck' ? Response.json({ overall: 'healthy', version: 'synthetic-version' }) : undefined)
+  await consumer.shell.refresh()
+  assert.equal(consumer.shell.info.value.backendStatus, 'ready')
+  assert.equal(consumer.shell.info.value.health, 0)
+  assert.equal(consumer.shell.info.value.version, 'synthetic-version')
+})
+
+test('diagnostics 401 invalidate only the current session and take priority over outages', async (t) => {
+  const consumer = session(t, undefined, undefined, (path) => Response.json({}, { status: path === '/api/selfcheck' ? 401 : 503 }))
+  await consumer.shell.refresh()
+  assert.equal(consumer.shell.info.value.backendStatus, 'auth-required')
+  assertNoIdentity(consumer.shell.info.value, 'locked')
+})
+
 test('raw mutation responses retain their denial contract while expiring the shared session', async (t) => {
   const consumer = session(t)
   await consumer.shell.refresh()
@@ -290,6 +346,7 @@ async function mountRecovery(t, consumer, location, pageName) {
   const navigation = []
   const globals = {
     useRoute: routing.useRoute, useRouter: routing.useRouter,
+    computed: vue.computed, ref: vue.ref, watch: vue.watch, nextTick: vue.nextTick, onBeforeUnmount: vue.onBeforeUnmount,
     useI18n: () => ({ t: (key) => key, locale: vue.ref('en') }),
     useSettingsModal: () => ({ settingsModalOpen: vue.ref(false), settingsModalTab: vue.ref('general'), openSettingsModal() { } }),
     window: { innerWidth: 1200, localStorage: { getItem: () => null }, addEventListener() { }, removeEventListener() { }, location: { assign: (href) => navigation.push(href) } },
@@ -440,4 +497,88 @@ for (const page of ['memory', 'documents']) test(`actual ${page} reader preserve
   assert.ok(!text(reloaded.host).includes('old synthetic protected content'))
   assert.equal(reloaded.reader().draft, 'unsubmitted safe search')
   assert.ok(!fresh.calls.some((call) => call.path.startsWith('/api/memories/principal')))
+})
+
+function walk(item) { return [item, ...item.children.flatMap(walk)] }
+function primaryText(item) { return item.tag === 'details' ? '' : item.text + item.children.map(primaryText).join(' ') }
+function contextResponse(outcome) {
+  return (url) => {
+    if (url.pathname === '/api/context/search') {
+      if (outcome === 'transport') throw new TypeError('Synthetic connection failure')
+      if (outcome === 'stale') return Response.json({ deprecated: true, message: 'synthetic stale response evidence' })
+      if (typeof outcome === 'number') return Response.json({}, { status: outcome })
+      return Response.json({ observations: [{ id: 7, project: 'untrusted-result-label', type: 'discovery', memory_type: 'context', content: 'synthetic private reader body' }] })
+    }
+    if (url.pathname === '/api/search/recent') return Response.json({ queries: [] })
+    if (['/api/search/analytics', '/api/stats/retrieval'].includes(url.pathname)) return Response.json({})
+    return knowledgeResponse('synthetic private reader body')(url)
+  }
+}
+
+for (const outcome of [403, 404, 405, 503, 'transport', 'stale']) test(`context search ${outcome} recovers to real canonical text tasks without copying content`, async (t) => {
+  const literal = "literal %_\\ ' ; --"
+  const consumer = session(t, undefined, contextResponse(outcome))
+  await consumer.shell.refresh()
+  const mounted = await mountRecovery(t, consumer, `/search?project=canonical-test&q=${encodeURIComponent(literal)}&token=discard`, 'search')
+  await mounted.reader().refreshSearch()
+  await tick()
+  for (const destination of ['memory', 'documents']) {
+    const link = walk(mounted.host).find((item) => item.props['data-testid'] === `search-text-${destination}`)
+    assert.ok(link, `${destination} text task must remain reachable`)
+    const target = new URL(link.props.href, 'http://synthetic.invalid')
+    assert.equal(target.pathname, `/${destination}`)
+    assert.equal(target.searchParams.get('project'), 'canonical-test')
+    assert.equal(target.searchParams.get('q'), literal)
+    assert.equal(target.searchParams.get('page'), '1')
+    assert.equal(target.searchParams.has('token'), false)
+    assert.ok(!target.href.includes('synthetic private reader body'))
+  }
+  const actual = consumer.calls.find((call) => call.path.startsWith('/api/context/search?'))
+  assert.ok(actual)
+  assert.equal(new URL(actual.path, 'http://synthetic.invalid').searchParams.get('query'), literal)
+  assert.ok(!primaryText(mounted.host).includes('/api/context/search'))
+  assert.ok(text(mounted.host).includes('/api/context/search'))
+  assert.ok(!primaryText(mounted.host).includes('synthetic stale response evidence'))
+  assert.ok(!walk(mounted.host).some((item) => item.props['data-testid'] === 'search-result-open-7'))
+  const beforeRetry = consumer.calls.filter((call) => call.path.startsWith('/api/context/search?')).length
+  await mounted.reader().refreshSearch()
+  assert.ok(consumer.calls.filter((call) => call.path.startsWith('/api/context/search?')).length > beforeRetry)
+})
+
+test('context search memory result and reader return retain canonical query without private content in URL', async (t) => {
+  const consumer = session(t, undefined, contextResponse('live'))
+  await consumer.shell.refresh()
+  const search = await mountRecovery(t, consumer, '/search?project=canonical-test&q=literal-safe-query', 'search')
+  await search.reader().refreshSearch()
+  await tick()
+  const button = walk(search.host).find((item) => item.props['data-testid'] === 'search-result-open-7')
+  assert.ok(button)
+  button.props.onClick()
+  await tick()
+  const selected = search.router.currentRoute.value
+  assert.equal(selected.path, '/memory')
+  assert.equal(selected.query.project, 'canonical-test')
+  assert.equal(selected.query.memory, '7')
+  assert.equal(selected.query.from, 'search')
+  assert.equal(selected.query.searchQuery, 'literal-safe-query')
+  assert.ok(!selected.fullPath.includes('synthetic private reader body'))
+  const memory = await mountRecovery(t, consumer, selected.fullPath, 'memory')
+  await tick()
+  await memory.reader().closeDetail()
+  assert.equal(memory.router.currentRoute.value.path, '/search')
+  assert.equal(memory.router.currentRoute.value.query.project, 'canonical-test')
+  assert.equal(memory.router.currentRoute.value.query.q, 'literal-safe-query')
+  assert.equal(memory.router.currentRoute.value.query.focusMemory, '7')
+})
+
+test('context search never offers broad text recovery for unknown or all-project scope', async (t) => {
+  for (const project of ['unknown-canonical', 'all']) {
+    const consumer = session(t, undefined, contextResponse(404))
+    await consumer.shell.refresh()
+    const mounted = await mountRecovery(t, consumer, `/search?project=${project}&q=literal-safe-query`, 'search')
+    await mounted.reader().refreshSearch()
+    await tick()
+    assert.ok(!walk(mounted.host).some((item) => item.props['data-testid']?.startsWith('search-text-')))
+    assert.ok(!consumer.calls.some((call) => call.path.startsWith('/api/context/search?')))
+  }
 })

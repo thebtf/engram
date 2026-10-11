@@ -440,8 +440,7 @@ function onDocumentKeydown(event: KeyboardEvent) {
 
     <footer class="statusbar" :inert="compactViewport && mobileNavOpen">
       <span class="si" :data-state="info.backendStatus"><span class="dot" />{{ backendStatusLabel }}</span>
-      <button type="button" class="si status-action" @click="openSettingsModal('general')"><span>{{ info.host }}</span><strong>{{ info.version }}</strong></button>
-      <span class="si">{{ t('shell.postgres') }}</span>
+      <button type="button" class="si status-action" @click="openSettingsModal('general')"><span>{{ info.host }}</span><strong>{{ info.version === '-' ? t('knowledge.unknown') : info.version }}</strong></button>
       <span class="si">{{ currentArea }}</span>
       <span class="ssp" />
       <RouterLink to="/health" class="si">{{ t('knowledge.diagnostics') }}</RouterLink>
@@ -590,8 +589,9 @@ function onDocumentKeydown(event: KeyboardEvent) {
 .statusbar button.si { border:0; background:transparent; padding:0; font:inherit; cursor:pointer; }
 .statusbar button.si:hover { color:var(--fg-2); }
 .statusbar .si strong { color:var(--fg-2); }
-.statusbar .si .dot { width:6px; height:6px; border-radius:50%; background:var(--class-live); flex:none; }
-.statusbar .si[data-state="auth-required"] .dot { background:var(--state-warn); }
+.statusbar .si .dot { width:6px; height:6px; border-radius:50%; background:var(--muted); flex:none; }
+.statusbar .si[data-state="ready"] .dot { background:var(--class-live); }
+.statusbar .si[data-state="auth-required"] .dot, .statusbar .si[data-state="degraded"] .dot, .statusbar .si[data-state="unavailable"] .dot { background:var(--state-warn); }
 .statusbar .si.warn { color:var(--state-warn); }
 .statusbar .si.warn .dot { background:var(--state-warn); }
 .statusbar .ssp { flex:1; }

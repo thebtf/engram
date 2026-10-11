@@ -19,3 +19,12 @@ session/credential/context invariants. The shell remains drifted until the integ
 candidate has ordinary-user real-API Chrome login, expiry, truthful role/noauth, failed
 logout and responsive keyboard evidence. Source seam checks and a build are not that proof.
 
+The bounded R3 follow-up repairs project context-search recovery and diagnostic status,
+not the visual model. Literal memory/document tasks retain the canonical project and
+operator query; technical request evidence is secondary and the footer no longer claims
+a database engine. Diagnostic capability loss is not a server outage or authentication
+verdict. Original R3 auth/content/return/mobile evidence remains historical input, not a
+new proof of these bytes. Memory audit and independent multiple-type selection are not
+closed by status-filter AND or this source check. Root acceptance and Main release stay
+open for the narrow changed-consumer proof on the existing isolated Chrome target.
+

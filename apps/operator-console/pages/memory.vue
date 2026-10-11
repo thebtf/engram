@@ -175,7 +175,7 @@ function time(value?: string) {
         <label class="search-field"><span>{{ t('knowledge.searchMemory') }}</span><input v-model="draft" type="search" /></label>
         <button class="btn primary" type="submit">{{ t('knowledge.find') }}</button>
         <fieldset class="memory-filters"><legend>{{ t('knowledge.pageFilter') }}</legend><div class="filter-chips"><button class="btn" type="button" :aria-pressed="!hasFilter" data-memory-filter="all" @click="updateQuery({ filter: undefined, page: '1', memory: undefined, memoryProject: undefined })">{{ t('knowledge.anyState') }}</button><button v-for="choice in filterChoices" :key="choice.value" class="btn" type="button" :aria-pressed="filter.includes(choice.value)" :data-memory-filter="choice.value" @click="toggleFilter(choice.value)">{{ t(choice.label) }}</button></div></fieldset>
-        <RouterLink :to="{ ...context.to('/search'), query: { ...context.to('/search').query, q: query || undefined } }">{{ t('knowledge.similaritySearch') }}</RouterLink>
+        <RouterLink :to="{ ...context.to('/search'), query: { ...context.to('/search').query, q: query || undefined } }">{{ t('knowledge.contextSearch') }}</RouterLink>
       </form>
       <div v-if="pending" class="state" role="status">{{ t('knowledge.loading') }}</div>
       <div v-else-if="loadState.kind === 'error'" class="state error" role="status"><span>{{ t(operatorDiagnosisKey(loadState.error)) }}</span><button class="btn" @click="refresh">{{ t('knowledge.retry') }}</button><details><summary>{{ t('knowledge.technical') }}</summary>{{ loadState.error.message }}</details></div>

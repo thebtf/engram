@@ -103,7 +103,7 @@
     "pageFilter": "Filter memories",
     "memoryResults": "Memory results",
     "documentResults": "Document results",
-    "similaritySearch": "Find similar knowledge",
+    "contextSearch": "Search project context",
     "docType": "Document type",
     "chooseRecordProject": "Choose a record from the results or select its project before opening it.",
     "principalScopeChanged": "Confirm the displayed owner, project, and privacy scope before reading.",
@@ -277,11 +277,11 @@
     "backend": {
       "unknown": "console reachable · server status not verified",
       "auth-required": "console reachable · sign-in required",
-      "ready": "console reachable · server ready",
-      "degraded": "console reachable · server degraded",
-      "unavailable": "console reachable · server unavailable"
+      "ready": "console reachable · service checks healthy",
+      "degraded": "console reachable · service checks report failures",
+      "unavailable": "console reachable · server unavailable",
+      "diagnostics-unavailable": "console reachable · diagnostics unavailable"
     },
-    "postgres": "PostgreSQL 17 · pgvector",
     "statusDegradation": "degradation",
     "statusNoise": "noise",
     "activeRecords": "{count} active record | {count} active records",
@@ -2132,8 +2132,8 @@
     }
   },
   "searchPage": {
-    "title": "Search",
-    "subtitle": "Live context search over Engram server observations, with recent/analytics telemetry and an honest tombstone for old collection search.",
+    "title": "Project context search",
+    "subtitle": "Search context in the selected project when available. Use memory or document search for literal text.",
     "placeholder": "Enter a context query…",
     "actions": {
       "refresh": "Refresh",
@@ -2146,15 +2146,14 @@
       "noProjects": "No projects"
     },
     "state": {
-      "pending": "Loading search data…",
-      "error": "Could not load search: {message}"
+      "pending": "Loading search data…"
     },
     "results": {
       "title": "Context search results",
-      "source": "Source: /api/context/search",
       "emptyTitle": "Enter a query",
-      "emptyBody": "Select a project and run search to see server observations.",
-      "staleTitle": "Source is stale",
+      "emptyBody": "Select a project and enter a query. Context results are separate from the memory and document inventories.",
+      "unavailableTitle": "Context search is unavailable",
+      "unavailableBody": "No context results are available. Try the same text in the project's memories or document metadata.",
       "noBody": "The response did not include a description."
     },
     "recent": {
@@ -2166,9 +2165,9 @@
       "total": "Total",
       "zeroRate": "Zero-result rate"
     },
-    "tombstone": {
-      "title": "Collection search tombstone",
-      "body": "Legacy search_collection is not wired as a working UI search; it is a removed/stale surface kept only as evidence."
+    "recovery": {
+      "title": "Project text search",
+      "body": "Search the same literal text in memory content or document names, types and authors. These are text matches, not similar-knowledge results."
     }
   },
   "noisePage": {

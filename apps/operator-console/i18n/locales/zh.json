@@ -103,7 +103,7 @@
     "pageFilter": "筛选记忆",
     "memoryResults": "记忆搜索结果",
     "documentResults": "文档搜索结果",
-    "similaritySearch": "查找相似知识",
+    "contextSearch": "搜索项目上下文",
     "docType": "文档类型",
     "chooseRecordProject": "请从结果中选择记录，或先选择其项目再打开内容。",
     "principalScopeChanged": "读取前请确认显示的所有者、项目和隐私范围。",
@@ -277,11 +277,11 @@
     "backend": {
       "unknown": "控制台可访问 · 服务器状态尚未确认",
       "auth-required": "控制台可访问 · 需要登录",
-      "ready": "console reachable · server ready",
-      "degraded": "console reachable · server degraded",
-      "unavailable": "console reachable · server unavailable"
+      "ready": "控制台可访问 · 服务检查正常",
+      "degraded": "控制台可访问 · 服务检查发现故障",
+      "unavailable": "控制台可访问 · 服务器不可用",
+      "diagnostics-unavailable": "控制台可访问 · 诊断不可用"
     },
-    "postgres": "PostgreSQL 17 · pgvector",
     "statusDegradation": "降级",
     "statusNoise": "噪声",
     "activeRecords": "{count} 条活跃记录",
@@ -2126,8 +2126,8 @@
     }
   },
   "searchPage": {
-    "title": "搜索",
-    "subtitle": "对 Engram 服务器观察记录进行实时 context search，并显示 recent/analytics 遥测以及旧 collection search 的真实 tombstone。",
+    "title": "项目上下文搜索",
+    "subtitle": "在功能可用时搜索所选项目的上下文。需要字面文本匹配时，请搜索记忆或文档。",
     "placeholder": "输入 context 查询…",
     "actions": {
       "refresh": "刷新",
@@ -2140,15 +2140,14 @@
       "noProjects": "没有项目"
     },
     "state": {
-      "pending": "正在加载搜索数据…",
-      "error": "无法加载搜索：{message}"
+      "pending": "正在加载搜索数据…"
     },
     "results": {
       "title": "Context search 结果",
-      "source": "来源：/api/context/search",
       "emptyTitle": "请输入查询",
-      "emptyBody": "选择项目并执行搜索以查看服务器观察记录。",
-      "staleTitle": "来源已过期",
+      "emptyBody": "请选择项目并输入查询。上下文结果不会替代记忆和文档列表。",
+      "unavailableTitle": "上下文搜索不可用",
+      "unavailableBody": "没有可用的上下文结果。请在项目记忆或文档信息中查找相同文本。",
       "noBody": "响应中没有描述。"
     },
     "recent": {
@@ -2160,9 +2159,9 @@
       "total": "总计",
       "zeroRate": "零结果率"
     },
-    "tombstone": {
-      "title": "Collection search tombstone",
-      "body": "Legacy search_collection 不作为可用 UI 搜索接入；它是已移除/过期 surface，仅作为 evidence 保留。"
+    "recovery": {
+      "title": "项目文本搜索",
+      "body": "在记忆内容或文档名称、类型和作者中查找相同的字面文本。这些是文本匹配，而非相似知识结果。"
     }
   },
   "noisePage": {
