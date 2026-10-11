@@ -56,7 +56,7 @@ func (f *fakeMemoryListStore) ListWithOffset(_ context.Context, _ string, limit 
 	return f.rows[offset:end], nil
 }
 
-func (f *fakeMemoryListStore) ListVisiblePage(_ context.Context, project, query, filter string, caller scope.KeycardContext, opts scope.MemoryVisibilityOptions, limit, offset int) ([]*models.Memory, int64, error) {
+func (f *fakeMemoryListStore) ListVisiblePage(_ context.Context, project, query string, filters []string, caller scope.KeycardContext, opts scope.MemoryVisibilityOptions, limit, offset int) ([]*models.Memory, int64, error) {
 	visible := make([]*models.Memory, 0)
 	for _, row := range f.rows {
 		if row.Project == project && scope.ResolveMemory(caller, row, opts) && strings.Contains(strings.ToLower(row.Content), strings.ToLower(query)) {

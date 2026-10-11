@@ -146,9 +146,15 @@ the existing active/nondeleted/current-validity, workstation, principal, domain
 and flag-controlled legacy privacy filters. Ordering remains
 `created_at DESC, id DESC`; status and provenance fields keep their meaning.
 
-Memory `filter=all|active|flagged|stale|low|chain` is applied before count/page;
-omitted means `all`. It uses the existing UI predicates without broadening the
-active-only eligible corpus. Zero-valued `omitempty` confidence/citation metrics
+Memory accepts repeated exact `filter` values: `all`, `active`, `flagged`,
+`stale`, `low`, `chain`. For example, `filter=low&filter=chain` intersects the
+selected predicates with **AND before count/page**, preserving the independently
+toggleable Memory Lab chips. Omitted filters mean `all`; explicit `all` is neutral
+with other selections. Valid duplicates are deduplicated. At most six incoming
+values are accepted before deduplication; blank, unknown, differently cased or
+CSV values are 400, including an invalid later value. No scalar-first fallback,
+JSON/CSV alternative or page-local filtering exists. The existing active-only
+eligible corpus is unchanged. Zero-valued `omitempty` confidence/citation metrics
 remain unknown, not new ratings. `chain` matches exact tags or a supersession link.
 
 `GET /api/memories/:id?project=<exact live canonical ID>` requires the same

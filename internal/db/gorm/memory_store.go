@@ -650,8 +650,8 @@ func (s *MemoryStore) GetVisible(ctx context.Context, id int64, project string, 
 
 // ListVisiblePage applies the shared read policy before both count and page.
 // The caller supplies a server-authorized canonical project, never a label.
-func (s *MemoryStore) ListVisiblePage(ctx context.Context, project, query, filter string, caller scope.KeycardContext, opts scope.MemoryVisibilityOptions, limit, offset int) ([]*models.Memory, int64, error) {
-	if project == "" || limit < 1 || limit > 500 || offset < 0 {
+func (s *MemoryStore) ListVisiblePage(ctx context.Context, project, query string, filters []string, caller scope.KeycardContext, opts scope.MemoryVisibilityOptions, limit, offset int) ([]*models.Memory, int64, error) {
+	if project == "" || limit < 1 || limit > 500 || offset < 0 || len(filters) > 6 {
 		return nil, 0, fmt.Errorf("invalid memory page")
 	}
 	q, err := s.visibleKnowledgeQuery(ctx, project, caller, opts)
@@ -664,18 +664,20 @@ func (s *MemoryStore) ListVisiblePage(ctx context.Context, project, query, filte
 	}
 	// The eligible corpus remains status=active. Zero-valued omitempty metrics
 	// are absent in the DTO, not known zero-confidence values.
-	switch filter {
-	case "", "all", "active":
-	case "flagged":
-		q = q.Where("FALSE")
-	case "stale":
-		q = q.Where("COALESCE(m.updated_at, m.created_at) <= ? AND COALESCE(m.citation_count, 0) = 0", time.Now().UTC().Add(-30*24*time.Hour))
-	case "low":
-		q = q.Where("m.confidence <> 0 AND m.confidence >= ? AND m.confidence < ?", -math.MaxFloat64, 0.85)
-	case "chain":
-		q = q.Where(`m.superseded_by IS NOT NULL OR m.tags @> ?::jsonb OR m.tags @> ?::jsonb OR m.tags @> ?::jsonb`, `["superseded"]`, `["replace"]`, `["replacement"]`)
-	default:
-		return nil, 0, fmt.Errorf("invalid memory filter")
+	for _, filter := range filters {
+		switch filter {
+		case "all", "active":
+		case "flagged":
+			q = q.Where("FALSE")
+		case "stale":
+			q = q.Where("COALESCE(m.updated_at, m.created_at) <= ? AND COALESCE(m.citation_count, 0) = 0", time.Now().UTC().Add(-30*24*time.Hour))
+		case "low":
+			q = q.Where("m.confidence <> 0 AND m.confidence >= ? AND m.confidence < ?", -math.MaxFloat64, 0.85)
+		case "chain":
+			q = q.Where(`m.superseded_by IS NOT NULL OR m.tags @> ?::jsonb OR m.tags @> ?::jsonb OR m.tags @> ?::jsonb`, `["superseded"]`, `["replace"]`, `["replacement"]`)
+		default:
+			return nil, 0, fmt.Errorf("invalid memory filter")
+		}
 	}
 	var total int64
 	if err := q.Count(&total).Error; err != nil {

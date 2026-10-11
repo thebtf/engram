@@ -1513,8 +1513,20 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
-                        "type": "string",
-                        "description": "all, active, flagged, stale, low or chain; omitted means all",
+                        "type": "array",
+                        "items": {
+                            "enum": [
+                                "all",
+                                "active",
+                                "flagged",
+                                "stale",
+                                "low",
+                                "chain"
+                            ],
+                            "type": "string"
+                        },
+                        "collectionFormat": "multi",
+                        "description": "Repeat exact filter values (all, active, flagged, stale, low, chain); AND before count/page, at most six values; all is neutral",
                         "name": "filter",
                         "in": "query"
                     },

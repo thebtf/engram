@@ -1829,10 +1829,21 @@ paths:
         in: query
         name: query
         type: string
-      - description: all, active, flagged, stale, low or chain; omitted means all
+      - collectionFormat: multi
+        description: Repeat exact filter values (all, active, flagged, stale, low,
+          chain); AND before count/page, at most six values; all is neutral
         in: query
+        items:
+          enum:
+          - all
+          - active
+          - flagged
+          - stale
+          - low
+          - chain
+          type: string
         name: filter
-        type: string
+        type: array
       - description: Visible rows to skip (default 0)
         in: query
         name: offset

@@ -294,7 +294,7 @@ type memoryListResponse struct {
 // @Security ApiKeyAuth
 // @Param project query string true "Existing canonical project ID"
 // @Param query query string false "Literal case-insensitive content substring (maximum 1024 UTF-8 bytes)"
-// @Param filter query string false "all, active, flagged, stale, low or chain; omitted means all"
+// @Param filter query []string false "Repeat exact filter values (all, active, flagged, stale, low, chain); AND before count/page, at most six values; all is neutral" collectionFormat(multi) Enums(all,active,flagged,stale,low,chain)
 // @Param offset query int false "Visible rows to skip (default 0)"
 // @Param limit query int false "Page size 1..500 (default 50)"
 // @Success 200 {object} memoryListResponse
@@ -318,7 +318,7 @@ func (s *Service) handleListMemories(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeKnowledgeProject(w, r, page.project) {
 		return
 	}
-	mems, total, err := store.ListVisiblePage(r.Context(), page.project, page.query, page.filter, memoryVisibilityCaller(r.Context(), ""), memoryVisibilityOptions(), page.limit, page.offset)
+	mems, total, err := store.ListVisiblePage(r.Context(), page.project, page.query, page.filters, memoryVisibilityCaller(r.Context(), ""), memoryVisibilityOptions(), page.limit, page.offset)
 	if err != nil {
 		if errors.Is(err, dbgorm.ErrKnowledgeProjectForbidden) {
 			writeDocumentError(w, http.StatusForbidden, "project read forbidden")
@@ -515,7 +515,7 @@ func mapMemoryAuditResponse(memoryID int64, entries []dbgorm.AuditLogEntry) memo
 type memoryListStore interface {
 	List(ctx context.Context, project string, limit int) ([]*models.Memory, error)
 	ListWithOffset(ctx context.Context, project string, limit int, offset int) ([]*models.Memory, error)
-	ListVisiblePage(context.Context, string, string, string, scope.KeycardContext, scope.MemoryVisibilityOptions, int, int) ([]*models.Memory, int64, error)
+	ListVisiblePage(context.Context, string, string, []string, scope.KeycardContext, scope.MemoryVisibilityOptions, int, int) ([]*models.Memory, int64, error)
 }
 
 // memoryGetStore is the subset of MemoryStore needed for exact-ID reads.

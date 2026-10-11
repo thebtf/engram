@@ -167,10 +167,13 @@ func knowledgeSQLiteDB(t *testing.T) *gorm.DB {
 type knowledgeFixtureTokens []gormdb.APIToken
 
 func (tokens knowledgeFixtureTokens) FindByPrefix(_ context.Context, prefix string) ([]gormdb.APIToken, error) {
-	if prefix == "facade00" {
-		return tokens, nil
+	var candidates []gormdb.APIToken
+	for _, token := range tokens {
+		if token.TokenPrefix == prefix {
+			candidates = append(candidates, token)
+		}
 	}
-	return nil, nil
+	return candidates, nil
 }
 
 func TestKnowledgeReadersHTTP_SQLite(t *testing.T) {
@@ -243,6 +246,7 @@ func runKnowledgeReadersHTTP(t *testing.T, db *gorm.DB, sqliteFixture bool) {
 		{Project: projectB, Content: "decision other project", PrivacyScope: "project"},
 	} {
 		hidden.Status, hidden.Version, hidden.Tags, hidden.SourceSessions = "active", 1, []string{}, []string{}
+		hidden.Tags = []string{"replace"}
 		hidden.CreatedAt, hidden.UpdatedAt = now.Add(time.Minute), now.Add(time.Minute)
 		require.NoError(t, db.Create(&hidden).Error)
 		hiddenIDs = append(hiddenIDs, hidden.ID)
@@ -273,10 +277,14 @@ func runKnowledgeReadersHTTP(t *testing.T, db *gorm.DB, sqliteFixture bool) {
 		require.NoError(t, db.Create(&gormdb.VersionedDocument{Project: selector, Path: "notes/excluded.md", Version: 1, DocType: "markdown", Author: "fixture", Content: "unreadable " + selector, ContentHash: "fixture", Metadata: "{}", CreatedAt: now}).Error)
 	}
 
-	// Public synthetic keycards exercise the actual bcrypt validator/middleware.
-	const tokenA = "engram_facade00000000000000000000000aaa"
-	const tokenB = "engram_facade00000000000000000000000bbb"
-	const tokenHAP = "engram_facade00000000000000000000000ccc"
+	// Fresh private nonces exercise real bcrypt/keycard auth only in this fixture.
+	newToken := func() string {
+		var secret [16]byte
+		_, err := rand.Read(secret[:])
+		require.NoError(t, err)
+		return fmt.Sprintf("engram_%x", secret[:])
+	}
+	tokenA, tokenB, tokenHAP := newToken(), newToken(), newToken()
 	tokens := knowledgeFixtureTokens{}
 	for _, input := range []struct{ raw, id, principal, kind string }{
 		{tokenA, "fixture-card-a", "agent/local-a", "agent"},
@@ -285,7 +293,7 @@ func runKnowledgeReadersHTTP(t *testing.T, db *gorm.DB, sqliteFixture bool) {
 	} {
 		hash, err := bcrypt.GenerateFromPassword([]byte(input.raw), bcrypt.MinCost)
 		require.NoError(t, err)
-		tokens = append(tokens, gormdb.APIToken{ID: input.id, TokenHash: string(hash), Scope: "read-only", Principal: input.principal, PrincipalKind: input.kind})
+		tokens = append(tokens, gormdb.APIToken{ID: input.id, TokenPrefix: input.raw[len("engram_") : len("engram_")+8], TokenHash: string(hash), Scope: "read-only", Principal: input.principal, PrincipalKind: input.kind})
 	}
 	ta, err := NewTokenAuth(rand.Text())
 	require.NoError(t, err)
@@ -411,6 +419,29 @@ func runKnowledgeReadersHTTP(t *testing.T, db *gorm.DB, sqliteFixture bool) {
 	get(memoryURL+"&filter=flagged", tokenA, 200, &memoryPage)
 	require.Zero(t, memoryPage.Total, "filters do not widen the existing active-only corpus")
 	get(memoryURL+"&filter=unknown", tokenA, 400, nil)
+	for _, filters := range []string{"filter=low&filter=chain", "filter=chain&filter=low", "filter=all&filter=low&filter=chain", "filter=low&filter=all&filter=chain&filter=low"} {
+		get(memoryURL+"&"+filters+"&limit=1", tokenA, 200, &memoryPage)
+		require.EqualValues(t, 1, memoryPage.Total, "selected chips intersect before count/page: %s", filters)
+		require.Len(t, memoryPage.Items, 1)
+		require.Equal(t, memories[0].ID, memoryPage.Items[0].ID, "intersection finds the older canonical alias beyond the unfiltered first 500")
+	}
+	get(memoryURL+"&filter=all&filter=chain", tokenA, 200, &memoryPage)
+	require.EqualValues(t, 2, memoryPage.Total, "all is neutral, not an exclusive reset")
+	get(memoryURL+strings.Repeat("&filter=chain", 6), tokenA, 200, &memoryPage)
+	require.EqualValues(t, 2, memoryPage.Total, "six incoming valid duplicates are deduplicated")
+	for _, filters := range []string{"filter=active&filter=flagged", "filter=flagged&filter=active", "filter=all&filter=active&filter=flagged&filter=stale&filter=low&filter=chain"} {
+		get(memoryURL+"&"+filters, tokenA, 200, &memoryPage)
+		require.Zero(t, memoryPage.Total, "active/flagged AND preserves the active-only corpus")
+		require.Empty(t, memoryPage.Items)
+	}
+	get(memoryURL+"&filter=chain&filter=low&query=hidden", tokenA, 200, &memoryPage)
+	require.Zero(t, memoryPage.Total, "hidden low+chain rows must affect neither total nor page")
+	require.Empty(t, memoryPage.Items)
+	get(memoryURL+"&filter=chain&filter=low&query="+url.QueryEscape(memories[0].Content), tokenB, 200, &memoryPage)
+	require.Zero(t, memoryPage.Total, "combined filtering retains private workstation/principal denial")
+	for _, filters := range []string{"filter=", "filter=low&filter=unknown", "filter=chain&filter=", "filter=chain&filter=low,chain", "filter=chain&filter=LOW", strings.TrimPrefix(strings.Repeat("&filter=chain", 7), "&")} {
+		get(memoryURL+"&"+filters, tokenA, 400, nil)
+	}
 	get("/api/memories?project="+memoryOnly, tokenA, 200, &memoryPage)
 	require.EqualValues(t, 1, memoryPage.Total)
 	require.Equal(t, memoryOnly, memoryPage.Items[0].Project)
@@ -529,5 +560,5 @@ func runKnowledgeReadersHTTP(t *testing.T, db *gorm.DB, sqliteFixture bool) {
 	get(detailURL+projectA, tokenA, 503, nil)
 	get(documentURL, tokenA, 503, nil)
 	get("/api/projects", tokenA, 503, nil)
-	t.Log("actual HTTP: canonical catalog; 501 memories and unique document paths; older alias detail; strict alias/cross-scope/history; visible query/filter totals; literal bounds; privacy/auth PASS; PostgreSQL operators remain a separate DSN gate")
+	t.Log("actual HTTP: canonical catalog; 501 memories and unique document paths; older alias detail; strict alias/cross-scope/history; repeated-filter AND/neutral-all/dedup/bounds; visible query/filter totals; literal bounds; privacy/auth PASS; PostgreSQL operators remain a separate DSN gate")
 }

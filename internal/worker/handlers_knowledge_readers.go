@@ -15,7 +15,7 @@ import (
 type knowledgePage struct {
 	project string
 	query   string
-	filter  string
+	filters []string
 	offset  int
 	limit   int
 }
@@ -46,13 +46,31 @@ func parseKnowledgePage(r *http.Request) (knowledgePage, error) {
 		return page, fmt.Errorf("query must be valid UTF-8 text without controls, at most 1024 bytes")
 	}
 	page.query = strings.TrimSpace(rawQuery)
-	page.filter = params.Get("filter")
 	if r.URL.Path == "/api/memories" {
-		switch page.filter {
-		case "", "all", "active", "flagged", "stale", "low", "chain":
-		default:
-			return page, fmt.Errorf("filter must be all, active, flagged, stale, low or chain")
+		values := params["filter"]
+		if len(values) > 6 {
+			return page, fmt.Errorf("at most six filter values are allowed")
 		}
+		count := 0
+		for _, filter := range values {
+			switch filter {
+			case "all", "active", "flagged", "stale", "low", "chain":
+			default:
+				return page, fmt.Errorf("each filter must be all, active, flagged, stale, low or chain")
+			}
+			duplicate := false
+			for _, selected := range values[:count] {
+				if selected == filter {
+					duplicate = true
+					break
+				}
+			}
+			if !duplicate {
+				values[count] = filter
+				count++
+			}
+		}
+		page.filters = values[:count]
 	}
 	for _, field := range []string{"offset", "limit"} {
 		if !params.Has(field) {

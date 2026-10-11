@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Return canonical project descriptors and visible-count page envelopes from the knowledge REST readers. Apply literal server-side query, access policy and document latest-version filters before count/offset/limit; retain existing memory DTO meaning and document content/history reads. Page sizes are 1..500, with deterministic `created_at DESC, id DESC` order on an unchanged dataset. Console consumers must adopt the new envelopes; no legacy response branch, identity model, migration or provider is added.
 - Apply the existing Memory Lab filters on the server before visible totals/pages, and require the selected live canonical project for exact-ID memory reads. Preserve registered historical memory/document selectors through strict unique existing aliases, including document latest/version/history; exclude ambiguous/cross-scope/dead aliases without changing stored provenance. Unregistered orphan selectors remain intact but have no canonical reader authority.
+- Preserve independently toggleable Memory Lab chips as repeated `filter` query values combined with AND before visible count/page. Validate every exact enum value, deduplicate valid selections, treat `all` as neutral, and bound incoming values to six; reject blank/unknown/CSV values rather than silently reading only the first.
 
 ## [6.52.0] - 2026-10-11
 
