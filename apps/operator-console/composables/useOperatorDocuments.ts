@@ -1,7 +1,8 @@
-import { ref as sharedRef, type Ref as SharedRef } from 'vue'
+import { computed, onBeforeUnmount, ref as sharedRef, type Ref as SharedRef } from 'vue'
 import { startedLoads } from './useConsolePreferences'
+import { loadKnowledgePage, type OperatorKnowledgePage } from './useOperatorProjectContext'
+import { useRoute } from 'vue-router'
 
-let sharedDocumentsPageProjects: SharedRef<string[]> | undefined
 let sharedDocumentsPageDocuments: SharedRef<OperatorDocumentSummary[]> | undefined
 let sharedDocumentsPageHistory: SharedRef<OperatorDocumentVersion[]> | undefined
 let sharedDocumentsPageComments: SharedRef<OperatorDocumentComment[]> | undefined
@@ -33,11 +34,10 @@ import {
   toOperatorSourceError,
 } from './useOperatorApi'
 
-const DEFAULT_DOCUMENT_PROJECT = 'engram'
-const DOCUMENT_LIST_LIMIT = 100
+const DEFAULT_DOCUMENT_PROJECT = ''
+const DOCUMENT_LIST_LIMIT = 20
 
 
-type ApiProjectList = string[]
 
 interface ApiDocumentListItem {
   id?: number | string
@@ -49,14 +49,7 @@ interface ApiDocumentListItem {
   created_at?: string
 }
 
-interface ApiDocumentListResponse {
-  documents?: ApiDocumentListItem[]
-  count?: number
-  project?: string
-  doc_type?: string
-  path_prefix?: string
-  limit?: number
-}
+type ApiDocumentListResponse = OperatorKnowledgePage<ApiDocumentListItem>
 
 interface ApiDocumentHistoryItem {
   id?: number | string
@@ -252,12 +245,6 @@ function compactAge(timestamp?: string) {
   return `${Math.floor(seconds / 86400)}d`
 }
 
-function normalizeProjectList(payload: ApiProjectList): string[] {
-  if (!Array.isArray(payload)) {
-    return []
-  }
-  return [...new Set(payload.map((row) => String(row || '').trim()).filter(Boolean))].sort((left, right) => left.localeCompare(right))
-}
 
 function mapDocumentSummary(row: ApiDocumentListItem): OperatorDocumentSummary {
   return {
@@ -265,7 +252,7 @@ function mapDocumentSummary(row: ApiDocumentListItem): OperatorDocumentSummary {
     path: row.path || '',
     project: row.project || DEFAULT_DOCUMENT_PROJECT,
     docType: row.doc_type || 'markdown',
-    author: row.author || 'operator',
+    author: row.author || '',
     createdAt: row.created_at || '',
     age: compactAge(row.created_at),
     version: typeof row.version === 'number' ? row.version : 0,
@@ -276,7 +263,7 @@ function mapDocumentVersion(row: ApiDocumentHistoryItem): OperatorDocumentVersio
   return {
     id: String(row.id ?? ''),
     contentHash: row.content_hash || '',
-    author: row.author || 'operator',
+    author: row.author || '',
     createdAt: row.created_at || '',
     age: compactAge(row.created_at),
     version: typeof row.version === 'number' ? row.version : 0,
@@ -292,7 +279,7 @@ function mapDocument(row: ApiDocumentReadResponse): OperatorDocument {
     contentHash: row.content_hash || '',
     docType: row.doc_type || 'markdown',
     metadata: row.metadata || '{}',
-    author: row.author || 'operator',
+    author: row.author || '',
     createdAt: row.created_at || '',
     age: compactAge(row.created_at),
     version: typeof row.version === 'number' ? row.version : 0,
@@ -306,7 +293,7 @@ function mapDocumentComment(row: ApiDocumentCommentItem): OperatorDocumentCommen
   return {
     id: String(row.id ?? ''),
     documentId: String(row.document_id ?? ''),
-    author: row.author || 'operator',
+    author: row.author || '',
     content: row.content || '',
     status: row.status || 'open',
     createdAt: row.created_at || '',
@@ -316,18 +303,8 @@ function mapDocumentComment(row: ApiDocumentCommentItem): OperatorDocumentCommen
   }
 }
 
-function parseDocumentListPayload(payload: ApiDocumentListResponse, path: string): OperatorDocumentSummary[] {
-  if (!payload || typeof payload !== 'object' || !Array.isArray(payload.documents)) {
-    throw new OperatorFetchError(`Invalid document payload from ${path}: expected { documents: [] }`, {
-      message: `Invalid document payload from ${path}: expected { documents: [] }`,
-      source: 'documents-list',
-      path,
-      method: 'GET',
-      retryable: false,
-    })
-  }
-
-  return payload.documents.map(mapDocumentSummary)
+function parseDocumentListPayload(payload: ApiDocumentListResponse): OperatorDocumentSummary[] {
+  return payload.items.map(mapDocumentSummary)
 }
 
 function parseDocumentHistoryPayload(payload: ApiDocumentHistoryResponse, path: string): OperatorDocumentVersion[] {
@@ -384,8 +361,7 @@ function startOnce(key: string, run: () => Promise<void>) {
   }
 }
 
-export function useOperatorDocuments(): {
-  projects: string[]
+export function useOperatorDocuments(projectContext?: Ref<string>): {
   documents: OperatorDocumentSummary[]
   history: OperatorDocumentVersion[]
   comments: OperatorDocumentComment[]
@@ -409,6 +385,9 @@ export function useOperatorDocuments(): {
   selectSecondaryVersion: (version: number) => Promise<void>
   addComment: (input: DocumentCommentInput) => Promise<MutationResult<DocumentCommentInput>>
   runDocumentSelectionOperation: (input: DocumentSelectionOperationInput) => Promise<DocumentSelectionOperationResult>
+  clearDocumentDetail: () => void
+  total: Ref<number | null>
+  hasMore: Ref<boolean>
 } {
   const listEvidence = endpointEvidence(`/api/documents?project={project}&limit=${DOCUMENT_LIST_LIMIT}`, 'documents-list')
   const historyEvidence = endpointEvidence('/api/documents/history?path={path}&project={project}', 'documents-history')
@@ -417,11 +396,10 @@ export function useOperatorDocuments(): {
   const commentsEvidence = endpointEvidence('/api/documents/comments?document_id={id}', 'documents-comments')
   const route = useRoute()
 
-  const projects = (sharedDocumentsPageProjects ??= sharedRef<string[]>((() => [DEFAULT_DOCUMENT_PROJECT])()))
   const documents = (sharedDocumentsPageDocuments ??= sharedRef<OperatorDocumentSummary[]>((() => [])()))
   const history = (sharedDocumentsPageHistory ??= sharedRef<OperatorDocumentVersion[]>((() => [])()))
   const comments = (sharedDocumentsPageComments ??= sharedRef<OperatorDocumentComment[]>((() => [])()))
-  const selectedProject = (sharedDocumentsPageSelectedProject ??= sharedRef<string>((() => DEFAULT_DOCUMENT_PROJECT)()))
+  const selectedProject = projectContext || (sharedDocumentsPageSelectedProject ??= sharedRef<string>(''))
   const selectedPath = (sharedDocumentsPageSelectedPath ??= sharedRef<string>((() => '')()))
   const primaryVersion = (sharedDocumentsPagePrimaryVersion ??= sharedRef<number | null>((() => null)()))
   const secondaryVersion = (sharedDocumentsPageSecondaryVersion ??= sharedRef<number | null>((() => null)()))
@@ -450,8 +428,21 @@ export function useOperatorDocuments(): {
     return null
   })
 
+  let listGeneration = 0
+  let detailGeneration = 0
+  let primaryGeneration = 0
+  let secondaryGeneration = 0
+  let commentsGeneration = 0
+  let documentProject = ''
+  let listRequest: AbortController | undefined
+  const total = sharedRef<number | null>(null)
+  const hasMore = sharedRef(false)
 
   function clearDocumentDetail() {
+    detailGeneration += 1
+    primaryGeneration += 1
+    secondaryGeneration += 1
+    commentsGeneration += 1
     selectedPath.value = ''
     primaryVersion.value = null
     secondaryVersion.value = null
@@ -465,27 +456,6 @@ export function useOperatorDocuments(): {
     commentsStateValue.value = emptyState(commentsEvidence, comments.value)
   }
 
-  async function refreshProjects() {
-    try {
-      const payload = await operatorFetchJson<ApiProjectList>('/api/projects', undefined, 'documents-projects')
-      const rows = normalizeProjectList(payload)
-      if (rows.length) {
-        replaceArray(projects.value, rows)
-        if (!projects.value.includes(selectedProject.value)) {
-          selectedProject.value = projects.value[0]
-        }
-      } else if (!selectedProject.value) {
-        selectedProject.value = DEFAULT_DOCUMENT_PROJECT
-      }
-    } catch (nextError) {
-      if (import.meta.env.DEV) {
-        console.warn('[useOperatorDocuments] project list load failed', nextError)
-      }
-      if (!projects.value.length) {
-        replaceArray(projects.value, [selectedProject.value || DEFAULT_DOCUMENT_PROJECT])
-      }
-    }
-  }
 
   async function loadVersionDocument(
     path: string,
@@ -495,22 +465,30 @@ export function useOperatorDocuments(): {
     valueRef: Ref<OperatorDocument | null>,
     source: 'documents-read-primary' | 'documents-read-secondary',
   ) {
+    const generation = source === 'documents-read-primary' ? ++primaryGeneration : ++secondaryGeneration
+    const detail = detailGeneration
+    const isCurrent = () => detail === detailGeneration && project === documentProject && path === selectedPath.value
+      && generation === (source === 'documents-read-primary' ? primaryGeneration : secondaryGeneration)
     const endpoint = version === null
       ? `/api/documents/read?path=${encodeURIComponent(path)}&project=${encodeURIComponent(project)}`
       : `/api/documents/read?path=${encodeURIComponent(path)}&project=${encodeURIComponent(project)}&version=${version}`
     const evidence = endpointEvidence(endpoint, source)
-    if (version === null) {
+    if (version === null && source === 'documents-read-secondary') {
       valueRef.value = null
       stateRef.value = emptyState(evidence, null)
       return
     }
 
-    stateRef.value = pendingState(evidence, valueRef.value)
+    valueRef.value = null
+    stateRef.value = pendingState(evidence, null)
     try {
       const payload = await operatorFetchJson<ApiDocumentReadResponse>(endpoint, undefined, source)
-      valueRef.value = parseDocumentReadPayload(payload, endpoint)
+      if (!isCurrent()) return
+      if (payload.path !== path || (version !== null && payload.version !== version)) throw new TypeError('Document read scope mismatch')
+      valueRef.value = { ...parseDocumentReadPayload(payload, endpoint), project }
       stateRef.value = liveState(evidence, valueRef.value)
     } catch (nextError) {
+      if (!isCurrent()) return
       const mapped = toOperatorSourceError(nextError, {
         source,
         path: endpoint,
@@ -527,6 +505,8 @@ export function useOperatorDocuments(): {
   }
 
   async function refreshCommentsForVersion(version: number | null) {
+    const generation = ++commentsGeneration
+    const detail = detailGeneration
     const versionEntry = history.value.find((row) => row.version === version)
     if (!versionEntry?.id) {
       replaceArray(comments.value, [])
@@ -536,13 +516,16 @@ export function useOperatorDocuments(): {
 
     const endpoint = `/api/documents/comments?document_id=${encodeURIComponent(versionEntry.id)}`
     const evidence = endpointEvidence(endpoint, 'documents-comments')
-    commentsStateValue.value = pendingState(evidence, comments.value)
+    replaceArray(comments.value, [])
+    commentsStateValue.value = pendingState(evidence, [])
     try {
       const payload = await operatorFetchJson<ApiDocumentCommentsResponse>(endpoint, undefined, 'documents-comments')
+      if (generation !== commentsGeneration || detail !== detailGeneration) return
       const rows = parseDocumentCommentsPayload(payload, endpoint)
       replaceArray(comments.value, rows)
       commentsStateValue.value = rows.length ? liveState(evidence, comments.value) : emptyState(evidence, comments.value)
     } catch (nextError) {
+      if (generation !== commentsGeneration || detail !== detailGeneration) return
       const mapped = toOperatorSourceError(nextError, {
         source: 'documents-comments',
         path: endpoint,
@@ -558,7 +541,8 @@ export function useOperatorDocuments(): {
     }
   }
 
-  async function refreshHistory(path = selectedPath.value, project = selectedProject.value) {
+  async function refreshHistory(path = selectedPath.value, project = documentProject) {
+    const generation = ++detailGeneration
     if (!path || !project) {
       clearDocumentDetail()
       return
@@ -571,34 +555,22 @@ export function useOperatorDocuments(): {
 
     try {
       const payload = await operatorFetchJson<ApiDocumentHistoryResponse>(endpoint, undefined, 'documents-history')
-      const rows = parseDocumentHistoryPayload(payload, endpoint)
+      if (generation !== detailGeneration || project !== documentProject || path !== selectedPath.value) return
+      if (payload.path !== path) throw new TypeError('Document history path mismatch')
+      const rows = parseDocumentHistoryPayload(payload, endpoint).sort((a, b) => b.version - a.version)
       replaceArray(history.value, rows)
       historyStateValue.value = rows.length ? liveState(evidence, history.value) : emptyState(evidence, history.value)
 
-      if (!rows.length) {
-        primaryVersion.value = null
-        secondaryVersion.value = null
-        primaryDocumentValue.value = null
-        secondaryDocumentValue.value = null
-        replaceArray(comments.value, [])
-        primaryStateValue.value = emptyState(primaryEvidence, null)
-        secondaryStateValue.value = emptyState(secondaryEvidence, null)
-        commentsStateValue.value = emptyState(commentsEvidence, comments.value)
-        return
-      }
-
+      if (!rows.length) return
       const nextPrimary = rows[0].version
-      const nextSecondary = rows[1]?.version ?? rows[0].version
-
       primaryVersion.value = nextPrimary
-      secondaryVersion.value = nextSecondary
 
       await Promise.all([
-        loadVersionDocument(path, project, nextPrimary, primaryStateValue, primaryDocumentValue, 'documents-read-primary'),
-        loadVersionDocument(path, project, nextSecondary, secondaryStateValue, secondaryDocumentValue, 'documents-read-secondary'),
-        refreshCommentsForVersion(rows[0].version),
+        primaryDocumentValue.value?.version === nextPrimary ? Promise.resolve() : loadVersionDocument(path, project, nextPrimary, primaryStateValue, primaryDocumentValue, 'documents-read-primary'),
+        refreshCommentsForVersion(nextPrimary),
       ])
     } catch (nextError) {
+      if (generation !== detailGeneration || project !== documentProject || path !== selectedPath.value) return
       const mapped = toOperatorSourceError(nextError, {
         source: 'documents-history',
         path: endpoint,
@@ -615,91 +587,87 @@ export function useOperatorDocuments(): {
   }
 
   async function openDocument(doc: OperatorDocumentSummary) {
+    clearDocumentDetail()
+    const project = selectedProject.value === 'all' ? String(route.query.docProject || '') : selectedProject.value
+    if (!project || project === 'all') return
+    documentProject = project
     selectedPath.value = doc.path
-    primaryVersion.value = null
-    secondaryVersion.value = null
-    await refreshHistory(doc.path, doc.project)
+    const generation = detailGeneration
+    await loadVersionDocument(doc.path, project, null, primaryStateValue, primaryDocumentValue, 'documents-read-primary')
+    if (generation !== detailGeneration || project !== documentProject || doc.path !== selectedPath.value) return
+    primaryVersion.value = primaryDocumentValue.value?.version || null
+    await refreshHistory(doc.path, project)
   }
 
   async function refreshDocuments() {
-    const routeProject = typeof route.query.project === 'string' ? route.query.project.trim() : ''
-    const project = (routeProject || selectedProject.value || DEFAULT_DOCUMENT_PROJECT).trim() || DEFAULT_DOCUMENT_PROJECT
-    if (project !== selectedProject.value) {
-      selectedProject.value = project
+    const generation = ++listGeneration
+    listRequest?.abort()
+    const controller = new AbortController()
+    listRequest = controller
+    const project = selectedProject.value
+    replaceArray(documents.value, [])
+    total.value = null
+    hasMore.value = false
+    if (project === 'all' && route.query.allRead !== '1') {
+      documentsStateValue.value = { kind: 'gated', evidence: listEvidence, flag: 'explicit-all-read', reason: 'Choose a project or submit an explicit all-projects search.', updatedAt: new Date().toISOString(), data: [] }
+      return
     }
-    const routePathPrefix = typeof route.query.pathPrefix === 'string'
-      ? route.query.pathPrefix.trim()
-      : typeof route.query.path_prefix === 'string'
-        ? route.query.path_prefix.trim()
-        : ''
-    const params = new URLSearchParams({
-      project,
-      limit: String(DOCUMENT_LIST_LIMIT),
-    })
-    if (routePathPrefix) {
-      params.set('path_prefix', routePathPrefix)
-    }
-
-    const endpoint = `/api/documents?${params.toString()}`
+    const page = Math.max(1, Number.parseInt(String(route.query.page || '1'), 10) || 1)
+    const limit = [10, 20, 50].includes(Number(route.query.size)) ? Number(route.query.size) : DOCUMENT_LIST_LIMIT
+    const params = new URLSearchParams({ offset: String((page - 1) * limit), limit: String(limit) })
+    const prefix = typeof route.query.pathPrefix === 'string' ? route.query.pathPrefix : typeof route.query.path_prefix === 'string' ? route.query.path_prefix : ''
+    if (prefix) params.set('path_prefix', prefix)
+    if (typeof route.query.q === 'string' && route.query.q.trim()) params.set('query', route.query.q.trim())
+    if (typeof route.query.docType === 'string' && route.query.docType) params.set('doc_type', route.query.docType)
+    const endpoint = `/api/documents?${params}`
     const evidence = endpointEvidence(endpoint, 'documents-list')
-    documentsStateValue.value = pendingState(evidence, documents.value)
-
+    documentsStateValue.value = pendingState(evidence, [])
     try {
-      const payload = await operatorFetchJson<ApiDocumentListResponse>(endpoint, undefined, 'documents-list')
-      const rows = parseDocumentListPayload(payload, endpoint)
+      const payload = await loadKnowledgePage<ApiDocumentListItem>('/api/documents', project, params, controller.signal)
+      if (generation !== listGeneration || project !== selectedProject.value) return
+      const rows = parseDocumentListPayload(payload)
+      if (project !== 'all' && rows.some((row) => row.project !== project)) throw new TypeError('Document page scope mismatch')
       replaceArray(documents.value, rows)
+      total.value = payload.total
+      hasMore.value = payload.has_more
       documentsStateValue.value = rows.length ? liveState(evidence, documents.value) : emptyState(evidence, documents.value)
-
-      if (!rows.length) {
-        clearDocumentDetail()
-        return
-      }
-
-      const nextDocument = rows.find((row) => row.path === selectedPath.value) || rows[0]
-      await openDocument(nextDocument)
     } catch (nextError) {
-      const mapped = toOperatorSourceError(nextError, {
-        source: 'documents-list',
-        path: endpoint,
-        method: 'GET',
-      })
-      documentsStateValue.value = errorState(evidence, mapped, {
-        source: 'documents-list',
-        run: async () => {
-          await refreshDocuments()
-          return documentsStateValue.value
-        },
-      }, documents.value)
+      if (generation !== listGeneration || project !== selectedProject.value || controller.signal.aborted) return
+      const mapped = toOperatorSourceError(nextError, { source: 'documents-list', path: endpoint, method: 'GET' })
+      if (nextError instanceof TypeError) mapped.category = 'invalid-response'
+      documentsStateValue.value = errorState(evidence, mapped, { source: 'documents-list', run: async () => { await refreshDocuments(); return documentsStateValue.value } }, [])
     }
   }
 
   async function refresh() {
-    await refreshProjects()
     await refreshDocuments()
   }
 
   async function selectPrimaryVersion(version: number) {
-    if (!selectedPath.value || !selectedProject.value || version <= 0) return
+    if (!Number.isSafeInteger(version) || !selectedPath.value || !documentProject || version <= 0) return
     if (primaryVersion.value === version && primaryDocumentValue.value?.version === version && primaryStateValue.value.kind !== 'error') {
+      await refreshCommentsForVersion(version)
       return
     }
+    const detail = detailGeneration
     primaryVersion.value = version
-    await loadVersionDocument(selectedPath.value, selectedProject.value, version, primaryStateValue, primaryDocumentValue, 'documents-read-primary')
+    await loadVersionDocument(selectedPath.value, documentProject, version, primaryStateValue, primaryDocumentValue, 'documents-read-primary')
+    if (detail === detailGeneration && primaryVersion.value === version) await refreshCommentsForVersion(version)
   }
 
   async function selectSecondaryVersion(version: number) {
-    if (!selectedPath.value || !selectedProject.value || version <= 0) return
+    if (!selectedPath.value || !documentProject || version <= 0) return
     if (secondaryVersion.value === version && secondaryDocumentValue.value?.version === version && secondaryStateValue.value.kind !== 'error') {
       return
     }
     secondaryVersion.value = version
-    await loadVersionDocument(selectedPath.value, selectedProject.value, version, secondaryStateValue, secondaryDocumentValue, 'documents-read-secondary')
+    await loadVersionDocument(selectedPath.value, documentProject, version, secondaryStateValue, secondaryDocumentValue, 'documents-read-secondary')
   }
 
   async function addComment(input: DocumentCommentInput) {
-    const currentVersionEntry = history.value[0]
+    const currentVersionEntry = history.value.find((entry) => entry.version === primaryVersion.value)
     if (!currentVersionEntry?.id) {
-      throw new Error('No current document version selected for comments')
+      throw new Error('No document version selected for comments')
     }
 
     return executeMutation(
@@ -742,10 +710,10 @@ export function useOperatorDocuments(): {
     return { mutation: await executeMutation(request, Promise.resolve(response), () => undefined), ...(artifact === undefined ? {} : { artifact }) }
   }
 
-  startOnce('documents-page', refresh)
+  if (!projectContext) startOnce('documents-page', refresh)
+  onBeforeUnmount(() => { listGeneration += 1; listRequest?.abort(); clearDocumentDetail() })
 
   return {
-    projects: projects.value,
     documents: documents.value,
     history: history.value,
     comments: comments.value,
@@ -769,5 +737,8 @@ export function useOperatorDocuments(): {
     selectSecondaryVersion,
     addComment,
     runDocumentSelectionOperation,
+    clearDocumentDetail,
+    total,
+    hasMore,
   }
 }

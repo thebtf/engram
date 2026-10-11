@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import { useOperatorProjectContext, projectName } from '../composables/useOperatorProjectContext'
 const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
+const context = useOperatorProjectContext()
 const query = ref('')
 const requestedQuery = computed(() => typeof route.query.q === 'string' ? route.query.q.trim() : '')
 const requestedProject = computed(() => typeof route.query.project === 'string' ? route.query.project.trim() : '')
@@ -32,20 +34,24 @@ watch([requestedQuery, requestedProject, hasRequestedProject], async ([nextQuery
     return
   }
 
-  selectedProject.value = nextProject
+  if (selectedProject.value !== nextProject) return
   const searchKey = `${nextProject}\u0000${nextQuery}`
   if (appliedRouteSearch.value === searchKey) return
   appliedRouteSearch.value = searchKey
   await runSearch(nextQuery, nextProject)
+  if (requestedProject.value !== nextProject || requestedQuery.value !== nextQuery) return
+  const memory = typeof route.query.focusMemory === 'string' ? route.query.focusMemory : ''
+  if (memory) { await nextTick(); document.querySelector<HTMLElement>(`[data-testid="search-result-open-${CSS.escape(memory)}"]`)?.focus() }
 }, { immediate: true })
 
 async function submitSearch() {
-  await runSearch(query.value, selectedProject.value)
+  await router.push({ path: '/search', query: { project: selectedProject.value, q: query.value.trim() } })
 }
 
-function openResult(project: string, memory: string) {
-  if (!project || project === '-' || !memory) return
-  void router.push({ path: '/memory', query: { project, memory } })
+function openResult(_project: string, memory: string) {
+  const project = selectedProject.value
+  if (!project || project === 'all' || !memory) return
+  void router.push({ path: '/memory', query: { ...context.to('/memory').query, project, memory, from: 'search', searchQuery: requestedQuery.value } })
 }
 </script>
 
@@ -62,16 +68,17 @@ function openResult(project: string, memory: string) {
     <form class="search-panel" @submit.prevent="submitSearch">
       <label>
         <span>{{ t('searchPage.form.project') }}</span>
-        <select v-model="selectedProject" :disabled="!hasProjects">
+        <select :value="selectedProject" :disabled="!hasProjects" @change="context.select(($event.target as HTMLSelectElement).value)">
           <option v-if="!hasProjects" value="">{{ t('searchPage.form.noProjects') }}</option>
-          <option v-for="project in projects" :key="project" :value="project">{{ project }}</option>
+          <option v-if="selectedProject === 'all'" value="all" disabled>{{ t('knowledge.chooseProject') }}</option>
+          <option v-for="project in projects" :key="project" :value="project">{{ projectName(project) }}</option>
         </select>
       </label>
       <label class="query">
         <span>{{ t('searchPage.form.query') }}</span>
         <input v-model="query" :placeholder="t('searchPage.placeholder')" autocomplete="off">
       </label>
-      <button class="btn primary" type="submit" :disabled="pending || !query.trim() || !selectedProject">
+      <button class="btn primary" type="submit" :disabled="pending || !query.trim() || !selectedProject || selectedProject === 'all'">
         {{ t('searchPage.actions.search') }}
       </button>
     </form>
@@ -104,9 +111,8 @@ function openResult(project: string, memory: string) {
               <p>{{ row.body || t('searchPage.results.noBody') }}</p>
             </div>
             <div class="meta">
-              <span>{{ row.project }}</span>
-              <code>{{ row.type }}</code>
-              <code>{{ row.score }}</code>
+              <span>{{ projectName(selectedProject) }}</span>
+              <details><summary>{{ t('knowledge.technical') }}</summary><code>{{ row.type }} · {{ row.score }}</code></details>
               <button v-if="row.memoryBacked" class="btn" type="button" :data-testid="`search-result-open-${row.id}`" @click="openResult(row.project, row.id)">{{ t('searchPage.actions.openMemory') }}</button>
             </div>
           </div>
@@ -136,23 +142,20 @@ function openResult(project: string, memory: string) {
           <dl class="stats">
             <div>
               <dt>{{ t('searchPage.analytics.total') }}</dt>
-              <dd>{{ analyticsState.kind === 'live' ? analyticsState.data.total_searches ?? 0 : '—' }}</dd>
+              <dd>{{ analyticsState.kind === 'live' ? analyticsState.data.total_searches ?? '—' : '—' }}</dd>
             </div>
             <div>
               <dt>{{ t('searchPage.analytics.zeroRate') }}</dt>
-              <dd>{{ analyticsState.kind === 'live' ? analyticsState.data.zero_result_rate ?? 0 : '—' }}</dd>
+              <dd>{{ analyticsState.kind === 'live' ? analyticsState.data.zero_result_rate ?? '—' : '—' }}</dd>
             </div>
           </dl>
         </article>
 
-        <article class="card tombstone">
-          <div class="card-head">
-            <h2>{{ t('searchPage.tombstone.title') }}</h2>
-            <HonestyBadge cls="stale" />
-          </div>
+        <details class="card">
+          <summary>{{ t('knowledge.technical') }}</summary>
           <p>{{ t('searchPage.tombstone.body') }}</p>
           <code>{{ tombstoneGap.evidence.endpoint }}</code>
-        </article>
+        </details>
       </aside>
     </section>
   </div>

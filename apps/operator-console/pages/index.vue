@@ -1,443 +1,117 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { useOperatorOverview } from '../composables/useOperatorOverview'
-
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { useOperatorProjectContext, projectName, loadKnowledgePage } from '../composables/useOperatorProjectContext'
+import { operatorDiagnosisKey, toOperatorSourceError, type OperatorSourceError } from '../composables/useOperatorApi'
 const { t } = useI18n()
-
-const {
-  memories,
-  issues,
-  creds,
-  models,
-  info,
-  memoryActive,
-  memoryNoise,
-  openIssues,
-  workIssues,
-  resolvedIssues,
-  closedIssues,
-  ruleCount,
-  projectCount,
-  memoryPending,
-  issuesPending,
-  rulesPending,
-  projectsPending,
-  modelsPending,
-  queuePending,
-  queueGated,
-  queueCount,
-  modelsError,
-  modelOK,
-  modelStandby,
-  modelDegraded,
-  accessGap,
-} = useOperatorOverview()
-
-function displayCount(value: number, pending = false) {
-  return pending ? t('common.loadingShort') : String(value)
-}
-
-const memoryTiers = computed(() => [
-  { label: 'semantic', count: memories.filter((memory) => memory.tier === 'semantic').length, color: 'var(--accent)' },
-  { label: 'procedural', count: memories.filter((memory) => memory.tier === 'procedural').length, color: 'var(--class-live)' },
-  { label: 'episodic', count: memories.filter((memory) => memory.tier === 'episodic').length, color: 'var(--state-warn)' },
-])
-
-const memoryCountDisplay = computed(() => displayCount(memories.length, memoryPending.value))
-const memoryActiveDisplay = computed(() => displayCount(memoryActive.value, memoryPending.value))
-const memoryNoiseDisplay = computed(() => displayCount(memoryNoise.value, memoryPending.value))
-const issueCountDisplay = computed(() => displayCount(issues.length, issuesPending.value))
-const openIssuesDisplay = computed(() => displayCount(openIssues.value, issuesPending.value))
-const workIssuesDisplay = computed(() => displayCount(workIssues.value, issuesPending.value))
-const resolvedIssuesDisplay = computed(() => displayCount(resolvedIssues.value, issuesPending.value))
-const closedIssuesDisplay = computed(() => displayCount(closedIssues.value, issuesPending.value))
-const ruleCountDisplay = computed(() => displayCount(ruleCount.value, rulesPending.value))
-const projectCountDisplay = computed(() => displayCount(projectCount.value, projectsPending.value))
-const modelCountDisplay = computed(() => displayCount(models.value.length, modelsPending.value))
-const modelOKDisplay = computed(() => displayCount(modelOK.value, modelsPending.value))
-const modelDegradedDisplay = computed(() => displayCount(modelDegraded.value, modelsPending.value))
-const queueCountDisplay = computed(() => displayCount(queueCount.value, queuePending.value))
-
-const memoryStops = computed(() => {
-  const total = Math.max(1, memories.length)
-  let acc = 0
-  return memoryTiers.value.map((tier) => {
-    acc += (tier.count / total) * 100
-    return acc
-  })
-})
-
-const taskBars = computed(() => {
-  const rows = [
-    { label: t('overview.tasks.open'), count: openIssues.value, display: openIssuesDisplay.value, color: 'var(--state-warn)' },
-    { label: t('overview.tasks.work'), count: workIssues.value, display: workIssuesDisplay.value, color: 'var(--accent)' },
-    { label: t('overview.tasks.resolved'), count: resolvedIssues.value, display: resolvedIssuesDisplay.value, color: 'var(--class-live)' },
-    { label: t('overview.tasks.closed'), count: closedIssues.value, display: closedIssuesDisplay.value, color: 'var(--muted)' },
-  ]
-  const max = Math.max(1, ...rows.map((row) => row.count))
-  return rows.map((row) => ({ ...row, width: Math.round((row.count / max) * 100) }))
-})
-
-const modelHealth = computed(() => {
-  if (modelsPending.value && models.value.length === 0) {
-    return [{ label: t('overview.modelHealth.loading'), count: 1, color: 'var(--muted)', width: 100 }]
-  }
-
-  if (modelsError.value) {
-    return [{ label: t('overview.modelHealth.error'), count: 1, color: 'var(--state-warn)', width: 100 }]
-  }
-
-  const rows = [
-    { label: t('overview.modelHealth.ok'), count: modelOK.value, color: 'var(--class-live)' },
-    { label: t('overview.modelHealth.standby'), count: modelStandby.value, color: 'var(--muted)' },
-    { label: t('overview.modelHealth.degraded'), count: modelDegraded.value, color: 'var(--state-warn)' },
-  ]
-  const total = Math.max(1, rows.reduce((sum, row) => sum + row.count, 0))
-  return rows.map((row) => ({ ...row, width: Math.round((row.count / total) * 100) }))
-})
-
-const attention = computed(() => [
-  {
-    color: modelsError.value || modelDegraded.value > 0 ? 'var(--state-warn)' : 'var(--class-live)',
-    text: modelsError.value
-      ? t('overview.attention.modelHealthError')
-      : modelDegraded.value > 0
-        ? t('overview.attention.modelHealthDegraded', { n: modelDegradedDisplay.value })
-        : t('overview.attention.modelHealthOk', { n: modelCountDisplay.value }),
-    to: '/health',
-    label: t('overview.attention.stateLink'),
-  },
-  { color: 'var(--state-warn)', text: t('overview.attention.search'), to: '/health', label: t('overview.attention.stateLink') },
-  {
-    color: queueGated.value ? 'var(--class-dormant)' : (queueCount.value > 0 ? 'var(--state-warn)' : 'var(--class-live)'),
-    text: queueGated.value
-      ? t('overview.attention.queueGated', { flag: 'VNEXT_F' })
-      : t('overview.attention.queueLive', { n: queueCountDisplay.value }),
-    to: '/queue',
-    label: t('overview.attention.queueLink'),
-  },
-  { color: 'var(--state-warn)', text: t('overview.attention.noise', { noise: info.value.noise, n: memoryNoiseDisplay.value }), to: '/noise', label: t('overview.attention.noiseLink') },
-])
-
-const memoryCards = computed(() => [
-  {
-    to: '/memory',
-    icon: 'memory',
-    name: t('nav.items.memory'),
-    big: memoryCountDisplay.value,
-    sub: t('overview.cards.memory.sub', { active: memoryActiveDisplay.value, noise: memoryNoiseDisplay.value }),
-    meta: [
-      { cls: 'live', text: t('overview.badges.semanticCount', { n: displayCount(memoryTiers.value[0]?.count ?? 0, memoryPending.value) }) },
-      { cls: 'status', text: t('overview.badges.episodicCount', { n: displayCount(memoryTiers.value[2]?.count ?? 0, memoryPending.value) }) },
-    ],
-  },
-  {
-    to: '/queue',
-    icon: 'queue',
-    name: t('nav.items.queue'),
-    big: queueGated.value ? null : queueCountDisplay.value,
-    sub: t('overview.cards.queue.sub'),
-    meta: [{ cls: queueGated.value ? 'gate' : 'live', text: queueGated.value ? t('overview.badges.vnext') : t('overview.badges.liveEndpoint') }],
-  },
-  {
-    to: '/noise',
-    icon: 'noise',
-    name: t('nav.items.noise'),
-    big: String(info.value.noise),
-    sub: t('overview.cards.noise.sub'),
-    meta: [{ cls: 'gate', text: t('overview.badges.aboveNorm') }],
-  },
-])
-
-const workCards = computed(() => [
-  {
-    to: '/rules',
-    icon: 'rules',
-    name: t('nav.items.rules'),
-    big: ruleCountDisplay.value,
-    sub: t('overview.cards.rules.sub'),
-    meta: [],
-  },
-  {
-    to: '/issues',
-    icon: 'issues',
-    name: t('nav.items.issues'),
-    big: openIssuesDisplay.value,
-    sub: t('overview.cards.issues.sub', { open: openIssuesDisplay.value, work: workIssuesDisplay.value, total: issueCountDisplay.value }),
-    meta: [{ cls: 'pri-high', text: t('overview.cards.issues.openBadge', { n: openIssuesDisplay.value }) }],
-  },
-  {
-    to: '/projects',
-    icon: 'projects',
-    name: t('nav.items.projects'),
-    big: projectCountDisplay.value,
-    sub: t('overview.cards.projects.sub', { n: projectCountDisplay.value }),
-    meta: [],
-  },
-])
-
-const serviceCards = computed(() => [
-  {
-    to: '/health',
-    icon: 'health',
-    name: t('nav.items.health'),
-    big: String(info.value.health),
-    sub: t('overview.cards.health.sub', { ok: modelOKDisplay.value, degraded: modelDegradedDisplay.value }),
-    meta: [{ cls: 'live', text: t('overview.badges.liveEndpoint') }],
-  },
-  {
-    to: '/secrets',
-    icon: 'secrets',
-    name: t('nav.items.secrets'),
-    big: String(creds.length),
-    sub: t('overview.cards.secrets.sub'),
-    meta: [{ cls: 'live', text: t('overview.badges.vaultLive') }],
-  },
-  {
-    to: '/access',
-    icon: 'access',
-    name: t('nav.items.access'),
-    big: null,
-    sub: t('overview.cards.access.sub'),
-    meta: [{ cls: 'live', text: t('overview.badges.liveEndpoint') }],
-  },
-])
-
-function iconPath(icon: string) {
-  const icons: Record<string, string> = {
-    memory: '<path d="M3 4.5c0-1.1 2.2-2 5-2s5 .9 5 2-2.2 2-5 2-5-.9-5-2Z"/><path d="M3 4.5v7c0 1.1 2.2 2 5 2s5-.9 5-2v-7"/><path d="M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>',
-    queue: '<path d="M3 4h10M3 8h10M3 12h6"/>',
-    noise: '<circle cx="8" cy="8" r="6"/><path d="M8 5v3l2 2"/>',
-    code: '<path d="M5.7 4 2.5 8l3.2 4M10.3 4l3.2 4-3.2 4M9 2.5 7 13.5"/>',
-    rules: '<path d="M3 3h10v10H3z"/><path d="M5.5 6.5h5M5.5 9.5h3"/>',
-    issues: '<circle cx="8" cy="8" r="6"/><path d="M8 5v4M8 11h.01"/>',
-    projects: '<path d="M2 4h5l1.5 2H14v6H2z"/>',
-    health: '<path d="M2 8.2H5L6.8 4l2.4 8.4L11 8.2h3"/>',
-    secrets: '<rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5 7V5a3 3 0 0 1 6 0v2"/>',
-    access: '<circle cx="8" cy="5.5" r="2.5"/><path d="M3.5 13c0-2.5 2-4 4.5-4s4.5 1.5 4.5 4"/>',
-  }
-  return icons[icon] || icons.memory
-}
+const context = useOperatorProjectContext()
+const { project, projects, pending, error, label } = context
+const projectQuery = ref('')
+const visibleProjects = computed(() => projects.value.filter((id) => `${projectName(id)} ${id}`.toLocaleLowerCase().includes(projectQuery.value.toLocaleLowerCase())))
+const recentMemories = ref<Array<{ id: number; project: string; content: string }>>([])
+const recentDocuments = ref<Array<{ path: string; project: string; version: number; author: string }>>([])
+const memoryTotal = ref<number | null>(null)
+const documentTotal = ref<number | null>(null)
+const homeError = ref<OperatorSourceError | null>(null)
+const homePending = ref(false)
+let generation = 0
+let request: AbortController | undefined
+watch(project, async (id) => {
+  const current = ++generation
+  request?.abort()
+  const controller = new AbortController()
+  request = controller
+  recentMemories.value = []
+  recentDocuments.value = []
+  memoryTotal.value = null
+  documentTotal.value = null
+  homeError.value = null
+  homePending.value = false
+  if (!id || id === 'all') return
+  homePending.value = true
+  try {
+    const params = new URLSearchParams({ offset: '0', limit: '3' })
+    const [memories, documents] = await Promise.all([
+      loadKnowledgePage<typeof recentMemories.value[number]>('/api/memories', id, params, controller.signal),
+      loadKnowledgePage<typeof recentDocuments.value[number]>('/api/documents', id, params, controller.signal),
+    ])
+    if (current !== generation || project.value !== id) return
+    if (memories.items.some((row) => row.project !== id) || documents.items.some((row) => row.project !== id)) throw new TypeError('Home scope mismatch')
+    recentMemories.value = memories.items
+    recentDocuments.value = documents.items
+    memoryTotal.value = memories.total
+    documentTotal.value = documents.total
+  } catch (cause) {
+    if (current === generation && !controller.signal.aborted) homeError.value = toOperatorSourceError(cause, { source: 'home-knowledge', path: '/api/memories, /api/documents', method: 'GET' })
+  } finally { if (current === generation) homePending.value = false }
+}, { immediate: true, flush: 'sync' })
+onBeforeUnmount(() => { generation += 1; request?.abort() })
 </script>
 
 <template>
-  <div class="overview-page">
-    <header class="page-head">
-      <h1>{{ t('overview.pageTitle') }}</h1>
-      <p>{{ t('overview.pageSubtitle') }}</p>
-    </header>
-
-    <section class="ov-hero">
-      <div class="ov-hi">
-        <h2>{{ t('overview.heroTitle') }}</h2>
-        <p>{{ info.host }} · {{ info.version }} · {{ t('overview.uptimePrefix') }} {{ info.uptime }}</p>
-      </div>
-      <div class="ov-id">
-        <span class="health-pill" data-h="degraded"><span class="hd" />{{ t('shell.statusDegradation') }} · {{ info.health }}</span>
-        <span class="bdg gate">{{ t('shell.statusNoise') }} {{ info.noise }}</span>
-      </div>
+  <div class="home-page">
+    <header><h1>{{ project ? t('knowledge.homeProject', { project: project === 'all' ? t('knowledge.allProjects') : label }) : t('knowledge.homeTitle') }}</h1><p>{{ t(project ? 'knowledge.homeLead' : 'knowledge.entryLead') }}</p></header>
+    <section v-if="!project" class="project-entry">
+      <label class="field"><span>{{ t('knowledge.findProject') }}</span><input v-model="projectQuery" type="search" /></label>
+      <p v-if="pending" role="status">{{ t('knowledge.loading') }}</p>
+      <div v-else-if="error" role="status"><p>{{ t(operatorDiagnosisKey(error)) }}</p><button class="btn" @click="context.refresh">{{ t('knowledge.retry') }}</button></div>
+      <p v-else-if="!projects.length">{{ t('knowledge.noProjects') }}</p>
+      <p v-else-if="!visibleProjects.length">{{ t('knowledge.noProjectMatch') }}</p>
+      <ul v-else class="project-list">
+        <li v-for="id in visibleProjects" :key="id"><button @click="context.select(id)"><strong>{{ projectName(id) }}</strong></button></li>
+      </ul>
+      <button class="btn" @click="context.select('all')">{{ t('knowledge.browseAll') }}</button>
+      <RouterLink :to="context.to('/code')" data-testid="overview-workspace-entry">{{ t('nav.items.code') }}</RouterLink><p>{{ t('knowledge.codeScope') }}</p>
     </section>
-
-    <RouterLink to="/code" class="workspace-entry" data-testid="overview-workspace-entry">
-      <svg class="workspace-icon" aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" v-html="iconPath('code')" />
-      <span>
-        <strong>{{ t('nav.items.code') }}</strong>
-        <span>{{ t('overview.cards.code.sub') }}</span>
-      </span>
-      <span aria-hidden="true">→</span>
-    </RouterLink>
-
-    <section class="ov-attention">
-      <h3>
-        <svg class="ov-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M8 1.5 15 14H1Z" /><path d="M8 6.5v3" /><circle cx="8" cy="11.6" r=".4" />
-        </svg>
-        {{ t('overview.attentionTitle') }}
-      </h3>
-      <div class="ov-att-list">
-        <RouterLink v-for="item in attention" :key="item.text" :to="item.to" class="ov-att-row">
-          <span class="oa-dot" :style="{ background: item.color }" />
-          <span>{{ item.text }}</span>
-          <span class="oa-go">{{ item.label }}</span>
-        </RouterLink>
-      </div>
-    </section>
-
-    <section class="ov-viz">
-      <div class="vz">
-        <h4>{{ t('overview.viz.memoryComposition') }}<span class="src">{{ t('overview.recordsCount', { n: memoryCountDisplay }) }}</span></h4>
-        <div class="donut-row">
-          <div
-            class="donut"
-            :style="`--c1:${memoryTiers[0].color};--s1:${memoryStops[0]};--c2:${memoryTiers[1].color};--s2:${memoryStops[1]};--c3:${memoryTiers[2].color};--s3:${memoryStops[2]};--c4:var(--muted)`"
-          >
-            <span class="dn">{{ memoryCountDisplay }}</span>
-            <span class="dl">{{ t('overview.total') }}</span>
-          </div>
-          <div class="donut-legend">
-            <div v-for="tier in memoryTiers" :key="tier.label" class="dlg">
-              <span class="sw" :style="{ background: tier.color }" />
-              <span class="dn2">{{ tier.label }}</span>
-              <span class="dv">{{ displayCount(tier.count, memoryPending) }}</span>
-            </div>
-          </div>
-        </div>
-        <div class="vz-trend">
-          <svg viewBox="0 0 120 30" preserveAspectRatio="none" aria-hidden="true"><line x1="0" y1="15" x2="120" y2="15" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3 5" opacity=".6" /></svg>
-          <span class="tt">{{ t('overview.viz.memoryTrend') }} <b>{{ t('overview.badges.mustBuildParen') }}</b>; {{ t('overview.snapshotOnly') }}</span>
-        </div>
-      </div>
-
-      <div class="vz">
-        <h4>{{ t('overview.viz.tasksByStatus') }}<span class="src">{{ t('overview.totalIssues', { n: issueCountDisplay }) }}</span></h4>
-        <div class="hbars">
-          <div v-for="bar in taskBars" :key="bar.label" class="hbar">
-            <span class="hl">{{ bar.label }}</span>
-            <span class="ht"><i :style="{ width: `${bar.width}%`, background: bar.color }" /></span>
-            <span class="hv">{{ bar.display }}</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="vz">
-        <h4>{{ t('overview.viz.modelHealth') }}<span class="src">/api/model-health</span></h4>
-        <div class="segbar"><i v-for="row in modelHealth" :key="row.label" :style="{ width: `${row.width}%`, background: row.color }" /></div>
-        <div class="seg-legend">
-          <span v-for="row in modelHealth" :key="row.label"><span class="sw" :style="{ background: row.color }" />{{ row.label }} · {{ row.count }}</span>
-        </div>
-        <div class="vz-trend">
-          <svg viewBox="0 0 120 30" preserveAspectRatio="none" aria-hidden="true"><line x1="0" y1="15" x2="120" y2="15" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3 5" opacity=".6" /></svg>
-          <span class="tt">
-            <template v-if="modelsError">{{ t('overview.modelHealth.errorShort', { message: modelsError }) }}</template>
-            <template v-else>{{ t('overview.viz.modelTrend') }} <b>{{ t('overview.badges.mustBuild') }}</b>; {{ t('overview.snapshotOnly') }}</template>
-          </span>
-        </div>
-      </div>
-    </section>
-
-    <div class="ov-section-t">{{ t('overview.groups.memoryProduct') }}</div>
-    <div class="ov-grid">
-      <RouterLink v-for="card in memoryCards" :key="card.to" :to="card.to" class="ov-card">
-        <div class="ov-top">
-          <svg class="ov-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" v-html="iconPath(card.icon)" />
-          <span class="ov-name">{{ card.name }}</span>
-          <span class="ov-arr">→</span>
-        </div>
-        <div v-if="card.big !== null" class="ov-big">{{ card.big }}</div>
-        <div class="ov-sub">{{ card.sub }}</div>
-        <div v-if="card.meta.length" class="ov-meta">
-          <span v-for="meta in card.meta" :key="meta.text" class="bdg" :class="meta.cls">{{ meta.text }}</span>
-        </div>
-      </RouterLink>
-    </div>
-
-    <div class="ov-section-t">{{ t('overview.groups.behaviorWork') }}</div>
-    <div class="ov-grid">
-      <RouterLink v-for="card in workCards" :key="card.to" :to="card.to" class="ov-card">
-        <div class="ov-top">
-          <svg class="ov-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" v-html="iconPath(card.icon)" />
-          <span class="ov-name">{{ card.name }}</span>
-          <span class="ov-arr">→</span>
-        </div>
-        <div class="ov-big">{{ card.big }}</div>
-        <div class="ov-sub">{{ card.sub }}</div>
-        <div v-if="card.meta.length" class="ov-meta">
-          <span v-for="meta in card.meta" :key="meta.text" class="bdg" :class="meta.cls">{{ meta.text }}</span>
-        </div>
-      </RouterLink>
-    </div>
-
-    <div class="ov-section-t">{{ t('overview.groups.service') }}</div>
-    <div class="ov-grid">
-      <RouterLink v-for="card in serviceCards" :key="card.to" :to="card.to" class="ov-card">
-        <div class="ov-top">
-          <svg class="ov-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" v-html="iconPath(card.icon)" />
-          <span class="ov-name">{{ card.name }}</span>
-          <span class="ov-arr">→</span>
-        </div>
-        <div class="ov-big">{{ card.big }}</div>
-        <div class="ov-sub">{{ card.sub }}</div>
-        <div v-if="card.meta.length" class="ov-meta">
-          <span v-for="meta in card.meta" :key="meta.text" class="bdg" :class="meta.cls">{{ meta.text }}</span>
-        </div>
-      </RouterLink>
-    </div>
+    <template v-else>
+      <section class="destinations" aria-labelledby="knowledge-home-heading">
+        <h2 id="knowledge-home-heading">{{ t('knowledge.yourKnowledge') }}</h2>
+        <RouterLink :to="context.to('/memory')"><strong>{{ t('nav.items.memory') }}</strong><span>{{ t('knowledge.memoryHome') }}</span><span aria-hidden="true">→</span></RouterLink>
+        <RouterLink :to="context.to('/documents')"><strong>{{ t('nav.items.documents') }}</strong><span>{{ t('knowledge.documentsHome') }}</span><span aria-hidden="true">→</span></RouterLink>
+        <RouterLink :to="context.to('/rules')"><strong>{{ t('nav.items.rules') }}</strong><span>{{ t('knowledge.rulesHome') }}</span><span aria-hidden="true">→</span></RouterLink>
+      </section>
+      <section v-if="project !== 'all'" class="recent-knowledge">
+        <p v-if="homePending" role="status">{{ t('knowledge.loading') }}</p>
+        <div v-else-if="homeError" role="status"><p>{{ t(operatorDiagnosisKey(homeError)) }}</p><RouterLink :to="context.to('/memory')">{{ t('knowledge.openMemory') }}</RouterLink></div>
+        <template v-else>
+          <section><h2>{{ t('knowledge.recentMemory') }}</h2><p>{{ memoryTotal === null ? t('knowledge.unknown') : t('knowledge.matches', { count: memoryTotal }) }}</p><p v-if="memoryTotal === 0">{{ t('knowledge.noMemoryHelp') }}</p><RouterLink v-for="memory in recentMemories" :key="memory.id" :to="{ path: '/memory', query: { project, memory: String(memory.id) } }">{{ memory.content }}</RouterLink></section>
+          <section><h2>{{ t('knowledge.recentDocuments') }}</h2><p>{{ documentTotal === null ? t('knowledge.unknown') : t('knowledge.matches', { count: documentTotal }) }}</p><p v-if="documentTotal === 0">{{ t('knowledge.noDocumentsHelp') }}</p><RouterLink v-for="doc in recentDocuments" :key="doc.path" :to="{ path: '/documents', query: { project, path: doc.path } }"><strong>{{ doc.path }}</strong><span>{{ t('knowledge.version') }} {{ doc.version }} · {{ doc.author || t('knowledge.notRecorded') }}</span></RouterLink></section>
+        </template>
+      </section>
+      <section class="destinations">
+        <h2>{{ t('nav.groups.workspace') }}</h2>
+        <RouterLink :to="context.to('/code')" data-testid="overview-workspace-entry"><strong>{{ t('nav.items.code') }}</strong><span>{{ t('overview.cards.code.sub') }}</span><span aria-hidden="true">→</span></RouterLink>
+        <RouterLink :to="context.to('/projects')"><strong>{{ t('knowledge.sessions') }}</strong><span>{{ t('knowledge.sessionsHome') }}</span><span aria-hidden="true">→</span></RouterLink>
+      </section>
+      <section class="secondary-links"><h2>{{ t('nav.groups.attention') }}</h2><RouterLink :to="context.to('/queue')">{{ t('nav.items.queue') }}</RouterLink><RouterLink :to="context.to('/issues')">{{ t('nav.items.issues') }}</RouterLink><RouterLink to="/health">{{ t('knowledge.diagnostics') }}</RouterLink></section>
+      <details><summary>{{ t('knowledge.projectIdentity') }}</summary><code>{{ project }}</code><p>{{ t('knowledge.identityHelp') }}</p></details>
+    </template>
   </div>
 </template>
 
 <style scoped>
-.overview-page { display:flex; flex-direction:column; gap:18px; }
-.page-head { margin-bottom:2px; padding-bottom:14px; border-bottom:1px solid var(--border); }
-.page-head h1 { margin:0 0 4px; font-size:var(--text-xl); font-weight:800; letter-spacing:var(--tracking-display); }
-.page-head p { margin:0; color:var(--muted); font-size:var(--text-sm); }
-.ov-hero { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; padding:18px 20px; border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); }
-.workspace-entry { display:grid; grid-template-columns:24px minmax(0,1fr) auto; align-items:center; gap:12px; border:1px solid var(--accent); border-radius:var(--r-md); background:var(--surface); padding:15px 18px; color:var(--fg); text-decoration:none; }
-.workspace-entry:hover { background:var(--surface-warm); }.workspace-entry:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }.workspace-icon { width:20px; height:20px; color:var(--accent); }.workspace-entry span:nth-child(2) { display:grid; gap:3px; }.workspace-entry strong { font-size:var(--text-sm); }.workspace-entry span:nth-child(2) span, .workspace-entry > span:last-child { color:var(--muted); font-size:var(--text-sm); }
-.ov-hi h2 { margin:0 0 3px; font-size:var(--text-2xl); font-weight:800; letter-spacing:var(--tracking-display); }
-.ov-hi p { margin:0; color:var(--muted); font-size:var(--text-sm); }
-.ov-id { display:flex; align-items:center; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
-.health-pill { display:inline-flex; align-items:center; gap:7px; padding:5px 11px 5px 9px; border-radius:var(--radius-pill); font-size:var(--text-xs); font-weight:700; border:1px solid color-mix(in oklab,var(--state-warn),transparent 60%); color:var(--state-warn); background:color-mix(in oklab,var(--state-warn),transparent 89%); }
-.health-pill .hd { width:8px; height:8px; border-radius:50%; background:var(--state-warn); }
-.bdg { display:inline-flex; align-items:center; gap:4px; border:1px solid var(--border); border-radius:var(--radius-pill); padding:3px 8px; font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:.03em; color:var(--fg-2); background:var(--surface-warm); }
-.bdg.live { color:var(--class-live); border-color:color-mix(in oklab,var(--class-live),transparent 58%); background:color-mix(in oklab,var(--class-live),transparent 90%); }
-.bdg.gate, .bdg.pri-high { color:var(--class-dormant); border-color:color-mix(in oklab,var(--class-dormant),transparent 58%); background:color-mix(in oklab,var(--class-dormant),transparent 90%); }
-.bdg.mb { color:var(--class-mustbuild); border-color:color-mix(in oklab,var(--class-mustbuild),transparent 58%); background:color-mix(in oklab,var(--class-mustbuild),transparent 90%); }
-.bdg.status { color:var(--fg-2); }
-.ov-attention { border:1px solid color-mix(in oklab,var(--state-warn),transparent 55%); border-radius:var(--r-md); background:color-mix(in oklab,var(--state-warn),transparent 91%); padding:15px 18px; }
-.ov-attention h3 { display:flex; align-items:center; gap:8px; margin:0 0 9px; color:var(--state-warn); font-size:var(--text-sm); font-weight:800; }
-.ov-ico { width:16px; height:16px; flex:none; }
-.ov-att-list { display:flex; flex-direction:column; gap:2px; }
-.ov-att-row { display:grid; grid-template-columns:8px minmax(0,1fr) auto; align-items:center; gap:10px; padding:7px 0; color:var(--fg-2); text-decoration:none; font-size:var(--text-sm); }
-.ov-att-row:hover { color:var(--fg); }
-.oa-dot { width:7px; height:7px; border-radius:50%; }
-.oa-go { color:var(--muted); font-size:var(--text-xs); }
-.ov-viz { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; }
-.vz { min-width:0; border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); padding:16px 18px; }
-.vz h4 { display:flex; align-items:center; gap:8px; margin:0 0 14px; font-size:var(--text-sm); font-weight:800; }
-.vz h4 .src { margin-left:auto; font-family:var(--font-mono); font-size:10px; color:var(--muted); font-weight:500; }
-.donut-row { display:flex; align-items:center; gap:18px; }
-.donut { width:118px; height:118px; border-radius:50%; flex:none; position:relative; display:grid; place-items:center; background:conic-gradient(var(--c1) calc(var(--s1)*1%), var(--c2) 0 calc(var(--s2)*1%), var(--c3) 0 calc(var(--s3)*1%), var(--c4) 0); }
-.donut::after { content:""; position:absolute; inset:15px; border-radius:50%; background:var(--surface); box-shadow:inset 0 0 0 1px var(--border-soft); }
-.donut .dn { position:relative; z-index:1; font-family:var(--font-mono); font-size:var(--text-xl); font-weight:800; line-height:1; }
-.donut .dl { position:relative; z-index:1; margin-top:24px; margin-left:-28px; font-size:9px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); }
-.donut-legend { display:flex; flex-direction:column; gap:7px; flex:1; min-width:0; }
-.dlg { display:flex; align-items:center; gap:8px; color:var(--fg-2); font-size:var(--text-sm); }
-.dlg .sw, .seg-legend .sw { width:10px; height:10px; border-radius:3px; flex:none; }
-.dlg .dv { margin-left:auto; font-family:var(--font-mono); font-weight:700; color:var(--fg); }
-.hbars { display:flex; flex-direction:column; gap:11px; }
-.hbar { display:grid; grid-template-columns:96px 1fr 34px; align-items:center; gap:10px; font-size:var(--text-sm); }
-.hl { color:var(--fg-2); }
-.ht { height:9px; border-radius:var(--radius-pill); overflow:hidden; background:var(--border-soft); }
-.ht i { display:block; height:100%; border-radius:var(--radius-pill); }
-.hv { font-family:var(--font-mono); font-weight:700; text-align:right; }
-.segbar { display:flex; height:14px; border-radius:var(--radius-pill); overflow:hidden; background:var(--border-soft); margin-bottom:12px; }
-.segbar i { min-width:3px; }
-.seg-legend { display:flex; gap:16px; flex-wrap:wrap; color:var(--muted); font-size:var(--text-xs); }
-.seg-legend span { display:inline-flex; align-items:center; gap:6px; }
-.vz-trend { display:flex; align-items:center; gap:12px; margin-top:13px; padding-top:12px; border-top:1px solid var(--border-soft); }
-.vz-trend svg { width:120px; height:30px; flex:none; color:var(--class-mustbuild); }
-.vz-trend .tt { color:var(--muted); font-size:var(--text-xs); line-height:1.35; }
-.vz-trend b { color:var(--class-mustbuild); }
-.ov-section-t { margin:3px 0 -5px; color:var(--muted); font-size:var(--text-xs); font-weight:800; text-transform:uppercase; letter-spacing:.08em; }
-.ov-grid { display:grid; grid-template-columns:repeat(4,minmax(180px,1fr)); gap:14px; }
-.ov-card { min-height:118px; display:flex; flex-direction:column; gap:8px; border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); padding:15px 17px; color:var(--fg); text-decoration:none; }
-.ov-card:hover { border-color:var(--accent); background:var(--surface-warm); }
-.ov-top { display:flex; align-items:center; gap:8px; min-width:0; }
-.ov-top .ov-ico { color:var(--accent); }
-.ov-name { font-weight:800; font-size:var(--text-sm); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.ov-arr { margin-left:auto; color:var(--muted); }
-.ov-big { margin-top:4px; font-family:var(--font-mono); font-size:var(--text-2xl); font-weight:800; line-height:1; }
-.ov-sub { color:var(--muted); font-size:var(--text-xs); line-height:1.4; }
-.ov-meta { display:flex; align-items:center; gap:7px; flex-wrap:wrap; margin-top:auto; }
-@media (max-width:1180px) {
-  .ov-viz { grid-template-columns:1fr; }
-  .ov-grid { grid-template-columns:repeat(2,minmax(180px,1fr)); }
-}
-@media (max-width:760px) {
-  .ov-hero { flex-direction:column; }
-  .workspace-entry { grid-template-columns:20px minmax(0,1fr); }.workspace-entry > span:last-child { display:none; }
-  .ov-grid { grid-template-columns:1fr; }
-  .ov-att-row { grid-template-columns:8px 1fr; }
-  .oa-go { grid-column:2; }
-}
+.home-page { max-width:1080px; display:grid; gap:28px; }
+h1 { font-size:var(--text-xl); margin:0 0 8px; } h2 { font-size:var(--text-lg); margin:0 0 8px; }
+p { color:var(--muted); margin:0; max-width:70ch; }
+.project-entry { display:grid; gap:16px; max-width:760px; }
+.field { display:grid; gap:6px; color:var(--muted); }
+input { padding:10px 12px; background:var(--surface); color:var(--fg); border:1px solid var(--border); border-radius:var(--r-sm); }
+.project-list { margin:0; padding:0; list-style:none; max-height:50vh; overflow:auto; }
+.project-list button { width:100%; padding:14px; display:grid; gap:4px; text-align:left; background:var(--surface); color:var(--fg); border:0; border-bottom:1px solid var(--border); cursor:pointer; }
+.project-list button:hover { background:var(--surface-warm); }
+.project-list span { color:var(--muted); font-size:var(--text-xs); overflow-wrap:anywhere; }
+.destinations { display:grid; }
+.destinations > a { display:grid; grid-template-columns:160px minmax(0,1fr) 24px; align-items:center; gap:16px; padding:20px 0; color:var(--fg); border-bottom:1px solid var(--border); }
+.destinations > a:hover { color:var(--accent); }
+.destinations > a span { color:var(--muted); }
+.secondary-links { display:flex; flex-wrap:wrap; align-items:center; gap:16px; }
+.secondary-links h2 { flex-basis:100%; }
+.recent-knowledge { display:grid; grid-template-columns:1fr 1fr; gap:28px; }
+.recent-knowledge section { min-width:0; }
+.recent-knowledge a { display:grid; gap:6px; padding:14px 0; border-bottom:1px solid var(--border); color:var(--fg); overflow-wrap:anywhere; }
+.recent-knowledge a:first-of-type { display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+.recent-knowledge a span { color:var(--muted); font-size:var(--text-sm); }
+@media(max-width:760px) { .recent-knowledge { grid-template-columns:1fr; } }
+.btn { min-height:40px; justify-self:start; padding:8px 14px; background:var(--surface); color:var(--fg); border:1px solid var(--border); border-radius:var(--r-sm); cursor:pointer; }
+details { color:var(--muted); } summary { cursor:pointer; } code { overflow-wrap:anywhere; }
+@media(max-width:760px) { .destinations > a { grid-template-columns:minmax(0,1fr) 24px; gap:6px; } .destinations > a span:first-of-type { grid-row:2; } .destinations > a span:last-child { grid-row:1 / 3; grid-column:2; } .btn, .project-list button { min-height:44px; } }
 </style>

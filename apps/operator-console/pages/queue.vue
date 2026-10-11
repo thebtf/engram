@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { resolvePageSize, usePersistentPageSize } from '../composables/usePersistentPageSize'
-import { QUEUE_ALL_PROJECTS, useOperatorQueue, type OperatorCandidate } from '../composables/useOperatorQueue'
+import { useOperatorQueue, type OperatorCandidate } from '../composables/useOperatorQueue'
+import { projectName } from '../composables/useOperatorProjectContext'
 
 type CandidateAction = 'promote' | 'reject' | 'supersede'
 
 const { t } = useI18n()
 const {
   rows,
-  projects,
   selectedProject,
   loadState,
   pending,
@@ -84,9 +84,6 @@ function confidenceLabel(candidate: OperatorCandidate) {
   return candidate.confidence === null ? '—' : `${Math.round(candidate.confidence * 100)}%`
 }
 
-function projectLabel(project: string) {
-  return project === QUEUE_ALL_PROJECTS ? t('queue.filters.allProjects') : project
-}
 
 function candidateProjectsLabel(candidate: OperatorCandidate) {
   return candidate.affectedProjects.length ? candidate.affectedProjects.join(', ') : t('queue.filters.unscoped')
@@ -147,6 +144,7 @@ async function runAction(candidate: OperatorCandidate, action: CandidateAction) 
   }
 
   setCandidateBusy(candidate.id, action)
+  const project = selectedProject.value
   try {
     const result = action === 'promote'
       ? await promoteCandidate(candidate.id)
@@ -154,6 +152,7 @@ async function runAction(candidate: OperatorCandidate, action: CandidateAction) 
         ? await rejectCandidate(candidate.id)
         : await supersedeCandidate(candidate.id)
 
+    if (project !== selectedProject.value) return
     mutationResult.value = result
     if (result.kind === 'committed_verified' || (result.kind === 'partial' && result.items.some((item) => String(item.targetId) === candidate.id && item.outcome === 'committed'))) {
       const nextSelected = { ...selected.value }
@@ -184,15 +183,15 @@ async function runAction(candidate: OperatorCandidate, action: CandidateAction) 
 
     <section class="queue-brief">
       <div class="metric">
-        <b>{{ rows.length }}</b>
+        <b>{{ loadState.kind === 'live' || loadState.kind === 'empty' ? rows.length : '—' }}</b>
         <span>{{ t('queue.metrics.pending') }}</span>
       </div>
       <div class="metric">
-        <b>{{ promotedTargetCount }}</b>
+        <b>{{ loadState.kind === 'live' || loadState.kind === 'empty' ? promotedTargetCount : '—' }}</b>
         <span>{{ t('queue.metrics.promotable') }}</span>
       </div>
       <div class="metric">
-        <b>{{ lowConfidenceCount }}</b>
+        <b>{{ loadState.kind === 'live' || loadState.kind === 'empty' ? lowConfidenceCount : '—' }}</b>
         <span>{{ t('queue.metrics.lowConfidence') }}</span>
       </div>
       <div class="brief-copy">
@@ -203,9 +202,7 @@ async function runAction(candidate: OperatorCandidate, action: CandidateAction) 
 
     <section class="ops">
       <div class="ops-left">
-        <select id="queue-project-filter" v-model="selectedProject" class="select" name="queue-project-filter" :aria-label="t('queue.filters.project')">
-          <option v-for="project in projects" :key="project" :value="project">{{ projectLabel(project) }}</option>
-        </select>
+        <span>{{ selectedProject === 'all' ? t('knowledge.allProjects') : selectedProject ? projectName(selectedProject) : t('knowledge.chooseProject') }}</span>
         <button class="tbtn" @click="selectAll">{{ t('queue.actions.selectAll') }}</button>
         <button class="tbtn" @click="clearSelected">{{ t('queue.actions.clearSelection') }}</button>
         <button class="tbtn" @click="refresh">{{ t('queue.actions.refresh') }}</button>

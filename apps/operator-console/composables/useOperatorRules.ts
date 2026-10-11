@@ -1,5 +1,6 @@
-import { ref as sharedRef, type Ref as SharedRef } from 'vue'
+import { onBeforeUnmount, ref as sharedRef, type Ref as SharedRef } from 'vue'
 import { startedLoads } from './useConsolePreferences'
+import { useOperatorProjectContext } from './useOperatorProjectContext'
 
 let sharedRulesPageRows: SharedRef<RuleRow[]> | undefined
 let sharedRulesPageProjectOptions: SharedRef<string[]> | undefined
@@ -498,7 +499,7 @@ function startOnce(key: string, run: () => Promise<void>) {
   }
 }
 
-export function useOperatorRules(): {
+export function useOperatorRules(initialScope = 'all'): {
   rows: RuleRow[]
   scopeOptions: ComputedRef<string[]>
   loadState: ComputedRef<OperatorLoadState<RuleRow[]>>
@@ -513,37 +514,38 @@ export function useOperatorRules(): {
   runRuleSelectionOperation: (input: RuleSelectionOperationInput) => Promise<RuleSelectionOperationResult>
   scopeChangeGap: OperatorUnsupportedAction
 } {
-  const initialEvidence = endpointEvidence(ruleListPath('all'), 'rules-list')
+  const initialEvidence = endpointEvidence(ruleListPath(initialScope), 'rules-list')
   const rowsState = (sharedRulesPageRows ??= sharedRef<RuleRow[]>((() => [])()))
   const projectOptions = (sharedRulesPageProjectOptions ??= sharedRef<string[]>((() => [])()))
+  const context = useOperatorProjectContext()
   const state = (sharedRulesPageState ??= sharedRef<OperatorLoadState<RuleRow[]>>((() => pendingState(initialEvidence, rowsState.value))()))
 
   const loadState = computed(() => state.value)
   const scopeOptions = computed(() => ['global', ...projectOptions.value])
   const pending = computed(() => state.value.kind === 'pending')
   const error = computed(() => state.value.kind === 'error' ? state.value.error.message : null)
+  let generation = 0
+  let currentScope = initialScope
 
   async function refreshProjects() {
-    const result = await loadOperatorJson<string[]>('/api/projects', {
-      source: 'rules-projects',
-      empty: (rows) => !rows.length,
-    })
-    if (result.kind === 'live' || result.kind === 'empty') {
-      replaceArray(projectOptions.value, [...new Set(result.data.filter((project) => project.trim()))].sort())
-    } else if (result.kind === 'error' && import.meta.env.DEV) {
-      console.warn('[useOperatorRules] project options unavailable', result.error.message)
-    }
+    await context.refresh()
+    replaceArray(projectOptions.value, context.projects.value)
   }
 
-  async function refresh(scope = 'all') {
+  async function refresh(scope = currentScope) {
+    const current = ++generation
+    currentScope = scope
     const endpoint = ruleListPath(scope)
     const evidence = endpointEvidence(endpoint, 'rules-list')
-    state.value = pendingState(evidence, rowsState.value)
+    replaceArray(rowsState.value, [])
+    state.value = pendingState(evidence, [])
     await refreshProjects()
+    if (current !== generation) return
     const result = await loadOperatorJson<ApiRuleRow[]>(endpoint, {
       source: 'rules-list',
       empty: (rows) => !rows.length,
     })
+    if (current !== generation) return
 
     if (result.kind === 'live' || result.kind === 'empty') {
       replaceArray(rowsState.value, result.data.map(mapRuleRow))
@@ -663,7 +665,8 @@ export function useOperatorRules(): {
     'Behavioral rule scope changes are intentionally not accepted by the current update endpoint.',
   )
 
-  startOnce('rules-page', refresh)
+  startOnce('rules-page', () => refresh(initialScope))
+  onBeforeUnmount(() => { generation += 1 })
 
   return {
     rows: rowsState.value,

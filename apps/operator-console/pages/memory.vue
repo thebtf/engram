@@ -1,848 +1,250 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { useOperatorProjectContext, projectName } from '../composables/useOperatorProjectContext'
 import { PRINCIPAL_CURRENT_PROJECT, useOperatorMemoryLab, useOperatorPrincipalMemorySurface, type MemoryAuditResponse } from '../composables/useOperatorMemoryLab'
-import { MEMORY_PAGE_SIZE_STORAGE_KEY, resolvePageSize, usePersistentPageSize } from '../composables/usePersistentPageSize'
+import { operatorDiagnosisKey, type OperatorLoadState, type OperatorSourceError, toOperatorSourceError } from '../composables/useOperatorApi'
 import type { Memory } from '../composables/useMockData'
-import type { OperatorLoadState } from '../composables/useOperatorApi'
 import type { MutationResult } from '../composables/useApi'
 
 const { t, locale } = useI18n()
-const {
-  rows: all,
-  loadState,
-  pending,
-  error,
-  refresh,
-  loadMemoryByID,
-  deleteMemory,
-  suppressMemory,
-  suppressMemories,
-  auditMemory,
-  provenanceGap,
-  actionGaps,
-} = useOperatorMemoryLab()
-const project = ref('all')
-const principalSurface = useOperatorPrincipalMemorySurface(project)
-const principalScope = principalSurface.scope
-const principalLoadState = principalSurface.loadState
-const principalBriefState = principalSurface.briefState
-const principalAttributionVisible = principalSurface.attributionVisible
-
-type MemoryFilter = 'active' | 'flagged' | 'stale' | 'low' | 'chain'
-type MemoryAuditState = OperatorLoadState<MemoryAuditResponse>
-
-const filters = ref<Record<MemoryFilter, boolean>>({
-  active: false,
-  flagged: false,
-  stale: false,
-  low: false,
-  chain: false,
-})
-const selected = ref<Record<string, boolean>>({})
-const openId = ref<string | null>(null)
-const page = ref(1)
-const { pageSize, pageSizeOptions } = usePersistentPageSize(MEMORY_PAGE_SIZE_STORAGE_KEY, 10)
-const deleteConfirmId = ref<string | null>(null)
-const suppressConfirmId = ref<string | null>(null)
-const bulkSuppressConfirm = ref(false)
-const deletePending = ref(false)
-const suppressPending = ref(false)
-const bulkSuppressPending = ref(false)
-const notice = ref<{ kind: 'success' | 'error'; text: string } | null>(null)
-const mutationResult = ref<MutationResult | null>(null)
-const auditState = ref<MemoryAuditState | null>(null)
-const auditPending = ref(false)
-let auditRequestSeq = 0
-
-const projects = computed(() => [...new Set(all.map((memory) => memory.project).filter(Boolean))].sort())
-const activeFilterCount = computed(() => Object.values(filters.value).filter(Boolean).length + (project.value === 'all' ? 0 : 1))
-
-function hasFilter(memory: Memory, key: MemoryFilter) {
-  switch (key) {
-    case 'active': return memory.status === 'active'
-    case 'flagged': return memory.status === 'flagged' || Boolean(memory.noise)
-    case 'stale': return memory.status === 'superseded' || memory.status === 'archived' || (memory.ageDays !== null && memory.ageDays >= 30 && (!memory.utilityKnown || memory.cite === 0))
-    case 'low': return memory.confidenceKnown && memory.conf < 0.85
-    case 'chain': return memory.status === 'superseded' || Boolean(memory.supersededBy) || memory.tags.some((tag) => ['superseded', 'replace', 'replacement'].includes(tag))
-    default: return true
-  }
-}
-
-const filtered = computed(() => all.filter((memory) => {
-  if (project.value !== 'all' && memory.project !== project.value) return false
-  const activeFilters = Object.entries(filters.value).filter(([, enabled]) => enabled).map(([key]) => key as MemoryFilter)
-  if (!activeFilters.length) return true
-  return activeFilters.every((key) => hasFilter(memory, key))
-}))
-
-const effectivePageSize = computed(() => resolvePageSize(pageSize.value, filtered.value.length))
-const pageCount = computed(() => Math.max(1, Math.ceil(filtered.value.length / effectivePageSize.value)))
-const pageRows = computed(() => {
-  const start = (page.value - 1) * effectivePageSize.value
-  return filtered.value.slice(start, start + effectivePageSize.value)
-})
-const pageRange = computed(() => {
-  if (!filtered.value.length) return { from: 0, to: 0 }
-  return {
-    from: ((page.value - 1) * effectivePageSize.value) + 1,
-    to: Math.min(page.value * effectivePageSize.value, filtered.value.length),
-  }
-})
-const selectedIds = computed(() => Object.entries(selected.value).filter(([, value]) => value).map(([id]) => id))
-const selectedCount = computed(() => selectedIds.value.length)
-const bulkVerbs = computed(() => {
-  if (bulkSuppressPending.value) return [t('memory.bulk.suppressing')]
-  return [bulkSuppressConfirm.value ? t('memory.bulk.confirmHideNoise') : t('memory.bulk.hideNoise')]
-})
-const bulkNote = computed(() => bulkSuppressConfirm.value ? t('memory.bulk.confirmNote') : t('memory.bulk.note'))
-const opened = computed(() => all.find((memory) => memory.id === openId.value) || null)
-const auditEntries = computed(() => auditState.value?.data?.entries || [])
-const principalStateKind = computed(() => principalSurface.riskyConfirmation.value ? 'risky-confirm' : principalLoadState.value.kind)
-const principalSummary = computed(() => principalLoadState.value.data)
-const principalItems = computed(() => principalSummary.value?.items || [])
-const principalProjectOptions = computed(() => [PRINCIPAL_CURRENT_PROJECT, 'all', ...projects.value])
-const principalStateText = computed(() => {
-  if (principalStateKind.value === 'pending') return t('memory.principal.state.pending')
-  if (principalStateKind.value === 'live') return t('memory.principal.state.live')
-  if (principalStateKind.value === 'empty') return t('memory.principal.state.empty')
-  if (principalStateKind.value === 'gated') return t('memory.principal.state.gated', { reason: principalLoadState.value.kind === 'gated' ? principalLoadState.value.reason : '-' })
-  if (principalStateKind.value === 'mustbuild') return t('memory.principal.state.mustbuild')
-  if (principalStateKind.value === 'stale') return t('memory.principal.state.stale')
-  if (principalStateKind.value === 'error') return t('memory.principal.state.error', { message: principalLoadState.value.kind === 'error' ? principalLoadState.value.error.message : '-' })
-  if (principalStateKind.value === 'risky-confirm') return t('memory.principal.state.risky-confirm')
-  return t('memory.principal.state.gated', { reason: '-' })
-})
-const principalBriefText = computed(() => {
-  if (principalBriefState.value.kind === 'mustbuild') return t('memory.principal.brief.mustbuild')
-  if (principalBriefState.value.kind === 'error') return t('memory.principal.brief.error', { message: principalBriefState.value.error.message })
-  if (principalBriefState.value.kind === 'empty') return t('memory.principal.brief.empty')
-  if (principalBriefState.value.kind === 'pending') return t('memory.principal.brief.pending')
-  return t('memory.principal.brief.live')
-})
-const noiseRatio = computed(() => {
-  const measured = all.filter((memory) => memory.utilityKnown)
-  if (!measured.length) return '—'
-  return (all.filter((memory) => memory.noise || (memory.utilityKnown && memory.inj >= 10 && memory.cite === 0)).length / measured.length).toFixed(2)
-})
-
 const route = useRoute()
-const requestedProject = computed(() => typeof route.query.project === 'string' ? route.query.project.trim() : '')
-const requestedMemory = computed(() => typeof route.query.memory === 'string' ? route.query.memory.trim() : '')
+const router = useRouter()
+const context = useOperatorProjectContext()
+const { project } = context
+const { rows, loadState, pending, total, hasMore, refresh, loadMemoryByID, deleteMemory, suppressMemory, suppressMemories, unsuppressMemory, archiveMemory, auditMemory } = useOperatorMemoryLab(project, false)
+const query = computed(() => typeof route.query.q === 'string' ? route.query.q : '')
+const filter = computed(() => typeof route.query.filter === 'string' ? route.query.filter : '')
+const page = computed(() => Math.max(1, Number.parseInt(String(route.query.page || '1'), 10) || 1))
+const pageSize = computed(() => [10, 20, 50].includes(Number(route.query.size)) ? Number(route.query.size) : 20)
+const openId = computed(() => typeof route.query.memory === 'string' ? route.query.memory : '')
+const detailProject = computed(() => project.value === 'all' && typeof route.query.memoryProject === 'string' ? route.query.memoryProject : project.value)
+const draft = ref(query.value)
+const opened = ref<Memory | null>(null)
+const detailPending = ref(false)
+const detailError = ref<OperatorSourceError | null>(null)
+const auditState = ref<OperatorLoadState<MemoryAuditResponse> | null>(null)
+const selected = ref<string[]>([])
+const confirmation = ref('')
+const busy = ref(false)
+const mutationResult = ref<MutationResult | null>(null)
+const detailHeading = ref<HTMLElement | null>(null)
+let detailGeneration = 0
 
-watch([loadState, requestedProject, requestedMemory], async ([state, nextProject, nextMemory]) => {
-  if (state.kind !== 'live' || !nextProject || !nextMemory) return
-  const listed = all.find((row) => row.project === nextProject && row.id === nextMemory)
-  let memory: Memory
-  if (listed) memory = listed
-  else {
-    try {
-      memory = await loadMemoryByID(nextMemory)
-    } catch {
-      return
-    }
-  }
-  if (requestedProject.value !== nextProject || requestedMemory.value !== nextMemory) return
-  if (memory.project !== nextProject) return
+const principal = useOperatorPrincipalMemorySurface(project)
+const principalScope = principal.scope
+const principalState = principal.loadState
+const principalAttribution = principal.attributionVisible
+const principalItems = computed(() => principalState.value.data?.items || [])
 
-  project.value = nextProject
-  const index = filtered.value.findIndex((row) => row.id === memory.id)
-  if (index < 0) return
-  page.value = Math.floor(index / effectivePageSize.value) + 1
-  openId.value = memory.id
-  await nextTick()
-  if (typeof window !== 'undefined') document.querySelector<HTMLElement>(`[data-testid="memory-row-${memory.id}"]`)?.scrollIntoView({ block: 'center' })
-}, { immediate: true })
+const filtered = computed(() => rows)
+const pageCount = computed(() => Math.max(1, Math.ceil((total.value || 0) / pageSize.value)))
+const pageRows = filtered
 
-watch([filtered, pageSize], () => {
-  if (page.value > pageCount.value) page.value = pageCount.value
-})
+function updateQuery(values: Record<string, string | undefined>, replace = false) {
+  const location = { path: '/memory', query: { ...route.query, project: project.value || undefined, ...values } }
+  return replace ? router.replace(location) : router.push(location)
+}
 
-watch(pageSize, () => {
-  page.value = 1
-})
+watch([project, query, filter, page, pageSize, () => route.query.allRead], () => {
+  selected.value = []
+  confirmation.value = ''
+  mutationResult.value = null
+  void refresh()
+}, { immediate: true, flush: 'sync' })
+watch(query, (value) => { draft.value = value })
 
-watch(() => opened.value?.id, () => {
-  deleteConfirmId.value = null
-  suppressConfirmId.value = null
+async function readDetail() {
+  const generation = ++detailGeneration
+  const id = openId.value
+  const scope = project.value
+  const targetProject = detailProject.value
+  opened.value = null
   auditState.value = null
-  auditPending.value = false
-  auditRequestSeq += 1
-  if (opened.value) void loadAudit(opened.value)
+  detailError.value = null
+  confirmation.value = ''
+  if (!id || !scope || !targetProject || targetProject === 'all') { detailPending.value = false; return }
+  await nextTick()
+  if (generation !== detailGeneration) return
+  detailHeading.value?.focus()
+  detailHeading.value?.scrollIntoView({ block: 'start' })
+  detailPending.value = true
+  try {
+    const memory = await loadMemoryByID(id, targetProject)
+    if (generation !== detailGeneration || scope !== project.value || id !== openId.value) return
+    if (memory.project !== targetProject) throw new Error(t('knowledge.scopeMismatch'))
+    opened.value = memory
+    await nextTick()
+    detailHeading.value?.focus()
+    const audit = await auditMemory(id, 200)
+    if (generation === detailGeneration && scope === project.value && id === openId.value) auditState.value = audit
+  } catch (cause) {
+    if (generation === detailGeneration) detailError.value = toOperatorSourceError(cause, { source: 'memory-read', path: `/api/memories/${id}`, method: 'GET' })
+  } finally {
+    if (generation === detailGeneration) detailPending.value = false
+  }
+}
+watch([project, openId, detailProject], readDetail, { immediate: true })
+watch(openId, async (value, previous) => {
+  if (value || !previous) return
+  await nextTick()
+  document.querySelector<HTMLElement>(`[data-memory-id="${CSS.escape(previous)}"]`)?.focus()
 })
+onBeforeUnmount(() => { detailGeneration += 1 })
 
-watch(selectedIds, () => {
-  bulkSuppressConfirm.value = false
-})
-
-function toggleFilter(key: MemoryFilter) {
-  filters.value[key] = !filters.value[key]
-  page.value = 1
+async function closeDetail() {
+  const id = openId.value
+  if (route.query.from === 'search' && typeof route.query.searchQuery === 'string') {
+    await router.push({ path: '/search', query: { ...context.to('/search').query, project: project.value, q: route.query.searchQuery, focusMemory: id } })
+    return
+  }
+  await updateQuery({ memory: undefined, memoryProject: undefined, from: undefined, searchQuery: undefined })
+  await nextTick()
+  document.querySelector<HTMLElement>(`[data-memory-id="${CSS.escape(id)}"]`)?.focus()
 }
 
-function resetFilter() {
-  project.value = 'all'
-  filters.value = { active: false, flagged: false, stale: false, low: false, chain: false }
-  page.value = 1
-}
-
-function selectAll() {
-  const next = { ...selected.value }
-  filtered.value.forEach((memory) => { next[memory.id] = true })
-  selected.value = next
-}
-
-function clearSelected() {
-  selected.value = {}
-  bulkSuppressConfirm.value = false
-}
-
-function toggleSelected(id: string) {
-  selected.value = { ...selected.value, [id]: !selected.value[id] }
-}
-
-async function deleteOpened() {
+async function act(action: 'suppress' | 'delete' | 'bulk' | 'restore' | 'archive') {
+  if (busy.value) return
   const memory = opened.value
-  if (!memory || deletePending.value) return
-
-  if (deleteConfirmId.value !== memory.id) {
-    deleteConfirmId.value = memory.id
-    notice.value = null
-    return
-  }
-
-  deletePending.value = true
+  if (action !== 'bulk' && !memory) return
+  if (action === 'bulk' && !selected.value.length) return
+  const target = `${project.value}:${action}:${action === 'bulk' ? selected.value.join(',') : memory?.id}`
+  if (confirmation.value !== target) { confirmation.value = target; return }
+  const scope = project.value
+  const id = openId.value
+  busy.value = true
   try {
-    const result = await deleteMemory(memory.id)
+    const result = action === 'bulk' ? await suppressMemories([...selected.value]) : action === 'delete' ? await deleteMemory(memory!.id) : action === 'restore' ? await unsuppressMemory(memory!.id) : action === 'archive' ? await archiveMemory(memory!.id) : await suppressMemory(memory!.id)
+    if (scope !== project.value || id !== openId.value) return
     mutationResult.value = result
+    confirmation.value = ''
     if (result.kind === 'committed_verified') {
-      const nextSelected = { ...selected.value }
-      delete nextSelected[memory.id]
-      selected.value = nextSelected
-      openId.value = null
-      deleteConfirmId.value = null
-    } else if (result.kind === 'partial' && result.items.some((item) => String(item.targetId) === memory.id && item.outcome === 'committed')) {
-      const nextSelected = { ...selected.value }
-      delete nextSelected[memory.id]
-      selected.value = nextSelected
-      openId.value = null
-      deleteConfirmId.value = null
-    }
-  } finally {
-    deletePending.value = false
-  }
-}
-
-async function suppressOpened() {
-  const memory = opened.value
-  if (!memory || suppressPending.value) return
-
-  if (suppressConfirmId.value !== memory.id) {
-    suppressConfirmId.value = memory.id
-    notice.value = null
-    return
-  }
-
-  suppressPending.value = true
-  try {
-    const result = await suppressMemory(memory.id)
-    mutationResult.value = result
-    if (result.kind === 'committed_verified') {
-      const nextSelected = { ...selected.value }
-      delete nextSelected[memory.id]
-      selected.value = nextSelected
-      openId.value = null
-      suppressConfirmId.value = null
-      notice.value = { kind: 'success', text: t('memory.notice.suppressed', { id: memory.id }) }
+      selected.value = []
+      await closeDetail()
       await refresh()
-    } else if (result.kind === 'partial' && result.items.some((item) => String(item.targetId) === memory.id && item.outcome === 'committed')) {
-      const nextSelected = { ...selected.value }
-      delete nextSelected[memory.id]
-      selected.value = nextSelected
-      openId.value = null
-      suppressConfirmId.value = null
     }
-  } finally {
-    suppressPending.value = false
-  }
-}
-
-async function handleBulkAction() {
-  if (!selectedIds.value.length || bulkSuppressPending.value) return
-
-  if (!bulkSuppressConfirm.value) {
-    bulkSuppressConfirm.value = true
-    notice.value = null
-    return
-  }
-
-  const count = selectedIds.value.length
-  bulkSuppressPending.value = true
-  try {
-    const result = await suppressMemories(selectedIds.value)
-    mutationResult.value = result
-    if (result.kind === 'committed_verified') {
-      selected.value = {}
-      bulkSuppressConfirm.value = false
-      notice.value = { kind: 'success', text: t('memory.notice.bulkSuppressed', { count }) }
-      await refresh()
-    } else if (result.kind === 'partial') {
-      const nextSelected = { ...selected.value }
-      for (const item of result.items) {
-        if (item.outcome === 'committed') delete nextSelected[String(item.targetId)]
-      }
-      selected.value = nextSelected
+    if (result.kind === 'partial') {
+      const committed = new Set(result.items.filter((item) => item.outcome === 'committed').map((item) => String(item.targetId)))
+      selected.value = selected.value.filter((id) => !committed.has(id))
     }
-  } finally {
-    bulkSuppressPending.value = false
-  }
+  } finally { busy.value = false }
 }
 
-async function loadAudit(memory: Memory | null = opened.value) {
-  if (!memory) return
-
-  const seq = ++auditRequestSeq
-  auditPending.value = true
-  try {
-    const nextState = await auditMemory(memory.id)
-    if (seq === auditRequestSeq && openId.value === memory.id) {
-      auditState.value = nextState
-    }
-  } finally {
-    if (seq === auditRequestSeq && openId.value === memory.id) {
-      auditPending.value = false
-    }
-  }
+async function refreshView() {
+  await refresh()
+  if (openId.value) await readDetail()
 }
 
-function rowState(memory: Memory) {
-  if (memory.status === 'flagged' || memory.noise) return 'flagged'
-  if (memory.status === 'superseded') return 'superseded'
-  if (memory.status === 'archived') return 'archived'
-  return 'active'
-}
-
-function rowStateClass(memory: Memory) {
-  const state = rowState(memory)
-  if (state === 'flagged') return 'warn'
-  if (state === 'superseded' || state === 'archived') return 'stale'
-  return 'live'
-}
-
-function rowStateLabel(memory: Memory) {
-  return t(`memory.rowState.${rowState(memory)}`)
-}
-
-function formatConfidence(memory: Memory) {
-  if (!memory.confidenceKnown) return '—'
-  return `${Math.round(memory.conf * 100)}%`
-}
-
-function formatPrincipalConfidence(value: number | null) {
-  return typeof value === 'number' ? `${Math.round(value * 100)}%` : '—'
-}
-
-function refreshPrincipalMemory() {
-  void principalSurface.refresh()
-}
-
-function refreshPrincipalBrief() {
-  principalSurface.refreshBrief()
-}
-
-function confidenceWidth(memory: Memory) {
-  return memory.confidenceKnown ? `${Math.round(memory.conf * 100)}%` : '0%'
-}
-
-function utilityText(memory: Memory) {
-  return memory.utilityKnown ? `${memory.cite} / ${memory.inj}` : '— / —'
-}
-
-function isNoisyUtility(memory: Memory) {
-  return memory.utilityKnown && memory.inj >= 10 && memory.cite === 0
-}
-
-function formatAuditTime(timestamp?: string) {
-  if (!timestamp) return '—'
-  const value = Date.parse(timestamp)
-  if (Number.isNaN(value)) return '—'
-  return new Intl.DateTimeFormat(locale.value, {
-    dateStyle: 'short',
-    timeStyle: 'short',
-  }).format(value)
+function time(value?: string) {
+  return value && !Number.isNaN(Date.parse(value)) ? new Intl.DateTimeFormat(locale.value, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : t('knowledge.unknown')
 }
 </script>
 
 <template>
-  <div class="memory-page">
-    <header class="page-head">
-      <h1>{{ t('memory.title') }}</h1>
-      <p>{{ t('memory.subtitle') }}</p>
-    </header>
-
-    <section class="legend">
-      <div class="legend-left">
-        <span class="lg"><span class="ld live" />{{ t('memory.legend.active') }}</span>
-        <span class="lg"><span class="ld dormant" />{{ t('memory.legend.dormant') }}</span>
-        <span class="lg"><span class="ld stale" />{{ t('memory.legend.stale') }}</span>
-        <span class="lg"><span class="ld mustbuild" />{{ t('memory.legend.mustBuild') }}</span>
-      </div>
-      <div class="legend-right">
-        <span class="lg"><span class="ld live" />{{ t('memory.legend.used') }}</span>
-        <span class="lg"><span class="ld warn" />{{ t('memory.legend.shownUnused') }}</span>
-      </div>
-    </section>
-
-    <section class="principal-surface" data-testid="principal-memory-surface">
-      <div class="principal-head">
-        <div>
-          <h2>{{ t('memory.principal.title') }}</h2>
-          <p>{{ t('memory.principal.subtitle') }}</p>
-        </div>
-        <span class="principal-chip" :data-state="principalStateKind">{{ principalStateKind }}</span>
-      </div>
-
-      <div class="principal-scopebar">
-        <label class="scope-field">
-          <span>{{ t('memory.principal.controls.principal') }}</span>
-          <input
-            id="principal-select"
-            v-model.trim="principalScope.principal"
-            class="scope-input"
-            data-testid="principal-select"
-            list="principal-options"
-            autocomplete="off"
-          >
-          <datalist id="principal-options">
-            <option v-for="item in principalSurface.principalOptions.value" :key="item" :value="item" />
-          </datalist>
-        </label>
-        <label class="scope-field compact">
-          <span>{{ t('memory.principal.controls.kind') }}</span>
-          <select v-model="principalScope.principalKind" class="scope-input">
-            <option value="human">{{ t('memory.principal.kinds.human') }}</option>
-            <option value="agent">{{ t('memory.principal.kinds.agent') }}</option>
-            <option value="service">{{ t('memory.principal.kinds.service') }}</option>
-          </select>
-        </label>
-        <label class="scope-field">
-          <span>{{ t('memory.principal.controls.domain') }}</span>
-          <input
-            id="domain-select"
-            v-model.trim="principalScope.domain"
-            class="scope-input"
-            data-testid="domain-select"
-            list="principal-domain-options"
-            autocomplete="off"
-          >
-          <datalist id="principal-domain-options">
-            <option v-for="item in principalSurface.domainOptions.value" :key="item" :value="item" />
-          </datalist>
-        </label>
-        <label class="scope-field compact">
-          <span>{{ t('memory.principal.controls.project') }}</span>
-          <select id="project-scope" v-model="principalScope.project" class="scope-input" data-testid="project-scope">
-            <option v-for="item in principalProjectOptions" :key="item" :value="item">
-              {{ item === PRINCIPAL_CURRENT_PROJECT ? t('memory.principal.projects.current') : item === 'all' ? t('memory.principal.projects.all') : item }}
-            </option>
-          </select>
-        </label>
-        <label class="scope-field compact">
-          <span>{{ t('memory.principal.controls.visibility') }}</span>
-          <select v-model="principalScope.visibility" class="scope-input">
-            <option value="all">{{ t('memory.principal.visibility.all') }}</option>
-            <option value="shared">{{ t('memory.principal.visibility.shared') }}</option>
-            <option value="private">{{ t('memory.principal.visibility.private') }}</option>
-          </select>
-        </label>
-        <label class="toggle-line">
-          <input v-model="principalAttributionVisible" type="checkbox" data-testid="attribution-toggle">
-          <span>{{ t('memory.principal.controls.attribution') }}</span>
-        </label>
-        <button class="tbtn" data-testid="refresh" :disabled="principalStateKind === 'pending'" @click="refreshPrincipalMemory">
-          {{ principalStateKind === 'risky-confirm' ? t('memory.principal.actions.confirmScope') : t('memory.principal.actions.refresh') }}
-        </button>
-        <button class="tbtn" data-testid="brief-refresh" @click="refreshPrincipalBrief">
-          {{ t('memory.principal.actions.briefRefresh') }}
-        </button>
-      </div>
-
-      <div class="statebar principal-state" :data-state="principalStateKind" data-testid="principal-state-banner">
-        <span>{{ principalStateText }}</span>
-        <span class="mono">{{ principalLoadState.evidence.endpoint }}</span>
-      </div>
-
-      <div class="principal-grid">
-        <section class="principal-panel" :data-state="principalStateKind" data-testid="principal-knowledge-summary">
-          <div class="principal-panel-head">
-            <h3>{{ t('memory.principal.knowledge.title') }}</h3>
-            <span>{{ t('memory.principal.knowledge.count', { count: principalItems.length, hidden: principalSummary?.hiddenCount || 0 }) }}</span>
+  <div class="knowledge-page" @keydown.esc="openId && closeDetail()">
+    <header class="page-head"><div><h1>{{ t('nav.items.memory') }}</h1><p>{{ t('knowledge.memoryLead') }}</p></div><button class="btn" :disabled="pending" @click="refreshView">{{ t('knowledge.refresh') }}</button></header>
+    <div v-if="!project" class="empty"><h2>{{ t('knowledge.chooseProject') }}</h2><p>{{ t('knowledge.chooseProjectHelp') }}</p><RouterLink :to="context.to('/projects')">{{ t('nav.items.projects') }}</RouterLink></div>
+    <template v-else>
+      <form class="toolbar" @submit.prevent="updateQuery({ q: draft.trim() || undefined, page: '1', memory: undefined, memoryProject: undefined, allRead: project === 'all' ? '1' : undefined })">
+        <label class="search-field"><span>{{ t('knowledge.searchMemory') }}</span><input v-model="draft" type="search" /></label>
+        <button class="btn primary" type="submit">{{ t('knowledge.find') }}</button>
+        <label><span>{{ t('knowledge.pageFilter') }}</span><select :value="filter" @change="updateQuery({ filter: ($event.target as HTMLSelectElement).value || undefined, page: '1', memory: undefined })"><option value="">{{ t('knowledge.anyState') }}</option><option value="active">{{ t('memory.rowState.active') }}</option><option value="flagged">{{ t('memory.rowState.flagged') }}</option><option value="stale">{{ t('knowledge.notCurrent') }}</option><option value="low">{{ t('memory.filters.low') }}</option><option value="chain">{{ t('memory.filters.chain') }}</option></select></label>
+        <RouterLink :to="{ ...context.to('/search'), query: { ...context.to('/search').query, q: query || undefined } }">{{ t('knowledge.similaritySearch') }}</RouterLink>
+      </form>
+      <div v-if="pending" class="state" role="status">{{ t('knowledge.loading') }}</div>
+      <div v-else-if="loadState.kind === 'error'" class="state error" role="status"><span>{{ t(operatorDiagnosisKey(loadState.error)) }}</span><button class="btn" @click="refresh">{{ t('knowledge.retry') }}</button><details><summary>{{ t('knowledge.technical') }}</summary>{{ loadState.error.message }}</details></div>
+      <div v-if="project === 'all'" class="state">{{ t('knowledge.allOrder') }}</div>
+      <p v-if="loadState.kind === 'gated'" class="state" role="status">{{ t('knowledge.allReadHelp') }}</p>
+      <div class="knowledge-workspace" :class="{ 'detail-open': openId }">
+        <section class="list-panel" :aria-label="t('knowledge.memoryResults')">
+          <div class="list-head"><span role="status">{{ total === null ? t('knowledge.unknown') : t('knowledge.matches', { count: total }) }}</span><label><span>{{ t('knowledge.perPage') }}</span><select :value="pageSize" @change="updateQuery({ size: ($event.target as HTMLSelectElement).value, page: '1', memory: undefined })"><option :value="10">10</option><option :value="20">20</option><option :value="50">50</option></select></label></div>
+          <div v-for="memory in pageRows" :key="memory.id" class="memory-row" :class="{ selected: openId === memory.id }">
+            <input v-model="selected" :value="memory.id" type="checkbox" :aria-label="t('knowledge.selectRecord', { id: memory.id })" />
+            <button :data-memory-id="memory.id" :data-testid="`memory-row-${memory.id}`" :aria-pressed="openId === memory.id" @click="updateQuery({ memory: memory.id, memoryProject: project === 'all' ? memory.project : undefined })"><strong>{{ memory.content }}</strong><span>{{ t(`memory.rowState.${memory.status}`) }} · {{ memory.type }} · {{ memory.age }}<template v-if="project === 'all'"> · {{ projectName(memory.project) }}</template></span><span v-if="memory.tags.length" class="tags">{{ memory.tags.join(' · ') }}</span></button>
           </div>
-          <div v-if="principalStateKind === 'pending'" class="mid">{{ t('memory.principal.state.pending') }}</div>
-          <div v-else-if="principalStateKind === 'error'" class="callout danger">
-            {{ principalStateText }}
-          </div>
-          <div v-else-if="principalStateKind === 'gated' || principalStateKind === 'risky-confirm'" class="callout muted">
-            {{ principalStateText }}
-          </div>
-          <div v-else-if="!principalItems.length" class="principal-empty">
-            <b>{{ t('memory.principal.empty.title') }}</b>
-            <span>{{ t('memory.principal.empty.body') }}</span>
-          </div>
-          <ol v-else class="principal-list">
-            <li v-for="item in principalItems" :key="item.id">
-              <p>{{ item.content }}</p>
-              <div class="principal-meta">
-                <span>{{ item.project }}</span>
-                <span>{{ item.domain }}</span>
-                <span>{{ formatPrincipalConfidence(item.confidence) }}</span>
-              </div>
-              <div v-if="principalAttributionVisible" class="principal-attribution">
-                <span>{{ item.ownerPrincipal }}</span>
-                <span>{{ item.ownerPrincipalKind }}</span>
-                <span>{{ item.visibility }}</span>
-                <span>{{ formatAuditTime(item.createdAt) }}</span>
-              </div>
-            </li>
-          </ol>
-          <div class="principal-evidence">
-            <span>{{ t('memory.principal.evidence.audit', { status: principalSummary?.auditStatus || 'not_required' }) }}</span>
-            <span>{{ t('memory.principal.evidence.source', { source: principalSummary?.source || 'principal-memory-query' }) }}</span>
-          </div>
+          <div v-if="!pending && loadState.kind === 'empty'" class="empty"><h2>{{ t(total && page > 1 ? 'knowledge.pageEmpty' : query || filter ? 'knowledge.noMatches' : 'knowledge.noMemory') }}</h2><p>{{ t(query || filter ? 'knowledge.noMatchesHelp' : 'knowledge.noMemoryHelp') }}</p><button v-if="total && page > 1" class="btn" @click="updateQuery({ page: '1', memory: undefined })">{{ t('knowledge.firstPage') }}</button><button v-else-if="query || filter" class="btn" @click="draft = ''; updateQuery({ q: undefined, filter: undefined, page: '1', memory: undefined })">{{ t('knowledge.clearFilters') }}</button><RouterLink v-else :to="context.to('/documents')">{{ t('knowledge.openDocuments') }}</RouterLink></div>
+          <nav class="pagination" :aria-label="t('knowledge.pagination')"><button class="btn" :disabled="pending || page <= 1" @click="updateQuery({ page: String(page - 1), memory: undefined })">{{ t('knowledge.previous') }}</button><span>{{ total === null ? t('knowledge.unknown') : t('knowledge.pageOf', { page, total: pageCount }) }}</span><button class="btn" :disabled="pending || !hasMore" @click="updateQuery({ page: String(page + 1), memory: undefined })">{{ t('knowledge.next') }}</button></nav>
+          <div v-if="selected.length" class="bulk"><span>{{ t('common.selectedCount', { count: selected.length }) }}</span><button class="btn" :disabled="busy" @click="act('bulk')">{{ t(confirmation.includes(':bulk:') ? 'memory.bulk.confirmHideNoise' : 'memory.bulk.hideNoise') }}</button><button class="btn" @click="selected = []; confirmation = ''">{{ t('common.clearSelection') }}</button></div>
         </section>
-
-        <section class="principal-panel brief" :data-state="principalBriefState.kind" data-testid="principal-brief-panel">
-          <div class="principal-panel-head">
-            <h3>{{ t('memory.principal.brief.title') }}</h3>
-            <span>{{ principalBriefState.kind }}</span>
-          </div>
-          <p>{{ principalBriefText }}</p>
-          <div class="principal-evidence">
-            <span class="mono">{{ principalBriefState.evidence.endpoint }}</span>
-            <span>{{ principalBriefState.evidence.source }}</span>
-          </div>
-        </section>
+        <article v-if="openId" class="reader" aria-labelledby="memory-reader-heading">
+          <button class="btn back" @click="closeDetail">{{ t('knowledge.backResults') }}</button>
+          <h2 id="memory-reader-heading" ref="detailHeading" tabindex="-1">{{ t('knowledge.memoryContent') }}</h2>
+          <div v-if="detailError" class="state error" role="status"><p>{{ t(operatorDiagnosisKey(detailError)) }}</p><button class="btn" @click="readDetail">{{ t('knowledge.retry') }}</button><details><summary>{{ t('knowledge.technical') }}</summary>{{ detailError.message }}</details></div>
+          <p v-else-if="!detailProject || detailProject === 'all'" role="status">{{ t('knowledge.chooseRecordProject') }}</p>
+          <p v-else-if="!opened" role="status">{{ t('knowledge.loading') }}</p>
+          <template v-else>
+            <p class="currentness">{{ t(`memory.rowState.${opened.status}`) }}<template v-if="opened.supersededBy"> · {{ t('knowledge.replacedBy') }} <button class="text-button" @click="updateQuery({ memory: opened.supersededBy })">#{{ opened.supersededBy }}</button></template></p>
+            <div class="content-body" data-testid="memory-content">{{ opened.content }}</div>
+            <section class="provenance"><h3>{{ t('knowledge.origin') }}</h3><dl><dt>{{ t('knowledge.project') }}</dt><dd>{{ projectName(detailProject) }}</dd><dt>{{ t('knowledge.created') }}</dt><dd>{{ time(opened.createdAt) }}</dd><dt>{{ t('knowledge.updated') }}</dt><dd>{{ time(opened.updatedAt) }}</dd><dt>{{ t('knowledge.lastConfirmed') }}</dt><dd>{{ time(opened.lastConfirmed) }}</dd><dt>{{ t('knowledge.reviewAfter') }}</dt><dd>{{ time(opened.reviewAfter) }}</dd><dt>{{ t('knowledge.author') }}</dt><dd>{{ opened.sourceAgent || t('knowledge.notRecorded') }}</dd></dl><p v-if="!opened.sourceSessions.length">{{ t('knowledge.noOriginSession') }}</p><RouterLink v-for="session in opened.sourceSessions" :key="session" :to="{ path: '/projects', query: { ...context.to('/projects').query, project: detailProject, session } }">{{ t('knowledge.originSession') }} · {{ session.slice(0, 8) }}</RouterLink><RouterLink :to="context.to('/documents')">{{ t('knowledge.relatedDocuments') }}</RouterLink></section>
+            <section class="history" data-testid="memory-audit-panel"><h3>{{ t('knowledge.history') }}</h3><p v-if="!auditState" role="status">{{ t('knowledge.loading') }}</p><div v-else-if="auditState.kind === 'error'" class="state error"><p>{{ t(operatorDiagnosisKey(auditState.error)) }}</p><button class="btn" @click="readDetail">{{ t('knowledge.retry') }}</button></div><p v-else-if="!auditState.data?.entries.length">{{ t('knowledge.noMemoryHistory') }}</p><ol v-else><li v-for="entry in auditState.data.entries" :key="entry.id"><strong>{{ t(`knowledge.audit.${entry.action}`, entry.action) }}</strong><time>{{ time(entry.created_at) }}</time><span>{{ entry.actor || t('knowledge.notRecorded') }}</span><p v-if="entry.reason">{{ entry.reason }}</p></li></ol><p>{{ t('knowledge.auditLimit') }}</p></section>
+            <details class="technical"><summary>{{ t('knowledge.technical') }}</summary><dl><dt>ID</dt><dd>{{ opened.id }}</dd><dt>{{ t('knowledge.projectIdentity') }}</dt><dd>{{ opened.project }}</dd><dt>{{ t('memory.detail.tier') }}</dt><dd>{{ opened.tier }}</dd><dt>{{ t('memory.detail.confidence') }}</dt><dd>{{ opened.confidenceKnown ? `${Math.round(opened.conf * 100)}%` : t('knowledge.unknown') }}</dd><dt>{{ t('memory.detail.utility') }}</dt><dd>{{ opened.utilityKnown ? `${opened.cite} / ${opened.inj}` : t('knowledge.unknown') }}</dd><dt>{{ t('knowledge.version') }}</dt><dd>{{ opened.version || t('knowledge.unknown') }}</dd></dl></details>
+            <details class="actions"><summary>{{ t('knowledge.manageRecord') }}</summary><p>{{ t('knowledge.confirmAction') }}</p><div class="action-row"><button v-if="opened.noise || opened.status === 'flagged'" class="btn" :disabled="busy" @click="act('restore')">{{ t(confirmation.includes(':restore:') ? 'knowledge.confirmRestore' : 'knowledge.restore') }}</button><button v-else class="btn" data-testid="memory-suppress-action" :disabled="busy" @click="act('suppress')">{{ t(confirmation.includes(':suppress:') ? 'memory.detail.actions.confirmHideNoise' : 'memory.detail.actions.hideNoise') }}</button><button class="btn" :disabled="busy" @click="act('archive')">{{ t(confirmation.includes(':archive:') ? 'knowledge.confirmArchive' : 'knowledge.archive') }}</button><button class="btn danger" :disabled="busy" @click="act('delete')">{{ t(confirmation.includes(':delete:') ? 'memory.detail.actions.confirmDelete' : 'memory.detail.actions.delete') }}</button></div></details>
+          </template>
+        </article>
       </div>
-    </section>
-
-    <section class="ops">
-      <div class="ops-left">
-        <button class="tbtn" @click="selectAll">{{ t('memory.actions.selectAll') }}</button>
-        <button class="tbtn" @click="clearSelected">{{ t('memory.actions.clearSelection') }}</button>
-        <button class="tbtn" :disabled="activeFilterCount === 0" @click="resetFilter">{{ t('memory.actions.resetFilter') }}</button>
-        <span class="cnt">{{ t('memory.countInFilter', { shown: filtered.length, total: all.length }) }}</span>
-      </div>
-      <div class="ops-right">
-        <label class="rows">
-          <span>{{ t('memory.rowsLabel') }}</span>
-          <select id="memory-page-size" v-model="pageSize" class="select" name="memory-page-size">
-            <option v-for="size in pageSizeOptions" :key="size" :value="size">
-              {{ size === 'all' ? t('memory.allRows') : size }}
-            </option>
-          </select>
-        </label>
-        <span class="cnt">{{ t('memory.pageRange', { from: pageRange.from, to: pageRange.to, total: filtered.length }) }}</span>
-        <button class="pg" :disabled="page <= 1" @click="page = 1">«</button>
-        <button class="pg" :disabled="page <= 1" @click="page--">‹</button>
-        <button class="pg on">{{ page }}</button>
-        <button class="pg" :disabled="page >= pageCount" @click="page++">›</button>
-        <button class="pg" :disabled="page >= pageCount" @click="page = pageCount">»</button>
-      </div>
-    </section>
-
-    <section class="filterbar">
-      <select id="memory-project-filter" v-model="project" class="fsel" name="memory-project-filter" :aria-label="t('memory.filters.allProjects')" @change="page = 1">
-        <option value="all">{{ t('memory.filters.allProjects') }}</option>
-        <option v-for="item in projects" :key="item" :value="item">{{ item }}</option>
-      </select>
-      <button class="fchip" :aria-pressed="filters.active" @click="toggleFilter('active')">{{ t('memory.filters.active') }}</button>
-      <button class="fchip" :aria-pressed="filters.flagged" @click="toggleFilter('flagged')">{{ t('memory.filters.flagged') }}</button>
-      <button class="fchip preset" :aria-pressed="filters.stale" @click="toggleFilter('stale')">{{ t('memory.filters.stale') }}</button>
-      <button class="fchip preset" :aria-pressed="filters.low" @click="toggleFilter('low')">{{ t('memory.filters.low') }}</button>
-      <button class="fchip preset" :aria-pressed="filters.chain" @click="toggleFilter('chain')">{{ t('memory.filters.chain') }}</button>
-      <span class="fcount">{{ t('memory.filterSummary', { count: filtered.length, noise: noiseRatio }) }}</span>
-    </section>
-
-    <section v-if="notice" class="statebar" :data-state="notice.kind === 'error' ? 'error' : 'live'" data-testid="memory-notice">
-      <span>{{ notice.text }}</span>
-      <button class="tbtn" @click="notice = null">{{ t('common.hide') }}</button>
-    </section>
-    <MutationResultNotice :result="mutationResult" :recheck-label="t('memory.state.retry')" @recheck="refresh" />
-
-    <section v-if="pending || error || loadState.kind === 'empty' || loadState.kind === 'gated'" class="statebar" :data-state="loadState.kind">
-      <span v-if="pending">{{ t('memory.state.pending') }}</span>
-      <span v-else-if="error">{{ t('memory.state.error', { message: error }) }}</span>
-      <span v-else-if="loadState.kind === 'empty'">{{ t('memory.state.empty') }}</span>
-      <span v-else-if="loadState.kind === 'gated'">{{ t('memory.state.gated', { flag: loadState.evidence.flag || 'VNEXT_F' }) }}</span>
-      <button v-if="error" class="tbtn" @click="refresh">{{ t('memory.state.retry') }}</button>
-    </section>
-
-    <div class="area-body" :class="{ 'detail-open': opened }">
-      <section class="grid">
-        <div class="grid-h">
-          <span>{{ t('memory.table.record') }}</span>
-          <span>{{ t('memory.table.value') }}</span>
+      <MutationResultNotice :result="mutationResult" :recheck-label="t('knowledge.refresh')" @recheck="refreshView" />
+      <details class="advanced" data-testid="principal-memory-surface">
+        <summary>{{ t('knowledge.principalFilters') }}</summary><p>{{ t('knowledge.principalHelp') }}</p>
+        <div class="advanced-fields">
+          <label><span>{{ t('memory.principal.controls.principal') }}</span><input v-model.trim="principalScope.principal" autocomplete="off" data-testid="principal-select" /></label>
+          <label><span>{{ t('memory.principal.controls.kind') }}</span><select v-model="principalScope.principalKind"><option value="human">{{ t('memory.principal.kinds.human') }}</option><option value="agent">{{ t('memory.principal.kinds.agent') }}</option><option value="service">{{ t('memory.principal.kinds.service') }}</option></select></label>
+          <label><span>{{ t('memory.principal.controls.domain') }}</span><input v-model.trim="principalScope.domain" data-testid="domain-select" /></label>
+          <label><span>{{ t('memory.principal.controls.project') }}</span><select v-model="principalScope.project" data-testid="project-scope"><option :value="PRINCIPAL_CURRENT_PROJECT">{{ t('memory.principal.projects.current') }}</option><option v-for="id in context.projects.value" :key="id" :value="id">{{ projectName(id) }}</option><option value="all">{{ t('knowledge.allProjects') }}</option></select></label>
+          <label><span>{{ t('memory.principal.controls.visibility') }}</span><select v-model="principalScope.visibility"><option value="all">{{ t('memory.principal.visibility.all') }}</option><option value="shared">{{ t('memory.principal.visibility.shared') }}</option><option value="private">{{ t('memory.principal.visibility.private') }}</option></select></label>
+          <label class="check"><input v-model="principalScope.includePrivate" type="checkbox" />{{ t('knowledge.includePrivate') }}</label>
+          <label class="check"><input v-model="principalAttribution" type="checkbox" data-testid="attribution-toggle" />{{ t('memory.principal.controls.attribution') }}</label>
+          <button class="btn" :disabled="principalState.kind === 'pending'" @click="principal.refresh()" data-testid="refresh">{{ t(principal.riskyConfirmation.value ? 'memory.principal.actions.confirmScope' : 'knowledge.find') }}</button>
         </div>
-
-        <button v-for="memory in pageRows" :key="memory.id" class="mrow" :class="{ open: openId === memory.id }" :data-testid="`memory-row-${memory.id}`" @click="openId = openId === memory.id ? null : memory.id">
-          <span class="echk" :class="{ on: selected[memory.id] }" @click.stop="toggleSelected(memory.id)">{{ selected[memory.id] ? '✓' : '' }}</span>
-          <span class="estate" :data-s="rowStateClass(memory)" />
-          <span class="ebody">
-            <span class="epreview">{{ memory.content }}</span>
-            <span class="emeta">
-              <span>{{ rowStateLabel(memory) }}</span>
-              <span>{{ memory.type }}</span>
-              <span>{{ memory.project }}</span>
-              <span>{{ memory.age }}</span>
-              <span>{{ memory.tier }}</span>
-            </span>
-          </span>
-          <span class="heat" :class="{ noisy: memory.noise || isNoisyUtility(memory), unknown: !memory.utilityKnown }">
-            <template v-if="memory.utilityKnown"><b>{{ memory.cite }}</b><span>/</span>{{ memory.inj }}</template>
-            <template v-else>—</template>
-          </span>
-          <span class="rowmenu" aria-hidden="true">…</span>
-        </button>
-
-        <div v-if="!pageRows.length" class="empty">
-          <b>{{ t('memory.empty.title') }}</b>
-          <span>{{ activeFilterCount ? t('memory.empty.filtered') : t('memory.empty.noRows') }}</span>
-        </div>
-      </section>
-
-      <aside v-if="opened" class="detail">
-        <div class="detail-head">
-          <h2>{{ t('memory.detail.title') }}</h2>
-          <button class="tbtn" @click="openId = null">×</button>
-        </div>
-        <div class="dident mono">{{ opened.id }}</div>
-        <div class="dcontent">{{ opened.content }}</div>
-        <div class="operator-note">
-          <span class="mark">?</span>
-          <div><b>{{ t('memory.detail.operatorQuestion') }}</b> {{ t('memory.detail.operatorText') }}</div>
-        </div>
-
-        <dl class="dfields">
-          <dt>{{ t('memory.detail.state') }}</dt><dd>{{ rowStateLabel(opened) }}</dd>
-          <dt>{{ t('memory.detail.tier') }}</dt><dd>{{ opened.tier }}</dd>
-          <dt>{{ t('memory.detail.type') }}</dt><dd>{{ opened.type }}</dd>
-          <dt>{{ t('memory.detail.project') }}</dt><dd>{{ opened.project }}</dd>
-          <dt>{{ t('memory.detail.age') }}</dt><dd>{{ opened.age }}</dd>
-          <dt>{{ t('memory.detail.confidence') }}</dt><dd>{{ formatConfidence(opened) }}</dd>
-        </dl>
-
-        <section class="dsection">
-          <div class="dsh">{{ t('memory.detail.tags') }}</div>
-          <div class="tags">
-            <span v-for="tag in opened.tags" :key="tag" class="tag">{{ tag }}</span>
-            <span v-if="!opened.tags.length" class="tag muted">—</span>
-          </div>
-        </section>
-
-        <section class="dsection">
-          <div class="dsh">{{ t('memory.detail.utility') }}</div>
-          <div class="gauge-mini">
-            <span class="gv">{{ utilityText(opened) }}</span>
-            <div class="confbar"><i :style="{ width: confidenceWidth(opened) }" /></div>
-            <span class="plain-help">{{ t('memory.detail.utilityHelp', { confidence: formatConfidence(opened) }) }}</span>
-          </div>
-          <div v-if="isNoisyUtility(opened)" class="callout danger">{{ t('memory.detail.noiseWarning') }}</div>
-          <div v-else-if="!opened.utilityKnown" class="callout muted">{{ t('memory.detail.utilityUnknown') }}</div>
-        </section>
-
-        <section class="dsection">
-          <div class="dsh">{{ t('memory.detail.audit') }}</div>
-          <div class="audit-card" :data-state="auditPending ? 'pending' : auditState?.kind || 'empty'" data-testid="memory-audit-panel">
-            <div class="audit-card-head">
-              <b>{{ t('memory.detail.auditBody') }}</b>
-              <button class="tbtn mini" :disabled="auditPending" @click="loadAudit(opened)">{{ t('memory.detail.auditRefresh') }}</button>
-            </div>
-            <div v-if="auditPending" class="mid">{{ t('memory.detail.auditLoading') }}</div>
-            <div v-else-if="auditState?.kind === 'error'" class="callout danger">
-              {{ t('memory.detail.auditError', { message: auditState.error.message }) }}
-              <button class="tbtn mini" @click="loadAudit(opened)">{{ t('memory.state.retry') }}</button>
-            </div>
-            <div v-else-if="!auditEntries.length" class="mid">{{ t('memory.detail.auditEmpty') }}</div>
-            <ol v-else class="audit-list">
-              <li v-for="entry in auditEntries" :key="entry.id">
-                <span class="mono">{{ entry.action }}</span>
-                <span>{{ entry.actor || t('memory.detail.auditUnknownActor') }}</span>
-                <span class="mid">{{ formatAuditTime(entry.created_at) }}</span>
-                <span v-if="entry.reason" class="mid">{{ entry.reason }}</span>
-                <span v-if="entry.before_state_present || entry.after_state_present" class="tag">{{ t('memory.detail.auditStateSnapshot') }}</span>
-              </li>
-            </ol>
-            <div class="mid">{{ auditState?.evidence.endpoint || `/api/memories/${opened.id}/audit?limit=10` }}</div>
-          </div>
-          <div class="mb-card compact">
-            {{ t('memory.detail.provenancePending') }}
-            <div class="mid">{{ provenanceGap.evidence.endpoint }}</div>
-          </div>
-        </section>
-
-        <div class="dactions">
-          <button class="act" data-testid="memory-suppress-action" :disabled="suppressPending" @click="suppressOpened">
-            {{ suppressConfirmId === opened.id ? t('memory.detail.actions.confirmHideNoise') : t('memory.detail.actions.hideNoise') }}
-          </button>
-          <button class="act danger" :disabled="deletePending" @click="deleteOpened">
-            {{ deleteConfirmId === opened.id ? t('memory.detail.actions.confirmDelete') : t('memory.detail.actions.delete') }}
-          </button>
-          <button v-for="action in actionGaps" :key="action.action" class="act" disabled :title="action.evidence.endpoint">
-            {{ t(action.labelKey) }} <span class="mbp">{{ t(action.badgeKey) }}</span>
-          </button>
-        </div>
-      </aside>
-    </div>
-
-    <BulkBar :count="selectedCount" :verbs="bulkVerbs" :note="bulkNote" @act="handleBulkAction" @clear="clearSelected" />
+        <p v-if="principalState.kind === 'error'" role="status">{{ t(operatorDiagnosisKey(principalState.error)) }}</p>
+        <p v-else-if="principalState.kind === 'gated' || principalState.kind === 'stale'" role="status">{{ t('knowledge.principalScopeChanged') }}</p>
+        <p v-else-if="principalState.kind === 'pending'" role="status">{{ t('knowledge.loading') }}</p>
+        <p v-else-if="!principalItems.length">{{ t('knowledge.noMatches') }}</p>
+        <ul v-else class="principal-results"><li v-for="item in principalItems" :key="item.id"><p>{{ item.content }}</p><span>{{ projectName(item.project) }} · {{ item.domain }} · {{ t(`memory.principal.visibility.${item.visibility}`) }}</span><span v-if="principalAttribution"> · {{ item.ownerPrincipal }} · {{ time(item.createdAt) }}</span></li></ul>
+        <details><summary>{{ t('memory.principal.brief.title') }}</summary><p>{{ t('memory.principal.brief.mustbuild') }}</p></details>
+      </details>
+    </template>
   </div>
 </template>
 
 <style scoped>
-.memory-page { display:flex; flex-direction:column; gap:14px; }
-.page-head { padding-bottom:14px; border-bottom:1px solid var(--border); }
-.page-head h1 { margin:0 0 4px; font-size:var(--text-xl); font-weight:800; letter-spacing:var(--tracking-display); }
-.page-head p { margin:0; color:var(--muted); font-size:var(--text-sm); }
-.legend { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:10px 16px; border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); }
-.legend-left, .legend-right { display:flex; align-items:center; gap:18px; flex-wrap:wrap; }
-.lg { display:inline-flex; align-items:center; gap:8px; color:var(--fg-2); font-size:var(--text-sm); font-weight:700; }
-.ld { width:9px; height:9px; border-radius:50%; }
-.ld.live { background:var(--class-live); }
-.ld.dormant { background:var(--class-dormant); }
-.ld.stale { border:2px solid var(--class-stale); }
-.ld.mustbuild { background:var(--class-mustbuild); }
-.ld.warn { background:var(--state-warn); }
-.ops { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
-.ops-left, .ops-right { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
-.ops-right label, .cnt { color:var(--muted); font-size:var(--text-xs); }
-.tbtn, .pg { display:inline-flex; align-items:center; justify-content:center; min-height:30px; padding:5px 10px; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--surface); color:var(--fg-2); font-size:var(--text-xs); font-weight:800; cursor:pointer; }
-.tbtn:hover:not(:disabled), .pg:hover:not(:disabled) { border-color:var(--accent); color:var(--fg); }
-.tbtn:disabled, .pg:disabled { opacity:.45; cursor:not-allowed; }
-.pg { min-width:34px; padding:5px 8px; }
-.pg.on { background:var(--accent); border-color:var(--accent); color:var(--accent-on); }
-.select, .fsel { min-height:32px; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--surface); color:var(--fg); padding:0 10px; font-size:var(--text-sm); }
-.filterbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
-.fchip { border:0; border-radius:var(--radius-pill); background:var(--surface-warm); color:var(--fg-2); padding:5px 14px; font-size:var(--text-sm); font-weight:800; cursor:pointer; }
-.fchip[aria-pressed="true"] { background:var(--accent); color:var(--accent-on); }
-.fchip.preset { border:1px dashed var(--border); }
-.fcount { margin-left:auto; color:var(--muted); font-size:var(--text-sm); }
-.statebar { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 12px; border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); color:var(--fg-2); font-size:var(--text-sm); }
-.statebar[data-state="pending"] { border-color:color-mix(in oklab,var(--accent),transparent 55%); }
-.statebar[data-state="error"] { border-color:color-mix(in oklab,var(--state-warn),transparent 45%); color:var(--state-warn); }
-.statebar[data-state="gated"] { border-color:color-mix(in oklab,var(--class-dormant),transparent 45%); }
-.statebar[data-state="empty"] { color:var(--muted); }
-.statebar[data-state="mustbuild"] { border-color:color-mix(in oklab,var(--class-mustbuild),transparent 45%); }
-.statebar[data-state="stale"], .statebar[data-state="risky-confirm"] { border-color:color-mix(in oklab,var(--class-stale),transparent 45%); }
-.principal-surface { display:flex; flex-direction:column; gap:12px; padding:14px; border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); }
-.principal-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
-.principal-head h2 { margin:0 0 4px; font-size:var(--text-lg); font-weight:800; }
-.principal-head p { margin:0; color:var(--muted); font-size:var(--text-sm); }
-.principal-chip { flex:none; padding:4px 9px; border:1px solid var(--border); border-radius:var(--radius-pill); color:var(--fg-2); font-family:var(--font-mono); font-size:var(--text-xs); font-weight:800; }
-.principal-chip[data-state="live"] { border-color:color-mix(in oklab,var(--class-live),transparent 45%); color:var(--class-live); }
-.principal-chip[data-state="error"], .principal-chip[data-state="risky-confirm"] { border-color:color-mix(in oklab,var(--state-warn),transparent 45%); color:var(--state-warn); }
-.principal-chip[data-state="mustbuild"] { border-color:color-mix(in oklab,var(--class-mustbuild),transparent 45%); color:var(--class-mustbuild); }
-.principal-scopebar { display:grid; grid-template-columns:minmax(170px,1.4fr) 116px minmax(150px,1fr) minmax(150px,1fr) 126px auto auto auto; gap:8px; align-items:end; }
-.scope-field { min-width:0; display:flex; flex-direction:column; gap:4px; color:var(--muted); font-size:var(--text-xs); font-weight:800; }
-.scope-field.compact { min-width:112px; }
-.scope-input { width:100%; min-height:32px; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--surface-warm); color:var(--fg); padding:0 10px; font-size:var(--text-sm); }
-.toggle-line { min-height:32px; display:inline-flex; align-items:center; gap:7px; color:var(--fg-2); font-size:var(--text-xs); font-weight:800; white-space:nowrap; }
-.toggle-line input { width:16px; height:16px; accent-color:var(--accent); }
-.principal-state .mono { color:var(--muted); font-family:var(--font-mono); font-size:var(--text-xs); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.principal-grid { display:grid; grid-template-columns:minmax(0,1.4fr) minmax(280px,.8fr); gap:12px; align-items:start; }
-.principal-panel { min-width:0; display:flex; flex-direction:column; gap:10px; padding:12px; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--surface-warm); }
-.principal-panel[data-state="live"] { border-color:color-mix(in oklab,var(--class-live),transparent 62%); }
-.principal-panel[data-state="error"] { border-color:color-mix(in oklab,var(--state-warn),transparent 45%); }
-.principal-panel[data-state="mustbuild"] { border-color:color-mix(in oklab,var(--class-mustbuild),transparent 52%); }
-.principal-panel-head { display:flex; align-items:center; justify-content:space-between; gap:8px; color:var(--muted); font-size:var(--text-xs); font-weight:800; }
-.principal-panel-head h3 { margin:0; color:var(--fg); font-size:var(--text-base); }
-.principal-empty { min-height:120px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; color:var(--muted); text-align:center; }
-.principal-empty b { color:var(--fg-2); }
-.principal-list { display:flex; flex-direction:column; gap:9px; margin:0; padding:0; list-style:none; }
-.principal-list li { display:flex; flex-direction:column; gap:7px; padding:10px 0; border-top:1px solid var(--border-soft); }
-.principal-list li:first-child { border-top:0; padding-top:0; }
-.principal-list p { margin:0; font-family:var(--font-mono); font-size:var(--text-sm); line-height:1.45; }
-.principal-meta, .principal-attribution, .principal-evidence { display:flex; align-items:center; gap:8px; flex-wrap:wrap; color:var(--muted); font-size:var(--text-xs); }
-.principal-attribution span, .principal-meta span { padding:2px 7px; border:1px solid var(--border); border-radius:var(--radius-pill); background:var(--surface); }
-.principal-evidence { padding-top:8px; border-top:1px solid var(--border-soft); }
-.principal-panel.brief p { margin:0; color:var(--fg-2); font-size:var(--text-sm); line-height:1.45; }
-.area-body { display:grid; grid-template-columns:minmax(0,1fr); gap:14px; }
-.area-body.detail-open { grid-template-columns:minmax(0,1fr) minmax(340px,384px); align-items:start; }
-.grid { border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); overflow:hidden; }
-.grid-h { display:grid; grid-template-columns:1fr 152px; gap:12px; padding:10px 14px 10px 51px; border-bottom:1px solid var(--border); color:var(--muted); font-size:var(--text-xs); font-weight:900; text-transform:uppercase; letter-spacing:.08em; }
-.grid-h span:last-child { text-align:right; }
-.mrow { width:100%; display:grid; grid-template-columns:22px 8px minmax(0,1fr) 86px 28px; align-items:center; gap:10px; min-height:52px; padding:9px 12px; border:0; border-bottom:1px solid var(--border-soft); background:transparent; color:var(--fg); text-align:left; cursor:pointer; }
-.mrow:hover, .mrow.open { background:var(--surface-warm); }
-.mrow.open { box-shadow:inset 3px 0 0 var(--accent); }
-.echk { width:22px; height:22px; border:1px solid var(--border); border-radius:5px; display:grid; place-items:center; color:var(--accent-on); font-size:12px; font-weight:900; }
-.echk.on { background:var(--accent); border-color:var(--accent); }
-.estate { width:8px; height:8px; border-radius:50%; }
-.estate[data-s="live"] { background:var(--class-live); }
-.estate[data-s="warn"] { background:var(--state-warn); }
-.estate[data-s="stale"] { border:2px solid var(--class-stale); }
-.ebody { min-width:0; display:flex; flex-direction:column; gap:3px; }
-.epreview { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:var(--font-mono); font-size:var(--text-sm); color:var(--fg); }
-.emeta { display:flex; align-items:center; gap:11px; flex-wrap:wrap; color:var(--muted); font-size:var(--text-xs); }
-.heat { justify-self:end; display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border:1px solid var(--border); border-radius:var(--radius-pill); color:var(--muted); font-family:var(--font-mono); font-size:var(--text-xs); }
-.heat b { color:var(--class-live); }
-.heat.noisy { border-color:color-mix(in oklab,var(--state-warn),transparent 55%); }
-.heat.noisy b { color:var(--state-warn); }
-.heat.unknown { color:var(--muted); border-style:dashed; }
-.rowmenu { color:var(--muted); text-align:center; font-size:18px; }
-.empty { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:5px; min-height:220px; color:var(--muted); }
-.empty b { color:var(--fg-2); font-size:var(--text-lg); }
-.detail { border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); padding:16px; position:sticky; top:0; }
-.detail-head { display:flex; align-items:center; gap:12px; }
-.detail-head h2 { margin:0; flex:1; font-size:var(--text-lg); }
-.dident { margin:4px 0 12px; color:var(--muted); font-size:var(--text-xs); }
-.dcontent { padding:12px; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--surface-warm); font-family:var(--font-mono); font-size:var(--text-sm); line-height:1.5; }
-.operator-note { display:flex; gap:10px; margin:12px 0; padding:11px 12px; border-radius:var(--r-sm); background:color-mix(in oklab,var(--accent),transparent 91%); border:1px solid color-mix(in oklab,var(--accent),transparent 65%); color:var(--fg-2); font-size:var(--text-xs); }
-.mark { width:22px; height:22px; display:grid; place-items:center; flex:none; border-radius:50%; background:var(--accent); color:var(--accent-on); font-weight:900; }
-.dfields { display:grid; grid-template-columns:120px minmax(0,1fr); gap:7px 12px; margin:14px 0; font-size:var(--text-sm); }
-.dfields dt { color:var(--muted); }
-.dfields dd { margin:0; color:var(--fg); font-family:var(--font-mono); }
-.dsection { margin-top:14px; }
-.dsh { margin-bottom:7px; color:var(--muted); font-size:var(--text-xs); font-weight:900; text-transform:uppercase; letter-spacing:.08em; }
-.tags { display:flex; gap:6px; flex-wrap:wrap; }
-.tag { display:inline-flex; border:1px solid var(--border); border-radius:var(--radius-pill); padding:3px 8px; color:var(--fg-2); font-family:var(--font-mono); font-size:var(--text-xs); }
-.tag.muted { color:var(--muted); }
-.gauge-mini { display:grid; grid-template-columns:58px 1fr; gap:8px 10px; align-items:center; }
-.gv { font-family:var(--font-mono); font-weight:800; }
-.confbar { height:8px; border-radius:var(--radius-pill); background:var(--border-soft); overflow:hidden; }
-.confbar i { display:block; height:100%; background:var(--class-live); border-radius:var(--radius-pill); }
-.plain-help { grid-column:1 / -1; color:var(--muted); font-size:var(--text-xs); }
-.callout { margin-top:9px; padding:9px 11px; border-radius:var(--r-sm); font-size:var(--text-xs); }
-.callout.danger { color:var(--state-warn); border:1px solid color-mix(in oklab,var(--state-warn),transparent 55%); background:color-mix(in oklab,var(--state-warn),transparent 90%); }
-.callout.muted { color:var(--muted); border:1px solid var(--border); background:var(--surface-warm); }
-.audit-card { display:flex; flex-direction:column; gap:9px; padding:12px; border-radius:var(--r-sm); border:1px solid color-mix(in oklab,var(--class-live),transparent 58%); background:color-mix(in oklab,var(--class-live),transparent 94%); color:var(--fg-2); font-size:var(--text-sm); }
-.audit-card[data-state="pending"] { border-color:color-mix(in oklab,var(--accent),transparent 58%); }
-.audit-card[data-state="error"] { border-color:color-mix(in oklab,var(--state-warn),transparent 45%); background:color-mix(in oklab,var(--state-warn),transparent 92%); }
-.audit-card[data-state="empty"] { border-color:var(--border); background:var(--surface-warm); }
-.audit-card-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
-.audit-list { display:flex; flex-direction:column; gap:7px; margin:0; padding:0; list-style:none; }
-.audit-list li { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:3px 8px; padding:8px 0; border-top:1px solid var(--border-soft); }
-.audit-list li:first-child { border-top:0; padding-top:0; }
-.audit-list .mono { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:var(--font-mono); font-size:var(--text-xs); color:var(--fg); }
-.mini { min-height:24px; padding:3px 8px; }
-.mb-card { padding:12px; border-radius:var(--r-sm); border:1px solid color-mix(in oklab,var(--class-mustbuild),transparent 55%); background:color-mix(in oklab,var(--class-mustbuild),transparent 91%); color:var(--fg-2); font-size:var(--text-sm); }
-.mb-card.compact { margin-top:8px; }
-.mb-card .mid { margin-top:4px; color:var(--muted); font-family:var(--font-mono); font-size:var(--text-xs); }
-.dactions { display:flex; gap:8px; flex-wrap:wrap; margin-top:15px; }
-.act { border:1px solid var(--border); border-radius:var(--r-sm); background:var(--surface); color:var(--fg-2); padding:7px 10px; font-size:var(--text-xs); font-weight:800; }
-.act.danger { border-color:color-mix(in oklab,var(--state-warn),transparent 45%); color:var(--state-warn); }
-.act:disabled { opacity:.55; cursor:not-allowed; }
-.mbp { margin-left:5px; color:var(--class-mustbuild); }
-@media (max-width:1120px) {
-  .area-body.detail-open { grid-template-columns:1fr; }
-  .detail { position:static; }
-  .principal-scopebar { grid-template-columns:repeat(3,minmax(0,1fr)); }
-  .principal-grid { grid-template-columns:1fr; }
-}
-@media (max-width:760px) {
-  .legend { align-items:flex-start; flex-direction:column; }
-  .principal-head { flex-direction:column; }
-  .principal-scopebar { grid-template-columns:1fr; }
-  .principal-state { align-items:flex-start; flex-direction:column; }
-  .grid-h { display:none; }
-  .mrow { grid-template-columns:22px 8px minmax(0,1fr); }
-  .heat, .rowmenu { grid-column:3; justify-self:start; }
-}
+.knowledge-page { display:grid; gap:20px; min-width:0; }
+.page-head { display:flex; align-items:start; justify-content:space-between; gap:16px; }
+h1 { margin:0 0 6px; font-size:var(--text-xl); } h2 { font-size:var(--text-lg); margin:0 0 16px; } h3 { font-size:var(--text-base); margin:0 0 10px; }
+p { margin:0 0 12px; color:var(--muted); }
+.toolbar, .action-row, .pagination, .list-head { display:flex; align-items:end; gap:12px; flex-wrap:wrap; }
+label { display:grid; gap:6px; font-size:var(--text-sm); color:var(--muted); }
+.search-field { flex:1; min-width:180px; }
+input:not([type=checkbox]), select { min-height:40px; padding:8px 10px; color:var(--fg); background:var(--surface); border:1px solid var(--border); border-radius:var(--r-sm); max-width:100%; }
+.btn { display:inline-flex; align-items:center; justify-content:center; min-height:40px; padding:8px 12px; color:var(--fg); background:var(--surface); border:1px solid var(--border); border-radius:var(--r-sm); cursor:pointer; }
+.btn:hover:not(:disabled), .memory-row button:hover { background:var(--surface-warm); }
+.btn:disabled { opacity:.5; cursor:not-allowed; } .primary { background:var(--accent); color:var(--accent-on); } .danger { color:var(--state-danger); }
+.state { padding:14px; border:1px solid var(--border); border-radius:var(--r-sm); display:flex; align-items:center; flex-wrap:wrap; gap:12px; color:var(--muted); } .state.error { color:var(--state-warn); }
+.knowledge-workspace { display:grid; gap:24px; min-width:0; }
+.knowledge-workspace.detail-open { grid-template-columns:minmax(0,.85fr) minmax(0,1.3fr); align-items:start; }
+.list-panel { min-width:0; border:1px solid var(--border); border-radius:var(--r-md); overflow:hidden; }
+.list-head { justify-content:space-between; padding:12px; color:var(--muted); font-size:var(--text-sm); border-bottom:1px solid var(--border); }
+.list-head label { display:flex; align-items:center; }
+.memory-row { display:flex; align-items:start; gap:8px; border-bottom:1px solid var(--border-soft); padding:0 12px; }
+.memory-row.selected { background:var(--surface-warm); }
+.memory-row > input { margin-top:20px; width:18px; height:18px; accent-color:var(--accent); }
+.memory-row button { flex:1; min-width:0; padding:16px 6px; border:0; background:transparent; color:var(--fg); display:grid; gap:8px; text-align:left; cursor:pointer; }
+.memory-row strong { font-size:var(--text-base); font-weight:500; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; overflow-wrap:anywhere; }
+.memory-row span { color:var(--muted); font-size:var(--text-xs); overflow-wrap:anywhere; }
+.pagination { align-items:center; justify-content:space-between; padding:12px; font-size:var(--text-sm); }
+.reader { min-width:0; padding:20px; background:var(--surface); border:1px solid var(--border); border-radius:var(--r-md); }
+.back { margin-bottom:20px; }
+.currentness { color:var(--fg-2); }
+.content-body { white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.65; max-width:75ch; font-size:var(--text-base); }
+.reader section, .reader details { margin-top:28px; padding-top:18px; border-top:1px solid var(--border); }
+dl { display:grid; grid-template-columns:120px minmax(0,1fr); gap:8px 12px; margin:0 0 16px; font-size:var(--text-sm); } dt { color:var(--muted); } dd { margin:0; overflow-wrap:anywhere; }
+.provenance > a { display:block; margin:8px 0; }
+.history ol { list-style:none; margin:0; padding:0; } .history li { display:grid; gap:4px; padding:12px 0; border-bottom:1px solid var(--border-soft); } .history time, .history li > span { color:var(--muted); font-size:var(--text-sm); }
+summary { cursor:pointer; min-height:40px; color:var(--fg-2); padding:8px 0; } details dl { margin-top:12px; }
+.advanced { border-top:1px solid var(--border); padding-top:8px; }
+.advanced-fields { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); align-items:end; gap:12px; }
+.check { display:flex; align-items:center; min-height:40px; } .principal-results { margin:16px 0 0; padding:0; list-style:none; } .principal-results li { padding:12px 0; border-top:1px solid var(--border); overflow-wrap:anywhere; }
+.text-button { border:0; padding:4px; color:var(--accent); background:transparent; cursor:pointer; }
+.empty { padding:32px 20px; } .bulk { display:flex; flex-wrap:wrap; gap:10px; padding:12px; }
+.knowledge-page :is(label, input, select, section, article, details, form) { min-width:0; }
+.reader h2 { scroll-margin-top:20px; }
+@media(max-width:760px) { .knowledge-workspace.detail-open { grid-template-columns:1fr; } .detail-open .list-panel { display:none; } .reader { padding:16px; } .toolbar { align-items:stretch; } .search-field { flex-basis:100%; } .btn, input:not([type=checkbox]), select { min-height:44px; } .advanced-fields { grid-template-columns:1fr; } .page-head { flex-wrap:wrap; } dl { grid-template-columns:90px minmax(0,1fr); } }
 </style>

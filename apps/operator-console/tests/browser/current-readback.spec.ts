@@ -232,9 +232,9 @@ test('partial memory retry keeps only unresolved selections and never replays au
  ]
  const selectionPayloads: Array<Record<string, unknown>> = []
  const operationPayloads: Array<Record<string, unknown>> = []
- await page.route('**/api/memories?**', (route: Route) => route.fulfill({ json: rows }))
+ await page.route('**/api/memories?**', (route: Route) => route.fulfill({ json: { items: rows, total: rows.length, offset: 0, limit: 20, has_more: false } }))
  for (const row of rows) {
-  await page.route(`**/api/memories/${row.id}`, (route: Route) => route.fulfill({ json: row }))
+  await page.route(`**/api/memories/${row.id}?**`, (route: Route) => route.fulfill({ json: row }))
  }
  await page.route('**/api/memories/selection', async (route: Route) => {
   if (route.request().method() !== 'POST') return route.continue()
@@ -260,18 +260,18 @@ test('partial memory retry keeps only unresolved selections and never replays au
    : { status: 202, json: { operation_state: 'accepted' } })
  })
 
- await page.goto('/memory')
- await page.getByTestId('memory-row-9101').locator('.echk').click()
- await page.getByTestId('memory-row-9102').locator('.echk').click()
- const apply = page.locator('.bulkbar .act').first()
+ await page.goto('/memory?project=operator-console')
+ await page.getByRole('checkbox', { name: 'Выбрать запись 9101' }).check()
+ await page.getByRole('checkbox', { name: 'Выбрать запись 9102' }).check()
+ const apply = page.locator('.bulk button').first()
  await apply.click()
  await apply.click()
 
  const outcome = page.getByTestId('mutation-result')
  await expect(outcome).toHaveAttribute('data-kind', 'partial')
  await expect(page.getByTestId('mutation-item-outcomes')).toContainText('9101')
- await expect(page.getByTestId('memory-row-9101').locator('.echk')).not.toHaveClass(/on/)
- await expect(page.getByTestId('memory-row-9102').locator('.echk')).toHaveClass(/on/)
+ await expect(page.getByRole('checkbox', { name: 'Выбрать запись 9101' })).not.toBeChecked()
+ await expect(page.getByRole('checkbox', { name: 'Выбрать запись 9102' })).toBeChecked()
  await expect.poll(() => selectionPayloads.length).toBe(1)
  expect(selectionPayloads).toEqual([
   {
@@ -315,8 +315,8 @@ test('a browser transport loss retains the selected mutation for manual reconcil
   { id: 9103, project: 'operator-console', content: 'T011 lost transport selection', tags: ['t011'], tier: 'semantic', epistemic_type: 'fact', confidence: 0.9, citation_count: 1, injection_count: 1, version: 1, created_at: '2026-09-10T12:00:00Z', updated_at: '2026-09-10T12:00:00Z', status: 'active' },
  ]
  let dispatches = 0
- await page.route('**/api/memories?**', (route: Route) => route.fulfill({ json: rows }))
- await page.route('**/api/memories/9103', (route: Route) => route.fulfill({ json: rows[0] }))
+ await page.route('**/api/memories?**', (route: Route) => route.fulfill({ json: { items: rows, total: rows.length, offset: 0, limit: 20, has_more: false } }))
+ await page.route('**/api/memories/9103?**', (route: Route) => route.fulfill({ json: rows[0] }))
  await page.route('**/api/memories/selection', async (route: Route) => {
   if (route.request().method() !== 'POST') return route.continue()
   await route.fulfill({ json: { selection: { kind: 'explicit', selection_version: 1 } } })
@@ -327,9 +327,9 @@ test('a browser transport loss retains the selected mutation for manual reconcil
   await route.abort('connectionreset')
  })
 
- await page.goto('/memory')
- await page.getByTestId('memory-row-9103').locator('.echk').click()
- const apply = page.locator('.bulkbar .act').first()
+ await page.goto('/memory?project=operator-console')
+ await page.getByRole('checkbox', { name: 'Выбрать запись 9103' }).check()
+ const apply = page.locator('.bulk button').first()
  await apply.click()
  await apply.click()
 
@@ -337,7 +337,7 @@ test('a browser transport loss retains the selected mutation for manual reconcil
  await expect(outcome).toHaveAttribute('data-kind', 'outcome_unknown')
  await expect(page.getByTestId('mutation-request-reference')).toHaveText(/\S+/)
  await expect(page.getByTestId('mutation-retained-input')).toBeVisible()
- await expect(page.getByTestId('memory-row-9103').locator('.echk')).toHaveClass(/on/)
+ await expect(page.getByRole('checkbox', { name: 'Выбрать запись 9103' })).toBeChecked()
  await expect(outcome).not.toContainText(/rollback/i)
  await expect.poll(() => dispatches).toBe(1)
  expect(dispatches).toBe(1)
@@ -410,9 +410,11 @@ test('documents create, history, readback, and export render through the current
  const failures = collectPageFailures(page)
  await page.goto('/documents?project=operator-console')
  await expect(page.locator('.doc-row').filter({ hasText: path })).toBeVisible()
- await expect(page.locator('.history-list')).toContainText('2')
- await expect(page.locator('.doc-content').first()).toHaveText(second)
+ await page.locator('.doc-row').filter({ hasText: path }).click()
+ await expect(page.locator('.history')).toContainText('2')
+ await expect(page.getByTestId('document-content')).toHaveText(second)
  const operation = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/documents' && response.request().postDataJSON().action === 'export')
+ await page.getByText('Действия с документом', { exact: true }).click()
  await page.getByTestId('document-export').click()
  await operation
  await expect(page.getByTestId('mutation-result')).toHaveAttribute('data-kind', 'committed_verified')

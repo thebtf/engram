@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test'
 
 test('search deep links preserve a q-only prefill and open the scoped memory row', async ({ page }) => {
   const searchRequests: URL[] = []
+  await page.setViewportSize({ width: 390, height: 844 })
   page.on('request', (request) => {
     const url = new URL(request.url())
     if (url.pathname === '/api/context/search') searchRequests.push(url)
@@ -19,9 +20,13 @@ test('search deep links preserve a q-only prefill and open the scoped memory row
 
   await page.getByTestId('search-result-open-101').click()
   await expect(page).toHaveURL(/\/memory\?project=operator-console&memory=101/)
-  await expect(page.locator('#memory-project-filter')).toHaveValue('operator-console')
-  await expect(page.getByTestId('memory-row-101')).toHaveClass(/open/)
-  await expect(page.locator('.detail .dcontent')).toHaveText('operator console = data plane: manage memory PRODUCT, config one Settings tab')
+  await expect(page.getByTestId('project-context-select')).toHaveValue('operator-console')
+  await expect(page.getByTestId('memory-row-101')).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByTestId('memory-content')).toHaveText('operator console = data plane: manage memory PRODUCT, config one Settings tab')
+  await expect(page.locator('#memory-reader-heading')).toBeFocused()
+  await page.getByRole('button', { name: 'Вернуться к результатам', exact: true }).click()
+  await expect(page.getByTestId('search-result-open-101')).toBeFocused()
+  await expect(page.getByTestId('project-context-select')).toHaveValue('operator-console')
 })
 
 test('search deep link fetches and opens a memory omitted by the capped list', async ({ page }) => {
@@ -35,13 +40,13 @@ test('search deep link fetches and opens a memory omitted by the capped list', a
   await page.getByTestId('search-result-open-501').click()
 
   await expect(page).toHaveURL(/\/memory\?project=operator-console&memory=501/)
-  await expect(page.getByTestId('memory-row-501')).toHaveClass(/open/)
-  await expect(page.locator('.detail .dcontent')).toHaveText('older memory omitted by the 500-row project list')
+  await expect(page.getByTestId('memory-content')).toHaveText('older memory omitted by the 500-row project list')
+  expect(exactRequests[0].searchParams.get('project')).toBe('operator-console')
   expect(exactRequests).toHaveLength(1)
 })
 
 test('memory deep link does not open an exact-ID row from another project', async ({ page }) => {
-  await page.route('**/api/memories/501', (route) => route.fulfill({
+  await page.route('**/api/memories/501?**', (route) => route.fulfill({
     json: {
       id: 501,
       project: 'other-project',
@@ -54,10 +59,9 @@ test('memory deep link does not open an exact-ID row from another project', asyn
 
   await page.goto('/memory?project=operator-console&memory=501')
 
-  const row = page.getByTestId('memory-row-501')
-  await expect(row).toBeVisible()
-  await expect(row).not.toHaveClass(/open/)
-  await expect(page.locator('#memory-project-filter')).toHaveValue('all')
+  await expect(page.getByTestId('memory-content')).toHaveCount(0)
+  await expect(page.getByTestId('project-context-select')).toHaveValue('operator-console')
+  await expect(page.locator('.reader .error')).toBeVisible()
 })
 
 test('late exact-ID deep link response cannot override a newer route', async ({ page }) => {
@@ -66,17 +70,19 @@ test('late exact-ID deep link response cannot override a newer route', async ({ 
   const started = new Promise<void>((resolve) => { markStarted = resolve })
   const delayed = new Promise<void>((resolve) => { release = resolve })
 
-  await page.route('**/api/memories/501', async (route) => {
+  await page.route('**/api/memories/501?**', async (route) => {
     markStarted()
     await delayed
-    await route.fulfill({ json: {
-      id: 501,
-      project: 'operator-console',
-      content: 'older memory omitted by the 500-row project list',
-      tags: ['deep-link'],
-      tier: 'semantic',
-      status: 'active',
-    } })
+    await route.fulfill({
+      json: {
+        id: 501,
+        project: 'operator-console',
+        content: 'older memory omitted by the 500-row project list',
+        tags: ['deep-link'],
+        tier: 'semantic',
+        status: 'active',
+      }
+    })
   })
 
   await page.goto('/memory?project=operator-console&memory=501')
@@ -86,11 +92,11 @@ test('late exact-ID deep link response cannot override a newer route', async ({ 
     window.dispatchEvent(new PopStateEvent('popstate'))
   })
 
-  await expect(page.getByTestId('memory-row-101')).toHaveClass(/open/)
+  await expect(page.getByTestId('memory-row-101')).toHaveAttribute('aria-pressed', 'true')
   release()
-  await expect(page.getByTestId('memory-row-101')).toHaveClass(/open/)
-  await expect(page.getByTestId('memory-row-501')).not.toHaveClass(/open/)
-  await expect(page.locator('#memory-project-filter')).toHaveValue('operator-console')
+  await expect(page.getByTestId('memory-row-101')).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByTestId('memory-content')).not.toContainText('older memory omitted')
+  await expect(page.getByTestId('project-context-select')).toHaveValue('operator-console')
 })
 
 test('search result actions require explicit memory discriminants', async ({ page }) => {

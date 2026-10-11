@@ -1,8 +1,8 @@
-import { ref as sharedRef, type Ref as SharedRef } from 'vue'
+import { onBeforeUnmount, ref as sharedRef, type Ref as SharedRef } from 'vue'
 import { startedLoads } from './useConsolePreferences'
+import { useOperatorProjectContext } from './useOperatorProjectContext'
 
 let sharedSearchNoiseProjects: SharedRef<string[]> | undefined
-let sharedSearchNoiseSelectedProject: SharedRef<string> | undefined
 let sharedSearchNoiseResults: SharedRef<OperatorSearchResult[]> | undefined
 let sharedSearchNoiseProjectsState: SharedRef<OperatorLoadState<string[]>> | undefined
 let sharedSearchNoiseSearchState: SharedRef<OperatorLoadState<OperatorSearchResult[]>> | undefined
@@ -228,7 +228,8 @@ export function useOperatorSearchNoise(): {
   const vnextEvidence = endpointEvidence('/api/stats/vnext', 'stats-vnext')
 
   const projects = (sharedSearchNoiseProjects ??= sharedRef<string[]>((() => [])()))
-  const selectedProject = (sharedSearchNoiseSelectedProject ??= sharedRef<string>((() => '')()))
+  const context = useOperatorProjectContext()
+  const selectedProject = context.project
   const searchResults = (sharedSearchNoiseResults ??= sharedRef<OperatorSearchResult[]>((() => [])()))
 
   const projectsStateValue = (sharedSearchNoiseProjectsState ??= sharedRef<OperatorLoadState<string[]>>((() => pendingState(projectsEvidence, projects.value))()))
@@ -270,6 +271,7 @@ export function useOperatorSearchNoise(): {
     analyticsStateValue.value,
     retrievalStateValue.value,
     vnextStateValue.value,
+    searchStateValue.value,
   ].some((state) => state.kind === 'pending'))
 
   const error = computed(() => {
@@ -281,23 +283,11 @@ export function useOperatorSearchNoise(): {
 
   async function refreshProjects() {
     projectsStateValue.value = pendingState(projectsEvidence, projects.value)
-    const result = await loadOperatorJson<string[]>('/api/projects', {
-      source: 'search-projects',
-      empty: (rows) => !rows.length,
-    })
-
-    if (result.kind === 'live' || result.kind === 'empty') {
-      replaceArray(projects.value, result.data)
-      projectsStateValue.value = projects.value.length
-        ? liveState(projectsEvidence, projects.value)
-        : emptyState(projectsEvidence, projects.value)
-      if (!selectedProject.value && projects.value.length) {
-        selectedProject.value = projects.value[0]
-      }
-      return
-    }
-
-    projectsStateValue.value = result
+    await context.refresh()
+    replaceArray(projects.value, context.projects.value)
+    projectsStateValue.value = context.error.value
+      ? errorState(projectsEvidence, context.error.value, { source: 'search-projects', run: async () => { await refreshProjects(); return projectsStateValue.value } }, [])
+      : projects.value.length ? liveState(projectsEvidence, projects.value) : emptyState(projectsEvidence, projects.value)
   }
 
   async function refreshRecent() {
@@ -339,7 +329,8 @@ export function useOperatorSearchNoise(): {
     const run = ++searchGeneration
     const trimmedQuery = query.trim()
     const trimmedProject = project.trim()
-    if (!trimmedQuery || !trimmedProject) {
+    replaceArray(searchResults.value, [])
+    if (!trimmedQuery || !trimmedProject || trimmedProject === 'all') {
       replaceArray(searchResults.value, [])
       searchStateValue.value = emptyState(searchEvidence, searchResults.value)
       return
@@ -350,11 +341,11 @@ export function useOperatorSearchNoise(): {
       `&query=${encodeURIComponent(trimmedQuery)}` +
       '&limit=20'
     const evidence = endpointEvidence(path, 'context-search')
-    searchStateValue.value = pendingState(evidence, searchResults.value)
+    searchStateValue.value = pendingState(evidence, [])
 
     try {
       const payload = await operatorFetchJson<ApiContextSearch>(path, undefined, 'context-search')
-      if (run !== searchGeneration) return
+      if (run !== searchGeneration || project !== selectedProject.value) return
       if (typeof payload === 'string' || payload.deprecated) {
         replaceArray(searchResults.value, [])
         searchStateValue.value = staleState(evidence, payload.message || 'Deprecated search response; not a live result set.', searchResults.value)
@@ -368,7 +359,7 @@ export function useOperatorSearchNoise(): {
         : emptyState(evidence, searchResults.value)
       await Promise.all([refreshRecent(), refreshAnalytics(), refreshRetrieval(), refreshVNext()])
     } catch (nextError) {
-      if (run !== searchGeneration) return
+      if (run !== searchGeneration || project !== selectedProject.value) return
       const mapped = toOperatorSourceError(nextError, {
         source: 'context-search',
         path,
@@ -397,6 +388,7 @@ export function useOperatorSearchNoise(): {
   )
 
   startOnce('search-noise', refresh)
+  onBeforeUnmount(() => { searchGeneration += 1 })
 
   return {
     projects,

@@ -32,6 +32,67 @@ The reviewed 2026.09.17 snapshot is already promoted. `PROMOTION-MANIFEST.json` 
 
 The [responsive-layout receipt](../../specs/011-operator-code-console/acceptance/da-workspace-responsive-layout-receipt.json) proves Workspace shell layout and drawer behavior only. It does not reassert semantic-provider explorer evidence (`embedded_chunks=0 of 64`) or substitute for the installed exact-head normal-homepage DA01–DA04 release proof, which remains pending.
 
+## Project knowledge journey (2026-10-11)
+
+The accepted operator-knowledge change refines the inherited Vue/Vite Operate world.
+It does not promote a new visual system or change the historical snapshot hashes.
+Navigation groups project entry, knowledge, Workspace, attention, and administration.
+The shared project selector uses the server's canonical IDs; equal display names stay
+distinct. The knowledge project is not a code Source/Checkout/View selection or a grant.
+
+| Route | Task and scope |
+|---|---|
+| `/` | Choose a project, open its knowledge or the independent code Workspace. A concrete project loads at most three latest memories and three document summaries, not every project's bodies. |
+| `/projects` | Choose one canonical project, enter memory/documents/code, and read up to 50 existing sessions. Project archive remains secondary and requires typing the exact selected ID. |
+| `/memory` | Server-filtered content search and paging, then the real ID reader, origin/currentness fields, source sessions, and up to 200 accessible audit events. Suppress, restore, archive, delete, and explicit bulk suppress use existing mutation/readback contracts. |
+| `/documents` | Metadata search, type/path-prefix filtering and paging, then current/version content, real version history, comparison, version-specific comments, and the existing export action. Download is exposed only after `committed_verified`; a new attempt or reader scope/version/state change clears its artifact. |
+| `/search` | Secondary similarity search through the existing context reader. Memory-backed results open the canonical scoped ID reader; guidance rows do not pretend to be memories. This bounded reader is not the complete memory inventory. |
+| `/code` | Existing independently selected and server-pinned Workspace. Knowledge labels never establish repository linkage or source access. |
+| `/rules`, `/queue` | Retained supported actions follow the shared selected project. Rules retain their explicit global scope; candidates retain the existing flag and explicit all-project contract. |
+| `/noise` | Secondary server-wide retrieval/outcome diagnostics. Missing numeric fields stay unknown; unavailable decorative trends are not a primary task. |
+
+The NEXT readers are one shape, not an optional compatibility mode:
+
+```ts
+type ProjectsResponse = { items: { id: string; display_name: string }[] }
+type ReaderPage<T> = { items: T[]; total: number; offset: number; limit: number; has_more: boolean }
+```
+
+Memory and document inventories require `project=<exact selected canonical ID>`.
+Their server-side literal, case-insensitive `query` and authorized `total` apply before
+offset/limit. Ordering is `created_at DESC, id DESC`, not last-update order.
+Memory `filter=all|active|flagged|stale|low|chain` filters the full visible query set;
+unknown confidence is not zero. Document query searches `path`, `doc_type`, and `author`,
+never bodies or vault data. Documents choose the latest version per path before filters.
+No array, `details=true`, stored-alias, display-name, or client 500-body fallback exists.
+
+`GET /api/memories/:id?project=<canonical ID>` uses that same selected context; its DTO
+`project` must be canonical. Document current/version/history requests likewise use the
+selected canonical ID, never a raw stored alias. The server owns strict unique legacy
+alias resolution and privacy. Unknown/unregistered or ambiguous identities are not
+invented, auto-registered, merged, or presented as successfully empty projects.
+
+“All projects” is explicit. Home never fans out knowledge bodies. Inventories require
+an explicit Find submission before composing pages over canonical descriptor IDs;
+ordering is by project, then by creation time within each project. A failed member
+read remains an error rather than a partial total presented as complete.
+
+The route preserves project, query, filters, page, page size, selected record/path,
+and document version/comparison. Per-project route state also stays in this tab's
+session storage so navigation back from another knowledge page survives a reload.
+Desktop uses master/detail; the narrow layout uses one reader column and hides the list.
+Opening focuses and scrolls the reader title into view. Back/Escape restores the result
+and its context. Generation guards isolate late list, content, version and mutation
+responses. Owner/privacy search remains a disclosed separate scope; collapsing it does
+not widen access. Audit events are not fictional previous-content versions.
+
+The source includes RU/EN/ZH task copy and retained accessibility affordances. Build
+success is compilation evidence only. Acceptance still requires the integrated NEXT
+backend, real known older records and documents, duplicate labels, empty/error recovery,
+1440×900 and 390px keyboard journeys, followed by the installed consumer walkthrough.
+Deployed 6.51 responses do not implement the NEXT envelopes and cannot prove this slice.
+
+
 ## Runtime invariants
 
 - Source/Checkout/View and explicit grants remain server authority. Human repository,
@@ -322,3 +383,10 @@ switch refusal, committed switches with lost/timed-out responses, same-context i
 continuity across reconfirmation/reload, and current-snapshot rejection. This is UI-layer
 smoke evidence, not a real-API, physical-LAN, semantic-provider, installed or release
 acceptance claim.
+
+Knowledge browser fixtures retain mutation-result, privacy, deep-link, and late-response
+coverage with canonical project parameters and reader envelopes. Old assertions that
+required Home charts, automatic all-project body loading, disabled capability buttons,
+or a page-local capped corpus were removed rather than repinned as product requirements.
+They remain fixture checks, not ordinary-user or installed acceptance.
+

@@ -75,7 +75,7 @@ const GRAPH_NODES = {
 
 async function routeGraphFoundation(page: Page, graphEnabled = true) {
  await page.route('**/api/flags', jsonRoute({ flags: { ENGRAM_GRAPH_ENABLED: graphEnabled } }))
- await page.route('**/api/projects', jsonRoute(['demo']))
+ await page.route('**/api/projects', jsonRoute({ items: [{ id: 'demo', display_name: 'Demo' }] }))
 }
 
 async function expectShellReady(page: Page) {

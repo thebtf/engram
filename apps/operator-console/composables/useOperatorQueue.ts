@@ -1,9 +1,9 @@
-import { ref as sharedRef, type Ref as SharedRef } from 'vue'
+import { onBeforeUnmount, ref as sharedRef, type Ref as SharedRef } from 'vue'
 import { startedLoads } from './useConsolePreferences'
+import { useOperatorProjectContext } from './useOperatorProjectContext'
 
 let sharedCandidateQueueRows: SharedRef<OperatorCandidate[]> | undefined
 let sharedCandidateQueueProjects: SharedRef<string[]> | undefined
-let sharedCandidateQueueSelectedProject: SharedRef<string> | undefined
 export const candidateQueueState = sharedRef<OperatorLoadState<OperatorCandidate[]>>(pendingState(endpointEvidence('/api/memory/candidates?project={project}&status=pending&limit=100', 'candidate-queue', { flag: 'ENGRAM_VNEXT_F_ENABLED' }), []))
 
 import type { ComputedRef, Ref } from 'vue'
@@ -239,39 +239,42 @@ export function useOperatorQueue(): {
   })
   const rowsState = (sharedCandidateQueueRows ??= sharedRef<OperatorCandidate[]>((() => [])()))
   const projectsState = (sharedCandidateQueueProjects ??= sharedRef<string[]>((() => [])()))
-  const selectedProject = (sharedCandidateQueueSelectedProject ??= sharedRef<string>((() => QUEUE_ALL_PROJECTS)()))
+  const context = useOperatorProjectContext()
+  const selectedProject = context.project
   const state = candidateQueueState
 
   const loadState = computed(() => state.value)
   const pending = computed(() => state.value.kind === 'pending')
   const error = computed(() => state.value.kind === 'error' ? state.value.error.message : null)
 
+  let generation = 0
   async function refresh() {
+    const current = ++generation
+    const project = selectedProject.value
+    replaceArray(rowsState.value, [])
     state.value = pendingState(evidence, rowsState.value)
+    if (!project) { state.value = gatedState(evidence, 'project-selection', 'Choose a project before reading candidates.', []); return }
     try {
       const flags = await operatorFetchJson<ApiFlags>('/api/flags', undefined, 'candidate-flags')
+      if (current !== generation || project !== selectedProject.value) return
       if (flags.flags?.[QUEUE_FLAG] !== true) {
         replaceArray(rowsState.value, [])
         state.value = gatedState(evidence, QUEUE_FLAG, 'Candidate review queue is disabled by the vNext-F feature flag.', rowsState.value)
         return
       }
 
-      const projects = await operatorFetchJson<string[]>('/api/projects', undefined, 'candidate-projects')
-      const nextProjects = Array.isArray(projects) ? projects.filter(Boolean).sort() : []
-      replaceArray(projectsState.value, [QUEUE_ALL_PROJECTS, ...nextProjects])
-      if (!selectedProject.value || !projectsState.value.includes(selectedProject.value)) {
-        selectedProject.value = QUEUE_ALL_PROJECTS
-      }
-
-      const apiProject = selectedProject.value === QUEUE_ALL_PROJECTS ? QUEUE_ALL_PROJECTS_API : selectedProject.value
+      replaceArray(projectsState.value, [QUEUE_ALL_PROJECTS, ...context.projects.value])
+      const apiProject = project === 'all' ? QUEUE_ALL_PROJECTS_API : project
       const path = `/api/memory/candidates?project=${encodeURIComponent(apiProject)}&status=${QUEUE_STATUS}&limit=${QUEUE_LIMIT}`
       const payload = await operatorFetchJson<ApiCandidateListResponse>(path, undefined, 'candidate-queue')
+      if (current !== generation || project !== selectedProject.value) return
       const rows = parseCandidatePayload(payload, path)
       replaceArray(rowsState.value, rows)
       state.value = rows.length
         ? liveState(evidence, rowsState.value)
         : emptyState(evidence, rowsState.value)
     } catch (nextError) {
+      if (current !== generation || project !== selectedProject.value) return
       const mapped = toOperatorSourceError(nextError, {
         source: 'candidate-queue',
         path: evidence.endpoint,
@@ -346,6 +349,7 @@ export function useOperatorQueue(): {
   }
 
   startOnce('candidate-queue', refresh)
+  onBeforeUnmount(() => { generation += 1 })
 
   return {
     rows: rowsState.value,

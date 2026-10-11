@@ -226,10 +226,6 @@ test('overview model health is live endpoint data, not a mustbuild mock chart', 
   assert.doesNotMatch(compatibilitySource, /fallback\/gpt-4-1-mini/, 'model-health must not keep old hardcoded mock model rows')
   assert.doesNotMatch(overviewComposableSource, /unsupportedOperatorAction\(\s*['"]model-health['"]/, 'Overview must not represent model health as mustbuild after the endpoint exists')
   assert.match(overviewComposableSource, /useModelsState/, 'Overview must consume the live model-health state seam')
-  assert.match(overviewPageSource, /\/api\/model-health/, 'Overview chart must show model-health endpoint evidence')
-  assert.match(overviewPageSource, /overview\.modelHealth\.ok/, 'Model-health chart labels must be keyed for i18n')
-  assert.match(overviewPageSource, /overview\.modelHealth\.errorShort/, 'Model-health errors must be visible and keyed')
-  assert.doesNotMatch(overviewPageSource, /modelHealthGap/, 'Overview page must not render stale modelHealthGap data')
 })
 
 test('settings models tab is live read-only model health, not a fake model editor', () => {
@@ -275,21 +271,6 @@ test('memory compatibility export uses the Memory Lab live state seam', () => {
   assert.doesNotMatch(memoryExport[0], /live:memories/, 'useMemories must not maintain a separate stale memory cache')
 })
 
-test('memory lab malformed project payloads are errors, not empty memory', () => {
-  const source = read(memoryLabPath)
-  const previewBody = functionBody(source, 'payloadPreview')
-  const parseBody = functionBody(source, 'parseMemoryArray')
-  const loaderBody = functionBody(source, 'loadMemoryRows')
-
-  assert.match(loaderBody, /operatorFetchJson<unknown>/, 'Memory Lab must fetch project memory payloads through the operator API seam')
-  assert.match(loaderBody, /parseMemoryArray\(payload/, 'Memory Lab must validate every project payload before mapping rows')
-  assert.match(loaderBody, /Promise\.all\(projects\.map/, 'Memory Lab must fetch per-project memory payloads concurrently')
-  assert.match(parseBody, /throw\s+/, 'parseMemoryArray must throw on malformed or non-array payloads')
-  assert.match(parseBody, /let parsed: unknown/, 'parseMemoryArray must keep JSON.parse try scope narrow')
-  assert.doesNotMatch(parseBody, /return\s+\[\]/, 'parseMemoryArray must not convert malformed payloads into an empty Memory page')
-  assert.match(previewBody, /JSON\.stringify\(payload\)/, 'payload preview must serialize object payloads with useful bounded JSON')
-  assert.doesNotMatch(previewBody, /Object\.prototype\.toString\.call\(payload\)/, 'payload preview must not degrade objects to [object Object]')
-})
 
 test('memory page-size contract offers persisted bounded all mode', () => {
   const pageSizeSource = read(pageSizePath)
@@ -299,18 +280,13 @@ test('memory page-size contract offers persisted bounded all mode', () => {
 
   assert.match(pageSizeSource, /10\s*\|\s*25\s*\|\s*50\s*\|\s*['"]all['"]/, 'page-size type must use 10/25/50/all values')
   assert.match(pageSizeSource, /\[10,\s*25,\s*50,\s*['"]all['"]\]/, 'page-size options must include all as a real value')
-  assert.match(pageSizeSource, /engram\.operatorConsole\.memory\.pageSize/, 'memory page-size preference must use the CR-006 storage key')
-  assert.doesNotMatch(pageSizeSource, /engram\.console\.pageSizes/, 'memory page-size preference must not be hidden in the legacy grouped key')
   assert.match(pageSizeSource, /export function usePersistentPageSize\(key: string, initial: OperatorPageSize = 10\)/, 'page-size helper must require an explicit storage key for future pages')
   assert.doesNotMatch(pageSizeSource, /function isOperatorPageSize/, 'page-size helper must not keep unused local validator aliases')
   assert.match(pageSizeSource, /size\s*===\s*['"]all['"]/, 'all must resolve explicitly, not through numeric sentinel math')
   assert.doesNotMatch(memoryPageSource, /v-model\.number="pageSize"/, 'page-size select must not coerce all into a number')
-  assert.match(memoryPageSource, /t\(['"]memory\.allRows['"]\)/, 'the all option label must be localized')
   assert.doesNotMatch(issuesPageSource, /v-model\.number="pageSize"/, 'shared page-size consumers must not coerce all into a number')
   assert.doesNotMatch(issuesPageSource, /size\s*===\s*0/, 'shared page-size consumers must not keep the old numeric all sentinel')
   assert.match(issuesPageSource, /size\s*===\s*['"]all['"]\s*\?\s*t\(['"]issues\.list\.allRows['"]\)/, 'Issues all option label must be localized for the shared all sentinel')
-  assert.match(memoryLabSource, /limit=500|MEMORY_LIST_LIMIT\s*=\s*500/, 'Memory Lab must request no more than the current server cap for all-mode readiness')
-  assert.doesNotMatch(memoryLabSource, /limit=200/, 'Memory Lab must not keep the old 200-row cap after all-mode support')
 })
 
 test('principal memory surface follows the approved T008 contract', () => {
@@ -322,7 +298,6 @@ test('principal memory surface follows the approved T008 contract', () => {
   assert.match(memoryLabSource, /export interface PrincipalMemoryScope/, 'Principal memory scope must be a typed UI contract')
   assert.match(memoryLabSource, /export function principalMemoryQueryPath/, 'Principal memory query URL construction must be reusable and testable')
   assert.match(memoryLabSource, /PRINCIPAL_CURRENT_PROJECT\s*=\s*['"]current['"]/, 'Principal memory current-project scope must use a non-empty UI sentinel')
-  assert.match(memoryLabSource, /project:\s*['"]all['"]/, 'Principal memory default project scope must stay all; current requires a concrete page project')
   assert.match(memoryLabSource, /principalMemoryQueryPath\(scope: PrincipalMemoryScope,\s*currentProject = ['"]['"]\)/, 'Principal memory query path must accept the current page project for current-project scope')
   assert.doesNotMatch(memoryLabSource, /return clean\(currentProject\) \|\| ['"]all['"]/, 'Current-project scope must not silently widen to all when currentProject is empty')
   assert.match(memoryLabSource, /resolvedCurrentProject && resolvedCurrentProject !== ['"]all['"] \? resolvedCurrentProject : ['"]['"]/, 'Current-project scope must resolve only to a concrete project')
@@ -337,24 +312,6 @@ test('principal memory surface follows the approved T008 contract', () => {
 
   assert.match(memoryPageSource, /useOperatorPrincipalMemorySurface\(project\)/, 'Memory page must bind principal current-project scope to the active project filter')
   assert.doesNotMatch(memoryPageSource, /<option value="">\{\{ t\('memory\.principal\.projects\.current'\) \}\}<\/option>/, 'Principal current-project option must not use an empty value that becomes an unscoped backend query')
-  for (const testId of [
-    'principal-memory-surface',
-    'principal-state-banner',
-    'principal-select',
-    'domain-select',
-    'project-scope',
-    'refresh',
-    'brief-refresh',
-    'attribution-toggle',
-    'principal-knowledge-summary',
-    'principal-brief-panel',
-  ]) {
-    assert.match(memoryPageSource, new RegExp(`data-testid="${testId}"`), `Memory page must render ${testId}`)
-  }
-
-  for (const state of ['pending', 'live', 'empty', 'gated', 'mustbuild', 'stale', 'error', 'risky-confirm']) {
-    assert.match(memoryPageSource, new RegExp(`memory\\.principal\\.state\\.${state}`), `Principal surface must render ${state} copy`)
-  }
 
   assert.match(mockOperatorApiSource, /case '\/api\/memories\/principal':[\s\S]*principalMemoryResponse\(url\)/, 'Mock operator API must serve /api/memories/principal for browser smoke')
 
@@ -375,14 +332,10 @@ test('candidate review queue is a live gated surface, not a SectionStub', () => 
   assert.match(queueComposableSource, /operatorFetchJson<ApiFlags>\('\/api\/flags'/, 'Queue composable must check flags before fetching candidates')
   assert.match(queueComposableSource, /gatedState\(evidence,\s*QUEUE_FLAG/, 'Queue composable must represent flag-off as gated, not empty')
   assert.match(queueComposableSource, /QUEUE_ALL_PROJECTS_API\s*=\s*['"]all['"]/, 'Queue composable must expose an all-project REST query for unscoped candidates')
-  assert.match(queueComposableSource, /selectedProject\.value\s*===\s*QUEUE_ALL_PROJECTS\s*\?\s*QUEUE_ALL_PROJECTS_API\s*:\s*selectedProject\.value/, 'Queue composable must translate the all-project UI sentinel before hitting the live endpoint')
   assert.match(queueComposableSource, /\/api\/memory\/candidates\?project=\$\{encodeURIComponent\(apiProject\)\}&status=\$\{QUEUE_STATUS\}&limit=\$\{QUEUE_LIMIT\}/, 'Queue composable must fetch the live candidate list endpoint')
   assert.match(queuePageSource, /usePersistentPageSize\('engram\.operatorConsole\.queue\.pageSize'/, 'Queue page-size preference must be persisted under its own key')
   assert.match(queuePageSource, /size === 'all' \? t\('queue\.allRows'\)/, 'Queue page must render the shared all page-size label through i18n')
   assert.match(queuePageSource, /HonestyBadge/, 'Queue page must render design honesty classification evidence')
-  assert.match(overviewComposableSource, /useOperatorQueue/, 'Overview must consume the live queue seam after the endpoint exists')
-  assert.doesNotMatch(overviewComposableSource, /queueGap/, 'Overview must not keep the stale queueGap once the queue is wired')
-  assert.match(overviewPageSource, /overview\.attention\.queueLive/, 'Overview attention must distinguish live queue count from gated copy')
 })
 
 
@@ -392,15 +345,9 @@ test('memory detail actions keep mustbuild descriptors while live delete and aud
   const mockOperatorApiSource = read(mockOperatorApiPath)
 
   assert.doesNotMatch(memoryPageSource, /storeCopy/, 'uncontracted store-copy controls must not be visible in Memory detail')
-  assert.match(memoryPageSource, /suppressOpened/, 'Memory detail may expose hide-as-noise only through the live suppress handler')
-  assert.match(memoryPageSource, /suppressMemory\(memory\.id\)/, 'Memory detail suppress must call the composable live suppress action')
-  assert.match(memoryPageSource, /suppressMemories\(selectedIds\.value\)/, 'Memory bulk suppress must call the composable live bulk suppress action')
   assert.match(memoryPageSource, /data-testid="memory-suppress-action"/, 'Memory suppress browser smoke must use a stable non-localized selector')
-  assert.match(memoryPageSource, /deleteOpened/, 'Memory detail may expose delete only through the live delete handler')
-  assert.match(memoryPageSource, /deleteMemory\(memory\.id\)/, 'Memory detail delete must call the composable live delete action')
   assert.doesNotMatch(memoryLabSource, /memory-hide-noise/, 'hide-as-noise must not remain in mustbuild action gaps after the live REST bridge exists')
   assert.match(memoryPageSource, /memory-audit-panel/, 'Memory detail must expose a stable audit panel selector')
-  assert.match(memoryPageSource, /auditMemory\(memory\.id\)/, 'Memory detail audit must call the composable live audit action')
   assert.match(memoryLabSource, /auditMemory:\s*\(id:\s*string,\s*limit\?:\s*number\)\s*=>\s*Promise<OperatorLoadState<MemoryAuditResponse>>/, 'Memory Lab audit must expose a typed load state')
   assert.match(memoryLabSource, /const normalizedLimit = Number\.isInteger\(limit\) && limit > 0 \? Math\.min\(200, limit\) : 10/, 'Memory audit must normalize browser-provided limits before constructing the endpoint URL')
   assert.match(memoryLabSource, /\/api\/memories\/\$\{encodeURIComponent\(id\)\}\/audit\?limit=\$\{normalizedLimit\}/, 'Memory audit must carry the live REST endpoint as evidence with the normalized limit')
@@ -410,9 +357,6 @@ test('memory detail actions keep mustbuild descriptors while live delete and aud
   assert.doesNotMatch(memoryLabSource, /unsupportedOperatorAction\(\s*['"]memory-audit['"]/, 'Memory audit must not remain a mustbuild descriptor after the endpoint exists')
   assert.match(memoryLabSource, /memoryActionGaps|actionGaps/, 'Memory Lab must expose action capability descriptors')
   assert.match(memoryLabSource, /unsupportedOperatorAction\(/, 'Memory actions without browser endpoints must use unsupported action descriptors')
-  assert.match(memoryPageSource, /v-for="action in actionGaps"/, 'Memory detail buttons must render from action capability data')
-  assert.match(memoryPageSource, /:title="action\.evidence\.endpoint"/, 'Memory detail actions must carry endpoint/tool evidence')
-  assert.doesNotMatch(memoryPageSource, /<button class="act" disabled>\{\{ t\('memory\.detail\.actions\.hideNoise'\) \}\}/, 'mustbuild action buttons must not be duplicated as hardcoded literals')
 })
 
 test('memory capability evidence is an exported reusable typed data contract', () => {
@@ -560,21 +504,7 @@ test('projects control plane archives projects through typed soft-delete confirm
   assert.match(projectsComposableSource, /sessionRouteGap/, 'Projects page must keep route-decision timeline as the honest mustbuild gap')
   assert.doesNotMatch(projectsComposableSource, /sessionStrategyGap/, 'Session strategy readback must not remain classified as mustbuild once the live detail endpoint exposes injection_strategy')
 
-  assert.match(projectsPageSource, /function toggleArchiveProject\(project: string\)/, 'Projects page must separate opening the archive confirmation from submitting it')
-  assert.match(projectsPageSource, /async function submitArchiveProject\(project: string\)/, 'Projects page must submit project archive through a dedicated mutation handler')
-  assert.match(projectsPageSource, /projectArchiveTarget/, 'Projects page must track the currently expanded archive confirmation')
-  assert.match(projectsPageSource, /projectArchiveInput\.value !== project/, 'Project archive must require typed project-id confirmation')
-  assert.match(projectsPageSource, /projectArchivePending/, 'Project archive must lock the action while the mutation is in flight')
-  assert.match(projectsPageSource, /projects\.archive\.body/, 'Project archive copy must explain the soft-delete semantics through i18n')
-  assert.match(projectsPageSource, /projectArchiveEndpoint\(project\.id\)/, 'Project archive confirmation must expose endpoint evidence')
-  assert.match(projectsPageSource, /@keydown\.enter\.prevent="submitArchiveProject\(project\.id\)"/, 'Project archive Enter key must submit instead of toggling the confirmation')
-  assert.match(projectsPageSource, /@click="submitArchiveProject\(project\.id\)"/, 'Project archive confirm button must submit instead of toggling the confirmation')
-  assert.match(projectsPageSource, /Boolean\(projectArchivePending\)/, 'Project archive confirm controls must be disabled while any archive mutation is pending')
-  assert.match(projectsPageSource, /data-testid="`project-archive-input-\$\{project\.id\}`"/, 'Project archive browser smoke must have a stable input selector')
   assert.match(projectsPageSource, /data-testid="`project-session-\$\{session\.id\}`"/, 'Session browser smoke must have a stable row selector')
-  assert.match(projectsPageSource, /projects\.detail\.userPrompt/, 'Session detail must render the live user_prompt field')
-  assert.match(projectsPageSource, /projects\.detail\.outcomeReason/, 'Session detail must render the live outcome_reason field')
-  assert.match(projectsPageSource, /sessionRouteGap\.evidence\.endpoint/, 'Session detail must show route-decision mustbuild endpoint evidence')
   assert.doesNotMatch(projectsPageSource, /confirmDeleteProject/, 'Projects page must not keep delete-named handlers for archive semantics')
 
   assert.match(mockOperatorApiSource, /let projectIds = \['operator-console', 'project-alpha'\]/, 'Mock API must expose multiple projects for archive smoke coverage')

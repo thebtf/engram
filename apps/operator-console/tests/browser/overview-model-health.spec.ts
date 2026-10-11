@@ -1,31 +1,21 @@
 import { expect, test } from '@playwright/test'
 
-test('overview renders live model-health snapshot', async ({ page }) => {
-  const failedRequests: string[] = []
-  const badResponses: string[] = []
-  const pageErrors: string[] = []
-
-  page.on('requestfailed', (request) => {
-    failedRequests.push(`${request.method()} ${request.url()} ${request.failure()?.errorText || 'failed'}`)
+test('home loads only bounded selected-project knowledge, never global bodies for counts', async ({ page }) => {
+  const requests: URL[] = []
+  page.on('request', (request) => {
+    const url = new URL(request.url())
+    if (url.pathname === '/api/memories' || url.pathname === '/api/documents') requests.push(url)
   })
-  page.on('response', (response) => {
-    if (response.status() >= 400) {
-      badResponses.push(`${response.status()} ${response.request().method()} ${response.url()}`)
-    }
-  })
-  page.on('pageerror', (error) => {
-    pageErrors.push(error.message)
-  })
-
   await page.goto('/')
-  await expect(page.locator('h1', { hasText: /^Обзор$/ })).toBeVisible()
-  await expect(page.getByText('/api/model-health')).toBeVisible()
-  const modelLegend = page.locator('.seg-legend')
-  await expect(modelLegend.getByText('ok · 0')).toBeVisible()
-  await expect(modelLegend.getByText('standby · 3')).toBeVisible()
-  await expect(page.getByText('live endpoint').first()).toBeVisible()
-
-  expect(failedRequests).toEqual([])
-  expect(badResponses).toEqual([])
-  expect(pageErrors).toEqual([])
+  await expect(page.getByRole('heading', { name: 'С чего начнём?' })).toBeVisible()
+  expect(requests).toEqual([])
+  await page.getByTestId('project-context-select').selectOption('operator-console')
+  await expect(page.getByRole('heading', { name: 'Последние записи' })).toBeVisible()
+  await expect.poll(() => requests.length).toBe(2)
+  for (const url of requests) {
+    expect(url.searchParams.get('project')).toBe('operator-console')
+    expect(url.searchParams.get('limit')).toBe('3')
+    expect(url.searchParams.get('offset')).toBe('0')
+  }
+  await expect(page.locator('.recent-knowledge')).toContainText('operator console = data plane')
 })

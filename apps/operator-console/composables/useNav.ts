@@ -35,35 +35,34 @@ export interface NavGroup { grpKey: string; items: NavItem[] }
 
 export const NAV: NavGroup[] = [
  {
-  grpKey: 'workspace', items: [
+  grpKey: 'entry', items: [
    { id: 'overview', labelKey: 'overview', to: '/', cls: 'live' },
-   { id: 'code', labelKey: 'code', to: '/code', cls: 'live' },
-   { id: 'search', labelKey: 'search', to: '/search', cls: 'live' },
-  ]
- },
- {
-  grpKey: 'memoryProduct', items: [
-   { id: 'memory', labelKey: 'memory', to: '/memory', cls: 'live' },
-   { id: 'queue', labelKey: 'queue', to: '/queue', cls: 'live' },
-   { id: 'noise', labelKey: 'noise', to: '/noise', cls: 'live' },
-  ]
- },
- {
-  grpKey: 'behaviorWork', items: [
-   { id: 'rules', labelKey: 'rules', to: '/rules', cls: 'live' },
-   { id: 'issues', labelKey: 'issues', to: '/issues', cls: 'live' },
    { id: 'projects', labelKey: 'projects', to: '/projects', cls: 'live' },
   ]
  },
  {
-  grpKey: 'storage', items: [
-   { id: 'secrets', labelKey: 'secrets', to: '/secrets', cls: 'live' },
+  grpKey: 'knowledge', items: [
+   { id: 'memory', labelKey: 'memory', to: '/memory', cls: 'live' },
    { id: 'documents', labelKey: 'documents', to: '/documents', cls: 'live' },
+   { id: 'rules', labelKey: 'rules', to: '/rules', cls: 'live' },
+  ]
+ },
+ {
+  grpKey: 'workspace', items: [
+   { id: 'code', labelKey: 'code', to: '/code', cls: 'live' },
+  ]
+ },
+ {
+  grpKey: 'attention', items: [
+   { id: 'queue', labelKey: 'queue', to: '/queue', cls: 'live' },
+   { id: 'issues', labelKey: 'issues', to: '/issues', cls: 'live' },
   ]
  },
  {
   grpKey: 'administration', items: [
+   { id: 'noise', labelKey: 'noise', to: '/noise', cls: 'live' },
    { id: 'access', labelKey: 'access', to: '/access', cls: 'live', admin: true },
+   { id: 'secrets', labelKey: 'secrets', to: '/secrets', cls: 'live' },
    { id: 'settings', labelKey: 'settings', to: '/settings', cls: 'live' },
    { id: 'health', labelKey: 'health', to: '/health', cls: 'live' },
   ]

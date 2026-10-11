@@ -629,17 +629,19 @@ function documentListResponse(url) {
   const docType = (url.searchParams.get('doc_type') || '').trim()
   const pathPrefix = (url.searchParams.get('path_prefix') || '').trim()
   const requestedLimit = Number(url.searchParams.get('limit') || 50)
-  const limit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.min(requestedLimit, 200) : 50
+  const limit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.min(requestedLimit, 500) : 50
+  const offset = Math.max(0, Number(url.searchParams.get('offset') || 0))
+  const query = (url.searchParams.get('query') || '').toLocaleLowerCase()
   const latestByPath = new Map()
   for (const row of documentRows) {
-    if (row.project !== project || (docType && row.doc_type !== docType) || (pathPrefix && !row.path.startsWith(pathPrefix))) continue
+    if (row.project !== project) continue
     if (!latestByPath.has(row.path) || latestByPath.get(row.path).version < row.version) latestByPath.set(row.path, row)
   }
-  const documents = [...latestByPath.values()]
-    .sort((left, right) => left.path.localeCompare(right.path))
-    .slice(0, limit)
-    .map(({ content, content_hash, metadata, ...row }) => ({ ...row }))
-  return { documents, project, ...(docType ? { doc_type: docType } : {}), ...(pathPrefix ? { path_prefix: pathPrefix } : {}), count: documents.length, limit }
+  const matching = [...latestByPath.values()]
+    .filter((row) => (!docType || row.doc_type === docType) && (!pathPrefix || row.path.startsWith(pathPrefix)) && (!query || [row.path, row.doc_type, row.author].some((value) => String(value || '').toLocaleLowerCase().includes(query))))
+    .sort((left, right) => right.created_at.localeCompare(left.created_at) || right.id - left.id)
+  const items = matching.slice(offset, offset + limit).map(({ content, content_hash, metadata, ...row }) => ({ ...row }))
+  return { items, total: matching.length, offset, limit, has_more: offset + items.length < matching.length }
 }
 
 function documentHistoryResponse(url) {
@@ -1147,8 +1149,11 @@ const server = createServer(async (req, res) => {
       json(res, 400, { error: 'invalid memory id' })
       return
     }
+    const project = url.searchParams.get('project') || ''
+    if (!project) { json(res, 400, { error: 'project query parameter is required' }); return }
+    if (!projectIds.includes(project)) { json(res, 403, { error: 'project is unavailable' }); return }
     const row = [...memoryRows, ...deepLinkMemoryRows].find((item) => item.id === id)
-    if (!row) {
+    if (!row || row.project !== project) {
       json(res, 404, { error: 'memory not found' })
       return
     }
@@ -1904,6 +1909,10 @@ const server = createServer(async (req, res) => {
           json(res, 400, { error: 'project query parameter is required' })
           return
         }
+        const offset = Number(url.searchParams.get('offset') || 0)
+        const limit = Number(url.searchParams.get('limit') || 50)
+        if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 500) { json(res, 400, { error: 'invalid reader input' }); return }
+        if (!projectIds.includes(project)) { json(res, 403, { error: 'project is unavailable' }); return }
         json(res, 200, documentListResponse(url))
       }
       return
@@ -1989,13 +1998,37 @@ const server = createServer(async (req, res) => {
       json(res, 200, ruleResponse(url))
       return
     case '/api/projects':
-      json(res, 200, [...projectIds])
+      json(res, 200, { items: projectIds.map((id) => ({ id, display_name: id })) })
       return
     case '/api/memories/principal':
       json(res, 200, principalMemoryResponse(url))
       return
     case '/api/memories':
-      json(res, 200, memoryResponseForProject(url.searchParams.get('project') || 'operator-console'))
+      {
+        const project = url.searchParams.get('project') || ''
+        const offset = Number(url.searchParams.get('offset') || 0)
+        const limit = Number(url.searchParams.get('limit') || 50)
+        const filter = url.searchParams.get('filter') || 'all'
+        if (!project || !Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 500 || !['all', 'active', 'flagged', 'stale', 'low', 'chain'].includes(filter)) { json(res, 400, { error: 'invalid reader input' }); return }
+        if (!projectIds.includes(project)) { json(res, 403, { error: 'project is unavailable' }); return }
+        const query = (url.searchParams.get('query') || '').trim().toLocaleLowerCase()
+        const cutoff = Date.now() - 30 * 86_400_000
+        const rows = memoryResponseForProject(project).filter((row) => {
+          if (query && !row.content.toLocaleLowerCase().includes(query)) return false
+          const status = String(row.status || '').trim().toLowerCase()
+          const mapped = ['active', 'flagged', 'superseded', 'archived'].includes(status) ? status : ['noise', 'suppressed'].includes(status) ? 'flagged' : row.superseded_by ? 'superseded' : 'unknown'
+          switch (filter) {
+            case 'active': return mapped === 'active'
+            case 'flagged': return mapped === 'flagged' || ['noise', 'suppressed'].includes(status)
+            case 'stale': return ['superseded', 'archived'].includes(mapped) || (Date.parse(row.updated_at || row.created_at) <= cutoff && (!('citation_count' in row || 'injection_count' in row) || !row.citation_count))
+            case 'low': return typeof row.confidence === 'number' && row.confidence < 0.85
+            case 'chain': return mapped === 'superseded' || Boolean(row.superseded_by) || row.tags.some((tag) => ['superseded', 'replace', 'replacement'].includes(tag))
+            default: return true
+          }
+        }).sort((left, right) => String(right.created_at || '').localeCompare(String(left.created_at || '')) || right.id - left.id)
+        const items = rows.slice(offset, offset + limit)
+        json(res, 200, { items, total: rows.length, offset, limit, has_more: offset + items.length < rows.length })
+      }
       return
     case '/api/memory/candidates':
       json(res, 200, candidateResponse(

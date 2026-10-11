@@ -58,6 +58,7 @@ onMounted(() => {
       </div>
       <button class="btn" type="button" :disabled="pending || pinnedContext === null" @click="refreshStatus">{{ t('codeExplorer.refresh') }}</button>
     </header>
+    <p class="code-scope-note">{{ t('knowledge.codeScope') }}</p>
 
     <CodeGrantChooser v-if="canAdministerGrants" />
 

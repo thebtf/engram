@@ -9,7 +9,8 @@ test('mobile topbar keeps primary controls reachable and settings access copy st
 
   const topbar = page.locator('.topbar')
   await expect(topbar.locator('.mobile-menu-button')).toBeVisible()
-  await expect(topbar.locator('.gsearch')).toBeVisible()
+  await expect(topbar.locator('.gsearch')).toBeHidden()
+  await expect(page.getByTestId('project-context-select')).toBeVisible()
   const secondaryControls = topbar.locator('.topbar-secondary')
   await expect(secondaryControls).toHaveCount(3)
   for (let index = 0; index < 3; index += 1) await expect(secondaryControls.nth(index)).toBeHidden()

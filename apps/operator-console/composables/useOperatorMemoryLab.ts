@@ -1,5 +1,7 @@
-import { ref as sharedRef, type Ref as SharedRef } from 'vue'
+import { computed, onBeforeUnmount, ref as sharedRef, watch, type Ref as SharedRef } from 'vue'
 import { startedLoads } from './useConsolePreferences'
+import { loadKnowledgePage, useOperatorProjectContext } from './useOperatorProjectContext'
+import { useRoute } from 'vue-router'
 
 let sharedPrincipalMemoryScope: SharedRef<PrincipalMemoryScope> | undefined
 let sharedPrincipalMemoryState: SharedRef<OperatorLoadState<OperatorPrincipalMemorySummary>> | undefined
@@ -61,6 +63,9 @@ interface ApiMemory {
   superseded_by?: number | string | null
   version?: number
   source_sessions?: string[]
+  source_agent?: string
+  last_confirmed?: string
+  review_after?: string
 }
 
 interface ApiPrincipalMemoryAudit {
@@ -92,8 +97,7 @@ interface ApiPrincipalMemoryQueryResponse {
   audit_status?: string
 }
 
-// Per-project fetch cap; matches the server-side /api/memories maximum limit.
-const MEMORY_LIST_LIMIT = 500
+const MEMORY_LIST_LIMIT = 20
 const PRINCIPAL_MEMORY_LIMIT = 10
 const PRINCIPAL_BRIEF_REASON = 'Principal-scoped brief exists in MCP get_memory_brief, but no browser REST bridge is available yet.'
 export const PRINCIPAL_CURRENT_PROJECT = 'current'
@@ -294,7 +298,7 @@ function blankPrincipalScope(): PrincipalMemoryScope {
   return {
     principal: '',
     principalKind: 'agent',
-    project: 'all',
+    project: PRINCIPAL_CURRENT_PROJECT,
     domain: '',
     visibility: 'all',
     includePrivate: false,
@@ -498,10 +502,11 @@ function parseMemoryCollectionReadback(value: unknown): MemoryCollectionOperatio
   return states
 }
 
-async function memoryCollectionSelectionTarget(id: string): Promise<{ id: string; expectedVersion: number }> {
-  const path = `/api/memories/${encodeURIComponent(id)}`
+async function memoryCollectionSelectionTarget(id: string, project: string): Promise<{ id: string; expectedVersion: number }> {
+  if (!project || project === 'all') throw new TypeError('A canonical memory project is required')
+  const path = `/api/memories/${encodeURIComponent(id)}?project=${encodeURIComponent(project)}`
   const value = await operatorFetchJson<ApiMemory>(path, undefined, 'memory-selection-target')
-  if ((typeof value.id !== 'number' && typeof value.id !== 'string') || String(value.id) !== id || typeof value.version !== 'number' || !Number.isSafeInteger(value.version) || value.version < 1) {
+  if (value.project !== project || (typeof value.id !== 'number' && typeof value.id !== 'string') || String(value.id) !== id || typeof value.version !== 'number' || !Number.isSafeInteger(value.version) || value.version < 1) {
     throw new Error('invalid current memory selection target')
   }
   return { id, expectedVersion: value.version }
@@ -549,11 +554,13 @@ async function submitMemoryCollectionOperation(
 async function applyMemoryCollectionOperation(
   action: MemoryCollectionOperationIntent['action'],
   ids: string[],
+  scopeForID: (id: string) => string,
 ): Promise<MutationResult<MemoryCollectionOperationIntent, MemoryCollectionOperationReadback[]>> {
   const requestId = crypto.randomUUID()
   const intent: MemoryCollectionOperationIntent = { action, selection: { kind: 'explicit', version: 0 } }
   try {
-    const targets = await Promise.all(ids.map(memoryCollectionSelectionTarget))
+    const scopes = ids.map((id) => ({ id, project: scopeForID(id) }))
+    const targets = await Promise.all(scopes.map(({ id, project }) => memoryCollectionSelectionTarget(id, project)))
     const selection = await snapshotMemoryCollectionSelection(targets)
     return submitMemoryCollectionOperation(action, selection, requestId)
   } catch {
@@ -592,7 +599,7 @@ function mapTier(value?: string): Memory['tier'] {
     return value
   }
 
-  return 'procedural'
+  return 'unknown'
 }
 
 function mapStatus(row: ApiMemory): Memory['status'] {
@@ -607,7 +614,7 @@ function mapStatus(row: ApiMemory): Memory['status'] {
     return 'superseded'
   }
 
-  return 'active'
+  return 'unknown'
 }
 
 function isNoiseStatus(value?: string): boolean {
@@ -639,6 +646,12 @@ function mapMemoryRow(row: ApiMemory): Memory {
     supersededBy: row.superseded_by === undefined || row.superseded_by === null ? undefined : String(row.superseded_by),
     sourceSessions: Array.isArray(row.source_sessions) ? row.source_sessions : [],
     noise: isNoiseStatus(row.status),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    sourceAgent: row.source_agent,
+    version: row.version,
+    lastConfirmed: row.last_confirmed,
+    reviewAfter: row.review_after,
   }
 }
 
@@ -658,40 +671,6 @@ function payloadPreview(payload: unknown): string {
   }
 }
 
-function memoryPayloadError(path: string, detail: string, payload: unknown): OperatorFetchError {
-  const message = `Invalid memory payload from ${path}: ${detail}${payloadPreview(payload)}`
-  return new OperatorFetchError(message, {
-    message,
-    source: 'memory-list',
-    path,
-    method: 'GET',
-    retryable: false,
-  })
-}
-
-function parseMemoryArray(payload: unknown, path: string): ApiMemory[] {
-  if (Array.isArray(payload)) {
-    return payload as ApiMemory[]
-  }
-
-  if (typeof payload === 'string' && payload.trim()) {
-    let parsed: unknown
-    try {
-      parsed = JSON.parse(payload)
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
-      throw memoryPayloadError(path, `invalid JSON (${detail})`, payload)
-    }
-
-    if (Array.isArray(parsed)) {
-      return parsed as ApiMemory[]
-    }
-
-    throw memoryPayloadError(path, 'expected a JSON array', parsed)
-  }
-
-  throw memoryPayloadError(path, 'expected a JSON array', payload)
-}
 
 function startOnce(key: string, run: () => Promise<void>) {
   const started = startedLoads.has(key)
@@ -705,33 +684,6 @@ function startOnce(key: string, run: () => Promise<void>) {
   }
 }
 
-async function loadMemoryRows(): Promise<Memory[]> {
-  const projectState = await loadOperatorJson<string[]>('/api/projects', {
-    source: 'memory-projects',
-    empty: (rows) => !Array.isArray(rows) || !rows.length,
-  })
-
-  if (projectState.kind === 'error') {
-    throw projectState.error
-  }
-
-  const projects = projectState.kind === 'live' || projectState.kind === 'empty'
-    ? projectState.data || []
-    : []
-  const projectRows = await Promise.all(projects.map(async (project) => {
-    const path = `/api/memories?project=${encodeURIComponent(project)}&limit=${MEMORY_LIST_LIMIT}`
-    const payload = await operatorFetchJson<unknown>(path, undefined, 'memory-list')
-    return parseMemoryArray(payload, path).map(mapMemoryRow)
-  }))
-  const combined = projectRows.flat()
-
-  const deduped = new Map<string, Memory>()
-  for (const row of combined) {
-    deduped.set(`${row.project}:${row.id}`, row)
-  }
-
-  return [...deduped.values()]
-}
 
 export function useOperatorPrincipalMemorySurface(currentProject?: Ref<string>): {
   scope: Ref<PrincipalMemoryScope>
@@ -752,6 +704,11 @@ export function useOperatorPrincipalMemorySurface(currentProject?: Ref<string>):
   const attributionVisible = (sharedPrincipalMemoryAttributionVisible ??= sharedRef<boolean>((() => true)()))
   const riskyConfirmation = (sharedPrincipalMemoryRiskyConfirmation ??= sharedRef<boolean>((() => false)()))
   const confirmedPrincipal = (sharedPrincipalMemoryConfirmedPrincipal ??= sharedRef<string>((() => '')()))
+  let generation = 0
+  watch(() => JSON.stringify([scope.value, currentProject?.value]), () => {
+    generation += 1
+    state.value = gatedState(queryEvidence, 'scope-changed', 'Confirm the displayed owner and privacy scope before reading.', emptyPrincipalSummary(principalQueryScope(scope.value, currentProject?.value || '')))
+  }, { immediate: true, flush: 'sync' })
 
   const loadState = computed(() => state.value)
   const briefState = computed(() => briefStateRef.value)
@@ -840,14 +797,17 @@ export function useOperatorPrincipalMemorySurface(currentProject?: Ref<string>):
 
     const path = principalMemoryQueryPath(normalizedScope, currentProjectValue)
     const evidence = endpointEvidence(path, 'principal-memory-query')
-    state.value = pendingState(evidence, state.value.data || emptyPrincipalSummary(queryScope))
+    const current = ++generation
+    state.value = pendingState(evidence, emptyPrincipalSummary(queryScope))
     try {
       const payload = await operatorFetchJson<unknown>(path, undefined, 'principal-memory-query')
+      if (current !== generation) return
       const summary = mapPrincipalMemoryResponse(payload, path, queryScope)
       state.value = summary.items.length
         ? liveState(evidence, summary)
         : emptyState(evidence, summary)
     } catch (nextError) {
+      if (current !== generation) return
       const mapped = toOperatorSourceError(nextError, {
         source: 'principal-memory-query',
         path,
@@ -866,6 +826,7 @@ export function useOperatorPrincipalMemorySurface(currentProject?: Ref<string>):
   }
 
   startOnce('principal-memory', refresh)
+  onBeforeUnmount(() => { generation += 1 })
 
   return {
     scope,
@@ -880,13 +841,13 @@ export function useOperatorPrincipalMemorySurface(currentProject?: Ref<string>):
   }
 }
 
-export function useOperatorMemoryLab(): {
+export function useOperatorMemoryLab(project?: Ref<string>, autoLoad = true): {
   rows: Memory[]
   loadState: ComputedRef<OperatorLoadState<Memory[]>>
   pending: ComputedRef<boolean>
   error: ComputedRef<string | null>
   refresh: () => Promise<void>
-  loadMemoryByID: (id: string) => Promise<Memory>
+  loadMemoryByID: (id: string, project?: string) => Promise<Memory>
   storeMemory: (input: StoreMemoryInput) => Promise<MutationResult<StoreMemoryInput>>
   deleteMemory: (id: string) => Promise<MutationResult<{ id: string }>>
   suppressMemory: (id: string, reason?: string) => Promise<MutationResult<MemoryCollectionOperationIntent, MemoryCollectionOperationReadback[]>>
@@ -896,6 +857,8 @@ export function useOperatorMemoryLab(): {
   auditMemory: (id: string, limit?: number) => Promise<OperatorLoadState<MemoryAuditResponse>>
   provenanceGap: ReturnType<typeof unsupportedOperatorAction>
   actionGaps: readonly MemoryActionGap[]
+  total: Ref<number | null>
+  hasMore: Ref<boolean>
 } {
   const evidence = endpointEvidence(`/api/memories?project={project}&limit=${MEMORY_LIST_LIMIT}`, 'memory-list')
   const rowsState = (sharedMemoryLabRows ??= sharedRef<Memory[]>((() => [])()))
@@ -904,37 +867,54 @@ export function useOperatorMemoryLab(): {
   const loadState = computed(() => state.value)
   const pending = computed(() => state.value.kind === 'pending')
   const error = computed(() => state.value.kind === 'error' ? state.value.error.message : null)
+  const route = useRoute()
+  const selectedProject = project || useOperatorProjectContext().project
+  const total = sharedRef<number | null>(null)
+  const hasMore = sharedRef(false)
 
+  let requestGeneration = 0
+  let request: AbortController | undefined
   async function refresh() {
+    const generation = ++requestGeneration
+    request?.abort()
+    request = new AbortController()
+    const controller = request
+    const scope = selectedProject.value
+    replaceArray(rowsState.value, [])
+    total.value = null
+    hasMore.value = false
     state.value = pendingState(evidence, rowsState.value)
+    if (scope === 'all' && route.query.allRead !== '1') {
+      state.value = gatedState(evidence, 'explicit-all-read', 'Choose a project or submit an explicit all-projects search.', [])
+      return
+    }
     try {
-      const nextRows = await loadMemoryRows()
+      const page = Math.max(1, Number.parseInt(String(route.query.page || '1'), 10) || 1)
+      const limit = [10, 20, 50].includes(Number(route.query.size)) ? Number(route.query.size) : MEMORY_LIST_LIMIT
+      const params = new URLSearchParams({ offset: String((page - 1) * limit), limit: String(limit) })
+      if (typeof route.query.q === 'string' && route.query.q.trim()) params.set('query', route.query.q.trim())
+      if (typeof route.query.filter === 'string' && route.query.filter) params.set('filter', route.query.filter)
+      const result = await loadKnowledgePage<ApiMemory>('/api/memories', scope, params, controller.signal)
+      if (generation !== requestGeneration || scope !== selectedProject.value) return
+      const nextRows = result.items.map(mapMemoryRow)
+      if (scope !== 'all' && nextRows.some((row) => row.project !== scope)) throw new TypeError('Memory page scope mismatch')
       replaceArray(rowsState.value, nextRows)
-      state.value = nextRows.length
-        ? liveState(evidence, rowsState.value)
-        : emptyState(evidence, rowsState.value)
+      total.value = result.total
+      hasMore.value = result.has_more
+      state.value = nextRows.length ? liveState(evidence, rowsState.value) : emptyState(evidence, rowsState.value)
     } catch (nextError) {
-      const mapped = toOperatorSourceError(nextError, {
-        source: 'memory-list',
-        path: evidence.endpoint,
-        method: 'GET',
-      })
-      state.value = errorState(evidence, mapped, {
-        source: 'memory-list',
-        run: async () => {
-          await refresh()
-          return state.value
-        },
-      }, rowsState.value)
+      if (generation !== requestGeneration || controller.signal.aborted) return
+      const mapped = toOperatorSourceError(nextError, { source: 'memory-list', path: evidence.endpoint, method: 'GET' })
+      if (nextError instanceof TypeError) mapped.category = 'invalid-response'
+      state.value = errorState(evidence, mapped, { source: 'memory-list', run: async () => { await refresh(); return state.value } }, [])
     }
   }
 
-  async function loadMemoryByID(id: string) {
-    const path = `/api/memories/${encodeURIComponent(id)}`
+  async function loadMemoryByID(id: string, scope = selectedProject.value) {
+    if (!scope || scope === 'all') throw new TypeError('A canonical memory project is required')
+    const path = `/api/memories/${encodeURIComponent(id)}?project=${encodeURIComponent(scope)}`
     const row = mapMemoryRow(await operatorFetchJson<ApiMemory>(path, undefined, 'memory-get'))
-    const index = rowsState.value.findIndex((item) => item.project === row.project && item.id === row.id)
-    if (index < 0) rowsState.value.push(row)
-    else rowsState.value.splice(index, 1, row)
+    if (row.id !== id || row.project !== scope) throw new TypeError('Memory detail scope mismatch')
     return row
   }
   async function storeMemory(input: StoreMemoryInput) {
@@ -950,8 +930,13 @@ export function useOperatorMemoryLab(): {
     return submitMutation('memory-delete', { id }, `/api/memories/${encodeURIComponent(id)}`, jsonInit('DELETE'))
   }
 
+  function scopeForID(id: string) {
+    if (selectedProject.value !== 'all') return selectedProject.value
+    return rowsState.value.find((row) => row.id === id)?.project || (route.query.memory === id && typeof route.query.memoryProject === 'string' ? route.query.memoryProject : '')
+  }
+
   async function suppressMemory(id: string, _reason = 'operator marked as noise') {
-    return applyMemoryCollectionOperation('suppress', [id])
+    return applyMemoryCollectionOperation('suppress', [id], scopeForID)
   }
 
   async function suppressMemories(ids: string[], _reason = 'operator bulk marked as noise'): Promise<MutationResult<MemoryCollectionOperationIntent, MemoryCollectionOperationReadback[]>> {
@@ -964,15 +949,15 @@ export function useOperatorMemoryLab(): {
         code: 'invalid_memory_id',
       }
     }
-    return applyMemoryCollectionOperation('suppress', uniqueIds)
+    return applyMemoryCollectionOperation('suppress', uniqueIds, scopeForID)
   }
 
   async function unsuppressMemory(id: string) {
-    return applyMemoryCollectionOperation('unsuppress', [id])
+    return applyMemoryCollectionOperation('unsuppress', [id], scopeForID)
   }
 
   async function archiveMemory(id: string) {
-    return applyMemoryCollectionOperation('archive', [id])
+    return applyMemoryCollectionOperation('archive', [id], scopeForID)
   }
 
   async function auditMemory(id: string, limit = 10) {
@@ -990,7 +975,8 @@ export function useOperatorMemoryLab(): {
     'Memory provenance is not exposed by the current server API.',
   )
 
-  startOnce('memory-lab', refresh)
+  if (autoLoad) startOnce('memory-lab', refresh)
+  onBeforeUnmount(() => { requestGeneration += 1; request?.abort() })
 
   return {
     rows: rowsState.value,
@@ -1008,5 +994,7 @@ export function useOperatorMemoryLab(): {
     auditMemory,
     provenanceGap,
     actionGaps: memoryActionGaps,
+    total,
+    hasMore,
   }
 }

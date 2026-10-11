@@ -5,6 +5,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useNav, type NavItem } from '../composables/useNav'
 import { operatorFetchJson } from '../composables/useOperatorApi'
 import { useOperatorShellStatus } from '../composables/useOperatorShell'
+import { useOperatorProjectContext } from '../composables/useOperatorProjectContext'
 
 const { NAV } = useNav()
 const shell = useOperatorShellStatus()
@@ -13,6 +14,7 @@ const route = useRoute()
 const router = useRouter()
 const { t, locale } = useI18n()
 const { settingsModalOpen, settingsModalTab, openSettingsModal } = useSettingsModal()
+const projectContext = useOperatorProjectContext()
 
 const NAV_COLLAPSE_KEY = 'engram.console.navCollapsed'
 const navCollapsed = ref<boolean>(false)
@@ -176,7 +178,7 @@ function cycleLocale() {
 
 function goSearch() {
   const query = search.value.trim()
-  void router.push(query ? { path: '/search', query: { q: query } } : '/search')
+  void router.push({ path: '/memory', query: { project: projectContext.project.value || undefined, q: query || undefined } })
 }
 
 function handleNavItemClick(event: MouseEvent, item: NavItem) {
@@ -277,7 +279,7 @@ function onDocumentKeydown(event: KeyboardEvent) {
       @pointerleave="onNavLeave"
     >
       <div class="navhead">
-        <RouterLink to="/" class="navbrand" :title="t('shell.brandHome')" @click="closeMobileNav">
+        <RouterLink :to="projectContext.to('/')" class="navbrand" :title="t('shell.brandHome')" @click="closeMobileNav">
           <span class="glyph">e</span>
           <span class="navbrand-wm">engram</span>
         </RouterLink>
@@ -301,7 +303,7 @@ function onDocumentKeydown(event: KeyboardEvent) {
           <RouterLink
             v-for="item in group.items"
             :key="item.id"
-            :to="item.to"
+            :to="projectContext.to(item.to)"
             class="nav-item"
             :class="{ tomb: item.cls === 'stale' }"
             exact-active-class="on"
@@ -323,10 +325,11 @@ function onDocumentKeydown(event: KeyboardEvent) {
 
     <header class="topbar" :inert="compactViewport && mobileNavOpen">
       <button ref="mobileMenuButton" class="tbtn mobile-menu-button" type="button" :aria-label="t('shell.mobileMenu')" :aria-expanded="mobileNavOpen" aria-controls="primary-navigation" @click="toggleMobileNav">☰</button>
-      <form class="gsearch-wrap" @submit.prevent="goSearch">
+      <ProjectContext />
+      <form class="gsearch-wrap" @submit.prevent="goSearch" :aria-label="t('knowledge.searchMemory')">
         <div class="gsearch">
           <span>⌕</span>
-          <input v-model="search" name="operator-console-search" :placeholder="t('shell.searchPlaceholder')" />
+          <input v-model="search" name="operator-console-search" :aria-label="t('knowledge.searchMemory')" :placeholder="t('knowledge.searchMemory')" />
           <kbd>/</kbd>
         </div>
       </form>
@@ -400,10 +403,7 @@ function onDocumentKeydown(event: KeyboardEvent) {
       <span class="si">{{ t('shell.postgres') }}</span>
       <span class="si">{{ currentArea }}</span>
       <span class="ssp" />
-      <RouterLink to="/health" class="si warn"><span class="dot" />{{ t('shell.statusDegradation') }} <strong>{{ info.health }}</strong></RouterLink>
-      <span class="si" data-testid="shell-memory-count" :data-count-state="activeMemoryCountState">{{ activeMemoryRecordsLabel }}</span>
-      <RouterLink to="/noise" class="si warn"><span class="dot" />{{ t('shell.statusNoise') }} <strong>{{ info.noise }}</strong></RouterLink>
-      <RouterLink to="/queue" class="si" data-testid="shell-review-queue-count">{{ reviewQueueLabel }}</RouterLink>
+      <RouterLink to="/health" class="si">{{ t('knowledge.diagnostics') }}</RouterLink>
 
       <span class="si">{{ t('shell.uptime', { value: info.uptime }) }}</span>
     </footer>
@@ -503,7 +503,7 @@ function onDocumentKeydown(event: KeyboardEvent) {
 .nav-item .lock { font-size:11px; color:var(--muted); }
 .topbar { display:flex; align-items:center; gap:var(--space-3); padding:0 var(--space-4); background:var(--surface); border-bottom:1px solid var(--border); min-width:0; }
 .gsearch-wrap { position:relative; }
-.gsearch { display:flex; align-items:center; gap:7px; width:min(360px,30vw); min-width:280px; background:var(--surface-warm); border:1px solid var(--border); border-radius:var(--r-sm); padding:5px 10px; color:var(--muted); font-size:var(--text-sm); transition:border-color var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard); }
+.gsearch { display:flex; align-items:center; gap:7px; width:min(280px,20vw); min-width:160px; background:var(--surface-warm); border:1px solid var(--border); border-radius:var(--r-sm); padding:5px 10px; color:var(--muted); font-size:var(--text-sm); }
 .gsearch:focus-within { background:var(--surface); border-color:var(--accent); box-shadow:var(--focus-ring); }
 .gsearch input { border:0; background:transparent; color:var(--fg); font-size:var(--text-sm); width:100%; outline:none; }
 .gsearch kbd { font-family:var(--font-mono); font-size:10px; border:1px solid var(--border); border-radius:4px; padding:1px 5px; color:var(--muted); }
@@ -552,7 +552,7 @@ function onDocumentKeydown(event: KeyboardEvent) {
 @media (pointer:coarse) {
   .nav-item,
   .tbtn,
-  .seg button { min-height:40px; }
+  .seg button { min-height:44px; }
 }
 @media (max-width:980px) {
   .app,
@@ -560,7 +560,7 @@ function onDocumentKeydown(event: KeyboardEvent) {
   .topbar { gap:8px; padding:0 10px; }
   .topbar .mobile-menu-button { display:inline-flex; width:44px; height:44px; justify-content:center; padding:0; }
   .topbar-secondary { display:none; }
-  .gsearch { min-width:0; width:min(360px,48vw); }
+  .gsearch-wrap { display:none; }
   .app > .nav { position:fixed; top:0; bottom:0; left:0; width:min(320px, calc(100vw - 48px)); transform:translateX(-100%); transition:none; z-index:60; }
   .app > .nav.open { transform:none; }
   .nav-scrim { display:block; position:fixed; inset:0; z-index:50; border:0; background:color-mix(in srgb, #000, transparent 52%); cursor:pointer; }
@@ -569,4 +569,5 @@ function onDocumentKeydown(event: KeyboardEvent) {
   .statusbar .si:nth-last-child(-n+3) { display:none; }
   .content { padding:18px 14px 70px; }
 }
+@media(max-width:760px) { .topbar :deep(.project-context) { flex:1; min-width:0; } .nav-item { min-height:44px; } }
 </style>
