@@ -33,7 +33,7 @@ let sharedServerInfo: SharedRef<{ host: string; version: string; uptime: string;
  */
 
 import { computed } from 'vue'
-import { operatorApiBase, operatorApiUrl } from './useOperatorApi'
+import { operatorApiBase, operatorFetchResponse } from './useOperatorApi'
 import { parseProjectCatalog, type OperatorProjectCatalog } from './useOperatorProjectContext'
 import { useOperatorMemoryLab } from './useOperatorMemoryLab'
 import { useOperatorRules } from './useOperatorRules'
@@ -327,10 +327,7 @@ function startOnce(key: string, run: () => Promise<void>) {
 }
 
 async function fetchApi(path: string, init: RequestInit = {}): Promise<Response> {
- const response = await fetch(operatorApiUrl(path, apiBase()), {
-  credentials: 'include',
-  ...init,
- })
+ const response = await operatorFetchResponse(path, init, apiBase())
 
  if (!response.ok) {
   const text = await response.text()

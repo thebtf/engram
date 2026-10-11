@@ -19,7 +19,7 @@ import {
   errorState,
   liveState,
   loadOperatorJson,
-  operatorApiUrl,
+  operatorFetchResponse,
   operatorFetchJson,
   pendingState,
   toOperatorSourceError,
@@ -331,7 +331,7 @@ export function useOperatorProjects(projectContext?: Ref<string>): {
     const endpoint = `/api/projects/${encodeURIComponent(project)}`
     return executeMutation(
       { requestId: crypto.randomUUID(), action: 'project-archive', intent: { project } },
-      fetch(operatorApiUrl(endpoint), { ...jsonInit('DELETE'), credentials: 'include' }),
+      operatorFetchResponse(endpoint, { ...jsonInit('DELETE'), credentials: 'include' }),
       projectArchiveCurrentStateParser(project),
     )
   }

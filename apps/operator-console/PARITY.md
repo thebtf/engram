@@ -12,3 +12,10 @@ acknowledged drift for release/production-readiness gates.
 
 G1 records every row as `drifted` from the 2026-06-21 audit. No structural code review
 may change that to `synced`: only accepted Chrome evidence can do so.
+
+The 2026-10-11 shell repair adds recovery through the existing normal cookie-user login
+and logout contracts; it does not promote a new auth or visual model. README.md owns its
+session/credential/context invariants. The shell remains drifted until the integrated
+candidate has ordinary-user real-API Chrome login, expiry, truthful role/noauth, failed
+logout and responsive keyboard evidence. Source seam checks and a build are not that proof.
+

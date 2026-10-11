@@ -14,7 +14,7 @@ import {
   errorState,
   liveState,
   loadOperatorJson,
-  operatorApiUrl,
+  operatorFetchResponse,
   operatorFetchJson,
   pendingState,
   toOperatorSourceError,
@@ -24,7 +24,7 @@ import {
 function submitMutation<TIntent, TCurrent>(action: string, intent: TIntent, path: string, init: RequestInit, parseCurrentState: MutationCurrentStateParser<TCurrent>): Promise<MutationResult<TIntent, TCurrent>> {
   return executeMutation(
     { requestId: crypto.randomUUID(), action, intent },
-    fetch(operatorApiUrl(path), { ...init, credentials: 'include' }),
+    operatorFetchResponse(path, { ...init, credentials: 'include' }),
     parseCurrentState,
   )
 }

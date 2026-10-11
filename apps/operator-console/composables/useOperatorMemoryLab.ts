@@ -25,7 +25,7 @@ import {
   loadOperatorJson,
   mustBuildState,
   OperatorFetchError,
-  operatorApiUrl,
+  operatorFetchResponse,
   operatorFetchJson,
   pendingState,
   staleState,
@@ -41,7 +41,7 @@ function submitMutation<TIntent, TCurrent = unknown>(
 ): Promise<MutationResult<TIntent, TCurrent>> {
   return executeMutation(
     { requestId: crypto.randomUUID(), action, intent },
-    fetch(operatorApiUrl(path), { ...init, credentials: 'include' }),
+    operatorFetchResponse(path, { ...init, credentials: 'include' }),
     parseCurrentState,
   )
 }
@@ -530,7 +530,7 @@ async function submitMemoryCollectionOperation(
   const intent: MemoryCollectionOperationIntent = { action, selection }
   return executeMutation(
     { requestId, action: `memory-${action}`, intent },
-    fetch(operatorApiUrl('/api/memories/operations'), {
+    operatorFetchResponse('/api/memories/operations', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -825,7 +825,6 @@ export function useOperatorPrincipalMemorySurface(currentProject?: Ref<string>):
     }
   }
 
-  startOnce('principal-memory', refresh)
   onBeforeUnmount(() => { generation += 1 })
 
   return {

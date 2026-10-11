@@ -26,7 +26,7 @@ const page = computed(() => Math.max(1, Number.parseInt(String(route.query.page 
 const pageSize = computed(() => [10, 20, 50].includes(Number(route.query.size)) ? Number(route.query.size) : 20)
 const openId = computed(() => typeof route.query.memory === 'string' ? route.query.memory : '')
 const detailProject = computed(() => project.value === 'all' && typeof route.query.memoryProject === 'string' ? route.query.memoryProject : project.value)
-const draft = ref(query.value)
+const draft = ref(typeof route.query.draftQ === 'string' ? route.query.draftQ : query.value)
 const opened = ref<Memory | null>(null)
 const detailPending = ref(false)
 const detailError = ref<OperatorSourceError | null>(null)
@@ -41,6 +41,12 @@ let detailGeneration = 0
 const principal = useOperatorPrincipalMemorySurface(project)
 const principalScope = principal.scope
 const principalState = principal.loadState
+if (typeof route.query.principal === 'string') principalScope.value.principal = route.query.principal
+if (route.query.principalKind === 'human' || route.query.principalKind === 'agent' || route.query.principalKind === 'service') principalScope.value.principalKind = route.query.principalKind
+if (typeof route.query.principalDomain === 'string') principalScope.value.domain = route.query.principalDomain
+if (typeof route.query.principalProject === 'string') principalScope.value.project = route.query.principalProject
+if (route.query.principalVisibility === 'all' || route.query.principalVisibility === 'shared' || route.query.principalVisibility === 'private') principalScope.value.visibility = route.query.principalVisibility
+principalScope.value.includePrivate = route.query.principalPrivate === '1'
 const principalAttribution = principal.attributionVisible
 const principalItems = computed(() => principalState.value.data?.items || [])
 
@@ -107,7 +113,10 @@ watch(openId, async (value, previous) => {
   await nextTick()
   document.querySelector<HTMLElement>(`[data-memory-id="${CSS.escape(previous)}"]`)?.focus()
 })
-onBeforeUnmount(() => { detailGeneration += 1 })
+onBeforeUnmount(() => {
+  detailGeneration += 1
+  if (route.path === '/memory') context.remember('/memory', { ...route.query, draftQ: draft.value, principal: principalScope.value.principal, principalKind: principalScope.value.principalKind, principalProject: principalScope.value.project, principalDomain: principalScope.value.domain, principalVisibility: principalScope.value.visibility, principalPrivate: principalScope.value.includePrivate ? '1' : '0' })
+})
 
 async function closeDetail() {
   const id = openId.value

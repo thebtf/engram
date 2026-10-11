@@ -1,5 +1,5 @@
 import { computed, onBeforeUnmount, onMounted, ref, unref, watch } from 'vue'
-import { operatorApiUrl } from './useOperatorApi'
+import { operatorFetchResponse } from './useOperatorApi'
 
 export type CodeBootstrapPhase = 'idle' | 'binding' | 'ready' | 'collision' | 'ambiguous' | 'reload-pending' | 'denied' | 'secure-origin-required' | 'identity-unavailable' | 'error'
 export type CodePresentationKind = 'idle' | 'loading' | 'ready' | 'empty' | 'partial' | 'stale' | 'denied' | 'unsupported' | 'timeout' | 'offline' | 'error'
@@ -1017,7 +1017,7 @@ export function useOperatorCode() {
     const headers: Record<string, string> = { 'X-Engram-Request-ID': id, ...extraHeaders }
     if (body !== undefined) headers['Content-Type'] = 'application/json'
     try {
-      const response = await fetch(operatorApiUrl(path), {
+      const response = await operatorFetchResponse(path, {
         method,
         credentials: 'include',
         headers,
@@ -1442,7 +1442,7 @@ export function useOperatorCode() {
     authProbeAbort = controller
     const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
     try {
-      const response = await fetch(operatorApiUrl('/auth/me'), { credentials: 'include', cache: 'no-store', signal: controller.signal })
+      const response = await operatorFetchResponse('/auth/me', { credentials: 'include', cache: 'no-store', signal: controller.signal })
       if (!response.ok && response.status !== 401) {
         bootstrapPhase.value = 'identity-unavailable'
         return

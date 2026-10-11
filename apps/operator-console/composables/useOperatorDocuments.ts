@@ -28,7 +28,7 @@ import {
   errorState,
   liveState,
   OperatorFetchError,
-  operatorApiUrl,
+  operatorFetchResponse,
   operatorFetchJson,
   pendingState,
   toOperatorSourceError,
@@ -672,7 +672,7 @@ export function useOperatorDocuments(projectContext?: Ref<string>): {
 
     return executeMutation(
       { requestId: crypto.randomUUID(), action: 'document-comment', intent: input },
-      fetch(operatorApiUrl('/api/documents/comment'), {
+      operatorFetchResponse('/api/documents/comment', {
         ...jsonInit('POST', {
           document_id: Number(currentVersionEntry.id),
           author: input.author || 'operator-console',
@@ -700,7 +700,7 @@ export function useOperatorDocuments(projectContext?: Ref<string>): {
     const body = { request_id: requestId, action: input.action, selection: documentOperationSelectionPayload(selection) }
     let response: Response
     try {
-      response = await fetch(operatorApiUrl('/api/documents'), { ...documentOperationInit(body, requestId), credentials: 'include' })
+      response = await operatorFetchResponse('/api/documents', { ...documentOperationInit(body, requestId), credentials: 'include' })
     } catch (error) {
       return { mutation: await executeMutation(request, Promise.reject(error), () => undefined) }
     }

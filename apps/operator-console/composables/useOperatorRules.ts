@@ -20,7 +20,7 @@ import {
   errorState,
   liveState,
   loadOperatorJson,
-  operatorApiUrl,
+  operatorFetchResponse,
   operatorFetchJson,
   pendingState,
   unsupportedOperatorAction,
@@ -577,7 +577,7 @@ export function useOperatorRules(initialScope = 'all'): {
     const request = { requestId, action: 'rule-create', intent: input }
     return executeMutation(
       request,
-      fetch(operatorApiUrl('/api/rules'), {
+      operatorFetchResponse('/api/rules', {
         ...jsonInit('POST', {
           content: input.content,
           priority: input.priority ?? 0,
@@ -641,7 +641,7 @@ export function useOperatorRules(initialScope = 'all'): {
     const parser = operationCurrentStateParser(input)
     let response: Response
     try {
-      response = await fetch(operatorApiUrl('/api/rules'), {
+      response = await operatorFetchResponse('/api/rules', {
         ...jsonInit('POST', operationBody(input, requestId), requestId),
         credentials: 'include',
       })

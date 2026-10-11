@@ -2,7 +2,7 @@
   "$schema": "./PARITY.schema.json",
   "design_version": "2026.09.17",
   "design_snapshot_sha256": "ac98a46de24efbbe6b8a16865e35b8f48dc5493f78838e81c02ce39f746dabee",
-  "note": "Historical promoted snapshot remains unchanged. The 2026-10-11 inherited-world operator knowledge route/design amendment is documented in README.md: canonical project entry, content-first memory/document readers, same-context return, and independent code Workspace. All affected rows remain drifted until fresh real-API, responsive and ordinary-user evidence is consumed; no mock/build result asserts visual or installed acceptance. Graph and Books remain retirement routes.",
+  "note": "Historical promoted snapshot remains unchanged. The 2026-10-11 inherited-world operator knowledge route/design amendment is documented in README.md: canonical project entry, content-first memory/document readers, same-context return, independent code Workspace, and existing-cookie ordinary sign-in recovery with truthful session identity. All affected rows remain drifted until fresh real-API, responsive and ordinary-user evidence is consumed; no mock/build result asserts visual or installed acceptance. Graph and Books remain retirement routes.",
   "sections": [
     {
       "id": "overview",
@@ -226,7 +226,7 @@
       "synced_snapshot": null,
       "visual_evidence": [],
       "gaps": [
-        "mobile navigation and shell replay pending"
+        "mobile navigation, normal account sign-in/expiry/logout and truthful session identity require fresh real-API Chrome replay"
       ]
     },
     {

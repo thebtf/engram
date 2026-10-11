@@ -4,7 +4,7 @@ const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const context = useOperatorProjectContext()
-const query = ref('')
+const query = ref(typeof route.query.draftQ === 'string' ? route.query.draftQ : '')
 const requestedQuery = computed(() => typeof route.query.q === 'string' ? route.query.q.trim() : '')
 const requestedProject = computed(() => typeof route.query.project === 'string' ? route.query.project.trim() : '')
 const appliedRouteSearch = ref('')
@@ -27,7 +27,7 @@ const hasProjects = computed(() => projects.value.length > 0)
 const hasRequestedProject = computed(() => Boolean(requestedProject.value) && projects.value.includes(requestedProject.value))
 
 watch([requestedQuery, requestedProject, hasRequestedProject], async ([nextQuery, nextProject, projectAvailable]) => {
-  query.value = nextQuery
+  query.value = typeof route.query.draftQ === 'string' ? route.query.draftQ : nextQuery
   if (!nextQuery || !nextProject || !projectAvailable) {
     appliedRouteSearch.value = ''
     await runSearch('', '')
@@ -53,6 +53,9 @@ function openResult(_project: string, memory: string) {
   if (!project || project === 'all' || !memory) return
   void router.push({ path: '/memory', query: { ...context.to('/memory').query, project, memory, from: 'search', searchQuery: requestedQuery.value } })
 }
+onBeforeUnmount(() => {
+  if (route.path === '/search') context.remember('/search', { ...route.query, draftQ: query.value })
+})
 </script>
 
 <template>

@@ -17,6 +17,14 @@ const navigationKey = 'engram.console.knowledgeNavigation'
 let navigationLoaded = false
 let catalogGeneration = 0
 
+const navigationFields: Record<string, true> = Object.fromEntries(['project', 'q', 'filter', 'page', 'size', 'allRead', 'memory', 'memoryProject', 'from', 'searchQuery', 'focusMemory', 'path', 'docProject', 'pathPrefix', 'path_prefix', 'docType', 'version', 'compare', 'session', 'draftQ', 'draftPrefix', 'draftType', 'principal', 'principalKind', 'principalProject', 'principalDomain', 'principalVisibility', 'principalPrivate'].map((key) => [key, true]))
+function safeNavigation(query: LocationQuery): LocationQuery {
+  return Object.fromEntries(Object.entries(query).filter(([key, value]) => Object.hasOwn(navigationFields, key) && (typeof value === 'string' || value === null || (Array.isArray(value) && value.every((item) => typeof item === 'string' || item === null)))))
+}
+function saveNavigation() {
+  try { sessionStorage.setItem(navigationKey, JSON.stringify([...remembered])) } catch { /* Storage is optional. */ }
+}
+
 function loadNavigation() {
   if (navigationLoaded || typeof window === 'undefined') return
   navigationLoaded = true
@@ -29,7 +37,7 @@ function loadNavigation() {
       for (const [key, value] of Object.entries(entry[1])) {
         if (typeof value === 'string' || value === null || (Array.isArray(value) && value.every((item) => typeof item === 'string' || item === null))) query[key] = value
       }
-      remembered.set(entry[0], query)
+      remembered.set(entry[0], safeNavigation(query))
     }
   } catch { /* Navigation remains usable when session storage is unavailable. */ }
 }
@@ -113,8 +121,8 @@ export function useOperatorProjectContext() {
   loadNavigation()
   watch(() => route.fullPath, () => {
     if (typeof route.query.project === 'string') project.value = route.query.project
-    remembered.set(`${project.value}\u0000${route.path}`, { ...route.query })
-    try { sessionStorage.setItem(navigationKey, JSON.stringify([...remembered])) } catch { /* Storage is optional. */ }
+    remembered.set(`${project.value}\u0000${route.path}`, safeNavigation(route.query))
+    saveNavigation()
   }, { immediate: true, flush: 'sync' })
   if (!catalogRequest) catalogRequest = refreshProjects()
 
@@ -123,6 +131,11 @@ export function useOperatorProjectContext() {
     if (project.value) query.project = project.value
     return { path, query }
   }
+  function remember(path: string, fields: LocationQuery) {
+    const key = `${project.value}\u0000${path}`
+    remembered.set(key, safeNavigation({ ...remembered.get(key), ...fields, project: project.value }))
+    saveNavigation()
+  }
   function select(id: string, path = route.path) {
     if (id !== 'all' && !projects.value.includes(id)) return
     const query: LocationQuery = { ...remembered.get(`${id}\u0000${path}`), project: id }
@@ -130,5 +143,5 @@ export function useOperatorProjectContext() {
     return router.push({ path, query })
   }
   const label = computed(() => project.value ? projectName(project.value) : '')
-  return { project, projects, descriptors, pending, error, label, refresh: () => { catalogRequest = refreshProjects(); return catalogRequest }, select, to }
+  return { project, projects, descriptors, pending, error, label, refresh: () => { catalogRequest = refreshProjects(); return catalogRequest }, select, to, remember }
 }

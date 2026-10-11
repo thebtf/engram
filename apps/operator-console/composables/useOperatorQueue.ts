@@ -18,7 +18,7 @@ import {
   gatedState,
   liveState,
   OperatorFetchError,
-  operatorApiUrl,
+  operatorFetchResponse,
   operatorFetchJson,
   pendingState,
   toOperatorSourceError,
@@ -296,7 +296,7 @@ export function useOperatorQueue(): {
     const request = { requestId, action: `candidate-${action}`, intent }
     let selectionResponse: Response
     try {
-      selectionResponse = await fetch(operatorApiUrl('/api/collections/selection'), {
+      selectionResponse = await operatorFetchResponse('/api/collections/selection', {
         ...jsonInit('POST', {
           domain: 'queue',
           selection: { kind: 'explicit', targets: [{ id }] },
@@ -328,7 +328,7 @@ export function useOperatorQueue(): {
     }
     return executeMutation(
       request,
-      fetch(operatorApiUrl('/api/memory/candidates/operations'), {
+      operatorFetchResponse('/api/memory/candidates/operations', {
         ...jsonInit('POST', body, requestId),
         credentials: 'include',
       }),

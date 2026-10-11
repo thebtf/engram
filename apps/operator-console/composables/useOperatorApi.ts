@@ -1,4 +1,7 @@
+import { ref } from 'vue'
 import { operatorConfig } from '../operator-config'
+
+export const operatorUnauthorizedRevision = ref(0)
 export const OPERATOR_LOAD_KINDS = [
  'pending',
  'error',
@@ -239,6 +242,12 @@ async function readOperatorResponseText(
  }
 }
 
+export async function operatorFetchResponse(path: string, init: RequestInit = {}, base = operatorApiBase()): Promise<Response> {
+ const response = await fetch(operatorApiUrl(path, base), { ...init, credentials: 'include' })
+ if (response.status === 401 && path !== '/api/auth/user-login') operatorUnauthorizedRevision.value++
+ return response
+}
+
 export async function operatorFetchJson<T>(
  path: string,
  init: RequestInit = {},
@@ -248,10 +257,7 @@ export async function operatorFetchJson<T>(
  let response: Response
 
  try {
-  response = await fetch(operatorApiUrl(path), {
-   ...init,
-   credentials: 'include',
-  })
+  response = await operatorFetchResponse(path, init)
  } catch (error) {
   const mapped = toOperatorSourceError(error, { source, path, method })
   throw new OperatorFetchError(mapped.message, mapped)

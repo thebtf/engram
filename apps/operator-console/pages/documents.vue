@@ -16,9 +16,9 @@ const requestedPath = computed(() => typeof route.query.path === 'string' ? rout
 const documentProject = computed(() => project.value === 'all' && typeof route.query.docProject === 'string' ? route.query.docProject : project.value)
 const page = computed(() => Math.max(1, Number.parseInt(String(route.query.page || '1'), 10) || 1))
 const pageSize = computed(() => [10, 20, 50].includes(Number(route.query.size)) ? Number(route.query.size) : 20)
-const draft = ref(query.value)
-const prefixDraft = ref(prefix.value)
-const typeDraft = ref(typeof route.query.docType === 'string' ? route.query.docType : '')
+const draft = ref(typeof route.query.draftQ === 'string' ? route.query.draftQ : query.value)
+const prefixDraft = ref(typeof route.query.draftPrefix === 'string' ? route.query.draftPrefix : prefix.value)
+const typeDraft = ref(typeof route.query.draftType === 'string' ? route.query.draftType : typeof route.query.docType === 'string' ? route.query.docType : '')
 const compareOpen = ref(false)
 const commentDraft = ref('')
 const lineStart = ref('')
@@ -85,7 +85,11 @@ watch(requestedPath, async (value, previous) => {
   await nextTick()
   for (const button of document.querySelectorAll<HTMLElement>('[data-document-path]')) if (button.dataset.documentPath === previous) { button.focus(); break }
 })
-onBeforeUnmount(() => { generation += 1; clearDocumentDetail() })
+onBeforeUnmount(() => {
+  generation += 1
+  if (route.path === '/documents') context.remember('/documents', { ...route.query, draftQ: draft.value, draftPrefix: prefixDraft.value, draftType: typeDraft.value })
+  clearDocumentDetail()
+})
 
 async function closeDetail() {
   const path = requestedPath.value

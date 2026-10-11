@@ -95,6 +95,48 @@ backend, real known older records and documents, duplicate labels, empty/error r
 1440×900 and 390px keyboard journeys, followed by the installed consumer walkthrough.
 Deployed 6.51 responses do not implement the NEXT envelopes and cannot prove this slice.
 
+### Ordinary sign-in and recovery
+
+The shared header and an authentication-required notice expose ordinary email/password
+sign-in through the existing `POST /api/auth/user-login` contract. The API wrapper keeps
+`credentials: include`; Go owns the HttpOnly cookie. No token, password, account, provider
+or proxy model is introduced. The dialog clears both fields after submission and on close,
+Escape or backdrop dismissal; credentials never enter browser storage or diagnostics.
+
+Only fresh `GET /api/auth/me` evidence establishes authentication, the server role and
+`auth_disabled`. Anonymous, expired and unavailable identity states do not invent an
+operator, role, provider or current session. All JSON and raw-response API callers share
+401 observation through the existing request seam, including mutation readback and code
+readers/grants. A protected-data or authMe 401 removes the prior verified identity and
+offers sign-in again. Credential-login 400/401 does not revoke a verified session; 403
+remains an authorization error, not a role upgrade. Protected diagnostic endpoints returning
+401 show sign-in required, not a fabricated server outage; initial server status is unknown.
+A server-confirmed `auth_disabled` mode remains distinct from a human login session.
+
+The layout does not render its protected page slot or settings payload until authMe
+confirms authentication or legitimate `auth_disabled`. On auth loss it unmounts readers;
+late responses cannot restore them. A successful account logout also withholds cached
+content while authMe checks the ended session. Failed logout 405/503 keeps the verified
+session and reports failure.
+
+After confirmed login, a fresh document refetches content under the current cookie.
+The existing knowledge-navigation seam retains only allowlisted canonical project,
+query/AND filters/page, reader-return and document version/comparison intent, including
+unsubmitted search/path/type drafts captured before readers unmount. It stores no reader
+payload, export artifact, mutation result, credential or session secret. Principal filter
+controls retain their exact visibility but require an explicit new query; recovery never
+replays a failed mutation or automatically repeats a private-scope read.
+Account sign-out uses `POST /api/auth/user-logout`, not master-token logout. An unavailable
+endpoint (including 405), server error or unconfirmed readback stays a visible failure;
+the UI does not fabricate successful session clearing.
+
+The focused `tests/composables/auth-session.spec.mjs` checks the real shared transport,
+session state and login-dialog submission/clearing with finite synthetic responses. It is
+not proof of cookie persistence,
+native-dialog keyboard behavior or ordinary-user acceptance: those require the parent's
+fresh real-API Chrome journey against the integrated candidate.
+
+
 
 ## Runtime invariants
 

@@ -21,7 +21,7 @@ import {
  errorState,
  liveState,
  loadOperatorJson,
- operatorApiUrl,
+ operatorFetchResponse,
  operatorFetchJson,
  pendingState,
  toOperatorSourceError,
@@ -209,7 +209,7 @@ async function issueMutation<TIntent>(
 ): Promise<{ mutation: MutationResult<TIntent, OperatorIssue>; body: unknown }> {
  let response: Response
  try {
-  response = await fetch(operatorApiUrl(path), { ...init, credentials: 'include' })
+  response = await operatorFetchResponse(path, { ...init, credentials: 'include' })
  } catch (error) {
   return { mutation: await executeMutation<TIntent, OperatorIssue>(request, Promise.reject(error), () => undefined), body: undefined }
  }
@@ -362,7 +362,7 @@ async function verifyCurrentIssue<TIntent>(
 async function verifyDeletedIssue<TIntent>(mutation: MutationResult<TIntent>, id: number): Promise<MutationResult<TIntent>> {
  if (mutation.kind !== 'committed_verification_pending' || mutation.commitment !== 'committed') return mutation
  try {
-  const response = await fetch(operatorApiUrl(`/api/issues/${id}`), { credentials: 'include' })
+  const response = await operatorFetchResponse(`/api/issues/${id}`, { credentials: 'include' })
   if (response.status === 404) {
    return {
     kind: 'committed_verified',
@@ -664,7 +664,7 @@ export function useOperatorIssues(): {
   const selectionBody = selection.kind === 'frozen_filter'
    ? { kind: 'frozen_filter', selection_version: selection.version, selection_token: selection.selectionToken }
    : { kind: selection.kind, selection_version: selection.version }
-  return executeMutation(request, fetch(operatorApiUrl('/api/issues/operations'), {
+  return executeMutation(request, operatorFetchResponse('/api/issues/operations', {
    ...selectionInit(requestId, { request_id: requestId, action: action.kind, selection: selectionBody, ...actionBody }),
    credentials: 'include',
   }), parseIssueSelectionCurrent)

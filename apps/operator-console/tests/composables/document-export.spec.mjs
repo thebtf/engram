@@ -59,7 +59,7 @@ async function mountConsumer(t) {
     selectSecondaryVersion: async () => { },
     runDocumentSelectionOperation: () => operation(),
   }
-  const context = { project, to: (path) => ({ path, query: {} }) }
+  const context = { project, to: (path) => ({ path, query: {} }), remember: () => { } }
   const descriptor = parse(readFileSync(pagePath, 'utf8'), { filename: fileURLToPath(pagePath) }).descriptor
   const script = compileScript(descriptor, { id: 'document-export-consumer' })
   const component = evaluateModule(script.content, (name) => {
