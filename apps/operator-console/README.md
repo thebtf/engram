@@ -505,4 +505,3 @@ coverage with canonical project parameters and reader envelopes. Old assertions 
 required Home charts, automatic all-project body loading, disabled capability buttons,
 or a page-local capped corpus were removed rather than repinned as product requirements.
 They remain fixture checks, not ordinary-user or installed acceptance.
-
