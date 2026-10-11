@@ -28,3 +28,10 @@ new proof of these bytes. Memory audit and independent multiple-type selection a
 closed by status-filter AND or this source check. Root acceptance and Main release stay
 open for the narrow changed-consumer proof on the existing isolated Chrome target.
 
+The F1 client migration follows Main's mandatory canonical `project` audit query without
+changing the route or DTO. It clears old history on scope/session changes and rejects
+late or mismatched responses; denial is not empty history. This does not prove the server
+privacy repair or legitimate audit events. Existing committed F3/F4 behavior stays intact;
+Root acceptance/Main release still require the coherent backend and narrow real-consumer
+proof. Standalone multiple-type selection still requires its actual backend interface.
+

@@ -24,7 +24,7 @@ function evaluate(source, require, globals) {
   return module.exports
 }
 
-function session(t, identity = () => Response.json(verifiedUser), knowledgeFetch = () => undefined, diagnosticFetch = () => undefined) {
+function session(t, identity = () => Response.json(verifiedUser), knowledgeFetch = () => undefined, diagnosticFetch = () => undefined, projectCatalog = [{ id: 'canonical-test', display_name: 'Synthetic project' }]) {
   const calls = []
   const storage = new Map()
   const scope = vue.effectScope()
@@ -46,7 +46,7 @@ function session(t, identity = () => Response.json(verifiedUser), knowledgeFetch
         return Response.json({}, { status: loginStatus })
       }
       if (path === '/api/auth/user-logout') return Response.json({}, { status: logoutStatus })
-      if (path === '/api/projects') return Response.json({ items: [{ id: 'canonical-test', display_name: 'Synthetic project' }] }, { status: projectStatus })
+      if (path === '/api/projects') return Response.json({ items: projectCatalog }, { status: projectStatus })
       if (protectedDiagnostics && ['/api/selfcheck', '/api/stats', '/api/stats/vnext'].includes(path)) return Response.json({}, { status: 401 })
       if (['/api/selfcheck', '/api/stats', '/api/stats/vnext'].includes(path)) {
         const diagnostic = diagnosticFetch(path)
@@ -441,7 +441,7 @@ function knowledgeResponse(content) {
   return (url) => {
     if (url.pathname === '/api/memories' || url.pathname === '/api/documents') return Response.json({ items: [], total: 0, offset: Number(url.searchParams.get('offset')), limit: Number(url.searchParams.get('limit')), has_more: false })
     if (url.pathname === '/api/memories/7') return Response.json({ id: 7, project: 'canonical-test', content, status: 'active' })
-    if (url.pathname === '/api/memories/7/audit') return Response.json({ memory_id: 7, entries: [] })
+    if (url.pathname === '/api/memories/7/audit') return url.searchParams.get('project') === 'canonical-test' ? Response.json({ memory_id: 7, entries: [] }) : Response.json({}, { status: 400 })
     if (url.pathname === '/api/documents/history') return Response.json({ path: 'synthetic.md', versions: [{ id: 7, version: 2 }, { id: 6, version: 1 }] })
     if (url.pathname === '/api/documents/comments') return Response.json({ comments: [] })
     if (url.pathname === '/api/documents/read') return Response.json({ id: 7, project: 'canonical-test', path: 'synthetic.md', version: Number(url.searchParams.get('version') || 2), content, content_hash: 'synthetic-hash' })
@@ -581,4 +581,153 @@ test('context search never offers broad text recovery for unknown or all-project
     assert.ok(!walk(mounted.host).some((item) => item.props['data-testid']?.startsWith('search-text-')))
     assert.ok(!consumer.calls.some((call) => call.path.startsWith('/api/context/search?')))
   }
+})
+
+const auditProjects = [{ id: 'canonical-test', display_name: 'Shared label' }, { id: 'canonical-other', display_name: 'Shared label' }]
+function auditPayload(id, marker) {
+  return { memory_id: id, entries: [{ id: id * 10, memory_id: id, action: 'suppress', actor: `synthetic actor ${marker}`, reason: `synthetic reason ${marker}`, before_state_present: false, after_state_present: true, created_at: '2026-10-11T00:00:00Z' }] }
+}
+function auditResponses(readAudit, readDetail = (url, id) => Response.json({ id, project: url.searchParams.get('project'), content: `synthetic scoped memory ${id}`, status: 'active' })) {
+  return (url) => {
+    if (url.pathname === '/api/memories') return Response.json({ items: [], total: 0, offset: Number(url.searchParams.get('offset')), limit: Number(url.searchParams.get('limit')), has_more: false })
+    const detail = url.pathname.match(/^\/api\/memories\/(7|8)$/)
+    if (detail) return readDetail(url, Number(detail[1]))
+    const audit = url.pathname.match(/^\/api\/memories\/(7|8)\/audit$/)
+    if (audit) {
+      const project = url.searchParams.get('project')
+      if (!project || project === 'all') return Response.json({}, { status: 400 })
+      if (!auditProjects.some((row) => row.id === project)) return Response.json({}, { status: 403 })
+      return readAudit(url, Number(audit[1]))
+    }
+  }
+}
+
+test('memory audit renders only the bound canonical reader history and preserves query/filter return', async (t) => {
+  const consumer = session(t, undefined, auditResponses((_url, id) => Response.json(auditPayload(id, 'authorized'))), undefined, auditProjects)
+  await consumer.shell.refresh()
+  const mounted = await mountRecovery(t, consumer, '/memory?project=canonical-test&memory=7&q=literal-safe&filter=low&filter=chain&page=3&size=10', 'memory')
+  await tick()
+  assert.ok(text(mounted.host).includes('synthetic actor authorized'))
+  assert.ok(text(mounted.host).includes('synthetic reason authorized'))
+  const request = consumer.calls.find((call) => call.path.includes('/7/audit?'))
+  assert.equal(new URL(request.path, 'http://synthetic.invalid').searchParams.get('project'), 'canonical-test')
+  assert.equal(new URL(request.path, 'http://synthetic.invalid').searchParams.get('limit'), '200')
+  assert.ok(!request.path.includes('Shared label'))
+  assert.ok(![...consumer.storage.values()].join('').includes('synthetic reason authorized'))
+  await mounted.reader().closeDetail()
+  assert.equal(mounted.router.currentRoute.value.query.project, 'canonical-test')
+  assert.equal(mounted.router.currentRoute.value.query.q, 'literal-safe')
+  assert.deepEqual(mounted.router.currentRoute.value.query.filter, ['low', 'chain'])
+  assert.equal(mounted.router.currentRoute.value.query.page, '3')
+  assert.ok(!text(mounted.host).includes('synthetic reason authorized'))
+})
+
+for (const status of [400, 403, 404]) test(`memory audit denial ${status} stays an error rather than empty or private history`, async (t) => {
+  const consumer = session(t, undefined, auditResponses(() => Response.json({ reason: 'synthetic hidden private reason' }, { status })))
+  await consumer.shell.refresh()
+  const mounted = await mountRecovery(t, consumer, '/memory?project=canonical-test&memory=7', 'memory')
+  await tick()
+  assert.equal(mounted.reader().auditState.kind, 'error')
+  assert.equal(mounted.reader().auditState.error.status, status)
+  assert.ok(text(mounted.host).includes('synthetic scoped memory 7'))
+  assert.ok(!text(mounted.host).includes('synthetic hidden private reason'))
+  assert.ok(!text(mounted.host).includes('knowledge.noMemoryHistory'))
+})
+
+test('memory audit rejects a mismatched response identity before rendering reasons or actors', async (t) => {
+  const consumer = session(t, undefined, auditResponses(() => Response.json(auditPayload(8, 'wrong-memory'))))
+  await consumer.shell.refresh()
+  const mounted = await mountRecovery(t, consumer, '/memory?project=canonical-test&memory=7', 'memory')
+  await tick()
+  assert.equal(mounted.reader().auditState.kind, 'error')
+  assert.equal(mounted.reader().auditState.error.category, 'invalid-response')
+  assert.ok(!text(mounted.host).includes('synthetic actor wrong-memory'))
+  assert.ok(!text(mounted.host).includes('synthetic reason wrong-memory'))
+})
+
+for (const change of ['project', 'record', 'all-detail-project']) test(`memory audit drops late history after ${change} changes`, async (t) => {
+  let releaseOld
+  let audits = 0
+  const consumer = session(t, undefined, auditResponses((_url, id) => {
+    if (++audits === 1) return new Promise((resolve) => { releaseOld = () => resolve(Response.json(auditPayload(id, 'old-context'))) })
+    return Response.json(auditPayload(id, 'current-context'))
+  }), undefined, auditProjects)
+  await consumer.shell.refresh()
+  const location = change === 'all-detail-project' ? '/memory?project=all&memoryProject=canonical-test&memory=7' : '/memory?project=canonical-test&memory=7'
+  const mounted = await mountRecovery(t, consumer, location, 'memory')
+  await tick()
+  assert.ok(releaseOld)
+  const next = { ...mounted.router.currentRoute.value.query }
+  if (change === 'project') next.project = 'canonical-other'
+  else if (change === 'record') next.memory = '8'
+  else next.memoryProject = 'canonical-other'
+  await mounted.router.push({ path: '/memory', query: next })
+  await tick()
+  assert.ok(text(mounted.host).includes('synthetic reason current-context'))
+  releaseOld()
+  await tick()
+  assert.ok(!text(mounted.host).includes('synthetic reason old-context'))
+  assert.ok(text(mounted.host).includes('synthetic reason current-context'))
+  const request = new URL(consumer.calls.filter((call) => call.path.includes('/audit?')).at(-1).path, 'http://synthetic.invalid')
+  assert.equal(request.searchParams.get('project'), change === 'record' ? 'canonical-test' : 'canonical-other')
+  assert.notEqual(request.searchParams.get('project'), 'all')
+})
+
+test('memory audit does not dispatch for a stale detail resolved after changing the open record', async (t) => {
+  let releaseDetail
+  const consumer = session(t, undefined, auditResponses((_url, id) => Response.json(auditPayload(id, 'current-detail')), (url, id) => {
+    if (id === 7) return new Promise((resolve) => { releaseDetail = () => resolve(Response.json({ id, project: url.searchParams.get('project'), content: 'synthetic old detail', status: 'active' })) })
+    return Response.json({ id, project: url.searchParams.get('project'), content: 'synthetic new detail', status: 'active' })
+  }))
+  await consumer.shell.refresh()
+  const mounted = await mountRecovery(t, consumer, '/memory?project=canonical-test&memory=7', 'memory')
+  await tick()
+  assert.ok(releaseDetail)
+  await mounted.router.push('/memory?project=canonical-test&memory=8')
+  await tick()
+  releaseDetail()
+  await tick()
+  assert.ok(text(mounted.host).includes('synthetic new detail'))
+  assert.ok(!text(mounted.host).includes('synthetic old detail'))
+  assert.ok(!consumer.calls.some((call) => call.path.includes('/7/audit?')))
+  assert.equal(mounted.reader().auditState.data.memory_id, 8)
+})
+
+test('memory audit clears rendered payload on logout and discards pending history after auth loss', async (t) => {
+  let signedIn = true
+  let releaseLate
+  let audits = 0
+  const consumer = session(t, () => signedIn ? Response.json(verifiedUser) : Response.json({ authenticated: false, auth_disabled: false }, { status: 401 }), auditResponses((_url, id) => {
+    if (++audits === 1) return Response.json(auditPayload(id, 'before-logout'))
+    return new Promise((resolve) => { releaseLate = () => resolve(Response.json(auditPayload(id, 'after-auth-loss'))) })
+  }))
+  await consumer.shell.refresh()
+  const mounted = await mountRecovery(t, consumer, '/memory?project=canonical-test&memory=7&q=literal-safe&filter=low&filter=chain', 'memory')
+  await tick()
+  const reader = mounted.reader()
+  assert.ok(text(mounted.host).includes('synthetic reason before-logout'))
+  const pending = reader.readDetail()
+  await tick()
+  assert.ok(releaseLate)
+  consumer.logoutStatus(200)
+  signedIn = false
+  await mounted.layout().logoutIdentity()
+  await tick()
+  assert.equal(reader.auditState, null)
+  assert.equal(reader.opened, null)
+  assert.ok(!text(mounted.host).includes('synthetic reason before-logout'))
+  releaseLate()
+  await pending
+  await tick()
+  assert.equal(reader.auditState, null)
+  assert.ok(!text(mounted.host).includes('synthetic reason after-auth-loss'))
+  assert.ok(![...consumer.storage.values()].join('').includes('synthetic reason'))
+})
+
+test('memory audit refuses absent and all-project scope without sending an unscoped request', async (t) => {
+  const consumer = session(t, undefined, auditResponses((_url, id) => Response.json(auditPayload(id, 'unexpected'))))
+  await consumer.shell.refresh()
+  const mounted = await mountRecovery(t, consumer, '/memory?project=canonical-test', 'memory')
+  for (const scope of [undefined, '', 'all']) await assert.rejects(mounted.reader().auditMemory('7', scope, 200), TypeError)
+  assert.ok(!consumer.calls.some((call) => call.path.includes('/audit?')))
 })

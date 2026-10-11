@@ -80,6 +80,18 @@ selected canonical ID, never a raw stored alias. The server owns strict unique l
 alias resolution and privacy. Unknown/unregistered or ambiguous identities are not
 invented, auto-registered, merged, or presented as successfully empty projects.
 
+`GET /api/memories/:id/audit?project=<canonical ID>&limit=200` now requires the
+same exact selected canonical project as the detail reader; its DTO remains
+`{ memory_id, entries[] }`. Missing project is 400, nonlive project is 403, and
+cross-project/private-hidden memories are nondisclosing 404. Main owns the server's
+read-privacy and manage-permission enforcement; the client is not that security gate.
+The reader captures its target project, open ID and authentication revision before
+awaiting requests, rejects mismatched audit identities, drops obsolete responses,
+and clears rendered audit content on scope change or session loss/unmount. Explicit
+all-project browsing still audits only the selected record's canonical project,
+never `project=all`, a stored alias or a display label. Denials remain visible errors,
+not empty history. Existing query/filter/page and search return remain unchanged.
+
 “All projects” is explicit. Home never fans out knowledge bodies. Inventories require
 an explicit Find submission before composing pages over canonical descriptor IDs;
 ordering is by project, then by creation time within each project. A failed member
@@ -155,6 +167,12 @@ ordinary-credential, Chrome, production, PostgreSQL or installed-delivery proof.
 original R3 ordinary journey remains an input; changed-surface acceptance still requires
 the parent's existing isolated Chrome target after coherent backend fixes. Memory audit
 availability and standalone multiple-type selection remain separate owner boundaries.
+
+The F1 `memory audit` regression subset mounts the same actual Vue/composable consumers
+with finite synthetic responses. It checks authorized history rendering, visible denial,
+canonical record/project binding, late-context and late-auth response rejection, logout
+payload clearing, and preserved query/filter return. It is not real backend privacy,
+legitimate-event, ordinary-credential or Chrome acceptance; those remain with Main/Root.
 
 
 

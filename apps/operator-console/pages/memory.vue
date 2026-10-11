@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useOperatorProjectContext, projectName } from '../composables/useOperatorProjectContext'
 import { PRINCIPAL_CURRENT_PROJECT, useOperatorMemoryLab, useOperatorPrincipalMemorySurface, type MemoryAuditResponse } from '../composables/useOperatorMemoryLab'
-import { operatorDiagnosisKey, type OperatorLoadState, type OperatorSourceError, toOperatorSourceError } from '../composables/useOperatorApi'
+import { operatorDiagnosisKey, operatorUnauthorizedRevision, type OperatorLoadState, type OperatorSourceError, toOperatorSourceError } from '../composables/useOperatorApi'
 import type { Memory } from '../composables/useMockData'
 import type { MutationResult } from '../composables/useApi'
 
@@ -82,32 +82,41 @@ async function readDetail() {
   const id = openId.value
   const scope = project.value
   const targetProject = detailProject.value
+  const authRevision = operatorUnauthorizedRevision.value
   opened.value = null
   auditState.value = null
   detailError.value = null
   confirmation.value = ''
   if (!id || !scope || !targetProject || targetProject === 'all') { detailPending.value = false; return }
   await nextTick()
-  if (generation !== detailGeneration) return
+  if (generation !== detailGeneration || authRevision !== operatorUnauthorizedRevision.value) return
   detailHeading.value?.focus()
   detailHeading.value?.scrollIntoView({ block: 'start' })
   detailPending.value = true
   try {
     const memory = await loadMemoryByID(id, targetProject)
-    if (generation !== detailGeneration || scope !== project.value || id !== openId.value) return
+    if (generation !== detailGeneration || scope !== project.value || targetProject !== detailProject.value || id !== openId.value || authRevision !== operatorUnauthorizedRevision.value) return
     if (memory.project !== targetProject) throw new Error(t('knowledge.scopeMismatch'))
     opened.value = memory
     await nextTick()
+    if (generation !== detailGeneration || scope !== project.value || targetProject !== detailProject.value || id !== openId.value || authRevision !== operatorUnauthorizedRevision.value) return
     detailHeading.value?.focus()
-    const audit = await auditMemory(id, 200)
-    if (generation === detailGeneration && scope === project.value && id === openId.value) auditState.value = audit
+    const audit = await auditMemory(id, targetProject, 200)
+    if (generation === detailGeneration && scope === project.value && targetProject === detailProject.value && id === openId.value && authRevision === operatorUnauthorizedRevision.value) auditState.value = audit
   } catch (cause) {
     if (generation === detailGeneration) detailError.value = toOperatorSourceError(cause, { source: 'memory-read', path: `/api/memories/${id}`, method: 'GET' })
   } finally {
     if (generation === detailGeneration) detailPending.value = false
   }
 }
-watch([project, openId, detailProject], readDetail, { immediate: true })
+watch([project, openId, detailProject], readDetail, { immediate: true, flush: 'sync' })
+watch(operatorUnauthorizedRevision, () => {
+  detailGeneration += 1
+  opened.value = null
+  auditState.value = null
+  detailError.value = null
+  detailPending.value = false
+}, { flush: 'sync' })
 watch(openId, async (value, previous) => {
   if (value || !previous) return
   await nextTick()
@@ -115,6 +124,8 @@ watch(openId, async (value, previous) => {
 })
 onBeforeUnmount(() => {
   detailGeneration += 1
+  opened.value = null
+  auditState.value = null
   if (route.path === '/memory') context.remember('/memory', { ...route.query, draftQ: draft.value, principal: principalScope.value.principal, principalKind: principalScope.value.principalKind, principalProject: principalScope.value.project, principalDomain: principalScope.value.domain, principalVisibility: principalScope.value.visibility, principalPrivate: principalScope.value.includePrivate ? '1' : '0' })
 })
 

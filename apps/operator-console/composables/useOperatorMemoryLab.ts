@@ -853,7 +853,7 @@ export function useOperatorMemoryLab(project?: Ref<string>, autoLoad = true): {
   suppressMemories: (ids: string[], reason?: string) => Promise<MutationResult<MemoryCollectionOperationIntent, MemoryCollectionOperationReadback[]>>
   unsuppressMemory: (id: string) => Promise<MutationResult<MemoryCollectionOperationIntent, MemoryCollectionOperationReadback[]>>
   archiveMemory: (id: string) => Promise<MutationResult<MemoryCollectionOperationIntent, MemoryCollectionOperationReadback[]>>
-  auditMemory: (id: string, limit?: number) => Promise<OperatorLoadState<MemoryAuditResponse>>
+  auditMemory: (id: string, project: string, limit?: number) => Promise<OperatorLoadState<MemoryAuditResponse>>
   provenanceGap: ReturnType<typeof unsupportedOperatorAction>
   actionGaps: readonly MemoryActionGap[]
   total: Ref<number | null>
@@ -960,12 +960,20 @@ export function useOperatorMemoryLab(project?: Ref<string>, autoLoad = true): {
     return applyMemoryCollectionOperation('archive', [id], scopeForID)
   }
 
-  async function auditMemory(id: string, limit = 10) {
+  async function auditMemory(id: string, scope: string, limit = 10) {
+    if (!scope || scope === 'all') throw new TypeError('A canonical memory project is required')
     const normalizedLimit = Number.isInteger(limit) && limit > 0 ? Math.min(200, limit) : 10
-    const path = `/api/memories/${encodeURIComponent(id)}/audit?limit=${normalizedLimit}`
+    const params = new URLSearchParams({ project: scope, limit: String(normalizedLimit) })
+    const path = `/api/memories/${encodeURIComponent(id)}/audit?${params}`
     return loadOperatorJson<MemoryAuditResponse>(path, {
       source: 'memory-audit',
-      empty: (data) => !data.entries.length,
+      empty: (data) => {
+        if (data?.memory_id !== Number(id) || !Array.isArray(data.entries) || data.entries.some((entry) => !entry || entry.memory_id !== Number(id))) {
+          const message = 'Memory audit identity mismatch'
+          throw new OperatorFetchError(message, { message, category: 'invalid-response', source: 'memory-audit', path, method: 'GET', retryable: false })
+        }
+        return !data.entries.length
+      },
     })
   }
 
