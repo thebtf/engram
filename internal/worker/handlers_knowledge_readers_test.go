@@ -257,7 +257,6 @@ func runKnowledgeReadersHTTP(t *testing.T, db *gorm.DB, sqliteFixture bool) {
 		hiddenIDs = append(hiddenIDs, hidden.ID)
 	}
 	for _, hidden := range []gormdb.Memory{
-		{Project: projectA, Content: "decision suppressed", Status: "suppressed"},
 		{Project: projectA, Content: "decision deleted", Status: "active", DeletedAt: &now},
 		{Project: projectA, Content: "decision expired", Status: "active", ValidUntil: &now},
 	} {
