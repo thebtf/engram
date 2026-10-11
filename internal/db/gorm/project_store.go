@@ -819,6 +819,53 @@ func ResolveProjectID(ctx context.Context, db *gorm.DB, projectID string) string
 	return canonicalID
 }
 
+var ErrKnowledgeProjectForbidden = errors.New("project read forbidden")
+
+var errProjectIdentityUnresolved = errors.New("project identity is missing or ambiguous")
+
+// CanonicalProjectDataSelectors preserves old stored selectors only through a
+// live canonical row and its uniquely owned existing aliases. It never writes
+// identity metadata or accepts a raw incoming selector as canonical authority.
+func CanonicalProjectDataSelectors(ctx context.Context, db *gorm.DB, canonical string) ([]string, error) {
+	if db == nil || canonical == "" || strings.TrimSpace(canonical) != canonical {
+		return nil, ErrKnowledgeProjectForbidden
+	}
+	var row Project
+	err := liveKnowledgeProjects(db.WithContext(ctx)).Select("id, legacy_ids").Where("id = ?", canonical).Take(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrKnowledgeProjectForbidden
+	}
+	if err != nil {
+		return nil, err
+	}
+	selectors := []string{canonical}
+	for _, alias := range row.LegacyIDs {
+		if alias == "" || alias == canonical || strings.TrimSpace(alias) != alias {
+			continue
+		}
+		var idOwners int64
+		if err := db.WithContext(ctx).Model(&Project{}).
+			Where("id = ? OR (id <> ? AND COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[])", alias, canonical, alias).
+			Count(&idOwners).Error; err != nil {
+			return nil, err
+		}
+		if idOwners != 0 {
+			continue
+		}
+		resolved, err := ResolveProjectIDStrict(ctx, db, alias)
+		if errors.Is(err, errProjectIdentityUnresolved) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if resolved == canonical {
+			selectors = append(selectors, alias)
+		}
+	}
+	return selectors, nil
+}
+
 // ResolveProjectIDStrict resolves one canonical project or legacy alias without
 // mutation. It fails closed on missing or ambiguous rows and is used by
 // credential-class enforcement where returning the caller input would turn a
@@ -837,7 +884,7 @@ func ResolveProjectIDStrict(ctx context.Context, db *gorm.DB, projectID string) 
 		return "", fmt.Errorf("resolve canonical project: %w", err)
 	}
 	if len(canonicalIDs) != 1 || canonicalIDs[0] == "" {
-		return "", fmt.Errorf("project identity is missing or ambiguous")
+		return "", errProjectIdentityUnresolved
 	}
 	return canonicalIDs[0], nil
 }

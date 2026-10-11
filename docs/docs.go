@@ -793,7 +793,7 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
-                        "description": "POST body: {project, query, agent_id, cwd, limit}",
+                        "description": "POST body: {project, query, agent_id, cwd, limit, project_descriptor}",
                         "name": "body",
                         "in": "body",
                         "schema": {
@@ -815,10 +815,22 @@ const docTemplate = `{
                             "type": "string"
                         }
                     },
-                    "500": {
-                        "description": "internal error",
+                    "409": {
+                        "description": "V3 project resolution refused",
                         "schema": {
-                            "type": "string"
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "V3 project resolution unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     }
                 }
@@ -872,7 +884,7 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
-                        "description": "POST body: {project, query, agent_id, cwd, limit}",
+                        "description": "POST body: {project, query, agent_id, cwd, limit, project_descriptor}",
                         "name": "body",
                         "in": "body",
                         "schema": {
@@ -894,10 +906,22 @@ const docTemplate = `{
                             "type": "string"
                         }
                     },
-                    "500": {
-                        "description": "internal error",
+                    "409": {
+                        "description": "V3 project resolution refused",
                         "schema": {
-                            "type": "string"
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "V3 project resolution unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     }
                 }
@@ -921,12 +945,12 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Project slug (required)",
+                        "description": "Project slug (required without project_descriptor)",
                         "name": "project",
                         "in": "query"
                     },
                     {
-                        "description": "POST body: {project, memories_limit, issues_limit}",
+                        "description": "POST body: {project, project_descriptor, memories_limit, issues_limit}",
                         "name": "body",
                         "in": "body",
                         "schema": {
@@ -942,15 +966,36 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "project required",
+                        "description": "invalid V3 project descriptor",
                         "schema": {
-                            "type": "string"
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "V3 project resolution refused",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     },
                     "500": {
                         "description": "internal error",
                         "schema": {
                             "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "V3 project resolution unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     }
                 }
@@ -972,12 +1017,12 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Project slug (required)",
+                        "description": "Project slug (required without project_descriptor)",
                         "name": "project",
                         "in": "query"
                     },
                     {
-                        "description": "POST body: {project, memories_limit, issues_limit}",
+                        "description": "POST body: {project, project_descriptor, memories_limit, issues_limit}",
                         "name": "body",
                         "in": "body",
                         "schema": {
@@ -993,15 +1038,36 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "project required",
+                        "description": "invalid V3 project descriptor",
                         "schema": {
-                            "type": "string"
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "V3 project resolution refused",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     },
                     "500": {
                         "description": "internal error",
                         "schema": {
                             "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "V3 project resolution unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     }
                 }
@@ -1054,6 +1120,94 @@ const docTemplate = `{
                         "description": "internal error",
                         "schema": {
                             "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/documents": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Pages public metadata of the latest version per path, ordered by created_at DESC, id DESC. Content and arbitrary JSON metadata are not searched.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Documents"
+                ],
+                "summary": "List current documents for one canonical project",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Existing canonical project ID",
+                        "name": "project",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Literal case-insensitive path/type/author substring, maximum 1024 UTF-8 bytes",
+                        "name": "query",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Exact latest-version document type",
+                        "name": "doc_type",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Literal path prefix",
+                        "name": "path_prefix",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Visible rows to skip (default 0)",
+                        "name": "offset",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page size 1..500 (default 50)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_worker.documentListResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "invalid reader parameters",
+                        "schema": {
+                            "$ref": "#/definitions/internal_worker.documentErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "project read forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_worker.documentErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "read unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_worker.documentErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "store unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_worker.documentErrorResponse"
                         }
                     }
                 }
@@ -1336,7 +1490,7 @@ const docTemplate = `{
                         "ApiKeyAuth": []
                     }
                 ],
-                "description": "Returns stored memories for the given project, newest first.",
+                "description": "Returns visible current memories ordered by created_at DESC, id DESC. Count and page apply the same access and literal query filters.",
                 "produces": [
                     "application/json"
                 ],
@@ -1347,14 +1501,32 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Project identifier",
+                        "description": "Existing canonical project ID",
                         "name": "project",
                         "in": "query",
                         "required": true
                     },
                     {
+                        "type": "string",
+                        "description": "Literal case-insensitive content substring (maximum 1024 UTF-8 bytes)",
+                        "name": "query",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "all, active, flagged, stale, low or chain; omitted means all",
+                        "name": "filter",
+                        "in": "query"
+                    },
+                    {
                         "type": "integer",
-                        "description": "Maximum number of results (default 50)",
+                        "description": "Visible rows to skip (default 0)",
+                        "name": "offset",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page size 1..500 (default 50)",
                         "name": "limit",
                         "in": "query"
                     }
@@ -1363,16 +1535,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "type": "array",
-                            "items": {
-                                "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.Memory"
-                            }
+                            "$ref": "#/definitions/internal_worker.memoryListResponse"
                         }
                     },
                     "400": {
-                        "description": "project is required",
+                        "description": "invalid reader parameters",
                         "schema": {
-                            "type": "string"
+                            "$ref": "#/definitions/internal_worker.documentErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "project read forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_worker.documentErrorResponse"
                         }
                     },
                     "500": {
@@ -1518,7 +1693,7 @@ const docTemplate = `{
                         "ApiKeyAuth": []
                     }
                 ],
-                "description": "Returns one active memory entry by numeric ID.",
+                "description": "Returns one nondeleted memory in the exact live canonical project, with the existing read privacy policy applied before the ID lookup.",
                 "produces": [
                     "application/json"
                 ],
@@ -1533,6 +1708,13 @@ const docTemplate = `{
                         "name": "id",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Existing canonical project ID",
+                        "name": "project",
+                        "in": "query",
+                        "required": true
                     }
                 ],
                 "responses": {
@@ -1543,9 +1725,15 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "invalid id",
+                        "description": "invalid id or project",
                         "schema": {
                             "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "project read forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_worker.documentErrorResponse"
                         }
                     },
                     "404": {
@@ -2069,7 +2257,7 @@ const docTemplate = `{
                         "ApiKeyAuth": []
                     }
                 ],
-                "description": "Returns all known projects. Response is cacheable for 5 minutes.",
+                "description": "Returns the live canonical project catalog with authoritative display labels. Requires the existing ordinary authenticated reader scope.",
                 "produces": [
                     "application/json"
                 ],
@@ -2081,10 +2269,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "type": "array",
-                            "items": {
-                                "type": "object"
-                            }
+                            "$ref": "#/definitions/internal_worker.projectListResponse"
                         }
                     },
                     "500": {
@@ -3701,6 +3886,32 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "github_com_thebtf_engram_internal_db_gorm.CollectionSelectionKind": {
+            "type": "string",
+            "enum": [
+                "none",
+                "explicit",
+                "page",
+                "frozen_filter"
+            ],
+            "x-enum-varnames": [
+                "CollectionSelectionNone",
+                "CollectionSelectionExplicit",
+                "CollectionSelectionPage",
+                "CollectionSelectionFrozenFilter"
+            ]
+        },
+        "github_com_thebtf_engram_internal_db_gorm.ProjectDescriptor": {
+            "type": "object",
+            "properties": {
+                "display_name": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                }
+            }
+        },
         "github_com_thebtf_engram_internal_embedding.EmbedError": {
             "type": "object",
             "properties": {
@@ -4311,20 +4522,71 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_worker.behavioralRuleOperationOrderTarget": {
+            "type": "object",
+            "properties": {
+                "expected_version": {
+                    "type": "integer"
+                },
+                "rule_id": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_worker.behavioralRuleOperationScope": {
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_worker.behavioralRuleOperationSelection": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "$ref": "#/definitions/github_com_thebtf_engram_internal_db_gorm.CollectionSelectionKind"
+                },
+                "selection_token": {
+                    "type": "string"
+                },
+                "selection_version": {
+                    "type": "integer"
+                }
+            }
+        },
         "internal_worker.behavioralRuleRequest": {
             "type": "object",
             "properties": {
+                "action": {
+                    "type": "string"
+                },
                 "content": {
                     "type": "string"
                 },
                 "edited_by": {
                     "type": "string"
                 },
+                "order": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_worker.behavioralRuleOperationOrderTarget"
+                    }
+                },
                 "priority": {
                     "type": "integer"
                 },
                 "project": {
                     "type": "string"
+                },
+                "request_id": {
+                    "type": "string"
+                },
+                "scope": {
+                    "$ref": "#/definitions/internal_worker.behavioralRuleOperationScope"
+                },
+                "selection": {
+                    "$ref": "#/definitions/internal_worker.behavioralRuleOperationSelection"
                 }
             }
         },
@@ -4413,6 +4675,63 @@ const docTemplate = `{
                 },
                 "updated_at": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_worker.documentErrorResponse": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_worker.documentListItem": {
+            "type": "object",
+            "properties": {
+                "author": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "doc_type": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "path": {
+                    "type": "string"
+                },
+                "project": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_worker.documentListResponse": {
+            "type": "object",
+            "properties": {
+                "has_more": {
+                    "type": "boolean"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_worker.documentListItem"
+                    }
+                },
+                "limit": {
+                    "type": "integer"
+                },
+                "offset": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
                 }
             }
         },
@@ -4523,6 +4842,29 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_worker.memoryListResponse": {
+            "type": "object",
+            "properties": {
+                "has_more": {
+                    "type": "boolean"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.Memory"
+                    }
+                },
+                "limit": {
+                    "type": "integer"
+                },
+                "offset": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
         "internal_worker.outcomeTelemetry": {
             "type": "object",
             "properties": {
@@ -4564,6 +4906,17 @@ const docTemplate = `{
                 },
                 "total_injections": {
                     "type": "integer"
+                }
+            }
+        },
+        "internal_worker.projectListResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_thebtf_engram_internal_db_gorm.ProjectDescriptor"
+                    }
                 }
             }
         },
@@ -4696,6 +5049,9 @@ const docTemplate = `{
         "internal_worker.tokenCreateRequest": {
             "type": "object",
             "properties": {
+                "expires_at": {
+                    "type": "string"
+                },
                 "name": {
                     "type": "string"
                 },

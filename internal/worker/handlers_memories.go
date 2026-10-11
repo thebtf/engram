@@ -278,16 +278,28 @@ func writeStoreMemoryResponse(w http.ResponseWriter, mem *models.Memory, decisio
 	writeJSON(w, resp)
 }
 
+type memoryListResponse struct {
+	Items   []*models.Memory `json:"items"`
+	Total   int64            `json:"total"`
+	Offset  int              `json:"offset"`
+	Limit   int              `json:"limit"`
+	HasMore bool             `json:"has_more"`
+}
+
 // handleListMemories godoc
 // @Summary List memory notes for a project
-// @Description Returns stored memories for the given project, newest first.
+// @Description Returns visible current memories ordered by created_at DESC, id DESC. Count and page apply the same access and literal query filters.
 // @Tags Memories
 // @Produce json
 // @Security ApiKeyAuth
-// @Param project query string true "Project identifier"
-// @Param limit query int false "Maximum number of results (default 50)"
-// @Success 200 {array} models.Memory
-// @Failure 400 {string} string "project is required"
+// @Param project query string true "Existing canonical project ID"
+// @Param query query string false "Literal case-insensitive content substring (maximum 1024 UTF-8 bytes)"
+// @Param filter query string false "all, active, flagged, stale, low or chain; omitted means all"
+// @Param offset query int false "Visible rows to skip (default 0)"
+// @Param limit query int false "Page size 1..500 (default 50)"
+// @Success 200 {object} memoryListResponse
+// @Failure 400 {object} documentErrorResponse "invalid reader parameters"
+// @Failure 403 {object} documentErrorResponse "project read forbidden"
 // @Failure 503 {string} string "service unavailable"
 // @Failure 500 {string} string "internal error"
 // @Router /api/memories [get]
@@ -298,52 +310,28 @@ func (s *Service) handleListMemories(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	project := r.URL.Query().Get("project")
-	if project == "" {
-		http.Error(w, "project is required", http.StatusBadRequest)
-		return
-	}
-
-	const maxLimit = 500
-	limit := 50
-	if raw := r.URL.Query().Get("limit"); raw != "" {
-		n, err := strconv.Atoi(raw)
-		if err != nil || n <= 0 {
-			http.Error(w, "limit must be a positive integer", http.StatusBadRequest)
-			return
-		}
-		if n > maxLimit {
-			http.Error(w, fmt.Sprintf("limit must not exceed %d", maxLimit), http.StatusBadRequest)
-			return
-		}
-		limit = n
-	}
-
-	// Codex P1 cycle-11 fix on 034f14f: REST GET /api/memories must enforce
-	// the same vNext-F visibility model as MCP recall surfaces, otherwise a
-	// private memory written via POST /api/memories (allowed since T004 +
-	// cycle-5 c6006f7) can be retrieved here by any caller knowing the
-	// project — bypassing scope.Resolve. This is the 4th cross-surface
-	// symmetry break the review cycles have closed (after MCP store, REST
-	// store, MCP recall, MCP recall_memory). Under flag ON: build caller
-	// KeycardContext from auth.Identity, use ListWithOffset batch-loop so
-	// scope-invisible newest rows do not truncate the visible result set
-	// before the requested limit is reached. Flag-OFF path preserves the
-	// original single-call List shape for v6.4.x byte-identity (RI-F1).
-	mems, err := listVisibleMemoriesREST(r.Context(), store, project, limit)
+	page, err := parseKnowledgePage(r)
 	if err != nil {
-		log.Error().Err(err).Str("project", project).Msg("list memories failed")
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		writeDocumentError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-
-	// Return an empty array rather than null when there are no results.
-	if len(mems) == 0 {
-		writeJSON(w, make([]*models.Memory, 0))
+	if !s.authorizeKnowledgeProject(w, r, page.project) {
 		return
 	}
-
-	writeJSON(w, jsonSafeMemories(mems))
+	mems, total, err := store.ListVisiblePage(r.Context(), page.project, page.query, page.filter, memoryVisibilityCaller(r.Context(), ""), memoryVisibilityOptions(), page.limit, page.offset)
+	if err != nil {
+		if errors.Is(err, dbgorm.ErrKnowledgeProjectForbidden) {
+			writeDocumentError(w, http.StatusForbidden, "project read forbidden")
+			return
+		}
+		log.Error().Err(err).Msg("list memories failed")
+		writeDocumentError(w, http.StatusInternalServerError, "memory read unavailable")
+		return
+	}
+	writeJSON(w, memoryListResponse{
+		Items: jsonSafeMemories(mems), Total: total, Offset: page.offset, Limit: page.limit,
+		HasMore: knowledgeHasMore(total, page.offset, len(mems)),
+	})
 }
 
 func jsonSafeMemories(mems []*models.Memory) []*models.Memory {
@@ -527,12 +515,13 @@ func mapMemoryAuditResponse(memoryID int64, entries []dbgorm.AuditLogEntry) memo
 type memoryListStore interface {
 	List(ctx context.Context, project string, limit int) ([]*models.Memory, error)
 	ListWithOffset(ctx context.Context, project string, limit int, offset int) ([]*models.Memory, error)
+	ListVisiblePage(context.Context, string, string, string, scope.KeycardContext, scope.MemoryVisibilityOptions, int, int) ([]*models.Memory, int64, error)
 }
 
 // memoryGetStore is the subset of MemoryStore needed for exact-ID reads.
 // It permits focused handler tests without a database.
 type memoryGetStore interface {
-	Get(ctx context.Context, id int64) (*models.Memory, error)
+	GetVisible(context.Context, int64, string, scope.KeycardContext, scope.MemoryVisibilityOptions) (*models.Memory, error)
 }
 
 func (s *Service) memGetStore() memoryGetStore {
@@ -547,14 +536,16 @@ func (s *Service) memGetStore() memoryGetStore {
 
 // handleGetMemoryByID godoc
 // @Summary Get a memory note by ID
-// @Description Returns one active memory entry by numeric ID.
+// @Description Returns one nondeleted memory in the exact live canonical project, with the existing read privacy policy applied before the ID lookup.
 // @Tags Memories
 // @Produce json
 // @Security ApiKeyAuth
 // @Param id path int true "Memory ID"
+// @Param project query string true "Existing canonical project ID"
 // @Success 200 {object} models.Memory
-// @Failure 400 {string} string "invalid id"
+// @Failure 400 {string} string "invalid id or project"
 // @Failure 404 {string} string "not found"
+// @Failure 403 {object} documentErrorResponse "project read forbidden"
 // @Failure 503 {string} string "service unavailable"
 // @Failure 500 {string} string "internal error"
 // @Router /api/memories/{id} [get]
@@ -571,8 +562,20 @@ func (s *Service) handleGetMemoryByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	memory, err := store.Get(r.Context(), id)
+	page, err := parseKnowledgePage(r)
 	if err != nil {
+		writeDocumentError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if !s.authorizeKnowledgeProject(w, r, page.project) {
+		return
+	}
+	memory, err := store.GetVisible(r.Context(), id, page.project, memoryVisibilityCaller(r.Context(), ""), memoryVisibilityOptions())
+	if err != nil {
+		if errors.Is(err, dbgorm.ErrKnowledgeProjectForbidden) {
+			writeDocumentError(w, http.StatusForbidden, "project read forbidden")
+			return
+		}
 		if errors.Is(err, gormlib.ErrRecordNotFound) {
 			http.Error(w, "memory not found", http.StatusNotFound)
 			return
@@ -586,7 +589,9 @@ func (s *Service) handleGetMemoryByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, jsonSafeMemory(memory))
+	safe := jsonSafeMemory(memory)
+	safe.Project = page.project
+	writeJSON(w, safe)
 }
 
 // injectionCandidateStore is the subset of the MemoryStore surface that

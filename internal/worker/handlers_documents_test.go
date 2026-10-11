@@ -153,6 +153,11 @@ func (f *fakeDocumentStore) List(_ context.Context, project, docType, pathPrefix
 	return f.listRows, nil
 }
 
+func (f *fakeDocumentStore) ListPage(ctx context.Context, project, docType, pathPrefix, query string, limit, offset int) ([]gormdb.VersionedDocument, int64, error) {
+	rows, err := f.List(ctx, project, docType, pathPrefix, limit)
+	return rows, int64(len(rows)), err
+}
+
 func (f *fakeDocumentStore) GetHistory(_ context.Context, path, project string, limit int) ([]gormdb.VersionedDocument, error) {
 	f.historyCall.called = true
 	f.historyCall.path = path
@@ -187,7 +192,9 @@ func (f *fakeDocumentStore) GetComments(_ context.Context, documentID int64) ([]
 }
 
 func documentsTestService(store versionedDocumentStore) *Service {
-	return &Service{documentStore: store}
+	service := &Service{documentStore: store}
+	useKnowledgeTestProject(service, "engram")
+	return service
 }
 
 const documentSelectionTestSession = "documents-browser-session"
@@ -311,8 +318,8 @@ func TestHandlersDocuments_Create_RequiresPath(t *testing.T) {
 	assert.False(t, fake.createCall.called, "store must not be called when validation fails")
 }
 
-// TestHandlersDocuments_List verifies GET /api/documents calls
-// VersionedDocumentStore.List directly (ADR-001) with the query filters.
+// TestHandlersDocuments_List verifies the REST metadata reader uses the page
+// store seam directly with the requested project and filters.
 func TestHandlersDocuments_List(t *testing.T) {
 	t.Parallel()
 
@@ -329,7 +336,7 @@ func TestHandlersDocuments_List(t *testing.T) {
 	svc.handleListDocuments(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code)
-	require.True(t, fake.listCall.called, "handler must call VersionedDocumentStore.List directly")
+	require.True(t, fake.listCall.called, "handler must call the document page store directly")
 	assert.Equal(t, "engram", fake.listCall.project)
 	assert.Equal(t, "markdown", fake.listCall.docType)
 	assert.Equal(t, "notes/", fake.listCall.pathPrefix)
@@ -337,7 +344,7 @@ func TestHandlersDocuments_List(t *testing.T) {
 
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	docs, ok := resp["documents"].([]any)
+	docs, ok := resp["items"].([]any)
 	require.True(t, ok)
 	assert.Len(t, docs, 1)
 }

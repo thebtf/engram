@@ -16,12 +16,14 @@ package worker
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/config"
+	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -52,6 +54,24 @@ func (f *fakeMemoryListStore) ListWithOffset(_ context.Context, _ string, limit 
 		end = len(f.rows)
 	}
 	return f.rows[offset:end], nil
+}
+
+func (f *fakeMemoryListStore) ListVisiblePage(_ context.Context, project, query, filter string, caller scope.KeycardContext, opts scope.MemoryVisibilityOptions, limit, offset int) ([]*models.Memory, int64, error) {
+	visible := make([]*models.Memory, 0)
+	for _, row := range f.rows {
+		if row.Project == project && scope.ResolveMemory(caller, row, opts) && strings.Contains(strings.ToLower(row.Content), strings.ToLower(query)) {
+			visible = append(visible, row)
+		}
+	}
+	total := int64(len(visible))
+	if offset >= len(visible) {
+		return []*models.Memory{}, total, nil
+	}
+	end := offset + limit
+	if end > len(visible) {
+		end = len(visible)
+	}
+	return visible[offset:end], total, nil
 }
 
 // buildScopeTestService creates a minimal Service with a fake memoryStore

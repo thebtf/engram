@@ -123,6 +123,77 @@ Bypass: `ENGRAM_AUTH_SKIP_LOCAL=true` skips auth for RFC 1918 addresses.
 | `POST` | `/api/tokens` | Create worker keycard. |
 | `DELETE` | `/api/tokens/:id` | Revoke token. |
 
+### Knowledge readers
+
+`GET /api/projects` returns `{items:[{id,display_name}]}` from live canonical
+`projects` rows, not session labels or legacy selectors. The authoritative
+`display_name` falls back to the same stored ID; duplicate labels remain distinct
+IDs. Existing ordinary authenticated readers retain their server-wide project
+scope. HAP project/legacy credentials remain forbidden by the existing route
+policy. The catalog response is `private, no-store`, never publicly cached.
+
+`GET /api/memories` and `GET /api/documents` require one exact existing live
+canonical `project` ID and return `{items,total,offset,limit,has_more}`. No legacy
+array/`documents`/page-length `count` shape remains. Defaults: `offset=0`,
+`limit=50`; bounds: `offset>=0`, `1<=limit<=500`. `items` is always an array.
+`total` counts the visible query set before pagination; hidden rows affect neither
+count nor page. `has_more` compares the returned page with that visible total.
+
+`query` is a trimmed, case-insensitive literal substring (valid UTF-8, maximum
+1024 bytes, no control characters). SQL bind parameters and LIKE escaping keep
+`%`, `_`, `\\` and SQL-looking text literal. Memory queries search content, after
+the existing active/nondeleted/current-validity, workstation, principal, domain
+and flag-controlled legacy privacy filters. Ordering remains
+`created_at DESC, id DESC`; status and provenance fields keep their meaning.
+
+Memory `filter=all|active|flagged|stale|low|chain` is applied before count/page;
+omitted means `all`. It uses the existing UI predicates without broadening the
+active-only eligible corpus. Zero-valued `omitempty` confidence/citation metrics
+remain unknown, not new ratings. `chain` matches exact tags or a supersession link.
+
+`GET /api/memories/:id?project=<exact live canonical ID>` requires the same
+fresh project authorization and uniquely owned alias set before loading the ID.
+It returns the existing memory DTO with `project` set to that canonical ID.
+Wrong project, hidden or unknown ID: nondisclosing 404; invalid ID/missing project:
+400; noncanonical/removed project: 403. Detail retains the existing nondeleted-row
+semantics; it does not broaden page eligibility or rewrite stored provenance.
+
+Documents select the latest version of each path **before** filtering. Search is
+limited to public list metadata (`path`, `doc_type`, `author`), not content,
+arbitrary JSON metadata or secrets. `doc_type` (128 bytes) and literal
+`path_prefix` (4096 bytes) remain supported; ordering is `created_at DESC, id DESC`.
+Document content/version/history shapes and comments are unchanged. Content,
+version and history reads use the same exact live canonical project and lawful
+stored alias set as list/count. The current document schema has no independent
+principal/privacy ACL: its reader boundary is the existing authenticated
+project-reader scope.
+
+Missing/blank project or invalid parameters: 400. Noncanonical, missing, removed
+project or forbidden credential: nondisclosing 403. Authentication remains 401;
+unavailable store: 503; unexpected query failure: 500 without SQL diagnostics.
+Offsets are stable only while the dataset is unchanged, not snapshot/cursor
+tokens. An explicit UI “All projects” context uses descriptor IDs; empty project
+never widens server reads and does not trigger an automatic content scan.
+
+Stored legacy TEXT projects are readable only when the live canonical row's
+existing `legacy_ids` maps each selector uniquely back to that same ID. Aliases
+claimed by another, removed or merged project are excluded. Canonical descriptors
+come from `projects`, including memory-only/document-only registered projects,
+not from sessions or label grouping. Unregistered orphan TEXT rows have no lawful
+catalog ID and remain untouched; this reader cannot register or infer one.
+No orphan endpoint, migration, raw-selector fallback or automatic registration
+is introduced. Existing authorized data diagnostics are separate from this API.
+
+For real-API preview, compose this backend with the UI envelope consumers and an
+existing authorized database. No migration, provider or identity onboarding is
+introduced. The focused SQLite fixture executes production handlers/stores and
+SQL count/window/pagination, with an explicit test-only lowering of PostgreSQL
+array/JSON containment syntax over real fixture rows. It cannot certify those
+PostgreSQL operators, collation, session membership or migration/locking behavior.
+The same cases retain a conditional isolated `DATABASE_DSN` integration test;
+production data is not a fixture.
+
+
 ### Hook and Observation Endpoints
 
 | Method | Path | Description |

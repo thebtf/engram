@@ -161,6 +161,7 @@ type Service struct {
 	graphNodeStoreSeam                  graphNodeStore                                // test seam for graph REST handlers
 	snapshotStore                       *gorm.SnapshotStore                           // Milestone-F TG6: non-nil when ENGRAM_VNEXT_F_ENABLED=true
 	legacyDirectProjectResolver         func(context.Context, string) (string, error) // test seam; production uses strict DB lookup
+	knowledgeProjectExistsSeam          func(context.Context, string) (bool, error)   // test seam; production reads canonical projects only
 	writelintTokenStore                 writelint.TokenStore                          // Milestone-F TG5: non-nil when ENGRAM_VNEXT_F_ENABLED=true
 	redactionRules                      []redaction.CompiledRule                      // Milestone-F TG5: compiled at startup from ENGRAM_REDACTION_RULES_PATH
 	interventionReconciler              policyReconciler                              // optional automatic policy compiler/reconciler

@@ -3,6 +3,7 @@ package gorm
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"strconv"
@@ -179,32 +180,28 @@ func TestSessionStore_GetSessionsToday(t *testing.T) {
 	assert.Equal(t, before+2, after)
 }
 
-// TestSessionStore_GetAllProjects verifies distinct project listing.
+// TestSessionStore_GetAllProjects keeps duplicate labels as distinct identities.
 func TestSessionStore_GetAllProjects(t *testing.T) {
 	ss, db, cleanup := openSessionTestDB(t)
 	defer cleanup()
-	defer db.Exec("DELETE FROM sdk_sessions WHERE claude_session_id IN ('sst-proj-01', 'sst-proj-02', 'sst-proj-03')")
-
-	ctx := context.Background()
-
-	_, _ = ss.CreateSDKSession(ctx, "sst-proj-01", "alpha-project", "")
-	_, _ = ss.CreateSDKSession(ctx, "sst-proj-02", "beta-project", "")
-	_, _ = ss.CreateSDKSession(ctx, "sst-proj-03", "alpha-project", "") // duplicate
-
-	projects, err := ss.GetAllProjects(ctx)
-	require.NoError(t, err)
-
-	// alpha-project and beta-project must be present; duplicates collapsed.
-	has := func(s string) bool {
-		for _, p := range projects {
-			if p == s {
-				return true
-			}
+	ids := []string{"sst-canonical-alpha", "sst-canonical-beta", "sst-canonical-unlabelled"}
+	t.Cleanup(func() { db.Where("id IN ?", ids).Delete(&Project{}) })
+	for i, id := range ids {
+		row := Project{ID: id}
+		if i < 2 {
+			row.DisplayName = sql.NullString{String: "Duplicate label", Valid: true}
 		}
-		return false
+		require.NoError(t, db.Create(&row).Error)
 	}
-	assert.True(t, has("alpha-project"))
-	assert.True(t, has("beta-project"))
+	projects, err := ss.GetAllProjects(context.Background())
+	require.NoError(t, err)
+	for i, id := range ids {
+		label := "Duplicate label"
+		if i == 2 {
+			label = id
+		}
+		assert.Contains(t, projects, ProjectDescriptor{ID: id, DisplayName: label})
+	}
 }
 
 // TestSessionStore_UpdateSessionOutcome_ByClaudeSessionID verifies recording outcome via claude_session_id.

@@ -59,7 +59,10 @@ const taskMemoryCandidateAccessSQL = `
 	AND m.deleted_at IS NULL
 	AND (m.valid_from IS NULL OR m.valid_from <= NOW())
 	AND (m.valid_until IS NULL OR m.valid_until >= NOW())
-	AND (
+	AND ` + memoryPrivacyAccessSQL + `
+	AND ` + memoryPrincipalAccessSQL
+
+const memoryPrivacyAccessSQL = `(
 		CASE COALESCE(NULLIF(m.privacy_scope, ''), 'project')
 			WHEN 'project' THEN TRUE
 			WHEN 'shared' THEN TRUE
@@ -71,8 +74,9 @@ const taskMemoryCandidateAccessSQL = `
 				AND (? = '' OR ? = ANY(m.source_sessions))
 			ELSE FALSE
 		END
-	)
-	AND (
+	)`
+
+const memoryPrincipalAccessSQL = `(
 		btrim(m.agent_visibility) = ''
 		OR btrim(m.agent_visibility) = 'shared'
 		OR (

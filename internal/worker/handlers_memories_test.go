@@ -21,6 +21,7 @@ import (
 	"github.com/thebtf/engram/internal/auth"
 	dbgorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/principalmemory"
+	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/pkg/models"
 	gormlib "gorm.io/gorm"
 )
@@ -36,16 +37,20 @@ func newMemoryTestService(t *testing.T, project string) *Service {
 	store, err := dbgorm.NewStore(dbgorm.Config{DSN: dsn, MaxConns: 2})
 	require.NoError(t, err)
 
+	require.NoError(t, store.DB.Create(&dbgorm.Project{ID: project}).Error)
 	memoryStore := dbgorm.NewMemoryStore(store)
 	auditStore := dbgorm.NewAuditStore(store.GetDB())
 	service := &Service{
-		memoryStore: memoryStore,
-		auditStore:  auditStore,
+		store:        store,
+		memoryStore:  memoryStore,
+		sessionStore: dbgorm.NewSessionStore(store),
+		auditStore:   auditStore,
 	}
 
 	t.Cleanup(func() {
 		require.NoError(t, store.DB.WithContext(context.Background()).Exec("DELETE FROM audit_log WHERE memory_id IN (SELECT id FROM memories WHERE project = ?)", project).Error)
 		require.NoError(t, store.DB.WithContext(context.Background()).Exec("DELETE FROM memories WHERE project = ?", project).Error)
+		require.NoError(t, store.DB.Where("id = ?", project).Delete(&dbgorm.Project{}).Error)
 		require.NoError(t, store.Close())
 	})
 
@@ -113,8 +118,7 @@ func TestHandleStoreMemoryExplicit_RoundTrip(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, listW.Code)
 
-	var list []models.Memory
-	require.NoError(t, json.Unmarshal(listW.Body.Bytes(), &list))
+	list := decodeKnowledgeItems[models.Memory](t, listW)
 	require.Len(t, list, 1)
 	assert.Equal(t, created.Content, list[0].Content)
 	assert.Equal(t, created.Project, list[0].Project)
@@ -320,6 +324,7 @@ func TestHandleListMemories_EmptyProjectReturnsJSONArray(t *testing.T) {
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
 
 	service := &Service{memoryStoreSeam: &fakeMemoryListStore{rows: []*models.Memory{}}}
+	useKnowledgeTestProject(service, "empty-project")
 	req := httptest.NewRequest(http.MethodGet, "/api/memories?project=empty-project&limit=50", nil)
 	w := httptest.NewRecorder()
 
@@ -328,7 +333,7 @@ func TestHandleListMemories_EmptyProjectReturnsJSONArray(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Equal(t, "application/json", w.Header().Get("Content-Type"))
 	require.NotEmpty(t, w.Body.String())
-	assert.JSONEq(t, "[]", w.Body.String())
+	assert.JSONEq(t, `{"items":[],"total":0,"offset":0,"limit":50,"has_more":false}`, w.Body.String())
 }
 
 func TestHandleListMemories_NonFiniteScoresReturnJSON(t *testing.T) {
@@ -342,6 +347,7 @@ func TestHandleListMemories_NonFiniteScoresReturnJSON(t *testing.T) {
 		Confidence: math.NaN(),
 		Stability:  math.Inf(1),
 	}}}}
+	useKnowledgeTestProject(service, "score-project")
 	req := httptest.NewRequest(http.MethodGet, "/api/memories?project=score-project&limit=50", nil)
 	w := httptest.NewRecorder()
 
@@ -350,8 +356,7 @@ func TestHandleListMemories_NonFiniteScoresReturnJSON(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Equal(t, "application/json", w.Header().Get("Content-Type"))
 
-	var rows []map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &rows))
+	rows := decodeKnowledgeItems[map[string]any](t, w)
 	require.Len(t, rows, 1)
 	assert.Equal(t, float64(42), rows[0]["id"])
 	assert.Equal(t, "memory with non-finite score", rows[0]["content"])
@@ -376,6 +381,7 @@ func TestHandleListMemories_PrincipalPrivateCrossPrincipalInvisible_FlagOff(t *t
 		Content: "visible legacy row",
 	}
 	service := &Service{memoryStoreSeam: &fakeMemoryListStore{rows: []*models.Memory{privateOther, visible}}}
+	useKnowledgeTestProject(service, "principal-list-project")
 	id := auth.ClientWithPrincipal("read-write", "keycard-alice", "agent/alice", auth.PrincipalKindAgent)
 	req := httptest.NewRequest(http.MethodGet, "/api/memories?project=principal-list-project&limit=50", nil).
 		WithContext(auth.WithIdentity(context.Background(), id))
@@ -384,8 +390,7 @@ func TestHandleListMemories_PrincipalPrivateCrossPrincipalInvisible_FlagOff(t *t
 	service.handleListMemories(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code)
-	var rows []map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &rows))
+	rows := decodeKnowledgeItems[map[string]any](t, w)
 	require.Len(t, rows, 1)
 	assert.Equal(t, float64(51), rows[0]["id"])
 	assert.Equal(t, "visible legacy row", rows[0]["content"])
@@ -401,6 +406,7 @@ func TestHandleListMemories_ContinuesPastAHiddenBatchWithoutLeakingIt(t *testing
 	}
 	rows = append(rows, &models.Memory{ID: 501, Project: "page-through-hidden", Content: "visible-after-hidden-page"})
 	service := &Service{memoryStoreSeam: &fakeMemoryListStore{rows: rows}}
+	useKnowledgeTestProject(service, "page-through-hidden")
 	identity := auth.ClientWithPrincipal("read-write", "ws-alice", "agent/alice", auth.PrincipalKindAgent)
 	req := httptest.NewRequest(http.MethodGet, "/api/memories?project=page-through-hidden&limit=1", nil).
 		WithContext(auth.WithIdentity(context.Background(), identity))
@@ -409,8 +415,7 @@ func TestHandleListMemories_ContinuesPastAHiddenBatchWithoutLeakingIt(t *testing
 	service.handleListMemories(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	var got []models.Memory
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	got := decodeKnowledgeItems[models.Memory](t, w)
 	require.Equal(t, []int64{501}, []int64{got[0].ID})
 	assert.NotContains(t, w.Body.String(), "other-workstation-private")
 }
@@ -437,6 +442,7 @@ func TestHandleListMemories_DomainOwnedCrossPrincipalInvisible_FlagOff(t *testin
 		Domain:             "memory-lab",
 	}
 	service := &Service{memoryStoreSeam: &fakeMemoryListStore{rows: []*models.Memory{hiddenOther, visibleOwn}}}
+	useKnowledgeTestProject(service, "domain-list-project")
 	id := auth.ClientWithPrincipal("read-write", "keycard-alice", "agent/alice", auth.PrincipalKindAgent)
 	req := httptest.NewRequest(http.MethodGet, "/api/memories?project=domain-list-project&limit=50", nil).
 		WithContext(auth.WithIdentity(context.Background(), id))
@@ -445,8 +451,7 @@ func TestHandleListMemories_DomainOwnedCrossPrincipalInvisible_FlagOff(t *testin
 	service.handleListMemories(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code)
-	var rows []map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &rows))
+	rows := decodeKnowledgeItems[map[string]any](t, w)
 	require.Len(t, rows, 1)
 	assert.Equal(t, float64(61), rows[0]["id"])
 	assert.Equal(t, "visible alice domain row", rows[0]["content"])
@@ -485,6 +490,7 @@ func TestHandleListMemories_OutOfRangeTimestampsReturnJSON(t *testing.T) {
 		ValidFrom:       &outOfRange,
 		ValidUntil:      &outOfRange,
 	}}}}
+	useKnowledgeTestProject(service, "time-project")
 	req := httptest.NewRequest(http.MethodGet, "/api/memories?project=time-project&limit=50", nil)
 	w := httptest.NewRecorder()
 
@@ -493,8 +499,7 @@ func TestHandleListMemories_OutOfRangeTimestampsReturnJSON(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Equal(t, "application/json", w.Header().Get("Content-Type"))
 
-	var rows []map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &rows))
+	rows := decodeKnowledgeItems[map[string]any](t, w)
 	require.Len(t, rows, 1)
 	assert.Equal(t, float64(43), rows[0]["id"])
 	assert.Equal(t, "memory with out-of-range timestamp", rows[0]["content"])
@@ -534,8 +539,7 @@ func TestHandleDeleteMemoryByID_RoundTrip(t *testing.T) {
 	service.handleListMemories(listW, listReq)
 	require.Equal(t, http.StatusOK, listW.Code)
 
-	var list []models.Memory
-	require.NoError(t, json.Unmarshal(listW.Body.Bytes(), &list))
+	list := decodeKnowledgeItems[models.Memory](t, listW)
 	require.Len(t, list, 0)
 }
 
@@ -665,8 +669,7 @@ func TestHandleSuppressMemoryByID_RoundTrip(t *testing.T) {
 	service.handleListMemories(listW, listReq)
 	require.Equal(t, http.StatusOK, listW.Code)
 
-	var list []models.Memory
-	require.NoError(t, json.Unmarshal(listW.Body.Bytes(), &list))
+	list := decodeKnowledgeItems[models.Memory](t, listW)
 	require.Len(t, list, 0)
 }
 
@@ -719,8 +722,7 @@ func TestHandleSuppressMemories_RoundTrip(t *testing.T) {
 	service.handleListMemories(listW, listReq)
 	require.Equal(t, http.StatusOK, listW.Code)
 
-	var list []models.Memory
-	require.NoError(t, json.Unmarshal(listW.Body.Bytes(), &list))
+	list := decodeKnowledgeItems[models.Memory](t, listW)
 	require.Len(t, list, 0)
 }
 
@@ -748,8 +750,7 @@ func TestHandleSuppressMemories_ValidatesBeforeDelete(t *testing.T) {
 	service.handleListMemories(listW, listReq)
 	require.Equal(t, http.StatusOK, listW.Code)
 
-	var list []models.Memory
-	require.NoError(t, json.Unmarshal(listW.Body.Bytes(), &list))
+	list := decodeKnowledgeItems[models.Memory](t, listW)
 	require.Len(t, list, 1)
 	assert.Equal(t, created.ID, list[0].ID)
 }
@@ -760,7 +761,7 @@ type fakeMemoryGetStore struct {
 	calls  int
 }
 
-func (f *fakeMemoryGetStore) Get(_ context.Context, _ int64) (*models.Memory, error) {
+func (f *fakeMemoryGetStore) GetVisible(_ context.Context, _ int64, _ string, _ scope.KeycardContext, _ scope.MemoryVisibilityOptions) (*models.Memory, error) {
 	f.calls++
 	return f.memory, f.err
 }
@@ -784,8 +785,9 @@ func TestHandleGetMemoryByID(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			service := &Service{memoryGetStoreSeam: tc.store}
+			useKnowledgeTestProject(service, "deep-link")
 			w := httptest.NewRecorder()
-			service.handleGetMemoryByID(w, newCHIRequest(http.MethodGet, "/api/memories/"+tc.id, "id", tc.id))
+			service.handleGetMemoryByID(w, newCHIRequest(http.MethodGet, "/api/memories/"+tc.id+"?project=deep-link", "id", tc.id))
 
 			require.Equal(t, tc.wantStatus, w.Code)
 			assert.Equal(t, tc.wantCalls, tc.store.calls)
@@ -848,8 +850,9 @@ func TestHandleGetMemoryByID_ReadVisibility(t *testing.T) {
 			t.Setenv("ENGRAM_VNEXT_F_ENABLED", tc.flag)
 			store := &fakeMemoryGetStore{memory: tc.memory}
 			service := &Service{memoryGetStoreSeam: store}
+			useKnowledgeTestProject(service, "deep-link")
 			w := httptest.NewRecorder()
-			req := newCHIRequest(http.MethodGet, "/api/memories/42", "id", "42")
+			req := newCHIRequest(http.MethodGet, "/api/memories/42?project=deep-link", "id", "42")
 			req = req.WithContext(auth.WithIdentity(req.Context(), tc.identity))
 
 			service.handleGetMemoryByID(w, req)

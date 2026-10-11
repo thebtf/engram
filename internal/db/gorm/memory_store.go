@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"sort"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"gorm.io/gorm/clause"
 
 	"github.com/thebtf/engram/internal/auditcontext"
+	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -612,6 +614,83 @@ func (s *MemoryStore) List(ctx context.Context, project string, limit int) ([]*m
 		return nil, fmt.Errorf("list memories for project %q: %w", project, err)
 	}
 	return result, nil
+}
+
+func (s *MemoryStore) visibleKnowledgeQuery(ctx context.Context, project string, caller scope.KeycardContext, opts scope.MemoryVisibilityOptions) (*gorm.DB, error) {
+	selectors, err := CanonicalProjectDataSelectors(ctx, s.db, project)
+	if err != nil {
+		return nil, err
+	}
+	principal := strings.TrimSpace(caller.Principal)
+	kind := strings.TrimSpace(caller.PrincipalKind)
+	q := s.db.WithContext(ctx).Model(&Memory{}).Table("memories AS m").
+		Where("m.project IN ? AND m.deleted_at IS NULL", selectors).
+		Where(memoryPrincipalAccessSQL, principal, kind, principal, kind, principal, kind, principal, kind)
+	if opts.ApplyPrivacyScope {
+		q = q.Where(memoryPrivacyAccessSQL, caller.WorkstationID, caller.WorkstationID, caller.SessionID, caller.SessionID)
+	}
+	return q, nil
+}
+
+// GetVisible scopes the exact-ID read before loading content. Detail retains
+// Get's nondeleted-row semantics, rather than the list's active-only corpus.
+func (s *MemoryStore) GetVisible(ctx context.Context, id int64, project string, caller scope.KeycardContext, opts scope.MemoryVisibilityOptions) (*models.Memory, error) {
+	q, err := s.visibleKnowledgeQuery(ctx, project, caller, opts)
+	if err != nil {
+		return nil, err
+	}
+	var row Memory
+	if err := q.Where("m.id = ?", id).Take(&row).Error; err != nil {
+		return nil, err
+	}
+	memory := memoryRowToModel(&row)
+	memory.Project = project
+	return memory, nil
+}
+
+// ListVisiblePage applies the shared read policy before both count and page.
+// The caller supplies a server-authorized canonical project, never a label.
+func (s *MemoryStore) ListVisiblePage(ctx context.Context, project, query, filter string, caller scope.KeycardContext, opts scope.MemoryVisibilityOptions, limit, offset int) ([]*models.Memory, int64, error) {
+	if project == "" || limit < 1 || limit > 500 || offset < 0 {
+		return nil, 0, fmt.Errorf("invalid memory page")
+	}
+	q, err := s.visibleKnowledgeQuery(ctx, project, caller, opts)
+	if err != nil {
+		return nil, 0, err
+	}
+	q = baseMemoryListQuery(q).Where("m.status = 'active'")
+	if query != "" {
+		q = q.Where("LOWER(m.content) LIKE ? ESCAPE '\\'", "%"+escapeSQLLike(strings.ToLower(query))+"%")
+	}
+	// The eligible corpus remains status=active. Zero-valued omitempty metrics
+	// are absent in the DTO, not known zero-confidence values.
+	switch filter {
+	case "", "all", "active":
+	case "flagged":
+		q = q.Where("FALSE")
+	case "stale":
+		q = q.Where("COALESCE(m.updated_at, m.created_at) <= ? AND COALESCE(m.citation_count, 0) = 0", time.Now().UTC().Add(-30*24*time.Hour))
+	case "low":
+		q = q.Where("m.confidence <> 0 AND m.confidence >= ? AND m.confidence < ?", -math.MaxFloat64, 0.85)
+	case "chain":
+		q = q.Where(`m.superseded_by IS NOT NULL OR m.tags @> ?::jsonb OR m.tags @> ?::jsonb OR m.tags @> ?::jsonb`, `["superseded"]`, `["replace"]`, `["replacement"]`)
+	default:
+		return nil, 0, fmt.Errorf("invalid memory filter")
+	}
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var rows []Memory
+	if err := q.Order("m.created_at DESC, m.id DESC").Limit(limit).Offset(offset).Find(&rows).Error; err != nil {
+		return nil, 0, err
+	}
+	items := make([]*models.Memory, len(rows))
+	for i := range rows {
+		items[i] = memoryRowToModel(&rows[i])
+		items[i].Project = project
+	}
+	return items, total, nil
 }
 
 // ListOptions controls the optional filters applied by ListWithFilters.

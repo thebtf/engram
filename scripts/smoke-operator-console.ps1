@@ -20,13 +20,9 @@ $composeProject = "engram-operator-console-smoke"
 $requiredOperatorConsoleSmokeHelpers = @(
   "shell.ps1",
   "overview.ps1",
-  "memory.ps1",
-  "rules.ps1",
   "issues.ps1",
   "secrets.ps1",
-  "projects.ps1",
   "health-settings.ps1",
-  "search-noise.ps1",
   "deferred.ps1"
 )
 

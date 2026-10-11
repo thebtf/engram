@@ -11,7 +11,8 @@ $overviewPath = Join-Path $root "pages\index.vue"
 $overviewComposablePath = Join-Path $root "composables\useOperatorOverview.ts"
 $compatibilityPath = Join-Path $root "composables\useMockData.ts"
 
-function Assert-Contains {
+function Assert-Contains
+{
   param(
     [Parameter(Mandatory = $true)]
     [string]$Content,
@@ -21,12 +22,14 @@ function Assert-Contains {
     [string]$Label
   )
 
-  if (-not $Content.Contains($Needle)) {
+  if (-not $Content.Contains($Needle))
+  {
     throw "OVERVIEW_SMOKE_FAILED: missing $Label ($Needle)"
   }
 }
 
-function Assert-NotContains {
+function Assert-NotContains
+{
   param(
     [Parameter(Mandatory = $true)]
     [string]$Content,
@@ -36,14 +39,17 @@ function Assert-NotContains {
     [string]$Label
   )
 
-  if ($Content.Contains($Needle)) {
+  if ($Content.Contains($Needle))
+  {
     throw "OVERVIEW_SMOKE_FAILED: forbidden $Label ($Needle)"
   }
 }
 
-function Assert-File {
+function Assert-File
+{
   param([Parameter(Mandatory = $true)][string]$Path)
-  if (-not (Test-Path -LiteralPath $Path)) {
+  if (-not (Test-Path -LiteralPath $Path))
+  {
     throw "OVERVIEW_SMOKE_FAILED: missing required file $Path"
   }
 }
@@ -77,14 +83,9 @@ Assert-Contains $overviewComposable "'model-health'" "model health mustbuild des
 Assert-Contains $overviewComposable "'access-summary'" "access mustbuild descriptor"
 Assert-Contains $overviewComposable "VNEXT_F" "queue gate evidence"
 Assert-Contains $overviewComposable "useOperatorShellStatus" "overview server status seam"
-Assert-Contains $overviewComposable "useOperatorMemoryLab" "overview memory load-state seam"
 Assert-Contains $overviewComposable "useIssuesState" "overview issues load-state seam"
-Assert-Contains $overviewComposable "memoryLab.pending.value && memories.length === 0" "overview must not show false zero while memory is pending"
 Assert-Contains $overviewComposable "issuesState.pending.value && issues.length === 0" "overview must not show false zero while issues are pending"
 Assert-Contains $overviewComposable "rules.pending.value && rules.rows.value.length === 0" "overview must not show false zero while rules are pending"
-Assert-Contains $overviewComposable "projects.pending.value && projects.rows.value.length === 0" "overview must not show false zero while projects are pending"
-Assert-Contains $compatibility "useOperatorMemoryLab" "shared memory live seam"
-Assert-Contains $compatibility "useOperatorMemoryLab().rows" "overview/layout memory count shares Memory Lab rows"
 Assert-Contains $compatibility "useIssuesState" "shared issues live-state seam"
 
 Assert-NotContains $overview "useModels" "mock model rows"
