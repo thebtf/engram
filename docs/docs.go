@@ -1835,7 +1835,7 @@ const docTemplate = `{
                         "ApiKeyAuth": []
                     }
                 ],
-                "description": "Returns safe audit summaries for a memory visible to the operator.",
+                "description": "Returns safe audit summaries only after canonical project and memory read privacy authorization; raw state snapshots are omitted.",
                 "produces": [
                     "application/json"
                 ],
@@ -1849,6 +1849,13 @@ const docTemplate = `{
                         "description": "Memory ID",
                         "name": "id",
                         "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Existing canonical project ID",
+                        "name": "project",
+                        "in": "query",
                         "required": true
                     },
                     {
@@ -1866,9 +1873,15 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "invalid id or limit",
+                        "description": "invalid id, project or limit",
                         "schema": {
                             "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "project read forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_worker.documentErrorResponse"
                         }
                     },
                     "404": {

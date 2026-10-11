@@ -32,15 +32,24 @@ func boundedKnowledgeText(value string, maxBytes int) bool {
 	return true
 }
 
+func parseKnowledgeProject(params url.Values) (string, error) {
+	project := params.Get("project")
+	if project == "" || strings.TrimSpace(project) != project || !boundedKnowledgeText(project, 256) {
+		return "", fmt.Errorf("an exact canonical project ID is required")
+	}
+	return project, nil
+}
+
 func parseKnowledgePage(r *http.Request) (knowledgePage, error) {
 	params, err := url.ParseQuery(r.URL.RawQuery)
 	if err != nil {
 		return knowledgePage{}, fmt.Errorf("invalid reader query parameters")
 	}
-	page := knowledgePage{project: params.Get("project"), limit: 50}
-	if page.project == "" || strings.TrimSpace(page.project) != page.project || !boundedKnowledgeText(page.project, 256) {
-		return page, fmt.Errorf("an exact canonical project ID is required")
+	project, err := parseKnowledgeProject(params)
+	if err != nil {
+		return knowledgePage{}, err
 	}
+	page := knowledgePage{project: project, limit: 50}
 	rawQuery := params.Get("query")
 	if !boundedKnowledgeText(rawQuery, 1024) {
 		return page, fmt.Errorf("query must be valid UTF-8 text without controls, at most 1024 bytes")

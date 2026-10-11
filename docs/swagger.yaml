@@ -2002,13 +2002,19 @@ paths:
       - Memories
   /api/memories/{id}/audit:
     get:
-      description: Returns safe audit summaries for a memory visible to the operator.
+      description: Returns safe audit summaries only after canonical project and memory
+        read privacy authorization; raw state snapshots are omitted.
       parameters:
       - description: Memory ID
         in: path
         name: id
         required: true
         type: integer
+      - description: Existing canonical project ID
+        in: query
+        name: project
+        required: true
+        type: string
       - description: Maximum number of audit rows (default 50, max 200)
         in: query
         name: limit
@@ -2021,9 +2027,13 @@ paths:
           schema:
             $ref: '#/definitions/internal_worker.memoryAuditResponse'
         "400":
-          description: invalid id or limit
+          description: invalid id, project or limit
           schema:
             type: string
+        "403":
+          description: project read forbidden
+          schema:
+            $ref: '#/definitions/internal_worker.documentErrorResponse'
         "404":
           description: not found
           schema:

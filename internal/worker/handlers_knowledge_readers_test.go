@@ -137,7 +137,7 @@ func knowledgeSQLiteDB(t *testing.T) *gorm.DB {
 	sqlDB.SetMaxOpenConns(1)
 	db, err := gorm.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gorm.Config{SkipDefaultTransaction: true, Logger: logger.Default.LogMode(logger.Silent)})
 	require.NoError(t, err)
-	for _, model := range []any{gormdb.Memory{}, gormdb.Project{}, gormdb.VersionedDocument{}} {
+	for _, model := range []any{gormdb.Memory{}, gormdb.Project{}, gormdb.VersionedDocument{}, gormdb.AuditLogEntry{}} {
 		parsed, err := schema.Parse(model, &sync.Map{}, schema.NamingStrategy{})
 		require.NoError(t, err)
 		columns := make([]string, 0, len(parsed.Fields))

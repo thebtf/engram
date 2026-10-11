@@ -164,6 +164,17 @@ Wrong project, hidden or unknown ID: nondisclosing 404; invalid ID/missing proje
 400; noncanonical/removed project: 403. Detail retains the existing nondeleted-row
 semantics; it does not broaden page eligibility or rewrite stored provenance.
 
+`GET /api/memories/:id/audit?project=<exact live canonical ID>` applies that same
+project/alias and workstation/principal/domain read policy before fetching audit
+rows, and retains the existing manage permission. Missing project is 400;
+nonlive/noncanonical project is 403; hidden, cross-project or unknown memory is
+nondisclosing 404. No context-free legacy fallback exists. `limit` retains its
+default 50 and range 1..200. The unchanged safe DTO includes action, actor,
+session reference, reason, timestamp and state-presence flags, never raw states.
+Audit validation errors (invalid ID, malformed query, missing/invalid project or
+limit) use plain-text 400 bodies; project authorization uses a JSON error object
+with status 403, matching the existing OpenAPI response schemas.
+
 Documents select the latest version of each path **before** filtering. Search is
 limited to public list metadata (`path`, `doc_type`, `author`), not content,
 arbitrary JSON metadata or secrets. `doc_type` (128 bytes) and literal

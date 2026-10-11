@@ -11,6 +11,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -628,20 +629,23 @@ func listVisibleForInjection(ctx context.Context, store injectionCandidateStore,
 
 // handleGetMemoryAudit godoc
 // @Summary Get memory audit history
-// @Description Returns safe audit summaries for a memory visible to the operator.
+// @Description Returns safe audit summaries only after canonical project and memory read privacy authorization; raw state snapshots are omitted.
 // @Tags Memories
 // @Produce json
 // @Security ApiKeyAuth
 // @Param id path int true "Memory ID"
+// @Param project query string true "Existing canonical project ID"
 // @Param limit query int false "Maximum number of audit rows (default 50, max 200)"
 // @Success 200 {object} memoryAuditResponse
-// @Failure 400 {string} string "invalid id or limit"
+// @Failure 400 {string} string "invalid id, project or limit"
+// @Failure 403 {object} documentErrorResponse "project read forbidden"
 // @Failure 404 {string} string "not found"
 // @Failure 503 {string} string "service unavailable"
 // @Failure 500 {string} string "internal error"
 // @Router /api/memories/{id}/audit [get]
 func (s *Service) handleGetMemoryAudit(w http.ResponseWriter, r *http.Request) {
-	if s.memoryStore == nil {
+	store := s.memGetStore()
+	if store == nil {
 		http.Error(w, "memory store not available", http.StatusServiceUnavailable)
 		return
 	}
@@ -657,14 +661,31 @@ func (s *Service) handleGetMemoryAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	limit, err := parseMemoryAuditLimit(r.URL.Query().Get("limit"))
+	params, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		http.Error(w, "invalid reader query parameters", http.StatusBadRequest)
+		return
+	}
+	project, err := parseKnowledgeProject(params)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-
-	memory, err := s.memoryStore.Get(r.Context(), id)
+	limit, err := parseMemoryAuditLimit(params.Get("limit"))
 	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !s.authorizeKnowledgeProject(w, r, project) {
+		return
+	}
+
+	memory, err := store.GetVisible(r.Context(), id, project, memoryVisibilityCaller(r.Context(), ""), memoryVisibilityOptions())
+	if err != nil {
+		if errors.Is(err, dbgorm.ErrKnowledgeProjectForbidden) {
+			writeDocumentError(w, http.StatusForbidden, "project read forbidden")
+			return
+		}
 		if errors.Is(err, gormlib.ErrRecordNotFound) {
 			http.Error(w, "memory not found", http.StatusNotFound)
 			return
@@ -673,7 +694,7 @@ func (s *Service) handleGetMemoryAudit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
-	if memory == nil || !memoryDomainManageAllowedREST(r.Context(), memory) {
+	if !memoryVisibleREST(r.Context(), memory) || !memoryDomainManageAllowedREST(r.Context(), memory) {
 		http.Error(w, "memory not found", http.StatusNotFound)
 		return
 	}

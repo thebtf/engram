@@ -579,7 +579,7 @@ func TestHandleGetMemoryAudit_RoundTrip(t *testing.T) {
 		Reason:          "operator marked as noise",
 	}))
 
-	auditReq := newCHIRequest(http.MethodGet, "/api/memories/"+strconv.FormatInt(created.ID, 10)+"/audit?limit=10", "id", strconv.FormatInt(created.ID, 10))
+	auditReq := newCHIRequest(http.MethodGet, "/api/memories/"+strconv.FormatInt(created.ID, 10)+"/audit?project="+project+"&limit=10", "id", strconv.FormatInt(created.ID, 10))
 	auditW := httptest.NewRecorder()
 	service.handleGetMemoryAudit(auditW, auditReq)
 
@@ -605,7 +605,7 @@ func TestHandleGetMemoryAudit_NotFound(t *testing.T) {
 	service := newMemoryTestService(t, project)
 
 	nonExistentID := int64(999999999)
-	auditReq := newCHIRequest(http.MethodGet, "/api/memories/"+strconv.FormatInt(nonExistentID, 10)+"/audit", "id", strconv.FormatInt(nonExistentID, 10))
+	auditReq := newCHIRequest(http.MethodGet, "/api/memories/"+strconv.FormatInt(nonExistentID, 10)+"/audit?project="+project, "id", strconv.FormatInt(nonExistentID, 10))
 	auditW := httptest.NewRecorder()
 	service.handleGetMemoryAudit(auditW, auditReq)
 
@@ -624,17 +624,72 @@ func TestHandleGetMemoryAudit_InvalidLimit(t *testing.T) {
 	var created models.Memory
 	require.NoError(t, json.Unmarshal(storeW.Body.Bytes(), &created))
 
-	trimmedReq := newCHIRequest(http.MethodGet, "/api/memories/"+strconv.FormatInt(created.ID, 10)+"/audit?limit=%201%20", "id", strconv.FormatInt(created.ID, 10))
+	trimmedReq := newCHIRequest(http.MethodGet, "/api/memories/"+strconv.FormatInt(created.ID, 10)+"/audit?project="+project+"&limit=%201%20", "id", strconv.FormatInt(created.ID, 10))
 	trimmedW := httptest.NewRecorder()
 	service.handleGetMemoryAudit(trimmedW, trimmedReq)
 
 	require.Equal(t, http.StatusOK, trimmedW.Code, trimmedW.Body.String())
 
-	auditReq := newCHIRequest(http.MethodGet, "/api/memories/"+strconv.FormatInt(created.ID, 10)+"/audit?limit=0", "id", strconv.FormatInt(created.ID, 10))
+	auditReq := newCHIRequest(http.MethodGet, "/api/memories/"+strconv.FormatInt(created.ID, 10)+"/audit?project="+project+"&limit=0", "id", strconv.FormatInt(created.ID, 10))
 	auditW := httptest.NewRecorder()
 	service.handleGetMemoryAudit(auditW, auditReq)
 
 	require.Equal(t, http.StatusBadRequest, auditW.Code)
+}
+
+func TestMemoryAuditReaderPrivacy(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
+	db := knowledgeSQLiteDB(t)
+	project, sibling := uuid.NewString(), uuid.NewString()
+	for _, id := range []string{project, sibling} {
+		require.NoError(t, db.Create(&dbgorm.Project{ID: id}).Error)
+	}
+	store := &dbgorm.Store{DB: db}
+	service := &Service{memoryStore: dbgorm.NewMemoryStore(store), sessionStore: dbgorm.NewSessionStore(store), auditStore: dbgorm.NewAuditStore(db)}
+	rows := []dbgorm.Memory{
+		{Project: project, PrivacyScope: "project"},
+		{Project: project, PrivacyScope: "private", SourceWorkstationID: "other-card"},
+		{Project: project, PrivacyScope: "project", AgentVisibility: "private", OwnerPrincipal: "agent/other", OwnerPrincipalKind: "agent"},
+		{Project: project, PrivacyScope: "project", AgentVisibility: "shared", Domain: "other-domain", OwnerPrincipal: "agent/other", OwnerPrincipalKind: "agent"},
+	}
+	for i := range rows {
+		rows[i].Status, rows[i].Version, rows[i].Tags, rows[i].SourceSessions = "active", 1, []string{}, []string{}
+		require.NoError(t, db.Create(&rows[i]).Error)
+		require.NoError(t, service.auditStore.Log(context.Background(), dbgorm.AuditLogEntry{MemoryID: &rows[i].ID, Action: "memory.create", Actor: "privacy-regression", Reason: "sensitive audit reason"}))
+	}
+	identity := auth.ClientWithPrincipal("read-only", "own-card", "agent/own", auth.PrincipalKindAgent)
+	read := func(id int64, query string, status int) string {
+		t.Helper()
+		rawID := strconv.FormatInt(id, 10)
+		req := newCHIRequest(http.MethodGet, "/api/memories/"+rawID+"/audit"+query, "id", rawID)
+		req = req.WithContext(auth.WithIdentity(req.Context(), identity))
+		w := httptest.NewRecorder()
+		service.handleGetMemoryAudit(w, req)
+		require.Equal(t, status, w.Code, w.Body.String())
+		switch status {
+		case http.StatusBadRequest:
+			require.Equal(t, "text/plain; charset=utf-8", w.Header().Get("Content-Type"))
+			require.False(t, json.Valid(w.Body.Bytes()), "audit 400 errors retain the plain-text string contract")
+			require.NotContains(t, w.Body.String(), "sensitive audit reason")
+		case http.StatusForbidden:
+			require.Equal(t, "application/json", w.Header().Get("Content-Type"))
+			var response documentErrorResponse
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+			require.Equal(t, "project read forbidden", response.Error)
+		}
+		return w.Body.String()
+	}
+	require.Contains(t, read(rows[0].ID, "?project="+project, http.StatusOK), "sensitive audit reason")
+	for _, row := range rows[1:] {
+		require.NotContains(t, read(row.ID, "?project="+project, http.StatusNotFound), "sensitive audit reason")
+	}
+	read(rows[0].ID, "?project="+sibling, http.StatusNotFound)
+	read(rows[0].ID, "?project=missing-project", http.StatusForbidden)
+	read(rows[0].ID, "", http.StatusBadRequest)
+	read(rows[0].ID, "?project=%zz", http.StatusBadRequest)
+	read(rows[0].ID, "?project=%20", http.StatusBadRequest)
+	read(0, "?project="+project, http.StatusBadRequest)
+	read(rows[0].ID, "?project="+project+"&limit=0", http.StatusBadRequest)
 }
 
 func TestHandleSuppressMemoryByID_RoundTrip(t *testing.T) {
