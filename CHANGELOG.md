@@ -18,6 +18,7 @@ Prepare the opt-in session-local memory CLI and offline Workspace connection fix
 ### Fixed
 
 - Order session-memory response commitment, cancellation and request-ID release under the same active-request lock before writing response bytes. Immediate ID reuse after an observed response no longer sees a stale active entry; cancellation before commitment suppresses queued responses without waiting for a blocked output write. Backend execution and the default mux path remain unchanged.
+- Stop session-memory lifecycle on SIGINT/SIGTERM even when inherited Unix stdin remains open or stdout is blocked. Decouple bounded frame scanning from cancellation and bound owned stdout worker drain to one second before process exit; retain request/connection teardown. Test actual CLI exit before client EOF, idle/busy RPC cancellation, unread stdout and independent-client continuation without changing the default mux path.
 - Guide offline Workspace copies to the existing native-agent connection task instead of an impossible first-index action. Allow selection of an existing Source before its first published View while keeping pins disabled, task text read-only and browser filesystem/identity/index authority unchanged.
 
 ## [6.51.0] - 2026-10-10

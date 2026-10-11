@@ -13,6 +13,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"github.com/thebtf/engram/internal/handlers/engramcore"
@@ -23,11 +24,12 @@ import (
 )
 
 const (
-	sessionMemoryFlag        = "--session-memory"
-	sessionMemoryFrameBytes  = 1024 * 1024
-	sessionMemoryIDBytes     = 16 * 1024
-	sessionMemoryInFlight    = 8
-	sessionMemoryDescription = "Session-local MEMORY only; not Workspace, relay or Loom. Uses the configured gRPC backend and existing project identity."
+	sessionMemoryFlag         = "--session-memory"
+	sessionMemoryFrameBytes   = 1024 * 1024
+	sessionMemoryIDBytes      = 16 * 1024
+	sessionMemoryInFlight     = 8
+	sessionMemoryShutdownWait = time.Second
+	sessionMemoryDescription  = "Session-local MEMORY only; not Workspace, relay or Loom. Uses the configured gRPC backend and existing project identity."
 )
 
 // Only the callable surface changes here; the core owns auth, identity and handlers.
@@ -207,12 +209,54 @@ func serveSessionMemory(parent context.Context, input io.ReadCloser, output io.W
 		_ = input.Close()
 		_ = output.Close()
 	})
+	frames := make(chan []byte)
+	readerDone := make(chan struct{})
+	var readerErr error
+	go func() {
+		defer close(frames)
+		defer close(readerDone)
+		scanner := bufio.NewScanner(input)
+		scanner.Buffer(make([]byte, 4096), sessionMemoryFrameBytes+2)
+		for scanner.Scan() {
+			select {
+			case frames <- bytes.Clone(scanner.Bytes()):
+			case <-ctx.Done():
+				return
+			}
+		}
+		readerErr = scanner.Err()
+	}()
+	processInput, isFile := input.(*os.File)
+	processStdin := isFile && processInput == os.Stdin
+	processOutput, outputIsFile := output.(*os.File)
+	processStdout := outputIsFile && processOutput == os.Stdout
 	var workers sync.WaitGroup
-	defer func() { cancel(); <-closed; workers.Wait() }()
+	shutdown := sync.OnceFunc(func() {
+		cancel()
+		<-closed
+		if processStdout {
+			drained := make(chan struct{})
+			go func() { workers.Wait(); close(drained) }()
+			select {
+			case <-drained:
+			case <-time.After(sessionMemoryShutdownWait):
+				// A blocked inherited write is retired by the owned process exit;
+				// it cannot hold core.Shutdown or the other client's lifetime.
+			}
+		} else {
+			workers.Wait()
+		}
+		// Caller streams must unblock Read/Write on Close. Raw inherited stdio
+		// may retain bounded I/O goroutines until this owned CLI process exits.
+		if !processStdin {
+			<-readerDone
+		}
+	})
+	defer shutdown()
 	var activeMu sync.Mutex
 	active := make(map[string]sessionMemoryOperation)
 	var failureOnce sync.Once
-	var failure error
+	failure := make(chan error, 1)
 	// Callers serialize frames, but never hold activeMu across a blocking write.
 	writeFrame := func(raw []byte) {
 		if len(raw) == 0 || ctx.Err() != nil {
@@ -223,7 +267,7 @@ func serveSessionMemory(parent context.Context, input io.ReadCloser, output io.W
 			err = io.ErrShortWrite
 		}
 		if err != nil {
-			failureOnce.Do(func() { failure = fmt.Errorf("memory stdio output: %w", err) })
+			failureOnce.Do(func() { failure <- fmt.Errorf("memory stdio output: %w", err) })
 			cancel()
 		}
 	}
@@ -245,13 +289,21 @@ func serveSessionMemory(parent context.Context, input io.ReadCloser, output io.W
 			writeFrame(raw)
 		}
 	}
-	scanner := bufio.NewScanner(input)
-	scanner.Buffer(make([]byte, 4096), sessionMemoryFrameBytes+2)
-	for scanner.Scan() {
+readFrames:
+	for {
+		var frame []byte
+		select {
+		case <-ctx.Done():
+			break readFrames
+		case raw, open := <-frames:
+			if !open {
+				break readFrames
+			}
+			frame = raw
+		}
 		if ctx.Err() != nil {
 			break
 		}
-		frame := scanner.Bytes()
 		if len(frame) > sessionMemoryFrameBytes {
 			return errors.New("memory stdio frame exceeds 1 MiB")
 		}
@@ -338,17 +390,23 @@ func serveSessionMemory(parent context.Context, input io.ReadCloser, output io.W
 			respond(requestCtx, key, response)
 		}()
 	}
-	cancel()
-	<-closed
-	workers.Wait()
-	if failure != nil {
-		return failure
+	shutdown()
+	select {
+	case err := <-failure:
+		return err
+	default:
 	}
 	if parent.Err() != nil {
 		return nil
 	}
-	if err := scanner.Err(); err != nil && !errors.Is(err, os.ErrClosed) {
-		return fmt.Errorf("memory stdio input: %w", err)
+	select {
+	case <-readerDone:
+		if readerErr != nil && !errors.Is(readerErr, os.ErrClosed) {
+			return fmt.Errorf("memory stdio input: %w", readerErr)
+		}
+	default:
+		// Only process-owned stdin may outlive this call; actual process exit
+		// retires its inherited descriptor and blocked reader together.
 	}
 	return nil
 }

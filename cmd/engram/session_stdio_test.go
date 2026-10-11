@@ -58,6 +58,7 @@ func (tokens memoryTestTokens) FindByPrefix(_ context.Context, prefix string) ([
 type memoryTestBackend struct {
 	server    *grpc.Server
 	mcp       *mcp.Server
+	db        *gorm.DB
 	url       string
 	started   chan string
 	cancelled chan string
@@ -149,7 +150,7 @@ func newMemoryTestBackend(t *testing.T) *memoryTestBackend {
 		}
 		tokens = append(tokens, dbstore.APIToken{ID: value.id, TokenHash: string(hash), Scope: "read-only", Principal: value.principal, PrincipalKind: "agent"})
 	}
-	fixture := &memoryTestBackend{mcp: mcp.NewServer(mcp.ServerOptions{Version: "local-handler-fixture"}), started: make(chan string, 32), cancelled: make(chan string, 32)}
+	fixture := &memoryTestBackend{db: db, mcp: mcp.NewServer(mcp.ServerOptions{Version: "local-handler-fixture"}), started: make(chan string, 32), cancelled: make(chan string, 32)}
 	fixture.mcp.SetMemoryStore(dbstore.NewMemoryStore(&dbstore.Store{DB: db}))
 	server, internal := grpcserver.New(fixture, auth.NewValidator("", tokens))
 	fixture.server = server
@@ -215,6 +216,11 @@ type memoryTestClient struct {
 
 func startMemoryTestClient(t *testing.T, binary, root, installation, serverURL, token string, extra ...string) *memoryTestClient {
 	t.Helper()
+	return startMemoryTestClientWithOutput(t, binary, root, installation, serverURL, token, true, extra...)
+}
+
+func startMemoryTestClientWithOutput(t *testing.T, binary, root, installation, serverURL, token string, readOutput bool, extra ...string) *memoryTestClient {
+	t.Helper()
 	command := exec.Command(binary, sessionMemoryFlag)
 	command.Dir = root
 	// Clear inherited overrides; each installation uses the real file resolver.
@@ -234,14 +240,16 @@ func startMemoryTestClient(t *testing.T, binary, root, installation, serverURL, 
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
 	}
-	go func() {
-		scanner := bufio.NewScanner(client.output)
-		scanner.Buffer(make([]byte, 4096), sessionMemoryFrameBytes+2)
-		for scanner.Scan() {
-			client.frames <- bytes.Clone(scanner.Bytes())
-		}
-		close(client.frames)
-	}()
+	if readOutput {
+		go func() {
+			scanner := bufio.NewScanner(client.output)
+			scanner.Buffer(make([]byte, 4096), sessionMemoryFrameBytes+2)
+			for scanner.Scan() {
+				client.frames <- bytes.Clone(scanner.Bytes())
+			}
+			close(client.frames)
+		}()
+	}
 	go func() { client.exited <- command.Wait() }()
 	t.Cleanup(func() {
 		if !client.closed {
@@ -318,6 +326,25 @@ func (c *memoryTestClient) close(t *testing.T, wantFailure bool) {
 		}
 		<-c.exited
 		t.Fatal("stdio did not exit after teardown")
+	}
+}
+
+func (c *memoryTestClient) waitForSignalExit(t *testing.T) {
+	t.Helper()
+	// Do not close stdin to make this test pass: the child must exit first.
+	select {
+	case err := <-c.exited:
+		c.closed = true
+		_ = c.input.Close()
+		if err != nil {
+			t.Fatalf("stdio signal exit: %v: %s", err, c.stderr.String())
+		}
+	case <-time.After(10 * time.Second):
+		_ = c.cmd.Process.Kill()
+		<-c.exited
+		c.closed = true
+		_ = c.input.Close()
+		t.Fatal("stdio did not exit after signal with stdin still open")
 	}
 }
 
@@ -766,16 +793,59 @@ func TestSessionMemoryTransport(t *testing.T) {
 			})
 			if runtime.GOOS != "windows" {
 				for _, signal := range []os.Signal{os.Interrupt, syscall.SIGTERM} {
-					t.Run(signal.String(), func(t *testing.T) {
-						client := startMemoryTestClient(t, binary, rootA, installationA, backend.url, memoryTestTokenA)
-						memoryTestInitialize(t, client)
-						client.send(t, "blocked", "tools/call", block)
-						memoryTestEvent(t, backend.started, "agent/local-a")
-						if err := client.cmd.Process.Signal(signal); err != nil {
+					for _, busy := range []bool{false, true} {
+						t.Run(fmt.Sprintf("signal_%s/busy_%t", signal.String(), busy), func(t *testing.T) {
+							client := startMemoryTestClient(t, binary, rootA, installationA, backend.url, memoryTestTokenA)
+							memoryTestInitialize(t, client)
+							if busy {
+								client.send(t, "blocked", "tools/call", block)
+								memoryTestEvent(t, backend.started, "agent/local-a")
+							}
+							if err := client.cmd.Process.Signal(signal); err != nil {
+								t.Fatal(err)
+							}
+							if busy {
+								memoryTestEvent(t, backend.cancelled, "agent/local-a")
+							}
+							client.waitForSignalExit(t)
+							memoryTestRecall(t, b, memoryTestProjectB, memoryTestProjectB, []int64{92001, 92002})
+						})
+					}
+				}
+				if runtime.GOOS == "linux" {
+					t.Run("signal_terminated/unread_output", func(t *testing.T) {
+						stalled := newMemoryTestBackend(t)
+						if err := stalled.db.Model(&dbstore.Memory{}).Where("id = ?", 91001).Update("content", strings.Repeat("x", 900*1024)).Error; err != nil {
 							t.Fatal(err)
 						}
-						memoryTestEvent(t, backend.cancelled, "agent/local-a")
-						client.close(t, false)
+						client := startMemoryTestClientWithOutput(t, binary, rootA, installationA, stalled.url, memoryTestTokenA, false)
+						output := client.output.(*os.File)
+						if err := output.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+							t.Fatal(err)
+						}
+						reader := bufio.NewScanner(output)
+						reader.Buffer(make([]byte, 4096), sessionMemoryFrameBytes+2)
+						for _, method := range []string{"initialize", "tools/list"} {
+							client.send(t, method, method, nil)
+							if !reader.Scan() {
+								t.Fatalf("stalled-output %s setup: %v", method, reader.Err())
+							}
+						}
+						client.send(t, "blocked", "tools/call", block)
+						memoryTestEvent(t, stalled.started, "agent/local-a")
+						client.send(t, "large", "tools/call", map[string]any{"name": "recall", "arguments": map[string]any{"project": memoryTestProjectA, "query": "", "limit": 20}})
+						// Observe a real large reply starting, then keep the pipe open
+						// and unread: inherited stdout writes must not delay process exit.
+						var first [1]byte
+						if _, err := output.Read(first[:]); err != nil {
+							t.Fatal(err)
+						}
+						if err := client.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+							t.Fatal(err)
+						}
+						memoryTestEvent(t, stalled.cancelled, "agent/local-a")
+						client.waitForSignalExit(t)
+						memoryTestRecall(t, b, memoryTestProjectB, memoryTestProjectB, []int64{92001, 92002})
 					})
 				}
 			} else {
