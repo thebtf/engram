@@ -247,6 +247,8 @@ export interface MemoryAuditResponse {
   entries: MemoryAuditEntry[]
 }
 
+export const MEMORY_EPISTEMIC_TYPES = ['fact', 'experience', 'opinion', 'observation'] as const
+
 export interface MemoryActionGap extends OperatorUnsupportedAction {
   labelKey: string
   badgeKey: string
@@ -894,6 +896,13 @@ export function useOperatorMemoryLab(project?: Ref<string>, autoLoad = true): {
       if (typeof route.query.q === 'string' && route.query.q.trim()) params.set('query', route.query.q.trim())
       const filters = route.query.filter
       if (filters !== undefined) for (const value of Array.isArray(filters) ? filters : [filters]) params.append('filter', value ?? '')
+      const requestedTypes = route.query.epistemic_type
+      const types = (requestedTypes === undefined ? [] : Array.isArray(requestedTypes) ? requestedTypes : [requestedTypes]).map((value) => value ?? '')
+      if (types.length > 6 || types.some((value) => !MEMORY_EPISTEMIC_TYPES.some((type) => type === value))) {
+        const message = 'Select at most six exact memory types: fact, experience, opinion, observation.'
+        throw new OperatorFetchError(message, { message, category: 'request-rejected', source: 'memory-types', path: evidence.endpoint, method: 'GET', retryable: false })
+      }
+      for (const value of new Set(types)) params.append('epistemic_type', value)
       const result = await loadKnowledgePage<ApiMemory>('/api/memories', scope, params, controller.signal)
       if (generation !== requestGeneration || scope !== selectedProject.value) return
       const nextRows = result.items.map(mapMemoryRow)

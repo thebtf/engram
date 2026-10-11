@@ -1,6 +1,6 @@
 import { computed, onBeforeUnmount, ref as sharedRef, type Ref as SharedRef } from 'vue'
 import { startedLoads } from './useConsolePreferences'
-import { loadKnowledgePage, type OperatorKnowledgePage } from './useOperatorProjectContext'
+import { loadKnowledgePage, safeNavigation, type OperatorKnowledgePage } from './useOperatorProjectContext'
 import { useRoute } from 'vue-router'
 
 let sharedDocumentsPageDocuments: SharedRef<OperatorDocumentSummary[]> | undefined
@@ -618,11 +618,23 @@ export function useOperatorDocuments(projectContext?: Ref<string>): {
     const prefix = typeof route.query.pathPrefix === 'string' ? route.query.pathPrefix : typeof route.query.path_prefix === 'string' ? route.query.path_prefix : ''
     if (prefix) params.set('path_prefix', prefix)
     if (typeof route.query.q === 'string' && route.query.q.trim()) params.set('query', route.query.q.trim())
-    if (typeof route.query.docType === 'string' && route.query.docType) params.set('doc_type', route.query.docType)
-    const endpoint = `/api/documents?${params}`
-    const evidence = endpointEvidence(endpoint, 'documents-list')
+    const requestedTypes = safeNavigation(route.query, route.fullPath).docType
+    const types = requestedTypes === undefined ? [] : Array.isArray(requestedTypes) ? requestedTypes : [requestedTypes]
+    const normalizedTypes = types.map((value) => typeof value === 'string' ? value.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, '') : '')
+    for (const value of normalizedTypes) params.append('doc_type', value)
+    let endpoint = `/api/documents?${params}`
+    let evidence = endpointEvidence(endpoint, 'documents-list')
     documentsStateValue.value = pendingState(evidence, [])
     try {
+      if (types.length > 6 || normalizedTypes.some((value) => !value || /[\p{Cc}\uD800-\uDFFF]/u.test(value) || new TextEncoder().encode(value).length > 128)) {
+        const message = 'Select at most six nonempty document types, each valid UTF-8 up to 128 bytes without control characters.'
+        throw new OperatorFetchError(message, { message, category: 'request-rejected', source: 'document-types', path: endpoint, method: 'GET', retryable: false })
+      }
+      params.delete('doc_type')
+      for (const value of new Set(normalizedTypes)) params.append('doc_type', value)
+      endpoint = `/api/documents?${params}`
+      evidence = endpointEvidence(endpoint, 'documents-list')
+      documentsStateValue.value = pendingState(evidence, [])
       const payload = await loadKnowledgePage<ApiDocumentListItem>('/api/documents', project, params, controller.signal)
       if (generation !== listGeneration || project !== selectedProject.value) return
       const rows = parseDocumentListPayload(payload)

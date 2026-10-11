@@ -17,9 +17,26 @@ const navigationKey = 'engram.console.knowledgeNavigation'
 let navigationLoaded = false
 let catalogGeneration = 0
 
-const navigationFields: Record<string, true> = Object.fromEntries(['project', 'q', 'filter', 'page', 'size', 'allRead', 'memory', 'memoryProject', 'from', 'searchQuery', 'focusMemory', 'path', 'docProject', 'pathPrefix', 'path_prefix', 'docType', 'version', 'compare', 'session', 'draftQ', 'draftPrefix', 'draftType', 'principal', 'principalKind', 'principalProject', 'principalDomain', 'principalVisibility', 'principalPrivate'].map((key) => [key, true]))
-function safeNavigation(query: LocationQuery): LocationQuery {
-  return Object.fromEntries(Object.entries(query).filter(([key, value]) => Object.hasOwn(navigationFields, key) && (typeof value === 'string' || value === null || (Array.isArray(value) && value.every((item) => typeof item === 'string' || item === null)))))
+const navigationFields: Record<string, true> = Object.fromEntries(['project', 'q', 'filter', 'epistemic_type', 'page', 'size', 'allRead', 'memory', 'memoryProject', 'from', 'searchQuery', 'focusMemory', 'path', 'docProject', 'pathPrefix', 'path_prefix', 'docType', 'version', 'compare', 'session', 'draftQ', 'draftPrefix', 'draftType', 'principal', 'principalKind', 'principalProject', 'principalDomain', 'principalVisibility', 'principalPrivate'].map((key) => [key, true]))
+export function safeNavigation(query: LocationQuery, fullPath?: string): LocationQuery {
+  const safe: LocationQuery = Object.fromEntries(Object.entries(query).filter(([key, value]) => Object.hasOwn(navigationFields, key) && (typeof value === 'string' || value === null || (Array.isArray(value) && value.every((item) => typeof item === 'string' || item === null)))))
+  const start = fullPath?.indexOf('?') ?? -1
+  if (fullPath && start >= 0 && safe.docType !== undefined) {
+    const end = fullPath.indexOf('#', start)
+    const values: Array<string | null> = []
+    for (const part of fullPath.slice(start + 1, end < 0 ? undefined : end).split('&')) {
+      const equal = part.indexOf('=')
+      const rawKey = equal < 0 ? part : part.slice(0, equal)
+      let key: string
+      try { key = decodeURIComponent(rawKey.replace(/\+/g, ' ')) } catch { continue }
+      if (key !== 'docType') continue
+      if (equal < 0) { values.push(null); continue }
+      try { values.push(decodeURIComponent(part.slice(equal + 1).replace(/\+/g, ' '))) }
+      catch { values.push(null) }
+    }
+    if (values.length) safe.docType = Array.isArray(safe.docType) ? values : values[0]
+  }
+  return safe
 }
 function saveNavigation() {
   try { sessionStorage.setItem(navigationKey, JSON.stringify([...remembered])) } catch { /* Storage is optional. */ }
@@ -121,7 +138,7 @@ export function useOperatorProjectContext() {
   loadNavigation()
   watch(() => route.fullPath, () => {
     if (typeof route.query.project === 'string') project.value = route.query.project
-    remembered.set(`${project.value}\u0000${route.path}`, safeNavigation(route.query))
+    remembered.set(`${project.value}\u0000${route.path}`, safeNavigation(route.query, route.fullPath))
     saveNavigation()
   }, { immediate: true, flush: 'sync' })
   if (!catalogRequest) catalogRequest = refreshProjects()
@@ -133,7 +150,7 @@ export function useOperatorProjectContext() {
   }
   function remember(path: string, fields: LocationQuery) {
     const key = `${project.value}\u0000${path}`
-    remembered.set(key, safeNavigation({ ...remembered.get(key), ...fields, project: project.value }))
+    remembered.set(key, safeNavigation({ ...remembered.get(key), ...fields, project: project.value }, path === route.path ? route.fullPath : undefined))
     saveNavigation()
   }
   function select(id: string, path = route.path) {

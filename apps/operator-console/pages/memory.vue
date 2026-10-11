@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useOperatorProjectContext, projectName } from '../composables/useOperatorProjectContext'
-import { PRINCIPAL_CURRENT_PROJECT, useOperatorMemoryLab, useOperatorPrincipalMemorySurface, type MemoryAuditResponse } from '../composables/useOperatorMemoryLab'
+import { MEMORY_EPISTEMIC_TYPES, PRINCIPAL_CURRENT_PROJECT, useOperatorMemoryLab, useOperatorPrincipalMemorySurface, type MemoryAuditResponse } from '../composables/useOperatorMemoryLab'
 import { operatorDiagnosisKey, operatorUnauthorizedRevision, type OperatorLoadState, type OperatorSourceError, toOperatorSourceError } from '../composables/useOperatorApi'
 import type { Memory } from '../composables/useMockData'
 import type { MutationResult } from '../composables/useApi'
@@ -15,6 +15,8 @@ const { rows, loadState, pending, total, hasMore, refresh, loadMemoryByID, delet
 const query = computed(() => typeof route.query.q === 'string' ? route.query.q : '')
 const filter = computed(() => { const value = route.query.filter; return value === undefined ? [] : Array.isArray(value) ? value : [value] })
 const hasFilter = computed(() => filter.value.some((value) => value !== 'all'))
+const types = computed(() => { const value = route.query.epistemic_type; return value === undefined ? [] : Array.isArray(value) ? value : [value] })
+const hasTypes = computed(() => types.value.length > 0)
 const filterChoices = [
   { value: 'active', label: 'memory.rowState.active' },
   { value: 'flagged', label: 'memory.rowState.flagged' },
@@ -63,9 +65,14 @@ function toggleFilter(value: typeof filterChoices[number]['value']) {
   const next = current.includes(value) ? current.filter((entry) => entry !== value) : [...current, value]
   return updateQuery({ filter: next.length ? next : undefined, page: '1', memory: undefined, memoryProject: undefined })
 }
+function toggleType(value: typeof MEMORY_EPISTEMIC_TYPES[number]) {
+  const current = types.value.map((entry) => entry ?? '')
+  const next = current.includes(value) ? current.filter((entry) => entry !== value) : [...current, value]
+  return updateQuery({ epistemic_type: next.length ? next : undefined, page: '1', memory: undefined, memoryProject: undefined })
+}
 
 
-watch([project, query, filter, page, pageSize, () => route.query.allRead] as const, (next, previous) => {
+watch([project, query, filter, types, page, pageSize, () => route.query.allRead] as const, (next, previous) => {
   if (previous?.length && next.every((value, index) => {
     const before = previous[index]
     return Array.isArray(value) && Array.isArray(before) ? value.length === before.length && value.every((entry, position) => entry === before[position]) : value === before
@@ -186,10 +193,11 @@ function time(value?: string) {
         <label class="search-field"><span>{{ t('knowledge.searchMemory') }}</span><input v-model="draft" type="search" /></label>
         <button class="btn primary" type="submit">{{ t('knowledge.find') }}</button>
         <fieldset class="memory-filters"><legend>{{ t('knowledge.pageFilter') }}</legend><div class="filter-chips"><button class="btn" type="button" :aria-pressed="!hasFilter" data-memory-filter="all" @click="updateQuery({ filter: undefined, page: '1', memory: undefined, memoryProject: undefined })">{{ t('knowledge.anyState') }}</button><button v-for="choice in filterChoices" :key="choice.value" class="btn" type="button" :aria-pressed="filter.includes(choice.value)" :data-memory-filter="choice.value" @click="toggleFilter(choice.value)">{{ t(choice.label) }}</button></div></fieldset>
+        <fieldset class="memory-filters" aria-describedby="memory-type-help"><legend>{{ t('knowledge.memoryTypes') }}</legend><p id="memory-type-help">{{ t('knowledge.typeGrouping') }}</p><div class="filter-chips"><button class="btn" type="button" :aria-pressed="!hasTypes" data-memory-type="any" @click="updateQuery({ epistemic_type: undefined, page: '1', memory: undefined, memoryProject: undefined })">{{ t('knowledge.anyType') }}</button><button v-for="type in MEMORY_EPISTEMIC_TYPES" :key="type" class="btn" type="button" :aria-pressed="types.includes(type)" :data-memory-type="type" @click="toggleType(type)">{{ t(`knowledge.epistemicTypes.${type}`) }}</button></div></fieldset>
         <RouterLink :to="{ ...context.to('/search'), query: { ...context.to('/search').query, q: query || undefined } }">{{ t('knowledge.contextSearch') }}</RouterLink>
       </form>
       <div v-if="pending" class="state" role="status">{{ t('knowledge.loading') }}</div>
-      <div v-else-if="loadState.kind === 'error'" class="state error" role="status"><span>{{ t(operatorDiagnosisKey(loadState.error)) }}</span><button class="btn" @click="refresh">{{ t('knowledge.retry') }}</button><details><summary>{{ t('knowledge.technical') }}</summary>{{ loadState.error.message }}</details></div>
+      <div v-else-if="loadState.kind === 'error'" class="state error" role="status"><span>{{ t(loadState.error.source === 'memory-types' ? 'knowledge.invalidMemoryTypes' : operatorDiagnosisKey(loadState.error)) }}</span><button class="btn" @click="refresh">{{ t('knowledge.retry') }}</button><details><summary>{{ t('knowledge.technical') }}</summary>{{ loadState.error.message }}</details></div>
       <div v-if="project === 'all'" class="state">{{ t('knowledge.allOrder') }}</div>
       <p v-if="loadState.kind === 'gated'" class="state" role="status">{{ t('knowledge.allReadHelp') }}</p>
       <div class="knowledge-workspace" :class="{ 'detail-open': openId }">
@@ -199,7 +207,7 @@ function time(value?: string) {
             <input v-model="selected" :value="memory.id" type="checkbox" :aria-label="t('knowledge.selectRecord', { id: memory.id })" />
             <button :data-memory-id="memory.id" :data-testid="`memory-row-${memory.id}`" :aria-pressed="openId === memory.id" @click="updateQuery({ memory: memory.id, memoryProject: project === 'all' ? memory.project : undefined })"><strong>{{ memory.content }}</strong><span>{{ t(`memory.rowState.${memory.status}`) }} · {{ memory.type }} · {{ memory.age }}<template v-if="project === 'all'"> · {{ projectName(memory.project) }}</template></span><span v-if="memory.tags.length" class="tags">{{ memory.tags.join(' · ') }}</span></button>
           </div>
-          <div v-if="!pending && loadState.kind === 'empty'" class="empty"><h2>{{ t(total && page > 1 ? 'knowledge.pageEmpty' : query || hasFilter ? 'knowledge.noMatches' : 'knowledge.noMemory') }}</h2><p>{{ t(query || hasFilter ? 'knowledge.noMatchesHelp' : 'knowledge.noMemoryHelp') }}</p><button v-if="total && page > 1" class="btn" @click="updateQuery({ page: '1', memory: undefined })">{{ t('knowledge.firstPage') }}</button><button v-else-if="query || hasFilter" class="btn" @click="draft = ''; updateQuery({ q: undefined, filter: undefined, page: '1', memory: undefined })">{{ t('knowledge.clearFilters') }}</button><RouterLink v-else :to="context.to('/documents')">{{ t('knowledge.openDocuments') }}</RouterLink></div>
+          <div v-if="!pending && loadState.kind === 'empty'" class="empty"><h2>{{ t(total && page > 1 ? 'knowledge.pageEmpty' : query || hasFilter || hasTypes ? 'knowledge.noMatches' : 'knowledge.noMemory') }}</h2><p>{{ t(query || hasFilter || hasTypes ? 'knowledge.noMatchesHelp' : 'knowledge.noMemoryHelp') }}</p><button v-if="total && page > 1" class="btn" @click="updateQuery({ page: '1', memory: undefined })">{{ t('knowledge.firstPage') }}</button><button v-else-if="query || hasFilter || hasTypes" class="btn" @click="draft = ''; updateQuery({ q: undefined, filter: undefined, epistemic_type: undefined, page: '1', memory: undefined })">{{ t('knowledge.clearFilters') }}</button><RouterLink v-else :to="context.to('/documents')">{{ t('knowledge.openDocuments') }}</RouterLink></div>
           <nav class="pagination" :aria-label="t('knowledge.pagination')"><button class="btn" :disabled="pending || page <= 1" @click="updateQuery({ page: String(page - 1), memory: undefined })">{{ t('knowledge.previous') }}</button><span>{{ total === null ? t('knowledge.unknown') : t('knowledge.pageOf', { page, total: pageCount }) }}</span><button class="btn" :disabled="pending || !hasMore" @click="updateQuery({ page: String(page + 1), memory: undefined })">{{ t('knowledge.next') }}</button></nav>
           <div v-if="selected.length" class="bulk"><span>{{ t('common.selectedCount', { count: selected.length }) }}</span><button class="btn" :disabled="busy" @click="act('bulk')">{{ t(confirmation.includes(':bulk:') ? 'memory.bulk.confirmHideNoise' : 'memory.bulk.hideNoise') }}</button><button class="btn" @click="selected = []; confirmation = ''">{{ t('common.clearSelection') }}</button></div>
         </section>

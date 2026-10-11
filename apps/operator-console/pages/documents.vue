@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { useOperatorProjectContext, projectName } from '../composables/useOperatorProjectContext'
+import { useOperatorProjectContext, projectName, safeNavigation } from '../composables/useOperatorProjectContext'
 import { useOperatorDocuments, type DocumentExportArtifact } from '../composables/useOperatorDocuments'
 import { operatorApiUrl, operatorDiagnosisKey } from '../composables/useOperatorApi'
 const { t, locale } = useI18n()
@@ -12,13 +12,15 @@ const docs = useOperatorDocuments(project)
 const { documents, history, comments, primaryVersion, secondaryVersion, primaryDocument, secondaryDocument, documentsState, historyState, primaryState, secondaryState, commentsState, total, hasMore, refresh, openDocument, selectPrimaryVersion, selectSecondaryVersion, clearDocumentDetail } = docs
 const query = computed(() => typeof route.query.q === 'string' ? route.query.q : '')
 const prefix = computed(() => typeof route.query.pathPrefix === 'string' ? route.query.pathPrefix : typeof route.query.path_prefix === 'string' ? route.query.path_prefix : '')
+const types = computed(() => { const value = safeNavigation(route.query, route.fullPath).docType; return value === undefined ? [] : Array.isArray(value) ? value : [value] })
+const hasTypes = computed(() => types.value.length > 0)
 const requestedPath = computed(() => typeof route.query.path === 'string' ? route.query.path : '')
 const documentProject = computed(() => project.value === 'all' && typeof route.query.docProject === 'string' ? route.query.docProject : project.value)
 const page = computed(() => Math.max(1, Number.parseInt(String(route.query.page || '1'), 10) || 1))
 const pageSize = computed(() => [10, 20, 50].includes(Number(route.query.size)) ? Number(route.query.size) : 20)
 const draft = ref(typeof route.query.draftQ === 'string' ? route.query.draftQ : query.value)
 const prefixDraft = ref(typeof route.query.draftPrefix === 'string' ? route.query.draftPrefix : prefix.value)
-const typeDraft = ref(typeof route.query.draftType === 'string' ? route.query.draftType : typeof route.query.docType === 'string' ? route.query.docType : '')
+const typeDraft = ref(typeof route.query.draftType === 'string' ? route.query.draftType : '')
 const compareOpen = ref(false)
 const commentDraft = ref('')
 const lineStart = ref('')
@@ -38,13 +40,21 @@ const filtered = computed(() => documents)
 const pageCount = computed(() => Math.max(1, Math.ceil((total.value || 0) / pageSize.value)))
 const pageRows = filtered
 
-function updateQuery(values: Record<string, string | undefined>) {
+function updateQuery(values: Record<string, string | string[] | undefined>) {
   return router.push({ path: '/documents', query: { ...route.query, project: project.value || undefined, ...values } })
+}
+function addType() {
+  const value = typeDraft.value
+  if (!types.value.includes(value)) void updateQuery({ docType: [...types.value.map((entry) => entry ?? ''), value], page: '1', path: undefined, docProject: undefined, version: undefined, compare: undefined })
+  typeDraft.value = ''
+}
+function removeType(index: number) {
+  const next = types.value.filter((_value, position) => position !== index).map((value) => value ?? '')
+  return updateQuery({ docType: next.length ? next : undefined, page: '1', path: undefined, docProject: undefined, version: undefined, compare: undefined })
 }
 watch(query, (value) => { draft.value = value })
 watch(prefix, (value) => { prefixDraft.value = value })
-watch(() => route.query.docType, (value) => { typeDraft.value = typeof value === 'string' ? value : '' })
-watch([project, prefix, query, page, pageSize, () => route.query.docType, () => route.query.allRead], () => {
+watch([project, prefix, query, page, pageSize, types, () => route.query.allRead], () => {
   actionError.value = ''
   mutationResult.value = null
   void refresh()
@@ -154,23 +164,24 @@ function time(value?: string) {
     <header class="page-head"><div><h1>{{ t('nav.items.documents') }}</h1><p>{{ t('knowledge.documentsLead') }}</p></div><button class="btn" :disabled="documentsState.kind === 'pending'" @click="refreshView">{{ t('knowledge.refresh') }}</button></header>
     <div v-if="!project" class="empty"><h2>{{ t('knowledge.chooseProject') }}</h2><p>{{ t('knowledge.chooseProjectHelp') }}</p><RouterLink :to="context.to('/projects')">{{ t('nav.items.projects') }}</RouterLink></div>
     <template v-else>
-      <form class="toolbar" @submit.prevent="updateQuery({ q: draft.trim() || undefined, pathPrefix: prefixDraft.trim() || undefined, docType: typeDraft.trim() || undefined, path_prefix: undefined, page: '1', path: undefined, version: undefined, compare: undefined, allRead: project === 'all' ? '1' : undefined })">
+      <form class="toolbar" @submit.prevent="updateQuery({ q: draft.trim() || undefined, pathPrefix: prefixDraft.trim() || undefined, path_prefix: undefined, page: '1', path: undefined, version: undefined, compare: undefined, allRead: project === 'all' ? '1' : undefined })">
         <label class="search-field"><span>{{ t('knowledge.searchDocuments') }}</span><input v-model="draft" type="search" /></label>
         <button class="btn primary" type="submit">{{ t('knowledge.find') }}</button>
-        <details><summary>{{ t('knowledge.filters') }}</summary><label><span>{{ t('knowledge.pathPrefix') }}</span><input v-model="prefixDraft" /></label><label><span>{{ t('knowledge.docType') }}</span><input v-model="typeDraft" /></label></details>
+        <details><summary>{{ t('knowledge.filters') }}</summary><label><span>{{ t('knowledge.pathPrefix') }}</span><input v-model="prefixDraft" /></label></details>
+        <fieldset class="type-filters" aria-describedby="document-type-help"><legend>{{ t('knowledge.documentTypes') }}</legend><p id="document-type-help">{{ t('knowledge.typeGrouping') }} {{ t('knowledge.literalDocumentTypes') }}</p><div class="type-chips"><button class="btn" type="button" :aria-pressed="!hasTypes" data-document-type="any" @click="updateQuery({ docType: undefined, page: '1', path: undefined, docProject: undefined, version: undefined, compare: undefined })">{{ t('knowledge.anyType') }}</button><button v-for="(type, index) in types" :key="index" class="btn" type="button" :aria-label="t('knowledge.removeType', { type: type || t('knowledge.invalidType') })" :data-document-type-index="index" @click="removeType(index)">{{ type || t('knowledge.invalidType') }} ×</button></div><div class="type-entry"><label><span>{{ t('knowledge.docType') }}</span><input v-model="typeDraft" list="document-type-examples" autocomplete="off" data-testid="document-type-entry" @keydown.enter.prevent="addType" /></label><datalist id="document-type-examples"><option value="markdown" /><option value="text" /></datalist><button class="btn" type="button" :disabled="!typeDraft" data-testid="document-type-add" @click="addType">{{ t('knowledge.addType') }}</button></div></fieldset>
       </form>
       <div v-if="documentsState.kind === 'pending'" class="state" role="status">{{ t('knowledge.loading') }}</div>
-      <div v-else-if="documentsState.kind === 'error'" class="state error" role="status"><p>{{ t(operatorDiagnosisKey(documentsState.error)) }}</p><button class="btn" @click="refresh">{{ t('knowledge.retry') }}</button><details><summary>{{ t('knowledge.technical') }}</summary>{{ documentsState.error.message }}</details></div>
+      <div v-else-if="documentsState.kind === 'error'" class="state error" role="status"><p>{{ t(documentsState.error.source === 'document-types' ? 'knowledge.invalidDocumentTypes' : operatorDiagnosisKey(documentsState.error)) }}</p><button class="btn" @click="refresh">{{ t('knowledge.retry') }}</button><details><summary>{{ t('knowledge.technical') }}</summary>{{ documentsState.error.message }}</details></div>
       <p v-if="project === 'all'" class="state">{{ t('knowledge.allOrder') }}</p>
       <p v-if="documentsState.kind === 'gated'" class="state" role="status">{{ t('knowledge.allReadHelp') }}</p>
       <div class="docs-workspace" :class="{ 'detail-open': requestedPath }">
         <section class="docs-list" :aria-label="t('knowledge.documentResults')">
           <div class="list-head"><span role="status">{{ total === null ? t('knowledge.unknown') : t('knowledge.matches', { count: total }) }}</span><label><span>{{ t('knowledge.perPage') }}</span><select :value="pageSize" @change="updateQuery({ size: ($event.target as HTMLSelectElement).value, page: '1', path: undefined })"><option :value="10">10</option><option :value="20">20</option><option :value="50">50</option></select></label></div>
-          <button v-for="doc in pageRows" :key="`${doc.project}:${doc.path}`" class="doc-row" :class="{ active: requestedPath === doc.path && documentProject === doc.project }" :aria-pressed="requestedPath === doc.path && documentProject === doc.project" :data-document-path="doc.path" @click="updateQuery({ path: doc.path, docProject: project === 'all' ? doc.project : undefined, version: undefined, compare: undefined })"><strong>{{ doc.path }}</strong><span>{{ t('knowledge.version') }} {{ doc.version }} · {{ doc.author || t('knowledge.notRecorded') }} · {{ time(doc.createdAt) }}<template v-if="project === 'all'"> · {{ projectName(doc.project) }}</template></span></button>
+          <button v-for="doc in pageRows" :key="`${doc.project}:${doc.path}`" class="doc-row" :class="{ active: requestedPath === doc.path && documentProject === doc.project }" :aria-pressed="requestedPath === doc.path && documentProject === doc.project" :data-document-path="doc.path" @click="updateQuery({ path: doc.path, docProject: project === 'all' ? doc.project : undefined, version: undefined, compare: undefined })"><strong>{{ doc.path }}</strong><span>{{ t('knowledge.version') }} {{ doc.version }} · {{ doc.docType }} · {{ doc.author || t('knowledge.notRecorded') }} · {{ time(doc.createdAt) }}<template v-if="project === 'all'"> · {{ projectName(doc.project) }}</template></span></button>
           <div v-if="documentsState.kind === 'empty'" class="empty" data-testid="documents-empty">
-            <h2>{{ t(total && page > 1 ? 'knowledge.pageEmpty' : query || prefix || typeDraft ? 'knowledge.noMatches' : 'knowledge.noDocuments') }}</h2><p>{{ t(query || prefix || typeDraft ? 'knowledge.noDocumentMatchesHelp' : 'knowledge.noDocumentsHelp') }}</p>
+            <h2>{{ t(total && page > 1 ? 'knowledge.pageEmpty' : query || prefix || hasTypes ? 'knowledge.noMatches' : 'knowledge.noDocuments') }}</h2><p>{{ t(query || prefix || hasTypes ? 'knowledge.noDocumentMatchesHelp' : 'knowledge.noDocumentsHelp') }}</p>
             <button v-if="total && page > 1" class="btn" @click="updateQuery({ page: '1', path: undefined })">{{ t('knowledge.firstPage') }}</button>
-            <button v-else-if="query || prefix || typeDraft" class="btn" @click="draft = ''; prefixDraft = ''; typeDraft = ''; updateQuery({ q: undefined, docType: undefined, pathPrefix: undefined, path_prefix: undefined, page: '1', path: undefined })">{{ t('knowledge.clearFilters') }}</button>
+            <button v-else-if="query || prefix || hasTypes" class="btn" @click="draft = ''; prefixDraft = ''; typeDraft = ''; updateQuery({ q: undefined, docType: undefined, pathPrefix: undefined, path_prefix: undefined, page: '1', path: undefined })">{{ t('knowledge.clearFilters') }}</button>
             <RouterLink v-else :to="context.to('/memory')">{{ t('knowledge.openMemory') }}</RouterLink>
           </div>
           <nav class="pagination" :aria-label="t('knowledge.pagination')"><button class="btn" :disabled="documentsState.kind === 'pending' || page <= 1" @click="updateQuery({ page: String(page - 1), path: undefined })">{{ t('knowledge.previous') }}</button><span>{{ total === null ? t('knowledge.unknown') : t('knowledge.pageOf', { page, total: pageCount }) }}</span><button class="btn" :disabled="documentsState.kind === 'pending' || !hasMore" @click="updateQuery({ page: String(page + 1), path: undefined })">{{ t('knowledge.next') }}</button></nav>
@@ -221,6 +232,12 @@ function time(value?: string) {
 .page-head { display:flex; align-items:start; justify-content:space-between; gap:16px; } h1 { font-size:var(--text-xl); margin:0 0 6px; } h2 { font-size:var(--text-lg); margin:0 0 16px; overflow-wrap:anywhere; } h3 { font-size:var(--text-base); margin:0 0 12px; }
 p { color:var(--muted); margin:0 0 12px; }
 .toolbar { display:flex; gap:12px; align-items:end; flex-wrap:wrap; } label { display:grid; gap:6px; color:var(--muted); font-size:var(--text-sm); } .search-field { flex:1; min-width:180px; }
+.type-filters { flex-basis:100%; min-width:0; margin:0; padding:0; border:0; }
+.type-filters legend { margin-bottom:6px; color:var(--muted); font-size:var(--text-sm); }
+.type-chips, .type-entry { display:flex; flex-wrap:wrap; gap:8px; align-items:end; }
+.type-entry { margin-top:12px; }
+.type-chips .btn[aria-pressed=true] { color:var(--accent); border-color:var(--accent); }
+.type-chips .btn { max-width:100%; overflow-wrap:anywhere; }
 input, select, textarea { min-height:40px; padding:8px 10px; color:var(--fg); background:var(--surface); border:1px solid var(--border); border-radius:var(--r-sm); max-width:100%; } textarea { width:100%; resize:vertical; }
 .btn { display:inline-flex; align-items:center; justify-content:center; min-height:40px; padding:8px 12px; color:var(--fg); background:var(--surface); border:1px solid var(--border); border-radius:var(--r-sm); cursor:pointer; }
 .btn:hover:not(:disabled), .doc-row:hover { background:var(--surface-warm); } .btn:disabled { opacity:.5; cursor:not-allowed; } .btn.primary { color:var(--accent-on); background:var(--accent); }

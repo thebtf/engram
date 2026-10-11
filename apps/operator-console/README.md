@@ -69,10 +69,31 @@ blank or CSV values. Unknown confidence is not zero. Document query searches `pa
 never bodies or vault data. Documents choose the latest version per path before filters.
 No array, `details=true`, stored-alias, display-name, or client 500-body fallback exists.
 
-Repeated `filter` values are status/quality predicates, not memory epistemic types.
-The accepted document reader has one exact scalar `doc_type` filter. No independent
-repeated memory-type or multi-document-type interface is established by that contract;
-the UI does not guess parameters, filter one fetched page, or substitute owner kinds.
+Repeated `filter` values remain status/quality predicates, separate from types.
+The agreed Main type-reader contract uses repeated `epistemic_type` values for memory:
+exact `fact|experience|opinion|observation`, not legacy observation `decision/bugfix`.
+Documents use repeated literal `doc_type` values, without a fixed enum. `markdown` and
+`text` are examples, not the only choices. Omitted types are unrestricted; one selected
+type is the scalar subset. Any selected type matches (IN/OR), AND all other query/status/
+quality/canonical/privacy criteria before count/page. Document types apply after latest
+version selection per path, never to historical versions before choosing the latest.
+Each selector accepts at most six raw values before deduplication. Document values use
+Unicode whitespace trimming, valid UTF-8 up to128 bytes, no control characters, and
+nonempty values. There is no CSV parsing or blanket comma rejection for literal types.
+Visible memory chips toggle independently; document literal-entry chips are removable.
+The existing `docType` route field now retains arrays; `epistemic_type` is allowlisted
+safe navigation intent. Invalid/over-bound input stays explicit and becomes a visible
+local validation error without an unfiltered request, fake HTTP status or zero total.
+Raw `docType` URL entries are strictly decoded at the existing safe-navigation boundary.
+An undecodable entry stays an explicit null/invalid choice through list reading, visible
+chips, session storage and reauth return; it never becomes a valid percent-containing
+literal or an omitted filter. The existing nonempty-value check rejects that choice.
+Intentional `%FF` entered as a decoded literal or encoded as `docType=%25FF` remains
+valid, as do valid Unicode and commas. Every repeated entry is checked, including later
+corrupt values. This is scoped to the real type route boundary, not a blanket percent ban.
+All valid selected types use `URLSearchParams.append`, never a page-local500-row filter.
+This agreed interface authorizes UI source implementation; real backend SQL/privacy and
+actual integrated API/browser acceptance still require Main's implementation and proof.
 
 `GET /api/memories/:id?project=<canonical ID>` uses that same selected context; its DTO
 `project` must be canonical. Document current/version/history requests likewise use the
@@ -173,6 +194,18 @@ with finite synthetic responses. It checks authorized history rendering, visible
 canonical record/project binding, late-context and late-auth response rejection, logout
 payload clearing, and preserved query/filter return. It is not real backend privacy,
 legitimate-event, ordinary-credential or Chrome acceptance; those remain with Main/Root.
+
+The `multi-type` compiled-consumer subset checks ordinary visible type choices, OR with
+other criteria AND, server-page totals/older-page consumption, detail/version return,
+canonical scope, safe reauth/navigation persistence and malformed/over-bound input.
+Its finite synthetic reader responses exercise the actual UI, not real SQL/privacy or
+Chrome/mobile acceptance. Historical build1002/A/F1 proofs are preserved inputs; the
+parent must rebind the final committed build before a narrow real-consumer walkthrough.
+The `raw type URL` edge subset reproduces the installed Vue Router decode fallback and
+checks malformed escapes/UTF-8, later repeated corruption, invalid reauth preservation,
+valid encoded/decoded percent literals, Unicode/comma, control/byte bounds and page/
+version return. Its RED/GREEN source proof does not relabel historical14/build1045 or
+prove actual backend SQL/privacy/Chrome behavior.
 
 
 

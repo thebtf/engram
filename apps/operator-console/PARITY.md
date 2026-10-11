@@ -35,3 +35,17 @@ privacy repair or legitimate audit events. Existing committed F3/F4 behavior sta
 Root acceptance/Main release still require the coherent backend and narrow real-consumer
 proof. Standalone multiple-type selection still requires its actual backend interface.
 
+The agreed Main multi-type interface adds visible memory choices and literal document
+type chips: any selected type (OR), AND existing criteria within exact canonical/privacy
+scope before count/page; documents choose latest versions before type filtering.
+Arrays survive query/page/detail/reauth return. No principal-kind or status-AND substitute,
+invented document enum, CSV parser, page-local filter or ignored type control is used.
+Source/compiled-consumer/build proof is not real SQL/privacy/Chrome acceptance. The
+historical1002 wrapper is preparation only and must bind the final committed type build.
+
+The raw-URL edge repair strictly decodes each `docType` entry at the existing navigation
+boundary and retains corruption as an explicit invalid choice across reauth. It does not
+ban valid percent literals, Unicode or comma names, and never turns corruption into a
+successful empty or unfiltered read. The earlier14/build1045 remains historical proof;
+the changed edge has its own bounded RED/GREEN and build binding, not Chrome acceptance.
+
