@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add explicit `engram --session-memory` stdio for the bounded memory callable surface over the unchanged core dispatcher, gRPC auth and project/privacy handlers. Preserve the default full mux path and existing installation identity; isolate cancellation, EOF/signal/output-error teardown, framing and in-flight limits per process. This mode does not replace Workspace, relay, Loom or host-hook context delivery. Source fixture proof is not installed acceptance; adoption requires a delivered binary and an explicit target-client argument change.
+
+### Fixed
+
+- Order session-memory response commitment, cancellation and request-ID release under the same active-request lock before writing response bytes. Immediate ID reuse after an observed response no longer sees a stale active entry; cancellation before commitment suppresses queued responses without waiting for a blocked output write. Backend execution and the default mux path remain unchanged.
+
 ## [6.51.0] - 2026-10-10
 
 Ordinary Home → Workspace onboarding and representative-corpus capacity calibration, composed on the released v6.50.6 source. These source and release inputs do not establish publication, installed-client adoption, semantic retrieval or full-index acceptance; coordinated native/server delivery and ordinary consumer proof remain required.
