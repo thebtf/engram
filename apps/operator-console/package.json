@@ -12,7 +12,7 @@
     "generate": "npm run build",
     "preview": "node .output/server/index.mjs",
     "parity": "node scripts/parity-check.repo.mjs",
-    "test:seam": "node --test scripts/seam-contract.test.mjs",
+    "test:seam": "node --test tests/composables/document-export.spec.mjs",
     "test:parity": "node --test scripts/parity-promotion.test.mjs",
     "test:browser": "playwright test",
     "test:browser:live": "npm run build && playwright test --config playwright.live.config.ts"
