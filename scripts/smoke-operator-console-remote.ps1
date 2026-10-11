@@ -428,7 +428,8 @@ if ($memoryRowCount -gt 0)
   Assert-Status -Response $memoryDetailResponse -ExpectedStatus @(200) -Step "memory-detail[$projectName]"
   $memoryDetail = Assert-JsonObject -Response $memoryDetailResponse -Step "memory-detail[$projectName]"
   if ($memoryDetail.id -ne $memoryID -or $memoryDetail.project -ne $projectName)
-  { throw "memory detail did not retain its canonical page context." }
+  { throw "memory detail did not retain its canonical page context." 
+  }
 }
 
 
@@ -835,7 +836,7 @@ foreach ($field in @('items', 'total', 'offset', 'limit', 'has_more'))
 
   if (-not $memoryPage.PSObject.Properties.Name.Contains($field))
 
-  { throw "memory page is missing $field." 
+  { throw "memory page is missing $field."
 
   }
 
@@ -1058,4 +1059,3 @@ if ($Mode -eq "token")
   Write-Host ("SELFCHECK_STATUS=" + $selfcheckResponse.StatusCode)
 
 }
-
