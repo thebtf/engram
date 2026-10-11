@@ -66,7 +66,7 @@ const phaseMessage = computed(() => {
   if (props.pinned !== null) return t('codeExplorer.context.pinnedMessage')
   if (repository.value === '') return t('codeExplorer.context.chooseRepository')
   if (!workingCopyChosen.value) return t('codeExplorer.context.chooseWorkingCopy')
-  return noViewEntry.value === null ? t('codeExplorer.context.chooseSnapshot') : t('codeExplorer.context.noViewOnlyBody')
+  return noViewEntry.value === null ? t('codeExplorer.context.chooseSnapshot') : ''
 })
 
 watch([() => props.catalog, () => props.candidate, () => props.pinned], ([catalog, candidate], [previousCatalog]) => {
@@ -122,7 +122,7 @@ function chooseSnapshot(event: Event): void {
       <span class="phase" :data-state="phase">{{ phaseLabel }}</span>
     </div>
 
-    <p class="message" aria-live="polite" data-testid="code-context-message">{{ phaseMessage }}</p>
+    <p v-if="phaseMessage" class="message" aria-live="polite" data-testid="code-context-message">{{ phaseMessage }}</p>
 
     <div v-if="catalog.length > 0" class="selectors" role="group" :aria-label="t('codeExplorer.context.selectionGroup')">
       <label class="selector">
@@ -152,7 +152,7 @@ function chooseSnapshot(event: Event): void {
       <p>{{ t('codeExplorer.context.emptyBody') }}</p>
     </div>
 
-    <div v-if="noViewEntry !== null" class="no-view" data-testid="code-context-index-affordance">
+    <div v-if="noViewEntry !== null" class="no-view" aria-live="polite" data-testid="code-context-index-affordance">
       <strong>{{ t('codeExplorer.context.noViewOnlyTitle') }}</strong>
       <p>{{ noViewEntry.indexIntentTarget === null ? t('codeExplorer.context.noViewUnavailable') : t('codeExplorer.context.noViewIndexAvailable') }}</p>
       <button

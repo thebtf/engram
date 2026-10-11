@@ -1001,7 +1001,8 @@ func main() {
 	if len(os.Args) > 1 && (os.Args[1] == "--help" || os.Args[1] == "-h" || os.Args[1] == "--version" || os.Args[1] == "-v") {
 		fmt.Printf("engram %s — stdio MCP daemon for Claude Code\n", daemonVersion)
 		fmt.Println()
-		fmt.Println("Run directly as a stdio MCP process or through the engram plugin.")
+		fmt.Println("Default: full mux-backed MCP process (also used by the engram plugin).")
+		fmt.Println("  --session-memory  " + sessionMemoryDescription)
 		fmt.Println()
 		fmt.Println("Environment:")
 		fmt.Printf("  %-28s  Server URL (e.g. http://host:37777)\n", config.EnvServerURL)
@@ -1014,6 +1015,24 @@ func main() {
 			os.Exit(1)
 		}
 		return
+	}
+
+	for _, arg := range os.Args[1:] {
+		if arg == sessionMemoryFlag {
+			if len(os.Args) != 2 {
+				fmt.Fprintln(os.Stderr, "[engram] --session-memory must be used alone")
+				os.Exit(1)
+			}
+			// Let stdout EPIPE reach the transport cleanup instead of exiting on SIGPIPE.
+			signal.Ignore(syscall.SIGPIPE)
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			if err := runSessionMemory(ctx, os.Stdin, os.Stdout); err != nil {
+				fmt.Fprintln(os.Stderr, "[engram] session-local memory failed:", err)
+				os.Exit(1)
+			}
+			return
+		}
 	}
 
 	// Both the stdio shim and its daemon child must select the same installation namespace.
