@@ -4,7 +4,7 @@ import { useOperatorProjectContext, projectName, loadKnowledgePage } from '../co
 import { operatorDiagnosisKey, toOperatorSourceError, type OperatorSourceError } from '../composables/useOperatorApi'
 const { t } = useI18n()
 const context = useOperatorProjectContext()
-const { project, projects, pending, error, label } = context
+const { project, projects, descriptors, unresolved, pending, error, selectionPending, selectionError, label } = context
 const projectQuery = ref('')
 const visibleProjects = computed(() => projects.value.filter((id) => `${projectName(id)} ${id}`.toLocaleLowerCase().includes(projectQuery.value.toLocaleLowerCase())))
 const recentMemories = ref<Array<{ id: number; project: string; content: string }>>([])
@@ -50,6 +50,9 @@ onBeforeUnmount(() => { generation += 1; request?.abort() })
 <template>
   <div class="home-page">
     <header><h1>{{ project ? t('knowledge.homeProject', { project: project === 'all' ? t('knowledge.allProjects') : label }) : t('knowledge.homeTitle') }}</h1><p>{{ t(project ? 'knowledge.homeLead' : 'knowledge.entryLead') }}</p></header>
+    <p v-if="selectionPending" role="status">{{ t('projectCatalog.loading') }}</p>
+    <div v-if="selectionError" role="alert"><p>{{ t('projectCatalog.unknownProject') }} {{ t(operatorDiagnosisKey(selectionError)) }}</p><button class="btn" @click="context.refresh">{{ t('knowledge.retry') }}</button></div>
+    <RouterLink v-if="unresolved.length" to="/projects/unresolved">{{ t('projectCatalog.review') }} ({{ unresolved.length }})</RouterLink>
     <section v-if="!project" class="project-entry">
       <label class="field"><span>{{ t('knowledge.findProject') }}</span><input v-model="projectQuery" type="search" /></label>
       <p v-if="pending" role="status">{{ t('knowledge.loading') }}</p>
@@ -57,7 +60,7 @@ onBeforeUnmount(() => { generation += 1; request?.abort() })
       <p v-else-if="!projects.length">{{ t('knowledge.noProjects') }}</p>
       <p v-else-if="!visibleProjects.length">{{ t('knowledge.noProjectMatch') }}</p>
       <ul v-else class="project-list">
-        <li v-for="id in visibleProjects" :key="id"><button @click="context.select(id)"><strong>{{ projectName(id) }}</strong></button></li>
+        <li v-for="id in visibleProjects" :key="id"><button @click="context.select(id)"><strong>{{ projectName(id) }}</strong><span v-if="descriptors.filter(row => projectName(row.project_id) === projectName(id)).length > 1">{{ t('projectCatalog.ambiguousName') }} · {{ id }}</span></button></li>
       </ul>
       <button class="btn" @click="context.select('all')">{{ t('knowledge.browseAll') }}</button>
       <RouterLink :to="context.to('/code')" data-testid="overview-workspace-entry">{{ t('nav.items.code') }}</RouterLink><p>{{ t('knowledge.codeScope') }}</p>

@@ -31,19 +31,3 @@ export function formatAbsoluteDate(dateString: string): string {
   }).format(new Date(dateString))
 }
 
-export function shortProjectName(project: string, projectNames: Record<string, string> = {}): string {
-  if (!project) return '?'
-  if (projectNames[project]) return projectNames[project]
-  if (/^[A-Z]:\\/.test(project)) {
-    const parts = project.split(/[/\\]/)
-    return parts[parts.length - 1] || project
-  }
-  if (/^[0-9a-f]{6,}$/i.test(project)) {
-    return project.slice(0, 8)
-  }
-  if (/^(.+)_[0-9a-f]{6,}$/i.test(project)) {
-    return project.replace(/_[0-9a-f]{6,}$/i, '')
-  }
-  const parts = project.split('/')
-  return parts[parts.length - 1] || project
-}

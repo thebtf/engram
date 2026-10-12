@@ -1,3 +1,5 @@
+import { parseProjectCatalog, parseProjectResolution, parseRetainedPage, parseReaderPage, credentialBinding, assertCredentialMetadata, UnresolvedProjectError, type ProjectCatalog, type RetainedKind, type RetainedPage, type ReaderPage, type MemoryReaderQuery } from '../../../../ui/src/utils/projectCatalog'
+
 export interface NullableStringValue {
   String: string
   Valid: boolean
@@ -81,6 +83,7 @@ export interface VaultCredential {
   name: string
   scope: string
   project?: string
+  project_id?: string | null
   created_at: string
   updated_at?: string
 }
@@ -183,13 +186,37 @@ async function apiDelete<T>(path: string): Promise<T> {
   })
 }
 
-export async function fetchProjects(): Promise<string[]> {
-  return apiGet<string[]>('/projects')
+let projectCatalog: ProjectCatalog | null = null
+
+export async function fetchProjects(): Promise<ProjectCatalog> {
+  const catalog = parseProjectCatalog(await apiGet<unknown>('/projects'))
+  projectCatalog = catalog
+  return catalog
+}
+
+export async function resolveProject(project: string): Promise<string> {
+  if (!project || project === 'all' || project === 'global') throw new Error('A concrete project is required')
+  const catalog = projectCatalog ?? await fetchProjects()
+  if (catalog.items.some(item => item.project_id === project)) return project
+  const result = parseProjectResolution(await apiGet<unknown>(`/projects/resolve?${new URLSearchParams({ legacy_id: project })}`))
+  if (result.status === 'unresolved') throw new UnresolvedProjectError(result.reference, result.reason)
+  const current = catalog.items.some(item => item.project_id === result.project_id) ? catalog : await fetchProjects()
+  if (!current.items.some(item => item.project_id === result.project_id)) throw new Error('Resolved project is absent from the catalog')
+  return result.project_id
+}
+
+export async function fetchRetainedContent(reference: string, kind: RetainedKind, id?: string | number, cursor?: string, q?: string): Promise<RetainedPage> {
+  const params = new URLSearchParams({ kind, limit: '50' })
+  if (id !== undefined) params.set('id', String(id))
+  if (cursor) params.set('cursor', cursor)
+  if (q && id === undefined) params.set('q', q)
+  const data = await apiGet<unknown>(`/projects/unresolved/${encodeURIComponent(reference)}/${id === undefined ? 'content' : 'history'}?${params}`)
+  return parseRetainedPage(data, reference, kind, id)
 }
 
 export async function fetchStats(project?: string | null): Promise<Stats> {
   const params = new URLSearchParams()
-  if (project) params.append('project', project)
+  if (project) params.append('project', await resolveProject(project))
   const query = params.toString()
   return apiGet<Stats>(`/stats${query ? `?${query}` : ''}`)
 }
@@ -200,7 +227,7 @@ export async function fetchSessions(params: {
   offset?: number
 } = {}): Promise<SessionListResponse> {
   const searchParams = new URLSearchParams()
-  if (params.project) searchParams.set('project', params.project)
+  if (params.project) searchParams.set('project', await resolveProject(params.project))
   if (params.limit !== undefined) searchParams.set('limit', String(params.limit))
   if (params.offset !== undefined) searchParams.set('offset', String(params.offset))
   const query = searchParams.toString()
@@ -212,7 +239,7 @@ export async function fetchRules(params: {
   limit?: number
 } = {}): Promise<RuleListResponse> {
   const searchParams = new URLSearchParams()
-  if (params.project) searchParams.set('project', params.project)
+  if (params.project) searchParams.set('project', await resolveProject(params.project))
   if (params.limit !== undefined) searchParams.set('limit', String(params.limit))
   const query = searchParams.toString()
   return apiGet<RuleListResponse>(`/rules${query ? `?${query}` : ''}`)
@@ -225,10 +252,12 @@ export async function fetchIssues(params: {
   offset?: number
   type?: string
   sourceProject?: string
+  sourceAgent?: string
 } = {}): Promise<IssueListResponse> {
   const searchParams = new URLSearchParams()
-  if (params.project) searchParams.set('project', params.project)
-  if (params.sourceProject) searchParams.set('source_project', params.sourceProject)
+  if (params.project) searchParams.set('project', await resolveProject(params.project))
+  if (params.sourceProject) searchParams.set('source_project', await resolveProject(params.sourceProject))
+  if (params.sourceAgent) searchParams.set('source_agent', params.sourceAgent)
   if (params.status) searchParams.set('status', params.status)
   if (params.limit !== undefined) searchParams.set('limit', String(params.limit))
   if (params.offset !== undefined) searchParams.set('offset', String(params.offset))
@@ -241,14 +270,6 @@ export async function fetchIssue(id: number): Promise<IssueDetailResponse> {
   return apiGet<IssueDetailResponse>(`/issues/${id}`)
 }
 
-export async function fetchTrackedProjects(): Promise<string[]> {
-  try {
-    const data = await apiGet<{ projects?: string[] }>('/issues/tracked-projects')
-    return data.projects || []
-  } catch {
-    return []
-  }
-}
 
 export async function createIssue(data: {
   title: string
@@ -256,18 +277,17 @@ export async function createIssue(data: {
   type?: string
   priority?: string
   target_project: string
+  source_project: string
 }): Promise<{ id: number; message: string }> {
-  const targetProject = data.target_project.trim()
-  if (!targetProject) {
-    throw new Error('target_project is required')
-  }
+  const targetProject = await resolveProject(data.target_project)
+  const sourceProject = await resolveProject(data.source_project)
 
   return apiPost<{ id: number; message: string }>('/issues', {
     ...data,
     target_project: targetProject,
     type: data.type || 'task',
     priority: data.priority || 'medium',
-    source_project: 'dashboard',
+    source_project: sourceProject,
     source_agent: 'human',
   })
 }
@@ -285,14 +305,26 @@ export async function fetchCredentials(): Promise<VaultCredential[]> {
   return apiGet<VaultCredential[]>('/vault/credentials')
 }
 
-export async function fetchCredential(name: string, project?: string): Promise<{ name: string; value: string }> {
-  const params = project ? `?project=${encodeURIComponent(project)}` : ''
-  return apiGet<{ name: string; value: string }>(`/vault/credentials/${encodeURIComponent(name)}${params}`)
+export async function fetchCredential(credential: VaultCredential): Promise<{ name: string; value: string }> {
+  const binding = credentialBinding(credential)
+  const params = new URLSearchParams(binding.project_id === null ? { scope: 'global' } : { project: binding.project_id })
+  const result = await apiGet<{ name: string; value: string }>(`/vault/credentials/${encodeURIComponent(binding.name)}?${params}`)
+  assertCredentialMetadata(result, binding)
+  const current = (await fetchCredentials()).find(row => row.id === binding.id)
+  if (!current) throw new Error('Credential metadata readback missing')
+  assertCredentialMetadata(credentialBinding(current), binding)
+  return result
 }
 
-export async function deleteCredential(name: string, project?: string): Promise<void> {
-  const params = project ? `?project=${encodeURIComponent(project)}` : ''
-  await apiDelete<Record<string, unknown>>(`/vault/credentials/${encodeURIComponent(name)}${params}`)
+export async function deleteCredential(credential: VaultCredential): Promise<void> {
+  const binding = credentialBinding(credential)
+  const current = (await fetchCredentials()).find(row => row.id === binding.id)
+  if (!current) throw new Error('Credential metadata readback missing')
+  assertCredentialMetadata(credentialBinding(current), binding)
+  const params = new URLSearchParams(binding.project_id === null ? { scope: 'global' } : { project: binding.project_id })
+  const result = await apiDelete<{ current_state?: unknown }>(`/vault/credentials/${encodeURIComponent(binding.name)}?${params}`)
+  if (result.current_state !== undefined) assertCredentialMetadata(result.current_state, binding)
+  if ((await fetchCredentials()).some(row => row.id === binding.id)) throw new Error('Credential deletion readback failed')
 }
 
 export async function fetchConfig(): Promise<Record<string, Record<string, unknown>>> {
@@ -311,10 +343,12 @@ export async function checkForUpdate(): Promise<UpdateInfo> {
   return apiGet<UpdateInfo>('/update/check')
 }
 
-export async function fetchMemories(project: string, limit = 100): Promise<Memory[]> {
-  const params = new URLSearchParams({
-    project,
-    limit: String(limit),
-  })
-  return apiGet<Memory[]>(`/memories?${params.toString()}`)
+export async function fetchMemories(query: MemoryReaderQuery): Promise<ReaderPage<Memory>> {
+  const project = await resolveProject(query.project)
+  const offset = query.offset ?? 0
+  const limit = query.limit ?? 100
+  const params = new URLSearchParams({ project, offset: String(offset), limit: String(limit) })
+  if (query.query) params.set('query', query.query)
+  for (const filter of query.filters ?? []) params.append('filter', filter)
+  return parseReaderPage(await apiGet<ReaderPage<Memory>>(`/memories?${params}`), project, offset, limit)
 }

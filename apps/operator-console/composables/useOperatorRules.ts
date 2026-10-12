@@ -1,9 +1,8 @@
 import { onBeforeUnmount, ref as sharedRef, type Ref as SharedRef } from 'vue'
 import { startedLoads } from './useConsolePreferences'
-import { useOperatorProjectContext } from './useOperatorProjectContext'
+import { isCatalogProject, useOperatorProjectContext } from './useOperatorProjectContext'
 
 let sharedRulesPageRows: SharedRef<RuleRow[]> | undefined
-let sharedRulesPageProjectOptions: SharedRef<string[]> | undefined
 let sharedRulesPageState: SharedRef<OperatorLoadState<RuleRow[]>> | undefined
 
 import { computed, type ComputedRef } from 'vue'
@@ -18,6 +17,7 @@ import {
   emptyState,
   endpointEvidence,
   errorState,
+  gatedState,
   liveState,
   loadOperatorJson,
   operatorFetchResponse,
@@ -499,7 +499,7 @@ function startOnce(key: string, run: () => Promise<void>) {
   }
 }
 
-export function useOperatorRules(initialScope = 'all'): {
+export function useOperatorRules(initialScope = ''): {
   rows: RuleRow[]
   scopeOptions: ComputedRef<string[]>
   loadState: ComputedRef<OperatorLoadState<RuleRow[]>>
@@ -516,21 +516,16 @@ export function useOperatorRules(initialScope = 'all'): {
 } {
   const initialEvidence = endpointEvidence(ruleListPath(initialScope), 'rules-list')
   const rowsState = (sharedRulesPageRows ??= sharedRef<RuleRow[]>((() => [])()))
-  const projectOptions = (sharedRulesPageProjectOptions ??= sharedRef<string[]>((() => [])()))
   const context = useOperatorProjectContext()
   const state = (sharedRulesPageState ??= sharedRef<OperatorLoadState<RuleRow[]>>((() => pendingState(initialEvidence, rowsState.value))()))
 
   const loadState = computed(() => state.value)
-  const scopeOptions = computed(() => ['global', ...projectOptions.value])
+  const scopeOptions = computed(() => ['global', ...context.projects.value])
   const pending = computed(() => state.value.kind === 'pending')
   const error = computed(() => state.value.kind === 'error' ? state.value.error.message : null)
   let generation = 0
   let currentScope = initialScope
 
-  async function refreshProjects() {
-    await context.refresh()
-    replaceArray(projectOptions.value, context.projects.value)
-  }
 
   async function refresh(scope = currentScope) {
     const current = ++generation
@@ -539,8 +534,10 @@ export function useOperatorRules(initialScope = 'all'): {
     const evidence = endpointEvidence(endpoint, 'rules-list')
     replaceArray(rowsState.value, [])
     state.value = pendingState(evidence, [])
-    await refreshProjects()
-    if (current !== generation) return
+    if (context.selectionPending.value || context.selectionError.value || context.error.value || !scope || (scope !== 'all' && scope !== 'global' && !isCatalogProject(scope))) {
+      state.value = gatedState(evidence, 'project-selection', 'Choose an explicit rule scope before reading rules.', [])
+      return
+    }
     const result = await loadOperatorJson<ApiRuleRow[]>(endpoint, {
       source: 'rules-list',
       empty: (rows) => !rows.length,
@@ -573,6 +570,7 @@ export function useOperatorRules(initialScope = 'all'): {
   }
 
   async function createRule(input: RuleCreateInput) {
+    if (context.selectionPending.value || context.selectionError.value || context.error.value || (input.project !== undefined && !isCatalogProject(input.project))) throw new TypeError('An explicit catalog rule scope is required')
     const requestId = crypto.randomUUID()
     const request = { requestId, action: 'rule-create', intent: input }
     return executeMutation(
@@ -600,6 +598,7 @@ export function useOperatorRules(initialScope = 'all'): {
   }
 
   async function freezeRuleSelection(filter: RuleSelectionFilter, excludedIds: string[]): Promise<OperatorSelection> {
+    if (context.selectionPending.value || context.selectionError.value || context.error.value || !filter.scope || (filter.scope !== 'all' && filter.scope !== 'global' && !isCatalogProject(filter.scope))) throw new TypeError('An explicit rule scope is required')
     const requestId = crypto.randomUUID()
     const response = await operatorFetchJson<SelectionEnvelope>('/api/collections/selection', jsonInit('POST', {
       domain: 'rules',
@@ -621,6 +620,7 @@ export function useOperatorRules(initialScope = 'all'): {
   }
 
   async function loadRulePage(filter: RuleSelectionFilter, cursor = ''): Promise<RuleSelectionPage> {
+    if (context.selectionPending.value || context.selectionError.value || context.error.value || !filter.scope || (filter.scope !== 'all' && filter.scope !== 'global' && !isCatalogProject(filter.scope))) throw new TypeError('An explicit rule scope is required')
     const requestId = crypto.randomUUID()
     const response = await operatorFetchJson<unknown>('/api/collections/selection/page', jsonInit('POST', {
       domain: 'rules',

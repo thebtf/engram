@@ -7,7 +7,7 @@ const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const context = useOperatorProjectContext()
-const { project, projects, pending: catalogPending, error: projectError } = context
+const { project, projects, descriptors, unresolved, pending: catalogPending, error: projectError, selectionPending, selectionError } = context
 const { sessions, selectedSession, sessionsState, detailState, pending, refresh, openProject, openSession, openSessionByID, deleteProject } = useOperatorProjects(project)
 const search = ref('')
 const visibleProjects = computed(() => projects.value.filter((id) => `${projectName(id)} ${id}`.toLocaleLowerCase().includes(search.value.toLocaleLowerCase())))
@@ -20,7 +20,7 @@ watch([project, () => route.query.session], async () => {
   archiveInput.value = ''
   const current = ++generation
   await openProject(id)
-  if (current !== generation) return
+  if (current !== generation || !context.isCatalogProject(id)) return
   const requested = typeof route.query.session === 'string' ? route.query.session : ''
   const session = sessions.find((row) => row.claudeSessionId === requested || row.id === requested)
   if (session) await openSession(session)
@@ -28,7 +28,7 @@ watch([project, () => route.query.session], async () => {
 }, { immediate: true, flush: 'sync' })
 async function archive() {
   const id = project.value
-  if (!id || id === 'all' || archiveInput.value !== id || archiveBusy.value) return
+  if (!context.isCatalogProject(id) || archiveInput.value !== id || archiveBusy.value) return
   archiveBusy.value = true
   try {
     const result = await deleteProject(id)
@@ -43,8 +43,11 @@ async function archive() {
   <div class="projects-page">
     <header><h1>{{ t('nav.items.projects') }}</h1><p>{{ t('knowledge.entryLead') }}</p></header>
     <div v-if="projectError" class="state error"><span>{{ t(operatorDiagnosisKey(projectError)) }}</span><button class="btn" @click="context.refresh">{{ t('knowledge.retry') }}</button></div>
+    <p v-if="selectionPending" role="status">{{ t('projectCatalog.loading') }}</p>
+    <div v-if="selectionError" role="alert"><p>{{ t('projectCatalog.unknownProject') }} {{ t(operatorDiagnosisKey(selectionError)) }}</p><button class="btn" @click="context.refresh">{{ t('knowledge.retry') }}</button></div>
+    <RouterLink v-if="unresolved.length" to="/projects/unresolved">{{ t('projectCatalog.review') }} ({{ unresolved.length }})</RouterLink>
     <div class="project-workspace">
-      <section class="project-list"><label><span>{{ t('knowledge.findProject') }}</span><input v-model="search" type="search" /></label><p v-if="catalogPending" role="status">{{ t('knowledge.loading') }}</p><p v-else-if="!projectError && !projects.length">{{ t('knowledge.noProjects') }}</p><p v-else-if="!projectError && !visibleProjects.length">{{ t('knowledge.noProjectMatch') }}</p><button v-for="id in visibleProjects" :key="id" class="project-row" :aria-pressed="project === id" :data-testid="`project-row-${id}`" @click="context.select(id)"><strong>{{ projectName(id) }}</strong></button><button class="btn" @click="context.select('all')">{{ t('knowledge.browseAll') }}</button></section>
+      <section class="project-list"><label><span>{{ t('knowledge.findProject') }}</span><input v-model="search" type="search" /></label><p v-if="catalogPending" role="status">{{ t('knowledge.loading') }}</p><p v-else-if="!projectError && !projects.length">{{ t('knowledge.noProjects') }}</p><p v-else-if="!projectError && !visibleProjects.length">{{ t('knowledge.noProjectMatch') }}</p><button v-for="id in visibleProjects" :key="id" class="project-row" :aria-pressed="project === id" :data-testid="`project-row-${id}`" @click="context.select(id)"><strong>{{ projectName(id) }}</strong><span v-if="descriptors.filter(row => projectName(row.project_id) === projectName(id)).length > 1">{{ t('projectCatalog.ambiguousName') }} · {{ id }}</span></button><button class="btn" @click="context.select('all')">{{ t('knowledge.browseAll') }}</button></section>
       <section v-if="project" class="project-content">
         <h2>{{ project === 'all' ? t('knowledge.allProjects') : projectName(project) }}</h2>
         <nav class="project-links"><RouterLink :to="context.to('/memory')">{{ t('nav.items.memory') }}</RouterLink><RouterLink :to="context.to('/documents')">{{ t('nav.items.documents') }}</RouterLink><RouterLink :to="context.to('/code')">{{ t('nav.items.code') }}</RouterLink><RouterLink :to="context.to('/')">{{ t('nav.items.overview') }}</RouterLink></nav>

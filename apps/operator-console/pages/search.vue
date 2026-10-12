@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { operatorDiagnosisKey } from '../composables/useOperatorApi'
-import { useOperatorProjectContext, projectName } from '../composables/useOperatorProjectContext'
+import { isCatalogProject, useOperatorProjectContext, projectName } from '../composables/useOperatorProjectContext'
 import { useOperatorSearchNoise } from '../composables/useOperatorSearchNoise'
 const { t } = useI18n()
 const route = useRoute()
@@ -9,7 +9,7 @@ const router = useRouter()
 const context = useOperatorProjectContext()
 const query = ref(typeof route.query.draftQ === 'string' ? route.query.draftQ : '')
 const requestedQuery = computed(() => typeof route.query.q === 'string' ? route.query.q.trim() : '')
-const requestedProject = computed(() => typeof route.query.project === 'string' ? route.query.project.trim() : '')
+const requestedProject = context.project
 const appliedRouteSearch = ref('')
 const {
   projects,
@@ -26,8 +26,8 @@ const {
 } = useOperatorSearchNoise()
 
 const hasProjects = computed(() => projects.value.length > 0)
-const hasRequestedProject = computed(() => Boolean(requestedProject.value) && projects.value.includes(requestedProject.value))
-const searchError = computed(() => context.error.value || (searchState.value.kind === 'error' ? searchState.value.error : null))
+const hasRequestedProject = computed(() => isCatalogProject(requestedProject.value) && !context.selectionPending.value && !context.selectionError.value && !context.error.value)
+const searchError = computed(() => context.selectionError.value || context.error.value || (searchState.value.kind === 'error' ? searchState.value.error : null))
 
 async function refreshSearch() {
   await refresh()
@@ -50,15 +50,16 @@ watch([requestedQuery, requestedProject, hasRequestedProject], async ([nextQuery
   if (requestedProject.value !== nextProject || requestedQuery.value !== nextQuery) return
   const memory = typeof route.query.focusMemory === 'string' ? route.query.focusMemory : ''
   if (memory) { await nextTick(); document.querySelector<HTMLElement>(`[data-testid="search-result-open-${CSS.escape(memory)}"]`)?.focus() }
-}, { immediate: true })
+}, { immediate: true, flush: 'sync' })
 
 async function submitSearch() {
+  if (!hasRequestedProject.value) return
   await router.push({ path: '/search', query: { project: selectedProject.value, q: query.value.trim() } })
 }
 
-function openResult(_project: string, memory: string) {
+function openResult(resultProject: string, memory: string) {
   const project = selectedProject.value
-  if (!project || project === 'all' || !memory) return
+  if (!hasRequestedProject.value || resultProject !== project || !memory) return
   void router.push({ path: '/memory', query: { ...context.to('/memory').query, project, memory, from: 'search', searchQuery: requestedQuery.value } })
 }
 onBeforeUnmount(() => {
@@ -80,7 +81,7 @@ onBeforeUnmount(() => {
       <label>
         <span>{{ t('searchPage.form.project') }}</span>
         <select :value="selectedProject" :disabled="!hasProjects" @change="context.select(($event.target as HTMLSelectElement).value)">
-          <option v-if="!hasProjects" value="">{{ t('searchPage.form.noProjects') }}</option>
+          <option v-if="!selectedProject" value="" disabled>{{ t('knowledge.chooseProject') }}</option>
           <option v-if="selectedProject === 'all'" value="all" disabled>{{ t('knowledge.chooseProject') }}</option>
           <option v-for="project in projects" :key="project" :value="project">{{ projectName(project) }}</option>
         </select>
@@ -89,12 +90,12 @@ onBeforeUnmount(() => {
         <span>{{ t('searchPage.form.query') }}</span>
         <input v-model="query" :placeholder="t('searchPage.placeholder')" autocomplete="off">
       </label>
-      <button class="btn primary" type="submit" :disabled="pending || !query.trim() || !selectedProject || selectedProject === 'all'">
+      <button class="btn primary" type="submit" :disabled="pending || !query.trim() || !hasRequestedProject">
         {{ t('searchPage.actions.search') }}
       </button>
     </form>
 
-    <div v-if="pending" class="state pending" role="status">{{ t('searchPage.state.pending') }}</div>
+    <div v-if="pending || context.selectionPending.value" class="state pending" role="status">{{ t('searchPage.state.pending') }}</div>
     <div v-if="searchError" class="state error" role="status"><p>{{ t(operatorDiagnosisKey(searchError)) }}</p><button class="btn" type="button" :disabled="pending" @click="refreshSearch">{{ t('knowledge.retry') }}</button></div>
     <nav v-if="hasRequestedProject && requestedQuery" class="text-recovery" :aria-label="t('searchPage.recovery.title')">
       <p>{{ t('searchPage.recovery.body') }}</p>

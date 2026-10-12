@@ -23,7 +23,7 @@ test('candidate queue lists pending candidates and rejects through the live acti
     pageErrors.push(error.message)
   })
 
-  await page.goto('/queue')
+  await page.goto('/queue?project=all')
 
   const candidate = page.getByTestId('queue-row-302')
   await expect(candidate).toBeVisible()
@@ -39,4 +39,17 @@ test('candidate queue lists pending candidates and rejects through the live acti
   expect(failedRequests).toEqual([])
   expect(badResponses).toEqual([])
   expect(pageErrors).toEqual([])
+})
+
+test('candidate queue never widens a missing or failed project selection', async ({ page }) => {
+  const projects: Array<string | null> = []
+  page.on('request', (request) => { const url = new URL(request.url()); if (url.pathname === '/api/memory/candidates') projects.push(url.searchParams.get('project')) })
+  await page.goto('/queue')
+  await expect(page.getByTestId('project-context-select')).toHaveValue('')
+  expect(projects).toEqual([])
+  await page.route('**/api/projects/resolve?**', (route) => route.fulfill({ status: 503, json: { error: 'Mapping unavailable' } }))
+  await page.goto('/queue?project=historical-unmapped')
+  await expect(page.getByTestId('project-context-select')).toHaveValue('')
+  await expect(page.locator('.statebar[data-state="error"]')).toBeVisible()
+  expect(projects).toEqual([])
 })

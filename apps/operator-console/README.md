@@ -51,12 +51,67 @@ distinct. The knowledge project is not a code Source/Checkout/View selection or 
 | `/rules`, `/queue` | Retained supported actions follow the shared selected project. Rules retain their explicit global scope; candidates retain the existing flag and explicit all-project contract. |
 | `/noise` | Secondary server-wide retrieval/outcome diagnostics. Missing numeric fields stay unknown; unavailable decorative trends are not a primary task. |
 
-The NEXT readers are one shape, not an optional compatibility mode:
+The canonical catalog is one shape, not an optional compatibility mode:
 
 ```ts
-type ProjectsResponse = { items: { id: string; display_name: string }[] }
+type ProjectsResponse = {
+  items: { project_id: string; name: string; repository_qualifier?: string }[]
+  unresolved: { reference: string; name: string; reason: string }[]
+}
 type ReaderPage<T> = { items: T[]; total: number; offset: number; limit: number; has_more: boolean }
 ```
+
+Only validated catalog UUIDs are normal project values. Names are mutable labels,
+not identity or authority. Equal names retain distinct IDs and use repository
+qualifiers when supplied; missing qualifiers remain visibly ambiguous. Workspace
+Repository/Working copy/Indexed snapshot selection remains independent.
+
+The shared context retains `project`, `projects`, `descriptors`, `pending`, `error`,
+`label`, `refresh`, `select`, `to`, and `remember`. It adds `unresolved`,
+`selectionPending`, `selectionError`, `isCatalogProject(id)` and
+`resolveCatalogProject(id): Promise<string | null>`. Null means a proven unresolved
+mapping; request/protocol errors throw. During route translation the selected project
+is blank. Temporary `GET /api/projects/resolve?legacy_id=...` is the only translator
+for old `project`, `memoryProject`, `docProject`, and explicit `principalProject`
+anchors. It preserves content IDs, query/filter/version/history and search-return
+state, and rejects late responses belonging to an older route. Missing scope never
+means all projects; explicit `all`/`current`/global policies are not Project IDs.
+
+`/projects/unresolved` separately lists retained groups and reads memory, document
+and issue records through `GET /api/projects/unresolved/{reference}/content` with
+`kind`, `limit`, `cursor`, and `q`. The matching `/history` reader takes the original
+`id`, `kind`, `limit`, and `cursor`. Records, version/audit fields, retained provenance,
+query, continuation and the original return link remain visible. The opaque reference
+never enters a normal project query, selector, identity computation or write form.
+Unknown/stale references and failed/mismatched readers show errors, not empty success.
+Document links retain their original path, requested version and comparison version.
+The review binds history to an explicit content ID, an exact matching record, or the
+single retained record for that path. It never substitutes another version as the
+selected content. Requested versions are highlighted in the read-only history;
+versions outside its current page remain visibly unavailable and history paging stays
+available. Issue detail links retain `/issues/{id}?project=<UUID>`; unresolved
+translation carries the same issue ID into the separate review.
+
+The review's Code choice uses `GET /api/projects/unresolved/{reference}/code` with
+`limit` and `cursor` only. It renders retained repository, working-copy and snapshot
+metadata; IDs and refs are technical provenance, never pin/read/index grants.
+The normal `POST /api/code/contexts` catalog retains Source/Checkout/View refs and
+may be narrowed with `project=<catalog UUID>`. Its `project_id: null` /
+`unresolved_reference` variant links to this review and is never a normal selection.
+
+These are coordinated source interfaces, not proof that the Main readers or migrated
+data are live. The synthetic mock fixtures and regression cases cover frontend
+selection/navigation only; actual migrated-reader, privacy and installed acceptance
+remain Main's integration dependencies. No production migration or release completion
+is claimed by this source slice.
+
+The mock uses the real bound `POST /api/code/contexts?project=<UUID>` shape, including
+`tab_binding_id` and `document_proof`. Human issue fixtures require explicit canonical
+source/target projects and `source_agent=human`; list filters apply before paging and
+counts. Vault fixtures retain exact project/name binding, explicit `scope=global`
+without `project`, and UUID/null `project_id` metadata. Values are returned only by
+the explicit reveal reader, never catalog, history or mutation readback metadata.
+
 
 Memory and document inventories require `project=<exact selected canonical ID>`.
 Their server-side literal, case-insensitive `query` and authorized `total` apply before
@@ -465,6 +520,25 @@ The standalone Compose file maps `OPERATOR_WEB_API_TARGET` to that same
 `ENGRAM_OPERATOR_API_TARGET`, defaulting to `http://host.docker.internal:37777`.
 Its static host listens on `HOST=0.0.0.0` and `PORT=3000`; no Nuxt/Nitro
 environment aliases remain in this deployment path.
+
+The optional process environment variable `ENGRAM_OPERATOR_OUTPUT_ROOT` redirects build
+artifacts; an unset or empty value keeps the existing `.output` layout and locale-copy
+behavior. Absolute paths are used directly; relative paths resolve from this app directory.
+With an override, `npm run build` writes `public/index.html`, `public/_nuxt/`,
+`public/i18n/locales/`, `server/index.mjs`, `auto-imports.d.ts`, `components.d.ts` and
+Vite's `cache/` below that root. The locale producer first copies immutable source `public/`
+assets and current `i18n/locales/` into the root's `static-public/`; Vite uses that staging
+directory as `publicDir`, separately from the `public/` output it empties. Source `public/`,
+the default `.output/` and existing `node_modules/` are not build destinations when the
+override is active. The build uses Vite's native config loader on the supported Node version,
+so it does not create a bundled config in `node_modules/.vite-temp`. Keep the same variable
+for `node scripts/check-static-assets.mjs`; launch the prepared host with
+`node <output-root>/server/index.mjs` instead of the default `npm run preview`.
+The caller must admit the exact finite output root first: the variable grants no filesystem
+permission or byte quota. For a confined npm invocation, also put npm's own cache/logs
+(`npm_config_cache`) and OS temporary files (`TMPDIR`, `TMP`, `TEMP`) inside that admitted
+root; capture build logs there. Budget staged public/locales, generated public bundles,
+both declaration files, the host entry, cache, temporary files and logs together.
 
 Use Node 22.22.3 or newer. The release script and Docker build pin the same Linux Node
 version; the release archive checksum and Docker digest remain independent pins. Run

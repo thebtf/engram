@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "build": "node scripts/copy-static-i18n.mjs && vite build && node scripts/prepare-static-host.mjs && node scripts/check-static-assets.mjs",
+    "build": "node scripts/copy-static-i18n.mjs && vite build --configLoader native && node scripts/prepare-static-host.mjs && node scripts/check-static-assets.mjs",
     "generate": "npm run build",
     "preview": "node .output/server/index.mjs",
     "parity": "node scripts/parity-check.repo.mjs",

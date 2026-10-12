@@ -330,14 +330,16 @@ test('one-time keycard and invitation receipts expose only validated create-resp
 })
 
 test('project, vault, and domain receipts require validated synchronous evidence', async () => {
- const project = 'project-alpha'
- const secret = { name: 'API_KEY', value: 'secret', project: 'engram', scope: 'project' as const }
+ const project = '44444444-4444-4444-8444-444444444444'
+ const secret = { name: 'API_KEY', value: 'secret', project, scope: 'project' as const }
  const domain = { domain: 'memory-lab', ownerPrincipal: 'agent/alice', ownerPrincipalKind: 'agent' as const, mode: 'warn' as const }
  const validDomain = { domain: domain.domain, owner_principal: domain.ownerPrincipal, owner_principal_kind: domain.ownerPrincipalKind, mode: domain.mode, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' }
  const valid = await Promise.all([
   parseMutationResponse({ requestId: 'project', action: 'project-archive', intent: { project } }, jsonResponse(200, { id: project, removed_at: '2026-01-01T00:00:00Z' }), projectArchiveCurrentStateParser(project)),
   parseMutationResponse({ requestId: 'vault-create', action: 'vault-store', intent: secret }, jsonResponse(201, { id: 9, name: secret.name, scope: secret.scope, message: 'Credential stored successfully' }), createSecretCurrentStateParser(secret)),
-  parseMutationResponse({ requestId: 'vault-delete', action: 'vault-delete', intent: { credentialID: '9' } }, jsonResponse(200, { deleted: true, name: secret.name }), deleteSecretCurrentStateParser(secret.name)),
+  parseMutationResponse({ requestId: 'vault-delete', action: 'vault-delete', intent: { credentialID: '9' } }, jsonResponse(200, { deleted: true, name: secret.name }), deleteSecretCurrentStateParser(secret.name, secret.project)),
+  parseMutationResponse({ requestId: 'vault-project-bound', action: 'vault-delete', intent: { credentialID: '9' } }, jsonResponse(200, { deleted: true, name: secret.name, project_id: secret.project }), deleteSecretCurrentStateParser(secret.name, secret.project)),
+  parseMutationResponse({ requestId: 'vault-global-bound', action: 'vault-delete', intent: { credentialID: '10' } }, jsonResponse(200, { deleted: true, name: secret.name, project_id: null }), deleteSecretCurrentStateParser(secret.name, '')),
   parseMutationResponse({ requestId: 'vault-cleanup', action: 'vault-orphan-cleanup', intent: undefined }, jsonResponse(200, { status: 'ok', deleted: 1 }), cleanupOrphansCurrentStateParser),
   parseMutationResponse({ requestId: 'domain-upsert', action: 'memory-domain-upsert', intent: domain }, jsonResponse(200, validDomain), upsertDomainCurrentStateParser(domain)),
   parseMutationResponse({ requestId: 'domain-delete', action: 'memory-domain-delete', intent: { domain: domain.domain } }, jsonResponse(200, { deleted: true, domain: domain.domain }), deleteDomainCurrentStateParser(domain.domain)),
@@ -349,7 +351,9 @@ test('project, vault, and domain receipts require validated synchronous evidence
   parseMutationResponse({ requestId: 'vault-malformed', action: 'vault-store', intent: secret }, jsonResponse(201, { id: '9', name: secret.name }), createSecretCurrentStateParser(secret)),
   parseMutationResponse({ requestId: 'domain-malformed', action: 'memory-domain-upsert', intent: domain }, jsonResponse(200, { ...validDomain, owner_principal: 'agent/bob' }), upsertDomainCurrentStateParser(domain)),
   parseMutationResponse({ requestId: 'project-pending', action: 'project-archive', intent: { project } }, jsonResponse(200, { operation_state: 'pending', id: project, removed_at: '2026-01-01T00:00:00Z' }), projectArchiveCurrentStateParser(project)),
-  parseMutationResponse({ requestId: 'vault-pending', action: 'vault-delete', intent: { credentialID: '9' } }, jsonResponse(200, { operation_state: 'pending', deleted: true, name: secret.name }), deleteSecretCurrentStateParser(secret.name)),
+  parseMutationResponse({ requestId: 'vault-pending', action: 'vault-delete', intent: { credentialID: '9' } }, jsonResponse(200, { operation_state: 'pending', deleted: true, name: secret.name }), deleteSecretCurrentStateParser(secret.name, secret.project)),
+  parseMutationResponse({ requestId: 'vault-foreign-delete', action: 'vault-delete', intent: { credentialID: '9' } }, jsonResponse(200, { deleted: true, name: secret.name, project_id: '55555555-5555-4555-8555-555555555555' }), deleteSecretCurrentStateParser(secret.name, secret.project)),
+  parseMutationResponse({ requestId: 'vault-foreign-create', action: 'vault-store', intent: secret }, jsonResponse(201, { id: 9, name: secret.name, scope: secret.scope, project_id: '55555555-5555-4555-8555-555555555555' }), createSecretCurrentStateParser(secret)),
   parseMutationResponse({ requestId: 'domain-pending', action: 'memory-domain-delete', intent: { domain: domain.domain } }, jsonResponse(200, { operation_state: 'pending', deleted: true, domain: domain.domain }), deleteDomainCurrentStateParser(domain.domain)),
  ])
  for (const result of rejected) assertMutationKind(result, 'committed_verification_pending')

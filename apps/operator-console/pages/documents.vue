@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { useOperatorProjectContext, projectName, safeNavigation } from '../composables/useOperatorProjectContext'
+import { isCatalogProject, useOperatorProjectContext, projectName, safeNavigation } from '../composables/useOperatorProjectContext'
 import { useOperatorDocuments, type DocumentExportArtifact } from '../composables/useOperatorDocuments'
 import { operatorApiUrl, operatorDiagnosisKey } from '../composables/useOperatorApi'
 const { t, locale } = useI18n()
@@ -8,6 +8,7 @@ const route = useRoute()
 const router = useRouter()
 const context = useOperatorProjectContext()
 const { project } = context
+const scopeError = computed(() => context.selectionError.value || context.error.value)
 const docs = useOperatorDocuments(project)
 const { documents, history, comments, primaryVersion, secondaryVersion, primaryDocument, secondaryDocument, documentsState, historyState, primaryState, secondaryState, commentsState, total, hasMore, refresh, openDocument, selectPrimaryVersion, selectSecondaryVersion, clearDocumentDetail } = docs
 const query = computed(() => typeof route.query.q === 'string' ? route.query.q : '')
@@ -41,6 +42,7 @@ const pageCount = computed(() => Math.max(1, Math.ceil((total.value || 0) / page
 const pageRows = filtered
 
 function updateQuery(values: Record<string, string | string[] | undefined>) {
+  if (context.selectionPending.value || (!isCatalogProject(project.value) && project.value !== 'all')) return
   return router.push({ path: '/documents', query: { ...route.query, project: project.value || undefined, ...values } })
 }
 function addType() {
@@ -54,7 +56,7 @@ function removeType(index: number) {
 }
 watch(query, (value) => { draft.value = value })
 watch(prefix, (value) => { prefixDraft.value = value })
-watch([project, prefix, query, page, pageSize, types, () => route.query.allRead], () => {
+watch([project, context.selectionPending, scopeError, prefix, query, page, pageSize, types, () => route.query.allRead], () => {
   actionError.value = ''
   mutationResult.value = null
   void refresh()
@@ -68,7 +70,7 @@ async function readDetail() {
   compareOpen.value = false
   exportArtifact.value = null
   const targetProject = documentProject.value
-  if (!path || !scope || !targetProject || targetProject === 'all') return
+  if (!path || !scope || !isCatalogProject(targetProject) || context.selectionPending.value) return
   await nextTick()
   if (current !== generation) return
   detailHeading.value?.focus()
@@ -83,7 +85,7 @@ async function readDetail() {
   await nextTick()
   detailHeading.value?.focus()
 }
-watch([requestedPath, documentProject], () => { commentDraft.value = ''; lineStart.value = ''; lineEnd.value = ''; actionError.value = ''; void readDetail() }, { immediate: true, flush: 'post' })
+watch([requestedPath, documentProject, context.selectionPending, scopeError], () => { commentDraft.value = ''; lineStart.value = ''; lineEnd.value = ''; actionError.value = ''; void readDetail() }, { immediate: true, flush: 'sync' })
 watch(() => route.query.version, (value) => { const version = Number(value); if (Number.isSafeInteger(version) && version > 0) void selectPrimaryVersion(version) })
 watch(() => route.query.compare, (value) => {
   const version = Number(value)
@@ -116,7 +118,7 @@ async function compare() {
 
 async function comment() {
   const content = commentDraft.value.trim()
-  if (!content || busy.value || !primaryDocument.value) return
+  if (!content || busy.value || !primaryDocument.value || context.selectionPending.value || scopeError.value) return
   const start = lineStart.value ? Number(lineStart.value) : undefined
   const end = lineEnd.value ? Number(lineEnd.value) : undefined
   if ((start !== undefined && (!Number.isSafeInteger(start) || start <= 0)) || (end !== undefined && (!Number.isSafeInteger(end) || end <= 0)) || (start !== undefined && end !== undefined && end < start)) { actionError.value = t('documents.comments.invalidRange'); return }
@@ -135,7 +137,7 @@ async function comment() {
 
 async function exportDocument() {
   const doc = primaryDocument.value
-  if (!doc || busy.value) return
+  if (!doc || busy.value || context.selectionPending.value || scopeError.value) return
   const attempt = ++exportGeneration
   exportArtifact.value = null
   busy.value = true
@@ -162,7 +164,9 @@ function time(value?: string) {
 <template>
   <div class="documents-page" @keydown.esc="requestedPath && closeDetail()">
     <header class="page-head"><div><h1>{{ t('nav.items.documents') }}</h1><p>{{ t('knowledge.documentsLead') }}</p></div><button class="btn" :disabled="documentsState.kind === 'pending'" @click="refreshView">{{ t('knowledge.refresh') }}</button></header>
-    <div v-if="!project" class="empty"><h2>{{ t('knowledge.chooseProject') }}</h2><p>{{ t('knowledge.chooseProjectHelp') }}</p><RouterLink :to="context.to('/projects')">{{ t('nav.items.projects') }}</RouterLink></div>
+    <div v-if="scopeError" class="state error" role="status" data-testid="documents-project-error"><p>{{ t(operatorDiagnosisKey(scopeError)) }}</p><button class="btn" @click="context.refresh">{{ t('knowledge.retry') }}</button></div>
+    <div v-else-if="context.selectionPending.value" class="state" role="status">{{ t('knowledge.loading') }}</div>
+    <div v-else-if="!project" class="empty"><h2>{{ t('knowledge.chooseProject') }}</h2><p>{{ t('knowledge.chooseProjectHelp') }}</p><RouterLink :to="context.to('/projects')">{{ t('nav.items.projects') }}</RouterLink></div>
     <template v-else>
       <form class="toolbar" @submit.prevent="updateQuery({ q: draft.trim() || undefined, pathPrefix: prefixDraft.trim() || undefined, path_prefix: undefined, page: '1', path: undefined, version: undefined, compare: undefined, allRead: project === 'all' ? '1' : undefined })">
         <label class="search-field"><span>{{ t('knowledge.searchDocuments') }}</span><input v-model="draft" type="search" /></label>

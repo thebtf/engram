@@ -3,8 +3,8 @@ import { useOperatorProjectContext, projectName } from '../composables/useOperat
 import { operatorDiagnosisKey } from '../composables/useOperatorApi'
 const { t } = useI18n()
 const context = useOperatorProjectContext()
-const { project, projects, pending, error } = context
-function select(event: Event) { void context.select((event.target as HTMLSelectElement).value) }
+const { project, projects, descriptors, unresolved, pending, error, selectionPending, selectionError } = context
+function select(event: Event) { if (event.target instanceof HTMLSelectElement) void context.select(event.target.value) }
 </script>
 
 <template>
@@ -13,15 +13,16 @@ function select(event: Event) { void context.select((event.target as HTMLSelectE
       <span>{{ t('knowledge.contextProject') }}</span>
       <select :value="project" :aria-label="t('knowledge.contextProject')" :disabled="pending && !projects.length" @change="select" data-testid="project-context-select">
         <option value="" disabled>{{ t('knowledge.chooseProject') }}</option>
-        <option v-for="id in projects" :key="id" :value="id">{{ projectName(id) }}</option>
-        <option v-if="project && project !== 'all' && !projects.includes(project)" :value="project">{{ projectName(project) }}</option>
+        <option v-for="id in projects" :key="id" :value="id">{{ projectName(id) }}{{ descriptors.filter(row => projectName(row.project_id) === projectName(id)).length > 1 ? ` · ${id}` : '' }}</option>
         <option value="all">{{ t('knowledge.allProjects') }}</option>
       </select>
     </label>
-    <span v-if="pending" role="status">{{ t('knowledge.loading') }}</span>
-    <div v-if="error" class="context-error" role="status">
-      {{ t(operatorDiagnosisKey(error)) }} <button type="button" @click="context.refresh">{{ t('knowledge.retry') }}</button>
+    <span v-if="pending || selectionPending" role="status">{{ t('projectCatalog.loading') }}</span>
+    <span v-if="project && project !== 'all' && descriptors.filter(row => projectName(row.project_id) === projectName(project)).length > 1">{{ t('projectCatalog.ambiguousName') }}</span>
+    <div v-if="error || selectionError" class="context-error" role="alert">
+      {{ t('projectCatalog.unknownProject') }} {{ t(operatorDiagnosisKey(error || selectionError)) }} <button type="button" @click="context.refresh">{{ t('knowledge.retry') }}</button>
     </div>
+    <RouterLink v-if="unresolved.length" to="/projects/unresolved">{{ t('projectCatalog.review') }} ({{ unresolved.length }})</RouterLink>
   </div>
 </template>
 

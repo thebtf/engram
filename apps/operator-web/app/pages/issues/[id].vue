@@ -5,17 +5,20 @@ import type { Issue } from '~/composables/useOperatorApi'
 import { useIssueDetailQuery } from '~/composables/useOperatorQueries'
 import {
   deleteIssue,
-  operatorIssueActor,
   updateIssue,
   type IssuePriority,
   type IssueType,
   type IssueUpdateFields,
 } from '~/composables/useOperatorIssueActions'
-import { formatAbsoluteDate, shortProjectName } from '~/utils/formatters'
+import { formatAbsoluteDate } from '~/utils/formatters'
+import { useProjectCatalog } from '~/composables/useProjectCatalog'
+import ProjectCatalogStatus from '~/components/ProjectCatalogStatus.vue'
 
 const route = useRoute()
 const router = useRouter()
 const queryClient = useQueryClient()
+const { projects, unresolved, selectedProject, selectionPending, selectionError, unresolvedReference, projectName } = useProjectCatalog('all')
+const canAct = computed(() => !selectionPending.value && !selectionError.value && projects.value.some(project => project.project_id === selectedProject.value))
 
 const issueId = computed(() => Number(route.params.id))
 const issueQuery = useIssueDetailQuery(issueId)
@@ -23,12 +26,12 @@ const issue = computed(() => issueQuery.data.value?.issue ?? null)
 const comments = computed(() => issueQuery.data.value?.comments ?? [])
 const sourceProjectName = computed(() =>
   issue.value
-    ? (issueQuery.data.value?.source_project_display_name || shortProjectName(issue.value.source_project))
+    ? (projects.value.some(project => project.project_id === issue.value?.source_project) ? projectName(issue.value.source_project) : issueQuery.data.value?.source_project_display_name || projectName(issue.value.source_project))
     : '',
 )
 const targetProjectName = computed(() =>
   issue.value
-    ? (issueQuery.data.value?.target_project_display_name || shortProjectName(issue.value.target_project))
+    ? (projects.value.some(project => project.project_id === issue.value?.target_project) ? projectName(issue.value.target_project) : issueQuery.data.value?.target_project_display_name || projectName(issue.value.target_project))
     : '',
 )
 
@@ -56,7 +59,10 @@ const invalidateIssue = async () => {
 }
 
 const issueMutation = useMutation({
-  mutationFn: (fields: IssueUpdateFields) => updateIssue(issueId.value, fields),
+  mutationFn: (fields: IssueUpdateFields) => {
+    if (!canAct.value) throw new Error('Choose a canonical source project before acting on an issue.')
+    return updateIssue(issueId.value, { ...fields, source_project: selectedProject.value, source_agent: 'human' })
+  },
   onSuccess: async () => {
     await invalidateIssue()
   },
@@ -70,7 +76,7 @@ const deleteMutation = useMutation({
   mutationFn: () => deleteIssue(issueId.value),
   onSuccess: async () => {
     await queryClient.invalidateQueries({ queryKey: ['issues'] })
-    await router.push('/issues')
+    await router.push({ path: '/issues', query: route.query })
   },
   onError: (error) => {
     actionMessage.value = ''
@@ -180,7 +186,6 @@ function updateStatus(status: Issue['status'], comment?: string) {
   actionError.value = ''
   actionMessage.value = ''
   issueMutation.mutate({
-    ...operatorIssueActor,
     status,
     comment,
   }, {
@@ -198,7 +203,6 @@ function submitComment() {
   actionError.value = ''
   actionMessage.value = ''
   issueMutation.mutate({
-    ...operatorIssueActor,
     comment: body,
   }, {
     onSuccess: async () => {
@@ -220,7 +224,6 @@ function submitReject() {
   actionError.value = ''
   actionMessage.value = ''
   issueMutation.mutate({
-    ...operatorIssueActor,
     status: 'rejected',
     comment: reason,
   }, {
@@ -242,6 +245,14 @@ function confirmDelete() {
 
 <template>
   <section class="space-y-5">
+    <ProjectCatalogStatus :records="unresolved" :pending="selectionPending" :error="selectionError" :reference="unresolvedReference" />
+    <label class="block text-sm text-[var(--fg-2)]">Source project
+      <select v-model="selectedProject" :disabled="selectionPending" class="ml-2 rounded border border-[var(--border)] bg-[var(--surface)] p-2">
+        <option value="all" disabled>Choose source project</option>
+        <option value="" disabled>Choose source project</option>
+        <option v-for="project in projects" :key="project.project_id" :value="project.project_id">{{ projectName(project.project_id) }}</option>
+      </select>
+    </label>
     <div class="surface-panel p-5">
       <div v-if="issueQuery.isPending.value" class="text-sm text-[var(--muted)]">
         Загрузка issue...
@@ -250,7 +261,7 @@ function confirmDelete() {
         {{ issueQuery.error.value?.message || 'Не удалось загрузить issue detail' }}
       </div>
       <div v-else-if="issue" class="space-y-5">
-        <NuxtLink to="/issues" class="inline-flex text-sm font-semibold text-[var(--accent)] hover:underline">
+        <NuxtLink :to="{ path: '/issues', query: route.query }" class="inline-flex text-sm font-semibold text-[var(--accent)] hover:underline">
           ← Back to issues
         </NuxtLink>
 

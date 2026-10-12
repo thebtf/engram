@@ -2,11 +2,13 @@
 import { computed, ref, watch } from 'vue'
 import { resolvePageSize, usePersistentPageSize } from '../composables/usePersistentPageSize'
 import { useOperatorQueue, type OperatorCandidate } from '../composables/useOperatorQueue'
-import { projectName } from '../composables/useOperatorProjectContext'
+import { isCatalogProject, projectName, useOperatorProjectContext } from '../composables/useOperatorProjectContext'
 
 type CandidateAction = 'promote' | 'reject' | 'supersede'
 
 const { t } = useI18n()
+const context = useOperatorProjectContext()
+const scopeError = computed(() => context.selectionError.value || context.error.value)
 const {
   rows,
   selectedProject,
@@ -54,13 +56,15 @@ watch(pageSize, () => {
   page.value = 1
 })
 
-watch(selectedProject, () => {
+watch([selectedProject, context.selectionPending, scopeError], () => {
   page.value = 1
   openId.value = null
   selected.value = {}
   confirm.value = null
+  mutationResult.value = null
+  notice.value = null
   void refresh()
-})
+}, { immediate: true, flush: 'sync' })
 
 watch(openId, () => {
   confirm.value = null
@@ -86,7 +90,7 @@ function confidenceLabel(candidate: OperatorCandidate) {
 
 
 function candidateProjectsLabel(candidate: OperatorCandidate) {
-  return candidate.affectedProjects.length ? candidate.affectedProjects.join(', ') : t('queue.filters.unscoped')
+  return candidate.affectedProjects.length ? candidate.affectedProjects.map((id) => isCatalogProject(id) ? projectName(id) : t('projectCatalog.unknownProject')).join(', ') : t('queue.filters.unscoped')
 }
 
 function compactDate(value?: string) {
@@ -136,7 +140,7 @@ function actionAriaLabel(candidate: OperatorCandidate, action: CandidateAction) 
 
 
 async function runAction(candidate: OperatorCandidate, action: CandidateAction) {
-  if (isCandidateBusy(candidate.id)) return
+  if (isCandidateBusy(candidate.id) || context.selectionPending.value || scopeError.value || (!isCatalogProject(selectedProject.value) && selectedProject.value !== 'all')) return
   if (confirm.value?.id !== candidate.id || confirm.value.action !== action) {
     confirm.value = { id: candidate.id, action }
     notice.value = null
@@ -232,11 +236,15 @@ async function runAction(candidate: OperatorCandidate, action: CandidateAction) 
     </section>
     <MutationResultNotice :result="mutationResult" :recheck-label="t('queue.actions.refresh')" @recheck="refresh" />
 
+    <section v-if="scopeError || context.selectionPending.value" class="statebar" :data-state="scopeError ? 'error' : 'pending'" role="status">
+      <span>{{ scopeError ? t('queue.state.error', { message: scopeError.message }) : t('queue.state.pending') }}</span>
+      <button v-if="scopeError" class="tbtn" @click="context.refresh">{{ t('queue.state.retry') }}</button>
+    </section>
     <section v-if="pending || error || loadState.kind === 'empty' || loadState.kind === 'gated'" class="statebar" :data-state="statebarKind">
       <span v-if="pending">{{ t('queue.state.pending') }}</span>
       <span v-else-if="error">{{ t('queue.state.error', { message: error }) }}</span>
       <span v-else-if="loadState.kind === 'empty'">{{ t('queue.state.empty') }}</span>
-      <span v-else-if="loadState.kind === 'gated'">{{ t('queue.state.gated', { flag: loadState.evidence.flag || 'VNEXT_F' }) }}</span>
+      <span v-else-if="loadState.kind === 'gated'">{{ t(loadState.flag === 'project-selection' ? 'projectCatalog.selectionRequired' : 'queue.state.gated', { flag: loadState.evidence.flag || 'VNEXT_F' }) }}</span>
       <button v-if="error" class="tbtn" @click="refresh">{{ t('queue.state.retry') }}</button>
     </section>
 

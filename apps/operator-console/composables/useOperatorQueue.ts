@@ -1,6 +1,6 @@
-import { onBeforeUnmount, ref as sharedRef, type Ref as SharedRef } from 'vue'
+import { computed, onBeforeUnmount, ref as sharedRef, type Ref as SharedRef } from 'vue'
 import { startedLoads } from './useConsolePreferences'
-import { useOperatorProjectContext } from './useOperatorProjectContext'
+import { isCatalogProject, useOperatorProjectContext } from './useOperatorProjectContext'
 
 let sharedCandidateQueueRows: SharedRef<OperatorCandidate[]> | undefined
 let sharedCandidateQueueProjects: SharedRef<string[]> | undefined
@@ -253,7 +253,7 @@ export function useOperatorQueue(): {
     const project = selectedProject.value
     replaceArray(rowsState.value, [])
     state.value = pendingState(evidence, rowsState.value)
-    if (!project) { state.value = gatedState(evidence, 'project-selection', 'Choose a project before reading candidates.', []); return }
+    if (context.selectionPending.value || context.selectionError.value || context.error.value || !project || (project !== 'all' && !isCatalogProject(project))) { state.value = gatedState(evidence, 'project-selection', 'Choose a catalog project before reading candidates.', []); return }
     try {
       const flags = await operatorFetchJson<ApiFlags>('/api/flags', undefined, 'candidate-flags')
       if (current !== generation || project !== selectedProject.value) return
@@ -269,6 +269,7 @@ export function useOperatorQueue(): {
       const payload = await operatorFetchJson<ApiCandidateListResponse>(path, undefined, 'candidate-queue')
       if (current !== generation || project !== selectedProject.value) return
       const rows = parseCandidatePayload(payload, path)
+      if (project !== 'all' && rows.some((row) => row.affectedProjects.some((id) => !isCatalogProject(id)))) throw new TypeError('Candidate project identity mismatch')
       replaceArray(rowsState.value, rows)
       state.value = rows.length
         ? liveState(evidence, rowsState.value)
@@ -291,6 +292,7 @@ export function useOperatorQueue(): {
   }
 
   async function runCandidateAction(id: string, action: CandidateAction, reason?: string): Promise<MutationResult<CandidateActionIntent, CandidateActionCurrentState>> {
+    if (context.selectionPending.value || context.selectionError.value || context.error.value || (!isCatalogProject(selectedProject.value) && selectedProject.value !== 'all') || !rowsState.value.some(row => row.id === id)) throw new TypeError('A current catalog candidate selection is required')
     const requestId = crypto.randomUUID()
     const intent = { id, action, ...(reason === undefined ? {} : { reason }) }
     const request = { requestId, action: `candidate-${action}`, intent }

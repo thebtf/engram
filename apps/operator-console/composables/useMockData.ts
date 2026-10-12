@@ -34,7 +34,7 @@ let sharedServerInfo: SharedRef<{ host: string; version: string; uptime: string;
 
 import { computed } from 'vue'
 import { operatorApiBase, operatorFetchResponse } from './useOperatorApi'
-import { parseProjectCatalog, type OperatorProjectCatalog } from './useOperatorProjectContext'
+import { parseProjectCatalog } from './useOperatorProjectContext'
 import { useOperatorMemoryLab } from './useOperatorMemoryLab'
 import { useOperatorRules } from './useOperatorRules'
 import { useOperatorSecrets } from './useOperatorSecrets'
@@ -460,8 +460,8 @@ function mapModelRegistry(payload: ApiModelsResponse | undefined): ModelRegistry
 }
 
 async function listProjects(): Promise<string[]> {
- const projects = await fetchJson<OperatorProjectCatalog>('/api/projects')
- return parseProjectCatalog(projects).map((row) => row.id)
+ const projects = await fetchJson<unknown>('/api/projects')
+ return parseProjectCatalog(projects).items.map((row) => row.project_id)
 }
 
 

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { useOperatorProjectContext, projectName } from '../composables/useOperatorProjectContext'
+import { isCatalogProject, useOperatorProjectContext, projectName } from '../composables/useOperatorProjectContext'
 import { MEMORY_EPISTEMIC_TYPES, PRINCIPAL_CURRENT_PROJECT, useOperatorMemoryLab, useOperatorPrincipalMemorySurface, type MemoryAuditResponse } from '../composables/useOperatorMemoryLab'
 import { operatorDiagnosisKey, operatorUnauthorizedRevision, type OperatorLoadState, type OperatorSourceError, toOperatorSourceError } from '../composables/useOperatorApi'
 import type { Memory } from '../composables/useMockData'
@@ -11,6 +11,7 @@ const route = useRoute()
 const router = useRouter()
 const context = useOperatorProjectContext()
 const { project } = context
+const scopeError = computed(() => context.selectionError.value || context.error.value)
 const { rows, loadState, pending, total, hasMore, refresh, loadMemoryByID, deleteMemory, suppressMemory, suppressMemories, unsuppressMemory, archiveMemory, auditMemory } = useOperatorMemoryLab(project, false)
 const query = computed(() => typeof route.query.q === 'string' ? route.query.q : '')
 const filter = computed(() => { const value = route.query.filter; return value === undefined ? [] : Array.isArray(value) ? value : [value] })
@@ -57,6 +58,7 @@ const pageCount = computed(() => Math.max(1, Math.ceil((total.value || 0) / page
 const pageRows = filtered
 
 function updateQuery(values: Record<string, string | string[] | undefined>, replace = false) {
+  if (context.selectionPending.value || (!isCatalogProject(project.value) && project.value !== 'all')) return
   const location = { path: '/memory', query: { ...route.query, project: project.value || undefined, ...values } }
   return replace ? router.replace(location) : router.push(location)
 }
@@ -72,7 +74,7 @@ function toggleType(value: typeof MEMORY_EPISTEMIC_TYPES[number]) {
 }
 
 
-watch([project, query, filter, types, page, pageSize, () => route.query.allRead] as const, (next, previous) => {
+watch([project, context.selectionPending, scopeError, query, filter, types, page, pageSize, () => route.query.allRead] as const, (next, previous) => {
   if (previous?.length && next.every((value, index) => {
     const before = previous[index]
     return Array.isArray(value) && Array.isArray(before) ? value.length === before.length && value.every((entry, position) => entry === before[position]) : value === before
@@ -94,7 +96,7 @@ async function readDetail() {
   auditState.value = null
   detailError.value = null
   confirmation.value = ''
-  if (!id || !scope || !targetProject || targetProject === 'all') { detailPending.value = false; return }
+  if (!id || !scope || !isCatalogProject(targetProject) || context.selectionPending.value) { detailPending.value = false; return }
   await nextTick()
   if (generation !== detailGeneration || authRevision !== operatorUnauthorizedRevision.value) return
   detailHeading.value?.focus()
@@ -116,7 +118,7 @@ async function readDetail() {
     if (generation === detailGeneration) detailPending.value = false
   }
 }
-watch([project, openId, detailProject], readDetail, { immediate: true, flush: 'sync' })
+watch([project, openId, detailProject, context.selectionPending], readDetail, { immediate: true, flush: 'sync' })
 watch(operatorUnauthorizedRevision, () => {
   detailGeneration += 1
   opened.value = null
@@ -149,6 +151,7 @@ async function closeDetail() {
 
 async function act(action: 'suppress' | 'delete' | 'bulk' | 'restore' | 'archive') {
   if (busy.value) return
+  if (context.selectionPending.value || (!isCatalogProject(project.value) && project.value !== 'all')) return
   const memory = opened.value
   if (action !== 'bulk' && !memory) return
   if (action === 'bulk' && !selected.value.length) return
@@ -187,7 +190,9 @@ function time(value?: string) {
 <template>
   <div class="knowledge-page" @keydown.esc="openId && closeDetail()">
     <header class="page-head"><div><h1>{{ t('nav.items.memory') }}</h1><p>{{ t('knowledge.memoryLead') }}</p></div><button class="btn" :disabled="pending" @click="refreshView">{{ t('knowledge.refresh') }}</button></header>
-    <div v-if="!project" class="empty"><h2>{{ t('knowledge.chooseProject') }}</h2><p>{{ t('knowledge.chooseProjectHelp') }}</p><RouterLink :to="context.to('/projects')">{{ t('nav.items.projects') }}</RouterLink></div>
+    <div v-if="scopeError" class="state error" role="status" data-testid="memory-project-error"><p>{{ t(operatorDiagnosisKey(scopeError)) }}</p><button class="btn" @click="context.refresh">{{ t('knowledge.retry') }}</button></div>
+    <div v-else-if="context.selectionPending.value" class="state" role="status">{{ t('knowledge.loading') }}</div>
+    <div v-else-if="!project" class="empty"><h2>{{ t('knowledge.chooseProject') }}</h2><p>{{ t('knowledge.chooseProjectHelp') }}</p><RouterLink :to="context.to('/projects')">{{ t('nav.items.projects') }}</RouterLink></div>
     <template v-else>
       <form class="toolbar" @submit.prevent="updateQuery({ q: draft.trim() || undefined, page: '1', memory: undefined, memoryProject: undefined, allRead: project === 'all' ? '1' : undefined })">
         <label class="search-field"><span>{{ t('knowledge.searchMemory') }}</span><input v-model="draft" type="search" /></label>

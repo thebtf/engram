@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+const projectID = '11111111-1111-4111-8111-111111111111'
 
 test('memory hide-as-noise uses the live suppress action and removes the row', async ({ page }) => {
   const consoleProblems: string[] = []
@@ -23,7 +24,7 @@ test('memory hide-as-noise uses the live suppress action and removes the row', a
     pageErrors.push(error.message)
   })
 
-  await page.goto('/memory?project=operator-console')
+  await page.goto(`/memory?project=${projectID}`)
 
   const noisyRow = page.getByTestId('memory-row-102')
   await expect(noisyRow).toBeVisible()
@@ -66,7 +67,7 @@ test('advanced principal query retains explicit privacy scope when collapsed', a
     pageErrors.push(error.message)
   })
 
-  await page.goto('/memory?project=operator-console')
+  await page.goto(`/memory?project=${projectID}`)
   const advanced = page.getByTestId('principal-memory-surface')
   await advanced.locator('summary').click()
   await page.getByTestId('principal-select').fill('agent/alice')

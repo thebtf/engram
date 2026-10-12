@@ -7,6 +7,8 @@ import * as routing from 'vue-router'
 import { compileScript, compileTemplate, parse } from '@vue/compiler-sfc'
 
 const root = new URL('../../', import.meta.url)
+const projectID = '11111111-1111-4111-8111-111111111111'
+const otherProjectID = '22222222-2222-4222-8222-222222222222'
 const verifiedUser = { authenticated: true, auth_disabled: false, role: 'viewer', source: 'user', user: { email: 'person@example.test' } }
 
 function evaluate(source, require, globals) {
@@ -24,7 +26,7 @@ function evaluate(source, require, globals) {
   return module.exports
 }
 
-function session(t, identity = () => Response.json(verifiedUser), knowledgeFetch = () => undefined, diagnosticFetch = () => undefined, projectCatalog = [{ id: 'canonical-test', display_name: 'Synthetic project' }], navigationStorage = new Map()) {
+function session(t, identity = () => Response.json(verifiedUser), knowledgeFetch = () => undefined, diagnosticFetch = () => undefined, projectCatalog = [{ project_id: projectID, name: 'Synthetic project' }], navigationStorage = new Map()) {
   const calls = []
   const storage = navigationStorage
   const scope = vue.effectScope()
@@ -46,7 +48,8 @@ function session(t, identity = () => Response.json(verifiedUser), knowledgeFetch
         return Response.json({}, { status: loginStatus })
       }
       if (path === '/api/auth/user-logout') return Response.json({}, { status: logoutStatus })
-      if (path === '/api/projects') return Response.json({ items: projectCatalog }, { status: projectStatus })
+      if (path === '/api/projects') return Response.json({ items: projectCatalog, unresolved: [] }, { status: projectStatus })
+      if (path.startsWith('/api/projects/resolve?')) return Response.json({ error: 'No proven mapping' }, { status: 404 })
       if (protectedDiagnostics && ['/api/selfcheck', '/api/stats', '/api/stats/vnext'].includes(path)) return Response.json({}, { status: 401 })
       if (['/api/selfcheck', '/api/stats', '/api/stats/vnext'].includes(path)) {
         const diagnostic = diagnosticFetch(path)
@@ -263,7 +266,7 @@ test('raw mutation responses retain their denial contract while expiring the sha
   const consumer = session(t)
   await consumer.shell.refresh()
   consumer.projectStatus(401)
-  const request = { requestId: 'synthetic-request', action: 'synthetic-action', intent: { project: 'canonical-test' } }
+  const request = { requestId: 'synthetic-request', action: 'synthetic-action', intent: { project: projectID } }
   const result = await consumer.mutation.executeMutation(request, consumer.api.operatorFetchResponse('/api/projects', { method: 'POST' }), () => undefined)
   assert.equal(result.kind, 'denied')
   assert.equal(result.httpStatus, 401)
@@ -376,6 +379,7 @@ async function mountRecovery(t, consumer, location, pageName) {
   let layoutState, readerState
   const app = renderer.createApp({ render: () => vue.h(layout, { ref: (instance) => { if (instance) layoutState = instance.$.setupState } }, { default: () => vue.h(reader, { ref: (instance) => { if (instance) readerState = instance.$.setupState } }) }) })
   for (const name of ['SettingsModal', 'ProfileModal', 'LoginModal', 'MutationResultNotice', 'HonestyBadge']) app.component(name, { render: () => null })
+  app.component('ProjectContext', component('components/ProjectContext.vue'))
   app.use(router)
   const host = node('root')
   app.mount(host)
@@ -386,7 +390,7 @@ async function mountRecovery(t, consumer, location, pageName) {
 
 test('actual layout removes cached payload on 401 and cannot redisplay it before fresh-document recovery', async (t) => {
   const consumer = session(t)
-  const mounted = await mountRecovery(t, consumer, '/memory?project=canonical-test&q=known&filter=low&filter=chain&page=3&size=10&memory=7&from=search&searchQuery=return-query&password=discard&token=discard')
+  const mounted = await mountRecovery(t, consumer, `/memory?project=${projectID}&q=known&filter=low&filter=chain&page=3&size=10&memory=7&from=search&searchQuery=return-query&password=discard&token=discard`)
   assert.ok(!text(mounted.host).includes('synthetic cached payload'))
   await consumer.shell.refresh()
   await tick()
@@ -407,7 +411,7 @@ test('actual layout removes cached payload on 401 and cannot redisplay it before
   mounted.layout().authenticated()
   const restored = new URL(mounted.navigation[0], 'http://synthetic.invalid')
   assert.deepEqual(restored.searchParams.getAll('filter'), ['low', 'chain'])
-  for (const [key, value] of [['project', 'canonical-test'], ['q', 'known'], ['page', '3'], ['size', '10'], ['memory', '7'], ['from', 'search'], ['searchQuery', 'return-query']]) assert.equal(restored.searchParams.get(key), value)
+  for (const [key, value] of [['project', projectID], ['q', 'known'], ['page', '3'], ['size', '10'], ['memory', '7'], ['from', 'search'], ['searchQuery', 'return-query']]) assert.equal(restored.searchParams.get(key), value)
   assert.equal(restored.searchParams.has('password'), false)
   assert.equal(restored.searchParams.has('token'), false)
   assert.ok(![...consumer.storage.values()].join('').includes('discard'))
@@ -416,7 +420,7 @@ test('actual layout removes cached payload on 401 and cannot redisplay it before
 for (const status of [405, 503]) test(`actual layout retains protected content and shows failed logout ${status}`, async (t) => {
   const consumer = session(t)
   await consumer.shell.refresh()
-  const mounted = await mountRecovery(t, consumer, '/memory?project=canonical-test')
+  const mounted = await mountRecovery(t, consumer, `/memory?project=${projectID}`)
   consumer.logoutStatus(status)
   await mounted.layout().logoutIdentity()
   await tick()
@@ -428,7 +432,7 @@ for (const status of [405, 503]) test(`actual layout retains protected content a
 test('successful logout with unverified readback withholds cached payload even if stale authMe says authenticated', async (t) => {
   const consumer = session(t)
   await consumer.shell.refresh()
-  const mounted = await mountRecovery(t, consumer, '/memory?project=canonical-test')
+  const mounted = await mountRecovery(t, consumer, `/memory?project=${projectID}`)
   consumer.logoutStatus(200)
   await mounted.layout().logoutIdentity()
   await tick()
@@ -440,18 +444,21 @@ test('successful logout with unverified readback withholds cached payload even i
 function knowledgeResponse(content) {
   return (url) => {
     if (url.pathname === '/api/memories' || url.pathname === '/api/documents') return Response.json({ items: [], total: 0, offset: Number(url.searchParams.get('offset')), limit: Number(url.searchParams.get('limit')), has_more: false })
-    if (url.pathname === '/api/memories/7') return Response.json({ id: 7, project: 'canonical-test', content, status: 'active' })
-    if (url.pathname === '/api/memories/7/audit') return url.searchParams.get('project') === 'canonical-test' ? Response.json({ memory_id: 7, entries: [] }) : Response.json({}, { status: 400 })
-    if (url.pathname === '/api/documents/history') return Response.json({ path: 'synthetic.md', versions: [{ id: 7, version: 2 }, { id: 6, version: 1 }] })
+    if (url.pathname === '/api/memories/7') return Response.json({ id: 7, project: projectID, content, status: 'active' })
+    if (url.pathname === '/api/memories/7/audit') return url.searchParams.get('project') === projectID ? Response.json({ memory_id: 7, entries: [] }) : Response.json({}, { status: 400 })
+    if (url.pathname === '/api/documents/history') return Response.json({ path: 'synthetic.md', project: projectID, versions: [{ id: 7, version: 2 }, { id: 6, version: 1 }] })
     if (url.pathname === '/api/documents/comments') return Response.json({ comments: [] })
-    if (url.pathname === '/api/documents/read') return Response.json({ id: 7, project: 'canonical-test', path: 'synthetic.md', version: Number(url.searchParams.get('version') || 2), content, content_hash: 'synthetic-hash' })
+    if (url.pathname === '/api/documents/read') {
+      const version = Number(url.searchParams.get('version') || 2)
+      return Response.json({ id: version === 1 ? 6 : 7, project: projectID, path: 'synthetic.md', version, content, content_hash: 'synthetic-hash' })
+    }
   }
 }
 
 for (const page of ['memory', 'documents']) test(`actual ${page} reader preserves unsynced safe controls, drops payload, and refetches after reauth`, async (t) => {
   const consumer = session(t, () => Response.json(verifiedUser), knowledgeResponse('old synthetic protected content'))
   await consumer.shell.refresh()
-  const location = page === 'memory' ? '/memory?project=canonical-test&q=known&filter=low&filter=chain&page=3&size=10&memory=7&from=search&searchQuery=return-query' : '/documents?project=canonical-test&q=known&page=3&size=10&path=synthetic.md&version=2&compare=1&docType=decision&pathPrefix=spec'
+  const location = page === 'memory' ? `/memory?project=${projectID}&q=known&filter=low&filter=chain&page=3&size=10&memory=7&from=search&searchQuery=return-query` : `/documents?project=${projectID}&q=known&page=3&size=10&path=synthetic.md&version=2&compare=1&docType=decision&pathPrefix=spec`
   const mounted = await mountRecovery(t, consumer, location, page)
   await tick()
   assert.ok(text(mounted.host).includes('old synthetic protected content'))
@@ -501,13 +508,13 @@ for (const page of ['memory', 'documents']) test(`actual ${page} reader preserve
 
 function walk(item) { return [item, ...item.children.flatMap(walk)] }
 function primaryText(item) { return item.tag === 'details' ? '' : item.text + item.children.map(primaryText).join(' ') }
-function contextResponse(outcome) {
+function contextResponse(outcome, responseProject = projectID) {
   return (url) => {
     if (url.pathname === '/api/context/search') {
       if (outcome === 'transport') throw new TypeError('Synthetic connection failure')
       if (outcome === 'stale') return Response.json({ deprecated: true, message: 'synthetic stale response evidence' })
       if (typeof outcome === 'number') return Response.json({}, { status: outcome })
-      return Response.json({ observations: [{ id: 7, project: 'untrusted-result-label', type: 'discovery', memory_type: 'context', content: 'synthetic private reader body' }] })
+      return Response.json({ observations: [{ id: 7, project: responseProject, type: 'discovery', memory_type: 'context', content: 'synthetic private reader body' }] })
     }
     if (url.pathname === '/api/search/recent') return Response.json({ queries: [] })
     if (['/api/search/analytics', '/api/stats/retrieval'].includes(url.pathname)) return Response.json({})
@@ -519,7 +526,7 @@ for (const outcome of [403, 404, 405, 503, 'transport', 'stale']) test(`context 
   const literal = "literal %_\\ ' ; --"
   const consumer = session(t, undefined, contextResponse(outcome))
   await consumer.shell.refresh()
-  const mounted = await mountRecovery(t, consumer, `/search?project=canonical-test&q=${encodeURIComponent(literal)}&token=discard`, 'search')
+  const mounted = await mountRecovery(t, consumer, `/search?project=${projectID}&q=${encodeURIComponent(literal)}&token=discard`, 'search')
   await mounted.reader().refreshSearch()
   await tick()
   for (const destination of ['memory', 'documents']) {
@@ -527,7 +534,7 @@ for (const outcome of [403, 404, 405, 503, 'transport', 'stale']) test(`context 
     assert.ok(link, `${destination} text task must remain reachable`)
     const target = new URL(link.props.href, 'http://synthetic.invalid')
     assert.equal(target.pathname, `/${destination}`)
-    assert.equal(target.searchParams.get('project'), 'canonical-test')
+    assert.equal(target.searchParams.get('project'), projectID)
     assert.equal(target.searchParams.get('q'), literal)
     assert.equal(target.searchParams.get('page'), '1')
     assert.equal(target.searchParams.has('token'), false)
@@ -548,7 +555,7 @@ for (const outcome of [403, 404, 405, 503, 'transport', 'stale']) test(`context 
 test('context search memory result and reader return retain canonical query without private content in URL', async (t) => {
   const consumer = session(t, undefined, contextResponse('live'))
   await consumer.shell.refresh()
-  const search = await mountRecovery(t, consumer, '/search?project=canonical-test&q=literal-safe-query', 'search')
+  const search = await mountRecovery(t, consumer, `/search?project=${projectID}&q=literal-safe-query`, 'search')
   await search.reader().refreshSearch()
   await tick()
   const button = walk(search.host).find((item) => item.props['data-testid'] === 'search-result-open-7')
@@ -557,7 +564,7 @@ test('context search memory result and reader return retain canonical query with
   await tick()
   const selected = search.router.currentRoute.value
   assert.equal(selected.path, '/memory')
-  assert.equal(selected.query.project, 'canonical-test')
+  assert.equal(selected.query.project, projectID)
   assert.equal(selected.query.memory, '7')
   assert.equal(selected.query.from, 'search')
   assert.equal(selected.query.searchQuery, 'literal-safe-query')
@@ -566,9 +573,23 @@ test('context search memory result and reader return retain canonical query with
   await tick()
   await memory.reader().closeDetail()
   assert.equal(memory.router.currentRoute.value.path, '/search')
-  assert.equal(memory.router.currentRoute.value.query.project, 'canonical-test')
+  assert.equal(memory.router.currentRoute.value.query.project, projectID)
   assert.equal(memory.router.currentRoute.value.query.q, 'literal-safe-query')
   assert.equal(memory.router.currentRoute.value.query.focusMemory, '7')
+})
+
+for (const responseProject of [otherProjectID, 'untrusted-result-label']) test(`context search refuses foreign result scope ${responseProject} without exposing private content`, async (t) => {
+  const consumer = session(t, undefined, contextResponse('live', responseProject))
+  await consumer.shell.refresh()
+  const search = await mountRecovery(t, consumer, `/search?project=${projectID}&q=literal-safe-query`, 'search')
+  await search.reader().refreshSearch()
+  await tick()
+  assert.equal(search.reader().searchState.kind, 'error')
+  assert.equal(search.router.currentRoute.value.path, '/search')
+  assert.equal(search.router.currentRoute.value.query.project, projectID)
+  assert.ok(!text(search.host).includes('synthetic private reader body'))
+  assert.ok(!walk(search.host).some((item) => item.props['data-testid'] === 'search-result-open-7'))
+  assert.ok(!search.router.currentRoute.value.fullPath.includes('synthetic private reader body'))
 })
 
 test('context search never offers broad text recovery for unknown or all-project scope', async (t) => {
@@ -583,7 +604,7 @@ test('context search never offers broad text recovery for unknown or all-project
   }
 })
 
-const auditProjects = [{ id: 'canonical-test', display_name: 'Shared label' }, { id: 'canonical-other', display_name: 'Shared label' }]
+const auditProjects = [{ project_id: projectID, name: 'Shared label' }, { project_id: otherProjectID, name: 'Shared label' }]
 function auditPayload(id, marker) {
   return { memory_id: id, entries: [{ id: id * 10, memory_id: id, action: 'suppress', actor: `synthetic actor ${marker}`, reason: `synthetic reason ${marker}`, before_state_present: false, after_state_present: true, created_at: '2026-10-11T00:00:00Z' }] }
 }
@@ -596,7 +617,7 @@ function auditResponses(readAudit, readDetail = (url, id) => Response.json({ id,
     if (audit) {
       const project = url.searchParams.get('project')
       if (!project || project === 'all') return Response.json({}, { status: 400 })
-      if (!auditProjects.some((row) => row.id === project)) return Response.json({}, { status: 403 })
+      if (!auditProjects.some((row) => row.project_id === project)) return Response.json({}, { status: 403 })
       return readAudit(url, Number(audit[1]))
     }
   }
@@ -605,17 +626,17 @@ function auditResponses(readAudit, readDetail = (url, id) => Response.json({ id,
 test('memory audit renders only the bound canonical reader history and preserves query/filter return', async (t) => {
   const consumer = session(t, undefined, auditResponses((_url, id) => Response.json(auditPayload(id, 'authorized'))), undefined, auditProjects)
   await consumer.shell.refresh()
-  const mounted = await mountRecovery(t, consumer, '/memory?project=canonical-test&memory=7&q=literal-safe&filter=low&filter=chain&page=3&size=10', 'memory')
+  const mounted = await mountRecovery(t, consumer, `/memory?project=${projectID}&memory=7&q=literal-safe&filter=low&filter=chain&page=3&size=10`, 'memory')
   await tick()
   assert.ok(text(mounted.host).includes('synthetic actor authorized'))
   assert.ok(text(mounted.host).includes('synthetic reason authorized'))
   const request = consumer.calls.find((call) => call.path.includes('/7/audit?'))
-  assert.equal(new URL(request.path, 'http://synthetic.invalid').searchParams.get('project'), 'canonical-test')
+  assert.equal(new URL(request.path, 'http://synthetic.invalid').searchParams.get('project'), projectID)
   assert.equal(new URL(request.path, 'http://synthetic.invalid').searchParams.get('limit'), '200')
   assert.ok(!request.path.includes('Shared label'))
   assert.ok(![...consumer.storage.values()].join('').includes('synthetic reason authorized'))
   await mounted.reader().closeDetail()
-  assert.equal(mounted.router.currentRoute.value.query.project, 'canonical-test')
+  assert.equal(mounted.router.currentRoute.value.query.project, projectID)
   assert.equal(mounted.router.currentRoute.value.query.q, 'literal-safe')
   assert.deepEqual(mounted.router.currentRoute.value.query.filter, ['low', 'chain'])
   assert.equal(mounted.router.currentRoute.value.query.page, '3')
@@ -625,7 +646,7 @@ test('memory audit renders only the bound canonical reader history and preserves
 for (const status of [400, 403, 404]) test(`memory audit denial ${status} stays an error rather than empty or private history`, async (t) => {
   const consumer = session(t, undefined, auditResponses(() => Response.json({ reason: 'synthetic hidden private reason' }, { status })))
   await consumer.shell.refresh()
-  const mounted = await mountRecovery(t, consumer, '/memory?project=canonical-test&memory=7', 'memory')
+  const mounted = await mountRecovery(t, consumer, `/memory?project=${projectID}&memory=7`, 'memory')
   await tick()
   assert.equal(mounted.reader().auditState.kind, 'error')
   assert.equal(mounted.reader().auditState.error.status, status)
@@ -637,7 +658,7 @@ for (const status of [400, 403, 404]) test(`memory audit denial ${status} stays 
 test('memory audit rejects a mismatched response identity before rendering reasons or actors', async (t) => {
   const consumer = session(t, undefined, auditResponses(() => Response.json(auditPayload(8, 'wrong-memory'))))
   await consumer.shell.refresh()
-  const mounted = await mountRecovery(t, consumer, '/memory?project=canonical-test&memory=7', 'memory')
+  const mounted = await mountRecovery(t, consumer, `/memory?project=${projectID}&memory=7`, 'memory')
   await tick()
   assert.equal(mounted.reader().auditState.kind, 'error')
   assert.equal(mounted.reader().auditState.error.category, 'invalid-response')
@@ -653,14 +674,14 @@ for (const change of ['project', 'record', 'all-detail-project']) test(`memory a
     return Response.json(auditPayload(id, 'current-context'))
   }), undefined, auditProjects)
   await consumer.shell.refresh()
-  const location = change === 'all-detail-project' ? '/memory?project=all&memoryProject=canonical-test&memory=7' : '/memory?project=canonical-test&memory=7'
+  const location = change === 'all-detail-project' ? `/memory?project=all&memoryProject=${projectID}&memory=7` : `/memory?project=${projectID}&memory=7`
   const mounted = await mountRecovery(t, consumer, location, 'memory')
   await tick()
   assert.ok(releaseOld)
   const next = { ...mounted.router.currentRoute.value.query }
-  if (change === 'project') next.project = 'canonical-other'
+  if (change === 'project') next.project = otherProjectID
   else if (change === 'record') next.memory = '8'
-  else next.memoryProject = 'canonical-other'
+  else next.memoryProject = otherProjectID
   await mounted.router.push({ path: '/memory', query: next })
   await tick()
   assert.ok(text(mounted.host).includes('synthetic reason current-context'))
@@ -669,7 +690,7 @@ for (const change of ['project', 'record', 'all-detail-project']) test(`memory a
   assert.ok(!text(mounted.host).includes('synthetic reason old-context'))
   assert.ok(text(mounted.host).includes('synthetic reason current-context'))
   const request = new URL(consumer.calls.filter((call) => call.path.includes('/audit?')).at(-1).path, 'http://synthetic.invalid')
-  assert.equal(request.searchParams.get('project'), change === 'record' ? 'canonical-test' : 'canonical-other')
+  assert.equal(request.searchParams.get('project'), change === 'record' ? projectID : otherProjectID)
   assert.notEqual(request.searchParams.get('project'), 'all')
 })
 
@@ -680,10 +701,10 @@ test('memory audit does not dispatch for a stale detail resolved after changing 
     return Response.json({ id, project: url.searchParams.get('project'), content: 'synthetic new detail', status: 'active' })
   }))
   await consumer.shell.refresh()
-  const mounted = await mountRecovery(t, consumer, '/memory?project=canonical-test&memory=7', 'memory')
+  const mounted = await mountRecovery(t, consumer, `/memory?project=${projectID}&memory=7`, 'memory')
   await tick()
   assert.ok(releaseDetail)
-  await mounted.router.push('/memory?project=canonical-test&memory=8')
+  await mounted.router.push(`/memory?project=${projectID}&memory=8`)
   await tick()
   releaseDetail()
   await tick()
@@ -702,7 +723,7 @@ test('memory audit clears rendered payload on logout and discards pending histor
     return new Promise((resolve) => { releaseLate = () => resolve(Response.json(auditPayload(id, 'after-auth-loss'))) })
   }))
   await consumer.shell.refresh()
-  const mounted = await mountRecovery(t, consumer, '/memory?project=canonical-test&memory=7&q=literal-safe&filter=low&filter=chain', 'memory')
+  const mounted = await mountRecovery(t, consumer, `/memory?project=${projectID}&memory=7&q=literal-safe&filter=low&filter=chain`, 'memory')
   await tick()
   const reader = mounted.reader()
   assert.ok(text(mounted.host).includes('synthetic reason before-logout'))
@@ -727,27 +748,27 @@ test('memory audit clears rendered payload on logout and discards pending histor
 test('memory audit refuses absent and all-project scope without sending an unscoped request', async (t) => {
   const consumer = session(t, undefined, auditResponses((_url, id) => Response.json(auditPayload(id, 'unexpected'))))
   await consumer.shell.refresh()
-  const mounted = await mountRecovery(t, consumer, '/memory?project=canonical-test', 'memory')
+  const mounted = await mountRecovery(t, consumer, `/memory?project=${projectID}`, 'memory')
   for (const scope of [undefined, '', 'all']) await assert.rejects(mounted.reader().auditMemory('7', scope, 200), TypeError)
   assert.ok(!consumer.calls.some((call) => call.path.includes('/audit?')))
 })
 
 // Finite reader fixtures prove consumer semantics, not Main's SQL/privacy implementation.
 const typeMemories = [
-  ...Array.from({ length: 160 }, (_value, index) => ({ id: 360 - index, project: 'canonical-test', content: `needle memory ${360 - index}`, epistemic_type: index % 2 ? 'experience' : 'fact', status: 'active', confidence: 0.2, citation_count: 0, injection_count: 10 })),
-  { id: 900, project: 'canonical-test', content: 'needle opinion excluded', epistemic_type: 'opinion', status: 'active', confidence: 0.2, citation_count: 0, injection_count: 10 },
-  { id: 901, project: 'canonical-test', content: 'needle confident excluded', epistemic_type: 'fact', status: 'active', confidence: 0.9, citation_count: 0, injection_count: 10 },
-  { id: 902, project: 'canonical-test', content: 'needle unused excluded', epistemic_type: 'experience', status: 'active', confidence: 0.2, citation_count: 0, injection_count: 0 },
-  { id: 903, project: 'canonical-other', content: 'needle foreign excluded', epistemic_type: 'fact', status: 'active', confidence: 0.2, citation_count: 0, injection_count: 10 },
+  ...Array.from({ length: 160 }, (_value, index) => ({ id: 360 - index, project: projectID, content: `needle memory ${360 - index}`, epistemic_type: index % 2 ? 'experience' : 'fact', status: 'active', confidence: 0.2, citation_count: 0, injection_count: 10 })),
+  { id: 900, project: projectID, content: 'needle opinion excluded', epistemic_type: 'opinion', status: 'active', confidence: 0.2, citation_count: 0, injection_count: 10 },
+  { id: 901, project: projectID, content: 'needle confident excluded', epistemic_type: 'fact', status: 'active', confidence: 0.9, citation_count: 0, injection_count: 10 },
+  { id: 902, project: projectID, content: 'needle unused excluded', epistemic_type: 'experience', status: 'active', confidence: 0.2, citation_count: 0, injection_count: 0 },
+  { id: 903, project: otherProjectID, content: 'needle foreign excluded', epistemic_type: 'fact', status: 'active', confidence: 0.2, citation_count: 0, injection_count: 10 },
 ]
 const typeDocuments = [
   ...Array.from({ length: 120 }, (_value, index) => [
-    { id: 1000 + index, path: `notes/needle-${String(index).padStart(3, '0')}.md`, project: 'canonical-test', doc_type: 'html', version: 1, author: 'synthetic', content: 'synthetic private old document' },
-    { id: 2000 + index, path: `notes/needle-${String(index).padStart(3, '0')}.md`, project: 'canonical-test', doc_type: index % 2 ? 'text' : 'markdown', version: 2, author: 'synthetic', content: 'synthetic private current document' },
+    { id: 1000 + index, path: `notes/needle-${String(index).padStart(3, '0')}.md`, project: projectID, doc_type: 'html', version: 1, author: 'synthetic', content: 'synthetic private old document' },
+    { id: 2000 + index, path: `notes/needle-${String(index).padStart(3, '0')}.md`, project: projectID, doc_type: index % 2 ? 'text' : 'markdown', version: 2, author: 'synthetic', content: 'synthetic private current document' },
   ]).flat(),
-  { id: 3000, path: 'notes/needle-current-html.md', project: 'canonical-test', doc_type: 'text', version: 1, author: 'synthetic', content: 'synthetic private old matching type' },
-  { id: 3001, path: 'notes/needle-current-html.md', project: 'canonical-test', doc_type: 'html', version: 2, author: 'synthetic', content: 'synthetic private latest other type' },
-  { id: 4000, path: 'notes/needle-comma.md', project: 'canonical-test', doc_type: 'alpha,beta', version: 1, author: 'synthetic', content: 'synthetic private literal comma document' },
+  { id: 3000, path: 'notes/needle-current-html.md', project: projectID, doc_type: 'text', version: 1, author: 'synthetic', content: 'synthetic private old matching type' },
+  { id: 3001, path: 'notes/needle-current-html.md', project: projectID, doc_type: 'html', version: 2, author: 'synthetic', content: 'synthetic private latest other type' },
+  { id: 4000, path: 'notes/needle-comma.md', project: projectID, doc_type: 'alpha,beta', version: 1, author: 'synthetic', content: 'synthetic private literal comma document' },
 ]
 function multiTypeResponses(requests) {
   return (url) => {
@@ -793,7 +814,7 @@ test('multi-type memory visible choices combine OR with query/status AND and ret
   const requests = []
   const consumer = session(t, undefined, multiTypeResponses(requests), undefined, auditProjects)
   await consumer.shell.refresh()
-  const mounted = await mountRecovery(t, consumer, '/memory?project=canonical-test&q=needle&filter=low&filter=chain&epistemic_type=fact&epistemic_type=experience&page=11&size=10', 'memory')
+  const mounted = await mountRecovery(t, consumer, `/memory?project=${projectID}&q=needle&filter=low&filter=chain&epistemic_type=fact&epistemic_type=experience&page=11&size=10`, 'memory')
   await tick()
   assert.equal(mounted.reader().total, 160)
   assert.equal(mounted.reader().pageRows.length, 10)
@@ -816,7 +837,7 @@ test('multi-type memory visible choices combine OR with query/status AND and ret
   assert.equal(mounted.reader().total, 80)
   assert.equal(mounted.router.currentRoute.value.query.page, '1')
   assert.ok(mounted.reader().pageRows.every((row) => row.type === 'experience'))
-  assert.equal(requests.at(-1).searchParams.get('project'), 'canonical-test')
+  assert.equal(requests.at(-1).searchParams.get('project'), projectID)
   assert.equal(requests.at(-1).searchParams.get('query'), 'needle')
 })
 
@@ -824,7 +845,7 @@ test('multi-type documents choose latest then type OR before page and retain ver
   const requests = []
   const consumer = session(t, undefined, multiTypeResponses(requests))
   await consumer.shell.refresh()
-  const mounted = await mountRecovery(t, consumer, '/documents?project=canonical-test&q=needle&pathPrefix=notes/&docType=markdown&docType=text&page=11&size=10', 'documents')
+  const mounted = await mountRecovery(t, consumer, `/documents?project=${projectID}&q=needle&pathPrefix=notes/&docType=markdown&docType=text&page=11&size=10`, 'documents')
   await tick()
   assert.equal(mounted.reader().total, 120)
   assert.equal(mounted.reader().pageRows.length, 10)
@@ -859,7 +880,7 @@ for (const page of ['memory', 'documents']) test(`multi-type ${page} arrays surv
   const consumer = session(t, undefined, multiTypeResponses(requests))
   await consumer.shell.refresh()
   const types = page === 'memory' ? 'epistemic_type=fact&epistemic_type=experience&filter=low&filter=chain' : 'docType=markdown&docType=text&pathPrefix=notes/'
-  const mounted = await mountRecovery(t, consumer, `/${page}?project=canonical-test&q=needle&${types}&page=11&size=10&token=discard`, page)
+  const mounted = await mountRecovery(t, consumer, `/${page}?project=${projectID}&q=needle&${types}&page=11&size=10&token=discard`, page)
   await tick()
   consumer.projectStatus(401)
   await assert.rejects(consumer.api.operatorFetchJson('/api/projects'))
@@ -872,14 +893,14 @@ for (const page of ['memory', 'documents']) test(`multi-type ${page} arrays surv
   const selected = page === 'memory' ? ['fact', 'experience'] : ['markdown', 'text']
   assert.deepEqual(restored.searchParams.getAll(field), selected)
   assert.equal(restored.searchParams.get('page'), '11')
-  assert.equal(restored.searchParams.get('project'), 'canonical-test')
+  assert.equal(restored.searchParams.get('project'), projectID)
   assert.equal(restored.searchParams.has('token'), false)
   const fresh = session(t, undefined, multiTypeResponses([]), undefined, undefined, consumer.storage)
   await fresh.shell.refresh()
   const reloaded = await mountRecovery(t, fresh, restored.pathname + restored.search, page)
   await tick()
   assert.equal(reloaded.reader().total, page === 'memory' ? 160 : 120)
-  await reloaded.router.push('/projects?project=canonical-test')
+  await reloaded.router.push(`/projects?project=${projectID}`)
   await tick()
   const back = reloaded.reader().context.to(`/${page}`)
   assert.deepEqual(back.query[field], selected)
@@ -895,7 +916,7 @@ for (const [label, suffix] of [
   const requests = []
   const consumer = session(t, undefined, multiTypeResponses(requests))
   await consumer.shell.refresh()
-  const mounted = await mountRecovery(t, consumer, `/memory?project=canonical-test&q=needle&${suffix}`, 'memory')
+  const mounted = await mountRecovery(t, consumer, `/memory?project=${projectID}&q=needle&${suffix}`, 'memory')
   await tick()
   assert.equal(mounted.reader().loadState.kind, 'error')
   assert.equal(mounted.reader().loadState.error.source, 'memory-types')
@@ -912,7 +933,7 @@ for (const [label, suffix] of [
   const requests = []
   const consumer = session(t, undefined, multiTypeResponses(requests))
   await consumer.shell.refresh()
-  const mounted = await mountRecovery(t, consumer, `/documents?project=canonical-test&q=needle&${suffix}`, 'documents')
+  const mounted = await mountRecovery(t, consumer, `/documents?project=${projectID}&q=needle&${suffix}`, 'documents')
   await tick()
   assert.equal(mounted.reader().documentsState.kind, 'error')
   assert.equal(mounted.reader().documentsState.error.source, 'document-types')
@@ -925,11 +946,11 @@ test('multi-type document whitespace and exact UTF8 bound are valid literal valu
   const requests = []
   const consumer = session(t, undefined, multiTypeResponses(requests))
   await consumer.shell.refresh()
-  const mounted = await mountRecovery(t, consumer, '/documents?project=canonical-test&q=needle&docType=%C2%85text%C2%85&docType=text', 'documents')
+  const mounted = await mountRecovery(t, consumer, `/documents?project=${projectID}&q=needle&docType=%C2%85text%C2%85&docType=text`, 'documents')
   await tick()
   assert.equal(mounted.reader().total, 60)
   assert.deepEqual(requests.at(-1).searchParams.getAll('doc_type'), ['text'])
-  await mounted.router.push(`/documents?project=canonical-test&docType=${encodeURIComponent('я'.repeat(64))}`)
+  await mounted.router.push(`/documents?project=${projectID}&docType=${encodeURIComponent('я'.repeat(64))}`)
   await tick()
   assert.equal(mounted.reader().documentsState.kind, 'empty')
   assert.equal(mounted.reader().total, 0)
@@ -939,7 +960,7 @@ test('multi-type memory accepts six raw repeated values as a deduplicated scalar
   const requests = []
   const consumer = session(t, undefined, multiTypeResponses(requests))
   await consumer.shell.refresh()
-  const mounted = await mountRecovery(t, consumer, `/memory?project=canonical-test&q=needle&filter=low&filter=chain&${Array(6).fill('epistemic_type=fact').join('&')}`, 'memory')
+  const mounted = await mountRecovery(t, consumer, `/memory?project=${projectID}&q=needle&filter=low&filter=chain&${Array(6).fill('epistemic_type=fact').join('&')}`, 'memory')
   await tick()
   assert.equal(mounted.reader().total, 80)
   assert.ok(mounted.reader().pageRows.every((row) => row.type === 'fact'))
@@ -952,7 +973,7 @@ for (const [label, types] of [
   const requests = []
   const consumer = session(t, undefined, multiTypeResponses(requests))
   await consumer.shell.refresh()
-  const mounted = await mountRecovery(t, consumer, `/documents?project=canonical-test&q=needle&${types}&page=3&size=10`, 'documents')
+  const mounted = await mountRecovery(t, consumer, `/documents?project=${projectID}&q=needle&${types}&page=3&size=10`, 'documents')
   await tick()
   console.info(JSON.stringify({ signature: label, fullPath: mounted.router.currentRoute.value.fullPath, vueRouterDecodedTypes: mounted.router.currentRoute.value.query.docType, loadKind: mounted.reader().documentsState.kind, total: mounted.reader().total, readerRequests: requests.map((url) => ({ url: url.href, types: url.searchParams.getAll('doc_type') })) }))
   assert.equal(mounted.reader().documentsState.kind, 'error')
@@ -965,7 +986,7 @@ for (const [label, types] of [
   await consumer.shell.login('person@example.test', 'synthetic-only')
   mounted.layout().authenticated()
   const restored = new URL(mounted.navigation[0], 'http://synthetic.invalid')
-  assert.equal(restored.searchParams.get('project'), 'canonical-test')
+  assert.equal(restored.searchParams.get('project'), projectID)
   assert.equal(restored.searchParams.get('q'), 'needle')
   assert.equal(restored.searchParams.get('page'), '3')
   const freshRequests = []
@@ -983,7 +1004,7 @@ test('raw type URL encoded literal percent and valid Unicode/comma remain legiti
     const requests = []
     const consumer = session(t, undefined, multiTypeResponses(requests))
     await consumer.shell.refresh()
-    const mounted = await mountRecovery(t, consumer, `/documents?project=canonical-test&docType=${encoded}`, 'documents')
+    const mounted = await mountRecovery(t, consumer, `/documents?project=${projectID}&docType=${encoded}`, 'documents')
     await tick()
     assert.equal(mounted.reader().documentsState.kind, 'empty')
     assert.equal(mounted.reader().total, 0)
@@ -999,8 +1020,8 @@ test('raw type URL already-decoded programmatic literal preserves typed page and
   const requests = []
   const consumer = session(t, undefined, multiTypeResponses(requests))
   await consumer.shell.refresh()
-  const mounted = await mountRecovery(t, consumer, '/documents?project=canonical-test', 'documents')
-  await mounted.router.push({ path: '/documents', query: { project: 'canonical-test', docType: ['text', '%FF'], q: 'needle', pathPrefix: 'notes/', page: '3', size: '10' } })
+  const mounted = await mountRecovery(t, consumer, `/documents?project=${projectID}`, 'documents')
+  await mounted.router.push({ path: '/documents', query: { project: projectID, docType: ['text', '%FF'], q: 'needle', pathPrefix: 'notes/', page: '3', size: '10' } })
   await tick()
   assert.ok(mounted.router.currentRoute.value.fullPath.includes('%25FF'))
   assert.equal(mounted.reader().total, 60)
@@ -1022,7 +1043,7 @@ for (const [label, encoded] of [['control', encodeURIComponent('te\u0000xt')], [
   const requests = []
   const consumer = session(t, undefined, multiTypeResponses(requests))
   await consumer.shell.refresh()
-  const mounted = await mountRecovery(t, consumer, `/documents?project=canonical-test&docType=${encoded}`, 'documents')
+  const mounted = await mountRecovery(t, consumer, `/documents?project=${projectID}&docType=${encoded}`, 'documents')
   await tick()
   assert.equal(mounted.reader().documentsState.kind, 'error')
   assert.equal(mounted.reader().total, null)

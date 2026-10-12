@@ -5,14 +5,20 @@ import { fileURLToPath } from 'node:url'
 import { compileScript, parse } from '@vue/compiler-sfc'
 import ts from 'typescript'
 import * as vue from 'vue'
+import * as routing from 'vue-router'
 
 const pagePath = new URL('../../pages/documents.vue', import.meta.url)
 const apiPath = new URL('../../composables/useApi.ts', import.meta.url)
+const contextPath = new URL('../../composables/useOperatorProjectContext.ts', import.meta.url)
+const operatorApiPath = new URL('../../composables/useOperatorApi.ts', import.meta.url)
+const projectID = '11111111-1111-4111-8111-111111111111'
+const otherProjectID = '22222222-2222-4222-8222-222222222222'
+const catalog = { items: [{ project_id: projectID, name: 'Synthetic project' }, { project_id: otherProjectID, name: 'Other synthetic project' }], unresolved: [] }
 const artifact = {
   downloadUrl: '/api/documents/exports/b857ebf7-c1cf-4a1f-a733-465ee492d3cb',
   filename: 'synthetic-export.json', contentType: 'application/json', byteLength: 32,
 }
-const document = { id: '7', path: 'synthetic.md', project: 'canonical-test', version: 1, content: 'Synthetic fixture only.' }
+const document = { id: '7', path: 'synthetic.md', project: projectID, version: 1, content: 'Synthetic fixture only.' }
 
 function evaluateModule(source, require, globals = {}) {
   const module = { exports: {} }
@@ -39,8 +45,24 @@ const verified = () => operationResult(200, {
 })
 
 async function mountConsumer(t) {
-  const project = vue.ref('canonical-test')
-  const route = vue.reactive({ query: {}, path: '/documents' })
+  const router = routing.createRouter({ history: routing.createMemoryHistory(), routes: [{ path: '/documents', component: { render: () => null } }] })
+  await router.push({ path: '/documents', query: { project: projectID } })
+  const api = evaluateModule(readFileSync(operatorApiPath, 'utf8'), (name) => {
+    if (name === 'vue') return vue
+    if (name.endsWith('operator-config')) return { operatorConfig: { apiBase: '/api' } }
+    throw new Error(`Unexpected API dependency: ${name}`)
+  })
+  const core = evaluateModule(readFileSync(contextPath, 'utf8'), (name) => {
+    if (name === 'vue') return vue
+    if (name === 'vue-router') return routing
+    if (name.endsWith('useOperatorApi')) return {
+      ...api, operatorFetchJson: async (path) => {
+        if (path === '/api/projects') return catalog
+        throw new Error(`Unexpected project-context request: ${path}`)
+      }
+    }
+    throw new Error(`Unexpected project-context dependency: ${name}`)
+  })
   const primaryDocument = vue.ref(null)
   const primaryVersion = vue.ref(null)
   const primaryState = vue.ref({ kind: 'empty' })
@@ -59,16 +81,15 @@ async function mountConsumer(t) {
     selectSecondaryVersion: async () => { },
     runDocumentSelectionOperation: () => operation(),
   }
-  const context = { project, to: (path) => ({ path, query: {} }), remember: () => { } }
   const descriptor = parse(readFileSync(pagePath, 'utf8'), { filename: fileURLToPath(pagePath) }).descriptor
   const script = compileScript(descriptor, { id: 'document-export-consumer' })
   const component = evaluateModule(script.content, (name) => {
     if (name === 'vue') return vue
     if (name.endsWith('useOperatorDocuments')) return { useOperatorDocuments: () => docs }
-    if (name.endsWith('useOperatorProjectContext')) return { useOperatorProjectContext: () => context, projectName: (id) => id }
-    if (name.endsWith('useOperatorApi')) return { operatorApiUrl: (path) => path, operatorDiagnosisKey: () => 'synthetic-error' }
+    if (name.endsWith('useOperatorProjectContext')) return core
+    if (name.endsWith('useOperatorApi')) return api
     throw new Error(`Unexpected page dependency: ${name}`)
-  }, { useI18n: () => ({ t: (key) => key, locale: vue.ref('en') }), useRoute: () => route, useRouter: () => ({ push: async () => { } }) }).default
+  }, { useI18n: () => ({ t: (key) => key, locale: vue.ref('en') }), useRoute: routing.useRoute, useRouter: routing.useRouter }).default
   component.render = () => null
   const createNode = () => ({ children: [], parent: null })
   const renderer = vue.createRenderer({
@@ -78,15 +99,23 @@ async function mountConsumer(t) {
     insert: (node, parent) => { node.parent = parent; parent.children.push(node) },
     remove: (node) => { if (node.parent) node.parent.children = node.parent.children.filter((child) => child !== node) },
   })
-  const app = renderer.createApp(component)
-  const instance = app.mount(createNode())
+  let context, instance
+  const app = renderer.createApp({
+    setup() {
+      context = core.useOperatorProjectContext()
+      return () => vue.h(component, { ref: (value) => { if (value) instance = value } })
+    }
+  })
+  app.use(router).mount(createNode())
   t.after(() => app.unmount())
+  await context.resolveCatalogProject(projectID)
   await vue.nextTick()
+  const project = context.project
   primaryDocument.value = { ...document }
   primaryVersion.value = 1
   primaryState.value = { kind: 'live' }
   await vue.nextTick()
-  return { state: instance.$.setupState, route, project, primaryDocument, primaryVersion, primaryState, setOperation: (next) => { operation = next } }
+  return { state: instance.$.setupState, router, project, primaryDocument, primaryVersion, primaryState, setOperation: (next) => { operation = next } }
 }
 
 for (const [label, status, body] of [
@@ -123,8 +152,8 @@ for (const changedTarget of ['scope', 'path', 'version', 'reader error']) {
     let resolve
     consumer.setOperation(() => new Promise((accept) => { resolve = accept }))
     const attempt = consumer.state.exportDocument()
-    if (changedTarget === 'scope') consumer.project.value = 'other-canonical-test'
-    if (changedTarget === 'path') consumer.route.query.path = 'other-synthetic.md'
+    if (changedTarget === 'scope') consumer.project.value = otherProjectID
+    if (changedTarget === 'path') await consumer.router.push({ path: '/documents', query: { ...consumer.router.currentRoute.value.query, path: 'other-synthetic.md' } })
     if (changedTarget === 'version') consumer.primaryVersion.value = 2
     if (changedTarget === 'reader error') consumer.primaryState.value = { kind: 'error' }
     await vue.nextTick()

@@ -8,6 +8,7 @@ import * as vue from 'vue'
 import * as routing from 'vue-router'
 
 const root = new URL('../../', import.meta.url)
+const projectID = '11111111-1111-4111-8111-111111111111'
 const tick = async () => { await new Promise(setImmediate); await vue.nextTick() }
 
 function evaluate(source, require, globals) {
@@ -42,12 +43,13 @@ const renderer = vue.createRenderer({
 })
 function walk(node) { return [node, ...node.children.flatMap(walk)] }
 
-async function mountConsumer(t, location, { storage = new Map(), rejectMemory = false } = {}) {
+async function mountConsumer(t, location, { storage = new Map(), rejectMemory = false, catalogReady = Promise.resolve(), resolveLegacy = false } = {}) {
   const requests = []
   let reader
   const fetch = async (input) => {
     const url = new URL(input, 'http://synthetic.invalid')
-    if (url.pathname === '/api/projects') return Response.json({ items: [{ id: 'canonical-test', display_name: 'Synthetic project' }] })
+    if (url.pathname === '/api/projects') { await catalogReady; return Response.json({ items: [{ project_id: projectID, name: 'Synthetic project' }], unresolved: [] }) }
+    if (url.pathname === '/api/projects/resolve') return resolveLegacy ? Response.json({ status: 'resolved', project_id: projectID, name: 'Synthetic project' }) : Response.json({ error: 'Mapping unavailable' }, { status: 503 })
     if (url.pathname === '/api/memories') {
       requests.push(url)
       return rejectMemory ? Response.json({ error: 'Synthetic request refusal' }, { status: 400 }) : Response.json({
@@ -107,10 +109,10 @@ async function mountConsumer(t, location, { storage = new Map(), rejectMemory = 
 }
 
 test('combined filters survive scoped paging, navigation return and session reload', async (t) => {
-  const consumer = await mountConsumer(t, '/memory?project=canonical-test&q=known&page=3&size=10&filter=low&filter=chain')
+  const consumer = await mountConsumer(t, `/memory?project=${projectID}&q=known&page=3&size=10&filter=low&filter=chain`)
   const request = consumer.requests.at(-1)
   assert.deepEqual(request.searchParams.getAll('filter'), ['low', 'chain'])
-  assert.equal(request.searchParams.get('project'), 'canonical-test')
+  assert.equal(request.searchParams.get('project'), projectID)
   assert.equal(request.searchParams.get('offset'), '20')
   assert.equal(request.searchParams.get('limit'), '10')
   await consumer.router.push(consumer.context.to('/documents'))
@@ -122,13 +124,13 @@ test('combined filters survive scoped paging, navigation return and session relo
   await consumer.router.push(back)
   await tick()
   assert.deepEqual(consumer.requests.at(-1).searchParams.getAll('filter'), ['low', 'chain'])
-  const reloaded = await mountConsumer(t, '/documents?project=canonical-test', { storage: consumer.storage })
+  const reloaded = await mountConsumer(t, `/documents?project=${projectID}`, { storage: consumer.storage })
   assert.deepEqual(reloaded.context.to('/memory').query.filter, ['low', 'chain'])
   assert.equal(reloaded.context.to('/memory').query.page, '3')
 })
 
 test('chips toggle independently and an empty selection sends no filter parameter', async (t) => {
-  const consumer = await mountConsumer(t, '/memory?project=canonical-test&q=known&page=3&size=10')
+  const consumer = await mountConsumer(t, `/memory?project=${projectID}&q=known&page=3&size=10`)
   assert.deepEqual(consumer.requests.at(-1).searchParams.getAll('filter'), [])
   for (const value of ['low', 'chain']) {
     const button = consumer.chip(value)
@@ -147,12 +149,12 @@ test('chips toggle independently and an empty selection sends no filter paramete
   await consumer.chip('chain').props.onClick()
   await tick()
   assert.deepEqual(consumer.requests.at(-1).searchParams.getAll('filter'), [])
-  assert.equal(consumer.requests.at(-1).searchParams.get('project'), 'canonical-test')
+  assert.equal(consumer.requests.at(-1).searchParams.get('project'), projectID)
 })
 
 for (const suffix of ['filter=low&filter=unknown', 'filter=']) {
   test(`invalid route input stays explicit and a server refusal is not empty knowledge: ${suffix}`, async (t) => {
-    const consumer = await mountConsumer(t, `/memory?project=canonical-test&${suffix}`, { rejectMemory: true })
+    const consumer = await mountConsumer(t, `/memory?project=${projectID}&${suffix}`, { rejectMemory: true })
     const expected = suffix === 'filter=' ? [''] : ['low', 'unknown']
     assert.deepEqual(consumer.requests.at(-1).searchParams.getAll('filter'), expected)
     assert.equal(consumer.reader().loadState.value.kind, 'error')
@@ -160,3 +162,22 @@ for (const suffix of ['filter=low&filter=unknown', 'filter=']) {
     assert.equal(consumer.reader().total.value, null)
   })
 }
+
+test('pending and failed legacy resolution never dispatch a raw or broader memory scope', async (t) => {
+  let release
+  const catalogReady = new Promise((resolve) => { release = resolve })
+  const consumer = await mountConsumer(t, '/memory?project=legacy-project&filter=low', { catalogReady, resolveLegacy: true })
+  assert.equal(consumer.context.project.value, '')
+  assert.equal(consumer.requests.length, 0)
+  release()
+  await tick()
+  await tick()
+  assert.equal(consumer.router.currentRoute.value.query.project, projectID)
+  assert.ok(consumer.requests.length > 0)
+  assert.ok(consumer.requests.every((request) => request.searchParams.get('project') === projectID))
+  const failed = await mountConsumer(t, '/memory?project=unknown-project')
+  assert.equal(failed.requests.length, 0)
+  assert.equal(failed.context.project.value, '')
+  assert.equal(failed.context.selectionError.value.status, 503)
+  assert.ok(walk(failed.host).some((node) => node.props['data-testid'] === 'memory-project-error'))
+})

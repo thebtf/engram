@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
-import { basename, dirname, join, normalize, relative, resolve, sep } from 'node:path'
+import { basename, dirname, join, normalize, relative, sep } from 'node:path'
+import { resolveBuildPaths } from './build-paths.mjs'
 
-const publicDir = resolve('.output/public')
+const { outputPublicDir: publicDir } = resolveBuildPaths(process.env.ENGRAM_OPERATOR_OUTPUT_ROOT)
 const nuxtDir = join(publicDir, '_nuxt')
 const assetExtensions = [
   'js',
@@ -20,7 +21,7 @@ const assetExtensions = [
 const assetPattern = assetExtensions.join('|')
 
 if (!existsSync(nuxtDir)) {
-  console.error('[check-static-assets] missing .output/public/_nuxt')
+  console.error(`[check-static-assets] missing ${nuxtDir}`)
   process.exit(1)
 }
 

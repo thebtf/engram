@@ -1,6 +1,6 @@
 import { computed, onBeforeUnmount, ref as sharedRef, type Ref as SharedRef } from 'vue'
 import { startedLoads } from './useConsolePreferences'
-import { loadKnowledgePage, safeNavigation, type OperatorKnowledgePage } from './useOperatorProjectContext'
+import { isCatalogProject, loadKnowledgePage, safeNavigation, type OperatorKnowledgePage } from './useOperatorProjectContext'
 import { useRoute } from 'vue-router'
 
 let sharedDocumentsPageDocuments: SharedRef<OperatorDocumentSummary[]> | undefined
@@ -34,7 +34,6 @@ import {
   toOperatorSourceError,
 } from './useOperatorApi'
 
-const DEFAULT_DOCUMENT_PROJECT = ''
 const DOCUMENT_LIST_LIMIT = 20
 
 
@@ -250,7 +249,7 @@ function mapDocumentSummary(row: ApiDocumentListItem): OperatorDocumentSummary {
   return {
     id: String(row.id ?? ''),
     path: row.path || '',
-    project: row.project || DEFAULT_DOCUMENT_PROJECT,
+    project: row.project || '',
     docType: row.doc_type || 'markdown',
     author: row.author || '',
     createdAt: row.created_at || '',
@@ -274,7 +273,7 @@ function mapDocument(row: ApiDocumentReadResponse): OperatorDocument {
   return {
     id: String(row.id ?? ''),
     path: row.path || '',
-    project: row.project || DEFAULT_DOCUMENT_PROJECT,
+    project: row.project || '',
     content: row.content || '',
     contentHash: row.content_hash || '',
     docType: row.doc_type || 'markdown',
@@ -412,7 +411,7 @@ export function useOperatorDocuments(projectContext?: Ref<string>): {
   const secondaryStateValue = (sharedDocumentsPageSecondaryState ??= sharedRef<OperatorLoadState<OperatorDocument | null>>((() => emptyState(secondaryEvidence, null))()))
   const commentsStateValue = (sharedDocumentsPageCommentsState ??= sharedRef<OperatorLoadState<OperatorDocumentComment[]>>((() => emptyState(commentsEvidence, comments.value))()))
 
-  const activeDocument = computed(() => documents.value.find((row) => row.path === selectedPath.value) || null)
+  const activeDocument = computed(() => documents.value.find((row) => row.path === selectedPath.value && row.project === documentProject) || null)
   const documentsState = computed(() => documentsStateValue.value)
   const historyState = computed(() => historyStateValue.value)
   const primaryState = computed(() => primaryStateValue.value)
@@ -482,10 +481,11 @@ export function useOperatorDocuments(projectContext?: Ref<string>): {
     valueRef.value = null
     stateRef.value = pendingState(evidence, null)
     try {
+      if (!isCatalogProject(project)) throw new TypeError('A catalog document project is required')
       const payload = await operatorFetchJson<ApiDocumentReadResponse>(endpoint, undefined, source)
       if (!isCurrent()) return
-      if (payload.path !== path || (version !== null && payload.version !== version)) throw new TypeError('Document read scope mismatch')
-      valueRef.value = { ...parseDocumentReadPayload(payload, endpoint), project }
+      if (payload.path !== path || payload.project !== project || (version !== null && payload.version !== version)) throw new TypeError('Document read scope mismatch')
+      valueRef.value = parseDocumentReadPayload(payload, endpoint)
       stateRef.value = liveState(evidence, valueRef.value)
     } catch (nextError) {
       if (!isCurrent()) return
@@ -554,9 +554,10 @@ export function useOperatorDocuments(projectContext?: Ref<string>): {
     historyStateValue.value = pendingState(evidence, history.value)
 
     try {
+      if (!isCatalogProject(project)) throw new TypeError('A catalog document project is required')
       const payload = await operatorFetchJson<ApiDocumentHistoryResponse>(endpoint, undefined, 'documents-history')
       if (generation !== detailGeneration || project !== documentProject || path !== selectedPath.value) return
-      if (payload.path !== path) throw new TypeError('Document history path mismatch')
+      if (payload.path !== path || payload.project !== project) throw new TypeError('Document history scope mismatch')
       const rows = parseDocumentHistoryPayload(payload, endpoint).sort((a, b) => b.version - a.version)
       replaceArray(history.value, rows)
       historyStateValue.value = rows.length ? liveState(evidence, history.value) : emptyState(evidence, history.value)
@@ -588,8 +589,8 @@ export function useOperatorDocuments(projectContext?: Ref<string>): {
 
   async function openDocument(doc: OperatorDocumentSummary) {
     clearDocumentDetail()
-    const project = selectedProject.value === 'all' ? String(route.query.docProject || '') : selectedProject.value
-    if (!project || project === 'all') return
+    const project = doc.project
+    if (!isCatalogProject(project) || (selectedProject.value !== 'all' && selectedProject.value !== project)) return
     documentProject = project
     selectedPath.value = doc.path
     const generation = detailGeneration
@@ -608,6 +609,10 @@ export function useOperatorDocuments(projectContext?: Ref<string>): {
     replaceArray(documents.value, [])
     total.value = null
     hasMore.value = false
+    if (!project || (project !== 'all' && !isCatalogProject(project))) {
+      documentsStateValue.value = { kind: 'gated', evidence: listEvidence, flag: 'project-selection', reason: 'Choose a catalog project before reading documents.', updatedAt: new Date().toISOString(), data: [] }
+      return
+    }
     if (project === 'all' && route.query.allRead !== '1') {
       documentsStateValue.value = { kind: 'gated', evidence: listEvidence, flag: 'explicit-all-read', reason: 'Choose a project or submit an explicit all-projects search.', updatedAt: new Date().toISOString(), data: [] }
       return
@@ -677,6 +682,7 @@ export function useOperatorDocuments(projectContext?: Ref<string>): {
   }
 
   async function addComment(input: DocumentCommentInput) {
+    if (!isCatalogProject(documentProject)) throw new TypeError('A catalog document project is required')
     const currentVersionEntry = history.value.find((entry) => entry.version === primaryVersion.value)
     if (!currentVersionEntry?.id) {
       throw new Error('No document version selected for comments')
@@ -699,6 +705,7 @@ export function useOperatorDocuments(projectContext?: Ref<string>): {
   }
 
   async function runDocumentSelectionOperation(input: DocumentSelectionOperationInput): Promise<DocumentSelectionOperationResult> {
+    if (!isCatalogProject(documentProject)) throw new TypeError('A catalog document project is required')
     if (!Number.isSafeInteger(input.target.documentId) || input.target.documentId < 1 || !Number.isSafeInteger(input.target.version) || input.target.version < 1) {
       throw new TypeError('Documents export target is invalid')
     }

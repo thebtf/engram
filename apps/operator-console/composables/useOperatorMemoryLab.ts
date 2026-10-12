@@ -1,6 +1,6 @@
 import { computed, onBeforeUnmount, ref as sharedRef, watch, type Ref as SharedRef } from 'vue'
 import { startedLoads } from './useConsolePreferences'
-import { loadKnowledgePage, useOperatorProjectContext } from './useOperatorProjectContext'
+import { isCatalogProject, loadKnowledgePage, useOperatorProjectContext } from './useOperatorProjectContext'
 import { useRoute } from 'vue-router'
 
 let sharedPrincipalMemoryScope: SharedRef<PrincipalMemoryScope> | undefined
@@ -355,6 +355,7 @@ function principalQueryScope(scope: PrincipalMemoryScope, currentProject = ''): 
 
 export function principalMemoryQueryPath(scope: PrincipalMemoryScope, currentProject = ''): string {
   const normalized = principalQueryScope(scope, currentProject)
+  if (scope.project !== 'all' && !isCatalogProject(normalized.project)) throw new TypeError('A canonical principal-memory project is required')
   const params = new URLSearchParams()
   params.set('principal', normalized.principal)
   params.set('principal_kind', normalized.principalKind)
@@ -406,7 +407,7 @@ function principalPayloadError(path: string, detail: string, payload: unknown): 
 function mapPrincipalMemoryItem(row: ApiPrincipalMemoryItem): OperatorPrincipalMemoryItem {
   return {
     id: row.id === undefined || row.id === null ? '-' : String(row.id),
-    project: clean(row.project) || 'global',
+    project: clean(row.project),
     content: clean(row.content) || '-',
     tags: Array.isArray(row.tags) ? row.tags.filter((tag): tag is string => typeof tag === 'string') : [],
     ownerPrincipal: clean(row.owner_principal),
@@ -439,6 +440,8 @@ function mapPrincipalMemoryResponse(
     project: clean(response.project) || scope.project,
     domain: clean(response.domain) || scope.domain,
   })
+  const items = response.items.map(mapPrincipalMemoryItem)
+  if ((scope.project !== 'all' && normalizedScope.project !== scope.project) || items.some((row) => !isCatalogProject(row.project) || (scope.project !== 'all' && row.project !== scope.project))) throw new TypeError('Principal memory project scope mismatch')
 
   return {
     scope: normalizedScope,
@@ -446,7 +449,7 @@ function mapPrincipalMemoryResponse(
     principalKind: normalizedScope.principalKind,
     project: normalizedScope.project,
     domain: normalizedScope.domain,
-    items: response.items.map(mapPrincipalMemoryItem),
+    items,
     hiddenCount: typeof response.hidden_count === 'number' ? response.hidden_count : 0,
     auditStatus: clean(response.audit_status) || 'not_required',
     audit: {
@@ -505,7 +508,7 @@ function parseMemoryCollectionReadback(value: unknown): MemoryCollectionOperatio
 }
 
 async function memoryCollectionSelectionTarget(id: string, project: string): Promise<{ id: string; expectedVersion: number }> {
-  if (!project || project === 'all') throw new TypeError('A canonical memory project is required')
+  if (!isCatalogProject(project)) throw new TypeError('A canonical memory project is required')
   const path = `/api/memories/${encodeURIComponent(id)}?project=${encodeURIComponent(project)}`
   const value = await operatorFetchJson<ApiMemory>(path, undefined, 'memory-selection-target')
   if (value.project !== project || (typeof value.id !== 'number' && typeof value.id !== 'string') || String(value.id) !== id || typeof value.version !== 'number' || !Number.isSafeInteger(value.version) || value.version < 1) {
@@ -637,7 +640,7 @@ function mapMemoryRow(row: ApiMemory): Memory {
     status: mapStatus(row),
     tier: mapTier(row.tier),
     type: row.epistemic_type || 'note',
-    project: row.project || 'global',
+    project: row.project || '',
     conf: hasConfidence ? row.confidence as number : 1,
     confidenceKnown: hasConfidence,
     cite: typeof row.citation_count === 'number' ? row.citation_count : 0,
@@ -762,7 +765,7 @@ export function useOperatorPrincipalMemorySurface(currentProject?: Ref<string>):
       return
     }
 
-    if (normalizedScope.project === PRINCIPAL_CURRENT_PROJECT && !queryScope.project) {
+    if (normalizedScope.project !== 'all' && !isCatalogProject(queryScope.project)) {
       riskyConfirmation.value = false
       state.value = gatedState(
         endpointEvidence('/api/memories/principal', 'principal-memory-query', {
@@ -885,6 +888,10 @@ export function useOperatorMemoryLab(project?: Ref<string>, autoLoad = true): {
     total.value = null
     hasMore.value = false
     state.value = pendingState(evidence, rowsState.value)
+    if (!scope || (scope !== 'all' && !isCatalogProject(scope))) {
+      state.value = gatedState(evidence, 'project-selection', 'Choose a catalog project before reading memories.', [])
+      return
+    }
     if (scope === 'all' && route.query.allRead !== '1') {
       state.value = gatedState(evidence, 'explicit-all-read', 'Choose a project or submit an explicit all-projects search.', [])
       return
@@ -920,13 +927,14 @@ export function useOperatorMemoryLab(project?: Ref<string>, autoLoad = true): {
   }
 
   async function loadMemoryByID(id: string, scope = selectedProject.value) {
-    if (!scope || scope === 'all') throw new TypeError('A canonical memory project is required')
+    if (!isCatalogProject(scope)) throw new TypeError('A canonical memory project is required')
     const path = `/api/memories/${encodeURIComponent(id)}?project=${encodeURIComponent(scope)}`
     const row = mapMemoryRow(await operatorFetchJson<ApiMemory>(path, undefined, 'memory-get'))
     if (row.id !== id || row.project !== scope) throw new TypeError('Memory detail scope mismatch')
     return row
   }
   async function storeMemory(input: StoreMemoryInput) {
+    if (!isCatalogProject(input.project)) throw new TypeError('A canonical memory project is required')
     return submitMutation('memory-store', input, '/api/memories', jsonInit('POST', {
       project: input.project,
       content: input.content,
@@ -936,7 +944,9 @@ export function useOperatorMemoryLab(project?: Ref<string>, autoLoad = true): {
   }
 
   async function deleteMemory(id: string) {
-    return submitMutation('memory-delete', { id }, `/api/memories/${encodeURIComponent(id)}`, jsonInit('DELETE'))
+    const scope = scopeForID(id)
+    if (!isCatalogProject(scope)) throw new TypeError('A canonical memory project is required')
+    return submitMutation('memory-delete', { id }, `/api/memories/${encodeURIComponent(id)}?project=${encodeURIComponent(scope)}`, jsonInit('DELETE'))
   }
 
   function scopeForID(id: string) {
@@ -970,7 +980,7 @@ export function useOperatorMemoryLab(project?: Ref<string>, autoLoad = true): {
   }
 
   async function auditMemory(id: string, scope: string, limit = 10) {
-    if (!scope || scope === 'all') throw new TypeError('A canonical memory project is required')
+    if (!isCatalogProject(scope)) throw new TypeError('A canonical memory project is required')
     const normalizedLimit = Number.isInteger(limit) && limit > 0 ? Math.min(200, limit) : 10
     const params = new URLSearchParams({ project: scope, limit: String(normalizedLimit) })
     const path = `/api/memories/${encodeURIComponent(id)}/audit?${params}`

@@ -1,6 +1,6 @@
-import { onBeforeUnmount, ref as sharedRef, type Ref as SharedRef } from 'vue'
+import { computed, onBeforeUnmount, watch, ref as sharedRef, type Ref as SharedRef } from 'vue'
 import { startedLoads } from './useConsolePreferences'
-import { useOperatorProjectContext } from './useOperatorProjectContext'
+import { isCatalogProject, useOperatorProjectContext } from './useOperatorProjectContext'
 
 let sharedSearchNoiseProjects: SharedRef<string[]> | undefined
 let sharedSearchNoiseResults: SharedRef<OperatorSearchResult[]> | undefined
@@ -238,6 +238,11 @@ export function useOperatorSearchNoise(): {
   const retrievalStateValue = (sharedSearchNoiseRetrievalState ??= sharedRef<OperatorLoadState<ApiRetrievalStats>>((() => pendingState(retrievalEvidence))()))
   const vnextStateValue = (sharedSearchNoiseVnextState ??= sharedRef<OperatorLoadState<ApiStatsVNext>>((() => pendingState(vnextEvidence))()))
   let searchGeneration = 0
+  watch([selectedProject, context.selectionPending, context.selectionError, context.error], () => {
+    searchGeneration += 1
+    replaceArray(searchResults.value, [])
+    searchStateValue.value = emptyState(searchEvidence, searchResults.value)
+  }, { flush: 'sync' })
 
   const searchState = computed(() => searchStateValue.value)
   const recentState = computed(() => recentStateValue.value)
@@ -343,6 +348,7 @@ export function useOperatorSearchNoise(): {
     searchStateValue.value = pendingState(evidence, [])
 
     try {
+      if (!isCatalogProject(trimmedProject)) throw new TypeError('A catalog search project is required')
       const payload = await operatorFetchJson<ApiContextSearch>(path, undefined, 'context-search')
       if (run !== searchGeneration || project !== selectedProject.value) return
       if (typeof payload === 'string' || payload.deprecated) {
@@ -352,6 +358,7 @@ export function useOperatorSearchNoise(): {
       }
 
       const nextRows = contextRows(payload)
+      if ((payload.project !== undefined && payload.project !== trimmedProject) || nextRows.some((row) => row.project !== trimmedProject)) throw new TypeError('Search result project mismatch')
       replaceArray(searchResults.value, nextRows)
       searchStateValue.value = nextRows.length
         ? liveState(evidence, searchResults.value)

@@ -6,12 +6,13 @@ import { useUiI18n } from '@/composables/useUiI18n'
 import {
   createRule,
   deleteRule,
-  fetchProjects,
   fetchRules,
   updateRule,
   type Rule,
 } from '@/utils/api'
 import { safeAbsoluteDate, truncate } from '@/utils/formatters'
+import { useProjectCatalog } from '@/composables/useProjectCatalog'
+import ProjectCatalogStatus from '@/components/ProjectCatalogStatus.vue'
 import EmptyState from '@/components/layout/EmptyState.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -53,8 +54,7 @@ import {
 const { user } = useAuth()
 const { t } = useUiI18n()
 
-const projects = ref<string[]>([])
-const selectedProject = ref('all')
+const { projects, unresolved, selectedProject, selectionPending, selectionError, unresolvedReference, projectName, refresh } = useProjectCatalog('all')
 const rules = ref<Rule[]>([])
 const selectedRuleId = ref<number | null>(null)
 const loading = ref(false)
@@ -62,6 +62,7 @@ const bootLoading = ref(true)
 const error = ref<string | null>(null)
 const actionError = ref<string | null>(null)
 
+let loadGeneration = 0
 const showCreateDialog = ref(false)
 const showEditDialog = ref(false)
 const showDeleteDialog = ref(false)
@@ -78,7 +79,7 @@ const selectedRule = computed(() =>
 )
 
 function scopeLabel(project?: string | null): string {
-  return project || t.value.rules.scope.global
+  return project ? projectName(project) : t.value.rules.scope.global
 }
 
 function nextRulePriority(): number {
@@ -88,6 +89,8 @@ function nextRulePriority(): number {
 }
 
 async function loadRules() {
+  const generation = ++loadGeneration
+  if (selectionPending.value || selectionError.value || !selectedProject.value) { rules.value = []; selectedRuleId.value = null; return }
   loading.value = true
   error.value = null
 
@@ -97,17 +100,18 @@ async function loadRules() {
         ? {}
         : { project: selectedProject.value },
     )
+    if (generation !== loadGeneration) return
     rules.value = response.rules ?? []
     if (!rules.value.some(rule => rule.id === selectedRuleId.value)) {
       selectedRuleId.value = rules.value[0]?.id ?? null
     }
   } catch (err: any) {
+    if (generation !== loadGeneration) return
     error.value = err?.message || t.value.rules.loadError
     rules.value = []
     selectedRuleId.value = null
   } finally {
-    loading.value = false
-    bootLoading.value = false
+    if (generation === loadGeneration) { loading.value = false; bootLoading.value = false }
   }
 }
 
@@ -115,8 +119,7 @@ async function loadData() {
   bootLoading.value = true
   actionError.value = null
   try {
-    projects.value = await fetchProjects()
-    await loadRules()
+    await refresh()
   } catch (err: any) {
     error.value = err?.message || t.value.rules.loadError
     bootLoading.value = false
@@ -127,11 +130,7 @@ onMounted(async () => {
   await loadData()
 })
 
-watch(selectedProject, async (next, prev) => {
-  if (next !== prev) {
-    await loadRules()
-  }
-})
+watch([selectedProject, selectionPending], () => { void loadRules() })
 
 function openCreateDialog() {
   createContent.value = ''
@@ -153,6 +152,7 @@ function openDeleteDialog(rule: Rule) {
 }
 
 async function handleCreate() {
+  if (selectionPending.value || selectionError.value) { actionError.value = t.value.projectCatalog.selectionRequired; return }
   const content = createContent.value.trim()
   if (!content) return
 
@@ -218,6 +218,7 @@ async function handleDelete() {
 
 <template>
   <div class="space-y-4 pt-4">
+    <ProjectCatalogStatus :records="unresolved" :pending="selectionPending" :error="selectionError" :reference="unresolvedReference" />
     <div class="flex items-center justify-between gap-3 flex-wrap">
       <div class="flex items-center gap-3">
         <Shield class="size-5 text-primary" />
@@ -233,8 +234,8 @@ async function handleDelete() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">{{ t.rules.filterAll }}</SelectItem>
-            <SelectItem v-for="project in projects" :key="project" :value="project">
-              {{ project }}
+            <SelectItem v-for="project in projects" :key="project.project_id" :value="project.project_id">
+              {{ projectName(project.project_id) }}
             </SelectItem>
           </SelectContent>
         </Select>
@@ -402,8 +403,8 @@ async function handleDelete() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="__global__">{{ t.rules.scope.global }}</SelectItem>
-                <SelectItem v-for="project in projects" :key="project" :value="project">
-                  {{ project }}
+                <SelectItem v-for="project in projects" :key="project.project_id" :value="project.project_id">
+                  {{ projectName(project.project_id) }}
                 </SelectItem>
               </SelectContent>
             </Select>
