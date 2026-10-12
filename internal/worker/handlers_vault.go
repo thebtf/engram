@@ -26,6 +26,31 @@ type storeCredentialRequest struct {
 	Tags    []string `json:"tags,omitempty"`
 }
 
+func credentialProjectID(project string) any {
+	if project == "" {
+		return nil
+	}
+	return project
+}
+
+func credentialRequestProject(r *http.Request) (string, error) {
+	project := r.URL.Query().Get("project")
+	scope := r.URL.Query().Get("scope")
+	if scope == "global" {
+		if r.URL.Query().Has("project") {
+			return "", errors.New("global credentials must not have a project selector")
+		}
+		return "", nil
+	}
+	if scope != "" && scope != "project" {
+		return "", errors.New("invalid scope: must be project or global")
+	}
+	if !operatorCodeUUID(project) {
+		return "", errors.New("canonical project UUID is required; use scope=global for global credentials")
+	}
+	return project, nil
+}
+
 // handleListCredentials godoc
 // @Summary List vault credentials
 // @Description Returns all stored credentials with metadata (name, scope, created) but NOT decrypted values.
@@ -48,6 +73,7 @@ func (s *Service) handleListCredentials(w http.ResponseWriter, r *http.Request) 
 		Name      string `json:"name"`
 		Scope     string `json:"scope"`
 		Project   string `json:"project,omitempty"`
+		ProjectID any    `json:"project_id"`
 		CreatedAt string `json:"created_at,omitempty"`
 		ID        int64  `json:"id"`
 	}
@@ -66,6 +92,7 @@ func (s *Service) handleListCredentials(w http.ResponseWriter, r *http.Request) 
 				Name:      c.Key,
 				Scope:     c.Scope,
 				Project:   c.Project,
+				ProjectID: credentialProjectID(c.Project),
 				ID:        c.ID,
 				CreatedAt: c.CreatedAt.Format(time.RFC3339),
 			})
@@ -95,6 +122,7 @@ func (s *Service) handleListCredentials(w http.ResponseWriter, r *http.Request) 
 			Name:      c.Key,
 			Scope:     c.Scope,
 			Project:   c.Project,
+			ProjectID: credentialProjectID(c.Project),
 			CreatedAt: c.CreatedAt.Format(time.RFC3339),
 		})
 	}
@@ -110,6 +138,7 @@ func (s *Service) handleListCredentials(w http.ResponseWriter, r *http.Request) 
 // @Security ApiKeyAuth
 // @Param name path string true "Credential name"
 // @Param project query string false "Project scope"
+// @Param scope query string false "Explicit global namespace or project scope"
 // @Success 200 {object} object
 // @Failure 400 {string} string "bad request"
 // @Failure 404 {string} string "not found"
@@ -126,7 +155,11 @@ func (s *Service) handleGetCredential(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "credential name is required", http.StatusBadRequest)
 		return
 	}
-	project := r.URL.Query().Get("project")
+	project, err := credentialRequestProject(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	v, err := s.getVault()
 	if err != nil {
@@ -135,13 +168,7 @@ func (s *Service) handleGetCredential(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var cred *models.Credential
-	if project != "" {
-		cred, err = s.credentialStore.Get(r.Context(), project, name)
-	} else {
-		// Dashboard admin view: caller doesn't know the project — find by name.
-		cred, err = s.credentialStore.GetByName(r.Context(), name)
-	}
+	cred, err := s.credentialStore.Get(r.Context(), project, name)
 	if err != nil {
 		if errors.Is(err, gormlib.ErrRecordNotFound) {
 			http.Error(w, "credential not found", http.StatusNotFound)
@@ -168,9 +195,11 @@ func (s *Service) handleGetCredential(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, map[string]any{
-		"name":  name,
-		"value": plaintext,
-		"scope": cred.Scope,
+		"name":       name,
+		"value":      plaintext,
+		"scope":      cred.Scope,
+		"id":         cred.ID,
+		"project_id": credentialProjectID(cred.Project),
 	})
 }
 
@@ -218,8 +247,8 @@ func (s *Service) handleStoreCredential(w http.ResponseWriter, r *http.Request) 
 	}
 	if req.Scope == "global" {
 		req.Project = ""
-	} else if req.Project == "" {
-		http.Error(w, "project is required for project-scoped credentials", http.StatusBadRequest)
+	} else if !operatorCodeUUID(req.Project) {
+		http.Error(w, "canonical project UUID is required for project-scoped credentials", http.StatusBadRequest)
 		return
 	}
 
@@ -258,6 +287,12 @@ func (s *Service) handleStoreCredential(w http.ResponseWriter, r *http.Request) 
 		"name":    req.Name,
 		"scope":   req.Scope,
 		"message": "Credential stored successfully",
+		"current_state": map[string]any{
+			"id":         created.ID,
+			"name":       created.Key,
+			"scope":      created.Scope,
+			"project_id": credentialProjectID(created.Project),
+		},
 	})
 }
 
@@ -287,15 +322,12 @@ func (s *Service) handleDeleteCredential(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	project := r.URL.Query().Get("project")
-
-	var err error
-	if project != "" {
-		err = s.credentialStore.Delete(r.Context(), project, name)
-	} else {
-		// Dashboard admin view: caller doesn't know the project — find and delete by name.
-		err = s.credentialStore.DeleteByName(r.Context(), name)
+	project, err := credentialRequestProject(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
+	err = s.credentialStore.Delete(r.Context(), project, name)
 	if err != nil {
 		if errors.Is(err, gormlib.ErrRecordNotFound) {
 			http.Error(w, "credential not found", http.StatusNotFound)
@@ -305,10 +337,20 @@ func (s *Service) handleDeleteCredential(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
+	scope := "project"
+	if project == "" {
+		scope = "global"
+	}
 
 	writeJSON(w, map[string]any{
 		"deleted": true,
 		"name":    name,
+		"current_state": map[string]any{
+			"name":       name,
+			"scope":      scope,
+			"project_id": credentialProjectID(project),
+			"deleted":    true,
+		},
 	})
 }
 

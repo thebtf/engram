@@ -99,6 +99,7 @@ func writeIssueStoreError(w http.ResponseWriter, err error) {
 func (s *Service) handleListIssues(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
 	sourceProject := r.URL.Query().Get("source_project")
+	sourceAgent := r.URL.Query().Get("source_agent")
 	statusParam := r.URL.Query().Get("status")
 	typeParam := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("type")))
 	limitStr := r.URL.Query().Get("limit")
@@ -126,6 +127,7 @@ func (s *Service) handleListIssues(w http.ResponseWriter, r *http.Request) {
 	params := gormdb.IssueListParams{
 		TargetProject: project,
 		SourceProject: sourceProject,
+		SourceAgent:   sourceAgent,
 		Statuses:      statuses,
 		Type:          typeParam,
 		Limit:         limit,
@@ -412,6 +414,7 @@ const (
 type issueSelectionFilter struct {
 	Project       string   `json:"project,omitempty"`
 	SourceProject string   `json:"source_project,omitempty"`
+	SourceAgent   string   `json:"source_agent,omitempty"`
 	Statuses      []string `json:"statuses,omitempty"`
 	Type          string   `json:"type,omitempty"`
 }
@@ -781,6 +784,7 @@ func (s *Service) issueSelectionRows(ctx context.Context, filter issueSelectionF
 	params := gormdb.IssueListParams{
 		TargetProject: filter.Project,
 		SourceProject: filter.SourceProject,
+		SourceAgent:   filter.SourceAgent,
 		Statuses:      append([]string(nil), filter.Statuses...),
 		Type:          filter.Type,
 		Limit:         gormdb.CollectionSelectionMaxTargets + 1,
@@ -875,10 +879,11 @@ func normalizeIssueSelectionFilter(request *issueSelectionFilter) (issueSelectio
 	filter := issueSelectionFilter{
 		Project:       strings.TrimSpace(request.Project),
 		SourceProject: strings.TrimSpace(request.SourceProject),
+		SourceAgent:   strings.TrimSpace(request.SourceAgent),
 		Type:          strings.ToLower(strings.TrimSpace(request.Type)),
 	}
-	if filter.Project != request.Project || filter.SourceProject != request.SourceProject || filter.Type != request.Type ||
-		(len(filter.Project) > issueSelectionFilterLimit || len(filter.SourceProject) > issueSelectionFilterLimit) {
+	if filter.Project != request.Project || filter.SourceProject != request.SourceProject || filter.SourceAgent != request.SourceAgent || filter.Type != request.Type ||
+		(len(filter.Project) > issueSelectionFilterLimit || len(filter.SourceProject) > issueSelectionFilterLimit || len(filter.SourceAgent) > issueSelectionFilterLimit) {
 		return issueSelectionFilter{}, gormdb.ErrCollectionSelectionInvalid
 	}
 	if filter.Type != "" && filter.Type != "bug" && filter.Type != "feature" && filter.Type != "improvement" && filter.Type != "task" {
@@ -903,7 +908,7 @@ func normalizeIssueSelectionFilter(request *issueSelectionFilter) (issueSelectio
 }
 
 func sameIssueSelectionFilter(left, right issueSelectionFilter) bool {
-	if left.Project != right.Project || left.SourceProject != right.SourceProject || left.Type != right.Type || len(left.Statuses) != len(right.Statuses) {
+	if left.Project != right.Project || left.SourceProject != right.SourceProject || left.SourceAgent != right.SourceAgent || left.Type != right.Type || len(left.Statuses) != len(right.Statuses) {
 		return false
 	}
 	for index := range left.Statuses {
@@ -924,7 +929,7 @@ func validIssueSelectionStatus(value string) bool {
 }
 
 func (filter issueSelectionFilter) collectionFilter() gormdb.CollectionFilter {
-	digest := sha256.Sum256([]byte("issues-collection-filter/v1\x00priority:asc\x00created_at:desc\x00" + filter.Project + "\x00" + filter.SourceProject + "\x00" + strings.Join(filter.Statuses, ",") + "\x00" + filter.Type))
+	digest := sha256.Sum256([]byte("issues-collection-filter/v1\x00priority:asc\x00created_at:desc\x00" + filter.Project + "\x00" + filter.SourceProject + "\x00" + strings.Join(filter.Statuses, ",") + "\x00" + filter.Type + "\x00" + filter.SourceAgent))
 	return gormdb.CollectionFilter{Fingerprint: issueSelectionDigestPrefix + hex.EncodeToString(digest[:]), Value: "issues"}
 }
 

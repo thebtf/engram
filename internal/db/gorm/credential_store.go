@@ -108,26 +108,6 @@ func (s *CredentialStore) Get(ctx context.Context, project, key string) (*models
 	return credentialRowToModel(&row), nil
 }
 
-// GetByName returns the first active credential matching the given key across all projects.
-// Used by the dashboard admin view where the caller doesn't know the project.
-// Global credentials are preferred, then project rows are ordered deterministically.
-// Returns a wrapped gorm.ErrRecordNotFound if no active row exists.
-func (s *CredentialStore) GetByName(ctx context.Context, key string) (*models.Credential, error) {
-	if key == "" {
-		return nil, fmt.Errorf("key: must not be empty")
-	}
-	var row Credential
-	err := s.db.WithContext(ctx).
-		Where("key = ? AND deleted_at IS NULL", key).
-		Order("CASE WHEN project = '' THEN 0 ELSE 1 END").
-		Order("project ASC").
-		First(&row).Error
-	if err != nil {
-		return nil, fmt.Errorf("get credential by name %q: %w", key, err)
-	}
-	return credentialRowToModel(&row), nil
-}
-
 // List returns all active credentials for the exact project namespace, ordered
 // by key ascending. An empty project lists global credentials only.
 func (s *CredentialStore) List(ctx context.Context, project string) ([]*models.Credential, error) {
@@ -189,29 +169,6 @@ func (s *CredentialStore) Delete(ctx context.Context, project, key string) error
 	}
 	if result.RowsAffected == 0 {
 		return fmt.Errorf("delete credential %q/%q: %w", project, key, gorm.ErrRecordNotFound)
-	}
-	return nil
-}
-
-// DeleteByName hard-deletes the first active credential matching the given key across
-// all projects, preferring the exact global row. Used by the dashboard admin view
-// where the caller doesn't know the project. Returns gorm.ErrRecordNotFound if absent.
-func (s *CredentialStore) DeleteByName(ctx context.Context, key string) error {
-	if key == "" {
-		return fmt.Errorf("key: must not be empty")
-	}
-	// Find the exact row first; a global credential wins when names coexist.
-	var row Credential
-	if err := s.db.WithContext(ctx).
-		Where("key = ? AND deleted_at IS NULL", key).
-		Order("CASE WHEN project = '' THEN 0 ELSE 1 END").
-		Order("project ASC").
-		First(&row).Error; err != nil {
-		return fmt.Errorf("delete credential by name %q: %w", key, err)
-	}
-	result := s.db.WithContext(ctx).Delete(&Credential{}, row.ID)
-	if result.Error != nil {
-		return fmt.Errorf("delete credential by name %q: %w", key, result.Error)
 	}
 	return nil
 }

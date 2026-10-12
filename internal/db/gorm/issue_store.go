@@ -4,22 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
 	"time"
 
 	"github.com/thebtf/engram/pkg/models"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
-
-// projectBareName strips the "_<hash>" suffix from a canonical hashed project ID
-// like "mcp-mux_e54050" → "mcp-mux". If the input has no recognizable hash suffix,
-// it is returned unchanged. Hash suffixes are 6-8 hex characters following "_".
-var projectHashSuffixRe = regexp.MustCompile(`_[0-9a-f]{6,8}$`)
-
-func projectBareName(projectID string) string {
-	return projectHashSuffixRe.ReplaceAllString(projectID, "")
-}
 
 var (
 	// ErrIssueNotFound indicates that no issue exists for the requested ID.
@@ -191,6 +181,7 @@ func (s *IssueStore) CreateIssue(ctx context.Context, issue *Issue) (int64, erro
 type IssueListParams struct {
 	TargetProject string
 	SourceProject string
+	SourceAgent   string
 	Statuses      []string
 	ResolvedSince *time.Time
 	Type          string
@@ -209,7 +200,7 @@ func (s *IssueStore) ListIssues(ctx context.Context, targetProject string, statu
 	})
 }
 
-// ListIssuesEx returns issues with extended filtering (source_project, resolved_since, stale_days).
+// ListIssuesEx applies exact project and actor filters before counting and pagination.
 func (s *IssueStore) ListIssuesEx(ctx context.Context, params IssueListParams) ([]IssueWithCount, int64, error) {
 	limit := params.Limit
 	if limit <= 0 {
@@ -217,19 +208,14 @@ func (s *IssueStore) ListIssuesEx(ctx context.Context, params IssueListParams) (
 	}
 
 	query := s.db.WithContext(ctx).Table("issues")
-	// Project matching accepts both canonical hashed IDs (dirname_hash) and bare
-	// slug names, because hooks use hashed IDs but MCP callers use bare names.
-	// Query "mcp-mux" matches issues with target_project="mcp-mux" AND "mcp-mux_e54050".
-	// Query "mcp-mux_e54050" matches issues with target_project="mcp-mux_e54050" AND "mcp-mux".
 	if params.TargetProject != "" {
-		bare := projectBareName(params.TargetProject)
-		query = query.Where(`target_project = ? OR target_project = ? OR target_project LIKE ? ESCAPE '\'`,
-			params.TargetProject, bare, escapeSQLLike(bare)+`\_%`)
+		query = query.Where("target_project = ?", params.TargetProject)
 	}
 	if params.SourceProject != "" {
-		bare := projectBareName(params.SourceProject)
-		query = query.Where(`source_project = ? OR source_project = ? OR source_project LIKE ? ESCAPE '\'`,
-			params.SourceProject, bare, escapeSQLLike(bare)+`\_%`)
+		query = query.Where("source_project = ?", params.SourceProject)
+	}
+	if params.SourceAgent != "" {
+		query = query.Where("source_agent = ?", params.SourceAgent)
 	}
 	if len(params.Statuses) > 0 {
 		query = query.Where("status IN ?", params.Statuses)
