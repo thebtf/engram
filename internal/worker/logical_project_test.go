@@ -234,3 +234,209 @@ func TestLogicalProjectRealCLIHandler(t *testing.T) {
 	t.Logf("PASS actual CLI -> HTTP -> PostgreSQL; UUID=%s, nested repeat offline-pinned; 8 concurrent catalog requests; fork/common-upstream distinct; normal Go proxy -> real gRPC -> real MCP list_rules twice; missing context typed; catalog survives", first.ProjectID)
 }
 
+func TestLogicalProjectConcurrentFirstBootstrap(t *testing.T) {
+	dsnFile := os.Getenv("ENGRAM_IDENTITY_TEST_DSN_FILE")
+	if dsnFile == "" {
+		t.Skip("requires private isolated PostgreSQL fixture")
+	}
+	dsn, err := os.ReadFile(dsnFile)
+	if err != nil {
+		t.Fatal("private fixture DSN is unavailable")
+	}
+	u, err := url.Parse(strings.TrimSpace(string(dsn)))
+	if err != nil || u.Host != "127.0.0.1:22366" || u.Path != "/identity_fixture" {
+		t.Fatal("refusing an unassigned database target")
+	}
+	admin, err := gormlib.Open(postgres.Open(u.String()), &gormlib.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatal("isolated fixture connection failed")
+	}
+	adminPool, err := admin.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer adminPool.Close()
+	schema := "logical_first_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	if err := admin.Exec("CREATE SCHEMA " + schema).Error; err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := admin.Exec("DROP SCHEMA " + schema + " CASCADE").Error; err != nil {
+			t.Error("isolated schema cleanup failed")
+		}
+	}()
+	query := u.Query()
+	query.Set("search_path", schema)
+	u.RawQuery = query.Encode()
+	db, err := gormlib.Open(postgres.Open(u.String()), &gormlib.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatal("isolated schema connection failed")
+	}
+	pool, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool.SetMaxOpenConns(4)
+	defer pool.Close()
+	if err := db.AutoMigrate(&gormdb.Project{}, &gormdb.ProjectIdentifier{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, ddl := range []string{
+		`CREATE UNIQUE INDEX logical_first_locator_alias ON project_identifiers(scheme, normalized_value) WHERE status IN ('active','redirected')`,
+		`ALTER TABLE project_identifiers ADD CONSTRAINT logical_first_project_fk FOREIGN KEY(project_key) REFERENCES projects(project_key)`,
+	} {
+		if err := db.Exec(ddl).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	locator := "example.test/FirstCreate/" + uuid.NewString()
+	var projectCount, bindingCount int64
+	if err := db.Model(&gormdb.Project{}).Count(&projectCount).Error; err != nil || projectCount != 0 {
+		t.Fatalf("fresh project catalog count=%d err=%v", projectCount, err)
+	}
+	if err := db.Model(&gormdb.ProjectIdentifier{}).Count(&bindingCount).Error; err != nil || bindingCount != 0 {
+		t.Fatalf("fresh binding catalog count=%d err=%v", bindingCount, err)
+	}
+	const callers = 8
+	var arrivals atomic.Int32
+	gate := make(chan struct{})
+	service := &Service{store: &gormdb.Store{DB: db}}
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/projects/bootstrap" {
+			http.NotFound(w, r)
+			return
+		}
+		if n := arrivals.Add(1); n <= callers {
+			if n == callers {
+				close(gate)
+			}
+			select {
+			case <-gate:
+			case <-r.Context().Done():
+				return
+			}
+		}
+		service.handleProjectBootstrap(w, r)
+	}))
+	defer httpServer.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	bootstrap := projectidentity.HTTPBootstrap(httpServer.URL, "")
+	request := projectidentity.BootstrapRequest{RepositoryLocator: locator}
+	type response struct {
+		project projectidentity.Project
+		err     error
+	}
+	responses := make(chan response, callers)
+	start := make(chan struct{})
+	for range callers {
+		go func() {
+			<-start
+			project, err := bootstrap(ctx, request)
+			responses <- response{project: project, err: err}
+		}()
+	}
+	close(start)
+	var id string
+	for range callers {
+		result := <-responses
+		if result.err != nil || !projectidentity.ValidProjectID(result.project.ProjectID) {
+			t.Fatalf("first bootstrap response invalid: %v", result.err)
+		}
+		if id == "" {
+			id = result.project.ProjectID
+		}
+		if result.project.ProjectID != id {
+			t.Fatalf("first creation returned distinct UUIDs: %s and %s", id, result.project.ProjectID)
+		}
+	}
+	replayed, err := bootstrap(ctx, request)
+	if err != nil || replayed.ProjectID != id {
+		t.Fatalf("bootstrap replay changed UUID: %v", err)
+	}
+	if arrivals.Load() != callers+1 {
+		t.Fatalf("HTTP arrivals=%d want=%d", arrivals.Load(), callers+1)
+	}
+	if err := db.Model(&gormdb.Project{}).Count(&projectCount).Error; err != nil || projectCount != 1 {
+		t.Fatalf("first creation project rows=%d want=1 err=%v", projectCount, err)
+	}
+	var stored gormdb.Project
+	if err := db.First(&stored, "id = ?", id).Error; err != nil || stored.ProjectKey.String != id || stored.AnchorProjectID.String != id || stored.GitRemote.String != locator {
+		t.Fatal("first creation did not retain one logical UUID and locator")
+	}
+	t.Logf("8 synchronized FIRST bootstrap requests returned UUID=%s; projects=1; replay preserves UUID", id)
+	if err := db.Model(&gormdb.ProjectIdentifier{}).Count(&bindingCount).Error; err != nil || bindingCount != 1 {
+		t.Fatalf("first creation identifier bindings=%d want=1 err=%v", bindingCount, err)
+	}
+	if err := db.Model(&gormdb.ProjectIdentifier{}).Where("project_key = ? AND scheme = ? AND normalized_value = ? AND status = ?", id, "manual_alias", locator, "active").Count(&bindingCount).Error; err != nil || bindingCount != 1 {
+		t.Fatalf("first creation locator binding=%d want=1 err=%v", bindingCount, err)
+	}
+	var binding gormdb.ProjectIdentifier
+	if err := db.First(&binding, "normalized_value = ?", locator).Error; err != nil || binding.Source != "logical_project_bootstrap" {
+		t.Fatal("primary locator binding provenance source is missing")
+	}
+	var provenance map[string]string
+	if err := json.Unmarshal([]byte(binding.Provenance), &provenance); err != nil || provenance["method"] != "primary_repository_locator" {
+		t.Fatal("primary locator binding provenance is missing")
+	}
+	if err := db.Model(&gormdb.Project{}).Where("id = ?", id).Updates(map[string]any{
+		"git_remote": "example.test/Metadata/Changed", "display_name": "Edited display name",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	clone := t.TempDir()
+	for _, args := range [][]string{{"init", "--quiet"}, {"remote", "add", "origin", "https://" + locator + ".git"}} {
+		if raw, err := exec.CommandContext(ctx, "git", append([]string{"-C", clone}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("fresh clone fixture: %v: %s", err, raw)
+		}
+	}
+	cloned, err := projectidentity.ResolveLogicalProject(ctx, clone, bootstrap)
+	if err != nil || cloned.ProjectID != id || cloned.Name != "Edited display name" {
+		t.Fatalf("fresh clone catalog lookup after metadata edit: %+v %v", cloned, err)
+	}
+	var pinnedBootstrapCalls int
+	pinned, err := projectidentity.ResolveLogicalProject(ctx, clone, func(ctx context.Context, input projectidentity.BootstrapRequest) (projectidentity.Project, error) {
+		pinnedBootstrapCalls++
+		return bootstrap(ctx, input)
+	})
+	if err != nil || pinned.ProjectID != id || pinnedBootstrapCalls != 0 {
+		t.Fatal("fixed marker identity performed a bootstrap query")
+	}
+	if err := db.Model(&gormdb.Project{}).Count(&projectCount).Error; err != nil || projectCount != 1 {
+		t.Fatalf("metadata edit or new clone created extra projects: count=%d err=%v", projectCount, err)
+	}
+	if err := db.Model(&gormdb.ProjectIdentifier{}).Count(&bindingCount).Error; err != nil || bindingCount != 1 {
+		t.Fatalf("metadata edit or new clone changed binding count: count=%d err=%v", bindingCount, err)
+	}
+	// A real uniqueness collision after project insertion must roll back the entire transaction.
+	collisionLocator := "example.test/Collision/" + uuid.NewString()
+	trigger := fmt.Sprintf(`CREATE FUNCTION first_bootstrap_collision() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+			IF NEW.git_remote = '%s' THEN
+				INSERT INTO project_identifiers(project_key, scheme, normalized_value, source, provenance, status)
+				VALUES ('%s', 'manual_alias', NEW.git_remote, 'collision-fixture', '{}', 'active');
+			END IF;
+			RETURN NEW;
+		END $$`, collisionLocator, id)
+	if err := db.Exec(trigger).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(`CREATE TRIGGER first_bootstrap_collision BEFORE INSERT ON projects FOR EACH ROW EXECUTE FUNCTION first_bootstrap_collision()`).Error; err != nil {
+		t.Fatal(err)
+	}
+	_, err = bootstrap(ctx, projectidentity.BootstrapRequest{RepositoryLocator: collisionLocator})
+	if projectidentity.ProjectErrorCode(err) != "PROJECT_IDENTITY_CONFLICT" {
+		t.Fatalf("locator uniqueness collision is not typed: %v", err)
+	}
+	if err := db.Model(&gormdb.Project{}).Count(&projectCount).Error; err != nil || projectCount != 1 {
+		t.Fatalf("collision left an orphan project: count=%d err=%v", projectCount, err)
+	}
+	if err := db.Model(&gormdb.ProjectIdentifier{}).Count(&bindingCount).Error; err != nil || bindingCount != 1 {
+		t.Fatalf("collision transaction did not roll back its binding: count=%d err=%v", bindingCount, err)
+	}
+	var retained gormdb.ProjectIdentifier
+	if err := db.First(&retained, "identifier_id = ?", binding.IdentifierID).Error; err != nil || retained.ProjectKey != id || retained.NormalizedValue != locator {
+		t.Fatal("collision changed the existing binding owner")
+	}
+	t.Log("PASS first creation: 8 synchronized requests, one UUID/project/active binding with provenance, stable replay; metadata edit and fresh clone retain catalog identity; pinned marker makes zero bootstrap calls; unique collision typed with full rollback and no orphan")
+}

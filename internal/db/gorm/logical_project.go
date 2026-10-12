@@ -76,12 +76,22 @@ func BootstrapLogicalProject(ctx context.Context, db *gormlib.DB, input projecti
 			GitRemote: sql.NullString{String: input.RepositoryLocator, Valid: true}, DisplayName: sql.NullString{String: input.Name, Valid: input.Name != ""},
 			IdentityScope: sql.NullString{String: "repository", Valid: true}, IdentityStatus: sql.NullString{String: "active", Valid: true}, LegacyIDs: pq.StringArray{},
 		}
-		return tx.Create(&project).Error
+		if err := tx.Create(&project).Error; err != nil {
+			return err
+		}
+		binding := ProjectIdentifier{
+			ProjectKey: id, Scheme: "manual_alias", NormalizedValue: input.RepositoryLocator,
+			Source: "logical_project_bootstrap", Provenance: `{"method":"primary_repository_locator"}`, Status: "active",
+		}
+		return tx.Create(&binding).Error
 	})
 	if err != nil {
 		var typed *projectidentity.LogicalError
 		if errors.As(err, &typed) {
 			return projectidentity.Project{}, err
+		}
+		if isUniqueViolation(err) {
+			return projectidentity.Project{}, &projectidentity.LogicalError{Code: "PROJECT_IDENTITY_CONFLICT"}
 		}
 		return projectidentity.Project{}, &projectidentity.LogicalError{Code: "PROJECT_RESOLUTION_UNAVAILABLE"}
 	}
