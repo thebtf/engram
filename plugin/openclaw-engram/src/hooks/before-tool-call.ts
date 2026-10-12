@@ -7,7 +7,7 @@
  * Non-blocking: 500ms timeout, failures swallowed (Constitution Principle 3).
  */
 
-import { resolveAndRegisterProject } from '../client.js';
+import { resolveProject } from '../client.js';
 import type { EngramRestClient, Observation } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import { quotedPromptPayload, quotedPromptScalar } from '../context/formatter.js';
@@ -78,7 +78,7 @@ export async function handleBeforeToolCall(
     const deadline = Date.now() + BEFORE_TOOL_CALL_BUDGET_MS;
     let registrationTimer: NodeJS.Timeout | undefined;
     const registration = await Promise.race([
-      resolveAndRegisterProject(client, ctx.agentId ?? '', ctx.workspaceDir, config.project),
+      resolveProject(client, ctx.agentId ?? '', ctx.workspaceDir, config.project),
       new Promise<null>((resolve) => {
         registrationTimer = setTimeout(() => resolve(null), BEFORE_TOOL_CALL_BUDGET_MS);
       }),

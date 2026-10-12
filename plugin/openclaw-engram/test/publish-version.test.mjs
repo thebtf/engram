@@ -19,15 +19,10 @@ test('package and OpenClaw descriptor versions stay aligned', () => {
   assert.equal(packageVersion, descriptorVersion);
 });
 
-test('packaged V3 client instance configuration is declared and documented', () => {
+test('packaged project selection declares the one logical UUID contract', () => {
   const descriptor = JSON.parse(fs.readFileSync(path.join(packageRoot, 'openclaw.plugin.json'), 'utf8'));
-  const readme = fs.readFileSync(path.join(packageRoot, 'README.md'), 'utf8');
-
-  assert.deepEqual(descriptor.configSchema.properties.clientInstanceId, {
-    type: 'string',
-    description: 'Opaque non-secret installation reference for V3 identity',
-  });
-  assert.match(readme, /^\| `clientInstanceId` \| string \| \*\(optional\)\* \| Opaque non-secret installation reference that enables V3 identity \|$/m);
+  assert.equal(descriptor.configSchema.properties.project.format, 'uuid');
+  assert.equal(descriptor.configSchema.properties.clientInstanceId, undefined);
 });
 
 test('stable semantic versions compare by major, minor, and patch', () => {

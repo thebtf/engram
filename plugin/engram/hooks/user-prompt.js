@@ -188,6 +188,8 @@ if (require.main === module) {
 
 module.exports = {
   handleUserPrompt,
+  buildAmbientRequest,
+  formatAmbientAdditionalContext,
   fetchAmbientAdditionalContext,
   requestAmbientPayloadWithinBudget,
   detectCorrection,

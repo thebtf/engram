@@ -44,7 +44,7 @@ test('automatic and explicit outcome callers report retirement rather than recor
   const warnings = [];
   const client = {
     isAvailable: () => true,
-    registerAndResolveProject: async () => ({ ok: true, canonicalProject: 'canonical-project' }),
+    resolveWorkspaceProject: async () => ({ projectId: '11111111-1111-4111-8111-111111111111', agentId: 'agent-a' }),
     setSessionOutcome: async () => retirement,
   };
   const logger = {

@@ -7,6 +7,9 @@ OpenClaw plugin that connects agents to an [engram](https://github.com/thebtf/en
 - OpenClaw gateway installed and running
 - Engram server running and reachable (default port `37777`)
 - An API token configured on the engram server
+- The matching release Go client (`engram`) on PATH, or its absolute executable
+  selected with `ENGRAM_EXECUTABLE`. It must support
+  `project resolve --root <actual-workspace> --json`; no JS/TS identity fallback exists.
 
 ## Installation
 
@@ -67,8 +70,7 @@ All fields are set under `plugins.entries.engram.config`:
 |---|---|---|---|
 | `url` | string | `http://localhost:37777` | Engram server base URL |
 | `token` | string | *(required)* | Bearer token for API authentication |
-| `project` | string | *(auto-detected)* | Project scope override; defaults to workspace identity |
-| `clientInstanceId` | string | *(optional)* | Opaque non-secret installation reference that enables V3 identity |
+| `project` | string | *(current workspace)* | Explicit logical project UUID override, never an agent/name/path selector |
 | `contextLimit` | number | `10` | Maximum observations injected per prompt turn |
 | `sessionContextLimit` | number | `20` | Maximum observations injected at session start |
 | `tokenBudget` | number | `2000` | Token budget for context injection (~4 chars/token) |
@@ -76,6 +78,14 @@ All fields are set under `plugins.entries.engram.config`:
 | `autoExtract` | boolean | `true` | Auto-extract observations on compaction and session end |
 | `workspaceDir` | string | `~/.openclaw/workspace/` | Workspace path for `/migrate` when called from channel context (Telegram, Discord) |
 | `logLevel` | string | `warn` | Log verbosity: `debug`, `info`, `warn`, `error` |
+
+Project resolution reads the portable `.engram-project` UUID or the real Git
+common-dir binding through the Go client. Initialize only an explicitly selected
+new project with `engram project init`; carry the marker into independent clones.
+Every hook/tool uses its current `ctx.workspaceDir`. Missing or conflicting
+context returns a scoped error without registration/capability roundtrips and
+without changing the OpenClaw host. Channel commands require an explicitly
+configured `workspaceDir` or `project` UUID when their host context has no root.
 
 ## What it provides
 

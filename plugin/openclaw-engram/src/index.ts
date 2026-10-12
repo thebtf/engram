@@ -22,7 +22,7 @@ import type {
  PluginHookContext,
 } from './types/openclaw.js';
 import { parseConfig, getJsonSchema } from './config.js';
-import { EngramRestClient, resolveAndRegisterProject } from './client.js';
+import { EngramRestClient, resolveProject } from './client.js';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -189,7 +189,7 @@ const plugin: OpenClawPluginDefinition = {
     .description('Search engram memory')
     .argument('<query>', 'Search query')
     .action(async (query: unknown) => {
-     const registration = await resolveAndRegisterProject(client, '', process.cwd(), config.project);
+     const registration = await resolveProject(client, '', process.cwd(), config.project);
      if (!registration.ok) {
       console.error(`Project identity unavailable: ${registration.error.code} (${registration.error.upgradeAction})`);
       return;
@@ -216,7 +216,7 @@ const plugin: OpenClawPluginDefinition = {
     .action(async (text: unknown) => {
      const textStr = String(text);
      const title = textStr.length > 80 ? textStr.slice(0, 77) + '...' : textStr;
-     const registration = await resolveAndRegisterProject(client, '', process.cwd(), config.project);
+     const registration = await resolveProject(client, '', process.cwd(), config.project);
      if (!registration.ok) {
       console.error(`Project identity unavailable: ${registration.error.code} (${registration.error.upgradeAction})`);
       return;
@@ -270,6 +270,6 @@ export default plugin;
 // Named exports for consumers that prefer explicit imports
 export { EngramRestClient } from './client.js';
 export { parseConfig, getJsonSchema } from './config.js';
-export { resolveIdentity, projectIDFromWorkspace } from './identity.js';
+export { resolveIdentity } from './identity.js';
 export { formatContext } from './context/formatter.js';
 export { AvailabilityTracker } from './availability.js';

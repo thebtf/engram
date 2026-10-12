@@ -6,7 +6,7 @@
  * and tracks utility signals for injected observations.
  */
 
-import { isOutcomeRetirement, resolveAndRegisterProject } from '../client.js';
+import { isOutcomeRetirement, resolveProject } from '../client.js';
 import type { EngramRestClient } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import { normalizeEngramContent } from './content.js';
@@ -71,7 +71,7 @@ export async function handleSessionEnd(
     if (!client.isAvailable()) return;
 
     const agentId = ctx.agentId ?? '';
-    const registration = await resolveAndRegisterProject(client, agentId, ctx.workspaceDir, config.project);
+    const registration = await resolveProject(client, agentId, ctx.workspaceDir, config.project);
     if (!registration.ok) {
       (logger ?? console).warn(`[engram] session-end: project registration failed: ${registration.error.code}`);
       return;

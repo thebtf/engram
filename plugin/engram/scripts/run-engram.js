@@ -2,43 +2,29 @@
 // run-engram.js - Cross-platform wrapper that execs the correct engram binary.
 // Used as plugin MCP command to handle Windows .exe suffix and path resolution.
 
-const { spawnSync } = require("child_process");
+const { execFile, spawnSync } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
-const { hashFile, objectRoots, resolveForLaunch } = require("./ensure-binary.js");
+const { hashFile, loadPolicy, objectRoots, resolveForLaunch } = require("./ensure-binary.js");
 const { installationClientInstanceID } = require("./client-instance.js");
 
 const STARTUP_DIAGNOSTIC_LOG_MAX_BYTES = 128 * 1024;
-const HAP_01B_REVISION = "omp-hap-01b/1";
-const HAP_01B_FIELDS = Object.freeze([
- "adapter_sha256",
- "legacy_direct_enforcement",
- "project_tokens",
- "registration_token",
- "relay_enabled",
- "relay_revision",
-]);
-const HAP_01B_INVALID = Symbol("hap_01b_invalid");
-const HAP_01B_NORMALIZED = Symbol("hap_01b_normalized");
-const HAP_01B_SHA256 = /^[0-9a-f]{64}$/;
-const HAP_01B_KEYCARD = /^engram_[0-9a-fA-F]{32}$/;
-const HAP_01B_PROJECT_KEY = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 async function main() {
+ if (process.argv[2] === 'codex-config') {
+  process.stdout.write(codexMcpConfig());
+  return;
+ }
  const pluginRoot = resolvePluginRoot();
  const pluginData = resolvePluginData(pluginRoot);
 
  const configFilePath = resolveConfigFilePath(pluginData);
  const configFile = readEngramConfigFile(configFilePath);
 
- emitStartupDiagnostic(pluginData, configFilePath, configFile);
+ const localProjectCommand = process.argv[2] === 'project';
+ if (!localProjectCommand) emitStartupDiagnostic(pluginData, configFilePath, configFile);
 
- if (isInvalidHap01bConfig(configFile)) {
-  process.stderr.write(`[engram] FATAL: invalid HAP-01B configuration in ${configFilePath}\n`);
-  process.exitCode = 1;
-  return;
- }
 
  // Visible diagnostic: fail early if the workstation is not configured. A new
  // install should not expose half-working tools with no remote memory backend.
@@ -51,7 +37,7 @@ async function main() {
    "ENGRAM_CLAUDE_USERCONFIG_URL"
   ) ||
   (configFile && isConfiguredValue(configFile.server_url) ? configFile.server_url : "");
- if (!serverURL) {
+ if (!serverURL && !localProjectCommand) {
   process.stderr.write(
    "[engram] FATAL: ENGRAM_URL is empty. Configure Engram before first use.\n" +
    "Universal (all harnesses): create ~/.engram/config.json with {\"server_url\":\"http://...\"} (add api_token when server auth is enabled).\n" +
@@ -79,7 +65,7 @@ async function main() {
   "ENGRAM_CLAUDE_USERCONFIG_CLIENT_INSTANCE_ID"
  ) || configFile?.client_instance_id || "";
  process.env.ENGRAM_TOKEN = token;
- const childEnv = childEnvForEngram(process.env, configFile?.hap_01b);
+ const childEnv = childEnvForEngram(process.env);
 
  if (process.env.ENGRAM_AUTH_ADMIN_TOKEN) {
   process.stderr.write(
@@ -98,17 +84,62 @@ async function main() {
  }
 }
 
-async function resolveAndSpawn(options) {
- const resolver = options.resolve || resolveForLaunch;
- const hash = options.hash || hashFile;
- const roots = options.roots || objectRoots;
- const resolved = await resolver({ pluginRoot: options.pluginRoot, pluginData: options.pluginData });
- // Rehash the policy-derived object in this process immediately before spawn.
- if (!hash(resolved.path, resolved.target, roots(options.pluginData).objects)) {
+async function resolveClient(options, projectOnly = false) {
+ let policy;
+ if (!options.resolve) {
+  policy = loadPolicy(options.pluginRoot);
+  // A predecessor may not implement this package's project resolve interface.
+  policy = { ...policy, target: { ...policy.target, predecessor: null } };
+ }
+ const resolved = await (options.resolve || resolveForLaunch)({
+  pluginRoot: options.pluginRoot, pluginData: options.pluginData, policy,
+  ...(projectOnly ? { parserTarget: null } : {}),
+ });
+ if (!(options.hash || hashFile)(resolved.path, resolved.target, (options.roots || objectRoots)(options.pluginData).objects)) {
   throw new Error("resolved client failed final integrity verification");
  }
+ return resolved;
+}
+
+function resolveHostRoot(env = process.env, cwd = process.cwd()) {
+ return path.resolve(env.CLAUDE_PROJECT_DIR || cwd);
+}
+
+async function resolveLogicalProject(root, options = {}) {
+ if (typeof root !== 'string' || !root.trim()) throw new Error('PROJECT_CONTEXT_REQUIRED');
+ const pluginRoot = options.pluginRoot || resolvePluginRoot();
+ const pluginData = options.pluginData || resolvePluginData(pluginRoot);
+ const resolved = await resolveClient({ ...options, pluginRoot, pluginData }, true);
+ const raw = await new Promise((resolve, reject) => {
+  (options.execFile || execFile)(resolved.path, ['project', 'resolve', '--root', root, '--json'], {
+   env: childEnvForEngram(options.env || process.env), encoding: 'utf8', windowsHide: true,
+   timeout: options.timeoutMs ?? 15000, maxBuffer: 4096, signal: options.signal,
+  }, (error, stdout) => {
+   if (error) {
+    let code = 'PROJECT_RESOLUTION_UNAVAILABLE';
+    try {
+     const result = JSON.parse(stdout);
+     if (typeof result.code === 'string' && /^PROJECT_[A-Z_]+$/.test(result.code)) code = result.code;
+    } catch { }
+    reject(new Error(code));
+   } else resolve(stdout);
+  });
+ });
+ let project;
+ try { project = JSON.parse(raw); } catch { throw new Error('PROJECT_CLIENT_UPGRADE_REQUIRED'); }
+ if (!project || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(project.project_id) ||
+  project.project_id === '00000000-0000-0000-0000-000000000000' ||
+  (project.name !== undefined && typeof project.name !== 'string')) throw new Error('PROJECT_IDENTITY_INVALID');
+ return { project_id: project.project_id, ...(project.name !== undefined ? { name: project.name } : {}) };
+}
+
+async function resolveAndSpawn(options) {
+ const projectOnly = options.args?.[0] === 'project';
+ const resolved = await resolveClient(options, projectOnly);
+ const hash = options.hash || hashFile;
+ const roots = options.roots || objectRoots;
  const env = { ...options.env };
- env.ENGRAM_CLIENT_INSTANCE_ID = env.ENGRAM_CLIENT_INSTANCE_ID || installationClientInstanceID(options.pluginData);
+ if (!projectOnly) env.ENGRAM_CLIENT_INSTANCE_ID = env.ENGRAM_CLIENT_INSTANCE_ID || installationClientInstanceID(options.pluginData);
  delete env.ENGRAM_UCI_PARSER_EXECUTABLE;
  delete env.ENGRAM_UCI_PARSER_BUNDLE_DIGEST;
  if (resolved.parserTarget) {
@@ -128,29 +159,24 @@ async function resolveAndSpawn(options) {
   env.ENGRAM_UCI_PARSER_BUNDLE_DIGEST = probe.stdout.trim();
  }
  const result = (options.spawnSync || spawnSync)(resolved.path, options.args || [], {
-  stdio: "inherit",
-  env,
+  stdio: "inherit", env, cwd: options.cwd || resolveHostRoot(env),
  });
  const failure = spawnFailureMessage(result, "engram exec");
  if (failure) throw new Error(failure.trim());
  return result.status ?? 0;
 }
 
-function childEnvForEngram(env = process.env, hapConfig) {
+function codexMcpConfig() {
+ return '[mcp_servers.engram]\ncommand = "node"\nargs = ' + JSON.stringify([path.resolve(__filename)]) + '\nstartup_timeout_sec = 60\n';
+}
+
+function childEnvForEngram(env = process.env) {
  const childEnv = { ...env };
  for (const key of Object.keys(childEnv)) {
   const canonical = key.toUpperCase();
   if (canonical === "ENGRAM_AUTH_ADMIN_TOKEN" || canonical.startsWith("ENGRAM_HAP_01B_")) {
    delete childEnv[key];
   }
- }
- if (isNormalizedHap01bConfig(hapConfig)) {
-  childEnv.ENGRAM_HAP_01B_RELAY_ENABLED = "true";
-  childEnv.ENGRAM_HAP_01B_RELAY_REVISION = hapConfig.relay_revision;
-  childEnv.ENGRAM_HAP_01B_LEGACY_DIRECT_ENFORCEMENT = String(hapConfig.legacy_direct_enforcement);
-  childEnv.ENGRAM_HAP_01B_ADAPTER_SHA256 = hapConfig.adapter_sha256;
-  childEnv.ENGRAM_HAP_01B_REGISTRATION_TOKEN = hapConfig.registration_token;
-  childEnv.ENGRAM_HAP_01B_PROJECT_TOKENS_JSON = JSON.stringify(hapConfig.project_tokens);
  }
  return childEnv;
 }
@@ -243,8 +269,7 @@ function resolveConfigFilePath(pluginData) {
 
 /**
  * Read and parse the engram config file.
- * Returns normalized base fields, plus a normalized hap_01b block when present and valid.
- * An invalid present hap_01b block is represented only by an internal marker.
+ * Returns normalized URL, token and installation reference only.
  * Returns null on missing or malformed root file; never throws.
  */
 function readEngramConfigFile(configFilePath) {
@@ -257,90 +282,22 @@ function readEngramConfigFile(configFilePath) {
   if (!isPlainObject(parsed)) {
    return null;
   }
-  const config = {
+  return {
    server_url: typeof parsed.server_url === "string" ? parsed.server_url.trim() : "",
    client_instance_id: typeof parsed.client_instance_id === "string" ? parsed.client_instance_id : "",
    api_token: typeof parsed.api_token === "string" ? parsed.api_token.trim() : "",
   };
-  if (!Object.hasOwn(parsed, "hap_01b")) {
-   return config;
-  }
-  const hapConfig = parseHap01bConfig(parsed.hap_01b);
-  if (!hapConfig) {
-   Object.defineProperty(config, HAP_01B_INVALID, { value: true });
-   return config;
-  }
-  config.hap_01b = hapConfig;
-  return config;
  } catch {
   // Missing file, permission error, or malformed JSON — skip silently.
   return null;
  }
 }
 
-function parseHap01bConfig(value) {
- if (!isPlainObject(value) || !hasExactHap01bFields(value)) {
-  return null;
- }
- if (
-  value.relay_enabled !== true ||
-  value.relay_revision !== HAP_01B_REVISION ||
-  typeof value.legacy_direct_enforcement !== "boolean" ||
-  typeof value.adapter_sha256 !== "string" ||
-  !HAP_01B_SHA256.test(value.adapter_sha256) ||
-  typeof value.registration_token !== "string" ||
-  !HAP_01B_KEYCARD.test(value.registration_token)
- ) {
-  return null;
- }
- const projectTokens = normalizeProjectTokens(value.project_tokens);
- if (!projectTokens) {
-  return null;
- }
- const normalized = {
-  relay_enabled: true,
-  relay_revision: HAP_01B_REVISION,
-  legacy_direct_enforcement: value.legacy_direct_enforcement,
-  adapter_sha256: value.adapter_sha256,
-  registration_token: value.registration_token,
-  project_tokens: projectTokens,
- };
- Object.defineProperty(normalized, HAP_01B_NORMALIZED, { value: true });
- return Object.freeze(normalized);
-}
-
-function normalizeProjectTokens(value) {
- if (!isPlainObject(value)) {
-  return null;
- }
- const entries = Object.entries(value);
- if (entries.length === 0 || entries.length > 256) {
-  return null;
- }
- for (const [projectKey, token] of entries) {
-  if (!HAP_01B_PROJECT_KEY.test(projectKey) || typeof token !== "string" || !HAP_01B_KEYCARD.test(token)) {
-   return null;
-  }
- }
- return Object.freeze(Object.fromEntries(entries.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))));
-}
-
-function hasExactHap01bFields(value) {
- const keys = Object.keys(value).sort();
- return keys.length === HAP_01B_FIELDS.length && keys.every((key, index) => key === HAP_01B_FIELDS[index]);
-}
 
 function isPlainObject(value) {
  return value !== null && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
 }
 
-function isInvalidHap01bConfig(configFile) {
- return Boolean(configFile?.[HAP_01B_INVALID]);
-}
-
-function isNormalizedHap01bConfig(value) {
- return Boolean(value?.[HAP_01B_NORMALIZED]);
-}
 
 function isConfiguredValue(value) {
  if (typeof value !== "string") {
@@ -378,8 +335,7 @@ function formatStartupDiagnostic(env = process.env, configFilePath, configFile) 
  ];
  const envParts = keys.map(([key, sensitive]) => describeEnvValue(key, env, sensitive)).join("; ");
  const cfPart = describeConfigFile(configFilePath, configFile);
- const hapPart = formatHap01bDiagnostic(configFile);
- return `[engram] startup env: ${envParts}; ${cfPart}; ${hapPart}`;
+ return `[engram] startup env: ${envParts}; ${cfPart}`;
 }
 
 function describeConfigFile(configFilePath, configFile) {
@@ -395,22 +351,6 @@ function describeConfigFile(configFilePath, configFile) {
  return `config_file=present(${configFilePath})`;
 }
 
-function formatHap01bDiagnostic(configFile) {
- if (isInvalidHap01bConfig(configFile)) {
-  return "hap_01b=invalid";
- }
- const hapConfig = configFile?.hap_01b;
- if (!isNormalizedHap01bConfig(hapConfig)) {
-  return "hap_01b=absent";
- }
- return "hap_01b=present(" +
-  `relay_enabled=${hapConfig.relay_enabled},` +
-  `relay_revision_len=${hapConfig.relay_revision.length},` +
-  `legacy_direct_enforcement=${hapConfig.legacy_direct_enforcement},` +
-  `adapter_sha256_len=${hapConfig.adapter_sha256.length},` +
-  `registration_token_len=${hapConfig.registration_token.length},` +
-  `project_token_count=${Object.keys(hapConfig.project_tokens).length})`;
-}
 
 function describeEnvValue(key, env = process.env, sensitive = false) {
  const raw = env[key];
@@ -491,17 +431,17 @@ module.exports = {
  describeConfigFile,
  describeEnvValue,
  emitStartupDiagnostic,
- formatHap01bDiagnostic,
  formatStartupDiagnostic,
  inferCodexPluginDataDir,
  isConfiguredValue,
- isInvalidHap01bConfig,
- parseHap01bConfig,
  readEngramConfigFile,
  resolveConfigFilePath,
  resolvePluginData,
  resolvePluginRoot,
  resolveAndSpawn,
+ resolveLogicalProject,
+ resolveHostRoot,
+ codexMcpConfig,
  spawnFailureMessage,
  trimStartupDiagnosticLog,
 };

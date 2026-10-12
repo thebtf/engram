@@ -1,262 +1,78 @@
 import { createRequire } from 'node:module';
-import path from 'node:path';
-import {
-  isOpaqueReference,
-  legacyRelay,
-  normalizeProjectIdentityV3Descriptor,
-} from './legacy-relay.mjs';
-
 const require = createRequire(import.meta.url);
 const lib = require('../hooks/lib.js');
 const { buildSessionStartContext } = require('../hooks/session-start.js');
-
-const sessionStartTimeoutMs = 5000;
-const ambientTimeoutMs = 500;
+const { buildAmbientRequest, formatAmbientAdditionalContext } = require('../hooks/user-prompt.js');
 const hiddenContextLimit = 12000;
-const descriptorCacheLimit = 64;
 
 function stringField(...values) {
-  return values.find((value) => typeof value === 'string' && value !== '') || '';
+  return values.find(value => typeof value === 'string' && value !== '') || '';
 }
 
-function isValidUtf8(value) {
-  return typeof value === 'string' && Buffer.from(value, 'utf8').toString('utf8') === value;
-}
-
-function boundedPrompt(event = {}, ctx = {}) {
-  const prompt = stringField(event.prompt, event.userMessage, event.user_message, ctx.prompt);
-  return isValidUtf8(prompt) && Buffer.byteLength(prompt, 'utf8') <= hiddenContextLimit ? prompt : '';
-}
-
-function callbackFacts(event = {}, ctx = {}, requireCwd) {
-  const hostSessionRef = stringField(event.sessionId, event.session_id, ctx.sessionId, ctx.session_id);
-  let resolvedSessionRef = hostSessionRef;
-  if (!resolvedSessionRef) {
-    try {
-      resolvedSessionRef = stringField(ctx.sessionManager?.getSessionId?.());
-    } catch {
-      return null;
-    }
+function callbackFacts(event = {}, ctx = {}) {
+  let session = stringField(event.sessionId, event.session_id, ctx.sessionId, ctx.session_id);
+  if (!session) {
+    try { session = stringField(ctx.sessionManager?.getSessionId?.()); } catch { return null; }
   }
-  if (!isOpaqueReference(resolvedSessionRef)) return null;
-  if (!requireCwd) return { hostSessionRef: resolvedSessionRef };
   const cwd = stringField(event.cwd, event.workspace, ctx.cwd, ctx.workspace);
-  return cwd ? { cwd, hostSessionRef: resolvedSessionRef } : null;
-}
-function canonicalCwd(value) {
-  try {
-    return path.resolve(value);
-  } catch {
-    return '';
-  }
+  return cwd && /^[^\s\p{Cc}/\\@]{1,256}$/u.test(session) ? { session, cwd } : null;
 }
 
-function sameCwd(left, right) {
-  const canonicalLeft = canonicalCwd(left);
-  const canonicalRight = canonicalCwd(right);
-  if (!canonicalLeft || !canonicalRight) return false;
-  return process.platform === 'win32'
-    ? canonicalLeft.toLowerCase() === canonicalRight.toLowerCase()
-    : canonicalLeft === canonicalRight;
-}
-
-
-function callbackDeadlineUnixMs(timeoutMs, now) {
-  const startedAt = Math.floor(now());
-  return Number.isSafeInteger(startedAt) && Number.isInteger(timeoutMs) && timeoutMs > 0
-    ? startedAt + timeoutMs
-    : 0;
-}
-
-function deadlineActive(deadlineUnixMs, now) {
-  return Number.isSafeInteger(deadlineUnixMs) && deadlineUnixMs > Math.floor(now());
-}
-
-function boundedContext(value) {
-  return isValidUtf8(value) && value !== '' && Buffer.byteLength(value, 'utf8') <= hiddenContextLimit ? value : '';
-}
-
-function hiddenMessage(content) {
-  return {
-    customType: 'engram-memory',
-    content,
-    display: false,
-    attribution: 'agent',
-  };
-}
-
-function isIdentityResponse(value) {
-  return value?.kind === 'OK' && value.route === 'IDENTITY_REGISTRATION' &&
-    typeof value.sessionCapability === 'string' && typeof value.canonicalProjectRef === 'string';
-}
-
-function isSessionContextResponse(value) {
-  return value?.kind === 'OK' && value.route === 'SESSION_START_CONTEXT' &&
-    value.payload && typeof value.payload === 'object' && !Array.isArray(value.payload);
-}
-
-function isAmbientResponse(value) {
-  return value?.kind === 'OK' && value.route === 'AMBIENT_CANDIDATES' &&
-    typeof value.additionalContext === 'string';
+export function hiddenMessage(content) {
+  return { customType: 'engram-memory', content, display: false, attribution: 'agent' };
 }
 
 export function createEngramMemoryExtension(options = {}) {
-  const relay = options.relay ?? legacyRelay;
-  const now = options.now ?? Date.now;
   const resolveContext = options.resolveHookProjectContext ?? lib.resolveHookProjectContext;
+  const requestPost = options.requestPost ?? lib.requestPost;
+  const runtimeConfig = options.resolveEngramRuntimeConfig ?? lib.resolveEngramRuntimeConfig;
   const isQuiet = options.isQuiet ?? lib.isQuietMode;
-  const cacheLimit = Number.isInteger(options.descriptorCacheLimit) && options.descriptorCacheLimit > 0
-    ? options.descriptorCacheLimit
-    : descriptorCacheLimit;
-  const descriptors = new Map();
 
-  function rememberDescriptor(hostSessionRef, cwd, projectIdentityV3, legacyClientInstanceID = '') {
-    const canonicalScope = canonicalCwd(cwd);
-    if (!canonicalScope) return false;
-    descriptors.delete(hostSessionRef);
-    descriptors.set(hostSessionRef, Object.freeze({ cwd: canonicalScope, projectIdentityV3, legacyClientInstanceID }));
-    while (descriptors.size > cacheLimit) descriptors.delete(descriptors.keys().next().value);
-    return true;
-  }
-
-  async function sessionIdentity(event, ctx, deadlineUnixMs) {
-    const facts = callbackFacts(event, ctx, true);
-    const clientInstanceID = lib.getHookClientInstanceID();
-    if (!facts || !clientInstanceID) return null;
-    let context;
+  async function message(event, ctx, timeoutMs, ambient) {
+    if (isQuiet()) return null;
+    const facts = callbackFacts(event, ctx);
+    if (!facts) return null;
+    const prompt = ambient ? stringField(event?.prompt, event?.userMessage, event?.user_message, ctx?.prompt) : '';
+    if (ambient && (!prompt || Buffer.byteLength(prompt) > hiddenContextLimit || Buffer.from(prompt, 'utf8').toString('utf8') !== prompt)) return null;
     const controller = new AbortController();
-    const remaining = deadlineUnixMs - Math.floor(now());
-    if (remaining <= 0) return null;
-    const timer = setTimeout(() => controller.abort(), remaining);
+    const deadline = Date.now() + timeoutMs;
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      context = await resolveContext(facts.cwd, clientInstanceID, { signal: controller.signal, timeoutMs: remaining });
-    } catch {
-      return null;
-    } finally {
-      clearTimeout(timer);
-    }
-    if (!deadlineActive(deadlineUnixMs, now)) return null;
-    if (context?.ProjectIdentityV2 && !context.ProjectDescriptorV3) {
-      if (!rememberDescriptor(facts.hostSessionRef, facts.cwd, null, clientInstanceID)) return null;
-      return { hostSessionRef: facts.hostSessionRef, legacyCwd: facts.cwd };
-    }
-    const projectIdentityV3 = normalizeProjectIdentityV3Descriptor(context?.ProjectDescriptorV3);
-    if (!projectIdentityV3) return null;
-    if (!rememberDescriptor(facts.hostSessionRef, facts.cwd, projectIdentityV3)) return null;
-    return { hostSessionRef: facts.hostSessionRef, projectIdentityV3 };
+      const config = await runtimeConfig({ signal: controller.signal });
+      if (!config.serverURL || config.quiet || controller.signal.aborted) return null;
+      const context = await resolveContext(facts.cwd, {
+        signal: controller.signal, timeoutMs: Math.max(1, deadline - Date.now()),
+        env: { ...process.env, ENGRAM_URL: config.serverURL, ENGRAM_TOKEN: config.token },
+      });
+      if (controller.signal.aborted || Date.now() >= deadline) return null;
+      const payload = await requestPost(
+        ambient ? '/api/hooks/ambient-candidates' : '/api/context/session-start',
+        ambient ? buildAmbientRequest(context.Project, facts.session, prompt) : { project: context.Project, session_id: facts.session },
+        Math.max(1, deadline - Date.now()),
+        { signal: controller.signal, serverURL: config.serverURL, token: config.token },
+      );
+      const content = ambient ? formatAmbientAdditionalContext(payload) : buildSessionStartContext(payload, context.Project, { maxLength: hiddenContextLimit });
+      if (controller.signal.aborted || Date.now() >= deadline || typeof content !== 'string' || !content || Buffer.byteLength(content) > hiddenContextLimit) return null;
+      return hiddenMessage(content);
+    } catch { return null; } finally { clearTimeout(timer); }
   }
 
-  function ambientIdentity(event, ctx) {
-    const facts = callbackFacts(event, ctx, true);
-    const clientInstanceID = lib.getHookClientInstanceID();
-    if (!facts || !clientInstanceID) return null;
-    const cachedEntry = descriptors.get(facts.hostSessionRef);
-    if (cachedEntry?.legacyClientInstanceID === clientInstanceID && sameCwd(cachedEntry.cwd, facts.cwd)) {
-      return { hostSessionRef: facts.hostSessionRef, legacyCwd: facts.cwd };
-    }
-    const cached = normalizeProjectIdentityV3Descriptor(cachedEntry?.projectIdentityV3);
-    if (!cached || cached.client_instance_id !== clientInstanceID || !sameCwd(cachedEntry.cwd, facts.cwd)) {
-      descriptors.delete(facts.hostSessionRef);
-      return null;
-    }
-    return { hostSessionRef: facts.hostSessionRef, projectIdentityV3: cached };
-  }
-
-  async function call(route, body, deadlineUnixMs) {
-    if (!deadlineActive(deadlineUnixMs, now)) return null;
-    try {
-      const result = await relay.call(route, body, deadlineUnixMs);
-      return deadlineActive(deadlineUnixMs, now) ? result : null;
-    } catch {
-      return null;
-    }
-  }
-
-  async function legacyMessage(identity, deadlineUnixMs, queryText) {
-    try {
-      const remaining = deadlineUnixMs - Math.floor(now());
-      if (remaining <= 0) return null;
-      const rendered = queryText === undefined
-        ? await lib.legacySessionStartContext(identity.legacyCwd, identity.hostSessionRef, remaining)
-        : await lib.legacyAmbientContext(identity.legacyCwd, identity.hostSessionRef, queryText, remaining);
-      const content = boundedContext(rendered);
-      return content && deadlineActive(deadlineUnixMs, now) ? hiddenMessage(content) : null;
-    } catch {
-      return null;
-    }
-  }
-
-  async function sessionStartMessage(event, ctx, timeoutMs = sessionStartTimeoutMs) {
-    const deadlineUnixMs = callbackDeadlineUnixMs(
-      Number.isInteger(timeoutMs) && timeoutMs > 0 ? timeoutMs : sessionStartTimeoutMs,
-      now,
-    );
-    if (!deadlineActive(deadlineUnixMs, now) || isQuiet()) return null;
-    const identity = await sessionIdentity(event, ctx, deadlineUnixMs);
-    if (!identity || !deadlineActive(deadlineUnixMs, now)) return null;
-    if (identity.legacyCwd) return legacyMessage(identity, deadlineUnixMs);
-    const registered = await call('IDENTITY_REGISTRATION', identity, deadlineUnixMs);
-    if (!isIdentityResponse(registered)) return null;
-    const context = await call('SESSION_START_CONTEXT', {
-      hostSessionRef: identity.hostSessionRef,
-      sessionCapability: registered.sessionCapability,
-    }, deadlineUnixMs);
-    if (!isSessionContextResponse(context) || !deadlineActive(deadlineUnixMs, now)) return null;
-    let content;
-    try {
-      content = boundedContext(buildSessionStartContext(context.payload, registered.canonicalProjectRef, {
-        maxLength: hiddenContextLimit,
-      }));
-    } catch {
-      return null;
-    }
-    return content && deadlineActive(deadlineUnixMs, now) ? hiddenMessage(content) : null;
-  }
-
-  async function ambientMessage(event, ctx) {
-    const deadlineUnixMs = callbackDeadlineUnixMs(ambientTimeoutMs, now);
-    if (!deadlineActive(deadlineUnixMs, now) || isQuiet()) return null;
-    const identity = ambientIdentity(event, ctx);
-    const queryText = boundedPrompt(event, ctx);
-    if (!identity || !queryText || !deadlineActive(deadlineUnixMs, now)) return null;
-    if (identity.legacyCwd) return legacyMessage(identity, deadlineUnixMs, queryText);
-    const registered = await call('IDENTITY_REGISTRATION', identity, deadlineUnixMs);
-    if (!isIdentityResponse(registered)) return null;
-    const ambient = await call('AMBIENT_CANDIDATES', {
-      hostSessionRef: identity.hostSessionRef,
-      sessionCapability: registered.sessionCapability,
-      queryText,
-    }, deadlineUnixMs);
-    const content = isAmbientResponse(ambient) ? boundedContext(ambient.additionalContext) : '';
-    return content && deadlineActive(deadlineUnixMs, now) ? hiddenMessage(content) : null;
-  }
-
+  const sessionStartMessage = (event, ctx, timeoutMs = 5000) => message(event, ctx, timeoutMs, false);
+  const ambientMessage = (event, ctx) => message(event, ctx, 500, true);
   function install(pi) {
     pi.on('session_start', async (event, ctx) => {
-      const message = await sessionStartMessage(event, ctx);
-      if (message) pi.sendMessage(message, { deliverAs: 'nextTurn' });
+      const result = await sessionStartMessage(event, ctx);
+      if (result) pi.sendMessage(result, { deliverAs: 'nextTurn' });
     });
     pi.on('before_agent_start', async (event, ctx) => {
-      const message = await ambientMessage(event, ctx);
-      return message ? { message } : undefined;
+      const result = await ambientMessage(event, ctx);
+      return result ? { message: result } : undefined;
     });
   }
-
-  return Object.freeze({ ambientMessage, install, sessionStartMessage });
+  return Object.freeze({ install, sessionStartMessage, ambientMessage });
 }
 
 const liveExtension = createEngramMemoryExtension();
-
-export default function engramMemory(pi) {
-  liveExtension.install(pi);
-}
-
-function sessionStartMessage(...args) {
-  return liveExtension.sessionStartMessage(...args);
-}
-
-function ambientMessage(...args) {
-  return liveExtension.ambientMessage(...args);
-}
-
-export { ambientMessage, hiddenMessage, sessionStartMessage };
+export default function engramMemory(pi) { liveExtension.install(pi); }
+export const sessionStartMessage = (...args) => liveExtension.sessionStartMessage(...args);
+export const ambientMessage = (...args) => liveExtension.ambientMessage(...args);

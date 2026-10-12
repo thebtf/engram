@@ -45,6 +45,39 @@ precedence over `~/.engram/config.json`. Check which file the launcher reports
 if an older value keeps winning. The home config is the fallback for hosts
 that do not forward environment variables to plugin children.
 
+### Codex MCP launcher and project root
+
+Codex 0.146 resolves plugin MCP `cwd: "."` to the plugin directory, not the
+current thread project. This plugin no longer contributes that wrong-root MCP
+entry. Keep its hooks and skills enabled. Configure one ordinary stdio server:
+
+1. Read `codex plugin list --json` and identify the installed `engram` entry.
+   Use its reported local source path; never pick the newest cache directory.
+2. Run `node <reported-plugin-path>/scripts/run-engram.js codex-config`.
+   The command prints TOML with that exact absolute launcher path; it writes no
+   configuration and does not start the client.
+3. Place that output in the normal Codex `config.toml`. Remove any previous
+   duplicate Engram MCP entry. Do not set `cwd`: the child must inherit the
+   actual thread directory. Open a fresh thread and verify its project UUID.
+
+OMP uses `${OMP_PLUGIN_ROOT}`; Claude uses `${CLAUDE_PLUGIN_ROOT}`. Neither
+descriptor sets the child cwd to the package directory. Hooks use the cwd in
+each host callback, not the launcher directory or an inherited `PWD` string.
+
+### Portable logical project
+
+The release Go client is the only project resolver. At the intended project
+root, explicitly initialize a new project with `engram project init`, or carry
+its `.engram-project` containing `project_id` and optional `name` into a clone.
+`engram project resolve --root <actual-directory> --json` returns the same UUID
+used by MCP and hooks. Names, paths and remote hashes are not project IDs.
+Unknown or conflicting scope fails only that scoped request; it must not hide
+the MCP tool catalog. A shell `cd` alone is not a host context update.
+The launcher ignores retired `hap_01b` configuration and strips inherited
+`ENGRAM_HAP_01B_*` variables. It never provisions project registration tokens or
+re-enables the retired memory relay. The ordinary server URL/keycard remains the
+separate data-access credential.
+
 ### Updating OMP
 
 An OMP marketplace update refreshes only the catalog. Upgrade the installed
