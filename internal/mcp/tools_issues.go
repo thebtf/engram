@@ -189,12 +189,8 @@ func (s *Server) handleIssues(ctx context.Context, args json.RawMessage) (string
 
 // issueSourceProject returns transport-derived attribution only. It is never
 // used to authorize an issue mutation.
-func (s *Server) issueSourceProject(ctx context.Context) string {
-	raw := strings.TrimSpace(projectFromContext(ctx))
-	if raw == "" {
-		return ""
-	}
-	return s.issueStore.ResolveProject(ctx, raw)
+func (s *Server) issueSourceProject(ctx context.Context) (string, error) {
+	return s.issueStore.ResolveProject(ctx, ProjectFromContext(ctx))
 }
 
 // issueMutationActor returns a trusted read-write keycard or non-client
@@ -277,13 +273,19 @@ func (s *Server) handleIssueCreate(ctx context.Context, m map[string]any) (strin
 		sourceAgent = "claude-code"
 	}
 	if targetProject != "" {
-		targetProject = s.issueStore.ResolveProject(ctx, targetProject)
+		targetProject, err = s.issueStore.ResolveProject(ctx, targetProject)
+		if err != nil {
+			return "", err
+		}
 	}
 	keycardID, isOperator, err := issueMutationActor(ctx)
 	if err != nil {
 		return "", err
 	}
-	sourceProject := s.issueSourceProject(ctx)
+	sourceProject, err := s.issueSourceProject(ctx)
+	if err != nil {
+		return "", err
+	}
 	if isOperator {
 		keycardID = ""
 	}
@@ -462,7 +464,10 @@ func (s *Server) handleIssueUpdate(ctx context.Context, m map[string]any) (strin
 	if _, err := s.authorizeIssueProgression(ctx); err != nil {
 		return "", err
 	}
-	sourceProject := s.issueSourceProject(ctx)
+	sourceProject, err := s.issueSourceProject(ctx)
+	if err != nil {
+		return "", err
+	}
 
 	if status != "resolved" {
 		return "", fmt.Errorf("status can only be set to 'resolved' via update (use reopen action to reopen)")
@@ -496,7 +501,10 @@ func (s *Server) handleIssueComment(ctx context.Context, m map[string]any) (stri
 	if _, err := s.authorizeIssueProgression(ctx); err != nil {
 		return "", err
 	}
-	sourceProject := s.issueSourceProject(ctx)
+	sourceProject, err := s.issueSourceProject(ctx)
+	if err != nil {
+		return "", err
+	}
 
 	commentID, err := s.issueStore.AddComment(ctx, id, &gormdb.IssueComment{
 		AuthorProject: sourceProject,
@@ -529,7 +537,10 @@ func (s *Server) handleIssueReopen(ctx context.Context, m map[string]any) (strin
 	if _, err := s.authorizeIssueSourceMutation(ctx, id); err != nil {
 		return "", err
 	}
-	sourceProject := s.issueSourceProject(ctx)
+	sourceProject, err := s.issueSourceProject(ctx)
+	if err != nil {
+		return "", err
+	}
 
 	if err := s.issueStore.ReopenIssue(ctx, id, comment, sourceProject, sourceAgent); err != nil {
 		return "", err

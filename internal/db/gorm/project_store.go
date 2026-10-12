@@ -3,7 +3,6 @@ package gorm
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -11,6 +10,9 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+
+	"github.com/thebtf/engram/internal/auditcontext"
+	"github.com/thebtf/engram/internal/projectidentity"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -105,9 +107,8 @@ func ProjectIdentityPublicMessage(err error) string {
 	return "project identity registration is unavailable"
 }
 
-// RegisterAndResolve validates and transactionally resolves a selector before
-// tenant data access. It deliberately uses only the existing projects table:
-// schema changes remain governed by gormigrate, never request-path DDL.
+// RegisterAndResolve reads a pinned UUID or an evidence-backed migration redirect.
+// Historical metadata is validated but never mints, binds or mutates a project.
 func RegisterAndResolve(ctx context.Context, db *gorm.DB, selector string, identity *ProjectIdentityV2) (ProjectIdentityResolution, error) {
 	if err := validateProjectSelectorV2(selector); err != nil {
 		return ProjectIdentityResolution{}, err
@@ -117,183 +118,24 @@ func RegisterAndResolve(ctx context.Context, db *gorm.DB, selector string, ident
 			return ProjectIdentityResolution{}, err
 		}
 	}
+	if projectidentity.ValidProjectID(selector) {
+		return ProjectIdentityResolution{CanonicalProjectID: selector}, nil
+	}
 	if db == nil {
 		return ProjectIdentityResolution{}, unavailableProjectIdentity(fmt.Errorf("project identity database is not ready"))
 	}
-
-	var resolution ProjectIdentityResolution
-	err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		lockKeys := []string{"selector:" + selector}
-		bindingKey := ""
-		if identity != nil {
-			bindingKey = projectIdentityBindingKey(selector, *identity)
-			lockKeys = append(lockKeys, "binding:"+bindingKey)
-			if identity.LegacyProjectID != "" {
-				lockKeys = append(lockKeys, "selector:"+identity.LegacyProjectID)
-			}
-		}
-		sort.Strings(lockKeys)
-		lastKey := ""
-		for _, key := range lockKeys {
-			if key == lastKey {
-				continue
-			}
-			lastKey = key
-			if err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtextextended(?, 0))`, key).Error; err != nil {
-				return unavailableProjectIdentity(fmt.Errorf("lock project identity: %w", err))
-			}
-		}
-
-		if identity == nil {
-			projects, err := findProjectCandidates(ctx, tx, selector)
-			if err != nil {
-				return unavailableProjectIdentity(err)
-			}
-			switch len(projects) {
-			case 0:
-				removed, err := hasSoftDeletedProjectCandidate(ctx, tx, selector)
-				if err != nil {
-					return unavailableProjectIdentity(err)
-				}
-				if removed {
-					return unavailableProjectIdentity(fmt.Errorf("legacy selector canonical is soft-deleted"))
-				}
-				return ambiguousProjectIdentity("legacy selector is not registered")
-			case 1:
-				resolution.CanonicalProjectID = projects[0].ID
-				return nil
-			default:
-				return ambiguousProjectIdentity("legacy selector maps to multiple canonical projects")
-			}
-		}
-
-		// A binding key is either the deterministic p2 identity or an alias on
-		// an older canonical row. It stores no raw non-git anchor.
-		bound, err := findProjectCandidates(ctx, tx, bindingKey)
-		if err != nil {
-			return unavailableProjectIdentity(err)
-		}
-		if len(bound) > 1 {
-			return ambiguousProjectIdentity("full identity binding is duplicated")
-		}
-		if len(bound) == 1 {
-			canonical := bound[0].ID
-			if identity.GitRemote != "" && !projectHasGitIdentity(bound[0], identity.GitRemote, identity.RelativePath) {
-				return ambiguousProjectIdentity("binding key conflicts with stored git identity")
-			}
-			// The bound row has proven it owns this full git identity, so a
-			// selector another legacy row still shadows must not deny service on
-			// every later handshake. An isolated non-git binding is the same
-			// situation: another binding owns its legacy row, so re-registration
-			// must preserve that ownership.
-			if err := appendProjectAliasesOwned(ctx, tx, canonical, identity.GitRemote != "" || isIsolatedNonGitBinding(bound[0], bindingKey), selector, identity.LegacyProjectID, bindingKey); err != nil {
-				return projectIdentityWriteError(err)
-			}
-			resolution.CanonicalProjectID = canonical
-			return nil
-		}
-
-		if identity.GitRemote != "" {
-			exact, err := findGitIdentity(ctx, tx, identity.GitRemote, identity.RelativePath)
-			if err != nil {
-				return unavailableProjectIdentity(err)
-			}
-			if len(exact) > 1 {
-				// Every row here already stores this git_remote and relative_path,
-				// so by the v2 contract they are one tenant that legacy dirName and
-				// path-hash registrations split. Collapse onto the densest row
-				// instead of refusing service. The alias append must stay lenient:
-				// the shadowed rows keep owning the outer selector.
-				canonical, err := densestProjectCandidate(ctx, tx, exact)
-				if err != nil {
-					return unavailableProjectIdentity(err)
-				}
-				if err := appendProjectAliasesOwned(ctx, tx, canonical, true, selector, identity.LegacyProjectID, bindingKey); err != nil {
-					return projectIdentityWriteError(err)
-				}
-				resolution.CanonicalProjectID = canonical
-				return nil
-			}
-			if len(exact) == 1 {
-				canonical := exact[0].ID
-				// This row stores the presented git identity, so it is the tenant.
-				// A legacy alias another row still carries — a repo that moved
-				// orgs leaves exactly that — must not deny service.
-				if err := appendProjectAliasesOwned(ctx, tx, canonical, true, selector, identity.LegacyProjectID, bindingKey); err != nil {
-					return projectIdentityWriteError(err)
-				}
-				resolution.CanonicalProjectID = canonical
-				return nil
-			}
-		}
-
-		legacyCandidates, err := findCombinedProjectCandidates(ctx, tx, selector, identity.LegacyProjectID)
-		if err != nil {
-			return unavailableProjectIdentity(err)
-		}
-		if len(legacyCandidates) > 1 {
-			if identity.GitRemote == "" {
-				return ambiguousProjectIdentity("selector and legacy identity map to different canonical projects")
-			}
-			// The presented git identity matched none of these rows above, so none
-			// of them owns it. Mint the binding row and leave every colliding
-			// legacy row untouched, exactly as with zero adoptable candidates.
-			legacyCandidates = nil
-		}
-		if len(legacyCandidates) == 1 {
-			refreshed, err := lockProjectIdentityCandidate(ctx, tx, legacyCandidates[0].ID)
-			if err != nil {
-				return unavailableProjectIdentity(err)
-			}
-			legacyCandidates[0] = refreshed
-		}
-		isolatedNonGitBinding := len(legacyCandidates) == 1 && identity.GitRemote == "" && projectHasNonGitBinding(legacyCandidates[0])
-		canonical := bindingKey
-		if len(legacyCandidates) == 1 && projectIsUnboundLegacy(legacyCandidates[0]) {
-			canonical = legacyCandidates[0].ID
-			if identity.GitRemote != "" {
-				result := tx.WithContext(ctx).Model(&Project{}).
-					Where("id = ? AND (git_remote IS NULL OR git_remote = '')", canonical).
-					Updates(map[string]any{
-						"git_remote":    identity.GitRemote,
-						"relative_path": identity.RelativePath,
-						"display_name":  nullStringValue(identity.DisplayName),
-					})
-				if result.Error != nil {
-					return unavailableProjectIdentity(fmt.Errorf("bind legacy project: %w", result.Error))
-				}
-				if result.RowsAffected != 1 {
-					canonical = bindingKey
-				}
-			}
-		}
-
-		// Every alias append on a git-identity path is lenient: the identity the
-		// client presented decides the tenant, so a legacy row still shadowing
-		// the selector or the legacy id is skipped, never stolen and never fatal.
-		// Non-git anchors keep the strict append.
-		lenientAliases := identity.GitRemote != ""
-		if canonical == bindingKey {
-			// Under a lenient append the seed aliases are omitted here: alias
-			// ownership is decided once, by the append below.
-			aliases := []string{selector, identity.LegacyProjectID}
-			if lenientAliases || isolatedNonGitBinding {
-				aliases = nil
-			}
-			if err := createProjectIdentityRow(ctx, tx, canonical, identity.GitRemote, identity.RelativePath, identity.DisplayName, aliases); err != nil {
-				return projectIdentityWriteError(err)
-			}
-		}
-		if err := appendProjectAliasesOwned(ctx, tx, canonical, lenientAliases || isolatedNonGitBinding, selector, identity.LegacyProjectID, bindingKey); err != nil {
-			return projectIdentityWriteError(err)
-		}
-		resolution.CanonicalProjectID = canonical
-		return nil
-	})
+	canonical, err := (&ProjectConsolidationStore{db: db}).ResolveLegacy(ctx, selector, auditcontext.SourceSession(ctx))
 	if err != nil {
-		return ProjectIdentityResolution{}, err
+		var refusal *ConsolidationError
+		if errors.As(err, &refusal) {
+			return ProjectIdentityResolution{}, err
+		}
+		return ProjectIdentityResolution{}, unavailableProjectIdentity(err)
 	}
-	return resolution, nil
+	if !projectidentity.ValidProjectID(canonical) {
+		return ProjectIdentityResolution{}, consolidationHold("UNRESOLVED_MEMBERSHIP")
+	}
+	return ProjectIdentityResolution{CanonicalProjectID: canonical}, nil
 }
 
 // validateProjectSelectorV2 owns the strict transport-independent outer
@@ -302,8 +144,8 @@ func RegisterAndResolve(ctx context.Context, db *gorm.DB, selector string, ident
 func validateProjectSelectorV2(selector string) error {
 	if selector == "" || len(selector) > 256 || strings.TrimSpace(selector) != selector ||
 		strings.Contains(selector, "..") || containsProjectIdentityControl(selector) ||
-		!strictProjectSelectorV2.MatchString(selector) || reservedProjectBindingV2.MatchString(selector) {
-		return invalidProjectIdentity("project selector is empty, malformed, or reserved")
+		!strictProjectSelectorV2.MatchString(selector) {
+		return invalidProjectIdentity("project selector is empty or malformed")
 	}
 	return nil
 }
@@ -352,8 +194,8 @@ func AttachLegacyAlias(ctx context.Context, db *gorm.DB, canonical, alias string
 	})
 }
 
-// RegisterLegacyProject atomically restores the legacy metadata contract: the
-// outer selector is canonical and the supplied legacy selector is an alias.
+// RegisterLegacyProject accepts only a proven redirect to the selected UUID.
+// It preserves historical rows and aliases without registration writes.
 func RegisterLegacyProject(ctx context.Context, db *gorm.DB, canonical, alias, gitRemote, relativePath, displayName string) error {
 	if err := validateProjectSelectorV2(canonical); err != nil {
 		return err
@@ -361,65 +203,19 @@ func RegisterLegacyProject(ctx context.Context, db *gorm.DB, canonical, alias, g
 	if err := ValidateProjectAliasV2(alias); err != nil {
 		return err
 	}
-	if reservedProjectBindingV2.MatchString(alias) {
-		return invalidProjectIdentity("project alias uses the reserved identity binding namespace")
-	}
 	if gitRemoteHasUserinfo(gitRemote) {
 		return invalidProjectIdentity("git_remote contains userinfo")
 	}
-	if db == nil {
-		return unavailableProjectIdentity(fmt.Errorf("project identity database is not ready"))
-	}
-
-	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		lockKeys := []string{"selector:" + canonical, "selector:" + alias}
-		sort.Strings(lockKeys)
-		lastKey := ""
-		for _, key := range lockKeys {
-			if key == lastKey {
-				continue
-			}
-			lastKey = key
-			if err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtextextended(?, 0))`, key).Error; err != nil {
-				return unavailableProjectIdentity(fmt.Errorf("lock legacy project registration: %w", err))
-			}
-		}
-
-		aliasCandidates, err := findProjectCandidates(ctx, tx, alias)
-		if err != nil {
-			return unavailableProjectIdentity(err)
-		}
-		if len(aliasCandidates) > 1 || len(aliasCandidates) == 1 && aliasCandidates[0].ID != canonical {
-			return ambiguousProjectIdentity("legacy alias already selects a different canonical project")
-		}
-
-		if err := registerLegacyCanonicalProject(ctx, tx, canonical, gitRemote, relativePath, displayName); err != nil {
-			return err
-		}
-
-		if err := appendProjectAliases(ctx, tx, canonical, alias); err != nil {
-			return projectIdentityWriteError(err)
-		}
-		return nil
-	})
-}
-
-func registerLegacyCanonicalProject(ctx context.Context, tx *gorm.DB, canonical, gitRemote, relativePath, displayName string) error {
-	canonicalCandidates, err := findProjectCandidates(ctx, tx, canonical)
+	selected, err := RegisterAndResolve(ctx, db, canonical, nil)
 	if err != nil {
-		return unavailableProjectIdentity(err)
+		return err
 	}
-	switch len(canonicalCandidates) {
-	case 0:
-		if err := createProjectIdentityRow(ctx, tx, canonical, gitRemote, relativePath, displayName, nil); err != nil {
-			return projectIdentityWriteError(err)
-		}
-	case 1:
-		if canonicalCandidates[0].ID != canonical {
-			return ambiguousProjectIdentity("canonical selector already selects a different project")
-		}
-	default:
-		return ambiguousProjectIdentity("canonical selector maps to multiple projects")
+	legacy, err := RegisterAndResolve(ctx, db, alias, nil)
+	if err != nil {
+		return err
+	}
+	if selected.CanonicalProjectID != legacy.CanonicalProjectID {
+		return consolidationHold("CONFLICTING_MEMBERSHIP")
 	}
 	return nil
 }
@@ -435,9 +231,8 @@ func ValidateProjectAliasV2(alias string) error {
 	return nil
 }
 
-// ValidateProjectIdentityV2 validates the complete transport metadata without
-// opening a transaction. HTTP callers use it before any registration write;
-// RegisterAndResolve repeats it to keep every transport fail-closed.
+// ValidateProjectIdentityV2 rejects malformed historical transport metadata.
+// Accepted metadata does not establish project membership or authorization.
 func ValidateProjectIdentityV2(identity ProjectIdentityV2) error {
 	if identity.Version != ProjectIdentityVersionV2 {
 		return invalidProjectIdentity("unsupported identity version")
@@ -489,29 +284,6 @@ func normalizedProjectRelativePathV2(value string) bool {
 	return true
 }
 
-func projectIdentityBindingKey(selector string, identity ProjectIdentityV2) string {
-	var source string
-	prefix := "p2g_"
-	if identity.GitRemote != "" {
-		source = fmt.Sprintf("v2\x00git\x00%s\x00%s", identity.GitRemote, identity.RelativePath)
-	} else {
-		prefix = "p2n_"
-		source = fmt.Sprintf("v2\x00non-git\x00%s\x00%t", identity.NonGitAnchor, *identity.AnchorShared)
-		if !*identity.AnchorShared {
-			// The legacy ID is path-derived and stable across supported clients,
-			// so one local workspace converges even when outer selectors differ.
-			// Older metadata may omit it; retain selector isolation as a fallback.
-			localScope := identity.LegacyProjectID
-			if localScope == "" {
-				localScope = selector
-			}
-			source += "\x00" + localScope
-		}
-	}
-	sum := sha256.Sum256([]byte(source))
-	return fmt.Sprintf("%s%x", prefix, sum[:16])
-}
-
 func findProjectCandidates(ctx context.Context, tx *gorm.DB, selector string) ([]Project, error) {
 	if selector == "" {
 		return nil, nil
@@ -521,149 +293,6 @@ func findProjectCandidates(ctx context.Context, tx *gorm.DB, selector string) ([
 		Where(`removed_at IS NULL AND (id = ? OR COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[])`, selector, selector).
 		Order("id ASC").Find(&projects).Error
 	return projects, err
-}
-
-func hasSoftDeletedProjectCandidate(ctx context.Context, tx *gorm.DB, selector string) (bool, error) {
-	var count int64
-	err := tx.WithContext(ctx).Model(&Project{}).
-		Where(`removed_at IS NOT NULL AND (id = ? OR COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[])`, selector, selector).
-		Count(&count).Error
-	return count != 0, err
-}
-
-func findCombinedProjectCandidates(ctx context.Context, tx *gorm.DB, selectors ...string) ([]Project, error) {
-	byID := map[string]Project{}
-	for _, selector := range selectors {
-		projects, err := findProjectCandidates(ctx, tx, selector)
-		if err != nil {
-			return nil, err
-		}
-		for _, project := range projects {
-			byID[project.ID] = project
-		}
-	}
-	ids := make([]string, 0, len(byID))
-	for id := range byID {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	projects := make([]Project, 0, len(ids))
-	for _, id := range ids {
-		projects = append(projects, byID[id])
-	}
-	return projects, nil
-}
-
-// lockProjectIdentityCandidate serializes the one-time conversion of a legacy
-// row into a v2 binding and refreshes the row after any concurrent binder
-// commits. The caller must re-evaluate projectIsUnboundLegacy on this value.
-func lockProjectIdentityCandidate(ctx context.Context, tx *gorm.DB, id string) (Project, error) {
-	var project Project
-	err := tx.WithContext(ctx).
-		Clauses(clause.Locking{Strength: "UPDATE"}).
-		Where("id = ? AND removed_at IS NULL", id).
-		First(&project).Error
-	if err != nil {
-		return Project{}, fmt.Errorf("lock legacy project %s: %w", id, err)
-	}
-	return project, nil
-}
-
-func findGitIdentity(ctx context.Context, tx *gorm.DB, remote, relativePath string) ([]Project, error) {
-	var projects []Project
-	err := tx.WithContext(ctx).
-		Where(`removed_at IS NULL AND git_remote = ? AND COALESCE(relative_path, '') = ?`, remote, relativePath).
-		Order("id ASC").Find(&projects).Error
-	return projects, err
-}
-
-func projectHasGitIdentity(project Project, remote, relativePath string) bool {
-	return project.GitRemote.Valid && project.GitRemote.String == remote &&
-		(!project.RelativePath.Valid && relativePath == "" || project.RelativePath.Valid && project.RelativePath.String == relativePath)
-}
-
-// densestProjectCandidate picks the canonical row among candidates that already
-// share one git identity: the row holding the most live memories wins, so the
-// collapse keeps the tenant's data reachable. Candidates arrive ordered by id
-// ASC and the comparison is strict, so equal counts resolve on that order and
-// every caller and replica converges on the same row.
-func densestProjectCandidate(ctx context.Context, tx *gorm.DB, candidates []Project) (string, error) {
-	ids := make([]string, 0, len(candidates))
-	for _, candidate := range candidates {
-		ids = append(ids, candidate.ID)
-	}
-	var counted []struct {
-		Project string
-		Total   int64
-	}
-	if err := tx.WithContext(ctx).Model(&Memory{}).
-		Select("project, COUNT(*) AS total").
-		Where("deleted_at IS NULL AND project IN ?", ids).
-		Group("project").Scan(&counted).Error; err != nil {
-		return "", fmt.Errorf("count memories for git identity candidates: %w", err)
-	}
-	totals := make(map[string]int64, len(counted))
-	for _, row := range counted {
-		totals[row.Project] = row.Total
-	}
-	densest := candidates[0].ID
-	for _, candidate := range candidates[1:] {
-		if totals[candidate.ID] > totals[densest] {
-			densest = candidate.ID
-		}
-	}
-	return densest, nil
-}
-
-func projectIsUnboundLegacy(project Project) bool {
-	if project.GitRemote.Valid && project.GitRemote.String != "" {
-		return false
-	}
-	for _, alias := range project.LegacyIDs {
-		if strings.HasPrefix(alias, "p2g_") || strings.HasPrefix(alias, "p2n_") {
-			return false
-		}
-	}
-	return !strings.HasPrefix(project.ID, "p2g_") && !strings.HasPrefix(project.ID, "p2n_")
-}
-
-func projectHasNonGitBinding(project Project) bool {
-	if strings.HasPrefix(project.ID, "p2n_") {
-		return true
-	}
-	for _, alias := range project.LegacyIDs {
-		if strings.HasPrefix(alias, "p2n_") {
-			return true
-		}
-	}
-	return false
-}
-
-func isIsolatedNonGitBinding(project Project, bindingKey string) bool {
-	return project.ID == bindingKey && strings.HasPrefix(bindingKey, "p2n_") && len(project.LegacyIDs) == 0
-}
-
-func createProjectIdentityRow(ctx context.Context, tx *gorm.DB, id, remote, relativePath, displayName string, aliases []string) error {
-	project := Project{
-		ID:           id,
-		GitRemote:    sql.NullString{String: remote, Valid: remote != ""},
-		RelativePath: sql.NullString{String: relativePath, Valid: remote != ""},
-		DisplayName:  sql.NullString{String: displayName, Valid: displayName != ""},
-	}
-	result := tx.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&project)
-	if result.Error != nil {
-		return fmt.Errorf("create project identity %s: %w", id, result.Error)
-	}
-	if result.RowsAffected == 0 {
-		var active int64
-		if err := tx.WithContext(ctx).Model(&Project{}).Where("id = ? AND removed_at IS NULL", id).Count(&active).Error; err != nil {
-			return fmt.Errorf("verify project identity %s: %w", id, err)
-		}
-		if active != 1 {
-			return fmt.Errorf("canonical project %s is unavailable", id)
-		}
-	}
-	return appendProjectAliases(ctx, tx, id, aliases...)
 }
 
 func appendProjectAliases(ctx context.Context, tx *gorm.DB, canonical string, aliases ...string) error {
@@ -754,13 +383,6 @@ func isURLScheme(value string) bool {
 	return true
 }
 
-func nullStringValue(value string) any {
-	if value == "" {
-		return nil
-	}
-	return value
-}
-
 // UpsertProject registers or updates a project identity record.
 //
 // newID is the canonical git-remote-based project ID.
@@ -803,68 +425,9 @@ func UpsertProject(ctx context.Context, db *gorm.DB, newID, legacyID, gitRemote,
 	return nil
 }
 
-// ResolveProjectID checks if projectID is a legacy alias in the projects table.
-// Returns the canonical project ID when a matching alias is found,
-// otherwise returns the input projectID unchanged.
-func ResolveProjectID(ctx context.Context, db *gorm.DB, projectID string) string {
-	if projectID == "" {
-		return projectID
-	}
-	var canonicalID string
-	if err := db.WithContext(ctx).
-		Raw(`SELECT id FROM projects WHERE removed_at IS NULL AND COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[] LIMIT 1`, projectID).
-		Scan(&canonicalID).Error; err != nil || canonicalID == "" {
-		return projectID
-	}
-	return canonicalID
-}
-
 var ErrKnowledgeProjectForbidden = errors.New("project read forbidden")
 
 var errProjectIdentityUnresolved = errors.New("project identity is missing or ambiguous")
-
-// CanonicalProjectDataSelectors preserves old stored selectors only through a
-// live canonical row and its uniquely owned existing aliases. It never writes
-// identity metadata or accepts a raw incoming selector as canonical authority.
-func CanonicalProjectDataSelectors(ctx context.Context, db *gorm.DB, canonical string) ([]string, error) {
-	if db == nil || canonical == "" || strings.TrimSpace(canonical) != canonical {
-		return nil, ErrKnowledgeProjectForbidden
-	}
-	var row Project
-	err := liveKnowledgeProjects(db.WithContext(ctx)).Select("id, legacy_ids").Where("id = ?", canonical).Take(&row).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, ErrKnowledgeProjectForbidden
-	}
-	if err != nil {
-		return nil, err
-	}
-	selectors := []string{canonical}
-	for _, alias := range row.LegacyIDs {
-		if alias == "" || alias == canonical || strings.TrimSpace(alias) != alias {
-			continue
-		}
-		var idOwners int64
-		if err := db.WithContext(ctx).Model(&Project{}).
-			Where("id = ? OR (id <> ? AND COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[])", alias, canonical, alias).
-			Count(&idOwners).Error; err != nil {
-			return nil, err
-		}
-		if idOwners != 0 {
-			continue
-		}
-		resolved, err := ResolveProjectIDStrict(ctx, db, alias)
-		if errors.Is(err, errProjectIdentityUnresolved) {
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		if resolved == canonical {
-			selectors = append(selectors, alias)
-		}
-	}
-	return selectors, nil
-}
 
 // ResolveProjectIDStrict resolves one canonical project or legacy alias without
 // mutation. It fails closed on missing or ambiguous rows and is used by

@@ -307,6 +307,9 @@ func (s *Server) CallTool(ctx context.Context, req *pb.CallToolRequest) (*pb.Cal
 		}
 		return nil, status.Error(codes.InvalidArgument, "invalid UCI request correlation")
 	}
+	if req.SessionId != "" {
+		ctx = mcp.ContextWithSession(ctx, req.SessionId)
+	}
 	canonicalProject := ""
 	var resolutionV3 *pb.ProjectResolutionResultV3
 	if identity := req.GetProjectIdentityV3(); identity != nil {
@@ -339,11 +342,6 @@ func (s *Server) CallTool(ctx context.Context, req *pb.CallToolRequest) (*pb.Cal
 	// Inject project identity using the same context key that internal/mcp reads.
 	if canonicalProject != "" {
 		ctx = mcp.ContextWithProject(ctx, canonicalProject)
-	}
-	// Finding 3: inject session identity so audit helpers can record the correct
-	// SourceSessionID. Only set when the proto field is non-empty.
-	if req.SessionId != "" {
-		ctx = mcp.ContextWithSession(ctx, req.SessionId)
 	}
 	if correlationValid {
 		ctx = auditcontext.WithUCIRequestCorrelation(ctx, correlation)
@@ -891,6 +889,15 @@ func (s *Server) resolveProjectIdentity(ctx context.Context, selector string, id
 	canonical, err := resolver(ctx, s.db, selector, identity)
 	if err == nil {
 		return canonical, nil
+	}
+	var migrationErr *engramgorm.ConsolidationError
+	if errors.As(err, &migrationErr) && migrationErr != nil {
+		st := status.New(codes.FailedPrecondition, "historical project membership is unresolved or conflicting")
+		withDetails, detailsErr := st.WithDetails(&errdetails.ErrorInfo{Reason: migrationErr.Code, Domain: "engram.project_identity"})
+		if detailsErr != nil {
+			return "", st.Err()
+		}
+		return "", withDetails.Err()
 	}
 	var identityErr *engramgorm.ProjectIdentityError
 	if !errors.As(err, &identityErr) || identityErr == nil {

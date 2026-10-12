@@ -9,7 +9,7 @@ redaction rules, startup verification, and restart procedures.
 
 Явный запуск `engram --session-memory` обслуживает только память через уже
 настроенный gRPC backend. Без этого аргумента остаётся полный mux-backed путь.
-Режим не заменяет Workspace, relay, Loom и автоматическую доставку контекста
+Режим не заменяет Workspace, Loom и автоматическую доставку контекста
 через host hooks. Он не запускает общий daemon, reconciliation, индексаторы
 или watchers и не меняет fencing существующего daemon.
 
@@ -18,12 +18,12 @@ redaction rules, startup verification, and restart procedures.
 `query_principal_memory`, `continuity_slot`. Остальные вызовы отклоняются,
 даже если клиент знает их имена. Авторизация и серверные флаги не меняются.
 
-Запускай процесс из существующего Git-проекта с принятой `.engram-project`
-и серверной привязкой. Используются штатные `ENGRAM_URL` / `ENGRAM_SERVER_URL`,
+Запускай процесс из каталога выбранного проекта с переносимым UUID
+в `.engram-project` либо Git common-dir cache. Используются штатные `ENGRAM_URL` / `ENGRAM_SERVER_URL`,
 `ENGRAM_TOKEN`, `CLAUDE_SESSION_ID` и installation identity: явный
 `ENGRAM_CLIENT_INSTANCE_ID` либо `client-instance-id` в `ENGRAM_DATA_DIR`
 (по умолчанию `~/.engram`). Identity не выводится и не заменяется сессионным ID.
-Режим не создаёт anchor или серверную привязку вместо отсутствующих данных.
+Для нового проекта используй `engram project init`; UUID не даёт прав доступа.
 Локальный `initialize` не доказывает доступ к памяти: проверь `tools/list`
 и настоящий `recall`. Неверная identity или авторизация остаётся отказом.
 
@@ -51,8 +51,8 @@ gRPC-соединения закрываются перед выходом. Пе
 аргументов только выбранного MCP клиента и проверка двух разрешённых scopes.
 Сохрани прежние аргументы для возврата к full mux. Успешный локальный fixture
 не доказывает установленный путь, PostgreSQL concurrency или production history.
-Даже read-style вызов может сохранять V3 resolution attempts/comparisons;
-его проверка требует разрешения на соответствующий backend и identity effects.
+Первое разрешение Git locator может создать запись каталога и локально закрепить UUID;
+его проверка требует разрешения на соответствующий backend и локальные записи.
 
 ## Обычная запись памяти без principal
 
@@ -278,23 +278,41 @@ For a legacy daemon that needs retirement, first identify its live control statu
 
 Каталог вкладки не является всей базой данных. Пустой ответ не доказывает отсутствие кода или исторических записей у других владельцев. При ошибке обновления подтверждённый View и уже выданные результаты сохраняются; повтори обновление. При отказе доступа или несовпадении контекста сервер может снять закрепление. Auth-enabled установка сохраняет свои проверки пользователя и grant; это отдельный путь, не способ обойти текущую авторизацию.
 
-A tracked, valid name-only marker retains its existing Git-origin/selected-subdirectory V2 memory scope. Its five-second local identity limit is unchanged: one `git rev-parse` reads the root, selected prefix and Git metadata paths; ordinary `remote get-url origin` still applies Git URL rewriting and credential normalization. Cache reuse checks selected-directory identity, marker bytes, Git environment, config/index/HEAD file fingerprints and nearer scope boundaries. System/global config paths are read authoritatively with separate `git var` calls and fingerprinted even when absent. Only a complete, file-only configuration without includes may omit the second config-origin query after all inputs remain unchanged. Includes and non-file origins still require fresh full derivation; a changed or interrupted inspection never grants scope.
+### Переносимый UUID проекта
 
-Git environment names are compared case-insensitively only on Windows; Unix keeps its native case-sensitive names. Config-file symlinks are supported only for identified Git config dependencies, not as a general relaxation for index, HEAD or repository markers. Their fingerprints bind each followed link and its target text, the resolved target's file identity, metadata and bounded contents, including an absent target's later creation. Link traversal is limited to 40 followed links and config reads remain limited to 1 MiB. Replacement, retargeting, loops, unsupported targets or changes during inspection refuse stale scope; the selected marker and directory guards are unchanged.
+Обычные MCP-вызовы и hooks используют Go resolver и один `project_id` UUID.
+Имя, каталог и хеш remote не являются идентификатором проекта. Для явно нового
+проекта выполни из выбранного каталога:
 
-### Identity refusal before onboarding
+```bash
+engram project init --name "Example Workspace"
+engram project resolve --root <actual-directory> --json
+```
 
-An existing Git repository with no `.engram-project` can discover the static `project_identity.register_v3` descriptor and any backend-provided unscoped `codebase_*` tools; this is not project-memory access. Registration cannot create the local anchor. For a genuinely new logical project, initialize the selected Git root offline with `engram project init --name <project-name>`, inspect and explicitly track `.engram-project`, then call `project_identity.register_v3` with `{}` through the configured ordinary client. Auth-enabled registration requires a server-authenticated master/admin identity; the supported no-auth first-use path does not authorize historical-memory adoption. Do not register a fresh anchor to recover an existing project's memories: retain the old data and client, establish its historical owner and an approved migration first. Malformed, untracked, unreadable, dangling-symlink and tracked-but-deleted anchors still refuse discovery; restore or repair their existing identity through authorized onboarding rather than minting a replacement.
+`init` работает локально, в том числе без Git, и выводит JSON с `project_id`
+и необязательным `name`. Он не добавляет файл в Git и не создаёт серверную
+регистрацию. Если UUID уже закреплён, команда возвращает его, а не создаёт другой.
+Для переноса проекта в clone сохрани `.engram-project`; добавление и commit
+этого файла выполняй явно.
 
-A staged Git deletion of a committed `.engram-project` is not an unonboarded repository. Discovery and `engram project init` refuse a replacement even when the index no longer lists the file; restore the existing accepted anchor through an authorized repair rather than generating a new UUID. An unavailable Git index or HEAD inspection also refuses initialization.
+`resolve` читает фактический каталог вызова. Вложенная `.engram-project` задаёт
+явную границу; подкаталог сам по себе не создаёт новый проект. Git-копии одного
+репозитория используют общий UUID cache `engram-project.json` в Git common-dir.
+Если UUID ещё нет, настроенный сервер может разрешить нормализованный primary
+remote через `/api/projects/bootstrap`; результат закрепляется в cache и marker.
+Это не перенос исторической памяти. Неверный marker или конфликт UUID остаётся
+ошибкой, а не поводом переписать существующую identity.
 
-An unresolvable HEAD is not proof of a new repository. Malformed refs and a missing current-branch ref with prior HEAD/reference history refuse onboarding and offline initialization; repair the existing Git state before retrying. A genuinely unborn repository remains supported.
+`tools/list` не требует проекта. Отсутствующий или конфликтующий контекст
+отклоняет только операцию, которой нужен проект; используй JSON-код ошибки
+`resolve` для диагностики. `project_identity.register_v3` больше не является
+шагом обычной настройки.
 
-If another visible ref tip, linked/detached worktree HEAD or listed worktree index in the same Git repository contains `.engram-project`, a pre-anchor checkout cannot initialize a replacement identity. A valid repository anchor is accepted after explicit `git add`; a commit is not required for V3 discovery, so an uncommitted index-tracked sibling anchor must also be preserved. An untracked-only sibling file does not establish accepted identity. Select or restore the existing accepted anchor through an authorized repository repair; Engram does not copy it or infer its server binding. Absence inspection checks at most 128 visible refs, 128 worktree records and 128 distinct tree tips, with a 128 KiB NUL-delimited worktree-list limit and one read-only index check per non-bare worktree. Excess, unsupported or unreadable evidence refuses onboarding instead of guessing. This is not a full historical scan: deleted refs and anchors absent from all visible tips and indexes require an explicit owner decision when older identity is known.
-
-V3 repository checks ignore inherited `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`, `GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_COMMON_DIR` and `GIT_NAMESPACE` for their own Git child commands. The selected repository's native `.git`/linked-worktree layout supplies that metadata instead. Ordinary Git configuration and the calling process environment remain unchanged; this is not credential filtering or a change to legacy identity adapters.
-
-The existing 30-second `tools/list` discovery limit includes V3 identity and Git inspection, not just the backend handshake. A shorter caller deadline or request cancellation stops those Git commands and refuses discovery; interrupted inspection is never evidence that an anchor is absent. Identity hashes, visible-tip validation and the evidence limits above remain unchanged.
+Старый memory relay gateway, listener/runtime и test-only advisor prewarm удалены.
+Не включай их через `hap_01b` или `ENGRAM_HAP_01B_*`: launcher игнорирует старую
+конфигурацию и удаляет такие переменные из окружения child. Обычные server URL
+и keycard остаются отдельными credentials доступа. Исторические записи,
+миграционные readers и проверки авторизации не отменяются этим cutover.
 
 ### Две независимые dirty-копии
 
@@ -319,7 +337,7 @@ The existing 30-second `tools/list` discovery limit includes V3 identity and Git
 - C# и динамические вызовы не считаются проверенными по результату Go или TS. Неподдерживаемый файл, неоднозначная ссылка, ограниченный обход и частичная экстракция должны остаться видимыми ограничениями.
 - Если провайдер не работает, сохрани последний хороший View. Проверь существующую конфигурацию модели, размерность и причину задания; не меняй профиль, сеть или провайдер из задачи подключения. Code embeddings и memory embeddings — разные доказательства.
 - Когда daemon офлайн, опубликованный View может оставаться читаемым. Новая регистрация и запрос индекса требуют живого разрешённого владельца. Обновление каталога не создаёт Source само по себе.
-- Новая UCI-регистрация не мигрирует canonical project, память или Issues. `.engram-project` не нужно создавать или переписывать для этой задачи. Отдельный `engram project init` относится только к явно новой project identity; существующий name-only/invalid marker нельзя заменять ради кода.
+- Новая UCI-регистрация не мигрирует память или Issues. Не создавай другой UUID ради индексации: сохрани существующую `.engram-project` и cache. `engram project init` предназначен для явно нового проекта; переход со старого name-only marker не доказывает миграцию исторических данных.
 - Сохраняй установленный plugin-data и его `ENGRAM_CLIENT_INSTANCE_ID`, Vault key и полезную историю. Не делись ключами между независимыми установками и не выводи их в отчёт. Ограничение opaque handles: native daemon удерживает не более 1024 транспортных владельцев с LRU eviction; после вытеснения получи свежую серверную привязку.
 
 Рабочий продукт проверяет независимый инженер по этой инструкции на установленных компонентах. Source fixture, старые donor receipts, успешный memory recall и HTTP readiness не заменяют installed-путь: Home → подключение → два worktree → реальные векторы → типизированная связь → исходник того же View. Fresh-host automatic context — отдельная приёмка; инструкция не выдаёт её за выполненную.

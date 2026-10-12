@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
@@ -25,9 +26,9 @@ func openIssueToolTestDB(t *testing.T) (*gormdb.Store, *gormdb.IssueStore) {
 	return store, gormdb.NewIssueStore(store.GetDB())
 }
 
-func uniqueIssueToolProject(t *testing.T, base string) string {
+func uniqueIssueToolProject(t *testing.T, _ string) string {
 	t.Helper()
-	return fmt.Sprintf("zz-test-%s-%d", base, time.Now().UnixNano())
+	return uuid.NewString()
 }
 
 func issueClientContext(project, keycard string, role auth.Role) context.Context {

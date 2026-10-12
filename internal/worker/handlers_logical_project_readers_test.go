@@ -21,9 +21,16 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+	"github.com/thebtf/engram/internal/auditcontext"
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/grpcserver"
+	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/uci"
+	pb "github.com/thebtf/engram/proto/engram/v1"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"gorm.io/driver/postgres"
 	gormlib "gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -206,6 +213,8 @@ func TestLogicalProjectReadersPostgresHTTP(t *testing.T) {
 	router.Get("/api/memories", service.handleListMemories)
 	router.Get("/api/documents", service.handleListDocuments)
 	router.Get("/api/issues", service.handleListIssues)
+	router.Post("/api/context/inject", service.handleContextInject)
+	router.Get("/api/context/inject", service.handleContextInject)
 	router.Post("/api/code/tabs/handshake", adapter.HandleHandshake)
 	router.Post("/api/code/contexts", adapter.HandleContexts)
 	server := httptest.NewServer(router)
@@ -229,7 +238,7 @@ func TestLogicalProjectReadersPostgresHTTP(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, want, response.StatusCode, string(raw))
 		result := map[string]any{}
-		if want < 400 {
+		if want < 400 || json.Valid(raw) {
 			require.NoError(t, json.Unmarshal(raw, &result), string(raw))
 		}
 		return result
@@ -313,5 +322,206 @@ func TestLogicalProjectReadersPostgresHTTP(t *testing.T) {
 	var count int64
 	require.NoError(t, db.Model(&gormdb.UCIView{}).Where("view_id IN ? AND dirty = true", viewIDs).Count(&count).Error)
 	require.EqualValues(t, 4, count)
+	t.Run("mixed-selector-caller-closure", func(t *testing.T) {
+		const mixed = "caller-mixed-selector"
+		const unmapped = "caller-unmapped-selector"
+		const invalid = "caller invalid selector"
+		const oldBinding = "p2g_00112233445566778899aabbccddeeff"
+		for _, selector := range []string{mixed, unmapped} {
+			require.NoError(t, db.Create(&gormdb.Project{ID: selector, LegacyIDs: []string{"retained-provenance"}}).Error)
+		}
+		for session, id := range map[string]string{"caller-session-a": a, "caller-session-b": b} {
+			require.NoError(t, db.Exec("INSERT INTO project_consolidation_redirects VALUES(?,?,?,?)", mixed, session, id, "fixture-plan").Error)
+		}
+		require.NoError(t, db.Exec("INSERT INTO project_consolidation_redirects VALUES(?,?,?,?)", oldBinding, "", a, "fixture-plan").Error)
+		require.NoError(t, db.Exec("INSERT INTO project_consolidation_redirects VALUES(?,?,?,?)", "caller-invalid-redirect", "", "not-a-uuid", "fixture-plan").Error)
+		var projectsBefore []gormdb.Project
+		require.NoError(t, db.Order("id").Find(&projectsBefore).Error)
+		typedHTTPRefusal := func(response map[string]any, code string) {
+			t.Helper()
+			require.Equal(t, code, response["error"].(map[string]any)["code"])
+		}
+		for _, session := range []string{"", "caller-unknown-session", "caller-session-a", "caller-session-b"} {
+			for _, metadata := range []bool{false, true} {
+				body := map[string]any{"project": mixed, "session_id": session, "identity_only": true, "agent_id": "caller-session-a"}
+				if metadata {
+					body["project_identity"] = &gormdb.ProjectIdentityV2{Version: 2, LegacyProjectID: mixed, GitRemote: "https://example.invalid/caller/ignored-v2.git"}
+				}
+				want := http.StatusConflict
+				expected := ""
+				if session == "caller-session-a" {
+					want, expected = http.StatusOK, a
+				} else if session == "caller-session-b" {
+					want, expected = http.StatusOK, b
+				}
+				response := call("POST", "/api/context/inject", body, want)
+				if expected != "" {
+					require.Equal(t, expected, response["canonical_project"])
+				} else {
+					typedHTTPRefusal(response, "PROJECT_ADOPTION_UNRESOLVED_MEMBERSHIP")
+				}
+			}
+			legacy := map[string]any{"project": a, "legacy_project": mixed, "session_id": session, "identity_only": true}
+			want := http.StatusConflict
+			if session == "caller-session-a" {
+				want = http.StatusOK
+			}
+			response := call("POST", "/api/context/inject", legacy, want)
+			if want == http.StatusOK {
+				require.Equal(t, a, response["canonical_project"])
+			} else if session == "caller-session-b" {
+				typedHTTPRefusal(response, "PROJECT_ADOPTION_CONFLICTING_MEMBERSHIP")
+			} else {
+				typedHTTPRefusal(response, "PROJECT_ADOPTION_UNRESOLVED_MEMBERSHIP")
+			}
+		}
+		for _, body := range []map[string]any{
+			{"project": unmapped, "identity_only": true},
+			{"project": unmapped, "legacy_project": mixed, "session_id": "caller-session-a", "identity_only": true},
+			{"project": "caller-invalid-redirect", "identity_only": true},
+			{"project": unmapped, "project_identity": &gormdb.ProjectIdentityV2{Version: 2, LegacyProjectID: unmapped, GitRemote: "https://example.invalid/caller/no-mint.git"}, "identity_only": true},
+		} {
+			typedHTTPRefusal(call("POST", "/api/context/inject", body, http.StatusConflict), "PROJECT_ADOPTION_UNRESOLVED_MEMBERSHIP")
+		}
+		call("POST", "/api/context/inject", map[string]any{"project": invalid, "identity_only": true}, http.StatusBadRequest)
+		for _, project := range []string{a, "old-a", oldBinding} {
+			response := call("POST", "/api/context/inject", map[string]any{"project": project, "identity_only": true}, http.StatusOK)
+			require.Equal(t, a, response["canonical_project"])
+		}
+		for _, session := range []string{"", "caller-unknown-session", "caller-session-a", "caller-session-b"} {
+			want, expected := http.StatusConflict, ""
+			if session == "caller-session-a" {
+				want, expected = http.StatusOK, a
+			} else if session == "caller-session-b" {
+				want, expected = http.StatusOK, b
+			}
+			response := call("GET", "/api/context/inject?project="+mixed+"&session_id="+session+"&agent_id=caller-session-a&identity_only=true", nil, want)
+			if expected != "" {
+				require.Equal(t, expected, response["canonical_project"])
+			} else {
+				typedHTTPRefusal(response, "PROJECT_ADOPTION_UNRESOLVED_MEMBERSHIP")
+			}
+		}
+		var projectsAfter []gormdb.Project
+		require.NoError(t, db.Order("id").Find(&projectsAfter).Error)
+		require.Equal(t, projectsBefore, projectsAfter, "resolution must not mint, register, revive or append aliases")
+		tools := mcp.NewServer(mcp.ServerOptions{Version: "mixed-caller-regression"})
+		tools.SetIssueStore(gormdb.NewIssueStore(db))
+		grpcTransport, grpcCore := grpcserver.New(&mcpHandlerAdapter{mcpServer: tools}, nil)
+		defer grpcTransport.Stop()
+		grpcCore.SetDB(db)
+		actor := auth.WithIdentity(ctx, auth.AuthDisabled())
+		issueCall := func(session, source string, arguments map[string]any) *mcp.Response {
+			t.Helper()
+			arguments["project"] = a
+			raw, err := json.Marshal(arguments)
+			require.NoError(t, err)
+			params, err := json.Marshal(mcp.ToolCallParams{Name: "issues", Arguments: raw})
+			require.NoError(t, err)
+			caller := mcp.ContextWithProject(auditcontext.WithSourceSession(actor, session), source)
+			response := tools.HandleRequest(caller, &mcp.Request{JSONRPC: "2.0", ID: 1, Method: "tools/call", Params: params})
+			require.NotNil(t, response)
+			return response
+		}
+		var issueBefore gormdb.Issue
+		require.NoError(t, db.First(&issueBefore, issue.ID).Error)
+		var issuesBefore, commentsBefore int64
+		require.NoError(t, db.Model(&gormdb.Issue{}).Count(&issuesBefore).Error)
+		require.NoError(t, db.Model(&gormdb.IssueComment{}).Count(&commentsBefore).Error)
+		for _, session := range []string{"", "caller-unknown-session"} {
+			for _, arguments := range []map[string]any{
+				{"action": "create", "title": "must not write mixed source", "target_project": b},
+				{"action": "update", "id": issue.ID, "status": "resolved", "comment": "must not write"},
+				{"action": "comment", "id": issue.ID, "body": "must not write"},
+				{"action": "reopen", "id": issue.ID, "comment": "must not write"},
+			} {
+				response := issueCall(session, mixed, arguments)
+				require.NotNil(t, response.Error)
+				require.Equal(t, "PROJECT_ADOPTION_UNRESOLVED_MEMBERSHIP", response.Error.Data)
+			}
+			response := issueCall(session, a, map[string]any{"action": "create", "title": "must not write mixed target", "target_project": mixed})
+			require.NotNil(t, response.Error)
+			require.Equal(t, "PROJECT_ADOPTION_UNRESOLVED_MEMBERSHIP", response.Error.Data)
+			_, err := grpcCore.CallTool(actor, &pb.CallToolRequest{ToolName: "issues", Project: mixed, SessionId: session, ArgumentsJson: []byte(`{"action":"create","project":"` + a + `","title":"must not dispatch","target_project":"` + b + `"}`)})
+			require.Equal(t, codes.FailedPrecondition, status.Code(err))
+			details := status.Convert(err).Details()
+			require.Len(t, details, 1)
+			require.Equal(t, "PROJECT_ADOPTION_UNRESOLVED_MEMBERSHIP", details[0].(*errdetails.ErrorInfo).Reason)
+		}
+		for _, selector := range []string{unmapped, invalid, ""} {
+			response := issueCall("caller-session-a", selector, map[string]any{"action": "create", "title": "must not write invalid source", "target_project": b})
+			require.NotNil(t, response.Error)
+			if selector == unmapped {
+				require.Equal(t, "PROJECT_ADOPTION_UNRESOLVED_MEMBERSHIP", response.Error.Data)
+			} else {
+				require.Contains(t, response.Error.Data, gormdb.ProjectIdentityInvalid)
+			}
+			if selector != "" {
+				response = issueCall("caller-session-a", a, map[string]any{"action": "create", "title": "must not write invalid target", "target_project": selector})
+				require.NotNil(t, response.Error)
+			}
+		}
+		var issuesAfter, commentsAfter int64
+		require.NoError(t, db.Model(&gormdb.Issue{}).Count(&issuesAfter).Error)
+		require.NoError(t, db.Model(&gormdb.IssueComment{}).Count(&commentsAfter).Error)
+		require.Equal(t, issuesBefore, issuesAfter)
+		require.Equal(t, commentsBefore, commentsAfter)
+		var issueAfter gormdb.Issue
+		require.NoError(t, db.First(&issueAfter, issue.ID).Error)
+		require.Equal(t, issueBefore, issueAfter)
+		for _, source := range []string{a, "old-a", oldBinding, mixed} {
+			for _, session := range []string{"caller-session-a", "caller-session-b"} {
+				title := source + "/" + session
+				response := issueCall(session, source, map[string]any{"action": "create", "title": title, "target_project": b})
+				require.Nil(t, response.Error)
+				var created gormdb.Issue
+				require.NoError(t, db.Where("title = ?", title).Take(&created).Error)
+				expected := a
+				if source == mixed && session == "caller-session-b" {
+					expected = b
+				}
+				require.Equal(t, expected, created.SourceProject)
+				require.Equal(t, b, created.TargetProject)
+			}
+		}
+		response := issueCall("caller-session-b", a, map[string]any{"action": "create", "title": "proven mixed target", "target_project": mixed})
+		require.Nil(t, response.Error)
+		var created gormdb.Issue
+		require.NoError(t, db.Where("title = ?", "proven mixed target").Take(&created).Error)
+		require.Equal(t, a, created.SourceProject)
+		require.Equal(t, b, created.TargetProject)
+		grpcResponse, err := grpcCore.CallTool(actor, &pb.CallToolRequest{ToolName: "issues", Project: mixed, SessionId: "caller-session-a", ArgumentsJson: []byte(`{"action":"create","project":"` + a + `","title":"proven current RPC session","target_project":"` + b + `"}`)})
+		require.NoError(t, err)
+		require.False(t, grpcResponse.IsError)
+		require.Equal(t, a, grpcResponse.CanonicalProject)
+		created = gormdb.Issue{}
+		require.NoError(t, db.Where("title = ?", "proven current RPC session").Take(&created).Error)
+		require.Equal(t, a, created.SourceProject)
+		require.Equal(t, b, created.TargetProject)
+		for _, operation := range []struct {
+			session string
+			args    map[string]any
+		}{
+			{"caller-session-a", map[string]any{"action": "update", "id": created.ID, "status": "resolved", "comment": "proven resolution"}},
+			{"caller-session-b", map[string]any{"action": "comment", "id": created.ID, "body": "proven comment"}},
+			{"caller-session-a", map[string]any{"action": "reopen", "id": created.ID, "comment": "proven reopening"}},
+		} {
+			require.Nil(t, issueCall(operation.session, mixed, operation.args).Error)
+		}
+		var comments []gormdb.IssueComment
+		require.NoError(t, db.Where("issue_id = ?", created.ID).Order("id").Find(&comments).Error)
+		require.Len(t, comments, 3)
+		require.Equal(t, []string{a, b, a}, []string{comments[0].AuthorProject, comments[1].AuthorProject, comments[2].AuthorProject})
+		var reopened gormdb.Issue
+		require.NoError(t, db.First(&reopened, created.ID).Error)
+		require.Equal(t, "reopened", reopened.Status)
+		require.Equal(t, a, reopened.SourceProject)
+		require.Equal(t, b, reopened.TargetProject)
+		initialized, err := grpcCore.Initialize(actor, &pb.InitializeRequest{})
+		require.NoError(t, err)
+		require.NotEmpty(t, initialized.Tools, "a refused scoped operation must not close discovery")
+		require.NoError(t, db.Order("id").Find(&projectsAfter).Error)
+		require.Equal(t, projectsBefore, projectsAfter)
+	})
 	t.Log("PASS real PostgreSQL/loopback HTTP: UUID catalog/legacy redirect; exact retained row membership; memory privacy SQL; nonempty docs/memory/issues and history; count/search/cursor pages; stale/unknown/foreign IDs denied; two distinct Sources/Checkouts/dirty Views share one logical UUID without changing snapshot refs")
 }
