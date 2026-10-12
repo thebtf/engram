@@ -246,7 +246,7 @@ func TestProjectInitProtectsVisibleSiblingIndexAnchor(t *testing.T) {
 			if state == "indexed-newline" {
 				name += "\nHEAD injected path line"
 			}
-			linked := filepath.Join(t.TempDir(), name)
+			linked := filepath.Join(filepath.Dir(root), name)
 			gitProjectInit(t, root, "worktree", "add", "--quiet", "--detach", linked, "HEAD")
 			anchorBytes := []byte(`{"version":3,"project_id":"22222222-2222-4222-8222-222222222222","name":"existing","scope":"repository"}`)
 			if err := os.WriteFile(filepath.Join(linked, ".engram-project"), anchorBytes, 0o600); err != nil {
