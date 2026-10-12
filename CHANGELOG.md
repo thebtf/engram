@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Keep retained project-membership subquery aliases distinct from the outer memory reader alias, so canonical UUID memory reads correlate the native row ID correctly instead of failing with a PostgreSQL missing-column error. Preserve document/issue predicates, conflict exclusion and filtering before pagination.
+- Bind human issue acknowledgement, selected bulk actions and deletion to an explicit canonical acting project and `source_agent=human`. Keep acting attribution separate from original issue provenance and row filters; bind saved/frozen selections to that actor context and persist acknowledgement/bulk/delete audit entries in the same transaction. Preserve existing keycard/operator permissions, atomicity, object IDs and readback; DELETE attribution uses query parameters without a request body.
 - Close the locally opened PostgreSQL pool after every MCP vault store/get/list/delete/status request, including validation, vault and query failures, and close constructor-owned pools when GORM acquisition, database ping or migrations fail before ownership transfers to the caller. Preserve credential encryption, global/project namespaces, existing error responses and caller-owned stores; add isolated real-handler and constructor-failure pool-lifecycle coverage. No version or release-state change.
 
 ## [6.52.0] - 2026-10-11

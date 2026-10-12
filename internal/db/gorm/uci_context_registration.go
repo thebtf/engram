@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/internal/uci"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -24,6 +25,7 @@ import (
 type RegisterLocalGitInput struct {
 	AuthRealm, Principal, WorkstationID string
 	SourceID, SourceLabel, Locator      string
+	ProjectID                           string
 	// ParserBundle is an explicit request; omitted replays retain their profile.
 	ParserBundle *bool
 	// DefaultParserBundle comes from the authenticated daemon capability, never
@@ -50,6 +52,9 @@ func (s *UCIContextStore) RegisterLocalGit(ctx context.Context, in RegisterLocal
 	if validateUCIContextOwner(in.AuthRealm, in.Principal) != nil || validateUCIRequiredText("workstation_id", in.WorkstationID) != nil {
 		return RegisteredLocalGit{}, errUCIContextAuthorizationDenied
 	}
+	if !projectidentity.ValidProjectID(in.ProjectID) {
+		return RegisteredLocalGit{}, &projectidentity.LogicalError{Code: "PROJECT_CONTEXT_REQUIRED"}
+	}
 	locator, valid := canonicalUCILocalGitLocator(in.Locator)
 	if !valid || (in.SourceID == "" && validateUCIRequiredText("source_label", in.SourceLabel) != nil) ||
 		(in.SourceID != "" && (validateUCIUUID("source_id", in.SourceID) != nil || in.SourceLabel != "")) {
@@ -62,6 +67,13 @@ func (s *UCIContextStore) RegisterLocalGit(ctx context.Context, in RegisterLocal
 	}
 	var out RegisteredLocalGit
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		exists, err := (&SessionStore{db: tx}).CanonicalProjectExists(ctx, in.ProjectID)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return &projectidentity.LogicalError{Code: "PROJECT_CONTEXT_REQUIRED"}
+		}
 		if in.AuthRealm == uci.NoAuthCodeRealm {
 			// One realm-wide lock serializes capacity checks across distinct Source and Checkout identities.
 			if err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtextextended('uci-noauth-code-catalog-capacity', 0))`).Error; err != nil {
@@ -84,6 +96,9 @@ func (s *UCIContextStore) RegisterLocalGit(ctx context.Context, in RegisterLocal
 				return errUCIContextAuthorizationDenied
 			}
 			if len(matches) == 1 {
+				if err := requireRegisteredSourceProject(tx, matches[0].SourceID, in.ProjectID); err != nil {
+					return err
+				}
 				if matches[0].RegistrationProfileID == nil {
 					return uci.NewContextError(uci.RegistrationProfileUnbound, nil)
 				}
@@ -95,7 +110,7 @@ func (s *UCIContextStore) RegisterLocalGit(ctx context.Context, in RegisterLocal
 				return nil
 			}
 			sourceID = uuid.NewString()
-			source := UCISource{SourceID: sourceID, AuthRealm: in.AuthRealm, Kind: UCISourceGit, DisplayName: in.SourceLabel, State: UCISourceActive, CreatedAt: now, UpdatedAt: now}
+			source := UCISource{SourceID: sourceID, ProjectID: &in.ProjectID, AuthRealm: in.AuthRealm, Kind: UCISourceGit, DisplayName: in.SourceLabel, State: UCISourceActive, CreatedAt: now, UpdatedAt: now}
 			if err := tx.Create(&source).Error; err != nil {
 				return fmt.Errorf("register local git source: %w", err)
 			}
@@ -110,6 +125,9 @@ func (s *UCIContextStore) RegisterLocalGit(ctx context.Context, in RegisterLocal
 			}
 			if owned == 0 {
 				return errUCIContextAuthorizationDenied
+			}
+			if err := requireRegisteredSourceProject(tx, sourceID, in.ProjectID); err != nil {
+				return err
 			}
 		}
 		var existing UCICheckout

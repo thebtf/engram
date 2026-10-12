@@ -59,7 +59,7 @@ func TestCloseIssueWithCommentRollsBackWhenCommentInsertFails(t *testing.T) {
 func TestAcknowledgeIssuesAtomicallyTypesInvalidInput(t *testing.T) {
 	store := NewIssueStore(nil)
 	for _, ids := range [][]int64{nil, {0}, {1, 1}} {
-		_, err := store.AcknowledgeIssuesAtomically(context.Background(), ids)
+		_, err := store.AcknowledgeIssuesAtomically(context.Background(), ids, nil)
 		require.ErrorIs(t, err, ErrIssueInvalidInput)
 	}
 }

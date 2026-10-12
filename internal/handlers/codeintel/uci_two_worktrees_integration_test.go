@@ -408,6 +408,8 @@ func TestUCITwoRealWorktreesRemainIsolated(t *testing.T) {
 	t.Setenv("ENGRAM_TLS_CA", "")
 
 	store := uciT001OpenStore(t)
+	projectID := uuid.NewString()
+	require.NoError(t, store.DB.Exec("INSERT INTO projects (id, display_name) VALUES (?, ?)", projectID, "Two-worktree fixture").Error)
 	fixture := uciT001NewGitFixture(t)
 	mcpServer := mcp.NewServer(mcp.ServerOptions{Version: "uci-t001"})
 	contexts := dbgorm.NewUCIContextStore(store.DB)
@@ -417,6 +419,7 @@ func TestUCITwoRealWorktreesRemainIsolated(t *testing.T) {
 	require.NoError(t, err)
 	contextApplication.SetLocalGitRegistration(func(ctx context.Context, caller uci.ResolveContextInput, sourceID, label, locator string, parserBundle *bool) (uci.RegisteredCheckoutSelector, error) {
 		registered, err := contexts.RegisterLocalGit(ctx, dbgorm.RegisterLocalGitInput{
+			ProjectID: projectID,
 			AuthRealm: caller.AuthRealm, Principal: caller.Principal, WorkstationID: caller.WorkstationID,
 			SourceID: sourceID, SourceLabel: label, Locator: locator, ParserBundle: parserBundle,
 		})

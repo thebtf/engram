@@ -76,6 +76,7 @@ type IssueSelectionOperation struct {
 	Action  IssueSelectionAction
 	Actor   IssueSelectionActor
 	Targets []IssueSelectionTarget
+	Audit   *AuditLogEntry
 }
 
 // IssueSelectionReadback contains only fields permitted in a committed selected-issue result.
@@ -209,10 +210,10 @@ func (s *IssueStore) ListIssuesEx(ctx context.Context, params IssueListParams) (
 
 	query := s.db.WithContext(ctx).Table("issues")
 	if params.TargetProject != "" {
-		query = query.Where("target_project = ?", params.TargetProject)
+		query = query.Where(canonicalProjectMembershipPredicate("issues", "target_project"), params.TargetProject, "issues", "issues", params.TargetProject)
 	}
 	if params.SourceProject != "" {
-		query = query.Where("source_project = ?", params.SourceProject)
+		query = query.Where(canonicalProjectMembershipPredicate("issues", "source_project"), params.SourceProject, "issues", "issues", params.SourceProject)
 	}
 	if params.SourceAgent != "" {
 		query = query.Where("source_agent = ?", params.SourceAgent)
@@ -513,7 +514,7 @@ func (s *IssueStore) AcknowledgeIssues(ctx context.Context, ids []int64) (int64,
 
 // AcknowledgeIssuesAtomically requires every requested issue to exist and be
 // open before transitioning the complete set in one transaction.
-func (s *IssueStore) AcknowledgeIssuesAtomically(ctx context.Context, ids []int64) (int64, error) {
+func (s *IssueStore) AcknowledgeIssuesAtomically(ctx context.Context, ids []int64, audit *AuditLogEntry) (int64, error) {
 	if len(ids) == 0 {
 		return 0, fmt.Errorf("%w: issue ids are required", ErrIssueInvalidInput)
 	}
@@ -550,6 +551,9 @@ func (s *IssueStore) AcknowledgeIssuesAtomically(ctx context.Context, ids []int6
 			return fmt.Errorf("%w: issue acknowledgement changed concurrently", ErrIssueInvalidTransition)
 		}
 		acknowledged = result.RowsAffected
+		if audit != nil {
+			return NewAuditStore(tx).LogTx(ctx, tx, *audit)
+		}
 		return nil
 	})
 	if err != nil {
@@ -614,6 +618,9 @@ func (s *IssueStore) ApplyIssueSelectionOperation(ctx context.Context, operation
 				return err
 			}
 			items = append(items, item)
+		}
+		if operation.Audit != nil {
+			return NewAuditStore(tx).LogTx(ctx, tx, *operation.Audit)
 		}
 		return nil
 	})
@@ -977,9 +984,15 @@ func (s *IssueStore) RejectIssue(ctx context.Context, id int64, comment, authorP
 }
 
 // DeleteIssue hard-deletes an issue and all its comments.
-func (s *IssueStore) DeleteIssue(ctx context.Context, id int64) error {
+func (s *IssueStore) DeleteIssue(ctx context.Context, id int64, audit *AuditLogEntry) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		return deleteIssueTx(tx, id)
+		if err := deleteIssueTx(tx, id); err != nil {
+			return err
+		}
+		if audit != nil {
+			return NewAuditStore(tx).LogTx(ctx, tx, *audit)
+		}
+		return nil
 	})
 }
 

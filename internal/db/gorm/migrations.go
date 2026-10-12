@@ -6869,6 +6869,8 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 		uciStructureExposureMigration183(),
 		uciSemanticContinuationMigration184(),
 		localGitRegistrationRetryMigration185(),
+		projectConsolidationMigration186(),
+		logicalSourceProjectMigration187(),
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

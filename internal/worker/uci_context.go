@@ -518,7 +518,8 @@ func composeUCIContext(
 		}
 		registered, err := contextStore.RegisterLocalGit(ctx, gormstore.RegisterLocalGitInput{
 			AuthRealm: caller.AuthRealm, Principal: caller.Principal, WorkstationID: caller.WorkstationID,
-			SourceID: sourceID, SourceLabel: label, Locator: locator, ParserBundle: parserBundle,
+			ProjectID: mcp.ProjectFromContext(ctx),
+			SourceID:  sourceID, SourceLabel: label, Locator: locator, ParserBundle: parserBundle,
 			DefaultParserBundle: available,
 		})
 		if err != nil {

@@ -74,6 +74,7 @@ func (UCISpace) TableName() string { return "spaces" }
 
 type UCISource struct {
 	SourceID    string         `gorm:"column:source_id;type:uuid;primaryKey"`
+	ProjectID   *string        `gorm:"column:project_id;type:text"`
 	AuthRealm   string         `gorm:"column:auth_realm;type:text;not null"`
 	Kind        UCISourceKind  `gorm:"column:kind;type:text;not null"`
 	DisplayName string         `gorm:"column:display_name;type:text;not null"`

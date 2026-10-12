@@ -208,7 +208,8 @@ func (s *Service) handleGetObservations(w http.ResponseWriter, r *http.Request) 
 }
 
 type projectListResponse struct {
-	Items []gorm.ProjectDescriptor `json:"items"`
+	Items      []gorm.ProjectDescriptor `json:"items"`
+	Unresolved []gorm.UnresolvedProject `json:"unresolved"`
 }
 
 // handleGetProjects godoc
@@ -235,7 +236,16 @@ func (s *Service) handleGetProjects(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "private, no-store")
-	writeJSON(w, projectListResponse{Items: projects})
+	membership := s.logicalMembershipStore(w, r)
+	if membership == nil {
+		return
+	}
+	unresolved, err := membership.ListUnresolved(r.Context())
+	if err != nil {
+		writeRetainedProjectError(w, err)
+		return
+	}
+	writeJSON(w, projectListResponse{Items: projects, Unresolved: unresolved})
 }
 
 // handleGetTypes godoc
