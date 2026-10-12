@@ -36,6 +36,16 @@ These are the stable entry points. Action enums list only routes that have live 
 
 The expanded surface contains only provider-backed tools whose handler is currently usable. Retired compatibility names are neither advertised nor dispatched. Clients should inspect `tools/list` with `include_all: true` rather than assuming a historical alias exists.
 
+For hybrid `recall_memory` (`ENGRAM_VNEXT_ENABLED=true`), the advertised
+`tier_filter` selects retrieval layers: `tier0_exact`, `tier1_fts`,
+`tier1_vector`, or `tier2_graph`. Omitted or empty means all retrieval layers.
+Validate this enum independently of `ENGRAM_LIFECYCLE_ENABLED`; unknown values
+and lifecycle memory tiers return `invalid_tier_filter:` rather than silently
+selecting no retrieval layer. Privacy, ranking, limits and graph opt-in remain
+unchanged. When `ENGRAM_VNEXT_ENABLED=false`, preserve the existing unadvertised
+lifecycle-only filter under `ENGRAM_LIFECYCLE_ENABLED=true`; it is not an alias
+for the public hybrid enum.
+
 ### Conditional Tool Families
 
 | Family | Tools | Advertised when | Since |

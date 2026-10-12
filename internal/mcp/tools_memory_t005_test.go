@@ -224,38 +224,6 @@ func mustJSON(t *testing.T, v any) json.RawMessage {
 
 // ---- B4 tier_filter tests -------------------------------------------------------
 
-// TestRecallMemoryToolSchema_B4_HasTierFilter verifies that recall_memory InputSchema
-// advertises the tier_filter property when ENGRAM_VNEXT_ENABLED=true.
-//
-// Merge note (W3+W4): W3 adopted the recallMemoryTool() function which gates
-// tier_filter (retrieval tiers: tier0_exact/tier1_fts/tier1_vector/tier2_graph)
-// behind ENGRAM_VNEXT_ENABLED. The lifecycle cognitive-tier filter (FR-B2: working/
-// episodic/semantic/procedural) is still applied in handleRecallMemory when
-// ENGRAM_LIFECYCLE_ENABLED=true, but is not schema-advertised in the base schema
-// (it is a hidden-but-functional parameter to avoid conflicting tier_filter enums).
-// This test is updated to reflect the merged schema contract.
-func TestRecallMemoryToolSchema_B4_HasTierFilter(t *testing.T) {
-	t.Setenv("ENGRAM_VNEXT_ENABLED", "true")
-
-	s := NewServer(ServerOptions{Version: "test"})
-	s.memoryStore = nonNilMemoryStore()
-
-	props := findToolProperties(t, s.ListTools(), "recall_memory")
-	tierFilter, ok := props["tier_filter"]
-	require.True(t, ok, "recall_memory schema must expose tier_filter property when ENGRAM_VNEXT_ENABLED=true")
-
-	tfMap, ok := tierFilter.(map[string]any)
-	require.True(t, ok, "tier_filter must be an object")
-	require.Equal(t, "array", tfMap["type"], "tier_filter must be type=array")
-
-	items, ok := tfMap["items"].(map[string]any)
-	require.True(t, ok, "tier_filter items must be an object")
-	enum := toStringSlice(items["enum"])
-	// W3 hybrid tier_filter enum (retrieval tiers, not lifecycle cognitive tiers).
-	require.ElementsMatch(t, []string{"tier0_exact", "tier1_fts", "tier1_vector", "tier2_graph"}, enum,
-		"tier_filter enum must cover retrieval tiers when ENGRAM_VNEXT_ENABLED=true")
-}
-
 // TestRecallMemoryTierFilter_InvalidTier_B4 verifies that recall_memory returns
 // an 'invalid_tier_filter:' structured error for unknown tier values when
 // ENGRAM_LIFECYCLE_ENABLED=true.

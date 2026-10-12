@@ -1411,11 +1411,20 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 	project := strings.TrimSpace(coerceString(m["project"], ""))
 	tags := coerceStringSlice(m["tags"])
 
-	// B4 resolution (2026-06-11): tier_filter for recall_memory — spec FR-B2 requires
-	// recall_memory to accept an optional tier filter. Gated behind ENGRAM_LIFECYCLE_ENABLED.
-	tierFilterEnabled := os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true"
-	tierFilterSet := make(map[string]bool)
-	if tierFilterEnabled {
+	// Hybrid tier_filter selects retrieval legs, not lifecycle memory tiers.
+	// Preserve the lifecycle-only filter when hybrid retrieval is disabled.
+	vnextEnabled := os.Getenv("ENGRAM_VNEXT_ENABLED") == "true"
+	var tierFilterSet map[string]bool
+	if vnextEnabled {
+		for _, tf := range coerceStringSlice(m["tier_filter"]) {
+			switch tf {
+			case "tier0_exact", "tier1_fts", "tier1_vector", "tier2_graph":
+			default:
+				return "", fmt.Errorf("invalid_tier_filter: %q must be one of tier0_exact, tier1_fts, tier1_vector, tier2_graph", tf)
+			}
+		}
+	} else if os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true" {
+		tierFilterSet = make(map[string]bool)
 		for _, tf := range coerceStringSlice(m["tier_filter"]) {
 			if lifecycle.ValidTier(tf) {
 				tierFilterSet[tf] = true
@@ -1495,7 +1504,6 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 	// Caller identity + visibility context are fully built above; pass them into
 	// handleRecallMemoryHybrid so hybrid results are subject to the same
 	// predicate as the legacy List path below.
-	vnextEnabled := os.Getenv("ENGRAM_VNEXT_ENABLED") == "true"
 	if vnextEnabled && !includePrincipalsSet {
 		return s.handleRecallMemoryHybrid(ctx, m, query, project, format, limit, obsType, tags, caller, visibilityOpts, tg3Active, tg3ConfidenceMin, tg3IncludeSuperseded, tg3IncludeRationale)
 	}
