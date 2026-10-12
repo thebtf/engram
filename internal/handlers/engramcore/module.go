@@ -142,13 +142,7 @@ func (m *Module) Shutdown(_ context.Context) error {
 // OnSessionConnect logs the first session for a project. Implements
 // module.ProjectLifecycle. Behaviour ported from engramHandler.OnProjectConnect.
 func (m *Module) OnSessionConnect(p muxcore.ProjectContext) {
-	if m.v3ClientInstanceID == "" {
-		// V2 compatibility eagerly resolves the slug. V3 must not resolve or
-		// retain a selector before central resolution.
-		_ = m.cache.Resolve(context.Background(), p)
-	} else {
-		m.cache.Forget(p.ID)
-	}
+	m.cache.Forget(p.ID)
 	if m.deps.Logger != nil {
 		m.deps.Logger.Info("session connected",
 			"project_id", p.ID,

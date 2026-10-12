@@ -1906,6 +1906,7 @@ func (s *Service) setupRoutes() {
 		// Observation and project data
 		r.Get("/api/observations", s.handleGetObservations)
 		r.Get("/api/projects", s.handleGetProjects)
+		r.Post("/api/projects/bootstrap", s.handleProjectBootstrap)
 		r.Delete("/api/projects/{id}", s.handleDeleteProject)
 		r.Get("/api/stats", s.handleGetStats)
 		r.Get("/api/stats/retrieval", s.handleGetRetrievalStats)
