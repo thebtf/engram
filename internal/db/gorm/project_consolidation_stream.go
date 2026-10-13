@@ -433,7 +433,7 @@ func (s *ProjectConsolidationStore) consumeRow(tx *gormlib.DB, frame consolidati
 	if !equal {
 		return consolidationHold("CONSERVATION_FAILED")
 	}
-	return tx.Exec(`TRUNCATE pg_temp.engram_owner_row_chunks,pg_temp.engram_owner_row`).Error
+	return tx.Exec(`DELETE FROM pg_temp.engram_owner_row_chunks; DELETE FROM pg_temp.engram_owner_row`).Error
 }
 
 type consolidationRowEdit struct {
