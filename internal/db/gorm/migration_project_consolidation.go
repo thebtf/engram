@@ -33,50 +33,44 @@ func projectConsolidationMigration186() *gormigrate.Migration {
 			 selector TEXT NOT NULL, session_id TEXT NOT NULL DEFAULT '', project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE RESTRICT,
 			 plan_fingerprint TEXT NOT NULL, PRIMARY KEY(selector,session_id))`,
 			`CREATE OR REPLACE FUNCTION engram_consolidation_scope(selector TEXT, session TEXT DEFAULT '') RETURNS TEXT
-			 LANGUAGE plpgsql STABLE AS $$ DECLARE resolved TEXT; candidates BIGINT; BEGIN
-			  SELECT count(DISTINCT project_id),min(project_id) INTO candidates,resolved FROM project_consolidation_redirects
-			  WHERE project_consolidation_redirects.selector=$1 AND session_id IN ('',session);
-			  IF candidates>1 THEN RAISE EXCEPTION 'PROJECT_ADOPTION_CONFLICTING_MEMBERSHIP'; END IF;
-			  IF candidates=0 AND EXISTS(SELECT 1 FROM project_consolidation_memberships WHERE selector_reference<>'' AND project_id IS NULL) THEN
-			   RETURN selector;
-			  END IF;
-			  RETURN COALESCE(resolved,selector);
+             LANGUAGE plpgsql STABLE AS $$ DECLARE resolved TEXT; candidates BIGINT; BEGIN
+              IF selector='' OR (selector ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+               AND selector<>'00000000-0000-0000-0000-000000000000') THEN RETURN selector; END IF;
+              SELECT count(DISTINCT project_id),min(project_id) INTO candidates,resolved FROM project_consolidation_redirects
+              WHERE project_consolidation_redirects.selector=$1 AND session_id IN ('',session);
+              IF candidates>1 THEN RAISE EXCEPTION 'PROJECT_ADOPTION_CONFLICTING_MEMBERSHIP'; END IF;
+              IF candidates=0 THEN RAISE EXCEPTION 'PROJECT_ADOPTION_UNRESOLVED_MEMBERSHIP'; END IF;
+              RETURN resolved;
 			 END $$`,
 			`CREATE OR REPLACE FUNCTION engram_consolidation_write_guard() RETURNS TRIGGER LANGUAGE plpgsql AS $$
-			 DECLARE field TEXT; value JSONB; result JSONB; session_ids TEXT[]; session_value TEXT; target TEXT; candidate TEXT; old_selector TEXT; item RECORD; BEGIN
-			  SELECT ARRAY(SELECT DISTINCT v FROM (
-			   SELECT to_jsonb(NEW)->>'sdk_session_id' AS v UNION ALL SELECT to_jsonb(NEW)->>'claude_session_id'
-			   UNION ALL SELECT to_jsonb(NEW)->>'session_id' UNION ALL SELECT to_jsonb(NEW)->>'source_session_id'
-			   UNION ALL SELECT jsonb_array_elements_text(COALESCE(to_jsonb(NEW)->'source_sessions','[]'::jsonb))
-			  ) q WHERE v IS NOT NULL AND v<>'') INTO session_ids;
-			  FOREACH field IN ARRAY TG_ARGV LOOP
-			   value:=to_jsonb(NEW)->field; result:=value;
-			   IF jsonb_typeof(value)='string' THEN
-			    old_selector:=value#>>'{}'; target:=engram_consolidation_scope(old_selector);
-			    FOREACH session_value IN ARRAY session_ids LOOP
-			     candidate:=engram_consolidation_scope(old_selector,session_value);
-			     IF candidate<>old_selector THEN
-			      IF target<>old_selector AND target<>candidate THEN RAISE EXCEPTION 'PROJECT_ADOPTION_CONFLICTING_MEMBERSHIP'; END IF;
-			      target:=candidate;
-			     ELSIF EXISTS(SELECT 1 FROM project_consolidation_redirects WHERE selector=old_selector AND session_id<>'') THEN
-			      RAISE EXCEPTION 'PROJECT_ADOPTION_UNRESOLVED_MEMBERSHIP';
-			     END IF;
-			    END LOOP;
-			    IF target=old_selector AND EXISTS(SELECT 1 FROM project_consolidation_redirects WHERE selector=old_selector AND session_id<>'') THEN
-			     RAISE EXCEPTION 'PROJECT_ADOPTION_UNRESOLVED_MEMBERSHIP';
-			    END IF;
-			    result:=to_jsonb(target);
-			   ELSIF jsonb_typeof(value)='array' THEN
-			    result:='[]'::jsonb;
-			    FOR item IN SELECT v,ord FROM jsonb_array_elements_text(value) WITH ORDINALITY e(v,ord) LOOP
-			     target:=engram_consolidation_scope(item.v);
-			     IF target=item.v AND EXISTS(SELECT 1 FROM project_consolidation_redirects WHERE selector=item.v AND session_id<>'') THEN
-			      RAISE EXCEPTION 'PROJECT_ADOPTION_UNRESOLVED_MEMBERSHIP';
-			     END IF;
-			     result:=result||jsonb_build_array(target);
-			    END LOOP;
-			   END IF;
-			   NEW:=jsonb_populate_record(NEW,jsonb_build_object(field,result));
+             DECLARE field TEXT; value JSONB; result JSONB; session_ids TEXT[]; session_value TEXT; target TEXT; candidate TEXT; item RECORD; BEGIN
+              SELECT ARRAY(SELECT DISTINCT v FROM (
+               SELECT to_jsonb(NEW)->>'sdk_session_id' AS v UNION ALL SELECT to_jsonb(NEW)->>'claude_session_id'
+               UNION ALL SELECT to_jsonb(NEW)->>'session_id' UNION ALL SELECT to_jsonb(NEW)->>'source_session_id'
+               UNION ALL SELECT jsonb_array_elements_text(COALESCE(NULLIF(to_jsonb(NEW)->'source_sessions','null'::jsonb),'[]'::jsonb))
+              ) q WHERE v IS NOT NULL AND v<>'' ORDER BY v) INTO session_ids;
+              FOREACH field IN ARRAY TG_ARGV LOOP
+               value:=to_jsonb(NEW)->field;
+               IF jsonb_typeof(value) IN ('string','array') THEN
+                result:='[]'::jsonb;
+                FOR item IN SELECT v FROM jsonb_array_elements_text(
+                 CASE WHEN jsonb_typeof(value)='array' THEN value ELSE jsonb_build_array(value) END
+                ) WITH ORDINALITY e(v,ord) ORDER BY ord LOOP
+                 target:=NULL;
+                 IF cardinality(session_ids)=0 THEN
+                  target:=engram_consolidation_scope(item.v);
+                 ELSE
+                  FOREACH session_value IN ARRAY session_ids LOOP
+                   candidate:=engram_consolidation_scope(item.v,session_value);
+                   IF target IS NOT NULL AND target<>candidate THEN RAISE EXCEPTION 'PROJECT_ADOPTION_CONFLICTING_MEMBERSHIP'; END IF;
+                   target:=candidate;
+                  END LOOP;
+                 END IF;
+                 result:=result||jsonb_build_array(target);
+                END LOOP;
+                IF jsonb_typeof(value)='string' THEN result:=result->0; END IF;
+                NEW:=jsonb_populate_record(NEW,jsonb_build_object(field,result));
+               END IF;
 			  END LOOP;
 			  RETURN NEW;
 			 END $$`,

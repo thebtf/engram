@@ -28,10 +28,10 @@ func consolidationSequences(tx *gormlib.DB) ([]consolidationSequence, error) {
 	result := make([]consolidationSequence, 0, len(names))
 	for _, name := range names {
 		var row consolidationSequence
-		row.Name = name
 		if err := tx.Raw("SELECT last_value,is_called FROM " + quoted(name)).Scan(&row).Error; err != nil {
 			return nil, err
 		}
+		row.Name = name
 		result = append(result, row)
 	}
 	return result, nil
@@ -171,6 +171,10 @@ func (s *ProjectConsolidationStore) VerifyBackup(ctx context.Context, token, fin
 				return err
 			}
 		}
+		restoreGuards, err := consolidationSuspendWriteGuards(tx)
+		if err != nil {
+			return err
+		}
 		for _, table := range tables {
 			var fields []string
 			for _, column := range columns {
@@ -188,6 +192,9 @@ func (s *ProjectConsolidationStore) VerifyBackup(ctx context.Context, token, fin
 		}
 		if err := tx.Exec(`SET CONSTRAINTS ALL IMMEDIATE`).Error; err != nil {
 			return consolidationHold("RESTORE_CONSTRAINT_FAILED")
+		}
+		if err := restoreGuards(); err != nil {
+			return err
 		}
 		for _, fk := range fks {
 			mode := " NOT DEFERRABLE"
@@ -305,6 +312,10 @@ func (s *ProjectConsolidationStore) execute(tx *gormlib.DB, state consolidationP
 			expected["projects"] = append(expected["projects"], object)
 		}
 	}
+	restoreGuards, err := consolidationSuspendWriteGuards(tx)
+	if err != nil {
+		return ConsolidationReceipt{}, err
+	}
 	counts := map[string]*ConsolidationRoleCount{}
 	for _, m := range state.Mapping {
 		row, ok := byRef[m.Reference]
@@ -378,6 +389,12 @@ func (s *ProjectConsolidationStore) execute(tx *gormlib.DB, state consolidationP
 		counts[key].After++
 	}
 	if err := s.installRedirects(tx, state); err != nil {
+		return ConsolidationReceipt{}, err
+	}
+	if err := tx.Exec(`SET CONSTRAINTS ALL IMMEDIATE`).Error; err != nil {
+		return ConsolidationReceipt{}, consolidationCollision(err)
+	}
+	if err := restoreGuards(); err != nil {
 		return ConsolidationReceipt{}, err
 	}
 	after := make(map[string]json.RawMessage, len(expected))
@@ -534,4 +551,37 @@ func consolidationRedirect(tx *gormlib.DB, selector, session, target, fingerprin
 		return nil
 	}
 	return consolidationCollision(tx.Exec(`INSERT INTO project_consolidation_redirects(selector,session_id,project_id,plan_fingerprint) VALUES(?,?,?::uuid,?)`, selector, session, target, fingerprint).Error)
+}
+
+// Only the locked, isolated restore/apply transactions call this helper. Their
+// rollback restores both historical data and transactional trigger DDL on error.
+func consolidationSuspendWriteGuards(tx *gormlib.DB) (func() error, error) {
+	var guards []struct{ SchemaName, TableName, Mode string }
+	if err := tx.Raw(`SELECT n.nspname AS schema_name,c.relname AS table_name,t.tgenabled::text AS mode
+		FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace
+		WHERE n.nspname=current_schema() AND t.tgname='engram_consolidation_scope_write' AND NOT t.tgisinternal
+		AND t.tgfoid=to_regprocedure(quote_ident(current_schema())||'.engram_consolidation_write_guard()')
+		AND t.tgenabled<>'D' ORDER BY c.relname`).Scan(&guards).Error; err != nil {
+		return nil, err
+	}
+	for _, guard := range guards {
+		if err := tx.Exec("ALTER TABLE " + quoted(guard.SchemaName) + "." + quoted(guard.TableName) + " DISABLE TRIGGER engram_consolidation_scope_write").Error; err != nil {
+			return nil, err
+		}
+	}
+	return func() error {
+		for _, guard := range guards {
+			mode := "ENABLE"
+			switch guard.Mode {
+			case "R":
+				mode = "ENABLE REPLICA"
+			case "A":
+				mode = "ENABLE ALWAYS"
+			}
+			if err := tx.Exec("ALTER TABLE " + quoted(guard.SchemaName) + "." + quoted(guard.TableName) + " " + mode + " TRIGGER engram_consolidation_scope_write").Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}, nil
 }
