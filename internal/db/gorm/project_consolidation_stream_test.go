@@ -2,16 +2,28 @@ package gorm
 
 import (
 	"bytes"
+	"context"
+	"crypto/md5"
+	"database/sql"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"io"
+	"os"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/config"
 	vaultcrypto "github.com/thebtf/engram/internal/crypto"
+	"gorm.io/driver/postgres"
+	gormlib "gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 func TestProjectConsolidationStreamIntegrity(t *testing.T) {
@@ -210,4 +222,119 @@ func TestProjectConsolidationUnknownObjectRolePreservesMetadata(t *testing.T) {
 	for _, column := range []string{"state", "digest", "source_book_job_id"} {
 		require.Empty(t, consolidationFieldRole("ci_profiles", column))
 	}
+}
+
+// Measures the exporting backend's actual temporary files, not EXPLAIN text.
+// Only the dedicated synthetic fixture is admitted; no owner corpus is read.
+func TestProjectConsolidationExportBoundsServerPayload(t *testing.T) {
+	deadlineText := os.Getenv("ENGRAM_CONSOLIDATION_FIXTURE_DEADLINE")
+	if deadlineText == "" {
+		t.Skip("exact admitted fixture deadline absent; no resource proof")
+	}
+	deadline, err := time.Parse(time.RFC3339, deadlineText)
+	require.NoError(t, err)
+	require.True(t, time.Now().Before(deadline), "fixture admission expired")
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+	cfg := consolidationTestDatabaseConfig(t, os.Getenv("DATABASE_DSN"), "source")
+	require.Equal(t, uint16(22366), cfg.Port, "existing admitted consolidation fixture only")
+	pool := stdlib.OpenDB(*cfg)
+	pool.SetMaxOpenConns(2)
+	defer pool.Close()
+	db, err := gormlib.Open(postgres.New(postgres.Config{Conn: pool}), &gormlib.Config{Logger: logger.Default.LogMode(logger.Silent), DisableAutomaticPing: true})
+	require.NoError(t, err)
+	db = db.WithContext(ctx)
+	schema := "export_bounds_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	require.NoError(t, db.Exec("CREATE SCHEMA "+quoted(schema)).Error)
+	defer func() { require.NoError(t, db.Exec("DROP SCHEMA "+quoted(schema)+" CASCADE").Error) }()
+	require.NoError(t, db.Exec("CREATE TABLE "+quoted(schema)+`.rows(bucket INTEGER,id INTEGER,body TEXT,PRIMARY KEY(bucket,id))`).Error)
+	require.NoError(t, db.Exec("INSERT INTO "+quoted(schema)+`.rows SELECT id%2,id,CASE WHEN id%3=0 THEN 'small' ELSE repeat('я',300000) END FROM generate_series(1,96) id`).Error)
+	require.NoError(t, db.Exec("CREATE TABLE "+quoted(schema)+`.physical(body TEXT)`).Error)
+	require.NoError(t, db.Exec("INSERT INTO "+quoted(schema)+`.physical SELECT repeat('я',300000) FROM generate_series(1,3)`).Error)
+	require.NoError(t, db.Exec("ANALYZE "+quoted(schema)+".rows").Error)
+	require.NoError(t, db.Exec("ANALYZE "+quoted(schema)+".physical").Error)
+	tx := db.Begin(&sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	require.NoError(t, tx.Error)
+	defer tx.Rollback()
+	require.NoError(t, tx.Exec("SET LOCAL search_path="+quoted(schema)).Error)
+	var backend int
+	require.NoError(t, tx.Raw("SELECT pg_backend_pid()").Scan(&backend).Error)
+	var memory int64
+	require.NoError(t, tx.Raw("SELECT pg_size_bytes(current_setting('work_mem'))").Scan(&memory).Error)
+	require.LessOrEqual(t, memory, int64(8<<20), "fixture must expose corpus-wide spill without changing work_mem")
+	var tablespaces string
+	require.NoError(t, tx.Raw("SELECT current_setting('temp_tablespaces')").Scan(&tablespaces).Error)
+	require.Empty(t, tablespaces, "temporary-file oracle measures the fixture default tablespace")
+	tables := []consolidationTable{{Name: "rows", Count: 96, PrimaryKey: pq.StringArray{"bucket", "id"}}, {Name: "physical", Count: 3}}
+	type expectedRow struct {
+		Key, Version, Digest string
+		Bytes                int64
+	}
+	var expected []expectedRow
+	for _, table := range tables {
+		var next []expectedRow
+		query := "SELECT " + consolidationKeySQL(table, "t") + "::text AS key,t.xmin::text AS version,md5(to_jsonb(t)::text) AS digest,octet_length(convert_to(to_jsonb(t)::text,'UTF8')) AS bytes FROM " + quoted(table.Name) + " t ORDER BY " + consolidationOrderSQL(table, "t")
+		require.NoError(t, tx.Raw(query).Scan(&next).Error)
+		for i := range next {
+			key, err := consolidationCanonicalKey([]byte(next[i].Key))
+			require.NoError(t, err)
+			next[i].Key = string(key)
+		}
+		expected = append(expected, next...)
+	}
+	sequences, err := consolidationSequences(tx)
+	require.NoError(t, err)
+	manifest := consolidationBackupState{Format: consolidationStreamFormat, Tables: tables, Sequences: sequences}
+	vault, err := vaultcrypto.OpenExistingVault(&config.Config{EncryptionKey: strings.Repeat("ab", 32)})
+	require.NoError(t, err)
+	store := NewProjectConsolidationStore(db, vault, nil)
+	reader, writer := io.Pipe()
+	defer reader.Close()
+	finished := make(chan error, 1)
+	go func() {
+		err := store.exportFrames(tx, manifest, writer)
+		_ = writer.CloseWithError(err)
+		finished <- err
+	}()
+	header, ciphertext, err := store.readFrame(reader)
+	require.NoError(t, err)
+	require.Equal(t, "manifest", header.Kind)
+	walk := consolidationFrameWalk{Manifest: manifest, Binding: structuralDigest(manifest), Previous: consolidationCipherHash(ciphertext), Ordinal: 1}
+	missingFinal := walk
+	require.EqualError(t, missingFinal.accept(consolidationFrame{Kind: "final", Ordinal: 1, Previous: walk.Previous, Binding: walk.Binding, Manifest: &manifest}, []byte("premature")), "PROJECT_ADOPTION_BACKUP_TRUNCATED")
+	digest := md5.New()
+	var rowBytes, peakTemp int64
+	row := 0
+	for !walk.Finished {
+		frame, cipher, err := store.readFrame(reader)
+		require.NoError(t, err)
+		require.NoError(t, walk.accept(frame, cipher))
+		if frame.Kind != "row" {
+			continue
+		}
+		require.Less(t, row, len(expected))
+		require.Equal(t, expected[row].Key, string(frame.Key))
+		require.Equal(t, expected[row].Version, frame.NativeVersion)
+		_, err = digest.Write(frame.Payload)
+		require.NoError(t, err)
+		rowBytes += int64(len(frame.Payload))
+		if frame.Last {
+			require.Equal(t, expected[row].Bytes, rowBytes)
+			require.Equal(t, expected[row].Digest, hex.EncodeToString(digest.Sum(nil)))
+			digest.Reset()
+			rowBytes = 0
+			row++
+		}
+		var temporary int64
+		require.NoError(t, db.Raw(`SELECT COALESCE(sum(size),0) FROM pg_ls_tmpdir() WHERE name LIKE ?`, "pgsql_tmp"+strconv.Itoa(backend)+".%").Scan(&temporary).Error)
+		if temporary > peakTemp {
+			peakTemp = temporary
+		}
+	}
+	require.NoError(t, <-finished)
+	require.Equal(t, len(expected), row)
+	_, _, err = store.readFrame(reader)
+	require.EqualError(t, err, "PROJECT_ADOPTION_BACKUP_TRUNCATED")
+	require.Less(t, peakTemp, int64(16<<20), "server must not sort the complete >32MiB serialized corpus")
+	t.Logf("authenticated_rows=%d peak_export_backend_temp_bytes=%d", row, peakTemp)
 }

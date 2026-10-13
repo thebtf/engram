@@ -160,18 +160,29 @@ func (s *ProjectConsolidationStore) exportFrames(tx *gormlib.DB, manifest consol
 		return err
 	}
 	for _, table := range manifest.Tables {
-		// Window numbering sorts native keys, not bodies. A single native row is
-		// serialized on the server and split before crossing the connection.
-		query := "SELECT " + consolidationKeySQL(table, "t") + "::text,t.xmin::text,r.row_number,n.part,(n.part+1)*? >= octet_length(b.body),substring(b.body FROM n.part*?+1 FOR ?) FROM " + quoted(table.Name) + " t JOIN (SELECT ctid,row_number() OVER(ORDER BY " + consolidationOrderSQL(table, "k") + ") FROM " + quoted(table.Name) + " k) r ON r.ctid=t.ctid CROSS JOIN LATERAL (SELECT convert_to(to_jsonb(t)::text,'UTF8') AS body) b CROSS JOIN LATERAL generate_series(0,(octet_length(b.body)-1)/?) n(part) ORDER BY r.row_number,n.part"
+		// Keep the ordered outer relation key-only. Each lateral invocation
+		// serializes one typed native row once and orders only that row's chunks.
+		// The final native-key prefix permits incremental, not corpus-wide, sort.
+		keys := []string{"k.ctid", "k.xmin"}
+		var match []string
+		for _, key := range table.PrimaryKey {
+			keys = append(keys, "k."+quoted(key))
+			match = append(match, "t."+quoted(key)+"=k."+quoted(key))
+		}
+		if len(match) == 0 {
+			match = append(match, "t.ctid=k.ctid", "t.xmin=k.xmin")
+		}
+		order := consolidationOrderSQL(table, "k")
+		query := "SELECT " + consolidationKeySQL(table, "k") + "::text,k.xmin::text,n.part,n.last,n.payload FROM (SELECT " + strings.Join(keys, ",") + " FROM " + quoted(table.Name) + " k ORDER BY " + order + " OFFSET 0) k CROSS JOIN LATERAL (WITH body AS MATERIALIZED (SELECT convert_to(to_jsonb(t)::text,'UTF8') AS body FROM " + quoted(table.Name) + " t WHERE " + strings.Join(match, " AND ") + ") SELECT n.part,(n.part+1)*? >= octet_length(b.body) AS last,substring(b.body FROM n.part*?+1 FOR ?) AS payload FROM body b CROSS JOIN LATERAL generate_series(0,(octet_length(b.body)-1)/?) n(part) ORDER BY n.part) n ORDER BY " + order + ",n.part"
 		rows, err := tx.Raw(query, consolidationChunkBytes, consolidationChunkBytes, consolidationChunkBytes, consolidationChunkBytes).Rows()
 		if err != nil {
 			return err
 		}
 		var count int64
 		for rows.Next() {
-			frame := consolidationFrame{Kind: "row", Table: table.Name}
+			frame := consolidationFrame{Kind: "row", Table: table.Name, Row: uint64(count + 1)}
 			var key []byte
-			if err := rows.Scan(&key, &frame.NativeVersion, &frame.Row, &frame.Chunk, &frame.Last, &frame.Payload); err != nil {
+			if err := rows.Scan(&key, &frame.NativeVersion, &frame.Chunk, &frame.Last, &frame.Payload); err != nil {
 				rows.Close()
 				return err
 			}
