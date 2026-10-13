@@ -164,7 +164,71 @@ func MaxBodySize(maxBytes int64) func(http.Handler) http.Handler {
 }
 
 // This transport ceiling admits the full owner stream, not a disk/resource grant.
-const projectConsolidationVerifyBackupMaxBytes int64 = 2 << 30
+const (
+	projectConsolidationVerifyBackupMaxBytes int64 = 2 << 30
+	projectConsolidationOperationTimeout           = 10 * time.Minute
+)
+
+func isProjectConsolidationOperation(r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		return false
+	}
+	switch r.URL.Path {
+	case "/api/projects/consolidation/backup", "/api/projects/consolidation/verify-backup", "/api/projects/consolidation/dry-run", "/api/projects/consolidation/apply":
+		return true
+	default:
+		return false
+	}
+}
+
+func requestTimeout(next http.Handler) http.Handler {
+	ordinary := middleware.Timeout(DefaultHTTPTimeout)(next)
+	consolidation := middleware.Timeout(projectConsolidationOperationTimeout)(next)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isProjectConsolidationOperation(r) {
+			defer r.Body.Close()
+			identity, ok := authpkg.IdentityFrom(r.Context())
+			if !ok || !identity.IsAdmin() {
+				consolidationHTTPError(w, &gormdb.ConsolidationError{Code: "PROJECT_ADOPTION_AUTH_REQUIRED"})
+				return
+			}
+			deadline := time.Now().Add(projectConsolidationOperationTimeout)
+			if inherited, ok := r.Context().Deadline(); ok && inherited.Before(deadline) {
+				deadline = inherited
+			}
+			ctx, cancel := context.WithDeadline(r.Context(), deadline)
+			defer cancel()
+			r = r.WithContext(ctx)
+			controller := http.NewResponseController(w)
+			if err := controller.SetWriteDeadline(deadline); err != nil && !errors.Is(err, http.ErrNotSupported) {
+				http.Error(w, "consolidation write deadline unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			defer controller.SetWriteDeadline(time.Time{})
+			if isProjectConsolidationVerifyBackup(r) {
+				if err := controller.SetReadDeadline(deadline); err != nil && !errors.Is(err, http.ErrNotSupported) {
+					http.Error(w, "backup read deadline unavailable", http.StatusServiceUnavailable)
+					return
+				}
+			}
+			interrupted := make(chan struct{})
+			stop := context.AfterFunc(ctx, func() {
+				defer close(interrupted)
+				_ = controller.SetReadDeadline(time.Now())
+				_ = controller.SetWriteDeadline(time.Now())
+				_ = r.Body.Close()
+			})
+			defer func() {
+				if !stop() {
+					<-interrupted
+				}
+			}()
+			consolidation.ServeHTTP(w, r)
+			return
+		}
+		ordinary.ServeHTTP(w, r)
+	})
+}
 
 func isProjectConsolidationVerifyBackup(r *http.Request) bool {
 	return r.Method == http.MethodPost && r.URL.Path == "/api/projects/consolidation/verify-backup"

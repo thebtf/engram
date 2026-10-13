@@ -1846,7 +1846,7 @@ func (s *Service) setupRoutes() {
 	// requireReady returns 503 with a descriptive body until initializeAsync completes.
 	s.router.Group(func(r chi.Router) {
 		r.Use(s.requireReady)
-		r.Use(middleware.Timeout(DefaultHTTPTimeout))
+		r.Use(requestTimeout)
 
 		// Session lifecycle
 		r.Post("/api/sessions/init", s.handleSessionInit)

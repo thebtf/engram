@@ -1,6 +1,8 @@
 package gorm
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -19,7 +21,7 @@ import (
 )
 
 const (
-	consolidationStreamFormat = "engram.owner-stream/1"
+	consolidationStreamFormat = "engram.owner-stream/2"
 	consolidationChunkBytes   = 256 << 10
 	consolidationFrameBytes   = 512 << 10
 )
@@ -69,6 +71,12 @@ func consolidationCanonicalKey(raw []byte) (JSONRaw, error) {
 // contextual binding lives inside its authenticated plaintext, never in an
 // unauthenticated transport header or a project ID used as a crypto key.
 func (s *ProjectConsolidationStore) writeFrame(dst io.Writer, frame consolidationFrame) ([]byte, error) {
+	var compressed bytes.Buffer
+	writer := gzip.NewWriter(&compressed)
+	return s.writeCompressedFrame(dst, frame, &compressed, writer)
+}
+
+func (s *ProjectConsolidationStore) writeCompressedFrame(dst io.Writer, frame consolidationFrame, compressed *bytes.Buffer, writer *gzip.Writer) ([]byte, error) {
 	raw, err := json.Marshal(frame)
 	if err != nil {
 		return nil, err
@@ -76,9 +84,21 @@ func (s *ProjectConsolidationStore) writeFrame(dst io.Writer, frame consolidatio
 	if len(raw) > consolidationFrameBytes-28 {
 		return nil, consolidationHold("FRAME_CAPACITY_EXCEEDED")
 	}
-	ciphertext, err := s.vault.Encrypt(string(raw))
+	compressed.Reset()
+	writer.Reset(compressed)
+	if _, err := writer.Write(raw); err != nil {
+		_ = writer.Close()
+		return nil, err
+	}
+	if err := writer.Close(); err != nil {
+		return nil, err
+	}
+	ciphertext, err := s.vault.Encrypt(compressed.String())
 	if err != nil {
 		return nil, consolidationHold("BACKUP_MISSING")
+	}
+	if len(ciphertext) > consolidationFrameBytes {
+		return nil, consolidationHold("FRAME_CAPACITY_EXCEEDED")
 	}
 	var size [4]byte
 	binary.BigEndian.PutUint32(size[:], uint32(len(ciphertext)))
@@ -122,18 +142,43 @@ func (s *ProjectConsolidationStore) readFrame(src io.Reader) (consolidationFrame
 	if _, err := io.ReadFull(src, ciphertext); err != nil {
 		return frame, nil, consolidationHold("BACKUP_TRUNCATED")
 	}
-	raw, err := s.vault.Decrypt(ciphertext)
-	if err != nil || json.Unmarshal([]byte(raw), &frame) != nil || len(frame.Payload) > consolidationChunkBytes || len(frame.Key) > consolidationMetadataBytes {
-		return frame, nil, consolidationHold("BACKUP_AUTHENTICATION_FAILED")
+	decoded, err := s.decodeFrame(ciphertext)
+	return decoded, ciphertext, err
+}
+
+func (s *ProjectConsolidationStore) decodeFrame(ciphertext []byte) (consolidationFrame, error) {
+	var frame consolidationFrame
+	if len(ciphertext) < 28 || len(ciphertext) > consolidationFrameBytes {
+		return frame, consolidationHold("FRAME_CAPACITY_EXCEEDED")
 	}
-	return frame, ciphertext, nil
+	authenticated, err := s.vault.Decrypt(ciphertext)
+	if err != nil {
+		return frame, consolidationHold("BACKUP_AUTHENTICATION_FAILED")
+	}
+	reader := strings.NewReader(authenticated)
+	compressed, err := gzip.NewReader(reader)
+	if err != nil {
+		return frame, consolidationHold("BACKUP_AUTHENTICATION_FAILED")
+	}
+	defer compressed.Close()
+	compressed.Multistream(false)
+	raw, err := io.ReadAll(io.LimitReader(compressed, consolidationFrameBytes-28+1))
+	if len(raw) > consolidationFrameBytes-28 {
+		return frame, consolidationHold("FRAME_CAPACITY_EXCEEDED")
+	}
+	if err != nil || reader.Len() != 0 || json.Unmarshal(raw, &frame) != nil || len(frame.Payload) > consolidationChunkBytes || len(frame.Key) > consolidationMetadataBytes {
+		return frame, consolidationHold("BACKUP_AUTHENTICATION_FAILED")
+	}
+	return frame, nil
 }
 
 func (s *ProjectConsolidationStore) backupManifest(ciphertext []byte, state consolidationPlanState) (consolidationBackupState, error) {
 	var manifest consolidationBackupState
-	raw, err := s.vault.Decrypt(ciphertext)
-	var frame consolidationFrame
-	if err != nil || json.Unmarshal([]byte(raw), &frame) != nil || frame.Kind != "manifest" || frame.Ordinal != 0 || frame.Previous != "" || frame.Manifest == nil {
+	frame, err := s.decodeFrame(ciphertext)
+	if err != nil {
+		return manifest, err
+	}
+	if frame.Kind != "manifest" || frame.Ordinal != 0 || frame.Previous != "" || frame.Manifest == nil {
 		return manifest, consolidationHold("BACKUP_AUTHENTICATION_FAILED")
 	}
 	manifest = *frame.Manifest
@@ -147,9 +192,11 @@ func (s *ProjectConsolidationStore) exportFrames(tx *gormlib.DB, manifest consol
 	binding := structuralDigest(manifest)
 	ordinal := uint64(0)
 	previous := ""
+	var compressed bytes.Buffer
+	writer := gzip.NewWriter(&compressed)
 	emit := func(frame consolidationFrame) error {
 		frame.Ordinal, frame.Previous, frame.Binding = ordinal, previous, binding
-		ciphertext, err := s.writeFrame(dst, frame)
+		ciphertext, err := s.writeCompressedFrame(dst, frame, &compressed, writer)
 		if err == nil {
 			ordinal++
 			previous = consolidationCipherHash(ciphertext)
@@ -430,10 +477,9 @@ func (s *ProjectConsolidationStore) walkStored(tx *gormlib.DB, backupID string, 
 		if err := tx.Where("backup_id=? AND ordinal=?", backupID, walk.Ordinal).First(&stored).Error; err != nil {
 			return consolidationHold("BACKUP_TRUNCATED")
 		}
-		raw, err := s.vault.Decrypt(stored.Ciphertext)
-		var frame consolidationFrame
-		if err != nil || json.Unmarshal([]byte(raw), &frame) != nil || len(frame.Payload) > consolidationChunkBytes {
-			return consolidationHold("BACKUP_AUTHENTICATION_FAILED")
+		frame, err := s.decodeFrame(stored.Ciphertext)
+		if err != nil {
+			return err
 		}
 		if err := walk.accept(frame, stored.Ciphertext); err != nil {
 			return err

@@ -23,6 +23,8 @@ import (
 	"gorm.io/gorm/logger"
 )
 
+const consolidationDecodedMetadataBytes = 56 << 20
+
 type ConsolidationError struct{ Code string }
 
 func (e *ConsolidationError) Error() string { return e.Code }
@@ -162,7 +164,8 @@ type consolidationPlanState struct {
 	ID          string
 	Fingerprint string
 	Census      consolidationCensusState
-	Mapping     []ConsolidationMapping
+	Mapping     []ConsolidationMapping `json:"-"`
+	Evidence    []ConsolidationEvidence
 }
 
 type consolidationBackupState struct {
@@ -249,10 +252,25 @@ func (s *ProjectConsolidationStore) opaque(kind string, value any) string {
 	return "urn:engram:migration:" + kind + ":" + hex.EncodeToString(mac.Sum(nil))
 }
 
+type consolidationMetadataWriter struct {
+	io.Writer
+	remaining int
+}
+
+func (writer *consolidationMetadataWriter) Write(raw []byte) (int, error) {
+	if len(raw) > writer.remaining {
+		return 0, consolidationHold("METADATA_CAPACITY_EXCEEDED")
+	}
+	n, err := writer.Writer.Write(raw)
+	writer.remaining -= n
+	return n, err
+}
+
 func (s *ProjectConsolidationStore) seal(kind string, value any) (string, error) {
 	var raw bytes.Buffer
 	compressed := gzip.NewWriter(&raw)
-	if err := json.NewEncoder(compressed).Encode(struct {
+	bounded := &consolidationMetadataWriter{Writer: compressed, remaining: consolidationDecodedMetadataBytes}
+	if err := json.NewEncoder(bounded).Encode(struct {
 		Kind  string
 		Value any
 	}{kind, value}); err != nil {
@@ -281,17 +299,28 @@ func (s *ProjectConsolidationStore) open(token, kind string, destination any) er
 	if err != nil {
 		return consolidationHold("STALE_PLAN")
 	}
-	compressed, err := gzip.NewReader(strings.NewReader(raw))
+	reader := strings.NewReader(raw)
+	compressed, err := gzip.NewReader(reader)
 	if err != nil {
 		return consolidationHold("STALE_PLAN")
 	}
 	defer compressed.Close()
+	compressed.Multistream(false)
+	limited := &io.LimitedReader{R: compressed, N: consolidationDecodedMetadataBytes + 1}
 	envelope := struct {
 		Kind  string
 		Value any
 	}{Value: destination}
-	decoder := json.NewDecoder(compressed)
-	if decoder.Decode(&envelope) != nil || envelope.Kind != kind || decoder.Decode(&struct{}{}) != io.EOF {
+	decoder := json.NewDecoder(limited)
+	decoder.DisallowUnknownFields()
+	err = decoder.Decode(&envelope)
+	if err == nil {
+		err = decoder.Decode(&struct{}{})
+	}
+	if limited.N == 0 {
+		return consolidationHold("METADATA_CAPACITY_EXCEEDED")
+	}
+	if err != io.EOF || envelope.Kind != kind || reader.Len() != 0 {
 		return consolidationHold("STALE_PLAN")
 	}
 	return nil
@@ -313,6 +342,11 @@ func (s *ProjectConsolidationStore) plan(token, fingerprint string) (consolidati
 	if err := s.open(token, "plan", &state); err != nil {
 		return state, err
 	}
+	mapping, err := s.buildMapping(state.Census.Rows, state.Evidence)
+	if err != nil {
+		return state, err
+	}
+	state.Mapping = mapping
 	if state.Fingerprint != fingerprint || consolidationPlanFingerprint(state) != fingerprint {
 		return state, consolidationHold("STALE_PLAN")
 	}
@@ -333,7 +367,7 @@ func (s *ProjectConsolidationStore) Preflight(ctx context.Context, request Conso
 	if census.Fingerprint != request.CensusFingerprint {
 		return ConsolidationPlan{}, consolidationHold("STALE_PLAN")
 	}
-	state := consolidationPlanState{Census: census}
+	state := consolidationPlanState{Census: census, Evidence: request.Evidence}
 	mapping, err := s.buildMapping(census.Rows, request.Evidence)
 	if err != nil {
 		return ConsolidationPlan{}, err
@@ -641,6 +675,8 @@ func (s *ProjectConsolidationStore) UnresolvedMembership(ctx context.Context, re
 		table = "issues"
 	case "code":
 		table = "sources"
+	case "credential":
+		table = "credentials"
 	case "native":
 		table = ""
 	default:

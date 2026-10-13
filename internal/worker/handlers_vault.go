@@ -2,18 +2,25 @@
 package worker
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 	gormlib "gorm.io/gorm"
 
+	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/crypto"
+	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -49,6 +56,64 @@ func credentialRequestProject(r *http.Request) (string, error) {
 		return "", errors.New("canonical project UUID is required; use scope=global for global credentials")
 	}
 	return project, nil
+}
+
+func credentialReadSelection(r *http.Request) (string, int64, string, error) {
+	query, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		return "", 0, "", errors.New("invalid credential selection")
+	}
+	if !query.Has("id") && !query.Has("unresolved_reference") {
+		project, err := credentialRequestProject(r)
+		return project, 0, "", err
+	}
+	if query.Has("project") || query.Has("scope") || len(query["id"]) != 1 || len(query["unresolved_reference"]) != 1 {
+		return "", 0, "", errors.New("exact ID and unresolved reference are required without a project selector")
+	}
+	id, err := strconv.ParseInt(query.Get("id"), 10, 64)
+	reference := query.Get("unresolved_reference")
+	if err != nil || id < 1 || strconv.FormatInt(id, 10) != query.Get("id") || len(reference) > 256 || !strings.HasPrefix(reference, "urn:engram:migration:unresolved:") {
+		return "", 0, "", errors.New("invalid retained credential selection")
+	}
+	return "", id, reference, nil
+}
+
+func (s *Service) retainedCredential(ctx context.Context, vault *crypto.Vault, reference string, id int64, name string) (*models.Credential, error) {
+	if s.store == nil || s.store.DB == nil {
+		return nil, errors.New("credential membership unavailable")
+	}
+	var credential *models.Credential
+	err := s.store.DB.WithContext(ctx).Transaction(func(tx *gormlib.DB) error {
+		members, err := gormdb.NewProjectConsolidationStore(tx, vault, nil).UnresolvedMembership(ctx, reference, "credential")
+		if err != nil {
+			return err
+		}
+		matched := false
+		for _, member := range members {
+			var key struct {
+				ID int64 `json:"id"`
+			}
+			var path []string
+			if json.Unmarshal(member.RowKey, &key) != nil || json.Unmarshal(member.FieldPath, &path) != nil {
+				return gormlib.ErrRecordNotFound
+			}
+			if key.ID == id && len(path) == 1 && path[0] == "project" {
+				matched = true
+			}
+		}
+		if !matched {
+			return gormlib.ErrRecordNotFound
+		}
+		credential, err = gormdb.NewCredentialStore(&gormdb.Store{DB: tx}).GetByID(ctx, id)
+		if err != nil {
+			return err
+		}
+		if credential.Key != name || credential.Scope != "project" || credential.Project == "" {
+			return gormlib.ErrRecordNotFound
+		}
+		return nil
+	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	return credential, err
 }
 
 // handleListCredentials godoc
@@ -155,10 +220,17 @@ func (s *Service) handleGetCredential(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "credential name is required", http.StatusBadRequest)
 		return
 	}
-	project, err := credentialRequestProject(r)
+	project, id, unresolved, err := credentialReadSelection(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+	if id != 0 {
+		identity, ok := auth.IdentityFrom(r.Context())
+		if !ok || !hapHTTPRouteAllowed(identity, r.Method, r.URL.Path) {
+			http.Error(w, "credential read forbidden", http.StatusForbidden)
+			return
+		}
 	}
 
 	v, err := s.getVault()
@@ -168,9 +240,15 @@ func (s *Service) handleGetCredential(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cred, err := s.credentialStore.Get(r.Context(), project, name)
+	var cred *models.Credential
+	if id != 0 {
+		cred, err = s.retainedCredential(r.Context(), v, unresolved, id, name)
+	} else {
+		cred, err = s.credentialStore.Get(r.Context(), project, name)
+	}
 	if err != nil {
-		if errors.Is(err, gormlib.ErrRecordNotFound) {
+		var refusal *gormdb.ConsolidationError
+		if errors.Is(err, gormlib.ErrRecordNotFound) || errors.As(err, &refusal) {
 			http.Error(w, "credential not found", http.StatusNotFound)
 			return
 		}
@@ -193,14 +271,23 @@ func (s *Service) handleGetCredential(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to decrypt credential", http.StatusInternalServerError)
 		return
 	}
+	w.Header().Set("Cache-Control", "private, no-store")
+	projectID := credentialProjectID(cred.Project)
+	if id != 0 {
+		projectID = nil
+	}
 
-	writeJSON(w, map[string]any{
+	response := map[string]any{
 		"name":       name,
 		"value":      plaintext,
 		"scope":      cred.Scope,
 		"id":         cred.ID,
-		"project_id": credentialProjectID(cred.Project),
-	})
+		"project_id": projectID,
+	}
+	if id != 0 {
+		response["unresolved_reference"] = unresolved
+	}
+	writeJSON(w, response)
 }
 
 // handleStoreCredential godoc

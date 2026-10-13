@@ -275,6 +275,15 @@ func TestProjectConsolidationRealStoreWorkflow(t *testing.T) {
 	require.Zero(t, retainedFrames, "partial ciphertext import must roll back")
 	_, err = backupFile.Seek(0, io.SeekStart)
 	require.NoError(t, err)
+	cancelledCtx, cancelImport := context.WithCancel(ctx)
+	_, err = s.VerifyBackup(cancelledCtx, plan.Reference, plan.Fingerprint, &consolidationCancelReader{Reader: backupFile, Cancel: cancelImport, Remaining: backupInfo.Size() / 2})
+	cancelImport()
+	require.Error(t, err, "cancelled import must not commit ciphertext frames or restored rows")
+	require.NoError(t, consolidationCompare(target, emptyTarget))
+	require.NoError(t, target.Model(&consolidationStoredFrame{}).Count(&retainedFrames).Error)
+	require.Zero(t, retainedFrames)
+	_, err = backupFile.Seek(0, io.SeekStart)
+	require.NoError(t, err)
 	backupRef, err := s.VerifyBackup(ctx, plan.Reference, plan.Fingerprint, backupFile)
 	require.NoError(t, err)
 	var verifiedFrameCount, verifiedBackupCount int64
@@ -353,6 +362,32 @@ func TestProjectConsolidationRealStoreWorkflow(t *testing.T) {
 		}
 	}
 	targetReader := NewProjectConsolidationStore(target, s.vault, nil)
+	var retainedCredentialCount int
+	for _, mapping := range plan.Mapping {
+		if mapping.Family != "credentials" || mapping.UnresolvedReference == "" {
+			continue
+		}
+		members, err := targetReader.UnresolvedMembership(ctx, mapping.UnresolvedReference, "credential")
+		require.NoError(t, err)
+		for _, member := range members {
+			if member.Reference != mapping.Reference {
+				continue
+			}
+			ids, err := RetainedContentIDs([]ConsolidationMembership{member})
+			require.NoError(t, err)
+			require.Len(t, ids, 1)
+			credential, err := reader.GetByID(ctx, ids[0])
+			require.NoError(t, err)
+			require.NotEmpty(t, credential.Project)
+			require.Equal(t, "project", credential.Scope)
+			require.Equal(t, secret, credential.EncryptedSecret)
+			decoded, err := s.vault.Decrypt(credential.EncryptedSecret)
+			require.NoError(t, err)
+			require.True(t, decoded == "synthetic private fixture value")
+			retainedCredentialCount++
+		}
+	}
+	require.Equal(t, 1, retainedCredentialCount)
 	membership, err := targetReader.UnresolvedMembership(ctx, unresolved, "memory")
 	require.NoError(t, err)
 	require.Len(t, membership, 1)
@@ -443,6 +478,21 @@ func TestProjectConsolidationRealStoreWorkflow(t *testing.T) {
 	encoded, err := json.MarshalIndent(proof, "", "  ")
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(output, "workflow-receipt.json"), encoded, 0o600))
+}
+
+type consolidationCancelReader struct {
+	io.Reader
+	Cancel    context.CancelFunc
+	Remaining int64
+}
+
+func (reader *consolidationCancelReader) Read(raw []byte) (int, error) {
+	n, err := reader.Reader.Read(raw)
+	reader.Remaining -= int64(n)
+	if reader.Remaining <= 0 {
+		reader.Cancel()
+	}
+	return n, err
 }
 
 func rawConsolidationJSON(raw string) *json.RawMessage { value := json.RawMessage(raw); return &value }

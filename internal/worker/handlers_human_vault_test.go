@@ -3,7 +3,9 @@ package worker
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"io"
@@ -12,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +22,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/config"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"gorm.io/driver/postgres"
@@ -107,7 +111,7 @@ func TestHumanVaultHTTPStoreIsolation(t *testing.T) {
 	require.NoError(t, err)
 	defer pool.Close()
 	pool.SetMaxOpenConns(2)
-	require.NoError(t, db.WithContext(ctx).AutoMigrate(&gormdb.Credential{}, &gormdb.Issue{}, &gormdb.IssueComment{}))
+	require.NoError(t, db.WithContext(ctx).AutoMigrate(&gormdb.Credential{}, &gormdb.Issue{}, &gormdb.IssueComment{}, &gormdb.ConsolidationMembership{}))
 	private := t.TempDir()
 	key := make([]byte, 32)
 	_, err = rand.Read(key)
@@ -115,11 +119,17 @@ func TestHumanVaultHTTPStoreIsolation(t *testing.T) {
 	keyFile := filepath.Join(private, "vault.key")
 	require.NoError(t, os.WriteFile(keyFile, []byte(hex.EncodeToString(key)), 0o600))
 	service := &Service{
+		store:           &gormdb.Store{DB: db},
 		config:          &config.Config{EncryptionKeyFile: keyFile},
 		credentialStore: gormdb.NewCredentialStore(&gormdb.Store{DB: db}),
 		issueStore:      gormdb.NewIssueStore(db),
 	}
 	router := chi.NewRouter()
+	router.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(auth.WithIdentity(r.Context(), auth.Admin())))
+		})
+	})
 	router.Get("/api/vault/credentials", service.handleListCredentials)
 	router.Post("/api/vault/credentials", service.handleStoreCredential)
 	router.Get("/api/vault/credentials/{name}", service.handleGetCredential)
@@ -193,6 +203,53 @@ func TestHumanVaultHTTPStoreIsolation(t *testing.T) {
 	}
 	require.NotEqual(t, ids[0], ids[1])
 	require.NotEqual(t, ids[1], ids[2])
+	vault, err := service.getVault()
+	require.NoError(t, err)
+	consolidation := gormdb.NewProjectConsolidationStore(db, vault, nil)
+	census, err := consolidation.Census(ctx, "retained-vault-fixture")
+	require.NoError(t, err)
+	plan, err := consolidation.Preflight(ctx, gormdb.ConsolidationPreflightRequest{CensusReference: census.Reference, CensusFingerprint: census.Fingerprint})
+	require.NoError(t, err)
+	nativeKey, err := json.Marshal(map[string]int64{"id": int64(ids[1])})
+	require.NoError(t, err)
+	address, err := json.Marshal(struct {
+		Table, Column string
+		Key           gormdb.JSONRaw
+		Path          []string
+	}{"credentials", "project", gormdb.JSONRaw(nativeKey), nil})
+	require.NoError(t, err)
+	referenceKey := vault.DeriveKey("project-consolidation-reference/v1")
+	mac := hmac.New(sha256.New, referenceKey[:])
+	_, _ = mac.Write([]byte("row\x00"))
+	_, _ = mac.Write(address)
+	nativeReference := "urn:engram:migration:row:" + hex.EncodeToString(mac.Sum(nil))
+	var membership *gormdb.ConsolidationMapping
+	for i := range plan.Mapping {
+		if plan.Mapping[i].Reference == nativeReference {
+			membership = &plan.Mapping[i]
+		}
+	}
+	require.NotNil(t, membership)
+	require.NotEmpty(t, membership.UnresolvedReference)
+	require.NoError(t, db.Create(&gormdb.ConsolidationMembership{Reference: nativeReference, UnresolvedReference: membership.UnresolvedReference, Table: "credentials", RowKey: gormdb.JSONRaw(nativeKey), SourceRowKey: gormdb.JSONRaw(nativeKey), FieldPath: gormdb.JSONRaw(`["project"]`), SelectorReference: membership.SelectorReference, PlanFingerprint: plan.Fingerprint}).Error)
+	retainedQuery := "?id=" + strconv.FormatInt(int64(ids[1]), 10) + "&unresolved_reference=" + url.QueryEscape(membership.UnresolvedReference)
+	retained := call(http.MethodGet, "/api/vault/credentials/"+name+retainedQuery, nil, http.StatusOK)
+	require.Nil(t, retained["project_id"])
+	require.Equal(t, membership.UnresolvedReference, retained["unresolved_reference"])
+	require.True(t, retained["value"] == values[1], "retained exact ID must decrypt only its own credential")
+	call(http.MethodGet, "/api/vault/credentials/wrong-name"+retainedQuery, nil, http.StatusNotFound)
+	call(http.MethodGet, "/api/vault/credentials/"+name+"?id="+strconv.FormatInt(int64(ids[0]), 10)+"&unresolved_reference="+url.QueryEscape(membership.UnresolvedReference), nil, http.StatusNotFound)
+	call(http.MethodGet, "/api/vault/credentials/"+name+retainedQuery+"&scope=global", nil, http.StatusBadRequest)
+	deletedAt := time.Now().UTC()
+	require.NoError(t, db.Model(&gormdb.Credential{}).Where("id = ?", int64(ids[1])).Update("deleted_at", deletedAt).Error)
+	call(http.MethodGet, "/api/vault/credentials/"+name+retainedQuery, nil, http.StatusNotFound)
+	require.NoError(t, db.Model(&gormdb.Credential{}).Where("id = ?", int64(ids[1])).Update("deleted_at", nil).Error)
+	require.NoError(t, db.Model(&gormdb.Credential{}).Where("id = ?", int64(ids[1])).Update("encryption_key_fingerprint", "fixture-mismatched-key").Error)
+	call(http.MethodGet, "/api/vault/credentials/"+name+retainedQuery, nil, http.StatusConflict)
+	require.NoError(t, db.Model(&gormdb.Credential{}).Where("id = ?", int64(ids[1])).Update("encryption_key_fingerprint", vault.Fingerprint()).Error)
+	require.NoError(t, db.Model(&gormdb.Credential{}).Where("id = ?", int64(ids[1])).Update("project", uuid.NewString()).Error)
+	call(http.MethodGet, "/api/vault/credentials/"+name+retainedQuery, nil, http.StatusNotFound)
+	require.NoError(t, db.Model(&gormdb.Credential{}).Where("id = ?", int64(ids[1])).Update("project", projectB).Error)
 	call(http.MethodGet, "/api/vault/credentials/"+name, nil, http.StatusBadRequest)
 	call(http.MethodDelete, "/api/vault/credentials/"+name, nil, http.StatusBadRequest)
 	call(http.MethodGet, "/api/vault/credentials/"+name+"?project="+uuid.NewString(), nil, http.StatusNotFound)
@@ -239,4 +296,32 @@ func TestHumanVaultHTTPStoreIsolation(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, filtered, 2)
 	t.Log("PASS real HTTP/AES-GCM/PostgreSQL: A/B/global same-name namespaces; scoped metadata; missing-context refusal; actor+project filters before count/offset; unscoped producer preserved")
+}
+
+func TestHumanVaultRetainedSelection(t *testing.T) {
+	reference := "urn:engram:migration:unresolved:" + strings.Repeat("a", 64)
+	for _, query := range []string{"?id=1", "?unresolved_reference=" + reference, "?id=0&unresolved_reference=" + reference, "?id=01&unresolved_reference=" + reference, "?id=1&id=2&unresolved_reference=" + reference, "?id=1&unresolved_reference=project-name", "?id=1&unresolved_reference=" + reference + "&project=" + uuid.NewString(), "?id=1&unresolved_reference=" + reference + "&scope=global"} {
+		_, _, _, err := credentialReadSelection(httptest.NewRequest(http.MethodGet, "/"+query, nil))
+		require.Error(t, err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/vault/credentials/same?id=1&unresolved_reference="+reference, nil)
+	route := chi.NewRouteContext()
+	route.URLParams.Add("name", "same")
+	request = request.WithContext(context.WithValue(request.Context(), chi.RouteCtxKey, route))
+	service := &Service{credentialStore: gormdb.NewCredentialStore(&gormdb.Store{})}
+	response := httptest.NewRecorder()
+	service.handleGetCredential(response, request)
+	require.Equal(t, http.StatusForbidden, response.Code)
+	_, id, got, err := credentialReadSelection(request)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, id)
+	require.Equal(t, reference, got)
+	future := time.Now().Add(time.Minute)
+	legacy := auth.ClientWithPrincipalExpiry("read-write", "fixture-keycard", auth.LegacyDirectPrincipal(uuid.NewString()), auth.PrincipalKindAgent, &future)
+	response = httptest.NewRecorder()
+	service.handleGetCredential(response, request.WithContext(auth.WithIdentity(request.Context(), legacy)))
+	require.Equal(t, http.StatusForbidden, response.Code)
+	for _, identity := range []auth.Identity{auth.Admin(), auth.Session("admin"), auth.Client("read-only", "fixture-readonly"), auth.Client("read-write", "fixture-readwrite")} {
+		require.True(t, hapHTTPRouteAllowed(identity, http.MethodGet, request.URL.Path), "retained read must keep the existing Vault GET actor policy")
+	}
 }

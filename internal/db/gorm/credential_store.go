@@ -108,6 +108,18 @@ func (s *CredentialStore) Get(ctx context.Context, project, key string) (*models
 	return credentialRowToModel(&row), nil
 }
 
+// GetByID reads an active native row after the caller validates its retained membership.
+func (s *CredentialStore) GetByID(ctx context.Context, id int64) (*models.Credential, error) {
+	if id < 1 {
+		return nil, fmt.Errorf("credential ID must be positive")
+	}
+	var row Credential
+	if err := s.db.WithContext(ctx).Where("id = ? AND deleted_at IS NULL", id).First(&row).Error; err != nil {
+		return nil, fmt.Errorf("get credential by ID: %w", err)
+	}
+	return credentialRowToModel(&row), nil
+}
+
 // List returns all active credentials for the exact project namespace, ordered
 // by key ascending. An empty project lists global credentials only.
 func (s *CredentialStore) List(ctx context.Context, project string) ([]*models.Credential, error) {

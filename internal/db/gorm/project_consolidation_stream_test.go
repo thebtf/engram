@@ -2,6 +2,7 @@ package gorm
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/md5"
 	"database/sql"
@@ -160,6 +161,125 @@ func TestProjectConsolidationMetadataCodecAndNativeKeys(t *testing.T) {
 		path, _ := json.Marshal(append([]string{state.Rows[0].Column}, state.Rows[0].Path...))
 		require.JSONEq(t, `[""]`, string(path))
 		require.False(t, state.Rows[0].Global)
+	}
+}
+
+func TestProjectConsolidationCompactPlanCodec(t *testing.T) {
+	vault, err := vaultcrypto.OpenExistingVault(&config.Config{EncryptionKey: strings.Repeat("ab", 32)})
+	require.NoError(t, err)
+	store := NewProjectConsolidationStore(nil, vault, nil)
+	state := consolidationPlanState{Census: consolidationCensusState{Fingerprint: "fixture-census", SourceVersion: "fixture-version", Database: "fixture-source", Snapshot: "fixture-snapshot", Schema: "fixture-schema", NativeSnapshot: "1:1:"}}
+	store.addCensusRow(&state.Census, "memories", "project", "tenant", JSONRaw(`{"id":1}`), nil, "mixed", false)
+	store.addCensusRow(&state.Census, "memories", "project", "tenant", JSONRaw(`{"id":2}`), nil, "mixed", false)
+	state.Census.Rows[0].NativeVersion = "7"
+	state.Census.Rows[1].NativeVersion = "8"
+	state.Evidence = []ConsolidationEvidence{{Reference: "urn:engram:fixture:proof", Kind: "portable_marker", Group: "urn:engram:fixture:group", ProjectID: uuid.NewString(), Rows: []string{state.Census.Rows[0].Reference}}}
+	state.Mapping, err = store.buildMapping(state.Census.Rows, state.Evidence)
+	require.NoError(t, err)
+	state.Fingerprint = consolidationPlanFingerprint(state)
+	state.ID = uuid.NewSHA1(uuid.NameSpaceOID, []byte(state.Fingerprint)).String()
+	token, err := store.seal("plan", state)
+	require.NoError(t, err)
+	var encoded map[string]json.RawMessage
+	require.NoError(t, store.open(token, "plan", &encoded))
+	require.NotContains(t, encoded, "Mapping")
+	require.Contains(t, encoded, "Census")
+	require.Contains(t, encoded, "Evidence")
+	decoded, err := store.plan(token, state.Fingerprint)
+	require.NoError(t, err)
+	require.Equal(t, state, decoded)
+	require.NotEmpty(t, decoded.Mapping[1].UnresolvedReference)
+	_, err = store.plan(token, "changed-fingerprint")
+	require.EqualError(t, err, "PROJECT_ADOPTION_STALE_PLAN")
+	state.Evidence[0].ProjectID = uuid.NewString()
+	tampered, err := store.seal("plan", state)
+	require.NoError(t, err)
+	_, err = store.plan(tampered, state.Fingerprint)
+	require.EqualError(t, err, "PROJECT_ADOPTION_STALE_PLAN")
+	obsolete, err := store.seal("plan", struct {
+		ID, Fingerprint string
+		Census          consolidationCensusState
+		Mapping         []ConsolidationMapping
+	}{decoded.ID, decoded.Fingerprint, decoded.Census, decoded.Mapping})
+	require.NoError(t, err)
+	_, err = store.plan(obsolete, decoded.Fingerprint)
+	require.EqualError(t, err, "PROJECT_ADOPTION_STALE_PLAN")
+}
+
+func TestProjectConsolidationBoundedMetadata(t *testing.T) {
+	vault, err := vaultcrypto.OpenExistingVault(&config.Config{EncryptionKey: strings.Repeat("ab", 32)})
+	require.NoError(t, err)
+	store := NewProjectConsolidationStore(nil, vault, nil)
+	oversized := strings.Repeat("x", consolidationDecodedMetadataBytes)
+	t.Run("producer refuses unusable reference", func(t *testing.T) {
+		token, err := store.seal("census", oversized)
+		require.EqualError(t, err, "PROJECT_ADOPTION_METADATA_CAPACITY_EXCEEDED")
+		require.Empty(t, token)
+	})
+	var envelope bytes.Buffer
+	compressor := gzip.NewWriter(&envelope)
+	require.NoError(t, json.NewEncoder(compressor).Encode(struct {
+		Kind  string
+		Value any
+	}{"census", oversized}))
+	require.NoError(t, compressor.Close())
+	ciphertext, err := vault.Encrypt(envelope.String())
+	require.NoError(t, err)
+	var decoded string
+	require.EqualError(t, store.open(hex.EncodeToString(ciphertext), "census", &decoded), "PROJECT_ADOPTION_METADATA_CAPACITY_EXCEEDED")
+	malformed, err := vault.Encrypt("not gzip")
+	require.NoError(t, err)
+	require.EqualError(t, store.open(hex.EncodeToString(malformed), "census", &decoded), "PROJECT_ADOPTION_STALE_PLAN")
+	var compressed bytes.Buffer
+	writer := gzip.NewWriter(&compressed)
+	_, err = writer.Write([]byte(`{"Kind":"census","Value":"ok"}`))
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	for _, payload := range [][]byte{compressed.Bytes()[:compressed.Len()-1], append(append([]byte(nil), compressed.Bytes()...), compressed.Bytes()...)} {
+		ciphertext, err := vault.Encrypt(string(payload))
+		require.NoError(t, err)
+		require.EqualError(t, store.open(hex.EncodeToString(ciphertext), "census", &decoded), "PROJECT_ADOPTION_STALE_PLAN")
+	}
+}
+
+func TestProjectConsolidationCompressedFrameCodec(t *testing.T) {
+	vault, err := vaultcrypto.OpenExistingVault(&config.Config{EncryptionKey: strings.Repeat("ab", 32)})
+	require.NoError(t, err)
+	store := NewProjectConsolidationStore(nil, vault, nil)
+	compress := func(raw []byte) []byte {
+		var buffer bytes.Buffer
+		writer := gzip.NewWriter(&buffer)
+		_, err := writer.Write(raw)
+		require.NoError(t, err)
+		require.NoError(t, writer.Close())
+		return buffer.Bytes()
+	}
+	valid, err := json.Marshal(consolidationFrame{Kind: "row", Payload: []byte("fixture")})
+	require.NoError(t, err)
+	packed := compress(valid)
+	oversizedPayload, err := json.Marshal(consolidationFrame{Kind: "row", Payload: make([]byte, consolidationChunkBytes+1)})
+	require.NoError(t, err)
+	oversizedKey, err := json.Marshal(consolidationFrame{Kind: "row", Key: JSONRaw(bytes.Repeat([]byte("k"), consolidationMetadataBytes+1))})
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name string
+		raw  []byte
+		code string
+	}{
+		{"uncompressed codec refused", valid, "PROJECT_ADOPTION_BACKUP_AUTHENTICATION_FAILED"},
+		{"malformed gzip", []byte("not gzip"), "PROJECT_ADOPTION_BACKUP_AUTHENTICATION_FAILED"},
+		{"truncated gzip", packed[:len(packed)-1], "PROJECT_ADOPTION_BACKUP_AUTHENTICATION_FAILED"},
+		{"second gzip member", append(append([]byte(nil), packed...), packed...), "PROJECT_ADOPTION_BACKUP_AUTHENTICATION_FAILED"},
+		{"oversized plaintext", compress(bytes.Repeat([]byte(" "), consolidationFrameBytes-28+1)), "PROJECT_ADOPTION_FRAME_CAPACITY_EXCEEDED"},
+		{"oversized payload", compress(oversizedPayload), "PROJECT_ADOPTION_BACKUP_AUTHENTICATION_FAILED"},
+		{"oversized native key", compress(oversizedKey), "PROJECT_ADOPTION_FRAME_CAPACITY_EXCEEDED"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ciphertext, err := vault.Encrypt(string(tc.raw))
+			require.NoError(t, err)
+			_, err = store.decodeFrame(ciphertext)
+			require.EqualError(t, err, tc.code)
+		})
 	}
 }
 

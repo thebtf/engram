@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -70,9 +71,13 @@ type consolidationTrackedBody struct {
 	readBytes int64
 	maxRead   int
 	closed    bool
+	closeOnce sync.Once
 }
 
-func (body *consolidationTrackedBody) Close() error { body.closed = true; return nil }
+func (body *consolidationTrackedBody) Close() error {
+	body.closeOnce.Do(func() { body.closed = true })
+	return nil
+}
 
 func (body *consolidationTrackedBody) Read(raw []byte) (int, error) {
 	if len(raw) > body.maxRead {
@@ -233,7 +238,7 @@ func TestProjectConsolidationRegisteredPolicy(t *testing.T) {
 					t.Fatal("metadata changed or request was buffered before verifier entry")
 				}
 				deadline, ok := ctx.Deadline()
-				if !ok || time.Until(deadline) > DefaultHTTPTimeout {
+				if !ok || time.Until(deadline) > projectConsolidationOperationTimeout || time.Until(deadline) <= DefaultHTTPTimeout {
 					t.Fatal("registered route timeout was bypassed")
 				}
 				n, err := io.Copy(io.Discard, src)
@@ -406,5 +411,126 @@ func TestProjectConsolidationVerifierSeamRetainsDataAuthorization(t *testing.T) 
 	service.handleProjectConsolidationVerifyBackup(response, request)
 	if response.Code != http.StatusForbidden || called || !body.closed || !strings.Contains(response.Body.String(), "PROJECT_ADOPTION_AUTH_REQUIRED") {
 		t.Fatalf("data authorization bypassed: status=%d, called=%v, closed=%v", response.Code, called, body.closed)
+	}
+}
+
+type consolidationDeadlineResponse struct {
+	*httptest.ResponseRecorder
+	readDeadline time.Time
+}
+
+func (response *consolidationDeadlineResponse) SetReadDeadline(deadline time.Time) error {
+	response.readDeadline = deadline
+	return nil
+}
+
+func TestProjectConsolidationOperationDeadline(t *testing.T) {
+	for _, path := range []string{"backup", "verify-backup", "dry-run", "apply"} {
+		t.Run("non-admin slow body/"+path, func(t *testing.T) {
+			reader, writer := io.Pipe()
+			defer reader.Close()
+			defer writer.Close()
+			body := &consolidationTrackedBody{Reader: reader}
+			request := httptest.NewRequest(http.MethodPost, "/api/projects/consolidation/"+path, body)
+			request = request.WithContext(auth.WithIdentity(request.Context(), auth.Client("read-write", "fixture-nonadmin")))
+			response := &consolidationDeadlineResponse{ResponseRecorder: httptest.NewRecorder()}
+			finished := make(chan struct{})
+			handler := requestBodySize(requestTimeout(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.Copy(io.Discard, r.Body)
+			})))
+			go func() {
+				handler.ServeHTTP(response, request)
+				close(finished)
+			}()
+			fast := true
+			select {
+			case <-finished:
+			case <-time.After(250 * time.Millisecond):
+				fast = false
+				_ = writer.Close()
+				<-finished
+			}
+			if !fast || response.Code != http.StatusForbidden || body.maxRead != 0 || !response.readDeadline.IsZero() {
+				t.Fatalf("non-admin body reached bulk lifetime: fast=%v status=%d readAttempt=%d extendedRead=%v", fast, response.Code, body.maxRead, !response.readDeadline.IsZero())
+			}
+		})
+	}
+	for _, path := range []string{"backup", "verify-backup", "dry-run", "apply", "preflight", "census"} {
+		t.Run(path, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/api/projects/consolidation/"+path, strings.NewReader("{}"))
+			request = request.WithContext(auth.WithIdentity(request.Context(), auth.Admin()))
+			response := &consolidationDeadlineResponse{ResponseRecorder: httptest.NewRecorder()}
+			handler := requestBodySize(requestTimeout(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				deadline, ok := r.Context().Deadline()
+				if !ok {
+					t.Fatal("request deadline missing")
+				}
+				remaining := time.Until(deadline)
+				if isProjectConsolidationOperation(r) {
+					if remaining <= DefaultHTTPTimeout || remaining > projectConsolidationOperationTimeout {
+						t.Fatal("finite bulk operation deadline missing")
+					}
+				} else if remaining > DefaultHTTPTimeout {
+					t.Fatal("ordinary deadline weakened")
+				}
+			})))
+			handler.ServeHTTP(response, request)
+			if path == "verify-backup" && (time.Until(response.readDeadline) <= DefaultHTTPTimeout || time.Until(response.readDeadline) > projectConsolidationOperationTimeout) {
+				t.Fatal("upload read deadline did not override the server's ordinary read timeout")
+			}
+		})
+	}
+	short := time.Now().Add(time.Second)
+	request := httptest.NewRequest(http.MethodPost, "/api/projects/consolidation/verify-backup", strings.NewReader("{}"))
+	ctx, cancel := context.WithDeadline(auth.WithIdentity(request.Context(), auth.Admin()), short)
+	defer cancel()
+	response := &consolidationDeadlineResponse{ResponseRecorder: httptest.NewRecorder()}
+	requestBodySize(requestTimeout(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		deadline, _ := r.Context().Deadline()
+		if !deadline.Equal(short) {
+			t.Fatal("inherited deadline extended")
+		}
+	}))).ServeHTTP(response, request.WithContext(ctx))
+	if !response.readDeadline.Equal(short) {
+		t.Fatal("socket read deadline ignored inherited cancellation boundary")
+	}
+}
+
+func TestProjectConsolidationUploadRealReadDeadline(t *testing.T) {
+	body, contentType, length := consolidationPolicyBody(t, 32, [][2]string{{"plan_reference", "fixture"}, {"plan_fingerprint", "sha256:fixture"}}, false)
+	service := consolidationPolicyService(t, func(ctx context.Context, _, _ string, source io.Reader) (string, error) {
+		deadline, ok := ctx.Deadline()
+		if !ok || time.Until(deadline) <= DefaultHTTPTimeout || time.Until(deadline) > projectConsolidationOperationTimeout {
+			t.Fatal("registered real-server operation deadline missing")
+		}
+		_, err := io.Copy(io.Discard, source)
+		return "fixture-backup", err
+	})
+	server := httptest.NewUnstartedServer(service.router)
+	server.Config.ReadTimeout = 100 * time.Millisecond
+	server.Config.ReadHeaderTimeout = time.Second
+	server.Start()
+	defer server.Close()
+	reader, writer := io.Pipe()
+	defer reader.Close()
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		_, err := io.Copy(writer, body)
+		_ = writer.CloseWithError(err)
+	}()
+	request, err := http.NewRequest(http.MethodPost, server.URL+"/api/projects/consolidation/verify-backup", reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.ContentLength = length
+	request.Header.Set("Content-Type", contentType)
+	request.Header.Set("X-Auth-Token", service.tokenAuth.Token())
+	response, err := server.Client().Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("registered upload failed with short ordinary server read timeout: %d", response.StatusCode)
 	}
 }
