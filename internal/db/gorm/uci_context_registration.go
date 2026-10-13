@@ -67,12 +67,8 @@ func (s *UCIContextStore) RegisterLocalGit(ctx context.Context, in RegisterLocal
 	}
 	var out RegisteredLocalGit
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		exists, err := (&SessionStore{db: tx}).CanonicalProjectExists(ctx, in.ProjectID)
-		if err != nil {
+		if err := ensureLogicalProjectForWrite(ctx, tx, in.ProjectID); err != nil {
 			return err
-		}
-		if !exists {
-			return &projectidentity.LogicalError{Code: "PROJECT_CONTEXT_REQUIRED"}
 		}
 		if in.AuthRealm == uci.NoAuthCodeRealm {
 			// One realm-wide lock serializes capacity checks across distinct Source and Checkout identities.

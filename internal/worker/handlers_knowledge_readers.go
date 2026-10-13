@@ -11,6 +11,7 @@ import (
 
 	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/lifecycle"
+	"github.com/thebtf/engram/internal/projectidentity"
 )
 
 type knowledgePage struct {
@@ -36,7 +37,7 @@ func boundedKnowledgeText(value string, maxBytes int) bool {
 
 func parseKnowledgeProject(params url.Values) (string, error) {
 	project := params.Get("project")
-	if project == "" || strings.TrimSpace(project) != project || !boundedKnowledgeText(project, 256) {
+	if !projectidentity.ValidProjectID(project) {
 		return "", fmt.Errorf("an exact canonical project ID is required")
 	}
 	return project, nil

@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -137,7 +136,7 @@ func knowledgeSQLiteDB(t *testing.T) *gorm.DB {
 	sqlDB.SetMaxOpenConns(1)
 	db, err := gorm.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gorm.Config{SkipDefaultTransaction: true, Logger: logger.Default.LogMode(logger.Silent)})
 	require.NoError(t, err)
-	for _, model := range []any{gormdb.Memory{}, gormdb.Project{}, gormdb.VersionedDocument{}, gormdb.AuditLogEntry{}} {
+	for _, model := range []any{gormdb.Memory{}, gormdb.Project{}, gormdb.VersionedDocument{}, gormdb.AuditLogEntry{}, gormdb.ConsolidationMembership{}} {
 		parsed, err := schema.Parse(model, &sync.Map{}, schema.NamingStrategy{})
 		require.NoError(t, err)
 		columns := make([]string, 0, len(parsed.Fields))
@@ -181,23 +180,37 @@ func TestKnowledgeReadersHTTP_SQLite(t *testing.T) {
 }
 
 func TestKnowledgeReadersHTTP_Postgres(t *testing.T) {
-	dsn := os.Getenv("DATABASE_DSN")
-	if dsn == "" {
-		t.Skip("isolated DATABASE_DSN unavailable: PostgreSQL reader semantics NOT_PROVEN")
-	}
-	store, err := gormdb.NewStore(gormdb.Config{DSN: dsn, MaxConns: 2})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	tx := store.DB.Begin()
-	require.NoError(t, tx.Error)
-	t.Cleanup(func() { require.NoError(t, tx.Rollback().Error) })
-	runKnowledgeReadersHTTP(t, tx, false)
+	store := openWorkerUCIContextCompositionStore(t)
+	runKnowledgeReadersHTTP(t, store.DB, false)
 }
 
 func runKnowledgeReadersHTTP(t *testing.T, db *gorm.DB, sqliteFixture bool) {
 	t.Helper()
 	t.Setenv("ENGRAM_AUTH_DISABLED", "false")
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
+	seedDB := db
+	var guardModes []struct{ TableName, Mode string }
+	seedCommitted := false
+	if !sqliteFixture {
+		db = seedDB.Begin()
+		require.NoError(t, db.Error)
+		t.Cleanup(func() {
+			if !seedCommitted {
+				require.NoError(t, db.Rollback().Error)
+			}
+		})
+		// Reconstruct pre-cutover history atomically; every other trigger stays active.
+		require.NoError(t, db.Exec("LOCK TABLE memories, versioned_documents IN ACCESS EXCLUSIVE MODE").Error)
+		require.NoError(t, db.Raw(`SELECT c.relname AS table_name, t.tgenabled::text AS mode
+			FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace
+			WHERE n.nspname=current_schema() AND c.relname IN ('memories','versioned_documents')
+			AND t.tgname='engram_consolidation_scope_write' AND NOT t.tgisinternal`).Scan(&guardModes).Error)
+		require.Len(t, guardModes, 2)
+		for _, guard := range guardModes {
+			require.Contains(t, []string{"O", "R", "A"}, guard.Mode)
+			require.NoError(t, db.Exec("ALTER TABLE "+guard.TableName+" DISABLE TRIGGER engram_consolidation_scope_write").Error)
+		}
+	}
 	projectA, projectB, removed, merged, unlabelled := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
 	memoryOnly, documentOnly := uuid.NewString(), uuid.NewString()
 	aliases := []string{"legacy-reader-alias", "ambiguous-reader-alias", projectB, removed, "dead-owner-alias"}
@@ -281,6 +294,44 @@ func runKnowledgeReadersHTTP(t *testing.T, db *gorm.DB, sqliteFixture bool) {
 		require.NoError(t, db.Create(&gormdb.VersionedDocument{Project: selector, Path: "notes/excluded.md", Version: 1, DocType: "markdown", Author: "fixture", Content: "unreadable " + selector, ContentHash: "fixture", Metadata: "{}", CreatedAt: now}).Error)
 	}
 
+	// Retained aliases are attached per native row, never expanded as buckets.
+	for _, input := range []struct{ table, selector, project string }{
+		{"memories", "legacy-reader-alias", projectA},
+		{"memories", "legacy-memory-only", memoryOnly},
+		{"versioned_documents", "legacy-reader-alias", projectA},
+		{"versioned_documents", "legacy-document-only", documentOnly},
+	} {
+		var ids []int64
+		require.NoError(t, db.Table(input.table).Where("project = ?", input.selector).Pluck("id", &ids).Error)
+		for _, id := range ids {
+			key, err := json.Marshal(map[string]int64{"id": id})
+			require.NoError(t, err)
+			require.NoError(t, db.Create(&gormdb.ConsolidationMembership{Reference: fmt.Sprintf("fixture:%s:%d", input.table, id), Table: input.table, RowKey: gormdb.JSONRaw(key), FieldPath: gormdb.JSONRaw(`["project"]`), ProjectID: &input.project, PlanFingerprint: "reader-fixture"}).Error)
+		}
+	}
+	if !sqliteFixture {
+		for _, guard := range guardModes {
+			mode := "ENABLE"
+			if guard.Mode == "R" {
+				mode = "ENABLE REPLICA"
+			} else if guard.Mode == "A" {
+				mode = "ENABLE ALWAYS"
+			}
+			require.NoError(t, db.Exec("ALTER TABLE "+guard.TableName+" "+mode+" TRIGGER engram_consolidation_scope_write").Error)
+			var actual string
+			require.NoError(t, db.Raw(`SELECT t.tgenabled::text FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid
+				JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema()
+				AND c.relname=? AND t.tgname='engram_consolidation_scope_write'`, guard.TableName).Scan(&actual).Error)
+			require.Equal(t, guard.Mode, actual)
+		}
+		require.NoError(t, db.Commit().Error)
+		seedCommitted = true
+		db = seedDB
+		err := db.Transaction(func(tx *gorm.DB) error {
+			return tx.Exec("INSERT INTO memories(project,content) VALUES(?,?)", "legacy-reader-alias", "new legacy writes stay denied").Error
+		})
+		require.ErrorContains(t, err, "PROJECT_ADOPTION_UNRESOLVED_MEMBERSHIP")
+	}
 	// Fresh private nonces exercise real bcrypt/keycard auth only in this fixture.
 	newToken := func() string {
 		var secret [16]byte
@@ -304,7 +355,7 @@ func runKnowledgeReadersHTTP(t *testing.T, db *gorm.DB, sqliteFixture bool) {
 	require.True(t, ta.IsEnabled(), "fixture must exercise bearer authentication")
 	ta.SetValidator(auth.NewValidator("", tokens))
 	store := &gormdb.Store{DB: db}
-	service := &Service{store: store, memoryStore: gormdb.NewMemoryStore(store), documentStore: gormdb.NewVersionedDocumentStore(store), sessionStore: gormdb.NewSessionStore(store)}
+	service := &Service{store: store, vault: newTestVault(t), memoryStore: gormdb.NewMemoryStore(store), documentStore: gormdb.NewVersionedDocumentStore(store), sessionStore: gormdb.NewSessionStore(store)}
 	router := chi.NewRouter()
 	router.Use(ta.Middleware)
 	router.Get("/api/projects", service.handleGetProjects)
@@ -337,9 +388,9 @@ func runKnowledgeReadersHTTP(t *testing.T, db *gorm.DB, sqliteFixture bool) {
 	get("/api/projects", tokenA, 200, &catalog)
 	require.Contains(t, catalog.Items, gormdb.ProjectDescriptor{ID: projectA, DisplayName: "Same human label"})
 	require.Contains(t, catalog.Items, gormdb.ProjectDescriptor{ID: projectB, DisplayName: "Same human label"})
-	require.Contains(t, catalog.Items, gormdb.ProjectDescriptor{ID: unlabelled, DisplayName: unlabelled})
-	require.Contains(t, catalog.Items, gormdb.ProjectDescriptor{ID: memoryOnly, DisplayName: memoryOnly})
-	require.Contains(t, catalog.Items, gormdb.ProjectDescriptor{ID: documentOnly, DisplayName: documentOnly})
+	require.Contains(t, catalog.Items, gormdb.ProjectDescriptor{ID: unlabelled, DisplayName: "Registered project"})
+	require.Contains(t, catalog.Items, gormdb.ProjectDescriptor{ID: memoryOnly, DisplayName: "Registered project"})
+	require.Contains(t, catalog.Items, gormdb.ProjectDescriptor{ID: documentOnly, DisplayName: "Registered project"})
 	for _, item := range catalog.Items {
 		require.NotContains(t, []string{removed, merged, "legacy-reader-alias"}, item.ID)
 	}
@@ -388,7 +439,11 @@ func runKnowledgeReadersHTTP(t *testing.T, db *gorm.DB, sqliteFixture bool) {
 		get("/api/memories/"+id+"?project="+projectA, tokenA, 400, nil)
 	}
 	for _, project := range []string{removed, merged, "legacy-reader-alias", "unregistered-orphan"} {
-		get(detailURL+project, tokenA, 403, nil)
+		status := 403
+		if _, err := uuid.Parse(project); err != nil {
+			status = 400
+		}
+		get(detailURL+project, tokenA, status, nil)
 	}
 	get(detailURL+projectA, tokenHAP, 403, nil)
 	get(memoryURL+"&query="+url.QueryEscape(`DECISION 100%_SAFE\route`), tokenA, 200, &memoryPage)
@@ -598,7 +653,11 @@ func runKnowledgeReadersHTTP(t *testing.T, db *gorm.DB, sqliteFixture bool) {
 	require.Zero(t, history.Count)
 	for _, endpoint := range []string{"/api/documents/read", "/api/documents/history"} {
 		for _, selector := range []string{removed, merged, "legacy-reader-alias", "unregistered-orphan"} {
-			get(endpoint+"?project="+selector+"&path="+url.QueryEscape(documents[0].Path), tokenA, 403, nil)
+			status := 403
+			if _, err := uuid.Parse(selector); err != nil {
+				status = 400
+			}
+			get(endpoint+"?project="+selector+"&path="+url.QueryEscape(documents[0].Path), tokenA, status, nil)
 		}
 	}
 
@@ -607,7 +666,11 @@ func runKnowledgeReadersHTTP(t *testing.T, db *gorm.DB, sqliteFixture bool) {
 			get(endpoint+"?"+query, tokenA, 400, nil)
 		}
 		for _, project := range []string{removed, merged, uuid.NewString(), "legacy-reader-alias", "Same human label"} {
-			get(endpoint+"?project="+url.QueryEscape(project), tokenA, 403, nil)
+			status := 403
+			if _, err := uuid.Parse(project); err != nil {
+				status = 400
+			}
+			get(endpoint+"?project="+url.QueryEscape(project), tokenA, status, nil)
 		}
 		get(endpoint+"?project="+projectA, tokenHAP, 403, nil)
 		get(endpoint+"?project="+projectA, "", 401, nil)

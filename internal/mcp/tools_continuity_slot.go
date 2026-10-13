@@ -85,7 +85,7 @@ func continuitySlotProject(ctx context.Context, values map[string]any) (string, 
 	if !present || project == "" {
 		return "", fmt.Errorf("continuity_slot: project is required")
 	}
-	if canonical := strings.TrimSpace(projectFromContext(ctx)); canonical == "" || project != canonical {
+	if canonical := strings.TrimSpace(ProjectFromContext(ctx)); canonical == "" || project != canonical {
 		return "", errors.New(continuitySlotAuthorizationError)
 	}
 	return project, nil

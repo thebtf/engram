@@ -41,7 +41,7 @@ func (s *Server) handleGetMemoryBrief(ctx context.Context, args json.RawMessage)
 		return "", fmt.Errorf("parse args: %w", err)
 	}
 	if a.Project == "" {
-		a.Project = projectFromContext(ctx)
+		a.Project = ProjectFromContext(ctx)
 	}
 	if a.Project == "" {
 		return "", fmt.Errorf("project required")

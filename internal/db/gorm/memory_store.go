@@ -392,7 +392,7 @@ func (s *MemoryStore) Create(ctx context.Context, mem *models.Memory) (*models.M
 	copyPrivacyFields(row, mem)
 	copyPrincipalMemoryFields(row, mem)
 
-	if err := s.db.WithContext(ctx).Create(row).Error; err != nil {
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error { return createMemoryRowForProjectTx(ctx, tx, row) }); err != nil {
 		return nil, fmt.Errorf("create memory for project %q: %w", mem.Project, err)
 	}
 	return memoryRowToModel(row), nil
@@ -422,7 +422,7 @@ func (s *MemoryStore) CreateWithLifecycle(ctx context.Context, mem *models.Memor
 	copyPrivacyFields(row, mem)
 	copyPrincipalMemoryFields(row, mem)
 
-	if err := s.db.WithContext(ctx).Create(row).Error; err != nil {
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error { return createMemoryRowForProjectTx(ctx, tx, row) }); err != nil {
 		return nil, fmt.Errorf("create memory with lifecycle for project %q: %w", mem.Project, err)
 	}
 	return memoryRowToModel(row), nil
@@ -449,10 +449,17 @@ func createMemoryWithLifecycleTx(ctx context.Context, tx *gorm.DB, mem *models.M
 	row := memoryRowForCreate(mem, now, true)
 	copyPrivacyFields(row, mem)
 	copyPrincipalMemoryFields(row, mem)
-	if err := tx.WithContext(ctx).Create(row).Error; err != nil {
+	if err := createMemoryRowForProjectTx(ctx, tx, row); err != nil {
 		return nil, fmt.Errorf("create memory with lifecycle (tx) for project %q: %w", mem.Project, err)
 	}
 	return memoryRowToModel(row), nil
+}
+
+func createMemoryRowForProjectTx(ctx context.Context, tx *gorm.DB, row *Memory) error {
+	if err := ensureLogicalProjectForWrite(ctx, tx, row.Project); err != nil {
+		return err
+	}
+	return tx.WithContext(ctx).Create(row).Error
 }
 
 // CreateWithLifecycleIfTagAbsent inserts a lifecycle memory only when no active
@@ -505,7 +512,7 @@ func (s *MemoryStore) CreateWithLifecycleIfTagAbsent(
 		// CreateWithLifecycle — codex P1 PR #221).
 		copyPrivacyFields(row, mem)
 		copyPrincipalMemoryFields(row, mem)
-		if err := tx.Create(row).Error; err != nil {
+		if err := createMemoryRowForProjectTx(ctx, tx, row); err != nil {
 			return fmt.Errorf("create memory with lifecycle for project %q: %w", mem.Project, err)
 		}
 		created = memoryRowToModel(row)
@@ -617,19 +624,11 @@ func (s *MemoryStore) List(ctx context.Context, project string, limit int) ([]*m
 }
 
 func (s *MemoryStore) visibleKnowledgeQuery(ctx context.Context, project string, caller scope.KeycardContext, opts scope.MemoryVisibilityOptions) (*gorm.DB, error) {
-	selectors, err := CanonicalProjectDataSelectors(ctx, s.db, project)
+	q, err := canonicalProjectRows(ctx, s.db.Model(&Memory{}), project, "memories", "m")
 	if err != nil {
 		return nil, err
 	}
-	principal := strings.TrimSpace(caller.Principal)
-	kind := strings.TrimSpace(caller.PrincipalKind)
-	q := s.db.WithContext(ctx).Model(&Memory{}).Table("memories AS m").
-		Where("m.project IN ? AND m.deleted_at IS NULL", selectors).
-		Where(memoryPrincipalAccessSQL, principal, kind, principal, kind, principal, kind, principal, kind)
-	if opts.ApplyPrivacyScope {
-		q = q.Where(memoryPrivacyAccessSQL, caller.WorkstationID, caller.WorkstationID, caller.SessionID, caller.SessionID)
-	}
-	return q, nil
+	return memoryReaderPrivacy(q.Where("m.deleted_at IS NULL"), caller, opts), nil
 }
 
 // GetVisible scopes the exact-ID read before loading content. Detail retains

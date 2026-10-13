@@ -525,3 +525,97 @@ func TestLogicalProjectReadersPostgresHTTP(t *testing.T) {
 	})
 	t.Log("PASS real PostgreSQL/loopback HTTP: UUID catalog/legacy redirect; exact retained row membership; memory privacy SQL; nonempty docs/memory/issues and history; count/search/cursor pages; stale/unknown/foreign IDs denied; two distinct Sources/Checkouts/dirty Views share one logical UUID without changing snapshot refs")
 }
+
+func TestRetainedProjectEncodedReferenceHTTP(t *testing.T) {
+	store := openWorkerUCIContextCompositionStore(t)
+	db := store.DB
+	t.Setenv("ENGRAM_AUTH_DISABLED", "true")
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
+	vault := newTestVault(t)
+	service := &Service{store: store, vault: vault, sessionStore: gormdb.NewSessionStore(store)}
+	adapter := NewOperatorCodeHTTPAdapter(nil, NewBrowserBindingApplication(gormdb.NewBrowserTabBindingStore(db)), nil, nil, nil)
+	adapter.contexts = gormdb.NewBrowserCodeContextStore(db)
+	require.NoError(t, adapter.configureChoiceCipher(vault))
+	service.operatorCodeAdapter = adapter
+	project := uuid.NewString()
+	require.NoError(t, db.Create(&gormdb.Project{ID: project}).Error)
+	opaque := func(kind string, value any) string {
+		key := vault.DeriveKey("project-consolidation-reference/v1")
+		mac := hmac.New(sha256.New, key[:])
+		raw, err := json.Marshal(value)
+		require.NoError(t, err)
+		_, err = mac.Write(append([]byte(kind+"\x00"), raw...))
+		require.NoError(t, err)
+		return "urn:engram:migration:" + kind + ":" + hex.EncodeToString(mac.Sum(nil))
+	}
+	membership := func(table string, key any, selector string) string {
+		raw, err := json.Marshal(key)
+		require.NoError(t, err)
+		column := "project"
+		if table == "sources" {
+			column = "project_id"
+		}
+		selectorRef := opaque("selector", selector)
+		unresolved := opaque("unresolved", selectorRef)
+		reference := opaque("row", struct {
+			Table, Column string
+			Key           gormdb.JSONRaw
+			Path          []string
+		}{table, column, gormdb.JSONRaw(raw), nil})
+		fieldPath, err := json.Marshal([]string{column})
+		require.NoError(t, err)
+		require.NoError(t, db.Create(&gormdb.ConsolidationMembership{Reference: reference, UnresolvedReference: unresolved, Table: table, RowKey: gormdb.JSONRaw(raw), FieldPath: gormdb.JSONRaw(fieldPath), SelectorReference: selectorRef, Reason: "encoded route fixture", PlanFingerprint: "encoded-reference-http"}).Error)
+		return unresolved
+	}
+	memory := &gormdb.Memory{Project: project, Content: "nonempty retained encoded memory", Status: "active", PrivacyScope: "project", Tags: []string{}, SourceSessions: []string{}}
+	require.NoError(t, db.Create(memory).Error)
+	contentRef := membership("memories", map[string]int64{"id": memory.ID}, project)
+	documents := []gormdb.VersionedDocument{
+		{Project: project, Path: "encoded.md", Version: 1, DocType: "text", Author: "fixture", Content: "old retained body", Metadata: "{}", ContentHash: "old"},
+		{Project: project, Path: "encoded.md", Version: 2, DocType: "text", Author: "fixture", Content: "new retained body", Metadata: "{}", ContentHash: "new"},
+	}
+	for i := range documents {
+		require.NoError(t, db.Create(&documents[i]).Error)
+		membership("versioned_documents", map[string]int64{"id": documents[i].ID}, project)
+	}
+	source, checkout, incarnation, profile, view := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
+	require.NoError(t, db.Exec(`INSERT INTO sources(source_id,auth_realm,kind,display_name,state) VALUES(?,?,'git','encoded retained source','active')`, source, uci.NoAuthCodeRealm).Error)
+	require.NoError(t, db.Exec(`INSERT INTO ci_profiles(profile_id,parser_bundle_digest,resolver_revision,chunker_revision,ignore_policy_digest,build_context_json,secret_policy_revision) VALUES(?,?,'fixture','fixture',?,'{}','fixture')`, profile, "sha256:"+strings.Repeat("a", 64), "sha256:"+strings.Repeat("b", 64)).Error)
+	require.NoError(t, db.Exec(`INSERT INTO ci_checkouts(checkout_id,source_id,incarnation_id,workstation_id,kind,owner_principal,locator_ref,state) VALUES(?,?,?,'encoded-device','working_tree',?,'file:///encoded/reference','registered')`, checkout, source, incarnation, uci.NoAuthCodePrincipal).Error)
+	require.NoError(t, db.Exec(`INSERT INTO ci_views(view_id,checkout_id,source_id,incarnation_id,generation,profile_id,head_oid,object_format,ref_label,dirty,observed_fs_seq,scan_start,scan_end,manifest_digest,state,coverage_json,published_at) VALUES(?,?,?,?,1,?,?,'sha1','refs/heads/fixture',true,1,now(),now()+interval '1 second',?,'published','{}',now())`, view, checkout, source, incarnation, profile, strings.Repeat("a", 40), "sha256:"+strings.Repeat("c", 64)).Error)
+	require.NoError(t, db.Exec("UPDATE ci_checkouts SET current_view_id=? WHERE checkout_id=?", view, checkout).Error)
+	codeRef := membership("sources", map[string]string{"source_id": source}, "")
+	router := chi.NewRouter()
+	gate, err := NewTokenAuth("")
+	require.NoError(t, err)
+	router.Use(gate.Middleware)
+	router.Get("/api/projects/unresolved/{reference}/content", service.handleRetainedProjectContent)
+	router.Get("/api/projects/unresolved/{reference}/history", service.handleRetainedProjectHistory)
+	router.Get("/api/projects/unresolved/{reference}/code", service.handleRetainedProjectCode)
+	server := httptest.NewServer(router)
+	t.Cleanup(server.Close)
+	for _, testcase := range []struct{ suffix, reference, expectedBody string }{
+		{"/content?kind=memory&limit=1", contentRef, memory.Content},
+		{fmt.Sprintf("/history?kind=document&id=%d&limit=10", documents[1].ID), contentRef, `"version":1`},
+		{"/code?limit=1", codeRef, "encoded retained source"},
+	} {
+		t.Run(testcase.suffix, func(t *testing.T) {
+			response, err := server.Client().Get(server.URL + "/api/projects/unresolved/" + url.QueryEscape(testcase.reference) + testcase.suffix)
+			require.NoError(t, err)
+			body, err := io.ReadAll(response.Body)
+			require.NoError(t, response.Body.Close())
+			require.NoError(t, err)
+			require.Equal(t, http.StatusOK, response.StatusCode, string(body))
+			require.Contains(t, string(body), testcase.expectedBody)
+			response, err = server.Client().Get(server.URL + "/api/projects/unresolved/" + url.QueryEscape(url.QueryEscape(testcase.reference)) + testcase.suffix)
+			require.NoError(t, err)
+			require.Equal(t, http.StatusNotFound, response.StatusCode, "double encoding must not become a valid reference")
+			require.NoError(t, response.Body.Close())
+		})
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/projects/unresolved/"+contentRef+"/content?kind=memory", nil)
+	request.URL.RawPath = "/api/projects/unresolved/urn%ZZ/content"
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+}

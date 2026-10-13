@@ -50,7 +50,7 @@ func (s *Server) captureActiveRuleIntent(ctx context.Context, intent ruleIntentC
 	}
 	project := strings.TrimSpace(intent.Project)
 	if project == "" && scope == string(models.ScopeProject) {
-		project = projectFromContext(ctx)
+		project = ProjectFromContext(ctx)
 	}
 	audience := strings.TrimSpace(intent.Audience)
 	if audience == "" {
@@ -95,7 +95,7 @@ func (s *Server) captureActiveRuleIntent(ctx context.Context, intent ruleIntentC
 		Fingerprint:       ruleIntentFingerprint(sourceTool, project, scope, audience, content),
 		DecayPolicy:       models.RuleEscapeNoData,
 	}
-	if project != "" {
+	if scope == string(models.ScopeProject) && project != "" {
 		candidate.ActivationPredicate["project"] = project
 	}
 	return s.ruleGovernanceStore.CreateRuleCandidate(ctx, candidate)

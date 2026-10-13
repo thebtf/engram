@@ -9,10 +9,11 @@ import (
 	"github.com/lib/pq"
 	"github.com/thebtf/engram/internal/projectidentity"
 	gormlib "gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
-// BootstrapLogicalProject is the only normal identity creation roundtrip.
-// Existing historical bindings must be migrated, never shadowed by a new UUID.
+// BootstrapLogicalProject is the locator bootstrap that mints a new identity.
+// Data writes register their already selected UUID without resolving a locator.
 func BootstrapLogicalProject(ctx context.Context, db *gormlib.DB, input projectidentity.BootstrapRequest) (projectidentity.Project, error) {
 	var result projectidentity.Project
 	if err := projectidentity.ValidateRepositoryLocator(input.RepositoryLocator); err != nil {
@@ -96,4 +97,20 @@ func BootstrapLogicalProject(ctx context.Context, db *gormlib.DB, input projecti
 		return projectidentity.Project{}, &projectidentity.LogicalError{Code: "PROJECT_RESOLUTION_UNAVAILABLE"}
 	}
 	return result, nil
+}
+
+func ensureLogicalProjectForWrite(ctx context.Context, tx *gormlib.DB, project string) error {
+	if !projectidentity.ValidProjectID(project) {
+		return nil
+	}
+	row := Project{ID: project, DisplayName: sql.NullString{String: "Registered project", Valid: true}}
+	if err := tx.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error; err != nil {
+		return err
+	}
+	var active Project
+	err := liveKnowledgeProjects(tx.WithContext(ctx)).Clauses(clause.Locking{Strength: "SHARE"}).Where("id = ?", project).Take(&active).Error
+	if errors.Is(err, gormlib.ErrRecordNotFound) {
+		return &projectidentity.LogicalError{Code: "PROJECT_IDENTITY_CONFLICT"}
+	}
+	return err
 }

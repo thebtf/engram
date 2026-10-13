@@ -169,12 +169,25 @@ func (s *Service) handleRetainedProjectHistory(w http.ResponseWriter, r *http.Re
 	s.readRetainedProject(w, r, true)
 }
 
+func retainedProjectReference(r *http.Request) (string, error) {
+	reference := chi.URLParam(r, "reference")
+	if r.URL.RawPath != "" {
+		return url.PathUnescape(reference)
+	}
+	return reference, nil
+}
+
 func (s *Service) readRetainedProject(w http.ResponseWriter, r *http.Request, history bool) {
 	store := s.logicalMembershipStore(w, r)
 	if store == nil {
 		return
 	}
-	reference, kind := chi.URLParam(r, "reference"), r.URL.Query().Get("kind")
+	reference, err := retainedProjectReference(r)
+	if err != nil {
+		writeDocumentError(w, http.StatusBadRequest, "invalid retained reference")
+		return
+	}
+	kind := r.URL.Query().Get("kind")
 	rows, err := store.UnresolvedMembership(r.Context(), reference, kind)
 	if err != nil {
 		writeRetainedProjectError(w, err)
@@ -281,7 +294,11 @@ func (s *Service) handleRetainedProjectCode(w http.ResponseWriter, r *http.Reque
 	if store == nil {
 		return
 	}
-	reference := chi.URLParam(r, "reference")
+	reference, err := retainedProjectReference(r)
+	if err != nil {
+		writeDocumentError(w, http.StatusBadRequest, "invalid retained reference")
+		return
+	}
 	rows, err := store.UnresolvedMembership(r.Context(), reference, "code")
 	if err != nil {
 		writeRetainedProjectError(w, err)

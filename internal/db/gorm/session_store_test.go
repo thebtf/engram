@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/postgres"
@@ -184,7 +185,7 @@ func TestSessionStore_GetSessionsToday(t *testing.T) {
 func TestSessionStore_GetAllProjects(t *testing.T) {
 	ss, db, cleanup := openSessionTestDB(t)
 	defer cleanup()
-	ids := []string{"sst-canonical-alpha", "sst-canonical-beta", "sst-canonical-unlabelled"}
+	ids := []string{uuid.NewString(), uuid.NewString(), uuid.NewString()}
 	t.Cleanup(func() { db.Where("id IN ?", ids).Delete(&Project{}) })
 	for i, id := range ids {
 		row := Project{ID: id}
@@ -198,7 +199,7 @@ func TestSessionStore_GetAllProjects(t *testing.T) {
 	for i, id := range ids {
 		label := "Duplicate label"
 		if i == 2 {
-			label = id
+			label = "Registered project"
 		}
 		assert.Contains(t, projects, ProjectDescriptor{ID: id, DisplayName: label})
 	}

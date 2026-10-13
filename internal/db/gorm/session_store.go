@@ -13,6 +13,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
+	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -201,8 +202,9 @@ func (s *SessionStore) GetSessionsToday(ctx context.Context) (int, error) {
 
 // ProjectDescriptor keeps canonical identity separate from its human label.
 type ProjectDescriptor struct {
-	ID          string `json:"id"`
-	DisplayName string `json:"display_name"`
+	ID                  string `json:"project_id"`
+	DisplayName         string `json:"name"`
+	RepositoryQualifier string `json:"repository_qualifier,omitempty"`
 }
 
 func liveKnowledgeProjects(q *gorm.DB) *gorm.DB {
@@ -214,22 +216,32 @@ func liveKnowledgeProjects(q *gorm.DB) *gorm.DB {
 // Ordinary authenticated readers share the existing server-wide project scope.
 func (s *SessionStore) GetAllProjects(ctx context.Context) ([]ProjectDescriptor, error) {
 	var rows []Project
-	if err := liveKnowledgeProjects(s.db.WithContext(ctx)).Select("id, display_name").Order("id ASC").Find(&rows).Error; err != nil {
+	if err := liveKnowledgeProjects(s.db.WithContext(ctx)).Select("id, display_name, git_remote").Order("id ASC").Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	items := make([]ProjectDescriptor, 0, len(rows))
 	for _, row := range rows {
+		if !projectidentity.ValidProjectID(row.ID) {
+			continue
+		}
 		label := row.DisplayName.String
 		if !row.DisplayName.Valid || strings.TrimSpace(label) == "" {
-			label = row.ID
+			label = "Registered project"
 		}
-		items = append(items, ProjectDescriptor{ID: row.ID, DisplayName: label})
+		item := ProjectDescriptor{ID: row.ID, DisplayName: label}
+		if locator, err := projectidentity.NormalizeRepositoryLocator(row.GitRemote.String); err == nil {
+			item.RepositoryQualifier = locator
+		}
+		items = append(items, item)
 	}
 	return items, nil
 }
 
 // CanonicalProjectExists never resolves labels or legacy aliases to authority.
 func (s *SessionStore) CanonicalProjectExists(ctx context.Context, project string) (bool, error) {
+	if !projectidentity.ValidProjectID(project) {
+		return false, nil
+	}
 	var total int64
 	err := liveKnowledgeProjects(s.db.WithContext(ctx)).Where("id = ?", project).Count(&total).Error
 	return total == 1, err

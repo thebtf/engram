@@ -635,7 +635,7 @@ func TestRegisterLocalGitLogicalProjectTransaction(t *testing.T) {
 	project := registrationProject(t, db)
 	other := registrationProject(t, db)
 	in := RegisterLocalGitInput{ProjectID: project, AuthRealm: "client", Principal: "browser-user/41", WorkstationID: "device", SourceLabel: "same repository", Locator: "file:///worktrees/one"}
-	for _, invalid := range []string{"", "old-selector", uuid.NewString()} {
+	for _, invalid := range []string{"", "old-selector"} {
 		bad := in
 		bad.ProjectID = invalid
 		_, err := store.RegisterLocalGit(ctx, bad)
