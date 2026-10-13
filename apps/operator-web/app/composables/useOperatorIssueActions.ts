@@ -52,8 +52,10 @@ export async function updateIssue(
   return apiPatch<{ message: string }>(`/issues/${id}`, { ...fields, source_project })
 }
 
-export async function deleteIssue(id: number): Promise<void> {
-  await apiDelete<Record<string, unknown>>(`/issues/${id}`)
+export async function deleteIssue(id: number, sourceProject: string): Promise<void> {
+  const source_project = await resolveProject(sourceProject)
+  const params = new URLSearchParams({ source_project, source_agent: 'human' })
+  await apiDelete<Record<string, unknown>>(`/issues/${id}?${params}`)
 }
 
 export async function acknowledgeIssues(ids: number[], sourceProject: string): Promise<{ acknowledged: number }> {

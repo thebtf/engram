@@ -755,8 +755,10 @@ export async function acknowledgeIssues(ids: number[], sourceProject: string, si
  return postJson<{ acknowledged: number }>(`${API_BASE}/issues/acknowledge`, { ids, source_project, source_agent: 'human' }, { signal })
 }
 
-export async function deleteIssue(id: number, signal?: AbortSignal): Promise<void> {
- await deleteJson<Record<string, unknown>>(`${API_BASE}/issues/${id}`, { signal })
+export async function deleteIssue(id: number, sourceProject: string, signal?: AbortSignal): Promise<void> {
+ const source_project = await resolveProject(sourceProject, signal)
+ const params = new URLSearchParams({ source_project, source_agent: 'human' })
+ await deleteJson<Record<string, unknown>>(`${API_BASE}/issues/${id}?${params}`, { signal })
 }
 
 export async function updateIssue(

@@ -310,10 +310,10 @@ async function submitComment() {
 }
 
 async function confirmDelete() {
-  if (!issue.value) return
+  if (!issue.value || !canAct.value) return
   actionLoading.value = true
   try {
-    await deleteIssue(issue.value.id)
+    await deleteIssue(issue.value.id, selectedProject.value)
     router.push({ path: '/issues', query: route.query })
   } catch (err: any) {
     error.value = err.message || t.value.issueDetail.loadFailed
@@ -414,6 +414,7 @@ onMounted(async () => { await Promise.all([loadIssue(), refresh().catch(() => {}
                   variant="outline"
                   size="sm"
                   class="border-destructive/50 text-destructive hover:bg-destructive/10"
+                  :disabled="actionLoading || !canAct"
                   @click="showDeleteConfirm = true"
                 >
                   <Trash2 class="w-3.5 h-3.5 mr-1" />
@@ -557,7 +558,7 @@ onMounted(async () => { await Promise.all([loadIssue(), refresh().catch(() => {}
       </DialogHeader>
       <DialogFooter>
         <Button variant="secondary" @click="showDeleteConfirm = false">{{ t.issueDetail.cancel }}</Button>
-        <Button variant="destructive" @click="confirmDelete" :disabled="actionLoading">
+        <Button variant="destructive" @click="confirmDelete" :disabled="actionLoading || !canAct">
           <Loader2 v-if="actionLoading" class="w-4 h-4 mr-2 animate-spin" />
           {{ t.issueDetail.delete }}
         </Button>

@@ -52,6 +52,8 @@ async function mount(t, project = selectedProject) {
     if (url.pathname === '/api/issues/7' && call.method === 'DELETE') { deleted = true; return new Response(null, { status: 204 }) }
     if (url.pathname === '/api/issues/acknowledge') { row.status = 'acknowledged'; return json({ operation_state: 'completed' }) }
     if (url.pathname === '/api/issues/selection') return json({ selection: snapshot })
+    if (url.pathname === '/api/issues/selection/current') return json({ selection: snapshot })
+    if (url.pathname === '/api/issues/selection/page') return json({ cursor: 'synthetic-cursor', next_cursor: '', filter_fingerprint: `sha256:${'a'.repeat(64)}`, targets: explicit.targets, total: 2 })
     if (url.pathname === '/api/issues/operations') return json({ request_id: call.body.request_id, operation_state: 'completed', readback: { authoritative: true, kind: 'current', current_state: [{ status: 'acknowledged', priority: 'medium', labels: [], updated_at: row.updated_at }] } })
     throw new Error(`Unexpected fixture request: ${call.method} ${url}`)
   }
@@ -98,6 +100,11 @@ for (const scope of ['', 'all']) {
       () => issues.runIssueSelectionOperation(explicit, { kind: 'acknowledge' }, selectedProject),
       () => issues.runIssueSelection([7, 8], { kind: 'priority', priority: 'high' }, selectedProject),
       () => issues.deleteIssue(7),
+      () => issues.saveIssueSelection(explicit),
+      () => issues.freezeIssueSelection({}, []),
+      () => issues.currentIssueSelection(),
+      () => issues.loadIssuePage({}),
+      () => issues.loadIssuePage({}, 'synthetic-cursor'),
     ]) await assert.rejects(mutation, TypeError)
     assert.deepEqual(calls, [])
   })
@@ -151,7 +158,7 @@ test('public ID selection wrapper preserves one source through snapshot and atom
   const result = await issues.runIssueSelection([7, 8], { kind: 'acknowledge' }, selectedProject)
   assert.equal(result.kind, 'committed_verified')
   assert.deepEqual(calls.map(call => [call.method, call.url.pathname]), [['POST', '/api/issues/selection'], ['POST', '/api/issues/operations']])
-  assert.deepEqual(calls[0].body, { selection: { kind: 'explicit', targets: [{ id: '7' }, { id: '8' }] } })
+  assert.deepEqual(calls[0].body, { selection: { kind: 'explicit', targets: [{ id: '7' }, { id: '8' }] }, source_project: selectedProject, source_agent: 'human' })
   assert.equal(calls[1].body.source_project, selectedProject)
   assert.equal(calls[1].body.source_agent, 'human')
 })
@@ -185,7 +192,38 @@ test('normal issue updates and deletion require selected source and preserve sup
   assert.equal(deletion.request.intent.sourceProject, selectedProject)
   const request = calls.find(call => call.method === 'DELETE')
   assert.equal(request.url.pathname, '/api/issues/7')
+  assert.equal(request.url.search, `?source_project=${selectedProject}&source_agent=human`)
+  assert.equal(request.credentials, 'include')
   assert.equal(request.body, undefined)
+})
+
+test('selection snapshot, current and both page shapes carry actor context separately from row filters', async t => {
+  const { issues, calls } = await mount(t)
+  calls.length = 0
+  await issues.saveIssueSelection({ kind: 'none', domain: 'issues', version: 0 })
+  await issues.saveIssueSelection({ ...explicit, kind: 'page', cursor: 'synthetic-cursor' })
+  await issues.freezeIssueSelection({ project: selectedProject, sourceProject: issueSourceProject, statuses: ['open'] }, ['8'])
+  const current = await issues.currentIssueSelection()
+  const page = await issues.loadIssuePage({ sourceProject: issueSourceProject })
+  await issues.loadIssuePage({}, page.cursor)
+  assert.deepEqual(current.targets, explicit.targets)
+  assert.deepEqual(page.targets, explicit.targets)
+  const actor = { source_project: selectedProject, source_agent: 'human' }
+  assert.deepEqual(calls.map(call => [call.url.pathname, call.body]), [
+    ['/api/issues/selection', { selection: { kind: 'none' }, ...actor }],
+    ['/api/issues/selection', { selection: { kind: 'page', cursor: 'synthetic-cursor' }, ...actor }],
+    ['/api/issues/selection', { selection: { kind: 'frozen_filter', filter: { project: selectedProject, source_project: issueSourceProject, statuses: ['open'] }, excluded_ids: ['8'] }, ...actor }],
+    ['/api/issues/selection/current', actor],
+    ['/api/issues/selection/page', { filter: { project: selectedProject, source_project: issueSourceProject }, limit: 50, ...actor }],
+    ['/api/issues/selection/page', { cursor: 'synthetic-cursor', limit: 50, ...actor }],
+  ])
+  assert.ok(calls.every(call => call.method === 'POST' && call.credentials === 'include'))
+  calls.length = 0
+  for (const project of ['all', issueSourceProject, targetProject]) {
+    await assert.rejects(() => issues.freezeIssueSelection({ project }, []), TypeError)
+    await assert.rejects(() => issues.loadIssuePage({ project }), TypeError)
+  }
+  assert.deepEqual(calls, [])
 })
 
 test('pending selection and catalog errors cannot dispatch human issue actions despite a known UUID', async t => {
@@ -203,6 +241,11 @@ test('pending selection and catalog errors cannot dispatch human issue actions d
       () => issues.runIssueSelection([7, 8], { kind: 'labels', labels: ['evidence'] }, selectedProject),
       () => issues.updateIssue(7, { status: 'resolved' }),
       () => issues.deleteIssue(7),
+      () => issues.saveIssueSelection(explicit),
+      () => issues.freezeIssueSelection({}, []),
+      () => issues.currentIssueSelection(),
+      () => issues.loadIssuePage({}),
+      () => issues.loadIssuePage({}, 'synthetic-cursor'),
     ]) await assert.rejects(mutation, TypeError)
     assert.deepEqual(calls, [])
     state.value = state === context.selectionPending ? false : null

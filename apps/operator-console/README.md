@@ -105,6 +105,15 @@ selection/navigation only; actual migrated-reader, privacy and installed accepta
 remain Main's integration dependencies. No production migration or release completion
 is claimed by this source slice.
 
+Human issue deletion sends `DELETE /api/issues/{id}?source_project=<selected canonical UUID>&source_agent=human`
+with no body. The selected acting project is separate from the content ID and the
+issue's original source/target; missing, all, pending or failed selection cannot dispatch.
+Issue selection snapshot, current and page POSTs carry the same actor fields at the
+top level, including cursor-only and empty-selection requests. Nested filter source
+fields remain row predicates, not actor attribution. Atomic operations retain the
+same acting context, generation guards, expiry and ID-bound readback.
+
+
 The mock uses the real bound `POST /api/code/contexts?project=<UUID>` shape, including
 `tab_binding_id` and `document_proof`. Human issue fixtures require explicit canonical
 source/target projects and `source_agent=human`; list filters apply before paging and

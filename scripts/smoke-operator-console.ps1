@@ -1,7 +1,13 @@
+<#
+.PARAMETER SourceProject
+Canonical UUID explicitly selected from this smoke backend's /api/projects catalog.
+Required for issue mutations; optional with -ParityOnly or -PageSmokesOnly.
+#>
 param(
   [ValidateSet("disabled", "token")]
   [string]$Mode = "disabled",
   [string]$AdminToken = "dev-admin-token",
+  [string]$SourceProject,
   [int]$PostgresPort = 55434,
   [int]$WorkerPort = 47779,
   [int]$OperatorConsolePort = 43002,
@@ -12,6 +18,16 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+if (-not ($ParityOnly -or $PageSmokesOnly))
+{
+  $sourceProjectGuid = [guid]::Empty
+  if (-not [guid]::TryParseExact($SourceProject, "D", [ref]$sourceProjectGuid))
+  {
+    throw "Issue mutations require -SourceProject with an explicitly selected canonical catalog UUID."
+  }
+  $SourceProject = $sourceProjectGuid.ToString("D")
+}
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $operatorConsoleRoot = Join-Path $repoRoot "apps\operator-console"
@@ -506,6 +522,20 @@ try
     Assert-Status -Response $statsVnextResponse -ExpectedStatus @(200) -Step "authenticated stats/vnext"
   }
 
+  Write-Step "Validating selected source project against the backend catalog"
+  $projectsResponse = Invoke-OperatorRequest -Method GET -Url "$origin/api/projects" -Session $session
+  Assert-Status -Response $projectsResponse -ExpectedStatus @(200) -Step "source project catalog"
+  $projectCatalog = Read-JsonBody -Response $projectsResponse -Step "source project catalog"
+  if (-not $projectCatalog.PSObject.Properties["items"])
+  {
+    throw "Source project catalog did not include canonical items."
+  }
+  $matchingProjects = @($projectCatalog.items | Where-Object { $_.project_id -eq $SourceProject })
+  if ($matchingProjects.Count -ne 1)
+  {
+    throw "Selected -SourceProject must match exactly one canonical backend catalog project."
+  }
+
   Write-Step "Creating smoke issue through proxied operator-console API"
   $createIssueResponse = Invoke-OperatorRequest `
     -Method POST `
@@ -516,9 +546,9 @@ try
     body = "Created by scripts/smoke-operator-console.ps1 to prove proxied issue mutations."
     priority = "low"
     type = "task"
-    source_project = "operator-console-smoke"
-    target_project = "operator-console-smoke"
-    source_agent = "smoke-script"
+    source_project = $SourceProject
+    target_project = $SourceProject
+    source_agent = "human"
     labels = @("operator-console", "smoke")
   }
   Assert-Status -Response $createIssueResponse -ExpectedStatus @(201) -Step "issue create"
@@ -538,7 +568,7 @@ try
     -Method POST `
     -Url $acknowledgeIssuesUrl `
     -Session $session `
-    -Body @{ ids = @($createdIssueId) }
+    -Body @{ ids = @($createdIssueId); source_project = $SourceProject; source_agent = "human" }
   Assert-Status -Response $acknowledgeResponse -ExpectedStatus @(200) -Step "issue acknowledge"
 
   Write-Step "Resolving smoke issue with a comment"
@@ -549,15 +579,15 @@ try
     -Body @{
     status = "resolved"
     comment = $smokeComment
-    source_project = "operator-console-smoke"
-    source_agent = "smoke-script"
+    source_project = $SourceProject
+    source_agent = "human"
   }
   Assert-Status -Response $resolveIssueResponse -ExpectedStatus @(200) -Step "issue resolve"
 
   Write-Step "Deleting smoke issue"
   $deleteIssueResponse = Invoke-OperatorRequest `
     -Method DELETE `
-    -Url $issueUrl `
+    -Url "${issueUrl}?source_project=$SourceProject&source_agent=human" `
     -Session $session
   Assert-Status -Response $deleteIssueResponse -ExpectedStatus @(204) -Step "issue delete"
 
@@ -686,7 +716,7 @@ try
     {
       $cleanupIssueResponse = Invoke-OperatorRequest `
         -Method DELETE `
-        -Url "$issuesUrl/$createdIssueId" `
+        -Url "${issuesUrl}/${createdIssueId}?source_project=$SourceProject&source_agent=human" `
         -Session $session
       if (@(204, 404) -notcontains [int]$cleanupIssueResponse.StatusCode)
       {

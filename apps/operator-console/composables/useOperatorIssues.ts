@@ -435,10 +435,9 @@ export function useOperatorIssues(): {
  let generation = 0
  let detailGeneration = 0
 
- function catalogFilter(filter: IssueSelectionFilter): IssueSelectionFilter {
-  const scope = filter.project ?? context.project.value
-  if (context.selectionPending.value || context.selectionError.value || context.error.value || !scope || (scope !== 'all' && !isCatalogProject(scope)) || (filter.sourceProject !== undefined && !isCatalogProject(filter.sourceProject))) throw new TypeError('A catalog issue project is required')
-  return { ...filter, project: scope === 'all' ? undefined : scope }
+ function catalogFilter(filter: IssueSelectionFilter, project: string): IssueSelectionFilter {
+  if ((filter.project !== undefined && filter.project !== project) || (filter.sourceProject !== undefined && !isCatalogProject(filter.sourceProject))) throw new TypeError('Issue filter must use the selected catalog project')
+  return { ...filter, project }
  }
 
  function humanSource(sourceProject: string) {
@@ -590,15 +589,18 @@ export function useOperatorIssues(): {
  }
 
  async function saveIssueSelection(selection: Exclude<OperatorSelection, { kind: 'frozen_filter' }>): Promise<OperatorSelection> {
+  const source = humanSource(context.project.value)
   const requestId = crypto.randomUUID()
   const response = await operatorFetchJson<SelectionEnvelope>('/api/issues/selection', selectionInit(requestId, {
    selection: issueSelectionPayload(selection),
+   ...source,
   }), 'issues-selection-snapshot')
   return parseIssueSelection(response)
  }
 
  async function freezeIssueSelection(filter: IssueSelectionFilter, excludedIds: string[]): Promise<OperatorSelection> {
-  filter = catalogFilter(filter)
+  const source = humanSource(context.project.value)
+  filter = catalogFilter(filter, source.source_project)
   const requestId = crypto.randomUUID()
   const response = await operatorFetchJson<SelectionEnvelope>('/api/issues/selection', selectionInit(requestId, {
    selection: {
@@ -611,18 +613,21 @@ export function useOperatorIssues(): {
     },
     excluded_ids: excludedIds,
    },
+   ...source,
   }), 'issues-selection-freeze')
   return parseIssueSelection(response)
  }
 
  async function currentIssueSelection(): Promise<OperatorSelection> {
+  const source = humanSource(context.project.value)
   const requestId = crypto.randomUUID()
-  const response = await operatorFetchJson<SelectionEnvelope>('/api/issues/selection/current', selectionInit(requestId, {}), 'issues-selection-current')
+  const response = await operatorFetchJson<SelectionEnvelope>('/api/issues/selection/current', selectionInit(requestId, source), 'issues-selection-current')
   return parseIssueSelection(response)
  }
 
  async function loadIssuePage(filter: IssueSelectionFilter, cursor = ''): Promise<IssueSelectionPage> {
-  filter = catalogFilter(filter)
+  const source = humanSource(context.project.value)
+  filter = catalogFilter(filter, source.source_project)
   const requestId = crypto.randomUUID()
   const response = await operatorFetchJson<IssueSelectionPageEnvelope>('/api/issues/selection/page', selectionInit(requestId, {
    ...(cursor ? { cursor } : {
@@ -634,6 +639,7 @@ export function useOperatorIssues(): {
     }
    }),
    limit: 50,
+   ...source,
   }), 'issues-selection-page')
   return parseIssueSelectionPage(response)
  }
@@ -672,7 +678,7 @@ export function useOperatorIssues(): {
  async function deleteIssue(id: number) {
   const source = humanSource(context.project.value)
   const request = { requestId: crypto.randomUUID(), action: 'issue-delete', intent: { id, sourceProject: source.source_project } }
-  const response = await issueMutation(request, `/api/issues/${id}`, jsonInit('DELETE'))
+  const response = await issueMutation(request, `/api/issues/${id}?${new URLSearchParams(source)}`, jsonInit('DELETE'))
   return verifyDeletedIssue(response.mutation, id)
  }
 

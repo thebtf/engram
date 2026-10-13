@@ -73,7 +73,10 @@ const issueMutation = useMutation({
 })
 
 const deleteMutation = useMutation({
-  mutationFn: () => deleteIssue(issueId.value),
+  mutationFn: () => {
+    if (!canAct.value) throw new Error('Choose a canonical source project before acting on an issue.')
+    return deleteIssue(issueId.value, selectedProject.value)
+  },
   onSuccess: async () => {
     await queryClient.invalidateQueries({ queryKey: ['issues'] })
     await router.push({ path: '/issues', query: route.query })
@@ -344,7 +347,7 @@ function confirmDelete() {
             </button>
             <button
               class="rounded-lg border border-[var(--danger)] bg-[var(--surface)] px-3 py-2 text-xs font-semibold text-[var(--danger)]"
-              :disabled="deleteMutation.isPending.value"
+              :disabled="deleteMutation.isPending.value || !canAct"
               @click="showDeleteConfirm = !showDeleteConfirm"
             >
               Delete
@@ -454,7 +457,7 @@ function confirmDelete() {
           <div class="mt-3 flex flex-wrap gap-2">
             <button
               class="rounded-lg border border-[var(--danger)] bg-[color:rgba(248,113,113,0.12)] px-4 py-2 text-sm font-semibold text-[var(--danger)] disabled:cursor-not-allowed disabled:opacity-60"
-              :disabled="deleteMutation.isPending.value"
+              :disabled="deleteMutation.isPending.value || !canAct"
               @click="confirmDelete"
             >
               {{ deleteMutation.isPending.value ? 'Deleting...' : 'Delete permanently' }}

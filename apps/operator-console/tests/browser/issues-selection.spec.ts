@@ -73,8 +73,8 @@ test('Select all freezes every matching issue when the loaded page is capped at 
  await page.locator('.modal .tbtn.primary').click()
 
  expect(selectionRequests).toEqual([
-  { selection: { kind: 'frozen_filter', filter: { project: targetProject }, excluded_ids: [] } },
-  { selection: { kind: 'frozen_filter', filter: { project: targetProject, statuses: ['open'] }, excluded_ids: [] } },
+  { selection: { kind: 'frozen_filter', filter: { project: targetProject }, excluded_ids: [] }, source_project: targetProject, source_agent: 'human' },
+  { selection: { kind: 'frozen_filter', filter: { project: targetProject, statuses: ['open'] }, excluded_ids: [] }, source_project: targetProject, source_agent: 'human' },
  ])
  expect(operationRequests).toEqual([
   expect.objectContaining({
@@ -180,13 +180,14 @@ test('all-project issue browsing keeps detail readable but disables every issue 
  await page.route('**/api/issues/7**', route => route.fulfill({ json: { issue: issue(7), comments: [] } }))
  await page.route('**/api/issues/selection', route => route.fulfill({ json: { selection: { ...frozenSelection, target_count: 1 } } }))
  page.on('request', request => {
-  if (request.method() !== 'GET' && /^\/api\/issues(?:\/(?:acknowledge|operations|7))?$/.test(new URL(request.url()).pathname)) mutations.push(request.method())
+  if (request.method() !== 'GET' && /^\/api\/issues(?:\/(?:acknowledge|operations|selection(?:\/(?:current|page))?|7))?$/.test(new URL(request.url()).pathname)) mutations.push(request.method())
  })
  await page.goto('/issues?project=all')
  await expect(page.locator('.issue-row')).toHaveCount(1)
  expect(listScopes.length).toBeGreaterThan(0)
  expect(listScopes.every(scope => scope === null)).toBe(true)
- await page.getByRole('button', { name: 'Выделить все' }).click()
+ await expect(page.getByRole('button', { name: 'Выделить все' })).toBeDisabled()
+ await page.locator('.issue-row-check').click()
  await expect(page.locator('.bulkbar .bc')).toContainText('1')
  for (const index of [0, 1, 3]) await expect(page.locator('.bulkbar .act').nth(index)).toBeDisabled()
  await page.locator('.issue-row').click()

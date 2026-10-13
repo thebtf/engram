@@ -282,6 +282,7 @@ async function toggleSelection(issue: OperatorIssue) {
   const target = targetFor(issue)
   const current = selection.current.value
   if (current.kind === 'frozen_filter') {
+    if (!humanSourceReady.value) return
     const excludedIds = isSelected(issue.id)
       ? [...current.excludedIds, target.id]
       : current.excludedIds.filter((id) => id !== target.id)
@@ -303,7 +304,7 @@ async function toggleSelection(issue: OperatorIssue) {
 }
 
 async function selectAllFiltered() {
-  if (!scopeReady.value) return
+  if (!humanSourceReady.value) return
   const generation = scopeGeneration
   try {
     const snapshot = await freezeIssueSelection(selectionFilter(), [])
@@ -692,7 +693,7 @@ function renderMarkdown(value: string) {
       <div class="pane">
         <div class="list-ops">
           <div class="op-left">
-            <button class="tbtn" :disabled="!filteredRows.length" @click="selectAllFiltered">{{ t('issues.actions.selectAll') }}</button>
+            <button class="tbtn" :disabled="!filteredRows.length || !humanSourceReady" @click="selectAllFiltered">{{ t('issues.actions.selectAll') }}</button>
             <button class="tbtn" :disabled="!selectedCount" @click="clearSelection">{{ t('issues.actions.clearSelection') }}</button>
             <button class="tbtn" :disabled="!hasFilter()" @click="resetFilter">{{ t('issues.actions.resetFilter') }}</button>
             <span class="fcount">{{ t('issues.list.countInFilter', { shown: filteredRows.length, total: rows.length }) }}</span>

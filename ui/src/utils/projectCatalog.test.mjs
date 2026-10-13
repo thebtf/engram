@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { parseProjectCatalog, parseProjectResolution, parseRetainedPage, projectLabel, parseReaderPage, credentialBinding, assertCredentialMetadata } from './projectCatalog.ts'
+import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import * as projectCatalog from './projectCatalog.ts'
+
+const ts = createRequire(new URL('../../../apps/operator-console/package.json', import.meta.url))('typescript')
+const { parseProjectCatalog, parseProjectResolution, parseRetainedPage, projectLabel, parseReaderPage, credentialBinding, assertCredentialMetadata } = projectCatalog
 
 const first = '11111111-1111-4111-8111-111111111111'
 const second = '22222222-2222-4222-8222-222222222222'
@@ -103,3 +108,51 @@ test('vault binds identical names by ID and explicit project or global metadata'
   assert.throws(() => credentialBinding({ id: 1, name: 'same', scope: 'global', project: first }))
   assert.throws(() => credentialBinding({ id: 1, name: 'same', scope: 'project', project: second, project_id: first }))
 })
+
+function evaluate(file, dependencies, globals) {
+  const source = readFileSync(new URL(file, import.meta.url), 'utf8')
+  const code = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText
+  const module = { exports: {} }
+  new Function('require', 'module', 'exports', ...Object.keys(globals), code)(dependencies, module, module.exports, ...Object.values(globals))
+  return module.exports
+}
+
+for (const client of ['ui', 'operator-web']) {
+  test(`${client} deletes the content ID with explicit selected human source query and no body`, async () => {
+    const actor = '33333333-3333-4333-8333-333333333333'
+    const calls = []
+    const issue = { id: 7, source_project: first, target_project: second }
+    const fetch = async (path, init = {}) => {
+      const url = new URL(path, 'http://synthetic.invalid')
+      calls.push({ url, init })
+      if (url.pathname === '/api/projects') return Response.json({ items: [...items, { project_id: actor, name: 'Acting project' }], unresolved: [] })
+      if (url.pathname === '/api/issues/7' && init.method === 'DELETE') return new Response(null, { status: 204 })
+      if (url.pathname === '/api/issues/7') return Response.json({ issue, comments: [] })
+      throw new Error(`Unexpected fixture request ${url}`)
+    }
+    const globals = {
+      fetch,
+      useRuntimeConfig: () => ({ public: { apiBase: '/api' } }),
+      $fetch: async (path, init) => {
+        const response = await fetch(path, init)
+        const text = await response.text()
+        return text ? JSON.parse(text) : undefined
+      },
+    }
+    const api = evaluate(client === 'ui' ? './api.ts' : '../../../apps/operator-web/app/composables/useOperatorApi.ts', () => projectCatalog, globals)
+    const actions = client === 'ui' ? api : evaluate('../../../apps/operator-web/app/composables/useOperatorIssueActions.ts', () => api, globals)
+    await api.fetchProjects()
+    const original = await api.fetchIssue(issue.id)
+    calls.length = 0
+    for (const source of [undefined, '', 'all', 'global']) await assert.rejects(() => actions.deleteIssue(original.issue.id, source))
+    assert.deepEqual(calls, [])
+    assert.equal(await actions.deleteIssue(original.issue.id, actor), undefined)
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0].url.pathname, '/api/issues/7')
+    assert.equal(calls[0].url.search, `?source_project=${actor}&source_agent=human`)
+    assert.equal(calls[0].init.method, 'DELETE')
+    assert.equal(calls[0].init.body, undefined)
+    if (client === 'operator-web') assert.equal(calls[0].init.credentials, 'include')
+    assert.deepEqual(original.issue, issue)
+  })
+}
