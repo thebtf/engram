@@ -2,35 +2,41 @@
 
 **Feature Branch**: `spec/engram-architectural-recovery`  
 **Created**: 2026-08-22  
-**Status**: Ready for analysis
+**Status**: Working recovery specification; project identity replaced by the accepted 2026-10-12 mandate.
 **Input**: Governed architectural recovery that makes Engram's persistent-memory loop
 complete, observable, default, and safely migratable without redesigning the operator surface.
+
+**Current identity authority**: `.agent/intake/engram-project-identity-rebuild-2026-10-12-r1/DELIVERY-BRIEF.md`, `MAIN-SEAMS.json` and `contracts/project-identity-v3.md` replace the former identity-as-authorization and dual-UUID requirements. One portable logical Project UUID identifies the project; authentication, data privacy and Source/Checkout/View authorization remain separate. Earlier recovery plans, checklists, intake documents and receipts are historical where they require V3 identity approval, a copied-marker hold or a second server/Space identity. Their original evidence is retained, not reinterpreted as current acceptance. This update does not restart the recovery or authorize production effects.
 
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Keep one project coherent everywhere (Priority: P1)
 
 A coding agent uses the same logical project from a primary checkout, nested directory,
-branch, worktree, clone, directory move, or remote rename and receives the same durable
-Engram project identity without silently creating a second tenant.
+branch, worktree, clone, directory move, remote rename or another workstation and receives
+the same portable Project UUID without merging independent code snapshots.
 
-**Why this priority**: Identity is the authorization and migration boundary for every other
-recovery outcome.
+**Why this priority**: Stable identity keeps project knowledge and migrated records coherent.
+It identifies membership; it is neither an authorization boundary nor an access grant.
 
-**Independent Test**: A fixture exercises all supported locations for one anchored project,
-then verifies one canonical identity; copied anchors, malformed anchors, ambiguous historical
-identifiers, and unanchored writes fail before mutation.
+**Independent Test**: Exercise marker, common-dir cache and first-locator bootstrap from the
+actual call roots. Verify one UUID, independent dirty Views and separate data authorization.
+Malformed IDs, genuine marker/cache conflicts and unresolved mappings fail without minting a fallback.
 
 **Acceptance Scenarios**:
 
-1. **Given** a valid repository anchor, **When** supported adapters access the project from a
-   primary checkout, worktree, clone, nested directory, branch, moved directory, or renamed
-   remote, **Then** each resolves the same canonical project identity.
-2. **Given** a copied anchor in a fork, **When** it attempts a project-scoped mutation,
-   **Then** the request is held for an explicit identity decision and no data is written.
-3. **Given** a missing, malformed, or ambiguous identity, **When** a scoped write is requested,
-   **Then** it fails with an actionable onboarding or ambiguity result and creates no fallback
-   path-, name-, or hash-derived tenant.
+1. **Given** a valid portable marker or accepted cache, **When** adapters access the project from
+   a primary checkout, external worktree, clone, nested directory, branch, moved directory,
+   renamed remote or another workstation, **Then** each uses the same UUID, including offline
+   pinned resolution; neither a clean HEAD nor staging the marker is required.
+2. **Given** a copied marker, **When** a clone or fork uses it, **Then** it denotes the same logical
+   project by default without identity approval; existing data/source authorization still applies.
+   Intentional separation requires an explicit new ID, not inference from upstream or basename.
+3. **Given** no usable marker, cache or locator, a malformed ID or conflicting bindings, **When**
+   a scoped operation is requested, **Then** it returns a typed context, invalid-identity or conflict
+   result and creates no path-, name- or hash-derived project. A selected unpinned repository with
+   a valid primary locator may use atomic get-or-create; explicit init may create a selected new
+   project. Opening an arbitrary directory creates nothing, and unscoped tools/list remains available.
 
 ---
 
@@ -166,8 +172,12 @@ its current supported contract and prove identity handling is consistent where i
 
 ### Edge Cases
 
-- A project has no anchor, a malformed anchor, duplicate copied anchor, ambiguous legacy selector,
-  intentional directory anchor, nested Git repository, or non-Git directory.
+- A project has no marker but a valid cache/locator, a malformed or nil UUID, a marker/cache
+  conflict, a copied marker, an ambiguous legacy selector, an explicit nested marker boundary,
+  a nested Git repository, a submodule or an explicitly selected non-Git directory.
+- Two clients have different call roots; two dirty worktrees share a Project UUID and HEAD but
+  retain distinct Checkout/View results. Independent offline copies without shared identity
+  evidence cannot be guaranteed to converge.
 - A valid evidence event is duplicated, too large, redacted, malformed, privacy-restricted,
   interrupted, delayed, replayed, or processed while a worker lease is lost.
 - A proposal is duplicate, contradictory, stale, superseded, policy-prohibited, or lacks enough
@@ -179,21 +189,31 @@ its current supported contract and prove identity handling is consistent where i
 
 ## Functional Requirements
 
-- **FR-001**: The product MUST use one canonical project identity for every project-scoped
-  operation and must resolve it before data access or mutation.
+- **FR-001**: The product MUST use one portable logical Project UUID, identical in marker,
+  client/server context, database and adapters. Identity MUST NOT depend on authentication,
+  registration capability, path/name/hash or a second server-issued UUID. Existing data
+  authorization and privacy checks remain independent service boundaries.
 - **FR-002**: The product MUST distinguish canonical project identity from identifiers, display
   metadata, paths, remotes, branches, and historical selectors.
-- **FR-003**: The product MUST define explicit resolution, onboarding, ambiguity, copied-anchor,
-  worktree, clone, monorepo, nested-repository, directory-scope, and non-Git behavior.
-- **FR-004**: The product MUST prevent request-path creation or mutation from an unresolved,
-  ambiguous, path-derived, name-derived, or hash-derived project selector.
-- **FR-005**: The product MUST provide a versioned cross-client project descriptor and compatible
-  migration window for supported legacy clients.
+- **FR-003**: The product MUST define marker/cache resolution, first-locator bootstrap, explicit
+  creation and intentional separation, conflict, worktree, clone, monorepo, submodule,
+  nested-repository and non-Git behavior. A copied marker means the same project by default.
+- **FR-004**: Normal project operations MUST NOT mint or use path-, name- or hash-derived IDs
+  when context is missing or conflicting. Creation is limited to atomic bootstrap of a selected
+  unpinned repository or explicit new-project init, never arbitrary-directory discovery.
+- **FR-005**: The product MUST expose one Go resolver through a supported JSON/CLI DTO
+  `{project_id,name?}`, shared by adapters. Normal pinned resolution reads marker/common-dir
+  without registration/audit roundtrips. Unscoped tools/list remains available; missing context
+  returns a typed error only for the scoped operation. Historical inputs have a bounded
+  conservation migration window, not permanent alternate identity algorithms.
 - **FR-006**: The product MUST inventory every project-bearing record, serialized field, cache
   key, import/export field, job payload, and multiple-project-role relationship before contraction.
-- **FR-007**: The product MUST support deterministic project merge planning, conflict classes,
-  dry-run receipts, repeat-run idempotency, privacy non-widening, provenance preservation, and
-  explicit quarantine for unresolved rows.
+- **FR-007**: The product MUST support evidence-based project merge planning, conflict classes,
+  dry-run, restored-copy rehearsal, repeat-run idempotency, privacy non-widening and preservation
+  of object IDs, versions, links, provenance, differing values and decryptable secrets. A mixed old
+  selector requires per-record mapping; unresolved rows remain accessible in an explicit review
+  section under existing privacy checks, not normal project choices. Migration and restoration
+  MUST account for writes after the snapshot; key changes alone MUST NOT reindex unchanged content.
 - **FR-008**: The product MUST accept supported session or task evidence durably before
   acknowledging it and must persist source, project, principal, privacy, provenance, timestamp,
   and idempotency fingerprint.
@@ -241,12 +261,16 @@ its current supported contract and prove identity handling is consistent where i
 
 ## Success Criteria
 
-- **SC-001**: All supported worktrees, clones, branches, nested directories, directory moves, and
-  remote renames of an accepted anchored repository resolve one canonical project identity.
-- **SC-002**: A copied, malformed, missing, or ambiguous project anchor causes zero project-scoped
-  mutations until its prescribed onboarding or review path completes.
-- **SC-003**: Every active project-bearing record in the accepted migration fixture has a canonical
-  key or a visible quarantine disposition before legacy-identity contraction.
+- **SC-001**: Supported external worktrees, clones, branches, nested directories, directory moves,
+  remote renames and workstations carrying the same marker/cache or proven locator binding use one
+  portable UUID. Two dirty Checkout/View snapshots remain independent under that UUID.
+- **SC-002**: A copied marker works as the same project without an identity ceremony. Malformed IDs,
+  genuine binding conflicts and missing context cannot produce a fallback project or scoped mutation;
+  explicit initialization/first-locator bootstrap remain the defined creation paths. tools/list is
+  available without a project. Data authorization and privacy checks still apply independently.
+- **SC-003**: Every active project-bearing record in the accepted migration fixture has the same
+  canonical UUID as its project or an accessible unresolved disposition before legacy contraction;
+  old selectors are migration/history metadata, not normal UI or MCP project choices.
 - **SC-004**: Every acknowledged evidence payload in controlled replay, interruption, restart, and
   provider-degradation scenarios reaches `completed`, `terminal_failure`, or `quarantined` with an
   inspectable receipt.
@@ -267,9 +291,10 @@ its current supported contract and prove identity handling is consistent where i
   terminal outcome evidence; every remainder is explicitly unknown, abandoned, or diagnosed.
 - **SC-012**: Every retained outcome or confidence change is traceable to stored evidence and can
   be reversed through recorded knowledge revision rather than destructive overwrite.
-- **SC-013**: A production-like identity migration fixture proves per-table counts, provenance,
-  privacy, conflict disposition, repeat-run idempotency, and rollback rehearsal for every accepted
-  merge group.
+- **SC-013**: A production-like migration fixture proves per-table counts, retained IDs/versions,
+  links, provenance, privacy, secret decryptability, explicit unique-key conflicts and unresolved
+  access. Repeat-run, interruption and rollback/forward-recovery rehearsals preserve writes made
+  after the snapshot, plus existing Source/Checkout/View history and memberships.
 - **SC-014**: A source/configuration/package/route/tool/hook scan finds zero unclassified
   project-bearing path, architecture-era flag, deleted capability, or legacy identity algorithm.
 - **SC-015**: The final recovery release has zero active architecture-era flags, duplicate
@@ -304,10 +329,12 @@ active declaration, SC-010 is `not_computable` and the static-context cutover is
 
 ## Key Entities
 
-- **Canonical Project**: An immutable logical-project identity with mutable display metadata and
-  historical identifiers.
-- **Project Identifier and Merge Record**: Historical identity evidence and auditable convergence
-  decisions distinct from the canonical project.
+- **Canonical Project**: One immutable portable nonzero UUID with mutable display metadata and
+  historical migration identifiers, not a credential or second server/Space identity.
+- **Source, Checkout and View**: Existing independent code addresses, working-copy lifecycles and
+  immutable snapshots. Several can share a Project UUID without sharing mutable code state or grants.
+- **Project Identifier and Merge Record**: Historical evidence and auditable conservation decisions
+  distinct from normal identity resolution; unresolved records keep their provenance and read access.
 - **Session Evidence**: Immutable accepted session or task signal with privacy, provenance, and
   fingerprint.
 - **Processing Job**: Durable work ownership and terminal-state record for accepted evidence or
@@ -349,10 +376,12 @@ Constitution 2.0.0 permits the separately accepted Operator Code Console and bas
 
 - The recovery remains one modular product with authoritative durable storage and no new network
   service.
-- Implementation begins only after explicit operator authorization in a fresh implementation
-  session.
-- Existing historical plans, release reports, flags, comments, and tests are evidence to reconcile,
-  not active authority unless adopted by the recovery artifacts.
+- The project-identity replacement is already authorized by the 2026-10-12 mandate. Historical
+  AR-0/fresh-session approval assumptions do not introduce another identity implementation gate;
+  other recovery slices retain their own accepted scope and effect boundaries.
+- Existing historical plans, release reports, flags, comments and tests are evidence to reconcile,
+  not current identity instructions. Earlier receipt hashes and V3 fixtures do not establish
+  acceptance of the portable replacement contract.
 - Production access, deployed configuration, live data mutation, and global tooling changes are
   outside AR-0.
 - Acceptance thresholds that require baseline measurement are established before the release slice
