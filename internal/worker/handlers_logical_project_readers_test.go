@@ -122,7 +122,7 @@ func TestLogicalProjectReadersPostgresHTTP(t *testing.T) {
 				codeUnresolved = ref
 			}
 		}
-		row := gormdb.ConsolidationMembership{Reference: reference, Table: table, RowKey: gormdb.JSONRaw(raw), FieldPath: gormdb.JSONRaw(path), SelectorReference: selectorReference, ProjectID: project, UnresolvedReference: ref, Reason: "unproven historical owner", PlanFingerprint: "fixture-plan"}
+		row := gormdb.ConsolidationMembership{Reference: reference, Table: table, RowKey: gormdb.JSONRaw(raw), SourceRowKey: gormdb.JSONRaw(raw), FieldPath: gormdb.JSONRaw(path), SelectorReference: selectorReference, ProjectID: project, UnresolvedReference: ref, Reason: "unproven historical owner", PlanFingerprint: "fixture-plan"}
 		require.NoError(t, db.Create(&row).Error)
 	}
 	now := time.Now().UTC().Add(-time.Hour)
@@ -564,7 +564,7 @@ func TestRetainedProjectEncodedReferenceHTTP(t *testing.T) {
 		}{table, column, gormdb.JSONRaw(raw), nil})
 		fieldPath, err := json.Marshal([]string{column})
 		require.NoError(t, err)
-		require.NoError(t, db.Create(&gormdb.ConsolidationMembership{Reference: reference, UnresolvedReference: unresolved, Table: table, RowKey: gormdb.JSONRaw(raw), FieldPath: gormdb.JSONRaw(fieldPath), SelectorReference: selectorRef, Reason: "encoded route fixture", PlanFingerprint: "encoded-reference-http"}).Error)
+		require.NoError(t, db.Create(&gormdb.ConsolidationMembership{Reference: reference, UnresolvedReference: unresolved, Table: table, RowKey: gormdb.JSONRaw(raw), SourceRowKey: gormdb.JSONRaw(raw), FieldPath: gormdb.JSONRaw(fieldPath), SelectorReference: selectorRef, Reason: "encoded route fixture", PlanFingerprint: "encoded-reference-http"}).Error)
 		return unresolved
 	}
 	memory := &gormdb.Memory{Project: project, Content: "nonempty retained encoded memory", Status: "active", PrivacyScope: "project", Tags: []string{}, SourceSessions: []string{}}

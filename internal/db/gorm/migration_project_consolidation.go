@@ -18,6 +18,10 @@ func projectConsolidationMigration186() *gormigrate.Migration {
 			 backup_id UUID PRIMARY KEY, plan_id UUID NOT NULL, plan_fingerprint TEXT NOT NULL,
 			 ciphertext BYTEA NOT NULL, restore_identity TEXT NOT NULL, restore_snapshot TEXT NOT NULL,
 			 restore_verified_at TIMESTAMPTZ NOT NULL)`,
+			`CREATE TABLE IF NOT EXISTS project_consolidation_frames (
+			 backup_id UUID NOT NULL REFERENCES project_consolidation_backups(backup_id) ON DELETE RESTRICT,
+			 ordinal BIGINT NOT NULL CHECK(ordinal>=0), ciphertext BYTEA NOT NULL CHECK(octet_length(ciphertext)<=524288),
+			 PRIMARY KEY(backup_id,ordinal))`,
 			`CREATE TABLE IF NOT EXISTS project_consolidation_operations (
 			 idempotency_key UUID PRIMARY KEY, operation_id UUID NOT NULL UNIQUE, plan_id UUID NOT NULL,
 			 plan_fingerprint TEXT NOT NULL, receipt JSONB NOT NULL, completed_at TIMESTAMPTZ NOT NULL)`,
@@ -26,7 +30,9 @@ func projectConsolidationMigration186() *gormigrate.Migration {
 			 row_key JSONB NOT NULL CHECK(jsonb_typeof(row_key)='object'), field_path JSONB NOT NULL,
 			 selector_reference TEXT NOT NULL DEFAULT '', project_id TEXT REFERENCES projects(id) ON DELETE RESTRICT,
 			 reason TEXT NOT NULL DEFAULT '', plan_fingerprint TEXT NOT NULL,
+			 native_version TEXT NOT NULL DEFAULT '', source_snapshot TEXT NOT NULL DEFAULT '', source_row_key JSONB NOT NULL DEFAULT '{}'::jsonb,
 			 CHECK(project_id IS NULL OR project_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'))`,
+			`ALTER TABLE project_consolidation_memberships ADD COLUMN IF NOT EXISTS native_version TEXT NOT NULL DEFAULT '', ADD COLUMN IF NOT EXISTS source_snapshot TEXT NOT NULL DEFAULT '', ADD COLUMN IF NOT EXISTS source_row_key JSONB NOT NULL DEFAULT '{}'::jsonb`,
 			`CREATE INDEX IF NOT EXISTS idx_consolidation_unresolved ON project_consolidation_memberships(unresolved_reference,table_name) WHERE project_id IS NULL`,
 			`CREATE INDEX IF NOT EXISTS idx_consolidation_canonical ON project_consolidation_memberships(project_id,table_name) WHERE project_id IS NOT NULL`,
 			`CREATE TABLE IF NOT EXISTS project_consolidation_redirects (

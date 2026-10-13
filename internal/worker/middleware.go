@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mime"
 	"net/http"
 	"os"
 	"regexp"
@@ -160,6 +161,26 @@ func MaxBodySize(maxBytes int64) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// This transport ceiling admits the full owner stream, not a disk/resource grant.
+const projectConsolidationVerifyBackupMaxBytes int64 = 2 << 30
+
+func isProjectConsolidationVerifyBackup(r *http.Request) bool {
+	return r.Method == http.MethodPost && r.URL.Path == "/api/projects/consolidation/verify-backup"
+}
+
+func requestBodySize(next http.Handler) http.Handler {
+	ordinary := MaxBodySize(10 << 20)(next)
+	backup := MaxBodySize(projectConsolidationVerifyBackupMaxBytes)(next)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isProjectConsolidationVerifyBackup(r) {
+			defer r.Body.Close()
+			backup.ServeHTTP(w, r)
+			return
+		}
+		ordinary.ServeHTTP(w, r)
+	})
 }
 
 // readOnlyAllowedPosts is the set of POST endpoints that read-only client tokens may call.
@@ -713,11 +734,20 @@ func (s *Service) requestActivityMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// RequireJSONContentType rejects body-bearing requests (POST/PUT/PATCH) whose
-// Content-Type is not application/json. An empty Content-Type is allowed to
-// accommodate body-less usages of these methods.
+// RequireJSONContentType keeps the ordinary JSON policy, including body-less
+// requests without Content-Type. Only the exact backup verification POST uses
+// multipart/form-data; metadata order and part limits remain handler-owned.
 func RequireJSONContentType(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isProjectConsolidationVerifyBackup(r) {
+			mediaType, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+			if err != nil || mediaType != "multipart/form-data" || params["boundary"] == "" {
+				http.Error(w, "Content-Type must be multipart/form-data with a boundary", http.StatusUnsupportedMediaType)
+				return
+			}
+			next.ServeHTTP(w, r)
+			return
+		}
 		if r.Method == "POST" || r.Method == "PUT" || r.Method == "PATCH" {
 			ct := r.Header.Get("Content-Type")
 			if ct != "" && !strings.HasPrefix(ct, "application/json") {

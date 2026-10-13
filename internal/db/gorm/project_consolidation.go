@@ -1,6 +1,8 @@
 package gorm
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -8,14 +10,17 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/lib/pq"
 	vaultcrypto "github.com/thebtf/engram/internal/crypto"
 	gormlib "gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 type ConsolidationError struct{ Code string }
@@ -24,11 +29,30 @@ func (e *ConsolidationError) Error() string { return e.Code }
 func consolidationHold(code string) error {
 	return &ConsolidationError{Code: "PROJECT_ADOPTION_" + code}
 }
+
+func consolidationReadError(err error) error {
+	var message string
+	var pgErr *pgconn.PgError
+	var pqErr *pq.Error
+	switch {
+	case errors.As(err, &pgErr) && pgErr.Code == "P0001":
+		message = pgErr.Message
+	case errors.As(err, &pqErr) && pqErr.Code == "P0001":
+		message = pqErr.Message
+	}
+	switch message {
+	case "PROJECT_ADOPTION_UNRESOLVED_MEMBERSHIP", "PROJECT_ADOPTION_CONFLICTING_MEMBERSHIP":
+		return &ConsolidationError{Code: message}
+	default:
+		return err
+	}
+}
+
 func quoted(value string) string { return pq.QuoteIdentifier(value) }
 func structuralDigest(value any) string {
-	encoded, _ := json.Marshal(value)
-	sum := sha256.Sum256(encoded)
-	return "sha256:" + hex.EncodeToString(sum[:])
+	h := sha256.New()
+	_ = json.NewEncoder(h).Encode(value)
+	return "sha256:" + hex.EncodeToString(h.Sum(nil))
 }
 
 type consolidationRole struct{ Table, Column, Kind string }
@@ -142,9 +166,9 @@ type consolidationPlanState struct {
 }
 
 type consolidationBackupState struct {
-	PlanID, Fingerprint, Schema string
-	Tables                      map[string]json.RawMessage
-	Sequences                   []consolidationSequence
+	Format, PlanID, Fingerprint, Source, Schema, Snapshot, NativeSnapshot, Classification string
+	Tables                                                                                []consolidationTable
+	Sequences                                                                             []consolidationSequence
 }
 
 type consolidationBackupRow struct {
@@ -177,11 +201,14 @@ type ConsolidationMembership struct {
 	UnresolvedReference string
 	Table               string  `gorm:"column:table_name"`
 	RowKey              JSONRaw `gorm:"type:jsonb"`
+	SourceRowKey        JSONRaw `gorm:"type:jsonb;not null;default:'{}'"`
 	FieldPath           JSONRaw `gorm:"type:jsonb"`
 	SelectorReference   string
 	ProjectID           *string
 	Reason              string
 	PlanFingerprint     string
+	NativeVersion       string
+	SourceSnapshot      string
 }
 
 func (ConsolidationMembership) TableName() string { return "project_consolidation_memberships" }
@@ -194,6 +221,12 @@ type ProjectConsolidationStore struct {
 }
 
 func NewProjectConsolidationStore(db *gormlib.DB, vault *vaultcrypto.Vault, restoreDB *gormlib.DB) *ProjectConsolidationStore {
+	if db != nil {
+		db = db.Session(&gormlib.Session{Logger: logger.Default.LogMode(logger.Silent)})
+	}
+	if restoreDB != nil {
+		restoreDB = restoreDB.Session(&gormlib.Session{Logger: logger.Default.LogMode(logger.Silent)})
+	}
 	return &ProjectConsolidationStore{db: db, vault: vault, restoreDB: restoreDB}
 }
 
@@ -217,14 +250,19 @@ func (s *ProjectConsolidationStore) opaque(kind string, value any) string {
 }
 
 func (s *ProjectConsolidationStore) seal(kind string, value any) (string, error) {
-	raw, err := json.Marshal(struct {
+	var raw bytes.Buffer
+	compressed := gzip.NewWriter(&raw)
+	if err := json.NewEncoder(compressed).Encode(struct {
 		Kind  string
 		Value any
-	}{kind, value})
-	if err != nil {
+	}{kind, value}); err != nil {
+		_ = compressed.Close()
 		return "", err
 	}
-	encrypted, err := s.vault.Encrypt(string(raw))
+	if err := compressed.Close(); err != nil {
+		return "", err
+	}
+	encrypted, err := s.vault.Encrypt(raw.String())
 	if err != nil {
 		return "", consolidationHold("BACKUP_MISSING")
 	}
@@ -243,11 +281,17 @@ func (s *ProjectConsolidationStore) open(token, kind string, destination any) er
 	if err != nil {
 		return consolidationHold("STALE_PLAN")
 	}
-	var envelope struct {
-		Kind  string
-		Value json.RawMessage
+	compressed, err := gzip.NewReader(strings.NewReader(raw))
+	if err != nil {
+		return consolidationHold("STALE_PLAN")
 	}
-	if json.Unmarshal([]byte(raw), &envelope) != nil || envelope.Kind != kind || json.Unmarshal(envelope.Value, destination) != nil {
+	defer compressed.Close()
+	envelope := struct {
+		Kind  string
+		Value any
+	}{Value: destination}
+	decoder := json.NewDecoder(compressed)
+	if decoder.Decode(&envelope) != nil || envelope.Kind != kind || decoder.Decode(&struct{}{}) != io.EOF {
 		return consolidationHold("STALE_PLAN")
 	}
 	return nil
@@ -440,35 +484,28 @@ func compactStrings(keys []string) []string {
 	return out
 }
 
-func (s *ProjectConsolidationStore) Backup(ctx context.Context, token, fingerprint string) ([]byte, error) {
+func (s *ProjectConsolidationStore) Backup(ctx context.Context, token, fingerprint string, dst io.Writer) error {
 	if err := s.available(); err != nil {
-		return nil, err
+		return err
+	}
+	if dst == nil {
+		return consolidationHold("BACKUP_MISSING")
 	}
 	state, err := s.plan(token, fingerprint)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	var encrypted []byte
-	err = s.db.WithContext(ctx).Transaction(func(tx *gormlib.DB) error {
+	return s.db.WithContext(ctx).Transaction(func(tx *gormlib.DB) error {
 		if err := s.fresh(tx, state.Census); err != nil {
-			return err
-		}
-		tables, err := consolidationSnapshot(tx)
-		if err != nil {
 			return err
 		}
 		sequences, err := consolidationSequences(tx)
 		if err != nil {
 			return err
 		}
-		raw, err := json.Marshal(consolidationBackupState{state.ID, fingerprint, state.Census.Schema, tables, sequences})
-		if err != nil {
-			return err
-		}
-		encrypted, err = s.vault.Encrypt(string(raw))
-		return err
+		manifest := consolidationBackupState{Format: consolidationStreamFormat, PlanID: state.ID, Fingerprint: fingerprint, Source: state.Census.Database, Schema: state.Census.Schema, Snapshot: state.Census.Snapshot, NativeSnapshot: state.Census.NativeSnapshot, Classification: consolidationClassification(state.Census), Tables: state.Census.Tables, Sequences: sequences}
+		return s.exportFrames(tx, manifest, dst)
 	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
-	return encrypted, err
 }
 
 // DryRun executes the real row updates and constraints, then rolls back. A live
@@ -494,6 +531,9 @@ func (s *ProjectConsolidationStore) apply(ctx context.Context, request Consolida
 	}
 	state, err := s.plan(request.PlanReference, request.PlanFingerprint)
 	if err != nil {
+		return ConsolidationReceipt{}, err
+	}
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gormlib.DB) error { return s.fresh(tx, state.Census) }, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true}); err != nil {
 		return ConsolidationReceipt{}, err
 	}
 	if err := s.distinctTarget(ctx); err != nil {
@@ -544,26 +584,28 @@ func (s *ProjectConsolidationStore) apply(ctx context.Context, request Consolida
 	if backup.RestoreVerifiedAt.IsZero() || backup.RestoreIdentity != identity || backup.RestoreSnapshot != current {
 		return receipt, consolidationHold("STALE_PLAN")
 	}
-	raw, err := s.vault.Decrypt(backup.Ciphertext)
+	before, err := s.backupManifest(backup.Ciphertext, state)
 	if err != nil {
-		return receipt, consolidationHold("BACKUP_MISSING")
-	}
-	var before consolidationBackupState
-	if json.Unmarshal([]byte(raw), &before) != nil || before.PlanID != state.ID || before.Fingerprint != state.Fingerprint {
-		return receipt, consolidationHold("BACKUP_MISSING")
+		return receipt, err
 	}
 	schema, _, _, err := consolidationSchema(tx)
 	if err != nil {
 		return receipt, err
 	}
 	if schema != before.Schema {
-		return receipt, consolidationHold("STALE_PLAN")
+		return receipt, consolidationHold("SCHEMA_MISMATCH")
 	}
-	if err := consolidationCompare(tx, before.Tables); err != nil {
+	if err := s.walkStored(tx, backup.BackupID, state, nil, false); err != nil {
 		return receipt, err
 	}
-	receipt, err = s.execute(tx, state, before.Tables)
+	receipt, err = s.execute(tx, state)
+	if err == nil {
+		err = s.walkStored(tx, backup.BackupID, state, &state, false)
+	}
 	if err != nil {
+		return ConsolidationReceipt{}, err
+	}
+	if err := s.db.WithContext(ctx).Transaction(func(source *gormlib.DB) error { return s.fresh(source, state.Census) }, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true}); err != nil {
 		return ConsolidationReceipt{}, err
 	}
 	if dryRun {
@@ -599,11 +641,17 @@ func (s *ProjectConsolidationStore) UnresolvedMembership(ctx context.Context, re
 		table = "issues"
 	case "code":
 		table = "sources"
+	case "native":
+		table = ""
 	default:
 		return nil, consolidationHold("UNKNOWN_REFERENCE")
 	}
 	var rows []ConsolidationMembership
-	if err := s.db.WithContext(ctx).Where("unresolved_reference = ? AND table_name = ? AND project_id IS NULL", reference, table).Order("reference").Find(&rows).Error; err != nil {
+	query := s.db.WithContext(ctx).Where("unresolved_reference = ? AND project_id IS NULL", reference)
+	if table != "" {
+		query = query.Where("table_name = ?", table)
+	}
+	if err := query.Order("reference").Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	if len(rows) == 0 {
@@ -660,6 +708,11 @@ func (s *ProjectConsolidationStore) validateUnresolvedMembership(ctx context.Con
 		if len(path) > 1 {
 			nested = path[1:]
 		}
+		var sourceKey map[string]json.RawMessage
+		if json.Unmarshal(row.SourceRowKey, &sourceKey) != nil || len(sourceKey) == 0 {
+			return consolidationHold("STALE_REFERENCE")
+		}
+		keyJSON, _ = json.Marshal(sourceKey)
 		ref := s.opaque("row", struct {
 			Table, Column string
 			Key           JSONRaw
@@ -695,8 +748,17 @@ func (s *ProjectConsolidationStore) validateUnresolvedMembership(ctx context.Con
 			}
 			continue
 		}
+		predicate, args, err := consolidationNativePredicate(row.RowKey, "t")
+		if err != nil {
+			return consolidationHold("STALE_REFERENCE")
+		}
 		var values []struct{ Selector string }
-		if err := s.db.WithContext(ctx).Raw("SELECT to_jsonb(t) #>> ?::text[] AS selector FROM "+quoted(row.Table)+" t WHERE to_jsonb(t) @> ?::jsonb", pq.Array(path), string(row.RowKey)).Scan(&values).Error; err != nil {
+		expression := "''::text"
+		if path[0] != "" {
+			expression = "COALESCE(to_jsonb(t) #>> ?::text[],'')"
+			args = append([]any{pq.Array(path)}, args...)
+		}
+		if err := s.db.WithContext(ctx).Raw("SELECT "+expression+" AS selector FROM "+quoted(row.Table)+" t WHERE "+predicate, args...).Scan(&values).Error; err != nil {
 			return err
 		}
 		if len(values) != 1 || (row.SelectorReference != "" && s.opaque("selector", values[0].Selector) != row.SelectorReference) {

@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -219,6 +221,9 @@ func TestProjectConsolidationMigration186RetainedRestoreAndPartialArray(t *testi
 		tables, err := consolidationDataTables(db)
 		require.NoError(t, err)
 		for _, table := range tables {
+			if table.Name == "migrations" {
+				continue
+			}
 			var count int64
 			require.NoError(t, db.Table(table.Name).Count(&count).Error)
 			require.Zero(t, count, "retention fixture requires empty dedicated data table %s", table.Name)
@@ -284,12 +289,18 @@ func TestProjectConsolidationMigration186RetainedRestoreAndPartialArray(t *testi
 		Evidence: []ConsolidationEvidence{{Reference: "urn:engram:test:marker", Kind: "portable_marker", Group: "urn:engram:test:group", ProjectID: canonical, Rows: []string{mappedReference}}},
 	})
 	require.NoError(t, err)
-	backup, err := store.Backup(ctx, plan.Reference, plan.Fingerprint)
+	backup, err := os.OpenFile(filepath.Join(t.TempDir(), "retained-backup.sealed"), os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 	require.NoError(t, err)
-	backupPlaintext, err := vault.Decrypt(backup)
+	t.Cleanup(func() { _ = backup.Close() })
+	require.NoError(t, store.Backup(ctx, plan.Reference, plan.Fingerprint, backup))
+	_, err = backup.Seek(0, io.SeekStart)
 	require.NoError(t, err)
-	var backupState consolidationBackupState
-	require.NoError(t, json.Unmarshal([]byte(backupPlaintext), &backupState))
+	_, header, err := store.readFrame(backup)
+	require.NoError(t, err)
+	boundPlan, err := store.plan(plan.Reference, plan.Fingerprint)
+	require.NoError(t, err)
+	backupState, err := store.backupManifest(header, boundPlan)
+	require.NoError(t, err)
 	var sequenceNames []string
 	require.NoError(t, source.Raw(`SELECT sequencename FROM pg_sequences WHERE schemaname=current_schema() ORDER BY sequencename`).Scan(&sequenceNames).Error)
 	require.Len(t, backupState.Sequences, len(sequenceNames))
@@ -297,12 +308,14 @@ func TestProjectConsolidationMigration186RetainedRestoreAndPartialArray(t *testi
 		require.Equal(t, sequenceNames[i], sequence.Name, "sealed backup must retain the actual sequence identity")
 	}
 	t.Logf("sealed backup sequence names: %v", sequenceNames)
+	_, err = backup.Seek(0, io.SeekStart)
+	require.NoError(t, err)
 	_, err = store.VerifyBackup(ctx, plan.Reference, plan.Fingerprint, backup)
 	var hold *ConsolidationError
 	require.ErrorAs(t, err, &hold)
 	require.Equal(t, "PROJECT_ADOPTION_RESTORE_CONSTRAINT_FAILED", hold.Code)
 	require.Equal(t, beforeModes, guardModes(target), "failed copy must roll back exact trigger modes")
-	for _, table := range []string{"memories", "crystallization_candidates", "project_consolidation_backups"} {
+	for _, table := range []string{"memories", "crystallization_candidates", "project_consolidation_backups", "project_consolidation_frames"} {
 		var count int64
 		require.NoError(t, target.Table(table).Count(&count).Error)
 		require.Zero(t, count, "failed copy must retain no partial rows or receipt")
@@ -314,6 +327,8 @@ func TestProjectConsolidationMigration186RetainedRestoreAndPartialArray(t *testi
 	for _, db := range []*gormlib.DB{source, target} {
 		require.NoError(t, db.Exec(`ALTER TABLE crystallization_candidates DISABLE TRIGGER consolidation_test_copy_guard`).Error)
 	}
+	_, err = backup.Seek(0, io.SeekStart)
+	require.NoError(t, err)
 	backupReference, err := store.VerifyBackup(ctx, plan.Reference, plan.Fingerprint, backup)
 	require.NoError(t, err, "isolated restore must preserve unresolved historical data and actual FK references")
 	require.Equal(t, beforeModes, guardModes(target))
@@ -322,7 +337,13 @@ func TestProjectConsolidationMigration186RetainedRestoreAndPartialArray(t *testi
 	require.Equal(t, backupState.Sequences, restoredSequences, "verified restore must conserve sequence identities and state")
 	require.JSONEq(t, originalMemory, consolidationTestRowJSON(t, target, "memories", memory.ID))
 	require.JSONEq(t, originalCandidate, consolidationTestRowJSON(t, target, "crystallization_candidates", candidate.ID))
-	assertConsolidationSQLRefusal(t, target.Create(&Memory{Project: "historical-only", Content: "forbidden-new", SourceSessions: pq.StringArray{}}).Error, "PROJECT_ADOPTION_UNRESOLVED_MEMBERSHIP")
+	var refusedIDCount int64
+	require.NoError(t, target.Model(&Memory{}).Where("id = ?", memory.ID+1).Count(&refusedIDCount).Error)
+	require.Zero(t, refusedIDCount, "refused probe ID must not collide with a restored row")
+	assertConsolidationSQLRefusal(t, target.Create(&Memory{ID: memory.ID + 1, Project: "historical-only", Content: "forbidden-new", SourceSessions: pq.StringArray{}}).Error, "PROJECT_ADOPTION_UNRESOLVED_MEMBERSHIP")
+	restoredSequences, err = consolidationSequences(target)
+	require.NoError(t, err)
+	require.Equal(t, backupState.Sequences, restoredSequences, "refused row probe must preserve the verified restore's sequence state")
 
 	request := ConsolidationApplyRequest{PlanReference: plan.Reference, PlanFingerprint: plan.Fingerprint, BackupReference: backupReference, IdempotencyKey: uuid.NewString()}
 	_, err = store.DryRun(ctx, request)

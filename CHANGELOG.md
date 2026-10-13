@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Stream full-owner migration exports through bounded authenticated row frames and ordered multipart verification instead of whole-payload JSON materialization. Retain encrypted original frames, native keys, source provenance, complete rows/counts and sequences for isolated restore, conservation and replay. Census includes whole-row unresolved documents/content/comparisons and preserves unknown metadata roles; source composition does not establish full-owner native Go conservation, installed recovery or resource admission.
+
 ### Changed
 
 - Remove the normal legacy relay gateway/runtime, test-only advisor prewarm and orphaned relay transport. Keep default full-mux tool discovery and explicit `--session-memory` over the portable project UUID; private actual-program smoke covers discovery, project init/resolve and store→fresh-process recall. Historical data and security enforcement remain intact; this is not release, installed-client or ownership-conservation proof.
@@ -26,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Apply ordered multipart and a finite 2 GiB body ceiling only to the exact backup verification POST; preserve ordinary JSON/10 MiB policy and registered authentication, security, rate and timeout middleware. Preserve Main fail-closed row-session scalar/array SQL, global/exact redirect conflicts, sequence names after Scan and exact owned trigger modes across rollback. Add actual stream caller and router regression sources; this integration has not executed them.
 - Preserve current-project MCP store defaults, global rule activation and existing source-project enforcement; preflight every supersession target before domain-warning audits or writes. Create the same-UUID catalog entry atomically on actual memory/Source writes, never on reads, and roll it back with failed writes. Decode encoded retained content/history/code/PIN links once. Focused private PostgreSQL/MCP/CLI and cookie-auth consumer proof covers these repairs, not installed clients, full-owner conservation or release. Catalog filtering precedes the SQL limit by source inspection; dynamic 129-row coverage remains unproven.
 - Make migration 186 SQL project writes fail closed on missing or conflicting actual row-session membership while preserving canonical/global values and ordered array occurrences. Preserve retained-data restore/apply transactions by draining deferred constraints before restoring only their own trigger modes, and prevent GORM scans from losing sequence names. Focused isolated PostgreSQL proof does not establish full-owner conservation, production migration or installed-release acceptance.
 - Keep retained project-membership subquery aliases distinct from the outer memory reader alias, so canonical UUID memory reads correlate the native row ID correctly instead of failing with a PostgreSQL missing-column error. Preserve document/issue predicates, conflict exclusion and filtering before pagination.
