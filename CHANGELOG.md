@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Restore MCP discovery and project-memory calls for existing Git workspaces with an older `{id,name}` marker, including the originally untracked form. Derive the unchanged V2 scope from the actual Git origin and selected path; never treat the historical marker ID as canonical authority. Preserve marker/index bytes, server authorization, privacy and V3 refusals without adoption, migration or profile changes. Installed recovery still requires the normal versioned plugin update and consumer proof.
+- Restore MCP discovery and project-memory calls for existing Git workspaces with an older `{id,name}` marker, including the originally untracked form. Derive V2 scope from the actual Git origin and selected path, or from an already-existing valid local V2 anchor when the origin is absent; never treat the historical marker ID as authority. Keep path-derived isolation for local clones. Stream the actual Git index with fixed memory and the existing identity deadline instead of applying the JSON/config size limit. Preserve marker/index/anchor bytes, server authorization, privacy and V3 refusals without creating anchors, adoption, migration or profile changes. Installed recovery still requires the normal versioned plugin update and consumer proof.
 
 ## [6.52.0] - 2026-10-11
 
