@@ -208,7 +208,7 @@ func (c *slugCache) ResolveIdentityV3(ctx context.Context, p muxcore.ProjectCont
 	}, nil
 }
 
-// resolveLegacyWorkspace retains only the bounded name-only workspace route.
+// resolveLegacyWorkspace retains bounded legacy Git workspace routes.
 // Marker bytes and Git config/index freshness are checked before cache reuse.
 func (c *slugCache) resolveLegacyWorkspace(ctx context.Context, p muxcore.ProjectContext) (bool, error) {
 	if err := ctx.Err(); err != nil {
@@ -264,14 +264,34 @@ func (c *slugCache) resolveLegacyWorkspace(ctx context.Context, p muxcore.Projec
 	if err != nil || opening != json.Delim('{') {
 		return false, nil
 	}
-	field, err := decoder.Token()
-	if err != nil || field != "name" {
-		return false, nil
-	}
 	var name string
-	if err := decoder.Decode(&name); err != nil || name == "" ||
-		utf8.RuneCountInString(name) > 256 || strings.TrimSpace(name) != name ||
-		strings.IndexFunc(name, unicode.IsControl) >= 0 {
+	historical := false
+	for decoder.More() {
+		field, err := decoder.Token()
+		if err != nil {
+			return false, nil
+		}
+		switch field {
+		case "name":
+			if name != "" {
+				return false, nil
+			}
+			if err := decoder.Decode(&name); err != nil || name == "" ||
+				utf8.RuneCountInString(name) > 256 || strings.TrimSpace(name) != name ||
+				strings.IndexFunc(name, unicode.IsControl) >= 0 {
+				return false, nil
+			}
+		case "id":
+			var id string
+			if historical || decoder.Decode(&id) != nil || len(id) != 6 || strings.Trim(id, "0123456789abcdef") != "" {
+				return false, nil
+			}
+			historical = true
+		default:
+			return false, nil
+		}
+	}
+	if name == "" {
 		return false, nil
 	}
 	closing, err := decoder.Token()
@@ -283,6 +303,11 @@ func (c *slugCache) resolveLegacyWorkspace(ctx context.Context, p muxcore.Projec
 	}
 	gitPaths := metadata[2:]
 	gitPaths = append(gitPaths, filepath.Join(root, ".git"))
+	if historical {
+		// Older non-Git markers remain untracked after Git adoption. Their ID
+		// is not authority: the existing Git resolver derives the V2 scope.
+		gitPaths = append(gitPaths, filepath.Join(root, ".engram-project"))
+	}
 	configFiles := map[string]bool{filepath.Clean(gitPaths[0]): true, filepath.Clean(gitPaths[3]): true}
 	for _, variable := range []string{"GIT_CONFIG_SYSTEM", "GIT_CONFIG_GLOBAL"} {
 		output, err := exec.CommandContext(ctx, "git", "-C", root, "var", variable).Output()
@@ -310,8 +335,10 @@ func (c *slugCache) resolveLegacyWorkspace(ctx context.Context, p muxcore.Projec
 	if err != nil {
 		return false, nil
 	}
-	if err := exec.CommandContext(ctx, "git", "-C", root, "ls-files", "--error-unmatch", "--", ".engram-project").Run(); err != nil {
-		return false, ctx.Err()
+	if !historical {
+		if err := exec.CommandContext(ctx, "git", "-C", root, "ls-files", "--error-unmatch", "--", ".engram-project").Run(); err != nil {
+			return false, ctx.Err()
+		}
 	}
 	dependencies, eligible, err := legacyConfigDependencies(ctx, root)
 	if err != nil {
