@@ -1060,8 +1060,13 @@ func TestProxyLegacyNameOnlyWorkspaceUsesExistingV2Scope(t *testing.T) {
 
 func TestProxyLegacyExistingLocalV2Anchor(t *testing.T) {
 	const anchorBytes = `{"version":2,"anchor":"00112233445566778899aabbccddeeff","shared":false}`
-	for _, boundary := range []string{"valid", "clone", "missing", "malformed", "symlink", "warm-invalidated"} {
+	for _, boundary := range []string{"valid", "clone", "missing", "malformed", "symlink", "nonregular", "fifo", "oversized", "warm-invalidated", "origin-malformed", "origin-symlink", "origin-nonregular", "origin-fifo", "origin-oversized", "origin-warm-invalidated", "raced-anchor", "raced-shared"} {
 		t.Run(boundary, func(t *testing.T) {
+			origin := strings.HasPrefix(boundary, "origin-")
+			boundary := strings.TrimPrefix(boundary, "origin-")
+			if boundary == "fifo" && runtime.GOOS == "windows" {
+				t.Skip("FIFO fixtures require POSIX")
+			}
 			srv := &mockEngramServer{
 				initResp: &pb.InitializeResponse{Tools: []*pb.ToolDefinition{{Name: "recall"}}},
 				callResp: &pb.CallToolResponse{ContentJson: []byte(`[]`)},
@@ -1071,6 +1076,11 @@ func TestProxyLegacyExistingLocalV2Anchor(t *testing.T) {
 			mod.v3ClientInstanceID = "fixture-daemon-install"
 			if output, err := exec.Command("git", "-C", project.Cwd, "init", "--quiet").CombinedOutput(); err != nil {
 				t.Fatalf("fixture git: %v: %s", err, output)
+			}
+			if origin {
+				if output, err := exec.Command("git", "-C", project.Cwd, "remote", "add", "origin", "https://github.com/thebtf/engram.git").CombinedOutput(); err != nil {
+					t.Fatalf("fixture origin: %v: %s", err, output)
+				}
 			}
 			marker := filepath.Join(project.Cwd, ".engram-project")
 			const markerBytes = `{"id":"ffffff","name":"nvmd-dubbing"}`
@@ -1083,6 +1093,9 @@ func TestProxyLegacyExistingLocalV2Anchor(t *testing.T) {
 				if boundary == "malformed" {
 					data = `{"version":2,"anchor":"invalid","shared":false}`
 				}
+				if boundary == "oversized" {
+					data = strings.Repeat(" ", 1024*1024+1)
+				}
 				if boundary == "symlink" {
 					target := filepath.Join(project.Cwd, "anchor-target.json")
 					if err := os.WriteFile(target, []byte(data), 0o600); err != nil {
@@ -1091,11 +1104,19 @@ func TestProxyLegacyExistingLocalV2Anchor(t *testing.T) {
 					if err := os.Symlink(target, anchor); err != nil {
 						t.Skipf("symlinks unavailable: %v", err)
 					}
+				} else if boundary == "nonregular" {
+					if err := os.Mkdir(anchor, 0o700); err != nil {
+						t.Fatal(err)
+					}
+				} else if boundary == "fifo" {
+					if output, err := exec.Command("mkfifo", anchor).CombinedOutput(); err != nil {
+						t.Fatalf("fixture FIFO: %v: %s", err, output)
+					}
 				} else if err := os.WriteFile(anchor, []byte(data), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
-			if boundary == "missing" || boundary == "malformed" || boundary == "symlink" {
+			if !origin && (boundary == "missing" || boundary == "malformed" || boundary == "symlink" || boundary == "nonregular" || boundary == "fifo" || boundary == "oversized") {
 				_, _ = mod.ProxyTools(context.Background(), project)
 				if _, err := mod.ProxyHandleTool(context.Background(), project, "recall", json.RawMessage(`{}`)); err == nil {
 					t.Fatal("invalid local anchor reached memory")
@@ -1107,6 +1128,29 @@ func TestProxyLegacyExistingLocalV2Anchor(t *testing.T) {
 					if _, err := os.Lstat(anchor); !os.IsNotExist(err) {
 						t.Fatal("missing local anchor was created")
 					}
+				}
+				return
+			}
+			if strings.HasPrefix(boundary, "raced-") {
+				original := resolveLegacyGitIdentity
+				t.Cleanup(func() { resolveLegacyGitIdentity = original })
+				changed := false
+				resolveLegacyGitIdentity = func(ctx context.Context, cwd, name, prefix string) (string, proxy.ProjectIdentityV2, error) {
+					slug, identity, err := original(ctx, cwd, name, prefix)
+					if err == nil && !changed {
+						changed = true
+						data := strings.Replace(anchorBytes, "00112233445566778899aabbccddeeff", "ffeeddccbbaa99887766554433221100", 1)
+						if boundary == "raced-shared" {
+							data = strings.Replace(anchorBytes, "false", "true", 1)
+						}
+						if err := os.WriteFile(anchor, []byte(data), 0o600); err != nil {
+							t.Fatal(err)
+						}
+					}
+					return slug, identity, err
+				}
+				if _, err := mod.ProxyTools(context.Background(), project); err == nil || !changed || srv.initReq != nil || srv.callReq != nil {
+					t.Fatal("anchor changed during resolution retained memory authority")
 				}
 				return
 			}
@@ -1123,7 +1167,12 @@ func TestProxyLegacyExistingLocalV2Anchor(t *testing.T) {
 				}
 				marker, anchor = filepath.Join(project.Cwd, ".engram-project"), filepath.Join(project.Cwd, ".engram-project-v2.json")
 			}
-			for range 2 {
+			for attempt := range 2 {
+				if origin && boundary == "warm-invalidated" && attempt == 1 {
+					if err := os.WriteFile(anchor, []byte(`{"version":2}`), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
 				if _, err := mod.ProxyTools(context.Background(), project); err != nil {
 					t.Fatal(err)
 				}
@@ -1133,12 +1182,25 @@ func TestProxyLegacyExistingLocalV2Anchor(t *testing.T) {
 				digest := sha256.Sum256([]byte(project.Cwd))
 				selector := fmt.Sprintf("%x", digest[:])[:6]
 				for _, request := range []*pb.ProjectIdentityV2{srv.initReq.GetProjectIdentity(), srv.callReq.GetProjectIdentity()} {
+					if origin {
+						if request.GetVersion() != 2 || request.GetGitRemote() != "https://github.com/thebtf/engram.git" || request.GetRelativePath() != "" || request.GetNonGitAnchor() != "" || request.AnchorShared != nil {
+							t.Fatalf("origin identity used irrelevant local anchor: %v", request)
+						}
+						continue
+					}
 					if request.GetVersion() != 2 || request.GetNonGitAnchor() != "00112233445566778899aabbccddeeff" || request.AnchorShared == nil || request.GetAnchorShared() ||
 						request.GetGitRemote() != "" || request.GetRelativePath() != "" || request.GetLegacyProjectId() != filepath.Base(project.Cwd)+"_"+selector {
 						t.Fatalf("existing local V2 metadata changed: %v", request)
 					}
 				}
-				if srv.initReq.GetProject() != selector || srv.callReq.GetProject() != selector || selector == "ffffff" {
+				if origin {
+					if srv.initReq.GetProject() != "67e398f8" || srv.callReq.GetProject() != "67e398f8" {
+						t.Fatal("origin selector changed")
+					}
+					if _, tracked := mod.cache.legacy[cacheKey(project)].files[anchor]; tracked {
+						t.Fatal("origin cache fingerprinted irrelevant local anchor")
+					}
+				} else if srv.initReq.GetProject() != selector || srv.callReq.GetProject() != selector || selector == "ffffff" {
 					t.Fatal("local selector trusted the marker instead of the selected path")
 				}
 				if srv.initReq.GetProjectIdentityV3() != nil || srv.callReq.GetProjectIdentityV3() != nil {
@@ -1150,6 +1212,17 @@ func TestProxyLegacyExistingLocalV2Anchor(t *testing.T) {
 						t.Fatal("cloned local anchor erased selected-path isolation")
 					}
 				}
+			}
+			if origin {
+				if output, err := exec.Command("git", "-C", project.Cwd, "remote", "remove", "origin").CombinedOutput(); err != nil {
+					t.Fatalf("remove origin: %v: %s", err, output)
+				}
+				srv.initReq, srv.callReq = nil, nil
+				_, _ = mod.ProxyTools(context.Background(), project)
+				if _, err := mod.ProxyHandleTool(context.Background(), project, "recall", json.RawMessage(`{}`)); err == nil || srv.initReq != nil || srv.callReq != nil {
+					t.Fatal("origin removal retained authority with an invalid local anchor")
+				}
+				return
 			}
 			if boundary == "warm-invalidated" {
 				if err := os.WriteFile(anchor, []byte(`{"version":2}`), 0o600); err != nil {

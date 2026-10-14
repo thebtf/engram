@@ -308,7 +308,6 @@ func (c *slugCache) resolveLegacyWorkspace(ctx context.Context, p muxcore.Projec
 		// Older non-Git markers remain untracked after Git adoption. Their ID
 		// is not authority: the existing Git resolver derives the V2 scope.
 		gitPaths = append(gitPaths, filepath.Join(root, ".engram-project"))
-		gitPaths = append(gitPaths, filepath.Join(key.cwd, ".engram-project-v2.json"))
 	}
 	configFiles := map[string]bool{filepath.Clean(gitPaths[0]): true, filepath.Clean(gitPaths[3]): true}
 	for _, variable := range []string{"GIT_CONFIG_SYSTEM", "GIT_CONFIG_GLOBAL"} {
@@ -363,6 +362,18 @@ func (c *slugCache) resolveLegacyWorkspace(ctx context.Context, p muxcore.Projec
 	}
 	if identity.NonGitAnchor != "" && !historical {
 		return false, nil
+	}
+	if identity.NonGitAnchor != "" {
+		anchorPath := filepath.Join(key.cwd, ".engram-project-v2.json")
+		anchorFiles, err := legacyFileFingerprints(ctx, []string{anchorPath}, nil, "")
+		if err != nil {
+			return false, v3InputError("PROJECT_ANCHOR_INVALID")
+		}
+		before[anchorPath] = anchorFiles[anchorPath]
+		_, confirmed, err := resolveLegacyGitIdentity(ctx, key.cwd, name, prefix)
+		if err != nil || confirmed.NonGitAnchor != identity.NonGitAnchor || confirmed.AnchorShared == nil || identity.AnchorShared == nil || *confirmed.AnchorShared != *identity.AnchorShared {
+			return false, v3InputError("PROJECT_ANCHOR_INVALID")
+		}
 	}
 	// Without includes or non-file origins, the fingerprinted inputs fully
 	// determine the dependency set, including currently absent config files.
