@@ -664,7 +664,7 @@ func TestLegacySymlinkConfigTargetTransition(t *testing.T) {
 					t.Fatalf("ordinary symlinked config refused: %v", err)
 				}
 				replaceTarget()
-				if legacyFilesUnchanged(mod.cache.legacy[cacheKey(project)].files) {
+				if legacyFilesUnchanged(context.Background(), mod.cache.legacy[cacheKey(project)].files) {
 					t.Fatal("replaced config target passed the cached fingerprint")
 				}
 			} else {
@@ -716,7 +716,7 @@ func TestLegacyConfigSymlinkFingerprintBoundaries(t *testing.T) {
 	configs := map[string]bool{outer: true}
 	snapshot := func() map[string]legacyFileState {
 		t.Helper()
-		result, err := legacyFileFingerprints([]string{outer}, configs)
+		result, err := legacyFileFingerprints(context.Background(), []string{outer}, configs, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -731,7 +731,7 @@ func TestLegacyConfigSymlinkFingerprintBoundaries(t *testing.T) {
 		if err := os.Rename(replacement, first); err != nil {
 			t.Fatal(err)
 		}
-		if legacyFilesUnchanged(before) {
+		if legacyFilesUnchanged(context.Background(), before) {
 			t.Fatal("same-content config target replacement did not invalidate identity")
 		}
 	})
@@ -744,7 +744,7 @@ func TestLegacyConfigSymlinkFingerprintBoundaries(t *testing.T) {
 		if err := os.Rename(replacement, inner); err != nil {
 			t.Fatal(err)
 		}
-		if legacyFilesUnchanged(before) {
+		if legacyFilesUnchanged(context.Background(), before) {
 			t.Fatal("same-target intermediate link replacement did not invalidate identity")
 		}
 	})
@@ -757,12 +757,12 @@ func TestLegacyConfigSymlinkFingerprintBoundaries(t *testing.T) {
 		if err := os.Rename(replacement, inner); err != nil {
 			t.Fatal(err)
 		}
-		if legacyFilesUnchanged(before) {
+		if legacyFilesUnchanged(context.Background(), before) {
 			t.Fatal("retargeted config link did not invalidate identity")
 		}
 	})
 	t.Run("non-config-link-remains-refused", func(t *testing.T) {
-		if _, err := legacyFileFingerprints([]string{outer}, nil); err == nil {
+		if _, err := legacyFileFingerprints(context.Background(), []string{outer}, nil, ""); err == nil {
 			t.Fatal("config-link support weakened the non-config file guard")
 		}
 	})
@@ -771,7 +771,7 @@ func TestLegacyConfigSymlinkFingerprintBoundaries(t *testing.T) {
 		if err := os.Symlink("loop.gitconfig", loop); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := legacyFileFingerprints([]string{loop}, map[string]bool{loop: true}); err == nil {
+		if _, err := legacyFileFingerprints(context.Background(), []string{loop}, map[string]bool{loop: true}, ""); err == nil {
 			t.Fatal("config symlink loop was accepted")
 		}
 	})
@@ -780,14 +780,14 @@ func TestLegacyConfigSymlinkFingerprintBoundaries(t *testing.T) {
 		if err := os.Symlink("absent.target", link); err != nil {
 			t.Fatal(err)
 		}
-		before, err := legacyFileFingerprints([]string{link}, map[string]bool{link: true})
+		before, err := legacyFileFingerprints(context.Background(), []string{link}, map[string]bool{link: true}, "")
 		if err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(target, content, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if legacyFilesUnchanged(before) {
+		if legacyFilesUnchanged(context.Background(), before) {
 			t.Fatal("creation of absent config-link target reused a cache entry")
 		}
 	})
@@ -799,7 +799,7 @@ func TestLegacyConfigSymlinkFingerprintBoundaries(t *testing.T) {
 		if err := os.Symlink("oversized.target", link); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := legacyFileFingerprints([]string{link}, map[string]bool{link: true}); err == nil {
+		if _, err := legacyFileFingerprints(context.Background(), []string{link}, map[string]bool{link: true}, ""); err == nil {
 			t.Fatal("config symlink bypassed the dependency size bound")
 		}
 	})
@@ -987,48 +987,312 @@ func TestProxyLegacyWarmScopeNeedsNoGitAndRechecksMarker(t *testing.T) {
 }
 
 func TestProxyLegacyNameOnlyWorkspaceUsesExistingV2Scope(t *testing.T) {
-	srv := &mockEngramServer{
-		initResp: &pb.InitializeResponse{Tools: []*pb.ToolDefinition{{Name: "recall"}}},
-		callResp: &pb.CallToolResponse{ContentJson: []byte(`[]`)},
+	for _, tc := range []struct {
+		name, marker string
+		tracked      bool
+	}{
+		{"name-only", `{"name":"engram"}`, true},
+		{"historical-untracked", `{"id":"a8e4b3","name":"nvmd-dubbing"}`, false},
+		{"historical-tracked", `{"id":"a8e4b3","name":"nvmd-dubbing"}`, true},
+		{"historical-reordered-id-ignored", `{"name":"nvmd-dubbing","id":"ffffff"}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := &mockEngramServer{
+				initResp: &pb.InitializeResponse{Tools: []*pb.ToolDefinition{{Name: "recall"}}},
+				callResp: &pb.CallToolResponse{ContentJson: []byte(`[]`)},
+			}
+			_, mod, project := buildContractDispatcher(t, startMockGRPC(t, srv))
+			project.Cwd = t.TempDir()
+			mod.v3ClientInstanceID = "fixture-daemon-install"
+			for _, args := range [][]string{{"init", "--quiet"}, {"remote", "add", "origin", "https://github.com/thebtf/engram.git"}} {
+				if output, err := exec.Command("git", append([]string{"-C", project.Cwd}, args...)...).CombinedOutput(); err != nil {
+					t.Fatalf("fixture git: %v: %s", err, output)
+				}
+			}
+			marker := filepath.Join(project.Cwd, ".engram-project")
+			if err := os.WriteFile(marker, []byte(tc.marker), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if tc.tracked {
+				if output, err := exec.Command("git", "-C", project.Cwd, "add", ".engram-project").CombinedOutput(); err != nil {
+					t.Fatalf("track marker: %v: %s", err, output)
+				}
+			}
+			index := filepath.Join(project.Cwd, ".git", "index")
+			beforeIndex, indexErr := os.ReadFile(index)
+			if indexErr != nil && !os.IsNotExist(indexErr) {
+				t.Fatal(indexErr)
+			}
+			for range 2 {
+				if _, err := mod.ProxyTools(context.Background(), project); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := mod.ProxyHandleTool(context.Background(), project, "recall", json.RawMessage(`{}`)); err != nil {
+					t.Fatal(err)
+				}
+				if srv.initReq.GetProject() != "67e398f8" || srv.callReq.GetProject() != "67e398f8" {
+					t.Fatalf("legacy scope changed: initialize=%v call=%v", srv.initReq, srv.callReq)
+				}
+				for _, identity := range []*pb.ProjectIdentityV2{srv.initReq.GetProjectIdentity(), srv.callReq.GetProjectIdentity()} {
+					if identity.GetVersion() != 2 || identity.GetGitRemote() != "https://github.com/thebtf/engram.git" || identity.GetRelativePath() != "" {
+						t.Fatalf("legacy metadata changed: %v", identity)
+					}
+				}
+				if srv.initReq.GetProjectIdentityV3() != nil || srv.callReq.GetProjectIdentityV3() != nil {
+					t.Fatal("legacy route carried V3 authority")
+				}
+				mod.OnProjectRemoved(project.ID)
+			}
+			after, err := os.ReadFile(marker)
+			if err != nil || string(after) != tc.marker {
+				t.Fatal("legacy marker was mutated")
+			}
+			afterIndex, afterIndexErr := os.ReadFile(index)
+			if string(beforeIndex) != string(afterIndex) || os.IsNotExist(indexErr) != os.IsNotExist(afterIndexErr) {
+				t.Fatal("legacy dispatch changed the Git index")
+			}
+			if _, err := os.Stat(filepath.Join(project.Cwd, ".engram-project-v2.json")); !os.IsNotExist(err) {
+				t.Fatal("legacy dispatch minted a non-Git anchor")
+			}
+		})
 	}
-	grpcAddr := startMockGRPC(t, srv)
-	_, mod, project := buildContractDispatcher(t, grpcAddr)
-	project.Cwd = daemonV3Repository(t)
-	mod.v3ClientInstanceID = "fixture-daemon-install"
-	if err := os.WriteFile(filepath.Join(project.Cwd, ".engram-project"), []byte(`{"name":"engram"}`), 0o600); err != nil {
-		t.Fatal(err)
+}
+
+func TestProxyLegacyExistingLocalV2Anchor(t *testing.T) {
+	const anchorBytes = `{"version":2,"anchor":"00112233445566778899aabbccddeeff","shared":false}`
+	for _, boundary := range []string{"valid", "clone", "missing", "malformed", "symlink", "nonregular", "fifo", "oversized", "warm-invalidated", "origin-malformed", "origin-symlink", "origin-nonregular", "origin-fifo", "origin-oversized", "origin-warm-invalidated", "raced-anchor", "raced-shared"} {
+		t.Run(boundary, func(t *testing.T) {
+			origin := strings.HasPrefix(boundary, "origin-")
+			boundary := strings.TrimPrefix(boundary, "origin-")
+			if boundary == "fifo" && runtime.GOOS == "windows" {
+				t.Skip("FIFO fixtures require POSIX")
+			}
+			srv := &mockEngramServer{
+				initResp: &pb.InitializeResponse{Tools: []*pb.ToolDefinition{{Name: "recall"}}},
+				callResp: &pb.CallToolResponse{ContentJson: []byte(`[]`)},
+			}
+			_, mod, project := buildContractDispatcher(t, startMockGRPC(t, srv))
+			project.Cwd = t.TempDir()
+			mod.v3ClientInstanceID = "fixture-daemon-install"
+			if output, err := exec.Command("git", "-C", project.Cwd, "init", "--quiet").CombinedOutput(); err != nil {
+				t.Fatalf("fixture git: %v: %s", err, output)
+			}
+			if origin {
+				if output, err := exec.Command("git", "-C", project.Cwd, "remote", "add", "origin", "https://github.com/thebtf/engram.git").CombinedOutput(); err != nil {
+					t.Fatalf("fixture origin: %v: %s", err, output)
+				}
+			}
+			marker := filepath.Join(project.Cwd, ".engram-project")
+			const markerBytes = `{"id":"ffffff","name":"nvmd-dubbing"}`
+			if err := os.WriteFile(marker, []byte(markerBytes), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			anchor := filepath.Join(project.Cwd, ".engram-project-v2.json")
+			if boundary != "missing" {
+				data := anchorBytes
+				if boundary == "malformed" {
+					data = `{"version":2,"anchor":"invalid","shared":false}`
+				}
+				if boundary == "oversized" {
+					data = strings.Repeat(" ", 1024*1024+1)
+				}
+				if boundary == "symlink" {
+					target := filepath.Join(project.Cwd, "anchor-target.json")
+					if err := os.WriteFile(target, []byte(data), 0o600); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Symlink(target, anchor); err != nil {
+						t.Skipf("symlinks unavailable: %v", err)
+					}
+				} else if boundary == "nonregular" {
+					if err := os.Mkdir(anchor, 0o700); err != nil {
+						t.Fatal(err)
+					}
+				} else if boundary == "fifo" {
+					if output, err := exec.Command("mkfifo", anchor).CombinedOutput(); err != nil {
+						t.Fatalf("fixture FIFO: %v: %s", err, output)
+					}
+				} else if err := os.WriteFile(anchor, []byte(data), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if !origin && (boundary == "missing" || boundary == "malformed" || boundary == "symlink" || boundary == "nonregular" || boundary == "fifo" || boundary == "oversized") {
+				_, _ = mod.ProxyTools(context.Background(), project)
+				if _, err := mod.ProxyHandleTool(context.Background(), project, "recall", json.RawMessage(`{}`)); err == nil {
+					t.Fatal("invalid local anchor reached memory")
+				}
+				if srv.initReq != nil || srv.callReq != nil {
+					t.Fatal("invalid local anchor reached transport")
+				}
+				if boundary == "missing" {
+					if _, err := os.Lstat(anchor); !os.IsNotExist(err) {
+						t.Fatal("missing local anchor was created")
+					}
+				}
+				return
+			}
+			if strings.HasPrefix(boundary, "raced-") {
+				original := resolveLegacyGitIdentity
+				t.Cleanup(func() { resolveLegacyGitIdentity = original })
+				changed := false
+				resolveLegacyGitIdentity = func(ctx context.Context, cwd, name, prefix string) (string, proxy.ProjectIdentityV2, error) {
+					slug, identity, err := original(ctx, cwd, name, prefix)
+					if err == nil && !changed {
+						changed = true
+						data := strings.Replace(anchorBytes, "00112233445566778899aabbccddeeff", "ffeeddccbbaa99887766554433221100", 1)
+						if boundary == "raced-shared" {
+							data = strings.Replace(anchorBytes, "false", "true", 1)
+						}
+						if err := os.WriteFile(anchor, []byte(data), 0o600); err != nil {
+							t.Fatal(err)
+						}
+					}
+					return slug, identity, err
+				}
+				if _, err := mod.ProxyTools(context.Background(), project); err == nil || !changed || srv.initReq != nil || srv.callReq != nil {
+					t.Fatal("anchor changed during resolution retained memory authority")
+				}
+				return
+			}
+			selected := project.Cwd
+			if boundary == "clone" {
+				project.Cwd = t.TempDir()
+				if output, err := exec.Command("git", "-C", project.Cwd, "init", "--quiet").CombinedOutput(); err != nil {
+					t.Fatalf("clone fixture git: %v: %s", err, output)
+				}
+				for filename, data := range map[string]string{".engram-project": markerBytes, ".engram-project-v2.json": anchorBytes} {
+					if err := os.WriteFile(filepath.Join(project.Cwd, filename), []byte(data), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				marker, anchor = filepath.Join(project.Cwd, ".engram-project"), filepath.Join(project.Cwd, ".engram-project-v2.json")
+			}
+			for attempt := range 2 {
+				if origin && boundary == "warm-invalidated" && attempt == 1 {
+					if err := os.WriteFile(anchor, []byte(`{"version":2}`), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if _, err := mod.ProxyTools(context.Background(), project); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := mod.ProxyHandleTool(context.Background(), project, "recall", json.RawMessage(`{}`)); err != nil {
+					t.Fatal(err)
+				}
+				digest := sha256.Sum256([]byte(project.Cwd))
+				selector := fmt.Sprintf("%x", digest[:])[:6]
+				for _, request := range []*pb.ProjectIdentityV2{srv.initReq.GetProjectIdentity(), srv.callReq.GetProjectIdentity()} {
+					if origin {
+						if request.GetVersion() != 2 || request.GetGitRemote() != "https://github.com/thebtf/engram.git" || request.GetRelativePath() != "" || request.GetNonGitAnchor() != "" || request.AnchorShared != nil {
+							t.Fatalf("origin identity used irrelevant local anchor: %v", request)
+						}
+						continue
+					}
+					if request.GetVersion() != 2 || request.GetNonGitAnchor() != "00112233445566778899aabbccddeeff" || request.AnchorShared == nil || request.GetAnchorShared() ||
+						request.GetGitRemote() != "" || request.GetRelativePath() != "" || request.GetLegacyProjectId() != filepath.Base(project.Cwd)+"_"+selector {
+						t.Fatalf("existing local V2 metadata changed: %v", request)
+					}
+				}
+				if origin {
+					if srv.initReq.GetProject() != "67e398f8" || srv.callReq.GetProject() != "67e398f8" {
+						t.Fatal("origin selector changed")
+					}
+					if _, tracked := mod.cache.legacy[cacheKey(project)].files[anchor]; tracked {
+						t.Fatal("origin cache fingerprinted irrelevant local anchor")
+					}
+				} else if srv.initReq.GetProject() != selector || srv.callReq.GetProject() != selector || selector == "ffffff" {
+					t.Fatal("local selector trusted the marker instead of the selected path")
+				}
+				if srv.initReq.GetProjectIdentityV3() != nil || srv.callReq.GetProjectIdentityV3() != nil {
+					t.Fatal("local legacy route carried V3 authority")
+				}
+				if boundary == "clone" {
+					original := sha256.Sum256([]byte(selected))
+					if selector == fmt.Sprintf("%x", original[:])[:6] {
+						t.Fatal("cloned local anchor erased selected-path isolation")
+					}
+				}
+			}
+			if origin {
+				if output, err := exec.Command("git", "-C", project.Cwd, "remote", "remove", "origin").CombinedOutput(); err != nil {
+					t.Fatalf("remove origin: %v: %s", err, output)
+				}
+				srv.initReq, srv.callReq = nil, nil
+				_, _ = mod.ProxyTools(context.Background(), project)
+				if _, err := mod.ProxyHandleTool(context.Background(), project, "recall", json.RawMessage(`{}`)); err == nil || srv.initReq != nil || srv.callReq != nil {
+					t.Fatal("origin removal retained authority with an invalid local anchor")
+				}
+				return
+			}
+			if boundary == "warm-invalidated" {
+				if err := os.WriteFile(anchor, []byte(`{"version":2}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				srv.initReq, srv.callReq = nil, nil
+				_, _ = mod.ProxyTools(context.Background(), project)
+				if _, err := mod.ProxyHandleTool(context.Background(), project, "recall", json.RawMessage(`{}`)); err == nil || srv.initReq != nil || srv.callReq != nil {
+					t.Fatal("changed local anchor retained memory authority")
+				}
+				return
+			}
+			for filename, want := range map[string]string{marker: markerBytes, anchor: anchorBytes} {
+				if data, err := os.ReadFile(filename); err != nil || string(data) != want {
+					t.Fatal("existing marker or local anchor was mutated")
+				}
+			}
+			if _, err := os.Stat(filepath.Join(project.Cwd, ".git", "index")); !os.IsNotExist(err) {
+				t.Fatal("local dispatch created a Git index")
+			}
+		})
 	}
-	if output, err := exec.Command("git", "-C", project.Cwd, "remote", "set-url", "origin", "https://github.com/thebtf/engram.git").CombinedOutput(); err != nil {
-		t.Fatalf("set fixture origin: %v: %s", err, output)
-	}
-	before, err := os.ReadFile(filepath.Join(project.Cwd, ".engram-project"))
+}
+
+func TestProxyLegacyLargeIndexFingerprint(t *testing.T) {
+	filename := filepath.Join(t.TempDir(), "index")
+	file, err := os.Create(filename)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := mod.ProxyTools(context.Background(), project); err != nil {
+	if err := file.Truncate(2 * 1024 * 1024); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := mod.ProxyHandleTool(context.Background(), project, "recall", json.RawMessage(`{}`)); err != nil {
+	if err := file.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if srv.initReq.GetProject() != "67e398f8" || srv.callReq.GetProject() != "67e398f8" {
-		t.Fatalf("legacy scope changed: initialize=%v call=%v", srv.initReq, srv.callReq)
+	before, err := legacyFileFingerprints(context.Background(), []string{filename}, nil, filename)
+	if err != nil || !legacyFilesUnchanged(context.Background(), before) {
+		t.Fatalf("regular large index refused: %v", err)
 	}
-	for _, identity := range []*pb.ProjectIdentityV2{srv.initReq.GetProjectIdentity(), srv.callReq.GetProjectIdentity()} {
-		if identity.GetVersion() != 2 || identity.GetGitRemote() != "https://github.com/thebtf/engram.git" || identity.GetRelativePath() != "" {
-			t.Fatalf("legacy metadata changed: %v", identity)
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := legacyFileFingerprints(cancelled, []string{filename}, nil, filename); !errors.Is(err, context.Canceled) {
+		t.Fatalf("index fingerprint ignored cancellation: %v", err)
+	}
+	if _, err := legacyFileFingerprints(context.Background(), []string{filename}, map[string]bool{filename: true}, ""); err == nil {
+		t.Fatal("large-index support relaxed the config size bound")
+	}
+	file, err = os.OpenFile(filename, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteAt([]byte{1}, 1024*1024+1); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if legacyFilesUnchanged(context.Background(), before) {
+		t.Fatal("changed large index retained its fingerprint")
+	}
+	t.Run("index-link-refused", func(t *testing.T) {
+		link := filepath.Join(t.TempDir(), "index.link")
+		if err := os.Symlink(filename, link); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
 		}
-	}
-	if srv.initReq.GetProjectIdentityV3() != nil || srv.callReq.GetProjectIdentityV3() != nil {
-		t.Fatal("legacy route carried V3 authority")
-	}
-	after, err := os.ReadFile(filepath.Join(project.Cwd, ".engram-project"))
-	if err != nil || string(before) != string(after) {
-		t.Fatal("legacy marker was mutated")
-	}
-	if _, err := os.Stat(filepath.Join(project.Cwd, ".engram-project-v2.json")); !os.IsNotExist(err) {
-		t.Fatal("legacy dispatch minted a non-Git anchor")
-	}
+		if _, err := legacyFileFingerprints(context.Background(), []string{link}, nil, link); err == nil {
+			t.Fatal("streamed index followed a symlink")
+		}
+	})
 }
 
 func TestProxyLegacyNameOnlyWorkspaceRejectsInvalidAnchors(t *testing.T) {
@@ -1039,6 +1303,12 @@ func TestProxyLegacyNameOnlyWorkspaceRejectsInvalidAnchors(t *testing.T) {
 		`{"name":"engram","project_id":"invalid","scope":"repository","version":3}`,
 		`{"name":"engram","project_id":"22222222-2222-4222-8222-222222222222","scope":"invalid","version":3}`,
 		`{"name":"engram","name":"other"}`, `{"name":"engram"} {}`, `{`,
+		`{"id":"a8e4b3"}`, `{"name":"engram","id":""}`, `{"name":"engram","id":42}`,
+		`{"name":"engram","id":"a8e4b"}`, `{"name":"engram","id":"a8e4b33"}`,
+		`{"name":"engram","id":"a8e4bz"}`, `{"name":"engram","id":"A8E4B3"}`,
+		`{"name":"engram","id":"a8e4b3","id":"ffffff"}`, `{"name":"engram","id":"a8e4b3","name":"other"}`,
+		`{"name":"engram","id":"a8e4b3","extra":true}`, `{"name":"engram","id":"a8e4b3","version":3}`,
+		`{"name":"engram","id":"a8e4b3"} {}`,
 	} {
 		t.Run(raw, func(t *testing.T) {
 			srv := &mockEngramServer{}
@@ -1050,9 +1320,13 @@ func TestProxyLegacyNameOnlyWorkspaceRejectsInvalidAnchors(t *testing.T) {
 			}
 			if _, err := mod.ProxyTools(context.Background(), project); err == nil {
 				t.Fatal("invalid discovery accepted")
+			} else if strings.Contains(err.Error(), project.Cwd) || strings.Contains(err.Error(), raw) {
+				t.Fatal("invalid discovery leaked private marker evidence")
 			}
 			if _, err := mod.ProxyHandleTool(context.Background(), project, "recall", json.RawMessage(`{}`)); err == nil {
 				t.Fatal("invalid call accepted")
+			} else if strings.Contains(err.Error(), project.Cwd) || strings.Contains(err.Error(), raw) {
+				t.Fatal("invalid call leaked private marker evidence")
 			}
 			if srv.initReq != nil || srv.callReq != nil {
 				t.Fatal("invalid anchor reached transport")
@@ -1062,23 +1336,40 @@ func TestProxyLegacyNameOnlyWorkspaceRejectsInvalidAnchors(t *testing.T) {
 }
 
 func TestProxyLegacyNameOnlyWorkspaceRequiresTrackedGitScope(t *testing.T) {
-	for _, boundary := range []string{"missing", "untracked", "missing-origin", "conflicting-directory-anchor"} {
+	for _, boundary := range []string{"missing", "untracked", "missing-origin", "conflicting-directory-anchor", "historical-missing-origin", "historical-non-git", "historical-symlink", "historical-conflicting-directory-anchor"} {
 		t.Run(boundary, func(t *testing.T) {
+			historical := strings.HasPrefix(boundary, "historical-")
+			boundary := strings.TrimPrefix(boundary, "historical-")
 			srv := &mockEngramServer{}
 			_, mod, project := buildContractDispatcher(t, startMockGRPC(t, srv))
 			mod.v3ClientInstanceID = "fixture-daemon-install"
 			project.Cwd = t.TempDir()
-			for _, args := range [][]string{{"init", "--quiet"}, {"remote", "add", "origin", "https://github.com/thebtf/engram.git"}} {
-				if output, err := exec.Command("git", append([]string{"-C", project.Cwd}, args...)...).CombinedOutput(); err != nil {
-					t.Fatalf("fixture git: %v: %s", err, output)
+			if boundary != "non-git" {
+				for _, args := range [][]string{{"init", "--quiet"}, {"remote", "add", "origin", "https://github.com/thebtf/engram.git"}} {
+					if output, err := exec.Command("git", append([]string{"-C", project.Cwd}, args...)...).CombinedOutput(); err != nil {
+						t.Fatalf("fixture git: %v: %s", err, output)
+					}
 				}
 			}
 			if boundary != "missing" {
-				if err := os.WriteFile(filepath.Join(project.Cwd, ".engram-project"), []byte(`{"name":"engram"}`), 0o600); err != nil {
+				raw := `{"name":"engram"}`
+				if historical {
+					raw = `{"id":"a8e4b3","name":"nvmd-dubbing"}`
+				}
+				marker := filepath.Join(project.Cwd, ".engram-project")
+				if boundary == "symlink" {
+					target := filepath.Join(project.Cwd, "historical-marker.json")
+					if err := os.WriteFile(target, []byte(raw), 0o600); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Symlink(target, marker); err != nil {
+						t.Skipf("symlinks unavailable: %v", err)
+					}
+				} else if err := os.WriteFile(marker, []byte(raw), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
-			if boundary != "missing" && boundary != "untracked" {
+			if !historical && boundary != "missing" && boundary != "untracked" {
 				if output, err := exec.Command("git", "-C", project.Cwd, "add", ".engram-project").CombinedOutput(); err != nil {
 					t.Fatalf("track marker: %v: %s", err, output)
 				}

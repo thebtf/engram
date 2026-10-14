@@ -172,9 +172,9 @@ func ResolveProjectIdentityV2(ctx context.Context, cwd string) (ProjectIdentityV
 	return identity, nil
 }
 
-// ResolveGitProjectIdentityV2 derives the existing Git-only V2 scope using the
-// selected prefix already inspected by the caller. It never creates or stages
-// either project marker and never enters the non-Git path.
+// ResolveGitProjectIdentityV2 derives the existing V2 scope for a Git workspace
+// using the selected prefix already inspected by the caller. A missing origin
+// requires an existing local V2 anchor; neither path creates or stages markers.
 func ResolveGitProjectIdentityV2(ctx context.Context, cwd, displayName, prefix string) (string, ProjectIdentityV2, error) {
 	resolved, err := filepath.Abs(cwd)
 	if err != nil {
@@ -183,19 +183,33 @@ func ResolveGitProjectIdentityV2(ctx context.Context, cwd, displayName, prefix s
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	remote, err := getGitRemote(ctx, resolved)
-	if err != nil {
+	if err != nil && !errors.Is(err, errGitIdentityAbsent) {
 		return "", ProjectIdentityV2{}, err
 	}
+	pathID := sha256Hex(resolved)[:6]
 	identity := ProjectIdentityV2{
 		Version:         ProjectIdentityVersionV2,
-		LegacyProjectID: filepath.Base(resolved) + "_" + sha256Hex(resolved)[:6],
-		DisplayName:     displayName, GitRemote: remote,
-		RelativePath: strings.ReplaceAll(prefix, "\\", "/"),
+		LegacyProjectID: filepath.Base(resolved) + "_" + pathID,
+		DisplayName:     displayName,
+	}
+	selector := pathID
+	if err == nil {
+		identity.GitRemote = remote
+		identity.RelativePath = strings.ReplaceAll(prefix, "\\", "/")
+		selector = sha256Hex(remote + "/" + prefix)[:8]
+	} else {
+		anchor, err := readProjectAnchorV2(filepath.Join(resolved, projectIdentityV2File))
+		if err != nil {
+			return "", ProjectIdentityV2{}, err
+		}
+		shared := anchor.Shared
+		identity.NonGitAnchor = anchor.Anchor
+		identity.AnchorShared = &shared
 	}
 	if err := ValidateProjectIdentityV2(identity); err != nil {
 		return "", ProjectIdentityV2{}, err
 	}
-	return sha256Hex(remote + "/" + prefix)[:8], identity, nil
+	return selector, identity, ctx.Err()
 }
 
 func readOrCreateProjectAnchorV2(dir string) (projectAnchorV2, error) {
@@ -225,9 +239,37 @@ func readOrCreateProjectAnchorV2(dir string) (projectAnchorV2, error) {
 }
 
 func readProjectAnchorV2(anchorPath string) (projectAnchorV2, error) {
-	data, err := os.ReadFile(anchorPath)
+	info, err := os.Lstat(anchorPath)
 	if err != nil {
 		return projectAnchorV2{}, err
+	}
+	if !info.Mode().IsRegular() || info.Size() > 1024*1024 || !os.SameFile(info, info) {
+		return projectAnchorV2{}, errors.New("PROJECT_IDENTITY_INVALID: existing anchor is not a bounded regular file")
+	}
+	file, err := os.Open(anchorPath)
+	if err != nil {
+		return projectAnchorV2{}, err
+	}
+	defer file.Close()
+	same := func(current os.FileInfo) bool {
+		return current != nil && os.SameFile(info, current) && info.Mode() == current.Mode() &&
+			info.Size() == current.Size() && info.ModTime().Equal(current.ModTime())
+	}
+	opened, err := file.Stat()
+	if err != nil || !same(opened) {
+		return projectAnchorV2{}, errors.New("PROJECT_IDENTITY_INVALID: existing anchor changed")
+	}
+	data, err := io.ReadAll(io.LimitReader(file, 1024*1024+1))
+	if err != nil {
+		return projectAnchorV2{}, err
+	}
+	finished, err := file.Stat()
+	if err != nil || len(data) > 1024*1024 || !same(finished) {
+		return projectAnchorV2{}, errors.New("PROJECT_IDENTITY_INVALID: existing anchor changed")
+	}
+	current, err := os.Lstat(anchorPath)
+	if err != nil || !same(current) {
+		return projectAnchorV2{}, errors.New("PROJECT_IDENTITY_INVALID: existing anchor replaced")
 	}
 	anchor, err := decodeProjectAnchorV2(data)
 	if err != nil {
