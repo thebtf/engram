@@ -194,7 +194,7 @@ func TestLatestPromotionJournalContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("current promotion journal matrix failed: %v\n%s", err, output)
 	}
-	if !strings.Contains(string(output), "scenarios=50") {
+	if !strings.Contains(string(output), "scenarios=65") {
 		t.Fatalf("current promotion journal matrix did not complete: %s", output)
 	}
 }
