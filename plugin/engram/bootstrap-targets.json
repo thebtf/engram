@@ -8,8 +8,8 @@
       "desired": {
         "version": "6.52.1",
         "asset": "engram-windows-amd64.exe",
-        "size": 29067264,
-        "sha256": "900f9cc7a0008eaeb30b215e56f7da66494ef86c4ac781b199c7c695aab4938d"
+        "size": 29068288,
+        "sha256": "1027b7eb528a48ec7ea0128a9f65b87eabe0f06c31d452f20c890c4e67d529e6"
       },
       "predecessor": null
     },
@@ -17,8 +17,8 @@
       "desired": {
         "version": "6.52.1",
         "asset": "engram-linux-amd64",
-        "size": 28242046,
-        "sha256": "317f7b73edfd06516e294f97335d6c185e204be7d3bd7a0bcb15b1f01003bb5a"
+        "size": 28246142,
+        "sha256": "ad9f1f1c21734fbdf2e9b042a6fe17ad5a4e568abc5b7d5239b96d35a10355b2"
       },
       "predecessor": null
     },
@@ -27,7 +27,7 @@
         "version": "6.52.1",
         "asset": "engram-darwin-arm64",
         "size": 27485314,
-        "sha256": "eb8c2a7be9bd6fb25da32b36346e7bea684b733ab4b59e0a048455e1dd371061"
+        "sha256": "c9037b973e5b44204bbdf82b9e314f4f2257579281e5d8ef5bae47290cd701b1"
       },
       "predecessor": null
     }
