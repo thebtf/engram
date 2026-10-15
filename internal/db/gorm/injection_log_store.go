@@ -88,8 +88,8 @@ func (s *InjectionLogStore) GetBySession(ctx context.Context, sessionID string) 
 	return result, nil
 }
 
-// DeleteOlderThan removes all injection_log rows whose injected_at timestamp
-// is strictly before olderThan. Returns the number of rows deleted.
+// DeleteOlderThan removes injection_log rows strictly before olderThan unless
+// retained consolidation memberships still address them. Returns rows deleted.
 func (s *InjectionLogStore) DeleteOlderThan(ctx context.Context, olderThan time.Time) (int64, error) {
 	sqlDB, err := s.db.DB()
 	if err != nil {
@@ -97,7 +97,11 @@ func (s *InjectionLogStore) DeleteOlderThan(ctx context.Context, olderThan time.
 	}
 
 	result, err := sqlDB.ExecContext(ctx,
-		`DELETE FROM injection_log WHERE injected_at < $1`,
+		`DELETE FROM injection_log WHERE injected_at < $1 AND NOT EXISTS (
+			SELECT 1 FROM project_consolidation_memberships retained
+			WHERE retained.table_name = 'injection_log'
+			AND retained.row_key = jsonb_build_object('id', injection_log.id)
+		)`,
 		olderThan,
 	)
 	if err != nil {

@@ -93,11 +93,16 @@ func (s *AuditStore) LogAudit(ctx context.Context, memoryID int64, action, actor
 }
 
 // DeleteOlderThan removes ordinary audit entries older than the cutoff.
-// The initial-admin setup proof is retained because Authentik provisioning
-// relies on it to distinguish a completed setup from an uninitialized system.
+// Retained consolidation memberships keep their native history addressable.
+// Initial-admin setup proof also survives for Authentik provisioning.
 func (s *AuditStore) DeleteOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
 	result := s.db.WithContext(ctx).
 		Where("created_at < ? AND action <> ?", cutoff, authSetupCompletedAuditAction).
+		Where(`NOT EXISTS (
+			SELECT 1 FROM project_consolidation_memberships retained
+			WHERE retained.table_name = 'audit_log'
+			AND retained.row_key = jsonb_build_object('id', audit_log.id)
+		)`).
 		Delete(&AuditLogEntry{})
 	return result.RowsAffected, result.Error
 }

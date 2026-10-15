@@ -518,7 +518,23 @@ func TestAuditStore_RetentionPreservesInitialAdminSetupProof(t *testing.T) {
 	require.NoError(t, store.DB.Model(&AuditLogEntry{}).
 		Where("action = ? AND actor = ?", authSetupCompletedAuditAction, adminEmail).
 		Update("created_at", old).Error)
-	require.NoError(t, store.DB.Create(&AuditLogEntry{Action: ordinaryAction, Actor: adminEmail, CreatedAt: old}).Error)
+	ordinary := AuditLogEntry{Action: ordinaryAction, Actor: adminEmail, CreatedAt: old}
+	require.NoError(t, store.DB.Create(&ordinary).Error)
+	retained := AuditLogEntry{Action: prefix + "-retained", Actor: adminEmail, Reason: "retained history", CreatedAt: old}
+	require.NoError(t, store.DB.Create(&retained).Error)
+	retainedKey := JSONRaw(fmt.Sprintf(`{"id":%d}`, retained.ID))
+	membership := ConsolidationMembership{
+		Reference: prefix, UnresolvedReference: prefix, Table: "audit_log",
+		RowKey: retainedKey, SourceRowKey: retainedKey, FieldPath: JSONRaw(`[""]`),
+		PlanFingerprint: "retention-fixture",
+	}
+	require.NoError(t, store.DB.Create(&membership).Error)
+	otherKey := JSONRaw(fmt.Sprintf(`{"id":%d}`, ordinary.ID))
+	otherMembership := membership
+	otherMembership.Reference = prefix + "-other-table"
+	otherMembership.Table = "citation_log"
+	otherMembership.RowKey, otherMembership.SourceRowKey = otherKey, otherKey
+	require.NoError(t, store.DB.Create(&otherMembership).Error)
 
 	deleted, err := NewAuditStore(store.DB).DeleteOlderThan(context.Background(), time.Now().UTC().AddDate(0, 0, -90))
 	require.NoError(t, err)
@@ -528,7 +544,14 @@ func TestAuditStore_RetentionPreservesInitialAdminSetupProof(t *testing.T) {
 	require.NoError(t, store.DB.Model(&AuditLogEntry{}).Where("action = ? AND actor = ?", authSetupCompletedAuditAction, adminEmail).Count(&setupProofs).Error)
 	require.NoError(t, store.DB.Model(&AuditLogEntry{}).Where("action = ? AND actor = ?", ordinaryAction, adminEmail).Count(&ordinaryRows).Error)
 	require.Equal(t, int64(1), setupProofs)
-	require.Zero(t, ordinaryRows)
+	require.Zero(t, ordinaryRows, "the same numeric key in another table must not retain the audit row")
+	var retainedAfter AuditLogEntry
+	require.NoError(t, store.DB.First(&retainedAfter, retained.ID).Error)
+	require.Equal(t, retained.Action, retainedAfter.Action)
+	require.Equal(t, retained.Reason, retainedAfter.Reason)
+	var membershipAfter ConsolidationMembership
+	require.NoError(t, store.DB.Where("reference = ?", membership.Reference).First(&membershipAfter).Error)
+	require.JSONEq(t, string(retainedKey), string(membershipAfter.RowKey))
 
 	operator, err := users.ProvisionAuthentikOperator(context.Background(), operatorEmail)
 	require.NoError(t, err)
