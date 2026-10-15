@@ -812,79 +812,148 @@ func (s *ProjectConsolidationStore) ResolveLegacy(ctx context.Context, selector,
 	return ids[0], nil
 }
 
+const (
+	consolidationMembershipBatchSize  = 128
+	consolidationMembershipBatchBytes = 1 << 20
+)
+
 // References select retained membership only; data readers still enforce their
 // ordinary record privacy and code authorization independently.
 func (s *ProjectConsolidationStore) validateUnresolvedMembership(ctx context.Context, rows []ConsolidationMembership) error {
 	if s == nil || s.db == nil || s.vault == nil {
 		return consolidationHold("UNKNOWN_REFERENCE")
 	}
-	for _, row := range rows {
-		var path []string
-		var key map[string]json.RawMessage
-		if json.Unmarshal(row.FieldPath, &path) != nil || len(path) == 0 || json.Unmarshal(row.RowKey, &key) != nil || len(key) == 0 || row.PlanFingerprint == "" {
-			return consolidationHold("STALE_REFERENCE")
-		}
-		keyJSON, _ := json.Marshal(key)
-		var nested []string
-		if len(path) > 1 {
-			nested = path[1:]
-		}
-		var sourceKey map[string]json.RawMessage
-		if json.Unmarshal(row.SourceRowKey, &sourceKey) != nil || len(sourceKey) == 0 {
-			return consolidationHold("STALE_REFERENCE")
-		}
-		keyJSON, _ = json.Marshal(sourceKey)
-		ref := s.opaque("row", struct {
-			Table, Column string
-			Key           JSONRaw
-			Path          []string
-		}{row.Table, path[0], JSONRaw(keyJSON), nested})
-		group := row.SelectorReference
-		if group == "" {
-			group = ref
-		}
-		if ref != row.Reference || s.opaque("unresolved", group) != row.UnresolvedReference {
-			return consolidationHold("UNKNOWN_REFERENCE")
-		}
-		if row.Table == "sources" {
-			var sourceID string
-			if len(key) != 1 || json.Unmarshal(key["source_id"], &sourceID) != nil || sourceID == "" || len(path) != 1 || (path[0] != "" && path[0] != "project_id") || (path[0] == "" && row.SelectorReference != "") {
-				return consolidationHold("STALE_REFERENCE")
+	type shape struct{ table, predicate, path string }
+	type batch struct {
+		shape
+		pathValues []string
+		args       []any
+		keys       []json.RawMessage
+		members    []*ConsolidationMembership
+	}
+	// Bound transport work, not membership completeness. An existing oversized
+	// key/path is validated alone rather than truncated or rejected.
+	for start := 0; start < len(rows); {
+		end, size := start, 0
+		for end < len(rows) && end-start < consolidationMembershipBatchSize {
+			next := len(rows[end].RowKey) + len(rows[end].FieldPath)
+			if end > start && size+next > consolidationMembershipBatchBytes {
+				break
 			}
-			var count int64
-			if err := s.db.WithContext(ctx).Table("sources").Where("source_id = ?", sourceID).Count(&count).Error; err != nil {
+			size += next
+			end++
+		}
+		var batches []batch
+		shapes := make(map[shape]int)
+		for i := start; i < end; i++ {
+			if err := ctx.Err(); err != nil {
 				return err
 			}
-			if count != 1 {
+			row := &rows[i]
+			var path []string
+			var key map[string]json.RawMessage
+			if json.Unmarshal(row.FieldPath, &path) != nil || len(path) == 0 || json.Unmarshal(row.RowKey, &key) != nil || len(key) == 0 || row.PlanFingerprint == "" {
 				return consolidationHold("STALE_REFERENCE")
 			}
-			if path[0] == "project_id" {
-				var values []struct{ Selector string }
-				if err := s.db.WithContext(ctx).Raw("SELECT COALESCE(project_id::text,'') AS selector FROM sources WHERE source_id = ?", sourceID).Scan(&values).Error; err != nil {
-					return err
+			var nested []string
+			if len(path) > 1 {
+				nested = path[1:]
+			}
+			var sourceKey map[string]json.RawMessage
+			if json.Unmarshal(row.SourceRowKey, &sourceKey) != nil || len(sourceKey) == 0 {
+				return consolidationHold("STALE_REFERENCE")
+			}
+			keyJSON, _ := json.Marshal(sourceKey)
+			ref := s.opaque("row", struct {
+				Table, Column string
+				Key           JSONRaw
+				Path          []string
+			}{row.Table, path[0], JSONRaw(keyJSON), nested})
+			group := row.SelectorReference
+			if group == "" {
+				group = ref
+			}
+			if ref != row.Reference || s.opaque("unresolved", group) != row.UnresolvedReference {
+				return consolidationHold("UNKNOWN_REFERENCE")
+			}
+			var predicate string
+			if row.Table == "sources" {
+				var sourceID string
+				if len(key) != 1 || json.Unmarshal(key["source_id"], &sourceID) != nil || sourceID == "" || len(path) != 1 || (path[0] != "" && path[0] != "project_id") || (path[0] == "" && row.SelectorReference != "") {
+					return consolidationHold("STALE_REFERENCE")
 				}
-				if len(values) != 1 || (row.SelectorReference == "" && values[0].Selector != "") || (row.SelectorReference != "" && s.opaque("selector", values[0].Selector) != row.SelectorReference) {
+				predicate = "t.source_id = (r.value->>'source_id')::uuid"
+			} else {
+				var err error
+				predicate, _, err = consolidationNativePredicate(row.RowKey, "t")
+				if err != nil {
 					return consolidationHold("STALE_REFERENCE")
 				}
 			}
-			continue
+			pathJSON, _ := json.Marshal(path)
+			entry := shape{row.Table, predicate, string(pathJSON)}
+			index, exists := shapes[entry]
+			if !exists {
+				index = len(batches)
+				shapes[entry] = index
+				b := batch{shape: entry, pathValues: path}
+				if row.Table != "sources" {
+					if _, physical := key["__native_ctid"]; physical {
+						b.args = []any{gormlib.Expr("COALESCE(r.value->>?::text,'')", "__native_ctid"), gormlib.Expr("COALESCE(r.value->>?::text,'')", "__native_xmin")}
+					} else {
+						names := make([]string, 0, len(key))
+						for name := range key {
+							names = append(names, name)
+						}
+						sort.Strings(names)
+						for _, name := range names {
+							b.args = append(b.args, gormlib.Expr("(r.value->?::text)", name))
+						}
+					}
+				}
+				batches = append(batches, b)
+			}
+			batches[index].keys = append(batches[index].keys, json.RawMessage(row.RowKey))
+			batches[index].members = append(batches[index].members, row)
 		}
-		predicate, args, err := consolidationNativePredicate(row.RowKey, "t")
-		if err != nil {
-			return consolidationHold("STALE_REFERENCE")
+		for _, b := range batches {
+			keys, err := json.Marshal(b.keys)
+			if err != nil {
+				return consolidationHold("STALE_REFERENCE")
+			}
+			expression := "''::text"
+			var args []any
+			if b.pathValues[0] != "" {
+				if b.table == "sources" {
+					expression = "COALESCE(MIN(t.project_id::text),'')"
+				} else {
+					expression = "COALESCE(MIN(to_jsonb(t) #>> ?::text[]),'')"
+					args = append(args, pq.Array(b.pathValues))
+				}
+			}
+			args = append(args, string(keys), gormlib.Expr(b.predicate, b.args...))
+			var values []struct {
+				Ordinal  int
+				Matches  int64
+				Selector string
+			}
+			// Keep the native predicate's JSONB equality and physical tuple casts;
+			// only its bound values now come from the requested key relation.
+			query := "SELECT r.ordinality AS ordinal, COUNT(t.tableoid) AS matches, " + expression + " AS selector FROM jsonb_array_elements(?::jsonb) WITH ORDINALITY AS r(value, ordinality) LEFT JOIN " + quoted(b.table) + " t ON ? GROUP BY r.ordinality ORDER BY r.ordinality"
+			if err := s.db.WithContext(ctx).Raw(query, args...).Scan(&values).Error; err != nil {
+				return err
+			}
+			if len(values) != len(b.members) {
+				return consolidationHold("STALE_REFERENCE")
+			}
+			for i, value := range values {
+				row := b.members[i]
+				if value.Ordinal != i+1 || value.Matches != 1 || (row.SelectorReference != "" && s.opaque("selector", value.Selector) != row.SelectorReference) || (b.table == "sources" && b.pathValues[0] == "project_id" && row.SelectorReference == "" && value.Selector != "") {
+					return consolidationHold("STALE_REFERENCE")
+				}
+			}
 		}
-		var values []struct{ Selector string }
-		expression := "''::text"
-		if path[0] != "" {
-			expression = "COALESCE(to_jsonb(t) #>> ?::text[],'')"
-			args = append([]any{pq.Array(path)}, args...)
-		}
-		if err := s.db.WithContext(ctx).Raw("SELECT "+expression+" AS selector FROM "+quoted(row.Table)+" t WHERE "+predicate, args...).Scan(&values).Error; err != nil {
-			return err
-		}
-		if len(values) != 1 || (row.SelectorReference != "" && s.opaque("selector", values[0].Selector) != row.SelectorReference) {
-			return consolidationHold("STALE_REFERENCE")
-		}
+		start = end
 	}
 	return nil
 }

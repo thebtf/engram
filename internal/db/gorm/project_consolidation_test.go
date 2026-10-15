@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -767,4 +768,231 @@ func TestProjectConsolidationReaderStoreSlice(t *testing.T) {
 	require.EqualError(t, err, "PROJECT_ADOPTION_STALE_REFERENCE")
 	require.NoError(t, tx.Rollback().Error)
 	require.NoError(t, consolidationCompare(db, original), "failed public corpus must remain unchanged")
+}
+
+type consolidationQueryCounter struct {
+	logger.Interface
+	queries int
+}
+
+func (counter *consolidationQueryCounter) Trace(context.Context, time.Time, func() (string, int64), error) {
+	counter.queries++
+}
+
+func TestProjectConsolidationUnresolvedMembershipBatch(t *testing.T) {
+	dsnPath := os.Getenv("ENGRAM_CONSOLIDATION_VALIDATION_TEST_DSN_FILE")
+	target := os.Getenv("ENGRAM_CONSOLIDATION_VALIDATION_TEST_TARGET")
+	if dsnPath == "" || target == "" {
+		t.Skip("dedicated isolated validation DSN/target absent; PostgreSQL batch regression not executed")
+	}
+	deadline, err := time.Parse(time.RFC3339, os.Getenv("ENGRAM_CONSOLIDATION_FIXTURE_DEADLINE"))
+	require.NoError(t, err)
+	require.True(t, time.Now().Before(deadline), "isolated fixture admission expired")
+	private, err := os.ReadFile(dsnPath)
+	require.NoError(t, err, "private dedicated fixture DSN unavailable")
+	cfg, err := pgx.ParseConfig(strings.TrimSpace(string(private)))
+	require.NoError(t, err)
+	require.Equal(t, "127.0.0.1", cfg.Host)
+	require.EqualValues(t, 22380, cfg.Port)
+	require.True(t, strings.HasPrefix(cfg.Database, "engram_catalog_batch_test_"), "only the explicitly isolated synthetic validation database is permitted")
+	require.Equal(t, target, fmt.Sprintf("%s:%d/%s", cfg.Host, cfg.Port, cfg.Database), "exact parent-supplied dedicated target required")
+	cfg.RuntimeParams["application_name"] = "engram_catalog_validation_test"
+	pool := stdlib.OpenDB(*cfg)
+	pool.SetMaxOpenConns(1)
+	defer pool.Close()
+	db, err := gormlib.Open(postgres.New(postgres.Config{Conn: pool}), &gormlib.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	require.NoError(t, err)
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+	var actual string
+	require.NoError(t, db.WithContext(ctx).Raw("SELECT current_database()").Scan(&actual).Error)
+	require.Equal(t, cfg.Database, actual)
+	tx := db.WithContext(ctx).Begin()
+	require.NoError(t, tx.Error)
+	defer tx.Rollback()
+	require.NoError(t, tx.Exec("SET LOCAL search_path = pg_temp").Error)
+	for _, statement := range []string{
+		`CREATE TEMP TABLE project_consolidation_memberships (reference text PRIMARY KEY, unresolved_reference text, table_name text, row_key jsonb, source_row_key jsonb, field_path jsonb, selector_reference text, project_id text, reason text, plan_fingerprint text, native_version text, source_snapshot text) ON COMMIT DROP`,
+		`CREATE TEMP TABLE projects (id text PRIMARY KEY, display_name text) ON COMMIT DROP`,
+		`CREATE TEMP TABLE sources (source_id uuid PRIMARY KEY, project_id text, display_name text) ON COMMIT DROP`,
+		`CREATE TEMP TABLE memories (id bigint PRIMARY KEY, project text, content text) ON COMMIT DROP`,
+		`CREATE TEMP TABLE credentials (id bigint PRIMARY KEY, project text) ON COMMIT DROP`,
+		`CREATE TEMP TABLE versioned_documents (id bigint, version bigint, project text, metadata jsonb) ON COMMIT DROP`,
+		`CREATE TEMP TABLE catalog_physical_history (project text) ON COMMIT DROP`,
+	} {
+		require.NoError(t, tx.Exec(statement).Error)
+	}
+	vault, err := vaultcrypto.OpenExistingVault(&config.Config{EncryptionKey: strings.Repeat("ab", 32)})
+	require.NoError(t, err)
+	s := NewProjectConsolidationStore(tx, vault, nil)
+	counter := &consolidationQueryCounter{Interface: logger.Default.LogMode(logger.Silent)}
+	s.db = s.db.Session(&gormlib.Session{Logger: counter})
+	member := func(table, key string, path []string, selector string) ConsolidationMembership {
+		t.Helper()
+		canonical, err := consolidationCanonicalKey([]byte(key))
+		require.NoError(t, err)
+		var nested []string
+		if len(path) > 1 {
+			nested = path[1:]
+		}
+		state := consolidationPlanState{Fingerprint: "isolated-validation"}
+		s.addCensusRow(&state.Census, table, path[0], "tenant", canonical, nested, selector, false)
+		mapping, err := s.buildMapping(state.Census.Rows, nil)
+		require.NoError(t, err)
+		return consolidationMembershipFor(state, state.Census.Rows[0], mapping[0], canonical)
+	}
+	const n = 257
+	require.NoError(t, tx.Exec("INSERT INTO memories SELECT n,'historical','retained body' FROM generate_series(1,?) n", n).Error)
+	rows := make([]ConsolidationMembership, n)
+	for i := range rows {
+		rows[i] = member("memories", fmt.Sprintf(`{"id":%d}`, i+1), []string{"project"}, "historical")
+		rows[i].Reason = "a"
+		if i%2 != 0 {
+			rows[i].Reason = "b"
+		}
+	}
+	counter.queries = 0
+	require.NoError(t, s.validateUnresolvedMembership(ctx, rows))
+	require.LessOrEqual(t, counter.queries, 8, "complete membership validation must use bounded batches, not one query per member")
+	const sourceCount = 129
+	require.NoError(t, tx.Exec("INSERT INTO sources SELECT ('00000000-0000-4000-8000-'||lpad(n::text,12,'0'))::uuid,NULL,'Source '||n FROM generate_series(1,?) n", sourceCount).Error)
+	for i := range sourceCount {
+		rows = append(rows, member("sources", fmt.Sprintf(`{"source_id":"00000000-0000-4000-8000-%012d"}`, i+1), []string{""}, ""))
+	}
+	require.NoError(t, tx.Exec("INSERT INTO projects VALUES ('historical','Historical label')").Error)
+	require.NoError(t, tx.CreateInBatches(&rows, consolidationMembershipBatchSize).Error)
+	items, err := s.UnresolvedMembership(ctx, rows[0].UnresolvedReference, "memory")
+	require.NoError(t, err)
+	require.Len(t, items, n)
+	ids, err := RetainedContentIDs(items)
+	require.NoError(t, err)
+	require.Len(t, ids, n)
+	legacy, err := s.LegacyUnresolved(ctx, "historical")
+	require.NoError(t, err)
+	require.Equal(t, rows[0].UnresolvedReference, legacy)
+	counter.queries = 0
+	catalog, err := s.ListUnresolved(ctx)
+	require.NoError(t, err)
+	require.LessOrEqual(t, counter.queries, 24, "validation and source labels must both have bounded query growth")
+	require.Len(t, catalog, sourceCount+1)
+	labels := make(map[string]UnresolvedProject, len(catalog))
+	for i, item := range catalog {
+		if i > 0 {
+			require.Less(t, catalog[i-1].Reference, item.Reference, "complete catalog order is unchanged")
+		}
+		labels[item.Reference] = item
+	}
+	require.Equal(t, "Historical label", labels[legacy].Name)
+	require.Equal(t, "a,b", labels[legacy].Reason)
+	for i := range sourceCount {
+		require.Equal(t, fmt.Sprintf("Source %d", i+1), labels[rows[n+i].UnresolvedReference].Name)
+	}
+	require.NoError(t, tx.Exec("UPDATE project_consolidation_memberships SET reference=? WHERE reference=?", rows[0].Reference+"0", rows[0].Reference).Error)
+	catalog, err = s.ListUnresolved(ctx)
+	require.EqualError(t, err, "PROJECT_ADOPTION_UNKNOWN_REFERENCE")
+	require.Nil(t, catalog, "one invalid member must refuse the entire catalog")
+	require.NoError(t, tx.Exec("UPDATE project_consolidation_memberships SET reference=? WHERE reference=?", rows[0].Reference, rows[0].Reference+"0").Error)
+	require.NoError(t, tx.Exec("INSERT INTO credentials VALUES (1,'historical')").Error)
+	credential := member("credentials", `{"id":1}`, []string{"project"}, "historical")
+	require.NoError(t, tx.Create(&credential).Error)
+	items, err = s.UnresolvedMembership(ctx, legacy, "credential")
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	stale := "PROJECT_ADOPTION_STALE_REFERENCE"
+	unknown := "PROJECT_ADOPTION_UNKNOWN_REFERENCE"
+	for _, mutate := range []func(*ConsolidationMembership){
+		func(row *ConsolidationMembership) { row.Reference += "0" },
+		func(row *ConsolidationMembership) { row.UnresolvedReference += "0" },
+		func(row *ConsolidationMembership) { row.SourceRowKey = JSONRaw(`{"id":2}`) },
+		func(row *ConsolidationMembership) { row.SelectorReference = s.opaque("selector", "other") },
+	} {
+		changed := rows[0]
+		mutate(&changed)
+		require.EqualError(t, s.validateUnresolvedMembership(ctx, []ConsolidationMembership{changed}), unknown)
+	}
+	changed := rows[0]
+	changed.PlanFingerprint = ""
+	require.EqualError(t, s.validateUnresolvedMembership(ctx, []ConsolidationMembership{changed}), stale)
+	changed = rows[0]
+	changed.RowKey = JSONRaw(`{"id":"1"}`)
+	require.EqualError(t, s.validateUnresolvedMembership(ctx, []ConsolidationMembership{changed}), stale, "native numeric and string keys are not interchangeable")
+	changed.RowKey = JSONRaw(`{"id":null}`)
+	require.EqualError(t, s.validateUnresolvedMembership(ctx, []ConsolidationMembership{changed}), stale)
+	changed = member("memories", `{"id":999999}`, []string{"project"}, "historical")
+	changed.RowKey = rows[0].RowKey
+	require.NoError(t, s.validateUnresolvedMembership(ctx, []ConsolidationMembership{changed}), "original source address remains distinct from the current native key")
+	require.NoError(t, tx.Exec("UPDATE memories SET project='other' WHERE id=1").Error)
+	require.EqualError(t, s.validateUnresolvedMembership(ctx, rows), stale, "a changed current selector must refuse the entire group")
+	require.NoError(t, tx.Exec("UPDATE memories SET project='historical' WHERE id=1").Error)
+	require.NoError(t, tx.Exec(`INSERT INTO versioned_documents VALUES (9007199254740993,2,'historical','{"nested":{"projects":["other","historical"],"null":null},"flag":true,"number":12}'), (9007199254740993,3,'other','{}'), (2,NULL,NULL,NULL), (3,1,'historical','null')`).Error)
+	require.NoError(t, s.validateUnresolvedMembership(ctx, []ConsolidationMembership{
+		member("versioned_documents", `{"id":9007199254740993,"version":2}`, []string{"project"}, "historical"),
+		member("versioned_documents", `{"id":9007199254740993,"version":3}`, []string{"project"}, "other"),
+		member("versioned_documents", `{"id":9007199254740993,"version":2}`, []string{"metadata", "nested", "projects", "1"}, "historical"),
+		member("versioned_documents", `{"id":9007199254740993,"version":2}`, []string{"metadata", "nested", "projects", "0"}, "other"),
+	}), "same-row paths and different composite members must not share a selector result")
+	for _, test := range []struct {
+		name, key string
+		path      []string
+		selector  string
+		want      string
+	}{
+		{"composite large integer", `{"version":2,"id":9007199254740993}`, []string{"project"}, "historical", ""},
+		{"composite typed key", `{"version":"2","id":9007199254740993}`, []string{"project"}, "historical", stale},
+		{"exact one row", `{"id":9007199254740993}`, []string{"project"}, "historical", stale},
+		{"nested array", `{"id":9007199254740993,"version":2}`, []string{"metadata", "nested", "projects", "1"}, "historical", ""},
+		{"negative array index", `{"id":9007199254740993,"version":2}`, []string{"metadata", "nested", "projects", "-1"}, "historical", ""},
+		{"JSON null selector", `{"id":9007199254740993,"version":2}`, []string{"metadata", "nested", "null"}, "", ""},
+		{"missing selector", `{"id":9007199254740993,"version":2}`, []string{"metadata", "missing"}, "", ""},
+		{"SQL null selector", `{"id":2}`, []string{"project"}, "", ""},
+		{"JSON boolean text", `{"id":9007199254740993,"version":2}`, []string{"metadata", "flag"}, "true", ""},
+		{"JSON number text", `{"id":9007199254740993,"version":2}`, []string{"metadata", "number"}, "12", ""},
+		{"JSON null native key", `{"metadata":null}`, []string{"project"}, "historical", ""},
+		{"SQL null native key", `{"id":2,"version":null}`, []string{"project"}, "", stale},
+		{"missing row", `{"id":99}`, []string{"project"}, "historical", stale},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			row := member("versioned_documents", test.key, test.path, test.selector)
+			if test.selector == "" {
+				row.SelectorReference = s.opaque("selector", "")
+				row.UnresolvedReference = s.opaque("unresolved", row.SelectorReference)
+			}
+			err := s.validateUnresolvedMembership(ctx, []ConsolidationMembership{row})
+			if test.want == "" {
+				require.NoError(t, err)
+			} else {
+				require.EqualError(t, err, test.want)
+			}
+		})
+	}
+	source := member("sources", string(rows[n].RowKey), []string{"project_id"}, "")
+	require.NoError(t, s.validateUnresolvedMembership(ctx, []ConsolidationMembership{source}))
+	require.NoError(t, tx.Exec("UPDATE sources SET project_id='other' WHERE source_id=(?::jsonb->>'source_id')::uuid", string(source.RowKey)).Error)
+	require.EqualError(t, s.validateUnresolvedMembership(ctx, []ConsolidationMembership{source}), stale, "unbound source project must remain empty")
+	require.NoError(t, s.validateUnresolvedMembership(ctx, []ConsolidationMembership{rows[n]}), "inherited sources retain the existence-only branch")
+	source = member("sources", string(rows[n].RowKey), []string{"project_id"}, "other")
+	require.NoError(t, s.validateUnresolvedMembership(ctx, []ConsolidationMembership{source}))
+	source = member("sources", string(rows[n].RowKey), []string{"project_id"}, "historical")
+	require.EqualError(t, s.validateUnresolvedMembership(ctx, []ConsolidationMembership{source}), stale)
+	require.NoError(t, tx.Exec("DELETE FROM sources WHERE source_id=(?::jsonb->>'source_id')::uuid", string(source.RowKey)).Error)
+	require.EqualError(t, s.validateUnresolvedMembership(ctx, []ConsolidationMembership{rows[n]}), stale)
+	require.NoError(t, tx.Exec("INSERT INTO catalog_physical_history VALUES ('historical')").Error)
+	var physical string
+	require.NoError(t, tx.Raw("SELECT jsonb_build_object('__native_ctid',ctid::text,'__native_xmin',xmin::text)::text FROM catalog_physical_history").Scan(&physical).Error)
+	physicalRow := member("catalog_physical_history", physical, []string{"project"}, "historical")
+	require.NoError(t, s.validateUnresolvedMembership(ctx, []ConsolidationMembership{physicalRow}))
+	require.NoError(t, tx.Exec("UPDATE catalog_physical_history SET project='historical'").Error)
+	require.EqualError(t, s.validateUnresolvedMembership(ctx, []ConsolidationMembership{physicalRow}), stale)
+	err = tx.Transaction(func(probe *gormlib.DB) error {
+		missing := member("catalog_missing_table", `{"id":1}`, []string{"project"}, "historical")
+		return NewProjectConsolidationStore(probe, vault, nil).validateUnresolvedMembership(ctx, []ConsolidationMembership{missing})
+	})
+	require.Error(t, err, "native database errors must fail closed, not become an empty catalog")
+	cancelled, stop := context.WithCancel(ctx)
+	stop()
+	require.ErrorIs(t, s.validateUnresolvedMembership(cancelled, rows), context.Canceled)
+	catalog, err = s.ListUnresolved(cancelled)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, catalog)
+	require.NoError(t, tx.Rollback().Error)
 }
