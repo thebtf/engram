@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Stream full-owner migration exports through bounded authenticated row frames and ordered multipart verification instead of whole-payload JSON materialization. Retain encrypted original frames, native keys, source provenance, complete rows/counts and sequences for isolated restore, conservation and replay. Census includes whole-row unresolved documents/content/comparisons and preserves unknown metadata roles; source composition does not establish full-owner native Go conservation, installed recovery or resource admission.
+- Add local `engram-server consolidate-projects` maintenance over a native restored target and the ordinary sealed Preflight plan, using private source/target DSN and plan files with the existing Vault key. Default to transaction rollback; require the validated dry-run's real `--plan-id` for explicit `--commit`, and reuse it for checked replay without service startup. Preserve owner data/provenance, native IDs, independent Checkout/View and unresolved credentials; replace custom transport writers only at verified, explicitly authorized cutover, retaining required readers. Built-CLI help/refusal and seven pure tests passed; full native owner restore/dry-run/Apply/replay, Vault 48/44, migrated API/UI, installation and release remain unproven.
 
 ### Changed
 
