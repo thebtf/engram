@@ -843,6 +843,11 @@ func TestProjectConsolidationUnresolvedMembershipBatch(t *testing.T) {
 	}
 	const n = 257
 	require.NoError(t, tx.Exec("INSERT INTO memories SELECT n,'historical','retained body' FROM generate_series(1,?) n", n).Error)
+	require.NoError(t, tx.Exec("UPDATE memories SET content=(SELECT string_agg(md5(n::text),'') FROM generate_series(1,32769) n) WHERE id=1").Error)
+	var body struct{ LogicalBytes, StoredBytes int64 }
+	require.NoError(t, tx.Raw("SELECT octet_length(content) AS logical_bytes,pg_column_size(content) AS stored_bytes FROM memories WHERE id=1").Scan(&body).Error)
+	require.Greater(t, body.LogicalBytes, int64(1<<20))
+	require.Greater(t, body.StoredBytes, int64(8192), "the unrelated body must exceed an inline PostgreSQL page")
 	rows := make([]ConsolidationMembership, n)
 	for i := range rows {
 		rows[i] = member("memories", fmt.Sprintf(`{"id":%d}`, i+1), []string{"project"}, "historical")
@@ -925,6 +930,8 @@ func TestProjectConsolidationUnresolvedMembershipBatch(t *testing.T) {
 	require.EqualError(t, s.validateUnresolvedMembership(ctx, rows), stale, "a changed current selector must refuse the entire group")
 	require.NoError(t, tx.Exec("UPDATE memories SET project='historical' WHERE id=1").Error)
 	require.NoError(t, tx.Exec(`INSERT INTO versioned_documents VALUES (9007199254740993,2,'historical','{"nested":{"projects":["other","historical"],"null":null},"flag":true,"number":12}'), (9007199254740993,3,'other','{}'), (2,NULL,NULL,NULL), (3,1,'historical','null')`).Error)
+	require.NoError(t, tx.Exec(`ALTER TABLE versioned_documents ADD COLUMN "selector""root" jsonb DEFAULT '{"nested":["other","historical"]}'::jsonb`).Error)
+	require.NoError(t, tx.Exec(`INSERT INTO versioned_documents(id,version,project,metadata) VALUES (4,1,'','"retained"'),(5,1,'historical','12'),(6,1,'historical','true')`).Error)
 	require.NoError(t, s.validateUnresolvedMembership(ctx, []ConsolidationMembership{
 		member("versioned_documents", `{"id":9007199254740993,"version":2}`, []string{"project"}, "historical"),
 		member("versioned_documents", `{"id":9007199254740993,"version":3}`, []string{"project"}, "other"),
@@ -947,6 +954,15 @@ func TestProjectConsolidationUnresolvedMembershipBatch(t *testing.T) {
 		{"SQL null selector", `{"id":2}`, []string{"project"}, "", ""},
 		{"JSON boolean text", `{"id":9007199254740993,"version":2}`, []string{"metadata", "flag"}, "true", ""},
 		{"JSON number text", `{"id":9007199254740993,"version":2}`, []string{"metadata", "number"}, "12", ""},
+		{"JSON object text", `{"id":9007199254740993,"version":2}`, []string{"metadata", "nested"}, `{"null": null, "projects": ["other", "historical"]}`, ""},
+		{"JSON null root", `{"id":3}`, []string{"metadata"}, "", ""},
+		{"empty text root", `{"id":4}`, []string{"project"}, "", ""},
+		{"JSON string root", `{"id":4}`, []string{"metadata"}, "retained", ""},
+		{"JSON number root", `{"id":5}`, []string{"metadata"}, "12", ""},
+		{"JSON boolean root", `{"id":6}`, []string{"metadata"}, "true", ""},
+		{"quoted root", `{"id":9007199254740993,"version":2}`, []string{"selector\"root", "nested", "1"}, "historical", ""},
+		{"missing root", `{"id":9007199254740993,"version":2}`, []string{"absent_column"}, "", ""},
+		{"system root", `{"id":9007199254740993,"version":2}`, []string{"tableoid"}, "", ""},
 		{"JSON null native key", `{"metadata":null}`, []string{"project"}, "historical", ""},
 		{"SQL null native key", `{"id":2,"version":null}`, []string{"project"}, "", stale},
 		{"missing row", `{"id":99}`, []string{"project"}, "historical", stale},

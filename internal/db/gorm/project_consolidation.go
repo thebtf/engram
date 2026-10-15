@@ -831,6 +831,7 @@ func (s *ProjectConsolidationStore) validateUnresolvedMembership(ctx context.Con
 		keys       []json.RawMessage
 		members    []*ConsolidationMembership
 	}
+	var selectorColumns map[[2]string]bool
 	// Bound transport work, not membership completeness. An existing oversized
 	// key/path is validated alone rather than truncated or rejected.
 	for start := 0; start < len(rows); {
@@ -927,8 +928,36 @@ func (s *ProjectConsolidationStore) validateUnresolvedMembership(ctx context.Con
 				if b.table == "sources" {
 					expression = "COALESCE(MIN(t.project_id::text),'')"
 				} else {
+					if selectorColumns == nil {
+						var tables []string
+						seen := make(map[string]bool)
+						for _, row := range rows {
+							if row.Table != "sources" && !seen[row.Table] {
+								seen[row.Table] = true
+								tables = append(tables, row.Table)
+							}
+						}
+						var columns []struct{ TableName, ColumnName string }
+						// Resolve the same quoted relation as the data query, including
+						// temporary tables shadowing public tables on this search_path.
+						if err := s.db.WithContext(ctx).Raw(`SELECT requested.table_name, a.attname AS column_name
+							FROM unnest(?::text[]) AS requested(table_name)
+							JOIN pg_attribute a ON a.attrelid = to_regclass(quote_ident(requested.table_name))
+							WHERE a.attnum > 0 AND NOT a.attisdropped`, pq.Array(tables)).Scan(&columns).Error; err != nil {
+							return err
+						}
+						selectorColumns = make(map[[2]string]bool, len(columns))
+						for _, column := range columns {
+							selectorColumns[[2]string{column.TableName, column.ColumnName}] = true
+						}
+					}
+					selectorPath := b.pathValues
 					expression = "COALESCE(MIN(to_jsonb(t) #>> ?::text[]),'')"
-					args = append(args, pq.Array(b.pathValues))
+					if selectorColumns[[2]string{b.table, b.pathValues[0]}] {
+						expression = "COALESCE(MIN(to_jsonb(t." + quoted(b.pathValues[0]) + ") #>> ?::text[]),'')"
+						selectorPath = b.pathValues[1:]
+					}
+					args = append(args, pq.Array(selectorPath))
 				}
 			}
 			args = append(args, string(keys), gormlib.Expr(b.predicate, b.args...))
