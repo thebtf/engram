@@ -10,9 +10,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/config"
 	vaultcrypto "github.com/thebtf/engram/internal/crypto"
+	"gorm.io/driver/postgres"
+	gormlib "gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 func TestProjectConsolidationNativeExpectedEditsPreserveOtherFields(t *testing.T) {
@@ -112,6 +117,67 @@ func TestProjectConsolidationNativePlanIDIsDecodedNotCallerState(t *testing.T) {
 	request.ExpectedPlanID = state.ID
 	_, err = store.nativePlan(request, true)
 	require.NoError(t, err)
+}
+
+func TestProjectConsolidationNativePhysicalDatabaseIdentity(t *testing.T) {
+	dsnPath := os.Getenv("ENGRAM_CONSOLIDATION_FIXTURE_DSN_FILE")
+	if dsnPath == "" {
+		t.Skip("exact admitted fixture binding absent; no physical database identity proof")
+	}
+	deadline, err := time.Parse(time.RFC3339, os.Getenv("ENGRAM_CONSOLIDATION_FIXTURE_DEADLINE"))
+	require.NoError(t, err)
+	require.True(t, time.Now().Before(deadline), "admitted fixture deadline expired")
+	private, err := os.ReadFile(dsnPath)
+	require.NoError(t, err, "private fixture DSN unavailable")
+	fixture, err := pgx.ParseConfig(strings.TrimSpace(string(private)))
+	require.NoError(t, err, "invalid admitted fixture DSN")
+	require.Equal(t, "127.0.0.1", fixture.Host)
+	require.EqualValues(t, 22366, fixture.Port)
+	require.Equal(t, "identity_fixture", fixture.Database)
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+	open := func(dsn, role string) *gormlib.DB {
+		configuration := consolidationTestDatabaseConfig(t, dsn, role)
+		require.Equal(t, fixture.Host, configuration.Host)
+		require.Equal(t, fixture.Port, configuration.Port)
+		configuration.RuntimeParams["default_transaction_read_only"] = "on"
+		configuration.RuntimeParams["application_name"] = "engram_consolidation_physical_identity_test"
+		pool := stdlib.OpenDB(*configuration)
+		pool.SetMaxOpenConns(1)
+		t.Cleanup(func() { require.NoError(t, pool.Close()) })
+		db, err := gormlib.Open(postgres.New(postgres.Config{Conn: pool}), &gormlib.Config{Logger: logger.Default.LogMode(logger.Silent)})
+		require.NoError(t, err)
+		return db.WithContext(ctx)
+	}
+	source := open(os.Getenv("DATABASE_DSN"), "source")
+	target := open(os.Getenv("ENGRAM_CONSOLIDATION_RESTORE_TEST_DSN"), "restore")
+	vault, err := vaultcrypto.OpenExistingVault(&config.Config{EncryptionKey: strings.Repeat("ab", 32)})
+	require.NoError(t, err)
+	store := NewProjectConsolidationStore(source, vault, target)
+	for _, db := range []*gormlib.DB{source, target} {
+		pool, err := db.DB()
+		require.NoError(t, err)
+		var physical struct {
+			Database, SystemIdentifier string
+			OID                        int64
+		}
+		require.NoError(t, pool.QueryRowContext(ctx, `SELECT current_database(),system_identifier::text,(SELECT oid::bigint FROM pg_database WHERE datname=current_database()) FROM pg_control_system()`).Scan(&physical.Database, &physical.SystemIdentifier, &physical.OID))
+		require.NotEmpty(t, physical.Database)
+		require.NotEmpty(t, physical.SystemIdentifier)
+		require.Positive(t, physical.OID)
+		reader := NewProjectConsolidationStore(db, vault, nil)
+		census, err := reader.Census(ctx, "native-physical-identity-regression")
+		require.NoError(t, err)
+		require.Equal(t, structuralDigest(physical), census.Database, "Census must bind the independently read native physical tuple")
+		var state consolidationCensusState
+		require.NoError(t, reader.open(census.Reference, "census", &state))
+		require.NoError(t, reader.fresh(db, state))
+		physical.OID++
+		state.Database = structuralDigest(physical)
+		require.EqualError(t, reader.fresh(db, state), "PROJECT_ADOPTION_STALE_PLAN", "a different physical OID must invalidate the census even when rows and schema are unchanged")
+	}
+	require.NoError(t, store.distinctTarget(ctx))
+	require.EqualError(t, NewProjectConsolidationStore(source, vault, source).distinctTarget(ctx), "PROJECT_ADOPTION_TARGET_IS_SOURCE")
 }
 
 func TestProjectConsolidationNativeStoreWorkflow(t *testing.T) {

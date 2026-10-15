@@ -121,8 +121,8 @@ func consolidationDatabaseIdentity(tx *gormlib.DB) (string, error) {
 		Database, SystemIdentifier string
 		OID                        int64
 	}
-	err := tx.Raw(`SELECT current_database() AS database,(SELECT system_identifier::text FROM pg_control_system()) AS system_identifier,(SELECT oid::bigint FROM pg_database WHERE datname=current_database()) AS oid`).Scan(&binding).Error
-	if err != nil || binding.SystemIdentifier == "" {
+	err := tx.Raw(`SELECT current_database(),(SELECT system_identifier::text FROM pg_control_system()),(SELECT oid::bigint FROM pg_database WHERE datname=current_database())`).Row().Scan(&binding.Database, &binding.SystemIdentifier, &binding.OID)
+	if err != nil || binding.Database == "" || binding.SystemIdentifier == "" || binding.OID <= 0 {
 		return "", consolidationHold("SOURCE_IDENTITY_UNAVAILABLE")
 	}
 	return structuralDigest(binding), nil
