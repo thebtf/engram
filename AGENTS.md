@@ -14,7 +14,7 @@ Root Solo decides, delegates, accepts results and advances delivery. Subagents a
 
 Assign coherent outcomes, not individual edits. The implementer owns diagnosis, implementation and focused repairs within scope without a new Root assignment for each failing test. Use independent review/QA at the release boundary, with focused behavior checks during implementation. Shared files have one writer and one integrator owns the candidate. Parallelize independent tasks, not competing heavy runs on shared resources.
 
-Inspect available facts before asking. Ask for missing product decisions or authority, not resolvable engineering details. A blocked deployment lane does not block implementation or isolated validation. Consume ready results and continue safe independent work; use a nonblocking decision request when supported. Do not enter a blocking `ask` while Root has decision-independent work to accept or dispatch. If none remains, report the exact dependency and wait. Never invent consent.
+Inspect available facts before asking. Ask for missing product decisions or authority, not resolvable engineering details. Selecting an available verification or review method within the accepted scope is Root's technical decision; do not ask the operator to choose a routine fallback or wait for an optional reviewer quota. Preserve actual approvals, required checks and evidence limits; do not enable paid billing or invent consent. A blocked deployment lane does not block implementation or isolated validation. Consume ready results and continue safe independent work; do not enter a blocking ask while decision-independent work remains. If none remains, report the exact missing product choice or authority.
 
 ## Review and evidence
 

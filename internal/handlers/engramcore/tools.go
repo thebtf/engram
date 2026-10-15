@@ -296,8 +296,8 @@ func (m *Module) proxyV2Identity(ctx context.Context, p muxcore.ProjectContext) 
 	return slug.(resolvedSlug).id, identity.(*pb.ProjectIdentityV2), ctx.Err()
 }
 
-// v3Identity selects the existing V2 producer only for a tracked name-only
-// workspace. Every other configured scope remains exclusively V3.
+// v3Identity selects the existing V2 producer for validated legacy Git
+// workspaces. Every other configured scope remains exclusively V3.
 func (m *Module) v3Identity(ctx context.Context, p muxcore.ProjectContext) (*pb.ProjectIdentityV3, bool, error) {
 	if m.v3ClientInstanceID == "" {
 		return nil, false, nil

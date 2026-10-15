@@ -72,6 +72,7 @@ type legacyFileState struct {
 	info     os.FileInfo
 	config   bool
 	resolved string
+	index    bool
 	links    []legacyConfigLink
 }
 
@@ -208,7 +209,7 @@ func (c *slugCache) ResolveIdentityV3(ctx context.Context, p muxcore.ProjectCont
 	}, nil
 }
 
-// resolveLegacyWorkspace retains only the bounded name-only workspace route.
+// resolveLegacyWorkspace retains bounded legacy Git workspace routes.
 // Marker bytes and Git config/index freshness are checked before cache reuse.
 func (c *slugCache) resolveLegacyWorkspace(ctx context.Context, p muxcore.ProjectContext) (bool, error) {
 	if err := ctx.Err(); err != nil {
@@ -226,7 +227,7 @@ func (c *slugCache) resolveLegacyWorkspace(ctx context.Context, p muxcore.Projec
 	if cached, ok := c.legacy[key]; ok {
 		raw, err := os.ReadFile(filepath.Join(cached.root, ".engram-project"))
 		if cached.cacheEligible && err == nil && bytes.Equal(raw, cached.marker) && os.SameFile(selectedInfo, cached.selected) &&
-			cached.environment == legacyGitEnvironment() && legacyFilesUnchanged(cached.files) &&
+			cached.environment == legacyGitEnvironment() && legacyFilesUnchanged(ctx, cached.files) &&
 			legacySelectedScopeUnchanged(key.cwd, cached.root, cached.prefix) {
 			return true, ctx.Err()
 		}
@@ -264,14 +265,34 @@ func (c *slugCache) resolveLegacyWorkspace(ctx context.Context, p muxcore.Projec
 	if err != nil || opening != json.Delim('{') {
 		return false, nil
 	}
-	field, err := decoder.Token()
-	if err != nil || field != "name" {
-		return false, nil
-	}
 	var name string
-	if err := decoder.Decode(&name); err != nil || name == "" ||
-		utf8.RuneCountInString(name) > 256 || strings.TrimSpace(name) != name ||
-		strings.IndexFunc(name, unicode.IsControl) >= 0 {
+	historical := false
+	for decoder.More() {
+		field, err := decoder.Token()
+		if err != nil {
+			return false, nil
+		}
+		switch field {
+		case "name":
+			if name != "" {
+				return false, nil
+			}
+			if err := decoder.Decode(&name); err != nil || name == "" ||
+				utf8.RuneCountInString(name) > 256 || strings.TrimSpace(name) != name ||
+				strings.IndexFunc(name, unicode.IsControl) >= 0 {
+				return false, nil
+			}
+		case "id":
+			var id string
+			if historical || decoder.Decode(&id) != nil || len(id) != 6 || strings.Trim(id, "0123456789abcdef") != "" {
+				return false, nil
+			}
+			historical = true
+		default:
+			return false, nil
+		}
+	}
+	if name == "" {
 		return false, nil
 	}
 	closing, err := decoder.Token()
@@ -283,6 +304,11 @@ func (c *slugCache) resolveLegacyWorkspace(ctx context.Context, p muxcore.Projec
 	}
 	gitPaths := metadata[2:]
 	gitPaths = append(gitPaths, filepath.Join(root, ".git"))
+	if historical {
+		// Older non-Git markers remain untracked after Git adoption. Their ID
+		// is not authority: the existing Git resolver derives the V2 scope.
+		gitPaths = append(gitPaths, filepath.Join(root, ".engram-project"))
+	}
 	configFiles := map[string]bool{filepath.Clean(gitPaths[0]): true, filepath.Clean(gitPaths[3]): true}
 	for _, variable := range []string{"GIT_CONFIG_SYSTEM", "GIT_CONFIG_GLOBAL"} {
 		output, err := exec.CommandContext(ctx, "git", "-C", root, "var", variable).Output()
@@ -303,15 +329,17 @@ func (c *slugCache) resolveLegacyWorkspace(ctx context.Context, p muxcore.Projec
 			}
 		}
 	}
-	for _, filename := range []string{gitPaths[1], gitPaths[2], filepath.Join(root, ".git")} {
+	for _, filename := range []string{gitPaths[1], gitPaths[2], filepath.Join(root, ".git"), filepath.Join(key.cwd, ".engram-project-v2.json")} {
 		delete(configFiles, filepath.Clean(filename))
 	}
-	initial, err := legacyFileFingerprints(gitPaths, configFiles)
+	initial, err := legacyFileFingerprints(ctx, gitPaths, configFiles, gitPaths[1])
 	if err != nil {
 		return false, nil
 	}
-	if err := exec.CommandContext(ctx, "git", "-C", root, "ls-files", "--error-unmatch", "--", ".engram-project").Run(); err != nil {
-		return false, ctx.Err()
+	if !historical {
+		if err := exec.CommandContext(ctx, "git", "-C", root, "ls-files", "--error-unmatch", "--", ".engram-project").Run(); err != nil {
+			return false, ctx.Err()
+		}
 	}
 	dependencies, eligible, err := legacyConfigDependencies(ctx, root)
 	if err != nil {
@@ -321,16 +349,31 @@ func (c *slugCache) resolveLegacyWorkspace(ctx context.Context, p muxcore.Projec
 		configFiles[filename] = true
 	}
 	// Index, HEAD and the repository marker are never config-link allowances.
-	for _, filename := range []string{gitPaths[1], gitPaths[2], filepath.Join(root, ".git")} {
+	for _, filename := range []string{gitPaths[1], gitPaths[2], filepath.Join(root, ".git"), filepath.Join(key.cwd, ".engram-project-v2.json")} {
 		delete(configFiles, filepath.Clean(filename))
 	}
-	before, err := legacyFileFingerprints(append(gitPaths, dependencies...), configFiles)
-	if err != nil || !legacyFilesUnchanged(initial) {
+	before, err := legacyFileFingerprints(ctx, append(gitPaths, dependencies...), configFiles, gitPaths[1])
+	if err != nil || !legacyFilesUnchanged(ctx, initial) {
 		return false, v3InputError("PROJECT_ANCHOR_INVALID")
 	}
 	slug, identity, err := resolveLegacyGitIdentity(ctx, key.cwd, name, prefix)
 	if err != nil {
 		return false, ctx.Err()
+	}
+	if identity.NonGitAnchor != "" && !historical {
+		return false, nil
+	}
+	if identity.NonGitAnchor != "" {
+		anchorPath := filepath.Join(key.cwd, ".engram-project-v2.json")
+		anchorFiles, err := legacyFileFingerprints(ctx, []string{anchorPath}, nil, "")
+		if err != nil {
+			return false, v3InputError("PROJECT_ANCHOR_INVALID")
+		}
+		before[anchorPath] = anchorFiles[anchorPath]
+		_, confirmed, err := resolveLegacyGitIdentity(ctx, key.cwd, name, prefix)
+		if err != nil || confirmed.NonGitAnchor != identity.NonGitAnchor || confirmed.AnchorShared == nil || identity.AnchorShared == nil || *confirmed.AnchorShared != *identity.AnchorShared {
+			return false, v3InputError("PROJECT_ANCHOR_INVALID")
+		}
 	}
 	// Without includes or non-file origins, the fingerprinted inputs fully
 	// determine the dependency set, including currently absent config files.
@@ -342,7 +385,7 @@ func (c *slugCache) resolveLegacyWorkspace(ctx context.Context, p muxcore.Projec
 	afterSelected, selectedErr := os.Stat(key.cwd)
 	if err != nil || markerErr != nil || selectedErr != nil || !os.SameFile(selectedInfo, afterSelected) || !bytes.Equal(raw, afterRaw) ||
 		strings.Join(dependencies, "\x00") != strings.Join(afterDependencies, "\x00") || eligible != afterEligible ||
-		environment != legacyGitEnvironment() || !legacyFilesUnchanged(before) || !legacySelectedScopeUnchanged(key.cwd, root, prefix) {
+		environment != legacyGitEnvironment() || !legacyFilesUnchanged(ctx, before) || !legacySelectedScopeUnchanged(key.cwd, root, prefix) {
 		return false, v3InputError("PROJECT_ANCHOR_INVALID")
 	}
 	if err := ctx.Err(); err != nil {
@@ -361,7 +404,7 @@ func (c *slugCache) resolveLegacyWorkspace(ctx context.Context, p muxcore.Projec
 	}
 	c.legacy[key] = legacyWorkspace{root: root, prefix: prefix, selected: selectedInfo, marker: raw, files: before, environment: environment, cacheEligible: eligible}
 	c.entries.Store(key, resolvedSlug{id: slug, announce: true})
-	c.identities.Store(key, &pb.ProjectIdentityV2{Version: identity.Version, LegacyProjectId: identity.LegacyProjectID, DisplayName: identity.DisplayName, GitRemote: identity.GitRemote, RelativePath: identity.RelativePath})
+	c.identities.Store(key, &pb.ProjectIdentityV2{Version: identity.Version, LegacyProjectId: identity.LegacyProjectID, DisplayName: identity.DisplayName, GitRemote: identity.GitRemote, RelativePath: identity.RelativePath, NonGitAnchor: identity.NonGitAnchor, AnchorShared: identity.AnchorShared})
 	return true, nil
 }
 
@@ -380,7 +423,7 @@ func legacyGitEnvironment() [32]byte {
 	return sha256.Sum256([]byte(strings.Join(values, "\x00")))
 }
 
-func legacyFileFingerprints(paths []string, configFiles map[string]bool) (map[string]legacyFileState, error) {
+func legacyFileFingerprints(ctx context.Context, paths []string, configFiles map[string]bool, indexPath string) (map[string]legacyFileState, error) {
 	if len(paths) > 128 {
 		return nil, errors.New("legacy Git dependency limit")
 	}
@@ -397,14 +440,25 @@ func legacyFileFingerprints(paths []string, configFiles map[string]bool) (map[st
 		}
 		info, err := os.Lstat(filename)
 		if errors.Is(err, os.ErrNotExist) {
-			result[filename] = legacyFileState{}
+			result[filename] = legacyFileState{index: filename == filepath.Clean(indexPath)}
 			continue
 		}
 		if err != nil {
 			return nil, err
 		}
 		if info.IsDir() {
+			if filename == filepath.Clean(indexPath) {
+				return nil, errors.New("legacy Git index is not regular")
+			}
 			result[filename] = legacyFileState{info: info}
+			continue
+		}
+		if filename == filepath.Clean(indexPath) {
+			state, err := legacyIndexFingerprint(ctx, filename, info)
+			if err != nil {
+				return nil, err
+			}
+			result[filename] = state
 			continue
 		}
 		if !info.Mode().IsRegular() || info.Size() > 1024*1024 {
@@ -419,14 +473,63 @@ func legacyFileFingerprints(paths []string, configFiles map[string]bool) (map[st
 	return result, nil
 }
 
-func legacyFilesUnchanged(before map[string]legacyFileState) bool {
+// Git indexes are binary fingerprints, not bounded JSON/config inputs. Stream
+// the exact index under the caller's identity deadline without following links.
+func legacyIndexFingerprint(ctx context.Context, filename string, info os.FileInfo) (legacyFileState, error) {
+	if !info.Mode().IsRegular() || !os.SameFile(info, info) {
+		return legacyFileState{}, errors.New("legacy Git index is not regular")
+	}
+	file, err := os.Open(filename)
+	if err != nil {
+		return legacyFileState{}, err
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !legacySameFileMetadata(info, opened) {
+		return legacyFileState{}, errors.New("legacy Git index changed")
+	}
+	hash := sha256.New()
+	var buffer [32 * 1024]byte
+	for {
+		if err := ctx.Err(); err != nil {
+			return legacyFileState{}, err
+		}
+		count, err := file.Read(buffer[:])
+		if count != 0 {
+			_, _ = hash.Write(buffer[:count])
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return legacyFileState{}, err
+		}
+	}
+	finished, err := file.Stat()
+	if err != nil || !legacySameFileMetadata(opened, finished) {
+		return legacyFileState{}, errors.New("legacy Git index changed")
+	}
+	current, err := os.Lstat(filename)
+	if err != nil || !legacySameFileMetadata(opened, current) {
+		return legacyFileState{}, errors.New("legacy Git index replaced")
+	}
+	state := legacyFileState{info: opened, index: true}
+	hash.Sum(state.digest[:0])
+	return state, nil
+}
+
+func legacyFilesUnchanged(ctx context.Context, before map[string]legacyFileState) bool {
 	paths := make([]string, 0, len(before))
 	configFiles := make(map[string]bool)
+	var indexPath string
 	for filename := range before {
 		paths = append(paths, filename)
 		configFiles[filename] = before[filename].config
+		if before[filename].index {
+			indexPath = filename
+		}
 	}
-	after, err := legacyFileFingerprints(paths, configFiles)
+	after, err := legacyFileFingerprints(ctx, paths, configFiles, indexPath)
 	if err != nil {
 		return false
 	}
@@ -447,14 +550,14 @@ func legacySameFileMetadata(left, right os.FileInfo) bool {
 }
 
 func legacyFileStatesEqual(left, right legacyFileState) bool {
-	if left.digest != right.digest || left.config != right.config || left.resolved != right.resolved || len(left.links) != len(right.links) ||
+	if left.digest != right.digest || left.config != right.config || left.index != right.index || left.resolved != right.resolved || len(left.links) != len(right.links) ||
 		(left.info == nil) != (right.info == nil) {
 		return false
 	}
 	if left.info != nil && (!os.SameFile(left.info, right.info) || left.info.Mode() != right.info.Mode()) {
 		return false
 	}
-	if left.config && !legacySameFileMetadata(left.info, right.info) {
+	if (left.config || left.index) && !legacySameFileMetadata(left.info, right.info) {
 		return false
 	}
 	for index, link := range left.links {

@@ -278,6 +278,16 @@ For a legacy daemon that needs retirement, first identify its live control statu
 
 Каталог вкладки не является всей базой данных. Пустой ответ не доказывает отсутствие кода или исторических записей у других владельцев. При ошибке обновления подтверждённый View и уже выданные результаты сохраняются; повтори обновление. При отказе доступа или несовпадении контекста сервер может снять закрепление. Auth-enabled установка сохраняет свои проверки пользователя и grant; это отдельный путь, не способ обойти текущую авторизацию.
 
+### Исторический hotfix v6.52.1
+
+The following describes only the v6.52.1 hotfix before the portable-UUID cutover, not the current setup or project-identity authority. Use the portable UUID flow below for this candidate; preserve old markers and anchors as migration and provenance inputs, not instructions to restore retired V2/V3 runtime fallbacks.
+
+An older regular `.engram-project` containing exactly `id` (six lowercase hexadecimal characters) and a valid `name` also uses the existing V2 adapter in a Git workspace, even when the marker is untracked. Field order does not matter. The historical ID is validated as a format marker, not used as project authority. A configured origin retains its existing remote/selected-path scope. Without an origin, the selected directory must already contain a regular, valid `.engram-project-v2.json`: its existing anchor and explicit sharing flag are forwarded with the established absolute-path-derived selector and legacy ID. A local `shared:false` anchor retains the server's path-derived clone isolation. Missing, malformed, symlinked or changed anchors refuse; this route never calls the anchor creator. Marker/index/anchor bytes are not rewritten or staged, and no V3 registration or historical-memory migration is performed. Non-Git directories, unknown/duplicate historical-marker fields and conflicting nearer anchors still refuse. After the normal plugin update, reconnect `engram:engram` and read an existing project memory before claiming recovery; do not replace either marker to clear a connection error.
+
+The exact Git index is streamed through a fixed 32 KiB buffer under the existing five-second identity deadline. The open file, final metadata and current pathname must identify the same regular file; replacement, mutation, cancellation and symlinks refuse stale scope. JSON markers, V2 anchors and config files retain their bounded reads; the index is not loaded as one large allocation.
+
+Git environment names are compared case-insensitively only on Windows; Unix keeps its native case-sensitive names. Config-file symlinks are supported only for identified Git config dependencies, not as a general relaxation for index, HEAD or repository markers. Their fingerprints bind each followed link and its target text, the resolved target's file identity, metadata and bounded contents, including an absent target's later creation. Link traversal is limited to 40 followed links and config reads remain limited to 1 MiB. Replacement, retargeting, loops, unsupported targets or changes during inspection refuse stale scope; the selected marker and directory guards are unchanged.
+
 ### Переносимый UUID проекта
 
 Обычные MCP-вызовы и hooks используют Go resolver и один `project_id` UUID.

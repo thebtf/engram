@@ -186,6 +186,13 @@ func TestAuthority0048JournalMatrix(t *testing.T) {
 // @features: [release-safety]
 func TestLatestPromotionJournalContract(t *testing.T) {
 	repo := repositoryRoot(t)
+	discovery := filepath.Join(repo, "tests", "critical", "runtime", "test-latest-promotion-discovery-contract.ps1")
+	discoveryOutput, err := exec.Command("pwsh", "-NoProfile", "-File", discovery,
+		"-RepositoryRoot", repo,
+		"-ArtifactRoot", t.TempDir()).CombinedOutput()
+	if err != nil || !strings.Contains(string(discoveryOutput), "PASS: latest-promotion discovery;") {
+		t.Fatalf("current promotion journal discovery failed: %v\n%s", err, discoveryOutput)
+	}
 	script := filepath.Join(repo, "tests", "critical", "runtime", "test-promote-latest-release-images-contract.ps1")
 	output, err := exec.Command("pwsh", "-NoProfile", "-File", script,
 		"-WorkflowPath", filepath.Join(repo, ".github", "workflows", "promote-latest-release-images.yml"),
