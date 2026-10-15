@@ -166,6 +166,7 @@ type consolidationPlanState struct {
 	Census      consolidationCensusState
 	Mapping     []ConsolidationMapping `json:"-"`
 	Evidence    []ConsolidationEvidence
+	native      *consolidationNativeState
 }
 
 type consolidationBackupState struct {
@@ -567,95 +568,179 @@ func (s *ProjectConsolidationStore) apply(ctx context.Context, request Consolida
 	if err != nil {
 		return ConsolidationReceipt{}, err
 	}
+	result, err := s.applyPrepared(ctx, request, state, dryRun, false)
+	return result.Receipt, err
+}
+
+func (s *ProjectConsolidationStore) applyPrepared(ctx context.Context, request ConsolidationApplyRequest, state consolidationPlanState, dryRun, native bool) (ConsolidationNativeResult, error) {
+	result := ConsolidationNativeResult{PlanID: state.ID, DryRun: dryRun}
 	if err := s.db.WithContext(ctx).Transaction(func(tx *gormlib.DB) error { return s.fresh(tx, state.Census) }, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true}); err != nil {
-		return ConsolidationReceipt{}, err
+		return ConsolidationNativeResult{}, err
 	}
 	if err := s.distinctTarget(ctx); err != nil {
-		return ConsolidationReceipt{}, err
+		return ConsolidationNativeResult{}, err
 	}
 	tx := s.restoreDB.WithContext(ctx).Begin()
 	if tx.Error != nil {
-		return ConsolidationReceipt{}, tx.Error
+		return ConsolidationNativeResult{}, tx.Error
 	}
 	defer tx.Rollback()
 	if err := consolidationLock(tx); err != nil {
-		return ConsolidationReceipt{}, err
+		return ConsolidationNativeResult{}, err
+	}
+	if native {
+		var names []string
+		if err := tx.Raw("SELECT table_name FROM information_schema.tables WHERE table_schema=current_schema() AND table_type='BASE TABLE' ORDER BY table_name").Scan(&names).Error; err != nil {
+			return ConsolidationNativeResult{}, err
+		}
+		for i := range names {
+			names[i] = quoted(names[i])
+		}
+		if len(names) == 0 {
+			return ConsolidationNativeResult{}, consolidationHold("INVENTORY_INCOMPLETE")
+		}
+		if err := tx.Exec("LOCK TABLE " + strings.Join(names, ",") + " IN EXCLUSIVE MODE").Error; err != nil {
+			return ConsolidationNativeResult{}, err
+		}
+		identity, err := consolidationDatabaseIdentity(tx)
+		if err != nil {
+			return ConsolidationNativeResult{}, err
+		}
+		result.TargetIdentity = identity
 	}
 	var prior consolidationOperation
-	err = tx.Where("idempotency_key = ?", request.IdempotencyKey).First(&prior).Error
-	var receipt ConsolidationReceipt
+	err := tx.Where("idempotency_key = ?", request.IdempotencyKey).First(&prior).Error
 	if err == nil {
-		if prior.PlanID != state.ID || prior.PlanFingerprint != state.Fingerprint {
-			return receipt, consolidationHold("REPLAY_CONFLICT")
-		}
-		if json.Unmarshal(prior.Receipt, &receipt) != nil {
-			return receipt, consolidationHold("REPLAY_CONFLICT")
+		if prior.PlanID != state.ID || prior.PlanFingerprint != state.Fingerprint || json.Unmarshal(prior.Receipt, &result.Receipt) != nil {
+			return ConsolidationNativeResult{}, consolidationHold("REPLAY_CONFLICT")
 		}
 		current, err := consolidationRevision(tx)
 		if err != nil {
-			return receipt, err
+			return ConsolidationNativeResult{}, err
 		}
-		if current != receipt.Snapshot {
-			return receipt, consolidationHold("STALE_PLAN")
+		if current != result.Receipt.Snapshot {
+			return ConsolidationNativeResult{}, consolidationHold("STALE_PLAN")
 		}
-		return receipt, nil
+		if native {
+			if err := consolidationNativeReplayReceipt(state, result.Receipt); err != nil {
+				return ConsolidationNativeResult{}, err
+			}
+			state.native, err = s.prepareNative(ctx, state, tx, true)
+			if err != nil {
+				return ConsolidationNativeResult{}, err
+			}
+			prior.Receipt, err = json.Marshal(result.Receipt)
+			if err != nil {
+				return ConsolidationNativeResult{}, err
+			}
+			if prior.OperationID != result.Receipt.OperationID {
+				return ConsolidationNativeResult{}, consolidationHold("REPLAY_CONFLICT")
+			}
+			if err := state.native.operation(prior); err != nil {
+				return ConsolidationNativeResult{}, err
+			}
+			if err := state.native.verifyAfter(tx); err != nil {
+				return ConsolidationNativeResult{}, err
+			}
+			if err := s.verifyCredentials(ctx, tx); err != nil {
+				return ConsolidationNativeResult{}, err
+			}
+			if err := s.nativeSourceUnchanged(ctx, state.native); err != nil {
+				return ConsolidationNativeResult{}, err
+			}
+			if err := s.db.WithContext(ctx).Transaction(func(source *gormlib.DB) error { return s.fresh(source, state.Census) }, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true}); err != nil {
+				return ConsolidationNativeResult{}, err
+			}
+		}
+		result.Replay = true
+		return result, nil
 	}
 	if !errors.Is(err, gormlib.ErrRecordNotFound) {
-		return receipt, err
+		return ConsolidationNativeResult{}, err
 	}
 	var backup consolidationBackupRow
-	if err := tx.Where("backup_id = ? AND plan_id = ? AND plan_fingerprint = ?", request.BackupReference, state.ID, state.Fingerprint).First(&backup).Error; err != nil {
-		return receipt, consolidationHold("BACKUP_MISSING")
+	if native {
+		state.native, err = s.prepareNative(ctx, state, tx, false)
+		if err != nil {
+			return ConsolidationNativeResult{}, err
+		}
+	} else {
+		if err := tx.Where("backup_id = ? AND plan_id = ? AND plan_fingerprint = ?", request.BackupReference, state.ID, state.Fingerprint).First(&backup).Error; err != nil {
+			return ConsolidationNativeResult{}, consolidationHold("BACKUP_MISSING")
+		}
+		identity, err := consolidationDatabaseIdentity(tx)
+		if err != nil {
+			return ConsolidationNativeResult{}, err
+		}
+		current, err := consolidationRevision(tx)
+		if err != nil {
+			return ConsolidationNativeResult{}, err
+		}
+		if backup.RestoreVerifiedAt.IsZero() || backup.RestoreIdentity != identity || backup.RestoreSnapshot != current {
+			return ConsolidationNativeResult{}, consolidationHold("STALE_PLAN")
+		}
+		before, err := s.backupManifest(backup.Ciphertext, state)
+		if err != nil {
+			return ConsolidationNativeResult{}, err
+		}
+		schema, _, _, err := consolidationSchema(tx)
+		if err != nil {
+			return ConsolidationNativeResult{}, err
+		}
+		if schema != before.Schema {
+			return ConsolidationNativeResult{}, consolidationHold("SCHEMA_MISMATCH")
+		}
+		if err := s.walkStored(tx, backup.BackupID, state, nil, false); err != nil {
+			return ConsolidationNativeResult{}, err
+		}
 	}
-	identity, err := consolidationDatabaseIdentity(tx)
-	if err != nil {
-		return receipt, err
-	}
-	current, err := consolidationRevision(tx)
-	if err != nil {
-		return receipt, err
-	}
-	if backup.RestoreVerifiedAt.IsZero() || backup.RestoreIdentity != identity || backup.RestoreSnapshot != current {
-		return receipt, consolidationHold("STALE_PLAN")
-	}
-	before, err := s.backupManifest(backup.Ciphertext, state)
-	if err != nil {
-		return receipt, err
-	}
-	schema, _, _, err := consolidationSchema(tx)
-	if err != nil {
-		return receipt, err
-	}
-	if schema != before.Schema {
-		return receipt, consolidationHold("SCHEMA_MISMATCH")
-	}
-	if err := s.walkStored(tx, backup.BackupID, state, nil, false); err != nil {
-		return receipt, err
-	}
-	receipt, err = s.execute(tx, state)
-	if err == nil {
+	result.Receipt, err = s.execute(tx, state)
+	if err == nil && !native {
 		err = s.walkStored(tx, backup.BackupID, state, &state, false)
 	}
 	if err != nil {
-		return ConsolidationReceipt{}, err
+		return ConsolidationNativeResult{}, err
 	}
 	if err := s.db.WithContext(ctx).Transaction(func(source *gormlib.DB) error { return s.fresh(source, state.Census) }, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true}); err != nil {
-		return ConsolidationReceipt{}, err
+		return ConsolidationNativeResult{}, err
+	}
+	if !dryRun {
+		encoded, err := json.Marshal(result.Receipt)
+		if err != nil {
+			return ConsolidationNativeResult{}, err
+		}
+		completed := time.Now().UTC()
+		if native {
+			completed = completed.Truncate(time.Microsecond)
+		}
+		operation := consolidationOperation{IdempotencyKey: request.IdempotencyKey, OperationID: result.Receipt.OperationID, PlanID: state.ID, PlanFingerprint: state.Fingerprint, Receipt: JSONRaw(encoded), CompletedAt: completed}
+		if err := tx.Create(&operation).Error; err != nil {
+			return ConsolidationNativeResult{}, err
+		}
+		if native {
+			if err := state.native.operation(operation); err != nil {
+				return ConsolidationNativeResult{}, err
+			}
+		}
+	}
+	if native {
+		if err := state.native.verifyAfter(tx); err != nil {
+			return ConsolidationNativeResult{}, err
+		}
+		if err := s.nativeSourceUnchanged(ctx, state.native); err != nil {
+			return ConsolidationNativeResult{}, err
+		}
+		if err := s.db.WithContext(ctx).Transaction(func(source *gormlib.DB) error { return s.fresh(source, state.Census) }, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true}); err != nil {
+			return ConsolidationNativeResult{}, err
+		}
 	}
 	if dryRun {
-		return receipt, nil
-	}
-	encoded, err := json.Marshal(receipt)
-	if err != nil {
-		return receipt, err
-	}
-	if err := tx.Create(&consolidationOperation{IdempotencyKey: request.IdempotencyKey, OperationID: receipt.OperationID, PlanID: state.ID, PlanFingerprint: state.Fingerprint, Receipt: JSONRaw(encoded), CompletedAt: time.Now().UTC()}).Error; err != nil {
-		return receipt, err
+		return result, nil
 	}
 	if err := tx.Commit().Error; err != nil {
-		return ConsolidationReceipt{}, err
+		return ConsolidationNativeResult{}, err
 	}
-	return receipt, nil
+	return result, nil
 }
 
 func (s *ProjectConsolidationStore) UnresolvedMembership(ctx context.Context, reference, kind string) ([]ConsolidationMembership, error) {
