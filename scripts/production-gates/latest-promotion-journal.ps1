@@ -1183,7 +1183,7 @@ switch ($Mode)
         $journal = Find-Journal
         if ($null -eq $journal)
         { if ($AllowMissingJournal)
-            { return
+            { return ''
             }; throw 'latest-promotion journal was not found'
         }
         Write-Output ([string]$journal.id)

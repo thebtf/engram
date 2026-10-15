@@ -18,12 +18,12 @@
     "type": "User"
   },
   "transition": {
-    "consumed_epoch": "authority-0070",
-    "event_base_sha": "40ede6e004caa6f3f72923cf1ea360b27434275a"
+    "consumed_epoch": "authority-0071",
+    "event_base_sha": "dcc264fa9cd37bd532c40dff2d20c0f68336e84f"
   },
   "active_epoch": {
-    "id": "authority-0071",
-    "label": "authority-maintenance:authority-0071",
+    "id": "authority-0072",
+    "label": "authority-maintenance:authority-0072",
     "exact_changes": [
       {
         "status": "M",
@@ -37,7 +37,7 @@
     "expected_head_blobs": [
       {
         "path": "scripts/production-gates/latest-promotion-journal.ps1",
-        "git_blob": "599ae817fa892a808ed4092683b7be16b19ecbee"
+        "git_blob": "112495aef26bed6c2b9d98229edc3533451a9cbb"
       }
     ]
   }
