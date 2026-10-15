@@ -12,13 +12,13 @@ Deliver one useful installable slice. Restore any broken shipped Engram plugin/m
 
 Root Solo decides, delegates, accepts results and advances delivery. Subagents author architecture, code, technical documents/tests, integrate changes and execute checks, including local Sonar. Root may read status and maintain continuation; it does not become the implementer or test operator. No peer PM/Developer hierarchy.
 
-Assign coherent outcomes, not individual edits. The implementer owns diagnosis, implementation and focused repairs within scope without a new Root assignment for each failing test. Use independent review/QA of the result. Shared files have one writer and one integrator owns the candidate. Parallelize independent tasks, not competing heavy runs on shared resources.
+Assign coherent outcomes, not individual edits. The implementer owns diagnosis, implementation and focused repairs within scope without a new Root assignment for each failing test. Use independent review/QA at the release boundary, with focused behavior checks during implementation. Shared files have one writer and one integrator owns the candidate. Parallelize independent tasks, not competing heavy runs on shared resources.
 
 Inspect available facts before asking. Ask for missing product decisions or authority, not resolvable engineering details. A blocked deployment lane does not block implementation or isolated validation. Consume ready results and continue safe independent work; use a nonblocking decision request when supported. Do not enter a blocking `ask` while Root has decision-independent work to accept or dispatch. If none remains, report the exact dependency and wait. Never invent consent.
 
 ## Review and evidence
 
-Review changed behavior and affected invariants. Keep related repairs in one assignment; recheck unresolved blockers and impacted behavior, not the whole product after every fix or reviewer/model change.
+During implementation, check changed behavior, affected invariants and concrete unresolved blockers. Do not launch repeated 30–60-minute broad reviews after individual edits; consolidate general independent review at the release boundary. Related repairs stay in one assignment and do not restart a broad review because of another fix or reviewer/model change. Required release checks and concrete known security/data-integrity blockers remain binding. Operator correction: 2026-10-15, session `01a0db09-8133-7307-8449-7674dc683546`; exact wording retained in native message `606e27f4-93f9-4ea8-b434-370da9e34b5c`.
 
 Fix mandatory gate failures, accepted-behavior violations and credible security/data-integrity defects. Resolve findings in existing review state through the authorized maintainer. Optional suggestions may share one reasoned, tracked follow-up; each does not require a new report, task or user approval. Do not unilaterally close required threads or waive approvals. Additional review needs a concrete unresolved question; no pass-count overrides a real blocker.
 
