@@ -28,8 +28,17 @@
       {
         "status": "M",
         "path": ".github/authority-policy.json"
+      },
+      {
+        "status": "M",
+        "path": "scripts/production-gates/latest-promotion-journal.ps1"
       }
     ],
-    "expected_head_blobs": []
+    "expected_head_blobs": [
+      {
+        "path": "scripts/production-gates/latest-promotion-journal.ps1",
+        "git_blob": "112495aef26bed6c2b9d98229edc3533451a9cbb"
+      }
+    ]
   }
 }
