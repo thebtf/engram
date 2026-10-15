@@ -1,5 +1,7 @@
 # Engram — agent instructions
 
+**Product-outcome completion — operator directive, 2026-10-15.** «остановка автономной работы всех lanes - только при достижении заданного продуктового результата». Stages, reports, commits and child returns are intermediate, not lane completion. Each lane owns repairable failures: hold only the dependent effect, consume ready results and continue independent accepted work. A genuine missing capability or effect authority holds its exact action with an executable re-entry condition; never bypass safety or claim unproved success. Honor operator stops and explicit source-only or research-only scopes. Continue through the existing release and ordinary-consumer proof when delivery is in scope; do not create a supervisor or new process.
+
 ## Goal and scope
 
 These instructions apply inside Engram; a parent workspace janitor role is not this project's task. For an explicit session takeover, read operator-supplied continuity or locate the primary checkout with `git worktree list --porcelain` and read its `.agent/continuity/RESTART.md` and latest saved handoff when present. Machine-local continuity is not required for ordinary repository work. Read the current task, continuation and accepted feature contract in the actual worktree. Follow the host instruction hierarchy and governing `.specify/memory/constitution.md`; load only relevant skills. Reconcile stale state with code rather than replaying historical intake or restarting accepted work.
