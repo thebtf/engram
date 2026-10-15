@@ -40,6 +40,12 @@ Navigation groups project entry, knowledge, Workspace, attention, and administra
 The shared project selector uses the server's canonical IDs; equal display names stay
 distinct. The knowledge project is not a code Source/Checkout/View selection or a grant.
 
+The shared header grows with the full project error instead of reserving a fixed
+48px row; its selector, retry and account/menu controls remain above main content.
+The unconfigured-host 503 smoke on 2026-10-15 covered 1440×900 and 390×844 in
+existing Edge, including visible Tab focus and Enter retry. It proves layout and
+recovery reachability only, not catalog data, authentication or installed acceptance.
+
 | Route | Task and scope |
 |---|---|
 | `/` | Choose a project, open its knowledge or the independent code Workspace. A concrete project loads at most three latest memories and three document summaries, not every project's bodies. |

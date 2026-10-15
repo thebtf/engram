@@ -464,7 +464,7 @@ function onDocumentKeydown(event: KeyboardEvent) {
   position:relative;
   display:grid;
   grid-template-columns:var(--nav-w) 1fr;
-  grid-template-rows:48px 1fr 26px;
+  grid-template-rows:minmax(48px, auto) minmax(0, 1fr) 26px;
   grid-template-areas:"nav topbar" "nav content" "nav statusbar";
   height:100vh;
   background:var(--bg);
@@ -545,7 +545,7 @@ function onDocumentKeydown(event: KeyboardEvent) {
 .nav-item .cnt { font-family:var(--font-mono); font-size:10px; font-weight:700; padding:1px 6px; border-radius:var(--radius-pill); background:color-mix(in oklab,var(--accent),transparent 84%); color:var(--fg); }
 .nav-item .flag,
 .nav-item .lock { font-size:11px; color:var(--muted); }
-.topbar { display:flex; align-items:center; gap:var(--space-3); padding:0 var(--space-4); background:var(--surface); border-bottom:1px solid var(--border); min-width:0; }
+.topbar { display:flex; align-items:center; gap:var(--space-3); padding:4px var(--space-4); background:var(--surface); border-bottom:1px solid var(--border); min-width:0; }
 .gsearch-wrap { position:relative; }
 .gsearch { display:flex; align-items:center; gap:7px; width:min(280px,20vw); min-width:160px; background:var(--surface-warm); border:1px solid var(--border); border-radius:var(--r-sm); padding:5px 10px; color:var(--muted); font-size:var(--text-sm); }
 .gsearch:focus-within { background:var(--surface); border-color:var(--accent); box-shadow:var(--focus-ring); }
@@ -603,10 +603,11 @@ function onDocumentKeydown(event: KeyboardEvent) {
 @media (max-width:980px) {
   .app,
   .app.nav-collapsed { grid-template-columns:1fr; grid-template-areas:"topbar" "content" "statusbar"; }
-  .topbar { gap:8px; padding:0 10px; }
+  .topbar { gap:8px; padding:4px 10px; }
   .topbar .mobile-menu-button { display:inline-flex; width:44px; height:44px; justify-content:center; padding:0; }
   .topbar-secondary { display:none; }
   .gsearch-wrap { display:none; }
+  .tspacer { display:none; }
   .app > .nav { position:fixed; top:0; bottom:0; left:0; width:min(320px, calc(100vw - 48px)); transform:translateX(-100%); transition:none; z-index:60; }
   .app > .nav.open { transform:none; }
   .nav-scrim { display:block; position:fixed; inset:0; z-index:50; border:0; background:color-mix(in srgb, #000, transparent 52%); cursor:pointer; }
