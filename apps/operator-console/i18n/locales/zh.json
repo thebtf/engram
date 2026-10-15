@@ -12,6 +12,7 @@
     "more": "下一页",
     "back": "返回",
     "unknownProject": "项目不可用或归属尚未确定。",
+    "unavailable": "项目目录不可用。请重试加载项目。",
     "ambiguousName": "名称相同；名称不能确定项目归属。",
     "selectionRequired": "请先从目录中选择项目。",
     "loading": "正在加载目录并确定项目…",
@@ -1415,6 +1416,8 @@
       "pending": "正在从服务器加载任务…",
       "error": "无法加载任务：{message}",
       "empty": "服务器登记表中还没有任务。",
+      "unknown": "任务尚未加载，数量和内容未知。",
+      "stale": "正在显示之前的结果。任务列表尚未刷新。",
       "retry": "重试"
     },
     "actions": {

@@ -8,6 +8,7 @@ let sharedIssuesPageTotal: SharedRef<number> | undefined
 let sharedIssuesPageDetail: SharedRef<OperatorIssue | null> | undefined
 let sharedIssuesPageState: SharedRef<OperatorLoadState<OperatorIssue[]>> | undefined
 let sharedIssuesPageDetailState: SharedRef<OperatorLoadState<OperatorIssue | null>> | undefined
+let sharedIssuesPageScope = ''
 
 import type { ComputedRef } from 'vue'
 import type { OperatorSelection, OperatorSelectionTarget } from './useOperatorSelection'
@@ -448,10 +449,13 @@ export function useOperatorIssues(): {
  async function refresh() {
   const current = ++generation
   const scope = context.project.value
-  replaceArray(rowsState.value, [])
-  totalCountState.value = 0
-  state.value = pendingState(listEvidence, [])
-  if (context.selectionPending.value || context.selectionError.value || context.error.value || !scope || (scope !== 'all' && !isCatalogProject(scope))) { state.value = gatedState(listEvidence, 'project-selection', 'Choose a catalog project before reading issues.', []); return }
+  if (scope !== sharedIssuesPageScope) {
+   replaceArray(rowsState.value, [])
+   totalCountState.value = 0
+   sharedIssuesPageScope = scope
+  }
+  if (context.selectionPending.value || context.selectionError.value || context.error.value || !scope || (scope !== 'all' && !isCatalogProject(scope))) { state.value = gatedState(listEvidence, 'project-selection', 'Choose a catalog project before reading issues.', rowsState.value); return }
+  state.value = pendingState(listEvidence, rowsState.value)
   const params = new URLSearchParams({ limit: '200' })
   if (scope !== 'all') params.set('project', scope)
   const result = await loadOperatorJson<ApiIssueList>(`/api/issues?${params}`, {

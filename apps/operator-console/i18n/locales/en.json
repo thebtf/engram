@@ -12,6 +12,7 @@
     "more": "Next page",
     "back": "Return",
     "unknownProject": "The project is unavailable or unresolved.",
+    "unavailable": "The project catalog is unavailable. Retry to load projects.",
     "ambiguousName": "Equal names; a name does not establish project membership.",
     "selectionRequired": "Choose a catalog project before continuing.",
     "loading": "Loading the catalog and resolving the project…",
@@ -1421,6 +1422,8 @@
       "pending": "Loading issues from the server…",
       "error": "Could not load issues: {message}",
       "empty": "The server registry has no issues yet.",
+      "unknown": "Issues have not been loaded. Their count and contents are unknown.",
+      "stale": "Previous results are shown. The issue list has not been refreshed.",
       "retry": "Retry"
     },
     "actions": {

@@ -116,6 +116,7 @@ const activeIssue = computed(() => {
 })
 const selectedCount = selection.selectedCount
 const selectionActionReady = computed(() => humanSourceReady.value && selectedCount.value > 0 && !selection.current.value.reconfirmationRequired)
+const listReady = computed(() => scopeReady.value && (loadState.value.kind === 'live' || loadState.value.kind === 'empty'))
 const hasLoadedRows = computed(() => rows.length > 0 || (Array.isArray(loadState.value.data) && loadState.value.data.length > 0))
 const showInitialPending = computed(() => pending.value && !hasLoadedRows.value)
 const detailError = computed(() => activeId.value !== null && detailState.value.kind === 'error' ? detailState.value.error.message : null)
@@ -682,12 +683,13 @@ function renderMarkdown(value: string) {
       <span v-else-if="notice">{{ notice }}</span>
       <span v-else-if="showInitialPending">{{ t('issues.state.pending') }}</span>
       <span v-else-if="error || detailError">{{ t('issues.state.error', { message: error || detailError }) }}</span>
-      <span v-else-if="loadState.kind === 'empty'">{{ t('issues.state.empty') }}</span>
+      <span v-else-if="listReady && loadState.kind === 'empty'">{{ t('issues.state.empty') }}</span>
       <span v-else-if="loadState.kind === 'gated'">{{ t('projectCatalog.selectionRequired') }}</span>
       <button v-if="scopeError" class="tbtn" @click="context.refresh">{{ t('issues.state.retry') }}</button>
       <button v-else-if="error || detailError" class="tbtn" @click="requestedId ? openIssue(requestedId) : refresh()">{{ t('issues.state.retry') }}</button>
     </section>
     <MutationResultNotice :result="mutationResult" :recheck-label="t('issues.state.retry')" @recheck="refresh" />
+    <p v-if="hasLoadedRows && !listReady" class="statebar" role="status">{{ t('issues.state.stale') }}</p>
 
     <section v-if="!activeIssue" class="area-body">
       <div class="pane">
@@ -696,7 +698,7 @@ function renderMarkdown(value: string) {
             <button class="tbtn" :disabled="!filteredRows.length || !humanSourceReady" @click="selectAllFiltered">{{ t('issues.actions.selectAll') }}</button>
             <button class="tbtn" :disabled="!selectedCount" @click="clearSelection">{{ t('issues.actions.clearSelection') }}</button>
             <button class="tbtn" :disabled="!hasFilter()" @click="resetFilter">{{ t('issues.actions.resetFilter') }}</button>
-            <span class="fcount">{{ t('issues.list.countInFilter', { shown: filteredRows.length, total: rows.length }) }}</span>
+            <span v-if="listReady" class="fcount">{{ t('issues.list.countInFilter', { shown: filteredRows.length, total: rows.length }) }}</span>
           </div>
           <div class="op-right">
             <label class="rows">
@@ -707,18 +709,20 @@ function renderMarkdown(value: string) {
                 </option>
               </select>
             </label>
-            <span class="fcount">{{ t('issues.list.pageRange', { from: pageRange.from, to: pageRange.to, total: filteredRows.length }) }}</span>
-            <button class="pager" :disabled="page <= 1" @click="page--">‹</button>
-            <button class="pager on">{{ page }}</button>
-            <button class="pager" :disabled="page >= totalPages" @click="page++">›</button>
+            <template v-if="listReady">
+              <span class="fcount">{{ t('issues.list.pageRange', { from: pageRange.from, to: pageRange.to, total: filteredRows.length }) }}</span>
+              <button class="pager" :disabled="page <= 1" @click="page--">‹</button>
+              <button class="pager on">{{ page }}</button>
+              <button class="pager" :disabled="page >= totalPages" @click="page++">›</button>
+            </template>
           </div>
         </div>
 
         <div class="issue-create-strip">
-          <button class="tbtn" @click="openCreate">{{ t('issues.create.open') }}</button>
+          <button class="tbtn" :disabled="!scopeReady" @click="openCreate">{{ t('issues.create.open') }}</button>
         </div>
 
-        <div class="instr-band">
+        <div v-if="listReady" class="instr-band">
           <div class="lead">
             <div class="ln">{{ stats.open }}</div>
             <div class="ll">{{ t('issues.stats.open') }}</div>
@@ -740,7 +744,7 @@ function renderMarkdown(value: string) {
           >
             {{ t(`issues.filters.${item}`) }}
           </button>
-          <span class="fcount">{{ t('issues.list.filteredTotal', { shown: filteredRows.length, total: registryTotal }) }}</span>
+          <span v-if="listReady" class="fcount">{{ t('issues.list.filteredTotal', { shown: filteredRows.length, total: registryTotal }) }}</span>
         </div>
 
         <div class="grid issues-grid">
@@ -789,10 +793,11 @@ function renderMarkdown(value: string) {
             <span class="issue-comments">▱ {{ issue.comments }}</span>
           </button>
 
-          <div v-if="!pageRows.length" class="empty">
+          <div v-if="listReady && !pageRows.length" class="empty">
             <b>{{ t('issues.empty.title') }}</b>
             <span>{{ t('issues.empty.body') }}</span>
           </div>
+          <p v-else-if="!pageRows.length" class="empty" role="status">{{ t(pending || context.selectionPending.value ? 'issues.state.pending' : 'issues.state.unknown') }}</p>
         </div>
 
         <div class="bulkbar" :class="{ show: selectedCount > 0 }">

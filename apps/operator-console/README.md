@@ -46,6 +46,23 @@ The unconfigured-host 503 smoke on 2026-10-15 covered 1440×900 and 390×844 in
 existing Edge, including visible Tab focus and Enter retry. It proves layout and
 recovery reachability only, not catalog data, authentication or installed acceptance.
 
+Catalog transport/503 errors name the project catalog, not the whole server;
+independent service health and authentication keep their own evidence. Issues show
+counts and empty results only after a successful scoped list read. A failed refresh
+keeps prior rows visibly marked as previous results, without current totals, only
+within the same proven project scope. Scope changes clear rows and totals before
+the selection gate, including pending or unresolved selection. The create entry
+reflects its existing context guard; all-project browsing still permits an explicit
+canonical source/target form after a healthy catalog read.
+The `unavailable catalog and issue reads` compiled-consumer regression in
+`tests/composables/auth-session.spec.mjs` covers unknown/error/empty, same-scope
+retention and project isolation. The 2026-10-15 e38 frontend overlay over diagnostic
+API375C rendered the scoped error and unknown Issues at desktop and 390px before
+the additional isolation fix. Its live proof is retained, not proof of the final
+bundle. The final isolation-corrected bundle is checked only against a genuine
+unconfigured-host503 with unknown auth. Neither proves catalog data, actor writes,
+successful-empty backend data, installed delivery or release acceptance.
+
 | Route | Task and scope |
 |---|---|
 | `/` | Choose a project, open its knowledge or the independent code Workspace. A concrete project loads at most three latest memories and three document summaries, not every project's bodies. |

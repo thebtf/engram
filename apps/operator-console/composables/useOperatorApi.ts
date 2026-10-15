@@ -214,9 +214,11 @@ export function operatorDiagnosisCategory(
 
 /** Locale key for the primary operator copy of a failure. Presentation boundary only. */
 export function operatorDiagnosisKey(
- error: Pick<OperatorSourceError, 'category' | 'status'> | null | undefined,
+ error: (Pick<OperatorSourceError, 'category' | 'status'> & Partial<Pick<OperatorSourceError, 'path'>>) | null | undefined,
 ): string {
- return `errors.diagnosis.${operatorDiagnosisCategory(error)}`
+ const category = operatorDiagnosisCategory(error)
+ if (error?.path === '/api/projects' && (category === 'server-unavailable' || category === 'unreachable')) return 'projectCatalog.unavailable'
+ return `errors.diagnosis.${category}`
 }
 
 async function readOperatorResponseText(
