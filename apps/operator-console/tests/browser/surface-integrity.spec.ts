@@ -35,45 +35,27 @@ test('home exposes Workspace while primary navigation retires Graph and Books', 
   await expect(page).toHaveURL(/\/rules$/)
 })
 
-for (const scenario of [
-  { route: '/rules', activeMemoryCount: undefined, state: 'unknown', visible: 'неизвест' },
-] as const) {
-  test(`shell renders ${scenario.state} memory count truth on ${scenario.route} without global candidate reads`, async ({ page }) => {
-    const memoryBodyRequests: string[] = []
-    const queueBodyRequests: string[] = []
-    const flagRequests: string[] = []
-    const settingsOwnedRequests: string[] = []
+test('shell never fetches global memory or candidate bodies outside their reader surfaces', async ({ page }) => {
+  const memoryBodyRequests: string[] = []
+  const queueBodyRequests: string[] = []
+  const flagRequests: string[] = []
+  const settingsOwnedRequests: string[] = []
 
-    page.on('request', (request) => {
-      const path = new URL(request.url()).pathname
-      if (path === '/api/memories') memoryBodyRequests.push(path)
-      if (path === '/api/memory/candidates') queueBodyRequests.push(path)
-      if (path === '/api/flags') flagRequests.push(path)
-      if (['/api/config', '/api/vector/metrics', '/api/update/status', '/api/update/check', '/api/model-health'].includes(path)) {
-        settingsOwnedRequests.push(path)
-      }
-    })
-
-    await page.route('**/api/stats/vnext', (route) => route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify({
-        noise_ratio: 0.25,
-        ...(scenario.activeMemoryCount === undefined ? {} : {
-          embedding: { active_memory_count: scenario.activeMemoryCount },
-        }),
-      }),
-    }))
-
-    await page.goto(scenario.route)
-
-    const count = page.getByTestId('shell-memory-count')
-    await expect(count).toHaveAttribute('data-count-state', scenario.state)
-    await expect(count).toContainText(scenario.visible)
-    await expect(page.getByTestId('shell-review-queue-count')).toContainText('неизвест')
-    await expect(page.locator('#primary-navigation a[href="/queue"]')).toBeVisible()
-    await expect.poll(() => flagRequests.length).toBeGreaterThan(0)
-    expect(memoryBodyRequests).toEqual([])
-    expect(queueBodyRequests).toEqual([])
-    expect(settingsOwnedRequests).toEqual([])
+  page.on('request', (request) => {
+    const path = new URL(request.url()).pathname
+    if (path === '/api/memories') memoryBodyRequests.push(path)
+    if (path === '/api/memory/candidates') queueBodyRequests.push(path)
+    if (path === '/api/flags') flagRequests.push(path)
+    if (['/api/config', '/api/vector/metrics', '/api/update/status', '/api/update/check', '/api/model-health'].includes(path)) {
+      settingsOwnedRequests.push(path)
+    }
   })
-}
+
+  await page.goto('/rules')
+
+  await expect(page.locator('#primary-navigation a[href="/queue"]')).toBeVisible()
+  await expect.poll(() => flagRequests.length).toBeGreaterThan(0)
+  expect(memoryBodyRequests).toEqual([])
+  expect(queueBodyRequests).toEqual([])
+  expect(settingsOwnedRequests).toEqual([])
+})

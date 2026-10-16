@@ -10,6 +10,7 @@ test('an unresponsive authentication-mode probe expires and allows a safe retry'
   await page.clock.install()
   await page.route('**/api/auth/me', async route => {
     attempts++
+    if (attempts === 1) return route.fulfill({ json: { auth_disabled: true } })
     if (!recovered) await new Promise<void>(resolve => { releases.push(resolve) })
     await route.fulfill({ json: { auth_disabled: true } }).catch(() => { })
   })
@@ -29,20 +30,24 @@ test('an unresponsive authentication-mode probe expires and allows a safe retry'
   expect(attempts).toBeGreaterThanOrEqual(2)
 })
 
-test('a documented auth-enabled 401 enters denied mode without mounting grants or binding', async ({ page }) => {
+test('a documented auth-enabled 401 locks the shell without mounting grants or binding', async ({ page }) => {
   const codeRequests: string[] = []
   await page.route('**/api/auth/me', route => route.fulfill({ status: 401, json: { authenticated: false, auth_disabled: false } }))
   await page.route('**/api/code/**', route => { codeRequests.push(new URL(route.request().url()).pathname); return route.fulfill({ status: 403 }) })
   await page.goto('/code?project=all')
-  await expect(page.locator('.phase')).toHaveAttribute('data-state', 'denied')
+  await expect(page.locator('.identity')).toHaveAttribute('data-auth', 'locked')
+  await expect(page.locator('main.code-page')).toHaveCount(0)
+  await expect(page.locator('main.content > .session-recovery')).toBeVisible()
   await expect(page.getByTestId('code-grant-chooser')).toHaveCount(0)
   expect(codeRequests).toEqual([])
 })
 
 test('unknown and no-auth mode never mount grant administration', async ({ page }) => {
   const codeRequests: string[] = []
+  let probes = 0
   let releaseProbe: () => void = () => { }
   await page.route('**/api/auth/me', async route => {
+    if (++probes === 1) return route.fulfill({ json: { auth_disabled: true } })
     await new Promise<void>(resolve => { releaseProbe = resolve })
     await route.fulfill({ json: { authenticated: true, auth_disabled: true } })
   })
@@ -62,12 +67,14 @@ test('unknown and no-auth mode never mount grant administration', async ({ page 
   expect(codeRequests).toEqual(['/api/code/tabs/handshake', '/api/code/contexts'])
 })
 
-test('malformed auth-enabled 401 remains a retryable probe failure without grants', async ({ page }) => {
+test('malformed auth-enabled 401 cannot grant identity or mount protected code', async ({ page }) => {
   const codeRequests: string[] = []
   await page.route('**/api/auth/me', route => route.fulfill({ status: 401, json: { authenticated: true, auth_disabled: false } }))
   await page.route('**/api/code/**', route => { codeRequests.push(route.request().url()); return route.fulfill({ status: 403 }) })
   await page.goto('/code?project=all')
-  await expect(page.locator('.phase')).toHaveAttribute('data-state', 'identity-unavailable')
+  await expect(page.locator('.identity')).toHaveAttribute('data-auth', 'locked')
+  await expect(page.locator('main.code-page')).toHaveCount(0)
+  await expect(page.locator('main.content > .session-recovery')).toBeVisible()
   await expect(page.getByTestId('code-grant-chooser')).toHaveCount(0)
   expect(codeRequests).toEqual([])
 })
@@ -139,9 +146,13 @@ test('a prior raw viewRef restores only a unique authorized candidate, never a s
 
 test('unbound refresh cannot erase a historical View candidate before identity retry', async ({ page }) => {
   let identityUnavailable = false
+  let shellProbe = true
   const requests: string[] = []
   const pins: unknown[] = []
-  await page.route('**/api/auth/me', route => route.fulfill(identityUnavailable ? { status: 503 } : { json: { auth_disabled: true } }))
+  await page.route('**/api/auth/me', route => {
+    if (shellProbe) { shellProbe = false; return route.fulfill({ json: { auth_disabled: true } }) }
+    return route.fulfill(identityUnavailable ? { status: 503 } : { json: { auth_disabled: true } })
+  })
   await page.route('**/api/code/**', async route => {
     const path = new URL(route.request().url()).pathname
     requests.push(path)
@@ -158,6 +169,7 @@ test('unbound refresh cannot erase a historical View candidate before identity r
   const stored = await page.evaluate(() => sessionStorage.getItem('engram.operator-code.view-candidate.v2'))
   expect(stored).not.toBeNull()
   identityUnavailable = true
+  shellProbe = true
   await page.reload()
   await expect(page.locator('.phase')).toHaveAttribute('data-state', 'identity-unavailable')
   await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)

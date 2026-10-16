@@ -1,6 +1,8 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
 import { executeMutation } from '../../composables/useApi'
 
+const projectID = '11111111-1111-4111-8111-111111111111'
+
 function collectPageFailures(page: Page) {
  const failures: string[] = []
  page.on('requestfailed', (request) => failures.push(`${request.method()} ${request.url()} ${request.failure()?.errorText || 'failed'}`))
@@ -95,18 +97,18 @@ test('rules create and selection update round-trip through current control-plane
   })
  })
 
- await page.goto('/rules')
+ await page.goto(`/rules?project=${projectID}`)
 
  await page.locator('.rules-page > .head > button.primary').click()
  const dialog = page.getByRole('dialog')
- await dialog.locator('select').selectOption('operator-console')
+ await dialog.locator('select').selectOption(projectID)
  await dialog.locator('textarea').fill('readback rule before edit')
  const createResponse = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/rules')
  await dialog.locator('button.primary').click()
  const created = await (await createResponse).json()
  expect(created).toMatchObject({
   id: expect.any(Number),
-  project: 'operator-console',
+  project: projectID,
   content: 'readback rule before edit',
   enabled: true,
   version: 1,
@@ -189,12 +191,12 @@ test('mismatched, bare, and accepted rule responses retain drafts for explicit r
   await page.locator('.rules-page > .head > button.primary').click()
   const dialog = page.getByRole('dialog')
   await dialog.locator('textarea').fill(content)
-  await dialog.locator('select').selectOption('operator-console')
+  await dialog.locator('select').selectOption(projectID)
   await dialog.locator('button.primary').click()
   return dialog
  }
 
- await page.goto('/rules')
+ await page.goto(`/rules?project=${projectID}`)
  const mismatchDraft = await submitDraft('keep this mismatched rule draft')
  const outcome = page.getByTestId('mutation-result')
  await expect(outcome).toHaveAttribute('data-kind', 'committed_verification_pending')
@@ -210,6 +212,7 @@ test('mismatched, bare, and accepted rule responses retain drafts for explicit r
  expect(createCalls).toBe(2)
 
  await page.reload({ waitUntil: 'networkidle' })
+ await page.locator('.scope-filter select').selectOption('global')
  const seededRule = page.locator('.rule-row').filter({ hasText: 'operator console rules are live data' })
  const remove = seededRule.locator('button.act.danger')
  await remove.click()
@@ -227,8 +230,8 @@ test('mismatched, bare, and accepted rule responses retain drafts for explicit r
 
 test('partial memory retry keeps only unresolved selections and never replays automatically', async ({ page }) => {
  const rows = [
-  { id: 9101, project: 'operator-console', content: 'T011 known success', tags: ['t011'], tier: 'semantic', epistemic_type: 'fact', confidence: 0.9, citation_count: 1, injection_count: 1, version: 1, created_at: '2026-09-10T12:00:00Z', updated_at: '2026-09-10T12:00:00Z', status: 'active' },
-  { id: 9102, project: 'operator-console', content: 'T011 unresolved selection', tags: ['t011'], tier: 'semantic', epistemic_type: 'fact', confidence: 0.9, citation_count: 1, injection_count: 1, version: 1, created_at: '2026-09-10T12:00:00Z', updated_at: '2026-09-10T12:00:00Z', status: 'active' },
+  { id: 9101, project: projectID, content: 'T011 known success', tags: ['t011'], tier: 'semantic', epistemic_type: 'fact', confidence: 0.9, citation_count: 1, injection_count: 1, version: 1, created_at: '2026-09-10T12:00:00Z', updated_at: '2026-09-10T12:00:00Z', status: 'active' },
+  { id: 9102, project: projectID, content: 'T011 unresolved selection', tags: ['t011'], tier: 'semantic', epistemic_type: 'fact', confidence: 0.9, citation_count: 1, injection_count: 1, version: 1, created_at: '2026-09-10T12:00:00Z', updated_at: '2026-09-10T12:00:00Z', status: 'active' },
  ]
  const selectionPayloads: Array<Record<string, unknown>> = []
  const operationPayloads: Array<Record<string, unknown>> = []
@@ -312,7 +315,7 @@ test('partial memory retry keeps only unresolved selections and never replays au
 
 test('a browser transport loss retains the selected mutation for manual reconciliation', async ({ page }) => {
  const rows = [
-  { id: 9103, project: 'operator-console', content: 'T011 lost transport selection', tags: ['t011'], tier: 'semantic', epistemic_type: 'fact', confidence: 0.9, citation_count: 1, injection_count: 1, version: 1, created_at: '2026-09-10T12:00:00Z', updated_at: '2026-09-10T12:00:00Z', status: 'active' },
+  { id: 9103, project: projectID, content: 'T011 lost transport selection', tags: ['t011'], tier: 'semantic', epistemic_type: 'fact', confidence: 0.9, citation_count: 1, injection_count: 1, version: 1, created_at: '2026-09-10T12:00:00Z', updated_at: '2026-09-10T12:00:00Z', status: 'active' },
  ]
  let dispatches = 0
  await page.route('**/api/memories?**', (route: Route) => route.fulfill({ json: { items: rows, total: rows.length, offset: 0, limit: 20, has_more: false } }))
@@ -366,15 +369,15 @@ test('documents create, history, readback, and export render through the current
 
  for (const content of [first, second]) {
   const response = await page.request.post('/api/documents', {
-   data: { path, project: 'operator-console', content, doc_type: 'markdown', author: 'operator-console' },
+   data: { path, project: projectID, content, doc_type: 'markdown', author: 'operator-console' },
   })
   expect(response.status()).toBe(201)
  }
 
- const historyResponse = await page.request.get(`/api/documents/history?path=${encodeURIComponent(path)}&project=operator-console`)
- expect(await historyResponse.json()).toMatchObject({ path, project: 'operator-console', count: 2, versions: [{ version: 2 }, { version: 1 }] })
- const readResponse = await page.request.get(`/api/documents/read?path=${encodeURIComponent(path)}&project=operator-console&version=2`)
- expect(await readResponse.json()).toMatchObject({ path, project: 'operator-console', version: 2, content: second })
+ const historyResponse = await page.request.get(`/api/documents/history?path=${encodeURIComponent(path)}&project=${projectID}`)
+ expect(await historyResponse.json()).toMatchObject({ path, project: projectID, count: 2, versions: [{ version: 2 }, { version: 1 }] })
+ const readResponse = await page.request.get(`/api/documents/read?path=${encodeURIComponent(path)}&project=${projectID}&version=2`)
+ expect(await readResponse.json()).toMatchObject({ path, project: projectID, version: 2, content: second })
 
  const selectionRequests: Array<Record<string, unknown>> = []
  const exportRequests: Array<Record<string, unknown>> = []
@@ -404,7 +407,7 @@ test('documents create, history, readback, and export render through the current
  })
  await page.route(`**/api/documents/exports/${artifactID}`, (route: Route) => route.fulfill({
   headers: { 'content-type': 'application/json', 'content-disposition': `attachment; filename="${filename}"` },
-  body: JSON.stringify({ schema_version: 'engram.documents.export/v1', documents: [{ id: 2, path, project: 'operator-console', version: 2, content_hash: 'safe-hash' }] }),
+  body: JSON.stringify({ schema_version: 'engram.documents.export/v1', documents: [{ id: 2, path, project: projectID, version: 2, content_hash: 'safe-hash' }] }),
  }))
 
  const failures = collectPageFailures(page)
@@ -440,9 +443,9 @@ test('orphan credential cleanup refreshes only after its validated synchronous r
  const statusReads: string[] = []
  let cleaned = false
  const credentials = [
-  { id: 1, name: 'primary-token', project: 'engram', scope: 'project', created_at: '2026-01-01T00:00:00Z' },
-  { id: 2, name: 'orphaned-token', project: 'engram', scope: 'project', created_at: '2026-01-01T00:00:00Z' },
-  { id: 3, name: 'shared-token', project: 'beta', scope: 'project', created_at: '2026-01-01T00:00:00Z' },
+  { id: 1, name: 'primary-token', project: '33333333-3333-4333-8333-333333333333', scope: 'project', created_at: '2026-01-01T00:00:00Z' },
+  { id: 2, name: 'orphaned-token', project: '33333333-3333-4333-8333-333333333333', scope: 'project', created_at: '2026-01-01T00:00:00Z' },
+  { id: 3, name: 'shared-token', project: '55555555-5555-4555-8555-555555555555', scope: 'project', created_at: '2026-01-01T00:00:00Z' },
  ]
  await page.route('**/api/vault/status', (route) => route.fulfill({
   json: {

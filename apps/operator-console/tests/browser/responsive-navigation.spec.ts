@@ -28,7 +28,7 @@ test.describe('mock interaction-only: responsive navigation and localization', (
     await expect(queue.locator('.flag')).toHaveText('ENGRAM_VNEXT_F_ENABLED')
   })
 
-  test('only queue and Overview fetch candidate content, not Search navigation', async ({ page }) => {
+  test('candidate reads require an explicit project scope and never follow Search navigation', async ({ page }) => {
     const candidateRequests: string[] = []
     page.on('request', (request) => {
       if (new URL(request.url()).pathname === '/api/memory/candidates') candidateRequests.push(request.url())
@@ -38,12 +38,13 @@ test.describe('mock interaction-only: responsive navigation and localization', (
     await expect(page.locator('#primary-navigation a[href="/queue"]')).toBeVisible()
     expect(candidateRequests).toEqual([])
 
-    await page.goto('/queue')
+    await page.goto('/queue?project=11111111-1111-4111-8111-111111111111')
     await expect.poll(() => candidateRequests.length).toBeGreaterThan(0)
     candidateRequests.length = 0
 
     await page.goto('/')
-    await expect.poll(() => candidateRequests.length).toBeGreaterThan(0)
+    await expect(page.getByRole('heading', { name: 'С чего начнём?' })).toBeVisible()
+    expect(candidateRequests).toEqual([])
   })
 
   test('mobile and tablet navigation stays reachable and settings groups stay selectable', async ({ page }) => {
@@ -74,9 +75,10 @@ test.describe('mock interaction-only: responsive navigation and localization', (
 
     const nav = page.locator('#primary-navigation')
     await expect(trigger).toHaveAttribute('aria-expanded', 'true')
-    await expect(nav.getByRole('link', { name: 'Обзор' })).toBeVisible()
-    await nav.getByRole('link', { name: 'Обзор' }).focus()
-    await expect(nav.getByRole('link', { name: 'Обзор' })).toBeFocused()
+    const home = nav.locator('a[href="/"]').last()
+    await expect(home).toBeVisible()
+    await home.focus()
+    await expect(home).toBeFocused()
     await page.keyboard.press('Escape')
     await expect(trigger).toHaveAttribute('aria-expanded', 'false')
     await expect(trigger).toBeFocused()
@@ -97,7 +99,6 @@ test.describe('mock interaction-only: responsive navigation and localization', (
   test('hard reload, 200% zoom, RU/EN, and zh keep navigation and Settings keyboard-accessible', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 1024 })
     await page.goto('/graph')
-    await expect(page.getByTestId('shell-memory-count')).toBeVisible()
     await expect(page.getByRole('heading', { name: 'Редактирование графа знаний упразднено', exact: true })).toBeVisible()
     await page.reload({ waitUntil: 'domcontentloaded' })
     await expect(page).toHaveURL(/\/graph$/)
@@ -118,7 +119,7 @@ test.describe('mock interaction-only: responsive navigation and localization', (
     await expect(dialog).toBeHidden()
     const englishMenu = page.getByRole('button', { name: 'Menu', exact: true })
     await englishMenu.click()
-    await expect(page.getByRole('link', { name: 'Workspace', exact: true })).toBeVisible()
+    await expect(page.locator('#primary-navigation').getByRole('link', { name: 'Workspace', exact: true })).toBeVisible()
     await page.keyboard.press('Escape')
 
     await page.goto('/settings')
@@ -128,7 +129,7 @@ test.describe('mock interaction-only: responsive navigation and localization', (
     await page.keyboard.press('Escape')
     const chineseMenu = page.getByRole('button', { name: '菜单', exact: true })
     await chineseMenu.click()
-    const workspace = page.getByRole('link', { name: '工作区', exact: true })
+    const workspace = page.locator('#primary-navigation').getByRole('link', { name: '工作区', exact: true })
     await expect(workspace).toBeVisible()
     await workspace.focus()
     await expect(workspace).toBeFocused()

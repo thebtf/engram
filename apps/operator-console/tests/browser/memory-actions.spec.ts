@@ -69,14 +69,15 @@ test('advanced principal query retains explicit privacy scope when collapsed', a
 
   await page.goto(`/memory?project=${projectID}`)
   const advanced = page.getByTestId('principal-memory-surface')
-  await advanced.locator('summary').click()
+  await advanced.locator(':scope > summary').click()
   await page.getByTestId('principal-select').fill('agent/alice')
   await page.getByTestId('domain-select').fill('operator-console')
   await page.getByTestId('refresh').click()
   await expect(advanced).toContainText('operator console = data plane')
   await expect(advanced).toContainText('agent/alice')
-  await advanced.locator('summary').click()
-  await advanced.locator('summary').click()
+  await advanced.locator(':scope > summary').click()
+  await expect(advanced).not.toHaveAttribute('open')
+  await advanced.locator(':scope > summary').click()
   await expect(page.getByTestId('project-scope')).toHaveValue('current')
   await expect(page.getByTestId('principal-select')).toHaveValue('agent/alice')
 

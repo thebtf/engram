@@ -35,7 +35,7 @@ test('old alias deep link preserves exact memory ID and search/filter return', a
 test('unresolved alias opens useful read-only knowledge/history and a stale reference is an error', async ({ page }) => {
   const reads: URL[] = []
   page.on('request', (request) => { const url = new URL(request.url()); if (url.pathname.includes('/unresolved/')) reads.push(url) })
-  const legacyLocation = '/memory?project=legacy&memory=901&q=retained&filter=low&filter=chain#original'
+  const legacyLocation = '/memory?project=legacy&memory=901&q=retained&filter=low&filter=chain&returnTo=/projects#original'
   await page.goto(legacyLocation)
   await expect(page).toHaveURL(/\/projects\/unresolved\?/)
   await expect(page.getByTestId('project-context-select')).toHaveValue('')
@@ -123,8 +123,9 @@ test('retained code metadata is review-only and never creates a pin', async ({ p
   const mutations: string[] = []
   page.on('request', (request) => { if (request.method() !== 'GET' && request.url().includes('/api/code/')) mutations.push(request.url()) })
   await page.goto('/projects/unresolved?reference=retained-legacy-fixture&kind=code')
-  await expect(page.getByText('Retained fixture repository', { exact: true })).toBeVisible()
-  await expect(page.getByText('Historical fixture working copy')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Retained fixture repository', exact: true })).toBeVisible()
+  await page.getByRole('article').locator('summary').click()
+  await expect(page.locator('dd').filter({ hasText: /^Historical fixture working copy$/ })).toBeVisible()
   await expect(page.getByTestId('project-context-select')).toHaveValue('')
   expect(mutations).toEqual([])
 })
@@ -137,11 +138,11 @@ test('legacy document links retain version/history and issue deep links retain t
   expect(query.get('path')).toBe('retained/notes.md')
   expect(query.get('version')).toBe('1')
   expect(query.get('compare')).toBe('2')
-  await page.goto('/issues/903?project=legacy#discussion')
+  await page.goto('/issues/903?project=legacy&returnTo=/projects#discussion')
   await expect(page.getByTestId('unresolved-content-903')).toContainText('Keep the original issue and its discussion available.')
   await expect(page.getByTestId('unresolved-history')).toContainText('Original retained discussion.')
   expect(new URL(page.url()).searchParams.get('id')).toBe('903')
-  expect(new URL(page.url()).searchParams.get('originalLocation')).toBe('/issues/903?project=legacy#discussion')
+  expect(new URL(page.url()).searchParams.get('originalLocation')).toBe('/issues/903?project=legacy&returnTo=/projects#discussion')
   expect(new URL(page.url()).searchParams.get('returnTo')).toBe('/projects')
 })
 

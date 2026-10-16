@@ -1836,7 +1836,7 @@ const server = createServer(async (req, res) => {
       return
     case '/api/selfcheck':
       json(res, 200, {
-        overall: 'ok',
+        overall: 'healthy',
         version: 'v6.29.0-smoke',
         uptime: '1m',
         components: [

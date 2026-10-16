@@ -342,7 +342,7 @@ test('unresolved code membership is readable provenance, never an empty success 
   await page.goto('/code?project=all')
   await expect(page.getByTestId('code-unresolved-membership')).toContainText('Retained repository')
   await expect(page.getByTestId('code-unresolved-membership')).toContainText('Historical snapshot')
-  await expect(page.locator('#code-connect-kind option[value="worktree"]')).toBeDisabled()
+  await expect(page.locator('#code-connect-kind option[value="worktree"]')).toHaveJSProperty('disabled', true)
   await expect(page.getByTestId('code-unresolved-membership').getByRole('link')).toHaveAttribute('href', '/projects/unresolved?reference=retained-source-group&kind=code')
   await expect(page.getByTestId('code-context-empty')).toHaveCount(0)
   await expect(page.getByTestId('code-context-repository')).toHaveCount(0)
