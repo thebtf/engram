@@ -79,7 +79,7 @@ The canonical catalog is one shape, not an optional compatibility mode:
 ```ts
 type ProjectsResponse = {
   items: { project_id: string; name: string; repository_qualifier?: string }[]
-  unresolved: { reference: string; name: string; reason: string }[]
+  unresolved: { reference: string; name: string; reason: string; reader_kinds: ('memory' | 'document' | 'issue' | 'code')[] }[]
 }
 type ReaderPage<T> = { items: T[]; total: number; offset: number; limit: number; has_more: boolean }
 ```
@@ -107,6 +107,16 @@ and issue records through `GET /api/projects/unresolved/{reference}/content` wit
 query, continuation and the original return link remain visible. The opaque reference
 never enters a normal project query, selector, identity computation or write form.
 Unknown/stale references and failed/mismatched readers show errors, not empty success.
+The required `reader_kinds` array is derived only from retained membership tables:
+`memories`, `versioned_documents`, `issues`, and `sources`. It is not a payload,
+availability, count or authorization claim. The review offers only those kinds,
+preferring memory when present; it never carries a previous group's kind into a
+new group. An empty array keeps the group visible as metadata-only for this
+review, including a group backed only by `projects`. No content/history request
+is sent for that group. This does not claim its original data is absent or grant
+access to separately authorized native/Vault readers. An explicitly linked
+unsupported kind remains visibly unavailable without silently substituting it.
+
 Document links retain their original path, requested version and comparison version.
 The review binds history to an explicit content ID, an exact matching record, or the
 single retained record for that path. It never substitutes another version as the

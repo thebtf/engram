@@ -15,11 +15,22 @@ const items = [
 ]
 
 test('catalog retains distinct IDs and separates opaque unresolved membership', () => {
-  const catalog = parseProjectCatalog({ items, unresolved: [{ reference: 'retained/old-worktree', name: 'Old checkout', reason: 'Mapping is ambiguous' }] })
+  const catalog = parseProjectCatalog({ items, unresolved: [{ reference: 'retained/old-worktree', name: 'Old checkout', reason: 'Mapping is ambiguous', reader_kinds: ['memory'] }] })
   assert.deepEqual(catalog.items.map(item => item.project_id), [first, second])
   assert.equal(catalog.unresolved[0].reference, 'retained/old-worktree')
+  assert.deepEqual(catalog.unresolved[0].reader_kinds, ['memory'])
   assert.equal(projectLabel(catalog.items, first, 'Unknown', 'Ambiguous'), 'Workspace · team-a/repository')
   assert.equal(projectLabel(catalog.items, second, 'Unknown', 'Ambiguous'), 'Workspace · team-b/repository')
+})
+
+test('catalog requires exact reader metadata and preserves metadata-only groups', () => {
+  const row = { reference: 'registry-only', name: 'Registry metadata', reason: 'locator_is_not_identity', reader_kinds: [] }
+  assert.deepEqual(parseProjectCatalog({ items, unresolved: [row] }).unresolved, [row])
+  for (const reader_kinds of [undefined, null, ['native'], ['credential'], ['memory', 'memory']]) {
+    assert.throws(() => parseProjectCatalog({ items, unresolved: [{ ...row, reader_kinds }] }))
+  }
+  const mixed = { ...row, reference: 'mixed', reader_kinds: ['document', 'issue', 'memory', 'code'] }
+  assert.deepEqual(parseProjectCatalog({ items, unresolved: [mixed, row] }).unresolved, [mixed, row])
 })
 
 test('legacy string arrays, duplicate IDs and non-UUID project choices refuse', () => {
@@ -81,6 +92,16 @@ test('retained readers preserve content IDs, history versions and scoped provena
   assert.ok(history.items[0].fields.some(field => field.label === 'content_hash' && field.value === 'old-content-hash'))
   assert.throws(() => parseRetainedPage({ reference: 'foreign', kind: 'memory', items: [], next_cursor: null, provenance: {} }, 'old-membership', 'memory'))
   assert.throws(() => parseRetainedPage({ reference: 'old-membership', kind: 'memory', items: [], next_cursor: 'same-page', provenance: {} }, 'old-membership', 'memory'))
+})
+
+test('retained code metadata stays reference-bound and offers no content history', () => {
+  const row = { project_id: null, unresolved_reference: 'retained', source_ref: 'source', checkout_ref: 'checkout', repository: 'Retained repository', working_copy: 'Retained checkout' }
+  const page = { reference: 'retained', items: [row], next_cursor: null }
+  assert.equal(parseRetainedPage(page, 'retained', 'code').items[0].title, 'Retained repository')
+  assert.throws(() => parseRetainedPage(page, 'retained', 'code', 1))
+  for (const foreign of [{ ...row, project_id: first }, { ...row, unresolved_reference: 'other' }, { ...row, project_id: undefined }]) {
+    assert.throws(() => parseRetainedPage({ ...page, items: [foreign] }, 'retained', 'code'))
+  }
 })
 
 test('reader pages retain server count and continuation, reject arrays and foreign scopes', () => {
@@ -154,5 +175,27 @@ for (const client of ['ui', 'operator-web']) {
     assert.equal(calls[0].init.body, undefined)
     if (client === 'operator-web') assert.equal(calls[0].init.credentials, 'include')
     assert.deepEqual(original.issue, issue)
+  })
+}
+
+for (const client of ['ui', 'operator-web']) {
+  test(`${client} retained code uses only the advertised metadata endpoint and refuses history locally`, async () => {
+    const calls = []
+    const fetch = async path => {
+      const url = new URL(path, 'http://synthetic.invalid')
+      calls.push(url)
+      return Response.json({ reference: 'retained', items: [{ project_id: null, unresolved_reference: 'retained', source_ref: 'source', repository: 'Repository' }], next_cursor: null })
+    }
+    const globals = { fetch, useRuntimeConfig: () => ({ public: { apiBase: '/api' } }), $fetch: async path => (await fetch(path)).json() }
+    const api = evaluate(client === 'ui' ? './api.ts' : '../../../apps/operator-web/app/composables/useOperatorApi.ts', () => projectCatalog, globals)
+    await api.fetchRetainedContent('retained', 'code', undefined, 'next', 'ignored search')
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0].pathname, '/api/projects/unresolved/retained/code')
+    assert.equal(calls[0].searchParams.get('cursor'), 'next')
+    assert.equal(calls[0].searchParams.has('kind'), false)
+    assert.equal(calls[0].searchParams.has('q'), false)
+    assert.equal(calls[0].searchParams.has('project'), false)
+    await assert.rejects(() => api.fetchRetainedContent('retained', 'code', 901))
+    assert.equal(calls.length, 1)
   })
 }

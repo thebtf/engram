@@ -817,6 +817,7 @@ func TestProjectConsolidationUnresolvedMembershipBatch(t *testing.T) {
 		`CREATE TEMP TABLE sources (source_id uuid PRIMARY KEY, project_id text, display_name text) ON COMMIT DROP`,
 		`CREATE TEMP TABLE memories (id bigint PRIMARY KEY, project text, content text) ON COMMIT DROP`,
 		`CREATE TEMP TABLE credentials (id bigint PRIMARY KEY, project text) ON COMMIT DROP`,
+		`CREATE TEMP TABLE issues (id bigint PRIMARY KEY, target_project text) ON COMMIT DROP`,
 		`CREATE TEMP TABLE versioned_documents (id bigint, version bigint, project text, metadata jsonb) ON COMMIT DROP`,
 		`CREATE TEMP TABLE catalog_physical_history (project text) ON COMMIT DROP`,
 	} {
@@ -889,9 +890,39 @@ func TestProjectConsolidationUnresolvedMembershipBatch(t *testing.T) {
 	}
 	require.Equal(t, "Historical label", labels[legacy].Name)
 	require.Equal(t, "a,b", labels[legacy].Reason)
+	require.Equal(t, []string{"memory"}, labels[legacy].ReaderKinds)
 	for i := range sourceCount {
 		require.Equal(t, fmt.Sprintf("Source %d", i+1), labels[rows[n+i].UnresolvedReference].Name)
+		require.Equal(t, []string{"code"}, labels[rows[n+i].UnresolvedReference].ReaderKinds)
 	}
+	require.NoError(t, tx.Exec("INSERT INTO projects VALUES ('registry-only','Registry metadata only')").Error)
+	registry := member("projects", `{"id":"registry-only"}`, []string{"id"}, "registry-only")
+	require.NoError(t, tx.Create(&registry).Error)
+	require.NoError(t, tx.Exec("INSERT INTO versioned_documents VALUES (7,1,'historical','{}')").Error)
+	require.NoError(t, tx.Exec("INSERT INTO issues VALUES (9001,'historical')").Error)
+	for _, row := range []ConsolidationMembership{
+		member("versioned_documents", `{"id":7,"version":1}`, []string{"project"}, "historical"),
+		member("issues", `{"id":9001}`, []string{"target_project"}, "historical"),
+	} {
+		require.NoError(t, tx.Create(&row).Error)
+	}
+	catalog, err = s.ListUnresolved(ctx)
+	require.NoError(t, err)
+	require.Len(t, catalog, sourceCount+2, "metadata-only groups must stay in the complete catalog")
+	for _, item := range catalog {
+		if item.Reference == legacy {
+			require.Equal(t, []string{"document", "issue", "memory"}, item.ReaderKinds)
+		}
+		if item.Reference == registry.UnresolvedReference {
+			require.Equal(t, "Registry metadata only", item.Name)
+			require.Equal(t, []string{}, item.ReaderKinds, "project registry metadata must not advertise a memory reader")
+			encoded, err := json.Marshal(item)
+			require.NoError(t, err)
+			require.Contains(t, string(encoded), `"reader_kinds":[]`)
+		}
+	}
+	_, err = s.UnresolvedMembership(ctx, registry.UnresolvedReference, "memory")
+	require.EqualError(t, err, "PROJECT_ADOPTION_UNKNOWN_REFERENCE", "unsupported readers remain fail-closed")
 	expectedCatalog := catalog
 	for _, change := range []struct{ name, mutate, restore string }{
 		{"missing native target", "DELETE FROM memories WHERE id=?", "INSERT INTO memories(id,project,content) VALUES (?,'historical','retained body')"},

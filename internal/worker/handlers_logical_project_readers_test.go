@@ -125,6 +125,8 @@ func TestLogicalProjectReadersPostgresHTTP(t *testing.T) {
 		row := gormdb.ConsolidationMembership{Reference: reference, Table: table, RowKey: gormdb.JSONRaw(raw), SourceRowKey: gormdb.JSONRaw(raw), FieldPath: gormdb.JSONRaw(path), SelectorReference: selectorReference, ProjectID: project, UnresolvedReference: ref, Reason: "unproven historical owner", PlanFingerprint: "fixture-plan"}
 		require.NoError(t, db.Create(&row).Error)
 	}
+	projectOnly := opaque("unresolved", opaque("selector", "old-duplicate"))
+	membership("projects", map[string]any{"id": "old-duplicate"}, "id", "old-duplicate", nil, projectOnly)
 	now := time.Now().UTC().Add(-time.Hour)
 	memoryIDs := []int64{}
 	for i := range 3 {
@@ -246,6 +248,21 @@ func TestLogicalProjectReadersPostgresHTTP(t *testing.T) {
 	catalog := call("GET", "/api/projects", nil, 200)
 	require.Len(t, catalog["items"], 2)
 	require.NotEmpty(t, catalog["unresolved"])
+	for _, value := range catalog["unresolved"].([]any) {
+		item := value.(map[string]any)
+		switch item["reference"] {
+		case unresolved:
+			require.Equal(t, []any{"document", "issue", "memory"}, item["reader_kinds"])
+		case codeUnresolved:
+			require.Equal(t, []any{"code"}, item["reader_kinds"])
+		case projectOnly:
+			require.Equal(t, []any{}, item["reader_kinds"])
+		default:
+			t.Fatalf("unexpected retained catalog group")
+		}
+	}
+	projectOnlyResponse := call("GET", "/api/projects/unresolved/"+url.PathEscape(projectOnly)+"/content?kind=memory", nil, 404)
+	require.Equal(t, "PROJECT_ADOPTION_UNKNOWN_REFERENCE", projectOnlyResponse["error"])
 	resolved := call("GET", "/api/projects/resolve?legacy_id=old-a", nil, 200)
 	require.Equal(t, a, resolved["project_id"])
 	call("GET", "/api/memories?project=mixed-selector", nil, 400)

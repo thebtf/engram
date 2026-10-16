@@ -1,7 +1,7 @@
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch, type Ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { operatorFetchJson, toOperatorSourceError, type OperatorSourceError } from './useOperatorApi'
-import { operatorProjectReturnTo } from './useOperatorProjectContext'
+import { operatorProjectReturnTo, type OperatorUnresolvedProject } from './useOperatorProjectContext'
 
 export type UnresolvedKnowledgeKind = 'memory' | 'document' | 'issue'
 export interface UnresolvedKnowledgeItem {
@@ -101,11 +101,15 @@ export function parseUnresolvedCode(payload: unknown, reference: string, limit: 
   return { reference, kind: 'code', items, nextCursor, provenance: [] }
 }
 
-export function useOperatorUnresolved() {
+export function useOperatorUnresolved(catalog: { unresolved: Ref<OperatorUnresolvedProject[]>; pending: Ref<boolean>; error: Ref<OperatorSourceError | null> }) {
   const route = useRoute()
   const router = useRouter()
   const reference = computed(() => typeof route.query.reference === 'string' ? route.query.reference : '')
-  const kind = computed(() => typeof route.query.kind === 'string' ? route.query.kind : 'memory')
+  const retained = computed(() => catalog.unresolved.value.find((row) => row.reference === reference.value))
+  const availableKinds = computed(() => retained.value?.reader_kinds || [])
+  const kind = computed(() => typeof route.query.kind === 'string' ? route.query.kind : availableKinds.value.includes('memory') ? 'memory' : availableKinds.value[0] || '')
+  const metadataOnly = computed(() => Boolean(retained.value && !availableKinds.value.length))
+  const unsupportedKind = computed(() => Boolean(retained.value && kind.value && !availableKinds.value.some((value) => value === kind.value)))
   const q = computed(() => typeof route.query.q === 'string' ? route.query.q : '')
   const id = computed(() => typeof route.query.id === 'string' ? route.query.id : kind.value === 'memory' && typeof route.query.memory === 'string' ? route.query.memory : '')
   const content = ref<UnresolvedContentPage | null>(null)
@@ -129,7 +133,7 @@ export function useOperatorUnresolved() {
   let contentRequest: AbortController | undefined
   let historyRequest: AbortController | undefined
 
-  watch(() => [route.query.reference, route.query.kind, route.query.q, route.query.cursor, retryRevision.value], async () => {
+  watch(() => [route.query.reference, route.query.kind, kind.value, retained.value, catalog.pending.value, catalog.error.value, route.query.q, route.query.cursor, retryRevision.value], async () => {
     const generation = ++contentGeneration
     contentRequest?.abort()
     contentRequest = new AbortController()
@@ -138,14 +142,16 @@ export function useOperatorUnresolved() {
     error.value = null
     pending.value = false
     if (route.query.reference === undefined) return
+    if (catalog.pending.value || catalog.error.value || metadataOnly.value || unsupportedKind.value || !kind.value) return
     const target = reference.value
-    const endpoint = `/api/projects/unresolved/${encodeURIComponent(target)}/${route.query.kind === 'code' ? 'code' : 'content'}`
+    const endpoint = `/api/projects/unresolved/${encodeURIComponent(target)}/${kind.value === 'code' ? 'code' : 'content'}`
     pending.value = true
     try {
       if (!reference.value || typeof route.query.reference !== 'string') throw new TypeError('Invalid retained reference')
+      if (route.query.kind !== undefined && typeof route.query.kind !== 'string') throw new TypeError('Invalid retained kind')
       if (route.query.q !== undefined && typeof route.query.q !== 'string') throw new TypeError('Invalid retained query')
       if (route.query.cursor !== undefined && typeof route.query.cursor !== 'string') throw new TypeError('Invalid retained continuation')
-      const targetKind = route.query.kind === 'code' ? 'code' : parseUnresolvedKind(route.query.kind ?? 'memory')
+      const targetKind = kind.value === 'code' ? 'code' : parseUnresolvedKind(kind.value)
       const params = new URLSearchParams({ limit: String(limit) })
       if (targetKind !== 'code') { params.set('kind', targetKind); params.set('q', q.value) }
       if (typeof route.query.cursor === 'string') params.set('cursor', route.query.cursor)
@@ -161,7 +167,7 @@ export function useOperatorUnresolved() {
     } finally { if (generation === contentGeneration) pending.value = false }
   }, { immediate: true, flush: 'sync' })
 
-  watch(() => [route.query.reference, route.query.kind, route.query.id, route.query.memory, historyID.value, route.query.historyCursor, retryRevision.value], async () => {
+  watch(() => [route.query.reference, route.query.kind, kind.value, retained.value, catalog.pending.value, catalog.error.value, route.query.id, route.query.memory, historyID.value, route.query.historyCursor, retryRevision.value], async () => {
     const generation = ++historyGeneration
     historyRequest?.abort()
     historyRequest = new AbortController()
@@ -169,11 +175,12 @@ export function useOperatorUnresolved() {
     history.value = null
     historyError.value = null
     historyPending.value = false
-    if (!reference.value || route.query.kind === 'code') return
+    if (catalog.pending.value || catalog.error.value || !reference.value || kind.value === 'code' || !kind.value || metadataOnly.value || unsupportedKind.value) return
     const target = reference.value
     const endpoint = `/api/projects/unresolved/${encodeURIComponent(target)}/history`
     try {
-      const targetKind = parseUnresolvedKind(route.query.kind ?? 'memory')
+      if (route.query.kind !== undefined && typeof route.query.kind !== 'string') throw new TypeError('Invalid retained kind')
+      const targetKind = parseUnresolvedKind(kind.value)
       if (route.query.id !== undefined && (typeof route.query.id !== 'string' || !route.query.id)) throw new TypeError('Invalid retained history identity')
       if (route.query.historyCursor !== undefined && typeof route.query.historyCursor !== 'string') throw new TypeError('Invalid retained history continuation')
       const targetID = historyID.value
@@ -197,5 +204,5 @@ export function useOperatorUnresolved() {
   function open(item: UnresolvedKnowledgeItem) { return update({ id: item.id, historyCursor: undefined }) }
   const originalLocation = computed(() => typeof route.query.originalLocation === 'string' ? route.query.originalLocation : typeof route.query.returnTo === 'string' ? route.query.returnTo : '')
   const returnTo = computed(() => operatorProjectReturnTo(route.query.returnTo, router, typeof route.query.originalLocation === 'string' ? route.query.originalLocation : ''))
-  return { reference, kind, q, id, selected, historyID, content, history, pending, historyPending, error, historyError, originalLocation, returnTo, open, update, retry: () => { retryRevision.value += 1 } }
+  return { reference, retained, availableKinds, kind, metadataOnly, unsupportedKind, q, id, selected, historyID, content, history, pending, historyPending, error, historyError, originalLocation, returnTo, open, update, retry: () => { retryRevision.value += 1 } }
 }

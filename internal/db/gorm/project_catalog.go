@@ -3,13 +3,15 @@ package gorm
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"strings"
 )
 
 type UnresolvedProject struct {
-	Reference string `json:"reference"`
-	Name      string `json:"name"`
-	Reason    string `json:"reason"`
+	Reference   string   `json:"reference"`
+	Name        string   `json:"name"`
+	Reason      string   `json:"reason"`
+	ReaderKinds []string `json:"reader_kinds" enums:"memory,document,issue,code"`
 }
 
 func (s *ProjectConsolidationStore) ListUnresolved(ctx context.Context) ([]UnresolvedProject, error) {
@@ -86,14 +88,41 @@ func (s *ProjectConsolidationStore) ListUnresolved(ctx context.Context) ([]Unres
 		if name == "" {
 			name = "Unresolved data owner"
 		}
-		if len(result) > 0 && result[len(result)-1].Reference == row.UnresolvedReference {
-			item := &result[len(result)-1]
-			if !strings.Contains(","+item.Reason+",", ","+row.Reason+",") {
-				item.Reason += "," + row.Reason
-			}
-			continue
+		if len(result) == 0 || result[len(result)-1].Reference != row.UnresolvedReference {
+			result = append(result, UnresolvedProject{Reference: row.UnresolvedReference, Name: name, ReaderKinds: []string{}})
 		}
-		result = append(result, UnresolvedProject{Reference: row.UnresolvedReference, Name: name, Reason: row.Reason})
+		item := &result[len(result)-1]
+		if item.Reason == "" {
+			item.Reason = row.Reason
+		} else if !strings.Contains(","+item.Reason+",", ","+row.Reason+",") {
+			item.Reason += "," + row.Reason
+		}
+		var kind string
+		switch row.Table {
+		case "memories":
+			kind = "memory"
+		case "versioned_documents":
+			kind = "document"
+		case "issues":
+			kind = "issue"
+		case "sources":
+			kind = "code"
+		}
+		if kind != "" {
+			found := false
+			for _, existing := range item.ReaderKinds {
+				if existing == kind {
+					found = true
+					break
+				}
+			}
+			if !found {
+				item.ReaderKinds = append(item.ReaderKinds, kind)
+			}
+		}
+	}
+	for i := range result {
+		sort.Strings(result[i].ReaderKinds)
 	}
 	return result, nil
 }

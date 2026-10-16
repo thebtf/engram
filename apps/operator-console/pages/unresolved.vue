@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { ref, watch } from 'vue'
 import { useOperatorProjectContext } from '../composables/useOperatorProjectContext'
 import { useOperatorUnresolved } from '../composables/useOperatorUnresolved'
 import { operatorDiagnosisKey } from '../composables/useOperatorApi'
@@ -7,9 +7,8 @@ const { t } = useI18n()
 const route = useRoute()
 const context = useOperatorProjectContext()
 const { unresolved, pending: catalogPending, error: catalogError } = context
-const reader = useOperatorUnresolved()
-const { reference, kind, q, id, selected, historyID, content, history, pending, historyPending, error, historyError, returnTo, originalLocation } = reader
-const retained = computed(() => unresolved.value.find((row) => row.reference === reference.value))
+const reader = useOperatorUnresolved(context)
+const { reference, retained, availableKinds, kind, metadataOnly, unsupportedKind, q, id, selected, historyID, content, history, pending, historyPending, error, historyError, returnTo, originalLocation } = reader
 const query = ref(q.value)
 watch(q, (value) => { query.value = value })
 function changeKind(event: Event) {
@@ -23,7 +22,7 @@ function changeKind(event: Event) {
     <p v-if="catalogPending" role="status">{{ t('knowledge.loading') }}</p>
     <div v-if="catalogError" role="alert"><p>{{ t(operatorDiagnosisKey(catalogError)) }}</p><button class="btn" @click="context.refresh">{{ t('knowledge.retry') }}</button></div>
     <nav class="retained-list" :aria-label="t('projectCatalog.unresolvedTitle')">
-      <RouterLink v-for="row in unresolved" :key="row.reference" :to="{ path: '/projects/unresolved', query: { reference: row.reference, kind, returnTo } }" :aria-current="reference === row.reference ? 'page' : undefined"><strong>{{ row.name }}</strong><span>{{ row.reason }}</span></RouterLink>
+      <RouterLink v-for="row in unresolved" :key="row.reference" :to="{ path: '/projects/unresolved', query: { reference: row.reference, returnTo } }" :aria-current="reference === row.reference ? 'page' : undefined"><strong>{{ row.name }}</strong><span>{{ row.reason }}</span><span v-if="!row.reader_kinds.length">{{ t('projectCatalog.metadataOnly') }}</span></RouterLink>
     </nav>
     <p v-if="!reference && !catalogPending && !catalogError && !unresolved.length">{{ t('projectCatalog.noUnresolved') }}</p>
     <p v-else-if="!reference">{{ t('projectCatalog.chooseUnresolved') }}</p>
@@ -31,9 +30,12 @@ function changeKind(event: Event) {
       <h2>{{ retained?.name || t('projectCatalog.unknownProject') }}</h2>
       <p v-if="retained">{{ retained.reason }}</p>
       <details><summary>{{ t('knowledge.technical') }}</summary><code>{{ reference }}</code><p>{{ t('projectCatalog.referenceHelp') }}</p><code v-if="originalLocation" data-testid="unresolved-original-location">{{ originalLocation }}</code></details>
+      <p v-if="metadataOnly" role="status" data-testid="unresolved-metadata-only">{{ t('projectCatalog.metadataOnly') }}</p>
+      <p v-else-if="retained">{{ t('projectCatalog.readerKindsHelp') }}</p>
+      <p v-if="unsupportedKind" role="alert" data-testid="unresolved-kind-unavailable">{{ t('projectCatalog.kindUnavailable') }}</p>
       <p v-if="route.query.path"><strong>{{ route.query.path }}</strong><span v-if="route.query.version"> · {{ t('knowledge.version') }} {{ route.query.version }}</span><span v-if="route.query.compare"> · {{ t('knowledge.compare') }} {{ route.query.compare }}</span></p>
-      <form class="filters" @submit.prevent="reader.update({ q: query, cursor: undefined })">
-        <label><span>{{ t('projectCatalog.kind') }}</span><select :value="kind" @change="changeKind"><option value="memory">{{ t('projectCatalog.memory') }}</option><option value="document">{{ t('projectCatalog.document') }}</option><option value="issue">{{ t('projectCatalog.issue') }}</option><option value="code">{{ t('nav.items.code') }}</option></select></label>
+      <form v-if="availableKinds.length" class="filters" @submit.prevent="reader.update({ q: query, cursor: undefined })">
+        <label><span>{{ t('projectCatalog.kind') }}</span><select :value="kind" @change="changeKind"><option v-if="unsupportedKind" :value="kind" disabled>{{ t('projectCatalog.kindUnavailable') }}</option><option v-for="choice in availableKinds" :key="choice" :value="choice">{{ choice === 'code' ? t('nav.items.code') : t(`projectCatalog.${choice}`) }}</option></select></label>
         <template v-if="kind !== 'code'"><label><span>{{ t('projectCatalog.search') }}</span><input v-model="query" type="search" /></label><button class="btn" type="submit">{{ t('projectCatalog.search') }}</button></template>
       </form>
       <p v-if="pending" role="status">{{ t('knowledge.loading') }}</p>
@@ -49,7 +51,7 @@ function changeKind(event: Event) {
         </article>
         <nav class="paging"><button v-if="route.query.cursor" class="btn" @click="reader.update({ cursor: undefined })">{{ t('projectCatalog.firstPage') }}</button><button v-if="content.nextCursor" class="btn" @click="reader.update({ cursor: content.nextCursor || undefined })">{{ t('projectCatalog.more') }}</button></nav>
       </template>
-      <section v-if="kind !== 'code' && (historyID || historyError)" class="history" data-testid="unresolved-history">
+      <section v-if="!metadataOnly && !unsupportedKind && kind && kind !== 'code' && (historyID || historyError)" class="history" data-testid="unresolved-history">
         <h3>{{ t('projectCatalog.history') }} · {{ historyID }}</h3>
         <p v-if="historyPending" role="status">{{ t('knowledge.loading') }}</p>
         <div v-else-if="historyError" role="alert"><p>{{ t('projectCatalog.readerError') }} {{ t(operatorDiagnosisKey(historyError)) }}</p><button class="btn" @click="reader.retry">{{ t('knowledge.retry') }}</button></div>

@@ -14,6 +14,9 @@ export interface UiCatalog {
     memory: string
     document: string
     issue: string
+    code: string
+    metadataOnly: string
+    readerKindsHelp: string
     history: string
     more: string
     back: string
@@ -461,6 +464,8 @@ export const messages: Record<SupportedLocale, UiCatalog> = {
     projectCatalog: {
       unresolvedTitle: 'Неразобранные записи', unresolvedReason: 'Причина неопределённости', review: 'Разобрать сохранённые записи',
       kind: 'Вид записей', memory: 'Память', document: 'Документы', issue: 'Задачи', history: 'История', more: 'Следующая страница', back: 'Вернуться',
+      code: 'Код', metadataOnly: 'Сохранена метаинформация группы. Для её записей нет reader в этом обзоре; это не означает отсутствие исходных данных.',
+      readerKindsHelp: 'Виды чтения указаны по сохранённой принадлежности. Доступность, целостность и права проверяются при чтении.',
       unknownProject: 'Проект недоступен или ещё не определён.', ambiguousName: 'Одинаковое имя; принадлежность не определена по имени.',
       selectionRequired: 'Выбери проект из каталога, прежде чем продолжить.', loading: 'Загрузка каталога и определение проекта…', search: 'Поиск',
     },
@@ -903,6 +908,8 @@ export const messages: Record<SupportedLocale, UiCatalog> = {
     projectCatalog: {
       unresolvedTitle: 'Unresolved records', unresolvedReason: 'Unresolved reason', review: 'Review retained records',
       kind: 'Record kind', memory: 'Memory', document: 'Documents', issue: 'Issues', history: 'History', more: 'Next page', back: 'Return',
+      code: 'Code', metadataOnly: 'Retained group metadata. No reader in this review supports its memberships; this does not mean the original data is absent.',
+      readerKindsHelp: 'Reader kinds come from retained membership metadata. Availability, integrity and access are checked when reading.',
       unknownProject: 'The project is unavailable or unresolved.', ambiguousName: 'Equal names; a name does not establish project membership.',
       selectionRequired: 'Choose a catalog project before continuing.', loading: 'Loading the catalog and resolving the project…', search: 'Search',
     },

@@ -126,11 +126,13 @@ export async function resolveProject(project: string, signal?: AbortSignal): Pro
 }
 
 export async function fetchRetainedContent(reference: string, kind: RetainedKind, id?: string | number, cursor?: string, q?: string): Promise<RetainedPage> {
- const params = new URLSearchParams({ kind, limit: '50' })
+ const params = new URLSearchParams({ limit: '50' })
+ if (kind === 'code' && id !== undefined) throw new Error('Retained code has no content history reader')
+ if (kind !== 'code') params.set('kind', kind)
  if (id !== undefined) params.set('id', String(id))
  if (cursor) params.set('cursor', cursor)
- if (q && id === undefined) params.set('q', q)
- const data = await fetchWithRetry<unknown>(`${API_BASE}/projects/unresolved/${encodeURIComponent(reference)}/${id === undefined ? 'content' : 'history'}?${params}`)
+ if (q && id === undefined && kind !== 'code') params.set('q', q)
+ const data = await fetchWithRetry<unknown>(`${API_BASE}/projects/unresolved/${encodeURIComponent(reference)}/${kind === 'code' ? 'code' : id === undefined ? 'content' : 'history'}?${params}`)
  return parseRetainedPage(data, reference, kind, id)
 }
 

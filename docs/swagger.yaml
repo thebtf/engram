@@ -14,9 +14,29 @@ definitions:
     - CollectionSelectionFrozenFilter
   github_com_thebtf_engram_internal_db_gorm.ProjectDescriptor:
     properties:
-      display_name:
+      name:
         type: string
-      id:
+      project_id:
+        type: string
+      repository_qualifier:
+        type: string
+    type: object
+  github_com_thebtf_engram_internal_db_gorm.UnresolvedProject:
+    properties:
+      name:
+        type: string
+      reader_kinds:
+        items:
+          enum:
+          - memory
+          - document
+          - issue
+          - code
+          type: string
+        type: array
+      reason:
+        type: string
+      reference:
         type: string
     type: object
   github_com_thebtf_engram_internal_embedding.EmbedError:
@@ -701,6 +721,10 @@ definitions:
         items:
           $ref: '#/definitions/github_com_thebtf_engram_internal_db_gorm.ProjectDescriptor'
         type: array
+      unresolved:
+        items:
+          $ref: '#/definitions/github_com_thebtf_engram_internal_db_gorm.UnresolvedProject'
+        type: array
     type: object
   internal_worker.sessionEndRequest:
     properties:
@@ -1218,20 +1242,28 @@ paths:
         recent (last 5), relevant (top 10 semantic), and guidance sections. Supports
         GET (deprecated) and POST. Critical startup path — optimized for speed.
       parameters:
-      - description: Project name (required)
+      - description: Pinned project UUID or proven historical selector (required)
         in: query
         name: project
         type: string
-      - description: Agent ID (acts as project scope if project empty)
+      - description: Agent attribution; never substitutes for project or session
         in: query
         name: agent_id
         type: string
+      - description: Actual caller session for historical selector translation
+        in: query
+        name: session_id
+        type: string
+      - description: Return the canonical project UUID without retrieval
+        in: query
+        name: identity_only
+        type: boolean
       - description: 'Response format: ''compact'' for minimal payload'
         in: query
         name: format
         type: string
-      - description: 'POST body: {project, agent_id, cwd, legacy_project, project_identity,
-          identity_only}'
+      - description: 'POST body: {project, session_id, agent_id, cwd, legacy_project,
+          project_identity, identity_only}'
         in: body
         name: body
         schema:
@@ -1249,7 +1281,7 @@ paths:
           schema:
             type: string
         "409":
-          description: ambiguous legacy project identity
+          description: unresolved or conflicting historical project membership
           schema:
             additionalProperties: true
             type: object
@@ -1258,7 +1290,7 @@ paths:
           schema:
             type: string
         "503":
-          description: project identity registration unavailable
+          description: project identity resolution unavailable
           schema:
             additionalProperties: true
             type: object
@@ -1274,20 +1306,28 @@ paths:
         recent (last 5), relevant (top 10 semantic), and guidance sections. Supports
         GET (deprecated) and POST. Critical startup path — optimized for speed.
       parameters:
-      - description: Project name (required)
+      - description: Pinned project UUID or proven historical selector (required)
         in: query
         name: project
         type: string
-      - description: Agent ID (acts as project scope if project empty)
+      - description: Agent attribution; never substitutes for project or session
         in: query
         name: agent_id
         type: string
+      - description: Actual caller session for historical selector translation
+        in: query
+        name: session_id
+        type: string
+      - description: Return the canonical project UUID without retrieval
+        in: query
+        name: identity_only
+        type: boolean
       - description: 'Response format: ''compact'' for minimal payload'
         in: query
         name: format
         type: string
-      - description: 'POST body: {project, agent_id, cwd, legacy_project, project_identity,
-          identity_only}'
+      - description: 'POST body: {project, session_id, agent_id, cwd, legacy_project,
+          project_identity, identity_only}'
         in: body
         name: body
         schema:
@@ -1305,7 +1345,7 @@ paths:
           schema:
             type: string
         "409":
-          description: ambiguous legacy project identity
+          description: unresolved or conflicting historical project membership
           schema:
             additionalProperties: true
             type: object
@@ -1314,7 +1354,7 @@ paths:
           schema:
             type: string
         "503":
-          description: project identity registration unavailable
+          description: project identity resolution unavailable
           schema:
             additionalProperties: true
             type: object
@@ -3208,6 +3248,10 @@ paths:
       - description: Project scope
         in: query
         name: project
+        type: string
+      - description: Explicit global namespace or project scope
+        in: query
+        name: scope
         type: string
       produces:
       - application/json

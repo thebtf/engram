@@ -9,7 +9,7 @@ const A = '11111111-1111-4111-8111-111111111111'
 const B = '22222222-2222-4222-8222-222222222222'
 const catalog = {
   items: [{ project_id: A, name: 'Same name', repository_qualifier: 'org/one' }, { project_id: B, name: 'Same name', repository_qualifier: 'org/two' }],
-  unresolved: [{ reference: 'opaque-retained', name: 'Retained knowledge', reason: 'Ambiguous membership' }],
+  unresolved: [{ reference: 'opaque-retained', name: 'Retained knowledge', reason: 'Ambiguous membership', reader_kinds: ['memory', 'document', 'issue', 'code'] }],
 }
 const tick = async () => { await new Promise(setImmediate); await vue.nextTick() }
 function evaluate(file, dependencies) {
@@ -36,7 +36,7 @@ async function mount(t, location, respond) {
   const router = routing.createRouter({ history: routing.createMemoryHistory(), routes: [...['/', '/memory', '/documents', '/projects', '/projects/unresolved', '/code'].map((path) => ({ path, component: { render: () => null } })), { name: 'issues', path: '/issues/:id(\\d+)?', component: { render: () => null } }] })
   await router.push(location)
   let context, reader
-  const app = renderer.createApp({ setup() { context = core.useOperatorProjectContext(); reader = unresolved.useOperatorUnresolved(); return () => null } })
+  const app = renderer.createApp({ setup() { context = core.useOperatorProjectContext(); reader = unresolved.useOperatorUnresolved(context); return () => null } })
   app.use(router).mount({})
   t.after(() => app.unmount())
   await tick()
@@ -63,6 +63,58 @@ test('exact DTO rejects legacy shapes and duplicate IDs, but keeps equal names d
   assert.throws(() => core.parseProjectCatalog({ items: [{ id: 'old-one', display_name: 'Same name' }] }), TypeError)
   assert.throws(() => core.parseProjectCatalog({ items: [catalog.items[0], catalog.items[0]], unresolved: [] }), TypeError)
   assert.throws(() => core.parseProjectCatalog({ items: [{ project_id: 'Same name', name: 'Same name' }], unresolved: [] }), TypeError)
+})
+
+test('retained reader metadata is required, exact and does not turn metadata-only groups into projects', async (t) => {
+  const { core } = await mount(t, '/', usual)
+  const row = catalog.unresolved[0]
+  for (const reader_kinds of [undefined, null, ['native'], ['credential'], ['memory', 'memory']]) {
+    assert.throws(() => core.parseProjectCatalog({ items: catalog.items, unresolved: [{ ...row, reader_kinds }] }), TypeError)
+  }
+  const parsed = core.parseProjectCatalog({ items: catalog.items, unresolved: [{ ...row, reader_kinds: [] }] })
+  assert.deepEqual(parsed.unresolved[0].reader_kinds, [])
+  assert.deepEqual(parsed.items, catalog.items)
+})
+
+test('catalog selection chooses only supported readers and metadata-only groups never dispatch content or history', async (t) => {
+  const groups = [
+    { reference: 'metadata', name: 'Registry metadata', reason: 'locator_is_not_identity', reader_kinds: [] },
+    { reference: 'document-only', name: 'Retained document', reason: 'unproven', reader_kinds: ['document'] },
+    { reference: 'memory-only', name: 'Retained memory', reason: 'unproven', reader_kinds: ['memory'] },
+    { ...catalog.unresolved[0], reader_kinds: ['document', 'memory', 'issue', 'code'] },
+  ]
+  const { reader, router, calls } = await mount(t, '/projects/unresolved?reference=metadata&kind=memory&id=901', (url) => {
+    if (url.pathname === '/api/projects') return { ...catalog, unresolved: groups }
+    const reference = url.pathname.split('/')[4]
+    const kind = url.searchParams.get('kind')
+    return { reference, kind, items: [{ id: 901, content: 'Retained original content', path: 'retained.md' }], next_cursor: null, provenance: { source: reference } }
+  })
+  assert.equal(reader.metadataOnly.value, true)
+  assert.equal(reader.content.value, null)
+  assert.equal(reader.history.value, null)
+  assert.equal(reader.error.value, null)
+  assert.equal(calls.filter(url => url.pathname.includes('/unresolved/')).length, 0)
+  await router.push('/projects/unresolved?reference=document-only'); await tick()
+  assert.equal(reader.kind.value, 'document')
+  assert.equal(reader.content.value.kind, 'document')
+  await router.push('/projects/unresolved?reference=document-only&kind=memory'); await tick()
+  assert.equal(reader.unsupportedKind.value, true)
+  assert.equal(reader.content.value, null)
+  assert.equal(calls.filter(url => url.pathname.includes('/document-only/') && url.searchParams.get('kind') === 'memory').length, 0)
+  await router.push('/projects/unresolved?reference=memory-only'); await tick()
+  assert.equal(reader.kind.value, 'memory')
+  assert.equal(reader.content.value.kind, 'memory')
+  await router.push('/projects/unresolved?reference=opaque-retained'); await tick()
+  assert.equal(reader.kind.value, 'memory')
+  assert.deepEqual(reader.availableKinds.value, groups[3].reader_kinds)
+  await reader.update({ kind: 'issue' }); await tick()
+  assert.equal(reader.content.value.kind, 'issue')
+  await router.push('/projects/unresolved?reference=metadata'); await tick()
+  assert.equal(reader.kind.value, '')
+  assert.equal(reader.metadataOnly.value, true)
+  assert.equal(reader.content.value, null)
+  assert.equal(reader.history.value, null)
+  assert.ok(calls.every(url => !url.pathname.includes('/metadata/')))
 })
 
 test('equal primary names remain visibly distinct with missing or repeated repository qualifiers, independent of catalog order', async (t) => {
@@ -211,7 +263,7 @@ test('unresolved content/history are bound to reference, kind and original IDs; 
   let release
   const delayed = new Promise((resolve) => { release = resolve })
   const { core, reader, router, calls } = await mount(t, '/projects/unresolved?reference=slow&kind=memory&id=901', async (url) => {
-    if (url.pathname === '/api/projects') return catalog
+    if (url.pathname === '/api/projects') return { ...catalog, unresolved: ['slow', 'new', 'stale'].map(reference => ({ ...catalog.unresolved[0], reference })) }
     const reference = url.pathname.split('/')[4]
     const kind = url.searchParams.get('kind')
     if (reference === 'slow') await delayed

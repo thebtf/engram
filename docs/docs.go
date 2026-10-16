@@ -600,14 +600,26 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Project name (required)",
+                        "description": "Pinned project UUID or proven historical selector (required)",
                         "name": "project",
                         "in": "query"
                     },
                     {
                         "type": "string",
-                        "description": "Agent ID (acts as project scope if project empty)",
+                        "description": "Agent attribution; never substitutes for project or session",
                         "name": "agent_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Actual caller session for historical selector translation",
+                        "name": "session_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Return the canonical project UUID without retrieval",
+                        "name": "identity_only",
                         "in": "query"
                     },
                     {
@@ -617,7 +629,7 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
-                        "description": "POST body: {project, agent_id, cwd, legacy_project, project_identity, identity_only}",
+                        "description": "POST body: {project, session_id, agent_id, cwd, legacy_project, project_identity, identity_only}",
                         "name": "body",
                         "in": "body",
                         "schema": {
@@ -640,7 +652,7 @@ const docTemplate = `{
                         }
                     },
                     "409": {
-                        "description": "ambiguous legacy project identity",
+                        "description": "unresolved or conflicting historical project membership",
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
@@ -653,7 +665,7 @@ const docTemplate = `{
                         }
                     },
                     "503": {
-                        "description": "project identity registration unavailable",
+                        "description": "project identity resolution unavailable",
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
@@ -681,14 +693,26 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Project name (required)",
+                        "description": "Pinned project UUID or proven historical selector (required)",
                         "name": "project",
                         "in": "query"
                     },
                     {
                         "type": "string",
-                        "description": "Agent ID (acts as project scope if project empty)",
+                        "description": "Agent attribution; never substitutes for project or session",
                         "name": "agent_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Actual caller session for historical selector translation",
+                        "name": "session_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Return the canonical project UUID without retrieval",
+                        "name": "identity_only",
                         "in": "query"
                     },
                     {
@@ -698,7 +722,7 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
-                        "description": "POST body: {project, agent_id, cwd, legacy_project, project_identity, identity_only}",
+                        "description": "POST body: {project, session_id, agent_id, cwd, legacy_project, project_identity, identity_only}",
                         "name": "body",
                         "in": "body",
                         "schema": {
@@ -721,7 +745,7 @@ const docTemplate = `{
                         }
                     },
                     "409": {
-                        "description": "ambiguous legacy project identity",
+                        "description": "unresolved or conflicting historical project membership",
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
@@ -734,7 +758,7 @@ const docTemplate = `{
                         }
                     },
                     "503": {
-                        "description": "project identity registration unavailable",
+                        "description": "project identity resolution unavailable",
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
@@ -3555,6 +3579,12 @@ const docTemplate = `{
                         "description": "Project scope",
                         "name": "project",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Explicit global namespace or project scope",
+                        "name": "scope",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -3949,10 +3979,39 @@ const docTemplate = `{
         "github_com_thebtf_engram_internal_db_gorm.ProjectDescriptor": {
             "type": "object",
             "properties": {
-                "display_name": {
+                "name": {
                     "type": "string"
                 },
-                "id": {
+                "project_id": {
+                    "type": "string"
+                },
+                "repository_qualifier": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_thebtf_engram_internal_db_gorm.UnresolvedProject": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "reader_kinds": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "memory",
+                            "document",
+                            "issue",
+                            "code"
+                        ]
+                    }
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "reference": {
                     "type": "string"
                 }
             }
@@ -4961,6 +5020,12 @@ const docTemplate = `{
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/github_com_thebtf_engram_internal_db_gorm.ProjectDescriptor"
+                    }
+                },
+                "unresolved": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_thebtf_engram_internal_db_gorm.UnresolvedProject"
                     }
                 }
             }

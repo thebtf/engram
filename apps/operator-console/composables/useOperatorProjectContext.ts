@@ -3,7 +3,8 @@ import { useRoute, useRouter, type LocationQuery, type RouteLocationNormalizedLo
 import { operatorFetchJson, toOperatorSourceError, type OperatorSourceError } from './useOperatorApi'
 
 export interface OperatorProjectDescriptor { project_id: string; name: string; repository_qualifier?: string }
-export interface OperatorUnresolvedProject { reference: string; name: string; reason: string }
+export type OperatorRetainedReaderKind = 'memory' | 'document' | 'issue' | 'code'
+export interface OperatorUnresolvedProject { reference: string; name: string; reason: string; reader_kinds: OperatorRetainedReaderKind[] }
 export interface OperatorProjectCatalog { items: OperatorProjectDescriptor[]; unresolved: OperatorUnresolvedProject[] }
 export type OperatorProjectResolution = { status: 'resolved'; project_id: string; name: string } | { status: 'unresolved'; reference: string; reason: string }
 export interface OperatorKnowledgePage<T> { items: T[]; total: number; offset: number; limit: number; has_more: boolean }
@@ -90,9 +91,14 @@ export function parseProjectCatalog(payload: unknown): OperatorProjectCatalog {
     return { project_id: row.project_id, name: row.name, ...(typeof row.repository_qualifier === 'string' ? { repository_qualifier: row.repository_qualifier } : {}) }
   })
   const retained = payload.unresolved.map((row: unknown): OperatorUnresolvedProject => {
-    if (!object(row) || !nonempty(row.reference) || !nonempty(row.name) || !nonempty(row.reason) || references.has(row.reference)) throw new TypeError('Invalid unresolved project')
+    if (!object(row) || !nonempty(row.reference) || !nonempty(row.name) || !nonempty(row.reason) || references.has(row.reference) || !Array.isArray(row.reader_kinds)) throw new TypeError('Invalid unresolved project')
+    const reader_kinds = row.reader_kinds.map((kind: unknown): OperatorRetainedReaderKind => {
+      if (kind === 'memory' || kind === 'document' || kind === 'issue' || kind === 'code') return kind
+      throw new TypeError('Invalid retained reader kind')
+    })
+    if (new Set(reader_kinds).size !== reader_kinds.length) throw new TypeError('Duplicate retained reader kind')
     references.add(row.reference)
-    return { reference: row.reference, name: row.name, reason: row.reason }
+    return { reference: row.reference, name: row.name, reason: row.reason, reader_kinds }
   })
   return { items, unresolved: retained }
 }

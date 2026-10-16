@@ -12,6 +12,7 @@ const router = useRouter()
 const labels = computed(() => ({
   unresolvedTitle: t('projectCatalog.unresolvedTitle'), review: t('projectCatalog.review'),
   kind: t('projectCatalog.kind'), memory: t('projectCatalog.memory'), document: t('projectCatalog.document'), issue: t('projectCatalog.issue'),
+  code: t('projectCatalog.code'), metadataOnly: t('projectCatalog.metadataOnly'), readerKindsHelp: t('projectCatalog.readerKindsHelp'),
   history: t('projectCatalog.history'), more: t('projectCatalog.more'), back: t('projectCatalog.back'),
   loading: t('projectCatalog.loading'), search: t('projectCatalog.search'), unknownProject: t('projectCatalog.unknownProject'),
 }))

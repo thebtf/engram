@@ -59,6 +59,47 @@ test('unresolved alias opens useful read-only knowledge/history and a stale refe
   await expect(page.getByTestId('unresolved-content-901')).toHaveCount(0)
 })
 
+test('catalog reader kinds distinguish memory, mixed and metadata-only groups without unsupported requests', async ({ page }) => {
+  const groups = [
+    { reference: 'registry-only', name: 'Retained registry metadata', reason: 'locator_is_not_identity', reader_kinds: [] },
+    { reference: 'document-only', name: 'Retained document group', reason: 'unproven', reader_kinds: ['document'] },
+    { reference: 'memory-only', name: 'Retained memory group', reason: 'unproven', reader_kinds: ['memory'] },
+    { reference: 'mixed', name: 'Retained mixed group', reason: 'unproven', reader_kinds: ['document', 'issue', 'memory'] },
+  ]
+  const reads: URL[] = []
+  page.on('request', request => { const url = new URL(request.url()); if (url.pathname.includes('/unresolved/')) reads.push(url) })
+  await page.route('**/api/projects', route => route.fulfill({ json: { items: [{ project_id: CONSOLE, name: 'Console' }], unresolved: groups } }))
+  await page.route('**/api/projects/unresolved/**', route => {
+    const url = new URL(route.request().url())
+    const reference = url.pathname.split('/')[4]
+    const kind = url.searchParams.get('kind')
+    return route.fulfill({ json: { reference, kind, items: [{ id: 901, content: `Retained ${kind} content`, path: 'retained.md' }], next_cursor: null, provenance: { source: reference } } })
+  })
+  await page.goto('/projects/unresolved?reference=registry-only&kind=memory&id=901')
+  await expect(page.getByTestId('unresolved-metadata-only')).toBeVisible()
+  await expect(page.getByTestId('unresolved-content-901')).toHaveCount(0)
+  await expect(page.getByTestId('unresolved-history')).toHaveCount(0)
+  expect(reads).toEqual([])
+  await page.getByRole('link', { name: 'Retained document group' }).click()
+  await expect(page.getByTestId('unresolved-content-901')).toContainText('Retained document content')
+  const kinds = page.locator('.reader select')
+  await expect(kinds.locator('option')).toHaveCount(1)
+  await expect(kinds).toHaveValue('document')
+  await page.getByRole('link', { name: 'Retained memory group' }).click()
+  await expect(kinds).toHaveValue('memory')
+  await expect(page.getByTestId('unresolved-content-901')).toContainText('Retained memory content')
+  await page.getByRole('link', { name: 'Retained mixed group' }).click()
+  await expect(kinds.locator('option')).toHaveCount(3)
+  await expect(kinds).toHaveValue('memory')
+  await kinds.selectOption('issue')
+  await expect(page.getByTestId('unresolved-content-901')).toContainText('Retained issue content')
+  await page.getByRole('link', { name: 'Retained registry metadata' }).click()
+  await expect(page.getByTestId('unresolved-metadata-only')).toBeVisible()
+  await expect(page.getByTestId('unresolved-content-901')).toHaveCount(0)
+  expect(reads.every(url => !url.pathname.includes('/registry-only/') && !url.searchParams.has('project'))).toBe(true)
+  expect(reads.filter(url => url.pathname.includes('/document-only/')).every(url => url.searchParams.get('kind') === 'document')).toBe(true)
+})
+
 test('a late alias response cannot borrow the newer selected project', async ({ page }) => {
   let release!: () => void
   let started!: () => void

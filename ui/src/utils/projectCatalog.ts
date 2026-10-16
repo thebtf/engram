@@ -8,6 +8,7 @@ export interface UnresolvedProject {
   reference: string
   name: string
   reason: string
+  reader_kinds: RetainedKind[]
 }
 
 export interface ProjectCatalog {
@@ -53,7 +54,13 @@ export function parseProjectCatalog(value: unknown): ProjectCatalog {
     const reference = text(row.reference)
     if (references.has(reference)) throw new Error('Duplicate unresolved reference')
     references.add(reference)
-    return { reference, name: text(row.name), reason: text(row.reason) }
+    if (!Array.isArray(row.reader_kinds)) throw new Error('Missing retained reader kinds')
+    const reader_kinds = row.reader_kinds.map((kind: unknown): RetainedKind => {
+      if (kind === 'memory' || kind === 'document' || kind === 'issue' || kind === 'code') return kind
+      throw new Error('Invalid retained reader kind')
+    })
+    if (new Set(reader_kinds).size !== reader_kinds.length) throw new Error('Duplicate retained reader kind')
+    return { reference, name: text(row.name), reason: text(row.reason), reader_kinds }
   })
   return { items, unresolved }
 }
@@ -140,7 +147,7 @@ export function assertCredentialMetadata(value: unknown, expected: CredentialBin
   if (metadata.project !== undefined && metadata.project !== (expected.project_id ?? '')) throw new Error('Credential metadata scope mismatch')
 }
 
-export type RetainedKind = 'memory' | 'document' | 'issue'
+export type RetainedKind = 'memory' | 'document' | 'issue' | 'code'
 export interface RetainedItem {
   id: string | number
   title: string
@@ -156,6 +163,19 @@ export interface RetainedPage {
 
 export function parseRetainedPage(value: unknown, reference: string, kind: RetainedKind, id?: string | number): RetainedPage {
   const data = object(value)
+  if (kind === 'code') {
+    if (id !== undefined || data.reference !== reference || !Array.isArray(data.items) || data.items.length > 50
+      || (data.next_cursor !== null && (typeof data.next_cursor !== 'string' || !data.next_cursor)) || (data.next_cursor && !data.items.length)) throw new Error('Invalid retained code page')
+    const items = data.items.map(value => {
+      const row = object(value)
+      if (row.project_id !== null || row.unresolved_reference !== reference) throw new Error('Retained code membership mismatch')
+      const snapshot = row.indexed_snapshot === undefined ? {} : object(row.indexed_snapshot)
+      const fields = ['source_ref', 'checkout_ref', 'view_ref', 'repository', 'working_copy'].flatMap(label => typeof row[label] === 'string' ? [{ label, value: row[label] }] : [])
+      fields.push(...['label', 'revision', 'published_at'].flatMap(label => typeof snapshot[label] === 'string' ? [{ label: `indexed_snapshot.${label}`, value: snapshot[label] }] : []))
+      return { id: text(row.view_ref ?? row.checkout_ref ?? row.source_ref), title: text(row.repository), content: typeof row.working_copy === 'string' ? row.working_copy : '', date: '', fields }
+    })
+    return { items, next_cursor: data.next_cursor }
+  }
   if (data.reference !== reference || data.kind !== kind || (id !== undefined && String(data.id) !== String(id)) || !Array.isArray(data.items) || data.items.length > 50
     || (data.next_cursor !== null && (typeof data.next_cursor !== 'string' || !data.next_cursor))) throw new Error('Invalid retained content page')
   if (id === undefined && !Object.prototype.hasOwnProperty.call(data, 'provenance')) throw new Error('Missing retained provenance')

@@ -19,7 +19,7 @@ const fixtureProjects = [
   { project_id: fixtureProjectIDs.alpha, name: 'Alpha', repository_qualifier: 'examples/alpha' },
   { project_id: fixtureProjectIDs.beta, name: 'Alpha', repository_qualifier: 'examples/beta' },
 ]
-const fixtureUnresolved = [{ reference: 'retained-legacy-fixture', name: 'Legacy fixture knowledge', reason: 'Synthetic ambiguous membership; no merge or assignment' }]
+const fixtureUnresolved = [{ reference: 'retained-legacy-fixture', name: 'Legacy fixture knowledge', reason: 'Synthetic ambiguous membership; no merge or assignment', reader_kinds: ['memory', 'document', 'issue', 'code'] }]
 
 function json(res, status, body) {
   const payload = JSON.stringify(body)
