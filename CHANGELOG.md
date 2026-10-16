@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.0.0] - 2026-10-16
+
+Prepare the accepted v7.0.0 source identity for R1 canonical-project memory continuity. Align the daemon, Claude/Codex/OMP package manifests and marketplace metadata; OpenClaw remains independently versioned at 3.9.2 because this candidate changes its published plugin source. Preserve the implementation facts and evidence limits below. This entry is not proof of canonical policy generation, publication, installation or ordinary-consumer release acceptance. The full semantic/code/graph and two-dirty-worktree journey remains required R2 work, not a completed R1 outcome.
+
 ### Added
 
 - Stream full-owner migration exports through bounded authenticated row frames and ordered multipart verification instead of whole-payload JSON materialization. Retain encrypted original frames, native keys, source provenance, complete rows/counts and sequences for isolated restore, conservation and replay. Census includes whole-row unresolved documents/content/comparisons and preserves unknown metadata roles; source composition does not establish full-owner native Go conservation, installed recovery or resource admission.
@@ -2265,7 +2269,8 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v6.52.1...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v7.0.0...HEAD
+[7.0.0]: https://github.com/thebtf/engram/compare/v6.52.1...v7.0.0
 [6.52.1]: https://github.com/thebtf/engram/compare/v6.52.0...v6.52.1
 [6.52.0]: https://github.com/thebtf/engram/compare/v6.51.0...v6.52.0
 [6.51.0]: https://github.com/thebtf/engram/compare/v6.50.6...v6.51.0
