@@ -892,11 +892,55 @@ func TestProjectConsolidationUnresolvedMembershipBatch(t *testing.T) {
 	for i := range sourceCount {
 		require.Equal(t, fmt.Sprintf("Source %d", i+1), labels[rows[n+i].UnresolvedReference].Name)
 	}
+	expectedCatalog := catalog
+	for _, change := range []struct{ name, mutate, restore string }{
+		{"missing native target", "DELETE FROM memories WHERE id=?", "INSERT INTO memories(id,project,content) VALUES (?,'historical','retained body')"},
+		{"changed native selector", "UPDATE memories SET project='other' WHERE id=?", "UPDATE memories SET project='historical' WHERE id=?"},
+	} {
+		t.Run(change.name, func(t *testing.T) {
+			require.NoError(t, tx.Exec(change.mutate, n).Error)
+			defer func() { require.NoError(t, tx.Exec(change.restore, n).Error) }()
+			metadata, err := s.ListUnresolved(ctx)
+			require.NoError(t, err, "native payload availability must not gate complete unresolved metadata")
+			require.Equal(t, catalog, metadata, "unchanged signed membership must remain visible with all provenance labels")
+			_, err = s.UnresolvedMembership(ctx, legacy, "memory")
+			require.EqualError(t, err, "PROJECT_ADOPTION_STALE_REFERENCE", "selected content must still validate its actual native target")
+			_, err = s.LegacyUnresolved(ctx, "historical")
+			require.EqualError(t, err, "PROJECT_ADOPTION_STALE_REFERENCE", "selected legacy resolution retains full native validation")
+		})
+	}
 	require.NoError(t, tx.Exec("UPDATE project_consolidation_memberships SET reference=? WHERE reference=?", rows[0].Reference+"0", rows[0].Reference).Error)
 	catalog, err = s.ListUnresolved(ctx)
 	require.EqualError(t, err, "PROJECT_ADOPTION_UNKNOWN_REFERENCE")
 	require.Nil(t, catalog, "one invalid member must refuse the entire catalog")
 	require.NoError(t, tx.Exec("UPDATE project_consolidation_memberships SET reference=? WHERE reference=?", rows[0].Reference, rows[0].Reference+"0").Error)
+	for _, change := range []struct {
+		name, column, want string
+		before, after      any
+	}{
+		{"opaque group", "unresolved_reference", "PROJECT_ADOPTION_UNKNOWN_REFERENCE", rows[0].UnresolvedReference, rows[0].UnresolvedReference + "0"},
+		{"current key shape", "row_key", "PROJECT_ADOPTION_STALE_REFERENCE", rows[0].RowKey, JSONRaw(`[]`)},
+		{"source key shape", "source_row_key", "PROJECT_ADOPTION_STALE_REFERENCE", rows[0].SourceRowKey, JSONRaw(`{}`)},
+		{"field path shape", "field_path", "PROJECT_ADOPTION_STALE_REFERENCE", rows[0].FieldPath, JSONRaw(`[]`)},
+		{"plan fingerprint", "plan_fingerprint", "PROJECT_ADOPTION_STALE_REFERENCE", rows[0].PlanFingerprint, ""},
+	} {
+		t.Run(change.name, func(t *testing.T) {
+			query := tx.Model(&ConsolidationMembership{}).Where("reference = ?", rows[0].Reference)
+			require.NoError(t, query.Update(change.column, change.after).Error)
+			defer func() { require.NoError(t, query.Update(change.column, change.before).Error) }()
+			metadata, err := s.ListUnresolved(ctx)
+			require.EqualError(t, err, change.want)
+			require.Nil(t, metadata, "invalid membership metadata must not become a successful partial catalog")
+		})
+	}
+	foreignVault, err := vaultcrypto.OpenExistingVault(&config.Config{EncryptionKey: strings.Repeat("cd", 32)})
+	require.NoError(t, err)
+	foreignCatalog, err := NewProjectConsolidationStore(tx, foreignVault, nil).ListUnresolved(ctx)
+	require.EqualError(t, err, "PROJECT_ADOPTION_UNKNOWN_REFERENCE")
+	require.Nil(t, foreignCatalog)
+	restoredCatalog, err := s.ListUnresolved(ctx)
+	require.NoError(t, err)
+	require.Equal(t, expectedCatalog, restoredCatalog)
 	require.NoError(t, tx.Exec("INSERT INTO credentials VALUES (1,'historical')").Error)
 	credential := member("credentials", `{"id":1}`, []string{"project"}, "historical")
 	require.NoError(t, tx.Create(&credential).Error)

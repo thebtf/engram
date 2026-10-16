@@ -817,6 +817,42 @@ const (
 	consolidationMembershipBatchBytes = 1 << 20
 )
 
+func (s *ProjectConsolidationStore) unresolvedMembershipMetadata(row *ConsolidationMembership) ([]string, map[string]json.RawMessage, error) {
+	var path []string
+	var key map[string]json.RawMessage
+	if json.Unmarshal(row.FieldPath, &path) != nil || len(path) == 0 || json.Unmarshal(row.RowKey, &key) != nil || len(key) == 0 || row.PlanFingerprint == "" {
+		return nil, nil, consolidationHold("STALE_REFERENCE")
+	}
+	var nested []string
+	if len(path) > 1 {
+		nested = path[1:]
+	}
+	var sourceKey map[string]json.RawMessage
+	if json.Unmarshal(row.SourceRowKey, &sourceKey) != nil || len(sourceKey) == 0 {
+		return nil, nil, consolidationHold("STALE_REFERENCE")
+	}
+	keyJSON, _ := json.Marshal(sourceKey)
+	ref := s.opaque("row", struct {
+		Table, Column string
+		Key           JSONRaw
+		Path          []string
+	}{row.Table, path[0], JSONRaw(keyJSON), nested})
+	group := row.SelectorReference
+	if group == "" {
+		group = ref
+	}
+	if ref != row.Reference || s.opaque("unresolved", group) != row.UnresolvedReference {
+		return nil, nil, consolidationHold("UNKNOWN_REFERENCE")
+	}
+	if row.Table == "sources" {
+		var sourceID string
+		if len(key) != 1 || json.Unmarshal(key["source_id"], &sourceID) != nil || sourceID == "" || len(path) != 1 || (path[0] != "" && path[0] != "project_id") || (path[0] == "" && row.SelectorReference != "") {
+			return nil, nil, consolidationHold("STALE_REFERENCE")
+		}
+	}
+	return path, key, nil
+}
+
 // References select retained membership only; data readers still enforce their
 // ordinary record privacy and code authorization independently.
 func (s *ProjectConsolidationStore) validateUnresolvedMembership(ctx context.Context, rows []ConsolidationMembership) error {
@@ -851,38 +887,12 @@ func (s *ProjectConsolidationStore) validateUnresolvedMembership(ctx context.Con
 				return err
 			}
 			row := &rows[i]
-			var path []string
-			var key map[string]json.RawMessage
-			if json.Unmarshal(row.FieldPath, &path) != nil || len(path) == 0 || json.Unmarshal(row.RowKey, &key) != nil || len(key) == 0 || row.PlanFingerprint == "" {
-				return consolidationHold("STALE_REFERENCE")
-			}
-			var nested []string
-			if len(path) > 1 {
-				nested = path[1:]
-			}
-			var sourceKey map[string]json.RawMessage
-			if json.Unmarshal(row.SourceRowKey, &sourceKey) != nil || len(sourceKey) == 0 {
-				return consolidationHold("STALE_REFERENCE")
-			}
-			keyJSON, _ := json.Marshal(sourceKey)
-			ref := s.opaque("row", struct {
-				Table, Column string
-				Key           JSONRaw
-				Path          []string
-			}{row.Table, path[0], JSONRaw(keyJSON), nested})
-			group := row.SelectorReference
-			if group == "" {
-				group = ref
-			}
-			if ref != row.Reference || s.opaque("unresolved", group) != row.UnresolvedReference {
-				return consolidationHold("UNKNOWN_REFERENCE")
+			path, key, err := s.unresolvedMembershipMetadata(row)
+			if err != nil {
+				return err
 			}
 			var predicate string
 			if row.Table == "sources" {
-				var sourceID string
-				if len(key) != 1 || json.Unmarshal(key["source_id"], &sourceID) != nil || sourceID == "" || len(path) != 1 || (path[0] != "" && path[0] != "project_id") || (path[0] == "" && row.SelectorReference != "") {
-					return consolidationHold("STALE_REFERENCE")
-				}
 				predicate = "t.source_id = (r.value->>'source_id')::uuid"
 			} else {
 				var err error

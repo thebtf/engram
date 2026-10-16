@@ -20,8 +20,13 @@ func (s *ProjectConsolidationStore) ListUnresolved(ctx context.Context) ([]Unres
 	if err := s.db.WithContext(ctx).Where("project_id IS NULL AND unresolved_reference <> ''").Order("unresolved_reference, reason, reference").Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	if err := s.validateUnresolvedMembership(ctx, rows); err != nil {
-		return nil, err
+	for i := range rows {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if _, _, err := s.unresolvedMembershipMetadata(&rows[i]); err != nil {
+			return nil, err
+		}
 	}
 	var projects []Project
 	if err := s.db.WithContext(ctx).Find(&projects).Error; err != nil {
