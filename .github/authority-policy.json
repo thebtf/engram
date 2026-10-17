@@ -18,18 +18,35 @@
     "type": "User"
   },
   "transition": {
-    "consumed_epoch": "authority-0072",
-    "event_base_sha": "cfee79b1c8775a0e4198c9e616e16a7eb06777cc"
+    "consumed_epoch": "authority-0073",
+    "event_base_sha": "1cc421591c780898f9e7fe790375789cd058ef70"
   },
   "active_epoch": {
-    "id": "authority-0073",
-    "label": "authority-maintenance:authority-0073",
+    "id": "authority-0074",
+    "label": "authority-maintenance:authority-0074",
     "exact_changes": [
       {
         "status": "M",
         "path": ".github/authority-policy.json"
+      },
+      {
+        "status": "M",
+        "path": "scripts/production-gates/assert-pr-authority-data-only.ps1"
+      },
+      {
+        "status": "M",
+        "path": "scripts/production-gates/test-pr-authority-data-only.ps1"
       }
     ],
-    "expected_head_blobs": []
+    "expected_head_blobs": [
+      {
+        "path": "scripts/production-gates/assert-pr-authority-data-only.ps1",
+        "git_blob": "0c20221e0cb1d9d9243656434c0adc826a14576c"
+      },
+      {
+        "path": "scripts/production-gates/test-pr-authority-data-only.ps1",
+        "git_blob": "81b390f1507a633d18b24e8838ca508671edabbb"
+      }
+    ]
   }
 }
