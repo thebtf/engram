@@ -1,7 +1,10 @@
 package projectidentity
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -92,6 +95,46 @@ func TestLogicalProjectNoImplicitNonGitCreation(t *testing.T) {
 	got, err := ResolveLogicalProject(t.Context(), child, nil)
 	if err != nil || got != project {
 		t.Fatalf("non-Git: %+v %v", got, err)
+	}
+}
+
+func TestResolveLogicalProjectRejectsDuplicateProjectID(t *testing.T) {
+	root := t.TempDir()
+	gitLogical(t, root, "init", "--quiet")
+	gitLogical(t, root, "remote", "add", "origin", "https://example.test/Identity/Duplicate.git")
+	markerPath := filepath.Join(root, anchorFilenameV3)
+	cachePath := filepath.Join(root, ".git", "engram-project.json")
+	if _, err := os.Lstat(cachePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected cold project cache: %v", err)
+	}
+	raw := []byte(`{"project_id":"11111111-1111-4111-8111-111111111111","project_id":"22222222-2222-4222-8222-222222222222","name":"Duplicate"}`)
+	if err := os.WriteFile(markerPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bootstrapCalls := 0
+	got, err := ResolveLogicalProject(t.Context(), root, func(context.Context, BootstrapRequest) (Project, error) {
+		bootstrapCalls++
+		return Project{ProjectID: "11111111-1111-4111-8111-111111111111", Name: "Bootstrap"}, nil
+	})
+	var identityErr *LogicalError
+	if !errors.As(err, &identityErr) || identityErr == nil || identityErr.Code != "PROJECT_IDENTITY_INVALID" {
+		t.Errorf("duplicate project_id must return typed PROJECT_IDENTITY_INVALID: project=%+v error=%T %v", got, err, err)
+	}
+	if got != (Project{}) {
+		t.Errorf("duplicate project_id returned an authoritative project: %+v", got)
+	}
+	if bootstrapCalls != 0 {
+		t.Errorf("duplicate project_id triggered %d bootstrap/backend calls", bootstrapCalls)
+	}
+	if _, err := os.Lstat(cachePath); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("duplicate project_id published project cache authority: %v", err)
+	}
+	after, err := os.ReadFile(markerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, raw) {
+		t.Errorf("duplicate project_id marker was rewritten: %s", after)
 	}
 }
 

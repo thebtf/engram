@@ -243,15 +243,35 @@ func readLogicalMarker(path string) (Project, bool, error) {
 	if err != nil {
 		return Project{}, true, logicalError("PROJECT_RESOLUTION_UNAVAILABLE")
 	}
-	var fields map[string]json.RawMessage
-	if json.Unmarshal(raw, &fields) != nil || fields == nil {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
 		return Project{}, true, logicalError("PROJECT_IDENTITY_INVALID")
 	}
+	fields := make(map[string]json.RawMessage)
 	// Old name-only and V3 markers are transition inputs, not alternate algorithms.
-	for field := range fields {
+	for decoder.More() {
+		token, err := decoder.Token()
+		field, ok := token.(string)
+		if err != nil || !ok {
+			return Project{}, true, logicalError("PROJECT_IDENTITY_INVALID")
+		}
+		if _, duplicate := fields[field]; duplicate {
+			return Project{}, true, logicalError("PROJECT_IDENTITY_INVALID")
+		}
 		if field != "project_id" && field != "name" && field != "version" && field != "scope" {
 			return Project{}, true, logicalError("PROJECT_IDENTITY_INVALID")
 		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return Project{}, true, logicalError("PROJECT_IDENTITY_INVALID")
+		}
+		fields[field] = value
+	}
+	if token, err := decoder.Token(); err != nil || token != json.Delim('}') {
+		return Project{}, true, logicalError("PROJECT_IDENTITY_INVALID")
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return Project{}, true, logicalError("PROJECT_IDENTITY_INVALID")
 	}
 	var project Project
 	if json.Unmarshal(raw, &project) != nil {
