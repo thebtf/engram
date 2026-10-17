@@ -127,28 +127,37 @@ func (s *VersionedDocumentStore) Create(
 // ReadLatest returns the highest-versioned document for the given path+project.
 // Returns gorm.ErrRecordNotFound if no document exists.
 func (s *VersionedDocumentStore) ReadLatest(ctx context.Context, path, project string) (*VersionedDocument, error) {
+	q, err := canonicalProjectRows(ctx, s.db.Model(&VersionedDocument{}), project, "versioned_documents", "d")
+	if err != nil {
+		return nil, err
+	}
 	var doc VersionedDocument
-	err := s.db.WithContext(ctx).
-		Where("path = ? AND project = ?", path, project).
-		Order("version DESC").
+	err = q.Where("path = ?", path).
+		Order("version DESC, id DESC").
 		Limit(1).
 		First(&doc).Error
 	if err != nil {
 		return nil, fmt.Errorf("versioned_document_store: read latest: %w", err)
 	}
+	doc.Project = project
 	return &doc, nil
 }
 
 // ReadVersion returns the document at the exact version specified.
 // Returns gorm.ErrRecordNotFound if no matching row exists.
 func (s *VersionedDocumentStore) ReadVersion(ctx context.Context, path, project string, version int) (*VersionedDocument, error) {
+	q, err := canonicalProjectRows(ctx, s.db.Model(&VersionedDocument{}), project, "versioned_documents", "d")
+	if err != nil {
+		return nil, err
+	}
 	var doc VersionedDocument
-	err := s.db.WithContext(ctx).
-		Where("path = ? AND project = ? AND version = ?", path, project, version).
+	err = q.Where("path = ? AND version = ?", path, version).
+		Order("id DESC").
 		First(&doc).Error
 	if err != nil {
 		return nil, fmt.Errorf("versioned_document_store: read version %d: %w", version, err)
 	}
+	doc.Project = project
 	return &doc, nil
 }
 
@@ -163,56 +172,80 @@ func (s *VersionedDocumentStore) ReadByID(ctx context.Context, id int64) (*Versi
 }
 
 // List returns the latest version of each distinct document path in a project.
-// Optional filters: docType (exact match), pathPrefix (LIKE prefix match).
+// Optional metadata filters apply after latest-version selection.
 // limit <= 0 means no row limit.
-// Uses DISTINCT ON (path) ORDER BY path, version DESC to return only the latest per path.
 func (s *VersionedDocumentStore) List(ctx context.Context, project, docType, pathPrefix string, limit int) ([]VersionedDocument, error) {
-	extraClauses, args := versionedDocBuildListFilters(project, docType, pathPrefix)
-	rawSQL := `SELECT DISTINCT ON (path)
-	              id, path, project, version, content, content_hash, doc_type, metadata, author, created_at
-	           FROM versioned_documents
-	           WHERE project = ?` + extraClauses + `
-	           ORDER BY path, version DESC`
-
-	if limit > 0 {
-		rawSQL += fmt.Sprintf(" LIMIT %d", limit)
+	q, err := canonicalProjectRows(ctx, s.db.Model(&VersionedDocument{}), project, "versioned_documents", "d")
+	if err != nil {
+		return nil, err
 	}
-
+	latest := q.Select("d.*, ROW_NUMBER() OVER (PARTITION BY path ORDER BY version DESC, id DESC) AS version_rank")
+	q = s.db.WithContext(ctx).Table("(?) AS latest", latest).Where("version_rank = 1")
+	if docType != "" {
+		q = q.Where("doc_type = ?", docType)
+	}
+	if pathPrefix != "" {
+		q = q.Where("path LIKE ? ESCAPE '\\'", escapeSQLLike(pathPrefix)+"%")
+	}
+	if limit > 0 {
+		q = q.Limit(limit)
+	}
 	var docs []VersionedDocument
-	if err := s.db.WithContext(ctx).Raw(rawSQL, args...).Scan(&docs).Error; err != nil {
-		return nil, fmt.Errorf("versioned_document_store: list: %w", err)
+	if err := q.Order("created_at DESC, id DESC").Find(&docs).Error; err != nil {
+		return nil, err
+	}
+	for i := range docs {
+		docs[i].Project = project
 	}
 	return docs, nil
 }
 
-// versionedDocBuildListFilters returns the extra WHERE clause string and positional args
-// for the List raw query. The project arg is always first and already in the query template.
-func versionedDocBuildListFilters(project, docType, pathPrefix string) (string, []interface{}) {
-	args := []interface{}{project}
-	var clauses []string
-
-	if docType != "" {
-		clauses = append(clauses, "doc_type = ?")
-		args = append(args, docType)
+// ListPage searches public metadata on the latest version of each path. Count
+// and page share the same project and filter predicates; content is not loaded.
+func (s *VersionedDocumentStore) ListPage(ctx context.Context, project string, docTypes []string, pathPrefix, query string, limit, offset int) ([]VersionedDocument, int64, error) {
+	if project == "" || limit < 1 || limit > 500 || offset < 0 || len(docTypes) > 6 {
+		return nil, 0, fmt.Errorf("invalid document page")
+	}
+	q, err := canonicalProjectRows(ctx, s.db.Model(&VersionedDocument{}), project, "versioned_documents", "d")
+	if err != nil {
+		return nil, 0, err
+	}
+	latest := q.Select("id, path, project, version, doc_type, author, created_at, ROW_NUMBER() OVER (PARTITION BY path ORDER BY version DESC, id DESC) AS version_rank")
+	q = s.db.WithContext(ctx).Table("(?) AS latest", latest).Where("version_rank = 1")
+	if len(docTypes) != 0 {
+		q = q.Where("doc_type IN ?", docTypes)
 	}
 	if pathPrefix != "" {
-		clauses = append(clauses, "path LIKE ? ESCAPE '\\'")
-		args = append(args, escapeSQLLike(pathPrefix)+"%")
+		q = q.Where("path LIKE ? ESCAPE '\\'", escapeSQLLike(pathPrefix)+"%")
 	}
-
-	if len(clauses) == 0 {
-		return "", args
+	if query != "" {
+		literal := "%" + escapeSQLLike(strings.ToLower(query)) + "%"
+		q = q.Where("LOWER(path) LIKE ? ESCAPE '\\' OR LOWER(doc_type) LIKE ? ESCAPE '\\' OR LOWER(author) LIKE ? ESCAPE '\\'", literal, literal, literal)
 	}
-	return " AND " + strings.Join(clauses, " AND "), args
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	docs := make([]VersionedDocument, 0)
+	if err := q.Select("id, path, project, version, doc_type, author, created_at").
+		Order("created_at DESC, id DESC").Limit(limit).Offset(offset).Find(&docs).Error; err != nil {
+		return nil, 0, err
+	}
+	for i := range docs {
+		docs[i].Project = project
+	}
+	return docs, total, nil
 }
 
 // GetHistory returns all versions of a document for the given path+project,
 // ordered by version descending (newest first).
 // limit <= 0 means no row limit.
 func (s *VersionedDocumentStore) GetHistory(ctx context.Context, path, project string, limit int) ([]VersionedDocument, error) {
-	query := s.db.WithContext(ctx).
-		Where("path = ? AND project = ?", path, project).
-		Order("version DESC")
+	query, err := canonicalProjectRows(ctx, s.db.Model(&VersionedDocument{}), project, "versioned_documents", "d")
+	if err != nil {
+		return nil, err
+	}
+	query = query.Where("path = ?", path).Order("version DESC, id DESC")
 
 	if limit > 0 {
 		query = query.Limit(limit)
@@ -221,6 +254,9 @@ func (s *VersionedDocumentStore) GetHistory(ctx context.Context, path, project s
 	var docs []VersionedDocument
 	if err := query.Find(&docs).Error; err != nil {
 		return nil, fmt.Errorf("versioned_document_store: get history: %w", err)
+	}
+	for i := range docs {
+		docs[i].Project = project
 	}
 	return docs, nil
 }

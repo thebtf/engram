@@ -1,8 +1,8 @@
-import { ref as sharedRef, type Ref as SharedRef } from 'vue'
+import { computed, onBeforeUnmount, watch, ref as sharedRef, type Ref as SharedRef } from 'vue'
 import { startedLoads } from './useConsolePreferences'
+import { isCatalogProject, useOperatorProjectContext } from './useOperatorProjectContext'
 
 let sharedSearchNoiseProjects: SharedRef<string[]> | undefined
-let sharedSearchNoiseSelectedProject: SharedRef<string> | undefined
 let sharedSearchNoiseResults: SharedRef<OperatorSearchResult[]> | undefined
 let sharedSearchNoiseProjectsState: SharedRef<OperatorLoadState<string[]>> | undefined
 let sharedSearchNoiseSearchState: SharedRef<OperatorLoadState<OperatorSearchResult[]>> | undefined
@@ -217,7 +217,6 @@ export function useOperatorSearchNoise(): {
   error: ComputedRef<string | null>
   refresh: () => Promise<void>
   runSearch: (query: string, project?: string) => Promise<void>
-  tombstoneGap: ReturnType<typeof unsupportedOperatorAction>
   noiseTrendGap: ReturnType<typeof unsupportedOperatorAction>
 } {
   const projectsEvidence = endpointEvidence('/api/projects', 'search-projects')
@@ -228,7 +227,8 @@ export function useOperatorSearchNoise(): {
   const vnextEvidence = endpointEvidence('/api/stats/vnext', 'stats-vnext')
 
   const projects = (sharedSearchNoiseProjects ??= sharedRef<string[]>((() => [])()))
-  const selectedProject = (sharedSearchNoiseSelectedProject ??= sharedRef<string>((() => '')()))
+  const context = useOperatorProjectContext()
+  const selectedProject = context.project
   const searchResults = (sharedSearchNoiseResults ??= sharedRef<OperatorSearchResult[]>((() => [])()))
 
   const projectsStateValue = (sharedSearchNoiseProjectsState ??= sharedRef<OperatorLoadState<string[]>>((() => pendingState(projectsEvidence, projects.value))()))
@@ -238,6 +238,11 @@ export function useOperatorSearchNoise(): {
   const retrievalStateValue = (sharedSearchNoiseRetrievalState ??= sharedRef<OperatorLoadState<ApiRetrievalStats>>((() => pendingState(retrievalEvidence))()))
   const vnextStateValue = (sharedSearchNoiseVnextState ??= sharedRef<OperatorLoadState<ApiStatsVNext>>((() => pendingState(vnextEvidence))()))
   let searchGeneration = 0
+  watch([selectedProject, context.selectionPending, context.selectionError, context.error], () => {
+    searchGeneration += 1
+    replaceArray(searchResults.value, [])
+    searchStateValue.value = emptyState(searchEvidence, searchResults.value)
+  }, { flush: 'sync' })
 
   const searchState = computed(() => searchStateValue.value)
   const recentState = computed(() => recentStateValue.value)
@@ -270,6 +275,7 @@ export function useOperatorSearchNoise(): {
     analyticsStateValue.value,
     retrievalStateValue.value,
     vnextStateValue.value,
+    searchStateValue.value,
   ].some((state) => state.kind === 'pending'))
 
   const error = computed(() => {
@@ -281,23 +287,11 @@ export function useOperatorSearchNoise(): {
 
   async function refreshProjects() {
     projectsStateValue.value = pendingState(projectsEvidence, projects.value)
-    const result = await loadOperatorJson<string[]>('/api/projects', {
-      source: 'search-projects',
-      empty: (rows) => !rows.length,
-    })
-
-    if (result.kind === 'live' || result.kind === 'empty') {
-      replaceArray(projects.value, result.data)
-      projectsStateValue.value = projects.value.length
-        ? liveState(projectsEvidence, projects.value)
-        : emptyState(projectsEvidence, projects.value)
-      if (!selectedProject.value && projects.value.length) {
-        selectedProject.value = projects.value[0]
-      }
-      return
-    }
-
-    projectsStateValue.value = result
+    await context.refresh()
+    replaceArray(projects.value, context.projects.value)
+    projectsStateValue.value = context.error.value
+      ? errorState(projectsEvidence, context.error.value, { source: 'search-projects', run: async () => { await refreshProjects(); return projectsStateValue.value } }, [])
+      : projects.value.length ? liveState(projectsEvidence, projects.value) : emptyState(projectsEvidence, projects.value)
   }
 
   async function refreshRecent() {
@@ -339,7 +333,8 @@ export function useOperatorSearchNoise(): {
     const run = ++searchGeneration
     const trimmedQuery = query.trim()
     const trimmedProject = project.trim()
-    if (!trimmedQuery || !trimmedProject) {
+    replaceArray(searchResults.value, [])
+    if (!trimmedQuery || !trimmedProject || trimmedProject === 'all') {
       replaceArray(searchResults.value, [])
       searchStateValue.value = emptyState(searchEvidence, searchResults.value)
       return
@@ -350,11 +345,12 @@ export function useOperatorSearchNoise(): {
       `&query=${encodeURIComponent(trimmedQuery)}` +
       '&limit=20'
     const evidence = endpointEvidence(path, 'context-search')
-    searchStateValue.value = pendingState(evidence, searchResults.value)
+    searchStateValue.value = pendingState(evidence, [])
 
     try {
+      if (!isCatalogProject(trimmedProject)) throw new TypeError('A catalog search project is required')
       const payload = await operatorFetchJson<ApiContextSearch>(path, undefined, 'context-search')
-      if (run !== searchGeneration) return
+      if (run !== searchGeneration || project !== selectedProject.value) return
       if (typeof payload === 'string' || payload.deprecated) {
         replaceArray(searchResults.value, [])
         searchStateValue.value = staleState(evidence, payload.message || 'Deprecated search response; not a live result set.', searchResults.value)
@@ -362,13 +358,14 @@ export function useOperatorSearchNoise(): {
       }
 
       const nextRows = contextRows(payload)
+      if ((payload.project !== undefined && payload.project !== trimmedProject) || nextRows.some((row) => row.project !== trimmedProject)) throw new TypeError('Search result project mismatch')
       replaceArray(searchResults.value, nextRows)
       searchStateValue.value = nextRows.length
         ? liveState(evidence, searchResults.value)
         : emptyState(evidence, searchResults.value)
       await Promise.all([refreshRecent(), refreshAnalytics(), refreshRetrieval(), refreshVNext()])
     } catch (nextError) {
-      if (run !== searchGeneration) return
+      if (run !== searchGeneration || project !== selectedProject.value) return
       const mapped = toOperatorSourceError(nextError, {
         source: 'context-search',
         path,
@@ -384,11 +381,6 @@ export function useOperatorSearchNoise(): {
     }
   }
 
-  const tombstoneGap = unsupportedOperatorAction(
-    'search-collection-tombstone',
-    'search_collection',
-    'Legacy collection search is not a live operator-console result source; keep it as stale/tombstone evidence.',
-  )
 
   const noiseTrendGap = unsupportedOperatorAction(
     'noise-trend',
@@ -397,6 +389,7 @@ export function useOperatorSearchNoise(): {
   )
 
   startOnce('search-noise', refresh)
+  onBeforeUnmount(() => { searchGeneration += 1 })
 
   return {
     projects,
@@ -413,7 +406,6 @@ export function useOperatorSearchNoise(): {
     error,
     refresh,
     runSearch,
-    tombstoneGap,
     noiseTrendGap,
   }
 }

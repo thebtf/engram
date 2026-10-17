@@ -8,7 +8,7 @@ import { executeMutation, type MutationCurrentStateParser, type MutationResult }
 import {
   endpointEvidence,
   loadOperatorJson,
-  operatorApiUrl,
+  operatorFetchResponse,
   pendingState,
   type OperatorLoadState,
 } from './useOperatorApi'
@@ -190,7 +190,7 @@ export function useOperatorDomainRegistry(): {
 
     return executeMutation(
       { requestId: crypto.randomUUID(), action: 'memory-domain-upsert', intent: draft },
-      fetch(operatorApiUrl(endpoint), {
+      operatorFetchResponse(endpoint, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(payload),
@@ -205,7 +205,7 @@ export function useOperatorDomainRegistry(): {
     const endpoint = `/api/memory-domains/${encodeURIComponent(normalizedDomain)}`
     return executeMutation(
       { requestId: crypto.randomUUID(), action: 'memory-domain-delete', intent: { domain: normalizedDomain } },
-      fetch(operatorApiUrl(endpoint), { method: 'DELETE', credentials: 'include' }),
+      operatorFetchResponse(endpoint, { method: 'DELETE', credentials: 'include' }),
       deleteDomainCurrentStateParser(normalizedDomain),
     )
   }

@@ -1,13 +1,14 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { Database, RefreshCw } from 'lucide-vue-next'
 import { useUiI18n } from '@/composables/useUiI18n'
 import {
-  fetchProjects,
   fetchSessions,
   type SDKSession,
 } from '@/utils/api'
 import { safeAbsoluteDate, truncate } from '@/utils/formatters'
+import { useProjectCatalog } from '@/composables/useProjectCatalog'
+import ProjectCatalogStatus from '@/components/ProjectCatalogStatus.vue'
 import EmptyState from '@/components/layout/EmptyState.vue'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -36,11 +37,10 @@ interface ProjectRow {
   lastActivityEpoch: number
 }
 
-const projects = ref<string[]>([])
+const { projects, unresolved, selectedProject: sessionProjectFilter, selectionPending, selectionError, unresolvedReference, projectName, refresh } = useProjectCatalog('all')
 const sessions = ref<SDKSession[]>([])
 const sessionTotal = ref(0)
 const activeTab = ref('projects')
-const sessionProjectFilter = ref('all')
 const loading = ref(false)
 const bootLoading = ref(true)
 const error = ref<string | null>(null)
@@ -87,17 +87,9 @@ async function loadData() {
   error.value = null
 
   try {
-    const [projectList, sessionList] = await Promise.all([
-      fetchProjects(),
-      fetchSessions({ limit: 200 }),
-    ])
-
-    projects.value = projectList
-    sessions.value = (sessionList.sessions ?? []).slice().sort((a, b) => sessionTimestamp(b) - sessionTimestamp(a))
-    sessionTotal.value = sessionList.total ?? sessions.value.length
+    await refresh()
   } catch (err: any) {
     error.value = err?.message || t.value.projects.loadError
-    projects.value = []
     sessions.value = []
     sessionTotal.value = 0
   } finally {
@@ -110,13 +102,21 @@ onMounted(async () => {
   await loadData()
 })
 
-const projectRows = computed<ProjectRow[]>(() => {
-  const ids = Array.from(new Set([
-    ...projects.value,
-    ...sessions.value.map(session => session.project).filter(Boolean),
-  ]))
+watch([sessionProjectFilter, selectionPending], async ([project, pending]) => {
+  if (pending || selectionError.value || !project) { sessions.value = []; sessionTotal.value = 0; return }
+  try {
+    const result = await fetchSessions({ project: project === 'all' ? undefined : project, limit: 200 })
+    if (sessionProjectFilter.value !== project || selectionPending.value) return
+    sessions.value = (result.sessions ?? []).slice().sort((a, b) => sessionTimestamp(b) - sessionTimestamp(a))
+    sessionTotal.value = result.total ?? sessions.value.length
+  } catch (failure) {
+    error.value = failure instanceof Error ? failure.message : t.value.projects.loadError
+    sessions.value = []
+  }
+})
 
-  return ids
+const projectRows = computed<ProjectRow[]>(() => {
+  return projects.value.map(project => project.project_id)
     .map(id => {
       const projectSessions = sessions.value.filter(session => session.project === id)
       const lastActivityEpoch = projectSessions.reduce((latest, session) => {
@@ -168,6 +168,7 @@ function statusVariant(status: string): 'default' | 'secondary' | 'destructive' 
 </script>
 
 <template>
+  <ProjectCatalogStatus :records="unresolved" :pending="selectionPending" :error="selectionError" :reference="unresolvedReference" />
   <div class="space-y-4 pt-4">
     <div class="flex items-center justify-between gap-3 flex-wrap">
       <div class="flex items-center gap-3">
@@ -260,9 +261,9 @@ function statusVariant(status: string): 'default' | 'secondary' | 'destructive' 
                 <TableRow v-for="project in projectRows" :key="project.id">
                   <TableCell>
                     <div class="space-y-1">
-                      <p class="font-medium text-foreground">{{ project.id }}</p>
+                      <p class="font-medium text-foreground">{{ projectName(project.id) }}</p>
                       <p class="text-xs text-muted-foreground">
-                        {{ t.projects.registry.liveRegistryId }}
+                        {{ project.id }}
                       </p>
                     </div>
                   </TableCell>
@@ -290,7 +291,7 @@ function statusVariant(status: string): 'default' | 'secondary' | 'destructive' 
             <SelectContent>
               <SelectItem value="all">{{ t.projects.sessions.filterAll }}</SelectItem>
               <SelectItem v-for="project in projectRows" :key="project.id" :value="project.id">
-                {{ project.id }}
+                {{ projectName(project.id) }}
               </SelectItem>
             </SelectContent>
           </Select>
@@ -322,7 +323,7 @@ function statusVariant(status: string): 'default' | 'secondary' | 'destructive' 
                   </TableCell>
                   <TableCell>
                     <div class="space-y-1">
-                      <p class="text-sm text-foreground">{{ session.project }}</p>
+                      <p class="text-sm text-foreground">{{ projectName(session.project) }}</p>
                       <p class="text-[11px] text-muted-foreground">
                         {{ truncate(session.claude_session_id, 18) }}
                       </p>

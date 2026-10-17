@@ -51,6 +51,12 @@ func NewStore(cfg Config) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get sql.DB: %w", err)
 	}
+	initialized := false
+	defer func() {
+		if !initialized {
+			_ = sqlDB.Close()
+		}
+	}()
 
 	maxConns := resolveMaxConns(cfg.MaxConns)
 	configurePool(sqlDB, maxConns)
@@ -74,6 +80,7 @@ func NewStore(cfg Config) (*Store, error) {
 	// latency. We warm half the pool — enough to absorb a burst without spending
 	// startup time on connections that may never be needed.
 	store.WarmPool(maxConns / 2)
+	initialized = true
 
 	return store, nil
 }
@@ -88,6 +95,11 @@ func openGORM(cfg Config) (*gorm.DB, error) {
 		NowFunc:     nil,
 	})
 	if err != nil {
+		if db != nil {
+			if sqlDB, dbErr := db.DB(); dbErr == nil && sqlDB != nil {
+				_ = sqlDB.Close()
+			}
+		}
 		return nil, fmt.Errorf("open gorm postgres: %w", err)
 	}
 	return db, nil

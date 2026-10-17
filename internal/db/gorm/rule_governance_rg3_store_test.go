@@ -12,8 +12,17 @@ import (
 	"github.com/thebtf/engram/pkg/models"
 )
 
+func openRG3LifecycleHealthTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	tx := openCandidateTestDB(t).Begin()
+	require.NoError(t, tx.Error)
+	t.Cleanup(func() { require.NoError(t, tx.Rollback().Error) })
+	require.NoError(t, tx.Exec(`CREATE TEMPORARY TABLE rule_arbiter_runs (LIKE public.rule_arbiter_runs INCLUDING ALL) ON COMMIT DROP`).Error)
+	return tx
+}
+
 func TestRuleGovernanceStore_GetLifecycleHealthAggregatesGovernanceTables(t *testing.T) {
-	db := openCandidateTestDB(t)
+	db := openRG3LifecycleHealthTestDB(t)
 	store := NewRuleGovernanceStore(db)
 	eventStore := NewRuleInjectionEventStore(db)
 	ctx := context.Background()
@@ -48,6 +57,11 @@ func TestRuleGovernanceStore_GetLifecycleHealthAggregatesGovernanceTables(t *tes
 		CandidatesRejected:  1,
 	}, "")
 	require.NoError(t, err)
+	require.NoError(t, db.Exec(`INSERT INTO rule_arbiter_runs (trigger, status, started_at, finished_at)
+		VALUES (?, ?, ?, ?), (?, ?, ?, ?)`,
+		"rg3-health-before-since", models.RuleArbiterRunStatusCompleted, since.Add(-time.Second), since.Add(-time.Second),
+		"rg3-health-failed", models.RuleArbiterRunStatusFailed, since, since,
+	).Error)
 
 	_, err = store.TransitionRuleVersion(ctx, draftVersionID, models.RuleStateShadow, transitionReq("rg3 shadow for health", ""))
 	require.NoError(t, err)
@@ -91,16 +105,26 @@ func TestRuleGovernanceStore_GetLifecycleHealthAggregatesGovernanceTables(t *tes
 	require.Equal(t, 1, health.VersionStateCounts[models.RuleStateActiveProject])
 	require.Equal(t, 1, health.VersionStateCounts[models.RuleStateSuperseded])
 	require.Equal(t, 1, health.ArbiterRunStatusCounts[models.RuleArbiterRunStatusCompleted])
+	require.Equal(t, 1, health.ArbiterRunStatusCounts[models.RuleArbiterRunStatusFailed])
 	require.Equal(t, 1, health.TransitionActionCounts["candidate_to_rejected"])
 	require.Equal(t, 1, health.TransitionActionCounts["rule_version_transition"])
 	require.Equal(t, 1, health.SnapshotStatusCounts["committed"])
 	require.Equal(t, 1, health.InjectionEventTypeCounts[models.RuleInjectionEmittedContextual])
 	require.Equal(t, 1, health.InjectionEventTypeCounts[models.RuleInjectionSuppressedState])
 	require.Contains(t, health.EvidenceHandles, fmt.Sprintf("rule_candidate:%d", createdPending.ID))
+
+	allTime, err := store.GetLifecycleHealth(ctx, RuleGovernanceHealthParams{
+		Project:                       project,
+		Limit:                         50,
+		IncludeGlobalArbiterRunCounts: true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, allTime.ArbiterRunStatusCounts[models.RuleArbiterRunStatusCompleted])
+	require.Equal(t, 1, allTime.ArbiterRunStatusCounts[models.RuleArbiterRunStatusFailed])
 }
 
 func TestRuleGovernanceStore_GetLifecycleHealthOmitsGlobalArbiterRunsForProjectScopedReads(t *testing.T) {
-	db := openCandidateTestDB(t)
+	db := openRG3LifecycleHealthTestDB(t)
 	store := NewRuleGovernanceStore(db)
 	ctx := context.Background()
 	project := fmt.Sprintf("rg3-health-scoped-%d", time.Now().UnixNano())
@@ -111,6 +135,12 @@ func TestRuleGovernanceStore_GetLifecycleHealthOmitsGlobalArbiterRunsForProjectS
 	}, "")
 	require.NoError(t, err)
 
+	other := ruleGovernanceCandidate(project + "-other")
+	other.SourceProject = project + "-other"
+	other.ActivationPredicate = map[string]any{"project": other.SourceProject}
+	createdOther, err := store.CreateRuleCandidate(ctx, other)
+	require.NoError(t, err)
+
 	scoped, err := store.GetLifecycleHealth(ctx, RuleGovernanceHealthParams{
 		Project: project,
 		Limit:   50,
@@ -118,6 +148,8 @@ func TestRuleGovernanceStore_GetLifecycleHealthOmitsGlobalArbiterRunsForProjectS
 	require.NoError(t, err)
 	require.Empty(t, scoped.ArbiterRunStatusCounts)
 	require.True(t, scoped.NoData)
+	require.Empty(t, scoped.CandidateStatusCounts)
+	require.NotContains(t, scoped.EvidenceHandles, fmt.Sprintf("rule_candidate:%d", createdOther.ID))
 
 	admin, err := store.GetLifecycleHealth(ctx, RuleGovernanceHealthParams{
 		Project:                       project,
@@ -127,6 +159,16 @@ func TestRuleGovernanceStore_GetLifecycleHealthOmitsGlobalArbiterRunsForProjectS
 	require.NoError(t, err)
 	require.Equal(t, 1, admin.ArbiterRunStatusCounts[models.RuleArbiterRunStatusCompleted])
 	require.False(t, admin.NoData)
+
+	otherProject, err := store.GetLifecycleHealth(ctx, RuleGovernanceHealthParams{
+		Project:                       other.SourceProject,
+		Limit:                         50,
+		IncludeGlobalArbiterRunCounts: true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, otherProject.CandidateStatusCounts[models.RuleCandidatePending])
+	require.Equal(t, 1, otherProject.ArbiterRunStatusCounts[models.RuleArbiterRunStatusCompleted])
+	require.False(t, otherProject.NoData)
 }
 
 func TestRuleGovernanceStore_ListExceptionQueueGroupsByReason(t *testing.T) {

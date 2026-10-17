@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useOperatorSecrets, type OperatorCredential } from '../composables/useOperatorSecrets'
 import type { MutationResult } from '../composables/useApi'
+import { isCatalogProject, projectName, useOperatorProjectContext } from '../composables/useOperatorProjectContext'
 
 const { t } = useI18n()
+const context = useOperatorProjectContext()
 const {
   creds,
   vault,
@@ -25,13 +27,35 @@ const deleteConfirm = ref(false)
 const revealError = ref<string | null>(null)
 const revealed = ref<{ id: string; value: string } | null>(null)
 const createName = ref('')
-const createProject = ref('engram')
+const createProject = ref('')
 const createValue = ref('')
 const mutationResult = ref<MutationResult | null>(null)
 let fpTimer: ReturnType<typeof setTimeout> | null = null
 
 const selected = computed(() => creds.find((cred) => cred.id === openedName.value) || null)
-const canCreate = computed(() => createName.value.trim().length > 0 && createProject.value.trim().length > 0 && createValue.value.length > 0 && !pending.value)
+const scopeError = computed(() => context.selectionError.value || context.error.value)
+const canCreate = computed(() => createName.value.trim().length > 0 && isCatalogProject(createProject.value) && createValue.value.length > 0 && !pending.value && !context.pending.value && !context.selectionPending.value && !scopeError.value)
+let revealGeneration = 0
+watch(context.project, (project) => {
+  createProject.value = isCatalogProject(project) ? project : ''
+  createValue.value = ''
+  mutationResult.value = null
+  openedName.value = null
+  deleteConfirm.value = false
+  revealed.value = null
+  revealError.value = null
+  revealGeneration += 1
+}, { immediate: true, flush: 'sync' })
+watch(loadState, () => { revealed.value = null; revealGeneration += 1 }, { flush: 'sync' })
+watch([context.selectionPending, scopeError], () => {
+  openedName.value = null
+  deleteConfirm.value = false
+  revealed.value = null
+  revealError.value = null
+  mutationResult.value = null
+  revealGeneration += 1
+}, { flush: 'sync' })
+onBeforeUnmount(() => { revealGeneration += 1; revealed.value = null; createValue.value = ''; if (fpTimer) clearTimeout(fpTimer) })
 
 function revealFp() {
   fpShown.value = !fpShown.value
@@ -55,11 +79,15 @@ function openCredential(cred: OperatorCredential) {
 }
 
 async function revealSecret(cred: OperatorCredential) {
+  if (context.selectionPending.value || scopeError.value) return
+  const generation = ++revealGeneration
   revealError.value = null
   try {
     const value = await fetchSecretValue(cred)
+    if (generation !== revealGeneration) return
     revealed.value = { id: cred.id, value }
   } catch (nextError) {
+    if (generation !== revealGeneration) return
     revealError.value = nextError instanceof Error ? nextError.message : String(nextError)
   }
 }
@@ -72,12 +100,16 @@ function hideSecret(id: string) {
 
 async function createSecret() {
   if (!canCreate.value) return
+  const scope = context.project.value
+  const value = createValue.value
+  createValue.value = ''
   const result = await runCreateSecret({
     name: createName.value.trim(),
-    value: createValue.value,
+    value,
     project: createProject.value.trim(),
     scope: 'project',
   })
+  if (scope !== context.project.value || context.selectionPending.value || scopeError.value) return
   mutationResult.value = result
   if (result.kind !== 'committed_verified') return
   createName.value = ''
@@ -86,14 +118,16 @@ async function createSecret() {
 }
 
 async function deleteOpened() {
-  if (!selected.value) return
+  if (!selected.value || context.selectionPending.value || scopeError.value) return
   if (!deleteConfirm.value) {
     deleteConfirm.value = true
     return
   }
 
   const cred = selected.value
+  const scope = context.project.value
   const result = await deleteSecret(cred)
+  if (scope !== context.project.value || context.selectionPending.value || scopeError.value) return
   mutationResult.value = result
   if (result.kind !== 'committed_verified') return
   openedName.value = null
@@ -125,6 +159,10 @@ async function cleanupOrphans() {
       <p>{{ t('secrets.subtitle') }}</p>
     </header>
 
+    <section v-if="context.selectionPending.value || scopeError" class="statebar" :data-state="scopeError ? 'error' : 'pending'" role="status">
+      <span>{{ scopeError ? t('secrets.state.error', { message: scopeError.message }) : t('secrets.state.pending') }}</span>
+      <button v-if="scopeError" class="tbtn" @click="context.refresh">{{ t('secrets.state.retry') }}</button>
+    </section>
     <section v-if="pending || error || loadState.kind === 'empty'" class="statebar" :data-state="loadState.kind">
       <span v-if="pending">{{ t('secrets.state.pending') }}</span>
       <span v-else-if="error">{{ t('secrets.state.error', { message: error }) }}</span>
@@ -177,7 +215,10 @@ async function cleanupOrphans() {
         </label>
         <label>
           <span>{{ t('secrets.create.project') }}</span>
-          <input v-model="createProject" class="input" autocomplete="off" />
+          <select v-model="createProject" class="input" data-testid="secret-create-project" :disabled="context.pending.value || context.selectionPending.value || Boolean(scopeError)">
+            <option value="" disabled>{{ t('knowledge.chooseProject') }}</option>
+            <option v-for="project in context.projects.value" :key="project" :value="project">{{ projectName(project) }}</option>
+          </select>
         </label>
         <label>
           <span>{{ t('secrets.create.value') }}</span>
@@ -217,7 +258,7 @@ async function cleanupOrphans() {
                 <span v-if="revealError && openedName === c.id" class="err">{{ revealError }}</span>
               </div>
             </td>
-            <td><span class="vcol">{{ c.project || t('secrets.globalProject') }}</span></td>
+            <td><span class="vcol">{{ c.scope === 'global' ? t('rules.scope.global') : projectName(c.project) }}</span></td>
             <td><span class="bdg">{{ c.scope }}</span></td>
             <td><span class="vcol">{{ c.created }}</span></td>
             <td class="r">

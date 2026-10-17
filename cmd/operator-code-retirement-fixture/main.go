@@ -315,6 +315,9 @@ func randomSecret() (string, error) {
 
 func seedHistoricalFixture(ctx context.Context, store *gormdb.Store) (fixtureState, error) {
 	state := fixtureState{project: retirementProject, documentPath: "books/jobs/fixture/history.md", ruleContent: "retirement fixture rule remains readable", issueTitle: "retirement fixture issue remains readable"}
+	if err := store.DB.WithContext(ctx).Create(&gormdb.Project{ID: state.project}).Error; err != nil {
+		return state, fmt.Errorf("seed canonical historical project: %w", err)
+	}
 	now := time.Now().UTC().Add(-time.Minute)
 	jobs := []booksJobFixtureRecord{
 		{Status: string(booksdomain.StatusPending), SourceRef: "historical-pending.md", CreatedAt: now, UpdatedAt: now},

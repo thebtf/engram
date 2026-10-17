@@ -1,6 +1,7 @@
 import { ref, watch } from 'vue'
 import { useUiI18n } from '@/composables/useUiI18n'
 import { fetchIssues, type Issue } from '@/utils/api'
+import { useProjectCatalog } from './useProjectCatalog'
 
 export function useIssues() {
   const { t } = useUiI18n()
@@ -9,8 +10,10 @@ export function useIssues() {
   const loading = ref(false)
   const error = ref<string | null>(null)
   const statusFilter = ref('open,acknowledged,resolved,reopened')
-  const projectFilter = ref('')
+  const catalog = useProjectCatalog('all')
+  const projectFilter = catalog.selectedProject
   const sourceProjectFilter = ref('')
+  const sourceAgentFilter = ref('')
   const typeFilter = ref('')
   /** Map from project ID to human-readable display name, populated by last fetch. */
   const projectNames = ref<Record<string, string>>({})
@@ -18,29 +21,32 @@ export function useIssues() {
   let abortController: AbortController | null = null
 
   async function load() {
-    if (abortController) {
-      abortController.abort()
-    }
+    abortController?.abort()
+    const project = projectFilter.value
+    if (catalog.selectionPending.value || catalog.selectionError.value || !project || (sourceAgentFilter.value === 'human' && !catalog.projects.value.some(row => row.project_id === project))) { issues.value = []; total.value = 0; loading.value = false; return }
     abortController = new AbortController()
+    const signal = abortController.signal
 
     loading.value = true
     error.value = null
 
     try {
       const result = await fetchIssues(
-        projectFilter.value || undefined,
+        projectFilter.value === 'all' || sourceAgentFilter.value === 'human' ? undefined : projectFilter.value,
         statusFilter.value || undefined,
         50,
         0,
-        abortController.signal,
+        signal,
         typeFilter.value || undefined,
-        sourceProjectFilter.value || undefined
+        sourceAgentFilter.value === 'human' ? project : sourceProjectFilter.value || undefined,
+        sourceAgentFilter.value || undefined
       )
+      if (catalog.selectionPending.value || projectFilter.value !== project || signal.aborted) return
       issues.value = result.issues || []
       total.value = result.total || 0
       projectNames.value = result.project_names || {}
     } catch (err: any) {
-      if (err.name !== 'AbortError') {
+      if (!signal.aborted && err.name !== 'AbortError') {
         error.value = err.message || t.value.issues.errors.loadFailed
         issues.value = []
         total.value = 0
@@ -51,11 +57,12 @@ export function useIssues() {
   }
 
   // Auto-reload when filters change
-  watch([statusFilter, projectFilter, sourceProjectFilter, typeFilter], () => {
+  watch([statusFilter, projectFilter, sourceProjectFilter, sourceAgentFilter, typeFilter, catalog.selectionPending], () => {
     load()
   })
 
   return {
+    ...catalog,
     issues,
     total,
     loading,
@@ -63,6 +70,7 @@ export function useIssues() {
     statusFilter,
     projectFilter,
     sourceProjectFilter,
+    sourceAgentFilter,
     typeFilter,
     projectNames,
     load,

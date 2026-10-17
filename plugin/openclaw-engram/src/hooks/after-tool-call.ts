@@ -6,7 +6,7 @@
  * This is fire-and-forget: the hook never blocks on a response.
  */
 
-import { resolveAndRegisterProject } from '../client.js';
+import { resolveProject } from '../client.js';
 import type { EngramRestClient } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import { classifyMessage } from './message-classifier.js';
@@ -71,7 +71,7 @@ export async function handleAfterToolCall(
   const agentId = ctx.agentId ?? '';
   const sessionId = ctx.sessionId ?? ctx.sessionKey ?? agentId;
   if (!sessionId?.trim()) return; // no session identity available — skip
-  const registration = await resolveAndRegisterProject(client, agentId, ctx.workspaceDir, config.project);
+  const registration = await resolveProject(client, agentId, ctx.workspaceDir, config.project);
   if (!registration.ok) {
     (logger ?? console).warn(`[engram] after-tool-call: project registration failed: ${registration.error.code}`);
     return;

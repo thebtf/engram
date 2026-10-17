@@ -7,10 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gorm.io/driver/postgres"
-	gormlib "gorm.io/gorm"
 	gormliblogger "gorm.io/gorm/logger"
 
 	engramgorm "github.com/thebtf/engram/internal/db/gorm"
@@ -29,16 +28,13 @@ func openIntegrationDB(tb testing.TB) (*engramgorm.Store, func()) {
 	if dsn == "" {
 		tb.Skip("T020: DATABASE_DSN not set; skipped")
 	}
-	rawDB, err := gormlib.Open(postgres.Open(dsn), &gormlib.Config{
-		Logger: gormliblogger.Default.LogMode(gormliblogger.Silent),
+	store, err := engramgorm.NewStore(engramgorm.Config{
+		DSN:      dsn,
+		MaxConns: 2,
+		LogLevel: gormliblogger.Silent,
 	})
-	require.NoError(tb, err, "open integration test DB")
-	sqlDB, err := rawDB.DB()
-	require.NoError(tb, err)
-	require.NoError(tb, sqlDB.Ping(), "ping integration test DB")
-
-	store := &engramgorm.Store{DB: rawDB}
-	return store, func() { sqlDB.Close() }
+	require.NoError(tb, err, "initialize integration test DB")
+	return store, func() { assert.NoError(tb, store.Close(), "close integration test DB") }
 }
 
 // TestTG3IntegrationCombinations_T020 exercises all 6 param combinations of
@@ -57,9 +53,11 @@ func TestTG3IntegrationCombinations_T020(t *testing.T) {
 	store, cleanup := openIntegrationDB(t)
 	defer cleanup()
 
-	const project = "test-tg3-integration-t020"
+	project := "test-tg3-integration-t020-" + uuid.NewString()
 	db := store.DB
-	defer db.Exec(`DELETE FROM memories WHERE project = ?`, project)
+	defer func() {
+		assert.NoError(t, db.Exec(`DELETE FROM memories WHERE project = ?`, project).Error, "clean T020 fixture")
+	}()
 
 	ctx := context.Background()
 	ms := engramgorm.NewMemoryStore(store)
@@ -86,8 +84,8 @@ func TestTG3IntegrationCombinations_T020(t *testing.T) {
 	}
 
 	// Fixture: three rows with distinct confidence + status values.
-	idActiveHigh := insertRow("active-high-confidence", "active", 0.9)        // passes all filters
-	idActiveLow := insertRow("active-low-confidence", "active", 0.3)          // excluded by confidence_min=0.7
+	idActiveHigh := insertRow("active-high-confidence", "active", 0.9)         // passes all filters
+	idActiveLow := insertRow("active-low-confidence", "active", 0.3)           // excluded by confidence_min=0.7
 	idSuperseded := insertRow("superseded-high-confidence", "superseded", 0.8) // excluded unless include_superseded
 
 	type combo struct {

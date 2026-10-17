@@ -66,10 +66,6 @@ func (m *Module) ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]mo
 	token := m.envFor(p, config.EnvWorkstationToken)
 	discoveryCtx, cancel := context.WithTimeout(ctx, proxyToolsDiscoveryTimeout)
 	defer cancel()
-	v3Identity, v3Enabled, err := m.v3Identity(discoveryCtx, p)
-	if err != nil {
-		return nil, &module.RequiredProxyToolsError{Cause: err}
-	}
 
 	conn, err := m.pool.getOrDialGRPC(serverURL, token)
 	if err != nil {
@@ -77,41 +73,16 @@ func (m *Module) ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]mo
 	}
 	client := pb.NewEngramServiceClient(conn)
 
+	// The catalogue is independent of local project state.
 	request := &pb.InitializeRequest{ClientName: "engram-daemon", ClientVersion: daemonClientVersion}
-	unscopedUCIDiscovery := v3Enabled && v3Identity == nil
-	if v3Enabled && !unscopedUCIDiscovery {
-		request.ProjectIdentityV3 = v3Identity
-		discoveryCtx = daemonComparisonContextV3(discoveryCtx)
-	} else if !v3Enabled {
-		project, projectIdentity, identityErr := m.proxyV2Identity(discoveryCtx, p)
-		if identityErr != nil {
-			return nil, &module.RequiredProxyToolsError{Cause: fmt.Errorf("project identity v2: %w", identityErr)}
-		}
-		request.Project = project
-		request.ProjectIdentity = projectIdentity
-	}
-
 	resp, err := client.Initialize(discoveryCtx, request, grpc.WaitForReady(true))
-	if v3Enabled && !unscopedUCIDiscovery && isV3OnboardingRequired(err) {
-		request.ProjectIdentityV3 = nil
-		unscopedUCIDiscovery = true
-		resp, err = client.Initialize(discoveryCtx, request, grpc.WaitForReady(true))
-	}
 	if err != nil {
-		if v3Enabled {
-			return nil, &module.RequiredProxyToolsError{Cause: v3ProxyError(err)}
-		}
 		return nil, &module.RequiredProxyToolsError{Cause: fmt.Errorf("gRPC Initialize: %w", err)}
-	}
-	if v3Enabled && !unscopedUCIDiscovery {
-		if err := validateV3Resolution(resp.GetProjectResolutionV3(), resp.GetCanonicalProject(), v3Identity); err != nil {
-			return nil, &module.RequiredProxyToolsError{Cause: err}
-		}
 	}
 
 	tools := make([]module.ToolDef, 0, len(resp.Tools))
 	for _, t := range resp.Tools {
-		if t.GetName() == projectIdentityV3RegistrationTool || (unscopedUCIDiscovery && !isUCIProxyTool(t.GetName())) {
+		if t.GetName() == projectIdentityV3RegistrationTool {
 			continue
 		}
 		tools = append(tools, module.ToolDef{
@@ -130,19 +101,8 @@ func (m *Module) ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]mo
 	return tools, nil
 }
 
-// Tools returns the one stable setup tool for a V3-configured daemon. V2
-// instances return no extra static tool and retain their existing surface.
-// V3 dispatch is static; V2 rejects the reserved name before proxy work.
-func (m *Module) Tools() []module.ToolDef {
-	if m.v3ClientInstanceID == "" {
-		return nil
-	}
-	return []module.ToolDef{{
-		Name:        projectIdentityV3RegistrationTool,
-		Description: "Explicitly register the current repository's V3 project identity. Takes no arguments and requires a server-authenticated master/admin identity.",
-		InputSchema: projectIdentityV3RegistrationSchema,
-	}}
-}
+// Project identity has no registration tool or authorization ceremony.
+func (m *Module) Tools() []module.ToolDef { return nil }
 
 // HandleTool executes the descriptor-only V3 registration setup operation.
 // It never constructs a V2 selector or accepts client project authority.
@@ -291,23 +251,19 @@ func (m *Module) proxyToolCallContext(ctx context.Context, project muxcore.Proje
 		callCtx, err := uciClientOutgoingContext(ctx, m.v3ClientInstanceID)
 		return callCtx, nil, false, err
 	}
-	v3Identity, v3Enabled, err := m.v3Identity(ctx, project)
+	if !projectidentity.ToolRequiresProject(request.ToolName) {
+		return ctx, nil, false, nil
+	}
+	serverURL, err := m.requireServerURL(project)
 	if err != nil {
 		return nil, nil, false, err
 	}
-	if v3Enabled {
-		if v3Identity == nil {
-			return nil, nil, false, &module.ModuleError{Code: "PROJECT_ANCHOR_INVALID", Message: projectIdentityResolutionRefusedMessage}
-		}
-		request.ProjectIdentityV3 = v3Identity
-		return daemonComparisonContextV3(ctx), v3Identity, true, nil
-	}
-	projectSlug, projectIdentity, err := m.proxyV2Identity(ctx, project)
+	resolved, err := projectidentity.ResolveLogicalProject(ctx, project.Cwd,
+		projectidentity.HTTPBootstrap(serverURL, m.envFor(project, config.EnvWorkstationToken)))
 	if err != nil {
-		return nil, nil, false, fmt.Errorf("project identity v2: %w", err)
+		return nil, nil, false, &module.ModuleError{Code: projectidentity.ProjectErrorCode(err), Message: "project context unavailable"}
 	}
-	request.Project = projectSlug
-	request.ProjectIdentity = projectIdentity
+	request.Project = resolved.ProjectID
 	return ctx, nil, false, nil
 }
 

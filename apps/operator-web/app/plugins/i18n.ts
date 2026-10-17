@@ -1,8 +1,10 @@
 import { createI18n } from 'vue-i18n'
 import { watch } from 'vue'
+import { messages as sharedMessages } from '../../../../ui/src/i18n/messages'
 
 const messages = {
   ru: {
+    projectCatalog: sharedMessages.ru.projectCatalog,
     common: {
       loading: 'Загрузка...',
       empty: 'Пусто',
@@ -12,6 +14,7 @@ const messages = {
     },
   },
   en: {
+    projectCatalog: sharedMessages.en.projectCatalog,
     common: {
       loading: 'Loading...',
       empty: 'Empty',

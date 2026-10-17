@@ -1,5 +1,11 @@
+<#
+.PARAMETER SourceProject
+Canonical UUID explicitly selected from this smoke backend's /api/projects catalog.
+Required for the human issue mutation flow; no project is inferred or created.
+#>
 param(
   [string]$AdminToken = "dev-admin-token",
+  [string]$SourceProject,
   [int]$PostgresPort = 55432,
   [int]$WorkerPort = 47777,
   [int]$OperatorWebPort = 43000,
@@ -8,6 +14,12 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+$sourceProjectGuid = [guid]::Empty
+if (-not [guid]::TryParseExact($SourceProject, "D", [ref]$sourceProjectGuid)) {
+  throw "Issue mutations require -SourceProject with an explicitly selected canonical catalog UUID."
+}
+$SourceProject = $sourceProjectGuid.ToString("D")
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 
@@ -181,6 +193,18 @@ try {
     throw "Expected selfcheck status 200, got $($selfcheckResponse.StatusCode). Body: $($selfcheckResponse.Content)"
   }
 
+  Write-Step "Validating selected source project against the backend catalog"
+  $projectsResponse = Invoke-OperatorRequest -Method GET -Url "$operatorWebOrigin/api/projects" -Session $webSession
+  Assert-Status -Response $projectsResponse -ExpectedStatus @(200) -Step "source project catalog"
+  $projectCatalog = Read-JsonBody -Response $projectsResponse -Step "source project catalog"
+  if (-not $projectCatalog.PSObject.Properties["items"]) {
+    throw "Source project catalog did not include canonical items."
+  }
+  $matchingProjects = @($projectCatalog.items | Where-Object { $_.project_id -eq $SourceProject })
+  if ($matchingProjects.Count -ne 1) {
+    throw "Selected -SourceProject must match exactly one canonical backend catalog project."
+  }
+
   Write-Step "Creating smoke issue through operator-web proxy"
   $createIssueResponse = Invoke-OperatorRequest `
     -Method POST `
@@ -191,9 +215,9 @@ try {
       body = "Created by scripts/smoke-operator-web.ps1 to prove proxied issue mutations."
       priority = "low"
       type = "task"
-      source_project = "operator-web-smoke"
-      target_project = "operator-web-smoke"
-      source_agent = "smoke-script"
+      source_project = $SourceProject
+      target_project = $SourceProject
+      source_agent = "human"
       labels = @("operator-web", "smoke")
     }
   Assert-Status -Response $createIssueResponse -ExpectedStatus @(201) -Step "issue create"
@@ -227,7 +251,7 @@ try {
     -Method POST `
     -Url $acknowledgeIssuesUrl `
     -Session $webSession `
-    -Body @{ ids = @($createdIssueId) }
+    -Body @{ ids = @($createdIssueId); source_project = $SourceProject; source_agent = "human" }
   Assert-Status -Response $acknowledgeResponse -ExpectedStatus @(200) -Step "issue acknowledge"
 
   $acknowledgeBody = Read-JsonBody -Response $acknowledgeResponse -Step "issue acknowledge"
@@ -255,8 +279,8 @@ try {
     -Body @{
       status = "resolved"
       comment = $smokeComment
-      source_project = "operator-web-smoke"
-      source_agent = "smoke-script"
+      source_project = $SourceProject
+      source_agent = "human"
     }
   Assert-Status -Response $resolveIssueResponse -ExpectedStatus @(200) -Step "issue resolve/comment"
 
@@ -280,7 +304,7 @@ try {
   Write-Step "Deleting smoke issue through operator-web proxy"
   $deleteIssueResponse = Invoke-OperatorRequest `
     -Method DELETE `
-    -Url $issueUrl `
+    -Url "${issueUrl}?source_project=$SourceProject&source_agent=human" `
     -Session $webSession
   Assert-Status -Response $deleteIssueResponse -ExpectedStatus @(204) -Step "issue delete cleanup"
 
@@ -312,7 +336,7 @@ finally {
     try {
       $cleanupIssueResponse = Invoke-OperatorRequest `
         -Method DELETE `
-        -Url "$issuesUrl/$createdIssueId" `
+        -Url "${issuesUrl}/${createdIssueId}?source_project=$SourceProject&source_agent=human" `
         -Session $webSession
       if (@(204, 404) -notcontains [int]$cleanupIssueResponse.StatusCode) {
         Write-Warning "Cleanup for smoke issue #$createdIssueId returned $($cleanupIssueResponse.StatusCode). Body: $($cleanupIssueResponse.Content)"

@@ -379,5 +379,5 @@ func assertBrowserReadGrantMigrationAuditCount(t *testing.T, db *gormlib.DB, act
 }
 
 func browserReadGrantMigrationPrincipal(userID int64) string {
-	return fmt.Sprintf("browser-grant-migration-user/%d", userID)
+	return fmt.Sprintf("browser-user/%d", userID)
 }

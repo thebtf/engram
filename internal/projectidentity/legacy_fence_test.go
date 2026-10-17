@@ -69,9 +69,9 @@ func TestLegacySelectorFence_StoreBoundary(t *testing.T) {
 		t.Cleanup(func() { clearSelectorRows(t, store, selector) })
 
 		resolution, err := gormdb.RegisterAndResolve(ctx, store.DB, selector, nil)
-		var identityErr *gormdb.ProjectIdentityError
-		if !errors.As(err, &identityErr) || identityErr == nil || identityErr.Code != gormdb.ProjectIdentityAmbiguous || identityErr.UpgradeAction != gormdb.UpgradeActionSendProjectIdentityV2 {
-			t.Errorf("error=%T %v, want selector-only PROJECT_IDENTITY_AMBIGUOUS with %q", err, err, gormdb.UpgradeActionSendProjectIdentityV2)
+		var refusal *gormdb.ConsolidationError
+		if !errors.As(err, &refusal) || refusal == nil || refusal.Code != "PROJECT_ADOPTION_UNRESOLVED_MEMBERSHIP" {
+			t.Errorf("error=%T %v, want typed unresolved membership", err, err)
 		}
 		if resolution.CanonicalProjectID != "" {
 			t.Errorf("canonical project=%q, want empty after selector-only refusal", resolution.CanonicalProjectID)
@@ -81,28 +81,25 @@ func TestLegacySelectorFence_StoreBoundary(t *testing.T) {
 		}
 	})
 
-	t.Run("known unique V2 selector remains resolvable", func(t *testing.T) {
-		selector := "ar1-fence-store-v2-selector"
-		canonical := "ar1-fence-store-v2-canonical"
-		remote := "https://example.invalid/ar1/fence.git"
+	t.Run("historical alias without migration proof remains retained but unusable for writes", func(t *testing.T) {
+		selector := "ar1-fence-store-retained-selector"
+		canonical := "ar1-fence-store-retained-bucket"
 		clearSelectorRows(t, store, selector, canonical)
 		t.Cleanup(func() { clearSelectorRows(t, store, selector, canonical) })
-		if err := gormdb.UpsertProject(ctx, store.DB, canonical, selector, remote, "packages/fence/", "fence"); err != nil {
-			t.Fatalf("seed known V2 project: %v", err)
+		if err := store.DB.Create(&gormdb.Project{ID: canonical, LegacyIDs: []string{selector}}).Error; err != nil {
+			t.Fatal(err)
 		}
-
-		resolution, err := gormdb.RegisterAndResolve(ctx, store.DB, selector, &gormdb.ProjectIdentityV2{
-			Version:         gormdb.ProjectIdentityVersionV2,
-			LegacyProjectID: selector,
-			DisplayName:     "fence",
-			GitRemote:       remote,
-			RelativePath:    "packages/fence/",
-		})
-		if err != nil {
-			t.Fatalf("resolve known V2 selector: %v", err)
+		resolution, err := gormdb.RegisterAndResolve(ctx, store.DB, selector, nil)
+		var refusal *gormdb.ConsolidationError
+		if !errors.As(err, &refusal) || refusal == nil || refusal.Code != "PROJECT_ADOPTION_UNRESOLVED_MEMBERSHIP" || resolution.CanonicalProjectID != "" {
+			t.Fatalf("resolution=%+v error=%v", resolution, err)
 		}
-		if resolution.CanonicalProjectID != canonical {
-			t.Fatalf("canonical project=%q, want %q", resolution.CanonicalProjectID, canonical)
+		var retained gormdb.Project
+		if err := store.DB.First(&retained, "id = ?", canonical).Error; err != nil {
+			t.Fatal(err)
+		}
+		if len(retained.LegacyIDs) != 1 || retained.LegacyIDs[0] != selector || selectorRowCount(t, store, selector) != 1 {
+			t.Fatal("refused resolution changed retained historical provenance")
 		}
 	})
 }

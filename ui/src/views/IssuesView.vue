@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { Plus, Loader2, MessageSquare } from 'lucide-vue-next'
 import { useUiI18n } from '@/composables/useUiI18n'
 import { useIssues } from '@/composables/useIssues'
-import { createIssue, fetchTrackedProjects } from '@/utils/api'
+import { createIssue, resolveProject } from '@/utils/api'
+import ProjectCatalogStatus from '@/components/ProjectCatalogStatus.vue'
 import { formatRelativeTime } from '@/utils/formatters'
 import EmptyState from '@/components/layout/EmptyState.vue'
 import { Button } from '@/components/ui/button'
@@ -37,13 +38,25 @@ import { cn } from '@/lib/utils'
 
 const router = useRouter()
 const { t } = useUiI18n()
-const { issues, total, loading, error, statusFilter, sourceProjectFilter, typeFilter, projectNames, load } = useIssues()
+const { issues, total, loading, error, statusFilter, sourceProjectFilter, sourceAgentFilter, typeFilter, projectNames, load, projects: trackedProjects, selectedProject, unresolved, selectionPending, selectionError, unresolvedReference, projectName, refresh } = useIssues()
 const myIssuesOnly = ref(false)
 
 function toggleMyIssues() {
+  if (selectionPending.value || selectionError.value || !trackedProjects.value.some(project => project.project_id === selectedProject.value)) {
+    createError.value = t.value.projectCatalog.selectionRequired
+    return
+  }
   myIssuesOnly.value = !myIssuesOnly.value
-  sourceProjectFilter.value = myIssuesOnly.value ? 'dashboard' : ''
+  sourceProjectFilter.value = myIssuesOnly.value ? selectedProject.value : ''
+  sourceAgentFilter.value = myIssuesOnly.value ? 'human' : ''
 }
+watch(selectedProject, project => {
+  if (myIssuesOnly.value) {
+    if (!trackedProjects.value.some(item => item.project_id === project)) myIssuesOnly.value = false
+    sourceProjectFilter.value = myIssuesOnly.value ? project : ''
+    sourceAgentFilter.value = myIssuesOnly.value ? 'human' : ''
+  }
+})
 
 // --- New Issue modal state ---
 const showNewIssue = ref(false)
@@ -52,7 +65,6 @@ const newBody = ref('')
 const newType = ref<'bug' | 'feature' | 'improvement' | 'task'>('task')
 const newPriority = ref<'critical' | 'high' | 'medium' | 'low'>('medium')
 const newTargetProject = ref('')
-const trackedProjects = ref<string[]>([])
 const creating = ref(false)
 const createError = ref<string | null>(null)
 
@@ -77,12 +89,18 @@ function saveDefaults() {
 }
 
 onMounted(async () => {
-  load()
-  trackedProjects.value = await fetchTrackedProjects()
-  loadDefaults()
-  // If saved target project is not in the list, fall back to first
-  if (newTargetProject.value && !trackedProjects.value.includes(newTargetProject.value)) {
-    newTargetProject.value = trackedProjects.value[0] || ''
+  try {
+    await refresh()
+    loadDefaults()
+    if (newTargetProject.value) {
+      const id = trackedProjects.value.some(project => project.project_id === newTargetProject.value)
+        ? newTargetProject.value : await resolveProject(newTargetProject.value)
+      if (!trackedProjects.value.some(project => project.project_id === id)) throw new Error(t.value.projectCatalog.unknownProject)
+      newTargetProject.value = id
+    }
+  } catch (failure) {
+    newTargetProject.value = ''
+    createError.value = failure instanceof Error ? failure.message : t.value.projectCatalog.unknownProject
   }
 })
 
@@ -97,7 +115,10 @@ async function openNewIssue() {
 }
 
 async function submitNewIssue() {
-  if (!newTitle.value.trim()) return
+  if (!newTitle.value.trim() || selectionPending.value || selectionError.value || !trackedProjects.value.some(project => project.project_id === selectedProject.value) || !trackedProjects.value.some(project => project.project_id === newTargetProject.value)) {
+    createError.value = t.value.projectCatalog.selectionRequired
+    return
+  }
   creating.value = true
   createError.value = null
   try {
@@ -107,6 +128,7 @@ async function submitNewIssue() {
       type: newType.value,
       priority: newPriority.value,
       target_project: newTargetProject.value,
+      source_project: selectedProject.value,
     })
     saveDefaults()
     showNewIssue.value = false
@@ -152,24 +174,8 @@ function typeBadgeClass(type: string): string {
 }
 
 function shortProject(project: string): string {
-  if (!project) return '?'
-  // Use server-provided display name if available
-  if (projectNames.value[project]) return projectNames.value[project]
-  // Strip D:\Dev\ or similar path prefixes
-  if (/^[A-Z]:\\/.test(project)) {
-    const parts = project.split(/[/\\]/)
-    return parts[parts.length - 1] || project
-  }
-  // Hash-only slugs (e.g. "689ee718") — show as truncated hash
-  if (/^[0-9a-f]{6,}$/i.test(project)) {
-    return project.slice(0, 8)
-  }
-  // name_hash format (e.g. "engram_67e398f8") — strip hash suffix
-  if (/^(.+)_[0-9a-f]{6,}$/i.test(project)) {
-    return project.replace(/_[0-9a-f]{6,}$/i, '')
-  }
-  const parts = project.split('/')
-  return parts[parts.length - 1] || project
+  return trackedProjects.value.some(item => item.project_id === project)
+    ? projectName(project) : projectNames.value[project] || t.value.projectCatalog.unknownProject
 }
 
 const statusGroups = computed(() => [
@@ -194,6 +200,13 @@ const issueTypes = computed(() => [
 
 <template>
   <div class="space-y-3 pt-4">
+    <ProjectCatalogStatus :records="unresolved" :pending="selectionPending" :error="selectionError" :reference="unresolvedReference" />
+    <label class="block text-sm">Project context (source for human actions)
+      <select v-model="selectedProject" :disabled="selectionPending" class="ml-2 rounded border p-2">
+        <option value="all">{{ t.projects.sessions.filterAll }}</option>
+        <option v-for="project in trackedProjects" :key="project.project_id" :value="project.project_id">{{ projectName(project.project_id) }}</option>
+      </select>
+    </label>
     <!-- Header: title + actions -->
     <div class="flex items-center justify-between flex-wrap gap-2">
       <div class="flex items-center gap-3">
@@ -287,7 +300,7 @@ const issueTypes = computed(() => [
             :key="issue.id"
             class="cursor-pointer"
             :class="(issue.status === 'closed' || issue.status === 'rejected') ? 'opacity-50' : ''"
-            @click="router.push(`/issues/${issue.id}`)"
+            @click="router.push({ path: `/issues/${issue.id}`, query: { project: selectedProject } })"
           >
             <TableCell class="text-muted-foreground text-xs font-mono">
               #{{ issue.id }}
@@ -398,7 +411,7 @@ const issueTypes = computed(() => [
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="">{{ t.issues.dialog.noTarget }}</SelectItem>
-              <SelectItem v-for="p in trackedProjects" :key="p" :value="p">{{ p }}</SelectItem>
+              <SelectItem v-for="p in trackedProjects" :key="p.project_id" :value="p.project_id">{{ projectName(p.project_id) }}</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -408,7 +421,7 @@ const issueTypes = computed(() => [
         <Button variant="secondary" @click="showNewIssue = false">{{ t.issues.dialog.cancel }}</Button>
         <Button
           @click="submitNewIssue"
-          :disabled="creating || !newTitle.trim()"
+          :disabled="creating || !newTitle.trim() || selectionPending || Boolean(selectionError) || !trackedProjects.some(project => project.project_id === selectedProject) || !trackedProjects.some(project => project.project_id === newTargetProject)"
         >
           <Loader2 v-if="creating" class="w-4 h-4 mr-2 animate-spin" />
           {{ creating ? t.issues.dialog.creating : t.issues.dialog.create }}

@@ -33,7 +33,14 @@ var (
 // A Context permits a published View choice only after transport authorization;
 // nil Context is a registered checkout awaiting its first View or non-authorizing
 // offline metadata. Registration alone does not prove a live daemon owner.
+type BrowserCodeCatalogFilter struct {
+	ProjectID           string
+	UnresolvedReference string
+}
+
 type BrowserCodeContextCatalogEntry struct {
+	ProjectID            *string
+	UnresolvedReference  *string
 	SourceID             string
 	SourceLabel          string
 	CheckoutID           string
@@ -138,7 +145,8 @@ func NewBrowserCodeContextStore(db *gorm.DB) *BrowserCodeContextStore {
 // ListCatalog returns each active grant's exact published Views in stable
 // Source, Checkout, generation, and View order. A checkout without a View is
 // returned once with Context nil and IndexIntentAvailable true.
-func (s *BrowserCodeContextStore) ListCatalog(ctx context.Context, subjectUserID int64) ([]BrowserCodeContextCatalogEntry, error) {
+func (s *BrowserCodeContextStore) ListCatalog(ctx context.Context, subjectUserID int64, filter BrowserCodeCatalogFilter) ([]BrowserCodeContextCatalogEntry, error) {
+	project := filter.ProjectID
 	if err := s.requireDB("list catalog"); err != nil {
 		return nil, err
 	}
@@ -149,6 +157,9 @@ func (s *BrowserCodeContextStore) ListCatalog(ctx context.Context, subjectUserID
 		return nil, err
 	}
 	if subjectUserID < 1 {
+		return nil, ErrBrowserCodeContextDenied
+	}
+	if project != "" && validateUCIUUID("project_id", project) != nil {
 		return nil, ErrBrowserCodeContextDenied
 	}
 
@@ -163,6 +174,7 @@ func (s *BrowserCodeContextStore) ListCatalog(ctx context.Context, subjectUserID
 	var rows []browserCodeContextCatalogRow
 	result := s.db.WithContext(ctx).Raw(`
 		SELECT
+			membership.project_id, membership.unresolved_reference,
 			browser_grant.source_id,
 			source.display_name AS source_label,
 			browser_grant.checkout_id,
@@ -188,6 +200,7 @@ func (s *BrowserCodeContextStore) ListCatalog(ctx context.Context, subjectUserID
 		JOIN ci_checkouts AS checkout
 			ON checkout.checkout_id = browser_grant.checkout_id
 			AND checkout.source_id = browser_grant.source_id
+		`+browserCodeProjectMembershipJoin+`
 		LEFT JOIN ci_views AS view_row
 			ON view_row.checkout_id = checkout.checkout_id
 			AND view_row.source_id = checkout.source_id
@@ -200,11 +213,13 @@ func (s *BrowserCodeContextStore) ListCatalog(ctx context.Context, subjectUserID
 			AND checkout.owner_principal = browser_grant.issuer_principal
 			AND source.state = ?
 			AND checkout.state IN (?, ?, ?)
+			AND (? = '' OR membership.project_id = ?)
+			AND (? = '' OR membership.unresolved_reference = ?)
 		ORDER BY browser_grant.source_id ASC, browser_grant.checkout_id ASC, view_row.generation DESC NULLS LAST, view_row.view_id ASC
 		LIMIT ?
 	`, UCIViewPublished, UCIViewSuperseded, subjectUserID, BrowserReadGrantActive, now,
 		UCISourceActive, UCICheckoutRegistered, UCICheckoutWatching, UCICheckoutCatchingUp,
-		browserCodeCatalogMaxEntries+1).Scan(&rows)
+		project, project, filter.UnresolvedReference, filter.UnresolvedReference, browserCodeCatalogMaxEntries+1).Scan(&rows)
 	if result.Error != nil {
 		return nil, fmt.Errorf("browser code context catalog: %w", result.Error)
 	}
@@ -225,16 +240,20 @@ func (s *BrowserCodeContextStore) ListCatalog(ctx context.Context, subjectUserID
 
 // ListNoAuthCatalog returns durable registrations plus a bounded, non-authorizing
 // offline inventory. The transport additionally derives owner liveness from polling.
-func (s *BrowserCodeContextStore) ListNoAuthCatalog(ctx context.Context) ([]BrowserCodeContextCatalogEntry, error) {
+func (s *BrowserCodeContextStore) ListNoAuthCatalog(ctx context.Context, filter BrowserCodeCatalogFilter) ([]BrowserCodeContextCatalogEntry, error) {
+	project := filter.ProjectID
 	if err := s.requireDB("list local code catalog"); err != nil {
 		return nil, err
 	}
 	if ctx == nil || ctx.Err() != nil {
 		return nil, ErrBrowserCodeContextDenied
 	}
+	if project != "" && validateUCIUUID("project_id", project) != nil {
+		return nil, ErrBrowserCodeContextDenied
+	}
 	var rows []browserCodeContextCatalogRow
 	err := s.db.WithContext(ctx).Raw(`
-		SELECT source.source_id, source.display_name AS source_label,
+		SELECT membership.project_id, membership.unresolved_reference, source.source_id, source.display_name AS source_label,
 			checkout.checkout_id, checkout.kind AS checkout_kind, checkout.state AS checkout_state,
 			COALESCE(checkout.display_name, '') AS checkout_label,
 			view_row.view_id, view_row.profile_id, view_row.generation,
@@ -244,6 +263,7 @@ func (s *BrowserCodeContextStore) ListNoAuthCatalog(ctx context.Context) ([]Brow
 			view_row.head_oid AS snapshot_revision, view_row.published_at AS snapshot_published_at
 		FROM sources AS source
 		JOIN ci_checkouts AS checkout ON checkout.source_id = source.source_id
+		`+browserCodeProjectMembershipJoin+`
 		LEFT JOIN LATERAL (
 			SELECT view_id, profile_id, generation, ref_label, head_oid, published_at
 			FROM ci_views WHERE checkout_id = checkout.checkout_id
@@ -254,11 +274,13 @@ func (s *BrowserCodeContextStore) ListNoAuthCatalog(ctx context.Context) ([]Brow
 		) AS view_row ON TRUE
 		WHERE source.auth_realm = ? AND checkout.owner_principal = ?
 			AND source.state = ? AND checkout.state IN (?, ?, ?)
+			AND (? = '' OR membership.project_id = ?)
+			AND (? = '' OR membership.unresolved_reference = ?)
 		ORDER BY source.source_id, checkout.checkout_id, view_row.generation DESC NULLS LAST, view_row.view_id
 		LIMIT ?
 	`, UCIViewPublished, UCIViewSuperseded, uci.NoAuthCodeRealm, uci.NoAuthCodePrincipal,
 		UCISourceActive, UCICheckoutRegistered, UCICheckoutWatching, UCICheckoutCatchingUp,
-		browserCodeCatalogMaxEntries+1).Scan(&rows).Error
+		project, project, filter.UnresolvedReference, filter.UnresolvedReference, browserCodeCatalogMaxEntries+1).Scan(&rows).Error
 	if err != nil {
 		return nil, fmt.Errorf("local code context catalog: %w", err)
 	}
@@ -270,17 +292,20 @@ func (s *BrowserCodeContextStore) ListNoAuthCatalog(ctx context.Context) ([]Brow
 	// a healthy active catalog into a service-wide 503.
 	var offline []browserCodeContextCatalogRow
 	err = s.db.WithContext(ctx).Raw(`
-		SELECT source.source_id, source.display_name AS source_label,
+		SELECT membership.project_id, membership.unresolved_reference, source.source_id, source.display_name AS source_label,
 			checkout.checkout_id, checkout.kind AS checkout_kind, checkout.state AS checkout_state,
 			COALESCE(checkout.display_name, '') AS checkout_label
 		FROM sources AS source
 		JOIN ci_checkouts AS checkout ON checkout.source_id = source.source_id
+		`+browserCodeProjectMembershipJoin+`
 		WHERE source.auth_realm = ? AND checkout.owner_principal = ?
 			AND source.state = ? AND checkout.state = ?
+			AND (? = '' OR membership.project_id = ?)
+			AND (? = '' OR membership.unresolved_reference = ?)
 		ORDER BY checkout.updated_at DESC, checkout.checkout_id
 		LIMIT ?
 	`, uci.NoAuthCodeRealm, uci.NoAuthCodePrincipal, UCISourceActive, UCICheckoutOffline,
-		browserCodeCatalogMaxEntries).Scan(&offline).Error
+		project, project, filter.UnresolvedReference, filter.UnresolvedReference, browserCodeCatalogMaxEntries).Scan(&offline).Error
 	if err != nil {
 		return nil, fmt.Errorf("local code context offline catalog: %w", err)
 	}
@@ -541,6 +566,8 @@ func (s *BrowserCodeContextStore) AdvanceContinuation(ctx context.Context, curso
 }
 
 type browserCodeContextCatalogRow struct {
+	ProjectID           *string          `gorm:"column:project_id"`
+	UnresolvedReference *string          `gorm:"column:unresolved_reference"`
 	SourceID            string           `gorm:"column:source_id"`
 	SourceLabel         string           `gorm:"column:source_label"`
 	CheckoutID          string           `gorm:"column:checkout_id"`
@@ -560,6 +587,8 @@ func (row browserCodeContextCatalogRow) catalogEntry() (BrowserCodeContextCatalo
 		return BrowserCodeContextCatalogEntry{}, ErrBrowserCodeContextDenied
 	}
 	entry := BrowserCodeContextCatalogEntry{
+		ProjectID:            row.ProjectID,
+		UnresolvedReference:  row.UnresolvedReference,
 		SourceID:             row.SourceID,
 		SourceLabel:          row.SourceLabel,
 		CheckoutID:           row.CheckoutID,

@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
+	"github.com/thebtf/engram/internal/auditcontext"
 	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/injection"
@@ -863,14 +864,16 @@ func grpcCodeToHTTP(code codes.Code) int {
 // @Accept json
 // @Produce json
 // @Security ApiKeyAuth
-// @Param project query string false "Project name (required)"
-// @Param agent_id query string false "Agent ID (acts as project scope if project empty)"
+// @Param project query string false "Pinned project UUID or proven historical selector (required)"
+// @Param agent_id query string false "Agent attribution; never substitutes for project or session"
+// @Param session_id query string false "Actual caller session for historical selector translation"
+// @Param identity_only query boolean false "Return the canonical project UUID without retrieval"
 // @Param format query string false "Response format: 'compact' for minimal payload"
-// @Param body body object false "POST body: {project, agent_id, cwd, legacy_project, project_identity, identity_only}"
+// @Param body body object false "POST body: {project, session_id, agent_id, cwd, legacy_project, project_identity, identity_only}"
 // @Success 200 {object} map[string]interface{}
 // @Failure 400 {string} string "project required"
-// @Failure 409 {object} map[string]interface{} "ambiguous legacy project identity"
-// @Failure 503 {object} map[string]interface{} "project identity registration unavailable"
+// @Failure 409 {object} map[string]interface{} "unresolved or conflicting historical project membership"
+// @Failure 503 {object} map[string]interface{} "project identity resolution unavailable"
 // @Failure 500 {string} string "internal error"
 // @Router /api/context/inject [post]
 // @Router /api/context/inject [get]
@@ -911,7 +914,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		projectDescriptor = req.ProjectDescriptor
 		identityOnly = req.IdentityOnly
 	} else {
-		// GET is the deprecated V2 compatibility route. V3 descriptors require POST.
+		// Historical selector translation requires the actual caller session.
 		project = r.URL.Query().Get("project")
 		agentID = r.URL.Query().Get("agent_id")
 		cwd = r.URL.Query().Get("cwd")
@@ -920,7 +923,9 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		relativePath = r.URL.Query().Get("relative_path")
 		sessionID = r.URL.Query().Get("session_id")
 		filesBeingEdited = r.URL.Query()["files_being_edited"]
+		identityOnly = r.URL.Query().Get("identity_only") == "true"
 	}
+	r = r.WithContext(auditcontext.WithSourceSession(r.Context(), sessionID))
 
 	var resolutionV3 *pb.ProjectResolutionResultV3
 	if projectDescriptor != nil {
@@ -937,22 +942,14 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		legacyProject = ""
 		projectIdentity = nil
 		resolutionV3 = resolved
+	} else if projectidentity.ValidProjectID(project) && projectIdentity == nil && legacyProject == "" {
+		// Portable UUID is already pinned; authorization stays at the data boundary.
 	} else {
-		// Fall back to agent_id as session proxy when no explicit session_id provided.
-		if sessionID == "" {
-			sessionID = agentID
-		}
-
-		// agent_id acts as project scope for OpenClaw agents without filesystem context.
-		if project == "" && agentID != "" {
-			project = agentID
-		}
 		if project == "" {
 			http.Error(w, "project required", http.StatusBadRequest)
 			return
 		}
-		// Validate every raw selector and the complete v2 metadata before identity
-		// registration can create a project row or append an alias.
+		// Validate historical metadata without deriving or registering an identity.
 		if err := ValidateProjectName(project); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -970,9 +967,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Under legacy-direct enforcement, resolve and authorize the existing
-		// canonical project before RegisterAndResolve can create identity state or
-		// append an alias. Default-off keeps the historical registration path.
+		// Existing data authorization remains independent of migration resolution.
 		if s.rejectLegacyDirectDelivery(w, r.Context(), project) {
 			return
 		}
@@ -981,11 +976,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if projectIdentity == nil && legacyProject != "" && legacyProject != project {
-			displayName := project
-			if index := strings.Index(project, "_"); index > 0 {
-				displayName = project[:index]
-			}
-			if err := gorm.RegisterLegacyProject(r.Context(), s.store.DB, project, legacyProject, gitRemote, relativePath, displayName); err != nil {
+			if err := gorm.RegisterLegacyProject(r.Context(), s.store.DB, project, legacyProject, gitRemote, relativePath, project); err != nil {
 				writeProjectIdentityHTTPError(w, err)
 				return
 			}
@@ -1480,6 +1471,13 @@ func writeProjectIdentityHTTPError(w http.ResponseWriter, err error) {
 		case gorm.ProjectIdentityAmbiguous:
 			statusCode = http.StatusConflict
 		}
+	}
+	var migrationErr *gorm.ConsolidationError
+	if errors.As(err, &migrationErr) && migrationErr != nil {
+		statusCode = http.StatusConflict
+		code = migrationErr.Code
+		action = "send_canonical_project_id"
+		message = "historical project membership is unresolved or conflicting"
 	}
 	w.Header().Set(contextJSONContentTypeHeader, contextJSONContentType)
 	w.WriteHeader(statusCode)

@@ -11,6 +11,8 @@ import {
 } from 'lucide-vue-next'
 import { fetchIssue, updateIssue, deleteIssue, type Issue, type IssueComment } from '@/utils/api'
 import { formatRelativeTime } from '@/utils/formatters'
+import { useProjectCatalog } from '@/composables/useProjectCatalog'
+import ProjectCatalogStatus from '@/components/ProjectCatalogStatus.vue'
 import { renderMarkdownAsync } from '@/composables/useMarkdown'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -41,6 +43,8 @@ import { cn } from '@/lib/utils'
 const route = useRoute()
 const router = useRouter()
 const { locale, t } = useUiI18n()
+const { projects, unresolved, selectedProject, selectionPending, selectionError, unresolvedReference, projectName, refresh } = useProjectCatalog('all')
+const canAct = computed(() => !selectionPending.value && !selectionError.value && projects.value.some(project => project.project_id === selectedProject.value))
 const statusLabels = computed<Record<string, string>>(() => ({
   open: t.value.issues.filters.open,
   acknowledged: t.value.issues.filters.acknowledged,
@@ -114,6 +118,7 @@ function typeBadgeClass(type: string): string {
 }
 
 function shortProject(project: string): string {
+  if (projects.value.some(item => item.project_id === project)) return projectName(project)
   if (!project) return '?'
   if (issue.value) {
     if (project === issue.value.source_project && sourceProjectDisplayName.value) {
@@ -123,8 +128,7 @@ function shortProject(project: string): string {
       return targetProjectDisplayName.value
     }
   }
-  const parts = project.split('/')
-  return parts[parts.length - 1] || project
+  return t.value.projectCatalog.unknownProject
 }
 
 const allStatuses = ['open', 'acknowledged', 'resolved', 'reopened', 'closed', 'rejected']
@@ -248,6 +252,7 @@ function startEdit() {
 
 async function saveEdit() {
   if (!issue.value) return
+  if (!canAct.value) { error.value = t.value.projectCatalog.selectionRequired; return }
   actionLoading.value = true
   try {
     const fields: Record<string, string> = {}
@@ -256,7 +261,7 @@ async function saveEdit() {
     if (editPriority.value !== issue.value.priority) fields.priority = editPriority.value
     if (editType.value !== (issue.value.type || 'task')) fields.type = editType.value
     if (Object.keys(fields).length > 0) {
-      await updateIssue(issue.value.id, fields)
+      await updateIssue(issue.value.id, { ...fields, source_project: selectedProject.value, source_agent: 'human' })
     }
     editing.value = false
     await loadIssue()
@@ -269,11 +274,12 @@ async function saveEdit() {
 
 async function changeStatus(newStatus: string) {
   if (!issue.value) return
+  if (!canAct.value) { error.value = t.value.projectCatalog.selectionRequired; return }
   actionLoading.value = true
   try {
     await updateIssue(issue.value.id, {
       status: newStatus,
-      source_project: 'dashboard',
+      source_project: selectedProject.value,
       source_agent: 'human',
     })
     await loadIssue()
@@ -286,11 +292,12 @@ async function changeStatus(newStatus: string) {
 
 async function submitComment() {
   if (!issue.value || !newComment.value.trim()) return
+  if (!canAct.value) { error.value = t.value.projectCatalog.selectionRequired; return }
   commenting.value = true
   try {
     await updateIssue(issue.value.id, {
       comment: newComment.value,
-      source_project: 'dashboard',
+      source_project: selectedProject.value,
       source_agent: 'human',
     })
     newComment.value = ''
@@ -303,11 +310,11 @@ async function submitComment() {
 }
 
 async function confirmDelete() {
-  if (!issue.value) return
+  if (!issue.value || !canAct.value) return
   actionLoading.value = true
   try {
-    await deleteIssue(issue.value.id)
-    router.push('/issues')
+    await deleteIssue(issue.value.id, selectedProject.value)
+    router.push({ path: '/issues', query: route.query })
   } catch (err: any) {
     error.value = err.message || t.value.issueDetail.loadFailed
   } finally {
@@ -318,12 +325,13 @@ async function confirmDelete() {
 
 async function confirmReject() {
   if (!issue.value || !rejectReason.value.trim()) return
+  if (!canAct.value) { error.value = t.value.projectCatalog.selectionRequired; return }
   actionLoading.value = true
   try {
     await updateIssue(issue.value.id, {
       status: 'rejected',
       comment: rejectReason.value,
-      source_project: 'dashboard',
+      source_project: selectedProject.value,
       source_agent: 'human',
     })
     showRejectDialog.value = false
@@ -336,13 +344,21 @@ async function confirmReject() {
   }
 }
 
-onMounted(loadIssue)
+onMounted(async () => { await Promise.all([loadIssue(), refresh().catch(() => {})]) })
 </script>
 
 <template>
   <div class="space-y-4 pt-4">
+    <ProjectCatalogStatus :records="unresolved" :pending="selectionPending" :error="selectionError" :reference="unresolvedReference" />
+    <label class="block text-sm">Source project
+      <select v-model="selectedProject" :disabled="selectionPending" class="ml-2 rounded-md border bg-background p-2">
+        <option value="all" disabled>{{ t.projectCatalog.selectionRequired }}</option>
+        <option value="" disabled>{{ t.projectCatalog.selectionRequired }}</option>
+        <option v-for="project in projects" :key="project.project_id" :value="project.project_id">{{ projectName(project.project_id) }}</option>
+      </select>
+    </label>
     <!-- Back button -->
-    <Button variant="ghost" size="sm" @click="router.push('/issues')" class="-ml-2">
+    <Button variant="ghost" size="sm" @click="router.push({ path: '/issues', query: route.query })" class="-ml-2">
       <ArrowLeft class="w-4 h-4 mr-1" />
       {{ t.issueDetail.back }}
     </Button>
@@ -398,6 +414,7 @@ onMounted(loadIssue)
                   variant="outline"
                   size="sm"
                   class="border-destructive/50 text-destructive hover:bg-destructive/10"
+                  :disabled="actionLoading || !canAct"
                   @click="showDeleteConfirm = true"
                 >
                   <Trash2 class="w-3.5 h-3.5 mr-1" />
@@ -541,7 +558,7 @@ onMounted(loadIssue)
       </DialogHeader>
       <DialogFooter>
         <Button variant="secondary" @click="showDeleteConfirm = false">{{ t.issueDetail.cancel }}</Button>
-        <Button variant="destructive" @click="confirmDelete" :disabled="actionLoading">
+        <Button variant="destructive" @click="confirmDelete" :disabled="actionLoading || !canAct">
           <Loader2 v-if="actionLoading" class="w-4 h-4 mr-2 animate-spin" />
           {{ t.issueDetail.delete }}
         </Button>

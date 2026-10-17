@@ -29,28 +29,29 @@ func (s *Server) getVault() (*crypto.Vault, error) {
 	return s.vault, s.vaultInitErr
 }
 
-// credentialStore derives a dedicated CredentialStore from the server's configured
-// database DSN using only public constructors. This removes the prior reflect/unsafe
-// field access while keeping the change local to MCP wiring.
-func (s *Server) credentialStore() (*gormstore.CredentialStore, error) {
+// credentialStore returns a dedicated credential wrapper and its locally opened
+// pool owner. The caller must close the owner on every exit; injected stores are
+// not owned by this helper.
+func (s *Server) credentialStore() (*gormstore.CredentialStore, *gormstore.Store, error) {
 	dsn := config.GetDatabaseDSN()
 	if dsn == "" {
-		return nil, fmt.Errorf("credential store not available: database DSN not configured")
+		return nil, nil, fmt.Errorf("credential store not available: database DSN not configured")
 	}
 
 	store, err := gormstore.NewStore(gormstore.Config{DSN: dsn})
 	if err != nil {
-		return nil, fmt.Errorf("credential store not available: %w", err)
+		return nil, nil, fmt.Errorf("credential store not available: %w", err)
 	}
-	return gormstore.NewCredentialStore(store), nil
+	return gormstore.NewCredentialStore(store), store, nil
 }
 
 // handleStoreCredential encrypts and stores a credential in the dedicated credentials table.
 func (s *Server) handleStoreCredential(ctx context.Context, args json.RawMessage) (string, error) {
-	store, err := s.credentialStore()
+	store, owner, err := s.credentialStore()
 	if err != nil {
 		return "", err
 	}
+	defer owner.Close()
 
 	m, err := parseArgs(args)
 	if err != nil {
@@ -127,10 +128,11 @@ func (s *Server) handleStoreCredential(ctx context.Context, args json.RawMessage
 
 // handleGetCredential retrieves and decrypts a credential by name.
 func (s *Server) handleGetCredential(ctx context.Context, args json.RawMessage) (string, error) {
-	store, err := s.credentialStore()
+	store, owner, err := s.credentialStore()
 	if err != nil {
 		return "", err
 	}
+	defer owner.Close()
 
 	m, err := parseArgs(args)
 	if err != nil {
@@ -205,10 +207,11 @@ func (s *Server) handleGetCredential(ctx context.Context, args json.RawMessage) 
 
 // handleListCredentials lists credential names and metadata (no values).
 func (s *Server) handleListCredentials(ctx context.Context, args json.RawMessage) (string, error) {
-	store, err := s.credentialStore()
+	store, owner, err := s.credentialStore()
 	if err != nil {
 		return "", err
 	}
+	defer owner.Close()
 
 	m, err := parseArgs(args)
 	if err != nil {
@@ -268,10 +271,11 @@ func (s *Server) handleListCredentials(ctx context.Context, args json.RawMessage
 
 // handleDeleteCredential removes a credential by name.
 func (s *Server) handleDeleteCredential(ctx context.Context, args json.RawMessage) (string, error) {
-	store, err := s.credentialStore()
+	store, owner, err := s.credentialStore()
 	if err != nil {
 		return "", err
 	}
+	defer owner.Close()
 
 	m, err := parseArgs(args)
 	if err != nil {
@@ -343,7 +347,8 @@ func (s *Server) handleVaultStatus(ctx context.Context, _ json.RawMessage) (stri
 	}
 
 	count := 0
-	if store, err := s.credentialStore(); err == nil {
+	if store, owner, err := s.credentialStore(); err == nil {
+		defer owner.Close()
 		if n, countErr := store.CountCredentials(ctx); countErr == nil {
 			count = int(n)
 		}

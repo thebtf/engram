@@ -147,7 +147,7 @@ function stateDotClass(state?: NavItem['state']): string {
                 :is-active="isActiveItem(item)"
                 :tooltip="item.label"
               >
-                <router-link :to="item.path" class="flex items-center gap-2">
+                <router-link :to="{ path: item.path, query: route.query.project === undefined ? {} : { project: route.query.project } }" class="flex items-center gap-2">
                   <span :class="['h-2 w-2 rounded-full shrink-0 group-data-[collapsible=icon]:hidden', stateDotClass(item.state)]" />
                   <component :is="item.icon" />
                   <span>{{ item.label }}</span>

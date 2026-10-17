@@ -9,7 +9,7 @@ redaction rules, startup verification, and restart procedures.
 
 Явный запуск `engram --session-memory` обслуживает только память через уже
 настроенный gRPC backend. Без этого аргумента остаётся полный mux-backed путь.
-Режим не заменяет Workspace, relay, Loom и автоматическую доставку контекста
+Режим не заменяет Workspace, Loom и автоматическую доставку контекста
 через host hooks. Он не запускает общий daemon, reconciliation, индексаторы
 или watchers и не меняет fencing существующего daemon.
 
@@ -18,14 +18,22 @@ redaction rules, startup verification, and restart procedures.
 `query_principal_memory`, `continuity_slot`. Остальные вызовы отклоняются,
 даже если клиент знает их имена. Авторизация и серверные флаги не меняются.
 
-Запускай процесс из существующего Git-проекта с принятой `.engram-project`
-и серверной привязкой. Используются штатные `ENGRAM_URL` / `ENGRAM_SERVER_URL`,
+Запускай процесс из каталога выбранного проекта с переносимым UUID
+в `.engram-project` либо Git common-dir cache. Используются штатные `ENGRAM_URL` / `ENGRAM_SERVER_URL`,
 `ENGRAM_TOKEN`, `CLAUDE_SESSION_ID` и installation identity: явный
 `ENGRAM_CLIENT_INSTANCE_ID` либо `client-instance-id` в `ENGRAM_DATA_DIR`
 (по умолчанию `~/.engram`). Identity не выводится и не заменяется сессионным ID.
-Режим не создаёт anchor или серверную привязку вместо отсутствующих данных.
+Для нового проекта используй `engram project init`; UUID не даёт прав доступа.
 Локальный `initialize` не доказывает доступ к памяти: проверь `tools/list`
 и настоящий `recall`. Неверная identity или авторизация остаётся отказом.
+
+В обычном SQL `recall` (`action: "search"`) отсутствующий или пустой `project`
+берётся из уже разрешённого контекста вызова. Явный `project` имеет приоритет
+в handler; прежняя transport-проверка и канонизация сохраняются. Этот fallback
+не переписывает аргументы и не меняет другие инструменты, поиск или privacy checks.
+Если нет ни аргумента, ни проекта в контексте, сохраняется ответ
+`{"memories":[],"count":0,"note":"project parameter is required for memory search"}`.
+Он сообщает об отсутствии области вызова, а не доказывает отсутствие памяти.
 
 Framing — один JSON-RPC 2.0 объект на строку, до 1 MiB на запрос и ответ.
 ID — JSON string или number (поле обязательно для запроса), не `null`,
@@ -51,8 +59,8 @@ gRPC-соединения закрываются перед выходом. Пе
 аргументов только выбранного MCP клиента и проверка двух разрешённых scopes.
 Сохрани прежние аргументы для возврата к full mux. Успешный локальный fixture
 не доказывает установленный путь, PostgreSQL concurrency или production history.
-Даже read-style вызов может сохранять V3 resolution attempts/comparisons;
-его проверка требует разрешения на соответствующий backend и identity effects.
+Первое разрешение Git locator может создать запись каталога и локально закрепить UUID;
+его проверка требует разрешения на соответствующий backend и локальные записи.
 
 ## Обычная запись памяти без principal
 
@@ -278,7 +286,9 @@ For a legacy daemon that needs retirement, first identify its live control statu
 
 Каталог вкладки не является всей базой данных. Пустой ответ не доказывает отсутствие кода или исторических записей у других владельцев. При ошибке обновления подтверждённый View и уже выданные результаты сохраняются; повтори обновление. При отказе доступа или несовпадении контекста сервер может снять закрепление. Auth-enabled установка сохраняет свои проверки пользователя и grant; это отдельный путь, не способ обойти текущую авторизацию.
 
-A tracked, valid name-only marker retains its existing Git-origin/selected-subdirectory V2 memory scope. Its five-second local identity limit is unchanged: one `git rev-parse` reads the root, selected prefix and Git metadata paths; ordinary `remote get-url origin` still applies Git URL rewriting and credential normalization. Cache reuse checks selected-directory identity, marker bytes, Git environment, config/index/HEAD file fingerprints and nearer scope boundaries. System/global config paths are read authoritatively with separate `git var` calls and fingerprinted even when absent. Only a complete, file-only configuration without includes may omit the second config-origin query after all inputs remain unchanged. Includes and non-file origins still require fresh full derivation; a changed or interrupted inspection never grants scope.
+### Исторический hotfix v6.52.1
+
+The following describes only the v6.52.1 hotfix before the portable-UUID cutover, not the current setup or project-identity authority. Use the portable UUID flow below for this candidate; preserve old markers and anchors as migration and provenance inputs, not instructions to restore retired V2/V3 runtime fallbacks.
 
 An older regular `.engram-project` containing exactly `id` (six lowercase hexadecimal characters) and a valid `name` also uses the existing V2 adapter in a Git workspace, even when the marker is untracked. Field order does not matter. The historical ID is validated as a format marker, not used as project authority. A configured origin retains its existing remote/selected-path scope. Without an origin, the selected directory must already contain a regular, valid `.engram-project-v2.json`: its existing anchor and explicit sharing flag are forwarded with the established absolute-path-derived selector and legacy ID. A local `shared:false` anchor retains the server's path-derived clone isolation. Missing, malformed, symlinked or changed anchors refuse; this route never calls the anchor creator. Marker/index/anchor bytes are not rewritten or staged, and no V3 registration or historical-memory migration is performed. Non-Git directories, unknown/duplicate historical-marker fields and conflicting nearer anchors still refuse. After the normal plugin update, reconnect `engram:engram` and read an existing project memory before claiming recovery; do not replace either marker to clear a connection error.
 
@@ -286,19 +296,131 @@ The exact Git index is streamed through a fixed 32 KiB buffer under the existing
 
 Git environment names are compared case-insensitively only on Windows; Unix keeps its native case-sensitive names. Config-file symlinks are supported only for identified Git config dependencies, not as a general relaxation for index, HEAD or repository markers. Their fingerprints bind each followed link and its target text, the resolved target's file identity, metadata and bounded contents, including an absent target's later creation. Link traversal is limited to 40 followed links and config reads remain limited to 1 MiB. Replacement, retargeting, loops, unsupported targets or changes during inspection refuse stale scope; the selected marker and directory guards are unchanged.
 
-### Identity refusal before onboarding
+### Переносимый UUID проекта
 
-An existing Git repository with no `.engram-project` can discover the static `project_identity.register_v3` descriptor and any backend-provided unscoped `codebase_*` tools; this is not project-memory access. Registration cannot create the local anchor. For a genuinely new logical project, initialize the selected Git root offline with `engram project init --name <project-name>`, inspect and explicitly track `.engram-project`, then call `project_identity.register_v3` with `{}` through the configured ordinary client. Auth-enabled registration requires a server-authenticated master/admin identity; the supported no-auth first-use path does not authorize historical-memory adoption. Do not register a fresh anchor to recover an existing project's memories: retain the old data and client, establish its historical owner and an approved migration first. Malformed, untracked, unreadable, dangling-symlink and tracked-but-deleted anchors still refuse discovery; restore or repair their existing identity through authorized onboarding rather than minting a replacement.
+Обычные MCP-вызовы и hooks используют Go resolver и один `project_id` UUID.
+Имя, каталог и хеш remote не являются идентификатором проекта. Для явно нового
+проекта выполни из выбранного каталога:
 
-A staged Git deletion of a committed `.engram-project` is not an unonboarded repository. Discovery and `engram project init` refuse a replacement even when the index no longer lists the file; restore the existing accepted anchor through an authorized repair rather than generating a new UUID. An unavailable Git index or HEAD inspection also refuses initialization.
+```bash
+engram project init --name "Example Workspace"
+engram project resolve --root <actual-directory> --json
+```
 
-An unresolvable HEAD is not proof of a new repository. Malformed refs and a missing current-branch ref with prior HEAD/reference history refuse onboarding and offline initialization; repair the existing Git state before retrying. A genuinely unborn repository remains supported.
+`init` работает локально, в том числе без Git, и выводит JSON с `project_id`
+и необязательным `name`. Он не добавляет файл в Git и не создаёт серверную
+регистрацию. Если UUID уже закреплён, команда возвращает его, а не создаёт другой.
+Для переноса проекта в clone сохрани `.engram-project`; добавление и commit
+этого файла выполняй явно.
 
-If another visible ref tip, linked/detached worktree HEAD or listed worktree index in the same Git repository contains `.engram-project`, a pre-anchor checkout cannot initialize a replacement identity. A valid repository anchor is accepted after explicit `git add`; a commit is not required for V3 discovery, so an uncommitted index-tracked sibling anchor must also be preserved. An untracked-only sibling file does not establish accepted identity. Select or restore the existing accepted anchor through an authorized repository repair; Engram does not copy it or infer its server binding. Absence inspection checks at most 128 visible refs, 128 worktree records and 128 distinct tree tips, with a 128 KiB NUL-delimited worktree-list limit and one read-only index check per non-bare worktree. Excess, unsupported or unreadable evidence refuses onboarding instead of guessing. This is not a full historical scan: deleted refs and anchors absent from all visible tips and indexes require an explicit owner decision when older identity is known.
+`resolve` читает фактический каталог вызова. Вложенная `.engram-project` задаёт
+явную границу; подкаталог сам по себе не создаёт новый проект. Git-копии одного
+репозитория используют общий UUID cache `engram-project.json` в Git common-dir.
+Если UUID ещё нет, настроенный сервер может разрешить нормализованный primary
+remote через `/api/projects/bootstrap`; результат закрепляется в cache и marker.
+Это не перенос исторической памяти. Неверный marker или конфликт UUID остаётся
+ошибкой, а не поводом переписать существующую identity.
 
-V3 repository checks ignore inherited `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`, `GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_COMMON_DIR` and `GIT_NAMESPACE` for their own Git child commands. The selected repository's native `.git`/linked-worktree layout supplies that metadata instead. Ordinary Git configuration and the calling process environment remain unchanged; this is not credential filtering or a change to legacy identity adapters.
+`tools/list` не требует проекта. Отсутствующий или конфликтующий контекст
+отклоняет только операцию, которой нужен проект; используй JSON-код ошибки
+`resolve` для диагностики. `project_identity.register_v3` больше не является
+шагом обычной настройки.
 
-The existing 30-second `tools/list` discovery limit includes V3 identity and Git inspection, not just the backend handshake. A shorter caller deadline or request cancellation stops those Git commands and refuses discovery; interrupted inspection is never evidence that an anchor is absent. Identity hashes, visible-tip validation and the evidence limits above remain unchanged.
+Старый memory relay gateway, listener/runtime и test-only advisor prewarm удалены.
+Не включай их через `hap_01b` или `ENGRAM_HAP_01B_*`: launcher игнорирует старую
+конфигурацию и удаляет такие переменные из окружения child. Обычные server URL
+и keycard остаются отдельными credentials доступа. Исторические записи,
+миграционные readers и проверки авторизации не отменяются этим cutover.
+
+### Проверка миграции проектов на восстановленной копии
+
+Эти операции не выполняют production cutover. `ProjectConsolidationStore` меняет только явно настроенную отдельную восстановленную БД. Авторизация чтения данных, приватность записей и правила Vault остаются вне определения Project ID. Census/Preflight ниже общие; для native restore используй maintenance CLI, а не custom HTTP backup/VerifyBackup.
+
+1. Сохрани точную версию исходников и используй уже существующий Vault key в приватном хранилище. `OpenExistingVault` не создаёт заменяющий ключ. Не выводи ключ, credentials или тела записей в отчёт.
+2. Получи `GET /api/projects/consolidation/census?source_version=<точная версия исходников>`. Ответ содержит фактические таблицы, counts, непрозрачные ссылки строк, schema/snapshot identity и незакрытые роли. `source_version` — привязка вызывающего; сам HTTP запрос не доказывает Git HEAD или установку.
+3. Передай `POST /api/projects/consolidation/preflight` с `census_reference`, `census_fingerprint` и `evidence`. Каждый элемент evidence задаёт `reference`, `kind`, `group`, необязательный retained `project_id` и точные `rows`. Допустимые доказательства: `portable_marker`, `common_dir_binding`, `established_alias`, `session_provenance`, `source_provenance`. Ссылки ведут к сохранённому структурному доказательству. Это не разрешение объединять по имени, basename, hash-prefix, похожему содержимому или upstream. API не обследует чужую файловую систему вместо автора доказательства. Группа без UUID получает один детерминированно закреплённый UUID; конфликт сохраняется как unresolved membership.
+   Sealed plan содержит один Census и исходные Evidence, без второго массива Mapping. После authentication и bounded gzip decode сервер восстанавливает Mapping тем же deterministic `buildMapping` и проверяет прежний fingerprint до effects. Structural metadata ограничена 56 MiB как при JSON encoding перед gzip, так и после распаковки; превышение получает `PROJECT_ADOPTION_METADATA_CAPACITY_EXCEEDED`, и producer не выдаёт непригодный reference. Не добавляй server registry или другую identity ради уменьшения token.
+
+#### Native maintenance CLI
+
+`engram-server consolidate-projects` — подкоманда существующего server binary, не `engram` и не отдельный сервис. Она выходит до обычного service startup: не запускает listener, фоновые jobs или автоматический migration chain. Сначала восстанови разрешённый backup в отдельную изолированную target БД существующим recovery-путём `scripts/recovery/verify-postgres-backup-restore.ps1`; CLI не выполняет `pg_dump`/`pg_restore` и не создаёт БД. Source для rehearsal также должна быть разрешённой изолированной копией. После отдельно разрешённого schema DDL получи свежий Census/Preflight; data-only rebase не заменяет sealed plan.
+
+| Аргумент | Фактическое поведение |
+| --- | --- |
+| `--source-dsn-file` | Обязательный файл с DSN source. Соединение использует `default_transaction_read_only=on`. |
+| `--target-dsn-file` | Обязательный файл с DSN отдельной восстановленной target. Разные строки DSN не доказывают разные БД: domain проверяет их identity. |
+| `--plan-file` | Обязательный JSON-файл обычного Preflight с непустыми `plan_reference` и `plan_fingerprint`; не plaintext mapping и не receipt о прежнем rebase. |
+| `--plan-id` | Ожидаемый настоящий `plan_id` из успешного dry-run. При `--commit` обязателен; если передан при dry-run, тоже должен совпасть. Не создавай новый UUID. |
+| `--commit` | По умолчанию `false`: target-транзакция откатывается. Только явный `--commit` выбирает Apply. Отдельного `--dry-run` нет. |
+
+Каждый DSN-файл содержит только строку подключения; крайние пробелы и перевод строки удаляются. Предел файла — 64 KiB. Plan-файл содержит один JSON-объект, без второго JSON или хвоста; предел — 128 MiB, `plan_reference` — до 64 MiB, fingerprint — до 256 байт. Это пределы локального CLI, не HTTP. Все три файла храни вне Git с доступом только у исполнителя; CLI проверяет regular file и размер, но не настраивает и не подтверждает ACL. Не передавай DSN или секреты в аргументах, отчётах и логах.
+
+Физическая identity БД включает имя из `current_database()`, `system_identifier` кластера из `pg_control_system()` и фактический положительный OID БД из `pg_database`. Domain читает эти значения по позициям SQL-результата; пустое имя, отсутствующий system identifier, неположительный OID или ошибка чтения дают `PROJECT_ADOPTION_SOURCE_IDENTITY_UNAVAILABLE`, а не запасную identity. Разные строки DSN могут указывать на одну физическую БД; её identity от написания DSN не зависит. План, запечатанный с прежним ошибочным OID=0, получает `PROJECT_ADOPTION_STALE_PLAN`: получи свежий Census/Preflight. Старые tokens остаются входами миграции и истории; не перепривязывай вручную token, identity hash или fingerprint ради принятия старого плана.
+
+Сохрани тот же существующий Vault key. `OpenExistingVault` использует настроенный `ENGRAM_ENCRYPTION_KEY`, затем `ENGRAM_ENCRYPTION_KEY_FILE`, иначе существующий default key file; новый ключ не создаётся. Предпочитай уже настроенный приватный файл, не подставляй новый ключ ради запуска. CLI использует прямой доступ к БД и Vault, а не HTTP token; локальный доступ не отменяет разрешение на выбранные данные и target effects.
+
+1. На точном собранном binary проверь имя подкоманды через `engram-server consolidate-projects --help`. Его фактическая строка справки:
+
+   ```text
+   engram-server consolidate-projects --source-dsn-file S --target-dsn-file T --plan-file P [--plan-id ID] [--commit]
+   ```
+
+2. Только на допущенных изолированных source/target выполни default dry-run, подставив пути к существующим приватным файлам:
+
+   ```bash
+   engram-server consolidate-projects --source-dsn-file "/private/source.dsn" --target-dsn-file "/private/target.dsn" --plan-file "/private/preflight.json"
+   ```
+
+   CLI открывает обычный sealed plan, восстанавливает Mapping из Census/Evidence и проверяет fingerprint и настоящий state ID. Общий executor проверяет свежесть source и отдельную identity target. Native-путь сравнивает восстановленные строки по native keys и digest, schema/objects и sequences, удерживает эксклюзивные блокировки всех таблиц target, проверяет ожидаемый результат и неизменность source. Это не сравнение одних counts. Dry-run выполняет domain transaction с откатом; не считай его бесплатным read-only запросом к target.
+3. Сохрани возвращённые `plan_id` и `target_identity`; проверь `dry_run:true`. Только после успешного dry-run и отдельного допуска Apply на эту изолированную target повтори ту же команду с `--plan-id "<plan_id из dry-run>" --commit`. JSON успеха в stdout также содержит `replay`, `operation_id`, `receipt_reference`, `after_snapshot_identity` и `occurrences_before`/`occurrences_after`. Последние считают occurrences ролей, не все строки owner corpus. Выход 0 сам по себе не доказывает полную сохранность данных.
+4. В пределах того же допуска проверь повтор с теми же plan, `--plan-id` и `--commit`. Replay использует существующий state ID как idempotency key, проверяет receipt, target и свежесть source; ожидается `replay:true`, а не второй Apply. После новых записей получи свежий Census/Preflight и снова проверь restored-target equivalence; не исправляй вручную membership или receipt ради повтора.
+
+`--help` возвращает 0 без доступа к БД. Ошибки возвращают 1 и JSON `{"code":"…"}` в stderr; Vault logging может идти отдельно. Основные публичные коды:
+
+| Код | Причина / действие |
+| --- | --- |
+| `PROJECT_ADOPTION_CLI_ARGUMENTS_INVALID` / `PROJECT_ADOPTION_PLAN_ID_REQUIRED` | Неверные аргументы или `--commit` без ожидаемого ID. |
+| `PROJECT_ADOPTION_PLAN_FILE_INVALID` / `PROJECT_ADOPTION_PRIVATE_INPUT_UNAVAILABLE` | Plan-файл либо DSN-файл недоступен или не проходит проверку формата/размера. |
+| `PROJECT_ADOPTION_EXISTING_VAULT_REQUIRED` / `PROJECT_ADOPTION_CONNECTION_INVALID` | Существующий ключ не открыт либо DSN не разобран; последующая ошибка соединения может получить общий `PROJECT_ADOPTION_NATIVE_OPERATION_FAILED`. |
+| `PROJECT_ADOPTION_SOURCE_IDENTITY_UNAVAILABLE` | Физическая identity БД не прочитана полностью; операция не продолжается с пустыми или нулевыми значениями. |
+| `PROJECT_ADOPTION_TARGET_IS_SOURCE` | Target — та же физическая БД, что и source, даже при другом тексте DSN. Выбери отдельную разрешённую восстановленную БД. |
+| `PROJECT_ADOPTION_STALE_PLAN` | Неверен ожидаемый ID либо устарели план/данные, в том числе identity старого плана с OID=0. Сверь `--plan-id` с dry-run; для устаревшего плана получи свежий Census/Preflight. Не обходи проверку. |
+| `PROJECT_ADOPTION_CONSERVATION_FAILED` / `PROJECT_ADOPTION_REPLAY_CONFLICT` / `PROJECT_ADOPTION_SECRET_UNREADABLE` | Сохранность, receipt повтора или чтение секрета не подтверждены; Apply не принимается. |
+| `PROJECT_ADOPTION_CANCELLED` / `PROJECT_ADOPTION_NATIVE_OPERATION_FAILED` | Отмена или иная ошибка. Ошибки до commit откатывают target-транзакцию; ошибка вывода `PROJECT_ADOPTION_OUTPUT_FAILED` после commit не доказывает откат. |
+
+Для CLI, однократно собранного из исходников `597a296e`, постоянный real-PG тест физической identity прошёл: 1 PASS, 0 skips, 0 FAIL. Реальный CLI отверг старый план с OID=0 как `PROJECT_ADOPTION_STALE_PLAN` и другой текст DSN той же source как `PROJECT_ADOPTION_TARGET_IS_SOURCE`. Каждый отказ вернул exit 1, один JSON-код ошибки и отдельную информационную запись Vault. Полная сверка до/после всех 90 таблиц каждой БД (89 793 строки source, 181 350 строк target) не выявила различий PK, содержимого по SHA-256 и xmin; все 48 ciphertext-строк credentials на каждой стороне сохранены. Это проверка неизменности при двух отказах, не новый Apply или replay. Ранее также подтверждены `--help`, отказ без аргументов, 4 native и 3 CLI pure-теста без skips.
+
+Для schema/objects, 40 sequences, replay и чтения 48 секретов через Go `CredentialStore` используются результаты прежнего native rehearsal, а не повторное выполнение на `597a296e`: 44 unresolved project credentials прочитаны по точному native ID и проверенной unresolved membership, четыре global — обычным global reader. Эти результаты не доказывают API/UI или новый полный restore → dry-run → Apply → replay на исправленной identity. Сохрани owner rows, native IDs/версии, provenance/references, constraints/sequences и независимые Checkout/View; basename или похожее имя не дают права назначить проект.
+
+**Откат после ошибки, возникшей уже после записи в target, API/UI на мигрированных данных, установка и release ещё не подтверждены.** Успех сборки, тестов и двух отказов не означает приёмку всего продукта или production cutover.
+
+Production переключение требует актуальной инвентаризации записей после snapshot и контролируемой остановки writers (quiescence), проверенного restorable backup, изолированного rehearsal и явного разрешения владельца на точный cutover effect. Прежние 9 добавлений/128 изменений/0 удалений относятся к двум историческим снимкам, не к текущему production delta. Здесь нет разрешения на live SQL, destructive cutover или установку. При подтверждённом cutover native-путь заменяет custom transport writers/entrypoints после проверки consumers; это не две постоянные системы миграции. Старый HTTP путь пока не объявлен удалённым; нужные migration/rollback readers и owner data сохраняются.
+
+#### Существующий HTTP transport до проверенного cutover
+
+Следующие шаги описывают ещё существующий custom transport и его ограничения, а не обязательный backup/VerifyBackup перед native CLI. Не выполняй оба пути как две последовательные миграции.
+
+4. Получи `POST /api/projects/consolidation/backup` с `plan_reference` и `plan_fingerprint`. Ответ — `application/octet-stream`, не JSON/base64. Формат `engram.owner-stream/2`: четырёхбайтовая big-endian длина перед каждым Vault AES-GCM ciphertext. Перед encryption frame plaintext сжимается gzip; reader сначала проверяет authentication, затем распаковывает не более 524 260 байт. Plaintext содержит ordinal, digest предыдущего ciphertext, привязку manifest, native table/PK, исходный xmin и не более 256 KiB байтов строки. xmin обозначает исходную транзакцию, не бизнес-версию записи; бизнес-версии сохраняются в полном native row. Ciphertext frame не превышает 512 KiB. Строка может занимать несколько frames, включая разрыв UTF-8 между chunks. Начальный и конечный аутентифицированные manifest связывают source/schema/snapshot, классификацию, counts и sequences. Старый unpublished frame codec не принимается. Census хранит structural metadata, не тела корпуса. До сохранения измерь поток в счётчик: memory bound не доказывает disk peak. При прерывании HTTP после начала ответа сервер выставляет trailer `X-Engram-Backup-Error`; такой экспорт нельзя принимать как backup.
+5. Подготовь отдельную пустую БД с той же полной схемой либо используй точную непустую восстановленную копию, прошедшую полное сравнение с этим потоком. Задай приватный DSN через `ENGRAM_CONSOLIDATION_RESTORE_DSN`; адрес не принимается из HTTP body. `POST /api/projects/consolidation/verify-backup` принимает строго ordered multipart: `plan_reference`, `plan_fingerprint`, затем бинарный `sealed_export`, без дополнительных частей. Поток можно передать напрямую без второго файла. Проверка сохраняет encrypted frames в `project_consolidation_frames`, проверяет chain/final manifest, уникальные native keys и исходные xmin, восстанавливает только пустую отдельную БД либо сравнивает полный native row с непустой копией. Любое отклонение откатывает импорт. Restore/apply временно отключают только собственный consolidation trigger; затем drain deferred constraints и восстанавливают точные O/R/A/D modes до conservation и receipt. Независимые triggers остаются включены. Sequence RESTART создаёт транзакционное хранилище до setval, сохраняя value/is_called при откате. Обычный `CredentialStore.Get` и Vault decrypt проверяют каждый активный секрет в его точном namespace, без выдачи plaintext. Повтор не дублирует frames и не перезаписывает valuable inputs. Резерв должен отдельно покрывать BYTEA/TOAST, indexes, WAL/temp и metadata: encrypted original остаётся обязательным входом, stream не заменяет его автоматически.
+   Schema fingerprint включает consolidation tables, constraints, indexes, triggers и routines. Не обходи несовпадение fingerprint: migration 186 должна быть отдельно разрешена на обеих изолированных БД до нового Census/plan. Сохрани original/map/key и докажи owner-row conservation до и после DDL с явным migration-metadata delta. `VerifyBackup` не вставляет таблицу `migrations`: её точные строки должны быть заранее подготовлены на target. Не запускай source `NewStore` или весь migration chain автоматически.
+   Только точный `POST /api/projects/consolidation/verify-backup` принимает `multipart/form-data` с boundary вместо обычного JSON. Предел всего HTTP body, включая части и заголовки multipart, — 2 GiB (2 147 483 648 байт). `http.MaxBytesReader` ограничивает чтение, включая chunked requests без `Content-Length`; заявленный больший размер получает 413 без чтения тела. Переполнение во время чтения также получает 413. Поток закрывается при успехе, ошибке, отказе auth/rate и cancellation. Пределы `plan_reference` (32 MiB), `plan_fingerprint` (256 байт), ciphertext frame (512 KiB) и обычного JSON body (10 MiB) не увеличены. Backup, VerifyBackup, DryRun и Apply получают server-controlled deadline не более 10 min, сокращённый более ранним caller deadline. Upload read deadline и stream write deadline задаются через `ResponseController`; cancellation прерывает I/O и DB transaction. Census, Preflight и остальные routes сохраняют 30 s. Глобальные server timeouts, authentication, CORS, rate и trace policy не ослаблены.
+   Для Backup, VerifyBackup, DryRun и Apply сервер проверяет data-admin до чтения тела и назначения расширенных context/socket deadlines. Клиент без admin-прав получает отказ без чтения тела и без продления обычного срока. Более ранний caller deadline остаётся обязательным.
+   2 GiB — transport ceiling, не разрешение выделить память, файл или место в БД. Read-only measurement текущего owner baseline подтвердило compact plan 8 629 646 байт, compressed stream 701 411 892 байт и ordered multipart 710 042 002 байта; authentication, chain, final manifest и counts проверены без сохранения frames. Это measurement-only overlay, не доказательство production codec, HTTP duration или target restore. Перед effects отдельно допусти BYTEA/TOAST, indexes, WAL/temp и metadata. HTTP regressions используют зарегистрированный router и bounded reader; verifier seam не заменяет data-admin guard и не доказывает restore/crypto.
+6. Вызови `POST /api/projects/consolidation/dry-run`, затем `/apply` с plan, `backup_reference` и UUID `idempotency_key`. Оба используют один настоящий executor; dry-run откатывает изменения. Executor держит короткую блокировку таблиц, проверяет свежесть, сохраняет все неидентификационные поля и отказывает при FK/unique collision. Нет `ON CONFLICT DO NOTHING`, удаления или смысловой дедупликации.
+7. Проверь повтор того же apply. После новых записей прежняя карта получает `STALE_PLAN`; новые данные не объявляются мигрированными. Для новой карты нужен свежий census/backup. В смешанном legacy bucket redirect допустим только для доказанной конкретной сессии: `engram_consolidation_scope` и `ResolveLegacy` возвращают её сохранённый UUID. Пустая или неизвестная сессия получает `PROJECT_ADOPTION_UNRESOLVED_MEMBERSHIP`, без возврата старого selector и legacy registration. Trigger использует сессии записываемой строки для scalar и каждого ordered array occurrence. Пустая global scope и canonical UUID сохраняются; неизвестный historical selector без доказанного redirect получает отказ. Если global и exact session redirects конфликтуют, SQL и `ResolveLegacy` отказывают одинаково. После перевода consumers удали временный bridge в отдельном согласованном cutover; историческую принадлежность сохрани.
+8. Для unresolved content используй только `ConsolidationMembership.RowKey` из `UnresolvedMembership(reference, kind)`, затем обычный reader с его privacy checks. `SourceRowKey`, `NativeVersion` и `SourceSnapshot` сохраняют исходное происхождение, даже когда адресующий PK меняется; native whole-row путь — `[""]`. `kind=native` возвращает точную retained table/PK metadata для отдельно авторизованных credential/document readers, не секрет или новую auth capability. Не передавай opaque reference как `project` и не используй старый selector как fallback. `CanonicalMembership(project_id, table)` связывает retained history и Sources с тем же UUID, не меняя Checkout/View/embedding IDs. История объекта читается только после подтверждения его native ID в этой membership.
+   Unresolved credential читается через существующий authenticated `GET /api/vault/credentials/{name}?id=<native-ID>&unresolved_reference=<opaque-reference>`. Не добавляй `project` или `scope` к этому запросу. Reader проверяет `UnresolvedMembership(reference,"credential")` и active native ID в одной read-only snapshot, сверяет имя и сохраняет обычные Vault authorization, key-fingerprint и decrypt checks. Reference не даёт разрешение чтения. Ответ содержит `project_id:null` и unresolved reference; старый namespace не становится canonical ID. Четыре global credentials используют прежний `scope=global` reader. Metadata/errors/logs не содержат secret plaintext.
+   Native FK memberships для `content_chunks`, `knowledge_edges`, `citation_log`, `promotion_log` и `rule_arbiter_evaluations` входят в census. Их IDs, embeddings и исторические поля не переписываются. Принадлежность наследуется только от согласованных FK parents; отсутствие доказательства остаётся unresolved.
+   `ListUnresolved(ctx)` возвращает полный набор сохранённых `reference`, `name` и `reason`, проверяя форму membership envelope и его opaque-привязку. Каталог не выполняет полный аудит native targets и не утверждает, что каждый payload существует, доступен или проверен. Отсутствующий либо изменившийся native target не скрывает его unresolved metadata и остальные корректные проекты. Повреждённый envelope или подменённый opaque reference по-прежнему отклоняет каталог, а не превращается в успешный неполный список.
+   Обязательный `reader_kinds` содержит только виды существующего обзора, подтверждённые таблицами retained membership: `memory` для `memories`, `document` для `versioned_documents`, `issue` для `issues`, `code` для `sources`. В смешанной группе сохраняются все такие виды без повторов. Это metadata, не проверка payload, доступности или прав. Пустой массив `[]` означает, что для memberships этой группы нет reader в обзоре; в частности, группа только из `projects` остаётся видимой как метаинформация. UI не отправляет для неё запрос памяти или истории и не объявляет успешный пустой content. Это не доказательство отсутствия исходных данных и не разрешение на native/Vault чтение. При переходе к другой группе UI выбирает только объявленный вид, предпочитая память, если она указана. Явно запрошенный, но не объявленный вид остаётся видимо недоступным; подстановка другого вида не скрывает исходную ссылку.
+   При выбранном обращении `UnresolvedMembership(reference, kind)` сохраняет полную проверку native key, единственного совпадения и selector перед обычными privacy/access checks. Отсутствующий либо изменившийся target получает отказ, не успешный пустой content. `LegacyUnresolved(ctx, selector)` также сохраняет полную native-проверку и переводит только сохранённую unresolved принадлежность; он не заменяет session-aware `ResolveLegacy`. Для `kind=code` reader возвращает только точный native `sources.source_id`. Неизвестная, чужая или устаревшая выбранная ссылка получает отказ. Полная migration/conservation проверка остаётся на существующем boundary миграции.
+   Изолированный real-PostgreSQL `TestProjectConsolidationUnresolvedMembershipBatch` прошёл без skip: полный metadata catalog при missing/changed native target, отказ выбранного reader, metadata/opaque tampering, foreign Vault и прежние native-key cases. Это не доказательство полного HTTP каталога на owner corpus за 10 секунд, установленного клиента или завершённой owner streaming миграции.
+   Полные native строки `documents`, `content` и `project_identity_comparisons` входят в census и unresolved membership. Для unresolved fixture `SourceRowKey` задаётся точным исходным ключом, включая encoded-link fixture; пустой metadata default не заменяет доказательство происхождения и не используется как fallback. Пустые `{}` в `ci_profiles.build_context_json` и `versioned_documents.metadata` не создают выдуманной неизвестной роли. Непустой object сохраняется с selective hold; ключи `scope`, `topic` и `readonly_review` сами по себе не доказывают Project ID. Обычные состояния, digests, audit labels и legacy alias namespaces сохраняются без переписывания.
+9. Перед восстановлением после cutover останови writers, сохрани новый export и инвентаризируй записи после миграции. Используй forward compensation либо ещё одну пустую восстановленную БД. Не перезаписывай новые записи старым backup.
+
+Отдельная HTTP проверка после нового допуска Root: `go test ./internal/worker -run '^(TestProjectConsolidation(RegisteredPolicy|RegisteredOrdinaryJSONPolicy|RegisteredTimeoutAndRateCleanup|VerifierSeamRetainsDataAuthorization|MultipartTermination|MultipartMetadataOrderAndCleanup|OperationDeadline|UploadRealReadDeadline)|TestHumanVaultRetainedSelection|TestMaxBodySize_Table|TestRequireJSONContentType_Table)$' -count=1 -parallel=1`. Она не читает owner corpus. Большие multipart bodies создаёт bounded virtual reader; отдельный real HTTP case проверяет upload при коротком обычном server read timeout без десятиминутного ожидания. До terminal result это `NOT_RUN`, не PASS.
+
+Focused codec checks после отдельного proof slot: `go test ./internal/db/gorm -run '^TestProjectConsolidation(StreamIntegrity|FinalManifestAndCounts|MetadataCodecAndNativeKeys|CompactPlanCodec|BoundedMetadata|CompressedFrameCodec|UnknownObjectRolePreservesMetadata|OccurrencePreservesArrayAndHistory|MixedBucketAndEvidenceConflict)$' -count=1 -parallel=1`. Затем admitted real-PG workflow: `go test ./internal/db/gorm -run '^TestProjectConsolidation(RealStoreWorkflow|Migration186WriteScopeMatrix|Migration186RetainedRestoreAndPartialArray)$' -count=1 -parallel=1`, и `go test ./internal/worker -run '^TestHumanVaultHTTPStoreIsolation$' -count=1 -parallel=1`. Нужны точные новые fixture DB/DSN, deadlines и private output bindings существующих тестов; старые DB не сбрасываются. Skip не является PASS. Checks сохраняют sequence/partial-frame/cancellation rollback, constraints и trigger modes, apply/replay/conservation, native-ID credentials, stale-name/reference и key mismatch refusal. Независимо от транспорта full-owner rehearsal использует свежий после metadata DDL Census/Preflight, все исходные 85 таблиц/89 792 строки с явным migration-row delta и 48 exact credential reads, включая 44 unresolved через обычные разрешённые readers. Source tests, measurement overlay и прежние HTTP результаты не заменяют full-owner native proof, API/UI на мигрированных данных, installed acceptance или release.
 
 ### Две независимые dirty-копии
 
@@ -323,7 +445,7 @@ The existing 30-second `tools/list` discovery limit includes V3 identity and Git
 - C# и динамические вызовы не считаются проверенными по результату Go или TS. Неподдерживаемый файл, неоднозначная ссылка, ограниченный обход и частичная экстракция должны остаться видимыми ограничениями.
 - Если провайдер не работает, сохрани последний хороший View. Проверь существующую конфигурацию модели, размерность и причину задания; не меняй профиль, сеть или провайдер из задачи подключения. Code embeddings и memory embeddings — разные доказательства.
 - Когда daemon офлайн, опубликованный View может оставаться читаемым. Новая регистрация и запрос индекса требуют живого разрешённого владельца. Обновление каталога не создаёт Source само по себе.
-- Новая UCI-регистрация не мигрирует canonical project, память или Issues. `.engram-project` не нужно создавать или переписывать для этой задачи. Отдельный `engram project init` относится только к явно новой project identity; существующий name-only/invalid marker нельзя заменять ради кода.
+- Новая UCI-регистрация не мигрирует память или Issues. Не создавай другой UUID ради индексации: сохрани существующую `.engram-project` и cache. `engram project init` предназначен для явно нового проекта; переход со старого name-only marker не доказывает миграцию исторических данных.
 - Сохраняй установленный plugin-data и его `ENGRAM_CLIENT_INSTANCE_ID`, Vault key и полезную историю. Не делись ключами между независимыми установками и не выводи их в отчёт. Ограничение opaque handles: native daemon удерживает не более 1024 транспортных владельцев с LRU eviction; после вытеснения получи свежую серверную привязку.
 
 Рабочий продукт проверяет независимый инженер по этой инструкции на установленных компонентах. Source fixture, старые donor receipts, успешный memory recall и HTTP readiness не заменяют installed-путь: Home → подключение → два worktree → реальные векторы → типизированная связь → исходник того же View. Fresh-host automatic context — отдельная приёмка; инструкция не выдаёт её за выполненную.

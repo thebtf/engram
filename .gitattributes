@@ -10,3 +10,6 @@ scripts/production-gates/latest-promotion-journal.ps1 text eol=lf
 tests/critical/runtime/test-promote-latest-release-images-contract.ps1 text eol=lf
 plugin/engram/bootstrap-targets.json text eol=lf
 tests/fixtures/operator-code-current-slice/** text eol=lf
+scripts/operator-console-smoke/overview.ps1 text eol=lf
+scripts/smoke-operator-console.ps1 text eol=lf
+scripts/smoke-operator-console-remote.ps1 text eol=lf

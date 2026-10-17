@@ -4,22 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
 	"time"
 
 	"github.com/thebtf/engram/pkg/models"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
-
-// projectBareName strips the "_<hash>" suffix from a canonical hashed project ID
-// like "mcp-mux_e54050" → "mcp-mux". If the input has no recognizable hash suffix,
-// it is returned unchanged. Hash suffixes are 6-8 hex characters following "_".
-var projectHashSuffixRe = regexp.MustCompile(`_[0-9a-f]{6,8}$`)
-
-func projectBareName(projectID string) string {
-	return projectHashSuffixRe.ReplaceAllString(projectID, "")
-}
 
 var (
 	// ErrIssueNotFound indicates that no issue exists for the requested ID.
@@ -86,6 +76,7 @@ type IssueSelectionOperation struct {
 	Action  IssueSelectionAction
 	Actor   IssueSelectionActor
 	Targets []IssueSelectionTarget
+	Audit   *AuditLogEntry
 }
 
 // IssueSelectionReadback contains only fields permitted in a committed selected-issue result.
@@ -125,10 +116,10 @@ func NewIssueStore(db *gorm.DB) *IssueStore {
 	return &IssueStore{db: db}
 }
 
-// ResolveProject normalizes a project slug through the legacy_ids lookup.
-// Returns the canonical project ID, or the input unchanged if no alias found.
-func (s *IssueStore) ResolveProject(ctx context.Context, projectID string) string {
-	return ResolveProjectID(ctx, s.db, projectID)
+// ResolveProject uses the same project resolution boundary as ordinary callers.
+func (s *IssueStore) ResolveProject(ctx context.Context, projectID string) (string, error) {
+	resolution, err := RegisterAndResolve(ctx, s.db, projectID, nil)
+	return resolution.CanonicalProjectID, err
 }
 
 // IssueWithCount extends Issue with a computed comment count for list views.
@@ -191,6 +182,7 @@ func (s *IssueStore) CreateIssue(ctx context.Context, issue *Issue) (int64, erro
 type IssueListParams struct {
 	TargetProject string
 	SourceProject string
+	SourceAgent   string
 	Statuses      []string
 	ResolvedSince *time.Time
 	Type          string
@@ -209,7 +201,7 @@ func (s *IssueStore) ListIssues(ctx context.Context, targetProject string, statu
 	})
 }
 
-// ListIssuesEx returns issues with extended filtering (source_project, resolved_since, stale_days).
+// ListIssuesEx applies exact project and actor filters before counting and pagination.
 func (s *IssueStore) ListIssuesEx(ctx context.Context, params IssueListParams) ([]IssueWithCount, int64, error) {
 	limit := params.Limit
 	if limit <= 0 {
@@ -217,19 +209,14 @@ func (s *IssueStore) ListIssuesEx(ctx context.Context, params IssueListParams) (
 	}
 
 	query := s.db.WithContext(ctx).Table("issues")
-	// Project matching accepts both canonical hashed IDs (dirname_hash) and bare
-	// slug names, because hooks use hashed IDs but MCP callers use bare names.
-	// Query "mcp-mux" matches issues with target_project="mcp-mux" AND "mcp-mux_e54050".
-	// Query "mcp-mux_e54050" matches issues with target_project="mcp-mux_e54050" AND "mcp-mux".
 	if params.TargetProject != "" {
-		bare := projectBareName(params.TargetProject)
-		query = query.Where(`target_project = ? OR target_project = ? OR target_project LIKE ? ESCAPE '\'`,
-			params.TargetProject, bare, escapeSQLLike(bare)+`\_%`)
+		query = query.Where(canonicalProjectMembershipPredicate("issues", "target_project"), params.TargetProject, "issues", "issues", params.TargetProject)
 	}
 	if params.SourceProject != "" {
-		bare := projectBareName(params.SourceProject)
-		query = query.Where(`source_project = ? OR source_project = ? OR source_project LIKE ? ESCAPE '\'`,
-			params.SourceProject, bare, escapeSQLLike(bare)+`\_%`)
+		query = query.Where(canonicalProjectMembershipPredicate("issues", "source_project"), params.SourceProject, "issues", "issues", params.SourceProject)
+	}
+	if params.SourceAgent != "" {
+		query = query.Where("source_agent = ?", params.SourceAgent)
 	}
 	if len(params.Statuses) > 0 {
 		query = query.Where("status IN ?", params.Statuses)
@@ -527,7 +514,7 @@ func (s *IssueStore) AcknowledgeIssues(ctx context.Context, ids []int64) (int64,
 
 // AcknowledgeIssuesAtomically requires every requested issue to exist and be
 // open before transitioning the complete set in one transaction.
-func (s *IssueStore) AcknowledgeIssuesAtomically(ctx context.Context, ids []int64) (int64, error) {
+func (s *IssueStore) AcknowledgeIssuesAtomically(ctx context.Context, ids []int64, audit *AuditLogEntry) (int64, error) {
 	if len(ids) == 0 {
 		return 0, fmt.Errorf("%w: issue ids are required", ErrIssueInvalidInput)
 	}
@@ -564,6 +551,9 @@ func (s *IssueStore) AcknowledgeIssuesAtomically(ctx context.Context, ids []int6
 			return fmt.Errorf("%w: issue acknowledgement changed concurrently", ErrIssueInvalidTransition)
 		}
 		acknowledged = result.RowsAffected
+		if audit != nil {
+			return NewAuditStore(tx).LogTx(ctx, tx, *audit)
+		}
 		return nil
 	})
 	if err != nil {
@@ -628,6 +618,9 @@ func (s *IssueStore) ApplyIssueSelectionOperation(ctx context.Context, operation
 				return err
 			}
 			items = append(items, item)
+		}
+		if operation.Audit != nil {
+			return NewAuditStore(tx).LogTx(ctx, tx, *operation.Audit)
 		}
 		return nil
 	})
@@ -991,9 +984,15 @@ func (s *IssueStore) RejectIssue(ctx context.Context, id int64, comment, authorP
 }
 
 // DeleteIssue hard-deletes an issue and all its comments.
-func (s *IssueStore) DeleteIssue(ctx context.Context, id int64) error {
+func (s *IssueStore) DeleteIssue(ctx context.Context, id int64, audit *AuditLogEntry) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		return deleteIssueTx(tx, id)
+		if err := deleteIssueTx(tx, id); err != nil {
+			return err
+		}
+		if audit != nil {
+			return NewAuditStore(tx).LogTx(ctx, tx, *audit)
+		}
+		return nil
 	})
 }
 

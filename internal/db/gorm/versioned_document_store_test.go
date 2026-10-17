@@ -15,6 +15,8 @@ func TestVersionedDocumentStore_ListTreatsPathPrefixAsLiteralText(t *testing.T) 
 	ctx := context.Background()
 	project := fmt.Sprintf("literal-document-prefix-%d", time.Now().UnixNano())
 	t.Cleanup(func() { _ = db.Exec("DELETE FROM versioned_documents WHERE project = ?", project).Error })
+	require.NoError(t, db.Create(&Project{ID: project}).Error)
+	t.Cleanup(func() { _ = db.Where("id = ?", project).Delete(&Project{}).Error })
 
 	paths := []string{
 		`notes_1/exact.md`, `notesX1/sibling.md`,

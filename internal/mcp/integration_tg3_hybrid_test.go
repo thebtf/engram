@@ -172,6 +172,83 @@ func TestHybridTG3_IncludeSuperseded_False_NoError_T022c(t *testing.T) {
 	assert.NoError(t, err, "include_superseded=false must not error in hybrid mode")
 }
 
+func TestRecallMemoryHybrid_TierFilterContract(t *testing.T) {
+	dsn := os.Getenv("DATABASE_DSN")
+	if dsn == "" || testing.Short() {
+		t.Skip("DATABASE_DSN not set or -short; requires isolated PostgreSQL with vector")
+	}
+	const project = "test-recall-hybrid-tier-contract"
+	const query = "tiercontractprobe"
+	store, err := dbgorm.NewStore(dbgorm.Config{DSN: dsn, MaxConns: 2})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, store.DB.Exec(`DELETE FROM memories WHERE project = ?`, project).Error)
+		require.NoError(t, store.Close())
+	})
+	visible := &dbgorm.Memory{
+		Project: project, Content: query + " visible memory", Status: "active",
+		PrivacyScope: "project", AgentVisibility: "shared",
+		OwnerPrincipal: "agent/bob", OwnerPrincipalKind: "agent", Confidence: 0.9,
+	}
+	require.NoError(t, store.DB.Create(visible).Error)
+	hidden := &dbgorm.Memory{
+		Project: project, Content: query + " private memory", Status: "active",
+		PrivacyScope: "project", AgentVisibility: "private",
+		OwnerPrincipal: "agent/bob", OwnerPrincipalKind: "agent", Confidence: 0.9,
+	}
+	require.NoError(t, store.DB.Create(hidden).Error)
+	t.Setenv("ENGRAM_VNEXT_ENABLED", "true")
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
+	srv := NewServer(ServerOptions{Version: "tier-contract-fixture"})
+	srv.memoryStore = dbgorm.NewMemoryStore(store)
+	caller := auth.WithIdentity(context.Background(), auth.ClientWithPrincipal("read-write", "keycard-alice", "agent/alice", auth.PrincipalKindAgent))
+	call := func(t *testing.T, tiers []string) *Response {
+		t.Helper()
+		args := map[string]any{"query": query, "project": project, "format": "items", "limit": 1, "explain": true}
+		if tiers != nil {
+			args["tier_filter"] = tiers
+		}
+		return srv.HandleRequest(caller, &Request{
+			JSONRPC: "2.0", ID: t.Name(), Method: "tools/call",
+			Params: mustJSON(t, ToolCallParams{Name: "recall_memory", Arguments: mustJSON(t, args)}),
+		})
+	}
+	for _, lifecycle := range []string{"true", "false"} {
+		t.Run("lifecycle_"+lifecycle, func(t *testing.T) {
+			t.Setenv("ENGRAM_LIFECYCLE_ENABLED", lifecycle)
+			for _, tc := range []struct {
+				name  string
+				tiers []string
+			}{
+				{name: "default"},
+				{name: "empty", tiers: []string{}},
+				{name: "selected_fts", tiers: []string{"tier1_fts"}},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					response := call(t, tc.tiers)
+					require.Nil(t, response.Error, "real MCP recall failed: %+v", response.Error)
+					out := response.Result.(map[string]any)["content"].([]map[string]any)[0]["text"].(string)
+					var rows []map[string]any
+					require.NoError(t, json.Unmarshal([]byte(out), &rows))
+					require.Len(t, rows, 1)
+					require.EqualValues(t, visible.ID, rows[0]["id"])
+					require.Equal(t, project, rows[0]["project"])
+					require.Equal(t, "tier1_fts", rows[0]["ranking_explanation"].(map[string]any)["source_tier"])
+				})
+			}
+			for _, invalid := range []string{"working", "episodic", "semantic", "procedural", "unknown-tier"} {
+				t.Run("reject_"+invalid, func(t *testing.T) {
+					response := call(t, []string{"tier1_fts", invalid})
+					require.NotNil(t, response.Error)
+					require.Equal(t, -32000, response.Error.Code)
+					require.Contains(t, response.Error.Message, "invalid_tier_filter:")
+					require.Nil(t, response.Result)
+				})
+			}
+		})
+	}
+}
+
 func TestRecallMemoryHybrid_EmbeddingBudget(t *testing.T) {
 	dsn := os.Getenv("DATABASE_DSN")
 	if dsn == "" || testing.Short() {

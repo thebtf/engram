@@ -32,7 +32,7 @@ test('Owner reload sees every paged active grant and revokes a reader without an
     }
   })
   await page.clock.setSystemTime(new Date('2030-01-01T00:00:00Z'))
-  await page.goto('/code')
+  await page.goto('/code?project=all')
   await page.getByTestId('code-grant-chooser').locator('summary').click()
   await expect(page.getByTestId('code-grant-chooser').getByRole('listitem')).toHaveCount(2)
   await page.reload()
@@ -75,7 +75,7 @@ test('Owner can choose a reader beyond the first bounded target page', async ({ 
       await route.fulfill({ status: 500 })
     }
   })
-  await page.goto('/code')
+  await page.goto('/code?project=all')
   const chooser = page.getByTestId('code-grant-chooser')
   await chooser.locator('summary').click()
   await expect(chooser.getByRole('combobox').nth(1).getByRole('option')).toHaveCount(23)
@@ -101,7 +101,7 @@ test('Grant inventory reports denied, empty and failed page without exposing inc
       await route.fulfill({ status: 500 })
     }
   })
-  await page.goto('/code')
+  await page.goto('/code?project=all')
   const chooser = page.getByTestId('code-grant-chooser')
   await chooser.locator('summary').click()
   await expect(chooser.getByRole('alert')).toContainText('недоступны')
@@ -131,7 +131,7 @@ test('Server-expired grants are not offered for revocation and labels are render
       await route.fulfill({ status: 500 })
     }
   })
-  await page.goto('/code')
+  await page.goto('/code?project=all')
   const chooser = page.getByTestId('code-grant-chooser')
   await chooser.locator('summary').click()
   await expect(chooser.getByRole('listitem')).toHaveCount(1)
@@ -166,7 +166,7 @@ test('Successful issue and revoke survive failed inventory refresh without stale
       await route.fulfill({ status: 500 })
     }
   })
-  await page.goto('/code')
+  await page.goto('/code?project=all')
   const chooser = page.getByTestId('code-grant-chooser')
   await chooser.locator('summary').click()
   await expect(chooser.getByRole('listitem')).toHaveCount(1)
@@ -197,7 +197,7 @@ test('Valid nonactive grant is ignored, malformed and foreign states reject the 
     else if (pathname === '/api/code/grants') await route.fulfill({ json: { grants: entries } })
     else await route.fulfill({ status: 500 })
   })
-  await page.goto('/code')
+  await page.goto('/code?project=all')
   const chooser = page.getByTestId('code-grant-chooser')
   await chooser.locator('summary').click()
   await expect(chooser.getByRole('listitem')).toHaveCount(1)

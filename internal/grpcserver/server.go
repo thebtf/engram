@@ -263,22 +263,7 @@ func (s *Server) Initialize(ctx context.Context, req *pb.InitializeRequest) (*pb
 	if err := rejectHAPCredentialWithoutProject(ctx); err != nil {
 		return nil, err
 	}
-	canonicalProject := ""
-	var resolutionV3 *pb.ProjectResolutionResultV3
-	if identity := req.GetProjectIdentityV3(); identity != nil {
-		resolution, err := s.resolveProjectIdentityV3(ctx, identity, projectidentity.ResolveExistingIntentV3)
-		if err != nil {
-			return nil, err
-		}
-		canonicalProject = string(resolution.CanonicalProjectKey())
-		resolutionV3 = projectIdentityV3Proto(resolution)
-	} else if req.GetProject() != "" || req.GetProjectIdentity() != nil {
-		var err error
-		canonicalProject, err = s.resolveProjectIdentity(ctx, req.GetProject(), req.GetProjectIdentity())
-		if err != nil {
-			return nil, err
-		}
-	}
+	// Discovery never resolves a project. A scoped operation reports its own error.
 	name, version := s.handler.ServerInfo()
 
 	defs := s.handler.ToolDefinitions()
@@ -297,8 +282,6 @@ func (s *Server) Initialize(ctx context.Context, req *pb.InitializeRequest) (*pb
 		ServerName:                      name,
 		ServerVersion:                   version,
 		Tools:                           tools,
-		CanonicalProject:                canonicalProject,
-		ProjectResolutionV3:             resolutionV3,
 		AuthenticatedSubjectProofSha256: proof,
 	}, nil
 }
@@ -324,6 +307,9 @@ func (s *Server) CallTool(ctx context.Context, req *pb.CallToolRequest) (*pb.Cal
 		}
 		return nil, status.Error(codes.InvalidArgument, "invalid UCI request correlation")
 	}
+	if req.SessionId != "" {
+		ctx = mcp.ContextWithSession(ctx, req.SessionId)
+	}
 	canonicalProject := ""
 	var resolutionV3 *pb.ProjectResolutionResultV3
 	if identity := req.GetProjectIdentityV3(); identity != nil {
@@ -345,14 +331,17 @@ func (s *Server) CallTool(ctx context.Context, req *pb.CallToolRequest) (*pb.Cal
 			return nil, err
 		}
 	}
+	if canonicalProject == "" && projectidentity.ToolRequiresProject(req.ToolName) {
+		st := status.New(codes.FailedPrecondition, "project context is required")
+		withDetails, err := st.WithDetails(&errdetails.ErrorInfo{Reason: "PROJECT_CONTEXT_REQUIRED", Domain: "engram.project"})
+		if err != nil {
+			return nil, st.Err()
+		}
+		return nil, withDetails.Err()
+	}
 	// Inject project identity using the same context key that internal/mcp reads.
 	if canonicalProject != "" {
 		ctx = mcp.ContextWithProject(ctx, canonicalProject)
-	}
-	// Finding 3: inject session identity so audit helpers can record the correct
-	// SourceSessionID. Only set when the proto field is non-empty.
-	if req.SessionId != "" {
-		ctx = mcp.ContextWithSession(ctx, req.SessionId)
 	}
 	if correlationValid {
 		ctx = auditcontext.WithUCIRequestCorrelation(ctx, correlation)
@@ -875,6 +864,9 @@ func projectIdentityV3OutcomeProto(outcome projectidentity.ResolutionOutcomeV3) 
 }
 
 func (s *Server) resolveProjectIdentity(ctx context.Context, selector string, identity *pb.ProjectIdentityV2) (string, error) {
+	if identity == nil && projectidentity.ValidProjectID(selector) {
+		return selector, nil
+	}
 	resolver := s.identityResolver
 	if resolver == nil {
 		resolver = func(ctx context.Context, db *gorm.DB, selector string, wire *pb.ProjectIdentityV2) (string, error) {
@@ -897,6 +889,15 @@ func (s *Server) resolveProjectIdentity(ctx context.Context, selector string, id
 	canonical, err := resolver(ctx, s.db, selector, identity)
 	if err == nil {
 		return canonical, nil
+	}
+	var migrationErr *engramgorm.ConsolidationError
+	if errors.As(err, &migrationErr) && migrationErr != nil {
+		st := status.New(codes.FailedPrecondition, "historical project membership is unresolved or conflicting")
+		withDetails, detailsErr := st.WithDetails(&errdetails.ErrorInfo{Reason: migrationErr.Code, Domain: "engram.project_identity"})
+		if detailsErr != nil {
+			return "", st.Err()
+		}
+		return "", withDetails.Err()
 	}
 	var identityErr *engramgorm.ProjectIdentityError
 	if !errors.As(err, &identityErr) || identityErr == nil {

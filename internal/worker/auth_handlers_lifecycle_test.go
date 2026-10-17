@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -14,10 +15,14 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
 	authpkg "github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"gorm.io/driver/postgres"
+	gormlib "gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 type authLifecycleEnv struct {
@@ -35,8 +40,30 @@ func openAuthLifecycleEnv(t *testing.T) *authLifecycleEnv {
 	if dsn == "" {
 		t.Skip("DATABASE_DSN not set, skipping auth lifecycle integration test")
 	}
-	store, err := gormdb.NewStore(gormdb.Config{DSN: dsn, LogLevel: 0})
+	adminDB, err := gormlib.Open(postgres.Open(dsn), &gormlib.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	require.NoError(t, err)
+	adminSQL, err := adminDB.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, adminSQL.Close()) })
+	require.NoError(t, adminDB.Exec(`CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public`).Error)
+	schema := "auth_lifecycle_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	require.NoError(t, adminDB.Exec("CREATE SCHEMA "+schema).Error)
+	t.Cleanup(func() {
+		require.NoError(t, adminDB.Exec("DROP SCHEMA IF EXISTS "+schema+" CASCADE").Error)
+	})
+
+	parsedDSN, err := url.Parse(dsn)
+	require.NoError(t, err)
+	require.Contains(t, []string{"postgres", "postgresql"}, parsedDSN.Scheme, "DATABASE_DSN must be a PostgreSQL URL")
+	query := parsedDSN.Query()
+	query.Set("search_path", schema+", public")
+	parsedDSN.RawQuery = query.Encode()
+	store, err := gormdb.NewStore(gormdb.Config{DSN: parsedDSN.String(), LogLevel: 0})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	var actualSchema string
+	require.NoError(t, store.DB.Raw(`SELECT current_schema()`).Scan(&actualSchema).Error)
+	require.Equal(t, schema, actualSchema)
 	env := &authLifecycleEnv{
 		store:       store,
 		users:       gormdb.NewUserStore(store.DB),
@@ -45,7 +72,6 @@ func openAuthLifecycleEnv(t *testing.T) *authLifecycleEnv {
 		access:      gormdb.NewDomainOwnerStore(store),
 	}
 	env.handlers = NewAuthHandlers(env.users, env.invitations, env.sessions, env.access)
-	t.Cleanup(func() { _ = store.Close() })
 	return env
 }
 
@@ -70,12 +96,6 @@ func TestAuthHandlersLifecycle_InvitationSingleUseRace(t *testing.T) {
 	userPrefix := fmt.Sprintf("zz-access-race-user-%d", time.Now().UnixNano())
 	admin, err := env.users.CreateUser(adminEmail, "hash", gormdb.DashboardRoleAdmin)
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		_ = env.store.DB.Exec(`DELETE FROM invitations WHERE code LIKE ?`, invitePrefix+"%").Error
-		_ = env.store.DB.Exec(`DELETE FROM users WHERE email LIKE ?`, userPrefix+"%@example.com").Error
-		_ = env.store.DB.Exec(`DELETE FROM users WHERE email = ?`, adminEmail).Error
-		_ = env.store.DB.Exec(`DELETE FROM audit_log WHERE action LIKE 'auth_%' AND actor LIKE ?`, userPrefix+"%@example.com").Error
-	})
 
 	code := invitePrefix + "-code"
 	_, err = env.invitations.CreateInvitation(code, admin.ID, "", gormdb.DashboardRoleOperator, time.Now().UTC().Add(2*time.Hour))
@@ -183,10 +203,6 @@ func TestAuthHandlersLifecycle_SetupCreatesOnlyOneInitialAdmin(t *testing.T) {
 
 	prefix := fmt.Sprintf("zz-initial-admin-race-%d", time.Now().UnixNano())
 	emails := []string{prefix + "-a@example.com", prefix + "-b@example.com"}
-	t.Cleanup(func() {
-		_ = env.store.DB.Exec(`DELETE FROM audit_log WHERE action = 'auth_setup_completed' AND actor LIKE ?`, prefix+"%@example.com").Error
-		_ = env.store.DB.Exec(`DELETE FROM users WHERE email LIKE ?`, prefix+"%@example.com").Error
-	})
 
 	ready := make(chan struct{}, len(emails))
 	release := make(chan struct{})
@@ -249,11 +265,6 @@ func TestAuthHandlersLifecycle_SessionRevokeWinsInFlightRequest(t *testing.T) {
 	require.NoError(t, err)
 	sess, err := env.sessions.CreateSession(admin.ID, 2*time.Hour, "test-agent", "127.0.0.1")
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		_ = env.store.DB.Exec(`DELETE FROM sessions WHERE id = ?`, sess.ID).Error
-		_ = env.store.DB.Exec(`DELETE FROM users WHERE email = ?`, adminEmail).Error
-		_ = env.store.DB.Exec(`DELETE FROM audit_log WHERE action LIKE 'auth_%' AND actor = ?`, adminEmail).Error
-	})
 
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -271,6 +282,14 @@ func TestAuthHandlersLifecycle_SessionRevokeWinsInFlightRequest(t *testing.T) {
 		defer close(done)
 		env.handlers.handleAccessListSessions(rec, req)
 	}()
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+		<-done
+	})
 
 	<-started
 	changed, err := env.sessions.RevokeSession(sess.ID, &admin.ID, "race revoke")
@@ -289,11 +308,6 @@ func TestAuthHandlersLifecycle_AccessCreateInvitationAcceptsAuthentikAdminWithou
 	inviteEmail := fmt.Sprintf("zz-access-authentik-invite-%d@example.com", time.Now().UnixNano())
 	admin, err := env.users.CreateUser(adminEmail, "hash", gormdb.DashboardRoleAdmin)
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		_ = env.store.DB.Exec(`DELETE FROM invitations WHERE email = ?`, inviteEmail).Error
-		_ = env.store.DB.Exec(`DELETE FROM users WHERE email = ?`, adminEmail).Error
-		_ = env.store.DB.Exec(`DELETE FROM audit_log WHERE action LIKE 'auth_%' AND actor = ?`, adminEmail).Error
-	})
 	req := requestWithRoute(http.MethodPost, "/api/access/invitations", []byte(fmt.Sprintf(`{"email":%q,"role":"operator"}`, inviteEmail)), authpkg.Session("admin"), nil)
 	req.Header.Set("X-Authentik-Email", adminEmail)
 	rec := httptest.NewRecorder()
@@ -327,9 +341,6 @@ func TestAuthHandlersLifecycle_LastAdminDemoteRaceLeavesOneAdmin(t *testing.T) {
 	require.NoError(t, err)
 	adminB, err := env.users.CreateUser(adminBEmail, "hash", gormdb.DashboardRoleAdmin)
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		_ = env.store.DB.Exec(`DELETE FROM users WHERE email IN (?, ?)`, adminAEmail, adminBEmail).Error
-	})
 
 	start := make(chan struct{})
 	results := make(chan error, 2)
@@ -368,9 +379,6 @@ func TestAuthHandlersLifecycle_LastAdminDemoteDisableRaceLeavesOneAdmin(t *testi
 	require.NoError(t, err)
 	adminB, err := env.users.CreateUser(adminBEmail, "hash", gormdb.DashboardRoleAdmin)
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		_ = env.store.DB.Exec(`DELETE FROM users WHERE email IN (?, ?)`, adminAEmail, adminBEmail).Error
-	})
 
 	start := make(chan struct{})
 	results := make(chan error, 2)
@@ -419,9 +427,6 @@ func TestAuthHandlersLifecycle_DisabledAdminCanBeDemotedWithoutLastAdminError(t 
 	require.NoError(t, err)
 	disabledAdmin, err := env.users.CreateUser(disabledEmail, "hash", gormdb.DashboardRoleAdmin)
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		_ = env.store.DB.Exec(`DELETE FROM users WHERE email IN (?, ?)`, activeEmail, disabledEmail).Error
-	})
 	_, err = env.handlers.applyUserUpdate(disabledAdmin.ID, updateUserRequest{Disabled: ptrBool(true)}, nil, "", false)
 	require.NoError(t, err)
 	updated, err := env.handlers.applyUserUpdate(disabledAdmin.ID, updateUserRequest{Role: strPtr(gormdb.DashboardRoleOperator)}, nil, "", false)
@@ -439,9 +444,6 @@ func TestAuthHandlersLifecycle_NormalizedAdminRoleIsNotDemotion(t *testing.T) {
 	email := fmt.Sprintf("zz-access-normalized-admin-%d@example.com", time.Now().UnixNano())
 	admin, err := env.users.CreateUser(email, "hash", gormdb.DashboardRoleAdmin)
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		_ = env.store.DB.Exec(`DELETE FROM users WHERE email = ?`, email).Error
-	})
 
 	updated, err := env.handlers.applyUserUpdate(admin.ID, updateUserRequest{Role: strPtr(" ADMIN ")}, nil, "", false)
 	require.NoError(t, err)

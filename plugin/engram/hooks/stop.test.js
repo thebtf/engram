@@ -3,96 +3,164 @@ const test = require('node:test');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const http = require('node:http');
 const { randomUUID } = require('node:crypto');
 const { once } = require('node:events');
 const { spawn } = require('node:child_process');
 const NODE_CHILD_TIMEOUT_MS = process.platform === 'win32' ? 10000 : 3000;
 
+const lib = require('./lib');
 const { handleStop, extractAgentOutput } = require('./stop');
 
-test('handleStop resolves to an empty string for compatibility no-op behavior', async () => {
-  await assert.doesNotReject(async () => {
-    const result = await handleStop(
-      {
-        SessionID: 'stop-noop-session',
-        RawInput: '',
-        Project: 'engram',
-      },
-      {}
-    );
+test('handleStop does not post without a session and project', async (t) => {
+  const originalPost = lib.requestPost;
+  const requests = [];
+  lib.requestPost = async (...args) => { requests.push(args); };
+  t.after(() => { lib.requestPost = originalPost; });
 
-    assert.equal(result, '');
-  });
+  for (const context of [{}, { SessionID: 'session' }, { Project: 'project' }]) {
+    await handleStop(context, {});
+  }
+  assert.deepEqual(requests, []);
 });
 
-test('handleStop ignores optional input payload and remains a no-op', async () => {
-  const result = await handleStop(
-    {
-      SessionID: 'stop-noop-session',
-      RawInput: '{"some":"payload"}',
-      Project: 'engram',
-    },
-    {
-      transcript_path: '/tmp/nonexistent.jsonl',
-      reason: 'session-end',
-    }
-  );
-
-  assert.equal(result, '');
-});
-
-test('Stop clears the pending marker when project registration is offline', async (t) => {
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-stop-offline-'));
-  const sessionID = `stop-offline-${randomUUID()}`;
+test('handleStop clears the marker before attempting transcript capture offline', async (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-stop-capture-'));
+  const sessionID = `stop-capture-${randomUUID()}`;
+  const project = randomUUID();
   const markerPath = path.join(os.tmpdir(), `.engram-pending-${sessionID}`);
-  let child;
+  const transcriptPath = path.join(workspace, 'transcript.jsonl');
+  const originalPost = lib.requestPost;
+  const requests = [];
   t.after(() => {
-    if (child && child.exitCode === null && child.signalCode === null) child.kill();
+    lib.requestPost = originalPost;
     fs.rmSync(workspace, { recursive: true, force: true });
     fs.rmSync(markerPath, { force: true });
   });
-  fs.writeFileSync(path.join(workspace, '.engram-project'), JSON.stringify({
-    version: 3,
-    project_id: randomUUID(),
-    name: 'stop-offline',
-    scope: 'directory',
-  }));
   fs.writeFileSync(markerPath, 'pending', 'utf8');
+  fs.writeFileSync(transcriptPath, [
+    { role: 'user', content: 'private user input' },
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'assistant output' }] } },
+  ].map((record) => JSON.stringify(record)).join('\n'));
+  lib.requestPost = async (endpoint, body) => {
+    requests.push({ endpoint, body, markerPresent: fs.existsSync(markerPath) });
+    throw new Error('fixture transport offline');
+  };
 
-  let stdout = '';
-  let stderr = '';
-  let timedOut = false;
-  child = spawn(process.execPath, [require.resolve('./stop')], {
-    windowsHide: true,
-    env: {
-      ...process.env,
-      ENGRAM_INTERNAL: '0',
-      ENGRAM_QUIET: '0',
-      ENGRAM_URL: 'http://127.0.0.1:9',
-      ENGRAM_TOKEN: 'test-token',
-      ENGRAM_CLIENT_INSTANCE_ID: 'hook-install-alpha',
-    },
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
-  child.stdout.setEncoding('utf8');
-  child.stderr.setEncoding('utf8');
-  child.stdout.on('data', (chunk) => { stdout += chunk; });
-  child.stderr.on('data', (chunk) => { stderr += chunk; });
-  child.stdin.end(JSON.stringify({ session_id: sessionID, cwd: workspace }));
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    child.kill();
-  }, NODE_CHILD_TIMEOUT_MS);
-  const [status, signal] = await once(child, 'close');
-  clearTimeout(timeout);
+  await handleStop({ SessionID: sessionID, Project: project }, { transcript_path: transcriptPath });
 
-  assert.equal(timedOut, false, `child exceeded ${NODE_CHILD_TIMEOUT_MS}ms`);
-  assert.equal(signal, null, stderr);
-  assert.equal(status, 0, stderr);
-  assert.equal(stdout.trim(), '{"continue":true}');
-  assert.equal(fs.existsSync(markerPath), false, 'clean Stop must remove the crash marker offline');
-  assert.match(stderr, /continuing local capture\/cleanup/);
+  assert.deepEqual(requests, [{
+    endpoint: '/api/hooks/session-end',
+    body: { session_id: sessionID, project, agent_output_text: 'assistant output' },
+    markerPresent: false,
+  }]);
+  assert.equal(fs.existsSync(markerPath), false);
 });
+
+for (const resolutionUnavailable of [false, true]) {
+  test(resolutionUnavailable
+    ? 'Stop does not post when native project resolution is unavailable'
+    : 'Stop clears the pending marker and exits when the session-end transport is offline', async (t) => {
+      const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-stop-offline-'));
+      const sessionID = `stop-offline-${randomUUID()}`;
+      const project = randomUUID();
+      const markerPath = path.join(workspace, `.engram-pending-${sessionID}`);
+      const preloadPath = path.join(workspace, 'native-result.cjs');
+      const requests = [];
+      const server = http.createServer((request) => {
+        let body = '';
+        request.setEncoding('utf8');
+        request.on('data', (chunk) => { body += chunk; });
+        request.on('end', () => {
+          requests.push({ method: request.method, path: request.url, body, markerPresent: fs.existsSync(markerPath) });
+          request.socket.destroy();
+        });
+      });
+      let child;
+      t.after(async () => {
+        if (child && child.exitCode === null && child.signalCode === null) {
+          child.kill();
+          await once(child, 'close');
+        }
+        server.closeAllConnections();
+        await new Promise((resolve) => server.close(resolve));
+        fs.rmSync(workspace, { recursive: true, force: true });
+      });
+      await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+      fs.writeFileSync(markerPath, 'pending', 'utf8');
+      // Keep native acquisition outside this hook test, as in run-engram.test.js.
+      fs.writeFileSync(preloadPath, `
+      require('node:child_process').execFile = (_file, _args, _options, callback) => {
+        if (${resolutionUnavailable}) {
+          callback(new Error('fixture native resolution offline'), '{"code":"PROJECT_RESOLUTION_UNAVAILABLE"}', '');
+          return;
+        }
+        callback(null, ${JSON.stringify(JSON.stringify({ project_id: project }))}, '');
+      };
+      require.cache[${JSON.stringify(require.resolve('../scripts/ensure-binary.js'))}] = { exports: {
+        loadPolicy: () => ({ target: { desired: {}, predecessor: null } }),
+        resolveForLaunch: async () => ({ path: 'fixture-client', target: {} }),
+        hashFile: () => true,
+        objectRoots: () => ({ objects: 'fixture-objects' }),
+        assertSafeDirectory: (directory) => directory,
+      } };
+    `);
+
+      let stdout = '';
+      let stderr = '';
+      let timedOut = false;
+      child = spawn(process.execPath, ['--require', preloadPath, require.resolve('./stop')], {
+        cwd: workspace,
+        windowsHide: true,
+        env: {
+          PATH: process.env.PATH,
+          SystemRoot: process.env.SystemRoot,
+          TMP: workspace, TEMP: workspace, TMPDIR: workspace,
+          HOME: workspace, USERPROFILE: workspace, APPDATA: workspace, LOCALAPPDATA: workspace,
+          PLUGIN_ROOT: path.resolve(__dirname, '..'),
+          PLUGIN_DATA: path.join(workspace, 'data'),
+          ENGRAM_INTERNAL: '0',
+          ENGRAM_QUIET: '0',
+          ENGRAM_URL: `http://127.0.0.1:${server.address().port}`,
+          ENGRAM_TOKEN: 'test-token',
+          ENGRAM_CLIENT_INSTANCE_ID: 'hook-install-alpha',
+        },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      child.stdout.setEncoding('utf8');
+      child.stderr.setEncoding('utf8');
+      child.stdout.on('data', (chunk) => { stdout += chunk; });
+      child.stderr.on('data', (chunk) => { stderr += chunk; });
+      child.stdin.end(JSON.stringify({ session_id: sessionID, cwd: workspace }));
+      const timeout = setTimeout(() => {
+        timedOut = true;
+        child.kill();
+      }, NODE_CHILD_TIMEOUT_MS);
+      let status;
+      let signal;
+      try {
+        [status, signal] = await once(child, 'close');
+      } finally {
+        clearTimeout(timeout);
+      }
+      const evidence = JSON.stringify({ timedOut, status, signal, stdout, stderr, requests, markerPresent: fs.existsSync(markerPath) });
+
+      assert.equal(timedOut, false, `child exceeded ${NODE_CHILD_TIMEOUT_MS}ms: ${evidence}`);
+      assert.equal(signal, null, evidence);
+      assert.equal(status, 0, evidence);
+      assert.deepEqual(JSON.parse(stdout), { continue: true }, evidence);
+      if (resolutionUnavailable) {
+        assert.deepEqual(requests, [], evidence);
+      } else {
+        assert.equal(fs.existsSync(markerPath), false, evidence);
+        assert.deepEqual(requests.map(({ body, ...request }) => ({ ...request, body: JSON.parse(body) })), [{
+          method: 'POST', path: '/api/hooks/session-end',
+          body: { session_id: sessionID, project, agent_output_text: '' },
+          markerPresent: false,
+        }], evidence);
+      }
+    });
+}
 
 // ---------------------------------------------------------------------------
 // extractAgentOutput — nested JSONL transcript shape (real Claude Code format)

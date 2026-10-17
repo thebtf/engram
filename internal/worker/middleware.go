@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mime"
 	"net/http"
 	"os"
 	"regexp"
@@ -160,6 +161,90 @@ func MaxBodySize(maxBytes int64) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// This transport ceiling admits the full owner stream, not a disk/resource grant.
+const (
+	projectConsolidationVerifyBackupMaxBytes int64 = 2 << 30
+	projectConsolidationOperationTimeout           = 10 * time.Minute
+)
+
+func isProjectConsolidationOperation(r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		return false
+	}
+	switch r.URL.Path {
+	case "/api/projects/consolidation/backup", "/api/projects/consolidation/verify-backup", "/api/projects/consolidation/dry-run", "/api/projects/consolidation/apply":
+		return true
+	default:
+		return false
+	}
+}
+
+func requestTimeout(next http.Handler) http.Handler {
+	ordinary := middleware.Timeout(DefaultHTTPTimeout)(next)
+	consolidation := middleware.Timeout(projectConsolidationOperationTimeout)(next)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isProjectConsolidationOperation(r) {
+			defer r.Body.Close()
+			identity, ok := authpkg.IdentityFrom(r.Context())
+			if !ok || !identity.IsAdmin() {
+				consolidationHTTPError(w, &gormdb.ConsolidationError{Code: "PROJECT_ADOPTION_AUTH_REQUIRED"})
+				return
+			}
+			deadline := time.Now().Add(projectConsolidationOperationTimeout)
+			if inherited, ok := r.Context().Deadline(); ok && inherited.Before(deadline) {
+				deadline = inherited
+			}
+			ctx, cancel := context.WithDeadline(r.Context(), deadline)
+			defer cancel()
+			r = r.WithContext(ctx)
+			controller := http.NewResponseController(w)
+			if err := controller.SetWriteDeadline(deadline); err != nil && !errors.Is(err, http.ErrNotSupported) {
+				http.Error(w, "consolidation write deadline unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			defer controller.SetWriteDeadline(time.Time{})
+			if isProjectConsolidationVerifyBackup(r) {
+				if err := controller.SetReadDeadline(deadline); err != nil && !errors.Is(err, http.ErrNotSupported) {
+					http.Error(w, "backup read deadline unavailable", http.StatusServiceUnavailable)
+					return
+				}
+			}
+			interrupted := make(chan struct{})
+			stop := context.AfterFunc(ctx, func() {
+				defer close(interrupted)
+				_ = controller.SetReadDeadline(time.Now())
+				_ = controller.SetWriteDeadline(time.Now())
+				_ = r.Body.Close()
+			})
+			defer func() {
+				if !stop() {
+					<-interrupted
+				}
+			}()
+			consolidation.ServeHTTP(w, r)
+			return
+		}
+		ordinary.ServeHTTP(w, r)
+	})
+}
+
+func isProjectConsolidationVerifyBackup(r *http.Request) bool {
+	return r.Method == http.MethodPost && r.URL.Path == "/api/projects/consolidation/verify-backup"
+}
+
+func requestBodySize(next http.Handler) http.Handler {
+	ordinary := MaxBodySize(10 << 20)(next)
+	backup := MaxBodySize(projectConsolidationVerifyBackupMaxBytes)(next)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isProjectConsolidationVerifyBackup(r) {
+			defer r.Body.Close()
+			backup.ServeHTTP(w, r)
+			return
+		}
+		ordinary.ServeHTTP(w, r)
+	})
 }
 
 // readOnlyAllowedPosts is the set of POST endpoints that read-only client tokens may call.
@@ -713,11 +798,20 @@ func (s *Service) requestActivityMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// RequireJSONContentType rejects body-bearing requests (POST/PUT/PATCH) whose
-// Content-Type is not application/json. An empty Content-Type is allowed to
-// accommodate body-less usages of these methods.
+// RequireJSONContentType keeps the ordinary JSON policy, including body-less
+// requests without Content-Type. Only the exact backup verification POST uses
+// multipart/form-data; metadata order and part limits remain handler-owned.
 func RequireJSONContentType(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isProjectConsolidationVerifyBackup(r) {
+			mediaType, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+			if err != nil || mediaType != "multipart/form-data" || params["boundary"] == "" {
+				http.Error(w, "Content-Type must be multipart/form-data with a boundary", http.StatusUnsupportedMediaType)
+				return
+			}
+			next.ServeHTTP(w, r)
+			return
+		}
 		if r.Method == "POST" || r.Method == "PUT" || r.Method == "PATCH" {
 			ct := r.Header.Get("Content-Type")
 			if ct != "" && !strings.HasPrefix(ct, "application/json") {

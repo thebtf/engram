@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import { resolvePageSize, usePersistentPageSize } from '../composables/usePersistentPageSize'
+import { isCatalogProject, projectName, useOperatorProjectContext } from '../composables/useOperatorProjectContext'
 import {
   useOperatorIssues,
   type IssueSelectionAction,
@@ -18,6 +19,16 @@ type BulkField = 'status' | 'priority'
 type CreateTemplate = 'bug' | 'handoff' | 'question' | 'improvement'
 
 const { t } = useI18n()
+const context = useOperatorProjectContext()
+const route = useRoute()
+const router = useRouter()
+const requestedId = computed(() => {
+  const id = typeof route.params.id === 'string' ? Number(route.params.id) : NaN
+  return Number.isSafeInteger(id) && id > 0 ? id : null
+})
+const scopeError = computed(() => context.selectionError.value || context.error.value)
+const scopeReady = computed(() => !context.selectionPending.value && !scopeError.value && (context.project.value === 'all' || isCatalogProject(context.project.value)))
+const humanSourceReady = computed(() => scopeReady.value && isCatalogProject(context.project.value))
 const {
   rows,
   comments,
@@ -71,7 +82,7 @@ const notice = ref('')
 const createBodyInput = ref<HTMLTextAreaElement | null>(null)
 const commentInput = ref<HTMLTextAreaElement | null>(null)
 const activeTemplate = ref<CreateTemplate>('bug')
-const createSourceProject = ref('operator')
+const createSourceProject = ref('')
 const selectedCommentKeys = ref<string[]>([])
 const hoverIssue = ref<OperatorIssue | null>(null)
 const hoverStyle = ref<Record<string, string>>({})
@@ -81,7 +92,7 @@ const ISSUE_HOVER_VIEWPORT_MARGIN = 12
 
 const createTitle = ref('')
 const createBody = ref('')
-const createTargetProject = ref('engram')
+const createTargetProject = ref('')
 const createPriority = ref<OperatorIssuePriority>('high')
 const createType = ref<OperatorIssueType>('bug')
 const createLabels = ref<string[]>(['operator-created'])
@@ -96,6 +107,7 @@ const bulkField = ref<BulkField>('status')
 const bulkValue = ref<string>('acknowledged')
 const bulkLabelValue = ref('operator-created')
 const mutationResult = ref<MutationResult | null>(null)
+let scopeGeneration = 0
 
 const activeIssue = computed(() => {
   if (activeId.value === null) return null
@@ -103,11 +115,13 @@ const activeIssue = computed(() => {
   return rows.find((issue) => issue.id === activeId.value) || null
 })
 const selectedCount = selection.selectedCount
-const selectionActionReady = computed(() => selectedCount.value > 0 && !selection.current.value.reconfirmationRequired)
+const selectionActionReady = computed(() => humanSourceReady.value && selectedCount.value > 0 && !selection.current.value.reconfirmationRequired)
+const listReady = computed(() => scopeReady.value && (loadState.value.kind === 'live' || loadState.value.kind === 'empty'))
 const hasLoadedRows = computed(() => rows.length > 0 || (Array.isArray(loadState.value.data) && loadState.value.data.length > 0))
 const showInitialPending = computed(() => pending.value && !hasLoadedRows.value)
-const showStatebar = computed(() => Boolean(notice.value || showInitialPending.value || error.value || loadState.value.kind === 'empty'))
-const statebarKind = computed(() => error.value ? 'error' : showInitialPending.value ? 'pending' : loadState.value.kind)
+const detailError = computed(() => activeId.value !== null && detailState.value.kind === 'error' ? detailState.value.error.message : null)
+const showStatebar = computed(() => Boolean(scopeError.value || context.selectionPending.value || notice.value || showInitialPending.value || error.value || detailError.value || loadState.value.kind === 'empty' || loadState.value.kind === 'gated'))
+const statebarKind = computed(() => scopeError.value || error.value || detailError.value ? 'error' : context.selectionPending.value || showInitialPending.value ? 'pending' : loadState.value.kind)
 
 const stats = computed(() => ({
   open: rows.filter((issue) => issue.status === 'open').length,
@@ -129,10 +143,10 @@ const pageRange = computed(() => {
   return { from, to }
 })
 const pageRows = computed(() => filteredRows.value.slice((page.value - 1) * effectivePageSize.value, page.value * effectivePageSize.value))
-const canCreate = computed(() => createTitle.value.trim().length > 0 && createTargetProject.value.trim().length > 0 && !pending.value)
-const canComment = computed(() => Boolean(activeIssue.value) && commentDraft.value.trim().length > 0 && !pending.value)
-const canReject = computed(() => Boolean(activeIssue.value) && rejectComment.value.trim().length > 0 && !pending.value)
-const projectOptions = computed(() => trackedProjects.value.length ? trackedProjects.value : ['engram'])
+const canCreate = computed(() => scopeReady.value && createTitle.value.trim().length > 0 && isCatalogProject(createSourceProject.value) && isCatalogProject(createTargetProject.value) && (context.project.value === 'all' || createSourceProject.value === context.project.value) && !pending.value)
+const canComment = computed(() => humanSourceReady.value && Boolean(activeIssue.value) && commentDraft.value.trim().length > 0 && !pending.value)
+const canReject = computed(() => humanSourceReady.value && Boolean(activeIssue.value) && rejectComment.value.trim().length > 0 && !pending.value)
+const projectOptions = trackedProjects
 const pageTitle = computed(() => activeIssue.value ? t('issues.detail.title', { id: activeIssue.value.id }) : t('issues.title'))
 const pageSubtitle = computed(() => activeIssue.value ? t('issues.detail.subtitle') : t('issues.subtitle'))
 const labelOptions = computed(() => {
@@ -158,7 +172,27 @@ const hoverThreadStats = computed(() => {
   }
 })
 
+watch([context.project, context.selectionPending, scopeError, requestedId], () => {
+  scopeGeneration += 1
+  page.value = 1
+  activeId.value = null
+  selection.invalidate('filter_changed')
+  notice.value = ''
+  mutationResult.value = null
+  showCreate.value = false
+  showReject.value = false
+  showDelete.value = false
+  showBulkField.value = false
+  showBulkLabels.value = false
+  createSourceProject.value = isCatalogProject(context.project.value) ? context.project.value : ''
+  createTargetProject.value = createSourceProject.value
+  if (scopeReady.value && requestedId.value !== null) {
+    activeId.value = requestedId.value
+    void openIssue(requestedId.value)
+  }
+}, { immediate: true, flush: 'sync' })
 watch(filter, () => {
+  scopeGeneration += 1
   page.value = 1
   selection.invalidate('filter_changed')
 })
@@ -189,8 +223,8 @@ watch(activeIssue, (issue) => {
 function resetCreate() {
   createTitle.value = ''
   createBody.value = ''
-  createSourceProject.value = 'operator'
-  createTargetProject.value = projectOptions.value.includes('engram') ? 'engram' : projectOptions.value[0] || 'engram'
+  createSourceProject.value = isCatalogProject(context.project.value) ? context.project.value : ''
+  createTargetProject.value = createSourceProject.value
   createPriority.value = 'high'
   createType.value = 'bug'
   createLabels.value = ['operator-created']
@@ -201,8 +235,9 @@ function setNotice(key: string, params: Record<string, unknown> = {}) {
   notice.value = t(key, params)
 }
 async function reconcileIssue(id: number) {
+  const generation = scopeGeneration
   await refresh()
-  await openIssue(id)
+  if (generation === scopeGeneration) await openIssue(id)
 }
 
 
@@ -212,7 +247,7 @@ function selectedCountText() {
 }
 
 function rowRoute(issue: OperatorIssue) {
-  return `${issue.sourceDisplayName} → ${issue.targetDisplayName}`
+  return `${isCatalogProject(issue.sourceProject) ? projectName(issue.sourceProject) : t('projectCatalog.unknownProject')} → ${isCatalogProject(issue.targetProject) ? projectName(issue.targetProject) : t('projectCatalog.unknownProject')}`
 }
 
 function targetFor(issue: OperatorIssue): OperatorSelectionTarget {
@@ -239,20 +274,24 @@ function setSelectionError(error: unknown) {
 
 function selectionFilter() {
   const statuses = filterStatuses[filter.value]
-  return statuses.length ? { statuses } : {}
+  return { ...(context.project.value === 'all' ? {} : { project: context.project.value }), ...(statuses.length ? { statuses } : {}) }
 }
 
 async function toggleSelection(issue: OperatorIssue) {
+  if (!scopeReady.value) return
+  const generation = scopeGeneration
   const target = targetFor(issue)
   const current = selection.current.value
   if (current.kind === 'frozen_filter') {
+    if (!humanSourceReady.value) return
     const excludedIds = isSelected(issue.id)
       ? [...current.excludedIds, target.id]
       : current.excludedIds.filter((id) => id !== target.id)
     try {
-      selection.applySnapshot(await freezeIssueSelection(selectionFilter(), excludedIds))
+      const snapshot = await freezeIssueSelection(selectionFilter(), excludedIds)
+      if (generation === scopeGeneration) selection.applySnapshot(snapshot)
     } catch (error) {
-      setSelectionError(error)
+      if (generation === scopeGeneration) setSelectionError(error)
     }
     return
   }
@@ -266,10 +305,13 @@ async function toggleSelection(issue: OperatorIssue) {
 }
 
 async function selectAllFiltered() {
+  if (!humanSourceReady.value) return
+  const generation = scopeGeneration
   try {
-    selection.applySnapshot(await freezeIssueSelection(selectionFilter(), []))
+    const snapshot = await freezeIssueSelection(selectionFilter(), [])
+    if (generation === scopeGeneration) selection.applySnapshot(snapshot)
   } catch (error) {
-    setSelectionError(error)
+    if (generation === scopeGeneration) setSelectionError(error)
   }
 }
 
@@ -287,15 +329,17 @@ function hasFilter() {
 }
 
 async function selectIssue(issue: OperatorIssue) {
-  activeId.value = issue.id
-  await openIssue(issue.id)
+  if (!scopeReady.value) return
+  await router.push({ path: `/issues/${issue.id}`, query: route.query })
 }
 
 function closeWorkspace() {
+  void router.push({ path: '/issues', query: route.query })
   activeId.value = null
 }
 
 function openCreate() {
+  if (!scopeReady.value) return
   resetCreate()
   showCreate.value = true
 }
@@ -352,7 +396,8 @@ function clearThreadSelection() {
 }
 
 async function updateCurrentField(field: 'status' | 'priority' | 'type', value: string) {
-  if (!activeIssue.value || pending.value) return
+  if (!activeIssue.value || pending.value || !humanSourceReady.value) return
+  const generation = scopeGeneration
   const id = activeIssue.value.id
   const patch: IssueUpdateInput =
     field === 'status'
@@ -364,12 +409,14 @@ async function updateCurrentField(field: 'status' | 'priority' | 'type', value: 
     ...patch,
     comment: t('issues.detail.fieldChangeComment', { field: t(`issues.detail.${field}`) }),
   })
+  if (generation !== scopeGeneration) return
   mutationResult.value = result
   if (result.kind === 'committed_verified') await reconcileIssue(id)
 }
 
 async function toggleIssueLabel(label: string) {
-  if (!activeIssue.value || pending.value) return
+  if (!activeIssue.value || pending.value || !humanSourceReady.value) return
+  const generation = scopeGeneration
   const id = activeIssue.value.id
   const labels = labelDraft.value.includes(label)
     ? labelDraft.value.filter((item) => item !== label)
@@ -379,6 +426,7 @@ async function toggleIssueLabel(label: string) {
     labels,
     comment: t('issues.detail.labelsComment'),
   })
+  if (generation !== scopeGeneration) return
   mutationResult.value = result
   if (result.kind === 'committed_verified') await reconcileIssue(id)
 }
@@ -444,15 +492,17 @@ function hideIssueHover() {
 
 async function createNewIssue() {
   if (!canCreate.value) return
+  const generation = scopeGeneration
   const result = await runCreateIssue({
     title: createTitle.value.trim(),
     body: createBody.value.trim(),
     priority: createPriority.value,
     type: createType.value,
-    sourceProject: createSourceProject.value.trim() || 'operator',
+    sourceProject: createSourceProject.value,
     targetProject: createTargetProject.value.trim(),
     labels: createLabels.value,
   })
+  if (generation !== scopeGeneration) return
 
   mutationResult.value = result
   if (result.kind === 'committed_verified') {
@@ -463,28 +513,34 @@ async function createNewIssue() {
 }
 
 async function acknowledgeCurrent() {
-  if (!activeIssue.value) return
+  if (!activeIssue.value || !humanSourceReady.value) return
+  const generation = scopeGeneration
   const id = activeIssue.value.id
-  const result = await acknowledgeIssue(id)
+  const result = await acknowledgeIssue(id, context.project.value)
+  if (generation !== scopeGeneration) return
   mutationResult.value = result
   if (result.kind === 'committed_verified') await reconcileIssue(id)
 }
 
 async function resolveCurrent() {
-  if (!activeIssue.value) return
+  if (!activeIssue.value || !humanSourceReady.value) return
+  const generation = scopeGeneration
   const id = activeIssue.value.id
   const result = await updateIssue(id, {
     status: 'resolved',
     comment: t('issues.detail.resolveComment'),
   })
+  if (generation !== scopeGeneration) return
   mutationResult.value = result
   if (result.kind === 'committed_verified') await reconcileIssue(id)
 }
 
 async function addComment() {
   if (!activeIssue.value || !canComment.value) return
+  const generation = scopeGeneration
   const id = activeIssue.value.id
   const result = await commentIssue(id, commentDraft.value.trim())
+  if (generation !== scopeGeneration) return
   mutationResult.value = result
   if (result.kind === 'committed_verified') {
     commentDraft.value = ''
@@ -494,8 +550,10 @@ async function addComment() {
 
 async function rejectCurrent() {
   if (!activeIssue.value || !canReject.value) return
+  const generation = scopeGeneration
   const id = activeIssue.value.id
   const result = await rejectIssue(id, rejectComment.value.trim())
+  if (generation !== scopeGeneration) return
   mutationResult.value = result
   if (result.kind === 'committed_verified') {
     showReject.value = false
@@ -505,14 +563,17 @@ async function rejectCurrent() {
 }
 
 async function deleteCurrent() {
-  if (!activeIssue.value) return
+  if (!activeIssue.value || !humanSourceReady.value) return
+  const generation = scopeGeneration
   const id = activeIssue.value.id
   const result = await deleteIssue(id)
+  if (generation !== scopeGeneration) return
   mutationResult.value = result
   if (result.kind === 'committed_verified') {
     await refresh()
+    if (generation !== scopeGeneration) return
     showDelete.value = false
-    activeId.value = null
+    await router.push({ path: '/issues', query: route.query })
   }
 }
 
@@ -533,21 +594,26 @@ function isBulkPriority(value: string): value is OperatorIssuePriority {
 
 async function applySelectedIssues(action: IssueSelectionAction) {
   if (!selectionActionReady.value) return false
+  const generation = scopeGeneration
+  const sourceProject = context.project.value
   try {
     let current = selection.current.value
     if (current.kind !== 'frozen_filter' && current.version === 0) {
-      selection.applySnapshot(await saveIssueSelection(current))
+      const snapshot = await saveIssueSelection(current)
+      if (generation !== scopeGeneration) return false
+      selection.applySnapshot(snapshot)
       current = selection.current.value
     }
     if (current.kind === 'none' || current.reconfirmationRequired) return false
 
-    const result = await runIssueSelectionOperation(current, action)
+    const result = await runIssueSelectionOperation(current, action, sourceProject)
+    if (generation !== scopeGeneration) return false
     mutationResult.value = result
     if (result.kind !== 'committed_verified') return false
     clearSelection()
     return true
   } catch (error) {
-    setSelectionError(error)
+    if (generation === scopeGeneration) setSelectionError(error)
     return false
   }
 }
@@ -569,8 +635,9 @@ async function applyBulkLabels() {
 }
 
 async function copyIssueLink() {
-  if (!activeIssue.value || typeof window === 'undefined') return
-  const url = `${window.location.origin}${window.location.pathname}#/issues/${activeIssue.value.id}`
+  if (!activeIssue.value || !scopeReady.value || typeof window === 'undefined') return
+  const params = new URLSearchParams({ project: context.project.value })
+  const url = new URL(`/issues/${activeIssue.value.id}?${params}`, window.location.origin).href
   try {
     await navigator.clipboard?.writeText(url)
     setNotice('issues.notice.linkCopied')
@@ -611,22 +678,27 @@ function renderMarkdown(value: string) {
     </header>
 
     <section v-if="showStatebar" class="statebar" :data-state="statebarKind">
-      <span v-if="notice">{{ notice }}</span>
+      <span v-if="scopeError">{{ t('issues.state.error', { message: scopeError.message }) }}</span>
+      <span v-else-if="context.selectionPending.value">{{ t('issues.state.pending') }}</span>
+      <span v-else-if="notice">{{ notice }}</span>
       <span v-else-if="showInitialPending">{{ t('issues.state.pending') }}</span>
-      <span v-else-if="error">{{ t('issues.state.error', { message: error }) }}</span>
-      <span v-else-if="loadState.kind === 'empty'">{{ t('issues.state.empty') }}</span>
-      <button v-if="error" class="tbtn" @click="refresh">{{ t('issues.state.retry') }}</button>
+      <span v-else-if="error || detailError">{{ t('issues.state.error', { message: error || detailError }) }}</span>
+      <span v-else-if="listReady && loadState.kind === 'empty'">{{ t('issues.state.empty') }}</span>
+      <span v-else-if="loadState.kind === 'gated'">{{ t('projectCatalog.selectionRequired') }}</span>
+      <button v-if="scopeError" class="tbtn" @click="context.refresh">{{ t('issues.state.retry') }}</button>
+      <button v-else-if="error || detailError" class="tbtn" @click="requestedId ? openIssue(requestedId) : refresh()">{{ t('issues.state.retry') }}</button>
     </section>
     <MutationResultNotice :result="mutationResult" :recheck-label="t('issues.state.retry')" @recheck="refresh" />
+    <p v-if="hasLoadedRows && !listReady" class="statebar" role="status">{{ t('issues.state.stale') }}</p>
 
     <section v-if="!activeIssue" class="area-body">
       <div class="pane">
         <div class="list-ops">
           <div class="op-left">
-            <button class="tbtn" :disabled="!filteredRows.length" @click="selectAllFiltered">{{ t('issues.actions.selectAll') }}</button>
+            <button class="tbtn" :disabled="!filteredRows.length || !humanSourceReady" @click="selectAllFiltered">{{ t('issues.actions.selectAll') }}</button>
             <button class="tbtn" :disabled="!selectedCount" @click="clearSelection">{{ t('issues.actions.clearSelection') }}</button>
             <button class="tbtn" :disabled="!hasFilter()" @click="resetFilter">{{ t('issues.actions.resetFilter') }}</button>
-            <span class="fcount">{{ t('issues.list.countInFilter', { shown: filteredRows.length, total: rows.length }) }}</span>
+            <span v-if="listReady" class="fcount">{{ t('issues.list.countInFilter', { shown: filteredRows.length, total: rows.length }) }}</span>
           </div>
           <div class="op-right">
             <label class="rows">
@@ -637,18 +709,20 @@ function renderMarkdown(value: string) {
                 </option>
               </select>
             </label>
-            <span class="fcount">{{ t('issues.list.pageRange', { from: pageRange.from, to: pageRange.to, total: filteredRows.length }) }}</span>
-            <button class="pager" :disabled="page <= 1" @click="page--">‹</button>
-            <button class="pager on">{{ page }}</button>
-            <button class="pager" :disabled="page >= totalPages" @click="page++">›</button>
+            <template v-if="listReady">
+              <span class="fcount">{{ t('issues.list.pageRange', { from: pageRange.from, to: pageRange.to, total: filteredRows.length }) }}</span>
+              <button class="pager" :disabled="page <= 1" @click="page--">‹</button>
+              <button class="pager on">{{ page }}</button>
+              <button class="pager" :disabled="page >= totalPages" @click="page++">›</button>
+            </template>
           </div>
         </div>
 
         <div class="issue-create-strip">
-          <button class="tbtn" @click="openCreate">{{ t('issues.create.open') }}</button>
+          <button class="tbtn" :disabled="!scopeReady" @click="openCreate">{{ t('issues.create.open') }}</button>
         </div>
 
-        <div class="instr-band">
+        <div v-if="listReady" class="instr-band">
           <div class="lead">
             <div class="ln">{{ stats.open }}</div>
             <div class="ll">{{ t('issues.stats.open') }}</div>
@@ -670,7 +744,7 @@ function renderMarkdown(value: string) {
           >
             {{ t(`issues.filters.${item}`) }}
           </button>
-          <span class="fcount">{{ t('issues.list.filteredTotal', { shown: filteredRows.length, total: registryTotal }) }}</span>
+          <span v-if="listReady" class="fcount">{{ t('issues.list.filteredTotal', { shown: filteredRows.length, total: registryTotal }) }}</span>
         </div>
 
         <div class="grid issues-grid">
@@ -719,10 +793,11 @@ function renderMarkdown(value: string) {
             <span class="issue-comments">▱ {{ issue.comments }}</span>
           </button>
 
-          <div v-if="!pageRows.length" class="empty">
+          <div v-if="listReady && !pageRows.length" class="empty">
             <b>{{ t('issues.empty.title') }}</b>
             <span>{{ t('issues.empty.body') }}</span>
           </div>
+          <p v-else-if="!pageRows.length" class="empty" role="status">{{ t(pending || context.selectionPending.value ? 'issues.state.pending' : 'issues.state.unknown') }}</p>
         </div>
 
         <div class="bulkbar" :class="{ show: selectedCount > 0 }">
@@ -754,8 +829,8 @@ function renderMarkdown(value: string) {
           </div>
         </div>
         <div class="dactions issue-danger-actions">
-          <button class="act" :disabled="pending" @click="resolveCurrent">{{ t('issues.detail.resolve') }}</button>
-          <button class="act danger" :disabled="pending" @click="showReject = true">{{ t('issues.detail.reject') }}</button>
+          <button class="act" :disabled="pending || !humanSourceReady" @click="resolveCurrent">{{ t('issues.detail.resolve') }}</button>
+          <button class="act danger" :disabled="pending || !humanSourceReady" @click="showReject = true">{{ t('issues.detail.reject') }}</button>
         </div>
       </div>
 
@@ -801,7 +876,7 @@ function renderMarkdown(value: string) {
                     :class="{ on: isCommentSelected(comment, index) }"
                     @click.stop="toggleCommentSelection(comment, index)"
                   >{{ isCommentSelected(comment, index) ? '✓' : '' }}</span>
-                  <span class="agent">{{ comment.authorProject }}</span>
+                  <span class="agent">{{ isCatalogProject(comment.authorProject) ? projectName(comment.authorProject) : t('projectCatalog.unknownProject') }}</span>
                   <span>{{ comment.authorAgent }}</span>
                   <span>{{ comment.age }}</span>
                 </div>
@@ -840,19 +915,19 @@ function renderMarkdown(value: string) {
             <div class="edit-grid">
               <label class="edit-field">
                 <span>{{ t('issues.detail.status') }}</span>
-                <select v-model="statusDraft" class="txt edit-select" name="issue-status" :disabled="pending" @change="updateCurrentField('status', statusDraft)">
+                <select v-model="statusDraft" class="txt edit-select" name="issue-status" :disabled="pending || !humanSourceReady" @change="updateCurrentField('status', statusDraft)">
                   <option v-for="status in statusOptions" :key="status" :value="status">{{ t(`issues.status.${status}`) }}</option>
                 </select>
               </label>
               <label class="edit-field">
                 <span>{{ t('issues.detail.priority') }}</span>
-                <select v-model="priorityDraft" class="txt edit-select" name="issue-priority" :disabled="pending" @change="updateCurrentField('priority', priorityDraft)">
+                <select v-model="priorityDraft" class="txt edit-select" name="issue-priority" :disabled="pending || !humanSourceReady" @change="updateCurrentField('priority', priorityDraft)">
                   <option v-for="priority in priorityOptions" :key="priority" :value="priority">{{ t(`issues.priority.${priority}`) }}</option>
                 </select>
               </label>
               <label class="edit-field">
                 <span>{{ t('issues.detail.type') }}</span>
-                <select v-model="typeDraft" class="txt edit-select" name="issue-type" :disabled="pending" @change="updateCurrentField('type', typeDraft)">
+                <select v-model="typeDraft" class="txt edit-select" name="issue-type" :disabled="pending || !humanSourceReady" @change="updateCurrentField('type', typeDraft)">
                   <option v-for="kind in typeOptions" :key="kind" :value="kind">{{ t(`issues.type.${kind}`) }}</option>
                 </select>
               </label>
@@ -871,14 +946,14 @@ function renderMarkdown(value: string) {
                 type="button"
                 class="tag-option"
                 :class="{ on: labelDraft.includes(label) }"
-                :disabled="pending"
+                :disabled="pending || !humanSourceReady"
                 @click="toggleIssueLabel(label)"
               >
                 {{ label }}
               </button>
             </div>
             <div class="dactions">
-              <button class="act" :disabled="pending" @click="acknowledgeCurrent">{{ t('issues.detail.acknowledge') }}</button>
+              <button class="act" :disabled="pending || !humanSourceReady" @click="acknowledgeCurrent">{{ t('issues.detail.acknowledge') }}</button>
             </div>
           </div>
 
@@ -886,7 +961,7 @@ function renderMarkdown(value: string) {
             <div class="dsh">{{ t('issues.detail.actions') }}</div>
             <div class="dactions">
               <button class="act" @click="copyIssueLink">{{ t('issues.detail.copyLink') }}</button>
-              <button class="act danger" @click="showDelete = true">{{ t('issues.detail.delete') }}</button>
+              <button class="act danger" :disabled="pending || !humanSourceReady" @click="showDelete = true">{{ t('issues.detail.delete') }}</button>
             </div>
           </div>
         </aside>
@@ -946,12 +1021,16 @@ function renderMarkdown(value: string) {
               <div class="issue-route-grid">
                 <label class="field">
                   <span>{{ t('issues.create.sourceProject') }}</span>
-                  <input v-model="createSourceProject" class="txt" name="new-issue-source-project" :placeholder="t('issues.create.sourcePlaceholder')" />
+                  <select v-model="createSourceProject" class="txt" name="new-issue-source-project" :disabled="context.project.value !== 'all' || !scopeReady">
+                    <option value="" disabled>{{ t('knowledge.chooseProject') }}</option>
+                    <option v-for="project in projectOptions" :key="project" :value="project">{{ projectName(project) }}</option>
+                  </select>
                 </label>
                 <label class="field">
                   <span>{{ t('issues.create.targetProject') }}</span>
-                  <select v-model="createTargetProject" class="txt" name="new-issue-target-project">
-                    <option v-for="project in projectOptions" :key="project" :value="project">{{ project }}</option>
+                  <select v-model="createTargetProject" class="txt" name="new-issue-target-project" :disabled="!scopeReady">
+                    <option value="" disabled>{{ t('knowledge.chooseProject') }}</option>
+                    <option v-for="project in projectOptions" :key="project" :value="project">{{ projectName(project) }}</option>
                   </select>
                 </label>
                 <label class="field">
@@ -1054,7 +1133,7 @@ function renderMarkdown(value: string) {
         <p>{{ t('issues.delete.body') }}</p>
         <div class="mf">
           <button class="tbtn" @click="showDelete = false">{{ t('issues.modal.cancel') }}</button>
-          <button class="tbtn danger-fill" @click="deleteCurrent">{{ t('issues.delete.submit') }}</button>
+          <button class="tbtn danger-fill" :disabled="pending || !humanSourceReady" @click="deleteCurrent">{{ t('issues.delete.submit') }}</button>
         </div>
       </section>
     </div>
@@ -1078,7 +1157,7 @@ function renderMarkdown(value: string) {
         </label>
         <div class="mf">
           <button class="tbtn" @click="showBulkField = false">{{ t('issues.modal.cancel') }}</button>
-          <button class="tbtn primary" @click="applyBulkField">{{ t('issues.bulkField.submit') }}</button>
+          <button class="tbtn primary" :disabled="!selectionActionReady" @click="applyBulkField">{{ t('issues.bulkField.submit') }}</button>
         </div>
       </section>
     </div>
@@ -1095,7 +1174,7 @@ function renderMarkdown(value: string) {
         </label>
         <div class="mf">
           <button class="tbtn" @click="showBulkLabels = false">{{ t('issues.modal.cancel') }}</button>
-          <button class="tbtn primary" @click="applyBulkLabels">{{ t('issues.bulkLabels.submit') }}</button>
+          <button class="tbtn primary" :disabled="!selectionActionReady" @click="applyBulkLabels">{{ t('issues.bulkLabels.submit') }}</button>
         </div>
       </section>
     </div>

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/operability"
 	"github.com/thebtf/engram/pkg/models"
@@ -206,26 +207,45 @@ func (s *Service) handleGetObservations(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, resp)
 }
 
+type projectListResponse struct {
+	Items      []gorm.ProjectDescriptor `json:"items"`
+	Unresolved []gorm.UnresolvedProject `json:"unresolved"`
+}
+
 // handleGetProjects godoc
 // @Summary List projects
-// @Description Returns all known projects. Response is cacheable for 5 minutes.
+// @Description Returns the live canonical project catalog with authoritative display labels. Requires the existing ordinary authenticated reader scope.
 // @Tags Observations
 // @Produce json
 // @Security ApiKeyAuth
-// @Success 200 {array} object
+// @Success 200 {object} projectListResponse
 // @Failure 500 {string} string "internal error"
 // @Router /api/projects [get]
 func (s *Service) handleGetProjects(w http.ResponseWriter, r *http.Request) {
-	projects, err := s.sessionStore.GetAllProjects(r.Context())
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	if identity, ok := auth.IdentityFrom(r.Context()); ok && !hapHTTPRouteAllowed(identity, r.Method, r.URL.Path) {
+		writeDocumentError(w, http.StatusForbidden, "project read forbidden")
 		return
 	}
-
-	// Project list changes infrequently; 5-minute cache avoids repeated DB hits
-	// during dashboard load-bursts.
-	w.Header().Set("Cache-Control", "public, max-age=300")
-	writeJSON(w, projects)
+	if s.sessionStore == nil {
+		writeDocumentError(w, http.StatusServiceUnavailable, "project catalog unavailable")
+		return
+	}
+	projects, err := s.sessionStore.GetAllProjects(r.Context())
+	if err != nil {
+		writeDocumentError(w, http.StatusInternalServerError, "project read unavailable")
+		return
+	}
+	w.Header().Set("Cache-Control", "private, no-store")
+	membership := s.logicalMembershipStore(w, r)
+	if membership == nil {
+		return
+	}
+	unresolved, err := membership.ListUnresolved(r.Context())
+	if err != nil {
+		writeRetainedProjectError(w, err)
+		return
+	}
+	writeJSON(w, projectListResponse{Items: projects, Unresolved: unresolved})
 }
 
 // handleGetTypes godoc

@@ -166,6 +166,9 @@ func recallPrincipalQueryItemToMemory(item principalmemory.PrincipalMemoryQueryI
 // response.
 func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (string, error) {
 	project := coerceString(m["project"], "")
+	if project == "" {
+		project = ProjectFromContext(ctx)
+	}
 	query := coerceString(m["query"], "")
 	limit := coerceInt(m["limit"], 20)
 	if limit <= 0 {

@@ -1,24 +1,25 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { useMemoriesQuery, useProjectsQuery } from '~/composables/useOperatorQueries'
+import { useMemoriesQuery } from '~/composables/useOperatorQueries'
+import { useProjectCatalog } from '~/composables/useProjectCatalog'
+import ProjectCatalogStatus from '~/components/ProjectCatalogStatus.vue'
 import { formatAbsoluteDate } from '~/utils/formatters'
+import { useOperatorI18n } from '~/composables/useOperatorI18n'
+const { t } = useOperatorI18n()
 
-const projectsQuery = useProjectsQuery()
-const selectedProject = ref('')
-const memoriesQuery = useMemoriesQuery(selectedProject)
+const { projectsQuery, projects, unresolved, selectedProject, selectionPending, selectionError, ready, unresolvedReference, projectName } = useProjectCatalog()
+const offset = ref(0)
+const searchQuery = ref('')
+const memoriesQuery = useMemoriesQuery(selectedProject, ready, offset, searchQuery)
 const selectedMemoryId = ref<number | null>(null)
 
-const projects = computed(() => projectsQuery.data.value ?? [])
-const memories = computed(() => memoriesQuery.data.value ?? [])
+const page = computed(() => ready.value ? memoriesQuery.data.value : undefined)
+const memories = computed(() => page.value?.items ?? [])
 const selectedMemory = computed(() =>
   memories.value.find((memory) => memory.id === selectedMemoryId.value) ?? null,
 )
 
-watch(projects, (nextProjects) => {
-  if (!selectedProject.value && nextProjects.length > 0) {
-    selectedProject.value = nextProjects[0]
-  }
-}, { immediate: true })
+watch([selectedProject, searchQuery], () => { offset.value = 0 })
 
 watch(memories, (nextMemories) => {
   if (!nextMemories.some((memory) => memory.id === selectedMemoryId.value)) {
@@ -29,12 +30,13 @@ watch(memories, (nextMemories) => {
 
 <template>
   <section class="space-y-5">
+    <ProjectCatalogStatus :records="unresolved" :pending="selectionPending" :error="selectionError" :reference="unresolvedReference" />
     <div class="surface-panel p-5">
       <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 class="text-xl font-semibold">Memory Lab</h1>
           <p class="mt-2 text-sm text-[var(--fg-2)]">
-            First live memory slice in the new app shell: project picker, memory list and truthful detail panel.
+            Project-scoped memories with server-side search, bounded pages and retained content IDs.
           </p>
         </div>
 
@@ -44,10 +46,11 @@ watch(memories, (nextMemories) => {
             class="rounded-lg border border-[var(--border)] bg-[var(--surface-warm)] px-3 py-2 text-sm text-[var(--fg)]"
           >
             <option value="" disabled>select project</option>
-            <option v-for="project in projects" :key="project" :value="project">{{ project }}</option>
+            <option v-for="project in projects" :key="project.project_id" :value="project.project_id">{{ projectName(project.project_id) }}</option>
           </select>
           <button
             class="rounded-lg border border-[var(--border)] bg-[var(--surface-warm)] px-4 py-2 text-sm text-[var(--fg-2)]"
+            :disabled="!ready || !selectedProject || selectedProject === 'all'"
             @click="memoriesQuery.refetch()"
           >
             Refresh
@@ -55,11 +58,22 @@ watch(memories, (nextMemories) => {
         </div>
       </div>
 
+      <label class="mb-4 block text-sm text-[var(--fg-2)]">Search memories
+        <input v-model="searchQuery" type="search" class="ml-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2" />
+      </label>
+      <div v-if="page" class="mb-4 flex flex-wrap items-center gap-3 text-sm text-[var(--muted)]" aria-live="polite">
+        <span>{{ page.items.length ? page.offset + 1 : 0 }}–{{ page.offset + page.items.length }} / {{ page.total }}</span>
+        <button :disabled="memoriesQuery.isFetching.value || page.offset === 0" class="rounded border px-3 py-2 disabled:opacity-50" @click="offset = Math.max(0, page.offset - page.limit)">Previous page</button>
+        <button :disabled="memoriesQuery.isFetching.value || !page.has_more" class="rounded border px-3 py-2 disabled:opacity-50" @click="offset = page.offset + page.limit">Next page</button>
+      </div>
       <div v-if="projectsQuery.isPending.value" class="text-sm text-[var(--muted)]">
         Загрузка проектов...
       </div>
       <div v-else-if="projects.length === 0" class="text-sm text-[var(--muted)]">
-        Нет проектов для memory slice.
+        No catalog projects are available.
+      </div>
+      <div v-else-if="!selectedProject || selectedProject === 'all'" class="text-sm text-[var(--muted)]">
+        {{ t('projectCatalog.selectionRequired') }}
       </div>
       <div v-else-if="memoriesQuery.isPending.value" class="text-sm text-[var(--muted)]">
         Загрузка памяти...
@@ -68,7 +82,7 @@ watch(memories, (nextMemories) => {
         {{ memoriesQuery.error.value?.message || 'Не удалось загрузить memories' }}
       </div>
       <div v-else-if="memories.length === 0" class="text-sm text-[var(--muted)]">
-        Для проекта {{ selectedProject }} пока нет memory rows.
+        No memories on this page for {{ projectName(selectedProject) }} and the current search.
       </div>
       <div v-else class="grid gap-4 xl:grid-cols-[minmax(0,1.25fr),minmax(320px,0.9fr)]">
         <div class="surface-panel-warm p-4">

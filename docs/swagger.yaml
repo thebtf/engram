@@ -1,5 +1,44 @@
 basePath: /
 definitions:
+  github_com_thebtf_engram_internal_db_gorm.CollectionSelectionKind:
+    enum:
+    - none
+    - explicit
+    - page
+    - frozen_filter
+    type: string
+    x-enum-varnames:
+    - CollectionSelectionNone
+    - CollectionSelectionExplicit
+    - CollectionSelectionPage
+    - CollectionSelectionFrozenFilter
+  github_com_thebtf_engram_internal_db_gorm.ProjectDescriptor:
+    properties:
+      name:
+        type: string
+      project_id:
+        type: string
+      repository_qualifier:
+        type: string
+    type: object
+  github_com_thebtf_engram_internal_db_gorm.UnresolvedProject:
+    properties:
+      name:
+        type: string
+      reader_kinds:
+        items:
+          enum:
+          - memory
+          - document
+          - issue
+          - code
+          type: string
+        type: array
+      reason:
+        type: string
+      reference:
+        type: string
+    type: object
   github_com_thebtf_engram_internal_embedding.EmbedError:
     properties:
       at:
@@ -423,16 +462,49 @@ definitions:
       enabled:
         type: boolean
     type: object
+  internal_worker.behavioralRuleOperationOrderTarget:
+    properties:
+      expected_version:
+        type: integer
+      rule_id:
+        type: integer
+    type: object
+  internal_worker.behavioralRuleOperationScope:
+    properties:
+      project:
+        type: string
+    type: object
+  internal_worker.behavioralRuleOperationSelection:
+    properties:
+      kind:
+        $ref: '#/definitions/github_com_thebtf_engram_internal_db_gorm.CollectionSelectionKind'
+      selection_token:
+        type: string
+      selection_version:
+        type: integer
+    type: object
   internal_worker.behavioralRuleRequest:
     properties:
+      action:
+        type: string
       content:
         type: string
       edited_by:
         type: string
+      order:
+        items:
+          $ref: '#/definitions/internal_worker.behavioralRuleOperationOrderTarget'
+        type: array
       priority:
         type: integer
       project:
         type: string
+      request_id:
+        type: string
+      scope:
+        $ref: '#/definitions/internal_worker.behavioralRuleOperationScope'
+      selection:
+        $ref: '#/definitions/internal_worker.behavioralRuleOperationSelection'
     type: object
   internal_worker.candidateListResponse:
     properties:
@@ -491,6 +563,43 @@ definitions:
         type: string
       updated_at:
         type: string
+    type: object
+  internal_worker.documentErrorResponse:
+    properties:
+      error:
+        type: string
+    type: object
+  internal_worker.documentListItem:
+    properties:
+      author:
+        type: string
+      created_at:
+        type: string
+      doc_type:
+        type: string
+      id:
+        type: integer
+      path:
+        type: string
+      project:
+        type: string
+      version:
+        type: integer
+    type: object
+  internal_worker.documentListResponse:
+    properties:
+      has_more:
+        type: boolean
+      items:
+        items:
+          $ref: '#/definitions/internal_worker.documentListItem'
+        type: array
+      limit:
+        type: integer
+      offset:
+        type: integer
+      total:
+        type: integer
     type: object
   internal_worker.embeddingTelemetry:
     properties:
@@ -562,6 +671,21 @@ definitions:
       memory_id:
         type: integer
     type: object
+  internal_worker.memoryListResponse:
+    properties:
+      has_more:
+        type: boolean
+      items:
+        items:
+          $ref: '#/definitions/github_com_thebtf_engram_pkg_models.Memory'
+        type: array
+      limit:
+        type: integer
+      offset:
+        type: integer
+      total:
+        type: integer
+    type: object
   internal_worker.outcomeTelemetry:
     properties:
       by_outcome:
@@ -590,6 +714,17 @@ definitions:
         type: integer
       total_injections:
         type: integer
+    type: object
+  internal_worker.projectListResponse:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/github_com_thebtf_engram_internal_db_gorm.ProjectDescriptor'
+        type: array
+      unresolved:
+        items:
+          $ref: '#/definitions/github_com_thebtf_engram_internal_db_gorm.UnresolvedProject'
+        type: array
     type: object
   internal_worker.sessionEndRequest:
     properties:
@@ -677,6 +812,8 @@ definitions:
     type: object
   internal_worker.tokenCreateRequest:
     properties:
+      expires_at:
+        type: string
       name:
         type: string
       principal:
@@ -1105,20 +1242,28 @@ paths:
         recent (last 5), relevant (top 10 semantic), and guidance sections. Supports
         GET (deprecated) and POST. Critical startup path — optimized for speed.
       parameters:
-      - description: Project name (required)
+      - description: Pinned project UUID or proven historical selector (required)
         in: query
         name: project
         type: string
-      - description: Agent ID (acts as project scope if project empty)
+      - description: Agent attribution; never substitutes for project or session
         in: query
         name: agent_id
         type: string
+      - description: Actual caller session for historical selector translation
+        in: query
+        name: session_id
+        type: string
+      - description: Return the canonical project UUID without retrieval
+        in: query
+        name: identity_only
+        type: boolean
       - description: 'Response format: ''compact'' for minimal payload'
         in: query
         name: format
         type: string
-      - description: 'POST body: {project, agent_id, cwd, legacy_project, project_identity,
-          identity_only}'
+      - description: 'POST body: {project, session_id, agent_id, cwd, legacy_project,
+          project_identity, identity_only}'
         in: body
         name: body
         schema:
@@ -1136,7 +1281,7 @@ paths:
           schema:
             type: string
         "409":
-          description: ambiguous legacy project identity
+          description: unresolved or conflicting historical project membership
           schema:
             additionalProperties: true
             type: object
@@ -1145,7 +1290,7 @@ paths:
           schema:
             type: string
         "503":
-          description: project identity registration unavailable
+          description: project identity resolution unavailable
           schema:
             additionalProperties: true
             type: object
@@ -1161,20 +1306,28 @@ paths:
         recent (last 5), relevant (top 10 semantic), and guidance sections. Supports
         GET (deprecated) and POST. Critical startup path — optimized for speed.
       parameters:
-      - description: Project name (required)
+      - description: Pinned project UUID or proven historical selector (required)
         in: query
         name: project
         type: string
-      - description: Agent ID (acts as project scope if project empty)
+      - description: Agent attribution; never substitutes for project or session
         in: query
         name: agent_id
         type: string
+      - description: Actual caller session for historical selector translation
+        in: query
+        name: session_id
+        type: string
+      - description: Return the canonical project UUID without retrieval
+        in: query
+        name: identity_only
+        type: boolean
       - description: 'Response format: ''compact'' for minimal payload'
         in: query
         name: format
         type: string
-      - description: 'POST body: {project, agent_id, cwd, legacy_project, project_identity,
-          identity_only}'
+      - description: 'POST body: {project, session_id, agent_id, cwd, legacy_project,
+          project_identity, identity_only}'
         in: body
         name: body
         schema:
@@ -1192,7 +1345,7 @@ paths:
           schema:
             type: string
         "409":
-          description: ambiguous legacy project identity
+          description: unresolved or conflicting historical project membership
           schema:
             additionalProperties: true
             type: object
@@ -1201,7 +1354,7 @@ paths:
           schema:
             type: string
         "503":
-          description: project identity registration unavailable
+          description: project identity resolution unavailable
           schema:
             additionalProperties: true
             type: object
@@ -1239,7 +1392,7 @@ paths:
         in: query
         name: limit
         type: integer
-      - description: 'POST body: {project, query, agent_id, cwd, limit}'
+      - description: 'POST body: {project, query, agent_id, cwd, limit, project_descriptor}'
         in: body
         name: body
         schema:
@@ -1256,10 +1409,18 @@ paths:
           description: project and query required
           schema:
             type: string
-        "500":
-          description: internal error
+        "409":
+          description: V3 project resolution refused
           schema:
-            type: string
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: V3 project resolution unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
       security:
       - ApiKeyAuth: []
       summary: Search observations by prompt
@@ -1293,7 +1454,7 @@ paths:
         in: query
         name: limit
         type: integer
-      - description: 'POST body: {project, query, agent_id, cwd, limit}'
+      - description: 'POST body: {project, query, agent_id, cwd, limit, project_descriptor}'
         in: body
         name: body
         schema:
@@ -1310,10 +1471,18 @@ paths:
           description: project and query required
           schema:
             type: string
-        "500":
-          description: internal error
+        "409":
+          description: V3 project resolution refused
           schema:
-            type: string
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: V3 project resolution unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
       security:
       - ApiKeyAuth: []
       summary: Search observations by prompt
@@ -1324,11 +1493,11 @@ paths:
       description: 'Returns static session-start context sourced from the server gRPC
         implementation: active issues, behavioral rules, recent memories, and generated_at.'
       parameters:
-      - description: Project slug (required)
+      - description: Project slug (required without project_descriptor)
         in: query
         name: project
         type: string
-      - description: 'POST body: {project, memories_limit, issues_limit}'
+      - description: 'POST body: {project, project_descriptor, memories_limit, issues_limit}'
         in: body
         name: body
         schema:
@@ -1341,13 +1510,27 @@ paths:
           schema:
             $ref: '#/definitions/internal_worker.sessionStartCompatibilityResponse'
         "400":
-          description: project required
+          description: invalid V3 project descriptor
           schema:
-            type: string
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: V3 project resolution refused
+          schema:
+            additionalProperties:
+              type: string
+            type: object
         "500":
           description: internal error
           schema:
             type: string
+        "503":
+          description: V3 project resolution unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
       security:
       - ApiKeyAuth: []
       summary: Get static session-start context
@@ -1357,11 +1540,11 @@ paths:
       description: 'Returns static session-start context sourced from the server gRPC
         implementation: active issues, behavioral rules, recent memories, and generated_at.'
       parameters:
-      - description: Project slug (required)
+      - description: Project slug (required without project_descriptor)
         in: query
         name: project
         type: string
-      - description: 'POST body: {project, memories_limit, issues_limit}'
+      - description: 'POST body: {project, project_descriptor, memories_limit, issues_limit}'
         in: body
         name: body
         schema:
@@ -1374,13 +1557,27 @@ paths:
           schema:
             $ref: '#/definitions/internal_worker.sessionStartCompatibilityResponse'
         "400":
-          description: project required
+          description: invalid V3 project descriptor
           schema:
-            type: string
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: V3 project resolution refused
+          schema:
+            additionalProperties:
+              type: string
+            type: object
         "500":
           description: internal error
           schema:
             type: string
+        "503":
+          description: V3 project resolution unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
       security:
       - ApiKeyAuth: []
       summary: Get static session-start context
@@ -1420,6 +1617,70 @@ paths:
       summary: Search decisions
       tags:
       - Search
+  /api/documents:
+    get:
+      description: Pages public metadata of the latest version per path, ordered by
+        created_at DESC, id DESC. Content and arbitrary JSON metadata are not searched.
+      parameters:
+      - description: Existing canonical project ID
+        in: query
+        name: project
+        required: true
+        type: string
+      - description: Literal case-insensitive path/type/author substring, maximum
+          1024 UTF-8 bytes
+        in: query
+        name: query
+        type: string
+      - collectionFormat: multi
+        description: Repeat literal latest-version document types; OR within types,
+          AND other criteria before count/page; at most six raw values, each 128 UTF-8
+          bytes
+        in: query
+        items:
+          type: string
+        name: doc_type
+        type: array
+      - description: Literal path prefix
+        in: query
+        name: path_prefix
+        type: string
+      - description: Visible rows to skip (default 0)
+        in: query
+        name: offset
+        type: integer
+      - description: Page size 1..500 (default 50)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_worker.documentListResponse'
+        "400":
+          description: invalid reader parameters
+          schema:
+            $ref: '#/definitions/internal_worker.documentErrorResponse'
+        "403":
+          description: project read forbidden
+          schema:
+            $ref: '#/definitions/internal_worker.documentErrorResponse'
+        "500":
+          description: read unavailable
+          schema:
+            $ref: '#/definitions/internal_worker.documentErrorResponse'
+        "503":
+          description: store unavailable
+          schema:
+            $ref: '#/definitions/internal_worker.documentErrorResponse'
+      security:
+      - ApiKeyAuth: []
+      summary: List current documents for one canonical project
+      tags:
+      - Documents
   /api/events/ingest:
     post:
       consumes:
@@ -1600,14 +1861,52 @@ paths:
       - System
   /api/memories:
     get:
-      description: Returns stored memories for the given project, newest first.
+      description: Returns visible current memories ordered by created_at DESC, id
+        DESC. Count and page apply the same access and literal query filters.
       parameters:
-      - description: Project identifier
+      - description: Existing canonical project ID
         in: query
         name: project
         required: true
         type: string
-      - description: Maximum number of results (default 50)
+      - description: Literal case-insensitive content substring (maximum 1024 UTF-8
+          bytes)
+        in: query
+        name: query
+        type: string
+      - collectionFormat: multi
+        description: Repeat exact filter values (all, active, flagged, stale, low,
+          chain); AND before count/page, at most six values; all is neutral
+        in: query
+        items:
+          enum:
+          - all
+          - active
+          - flagged
+          - stale
+          - low
+          - chain
+          type: string
+        name: filter
+        type: array
+      - collectionFormat: multi
+        description: Repeat exact memory types; OR within types, AND other criteria
+          before count/page; at most six raw values
+        in: query
+        items:
+          enum:
+          - fact
+          - experience
+          - opinion
+          - observation
+          type: string
+        name: epistemic_type
+        type: array
+      - description: Visible rows to skip (default 0)
+        in: query
+        name: offset
+        type: integer
+      - description: Page size 1..500 (default 50)
         in: query
         name: limit
         type: integer
@@ -1617,13 +1916,15 @@ paths:
         "200":
           description: OK
           schema:
-            items:
-              $ref: '#/definitions/github_com_thebtf_engram_pkg_models.Memory'
-            type: array
+            $ref: '#/definitions/internal_worker.memoryListResponse'
         "400":
-          description: project is required
+          description: invalid reader parameters
           schema:
-            type: string
+            $ref: '#/definitions/internal_worker.documentErrorResponse'
+        "403":
+          description: project read forbidden
+          schema:
+            $ref: '#/definitions/internal_worker.documentErrorResponse'
         "500":
           description: internal error
           schema:
@@ -1712,13 +2013,19 @@ paths:
       tags:
       - Memories
     get:
-      description: Returns one active memory entry by numeric ID.
+      description: Returns one nondeleted memory in the exact live canonical project,
+        with the existing read privacy policy applied before the ID lookup.
       parameters:
       - description: Memory ID
         in: path
         name: id
         required: true
         type: integer
+      - description: Existing canonical project ID
+        in: query
+        name: project
+        required: true
+        type: string
       produces:
       - application/json
       responses:
@@ -1727,9 +2034,13 @@ paths:
           schema:
             $ref: '#/definitions/github_com_thebtf_engram_pkg_models.Memory'
         "400":
-          description: invalid id
+          description: invalid id or project
           schema:
             type: string
+        "403":
+          description: project read forbidden
+          schema:
+            $ref: '#/definitions/internal_worker.documentErrorResponse'
         "404":
           description: not found
           schema:
@@ -1749,13 +2060,19 @@ paths:
       - Memories
   /api/memories/{id}/audit:
     get:
-      description: Returns safe audit summaries for a memory visible to the operator.
+      description: Returns safe audit summaries only after canonical project and memory
+        read privacy authorization; raw state snapshots are omitted.
       parameters:
       - description: Memory ID
         in: path
         name: id
         required: true
         type: integer
+      - description: Existing canonical project ID
+        in: query
+        name: project
+        required: true
+        type: string
       - description: Maximum number of audit rows (default 50, max 200)
         in: query
         name: limit
@@ -1768,9 +2085,13 @@ paths:
           schema:
             $ref: '#/definitions/internal_worker.memoryAuditResponse'
         "400":
-          description: invalid id or limit
+          description: invalid id, project or limit
           schema:
             type: string
+        "403":
+          description: project read forbidden
+          schema:
+            $ref: '#/definitions/internal_worker.documentErrorResponse'
         "404":
           description: not found
           schema:
@@ -2075,16 +2396,15 @@ paths:
       - Observations
   /api/projects:
     get:
-      description: Returns all known projects. Response is cacheable for 5 minutes.
+      description: Returns the live canonical project catalog with authoritative display
+        labels. Requires the existing ordinary authenticated reader scope.
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            items:
-              type: object
-            type: array
+            $ref: '#/definitions/internal_worker.projectListResponse'
         "500":
           description: internal error
           schema:
@@ -2928,6 +3248,10 @@ paths:
       - description: Project scope
         in: query
         name: project
+        type: string
+      - description: Explicit global namespace or project scope
+        in: query
+        name: scope
         type: string
       produces:
       - application/json

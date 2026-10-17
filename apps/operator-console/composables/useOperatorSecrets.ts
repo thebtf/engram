@@ -1,5 +1,6 @@
-import { ref as sharedRef, type Ref as SharedRef } from 'vue'
+import { computed, ref as sharedRef, type Ref as SharedRef } from 'vue'
 import { startedLoads } from './useConsolePreferences'
+import { isCatalogProject, useOperatorProjectContext } from './useOperatorProjectContext'
 
 let sharedSecretsPageCreds: SharedRef<OperatorCredential[]> | undefined
 let sharedSecretsPageVault: SharedRef<OperatorVaultStatus> | undefined
@@ -14,7 +15,7 @@ import {
   errorState,
   liveState,
   loadOperatorJson,
-  operatorApiUrl,
+  operatorFetchResponse,
   operatorFetchJson,
   pendingState,
   toOperatorSourceError,
@@ -24,7 +25,7 @@ import {
 function submitMutation<TIntent, TCurrent>(action: string, intent: TIntent, path: string, init: RequestInit, parseCurrentState: MutationCurrentStateParser<TCurrent>): Promise<MutationResult<TIntent, TCurrent>> {
   return executeMutation(
     { requestId: crypto.randomUUID(), action, intent },
-    fetch(operatorApiUrl(path), { ...init, credentials: 'include' }),
+    operatorFetchResponse(path, { ...init, credentials: 'include' }),
     parseCurrentState,
   )
 }
@@ -34,7 +35,7 @@ export interface OperatorCredential {
   id: string
   name: string
   project: string
-  scope: string
+  scope: 'project' | 'global'
   created: string
 }
 
@@ -57,6 +58,7 @@ interface ApiVaultCredential {
   id?: number
   name: string
   project?: string
+  project_id?: string | null
   scope?: string
   created_at?: string
 }
@@ -72,6 +74,9 @@ interface ApiVaultStatus {
 interface ApiVaultReveal {
   name: string
   value: string
+  project?: string
+  project_id?: string | null
+  id?: number
   scope?: string
 }
 
@@ -87,15 +92,19 @@ export function createSecretCurrentStateParser(input: StoreSecretInput): Mutatio
     const id = Reflect.get(value, 'id')
     const name = Reflect.get(value, 'name')
     const scope = Reflect.get(value, 'scope')
-    if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0 || name !== input.name || scope !== input.scope) return undefined
+    const project = Reflect.get(value, 'project')
+    const projectId = Reflect.get(value, 'project_id')
+    if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0 || name !== input.name || scope !== input.scope || (project !== undefined && project !== input.project) || (projectId !== undefined && projectId !== input.project)) return undefined
     return { id, name, scope }
   }
 }
 
-export function deleteSecretCurrentStateParser(name: string): MutationCurrentStateParser<{ name: string }> {
+export function deleteSecretCurrentStateParser(name: string, project: string): MutationCurrentStateParser<{ name: string }> {
   return (value) => {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
-    return Reflect.get(value, 'deleted') === true && Reflect.get(value, 'name') === name ? { name } : undefined
+    const echoedProject = Reflect.get(value, 'project')
+    const projectId = Reflect.get(value, 'project_id')
+    return Reflect.get(value, 'deleted') === true && Reflect.get(value, 'name') === name && (echoedProject === undefined || echoedProject === project) && (projectId === undefined || projectId === (project || null)) ? { name } : undefined
   }
 }
 
@@ -135,21 +144,23 @@ function compactAge(timestamp?: string): string {
 }
 
 function mapCredential(row: ApiVaultCredential): OperatorCredential {
-  const project = row.project || ''
+  const scope = row?.scope || 'project'
+  const project = row?.project_id === undefined ? row?.project || '' : row.project_id || ''
+  if (!row || (scope !== 'project' && scope !== 'global') || (scope === 'global' ? project !== '' : !isCatalogProject(project)) || (row.project !== undefined && row.project !== project) || typeof row.name !== 'string' || !row.name || (row.id !== undefined && (!Number.isSafeInteger(row.id) || row.id < 1))) throw new TypeError('Invalid credential project identity')
   return {
-    id: row.id !== undefined ? String(row.id) : `${project || 'global'}:${row.name}`,
+    id: row.id !== undefined ? String(row.id) : `${scope}:${project}:${row.name}`,
     name: row.name,
     project,
-    scope: row.scope || 'project',
+    scope,
     created: compactAge(row.created_at),
   }
 }
 
 function credentialUrl(cred: OperatorCredential): string {
   const base = `/api/vault/credentials/${encodeURIComponent(cred.name)}`
-  if (!cred.project) return base
+  if (cred.scope === 'global' ? cred.project !== '' : !isCatalogProject(cred.project)) throw new TypeError('An exact credential scope is required')
 
-  const params = new URLSearchParams({ project: cred.project })
+  const params = new URLSearchParams(cred.scope === 'global' ? { scope: 'global' } : { project: cred.project })
   return `${base}?${params.toString()}`
 }
 
@@ -184,13 +195,14 @@ export function useOperatorSecrets(): {
   error: ComputedRef<string | null>
   refresh: () => Promise<void>
   revealSecret: (cred: OperatorCredential) => Promise<string>
-  createSecret: (input: StoreSecretInput) => Promise<MutationResult<StoreSecretInput, OperatorVaultCreateReceipt>>
+  createSecret: (input: StoreSecretInput) => Promise<MutationResult<Omit<StoreSecretInput, 'value'>, OperatorVaultCreateReceipt>>
   deleteSecret: (cred: OperatorCredential) => Promise<MutationResult<{ credentialID: string }, { name: string }>>
   cleanupOrphans: () => Promise<MutationResult<undefined, { deleted: number }>>
   rotationGap: ReturnType<typeof unsupportedOperatorAction>
 } {
   const credsEvidence = endpointEvidence('/api/vault/credentials', 'vault-credentials')
   const vaultEvidence = endpointEvidence('/api/vault/status', 'vault-status')
+  const context = useOperatorProjectContext()
   const credsState = (sharedSecretsPageCreds ??= sharedRef<OperatorCredential[]>((() => [])()))
   const vaultStatus = (sharedSecretsPageVault ??= sharedRef<OperatorVaultStatus>((() => ({
     encrypted: false,
@@ -244,10 +256,21 @@ export function useOperatorSecrets(): {
     })
 
     if (result.kind === 'live' || result.kind === 'empty') {
-      replaceArray(credsState.value, result.data.map(mapCredential))
-      loadStateValue.value = credsState.value.length
-        ? liveState(credsEvidence, credsState.value)
-        : emptyState(credsEvidence, credsState.value)
+      try {
+        await context.refresh()
+        if (context.error.value) throw context.error.value
+        if (!Array.isArray(result.data)) throw new TypeError('Invalid credential metadata')
+        const credentials = result.data.map(mapCredential)
+        const identities = new Set(credentials.map((cred) => `${cred.project}\u0000${cred.name}`))
+        if (identities.size !== credentials.length) throw new TypeError('Duplicate credential identity')
+        replaceArray(credsState.value, credentials)
+        loadStateValue.value = credsState.value.length ? liveState(credsEvidence, credsState.value) : emptyState(credsEvidence, credsState.value)
+      } catch (cause) {
+        replaceArray(credsState.value, [])
+        const mapped = toOperatorSourceError(cause, { source: 'vault-credentials', path: '/api/vault/credentials', method: 'GET' })
+        if (cause instanceof TypeError) mapped.category = 'invalid-response'
+        loadStateValue.value = errorState(credsEvidence, mapped, { source: 'vault-credentials', run: async () => { await refreshCreds(); return loadStateValue.value } }, [])
+      }
       return
     }
 
@@ -276,6 +299,7 @@ export function useOperatorSecrets(): {
         undefined,
         'vault-reveal',
       )
+      if (payload.name !== cred.name || (payload.id !== undefined && String(payload.id) !== cred.id) || (payload.project !== undefined && payload.project !== cred.project) || (payload.project_id !== undefined && payload.project_id !== (cred.project || null)) || (payload.scope !== undefined && payload.scope !== cred.scope) || typeof payload.value !== 'string') throw new TypeError('Credential reveal identity mismatch')
       return payload.value
     } catch (nextError) {
       const mapped = toOperatorSourceError(nextError, {
@@ -288,17 +312,32 @@ export function useOperatorSecrets(): {
   }
 
   async function createSecret(input: StoreSecretInput) {
-    return submitMutation('vault-store', input, '/api/vault/credentials', jsonInit('POST', {
+    if (!isCatalogProject(input.project)) throw new TypeError('A catalog credential project is required')
+    const intent = { name: input.name, project: input.project, scope: input.scope }
+    const result = await submitMutation('vault-store', intent, '/api/vault/credentials', jsonInit('POST', {
       name: input.name,
       value: input.value,
       scope: input.scope,
       project: input.project,
     }), createSecretCurrentStateParser(input))
+    if (result.kind !== 'committed_verified' || result.readback.kind !== 'current') return result
+    try {
+      const rows = await operatorFetchJson<ApiVaultCredential[]>('/api/vault/credentials', undefined, 'vault-store-readback')
+      const id = result.readback.current.id
+      if (Array.isArray(rows) && rows.map(mapCredential).some((row) => row.id === String(id) && row.name === input.name && row.project === input.project && row.scope === input.scope)) return result
+    } catch { /* A failed metadata read never proves the credential identity. */ }
+    return { kind: 'committed_verification_pending' as const, request: result.request, httpStatus: result.httpStatus, commitment: 'committed' as const, reason: 'readback_invalid' as const }
   }
 
   async function deleteSecret(cred: OperatorCredential) {
     const path = credentialUrl(cred)
-    return submitMutation('vault-delete', { credentialID: cred.id }, path, jsonInit('DELETE'), deleteSecretCurrentStateParser(cred.name))
+    const result = await submitMutation('vault-delete', { credentialID: cred.id }, path, jsonInit('DELETE'), deleteSecretCurrentStateParser(cred.name, cred.project))
+    if (result.kind !== 'committed_verified') return result
+    try {
+      const rows = await operatorFetchJson<ApiVaultCredential[]>('/api/vault/credentials', undefined, 'vault-delete-readback')
+      if (Array.isArray(rows) && !rows.map(mapCredential).some((row) => row.scope === cred.scope && row.project === cred.project && (row.id === cred.id || row.name === cred.name))) return result
+    } catch { /* A failed metadata read never proves scoped deletion. */ }
+    return { kind: 'committed_verification_pending' as const, request: result.request, httpStatus: result.httpStatus, commitment: 'committed' as const, reason: 'readback_invalid' as const }
   }
 
   async function cleanupOrphans() {

@@ -1,7 +1,7 @@
 {
   "name": "engram",
   "id": "engram",
-  "version": "3.9.1",
+  "version": "3.9.2",
   "displayName": "Engram Memory",
   "description": "Connects OpenClaw agents to engram persistent memory server for long-term context retention",
   "kind": "memory",
@@ -24,11 +24,8 @@
       },
       "project": {
         "type": "string",
-        "description": "Project scope override (defaults to auto-detected from workspace)"
-      },
-      "clientInstanceId": {
-        "type": "string",
-        "description": "Opaque non-secret installation reference for V3 identity"
+        "format": "uuid",
+        "description": "Explicit logical project UUID (otherwise resolved from the current workspace by the Go client)"
       },
       "contextLimit": {
         "type": "number",

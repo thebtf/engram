@@ -114,8 +114,8 @@ type operatorCodeApplication interface {
 // operatorCodeContextStore owns the small cross-table API state that must be
 // rechecked atomically: catalog choices, exact pins, and opaque search cursors.
 type operatorCodeContextStore interface {
-	ListCatalog(context.Context, int64) ([]gormdb.BrowserCodeContextCatalogEntry, error)
-	ListNoAuthCatalog(context.Context) ([]gormdb.BrowserCodeContextCatalogEntry, error)
+	ListCatalog(context.Context, int64, gormdb.BrowserCodeCatalogFilter) ([]gormdb.BrowserCodeContextCatalogEntry, error)
+	ListNoAuthCatalog(context.Context, gormdb.BrowserCodeCatalogFilter) ([]gormdb.BrowserCodeContextCatalogEntry, error)
 	AuthorizeNoAuthIndexIntent(context.Context, string, string, string, bool) (gormdb.BrowserCodeIndexIntentBinding, error)
 	Pin(context.Context, gormdb.BrowserCodeContextPin) error
 	AuthorizeInitialIndexIntent(context.Context, gormdb.BrowserCodeIndexIntentTarget) (gormdb.BrowserCodeIndexIntentBinding, error)
@@ -898,6 +898,16 @@ func (adapter *OperatorCodeHTTPAdapter) HandleVersionedRead(w http.ResponseWrite
 // HandleContexts lists every active grant's safe Source → Checkout → View
 // choices. It does not silently select a grant, checkout, or current View.
 func (adapter *OperatorCodeHTTPAdapter) HandleContexts(w http.ResponseWriter, r *http.Request) {
+	params, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil || len(params) > 1 || params.Has("project") && (len(params["project"]) != 1 || !operatorCodeUUID(params.Get("project"))) {
+		operatorCodeWriteBodyless(w, http.StatusBadRequest)
+		return
+	}
+	if len(params) == 1 && !params.Has("project") {
+		operatorCodeWriteBodyless(w, http.StatusBadRequest)
+		return
+	}
+	filter := gormdb.BrowserCodeCatalogFilter{ProjectID: params.Get("project")}
 	var request operatorCodeProofRequest
 	identity, ok := adapter.decode(w, r, "operator-code-contexts", &request)
 	if !ok {
@@ -912,7 +922,7 @@ func (adapter *OperatorCodeHTTPAdapter) HandleContexts(w http.ResponseWriter, r 
 			operatorCodeWriteBodyless(w, http.StatusForbidden)
 			return
 		}
-		entries, err := adapter.contexts.ListNoAuthCatalog(r.Context())
+		entries, err := adapter.contexts.ListNoAuthCatalog(r.Context(), filter)
 		if err != nil {
 			operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
 			return
@@ -939,7 +949,7 @@ func (adapter *OperatorCodeHTTPAdapter) HandleContexts(w http.ResponseWriter, r 
 		operatorCodeWriteBodyless(w, http.StatusForbidden)
 		return
 	}
-	entries, err := adapter.contexts.ListCatalog(r.Context(), subject.UserID)
+	entries, err := adapter.contexts.ListCatalog(r.Context(), subject.UserID, filter)
 	if err != nil {
 		operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
 		return
@@ -2677,6 +2687,8 @@ type operatorCodeCatalogView struct {
 }
 
 type operatorCodeCatalogEntry struct {
+	ProjectID               *string                  `json:"project_id"`
+	UnresolvedReference     *string                  `json:"unresolved_reference"`
 	Repository              string                   `json:"repository"`
 	WorkingCopy             string                   `json:"working_copy"`
 	SourceRef               string                   `json:"source_ref"`
@@ -2701,7 +2713,7 @@ type operatorCodeContextsResponse struct {
 func (adapter *OperatorCodeHTTPAdapter) operatorCodeCatalogEntries(identity operatorCodeRequestIdentity, entries []gormdb.BrowserCodeContextCatalogEntry, targets operatorCodeIndexTargetResolver) ([]operatorCodeCatalogEntry, bool) {
 	result := make([]operatorCodeCatalogEntry, 0, len(entries))
 	for _, entry := range entries {
-		item := operatorCodeCatalogEntry{Repository: entry.SourceLabel, WorkingCopy: entry.CheckoutLabel, SourceRef: operatorCodeCatalogRef("source", entry.SourceID), CheckoutRef: operatorCodeCatalogRef("checkout", entry.SourceID, entry.CheckoutID)}
+		item := operatorCodeCatalogEntry{ProjectID: entry.ProjectID, UnresolvedReference: entry.UnresolvedReference, Repository: entry.SourceLabel, WorkingCopy: entry.CheckoutLabel, SourceRef: operatorCodeCatalogRef("source", entry.SourceID), CheckoutRef: operatorCodeCatalogRef("checkout", entry.SourceID, entry.CheckoutID)}
 		if identity.identity.Source == auth.SourceAuthDisabled && (targets == nil || !targets.IsLive(entry.SourceID, entry.CheckoutID)) {
 			if entry.Context != nil || entry.IndexIntentAvailable {
 				item.WorkingCopy += " · Offline"

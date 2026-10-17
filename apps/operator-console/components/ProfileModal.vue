@@ -6,10 +6,12 @@ const props = defineProps<{
   open: boolean
   info: ShellInfo
   authPostureLabel: string
+  identityName: string
 }>()
 
 const emit = defineEmits<{
   'update:open': [value: boolean]
+  'sign-in': []
 }>()
 
 const { t } = useI18n()
@@ -57,8 +59,8 @@ onBeforeUnmount(() => {
         <div class="profile-hero">
           <span class="iav">{{ info.identityInitials }}</span>
           <div class="profile-id">
-            <h2>{{ info.identityName }}</h2>
-            <p>{{ t('profileModal.via', { provider: info.identityProvider }) }} · {{ authPostureLabel }}</p>
+            <h2>{{ identityName }}</h2>
+            <p>{{ authPostureLabel }}<template v-if="info.authenticated && !info.authDisabled && info.identityProvider"> · {{ t('profileModal.via', { provider: info.identityProvider }) }}</template></p>
           </div>
           <button class="tbtn close" type="button" :aria-label="t('profileModal.close')" @click="close">×</button>
         </div>
@@ -74,14 +76,14 @@ onBeforeUnmount(() => {
                 <b>{{ t('profileModal.displayName') }}</b>
                 <p>{{ t('profileModal.displayNameDesc') }}</p>
               </div>
-              <span class="readonly">{{ info.identityName }}</span>
+              <span class="readonly">{{ identityName }}</span>
             </div>
             <div class="profile-row">
               <div>
                 <b>{{ t('profileModal.role') }}</b>
                 <p>{{ t('profileModal.roleDesc') }}</p>
               </div>
-              <span class="readonly">{{ info.role }}</span>
+              <span class="readonly">{{ info.role || t('knowledge.unknown') }}</span>
             </div>
             <div class="mustbuild-note">
               <b>{{ t('profileModal.profileMustBuildTitle') }}</b>
@@ -92,16 +94,9 @@ onBeforeUnmount(() => {
           <section id="pfSessions" class="profile-section">
             <div class="profile-section-title">
               <span>{{ t('profileModal.sessionsTitle') }}</span>
-              <span class="sess-count">{{ t('profileModal.sessionsCount', 1) }}</span>
             </div>
-            <div class="psession">
-              <span class="ps-ic">◐</span>
-              <span class="ps-meta">
-                <b>{{ t('profileModal.currentSession') }}</b>
-                <span>{{ info.host }} · {{ info.identityProvider }}</span>
-              </span>
-              <span class="ps-cur">{{ t('profileModal.current') }}</span>
-            </div>
+            <p role="status">{{ authPostureLabel }}</p>
+            <button v-if="!info.authenticated && !info.authDisabled" class="tbtn" type="button" @click="emit('sign-in')">{{ t('auth.signIn') }}</button>
             <div class="mustbuild-note">
               <HonestyBadge cls="mustbuild" evidence="GET /api/auth/sessions" />
               <span>{{ t('profileModal.sessionsMustBuildBody') }}</span>
@@ -152,14 +147,6 @@ onBeforeUnmount(() => {
 .mustbuild-note { display:flex; align-items:flex-start; gap:10px; margin-top:var(--space-3); padding:11px 12px; border:1px dashed color-mix(in oklab, var(--class-mustbuild), transparent 45%); border-radius:var(--r-md); background:color-mix(in oklab, var(--class-mustbuild), transparent 91%); color:var(--fg-2); font-size:var(--text-xs); line-height:1.45; }
 .mustbuild-note b { color:var(--fg); }
 .mustbuild-note span { min-width:0; }
-.psession { display:flex; align-items:center; gap:11px; padding:11px 0; border-top:1px solid var(--border-soft); }
-.psession:first-child { border-top:0; }
-.ps-ic { width:30px; height:30px; border-radius:8px; display:grid; place-items:center; background:var(--surface-warm); border:1px solid var(--border); color:var(--fg-2); flex:none; }
-.ps-meta { flex:1; min-width:0; }
-.ps-meta b { display:block; font-size:var(--text-sm); }
-.ps-meta span { display:block; font-size:var(--text-xs); color:var(--muted); font-family:var(--font-mono); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.ps-cur { font-size:10px; font-weight:800; color:var(--success); text-transform:uppercase; letter-spacing:.05em; }
-.sess-count { font-family:var(--font-mono); font-size:10px; font-weight:700; line-height:1; padding:2px 7px; border-radius:var(--radius-pill); background:var(--surface-warm); border:1px solid var(--border); color:var(--fg-2); text-transform:none; letter-spacing:0; }
 .profile-body::-webkit-scrollbar { width:8px; height:8px; }
 .profile-body::-webkit-scrollbar-track { background:transparent; }
 .profile-body::-webkit-scrollbar-thumb { background:color-mix(in oklab,var(--border),transparent 40%); border-radius:var(--radius-pill); }

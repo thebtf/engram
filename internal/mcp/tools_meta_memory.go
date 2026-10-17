@@ -54,7 +54,7 @@ func (s *Server) handleKnowAbout(ctx context.Context, args json.RawMessage) (str
 	}
 	project := strings.TrimSpace(coerceString(m["project"], ""))
 	if project == "" {
-		project = strings.TrimSpace(projectFromContext(ctx))
+		project = strings.TrimSpace(ProjectFromContext(ctx))
 	}
 	if project == "" {
 		return "", fmt.Errorf("project is required")

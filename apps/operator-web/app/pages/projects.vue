@@ -1,19 +1,19 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { useProjectsQuery, useSessionsQuery } from '~/composables/useOperatorQueries'
+import { computed } from 'vue'
+import { useSessionsQuery } from '~/composables/useOperatorQueries'
+import { useProjectCatalog } from '~/composables/useProjectCatalog'
+import ProjectCatalogStatus from '~/components/ProjectCatalogStatus.vue'
 import { useOperatorI18n } from '~/composables/useOperatorI18n'
 
 const { t } = useOperatorI18n()
-const selectedProject = ref('')
-const projectsQuery = useProjectsQuery()
-const sessionsQuery = useSessionsQuery(selectedProject)
-
-const projects = computed(() => projectsQuery.data.value ?? [])
+const { projectsQuery, projects, unresolved, selectedProject, selectionPending, selectionError, ready, unresolvedReference, projectName } = useProjectCatalog('all')
+const sessionsQuery = useSessionsQuery(selectedProject, ready)
 const sessions = computed(() => sessionsQuery.data.value?.sessions ?? [])
 </script>
 
 <template>
   <section class="space-y-5">
+    <ProjectCatalogStatus :records="unresolved" :pending="selectionPending" :error="selectionError" :reference="unresolvedReference" />
     <div class="surface-panel p-5">
       <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
         <div>
@@ -26,8 +26,8 @@ const sessions = computed(() => sessionsQuery.data.value?.sessions ?? [])
         <label class="text-sm text-[var(--fg-2)]">
           <span class="mr-2">{{ t('common.allProjects') }}</span>
           <select v-model="selectedProject" class="rounded-lg border border-[var(--border)] bg-[var(--surface-warm)] px-3 py-2 text-sm text-[var(--fg)]">
-            <option value="">{{ t('common.allProjects') }}</option>
-            <option v-for="project in projects" :key="project" :value="project">{{ project }}</option>
+            <option value="all">{{ t('common.allProjects') }}</option>
+            <option v-for="project in projects" :key="project.project_id" :value="project.project_id">{{ projectName(project.project_id) }}</option>
           </select>
         </label>
       </div>
@@ -37,8 +37,8 @@ const sessions = computed(() => sessionsQuery.data.value?.sessions ?? [])
           <div class="mb-3 text-xs uppercase tracking-[0.08em] text-[var(--muted)]">Projects</div>
           <div v-if="projectsQuery.isPending.value" class="text-sm text-[var(--muted)]">{{ t('common.loading') }}</div>
           <ul v-else class="space-y-2 text-sm">
-            <li v-for="project in projects" :key="project" class="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2">
-              {{ project }}
+            <li v-for="project in projects" :key="project.project_id" class="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2">
+              {{ projectName(project.project_id) }}
             </li>
           </ul>
         </div>
@@ -59,7 +59,7 @@ const sessions = computed(() => sessionsQuery.data.value?.sessions ?? [])
               </thead>
               <tbody>
                 <tr v-for="session in sessions" :key="session.id" class="border-t border-[var(--border)]">
-                  <td class="px-3 py-2">{{ session.project }}</td>
+                  <td class="px-3 py-2">{{ projectName(session.project) }}</td>
                   <td class="px-3 py-2">{{ session.status }}</td>
                   <td class="mono-data px-3 py-2">{{ session.prompt_counter }}</td>
                   <td class="mono-data px-3 py-2">{{ session.started_at }}</td>

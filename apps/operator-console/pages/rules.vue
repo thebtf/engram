@@ -8,12 +8,15 @@ import type {
 } from '../composables/useOperatorRules'
 import { useOperatorRules } from '../composables/useOperatorRules'
 import type { RuleRow } from '../composables/useMockData'
+import { isCatalogProject, useOperatorProjectContext, projectName } from '../composables/useOperatorProjectContext'
 import {
   createOperatorSelection,
   type OperatorSelectionTarget,
 } from '../composables/useOperatorSelection'
 
 const { t } = useI18n()
+const projectContext = useOperatorProjectContext()
+const scopeError = computed(() => projectContext.selectionError.value || projectContext.error.value)
 const {
   rows,
   scopeOptions,
@@ -28,9 +31,10 @@ const {
   loadRulePage,
   runRuleSelectionOperation,
   scopeChangeGap,
-} = useOperatorRules()
+} = useOperatorRules(projectContext.project.value)
 
-const scopeFilter = ref('all')
+const scopeFilter = ref(projectContext.project.value)
+watch([projectContext.project, projectContext.selectionPending, scopeError], ([project]) => { scopeFilter.value = project; mutationResult.value = null; editingId.value = null; createOpen.value = false; scopeGeneration += 1; selectionPending.value = false; selectionPage.value = null; selection.invalidate('filter_changed') }, { flush: 'sync' })
 const createOpen = ref(false)
 const createContent = ref('')
 const createScope = ref('global')
@@ -48,7 +52,7 @@ const operationItems = ref<RuleOperationItem[]>([])
 const selection = createOperatorSelection('rules')
 
 const createScopes = computed(() => scopeOptions.value)
-const busy = computed(() => pending.value || selectionPending.value)
+const busy = computed(() => pending.value || selectionPending.value || projectContext.selectionPending.value || Boolean(scopeError.value))
 const selectionTargets = computed(() => selectionPage.value?.targets ?? [])
 const scopedRows = computed(() => rows.filter((rule) => scopeFilter.value === 'all' || rule.project === scopeFilter.value))
 const visibleRows = computed(() => {
@@ -59,7 +63,7 @@ const visibleRows = computed(() => {
     return row === undefined ? [] : [row]
   })
 })
-const canCreate = computed(() => createContent.value.trim().length > 0 && !busy.value)
+const canCreate = computed(() => createContent.value.trim().length > 0 && (createScope.value === 'global' || isCatalogProject(createScope.value)) && !busy.value)
 const editingRule = computed(() => rows.find((rule) => rule.id === editingId.value) || null)
 const editChanged = computed(() => Boolean(editingRule.value) && editContent.value.trim() !== editingRule.value?.content)
 const canSaveEdit = computed(() => editChanged.value && !busy.value)
@@ -86,14 +90,14 @@ const canReorderScope = computed(() => {
 
 watch(scopeOptions, (options) => {
   if (!options.includes(createScope.value)) {
-    createScope.value = 'global'
-  }
-  if (scopeFilter.value !== 'all' && !options.includes(scopeFilter.value)) {
-    scopeFilter.value = 'all'
+    createScope.value = ''
   }
 }, { immediate: true })
 
+let scopeGeneration = 0
 watch(scopeFilter, (scope) => {
+  scopeGeneration += 1
+  selectionPending.value = false
   selectionPage.value = null
   selection.invalidate('filter_changed')
   selectionError.value = ''
@@ -105,7 +109,7 @@ onMounted(() => {
 })
 
 function scopeLabel(scope: string) {
-  return scope === 'global' ? t('rules.scope.global') : scope
+  return scope === 'global' ? t('rules.scope.global') : isCatalogProject(scope) ? projectName(scope) : t('projectCatalog.unknownProject')
 }
 
 function rowMeta(rule: RuleRow, index: number) {
@@ -153,12 +157,14 @@ function closeCreate() {
 
 async function createRule() {
   if (!canCreate.value) return
+  const generation = scopeGeneration
   const result = await runCreateRule({
     content: createContent.value.trim(),
     priority: priorityForNewRule(),
     project: createScope.value === 'global' ? undefined : createScope.value,
     editedBy: 'operator-console',
   })
+  if (generation !== scopeGeneration) return
   mutationResult.value = result
   operationItems.value = []
   if (result.kind === 'committed_verified') {
@@ -180,36 +186,45 @@ function cancelEdit() {
 }
 
 async function loadCurrentSelection() {
+  const generation = scopeGeneration
   selectionPending.value = true
   selectionError.value = ''
   try {
-    selection.applySnapshot(await currentRuleSelection())
+    const snapshot = await currentRuleSelection()
+    if (generation === scopeGeneration) selection.applySnapshot(snapshot)
   } catch (error) {
-    selectionError.value = error instanceof Error ? error.message : t('rules.selection.loadError')
+    if (generation === scopeGeneration) selectionError.value = error instanceof Error ? error.message : t('rules.selection.loadError')
   } finally {
-    selectionPending.value = false
+    if (generation === scopeGeneration) selectionPending.value = false
   }
 }
 
 async function loadSelectionPage(cursor = '') {
+  const generation = scopeGeneration
+  const scope = scopeFilter.value
   selectionPending.value = true
   selectionError.value = ''
   try {
-    selectionPage.value = await loadRulePage({ scope: scopeFilter.value }, cursor)
+    const result = await loadRulePage({ scope }, cursor)
+    if (generation === scopeGeneration) selectionPage.value = result
   } catch (error) {
+    if (generation !== scopeGeneration) return
     selectionError.value = error instanceof Error ? error.message : t('rules.selection.pageError')
   } finally {
-    selectionPending.value = false
+    if (generation === scopeGeneration) selectionPending.value = false
   }
 }
 
 async function saveCurrentSelection() {
+  const generation = scopeGeneration
   const current = selection.current.value
   if (current.kind === 'frozen_filter') {
-    selection.applySnapshot(await freezeRuleSelection({ scope: scopeFilter.value }, current.excludedIds))
+    const snapshot = await freezeRuleSelection({ scope: scopeFilter.value }, current.excludedIds)
+    if (generation === scopeGeneration) selection.applySnapshot(snapshot)
     return
   }
-  selection.applySnapshot(await saveRuleSelection(current))
+  const snapshot = await saveRuleSelection(current)
+  if (generation === scopeGeneration) selection.applySnapshot(snapshot)
 }
 
 async function selectCurrentPage() {
@@ -231,17 +246,20 @@ async function selectCurrentPage() {
 }
 
 async function freezeCurrentFilter() {
+  if (busy.value) return
+  const generation = scopeGeneration
   selectionPending.value = true
   selectionError.value = ''
   try {
     const exclusions = selection.current.value.kind === 'frozen_filter'
       ? selection.current.value.excludedIds
       : []
-    selection.applySnapshot(await freezeRuleSelection({ scope: scopeFilter.value }, exclusions))
+    const snapshot = await freezeRuleSelection({ scope: scopeFilter.value }, exclusions)
+    if (generation === scopeGeneration) selection.applySnapshot(snapshot)
   } catch (error) {
-    selectionError.value = error instanceof Error ? error.message : t('rules.selection.freezeError')
+    if (generation === scopeGeneration) selectionError.value = error instanceof Error ? error.message : t('rules.selection.freezeError')
   } finally {
-    selectionPending.value = false
+    if (generation === scopeGeneration) selectionPending.value = false
   }
 }
 
@@ -287,6 +305,8 @@ async function toggleHeaderSelection(event: KeyboardEvent | Event) {
 }
 
 async function toggleRuleSelection(rule: RuleRow) {
+  if (busy.value) return
+  const generation = scopeGeneration
   const target = targetFor(rule)
   selectionPending.value = true
   selectionError.value = ''
@@ -296,7 +316,8 @@ async function toggleRuleSelection(rule: RuleRow) {
       const excludedIds = isTargetSelected(target)
         ? [...current.excludedIds, target.id]
         : current.excludedIds.filter((id) => id !== target.id)
-      selection.applySnapshot(await freezeRuleSelection({ scope: scopeFilter.value }, excludedIds))
+      const snapshot = await freezeRuleSelection({ scope: scopeFilter.value }, excludedIds)
+      if (generation === scopeGeneration) selection.applySnapshot(snapshot)
       return
     }
 
@@ -311,27 +332,31 @@ async function toggleRuleSelection(rule: RuleRow) {
     }
     await saveCurrentSelection()
   } catch (error) {
-    selectionError.value = error instanceof Error ? error.message : t('rules.selection.saveError')
+    if (generation === scopeGeneration) selectionError.value = error instanceof Error ? error.message : t('rules.selection.saveError')
   } finally {
-    selectionPending.value = false
+    if (generation === scopeGeneration) selectionPending.value = false
   }
 }
 
 async function runSelectionAction(action: RuleSelectionOperationAction, fields: { content?: string; priority?: number; scope?: string; order?: Array<{ ruleId: number; expectedVersion: number }> } = {}) {
   if (!selectionActionReady.value) return false
 
+  const generation = scopeGeneration
   selectionPending.value = true
   selectionError.value = ''
   operationItems.value = []
   try {
     let current = selection.current.value
     if (current.kind !== 'frozen_filter' && current.version === 0) {
-      selection.applySnapshot(await saveRuleSelection(current))
+      const snapshot = await saveRuleSelection(current)
+      if (generation !== scopeGeneration) return false
+      selection.applySnapshot(snapshot)
       current = selection.current.value
     }
     if (current.kind === 'none' || current.reconfirmationRequired) return false
 
     const result = await runRuleSelectionOperation({ action, selection: current, ...fields })
+    if (generation !== scopeGeneration) return false
     mutationResult.value = result.mutation
     operationItems.value = result.items
     if (result.mutation.kind !== 'committed_verified') return false
@@ -341,10 +366,11 @@ async function runSelectionAction(action: RuleSelectionOperationAction, fields: 
     await loadSelectionPage()
     return true
   } catch (error) {
+    if (generation !== scopeGeneration) return false
     selectionError.value = error instanceof Error ? error.message : t('rules.selection.operationError')
     return false
   } finally {
-    selectionPending.value = false
+    if (generation === scopeGeneration) selectionPending.value = false
   }
 }
 
@@ -450,21 +476,20 @@ function clearDrag() {
       <button class="primary" :disabled="busy" @click="openCreate">{{ t('rules.create.open') }}</button>
     </header>
 
-    <nav class="tabs" :aria-label="t('rules.tabs.label')">
-      <button class="tab active">{{ t('rules.tabs.rules') }}</button>
-      <button class="tab stale" disabled>
-        {{ t('rules.tabs.instincts') }}
-        <HonestyBadge cls="stale" :evidence="t('rules.tabs.instinctsEvidence')" />
-      </button>
-    </nav>
+    <details><summary>{{ t('knowledge.technical') }}</summary><p>{{ t('rules.tabs.instinctsEvidence') }}</p></details>
+    <section v-if="scopeError || projectContext.selectionPending.value" class="statebar" :data-state="scopeError ? 'error' : 'pending'" role="status">
+      <span>{{ scopeError ? t('rules.state.error', { message: scopeError.message }) : t('rules.state.pending') }}</span>
+      <button v-if="scopeError" class="tbtn" @click="projectContext.refresh">{{ t('rules.state.retry') }}</button>
+    </section>
 
-    <section v-if="pending || error || loadState.kind === 'empty'" class="statebar" :data-state="loadState.kind">
+    <section v-if="pending || error || loadState.kind === 'empty' || loadState.kind === 'gated'" class="statebar" :data-state="loadState.kind">
       <span v-if="pending">{{ t('rules.state.pending') }}</span>
       <span v-else-if="error">{{ t('rules.state.error', { message: error }) }}</span>
       <span v-else-if="loadState.kind === 'empty'">{{ t('rules.state.empty') }}</span>
-      <button v-if="error" class="tbtn" @click="refresh">{{ t('rules.state.retry') }}</button>
+      <span v-else-if="loadState.kind === 'gated'">{{ t('projectCatalog.selectionRequired') }}</span>
+      <button v-if="error" class="tbtn" @click="refresh(scopeFilter)">{{ t('rules.state.retry') }}</button>
     </section>
-    <MutationResultNotice :result="mutationResult" :recheck-label="t('rules.actions.refresh')" @recheck="refresh" />
+    <MutationResultNotice :result="mutationResult" :recheck-label="t('rules.actions.refresh')" @recheck="refresh(scopeFilter)" />
 
     <section class="pane">
       <div class="rule-reorder-note">
@@ -484,6 +509,7 @@ function clearDrag() {
         <label class="scope-filter">
           <span>{{ t('rules.scope.filter') }}</span>
           <select v-model="scopeFilter" class="fsel" :disabled="busy">
+            <option v-if="!scopeFilter" value="" disabled>{{ t('knowledge.chooseProject') }}</option>
             <option value="all">{{ t('rules.scope.all') }}</option>
             <option v-for="scope in createScopes" :key="scope" :value="scope">{{ scopeLabel(scope) }}</option>
           </select>

@@ -1,5 +1,6 @@
-import { ref as sharedRef, type Ref as SharedRef } from 'vue'
+import { onBeforeUnmount, ref as sharedRef, type Ref as SharedRef } from 'vue'
 import { startedLoads } from './useConsolePreferences'
+import { useOperatorProjectContext } from './useOperatorProjectContext'
 
 let sharedProjectsPageProjects: SharedRef<string[]> | undefined
 let sharedProjectsPageRecentSessions: SharedRef<OperatorSessionRow[]> | undefined
@@ -18,7 +19,7 @@ import {
   errorState,
   liveState,
   loadOperatorJson,
-  operatorApiUrl,
+  operatorFetchResponse,
   operatorFetchJson,
   pendingState,
   toOperatorSourceError,
@@ -174,7 +175,7 @@ export function projectArchiveCurrentStateParser(project: string): MutationCurre
   }
 }
 
-export function useOperatorProjects(): {
+export function useOperatorProjects(projectContext?: Ref<string>): {
   projectRows: ComputedRef<OperatorProjectRow[]>
   sessions: OperatorSessionRow[]
   selectedProject: Ref<string>
@@ -187,6 +188,7 @@ export function useOperatorProjects(): {
   refresh: () => Promise<void>
   openProject: (project: string) => Promise<void>
   openSession: (session: OperatorSessionRow) => Promise<void>
+  openSessionByID: (id: string) => Promise<void>
   deleteProject: (project: string) => Promise<MutationResult<{ project: string }, OperatorProjectArchiveReceipt>>
   sessionDetailGap: ReturnType<typeof unsupportedOperatorAction>
   sessionRouteGap: ReturnType<typeof unsupportedOperatorAction>
@@ -195,11 +197,12 @@ export function useOperatorProjects(): {
   const projectsEvidence = endpointEvidence('/api/projects', 'projects-list')
   const sessionsEvidence = endpointEvidence('/api/sessions/list?project={project}&limit=50', 'sessions-list')
   const detailEvidence = endpointEvidence('/api/sessions?claudeSessionId={id}', 'sessions-detail')
+  const context = useOperatorProjectContext()
 
   const projects = (sharedProjectsPageProjects ??= sharedRef<string[]>((() => [])()))
   const recentSessions = (sharedProjectsPageRecentSessions ??= sharedRef<OperatorSessionRow[]>((() => [])()))
   const sessions = (sharedProjectsPageSessions ??= sharedRef<OperatorSessionRow[]>((() => [])()))
-  const selectedProject = (sharedProjectsPageSelectedProject ??= sharedRef<string>((() => '')()))
+  const selectedProject = projectContext || context.project
   const selectedSession = (sharedProjectsPageSelectedSession ??= sharedRef<OperatorSessionRow | null>((() => null)()))
 
   const projectsStateValue = (sharedProjectsPageProjectsState ??= sharedRef<OperatorLoadState<string[]>>((() => pendingState(projectsEvidence, projects.value))()))
@@ -210,33 +213,23 @@ export function useOperatorProjects(): {
   const sessionsState = computed(() => sessionsStateValue.value)
   const detailState = computed(() => detailStateValue.value)
   const projectRows = computed(() => projects.value.map((project) => summarizeProject(project, recentSessions.value)))
-  const pending = computed(() => projectsStateValue.value.kind === 'pending' || sessionsStateValue.value.kind === 'pending')
+  const pending = computed(() => (!projectContext && projectsStateValue.value.kind === 'pending') || sessionsStateValue.value.kind === 'pending')
   const error = computed(() => {
     if (projectsStateValue.value.kind === 'error') return projectsStateValue.value.error.message
     if (sessionsStateValue.value.kind === 'error') return sessionsStateValue.value.error.message
     if (detailStateValue.value.kind === 'error') return detailStateValue.value.error.message
     return null
   })
+  let sessionsGeneration = 0
+  let detailGeneration = 0
 
   async function refreshProjects() {
     projectsStateValue.value = pendingState(projectsEvidence, projects.value)
-    const result = await loadOperatorJson<string[]>('/api/projects', {
-      source: 'projects-list',
-      empty: (rows) => !rows.length,
-    })
-
-    if (result.kind === 'live' || result.kind === 'empty') {
-      replaceArray(projects.value, result.data)
-      projectsStateValue.value = projects.value.length
-        ? liveState(projectsEvidence, projects.value)
-        : emptyState(projectsEvidence, projects.value)
-      if (!selectedProject.value && projects.value.length) {
-        selectedProject.value = projects.value[0]
-      }
-      return
-    }
-
-    projectsStateValue.value = result
+    await context.refresh()
+    replaceArray(projects.value, context.projects.value)
+    projectsStateValue.value = context.error.value
+      ? errorState(projectsEvidence, context.error.value, { source: 'projects-list', run: async () => { await refreshProjects(); return projectsStateValue.value } }, [])
+      : projects.value.length ? liveState(projectsEvidence, projects.value) : emptyState(projectsEvidence, projects.value)
   }
 
   async function loadSessions(project?: string) {
@@ -257,14 +250,19 @@ export function useOperatorProjects(): {
   }
 
   async function refreshSessions(project = selectedProject.value) {
-    sessionsStateValue.value = pendingState(sessionsEvidence, sessions.value)
-    if (!project) {
-      replaceArray(sessions.value, [])
-      sessionsStateValue.value = emptyState(sessionsEvidence, sessions.value)
+    const generation = ++sessionsGeneration
+    detailGeneration += 1
+    selectedSession.value = null
+    replaceArray(sessions.value, [])
+    detailStateValue.value = emptyState(detailEvidence, null)
+    sessionsStateValue.value = pendingState(sessionsEvidence, [])
+    if (!project || project === 'all') {
+      sessionsStateValue.value = emptyState(sessionsEvidence, [])
       return
     }
 
     const result = await loadSessions(project)
+    if (generation !== sessionsGeneration || project !== selectedProject.value) return
     if (result.kind === 'live' || result.kind === 'empty') {
       const nextRows = sortSessions((result.data.sessions || []).map(mapSession))
       replaceArray(sessions.value, nextRows)
@@ -289,7 +287,6 @@ export function useOperatorProjects(): {
 
   async function refresh() {
     await refreshProjects()
-    await refreshRecentSessions()
     await refreshSessions(selectedProject.value)
   }
 
@@ -300,33 +297,33 @@ export function useOperatorProjects(): {
     await refreshSessions(project)
   }
 
-  async function openSession(session: OperatorSessionRow) {
-    selectedSession.value = session
-    if (!session.claudeSessionId) {
-      detailStateValue.value = emptyState(detailEvidence, session)
-      return
-    }
-
-    const path = `/api/sessions?claudeSessionId=${encodeURIComponent(session.claudeSessionId)}`
+  async function openSessionByID(id: string) {
+    const generation = ++detailGeneration
+    const project = selectedProject.value
+    selectedSession.value = null
+    if (!project || project === 'all' || !id) return
+    const path = `/api/sessions?claudeSessionId=${encodeURIComponent(id)}`
     const evidence = endpointEvidence(path, 'sessions-detail')
-    detailStateValue.value = pendingState(evidence, selectedSession.value)
+    detailStateValue.value = pendingState(evidence, null)
     try {
       const row = await operatorFetchJson<ApiSessionRow>(path, undefined, 'sessions-detail')
+      if (generation !== detailGeneration || project !== selectedProject.value) return
+      if (row.project !== project) throw new TypeError('Session detail scope mismatch')
       selectedSession.value = mapSession(row)
       detailStateValue.value = liveState(evidence, selectedSession.value)
     } catch (nextError) {
-      const mapped = toOperatorSourceError(nextError, {
-        source: 'sessions-detail',
-        path,
-        method: 'GET',
-      })
-      detailStateValue.value = errorState(evidence, mapped, {
-        source: 'sessions-detail',
-        run: async () => {
-          await openSession(session)
-          return detailStateValue.value
-        },
-      }, selectedSession.value)
+      if (generation !== detailGeneration || project !== selectedProject.value) return
+      const mapped = toOperatorSourceError(nextError, { source: 'sessions-detail', path, method: 'GET' })
+      detailStateValue.value = errorState(evidence, mapped, { source: 'sessions-detail', run: async () => { await openSessionByID(id); return detailStateValue.value } }, null)
+    }
+  }
+
+  async function openSession(session: OperatorSessionRow) {
+    if (session.project !== selectedProject.value) return
+    if (session.claudeSessionId) await openSessionByID(session.claudeSessionId)
+    else {
+      selectedSession.value = session
+      detailStateValue.value = liveState(detailEvidence, session)
     }
   }
 
@@ -334,7 +331,7 @@ export function useOperatorProjects(): {
     const endpoint = `/api/projects/${encodeURIComponent(project)}`
     return executeMutation(
       { requestId: crypto.randomUUID(), action: 'project-archive', intent: { project } },
-      fetch(operatorApiUrl(endpoint), { ...jsonInit('DELETE'), credentials: 'include' }),
+      operatorFetchResponse(endpoint, { ...jsonInit('DELETE'), credentials: 'include' }),
       projectArchiveCurrentStateParser(project),
     )
   }
@@ -355,7 +352,8 @@ export function useOperatorProjects(): {
     'Code-intelligence project summaries are MCP/tool-only and have no operator-console REST endpoint yet.',
   )
 
-  startOnce('projects-page', refresh)
+  if (!projectContext) startOnce('projects-page', refresh)
+  onBeforeUnmount(() => { sessionsGeneration += 1; detailGeneration += 1 })
 
   return {
     projectRows,
@@ -370,6 +368,7 @@ export function useOperatorProjects(): {
     refresh,
     openProject,
     openSession,
+    openSessionByID,
     deleteProject,
     sessionDetailGap,
     sessionRouteGap,

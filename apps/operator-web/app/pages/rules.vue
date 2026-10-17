@@ -3,18 +3,17 @@ import { computed, ref, watch } from 'vue'
 import { useMutation, useQueryClient } from '@tanstack/vue-query'
 import type { Rule } from '~/composables/useOperatorApi'
 import { createRule, deleteRule, updateRule } from '~/composables/useRulesApi'
-import { useProjectsQuery, useRulesQuery } from '~/composables/useOperatorQueries'
+import { useRulesQuery } from '~/composables/useOperatorQueries'
+import { useProjectCatalog } from '~/composables/useProjectCatalog'
+import ProjectCatalogStatus from '~/components/ProjectCatalogStatus.vue'
 import { useOperatorI18n } from '~/composables/useOperatorI18n'
 import { formatAbsoluteDate } from '~/utils/formatters'
 
 const { t } = useOperatorI18n()
 const queryClient = useQueryClient()
 
-const selectedProject = ref('')
-const projectsQuery = useProjectsQuery()
-const rulesQuery = useRulesQuery(selectedProject)
-
-const projects = computed(() => projectsQuery.data.value ?? [])
+const { projects, unresolved, selectedProject, selectionPending, selectionError, ready, unresolvedReference, projectName } = useProjectCatalog('all')
+const rulesQuery = useRulesQuery(selectedProject, ready)
 const rules = computed(() => rulesQuery.data.value?.rules ?? [])
 const total = computed(() => rulesQuery.data.value?.total ?? rules.value.length)
 
@@ -32,7 +31,7 @@ const editError = ref('')
 const deletingRuleId = ref<number | null>(null)
 
 watch(selectedProject, (project) => {
-  createProject.value = project
+  createProject.value = project === 'all' ? '' : project
 })
 
 function normalizedPriority(value: unknown): number {
@@ -102,6 +101,7 @@ const deleteRuleMutation = useMutation({
 
 function submitCreate() {
   createError.value = ''
+  if (!ready.value) { createError.value = t('projectCatalog.selectionRequired'); return }
   actionError.value = ''
   actionMessage.value = ''
 
@@ -162,7 +162,7 @@ function confirmDelete(rule: Rule) {
 }
 
 function ruleScope(rule: Rule): string {
-  return rule.project || 'global'
+  return rule.project ? projectName(rule.project) : 'global'
 }
 
 function isRuleDeleting(rule: Rule): boolean {
@@ -192,6 +192,7 @@ function isRuleUpdating(rule: Rule): boolean {
           <button
             type="button"
             class="rounded-lg border border-[var(--border)] bg-[var(--surface-warm)] px-4 py-2 text-sm text-[var(--fg-2)]"
+            :disabled="!ready || !selectedProject"
             @click="rulesQuery.refetch()"
           >
             Refresh
@@ -206,13 +207,14 @@ function isRuleUpdating(rule: Rule): boolean {
             v-model="selectedProject"
             class="rounded-lg border border-[var(--border)] bg-[var(--surface-warm)] px-3 py-2 text-sm text-[var(--fg)]"
           >
-            <option value="">{{ t('common.allProjects') }}</option>
-            <option v-for="project in projects" :key="project" :value="project">
-              {{ project }}
+            <option value="all">{{ t('common.allProjects') }}</option>
+            <option v-for="project in projects" :key="project.project_id" :value="project.project_id">
+              {{ projectName(project.project_id) }}
             </option>
           </select>
         </label>
       </div>
+      <ProjectCatalogStatus :records="unresolved" :pending="selectionPending" :error="selectionError" :reference="unresolvedReference" />
 
       <div v-if="actionMessage" class="mb-4 rounded-lg border border-[color:rgba(52,211,153,0.35)] bg-[color:rgba(52,211,153,0.12)] px-3 py-2 text-sm text-[var(--success)]">
         {{ actionMessage }}
@@ -351,8 +353,8 @@ function isRuleUpdating(rule: Rule): boolean {
                 class="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--fg)]"
               >
                 <option value="">global</option>
-                <option v-for="project in projects" :key="project" :value="project">
-                  {{ project }}
+                <option v-for="project in projects" :key="project.project_id" :value="project.project_id">
+                  {{ projectName(project.project_id) }}
                 </option>
               </select>
             </label>

@@ -8,7 +8,7 @@
 import type { FSWatcher } from 'chokidar';
 import { join, relative } from 'node:path';
 import { createHash } from 'node:crypto';
-import { resolveAndRegisterProject, type EngramRestClient, type BulkImportRequest } from '../client.js';
+import { resolveProject, type EngramRestClient, type BulkImportRequest } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import type { OpenClawPluginService, OpenClawPluginServiceContext, PluginLogger } from '../types/openclaw.js';
 import {
@@ -40,7 +40,7 @@ class FileWatcherService implements OpenClawPluginService {
   }
 
   async start(_ctx: OpenClawPluginServiceContext): Promise<void> {
-    const registration = await resolveAndRegisterProject(
+    const registration = await resolveProject(
       this.client,
       'file-watcher',
       this.workspaceDir,

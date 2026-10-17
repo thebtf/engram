@@ -28,7 +28,7 @@ export default defineConfig({
   webServer: [
     {
       name: 'mock-operator-api',
-      command: 'node scripts/mock-operator-api.mjs',
+      command: `"${process.execPath}" scripts/mock-operator-api.mjs`,
       url: `${apiUrl}/api/ready`,
       timeout: 30_000,
       reuseExistingServer: !process.env.CI,
@@ -41,7 +41,7 @@ export default defineConfig({
     },
     {
       name: 'operator-console-preview',
-      command: process.env.OPERATOR_CONSOLE_SMOKE_DEV ? `npm run dev -- --host 0.0.0.0 --port ${appPort}` : 'node .output/server/index.mjs',
+      command: process.env.OPERATOR_CONSOLE_SMOKE_DEV ? `npm run dev -- --host 0.0.0.0 --port ${appPort}` : `"${process.execPath}" .output/server/index.mjs`,
       url: `${appUrl}/settings`,
       timeout: 60_000,
       reuseExistingServer: !process.env.CI,

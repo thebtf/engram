@@ -21,7 +21,7 @@ import {
   endpointEvidence,
   errorState,
   liveState,
-  operatorApiUrl,
+  operatorFetchResponse,
   operatorFetchJson,
   pendingState,
   toOperatorSourceError,
@@ -34,7 +34,7 @@ const ACCESS_LIMIT = 100
 function submitMutation<TIntent>(action: string, intent: TIntent, path: string, init: RequestInit): Promise<MutationResult<TIntent>> {
   return executeMutation(
     { requestId: crypto.randomUUID(), action, intent },
-    fetch(operatorApiUrl(path), { ...init, credentials: 'include' }),
+    operatorFetchResponse(path, { ...init, credentials: 'include' }),
     () => undefined,
   )
 }
@@ -563,7 +563,7 @@ export function useOperatorAccess(): OperatorAccessComposable {
   function createInvitation(input: AccessCreateInvitationInput) {
     return executeMutation(
       { requestId: crypto.randomUUID(), action: 'access-create-invitation', intent: input },
-      fetch(operatorApiUrl(`${ACCESS_BASE}/invitations`), {
+      operatorFetchResponse(`${ACCESS_BASE}/invitations`, {
         ...jsonInit('POST', { email: input.email, role: input.role, expires_in_hours: input.expiresInHours }),
         credentials: 'include',
       }),

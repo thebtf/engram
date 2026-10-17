@@ -186,10 +186,6 @@ func TestCredentialStore_GlobalAndProjectSameNameCoexist(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, projectCreated.ID, projectFetched.ID)
 
-	byName, err := cs.GetByName(ctx, key)
-	require.NoError(t, err)
-	assert.Equal(t, globalCreated.ID, byName.ID, "project-less lookup must prefer the exact global row")
-
 	globalList, err := cs.List(ctx, "")
 	require.NoError(t, err)
 	require.Len(t, globalList, 1)
@@ -208,9 +204,9 @@ func TestCredentialStore_GlobalAndProjectSameNameCoexist(t *testing.T) {
 
 	globalCreated, err = cs.Create(ctx, globalInput)
 	require.NoError(t, err)
-	require.NoError(t, cs.DeleteByName(ctx, key))
+	require.NoError(t, cs.Delete(ctx, "", key))
 	_, err = cs.Get(ctx, "", key)
-	require.Error(t, err, "project-less delete must remove the preferred global row")
+	require.Error(t, err, "exact global delete must preserve project credentials")
 	projectFetched, err = cs.Get(ctx, project, key)
 	require.NoError(t, err)
 	assert.Equal(t, projectCreated.ID, projectFetched.ID)

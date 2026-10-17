@@ -1,7 +1,7 @@
 import { expect, test, type Route } from '@playwright/test'
 
 const bindingId = '60000000-0000-4000-8000-000000000041'
-const source = { source_ref: 'source-opaque', checkout_ref: 'checkout-opaque', repository: 'Engram', working_copy: 'Desk A', indexed_snapshot: { label: 'Snapshot A', revision: 'abc123', published_at: '2026-09-27T00:00:00Z' }, view_ref: 'view-opaque', selection_ref: 'selection-opaque', index_intent_available: false }
+const source = { project_id: '33333333-3333-4333-8333-333333333333', source_ref: 'source-opaque', checkout_ref: 'checkout-opaque', repository: 'Engram', working_copy: 'Desk A', indexed_snapshot: { label: 'Snapshot A', revision: 'abc123', published_at: '2026-09-27T00:00:00Z' }, view_ref: 'view-opaque', selection_ref: 'selection-opaque', index_intent_available: false }
 const otherSource = { ...source, source_ref: 'source-b', checkout_ref: 'checkout-b', repository: 'Other', working_copy: 'Desk B', indexed_snapshot: { ...source.indexed_snapshot, label: 'Snapshot B' }, view_ref: 'view-b', selection_ref: 'selection-b' }
 
 for (const identity of [{ auth_disabled: true }, { authenticated: true, auth_disabled: false }, { auth_disabled: false }, {}, { authenticated: true }] as const) {
@@ -25,9 +25,9 @@ for (const identity of [{ auth_disabled: true }, { authenticated: true, auth_dis
       else await route.fulfill({ status: 500 })
     })
     if (identity.auth_disabled === true) {
-      await page.goto('/')
+      await page.goto('/?project=all')
       await page.getByTestId('overview-workspace-entry').click()
-    } else await page.goto('/code?auth_disabled=true')
+    } else await page.goto('/code?project=all&auth_disabled=true')
     expect(await page.evaluate(() => window.isSecureContext)).toBe(false)
     if (identity.auth_disabled === true) {
       await expect(page.getByTestId('code-context-working-copy').getByRole('option', { name: 'Desk A' })).toHaveCount(1)
@@ -72,7 +72,7 @@ test('HTTP LAN waits for a confirmed noauth identity after transient 503', async
     else if (pathname === '/api/code/contexts') await route.fulfill({ json: { contexts: [source] } })
     else await route.fulfill({ status: 500 })
   })
-  await page.goto('/code?auth_disabled=true')
+  await page.goto('/code?project=all&auth_disabled=true')
   expect(await page.evaluate(() => window.isSecureContext)).toBe(false)
   await expect(page.locator('.phase')).toHaveAttribute('data-state', 'identity-unavailable')
   await expect(page.getByTestId('code-retry-identity')).toBeVisible()
@@ -99,7 +99,7 @@ test('HTTP LAN cannot rebound a saved noauth tab after server enables authentica
     else if (pathname === '/api/code/structure') await route.fulfill({ status: 403 })
     else await route.fulfill({ status: 204 })
   })
-  await page.goto('/code')
+  await page.goto('/code?project=all')
   await page.getByTestId('code-context-snapshot').selectOption('selection-opaque')
   await page.getByTestId('code-pin-context').click()
   await expect(page.getByTestId('code-context-pinned')).toBeVisible()

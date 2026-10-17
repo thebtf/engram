@@ -530,7 +530,9 @@ onBeforeUnmount(() => {
                     </div>
                     <div class="setting-control">
                       <span class="tag">{{ info.host }}</span>
-                      <span class="tag">{{ info.version }}</span>
+                      <span class="tag">{{ info.version === '-' ? t('knowledge.unknown') : info.version }}</span>
+                      <span class="tag">{{ t(`shell.backend.${info.backendStatus}`) }}</span>
+                      <details v-if="shell.error.value"><summary>{{ t('knowledge.technical') }}</summary><code>{{ shell.error.value }}</code></details>
                     </div>
                   </div>
                   <div class="settings-row">

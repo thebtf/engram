@@ -6,6 +6,26 @@ export interface RouteMetaEntry {
 }
 
 export interface UiCatalog {
+  projectCatalog: {
+    unresolvedTitle: string
+    unresolvedReason: string
+    review: string
+    kind: string
+    memory: string
+    document: string
+    issue: string
+    code: string
+    metadataOnly: string
+    readerKindsHelp: string
+    history: string
+    more: string
+    back: string
+    unknownProject: string
+    ambiguousName: string
+    selectionRequired: string
+    loading: string
+    search: string
+  }
   common: {
     refresh: string
     loading: string
@@ -319,12 +339,12 @@ export interface UiCatalog {
     }
   }
   projects: {
-      title: string
-      subtitle: string
-      loading: string
-      loadError: string
-      emptyTitle: string
-      emptyDescription: string
+    title: string
+    subtitle: string
+    loading: string
+    loadError: string
+    emptyTitle: string
+    emptyDescription: string
     tabs: {
       projects: string
       sessions: string
@@ -336,16 +356,16 @@ export interface UiCatalog {
       totalServer: string
       activeStatus: string
     }
-      notes: {
-        windowSlice: string
-        windowAll: string
-        clientsTitle: string
-        clientsCaption: string
-        clientsDescription: string
-        codeIntelTitle: string
-        codeIntelCaption: string
-        codeIntelDescription: string
-      }
+    notes: {
+      windowSlice: string
+      windowAll: string
+      clientsTitle: string
+      clientsCaption: string
+      clientsDescription: string
+      codeIntelTitle: string
+      codeIntelCaption: string
+      codeIntelDescription: string
+    }
     registry: {
       title: string
       projectId: string
@@ -441,6 +461,14 @@ export interface UiCatalog {
 
 export const messages: Record<SupportedLocale, UiCatalog> = {
   ru: {
+    projectCatalog: {
+      unresolvedTitle: 'Неразобранные записи', unresolvedReason: 'Причина неопределённости', review: 'Разобрать сохранённые записи',
+      kind: 'Вид записей', memory: 'Память', document: 'Документы', issue: 'Задачи', history: 'История', more: 'Следующая страница', back: 'Вернуться',
+      code: 'Код', metadataOnly: 'Сохранена метаинформация группы. Для её записей нет reader в этом обзоре; это не означает отсутствие исходных данных.',
+      readerKindsHelp: 'Виды чтения указаны по сохранённой принадлежности. Доступность, целостность и права проверяются при чтении.',
+      unknownProject: 'Проект недоступен или ещё не определён.', ambiguousName: 'Одинаковое имя; принадлежность не определена по имени.',
+      selectionRequired: 'Выбери проект из каталога, прежде чем продолжить.', loading: 'Загрузка каталога и определение проекта…', search: 'Поиск',
+    },
     common: {
       refresh: 'Обновить',
       loading: 'Загрузка...',
@@ -877,6 +905,14 @@ export const messages: Record<SupportedLocale, UiCatalog> = {
     },
   },
   en: {
+    projectCatalog: {
+      unresolvedTitle: 'Unresolved records', unresolvedReason: 'Unresolved reason', review: 'Review retained records',
+      kind: 'Record kind', memory: 'Memory', document: 'Documents', issue: 'Issues', history: 'History', more: 'Next page', back: 'Return',
+      code: 'Code', metadataOnly: 'Retained group metadata. No reader in this review supports its memberships; this does not mean the original data is absent.',
+      readerKindsHelp: 'Reader kinds come from retained membership metadata. Availability, integrity and access are checked when reading.',
+      unknownProject: 'The project is unavailable or unresolved.', ambiguousName: 'Equal names; a name does not establish project membership.',
+      selectionRequired: 'Choose a catalog project before continuing.', loading: 'Loading the catalog and resolving the project…', search: 'Search',
+    },
     common: {
       refresh: 'Refresh',
       loading: 'Loading...',

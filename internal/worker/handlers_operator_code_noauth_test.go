@@ -115,7 +115,10 @@ func TestNoAuthHTTPRealCatalogDerivesOfflineOwnerWithoutStateWriter(t *testing.T
 	store := openWorkerUCIContextCompositionStore(t)
 	ctx := context.Background()
 	contexts := gormdb.NewUCIContextStore(store.DB)
+	projectID := "10000000-0000-4000-8000-000000000041"
+	require.NoError(t, store.DB.Exec("INSERT INTO projects (id, display_name) VALUES (?, ?)", projectID, "Offline registration fixture").Error)
 	registered, err := contexts.RegisterLocalGit(ctx, gormdb.RegisterLocalGitInput{
+		ProjectID: projectID,
 		AuthRealm: uci.NoAuthCodeRealm, Principal: uci.NoAuthCodePrincipal,
 		WorkstationID: "offline-device", SourceLabel: "offline repository", Locator: "file:///private/offline-copy",
 	})
