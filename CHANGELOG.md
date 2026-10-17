@@ -36,6 +36,7 @@ Prepare the accepted v7.0.0 source identity for R1 canonical-project memory cont
 
 ### Fixed
 
+- Align remote operator-console smoke validation and selection with canonical `project_id`/`name` descriptors; correct the manual catalog contract, optional repository qualifiers, unresolved metadata and `Registered project` fallback.
 - Make project-identity error unwrapping nil-receiver-safe so HTTP and gRPC fail closed on typed-nil errors instead of panicking; preserve non-nil error codes, messages and cause chains.
 - Reject repeated JSON object keys in project markers and common-directory caches before granting project UUID authority; preserve existing marker/cache bytes and valid canonical or transition inputs.
 - Align synthetic operator-console fixtures and selectors with canonical project scope and the current shared-auth contract; launch Playwright fixture servers with the current Node executable. Production behavior is unchanged; synthetic results do not establish installed acceptance.

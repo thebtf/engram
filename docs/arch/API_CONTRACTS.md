@@ -135,12 +135,19 @@ Bypass: `ENGRAM_AUTH_SKIP_LOCAL=true` skips auth for RFC 1918 addresses.
 
 ### Knowledge readers
 
-`GET /api/projects` returns `{items:[{id,display_name}]}` from live canonical
-`projects` rows, not session labels or legacy selectors. The authoritative
-`display_name` falls back to the same stored ID; duplicate labels remain distinct
-IDs. Existing ordinary authenticated readers retain their server-wide project
+`GET /api/projects` returns `{items:[{project_id,name,repository_qualifier?}],unresolved:[{reference,name,reason,reader_kinds}]}`.
+`items` contains live canonical `projects` rows, not session labels or legacy
+selectors. `project_id` is the canonical UUID; `name` is a human label that falls
+back to `Registered project` when missing or blank. The optional
+`repository_qualifier` is a normalized repository locator. Duplicate labels remain
+distinct UUIDs. Existing ordinary authenticated readers retain their server-wide project
 scope. HAP project/legacy credentials remain forbidden by the existing route
 policy. The catalog response is `private, no-store`, never publicly cached.
+
+`unresolved` describes retained data owners without a canonical project assignment.
+Each entry has an opaque `reference`, display `name`, `reason`, and `reader_kinds`
+identifying retained `memory`, `document`, `issue` or `code` data. This metadata
+neither verifies retained content nor grants reader access.
 
 `GET /api/memories` and `GET /api/documents` require one exact existing live
 canonical `project` ID and return `{items,total,offset,limit,has_more}`. No legacy

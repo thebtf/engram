@@ -809,7 +809,7 @@ foreach ($project in $projects)
 
 {
 
-  if (-not $project.PSObject.Properties.Name.Contains('id') -or -not $project.PSObject.Properties.Name.Contains('display_name') -or [string]::IsNullOrWhiteSpace([string]$project.id))
+  if (-not $project.PSObject.Properties.Name.Contains('project_id') -or -not $project.PSObject.Properties.Name.Contains('name') -or [string]::IsNullOrWhiteSpace([string]$project.project_id))
 
   {
 
@@ -821,7 +821,7 @@ foreach ($project in $projects)
 
 # Read one deliberate canonical context, never an automatic all-project body scan.
 
-$projectName = [string]$projects[0].id
+$projectName = [string]$projects[0].project_id
 
 $encodedProject = [uri]::EscapeDataString($projectName)
 
