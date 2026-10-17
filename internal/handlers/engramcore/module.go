@@ -10,7 +10,7 @@
 // Constraints:
 //   - NFR-5 zero breaking change: tools/list and tools/call output MUST be
 //     byte-identical to v4.2.0 for any given gRPC backend response.
-//   - FR-13 HandleTool <1s soft contract is satisfied by the server-side
+//   - FR-13 ProxyHandleTool <1s soft contract is satisfied by the server-side
 //     timeout; the proxy itself adds no blocking.
 //   - FR-11a single ProxyToolProvider: the registry rejects any attempt to
 //     register a second proxy module.
@@ -38,12 +38,7 @@ const moduleName = "engramcore"
 //   - module.EngramModule       — core lifecycle (Name/Init/Shutdown)
 //   - module.ProjectLifecycle   — session connect/disconnect logging
 //   - module.ProjectRemovalAware — clear slug cache on project removal
-//   - module.ToolProvider       — explicit V3 project registration
 //   - module.ProxyToolProvider  — dynamic tool set fetched from engram-server
-//
-// The static registration tool is intentionally separate from the server-owned
-// dynamic tool inventory: it is the only way an unbound V3 descriptor can
-// establish a binding. All ordinary proxy operations remain resolve-only.
 type Module struct {
 	pool                        *grpcPool
 	cache                       *slugCache
@@ -62,19 +57,17 @@ var (
 	_ module.EngramModule        = (*Module)(nil)
 	_ module.ProjectLifecycle    = (*Module)(nil)
 	_ module.ProjectRemovalAware = (*Module)(nil)
-	_ module.ToolProvider        = (*Module)(nil)
 	_ module.ProxyToolProvider   = (*Module)(nil)
 )
 
-// NewModule constructs an unstarted V2-compatible engramcore module. Call Init
-// before HandleTool / ProxyTools.
+// NewModule constructs an unstarted engramcore module. Call Init before
+// ProxyHandleTool / ProxyTools.
 func NewModule() *Module {
 	return NewModuleWithClientInstanceID("")
 }
 
-// NewModuleWithClientInstanceID constructs a module that submits V3
-// descriptors for every scoped proxy operation. The client instance reference
-// is configured by daemon wiring; identity resolution never generates it.
+// NewModuleWithClientInstanceID constructs a module with the installation
+// reference configured by daemon wiring for UCI transport metadata.
 func NewModuleWithClientInstanceID(clientInstanceID string) *Module {
 	return newModule(clientInstanceID, nil)
 }
