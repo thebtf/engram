@@ -28,20 +28,18 @@ type directDiscoveryFixture struct {
 }
 
 func (f *directDiscoveryFixture) Initialize(_ context.Context, request *pb.InitializeRequest) (*pb.InitializeResponse, error) {
-	identity := request.GetProjectIdentityV3()
-	if identity == nil {
-		return nil, errors.New("direct discovery requires a V3 repository descriptor")
+	if request.GetProject() != "" || request.GetProjectIdentity() != nil || request.GetProjectIdentityV3() != nil {
+		return nil, errors.New("direct discovery must be unscoped")
 	}
 	f.requests <- request
-	projectKey, scope := identity.GetAnchorProjectId(), identity.GetScope()
 	return &pb.InitializeResponse{
-		Tools:            []*pb.ToolDefinition{{Name: "codebase_context", Description: "select authorized checkout"}},
-		CanonicalProject: projectKey,
-		ProjectResolutionV3: &pb.ProjectResolutionResultV3{
-			Outcome:       pb.ProjectResolutionOutcomeV3_PROJECT_RESOLVED,
-			Correlation:   "direct-stdio-fixture",
-			ProjectKey:    &projectKey,
-			ResolvedScope: &scope,
+		Tools: []*pb.ToolDefinition{
+			{Name: "codebase_context", Description: "select authorized checkout", InputSchemaJson: []byte(`{"type":"object"}`)},
+			{Name: "codebase_index", Description: "index selected checkout", InputSchemaJson: []byte(`{"type":"object"}`)},
+			{Name: "codebase_status", Description: "read selected index status", InputSchemaJson: []byte(`{"type":"object"}`)},
+			{Name: "codebase_search", Description: "search authorized view", InputSchemaJson: []byte(`{"type":"object"}`)},
+			{Name: "codebase_read", Description: "read authorized source span", InputSchemaJson: []byte(`{"type":"object"}`)},
+			{Name: "codebase_graph", Description: "explore authorized graph", InputSchemaJson: []byte(`{"type":"object"}`)},
 		},
 	}, nil
 }
@@ -77,19 +75,6 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 	}
 	if info, err := os.Stat(commonDir); err != nil || !info.IsDir() {
 		t.Fatalf("direct fixture primary Git directory unavailable: %s: %v", commonDir, err)
-	}
-	var project struct {
-		Version int    `json:"version"`
-		ID      string `json:"project_id"`
-		Name    string `json:"name"`
-		Scope   string `json:"scope"`
-	}
-	marker, err := os.ReadFile(filepath.Join(root, ".engram-project"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(marker, &project); err != nil || project.Version != 3 || project.ID == "" || project.Scope != "repository" {
-		t.Fatalf("direct fixture requires V3 repository anchor in current checkout: %v", err)
 	}
 	scratch := filepath.Join(filepath.Dir(commonDir), ".agent", "tmp")
 	if err := os.MkdirAll(scratch, 0o700); err != nil {
@@ -280,7 +265,7 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 					for _, tool := range listed.Tools {
 						names[tool.Name] = true
 					}
-					for _, name := range []string{"codebase_context", "codebase_index", "codebase_status"} {
+					for _, name := range []string{"codebase_context", "codebase_index", "codebase_status", "codebase_search", "codebase_read", "codebase_graph"} {
 						if !names[name] {
 							t.Fatalf("direct tools/list omitted %s (tools: %v)", name, names)
 						}
@@ -301,12 +286,11 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 		}
 		select {
 		case request := <-discovery.requests:
-			identity := request.GetProjectIdentityV3()
-			if request.GetProject() != "" || request.GetProjectIdentity() != nil || identity.GetVersion() != 3 || identity.GetAnchorProjectId() != project.ID || identity.GetName() != project.Name || identity.GetScope() != project.Scope || identity.GetClientInstanceId() != strings.TrimSuffix(string(id), "\n") {
-				t.Fatalf("direct Initialize did not derive V3 identity from repository and installation: %s", request)
+			if request.GetProject() != "" || request.GetProjectIdentity() != nil || request.GetProjectIdentityV3() != nil || request.GetClientName() != "engram-daemon" || request.GetClientVersion() == "" {
+				t.Fatalf("direct Initialize was not unscoped capability discovery: %s", request)
 			}
 		default:
-			t.Fatal("direct client did not send V3 Initialize to fixture")
+			t.Fatal("direct client did not send Initialize to fixture")
 		}
 		if first != "" && string(id) != first {
 			t.Fatalf("direct client restart changed identity")
