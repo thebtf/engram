@@ -549,6 +549,7 @@ let ruleRows = [
 ]
 
 const ruleSelections = new Map()
+const ruleSelectionProjections = new Map()
 
 function ruleSession(req) {
   return /(?:^|;\s*)mock-rule-session=([^;]+)/.exec(req.headers.cookie || '')?.[1] || 'default'
@@ -882,10 +883,12 @@ function ruleSelectionSnapshot(selection) {
 
 function saveRuleSelection(body, req) {
   if (!body || body.domain !== 'rules' || !body.selection || typeof body.selection !== 'object') return null
+  if (typeof body.filter?.scope !== 'string') return null
   const selection = body.selection
   if (selection.kind === 'none') {
     const next = { domain: 'rules', kind: 'none', selection_version: currentRuleSelection(req).selection_version + 1 }
     ruleSelections.set(ruleSession(req), next)
+    ruleSelectionProjections.set(ruleSession(req), body.filter.scope)
     return ruleSelectionSnapshot(next)
   }
   if (selection.kind !== 'explicit' || !Array.isArray(selection.targets) || !selection.targets.length) return null
@@ -899,6 +902,7 @@ function saveRuleSelection(body, req) {
   if (targets.some((target) => target === null)) return null
   const next = { domain: 'rules', kind: 'explicit', selection_version: currentRuleSelection(req).selection_version + 1, targets }
   ruleSelections.set(ruleSession(req), next)
+  ruleSelectionProjections.set(ruleSession(req), body.filter.scope)
   return ruleSelectionSnapshot(next)
 }
 
@@ -917,7 +921,7 @@ function ruleSelectionPage(body) {
 
 function applyRuleSelectionOperation(body, req) {
   const selection = currentRuleSelection(req)
-  if (!body || !['enable', 'disable'].includes(body.action) || body.selection?.selection_version !== selection.selection_version || selection.kind !== 'explicit') return null
+  if (!body || !['enable', 'disable'].includes(body.action) || typeof body.filter?.scope !== 'string' || body.filter.scope !== ruleSelectionProjections.get(ruleSession(req)) || selection.reconfirmation_required || body.selection?.selection_version !== selection.selection_version || selection.kind !== 'explicit') return null
   const enabled = body.action === 'enable'
   const now = new Date().toISOString()
   const targets = selection.targets.map((target) => Number(target.id))
@@ -1534,11 +1538,17 @@ const server = createServer(async (req, res) => {
   if (req.method === 'POST' && path === '/api/collections/selection/current') {
     try {
       const body = await readRequestJson(req)
-      if (body.domain !== 'rules') {
-        json(res, 400, { error: 'rules selection domain is required' })
+      if (body.domain !== 'rules' || typeof body.filter?.scope !== 'string') {
+        json(res, 400, { error: 'rules selection domain and projection are required' })
         return
       }
-      json(res, 200, ruleSelectionSnapshot(currentRuleSelection(req)))
+      const selection = currentRuleSelection(req)
+      if (selection.kind !== 'none' && ruleSelectionProjections.get(ruleSession(req)) !== body.filter.scope && !selection.reconfirmation_required) {
+        selection.reconfirmation_required = true
+        selection.reconfirmation_reason = 'context_changed'
+        selection.selection_version += 1
+      }
+      json(res, 200, ruleSelectionSnapshot(selection))
     } catch (error) {
       json(res, 400, { error: error instanceof Error ? error.message : String(error) })
     }

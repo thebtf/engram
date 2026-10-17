@@ -90,7 +90,7 @@ test('a second browser session cannot replace a pending rule selection operation
     await page.route('**/api/rules', async (route) => {
       if (route.request().method() === 'POST' && route.request().postDataJSON().action === 'enable') {
         const competingSave = await otherSession.request.post('/api/collections/selection', {
-          data: { domain: 'rules', selection: { kind: 'explicit', targets: [{ id: '401' }] } },
+          data: { domain: 'rules', filter: { scope: 'all' }, selection: { kind: 'explicit', targets: [{ id: '401' }] } },
         })
         expect(competingSave.ok()).toBe(true)
       }

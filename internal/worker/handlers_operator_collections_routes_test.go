@@ -104,18 +104,20 @@ func TestOperatorCollectionRoutesDelegateScopedSelectionWithoutAuthority(t *test
 		return recorder
 	}
 
-	snapshot := call("/api/collections/selection", `{"domain":"rules","selection":{"kind":"explicit","targets":[{"id":"rule-1","expected_version":4}]}}`, identity)
+	snapshot := call("/api/collections/selection", `{"domain":"rules","filter":{"scope":"global"},"selection":{"kind":"explicit","targets":[{"id":"rule-1","expected_version":4}]}}`, identity)
 	require.Equal(t, http.StatusOK, snapshot.Code, snapshot.Body.String())
+	qualifiedScope, err := rulesCollectionProjectionScope(operatorCollectionRouteTestScope("rules"), normalizer.filter)
+	require.NoError(t, err)
 	require.Equal(t, []operatorCollectionRouteTestSaved{{
-		scope:     operatorCollectionRouteTestScope("rules"),
+		scope:     qualifiedScope,
 		selection: gormdb.CollectionSelection{Kind: gormdb.CollectionSelectionExplicit, Targets: []gormdb.CollectionSelectionTarget{{ID: "rule-1", ExpectedVersion: 4}}},
 	}}, store.saved)
 
-	current := call("/api/collections/selection/current", `{"domain":"rules"}`, identity)
+	current := call("/api/collections/selection/current", `{"domain":"rules","filter":{"scope":"global"}}`, identity)
 	require.Equal(t, http.StatusOK, current.Code, current.Body.String())
 	require.Equal(t, 1, store.currentCalls)
 
-	page := call("/api/collections/selection/page", `{"domain":"rules","filter":{"scope":"project"},"limit":2}`, identity)
+	page := call("/api/collections/selection/page", `{"domain":"rules","filter":{"scope":"global"},"limit":2}`, identity)
 	require.Equal(t, http.StatusOK, page.Code, page.Body.String())
 	require.Equal(t, []gormdb.CollectionPageRequest{{
 		Domain: "rules",

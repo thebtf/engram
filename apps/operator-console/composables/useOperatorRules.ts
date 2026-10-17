@@ -95,6 +95,7 @@ export interface RuleOperationItem {
 export interface RuleSelectionOperationInput {
   action: RuleSelectionOperationAction
   selection: Exclude<OperatorSelection, { kind: 'none' }>
+  filter: RuleSelectionFilter
   content?: string
   priority?: number
   scope?: string
@@ -292,6 +293,9 @@ function parseRuleSelectionEnvelope(value: unknown): OperatorSelection {
     throw new TypeError('Rules selection response is invalid')
   }
   const selection = Reflect.get(value, 'selection')
+  if (typeof selection === 'object' && selection !== null && Reflect.get(selection, 'reconfirmation_required') === true && Reflect.get(selection, 'kind') !== 'frozen_filter') {
+    throw new TypeError('Rules selection context changed; select the intended rules again')
+  }
   if (
     typeof selection === 'object' && selection !== null && !Array.isArray(selection)
     && Reflect.get(selection, 'kind') === 'frozen_filter'
@@ -458,6 +462,7 @@ function operationBody(input: RuleSelectionOperationInput, requestId: string): R
     request_id: requestId,
     action: input.action,
     selection,
+    filter: input.filter,
   }
   switch (input.action) {
     case 'enable':
@@ -507,9 +512,9 @@ export function useOperatorRules(initialScope = ''): {
   error: ComputedRef<string | null>
   refresh: (scope?: string) => Promise<void>
   createRule: (input: RuleCreateInput) => Promise<MutationResult<RuleCreateInput, CurrentRule>>
-  saveRuleSelection: (selection: Exclude<OperatorSelection, { kind: 'frozen_filter' }>) => Promise<OperatorSelection>
+  saveRuleSelection: (selection: Exclude<OperatorSelection, { kind: 'frozen_filter' }>, filter: RuleSelectionFilter) => Promise<OperatorSelection>
   freezeRuleSelection: (filter: RuleSelectionFilter, excludedIds: string[]) => Promise<OperatorSelection>
-  currentRuleSelection: () => Promise<OperatorSelection>
+  currentRuleSelection: (filter: RuleSelectionFilter) => Promise<OperatorSelection>
   loadRulePage: (filter: RuleSelectionFilter, cursor?: string) => Promise<RuleSelectionPage>
   runRuleSelectionOperation: (input: RuleSelectionOperationInput) => Promise<RuleSelectionOperationResult>
   scopeChangeGap: OperatorUnsupportedAction
@@ -588,20 +593,27 @@ export function useOperatorRules(initialScope = ''): {
     )
   }
 
-  async function saveRuleSelection(selection: Exclude<OperatorSelection, { kind: 'frozen_filter' }>): Promise<OperatorSelection> {
+  function requireSelectionFilter(filter: RuleSelectionFilter) {
+    if (context.selectionPending.value || context.selectionError.value || context.error.value || !filter.scope || (filter.scope !== 'all' && filter.scope !== 'global' && !isCatalogProject(filter.scope))) throw new TypeError('An explicit rule scope is required')
+  }
+
+  async function saveRuleSelection(selection: Exclude<OperatorSelection, { kind: 'frozen_filter' }>, filter: RuleSelectionFilter): Promise<OperatorSelection> {
+    requireSelectionFilter(filter)
     const requestId = crypto.randomUUID()
     const response = await operatorFetchJson<SelectionEnvelope>('/api/collections/selection', jsonInit('POST', {
       domain: 'rules',
+      filter,
       selection: selectionPayload(selection),
     }, requestId), 'rules-selection-snapshot')
     return parseRuleSelectionEnvelope(response)
   }
 
   async function freezeRuleSelection(filter: RuleSelectionFilter, excludedIds: string[]): Promise<OperatorSelection> {
-    if (context.selectionPending.value || context.selectionError.value || context.error.value || !filter.scope || (filter.scope !== 'all' && filter.scope !== 'global' && !isCatalogProject(filter.scope))) throw new TypeError('An explicit rule scope is required')
+    requireSelectionFilter(filter)
     const requestId = crypto.randomUUID()
     const response = await operatorFetchJson<SelectionEnvelope>('/api/collections/selection', jsonInit('POST', {
       domain: 'rules',
+      filter,
       selection: {
         kind: 'frozen_filter',
         filter,
@@ -611,16 +623,18 @@ export function useOperatorRules(initialScope = ''): {
     return parseRuleSelectionEnvelope(response)
   }
 
-  async function currentRuleSelection(): Promise<OperatorSelection> {
+  async function currentRuleSelection(filter: RuleSelectionFilter): Promise<OperatorSelection> {
+    requireSelectionFilter(filter)
     const requestId = crypto.randomUUID()
     const response = await operatorFetchJson<SelectionEnvelope>('/api/collections/selection/current', jsonInit('POST', {
       domain: 'rules',
+      filter,
     }, requestId), 'rules-selection-current')
     return parseRuleSelectionEnvelope(response)
   }
 
   async function loadRulePage(filter: RuleSelectionFilter, cursor = ''): Promise<RuleSelectionPage> {
-    if (context.selectionPending.value || context.selectionError.value || context.error.value || !filter.scope || (filter.scope !== 'all' && filter.scope !== 'global' && !isCatalogProject(filter.scope))) throw new TypeError('An explicit rule scope is required')
+    requireSelectionFilter(filter)
     const requestId = crypto.randomUUID()
     const response = await operatorFetchJson<unknown>('/api/collections/selection/page', jsonInit('POST', {
       domain: 'rules',
@@ -632,6 +646,7 @@ export function useOperatorRules(initialScope = ''): {
   }
 
   async function runRuleSelectionOperation(input: RuleSelectionOperationInput): Promise<RuleSelectionOperationResult> {
+    requireSelectionFilter(input.filter)
     const requestId = crypto.randomUUID()
     const request = {
       requestId,

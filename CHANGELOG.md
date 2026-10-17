@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Preserve native ID and verified retained membership in both Vault list modes and all three Vault/Secrets clients; keep retained Reveal read-only and unavailable/conflicting rows visible without canonical/global fallback. Refuse unsupported Reveal/Delete before dispatch while preserving valid sibling operations.
 - Accept canonical retained-content pages without invented page-level provenance in all three UI readers. Preserve record/history origin, native IDs and scope/cursor/error guards; keep known unresolved selections noncanonical and initialize the cached Rules create form with its selected UUID. Reuse focused decoder/component evidence, not a whole-candidate build or installed acceptance claim.
 - Bound shared migration/UCI PostgreSQL fixture admin and data pools to max-open 2 and max-idle 1 before fixture SQL. Preserve schema ownership, migration and cleanup behavior; reuse the recorded document HTTP/store 12 PASS on these exact helper bytes without repeating accepted database work.
+- Bind saved Rules selections and their operations to the server-normalized active all/global/canonical-project projection. Require deliberate reselection after a different-project restore while preserving same-projection explicit/page/frozen off-page targets, per-row replacement and existing owner/session/version/grant checks; no schema or migration change.
 
 ## [7.0.0] - 2026-10-16
 

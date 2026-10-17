@@ -24,6 +24,7 @@ type behavioralRuleRequest struct {
 	RequestID string                               `json:"request_id,omitempty"`
 	Action    string                               `json:"action,omitempty"`
 	Selection *behavioralRuleOperationSelection    `json:"selection,omitempty"`
+	Filter    *operatorCollectionFilterRequest     `json:"filter,omitempty"`
 	Scope     *behavioralRuleOperationScope        `json:"scope,omitempty"`
 	Order     []behavioralRuleOperationOrderTarget `json:"order,omitempty"`
 }
@@ -160,7 +161,7 @@ func (s *Service) handleCreateBehavioralRule(w http.ResponseWriter, r *http.Requ
 		s.handleBehavioralRuleSelectionOperation(w, r, req)
 		return
 	}
-	if req.RequestID != "" || req.Selection != nil || req.Scope != nil || len(req.Order) != 0 {
+	if req.RequestID != "" || req.Selection != nil || req.Filter != nil || req.Scope != nil || len(req.Order) != 0 {
 		http.Error(w, "selection operation requires an action", http.StatusBadRequest)
 		return
 	}
@@ -390,6 +391,20 @@ func (s *Service) handleBehavioralRuleSelectionOperation(w http.ResponseWriter, 
 	scope, err := behavioralRuleSelectionScopeFromRequest(r)
 	if err != nil {
 		http.Error(w, "rules operation forbidden", http.StatusForbidden)
+		return
+	}
+	if request.Filter == nil {
+		http.Error(w, "rules projection is required", http.StatusBadRequest)
+		return
+	}
+	filter, err := s.behavioralRulesStore.NormalizeCollectionFilter(r.Context(), scope, request.Filter.Scope)
+	if err != nil {
+		http.Error(w, "invalid rules projection", http.StatusBadRequest)
+		return
+	}
+	scope, err = rulesCollectionProjectionScope(scope, filter)
+	if err != nil {
+		http.Error(w, "invalid rules projection", http.StatusBadRequest)
 		return
 	}
 	result, err := s.behavioralRulesStore.ApplySelectionOperation(r.Context(), scope, operation)

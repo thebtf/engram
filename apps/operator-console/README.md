@@ -74,6 +74,14 @@ successful-empty backend data, installed delivery or release acceptance.
 | `/rules`, `/queue` | Retained supported actions follow the shared selected project. Rules retain their explicit global scope; candidates retain the existing flag and explicit all-project contract. |
 | `/noise` | Secondary server-wide retrieval/outcome diagnostics. Missing numeric fields stay unknown; unavailable decorative trends are not a primary task. |
 
+Rules saved selections belong to the active `all`, `global`, or canonical-project projection.
+Selection snapshot/current requests and selection operations send that scope in the existing
+top-level `filter`; the server normalizes it and binds the stored context itself. Restoring
+another projection requires deliberate reselection, even after a remount. Same-projection
+explicit, page and frozen selections retain their off-page targets; per-row actions replace
+old intent with the clicked row. Browser owner/session, target versions and grants remain
+independent checks. This request binding adds no table or migration.
+
 The canonical catalog is one shape, not an optional compatibility mode:
 
 ```ts

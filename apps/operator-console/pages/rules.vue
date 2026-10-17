@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { MutationResult } from '../composables/useApi'
 import type {
   RuleOperationItem,
@@ -104,9 +104,9 @@ watch(scopeFilter, (scope) => {
   void refresh(scope)
 })
 
-onMounted(() => {
-  void loadCurrentSelection()
-})
+watch([scopeFilter, projectContext.selectionPending, scopeError], ([scope, pending, error]) => {
+  if (scope && !pending && !error) void loadCurrentSelection()
+}, { immediate: true })
 
 function scopeLabel(scope: string) {
   return scope === 'global' ? t('rules.scope.global') : isCatalogProject(scope) ? projectName(scope) : t('projectCatalog.unknownProject')
@@ -190,7 +190,7 @@ async function loadCurrentSelection() {
   selectionPending.value = true
   selectionError.value = ''
   try {
-    const snapshot = await currentRuleSelection()
+    const snapshot = await currentRuleSelection({ scope: scopeFilter.value })
     if (generation === scopeGeneration) selection.applySnapshot(snapshot)
   } catch (error) {
     if (generation === scopeGeneration) selectionError.value = error instanceof Error ? error.message : t('rules.selection.loadError')
@@ -223,7 +223,7 @@ async function saveCurrentSelection() {
     if (generation === scopeGeneration) selection.applySnapshot(snapshot)
     return
   }
-  const snapshot = await saveRuleSelection(current)
+  const snapshot = await saveRuleSelection(current, { scope: scopeFilter.value })
   if (generation === scopeGeneration) selection.applySnapshot(snapshot)
 }
 
@@ -348,14 +348,14 @@ async function runSelectionAction(action: RuleSelectionOperationAction, fields: 
   try {
     let current = selection.current.value
     if (current.kind !== 'frozen_filter' && current.version === 0) {
-      const snapshot = await saveRuleSelection(current)
+      const snapshot = await saveRuleSelection(current, { scope: scopeFilter.value })
       if (generation !== scopeGeneration) return false
       selection.applySnapshot(snapshot)
       current = selection.current.value
     }
     if (current.kind === 'none' || current.reconfirmationRequired) return false
 
-    const result = await runRuleSelectionOperation({ action, selection: current, ...fields })
+    const result = await runRuleSelectionOperation({ action, selection: current, filter: { scope: scopeFilter.value }, ...fields })
     if (generation !== scopeGeneration) return false
     mutationResult.value = result.mutation
     operationItems.value = result.items
