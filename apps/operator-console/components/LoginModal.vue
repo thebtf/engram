@@ -29,6 +29,7 @@ const errorKey = computed(() => {
 })
 
 function close() {
+  if (pending.value) return
   closed = true
   password.value = ''
   email.value = ''
@@ -72,7 +73,7 @@ onBeforeUnmount(() => {
 
 <template>
   <dialog ref="dialog" class="login-dialog" aria-labelledby="login-title" aria-describedby="login-description" @cancel.prevent="close" @click="($event.target === dialog) && close()">
-    <header><h2 id="login-title">{{ t('auth.signIn') }}</h2><button type="button" :aria-label="t('auth.close')" @click="close">×</button></header>
+    <header><h2 id="login-title">{{ t('auth.signIn') }}</h2><button type="button" :aria-label="t('auth.close')" :disabled="pending" @click="close">×</button></header>
     <p id="login-description">{{ t('auth.description') }}</p>
     <form :aria-busy="pending" @submit.prevent="submit">
       <label for="login-email">{{ t('auth.email') }}</label>
@@ -81,7 +82,7 @@ onBeforeUnmount(() => {
       <input id="login-password" v-model="password" name="password" type="password" autocomplete="current-password" required :disabled="pending" />
       <p v-if="error || unverified" class="login-error" role="alert">{{ t(errorKey) }}</p>
       <p v-if="pending" role="status">{{ t('auth.pending') }}</p>
-      <div class="login-actions"><button type="button" @click="close">{{ t('auth.cancel') }}</button><button class="primary" type="submit" :disabled="pending">{{ t('auth.signIn') }}</button></div>
+      <div class="login-actions"><button type="button" :disabled="pending" @click="close">{{ t('auth.cancel') }}</button><button class="primary" type="submit" :disabled="pending">{{ t('auth.signIn') }}</button></div>
     </form>
   </dialog>
 </template>

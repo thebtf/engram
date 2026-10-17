@@ -6,9 +6,8 @@ let sharedShellStatus: SharedRef<ShellInfo> | undefined
 let sharedShellStatusPending: SharedRef<boolean> | undefined
 let sharedShellStatusError: SharedRef<string | null> | undefined
 
-import { operatorApiBase, operatorFetchJson, loadOperatorJson, operatorUnauthorizedRevision, type OperatorLoadState } from './useOperatorApi'
+import { operatorApiBase, operatorFetchJson, loadOperatorJson, operatorUnauthorizedRevision, authGeneration, type OperatorLoadState } from './useOperatorApi'
 
-let authGeneration = 0
 type ShellIdentity = Pick<ShellInfo, 'authDisabled' | 'authenticated' | 'role' | 'source' | 'synthetic' | 'authPosture' | 'identityName' | 'identityInitials' | 'identityProvider'>
 
 function unknownIdentity(): ShellIdentity {
@@ -42,7 +41,7 @@ function identityFrom(payload: unknown): ShellIdentity | null {
 }
 
 watch(operatorUnauthorizedRevision, () => {
-  authGeneration++
+  authGeneration.value++
   if (sharedShellStatus) sharedShellStatus.value = { ...sharedShellStatus.value, ...unknownIdentity(), authPosture: 'locked', backendStatus: 'auth-required' }
 }, { flush: 'sync' })
 
@@ -161,10 +160,10 @@ export function useOperatorShellStatus() {
   const error = (sharedShellStatusError ??= sharedRef<string | null>((() => null)()))
 
   async function refreshIdentity() {
-    const generation = ++authGeneration
+    const generation = ++authGeneration.value
     info.value = { ...info.value, ...unknownIdentity() }
     const state = await loadOperatorJson<unknown>('/api/auth/me', { source: 'shell-auth', cache: 'no-store' })
-    if (generation !== authGeneration) return false
+    if (generation !== authGeneration.value) return false
     const identity = isLive(state) ? identityFrom(state.data) : state.kind === 'error' && state.error.status === 401 ? { ...unknownIdentity(), authPosture: 'locked' as const } : null
     info.value = { ...info.value, ...(identity ?? unknownIdentity()) }
     return identity !== null
@@ -188,8 +187,10 @@ export function useOperatorShellStatus() {
     pending.value = true
     error.value = null
 
+    const identityRequest = refreshIdentity()
+    const generation = authGeneration.value
     const [authResult, selfcheckResult, statsResult, vnextResult] = await Promise.allSettled([
-      refreshIdentity(),
+      identityRequest,
       loadOperatorJson<ApiSelfcheck>('/api/selfcheck', { source: 'shell-selfcheck' }),
       loadOperatorJson<ApiStats>('/api/stats', { source: 'shell-stats' }),
       loadOperatorJson<ApiStatsVnext>('/api/stats/vnext', { source: 'shell-stats-vnext' }),
@@ -231,7 +232,7 @@ export function useOperatorShellStatus() {
 
 
     const coreResults = [selfcheckResult, statsResult]
-    const coreAuthRequired = coreResults.some((result) => result.status === 'fulfilled' && result.value.kind === 'error' && result.value.error.status === 401)
+    const coreAuthRequired = generation === authGeneration.value && coreResults.some((result) => result.status === 'fulfilled' && result.value.kind === 'error' && result.value.error.status === 401)
     const coreOutages = coreResults.filter((result) => result.status === 'fulfilled' && result.value.kind === 'error' && (result.value.error.category === 'unreachable' || result.value.error.category === 'server-unavailable')).length
     next.backendStatus = info.value.authPosture === 'locked' || coreAuthRequired ? 'auth-required'
       : coreOutages === 2 ? 'unavailable'

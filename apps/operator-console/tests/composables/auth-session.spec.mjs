@@ -328,7 +328,7 @@ for (const status of [400, 401, 403]) test(`credential login ${status} does not 
 })
 
 const tick = async () => { await new Promise(setImmediate); await vue.nextTick() }
-function node(tag = '', text = '') { return { tag, text, props: {}, children: [], parent: null, focus() { }, scrollIntoView() { } } }
+function node(tag = '', text = '') { return { tag, text, props: {}, children: [], parent: null, focus() { }, scrollIntoView() { }, showModal() { this.open = true }, close() { this.open = false } } }
 const renderer = vue.createRenderer({
   createElement: (tag) => node(tag), createText: (text) => node('', text), createComment: () => node(),
   patchProp: (item, key, _previous, value) => { item.props[key] = value },
@@ -345,7 +345,7 @@ const renderer = vue.createRenderer({
 })
 function text(item) { return item.text + item.children.map(text).join(' ') }
 
-async function mountRecovery(t, consumer, location, pageName) {
+async function mountRecovery(t, consumer, location, pageName, actualLogin = false) {
   const navigation = []
   const globals = {
     useRoute: routing.useRoute, useRouter: routing.useRouter,
@@ -353,8 +353,8 @@ async function mountRecovery(t, consumer, location, pageName) {
     useI18n: () => ({ t: (key) => key, locale: vue.ref('en') }),
     useSettingsModal: () => ({ settingsModalOpen: vue.ref(false), settingsModalTab: vue.ref('general'), openSettingsModal() { } }),
     window: { innerWidth: 1200, localStorage: { getItem: () => null }, addEventListener() { }, removeEventListener() { }, location: { assign: (href) => navigation.push(href) } },
-    document: { body: { style: { overflow: '' } }, querySelector: () => null, querySelectorAll: () => [] },
-    CSS: { escape: (value) => value }, Node: class { },
+    document: { activeElement: null, body: { style: { overflow: '' } }, querySelector: () => null, querySelectorAll: () => [] },
+    CSS: { escape: (value) => value }, Node: class { }, HTMLElement: class { },
   }
   const dependency = (name) => {
     if (name.endsWith('useConsolePreferences')) return { density: vue.ref('comfortable'), theme: vue.ref('dark') }
@@ -376,16 +376,19 @@ async function mountRecovery(t, consumer, location, pageName) {
   const reader = pageName ? component(`pages/${pageName}.vue`) : { render: () => vue.h('article', 'synthetic cached payload') }
   const router = routing.createRouter({ history: routing.createMemoryHistory(), routes: [{ path: '/:pathMatch(.*)*', component: { render: () => null } }] })
   await router.push(location)
-  let layoutState, readerState
+  let layoutState, readerState, loginState
   const app = renderer.createApp({ render: () => vue.h(layout, { ref: (instance) => { if (instance) layoutState = instance.$.setupState } }, { default: () => vue.h(reader, { ref: (instance) => { if (instance) readerState = instance.$.setupState } }) }) })
-  for (const name of ['SettingsModal', 'ProfileModal', 'LoginModal', 'MutationResultNotice', 'HonestyBadge']) app.component(name, { render: () => null })
+  for (const name of ['SettingsModal', 'ProfileModal', 'MutationResultNotice', 'HonestyBadge']) app.component(name, { render: () => null })
+  const login = actualLogin ? component('components/LoginModal.vue') : { render: () => null }
+  app.component('LoginModal', login)
+  if (actualLogin) app.mixin({ mounted() { if (this.$.type === login) loginState = this.$.setupState } })
   app.component('ProjectContext', component('components/ProjectContext.vue'))
   app.use(router)
   const host = node('root')
   app.mount(host)
   t.after(() => app.unmount())
   await tick()
-  return { host, router, navigation, layout: () => layoutState, reader: () => readerState }
+  return { host, router, navigation, layout: () => layoutState, reader: () => readerState, login: () => loginState }
 }
 
 test('actual layout removes cached payload on 401 and cannot redisplay it before fresh-document recovery', async (t) => {
@@ -1137,4 +1140,148 @@ test('unavailable catalog and issue reads never render known empty; refresh reta
   assert.ok(!rendered().includes('issues.empty.title'))
   assert.equal(consumer.calls.filter(call => call.path.startsWith('/api/issues')).length, readsBeforeSelection)
   assert.ok(consumer.calls.every(call => call.method === 'GET'))
+})
+
+for (const action of ['login', 'logout']) test(`auth recovery regression: ${action} reload retains the unresolved reader URL intent`, async (t) => {
+  let signedIn = true
+  const consumer = session(t, () => Response.json(signedIn ? verifiedUser : { authenticated: false, auth_disabled: false }))
+  await consumer.shell.refresh()
+  const intent = {
+    reference: 'opaque-retained', kind: 'document', id: '901', cursor: 'next-content', historyCursor: 'older-history',
+    path: 'notes/retained decision.md', version: '3', compare: '2', q: 'known decision',
+    returnTo: `/memory?project=${projectID}&memory=7#previous`,
+    originalLocation: '/documents?project=ambiguous&path=notes%2Fretained%20decision.md&version=3#version',
+  }
+  const location = { path: '/projects/unresolved', query: { ...intent, password: 'discard', token: 'discard' }, hash: '#retained-version' }
+  const mounted = await mountRecovery(t, consumer, location)
+  assert.equal(mounted.layout().projectContext.project.value, '')
+  for (const [key, value] of Object.entries(intent)) assert.equal(mounted.router.currentRoute.value.query[key], value)
+  if (action === 'login') {
+    assert.equal(await consumer.shell.login('person@example.test', 'synthetic-only'), true)
+    mounted.layout().authenticated()
+  } else {
+    signedIn = false
+    consumer.logoutStatus(200)
+    await mounted.layout().logoutIdentity()
+  }
+  assert.equal(mounted.navigation.length, 1)
+  const restored = new URL(mounted.navigation[0], 'http://synthetic.invalid')
+  t.diagnostic(`auth reload produced ${restored.pathname}${restored.search}${restored.hash}`)
+  assert.equal(restored.pathname, '/projects/unresolved')
+  assert.deepEqual(Object.fromEntries(restored.searchParams), intent, 'auth reload must retain only safe unresolved reader intent')
+  assert.equal(restored.hash, '#retained-version')
+  assert.ok(![...consumer.storage.values()].join('').includes('discard'))
+})
+
+for (const control of ['Cancel', 'Escape', 'close button', 'backdrop']) test(`auth recovery regression: pending login ${control} cannot strand confirmed identity`, async (t) => {
+  let releaseIdentity
+  const consumer = session(t, () => new Promise(resolve => { releaseIdentity = resolve }))
+  const mounted = await mountRecovery(t, consumer, '/projects/unresolved?reference=opaque-retained&kind=memory&id=901', undefined, true)
+  mounted.layout().openLogin()
+  await tick()
+  const state = mounted.login()
+  assert.ok(state, 'the actual LoginModal must be mounted by the layout')
+  state.email = 'person@example.test'
+  state.password = 'synthetic-only'
+  const dialog = walk(mounted.host).find(item => item.tag === 'dialog')
+  const form = walk(dialog).find(item => item.tag === 'form')
+  const attempt = form.props.onSubmit({ preventDefault() { } })
+  await tick()
+  assert.equal(state.pending, true)
+  assert.equal(state.password, '')
+  assert.equal(typeof releaseIdentity, 'function', 'login must be awaiting its real authMe readback')
+  if (control === 'Escape') dialog.props.onCancel({ preventDefault() { } })
+  else if (control === 'backdrop') dialog.props.onClick({ target: state.dialog })
+  else {
+    const button = walk(dialog).find(item => item.tag === 'button' && (control === 'Cancel' ? text(item) === 'auth.cancel' : item.props['aria-label'] === 'auth.close'))
+    assert.ok(button)
+    if (!button.props.disabled) button.props.onClick({})
+  }
+  await tick()
+  const closedWhilePending = !walk(mounted.host).some(item => item.tag === 'dialog')
+  releaseIdentity(Response.json(verifiedUser))
+  await attempt
+  await tick()
+  assert.equal(consumer.shell.info.value.authPosture, 'authenticated')
+  assert.ok(!text(mounted.host).includes('synthetic cached payload'), 'old protected payload must remain hidden until document replacement')
+  t.diagnostic(`closed while pending=${closedWhilePending}; confirmed=${consumer.shell.info.value.authenticated}; recovery=${mounted.layout().recoveryRequired}; reloads=${mounted.navigation.length}`)
+  assert.equal(mounted.navigation.length, 1, 'confirmed login must reach the layout fresh-document recovery even after a close gesture')
+})
+
+test('auth recovery regression: idle Cancel still closes the actual login without submitting credentials', async (t) => {
+  const consumer = session(t)
+  const mounted = await mountRecovery(t, consumer, '/projects', undefined, true)
+  mounted.layout().openLogin()
+  await tick()
+  const state = mounted.login()
+  state.email = 'person@example.test'
+  state.password = 'synthetic-only'
+  const cancel = walk(mounted.host).find(item => item.tag === 'button' && text(item) === 'auth.cancel')
+  cancel.props.onClick({})
+  await tick()
+  assert.equal(mounted.layout().loginModalOpen, false)
+  assert.equal(state.email, '')
+  assert.equal(state.password, '')
+  assert.equal(walk(mounted.host).some(item => item.tag === 'dialog'), false)
+  assert.equal(consumer.calls.some(call => call.path === '/api/auth/user-login'), false)
+  assert.deepEqual(mounted.navigation, [])
+})
+
+for (const ordering of ['during identity readback', 'after identity readback']) test(`auth recovery regression: old startup stats 401 ${ordering} cannot revoke new login`, async (t) => {
+  let identityReads = 0, releaseIdentity, releaseStats
+  const consumer = session(t, () => ++identityReads === 1
+    ? Response.json({ authenticated: false, auth_disabled: false })
+    : new Promise(resolve => { releaseIdentity = resolve }), undefined,
+    path => path === '/api/stats' ? new Promise(resolve => { releaseStats = resolve }) : undefined)
+  const startup = consumer.shell.refresh()
+  await tick()
+  assertNoIdentity(consumer.shell.info.value, 'locked')
+  assert.equal(typeof releaseStats, 'function')
+  const login = consumer.shell.login('person@example.test', 'synthetic-only')
+  await tick()
+  assert.equal(typeof releaseIdentity, 'function')
+  let confirmed
+  if (ordering === 'during identity readback') {
+    releaseStats(Response.json({}, { status: 401 }))
+    await tick()
+    releaseIdentity(Response.json(verifiedUser))
+    confirmed = await login
+  } else {
+    releaseIdentity(Response.json(verifiedUser))
+    confirmed = await login
+    assert.equal(confirmed, true)
+    assert.equal(consumer.shell.info.value.authPosture, 'authenticated')
+    releaseStats(Response.json({}, { status: 401 }))
+  }
+  await startup
+  t.diagnostic(`old stats status=401; login result=${confirmed}; final posture=${consumer.shell.info.value.authPosture}; backend=${consumer.shell.info.value.backendStatus}`)
+  assert.equal(confirmed, true, 'an older diagnostic must not discard new authMe confirmation')
+  assert.equal(consumer.shell.info.value.authPosture, 'authenticated', 'an older diagnostic must not revoke the newer verified identity')
+  assert.notEqual(consumer.shell.info.value.backendStatus, 'auth-required', 'an older diagnostic must not mark the new session auth-required')
+})
+
+test('auth recovery regression: a fetch cancelled before Response preserves identity and a current 401 still locks it', async (t) => {
+  let started
+  const begun = new Promise(resolve => { started = resolve })
+  const consumer = session(t, undefined, (url, init) => {
+    if (url.pathname !== '/api/retained-cancel-fixture') return undefined
+    return new Promise((_resolve, reject) => {
+      init.signal.addEventListener('abort', () => reject(new DOMException('Synthetic fetch aborted before Response', 'AbortError')), { once: true })
+      started()
+    })
+  })
+  await consumer.shell.refresh()
+  const revision = consumer.api.operatorUnauthorizedRevision.value
+  const controller = new AbortController()
+  const request = consumer.api.operatorFetchResponse('/api/retained-cancel-fixture', { signal: controller.signal })
+  const rejected = assert.rejects(request, { name: 'AbortError' })
+  await begun
+  controller.abort()
+  await rejected
+  assert.equal(consumer.api.operatorUnauthorizedRevision.value, revision)
+  assert.equal(consumer.shell.info.value.authPosture, 'authenticated')
+  consumer.projectStatus(401)
+  await assert.rejects(consumer.api.operatorFetchJson('/api/projects'), error => error.status === 401)
+  assertNoIdentity(consumer.shell.info.value, 'locked')
+  assert.equal(consumer.shell.info.value.backendStatus, 'auth-required')
 })

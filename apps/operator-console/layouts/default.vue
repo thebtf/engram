@@ -5,7 +5,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useNav, type NavItem } from '../composables/useNav'
 import { operatorDiagnosisKey, toOperatorSourceError, type OperatorSourceError } from '../composables/useOperatorApi'
 import { useOperatorShellStatus } from '../composables/useOperatorShell'
-import { useOperatorProjectContext } from '../composables/useOperatorProjectContext'
+import { operatorProjectReturnTo, safeNavigation, useOperatorProjectContext } from '../composables/useOperatorProjectContext'
 
 const { NAV } = useNav()
 const shell = useOperatorShellStatus()
@@ -239,10 +239,23 @@ function openLogin() {
   loginModalOpen.value = true
 }
 
+function reloadSession() {
+  const target = projectContext.to(route.path)
+  if (route.path === '/projects/unresolved') {
+    const query = safeNavigation(route.query, route.fullPath)
+    for (const key of ['reference', 'kind', 'id', 'cursor', 'historyCursor', 'originalLocation']) {
+      if (typeof route.query[key] === 'string') query[key] = route.query[key]
+    }
+    if (route.query.returnTo !== undefined) query.returnTo = operatorProjectReturnTo(route.query.returnTo, router, route.fullPath)
+    target.query = query
+  }
+  window.location.assign(router.resolve({ ...target, hash: route.path === '/projects/unresolved' ? route.hash : undefined }).href)
+}
+
 function authenticated() {
   loginModalOpen.value = false
   // A new document drops cached payloads and refetches under the verified cookie.
-  window.location.assign(router.resolve(projectContext.to(route.path)).href)
+  reloadSession()
 }
 
 async function refreshSession() {
@@ -257,7 +270,7 @@ async function logoutIdentity() {
   logoutError.value = null
   logoutUnverified.value = false
   try {
-    if (await shell.logout()) window.location.assign(router.resolve(projectContext.to(route.path)).href)
+    if (await shell.logout()) reloadSession()
     else logoutUnverified.value = true
   } catch (cause) {
     logoutError.value = toOperatorSourceError(cause, { source: 'shell-user-logout', path: '/api/auth/user-logout', method: 'POST' })

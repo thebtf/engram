@@ -36,6 +36,7 @@ Prepare the accepted v7.0.0 source identity for R1 canonical-project memory cont
 
 ### Fixed
 
+- Preserve retained-reader navigation intent across login/logout, prevent pending login-dialog dismissal, and ignore stale-generation 401 responses without weakening current-session authentication checks.
 - Align v7 archives, artifact validation and trusted installers with the declared relay-free OMP extension payload; retire the obsolete relay-only production probe while preserving historical capability-record readers and versioned installer safeguards.
 - Honor supplied plugin callback cancellation and one shared deadline through trusted client/parser acquisition and project execution; show unconfigured SessionStart setup guidance before requiring project identity. Preserve object verification and configured fail-closed behavior; focused local Node proof is not installed-host acceptance.
 - Allow explicit global OpenClaw Vault writes without workspace/project context while preserving scoped identity checks; clarify scoped context requirements and the existing channel migration workspace default.
