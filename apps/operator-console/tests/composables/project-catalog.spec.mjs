@@ -87,7 +87,7 @@ test('catalog selection chooses only supported readers and metadata-only groups 
     if (url.pathname === '/api/projects') return { ...catalog, unresolved: groups }
     const reference = url.pathname.split('/')[4]
     const kind = url.searchParams.get('kind')
-    return { reference, kind, items: [{ id: 901, content: 'Retained original content', path: 'retained.md' }], next_cursor: null, provenance: { source: reference } }
+    return { reference, kind, items: [{ id: 901, content: 'Retained original content', path: 'retained.md' }], next_cursor: null }
   })
   assert.equal(reader.metadataOnly.value, true)
   assert.equal(reader.content.value, null)
@@ -178,7 +178,7 @@ test('unknown and unresolved values never widen into a project or all-project re
 test('an unresolved legacy memory keeps its original identity and provenance while Back exits to the catalog', async (t) => {
   const original = '/memory?project=ambiguous&memory=501&q=retained&filter=low&filter=chain#original'
   const { context, reader, router, calls } = await mount(t, original, (url) => {
-    if (url.pathname.endsWith('/content')) return { reference: 'opaque-retained', kind: 'memory', items: [{ id: 501, content: 'Original memory', source_project: 'ambiguous' }], next_cursor: null, provenance: { legacy_id: 'ambiguous' } }
+    if (url.pathname.endsWith('/content')) return { reference: 'opaque-retained', kind: 'memory', items: [{ id: 501, content: 'Original memory', source_project: 'ambiguous' }], next_cursor: null }
     if (url.pathname.endsWith('/history')) return { reference: 'opaque-retained', kind: 'memory', id: '501', items: [{ id: 991, action: 'memory.store', author_project: 'ambiguous' }], next_cursor: null }
     return usual(url)
   })
@@ -187,7 +187,8 @@ test('an unresolved legacy memory keeps its original identity and provenance whi
   assert.equal(reader.originalLocation.value, original)
   assert.equal(reader.selected.value.id, '501')
   assert.equal(reader.history.value.id, '501')
-  assert.deepEqual(reader.content.value.provenance, [{ label: 'legacy_id', value: 'ambiguous' }])
+  assert.deepEqual(reader.content.value.items[0].fields, [{ label: 'source_project', value: 'ambiguous' }])
+  assert.ok(reader.history.value.items[0].fields.some((field) => field.label === 'author_project' && field.value === 'ambiguous'))
   assert.equal(router.currentRoute.value.query.project, 'ambiguous')
   assert.equal(router.currentRoute.value.query.q, 'retained')
   assert.deepEqual(router.currentRoute.value.query.filter, ['low', 'chain'])
@@ -204,7 +205,7 @@ test('an unresolved legacy memory keeps its original identity and provenance whi
 test('Back returns to a distinct known pre-alias route without discarding retained document path/version/hash', async (t) => {
   const previous = `/memory?project=${A}&memory=501&q=known#previous`
   const { reader, router, context } = await mount(t, previous, (url) => {
-    if (url.pathname.endsWith('/content')) return { reference: 'opaque-retained', kind: 'document', items: [{ id: 901, path: 'notes.md', version: 3, content: 'Original document' }], next_cursor: null, provenance: {} }
+    if (url.pathname.endsWith('/content')) return { reference: 'opaque-retained', kind: 'document', items: [{ id: 901, path: 'notes.md', version: 3, content: 'Original document' }], next_cursor: null }
     if (url.pathname.endsWith('/history')) return { reference: 'opaque-retained', kind: 'document', id: '901', items: [{ id: 991, version: 3, content: 'Original version' }], next_cursor: null }
     return usual(url)
   })
@@ -259,6 +260,44 @@ test('a delayed mapping cannot overwrite a newer canonical route, including chan
   assert.equal(context.selectionPending.value, false)
 })
 
+test('retained reader decodes canonical Go content pages without page provenance', async (t) => {
+  const reference = `urn:engram:migration:unresolved:${'a'.repeat(64)}`
+  const examples = [
+    ['document', { id: 901, path: 'synthetic.md', content: 'Synthetic document body.', version: 1 }, { id: '901', title: 'synthetic.md', content: 'Synthetic document body.', fields: [{ label: 'version', value: '1' }] }],
+    ['memory', { id: 902, content: 'Synthetic memory body.', tags: ['synthetic'] }, { id: '902', title: '902', content: 'Synthetic memory body.', fields: [{ label: 'tags', value: 'synthetic' }] }],
+    ['issue', { id: 903, title: 'Synthetic issue', body: 'Synthetic issue body.', status: 'open' }, { id: '903', title: 'Synthetic issue', content: 'Synthetic issue body.', fields: [{ label: 'status', value: 'open' }] }],
+  ]
+  for (const [kind, item, expected] of examples) {
+    await t.test(kind, async (t) => {
+      const payload = { reference, kind, items: [item], total: 1, next_cursor: null }
+      const { reader } = await mount(t, `/projects/unresolved?reference=${reference}&kind=${kind}`, (url) => {
+        if (url.pathname === '/api/projects') return { ...catalog, unresolved: [{ ...catalog.unresolved[0], reference }] }
+        assert.ok(url.pathname.endsWith('/content'))
+        assert.equal(url.searchParams.get('kind'), kind)
+        return payload
+      })
+      assert.equal(reader.error.value, null, 'The canonical retained page must not become an unreadable-response error')
+      assert.deepEqual(reader.content.value?.items, [expected])
+      assert.equal(reader.content.value.reference, reference)
+      assert.equal(reader.content.value.kind, kind)
+      assert.equal(reader.content.value.nextCursor, null)
+    })
+  }
+  const parser = evaluate('useOperatorUnresolved', (name) => name === 'vue' ? vue : name === 'vue-router' ? routing : {})
+  await t.test('malformed identity remains rejected', () => {
+    const payload = { reference, kind: 'memory', items: [{ id: 0, content: 'Synthetic invalid identity.' }], total: 1, next_cursor: null }
+    let trusted = null
+    assert.throws(() => { trusted = parser.parseUnresolvedContent(payload, reference, 'memory', 20) }, TypeError)
+    assert.equal(trusted, null)
+  })
+  await t.test('record without readable content remains rejected', () => {
+    const payload = { reference, kind: 'memory', items: [{ id: 904 }], total: 1, next_cursor: null }
+    let trusted = null
+    assert.throws(() => { trusted = parser.parseUnresolvedContent(payload, reference, 'memory', 20) }, TypeError)
+    assert.equal(trusted, null)
+  })
+})
+
 test('unresolved content/history are bound to reference, kind and original IDs; stale and failed readers remain errors', async (t) => {
   let release
   const delayed = new Promise((resolve) => { release = resolve })
@@ -269,7 +308,7 @@ test('unresolved content/history are bound to reference, kind and original IDs; 
     if (reference === 'slow') await delayed
     if (reference === 'stale') throw Object.assign(new Error('Unknown retained membership'), { status: 404 })
     if (url.pathname.endsWith('/history')) return { reference, kind, id: url.searchParams.get('id'), items: [{ id: 9901, action: 'memory.store', actor: reference, created_at: '2026-01-01' }], next_cursor: null }
-    return { reference, kind, items: [{ id: 901, content: `${reference} retained content` }], next_cursor: null, provenance: { source: reference } }
+    return { reference, kind, items: [{ id: 901, content: `${reference} retained content` }], next_cursor: null }
   })
   await router.push('/projects/unresolved?reference=new&kind=memory&id=901&q=known'); await tick()
   assert.equal(reader.content.value.items[0].content, 'new retained content')
@@ -283,7 +322,7 @@ test('unresolved content/history are bound to reference, kind and original IDs; 
   assert.equal(reader.error.value.status, 404)
   assert.throws(() => core.parseProjectResolution({ status: 'resolved', project_id: 'raw-name', name: 'Guess' }), TypeError)
   const parser = evaluate('useOperatorUnresolved', (name) => name === 'vue' ? vue : name === 'vue-router' ? routing : {})
-  assert.throws(() => parser.parseUnresolvedContent({ reference: 'other', kind: 'memory', items: [], next_cursor: null, provenance: {} }, 'new', 'memory', 20), TypeError)
+  assert.throws(() => parser.parseUnresolvedContent({ reference: 'other', kind: 'memory', items: [], next_cursor: null }, 'new', 'memory', 20), TypeError)
   assert.throws(() => parser.parseUnresolvedHistory({ reference: 'new', kind: 'memory', id: '902', items: [], next_cursor: null }, 'new', 'memory', '901', 20), TypeError)
 })
 
@@ -314,7 +353,7 @@ test('retained paging/query/history preserve original IDs, and code metadata cre
     const kind = url.searchParams.get('kind')
     if (url.pathname.endsWith('/code')) return { reference, items: [{ project_id: null, unresolved_reference: reference, source_ref: 'old-source', checkout_ref: 'old-checkout', repository: 'Retained repo', working_copy: 'Retained checkout' }], next_cursor: null }
     if (url.pathname.endsWith('/history')) return { reference, kind, id: '901', items: [{ id: 9901, action: 'memory.store', actor: 'retained-author' }], next_cursor: url.searchParams.has('cursor') ? null : 'older-history' }
-    return { reference, kind, items: [{ id: url.searchParams.has('cursor') ? 902 : 901, content: 'Retained original content' }], next_cursor: url.searchParams.has('cursor') ? null : 'next-content', provenance: { legacy_id: 'old-one' } }
+    return { reference, kind, items: [{ id: url.searchParams.has('cursor') ? 902 : 901, content: 'Retained original content' }], next_cursor: url.searchParams.has('cursor') ? null : 'next-content' }
   })
   await tick()
   assert.equal(reader.content.value.items[0].id, '901')
@@ -342,7 +381,7 @@ test('an unresolved document link does not substitute another version or a same-
   const { reader, router } = await mount(t, '/projects/unresolved?reference=opaque-retained&kind=document&path=notes.md&version=1&compare=2', async (url) => {
     if (url.pathname === '/api/projects') return catalog
     if (url.pathname.endsWith('/history')) return { reference: 'opaque-retained', kind: 'document', id: url.searchParams.get('id'), items: [], next_cursor: null }
-    return { reference: 'opaque-retained', kind: 'document', items: [{ id: 902, path: 'notes.md', version: 2, author: 'author' }, { id: 901, path: 'notes.md', version: 1, author: 'author' }], next_cursor: null, provenance: {} }
+    return { reference: 'opaque-retained', kind: 'document', items: [{ id: 902, path: 'notes.md', version: 2, author: 'author' }, { id: 901, path: 'notes.md', version: 1, author: 'author' }], next_cursor: null }
   })
   assert.equal(reader.selected.value.id, '901')
   await router.push('/projects/unresolved?reference=opaque-retained&kind=document&path=notes.md&version=3'); await tick()
@@ -392,7 +431,7 @@ test('retained code requires the explicit unresolved variant and keeps independe
 test('unresolved issue and code links retain their real object identity and original return hash', async (t) => {
   const { router, reader } = await mount(t, '/issues/903?project=ambiguous#discussion', (url) => {
     if (url.pathname.endsWith('/history')) return { reference: 'opaque-retained', kind: 'issue', id: '903', items: [{ id: 991, body: 'Retained discussion', author_agent: 'human' }], next_cursor: null }
-    if (url.pathname.endsWith('/content')) return { reference: 'opaque-retained', kind: 'issue', items: [{ id: 903, title: 'Retained task', body: 'Retained body' }], next_cursor: null, provenance: {} }
+    if (url.pathname.endsWith('/content')) return { reference: 'opaque-retained', kind: 'issue', items: [{ id: 903, title: 'Retained task', body: 'Retained body' }], next_cursor: null }
     if (url.pathname.endsWith('/code')) return { reference: 'opaque-retained', items: [{ project_id: null, unresolved_reference: 'opaque-retained', source_ref: 'source', repository: 'Retained repo' }], next_cursor: null }
     return usual(url)
   })
@@ -435,7 +474,7 @@ test('a document path can read its retained history without selecting a differen
   const { reader, calls } = await mount(t, '/projects/unresolved?reference=opaque-retained&kind=document&path=notes.md&version=1&compare=2', (url) => {
     if (url.pathname === '/api/projects') return catalog
     if (url.pathname.endsWith('/history')) return { reference: 'opaque-retained', kind: 'document', id: '902', items: [{ id: 9921, version: 1, content: 'Original version' }, { id: 9922, version: 2, content: 'Current version' }], next_cursor: null }
-    return { reference: 'opaque-retained', kind: 'document', items: [{ id: 902, path: 'notes.md', version: 2, content: 'Current version' }], next_cursor: null, provenance: {} }
+    return { reference: 'opaque-retained', kind: 'document', items: [{ id: 902, path: 'notes.md', version: 2, content: 'Current version' }], next_cursor: null }
   })
   await tick()
   assert.equal(reader.selected.value, undefined)

@@ -1285,3 +1285,67 @@ test('auth recovery regression: a fetch cancelled before Response preserves iden
   assertNoIdentity(consumer.shell.info.value, 'locked')
   assert.equal(consumer.shell.info.value.backendStatus, 'auth-required')
 })
+
+test('canonical retained SFC renders decoded records without page provenance', async (t) => {
+  const reference = `urn:engram:migration:unresolved:${'c'.repeat(64)}`
+  const globals = { useRoute: routing.useRoute, useI18n: () => ({ t: (key) => key }) }
+  const parser = evaluate(readFileSync(new URL('composables/useOperatorUnresolved.ts', root), 'utf8'), (name) => name === 'vue' ? vue : name === 'vue-router' ? routing : {}, globals)
+  const path = 'pages/unresolved.vue'
+  const descriptor = parse(readFileSync(new URL(path, root), 'utf8')).descriptor
+  const script = compileScript(descriptor, { id: path })
+  const template = compileTemplate({ source: descriptor.template.content, filename: path, id: path, isTS: true, compilerOptions: { bindingMetadata: script.bindings, directiveTransforms: { model: () => ({ props: [] }) } } })
+  assert.deepEqual(template.errors, [])
+  const examples = [
+    ['document', { id: 701, path: 'synthetic.md', content: 'Synthetic compiled document.', version: 2 }],
+    ['memory', { id: 702, content: 'Synthetic compiled memory.', source_project: 'synthetic-original-project' }],
+    ['issue', { id: 703, title: 'Synthetic issue', body: 'Synthetic compiled issue.', status: 'open' }],
+  ]
+  for (const [kind, item] of examples) await t.test(kind, async (t) => {
+    const content = parser.parseUnresolvedContent({ reference, kind, items: [item], total: 1, next_cursor: null }, reference, kind, 20)
+    const group = { reference, name: 'Synthetic retained group', reason: 'synthetic_membership_reason', reader_kinds: [kind] }
+    const originalLocation = '/memory?project=synthetic-original-project'
+    const unexpected = () => { throw new Error('No interaction or request is expected in the compiled render check') }
+    const context = { unresolved: vue.ref([group]), pending: vue.ref(false), error: vue.ref(null), refresh: unexpected }
+    const reader = {
+      reference: vue.ref(reference), retained: vue.ref(group), availableKinds: vue.ref([kind]), kind: vue.ref(kind),
+      metadataOnly: vue.ref(false), unsupportedKind: vue.ref(false), q: vue.ref(''), id: vue.ref(''),
+      selected: vue.ref(undefined), historyID: vue.ref(''), content: vue.ref(content), history: vue.ref(null),
+      pending: vue.ref(false), historyPending: vue.ref(false), error: vue.ref(null), historyError: vue.ref(null),
+      returnTo: vue.ref('/projects'), originalLocation: vue.ref(originalLocation), update: unexpected, open: unexpected, retry: unexpected,
+    }
+    const dependency = (name) => {
+      if (name === 'vue') return vue
+      if (name === 'vue-router') return routing
+      if (name.endsWith('useOperatorProjectContext')) return { useOperatorProjectContext: () => context }
+      if (name.endsWith('useOperatorUnresolved')) return { useOperatorUnresolved: () => reader }
+      if (name.endsWith('useOperatorApi')) return { operatorDiagnosisKey: unexpected }
+      throw new Error(`Unexpected compiled retained-reader dependency ${name}`)
+    }
+    const component = evaluate(script.content, dependency, globals).default
+    component.render = evaluate(template.code, dependency, globals).render
+    const router = routing.createRouter({ history: routing.createMemoryHistory(), routes: ['/projects', '/projects/unresolved'].map((path) => ({ path, component: { render: () => null } })) })
+    await router.push({ path: '/projects/unresolved', query: { reference, kind } })
+    const errors = []
+    const app = renderer.createApp(component)
+    app.config.errorHandler = (error) => errors.push({ name: error.name, message: error.message })
+    app.use(router)
+    t.after(() => app.unmount())
+    const host = node('root')
+    app.mount(host)
+    await tick()
+    assert.deepEqual(errors, [], 'The actual retained SFC must render canonical decoder output without an error')
+    const articles = walk(host).filter((entry) => entry.tag === 'article' && entry.props['data-testid'])
+    assert.equal(articles.length, 1)
+    assert.equal(articles[0].props['data-testid'], `unresolved-content-${item.id}`)
+    const body = walk(articles[0]).find((entry) => entry.props.class === 'body')
+    assert.ok(body)
+    assert.equal(text(body), item.content ?? item.body)
+    assert.deepEqual(walk(articles[0]).filter((entry) => entry.tag === 'dt').map(text), content.items[0].fields.map((field) => field.label))
+    assert.deepEqual(walk(articles[0]).filter((entry) => entry.tag === 'dd').map(text), content.items[0].fields.map((field) => field.value))
+    assert.ok(content.items[0].fields.length > 0)
+    assert.ok(text(host).includes(reference))
+    assert.ok(text(host).includes(group.reason))
+    assert.ok(text(host).includes(originalLocation))
+    assert.equal(walk(host).some((entry) => entry.props['data-testid'] === 'unresolved-error'), false)
+  })
+})

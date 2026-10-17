@@ -103,10 +103,15 @@ means all projects; explicit `all`/`current`/global policies are not Project IDs
 `/projects/unresolved` separately lists retained groups and reads memory, document
 and issue records through `GET /api/projects/unresolved/{reference}/content` with
 `kind`, `limit`, `cursor`, and `q`. The matching `/history` reader takes the original
-`id`, `kind`, `limit`, and `cursor`. Records, version/audit fields, retained provenance,
-query, continuation and the original return link remain visible. The opaque reference
+`id`, `kind`, `limit`, and `cursor`. Records, version/audit fields and provenance
+supplied in those records, query, continuation and the original return link remain visible. The opaque reference
 never enters a normal project query, selector, identity computation or write form.
 Unknown/stale references and failed/mismatched readers show errors, not empty success.
+Content pages use the public Go DTO `{ reference, kind, items, total, next_cursor }`;
+`next_cursor` is null or a nonempty continuation string. Page-level `provenance` is
+not part of that response. The review keeps the real catalog reason/reference,
+original location, record metadata and history instead of requiring invented data.
+
 The required `reader_kinds` array is derived only from retained membership tables:
 `memories`, `versioned_documents`, `issues`, and `sources`. It is not a payload,
 availability, count or authorization claim. The review offers only those kinds,
@@ -132,11 +137,16 @@ The normal `POST /api/code/contexts` catalog retains Source/Checkout/View refs a
 may be narrowed with `project=<catalog UUID>`. Its `project_id: null` /
 `unresolved_reference` variant links to this review and is never a normal selection.
 
-These are coordinated source interfaces, not proof that the Main readers or migrated
-data are live. The synthetic mock fixtures and regression cases cover frontend
-selection/navigation only; actual migrated-reader, privacy and installed acceptance
-remain Main's integration dependencies. No production migration or release completion
-is claimed by this source slice.
+These are coordinated source interfaces, not proof that Main readers or migrated data are live.
+
+The project-catalog seam checks canonical content decoding, malformed-record rejection,
+real record/history metadata and scoped selection/navigation. The focused
+`canonical retained SFC renders decoded records without page provenance` case in
+`tests/composables/auth-session.spec.mjs` compiles the real Vue page and renders real
+decoder output, checking record IDs, bodies, metadata fields and absence of render errors.
+These checks use synthetic public DTOs, not a live API or browser. Actual migrated-reader,
+privacy and installed acceptance remain Main's integration dependencies. No production
+migration or release completion is claimed by this source slice.
 
 Human issue deletion sends `DELETE /api/issues/{id}?source_project=<selected canonical UUID>&source_agent=human`
 with no body. The selected acting project is separate from the content ID and the

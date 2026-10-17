@@ -22,7 +22,6 @@
     "noUnresolved": "The catalog has no unresolved groups.",
     "chooseUnresolved": "Choose a retained group to read its records.",
     "readerError": "The retained-record reader refused or could not complete this request. Retry or return to the group list.",
-    "provenance": "Retained provenance",
     "metadataOnly": "Retained group metadata. No reader in this review supports its memberships; this does not mean the original data is absent.",
     "readerKindsHelp": "Reader kinds come from retained membership metadata. Availability, integrity and access are checked when reading.",
     "kindUnavailable": "This group does not advertise the requested reader kind. The link is preserved; choose an available kind or return to the group list.",

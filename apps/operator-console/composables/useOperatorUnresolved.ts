@@ -15,7 +15,6 @@ export interface UnresolvedContentPage {
   kind: UnresolvedKnowledgeKind | 'code'
   items: UnresolvedKnowledgeItem[]
   nextCursor: string | null
-  provenance: Array<{ label: string; value: string }>
 }
 export interface UnresolvedHistoryPage {
   reference: string
@@ -64,17 +63,11 @@ function continuation(value: unknown): string | null {
   if (value === null || (typeof value === 'string' && value)) return value
   throw new TypeError('Invalid unresolved continuation')
 }
-function provenanceFields(value: unknown, prefix = ''): Array<{ label: string; value: string }> {
-  if (Array.isArray(value)) return value.flatMap((entry, index) => provenanceFields(entry, `${prefix}${prefix ? '.' : ''}${index + 1}`))
-  if (object(value)) return Object.entries(value).flatMap(([key, entry]) => provenanceFields(entry, `${prefix}${prefix ? '.' : ''}${key}`))
-  const text = scalar(value)
-  return text ? [{ label: prefix || 'source', value: text }] : []
-}
 export function parseUnresolvedContent(payload: unknown, reference: string, kind: UnresolvedKnowledgeKind, limit: number): UnresolvedContentPage {
-  if (!object(payload) || payload.reference !== reference || payload.kind !== kind || !Array.isArray(payload.items) || payload.items.length > limit || !Object.hasOwn(payload, 'provenance') || payload.provenance === undefined) throw new TypeError('Unresolved content scope mismatch')
+  if (!object(payload) || payload.reference !== reference || payload.kind !== kind || !Array.isArray(payload.items) || payload.items.length > limit) throw new TypeError('Unresolved content scope mismatch')
   const nextCursor = continuation(payload.next_cursor)
   if (nextCursor && !payload.items.length) throw new TypeError('Empty unresolved continuation')
-  return { reference, kind, items: payload.items.map((item: unknown) => retainedItem(item, kind, false)), nextCursor, provenance: provenanceFields(payload.provenance) }
+  return { reference, kind, items: payload.items.map((item: unknown) => retainedItem(item, kind, false)), nextCursor }
 }
 export function parseUnresolvedHistory(payload: unknown, reference: string, kind: UnresolvedKnowledgeKind, id: string, limit: number): UnresolvedHistoryPage {
   if (!object(payload) || payload.reference !== reference || payload.kind !== kind || contentID(payload.id) !== id || !Array.isArray(payload.items) || payload.items.length > limit) throw new TypeError('Unresolved history scope mismatch')
@@ -98,7 +91,7 @@ export function parseUnresolvedCode(payload: unknown, reference: string, limit: 
     fields.push(...readableFields(snapshot, ['label', 'revision', 'published_at']).map((field) => ({ ...field, label: `indexed_snapshot.${field.label}` })))
     return { id, title, content, fields }
   })
-  return { reference, kind: 'code', items, nextCursor, provenance: [] }
+  return { reference, kind: 'code', items, nextCursor }
 }
 
 export function useOperatorUnresolved(catalog: { unresolved: Ref<OperatorUnresolvedProject[]>; pending: Ref<boolean>; error: Ref<OperatorSourceError | null> }) {
