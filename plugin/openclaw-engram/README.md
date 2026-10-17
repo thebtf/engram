@@ -82,10 +82,13 @@ All fields are set under `plugins.entries.engram.config`:
 Project resolution reads the portable `.engram-project` UUID or the real Git
 common-dir binding through the Go client. Initialize only an explicitly selected
 new project with `engram project init`; carry the marker into independent clones.
-Every hook/tool uses its current `ctx.workspaceDir`. Missing or conflicting
-context returns a scoped error without registration/capability roundtrips and
-without changing the OpenClaw host. Channel commands require an explicitly
-configured `workspaceDir` or `project` UUID when their host context has no root.
+Project-scoped hooks and tools use their current `ctx.workspaceDir` or a configured
+`project` UUID override. Missing or invalid project context returns a scoped error
+without registration/capability roundtrips or changes to the OpenClaw host.
+Explicit global Vault calls do not require project context. Channel `/migrate`
+uses the configured `workspaceDir` or the documented `~/.openclaw/workspace/`
+default. Before importing, it resolves that workspace through the Go client unless
+a valid `project` UUID override is configured.
 
 ## What it provides
 

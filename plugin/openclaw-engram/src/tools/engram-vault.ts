@@ -63,11 +63,14 @@ export function createEngramVaultStoreTool(
     return 'engram is currently unreachable — vault store unavailable';
    }
 
-   const registration = await resolveProject(client, ctx.agentId ?? '', ctx.workspaceDir, config.project);
-   if (!registration.ok) {
-    return `Project identity unavailable: ${registration.error.code} (${registration.error.upgradeAction})`;
+   let project: string | undefined;
+   if (parsed.data.scope !== 'global') {
+    const registration = await resolveProject(client, ctx.agentId ?? '', ctx.workspaceDir, config.project);
+    if (!registration.ok) {
+     return `Project identity unavailable: ${registration.error.code} (${registration.error.upgradeAction})`;
+    }
+    project = registration.canonicalProject;
    }
-   const project = registration.canonicalProject;
 
    const success = await client.storeCredential(
     parsed.data.name,

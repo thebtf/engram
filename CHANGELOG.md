@@ -38,6 +38,7 @@ Prepare the accepted v7.0.0 source identity for R1 canonical-project memory cont
 
 - Align v7 archives, artifact validation and trusted installers with the declared relay-free OMP extension payload; retire the obsolete relay-only production probe while preserving historical capability-record readers and versioned installer safeguards.
 - Honor supplied plugin callback cancellation and one shared deadline through trusted client/parser acquisition and project execution; show unconfigured SessionStart setup guidance before requiring project identity. Preserve object verification and configured fail-closed behavior; focused local Node proof is not installed-host acceptance.
+- Allow explicit global OpenClaw Vault writes without workspace/project context while preserving scoped identity checks; clarify scoped context requirements and the existing channel migration workspace default.
 - Align remote operator-console smoke validation and selection with canonical `project_id`/`name` descriptors; correct the manual catalog contract, optional repository qualifiers, unresolved metadata and `Registered project` fallback.
 - Make project-identity error unwrapping nil-receiver-safe so HTTP and gRPC fail closed on typed-nil errors instead of panicking; preserve non-nil error codes, messages and cause chains.
 - Reject repeated JSON object keys in project markers and common-directory caches before granting project UUID authority; preserve existing marker/cache bytes and valid canonical or transition inputs.
