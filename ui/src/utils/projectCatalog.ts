@@ -195,7 +195,6 @@ export function parseRetainedPage(value: unknown, reference: string, kind: Retai
   }
   if (data.reference !== reference || data.kind !== kind || (id !== undefined && String(data.id) !== String(id)) || !Array.isArray(data.items) || data.items.length > 50
     || (data.next_cursor !== null && (typeof data.next_cursor !== 'string' || !data.next_cursor))) throw new Error('Invalid retained content page')
-  if (id === undefined && !Object.prototype.hasOwnProperty.call(data, 'provenance')) throw new Error('Missing retained provenance')
   if (data.next_cursor && data.items.length === 0) throw new Error('Empty retained continuation')
   const items = data.items.map(value => {
     const row = object(value)

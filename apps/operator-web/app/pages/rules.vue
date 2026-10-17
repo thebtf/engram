@@ -32,7 +32,7 @@ const deletingRuleId = ref<number | null>(null)
 
 watch(selectedProject, (project) => {
   createProject.value = project === 'all' ? '' : project
-})
+}, { immediate: true })
 
 function normalizedPriority(value: unknown): number {
   const parsed = Number(value)

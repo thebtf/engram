@@ -82,16 +82,48 @@ test('resolution admits only proven canonical or explicit unresolved responses',
   assert.throws(() => parseProjectResolution({ status: 'unknown' }))
 })
 
-test('retained readers preserve content IDs, history versions and scoped provenance', () => {
-  const content = parseRetainedPage({ reference: 'old-membership', kind: 'memory', items: [{ id: 87, content: 'Retained decision' }], next_cursor: 'next-page', provenance: { source: 'retained membership' } }, 'old-membership', 'memory')
-  assert.equal(content.items[0].id, 87)
-  assert.equal(content.items[0].content, 'Retained decision')
-  assert.equal(content.next_cursor, 'next-page')
-  const history = parseRetainedPage({ reference: 'old-membership', kind: 'document', id: 87, items: [{ version: 3, author: 'operator', content_hash: 'old-content-hash' }], next_cursor: null }, 'old-membership', 'document', 87)
-  assert.equal(history.items[0].id, 3)
-  assert.ok(history.items[0].fields.some(field => field.label === 'content_hash' && field.value === 'old-content-hash'))
-  assert.throws(() => parseRetainedPage({ reference: 'foreign', kind: 'memory', items: [], next_cursor: null, provenance: {} }, 'old-membership', 'memory'))
-  assert.throws(() => parseRetainedPage({ reference: 'old-membership', kind: 'memory', items: [], next_cursor: 'same-page', provenance: {} }, 'old-membership', 'memory'))
+for (const [kind, row, historyRow, attribution] of [
+  ['memory', { id: 87, content: 'Retained decision', project: 'old-checkout', source_agent: 'claude-code', source_sessions: ['session-original'] },
+    { id: 701, memory_id: 87, action: 'memory.update', actor: 'operator', before_state_present: true, after_state_present: true, created_at: '2026-10-01T00:00:00Z' },
+    { project: 'old-checkout', source_agent: 'claude-code', source_sessions: 'session-original' }],
+  ['document', { id: 88, path: 'notes/retained.md', content: 'Retained document', project: 'old-checkout', version: 3, author: 'operator', content_hash: 'original-content-hash' },
+    { id: 703, version: 2, author: 'original-author', content_hash: 'previous-content-hash', created_at: '2026-10-01T00:00:00Z' },
+    { project: 'old-checkout', version: '3', author: 'operator', content_hash: 'original-content-hash' }],
+  ['issue', { id: 89, title: 'Retained issue', body: 'Retained issue body', source_project: 'original-source', target_project: 'old-checkout', source_agent: 'codex' },
+    { id: 702, issue_id: 89, body: 'Original discussion', author_project: 'original-source', author_agent: 'codex', created_at: '2026-10-01T00:00:00Z' },
+    { source_project: 'original-source', target_project: 'old-checkout', source_agent: 'codex' }],
+]) {
+  test(`backend-shaped retained ${kind} exposes native content, attribution and selectable history without an envelope provenance key`, () => {
+    const payload = { reference: 'old-membership', kind, items: [row], total: 1, next_cursor: null }
+    const original = structuredClone(payload)
+    const page = parseRetainedPage(payload, 'old-membership', kind)
+    assert.equal(page.items[0].id, row.id)
+    assert.equal(page.items[0].content, row.content ?? row.body)
+    for (const [label, value] of Object.entries(attribution)) assert.ok(page.items[0].fields.some(field => field.label === label && field.value === value), label)
+    const history = parseRetainedPage({ reference: 'old-membership', kind, id: page.items[0].id, items: [historyRow], total: 1, next_cursor: null }, 'old-membership', kind, page.items[0].id)
+    assert.equal(history.items[0].id, historyRow.id ?? historyRow.version)
+    assert.equal(history.items[0].content, historyRow.body ?? '')
+    for (const [label, value] of Object.entries(historyRow).filter(([label]) => !['id', 'body', 'before_state', 'after_state'].includes(label))) {
+      assert.ok(history.items[0].fields.some(field => field.label === label && field.value === String(value)), label)
+    }
+    assert.deepEqual(payload, original)
+    assert.equal(page.next_cursor, null)
+    assert.equal(page.provenance, undefined)
+  })
+}
+
+test('retained parser preserves optional real provenance and rejects invalid scope, rows, history IDs and continuations', () => {
+  const page = { reference: 'old-membership', kind: 'memory', items: [{ id: 87, content: 'Retained decision' }], total: 1, next_cursor: null, provenance: { source: 'original-membership', version: 2 } }
+  assert.deepEqual(parseRetainedPage(page, 'old-membership', 'memory').provenance, page.provenance)
+  assert.equal(parseRetainedPage({ ...page, next_cursor: 'opaque-next-page' }, 'old-membership', 'memory').next_cursor, 'opaque-next-page')
+  for (const changed of [
+    { reference: 'foreign' }, { kind: 'document' }, { items: null }, { items: {} }, { items: [null] },
+    { items: [{ id: 0, content: 'Invalid ID' }] }, { items: [{ id: 87 }] },
+    { items: Array.from({ length: 51 }, () => page.items[0]) },
+    { next_cursor: 42 }, { next_cursor: '' }, { next_cursor: undefined }, { items: [], next_cursor: 'non-empty-cursor' },
+  ]) assert.throws(() => parseRetainedPage({ ...page, ...changed }, 'old-membership', 'memory'), JSON.stringify(changed))
+  assert.throws(() => parseRetainedPage({ ...page, id: 88 }, 'old-membership', 'memory', 87))
+  assert.throws(() => parseRetainedPage({ error: 'membership unavailable' }, 'old-membership', 'memory'))
 })
 
 test('retained code metadata stays reference-bound and offers no content history', () => {

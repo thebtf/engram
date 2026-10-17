@@ -14,7 +14,7 @@ export function useProjectCatalog(defaultSelection: '' | 'all' = '') {
   const selectedProject = ref('')
   const selectionPending = ref(true)
   const selectionError = ref<string | null>(null)
-  const ready = computed(() => !selectionPending.value && !selectionError.value)
+  const ready = computed(() => !selectionPending.value && !selectionError.value && selectedProject.value !== '')
   let generation = 0
 
   watch([() => route.query.project, projectsQuery.data, projectsQuery.error], async ([raw, catalog, error]) => {
@@ -43,8 +43,11 @@ export function useProjectCatalog(defaultSelection: '' | 'all' = '') {
     } catch (error) {
       if (current !== generation) return
       selectedProject.value = ''
-      selectionError.value = error instanceof Error ? error.message : t('projectCatalog.unknownProject')
-      if (error instanceof UnresolvedProjectError) await router.replace({ query: { ...route.query, unresolved: error.reference } })
+      if (error instanceof UnresolvedProjectError && catalog.unresolved.some(record => record.reference === error.reference)) {
+        await router.replace({ query: { ...route.query, unresolved: error.reference } })
+      } else {
+        selectionError.value = error instanceof Error ? error.message : t('projectCatalog.unknownProject')
+      }
     } finally {
       if (current === generation) selectionPending.value = false
     }
