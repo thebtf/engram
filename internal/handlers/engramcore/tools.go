@@ -9,7 +9,6 @@ import (
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/module"
 	"github.com/thebtf/engram/internal/projectidentity"
-	"github.com/thebtf/engram/internal/proxy"
 	"github.com/thebtf/engram/internal/uci"
 	"github.com/thebtf/engram/internal/version"
 	pb "github.com/thebtf/engram/proto/engram/v1"
@@ -18,10 +17,7 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
-const (
-	proxyToolsDiscoveryTimeout        = 30 * time.Second
-	projectIdentityV3RegistrationTool = "project_identity.register_v3"
-)
+const proxyToolsDiscoveryTimeout = 30 * time.Second
 
 const projectIdentityResolutionRefusedMessage = "project identity resolution refused"
 
@@ -61,9 +57,6 @@ func (m *Module) ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]mo
 
 	tools := make([]module.ToolDef, 0, len(resp.Tools))
 	for _, t := range resp.Tools {
-		if t.GetName() == projectIdentityV3RegistrationTool {
-			continue
-		}
 		tools = append(tools, module.ToolDef{
 			Name:        t.Name,
 			Description: t.Description,
@@ -101,9 +94,6 @@ func (m *Module) ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]mo
 //	    sentinel and wraps with isError:true. End result is byte-identical
 //	    to v4.2.0 both in content and in the isError boolean.
 func (m *Module) ProxyHandleTool(ctx context.Context, p muxcore.ProjectContext, name string, args json.RawMessage) (json.RawMessage, error) {
-	if name == projectIdentityV3RegistrationTool {
-		return nil, &module.ModuleError{Code: "PROJECT_DESCRIPTOR_UNSUPPORTED", Message: projectIdentityResolutionRefusedMessage}
-	}
 	sessionID, uciTool, err := m.proxyToolSession(ctx, p, name)
 	if err != nil {
 		return nil, err
@@ -163,7 +153,7 @@ func (m *Module) proxyToolCallContext(ctx context.Context, project muxcore.Proje
 	if uciTool {
 		return uciClientOutgoingContext(ctx, m.v3ClientInstanceID)
 	}
-	if !projectidentity.ToolRequiresProject(request.ToolName) {
+	if !projectidentity.ToolRequiresProject(request.ToolName, request.ArgumentsJson) {
 		return ctx, nil
 	}
 	serverURL, err := m.requireServerURL(project)
@@ -207,19 +197,3 @@ func buildInnerBlock(contentJSON []byte) (json.RawMessage, error) {
 // daemonClientVersion is the ClientVersion string sent in gRPC
 // InitializeRequest. Bumped alongside Constitution §15 unified version.
 var daemonClientVersion = version.Daemon
-
-func resolveProjectIdentityV2(ctx context.Context, cwd string) (*pb.ProjectIdentityV2, error) {
-	identity, err := proxy.ResolveProjectIdentityV2(ctx, cwd)
-	if err != nil {
-		return nil, err
-	}
-	return &pb.ProjectIdentityV2{
-		Version:         identity.Version,
-		LegacyProjectId: identity.LegacyProjectID,
-		DisplayName:     identity.DisplayName,
-		GitRemote:       identity.GitRemote,
-		RelativePath:    identity.RelativePath,
-		NonGitAnchor:    identity.NonGitAnchor,
-		AnchorShared:    identity.AnchorShared,
-	}, nil
-}

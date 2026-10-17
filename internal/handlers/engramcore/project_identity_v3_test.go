@@ -56,7 +56,7 @@ func TestProxyHandleTool_InvalidPortableMarkerFailsClosed(t *testing.T) {
 			}
 			srv.mu.Lock()
 			defer srv.mu.Unlock()
-			if srv.callReq != previous || srv.registerCalls != 0 {
+			if srv.callReq != previous {
 				t.Fatal("changed invalid marker reused a prior project or reached registration")
 			}
 		})
@@ -99,7 +99,7 @@ func TestProxyHandleTool_NonRegularPortableMarkerFailsClosed(t *testing.T) {
 			}
 			srv.mu.Lock()
 			defer srv.mu.Unlock()
-			if srv.callReq != nil || srv.registerCalls != 0 {
+			if srv.callReq != nil {
 				t.Fatal("nonregular marker reached backend scope resolution")
 			}
 		})
@@ -145,7 +145,7 @@ func TestProxyHandleTool_MissingProjectDoesNotInventIdentity(t *testing.T) {
 			}
 			srv.mu.Lock()
 			defer srv.mu.Unlock()
-			if srv.callReq != nil || srv.registerCalls != 0 {
+			if srv.callReq != nil {
 				t.Fatal("missing project reached backend data or registration handlers")
 			}
 		})
@@ -180,7 +180,7 @@ func TestProxyHandleTool_NestedProjectBoundaryPreservesRepository(t *testing.T) 
 		srv.mu.Lock()
 		request := srv.callReq
 		srv.mu.Unlock()
-		if request == nil || request.GetProject() != expected || request.GetProjectIdentity() != nil || request.GetProjectIdentityV3() != nil {
+		if request == nil || request.GetProject() != expected {
 			t.Fatalf("selected nested project=%#v, want %s", request, expected)
 		}
 		if expected == otherContractProjectID {
@@ -226,7 +226,7 @@ func TestProxyHandleTool_MarkerCacheConflictDoesNotDispatch(t *testing.T) {
 	}
 	srv.mu.Lock()
 	defer srv.mu.Unlock()
-	if srv.callReq != previous || srv.registerCalls != 0 {
+	if srv.callReq != previous {
 		t.Fatal("conflicting project identity reached backend data or registration handlers")
 	}
 	var cached struct {
@@ -255,7 +255,7 @@ func TestProxyHandleTool_CancelledProjectCallDoesNotDispatch(t *testing.T) {
 	}
 	srv.mu.Lock()
 	defer srv.mu.Unlock()
-	if srv.callReq != previous || srv.registerCalls != 0 {
+	if srv.callReq != previous {
 		t.Fatal("cancelled project call reached backend data or registration handlers")
 	}
 }

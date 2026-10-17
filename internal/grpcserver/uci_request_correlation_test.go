@@ -13,7 +13,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
-	gormlib "gorm.io/gorm"
 )
 
 type uciRequestCorrelationHandler struct {
@@ -106,21 +105,17 @@ func TestCallToolRejectsMissingInvalidOrDuplicateUCIRequestCorrelation(t *testin
 	}
 }
 
-func TestCallToolPreservesLegacyCodebaseSearchWithoutUCIRequestCorrelation(t *testing.T) {
+func TestCallToolPreservesCanonicalCodebaseSearchWithoutUCIRequestCorrelation(t *testing.T) {
 	handler := &uciRequestCorrelationHandler{}
 	server := &Server{handler: handler}
-	server.identityResolver = func(_ context.Context, _ *gormlib.DB, selector string, _ *pb.ProjectIdentityV2) (string, error) {
-		require.Equal(t, "legacy", selector)
-		return "canonical", nil
-	}
 
 	response, err := server.CallTool(context.Background(), &pb.CallToolRequest{
 		ToolName:      "codebase_search",
-		Project:       "legacy",
+		Project:       grpcLogicalProjectID,
 		ArgumentsJson: []byte(`{"query":"fixture"}`),
 	})
 	require.NoError(t, err)
-	require.Equal(t, "canonical", response.CanonicalProject)
+	require.Equal(t, grpcLogicalProjectID, response.CanonicalProject)
 	require.Equal(t, 1, handler.calls)
 	require.False(t, handler.found)
 	require.False(t, handler.required)

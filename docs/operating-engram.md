@@ -326,6 +326,17 @@ remote через `/api/projects/bootstrap`; результат закрепля
 `resolve` для диагностики. `project_identity.register_v3` больше не является
 шагом обычной настройки.
 
+`issues list/get` не требуют текущего проекта: `project` и `source_project`
+задают фильтры чтения. Изменения Issues сохраняют требования проекта и actor.
+`vault status` также не требует проекта. Для `store` проект нужен по умолчанию;
+явный `scope="global"` отменяет его выбор. Для `get/delete` пустой selector
+выбирает global, непустой `project` или `scope="project"` требует текущего
+проекта, а явный `scope="global"` очищает project. `vault list` выбирает namespace
+только по `project`: без него читает global, с ним — проект и global; один
+`scope="global"` непустой selector не отменяет. Некорректные action, scope,
+типы проектных selectors или JSON не получают исключение из project guard.
+Авторизация и проверка canonical UUID остаются обязательными.
+
 Старый memory relay gateway, listener/runtime и test-only advisor prewarm удалены.
 Не включай их через `hap_01b` или `ENGRAM_HAP_01B_*`: launcher игнорирует старую
 конфигурацию и удаляет такие переменные из окружения child. Обычные server URL

@@ -22,9 +22,9 @@ func TestLegacyDirectEnforcement_ContextInjectRoute(t *testing.T) {
 		resolverCalled = true
 		return "11111111-1111-4111-8111-111111111111", nil
 	}}
-	project := "legacy-direct-context"
+	project := sessionStartLogicalProjectID
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api/context/inject", bytes.NewBufferString(`{"project":"`+project+`","identity_only":true}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/context/inject", bytes.NewBufferString(`{"project":"`+project+`"}`))
 	service.handleContextInject(recorder, request)
 	require.Equal(t, http.StatusForbidden, recorder.Code)
 	require.True(t, resolverCalled, "legacy direct authorization must run before store readiness or identity mutation")
@@ -35,7 +35,7 @@ func TestLegacyDirectEnforcement_SessionStartRoute(t *testing.T) {
 	backend := &stubSessionStartContextServer{resp: &pb.GetSessionStartContextResponse{}}
 	service := &Service{grpcInternalServer: backend}
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/api/context/session-start?project=legacy-direct-session", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/context/session-start?project="+sessionStartLogicalProjectID, nil)
 	service.handleSessionStartContextStatic(recorder, request)
 	require.Equal(t, http.StatusForbidden, recorder.Code)
 	require.Nil(t, backend.req, "guard must run before the compatibility backend")

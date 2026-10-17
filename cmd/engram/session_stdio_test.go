@@ -574,7 +574,7 @@ func TestSessionMemoryTransport(t *testing.T) {
 		binary += ".exe"
 		goName += ".exe"
 	}
-	build := exec.Command(filepath.Join(runtime.GOROOT(), "bin", goName), "build", "-p=2", "-o", binary, ".")
+	build := exec.Command(filepath.Join(runtime.GOROOT(), "bin", goName), "build", "-p=1", "-o", binary, ".")
 	if raw, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build actual CLI: %v: %s", err, raw)
 	}

@@ -30,8 +30,6 @@ func TestNativeCodebaseRegistrationUsesActualGitRootWithoutProjectMutation(t *te
 		require.Equal(t, "codebase_context", request.GetToolName())
 		require.Equal(t, "native-onboarding-session", request.GetSessionId())
 		require.Empty(t, request.GetProject())
-		require.Nil(t, request.GetProjectIdentity())
-		require.Nil(t, request.GetProjectIdentityV3())
 		var args nativeCodebaseRegistrationArgs
 		require.NoError(t, json.Unmarshal(request.GetArgumentsJson(), &args))
 		require.NotNil(t, args.SourceLabel)

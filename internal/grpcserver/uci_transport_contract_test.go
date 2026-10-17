@@ -43,11 +43,9 @@ func TestUCITransportContractPreservesExistingServiceSnapshot(t *testing.T) {
 		{name: "SyncProjectState", input: "engram.v1.SyncProjectStateRequest", output: "engram.v1.SyncProjectStateResponse"},
 		{name: "ProjectEvents", input: "engram.v1.ProjectEventsRequest", output: "engram.v1.ProjectEvent", serverStreaming: true},
 		{name: "GetSessionStartContext", input: "engram.v1.GetSessionStartContextRequest", output: "engram.v1.GetSessionStartContextResponse"},
-		{name: "GetAmbientCandidates", input: "engram.v1.GetAmbientCandidatesRequest", output: "engram.v1.GetAmbientCandidatesResponse"},
 		{name: "NegotiateVersion", input: "engram.v1.NegotiateVersionRequest", output: "engram.v1.NegotiateVersionResponse"},
 		{name: "CodeIndexNegotiate", input: "engram.v1.CodeIndexNegotiateRequest", output: "engram.v1.CodeIndexNegotiateResponse"},
 		{name: "CodeIndexUpload", input: "engram.v1.CodeChunkUpload", output: "engram.v1.CodeIndexUploadReceipt", clientStreaming: true},
-		{name: "RegisterProjectIdentityV3", input: "engram.v1.RegisterProjectIdentityV3Request", output: "engram.v1.RegisterProjectIdentityV3Response"},
 		{name: "Bind", input: "engram.v1.HostAdvisorBindRequest", output: "engram.v1.HostAdvisorBindResponse"},
 		{name: "Advise", input: "engram.v1.HostAdvisorAdviseRequest", output: "engram.v1.HostAdvisorAdviseResponse"},
 		{name: "Observe", input: "engram.v1.HostAdvisorObserveRequest", output: "engram.v1.HostAdvisorObserveResponse"},
@@ -61,8 +59,6 @@ func TestUCITransportContractPreservesExistingServiceSnapshot(t *testing.T) {
 		uciTransportFieldSpec{name: "arguments_json", number: 2, kind: protoreflect.BytesKind, cardinality: protoreflect.Optional},
 		uciTransportFieldSpec{name: "project", number: 3, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
 		uciTransportFieldSpec{name: "session_id", number: 4, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
-		uciTransportFieldSpec{name: "project_identity", number: 5, kind: protoreflect.MessageKind, cardinality: protoreflect.Optional, message: "engram.v1.ProjectIdentityV2"},
-		uciTransportFieldSpec{name: "project_identity_v3", number: 6, kind: protoreflect.MessageKind, cardinality: protoreflect.Optional, message: "engram.v1.ProjectIdentityV3"},
 	)
 	requireUCITransportFields(t, file, "CodeChunkMeta",
 		uciTransportFieldSpec{name: "chunk_id", number: 1, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
@@ -111,8 +107,10 @@ func TestUCITransportContractRequiresScopedAdditions(t *testing.T) {
 	} {
 		requireUCITransportMethod(t, service, spec)
 	}
-	if methods := service.Methods().Len(); methods != 23 {
-		t.Fatalf("EngramService methods = %d, want 23 legacy-plus-UCI methods", methods)
+	for _, name := range []protoreflect.Name{"RegisterProjectIdentityV3", "GetAmbientCandidates"} {
+		if service.Methods().ByName(name) != nil {
+			t.Fatalf("retired identity RPC %s remains executable", name)
+		}
 	}
 
 	file := pb.File_proto_engram_v1_engram_proto

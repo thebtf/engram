@@ -3,44 +3,19 @@ package grpcserver
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"net"
-	"net/url"
-	"os"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/thebtf/engram/internal/auth"
-	localgorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/mcp"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	gormlib "gorm.io/gorm"
 )
 
 const grpcLogicalProjectID = "33333333-3333-4333-8333-333333333333"
-
-func setAR1FixtureDSN(t *testing.T) {
-	t.Helper()
-	dsn := os.Getenv("ENGRAM_RECOVERY_FIXTURE_DSN")
-	if dsn == "" {
-		t.Skip("ENGRAM_RECOVERY_FIXTURE_DSN not set, skipping AR-1 fixture test")
-	}
-	fixtureURL, err := url.Parse(dsn)
-	if err != nil || fixtureURL.User == nil {
-		t.Skip("ENGRAM_RECOVERY_FIXTURE_DSN is not the dedicated fixture endpoint")
-	}
-	_, hasPassword := fixtureURL.User.Password()
-	fixtureIP := net.ParseIP(fixtureURL.Hostname())
-	if fixtureURL.Scheme != "postgres" || fixtureURL.User.Username() != "fixture" || hasPassword || fixtureIP == nil || !fixtureIP.IsLoopback() || fixtureURL.Port() != "55432" || fixtureURL.Path != "/engram_fixture" || fixtureURL.RawPath != "" || fixtureURL.RawQuery != "sslmode=disable" || fixtureURL.Fragment != "" {
-		t.Skip("ENGRAM_RECOVERY_FIXTURE_DSN is not the dedicated fixture endpoint")
-	}
-	t.Setenv("DATABASE_DSN", dsn)
-}
 
 type identityOrderHandler struct {
 	steps     *[]string
@@ -66,10 +41,6 @@ func TestCallTool_UsesPortableProjectWithoutRegistration(t *testing.T) {
 	steps := []string{}
 	var project string
 	srv := &Server{handler: identityOrderHandler{steps: &steps, project: &project}}
-	srv.identityResolver = func(_ context.Context, _ *gormlib.DB, _ string, _ *pb.ProjectIdentityV2) (string, error) {
-		t.Fatal("portable UUID entered the retired registration resolver")
-		return "", nil
-	}
 
 	resp, err := srv.CallTool(context.Background(), &pb.CallToolRequest{
 		ToolName: "recall",
@@ -81,7 +52,7 @@ func TestCallTool_UsesPortableProjectWithoutRegistration(t *testing.T) {
 	if !reflect.DeepEqual(steps, []string{"handler"}) {
 		t.Fatalf("order=%v", steps)
 	}
-	if resp.CanonicalProject != grpcLogicalProjectID || project != grpcLogicalProjectID || resp.ProjectResolutionV3 != nil {
+	if resp.CanonicalProject != grpcLogicalProjectID || project != grpcLogicalProjectID {
 		t.Fatalf("response=%v handler project=%q", resp, project)
 	}
 }
@@ -150,10 +121,6 @@ func TestCallTool_WithoutOuterProjectSkipsIdentityResolution(t *testing.T) {
 	steps := []string{}
 	var captured []byte
 	srv := &Server{handler: identityOrderHandler{steps: &steps, arguments: &captured}}
-	srv.identityResolver = func(_ context.Context, _ *gormlib.DB, _ string, _ *pb.ProjectIdentityV2) (string, error) {
-		t.Fatal("identity resolver called for unscoped tool request")
-		return "", nil
-	}
 
 	arguments := []byte(`{"project":"all","limit":5}`)
 	resp, err := srv.CallTool(context.Background(), &pb.CallToolRequest{
@@ -315,16 +282,12 @@ func TestInitialize_ReturnsCompleteUnscopedCatalog(t *testing.T) {
 		{Name: "codebase_search", Description: "search authorized view", InputSchemaJSON: []byte(`{"type":"object"}`)},
 	}
 	srv := &Server{handler: identityOrderHandler{steps: &[]string{}, tools: definitions}}
-	srv.identityResolver = func(_ context.Context, _ *gormlib.DB, _ string, _ *pb.ProjectIdentityV2) (string, error) {
-		t.Fatal("identity resolver called for unscoped capability discovery")
-		return "", nil
-	}
 
 	resp, err := srv.Initialize(context.Background(), &pb.InitializeRequest{ClientName: "portable-project-client", ClientVersion: "1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.ServerName != "test" || resp.ServerVersion != "test" || resp.CanonicalProject != "" || resp.ProjectResolutionV3 != nil || len(resp.Tools) != len(definitions) {
+	if resp.ServerName != "test" || resp.ServerVersion != "test" || resp.CanonicalProject != "" || len(resp.Tools) != len(definitions) {
 		t.Fatalf("response=%#v", resp)
 	}
 	for index, definition := range definitions {
@@ -355,37 +318,6 @@ func TestInitialize_DoesNotAdmitProjectOperations(t *testing.T) {
 	}
 }
 
-func TestCallTool_StableIdentityErrorsPrecedeMutation(t *testing.T) {
-	srv := &Server{handler: identityOrderHandler{steps: &[]string{}}}
-	srv.identityResolver = func(_ context.Context, _ *gormlib.DB, _ string, _ *pb.ProjectIdentityV2) (string, error) {
-		return "", &localgorm.ProjectIdentityError{Code: localgorm.ProjectIdentityAmbiguous, UpgradeAction: localgorm.UpgradeActionSendProjectIdentityV2, Err: errors.New("ambiguous selector")}
-	}
-	_, err := srv.CallTool(context.Background(), &pb.CallToolRequest{ToolName: "recall", Project: "legacy"})
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("status=%v error=%v", status.Code(err), err)
-	}
-	st, _ := status.FromError(err)
-	if len(st.Details()) != 1 {
-		t.Fatalf("stable machine-readable detail missing: %#v", st.Details())
-	}
-}
-
-func TestCallTool_TypedNilIdentityErrorFailsClosed(t *testing.T) {
-	steps := []string{}
-	srv := &Server{handler: identityOrderHandler{steps: &steps}}
-	srv.identityResolver = func(_ context.Context, _ *gormlib.DB, _ string, _ *pb.ProjectIdentityV2) (string, error) {
-		var typedNil *localgorm.ProjectIdentityError
-		return "", typedNil
-	}
-	_, err := srv.CallTool(context.Background(), &pb.CallToolRequest{ToolName: "recall", Project: "legacy"})
-	if status.Code(err) != codes.Unavailable {
-		t.Fatalf("status=%v error=%v, want Unavailable", status.Code(err), err)
-	}
-	if len(steps) != 0 {
-		t.Fatalf("handler ran after typed-nil identity error: %v", steps)
-	}
-}
-
 func TestProjectIDDoesNotBypassAuthentication(t *testing.T) {
 	srv := &Server{validator: auth.NewValidator("master-secret", &stubReader{})}
 	req := &pb.CallToolRequest{
@@ -399,24 +331,6 @@ func TestProjectIDDoesNotBypassAuthentication(t *testing.T) {
 	_, err := srv.authInterceptor(context.Background(), req, &grpc.UnaryServerInfo{FullMethod: pb.EngramService_CallTool_FullMethodName}, handler)
 	if status.Code(err) != codes.Unauthenticated {
 		t.Fatalf("status=%v error=%v", status.Code(err), err)
-	}
-}
-
-func TestProjectIdentityUnavailable_DoesNotExposeDatabaseDiagnostics(t *testing.T) {
-	srv := &Server{handler: identityOrderHandler{steps: &[]string{}}}
-	srv.identityResolver = func(_ context.Context, _ *gormlib.DB, _ string, _ *pb.ProjectIdentityV2) (string, error) {
-		return "", &localgorm.ProjectIdentityError{
-			Code:          localgorm.ProjectIdentityUnavailable,
-			UpgradeAction: localgorm.UpgradeActionRetryProjectRegistration,
-			Err:           errors.New("postgres internal-token-do-not-leak relation projects"),
-		}
-	}
-	_, err := srv.CallTool(context.Background(), &pb.CallToolRequest{ToolName: "recall", Project: "legacy"})
-	if status.Code(err) != codes.Unavailable {
-		t.Fatalf("status=%v error=%v", status.Code(err), err)
-	}
-	if strings.Contains(err.Error(), "do-not-leak") || strings.Contains(err.Error(), "relation projects") {
-		t.Fatalf("database diagnostics leaked: %v", err)
 	}
 }
 
@@ -437,44 +351,12 @@ func TestCallTool_DefaultResolverRejectsMalformedSelectorsBeforeHandler(t *testi
 			if !ok {
 				t.Fatalf("detail=%T, want ErrorInfo", st.Details()[0])
 			}
-			if detail.Reason != localgorm.ProjectIdentityInvalid || detail.Domain != "engram.project_identity" || detail.Metadata["upgrade_action"] != localgorm.UpgradeActionRegenerateProjectIdentityV2 {
+			if detail.Reason != "PROJECT_CONTEXT_INVALID" || detail.Domain != "engram.project" {
 				t.Fatalf("detail=%#v", detail)
 			}
 			if len(steps) != 0 {
 				t.Fatalf("handler ran before selector rejection: %v", steps)
 			}
 		})
-	}
-}
-
-func TestCallTool_UnknownSelectorOnlyFailsBeforeProjectMutation(t *testing.T) {
-	setAR1FixtureDSN(t)
-	db, cleanup := testGRPCSyncDB(t)
-	defer cleanup()
-	selector := "ar1-fence-grpc-unknown"
-	db.Unscoped().Exec(`DELETE FROM projects WHERE id = ? OR COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[]`, selector, selector)
-	defer db.Unscoped().Exec(`DELETE FROM projects WHERE id = ? OR COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[]`, selector, selector)
-
-	steps := []string{}
-	srv := &Server{db: db, handler: identityOrderHandler{steps: &steps}}
-	response, err := srv.CallTool(context.Background(), &pb.CallToolRequest{ToolName: "recall", Project: selector})
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Errorf("status=%v error=%v, want selector-only refusal", status.Code(err), err)
-	}
-	if response != nil {
-		t.Errorf("response=%#v, want no handler response after selector-only refusal", response)
-	}
-	if len(steps) != 0 {
-		t.Errorf("handler ran after selector-only request: %v", steps)
-	}
-
-	var count int64
-	if err := db.Unscoped().Model(&localgorm.Project{}).
-		Where(`id = ? OR COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[]`, selector, selector).
-		Count(&count).Error; err != nil {
-		t.Fatal(err)
-	}
-	if count != 0 {
-		t.Errorf("selector-only gRPC request created or retained %d project/alias rows, including soft-deleted rows", count)
 	}
 }

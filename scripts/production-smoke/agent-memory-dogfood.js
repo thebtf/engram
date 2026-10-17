@@ -6,7 +6,6 @@ const http = require("node:http");
 const path = require("node:path");
 
 const wrapper = require("../../plugin/engram/scripts/run-engram.js");
-const hookLib = require("../../plugin/engram/hooks/lib.js");
 
 const ExitCode = Object.freeze({ CONFIG: 10, READY: 11, MCP_INIT: 12, HEALTH: 13, STORE: 14, RECALL: 15, SESSION_SEED: 16, SESSION_INIT: 17, OUTCOME: 18, OUTCOME_READBACK: 19, STATS_CORROBORATION: 20, FAIL_OPEN: 21 });
 const validRunID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -674,22 +673,11 @@ function readbackFields(body) {
  };
 }
 
-async function canonicalProject(config, request = requestJSON) {
- const identity = hookLib.resolveProjectIdentityV2(repoRoot);
- const response = await request(config, "/api/context/inject", {
-  method: "POST",
-  body: {
-   project: hookLib.ProjectIDWithName(repoRoot),
-   legacy_project: hookLib.LegacyProjectID(repoRoot),
-   git_remote: identity.git_remote,
-   relative_path: identity.relative_path,
-   project_identity: identity,
-   identity_only: true,
-  },
+async function canonicalProject(config) {
+ const resolved = await wrapper.resolveLogicalProject(repoRoot, {
+  env: { ...process.env, ENGRAM_URL: config.endpoint.toString(), ENGRAM_TOKEN: config.token },
  });
- const project = response.body?.canonical_project;
- if (response.status !== 200 || typeof project !== "string" || !safeProject.test(project)) throw new Error("canonical project unavailable");
- return { project, status: response.status };
+ return { project: resolved.project_id };
 }
 
 function r6Marker(runID) {
@@ -863,7 +851,7 @@ async function r6Run(runID, config, receipt, actions = {}) {
  const recall = await recordR6Phase(receipt, "RECALL", async () => {
   const canonical = await operation.canonicalProject(config);
   project = canonical?.project;
-  if (canonical?.status !== 200 || typeof project !== "string") throw new Error("canonical project unavailable");
+  if (typeof project !== "string" || !safeProject.test(project)) throw new Error("canonical project unavailable");
   return finalVisibleRecall(await operation.deliberateRecall(runID, project), r6Marker(runID), project);
  });
  receipt.recall = { final_visible_count: recall.count, marker_id: recall.marker.id, marker_content: recall.marker.content, project: recall.marker.project };

@@ -27,6 +27,8 @@ import (
 	gormlib "gorm.io/gorm"
 )
 
+const comparisonAdapterHeaderV3 = "X-Engram-Project-Identity-Adapter"
+
 // requestIDKey is the context key for request IDs.
 type requestIDKey struct{}
 

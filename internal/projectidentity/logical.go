@@ -124,9 +124,47 @@ func ValidateRepositoryLocator(locator string) error {
 	return nil
 }
 
-func ToolRequiresProject(name string) bool {
+// ToolRequiresProject exempts only recognized project-free operations, not whole tools.
+func ToolRequiresProject(name string, arguments []byte) bool {
 	switch name {
-	case "store", "recall", "recall_memory", "feedback", "store_rule", "list_rules", "get_memory_brief", "query_principal_memory", "continuity_slot", "issues", "docs", "vault", "ingest", "get_state", "set_state", "lifecycle", "list_candidates", "get_candidate", "promote_candidate", "reject_candidate", "supersede_candidate", "bulk_promote", "bulk_delete", "bulk_supersede", "rollback_snapshot", "list_snapshots", "pin_snapshot":
+	case "issues", "vault":
+		var values map[string]any
+		if err := json.Unmarshal(arguments, &values); err != nil || values == nil {
+			return true
+		}
+		for _, key := range [...]string{"action", "scope", "project", "source_project", "target_project", "source_agent"} {
+			if value, present := values[key]; present {
+				if _, valid := value.(string); !valid {
+					return true
+				}
+			}
+		}
+		action, _ := values["action"].(string)
+		scope, _ := values["scope"].(string)
+		project, _ := values["project"].(string)
+		if scope != "" && scope != "global" && scope != "project" {
+			return true
+		}
+		if name == "issues" {
+			if _, present := values["action"]; !present {
+				action = "list"
+			}
+			return action != "list" && action != "get"
+		}
+		switch action {
+		case "status":
+			return false
+		case "list":
+			// List uses the project selector even when scope is global.
+			return project != ""
+		case "store":
+			return scope != "global"
+		case "get", "delete":
+			return scope != "global" && (scope == "project" || project != "")
+		default:
+			return true
+		}
+	case "store", "recall", "recall_memory", "feedback", "store_rule", "list_rules", "get_memory_brief", "query_principal_memory", "continuity_slot", "docs", "ingest", "get_state", "set_state", "lifecycle", "list_candidates", "get_candidate", "promote_candidate", "reject_candidate", "supersede_candidate", "bulk_promote", "bulk_delete", "bulk_supersede", "rollback_snapshot", "list_snapshots", "pin_snapshot":
 		return true
 	default:
 		return false

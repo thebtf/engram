@@ -39,8 +39,8 @@ func TestProxyHandleTool_FirstCallBeforeHookUsesLogicalProject(t *testing.T) {
 	if request == nil || request.GetProject() != contractProjectID || request.GetToolName() != "recall" {
 		t.Fatalf("first project-scoped request=%#v, want canonical UUID", request)
 	}
-	if request.GetProjectIdentity() != nil || request.GetProjectIdentityV3() != nil || srv.registerCalls != 0 || srv.initCalls != 0 {
-		t.Fatal("normal project resolution required a descriptor or registration handshake")
+	if srv.initCalls != 0 {
+		t.Fatal("normal project resolution required a discovery handshake")
 	}
 }
 
@@ -61,9 +61,6 @@ func TestProxyHandleTool_ReReadsMarkerInsteadOfSessionOrLegacyCache(t *testing.T
 		if request == nil || request.GetProject() != projectID || request.GetSessionId() != "same-host-session" {
 			t.Fatalf("marker %s was replaced by session/cache authority: %#v", projectID, request)
 		}
-		if request.GetProjectIdentity() != nil || request.GetProjectIdentityV3() != nil {
-			t.Fatal("portable marker resolution forwarded a retired descriptor")
-		}
 	}
 	mod.OnProjectRemoved(project.ID)
 	if _, err := mod.ProxyHandleTool(t.Context(), project, "recall", json.RawMessage(`{}`)); err != nil {
@@ -71,8 +68,8 @@ func TestProxyHandleTool_ReReadsMarkerInsteadOfSessionOrLegacyCache(t *testing.T
 	}
 	srv.mu.Lock()
 	defer srv.mu.Unlock()
-	if srv.callReq.GetProject() != otherContractProjectID || srv.registerCalls != 0 {
-		t.Fatal("project removal changed the portable UUID or required registration")
+	if srv.callReq.GetProject() != otherContractProjectID {
+		t.Fatal("project removal changed the portable UUID")
 	}
 }
 
@@ -94,11 +91,11 @@ func TestProxyTools_InitializeCarriesNoProjectAuthority(t *testing.T) {
 	srv.mu.Lock()
 	defer srv.mu.Unlock()
 	request := srv.initReq
-	if request == nil || request.GetProject() != "" || request.GetProjectIdentity() != nil || request.GetProjectIdentityV3() != nil {
+	if request == nil || request.GetProject() != "" {
 		t.Fatalf("Initialize carried project authority: %#v", request)
 	}
-	if request.GetClientName() != "engram-daemon" || request.GetClientVersion() != daemonClientVersion || srv.initCalls != 1 || srv.registerCalls != 0 {
-		t.Fatalf("unexpected discovery handshake: %#v, calls=%d registrations=%d", request, srv.initCalls, srv.registerCalls)
+	if request.GetClientName() != "engram-daemon" || request.GetClientVersion() != daemonClientVersion || srv.initCalls != 1 {
+		t.Fatalf("unexpected discovery handshake: %#v, calls=%d", request, srv.initCalls)
 	}
 }
 
@@ -124,7 +121,7 @@ func TestProxyHandleTool_SameHostProjectDifferentCWDResolvesIndependently(t *tes
 		srv.mu.Lock()
 		request := srv.callReq
 		srv.mu.Unlock()
-		if request == nil || request.GetProject() != selected.projectID || request.GetProjectIdentity() != nil || request.GetProjectIdentityV3() != nil {
+		if request == nil || request.GetProject() != selected.projectID {
 			t.Fatalf("cwd %s borrowed another client's project: %#v", selected.cwd, request)
 		}
 	}

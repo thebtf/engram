@@ -74,83 +74,6 @@ func (ProjectEventType) EnumDescriptor() ([]byte, []int) {
 	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{0}
 }
 
-// ProjectResolutionOutcomeV3 is the closed transport representation of V3 outcomes.
-type ProjectResolutionOutcomeV3 int32
-
-const (
-	ProjectResolutionOutcomeV3_PROJECT_RESOLUTION_OUTCOME_V3_UNSPECIFIED ProjectResolutionOutcomeV3 = 0
-	ProjectResolutionOutcomeV3_PROJECT_RESOLVED                          ProjectResolutionOutcomeV3 = 1
-	ProjectResolutionOutcomeV3_PROJECT_REDIRECTED                        ProjectResolutionOutcomeV3 = 2
-	ProjectResolutionOutcomeV3_PROJECT_ONBOARDING_REQUIRED               ProjectResolutionOutcomeV3 = 3
-	ProjectResolutionOutcomeV3_PROJECT_ANCHOR_INVALID                    ProjectResolutionOutcomeV3 = 4
-	ProjectResolutionOutcomeV3_PROJECT_SCOPE_MISMATCH                    ProjectResolutionOutcomeV3 = 5
-	ProjectResolutionOutcomeV3_PROJECT_NESTED_REPOSITORY_UNRESOLVED      ProjectResolutionOutcomeV3 = 6
-	ProjectResolutionOutcomeV3_PROJECT_ANCHOR_DECISION_REQUIRED          ProjectResolutionOutcomeV3 = 7
-	ProjectResolutionOutcomeV3_PROJECT_IDENTITY_AMBIGUOUS                ProjectResolutionOutcomeV3 = 8
-	ProjectResolutionOutcomeV3_PROJECT_DESCRIPTOR_UNSUPPORTED            ProjectResolutionOutcomeV3 = 9
-	ProjectResolutionOutcomeV3_PROJECT_DESCRIPTOR_INVALID                ProjectResolutionOutcomeV3 = 10
-	ProjectResolutionOutcomeV3_PROJECT_KEY_CLIENT_ASSERTION_FORBIDDEN    ProjectResolutionOutcomeV3 = 11
-)
-
-// Enum value maps for ProjectResolutionOutcomeV3.
-var (
-	ProjectResolutionOutcomeV3_name = map[int32]string{
-		0:  "PROJECT_RESOLUTION_OUTCOME_V3_UNSPECIFIED",
-		1:  "PROJECT_RESOLVED",
-		2:  "PROJECT_REDIRECTED",
-		3:  "PROJECT_ONBOARDING_REQUIRED",
-		4:  "PROJECT_ANCHOR_INVALID",
-		5:  "PROJECT_SCOPE_MISMATCH",
-		6:  "PROJECT_NESTED_REPOSITORY_UNRESOLVED",
-		7:  "PROJECT_ANCHOR_DECISION_REQUIRED",
-		8:  "PROJECT_IDENTITY_AMBIGUOUS",
-		9:  "PROJECT_DESCRIPTOR_UNSUPPORTED",
-		10: "PROJECT_DESCRIPTOR_INVALID",
-		11: "PROJECT_KEY_CLIENT_ASSERTION_FORBIDDEN",
-	}
-	ProjectResolutionOutcomeV3_value = map[string]int32{
-		"PROJECT_RESOLUTION_OUTCOME_V3_UNSPECIFIED": 0,
-		"PROJECT_RESOLVED":                          1,
-		"PROJECT_REDIRECTED":                        2,
-		"PROJECT_ONBOARDING_REQUIRED":               3,
-		"PROJECT_ANCHOR_INVALID":                    4,
-		"PROJECT_SCOPE_MISMATCH":                    5,
-		"PROJECT_NESTED_REPOSITORY_UNRESOLVED":      6,
-		"PROJECT_ANCHOR_DECISION_REQUIRED":          7,
-		"PROJECT_IDENTITY_AMBIGUOUS":                8,
-		"PROJECT_DESCRIPTOR_UNSUPPORTED":            9,
-		"PROJECT_DESCRIPTOR_INVALID":                10,
-		"PROJECT_KEY_CLIENT_ASSERTION_FORBIDDEN":    11,
-	}
-)
-
-func (x ProjectResolutionOutcomeV3) Enum() *ProjectResolutionOutcomeV3 {
-	p := new(ProjectResolutionOutcomeV3)
-	*p = x
-	return p
-}
-
-func (x ProjectResolutionOutcomeV3) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (ProjectResolutionOutcomeV3) Descriptor() protoreflect.EnumDescriptor {
-	return file_proto_engram_v1_engram_proto_enumTypes[1].Descriptor()
-}
-
-func (ProjectResolutionOutcomeV3) Type() protoreflect.EnumType {
-	return &file_proto_engram_v1_engram_proto_enumTypes[1]
-}
-
-func (x ProjectResolutionOutcomeV3) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use ProjectResolutionOutcomeV3.Descriptor instead.
-func (ProjectResolutionOutcomeV3) EnumDescriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{1}
-}
-
 // HostAdvisorHostFamily identifies the host family that owns callback facts.
 type HostAdvisorHostFamily int32
 
@@ -188,11 +111,11 @@ func (x HostAdvisorHostFamily) String() string {
 }
 
 func (HostAdvisorHostFamily) Descriptor() protoreflect.EnumDescriptor {
-	return file_proto_engram_v1_engram_proto_enumTypes[2].Descriptor()
+	return file_proto_engram_v1_engram_proto_enumTypes[1].Descriptor()
 }
 
 func (HostAdvisorHostFamily) Type() protoreflect.EnumType {
-	return &file_proto_engram_v1_engram_proto_enumTypes[2]
+	return &file_proto_engram_v1_engram_proto_enumTypes[1]
 }
 
 func (x HostAdvisorHostFamily) Number() protoreflect.EnumNumber {
@@ -201,7 +124,7 @@ func (x HostAdvisorHostFamily) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use HostAdvisorHostFamily.Descriptor instead.
 func (HostAdvisorHostFamily) EnumDescriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{2}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{1}
 }
 
 // HostAdvisorArtifactKind identifies the proven artifact source.
@@ -238,11 +161,11 @@ func (x HostAdvisorArtifactKind) String() string {
 }
 
 func (HostAdvisorArtifactKind) Descriptor() protoreflect.EnumDescriptor {
-	return file_proto_engram_v1_engram_proto_enumTypes[3].Descriptor()
+	return file_proto_engram_v1_engram_proto_enumTypes[2].Descriptor()
 }
 
 func (HostAdvisorArtifactKind) Type() protoreflect.EnumType {
-	return &file_proto_engram_v1_engram_proto_enumTypes[3]
+	return &file_proto_engram_v1_engram_proto_enumTypes[2]
 }
 
 func (x HostAdvisorArtifactKind) Number() protoreflect.EnumNumber {
@@ -251,7 +174,7 @@ func (x HostAdvisorArtifactKind) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use HostAdvisorArtifactKind.Descriptor instead.
 func (HostAdvisorArtifactKind) EnumDescriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{3}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{2}
 }
 
 // HostAdvisorSemantic identifies a closed host callback semantic.
@@ -294,11 +217,11 @@ func (x HostAdvisorSemantic) String() string {
 }
 
 func (HostAdvisorSemantic) Descriptor() protoreflect.EnumDescriptor {
-	return file_proto_engram_v1_engram_proto_enumTypes[4].Descriptor()
+	return file_proto_engram_v1_engram_proto_enumTypes[3].Descriptor()
 }
 
 func (HostAdvisorSemantic) Type() protoreflect.EnumType {
-	return &file_proto_engram_v1_engram_proto_enumTypes[4]
+	return &file_proto_engram_v1_engram_proto_enumTypes[3]
 }
 
 func (x HostAdvisorSemantic) Number() protoreflect.EnumNumber {
@@ -307,7 +230,7 @@ func (x HostAdvisorSemantic) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use HostAdvisorSemantic.Descriptor instead.
 func (HostAdvisorSemantic) EnumDescriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{4}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{3}
 }
 
 // HostAdvisorAction identifies a closed action capability.
@@ -356,11 +279,11 @@ func (x HostAdvisorAction) String() string {
 }
 
 func (HostAdvisorAction) Descriptor() protoreflect.EnumDescriptor {
-	return file_proto_engram_v1_engram_proto_enumTypes[5].Descriptor()
+	return file_proto_engram_v1_engram_proto_enumTypes[4].Descriptor()
 }
 
 func (HostAdvisorAction) Type() protoreflect.EnumType {
-	return &file_proto_engram_v1_engram_proto_enumTypes[5]
+	return &file_proto_engram_v1_engram_proto_enumTypes[4]
 }
 
 func (x HostAdvisorAction) Number() protoreflect.EnumNumber {
@@ -369,7 +292,7 @@ func (x HostAdvisorAction) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use HostAdvisorAction.Descriptor instead.
 func (HostAdvisorAction) EnumDescriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{5}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{4}
 }
 
 // HostAdvisorContextInjectionMode identifies a closed host context surface.
@@ -409,11 +332,11 @@ func (x HostAdvisorContextInjectionMode) String() string {
 }
 
 func (HostAdvisorContextInjectionMode) Descriptor() protoreflect.EnumDescriptor {
-	return file_proto_engram_v1_engram_proto_enumTypes[6].Descriptor()
+	return file_proto_engram_v1_engram_proto_enumTypes[5].Descriptor()
 }
 
 func (HostAdvisorContextInjectionMode) Type() protoreflect.EnumType {
-	return &file_proto_engram_v1_engram_proto_enumTypes[6]
+	return &file_proto_engram_v1_engram_proto_enumTypes[5]
 }
 
 func (x HostAdvisorContextInjectionMode) Number() protoreflect.EnumNumber {
@@ -422,7 +345,7 @@ func (x HostAdvisorContextInjectionMode) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use HostAdvisorContextInjectionMode.Descriptor instead.
 func (HostAdvisorContextInjectionMode) EnumDescriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{6}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{5}
 }
 
 // HostAdvisorCallbackOrdering identifies the observed callback ordering.
@@ -462,11 +385,11 @@ func (x HostAdvisorCallbackOrdering) String() string {
 }
 
 func (HostAdvisorCallbackOrdering) Descriptor() protoreflect.EnumDescriptor {
-	return file_proto_engram_v1_engram_proto_enumTypes[7].Descriptor()
+	return file_proto_engram_v1_engram_proto_enumTypes[6].Descriptor()
 }
 
 func (HostAdvisorCallbackOrdering) Type() protoreflect.EnumType {
-	return &file_proto_engram_v1_engram_proto_enumTypes[7]
+	return &file_proto_engram_v1_engram_proto_enumTypes[6]
 }
 
 func (x HostAdvisorCallbackOrdering) Number() protoreflect.EnumNumber {
@@ -475,7 +398,7 @@ func (x HostAdvisorCallbackOrdering) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use HostAdvisorCallbackOrdering.Descriptor instead.
 func (HostAdvisorCallbackOrdering) EnumDescriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{7}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{6}
 }
 
 // HostAdvisorAcknowledgement identifies the strongest host acknowledgement.
@@ -518,11 +441,11 @@ func (x HostAdvisorAcknowledgement) String() string {
 }
 
 func (HostAdvisorAcknowledgement) Descriptor() protoreflect.EnumDescriptor {
-	return file_proto_engram_v1_engram_proto_enumTypes[8].Descriptor()
+	return file_proto_engram_v1_engram_proto_enumTypes[7].Descriptor()
 }
 
 func (HostAdvisorAcknowledgement) Type() protoreflect.EnumType {
-	return &file_proto_engram_v1_engram_proto_enumTypes[8]
+	return &file_proto_engram_v1_engram_proto_enumTypes[7]
 }
 
 func (x HostAdvisorAcknowledgement) Number() protoreflect.EnumNumber {
@@ -531,7 +454,7 @@ func (x HostAdvisorAcknowledgement) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use HostAdvisorAcknowledgement.Descriptor instead.
 func (HostAdvisorAcknowledgement) EnumDescriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{8}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{7}
 }
 
 // HostAdvisorFactKind identifies a bounded occurrence fact.
@@ -571,11 +494,11 @@ func (x HostAdvisorFactKind) String() string {
 }
 
 func (HostAdvisorFactKind) Descriptor() protoreflect.EnumDescriptor {
-	return file_proto_engram_v1_engram_proto_enumTypes[9].Descriptor()
+	return file_proto_engram_v1_engram_proto_enumTypes[8].Descriptor()
 }
 
 func (HostAdvisorFactKind) Type() protoreflect.EnumType {
-	return &file_proto_engram_v1_engram_proto_enumTypes[9]
+	return &file_proto_engram_v1_engram_proto_enumTypes[8]
 }
 
 func (x HostAdvisorFactKind) Number() protoreflect.EnumNumber {
@@ -584,7 +507,7 @@ func (x HostAdvisorFactKind) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use HostAdvisorFactKind.Descriptor instead.
 func (HostAdvisorFactKind) EnumDescriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{9}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{8}
 }
 
 // HostAdvisorCandidateTier identifies the selected knowledge source tier.
@@ -624,11 +547,11 @@ func (x HostAdvisorCandidateTier) String() string {
 }
 
 func (HostAdvisorCandidateTier) Descriptor() protoreflect.EnumDescriptor {
-	return file_proto_engram_v1_engram_proto_enumTypes[10].Descriptor()
+	return file_proto_engram_v1_engram_proto_enumTypes[9].Descriptor()
 }
 
 func (HostAdvisorCandidateTier) Type() protoreflect.EnumType {
-	return &file_proto_engram_v1_engram_proto_enumTypes[10]
+	return &file_proto_engram_v1_engram_proto_enumTypes[9]
 }
 
 func (x HostAdvisorCandidateTier) Number() protoreflect.EnumNumber {
@@ -637,7 +560,7 @@ func (x HostAdvisorCandidateTier) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use HostAdvisorCandidateTier.Descriptor instead.
 func (HostAdvisorCandidateTier) EnumDescriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{10}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{9}
 }
 
 // HostAdvisorAbstentionReason identifies a final non-delivery decision.
@@ -707,11 +630,11 @@ func (x HostAdvisorAbstentionReason) String() string {
 }
 
 func (HostAdvisorAbstentionReason) Descriptor() protoreflect.EnumDescriptor {
-	return file_proto_engram_v1_engram_proto_enumTypes[11].Descriptor()
+	return file_proto_engram_v1_engram_proto_enumTypes[10].Descriptor()
 }
 
 func (HostAdvisorAbstentionReason) Type() protoreflect.EnumType {
-	return &file_proto_engram_v1_engram_proto_enumTypes[11]
+	return &file_proto_engram_v1_engram_proto_enumTypes[10]
 }
 
 func (x HostAdvisorAbstentionReason) Number() protoreflect.EnumNumber {
@@ -720,7 +643,7 @@ func (x HostAdvisorAbstentionReason) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use HostAdvisorAbstentionReason.Descriptor instead.
 func (HostAdvisorAbstentionReason) EnumDescriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{11}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{10}
 }
 
 // HostAdvisorUnavailableCode identifies a typed unavailable outcome.
@@ -775,11 +698,11 @@ func (x HostAdvisorUnavailableCode) String() string {
 }
 
 func (HostAdvisorUnavailableCode) Descriptor() protoreflect.EnumDescriptor {
-	return file_proto_engram_v1_engram_proto_enumTypes[12].Descriptor()
+	return file_proto_engram_v1_engram_proto_enumTypes[11].Descriptor()
 }
 
 func (HostAdvisorUnavailableCode) Type() protoreflect.EnumType {
-	return &file_proto_engram_v1_engram_proto_enumTypes[12]
+	return &file_proto_engram_v1_engram_proto_enumTypes[11]
 }
 
 func (x HostAdvisorUnavailableCode) Number() protoreflect.EnumNumber {
@@ -788,7 +711,7 @@ func (x HostAdvisorUnavailableCode) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use HostAdvisorUnavailableCode.Descriptor instead.
 func (HostAdvisorUnavailableCode) EnumDescriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{12}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{11}
 }
 
 // HostAdvisorObservationState identifies the final observation acknowledgement.
@@ -831,11 +754,11 @@ func (x HostAdvisorObservationState) String() string {
 }
 
 func (HostAdvisorObservationState) Descriptor() protoreflect.EnumDescriptor {
-	return file_proto_engram_v1_engram_proto_enumTypes[13].Descriptor()
+	return file_proto_engram_v1_engram_proto_enumTypes[12].Descriptor()
 }
 
 func (HostAdvisorObservationState) Type() protoreflect.EnumType {
-	return &file_proto_engram_v1_engram_proto_enumTypes[13]
+	return &file_proto_engram_v1_engram_proto_enumTypes[12]
 }
 
 func (x HostAdvisorObservationState) Number() protoreflect.EnumNumber {
@@ -844,7 +767,7 @@ func (x HostAdvisorObservationState) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use HostAdvisorObservationState.Descriptor instead.
 func (HostAdvisorObservationState) EnumDescriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{13}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{12}
 }
 
 // HostAdvisorObservationReason identifies the closed observation disposition.
@@ -893,11 +816,11 @@ func (x HostAdvisorObservationReason) String() string {
 }
 
 func (HostAdvisorObservationReason) Descriptor() protoreflect.EnumDescriptor {
-	return file_proto_engram_v1_engram_proto_enumTypes[14].Descriptor()
+	return file_proto_engram_v1_engram_proto_enumTypes[13].Descriptor()
 }
 
 func (HostAdvisorObservationReason) Type() protoreflect.EnumType {
-	return &file_proto_engram_v1_engram_proto_enumTypes[14]
+	return &file_proto_engram_v1_engram_proto_enumTypes[13]
 }
 
 func (x HostAdvisorObservationReason) Number() protoreflect.EnumNumber {
@@ -906,7 +829,7 @@ func (x HostAdvisorObservationReason) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use HostAdvisorObservationReason.Descriptor instead.
 func (HostAdvisorObservationReason) EnumDescriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{14}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{13}
 }
 
 // HostAdvisorAttestationKind identifies a closed receipt-bound adapter fact.
@@ -943,11 +866,11 @@ func (x HostAdvisorAttestationKind) String() string {
 }
 
 func (HostAdvisorAttestationKind) Descriptor() protoreflect.EnumDescriptor {
-	return file_proto_engram_v1_engram_proto_enumTypes[15].Descriptor()
+	return file_proto_engram_v1_engram_proto_enumTypes[14].Descriptor()
 }
 
 func (HostAdvisorAttestationKind) Type() protoreflect.EnumType {
-	return &file_proto_engram_v1_engram_proto_enumTypes[15]
+	return &file_proto_engram_v1_engram_proto_enumTypes[14]
 }
 
 func (x HostAdvisorAttestationKind) Number() protoreflect.EnumNumber {
@@ -956,7 +879,7 @@ func (x HostAdvisorAttestationKind) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use HostAdvisorAttestationKind.Descriptor instead.
 func (HostAdvisorAttestationKind) EnumDescriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{15}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{14}
 }
 
 // HostAdvisorSemanticGapCode identifies a closed adapter semantic gap.
@@ -996,11 +919,11 @@ func (x HostAdvisorSemanticGapCode) String() string {
 }
 
 func (HostAdvisorSemanticGapCode) Descriptor() protoreflect.EnumDescriptor {
-	return file_proto_engram_v1_engram_proto_enumTypes[16].Descriptor()
+	return file_proto_engram_v1_engram_proto_enumTypes[15].Descriptor()
 }
 
 func (HostAdvisorSemanticGapCode) Type() protoreflect.EnumType {
-	return &file_proto_engram_v1_engram_proto_enumTypes[16]
+	return &file_proto_engram_v1_engram_proto_enumTypes[15]
 }
 
 func (x HostAdvisorSemanticGapCode) Number() protoreflect.EnumNumber {
@@ -1009,7 +932,7 @@ func (x HostAdvisorSemanticGapCode) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use HostAdvisorSemanticGapCode.Descriptor instead.
 func (HostAdvisorSemanticGapCode) EnumDescriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{16}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{15}
 }
 
 // UCICompletionOutcome is the closed completion state reported by a verified
@@ -1053,11 +976,11 @@ func (x UCICompletionOutcome) String() string {
 }
 
 func (UCICompletionOutcome) Descriptor() protoreflect.EnumDescriptor {
-	return file_proto_engram_v1_engram_proto_enumTypes[17].Descriptor()
+	return file_proto_engram_v1_engram_proto_enumTypes[16].Descriptor()
 }
 
 func (UCICompletionOutcome) Type() protoreflect.EnumType {
-	return &file_proto_engram_v1_engram_proto_enumTypes[17]
+	return &file_proto_engram_v1_engram_proto_enumTypes[16]
 }
 
 func (x UCICompletionOutcome) Number() protoreflect.EnumNumber {
@@ -1066,7 +989,7 @@ func (x UCICompletionOutcome) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use UCICompletionOutcome.Descriptor instead.
 func (UCICompletionOutcome) EnumDescriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{17}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{16}
 }
 
 type SyncProjectStateRequest struct {
@@ -1354,23 +1277,14 @@ func (x *ProjectEvent) GetMetadata() map[string]string {
 
 type GetSessionStartContextRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// project is the target project slug used to fetch static context entities.
+	// project is the pinned canonical project UUID.
 	Project string `protobuf:"bytes,1,opt,name=project,proto3" json:"project,omitempty"`
 	// memories_limit is the maximum number of memories to return, ordered by newest first.
 	// Zero means the server default.
 	MemoriesLimit int32 `protobuf:"varint,2,opt,name=memories_limit,json=memoriesLimit,proto3" json:"memories_limit,omitempty"`
 	// issues_limit is the maximum number of active issues to return, ordered by priority then newest first.
 	// Zero means the server default.
-	IssuesLimit int32 `protobuf:"varint,3,opt,name=issues_limit,json=issuesLimit,proto3" json:"issues_limit,omitempty"`
-	// project_identity_v3 selects V3 central resolution. When present, project
-	// is legacy compatibility input and MUST NOT be used for scoped access.
-	ProjectIdentityV3 *ProjectIdentityV3 `protobuf:"bytes,4,opt,name=project_identity_v3,json=projectIdentityV3,proto3" json:"project_identity_v3,omitempty"`
-	// host_session_ref is the opaque host-session reference bound by the relay.
-	// Its presence selects the private bridge compatibility branch.
-	HostSessionRef string `protobuf:"bytes,5,opt,name=host_session_ref,json=hostSessionRef,proto3" json:"host_session_ref,omitempty"`
-	// relay_revision is the installed private relay revision. The server admits
-	// it only when the dedicated relay gate accepts this exact revision.
-	RelayRevision string `protobuf:"bytes,6,opt,name=relay_revision,json=relayRevision,proto3" json:"relay_revision,omitempty"`
+	IssuesLimit   int32 `protobuf:"varint,3,opt,name=issues_limit,json=issuesLimit,proto3" json:"issues_limit,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1426,40 +1340,16 @@ func (x *GetSessionStartContextRequest) GetIssuesLimit() int32 {
 	return 0
 }
 
-func (x *GetSessionStartContextRequest) GetProjectIdentityV3() *ProjectIdentityV3 {
-	if x != nil {
-		return x.ProjectIdentityV3
-	}
-	return nil
-}
-
-func (x *GetSessionStartContextRequest) GetHostSessionRef() string {
-	if x != nil {
-		return x.HostSessionRef
-	}
-	return ""
-}
-
-func (x *GetSessionStartContextRequest) GetRelayRevision() string {
-	if x != nil {
-		return x.RelayRevision
-	}
-	return ""
-}
-
 type GetSessionStartContextResponse struct {
-	state       protoimpl.MessageState   `protogen:"open.v1"`
-	Issues      []*SessionStartIssue     `protobuf:"bytes,1,rep,name=issues,proto3" json:"issues,omitempty"`
-	Rules       []*SessionStartRule      `protobuf:"bytes,2,rep,name=rules,proto3" json:"rules,omitempty"`
-	Memories    []*SessionStartMemory    `protobuf:"bytes,3,rep,name=memories,proto3" json:"memories,omitempty"`
-	GeneratedAt *timestamppb.Timestamp   `protobuf:"bytes,4,opt,name=generated_at,json=generatedAt,proto3" json:"generated_at,omitempty"`
-	RuleRouter  *SessionStartRuleRouter  `protobuf:"bytes,5,opt,name=rule_router,json=ruleRouter,proto3" json:"rule_router,omitempty"`
-	MetaSummary *SessionStartMetaSummary `protobuf:"bytes,6,opt,name=meta_summary,json=metaSummary,proto3" json:"meta_summary,omitempty"`
-	// project_resolution_v3 is populated only for V3 requests. Its project_key
-	// and resolved_scope are absent on a refusal.
-	ProjectResolutionV3 *ProjectResolutionResultV3 `protobuf:"bytes,7,opt,name=project_resolution_v3,json=projectResolutionV3,proto3" json:"project_resolution_v3,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	state         protoimpl.MessageState   `protogen:"open.v1"`
+	Issues        []*SessionStartIssue     `protobuf:"bytes,1,rep,name=issues,proto3" json:"issues,omitempty"`
+	Rules         []*SessionStartRule      `protobuf:"bytes,2,rep,name=rules,proto3" json:"rules,omitempty"`
+	Memories      []*SessionStartMemory    `protobuf:"bytes,3,rep,name=memories,proto3" json:"memories,omitempty"`
+	GeneratedAt   *timestamppb.Timestamp   `protobuf:"bytes,4,opt,name=generated_at,json=generatedAt,proto3" json:"generated_at,omitempty"`
+	RuleRouter    *SessionStartRuleRouter  `protobuf:"bytes,5,opt,name=rule_router,json=ruleRouter,proto3" json:"rule_router,omitempty"`
+	MetaSummary   *SessionStartMetaSummary `protobuf:"bytes,6,opt,name=meta_summary,json=metaSummary,proto3" json:"meta_summary,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *GetSessionStartContextResponse) Reset() {
@@ -1530,13 +1420,6 @@ func (x *GetSessionStartContextResponse) GetRuleRouter() *SessionStartRuleRouter
 func (x *GetSessionStartContextResponse) GetMetaSummary() *SessionStartMetaSummary {
 	if x != nil {
 		return x.MetaSummary
-	}
-	return nil
-}
-
-func (x *GetSessionStartContextResponse) GetProjectResolutionV3() *ProjectResolutionResultV3 {
-	if x != nil {
-		return x.ProjectResolutionV3
 	}
 	return nil
 }
@@ -2416,17 +2299,12 @@ type CallToolRequest struct {
 	ToolName string `protobuf:"bytes,1,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
 	// Tool arguments as JSON bytes (same as MCP JSON-RPC params.arguments).
 	ArgumentsJson []byte `protobuf:"bytes,2,opt,name=arguments_json,json=argumentsJson,proto3" json:"arguments_json,omitempty"`
-	// Project identity for scope isolation (from git-derived slug).
+	// Pinned canonical project UUID; never an authorization credential.
 	Project string `protobuf:"bytes,3,opt,name=project,proto3" json:"project,omitempty"`
 	// Claude session ID for tracking and outcome propagation.
-	SessionId string `protobuf:"bytes,4,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	// Full versioned identity metadata. Additive: old servers ignore it.
-	ProjectIdentity *ProjectIdentityV2 `protobuf:"bytes,5,opt,name=project_identity,json=projectIdentity,proto3" json:"project_identity,omitempty"`
-	// Version 3 descriptor. Its presence selects the V3 resolver; project and
-	// project_identity are retained solely for the explicit V2 compatibility branch.
-	ProjectIdentityV3 *ProjectIdentityV3 `protobuf:"bytes,6,opt,name=project_identity_v3,json=projectIdentityV3,proto3" json:"project_identity_v3,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	SessionId     string `protobuf:"bytes,4,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CallToolRequest) Reset() {
@@ -2487,20 +2365,6 @@ func (x *CallToolRequest) GetSessionId() string {
 	return ""
 }
 
-func (x *CallToolRequest) GetProjectIdentity() *ProjectIdentityV2 {
-	if x != nil {
-		return x.ProjectIdentity
-	}
-	return nil
-}
-
-func (x *CallToolRequest) GetProjectIdentityV3() *ProjectIdentityV3 {
-	if x != nil {
-		return x.ProjectIdentityV3
-	}
-	return nil
-}
-
 // CallToolResponse carries the result of an MCP tool call.
 type CallToolResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -2510,10 +2374,8 @@ type CallToolResponse struct {
 	ContentJson []byte `protobuf:"bytes,2,opt,name=content_json,json=contentJson,proto3" json:"content_json,omitempty"`
 	// Server-resolved canonical selector used for this call.
 	CanonicalProject string `protobuf:"bytes,3,opt,name=canonical_project,json=canonicalProject,proto3" json:"canonical_project,omitempty"`
-	// Present only for a V3 request that resolved successfully.
-	ProjectResolutionV3 *ProjectResolutionResultV3 `protobuf:"bytes,4,opt,name=project_resolution_v3,json=projectResolutionV3,proto3" json:"project_resolution_v3,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *CallToolResponse) Reset() {
@@ -2567,24 +2429,14 @@ func (x *CallToolResponse) GetCanonicalProject() string {
 	return ""
 }
 
-func (x *CallToolResponse) GetProjectResolutionV3() *ProjectResolutionResultV3 {
-	if x != nil {
-		return x.ProjectResolutionV3
-	}
-	return nil
-}
-
 // InitializeRequest is the handshake from daemon to server.
 type InitializeRequest struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	ClientName      string                 `protobuf:"bytes,1,opt,name=client_name,json=clientName,proto3" json:"client_name,omitempty"`
-	ClientVersion   string                 `protobuf:"bytes,2,opt,name=client_version,json=clientVersion,proto3" json:"client_version,omitempty"`
-	Project         string                 `protobuf:"bytes,3,opt,name=project,proto3" json:"project,omitempty"`
-	ProjectIdentity *ProjectIdentityV2     `protobuf:"bytes,4,opt,name=project_identity,json=projectIdentity,proto3" json:"project_identity,omitempty"`
-	// Version 3 descriptor. Its presence selects the V3 resolver.
-	ProjectIdentityV3 *ProjectIdentityV3 `protobuf:"bytes,5,opt,name=project_identity_v3,json=projectIdentityV3,proto3" json:"project_identity_v3,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClientName    string                 `protobuf:"bytes,1,opt,name=client_name,json=clientName,proto3" json:"client_name,omitempty"`
+	ClientVersion string                 `protobuf:"bytes,2,opt,name=client_version,json=clientVersion,proto3" json:"client_version,omitempty"`
+	Project       string                 `protobuf:"bytes,3,opt,name=project,proto3" json:"project,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *InitializeRequest) Reset() {
@@ -2638,20 +2490,6 @@ func (x *InitializeRequest) GetProject() string {
 	return ""
 }
 
-func (x *InitializeRequest) GetProjectIdentity() *ProjectIdentityV2 {
-	if x != nil {
-		return x.ProjectIdentity
-	}
-	return nil
-}
-
-func (x *InitializeRequest) GetProjectIdentityV3() *ProjectIdentityV3 {
-	if x != nil {
-		return x.ProjectIdentityV3
-	}
-	return nil
-}
-
 // InitializeResponse carries server capabilities and tool definitions.
 type InitializeResponse struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
@@ -2659,8 +2497,6 @@ type InitializeResponse struct {
 	ServerVersion    string                 `protobuf:"bytes,2,opt,name=server_version,json=serverVersion,proto3" json:"server_version,omitempty"`
 	Tools            []*ToolDefinition      `protobuf:"bytes,3,rep,name=tools,proto3" json:"tools,omitempty"`
 	CanonicalProject string                 `protobuf:"bytes,4,opt,name=canonical_project,json=canonicalProject,proto3" json:"canonical_project,omitempty"`
-	// Present only for a V3 request that resolved successfully.
-	ProjectResolutionV3 *ProjectResolutionResultV3 `protobuf:"bytes,5,opt,name=project_resolution_v3,json=projectResolutionV3,proto3" json:"project_resolution_v3,omitempty"`
 	// Present only for an eligible authenticated workstation keycard.
 	AuthenticatedSubjectProofSha256 []byte `protobuf:"bytes,6,opt,name=authenticated_subject_proof_sha256,json=authenticatedSubjectProofSha256,proto3" json:"authenticated_subject_proof_sha256,omitempty"`
 	unknownFields                   protoimpl.UnknownFields
@@ -2723,13 +2559,6 @@ func (x *InitializeResponse) GetCanonicalProject() string {
 		return x.CanonicalProject
 	}
 	return ""
-}
-
-func (x *InitializeResponse) GetProjectResolutionV3() *ProjectResolutionResultV3 {
-	if x != nil {
-		return x.ProjectResolutionV3
-	}
-	return nil
 }
 
 func (x *InitializeResponse) GetAuthenticatedSubjectProofSha256() []byte {
@@ -3231,104 +3060,6 @@ func (x *CodeIndexUploadReceipt) GetErrors() []string {
 	return nil
 }
 
-// ProjectIdentityV2 carries one complete identity source. Git identities use
-// git_remote+relative_path. Non-git identities use a 128-bit anchor and require
-// explicit anchor_shared presence. The selector remains on the outer request
-// for old-server compatibility; metadata is not an authentication credential.
-// Appended after the existing message declarations to minimize generated-code
-// churn while preserving every pre-v2 descriptor index.
-type ProjectIdentityV2 struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	Version         uint32                 `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"`
-	LegacyProjectId string                 `protobuf:"bytes,2,opt,name=legacy_project_id,json=legacyProjectId,proto3" json:"legacy_project_id,omitempty"`
-	DisplayName     string                 `protobuf:"bytes,3,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
-	GitRemote       string                 `protobuf:"bytes,4,opt,name=git_remote,json=gitRemote,proto3" json:"git_remote,omitempty"`
-	RelativePath    string                 `protobuf:"bytes,5,opt,name=relative_path,json=relativePath,proto3" json:"relative_path,omitempty"`
-	NonGitAnchor    string                 `protobuf:"bytes,6,opt,name=non_git_anchor,json=nonGitAnchor,proto3" json:"non_git_anchor,omitempty"`
-	AnchorShared    *bool                  `protobuf:"varint,7,opt,name=anchor_shared,json=anchorShared,proto3,oneof" json:"anchor_shared,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
-}
-
-func (x *ProjectIdentityV2) Reset() {
-	*x = ProjectIdentityV2{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[27]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ProjectIdentityV2) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ProjectIdentityV2) ProtoMessage() {}
-
-func (x *ProjectIdentityV2) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[27]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ProjectIdentityV2.ProtoReflect.Descriptor instead.
-func (*ProjectIdentityV2) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{27}
-}
-
-func (x *ProjectIdentityV2) GetVersion() uint32 {
-	if x != nil {
-		return x.Version
-	}
-	return 0
-}
-
-func (x *ProjectIdentityV2) GetLegacyProjectId() string {
-	if x != nil {
-		return x.LegacyProjectId
-	}
-	return ""
-}
-
-func (x *ProjectIdentityV2) GetDisplayName() string {
-	if x != nil {
-		return x.DisplayName
-	}
-	return ""
-}
-
-func (x *ProjectIdentityV2) GetGitRemote() string {
-	if x != nil {
-		return x.GitRemote
-	}
-	return ""
-}
-
-func (x *ProjectIdentityV2) GetRelativePath() string {
-	if x != nil {
-		return x.RelativePath
-	}
-	return ""
-}
-
-func (x *ProjectIdentityV2) GetNonGitAnchor() string {
-	if x != nil {
-		return x.NonGitAnchor
-	}
-	return ""
-}
-
-func (x *ProjectIdentityV2) GetAnchorShared() bool {
-	if x != nil && x.AnchorShared != nil {
-		return *x.AnchorShared
-	}
-	return false
-}
-
 // ProjectLegacyIdentifierV3 is non-authoritative compatibility evidence.
 type ProjectLegacyIdentifierV3 struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -3341,7 +3072,7 @@ type ProjectLegacyIdentifierV3 struct {
 
 func (x *ProjectLegacyIdentifierV3) Reset() {
 	*x = ProjectLegacyIdentifierV3{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[28]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3353,7 +3084,7 @@ func (x *ProjectLegacyIdentifierV3) String() string {
 func (*ProjectLegacyIdentifierV3) ProtoMessage() {}
 
 func (x *ProjectLegacyIdentifierV3) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[28]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3366,7 +3097,7 @@ func (x *ProjectLegacyIdentifierV3) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProjectLegacyIdentifierV3.ProtoReflect.Descriptor instead.
 func (*ProjectLegacyIdentifierV3) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{28}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *ProjectLegacyIdentifierV3) GetScheme() string {
@@ -3390,8 +3121,8 @@ func (x *ProjectLegacyIdentifierV3) GetProvenance() string {
 	return ""
 }
 
-// ProjectIdentityV3 is the versioned project descriptor submitted by a V3-capable client.
-// It deliberately has no project_key: clients cannot select canonical project authority.
+// ProjectIdentityV3 carries project evidence for authenticated HostAdvisor task authority.
+// Normal tool and session requests use the canonical UUID directly.
 type ProjectIdentityV3 struct {
 	state                protoimpl.MessageState       `protogen:"open.v1"`
 	Version              uint32                       `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"`
@@ -3407,7 +3138,7 @@ type ProjectIdentityV3 struct {
 
 func (x *ProjectIdentityV3) Reset() {
 	*x = ProjectIdentityV3{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[29]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3419,7 +3150,7 @@ func (x *ProjectIdentityV3) String() string {
 func (*ProjectIdentityV3) ProtoMessage() {}
 
 func (x *ProjectIdentityV3) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[29]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3432,7 +3163,7 @@ func (x *ProjectIdentityV3) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProjectIdentityV3.ProtoReflect.Descriptor instead.
 func (*ProjectIdentityV3) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{29}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *ProjectIdentityV3) GetVersion() uint32 {
@@ -3484,308 +3215,6 @@ func (x *ProjectIdentityV3) GetClientInstanceId() string {
 	return ""
 }
 
-// ProjectResolutionResultV3 carries only public resolution facts. project_key,
-// resolved_scope, and redirect_reference are set only for successful outcomes.
-type ProjectResolutionResultV3 struct {
-	state             protoimpl.MessageState     `protogen:"open.v1"`
-	Outcome           ProjectResolutionOutcomeV3 `protobuf:"varint,1,opt,name=outcome,proto3,enum=engram.v1.ProjectResolutionOutcomeV3" json:"outcome,omitempty"`
-	Correlation       string                     `protobuf:"bytes,2,opt,name=correlation,proto3" json:"correlation,omitempty"`
-	ProjectKey        *string                    `protobuf:"bytes,3,opt,name=project_key,json=projectKey,proto3,oneof" json:"project_key,omitempty"`
-	ResolvedScope     *string                    `protobuf:"bytes,4,opt,name=resolved_scope,json=resolvedScope,proto3,oneof" json:"resolved_scope,omitempty"`
-	RedirectReference *string                    `protobuf:"bytes,5,opt,name=redirect_reference,json=redirectReference,proto3,oneof" json:"redirect_reference,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
-}
-
-func (x *ProjectResolutionResultV3) Reset() {
-	*x = ProjectResolutionResultV3{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[30]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ProjectResolutionResultV3) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ProjectResolutionResultV3) ProtoMessage() {}
-
-func (x *ProjectResolutionResultV3) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[30]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ProjectResolutionResultV3.ProtoReflect.Descriptor instead.
-func (*ProjectResolutionResultV3) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{30}
-}
-
-func (x *ProjectResolutionResultV3) GetOutcome() ProjectResolutionOutcomeV3 {
-	if x != nil {
-		return x.Outcome
-	}
-	return ProjectResolutionOutcomeV3_PROJECT_RESOLUTION_OUTCOME_V3_UNSPECIFIED
-}
-
-func (x *ProjectResolutionResultV3) GetCorrelation() string {
-	if x != nil {
-		return x.Correlation
-	}
-	return ""
-}
-
-func (x *ProjectResolutionResultV3) GetProjectKey() string {
-	if x != nil && x.ProjectKey != nil {
-		return *x.ProjectKey
-	}
-	return ""
-}
-
-func (x *ProjectResolutionResultV3) GetResolvedScope() string {
-	if x != nil && x.ResolvedScope != nil {
-		return *x.ResolvedScope
-	}
-	return ""
-}
-
-func (x *ProjectResolutionResultV3) GetRedirectReference() string {
-	if x != nil && x.RedirectReference != nil {
-		return *x.RedirectReference
-	}
-	return ""
-}
-
-// RegisterProjectIdentityV3Request is deliberately descriptor-only. It carries
-// neither project authority nor registration authorization from the client.
-type RegisterProjectIdentityV3Request struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	ProjectIdentityV3 *ProjectIdentityV3     `protobuf:"bytes,1,opt,name=project_identity_v3,json=projectIdentityV3,proto3" json:"project_identity_v3,omitempty"`
-	// relay_revision selects the additive registration branch used only by the
-	// private bridge. An omitted value preserves existing registration behavior.
-	RelayRevision string `protobuf:"bytes,2,opt,name=relay_revision,json=relayRevision,proto3" json:"relay_revision,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *RegisterProjectIdentityV3Request) Reset() {
-	*x = RegisterProjectIdentityV3Request{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[31]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RegisterProjectIdentityV3Request) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RegisterProjectIdentityV3Request) ProtoMessage() {}
-
-func (x *RegisterProjectIdentityV3Request) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[31]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RegisterProjectIdentityV3Request.ProtoReflect.Descriptor instead.
-func (*RegisterProjectIdentityV3Request) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{31}
-}
-
-func (x *RegisterProjectIdentityV3Request) GetProjectIdentityV3() *ProjectIdentityV3 {
-	if x != nil {
-		return x.ProjectIdentityV3
-	}
-	return nil
-}
-
-func (x *RegisterProjectIdentityV3Request) GetRelayRevision() string {
-	if x != nil {
-		return x.RelayRevision
-	}
-	return ""
-}
-
-// RegisterProjectIdentityV3Response returns the existing typed V3 resolution result.
-type RegisterProjectIdentityV3Response struct {
-	state               protoimpl.MessageState     `protogen:"open.v1"`
-	ProjectResolutionV3 *ProjectResolutionResultV3 `protobuf:"bytes,1,opt,name=project_resolution_v3,json=projectResolutionV3,proto3" json:"project_resolution_v3,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
-}
-
-func (x *RegisterProjectIdentityV3Response) Reset() {
-	*x = RegisterProjectIdentityV3Response{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[32]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RegisterProjectIdentityV3Response) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RegisterProjectIdentityV3Response) ProtoMessage() {}
-
-func (x *RegisterProjectIdentityV3Response) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[32]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RegisterProjectIdentityV3Response.ProtoReflect.Descriptor instead.
-func (*RegisterProjectIdentityV3Response) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{32}
-}
-
-func (x *RegisterProjectIdentityV3Response) GetProjectResolutionV3() *ProjectResolutionResultV3 {
-	if x != nil {
-		return x.ProjectResolutionV3
-	}
-	return nil
-}
-
-// GetAmbientCandidatesRequest contains only relay-bound callback facts. It has
-// no raw project selector: the V3 descriptor is resolved by the server.
-type GetAmbientCandidatesRequest struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	ProjectIdentityV3 *ProjectIdentityV3     `protobuf:"bytes,1,opt,name=project_identity_v3,json=projectIdentityV3,proto3" json:"project_identity_v3,omitempty"`
-	HostSessionRef    string                 `protobuf:"bytes,2,opt,name=host_session_ref,json=hostSessionRef,proto3" json:"host_session_ref,omitempty"`
-	QueryText         string                 `protobuf:"bytes,3,opt,name=query_text,json=queryText,proto3" json:"query_text,omitempty"`
-	Limit             int32                  `protobuf:"varint,4,opt,name=limit,proto3" json:"limit,omitempty"`
-	RelayRevision     string                 `protobuf:"bytes,5,opt,name=relay_revision,json=relayRevision,proto3" json:"relay_revision,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
-}
-
-func (x *GetAmbientCandidatesRequest) Reset() {
-	*x = GetAmbientCandidatesRequest{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[33]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetAmbientCandidatesRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetAmbientCandidatesRequest) ProtoMessage() {}
-
-func (x *GetAmbientCandidatesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[33]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetAmbientCandidatesRequest.ProtoReflect.Descriptor instead.
-func (*GetAmbientCandidatesRequest) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{33}
-}
-
-func (x *GetAmbientCandidatesRequest) GetProjectIdentityV3() *ProjectIdentityV3 {
-	if x != nil {
-		return x.ProjectIdentityV3
-	}
-	return nil
-}
-
-func (x *GetAmbientCandidatesRequest) GetHostSessionRef() string {
-	if x != nil {
-		return x.HostSessionRef
-	}
-	return ""
-}
-
-func (x *GetAmbientCandidatesRequest) GetQueryText() string {
-	if x != nil {
-		return x.QueryText
-	}
-	return ""
-}
-
-func (x *GetAmbientCandidatesRequest) GetLimit() int32 {
-	if x != nil {
-		return x.Limit
-	}
-	return 0
-}
-
-func (x *GetAmbientCandidatesRequest) GetRelayRevision() string {
-	if x != nil {
-		return x.RelayRevision
-	}
-	return ""
-}
-
-// GetAmbientCandidatesResponse returns only bounded, untrusted ambient text.
-type GetAmbientCandidatesResponse struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	AdditionalContext string                 `protobuf:"bytes,1,opt,name=additional_context,json=additionalContext,proto3" json:"additional_context,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
-}
-
-func (x *GetAmbientCandidatesResponse) Reset() {
-	*x = GetAmbientCandidatesResponse{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[34]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetAmbientCandidatesResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetAmbientCandidatesResponse) ProtoMessage() {}
-
-func (x *GetAmbientCandidatesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[34]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetAmbientCandidatesResponse.ProtoReflect.Descriptor instead.
-func (*GetAmbientCandidatesResponse) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{34}
-}
-
-func (x *GetAmbientCandidatesResponse) GetAdditionalContext() string {
-	if x != nil {
-		return x.AdditionalContext
-	}
-	return ""
-}
-
 type HostAdvisorProtocolRange struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	MinVersion    uint32                 `protobuf:"varint,1,opt,name=min_version,json=minVersion,proto3" json:"min_version,omitempty"`
@@ -3796,7 +3225,7 @@ type HostAdvisorProtocolRange struct {
 
 func (x *HostAdvisorProtocolRange) Reset() {
 	*x = HostAdvisorProtocolRange{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[35]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3808,7 +3237,7 @@ func (x *HostAdvisorProtocolRange) String() string {
 func (*HostAdvisorProtocolRange) ProtoMessage() {}
 
 func (x *HostAdvisorProtocolRange) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[35]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3821,7 +3250,7 @@ func (x *HostAdvisorProtocolRange) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostAdvisorProtocolRange.ProtoReflect.Descriptor instead.
 func (*HostAdvisorProtocolRange) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{35}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *HostAdvisorProtocolRange) GetMinVersion() uint32 {
@@ -3851,7 +3280,7 @@ type HostAdvisorHost struct {
 
 func (x *HostAdvisorHost) Reset() {
 	*x = HostAdvisorHost{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[36]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3863,7 +3292,7 @@ func (x *HostAdvisorHost) String() string {
 func (*HostAdvisorHost) ProtoMessage() {}
 
 func (x *HostAdvisorHost) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[36]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3876,7 +3305,7 @@ func (x *HostAdvisorHost) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostAdvisorHost.ProtoReflect.Descriptor instead.
 func (*HostAdvisorHost) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{36}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *HostAdvisorHost) GetFamily() HostAdvisorHostFamily {
@@ -3924,7 +3353,7 @@ type HostAdvisorArtifact struct {
 
 func (x *HostAdvisorArtifact) Reset() {
 	*x = HostAdvisorArtifact{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[37]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3936,7 +3365,7 @@ func (x *HostAdvisorArtifact) String() string {
 func (*HostAdvisorArtifact) ProtoMessage() {}
 
 func (x *HostAdvisorArtifact) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[37]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3949,7 +3378,7 @@ func (x *HostAdvisorArtifact) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostAdvisorArtifact.ProtoReflect.Descriptor instead.
 func (*HostAdvisorArtifact) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{37}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *HostAdvisorArtifact) GetKind() HostAdvisorArtifactKind {
@@ -3976,7 +3405,7 @@ type HostAdvisorEvidenceRef struct {
 
 func (x *HostAdvisorEvidenceRef) Reset() {
 	*x = HostAdvisorEvidenceRef{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[38]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3988,7 +3417,7 @@ func (x *HostAdvisorEvidenceRef) String() string {
 func (*HostAdvisorEvidenceRef) ProtoMessage() {}
 
 func (x *HostAdvisorEvidenceRef) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[38]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4001,7 +3430,7 @@ func (x *HostAdvisorEvidenceRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostAdvisorEvidenceRef.ProtoReflect.Descriptor instead.
 func (*HostAdvisorEvidenceRef) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{38}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *HostAdvisorEvidenceRef) GetArtifact() *HostAdvisorArtifact {
@@ -4030,7 +3459,7 @@ type HostAdvisorCorrelation struct {
 
 func (x *HostAdvisorCorrelation) Reset() {
 	*x = HostAdvisorCorrelation{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[39]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4042,7 +3471,7 @@ func (x *HostAdvisorCorrelation) String() string {
 func (*HostAdvisorCorrelation) ProtoMessage() {}
 
 func (x *HostAdvisorCorrelation) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[39]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4055,7 +3484,7 @@ func (x *HostAdvisorCorrelation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostAdvisorCorrelation.ProtoReflect.Descriptor instead.
 func (*HostAdvisorCorrelation) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{39}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *HostAdvisorCorrelation) GetSession() bool {
@@ -4097,7 +3526,7 @@ type HostAdvisorCallback struct {
 
 func (x *HostAdvisorCallback) Reset() {
 	*x = HostAdvisorCallback{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[40]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4109,7 +3538,7 @@ func (x *HostAdvisorCallback) String() string {
 func (*HostAdvisorCallback) ProtoMessage() {}
 
 func (x *HostAdvisorCallback) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[40]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4122,7 +3551,7 @@ func (x *HostAdvisorCallback) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostAdvisorCallback.ProtoReflect.Descriptor instead.
 func (*HostAdvisorCallback) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{40}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *HostAdvisorCallback) GetAwaited() bool {
@@ -4160,7 +3589,7 @@ type HostCapability struct {
 
 func (x *HostCapability) Reset() {
 	*x = HostCapability{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[41]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4172,7 +3601,7 @@ func (x *HostCapability) String() string {
 func (*HostCapability) ProtoMessage() {}
 
 func (x *HostCapability) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[41]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4185,7 +3614,7 @@ func (x *HostCapability) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostCapability.ProtoReflect.Descriptor instead.
 func (*HostCapability) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{41}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *HostCapability) GetSemantic() HostAdvisorSemantic {
@@ -4242,7 +3671,7 @@ type HostHello struct {
 
 func (x *HostHello) Reset() {
 	*x = HostHello{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[42]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4254,7 +3683,7 @@ func (x *HostHello) String() string {
 func (*HostHello) ProtoMessage() {}
 
 func (x *HostHello) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[42]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4267,7 +3696,7 @@ func (x *HostHello) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostHello.ProtoReflect.Descriptor instead.
 func (*HostHello) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{42}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *HostHello) GetProtocolRange() *HostAdvisorProtocolRange {
@@ -4311,7 +3740,7 @@ type AcceptedCapabilitySnapshot struct {
 
 func (x *AcceptedCapabilitySnapshot) Reset() {
 	*x = AcceptedCapabilitySnapshot{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[43]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4323,7 +3752,7 @@ func (x *AcceptedCapabilitySnapshot) String() string {
 func (*AcceptedCapabilitySnapshot) ProtoMessage() {}
 
 func (x *AcceptedCapabilitySnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[43]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4336,7 +3765,7 @@ func (x *AcceptedCapabilitySnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AcceptedCapabilitySnapshot.ProtoReflect.Descriptor instead.
 func (*AcceptedCapabilitySnapshot) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{43}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *AcceptedCapabilitySnapshot) GetSnapshotId() string {
@@ -4387,7 +3816,7 @@ type HostBinding struct {
 
 func (x *HostBinding) Reset() {
 	*x = HostBinding{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[44]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4399,7 +3828,7 @@ func (x *HostBinding) String() string {
 func (*HostBinding) ProtoMessage() {}
 
 func (x *HostBinding) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[44]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4412,7 +3841,7 @@ func (x *HostBinding) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostBinding.ProtoReflect.Descriptor instead.
 func (*HostBinding) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{44}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *HostBinding) GetBindingId() string {
@@ -4459,7 +3888,7 @@ type HostAdvisorBindRequest struct {
 
 func (x *HostAdvisorBindRequest) Reset() {
 	*x = HostAdvisorBindRequest{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[45]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4471,7 +3900,7 @@ func (x *HostAdvisorBindRequest) String() string {
 func (*HostAdvisorBindRequest) ProtoMessage() {}
 
 func (x *HostAdvisorBindRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[45]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4484,7 +3913,7 @@ func (x *HostAdvisorBindRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostAdvisorBindRequest.ProtoReflect.Descriptor instead.
 func (*HostAdvisorBindRequest) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{45}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *HostAdvisorBindRequest) GetHello() *HostHello {
@@ -4503,7 +3932,7 @@ type HostAdvisorBindResponse struct {
 
 func (x *HostAdvisorBindResponse) Reset() {
 	*x = HostAdvisorBindResponse{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[46]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4515,7 +3944,7 @@ func (x *HostAdvisorBindResponse) String() string {
 func (*HostAdvisorBindResponse) ProtoMessage() {}
 
 func (x *HostAdvisorBindResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[46]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4528,7 +3957,7 @@ func (x *HostAdvisorBindResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostAdvisorBindResponse.ProtoReflect.Descriptor instead.
 func (*HostAdvisorBindResponse) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{46}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *HostAdvisorBindResponse) GetBinding() *HostBinding {
@@ -4548,7 +3977,7 @@ type HostAdvisorTypedFact struct {
 
 func (x *HostAdvisorTypedFact) Reset() {
 	*x = HostAdvisorTypedFact{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[47]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4560,7 +3989,7 @@ func (x *HostAdvisorTypedFact) String() string {
 func (*HostAdvisorTypedFact) ProtoMessage() {}
 
 func (x *HostAdvisorTypedFact) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[47]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4573,7 +4002,7 @@ func (x *HostAdvisorTypedFact) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostAdvisorTypedFact.ProtoReflect.Descriptor instead.
 func (*HostAdvisorTypedFact) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{47}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *HostAdvisorTypedFact) GetKind() HostAdvisorFactKind {
@@ -4600,7 +4029,7 @@ type HostAdvisorBeforeAgentStartFacts struct {
 
 func (x *HostAdvisorBeforeAgentStartFacts) Reset() {
 	*x = HostAdvisorBeforeAgentStartFacts{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[48]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4612,7 +4041,7 @@ func (x *HostAdvisorBeforeAgentStartFacts) String() string {
 func (*HostAdvisorBeforeAgentStartFacts) ProtoMessage() {}
 
 func (x *HostAdvisorBeforeAgentStartFacts) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[48]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4625,7 +4054,7 @@ func (x *HostAdvisorBeforeAgentStartFacts) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostAdvisorBeforeAgentStartFacts.ProtoReflect.Descriptor instead.
 func (*HostAdvisorBeforeAgentStartFacts) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{48}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *HostAdvisorBeforeAgentStartFacts) GetTaskQuery() string {
@@ -4652,7 +4081,7 @@ type HostAdvisorReceiptIdentity struct {
 
 func (x *HostAdvisorReceiptIdentity) Reset() {
 	*x = HostAdvisorReceiptIdentity{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[49]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4664,7 +4093,7 @@ func (x *HostAdvisorReceiptIdentity) String() string {
 func (*HostAdvisorReceiptIdentity) ProtoMessage() {}
 
 func (x *HostAdvisorReceiptIdentity) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[49]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4677,7 +4106,7 @@ func (x *HostAdvisorReceiptIdentity) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostAdvisorReceiptIdentity.ProtoReflect.Descriptor instead.
 func (*HostAdvisorReceiptIdentity) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{49}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *HostAdvisorReceiptIdentity) GetReceiptId() string {
@@ -4707,7 +4136,7 @@ type HostAdvisorOccurrence struct {
 
 func (x *HostAdvisorOccurrence) Reset() {
 	*x = HostAdvisorOccurrence{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[50]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4719,7 +4148,7 @@ func (x *HostAdvisorOccurrence) String() string {
 func (*HostAdvisorOccurrence) ProtoMessage() {}
 
 func (x *HostAdvisorOccurrence) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[50]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4732,7 +4161,7 @@ func (x *HostAdvisorOccurrence) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostAdvisorOccurrence.ProtoReflect.Descriptor instead.
 func (*HostAdvisorOccurrence) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{50}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *HostAdvisorOccurrence) GetPhase() HostAdvisorSemantic {
@@ -4782,7 +4211,7 @@ type HostAdvisorAdviseRequest struct {
 
 func (x *HostAdvisorAdviseRequest) Reset() {
 	*x = HostAdvisorAdviseRequest{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[51]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4794,7 +4223,7 @@ func (x *HostAdvisorAdviseRequest) String() string {
 func (*HostAdvisorAdviseRequest) ProtoMessage() {}
 
 func (x *HostAdvisorAdviseRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[51]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4807,7 +4236,7 @@ func (x *HostAdvisorAdviseRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostAdvisorAdviseRequest.ProtoReflect.Descriptor instead.
 func (*HostAdvisorAdviseRequest) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{51}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *HostAdvisorAdviseRequest) GetBindingId() string {
@@ -4844,7 +4273,7 @@ type HostAdvisorKnowledgeReference struct {
 
 func (x *HostAdvisorKnowledgeReference) Reset() {
 	*x = HostAdvisorKnowledgeReference{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[52]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4856,7 +4285,7 @@ func (x *HostAdvisorKnowledgeReference) String() string {
 func (*HostAdvisorKnowledgeReference) ProtoMessage() {}
 
 func (x *HostAdvisorKnowledgeReference) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[52]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4869,7 +4298,7 @@ func (x *HostAdvisorKnowledgeReference) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostAdvisorKnowledgeReference.ProtoReflect.Descriptor instead.
 func (*HostAdvisorKnowledgeReference) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{52}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *HostAdvisorKnowledgeReference) GetMemoryId() int64 {
@@ -4917,7 +4346,7 @@ type HostAdvisorPresentation struct {
 
 func (x *HostAdvisorPresentation) Reset() {
 	*x = HostAdvisorPresentation{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[53]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4929,7 +4358,7 @@ func (x *HostAdvisorPresentation) String() string {
 func (*HostAdvisorPresentation) ProtoMessage() {}
 
 func (x *HostAdvisorPresentation) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[53]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4942,7 +4371,7 @@ func (x *HostAdvisorPresentation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostAdvisorPresentation.ProtoReflect.Descriptor instead.
 func (*HostAdvisorPresentation) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{53}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *HostAdvisorPresentation) GetInjectionMode() HostAdvisorContextInjectionMode {
@@ -4971,7 +4400,7 @@ type HostAdvisorPacket struct {
 
 func (x *HostAdvisorPacket) Reset() {
 	*x = HostAdvisorPacket{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[54]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4983,7 +4412,7 @@ func (x *HostAdvisorPacket) String() string {
 func (*HostAdvisorPacket) ProtoMessage() {}
 
 func (x *HostAdvisorPacket) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[54]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4996,7 +4425,7 @@ func (x *HostAdvisorPacket) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostAdvisorPacket.ProtoReflect.Descriptor instead.
 func (*HostAdvisorPacket) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{54}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *HostAdvisorPacket) GetReceipt() *HostAdvisorReceiptIdentity {
@@ -5037,7 +4466,7 @@ type HostAdvisorEmit struct {
 
 func (x *HostAdvisorEmit) Reset() {
 	*x = HostAdvisorEmit{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[55]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5049,7 +4478,7 @@ func (x *HostAdvisorEmit) String() string {
 func (*HostAdvisorEmit) ProtoMessage() {}
 
 func (x *HostAdvisorEmit) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[55]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5062,7 +4491,7 @@ func (x *HostAdvisorEmit) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostAdvisorEmit.ProtoReflect.Descriptor instead.
 func (*HostAdvisorEmit) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{55}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *HostAdvisorEmit) GetReceipt() *HostAdvisorReceiptIdentity {
@@ -5089,7 +4518,7 @@ type HostAdvisorAbstain struct {
 
 func (x *HostAdvisorAbstain) Reset() {
 	*x = HostAdvisorAbstain{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[56]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5101,7 +4530,7 @@ func (x *HostAdvisorAbstain) String() string {
 func (*HostAdvisorAbstain) ProtoMessage() {}
 
 func (x *HostAdvisorAbstain) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[56]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5114,7 +4543,7 @@ func (x *HostAdvisorAbstain) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostAdvisorAbstain.ProtoReflect.Descriptor instead.
 func (*HostAdvisorAbstain) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{56}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *HostAdvisorAbstain) GetReceipt() *HostAdvisorReceiptIdentity {
@@ -5140,7 +4569,7 @@ type HostAdvisorDeliveryAmbiguous struct {
 
 func (x *HostAdvisorDeliveryAmbiguous) Reset() {
 	*x = HostAdvisorDeliveryAmbiguous{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[57]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5152,7 +4581,7 @@ func (x *HostAdvisorDeliveryAmbiguous) String() string {
 func (*HostAdvisorDeliveryAmbiguous) ProtoMessage() {}
 
 func (x *HostAdvisorDeliveryAmbiguous) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[57]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5165,7 +4594,7 @@ func (x *HostAdvisorDeliveryAmbiguous) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostAdvisorDeliveryAmbiguous.ProtoReflect.Descriptor instead.
 func (*HostAdvisorDeliveryAmbiguous) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{57}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *HostAdvisorDeliveryAmbiguous) GetReceipt() *HostAdvisorReceiptIdentity {
@@ -5186,7 +4615,7 @@ type HostAdvisorUnavailable struct {
 
 func (x *HostAdvisorUnavailable) Reset() {
 	*x = HostAdvisorUnavailable{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[58]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5198,7 +4627,7 @@ func (x *HostAdvisorUnavailable) String() string {
 func (*HostAdvisorUnavailable) ProtoMessage() {}
 
 func (x *HostAdvisorUnavailable) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[58]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5211,7 +4640,7 @@ func (x *HostAdvisorUnavailable) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostAdvisorUnavailable.ProtoReflect.Descriptor instead.
 func (*HostAdvisorUnavailable) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{58}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *HostAdvisorUnavailable) GetCorrelationId() string {
@@ -5250,7 +4679,7 @@ type HostAdvisorAdviseResponse struct {
 
 func (x *HostAdvisorAdviseResponse) Reset() {
 	*x = HostAdvisorAdviseResponse{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[59]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5262,7 +4691,7 @@ func (x *HostAdvisorAdviseResponse) String() string {
 func (*HostAdvisorAdviseResponse) ProtoMessage() {}
 
 func (x *HostAdvisorAdviseResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[59]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5275,7 +4704,7 @@ func (x *HostAdvisorAdviseResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostAdvisorAdviseResponse.ProtoReflect.Descriptor instead.
 func (*HostAdvisorAdviseResponse) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{59}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *HostAdvisorAdviseResponse) GetDecision() isHostAdvisorAdviseResponse_Decision {
@@ -5358,7 +4787,7 @@ type HostAdvisorAdapterAttestation struct {
 
 func (x *HostAdvisorAdapterAttestation) Reset() {
 	*x = HostAdvisorAdapterAttestation{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[60]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5370,7 +4799,7 @@ func (x *HostAdvisorAdapterAttestation) String() string {
 func (*HostAdvisorAdapterAttestation) ProtoMessage() {}
 
 func (x *HostAdvisorAdapterAttestation) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[60]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5383,7 +4812,7 @@ func (x *HostAdvisorAdapterAttestation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostAdvisorAdapterAttestation.ProtoReflect.Descriptor instead.
 func (*HostAdvisorAdapterAttestation) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{60}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *HostAdvisorAdapterAttestation) GetKind() HostAdvisorAttestationKind {
@@ -5402,7 +4831,7 @@ type HostAdvisorAdapterSemanticGap struct {
 
 func (x *HostAdvisorAdapterSemanticGap) Reset() {
 	*x = HostAdvisorAdapterSemanticGap{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[61]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5414,7 +4843,7 @@ func (x *HostAdvisorAdapterSemanticGap) String() string {
 func (*HostAdvisorAdapterSemanticGap) ProtoMessage() {}
 
 func (x *HostAdvisorAdapterSemanticGap) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[61]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5427,7 +4856,7 @@ func (x *HostAdvisorAdapterSemanticGap) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostAdvisorAdapterSemanticGap.ProtoReflect.Descriptor instead.
 func (*HostAdvisorAdapterSemanticGap) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{61}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *HostAdvisorAdapterSemanticGap) GetCode() HostAdvisorSemanticGapCode {
@@ -5452,7 +4881,7 @@ type HostAdvisorReceiptBoundObservation struct {
 
 func (x *HostAdvisorReceiptBoundObservation) Reset() {
 	*x = HostAdvisorReceiptBoundObservation{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[62]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5464,7 +4893,7 @@ func (x *HostAdvisorReceiptBoundObservation) String() string {
 func (*HostAdvisorReceiptBoundObservation) ProtoMessage() {}
 
 func (x *HostAdvisorReceiptBoundObservation) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[62]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5477,7 +4906,7 @@ func (x *HostAdvisorReceiptBoundObservation) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use HostAdvisorReceiptBoundObservation.ProtoReflect.Descriptor instead.
 func (*HostAdvisorReceiptBoundObservation) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{62}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *HostAdvisorReceiptBoundObservation) GetDecisionReceipt() *HostAdvisorReceiptIdentity {
@@ -5548,7 +4977,7 @@ type HostAdvisorChannelSemanticGap struct {
 
 func (x *HostAdvisorChannelSemanticGap) Reset() {
 	*x = HostAdvisorChannelSemanticGap{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[63]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5560,7 +4989,7 @@ func (x *HostAdvisorChannelSemanticGap) String() string {
 func (*HostAdvisorChannelSemanticGap) ProtoMessage() {}
 
 func (x *HostAdvisorChannelSemanticGap) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[63]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5573,7 +5002,7 @@ func (x *HostAdvisorChannelSemanticGap) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostAdvisorChannelSemanticGap.ProtoReflect.Descriptor instead.
 func (*HostAdvisorChannelSemanticGap) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{63}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *HostAdvisorChannelSemanticGap) GetObservationAnchorRef() string {
@@ -5604,7 +5033,7 @@ type HostAdvisorObserveRequest struct {
 
 func (x *HostAdvisorObserveRequest) Reset() {
 	*x = HostAdvisorObserveRequest{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[64]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5616,7 +5045,7 @@ func (x *HostAdvisorObserveRequest) String() string {
 func (*HostAdvisorObserveRequest) ProtoMessage() {}
 
 func (x *HostAdvisorObserveRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[64]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5629,7 +5058,7 @@ func (x *HostAdvisorObserveRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostAdvisorObserveRequest.ProtoReflect.Descriptor instead.
 func (*HostAdvisorObserveRequest) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{64}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *HostAdvisorObserveRequest) GetBindingId() string {
@@ -5691,7 +5120,7 @@ type HostAdvisorObserveResponse struct {
 
 func (x *HostAdvisorObserveResponse) Reset() {
 	*x = HostAdvisorObserveResponse{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[65]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5703,7 +5132,7 @@ func (x *HostAdvisorObserveResponse) String() string {
 func (*HostAdvisorObserveResponse) ProtoMessage() {}
 
 func (x *HostAdvisorObserveResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[65]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5716,7 +5145,7 @@ func (x *HostAdvisorObserveResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostAdvisorObserveResponse.ProtoReflect.Descriptor instead.
 func (*HostAdvisorObserveResponse) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{65}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *HostAdvisorObserveResponse) GetState() HostAdvisorObservationState {
@@ -5756,7 +5185,7 @@ type ContextRef struct {
 
 func (x *ContextRef) Reset() {
 	*x = ContextRef{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[66]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5768,7 +5197,7 @@ func (x *ContextRef) String() string {
 func (*ContextRef) ProtoMessage() {}
 
 func (x *ContextRef) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[66]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5781,7 +5210,7 @@ func (x *ContextRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ContextRef.ProtoReflect.Descriptor instead.
 func (*ContextRef) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{66}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *ContextRef) GetSpaceId() string {
@@ -5840,7 +5269,7 @@ type CodeIndexScope struct {
 
 func (x *CodeIndexScope) Reset() {
 	*x = CodeIndexScope{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[67]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5852,7 +5281,7 @@ func (x *CodeIndexScope) String() string {
 func (*CodeIndexScope) ProtoMessage() {}
 
 func (x *CodeIndexScope) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[67]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5865,7 +5294,7 @@ func (x *CodeIndexScope) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CodeIndexScope.ProtoReflect.Descriptor instead.
 func (*CodeIndexScope) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{67}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *CodeIndexScope) GetSourceId() string {
@@ -5907,7 +5336,7 @@ type BindCodeContextRequest struct {
 
 func (x *BindCodeContextRequest) Reset() {
 	*x = BindCodeContextRequest{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[68]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5919,7 +5348,7 @@ func (x *BindCodeContextRequest) String() string {
 func (*BindCodeContextRequest) ProtoMessage() {}
 
 func (x *BindCodeContextRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[68]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5932,7 +5361,7 @@ func (x *BindCodeContextRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BindCodeContextRequest.ProtoReflect.Descriptor instead.
 func (*BindCodeContextRequest) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{68}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *BindCodeContextRequest) GetClientSessionId() string {
@@ -5971,7 +5400,7 @@ type BindCodeContextResponse struct {
 
 func (x *BindCodeContextResponse) Reset() {
 	*x = BindCodeContextResponse{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[69]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5983,7 +5412,7 @@ func (x *BindCodeContextResponse) String() string {
 func (*BindCodeContextResponse) ProtoMessage() {}
 
 func (x *BindCodeContextResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[69]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5996,7 +5425,7 @@ func (x *BindCodeContextResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BindCodeContextResponse.ProtoReflect.Descriptor instead.
 func (*BindCodeContextResponse) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{69}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *BindCodeContextResponse) GetContextHandle() string {
@@ -6054,7 +5483,7 @@ type CodeIndexIntentTarget struct {
 
 func (x *CodeIndexIntentTarget) Reset() {
 	*x = CodeIndexIntentTarget{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[70]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6066,7 +5495,7 @@ func (x *CodeIndexIntentTarget) String() string {
 func (*CodeIndexIntentTarget) ProtoMessage() {}
 
 func (x *CodeIndexIntentTarget) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[70]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6079,7 +5508,7 @@ func (x *CodeIndexIntentTarget) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CodeIndexIntentTarget.ProtoReflect.Descriptor instead.
 func (*CodeIndexIntentTarget) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{70}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *CodeIndexIntentTarget) GetClientSessionId() string {
@@ -6128,7 +5557,7 @@ type CodeIndexIntentClaim struct {
 
 func (x *CodeIndexIntentClaim) Reset() {
 	*x = CodeIndexIntentClaim{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[71]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6140,7 +5569,7 @@ func (x *CodeIndexIntentClaim) String() string {
 func (*CodeIndexIntentClaim) ProtoMessage() {}
 
 func (x *CodeIndexIntentClaim) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[71]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6153,7 +5582,7 @@ func (x *CodeIndexIntentClaim) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CodeIndexIntentClaim.ProtoReflect.Descriptor instead.
 func (*CodeIndexIntentClaim) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{71}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *CodeIndexIntentClaim) GetIntentRef() string {
@@ -6188,7 +5617,7 @@ type PollCodeIndexIntentsRequest struct {
 
 func (x *PollCodeIndexIntentsRequest) Reset() {
 	*x = PollCodeIndexIntentsRequest{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[72]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6200,7 +5629,7 @@ func (x *PollCodeIndexIntentsRequest) String() string {
 func (*PollCodeIndexIntentsRequest) ProtoMessage() {}
 
 func (x *PollCodeIndexIntentsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[72]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6213,7 +5642,7 @@ func (x *PollCodeIndexIntentsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PollCodeIndexIntentsRequest.ProtoReflect.Descriptor instead.
 func (*PollCodeIndexIntentsRequest) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{72}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *PollCodeIndexIntentsRequest) GetTarget() *CodeIndexIntentTarget {
@@ -6251,7 +5680,7 @@ type CodeIndexIntentOffer struct {
 
 func (x *CodeIndexIntentOffer) Reset() {
 	*x = CodeIndexIntentOffer{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[73]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6263,7 +5692,7 @@ func (x *CodeIndexIntentOffer) String() string {
 func (*CodeIndexIntentOffer) ProtoMessage() {}
 
 func (x *CodeIndexIntentOffer) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[73]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6276,7 +5705,7 @@ func (x *CodeIndexIntentOffer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CodeIndexIntentOffer.ProtoReflect.Descriptor instead.
 func (*CodeIndexIntentOffer) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{73}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *CodeIndexIntentOffer) GetIntentRef() string {
@@ -6330,7 +5759,7 @@ type PollCodeIndexIntentsResponse struct {
 
 func (x *PollCodeIndexIntentsResponse) Reset() {
 	*x = PollCodeIndexIntentsResponse{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[74]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6342,7 +5771,7 @@ func (x *PollCodeIndexIntentsResponse) String() string {
 func (*PollCodeIndexIntentsResponse) ProtoMessage() {}
 
 func (x *PollCodeIndexIntentsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[74]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6355,7 +5784,7 @@ func (x *PollCodeIndexIntentsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PollCodeIndexIntentsResponse.ProtoReflect.Descriptor instead.
 func (*PollCodeIndexIntentsResponse) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{74}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *PollCodeIndexIntentsResponse) GetOffer() *CodeIndexIntentOffer {
@@ -6380,7 +5809,7 @@ type UpdateCodeIndexIntentRequest struct {
 
 func (x *UpdateCodeIndexIntentRequest) Reset() {
 	*x = UpdateCodeIndexIntentRequest{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[75]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6392,7 +5821,7 @@ func (x *UpdateCodeIndexIntentRequest) String() string {
 func (*UpdateCodeIndexIntentRequest) ProtoMessage() {}
 
 func (x *UpdateCodeIndexIntentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[75]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6405,7 +5834,7 @@ func (x *UpdateCodeIndexIntentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateCodeIndexIntentRequest.ProtoReflect.Descriptor instead.
 func (*UpdateCodeIndexIntentRequest) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{75}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *UpdateCodeIndexIntentRequest) GetTarget() *CodeIndexIntentTarget {
@@ -6470,7 +5899,7 @@ type UpdateCodeIndexIntentResponse struct {
 
 func (x *UpdateCodeIndexIntentResponse) Reset() {
 	*x = UpdateCodeIndexIntentResponse{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[76]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6482,7 +5911,7 @@ func (x *UpdateCodeIndexIntentResponse) String() string {
 func (*UpdateCodeIndexIntentResponse) ProtoMessage() {}
 
 func (x *UpdateCodeIndexIntentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[76]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6495,7 +5924,7 @@ func (x *UpdateCodeIndexIntentResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateCodeIndexIntentResponse.ProtoReflect.Descriptor instead.
 func (*UpdateCodeIndexIntentResponse) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{76}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *UpdateCodeIndexIntentResponse) GetIntentRef() string {
@@ -6548,7 +5977,7 @@ type BeginCodeIndexRequest struct {
 
 func (x *BeginCodeIndexRequest) Reset() {
 	*x = BeginCodeIndexRequest{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[77]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6560,7 +5989,7 @@ func (x *BeginCodeIndexRequest) String() string {
 func (*BeginCodeIndexRequest) ProtoMessage() {}
 
 func (x *BeginCodeIndexRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[77]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6573,7 +6002,7 @@ func (x *BeginCodeIndexRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BeginCodeIndexRequest.ProtoReflect.Descriptor instead.
 func (*BeginCodeIndexRequest) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{77}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *BeginCodeIndexRequest) GetScope() *CodeIndexScope {
@@ -6637,7 +6066,7 @@ type BeginCodeIndexResponse struct {
 
 func (x *BeginCodeIndexResponse) Reset() {
 	*x = BeginCodeIndexResponse{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[78]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6649,7 +6078,7 @@ func (x *BeginCodeIndexResponse) String() string {
 func (*BeginCodeIndexResponse) ProtoMessage() {}
 
 func (x *BeginCodeIndexResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[78]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6662,7 +6091,7 @@ func (x *BeginCodeIndexResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BeginCodeIndexResponse.ProtoReflect.Descriptor instead.
 func (*BeginCodeIndexResponse) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{78}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *BeginCodeIndexResponse) GetScope() *CodeIndexScope {
@@ -6708,7 +6137,7 @@ type StageCodeIndexFrame struct {
 
 func (x *StageCodeIndexFrame) Reset() {
 	*x = StageCodeIndexFrame{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[79]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6720,7 +6149,7 @@ func (x *StageCodeIndexFrame) String() string {
 func (*StageCodeIndexFrame) ProtoMessage() {}
 
 func (x *StageCodeIndexFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[79]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6733,7 +6162,7 @@ func (x *StageCodeIndexFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StageCodeIndexFrame.ProtoReflect.Descriptor instead.
 func (*StageCodeIndexFrame) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{79}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *StageCodeIndexFrame) GetScope() *CodeIndexScope {
@@ -6799,7 +6228,7 @@ type StageCodeIndexResponse struct {
 
 func (x *StageCodeIndexResponse) Reset() {
 	*x = StageCodeIndexResponse{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[80]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6811,7 +6240,7 @@ func (x *StageCodeIndexResponse) String() string {
 func (*StageCodeIndexResponse) ProtoMessage() {}
 
 func (x *StageCodeIndexResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[80]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6824,7 +6253,7 @@ func (x *StageCodeIndexResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StageCodeIndexResponse.ProtoReflect.Descriptor instead.
 func (*StageCodeIndexResponse) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{80}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *StageCodeIndexResponse) GetBuildId() string {
@@ -6884,7 +6313,7 @@ type FinalizeCodeIndexRequest struct {
 
 func (x *FinalizeCodeIndexRequest) Reset() {
 	*x = FinalizeCodeIndexRequest{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[81]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6896,7 +6325,7 @@ func (x *FinalizeCodeIndexRequest) String() string {
 func (*FinalizeCodeIndexRequest) ProtoMessage() {}
 
 func (x *FinalizeCodeIndexRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[81]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6909,7 +6338,7 @@ func (x *FinalizeCodeIndexRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FinalizeCodeIndexRequest.ProtoReflect.Descriptor instead.
 func (*FinalizeCodeIndexRequest) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{81}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *FinalizeCodeIndexRequest) GetScope() *CodeIndexScope {
@@ -7071,7 +6500,7 @@ type FinalizeCodeIndexResponse struct {
 
 func (x *FinalizeCodeIndexResponse) Reset() {
 	*x = FinalizeCodeIndexResponse{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[82]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7083,7 +6512,7 @@ func (x *FinalizeCodeIndexResponse) String() string {
 func (*FinalizeCodeIndexResponse) ProtoMessage() {}
 
 func (x *FinalizeCodeIndexResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[82]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7096,7 +6525,7 @@ func (x *FinalizeCodeIndexResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FinalizeCodeIndexResponse.ProtoReflect.Descriptor instead.
 func (*FinalizeCodeIndexResponse) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{82}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *FinalizeCodeIndexResponse) GetPublishedContext() *ContextRef {
@@ -7141,7 +6570,7 @@ type QueryCodeRequest struct {
 
 func (x *QueryCodeRequest) Reset() {
 	*x = QueryCodeRequest{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[83]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7153,7 +6582,7 @@ func (x *QueryCodeRequest) String() string {
 func (*QueryCodeRequest) ProtoMessage() {}
 
 func (x *QueryCodeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[83]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7166,7 +6595,7 @@ func (x *QueryCodeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueryCodeRequest.ProtoReflect.Descriptor instead.
 func (*QueryCodeRequest) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{83}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{77}
 }
 
 func (x *QueryCodeRequest) GetContext() *ContextRef {
@@ -7221,7 +6650,7 @@ type QueryCodeResponse struct {
 
 func (x *QueryCodeResponse) Reset() {
 	*x = QueryCodeResponse{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[84]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[78]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7233,7 +6662,7 @@ func (x *QueryCodeResponse) String() string {
 func (*QueryCodeResponse) ProtoMessage() {}
 
 func (x *QueryCodeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[84]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[78]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7246,7 +6675,7 @@ func (x *QueryCodeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueryCodeResponse.ProtoReflect.Descriptor instead.
 func (*QueryCodeResponse) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{84}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{78}
 }
 
 func (x *QueryCodeResponse) GetContext() *ContextRef {
@@ -7280,7 +6709,7 @@ type ExploreCodeRequest struct {
 
 func (x *ExploreCodeRequest) Reset() {
 	*x = ExploreCodeRequest{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[85]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[79]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7292,7 +6721,7 @@ func (x *ExploreCodeRequest) String() string {
 func (*ExploreCodeRequest) ProtoMessage() {}
 
 func (x *ExploreCodeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[85]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[79]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7305,7 +6734,7 @@ func (x *ExploreCodeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExploreCodeRequest.ProtoReflect.Descriptor instead.
 func (*ExploreCodeRequest) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{85}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{79}
 }
 
 func (x *ExploreCodeRequest) GetContext() *ContextRef {
@@ -7381,7 +6810,7 @@ type ExploreCodeResponse struct {
 
 func (x *ExploreCodeResponse) Reset() {
 	*x = ExploreCodeResponse{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[86]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[80]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7393,7 +6822,7 @@ func (x *ExploreCodeResponse) String() string {
 func (*ExploreCodeResponse) ProtoMessage() {}
 
 func (x *ExploreCodeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[86]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[80]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7406,7 +6835,7 @@ func (x *ExploreCodeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExploreCodeResponse.ProtoReflect.Descriptor instead.
 func (*ExploreCodeResponse) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{86}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{80}
 }
 
 func (x *ExploreCodeResponse) GetContext() *ContextRef {
@@ -7440,7 +6869,7 @@ type RecordUCICompletionRequest struct {
 
 func (x *RecordUCICompletionRequest) Reset() {
 	*x = RecordUCICompletionRequest{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[87]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[81]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7452,7 +6881,7 @@ func (x *RecordUCICompletionRequest) String() string {
 func (*RecordUCICompletionRequest) ProtoMessage() {}
 
 func (x *RecordUCICompletionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[87]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[81]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7465,7 +6894,7 @@ func (x *RecordUCICompletionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecordUCICompletionRequest.ProtoReflect.Descriptor instead.
 func (*RecordUCICompletionRequest) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{87}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{81}
 }
 
 func (x *RecordUCICompletionRequest) GetCanonicalProject() string {
@@ -7521,7 +6950,7 @@ type RecordUCICompletionResponse struct {
 
 func (x *RecordUCICompletionResponse) Reset() {
 	*x = RecordUCICompletionResponse{}
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[88]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[82]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7533,7 +6962,7 @@ func (x *RecordUCICompletionResponse) String() string {
 func (*RecordUCICompletionResponse) ProtoMessage() {}
 
 func (x *RecordUCICompletionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_engram_v1_engram_proto_msgTypes[88]
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[82]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7546,7 +6975,7 @@ func (x *RecordUCICompletionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecordUCICompletionResponse.ProtoReflect.Descriptor instead.
 func (*RecordUCICompletionResponse) Descriptor() ([]byte, []int) {
-	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{88}
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{82}
 }
 
 func (x *RecordUCICompletionResponse) GetAccepted() bool {
@@ -7582,14 +7011,11 @@ const file_proto_engram_v1_engram_proto_rawDesc = "" +
 	"\bmetadata\x18\x06 \x03(\v2%.engram.v1.ProjectEvent.MetadataEntryR\bmetadata\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xa2\x02\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xcc\x01\n" +
 	"\x1dGetSessionStartContextRequest\x12\x18\n" +
 	"\aproject\x18\x01 \x01(\tR\aproject\x12%\n" +
 	"\x0ememories_limit\x18\x02 \x01(\x05R\rmemoriesLimit\x12!\n" +
-	"\fissues_limit\x18\x03 \x01(\x05R\vissuesLimit\x12L\n" +
-	"\x13project_identity_v3\x18\x04 \x01(\v2\x1c.engram.v1.ProjectIdentityV3R\x11projectIdentityV3\x12(\n" +
-	"\x10host_session_ref\x18\x05 \x01(\tR\x0ehostSessionRef\x12%\n" +
-	"\x0erelay_revision\x18\x06 \x01(\tR\rrelayRevision\"\xe8\x03\n" +
+	"\fissues_limit\x18\x03 \x01(\x05R\vissuesLimitJ\x04\b\x04\x10\x05J\x04\b\x05\x10\x06J\x04\b\x06\x10\aR\x13project_identity_v3R\x10host_session_refR\x0erelay_revision\"\xab\x03\n" +
 	"\x1eGetSessionStartContextResponse\x124\n" +
 	"\x06issues\x18\x01 \x03(\v2\x1c.engram.v1.SessionStartIssueR\x06issues\x121\n" +
 	"\x05rules\x18\x02 \x03(\v2\x1b.engram.v1.SessionStartRuleR\x05rules\x129\n" +
@@ -7597,8 +7023,7 @@ const file_proto_engram_v1_engram_proto_rawDesc = "" +
 	"\fgenerated_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\vgeneratedAt\x12B\n" +
 	"\vrule_router\x18\x05 \x01(\v2!.engram.v1.SessionStartRuleRouterR\n" +
 	"ruleRouter\x12E\n" +
-	"\fmeta_summary\x18\x06 \x01(\v2\".engram.v1.SessionStartMetaSummaryR\vmetaSummary\x12X\n" +
-	"\x15project_resolution_v3\x18\a \x01(\v2$.engram.v1.ProjectResolutionResultV3R\x13projectResolutionV3\"\xb1\x05\n" +
+	"\fmeta_summary\x18\x06 \x01(\v2\".engram.v1.SessionStartMetaSummaryR\vmetaSummaryJ\x04\b\a\x10\bR\x15project_resolution_v3\"\xb1\x05\n" +
 	"\x11SessionStartIssue\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x12\n" +
@@ -7693,35 +7118,29 @@ const file_proto_engram_v1_engram_proto_rawDesc = "" +
 	"compatible\x18\x01 \x01(\bR\n" +
 	"compatible\x12%\n" +
 	"\x0eserver_version\x18\x02 \x01(\tR\rserverVersion\x12'\n" +
-	"\x0fincompat_reason\x18\x03 \x01(\tR\x0eincompatReason\"\xa5\x02\n" +
+	"\x0fincompat_reason\x18\x03 \x01(\tR\x0eincompatReason\"\xc1\x01\n" +
 	"\x0fCallToolRequest\x12\x1b\n" +
 	"\ttool_name\x18\x01 \x01(\tR\btoolName\x12%\n" +
 	"\x0earguments_json\x18\x02 \x01(\fR\rargumentsJson\x12\x18\n" +
 	"\aproject\x18\x03 \x01(\tR\aproject\x12\x1d\n" +
 	"\n" +
-	"session_id\x18\x04 \x01(\tR\tsessionId\x12G\n" +
-	"\x10project_identity\x18\x05 \x01(\v2\x1c.engram.v1.ProjectIdentityV2R\x0fprojectIdentity\x12L\n" +
-	"\x13project_identity_v3\x18\x06 \x01(\v2\x1c.engram.v1.ProjectIdentityV3R\x11projectIdentityV3\"\xd7\x01\n" +
+	"session_id\x18\x04 \x01(\tR\tsessionIdJ\x04\b\x05\x10\x06J\x04\b\x06\x10\aR\x10project_identityR\x13project_identity_v3\"\x9a\x01\n" +
 	"\x10CallToolResponse\x12\x19\n" +
 	"\bis_error\x18\x01 \x01(\bR\aisError\x12!\n" +
 	"\fcontent_json\x18\x02 \x01(\fR\vcontentJson\x12+\n" +
-	"\x11canonical_project\x18\x03 \x01(\tR\x10canonicalProject\x12X\n" +
-	"\x15project_resolution_v3\x18\x04 \x01(\v2$.engram.v1.ProjectResolutionResultV3R\x13projectResolutionV3\"\x8c\x02\n" +
+	"\x11canonical_project\x18\x03 \x01(\tR\x10canonicalProjectJ\x04\b\x04\x10\x05R\x15project_resolution_v3\"\xa8\x01\n" +
 	"\x11InitializeRequest\x12\x1f\n" +
 	"\vclient_name\x18\x01 \x01(\tR\n" +
 	"clientName\x12%\n" +
 	"\x0eclient_version\x18\x02 \x01(\tR\rclientVersion\x12\x18\n" +
-	"\aproject\x18\x03 \x01(\tR\aproject\x12G\n" +
-	"\x10project_identity\x18\x04 \x01(\v2\x1c.engram.v1.ProjectIdentityV2R\x0fprojectIdentity\x12L\n" +
-	"\x13project_identity_v3\x18\x05 \x01(\v2\x1c.engram.v1.ProjectIdentityV3R\x11projectIdentityV3\"\xe1\x02\n" +
+	"\aproject\x18\x03 \x01(\tR\aprojectJ\x04\b\x04\x10\x05J\x04\b\x05\x10\x06R\x10project_identityR\x13project_identity_v3\"\xa4\x02\n" +
 	"\x12InitializeResponse\x12\x1f\n" +
 	"\vserver_name\x18\x01 \x01(\tR\n" +
 	"serverName\x12%\n" +
 	"\x0eserver_version\x18\x02 \x01(\tR\rserverVersion\x12/\n" +
 	"\x05tools\x18\x03 \x03(\v2\x19.engram.v1.ToolDefinitionR\x05tools\x12+\n" +
-	"\x11canonical_project\x18\x04 \x01(\tR\x10canonicalProject\x12X\n" +
-	"\x15project_resolution_v3\x18\x05 \x01(\v2$.engram.v1.ProjectResolutionResultV3R\x13projectResolutionV3\x12K\n" +
-	"\"authenticated_subject_proof_sha256\x18\x06 \x01(\fR\x1fauthenticatedSubjectProofSha256\"r\n" +
+	"\x11canonical_project\x18\x04 \x01(\tR\x10canonicalProject\x12K\n" +
+	"\"authenticated_subject_proof_sha256\x18\x06 \x01(\fR\x1fauthenticatedSubjectProofSha256J\x04\b\x05\x10\x06R\x15project_resolution_v3\"r\n" +
 	"\x0eToolDefinition\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12*\n" +
@@ -7757,17 +7176,7 @@ const file_proto_engram_v1_engram_proto_rawDesc = "" +
 	"\x16CodeIndexUploadReceipt\x12\x1a\n" +
 	"\bembedded\x18\x01 \x01(\x05R\bembedded\x12\x18\n" +
 	"\adeleted\x18\x02 \x01(\x05R\adeleted\x12\x16\n" +
-	"\x06errors\x18\x03 \x03(\tR\x06errors\"\xa2\x02\n" +
-	"\x11ProjectIdentityV2\x12\x18\n" +
-	"\aversion\x18\x01 \x01(\rR\aversion\x12*\n" +
-	"\x11legacy_project_id\x18\x02 \x01(\tR\x0flegacyProjectId\x12!\n" +
-	"\fdisplay_name\x18\x03 \x01(\tR\vdisplayName\x12\x1d\n" +
-	"\n" +
-	"git_remote\x18\x04 \x01(\tR\tgitRemote\x12#\n" +
-	"\rrelative_path\x18\x05 \x01(\tR\frelativePath\x12$\n" +
-	"\x0enon_git_anchor\x18\x06 \x01(\tR\fnonGitAnchor\x12(\n" +
-	"\ranchor_shared\x18\a \x01(\bH\x00R\fanchorShared\x88\x01\x01B\x10\n" +
-	"\x0e_anchor_shared\"i\n" +
+	"\x06errors\x18\x03 \x03(\tR\x06errors\"i\n" +
 	"\x19ProjectLegacyIdentifierV3\x12\x16\n" +
 	"\x06scheme\x18\x01 \x01(\tR\x06scheme\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value\x12\x1e\n" +
@@ -7781,31 +7190,7 @@ const file_proto_engram_v1_engram_proto_rawDesc = "" +
 	"\x05scope\x18\x04 \x01(\tR\x05scope\x124\n" +
 	"\x16normalized_git_remotes\x18\x05 \x03(\tR\x14normalizedGitRemotes\x12S\n" +
 	"\x12legacy_identifiers\x18\x06 \x03(\v2$.engram.v1.ProjectLegacyIdentifierV3R\x11legacyIdentifiers\x12,\n" +
-	"\x12client_instance_id\x18\a \x01(\tR\x10clientInstanceId\"\xbe\x02\n" +
-	"\x19ProjectResolutionResultV3\x12?\n" +
-	"\aoutcome\x18\x01 \x01(\x0e2%.engram.v1.ProjectResolutionOutcomeV3R\aoutcome\x12 \n" +
-	"\vcorrelation\x18\x02 \x01(\tR\vcorrelation\x12$\n" +
-	"\vproject_key\x18\x03 \x01(\tH\x00R\n" +
-	"projectKey\x88\x01\x01\x12*\n" +
-	"\x0eresolved_scope\x18\x04 \x01(\tH\x01R\rresolvedScope\x88\x01\x01\x122\n" +
-	"\x12redirect_reference\x18\x05 \x01(\tH\x02R\x11redirectReference\x88\x01\x01B\x0e\n" +
-	"\f_project_keyB\x11\n" +
-	"\x0f_resolved_scopeB\x15\n" +
-	"\x13_redirect_reference\"\x97\x01\n" +
-	" RegisterProjectIdentityV3Request\x12L\n" +
-	"\x13project_identity_v3\x18\x01 \x01(\v2\x1c.engram.v1.ProjectIdentityV3R\x11projectIdentityV3\x12%\n" +
-	"\x0erelay_revision\x18\x02 \x01(\tR\rrelayRevision\"}\n" +
-	"!RegisterProjectIdentityV3Response\x12X\n" +
-	"\x15project_resolution_v3\x18\x01 \x01(\v2$.engram.v1.ProjectResolutionResultV3R\x13projectResolutionV3\"\xf1\x01\n" +
-	"\x1bGetAmbientCandidatesRequest\x12L\n" +
-	"\x13project_identity_v3\x18\x01 \x01(\v2\x1c.engram.v1.ProjectIdentityV3R\x11projectIdentityV3\x12(\n" +
-	"\x10host_session_ref\x18\x02 \x01(\tR\x0ehostSessionRef\x12\x1d\n" +
-	"\n" +
-	"query_text\x18\x03 \x01(\tR\tqueryText\x12\x14\n" +
-	"\x05limit\x18\x04 \x01(\x05R\x05limit\x12%\n" +
-	"\x0erelay_revision\x18\x05 \x01(\tR\rrelayRevision\"M\n" +
-	"\x1cGetAmbientCandidatesResponse\x12-\n" +
-	"\x12additional_context\x18\x01 \x01(\tR\x11additionalContext\"\\\n" +
+	"\x12client_instance_id\x18\a \x01(\tR\x10clientInstanceId\"\\\n" +
 	"\x18HostAdvisorProtocolRange\x12\x1f\n" +
 	"\vmin_version\x18\x01 \x01(\rR\n" +
 	"minVersion\x12\x1f\n" +
@@ -8132,21 +7517,7 @@ const file_proto_engram_v1_engram_proto_rawDesc = "" +
 	"\x1ePROJECT_EVENT_TYPE_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aPROJECT_EVENT_TYPE_REMOVED\x10\x01\x12\x1e\n" +
 	"\x1aPROJECT_EVENT_TYPE_CREATED\x10\x02\x12\x1e\n" +
-	"\x1aPROJECT_EVENT_TYPE_RENAMED\x10\x03*\xb2\x03\n" +
-	"\x1aProjectResolutionOutcomeV3\x12-\n" +
-	")PROJECT_RESOLUTION_OUTCOME_V3_UNSPECIFIED\x10\x00\x12\x14\n" +
-	"\x10PROJECT_RESOLVED\x10\x01\x12\x16\n" +
-	"\x12PROJECT_REDIRECTED\x10\x02\x12\x1f\n" +
-	"\x1bPROJECT_ONBOARDING_REQUIRED\x10\x03\x12\x1a\n" +
-	"\x16PROJECT_ANCHOR_INVALID\x10\x04\x12\x1a\n" +
-	"\x16PROJECT_SCOPE_MISMATCH\x10\x05\x12(\n" +
-	"$PROJECT_NESTED_REPOSITORY_UNRESOLVED\x10\x06\x12$\n" +
-	" PROJECT_ANCHOR_DECISION_REQUIRED\x10\a\x12\x1e\n" +
-	"\x1aPROJECT_IDENTITY_AMBIGUOUS\x10\b\x12\"\n" +
-	"\x1ePROJECT_DESCRIPTOR_UNSUPPORTED\x10\t\x12\x1e\n" +
-	"\x1aPROJECT_DESCRIPTOR_INVALID\x10\n" +
-	"\x12*\n" +
-	"&PROJECT_KEY_CLIENT_ASSERTION_FORBIDDEN\x10\v*\xb1\x01\n" +
+	"\x1aPROJECT_EVENT_TYPE_RENAMED\x10\x03*\xb1\x01\n" +
 	"\x15HostAdvisorHostFamily\x12(\n" +
 	"$HOST_ADVISOR_HOST_FAMILY_UNSPECIFIED\x10\x00\x12 \n" +
 	"\x1cHOST_ADVISOR_HOST_FAMILY_OMP\x10\x01\x12(\n" +
@@ -8250,7 +7621,7 @@ const file_proto_engram_v1_engram_proto_rawDesc = "" +
 	" UCI_COMPLETION_OUTCOME_SUCCEEDED\x10\x01\x12\"\n" +
 	"\x1eUCI_COMPLETION_OUTCOME_PARTIAL\x10\x02\x12!\n" +
 	"\x1dUCI_COMPLETION_OUTCOME_FAILED\x10\x03\x12$\n" +
-	" UCI_COMPLETION_OUTCOME_ABANDONED\x10\x042\x9b\x10\n" +
+	" UCI_COMPLETION_OUTCOME_ABANDONED\x10\x042\xba\x0e\n" +
 	"\rEngramService\x12C\n" +
 	"\bCallTool\x12\x1a.engram.v1.CallToolRequest\x1a\x1b.engram.v1.CallToolResponse\x12I\n" +
 	"\n" +
@@ -8258,12 +7629,10 @@ const file_proto_engram_v1_engram_proto_rawDesc = "" +
 	"\x04Ping\x12\x16.engram.v1.PingRequest\x1a\x17.engram.v1.PingResponse\x12[\n" +
 	"\x10SyncProjectState\x12\".engram.v1.SyncProjectStateRequest\x1a#.engram.v1.SyncProjectStateResponse\x12K\n" +
 	"\rProjectEvents\x12\x1f.engram.v1.ProjectEventsRequest\x1a\x17.engram.v1.ProjectEvent0\x01\x12m\n" +
-	"\x16GetSessionStartContext\x12(.engram.v1.GetSessionStartContextRequest\x1a).engram.v1.GetSessionStartContextResponse\x12g\n" +
-	"\x14GetAmbientCandidates\x12&.engram.v1.GetAmbientCandidatesRequest\x1a'.engram.v1.GetAmbientCandidatesResponse\x12[\n" +
+	"\x16GetSessionStartContext\x12(.engram.v1.GetSessionStartContextRequest\x1a).engram.v1.GetSessionStartContextResponse\x12[\n" +
 	"\x10NegotiateVersion\x12\".engram.v1.NegotiateVersionRequest\x1a#.engram.v1.NegotiateVersionResponse\x12a\n" +
 	"\x12CodeIndexNegotiate\x12$.engram.v1.CodeIndexNegotiateRequest\x1a%.engram.v1.CodeIndexNegotiateResponse\x12R\n" +
-	"\x0fCodeIndexUpload\x12\x1a.engram.v1.CodeChunkUpload\x1a!.engram.v1.CodeIndexUploadReceipt(\x01\x12v\n" +
-	"\x19RegisterProjectIdentityV3\x12+.engram.v1.RegisterProjectIdentityV3Request\x1a,.engram.v1.RegisterProjectIdentityV3Response\x12M\n" +
+	"\x0fCodeIndexUpload\x12\x1a.engram.v1.CodeChunkUpload\x1a!.engram.v1.CodeIndexUploadReceipt(\x01\x12M\n" +
 	"\x04Bind\x12!.engram.v1.HostAdvisorBindRequest\x1a\".engram.v1.HostAdvisorBindResponse\x12S\n" +
 	"\x06Advise\x12#.engram.v1.HostAdvisorAdviseRequest\x1a$.engram.v1.HostAdvisorAdviseResponse\x12V\n" +
 	"\aObserve\x12$.engram.v1.HostAdvisorObserveRequest\x1a%.engram.v1.HostAdvisorObserveResponse\x12X\n" +
@@ -8289,293 +7658,270 @@ func file_proto_engram_v1_engram_proto_rawDescGZIP() []byte {
 	return file_proto_engram_v1_engram_proto_rawDescData
 }
 
-var file_proto_engram_v1_engram_proto_enumTypes = make([]protoimpl.EnumInfo, 18)
-var file_proto_engram_v1_engram_proto_msgTypes = make([]protoimpl.MessageInfo, 90)
+var file_proto_engram_v1_engram_proto_enumTypes = make([]protoimpl.EnumInfo, 17)
+var file_proto_engram_v1_engram_proto_msgTypes = make([]protoimpl.MessageInfo, 84)
 var file_proto_engram_v1_engram_proto_goTypes = []any{
 	(ProjectEventType)(0),                      // 0: engram.v1.ProjectEventType
-	(ProjectResolutionOutcomeV3)(0),            // 1: engram.v1.ProjectResolutionOutcomeV3
-	(HostAdvisorHostFamily)(0),                 // 2: engram.v1.HostAdvisorHostFamily
-	(HostAdvisorArtifactKind)(0),               // 3: engram.v1.HostAdvisorArtifactKind
-	(HostAdvisorSemantic)(0),                   // 4: engram.v1.HostAdvisorSemantic
-	(HostAdvisorAction)(0),                     // 5: engram.v1.HostAdvisorAction
-	(HostAdvisorContextInjectionMode)(0),       // 6: engram.v1.HostAdvisorContextInjectionMode
-	(HostAdvisorCallbackOrdering)(0),           // 7: engram.v1.HostAdvisorCallbackOrdering
-	(HostAdvisorAcknowledgement)(0),            // 8: engram.v1.HostAdvisorAcknowledgement
-	(HostAdvisorFactKind)(0),                   // 9: engram.v1.HostAdvisorFactKind
-	(HostAdvisorCandidateTier)(0),              // 10: engram.v1.HostAdvisorCandidateTier
-	(HostAdvisorAbstentionReason)(0),           // 11: engram.v1.HostAdvisorAbstentionReason
-	(HostAdvisorUnavailableCode)(0),            // 12: engram.v1.HostAdvisorUnavailableCode
-	(HostAdvisorObservationState)(0),           // 13: engram.v1.HostAdvisorObservationState
-	(HostAdvisorObservationReason)(0),          // 14: engram.v1.HostAdvisorObservationReason
-	(HostAdvisorAttestationKind)(0),            // 15: engram.v1.HostAdvisorAttestationKind
-	(HostAdvisorSemanticGapCode)(0),            // 16: engram.v1.HostAdvisorSemanticGapCode
-	(UCICompletionOutcome)(0),                  // 17: engram.v1.UCICompletionOutcome
-	(*SyncProjectStateRequest)(nil),            // 18: engram.v1.SyncProjectStateRequest
-	(*SyncProjectStateResponse)(nil),           // 19: engram.v1.SyncProjectStateResponse
-	(*ProjectEventsRequest)(nil),               // 20: engram.v1.ProjectEventsRequest
-	(*ProjectEvent)(nil),                       // 21: engram.v1.ProjectEvent
-	(*GetSessionStartContextRequest)(nil),      // 22: engram.v1.GetSessionStartContextRequest
-	(*GetSessionStartContextResponse)(nil),     // 23: engram.v1.GetSessionStartContextResponse
-	(*SessionStartIssue)(nil),                  // 24: engram.v1.SessionStartIssue
-	(*SessionStartRule)(nil),                   // 25: engram.v1.SessionStartRule
-	(*SessionStartRuleRouter)(nil),             // 26: engram.v1.SessionStartRuleRouter
-	(*SessionStartRulePacket)(nil),             // 27: engram.v1.SessionStartRulePacket
-	(*SessionStartMemory)(nil),                 // 28: engram.v1.SessionStartMemory
-	(*SessionStartMetaTagCount)(nil),           // 29: engram.v1.SessionStartMetaTagCount
-	(*SessionStartMetaSummary)(nil),            // 30: engram.v1.SessionStartMetaSummary
-	(*NegotiateVersionRequest)(nil),            // 31: engram.v1.NegotiateVersionRequest
-	(*NegotiateVersionResponse)(nil),           // 32: engram.v1.NegotiateVersionResponse
-	(*CallToolRequest)(nil),                    // 33: engram.v1.CallToolRequest
-	(*CallToolResponse)(nil),                   // 34: engram.v1.CallToolResponse
-	(*InitializeRequest)(nil),                  // 35: engram.v1.InitializeRequest
-	(*InitializeResponse)(nil),                 // 36: engram.v1.InitializeResponse
-	(*ToolDefinition)(nil),                     // 37: engram.v1.ToolDefinition
-	(*PingRequest)(nil),                        // 38: engram.v1.PingRequest
-	(*PingResponse)(nil),                       // 39: engram.v1.PingResponse
-	(*CodeChunkMeta)(nil),                      // 40: engram.v1.CodeChunkMeta
-	(*CodeIndexNegotiateRequest)(nil),          // 41: engram.v1.CodeIndexNegotiateRequest
-	(*CodeIndexNegotiateResponse)(nil),         // 42: engram.v1.CodeIndexNegotiateResponse
-	(*CodeChunkUpload)(nil),                    // 43: engram.v1.CodeChunkUpload
-	(*CodeIndexUploadReceipt)(nil),             // 44: engram.v1.CodeIndexUploadReceipt
-	(*ProjectIdentityV2)(nil),                  // 45: engram.v1.ProjectIdentityV2
-	(*ProjectLegacyIdentifierV3)(nil),          // 46: engram.v1.ProjectLegacyIdentifierV3
-	(*ProjectIdentityV3)(nil),                  // 47: engram.v1.ProjectIdentityV3
-	(*ProjectResolutionResultV3)(nil),          // 48: engram.v1.ProjectResolutionResultV3
-	(*RegisterProjectIdentityV3Request)(nil),   // 49: engram.v1.RegisterProjectIdentityV3Request
-	(*RegisterProjectIdentityV3Response)(nil),  // 50: engram.v1.RegisterProjectIdentityV3Response
-	(*GetAmbientCandidatesRequest)(nil),        // 51: engram.v1.GetAmbientCandidatesRequest
-	(*GetAmbientCandidatesResponse)(nil),       // 52: engram.v1.GetAmbientCandidatesResponse
-	(*HostAdvisorProtocolRange)(nil),           // 53: engram.v1.HostAdvisorProtocolRange
-	(*HostAdvisorHost)(nil),                    // 54: engram.v1.HostAdvisorHost
-	(*HostAdvisorArtifact)(nil),                // 55: engram.v1.HostAdvisorArtifact
-	(*HostAdvisorEvidenceRef)(nil),             // 56: engram.v1.HostAdvisorEvidenceRef
-	(*HostAdvisorCorrelation)(nil),             // 57: engram.v1.HostAdvisorCorrelation
-	(*HostAdvisorCallback)(nil),                // 58: engram.v1.HostAdvisorCallback
-	(*HostCapability)(nil),                     // 59: engram.v1.HostCapability
-	(*HostHello)(nil),                          // 60: engram.v1.HostHello
-	(*AcceptedCapabilitySnapshot)(nil),         // 61: engram.v1.AcceptedCapabilitySnapshot
-	(*HostBinding)(nil),                        // 62: engram.v1.HostBinding
-	(*HostAdvisorBindRequest)(nil),             // 63: engram.v1.HostAdvisorBindRequest
-	(*HostAdvisorBindResponse)(nil),            // 64: engram.v1.HostAdvisorBindResponse
-	(*HostAdvisorTypedFact)(nil),               // 65: engram.v1.HostAdvisorTypedFact
-	(*HostAdvisorBeforeAgentStartFacts)(nil),   // 66: engram.v1.HostAdvisorBeforeAgentStartFacts
-	(*HostAdvisorReceiptIdentity)(nil),         // 67: engram.v1.HostAdvisorReceiptIdentity
-	(*HostAdvisorOccurrence)(nil),              // 68: engram.v1.HostAdvisorOccurrence
-	(*HostAdvisorAdviseRequest)(nil),           // 69: engram.v1.HostAdvisorAdviseRequest
-	(*HostAdvisorKnowledgeReference)(nil),      // 70: engram.v1.HostAdvisorKnowledgeReference
-	(*HostAdvisorPresentation)(nil),            // 71: engram.v1.HostAdvisorPresentation
-	(*HostAdvisorPacket)(nil),                  // 72: engram.v1.HostAdvisorPacket
-	(*HostAdvisorEmit)(nil),                    // 73: engram.v1.HostAdvisorEmit
-	(*HostAdvisorAbstain)(nil),                 // 74: engram.v1.HostAdvisorAbstain
-	(*HostAdvisorDeliveryAmbiguous)(nil),       // 75: engram.v1.HostAdvisorDeliveryAmbiguous
-	(*HostAdvisorUnavailable)(nil),             // 76: engram.v1.HostAdvisorUnavailable
-	(*HostAdvisorAdviseResponse)(nil),          // 77: engram.v1.HostAdvisorAdviseResponse
-	(*HostAdvisorAdapterAttestation)(nil),      // 78: engram.v1.HostAdvisorAdapterAttestation
-	(*HostAdvisorAdapterSemanticGap)(nil),      // 79: engram.v1.HostAdvisorAdapterSemanticGap
-	(*HostAdvisorReceiptBoundObservation)(nil), // 80: engram.v1.HostAdvisorReceiptBoundObservation
-	(*HostAdvisorChannelSemanticGap)(nil),      // 81: engram.v1.HostAdvisorChannelSemanticGap
-	(*HostAdvisorObserveRequest)(nil),          // 82: engram.v1.HostAdvisorObserveRequest
-	(*HostAdvisorObserveResponse)(nil),         // 83: engram.v1.HostAdvisorObserveResponse
-	(*ContextRef)(nil),                         // 84: engram.v1.ContextRef
-	(*CodeIndexScope)(nil),                     // 85: engram.v1.CodeIndexScope
-	(*BindCodeContextRequest)(nil),             // 86: engram.v1.BindCodeContextRequest
-	(*BindCodeContextResponse)(nil),            // 87: engram.v1.BindCodeContextResponse
-	(*CodeIndexIntentTarget)(nil),              // 88: engram.v1.CodeIndexIntentTarget
-	(*CodeIndexIntentClaim)(nil),               // 89: engram.v1.CodeIndexIntentClaim
-	(*PollCodeIndexIntentsRequest)(nil),        // 90: engram.v1.PollCodeIndexIntentsRequest
-	(*CodeIndexIntentOffer)(nil),               // 91: engram.v1.CodeIndexIntentOffer
-	(*PollCodeIndexIntentsResponse)(nil),       // 92: engram.v1.PollCodeIndexIntentsResponse
-	(*UpdateCodeIndexIntentRequest)(nil),       // 93: engram.v1.UpdateCodeIndexIntentRequest
-	(*UpdateCodeIndexIntentResponse)(nil),      // 94: engram.v1.UpdateCodeIndexIntentResponse
-	(*BeginCodeIndexRequest)(nil),              // 95: engram.v1.BeginCodeIndexRequest
-	(*BeginCodeIndexResponse)(nil),             // 96: engram.v1.BeginCodeIndexResponse
-	(*StageCodeIndexFrame)(nil),                // 97: engram.v1.StageCodeIndexFrame
-	(*StageCodeIndexResponse)(nil),             // 98: engram.v1.StageCodeIndexResponse
-	(*FinalizeCodeIndexRequest)(nil),           // 99: engram.v1.FinalizeCodeIndexRequest
-	(*FinalizeCodeIndexResponse)(nil),          // 100: engram.v1.FinalizeCodeIndexResponse
-	(*QueryCodeRequest)(nil),                   // 101: engram.v1.QueryCodeRequest
-	(*QueryCodeResponse)(nil),                  // 102: engram.v1.QueryCodeResponse
-	(*ExploreCodeRequest)(nil),                 // 103: engram.v1.ExploreCodeRequest
-	(*ExploreCodeResponse)(nil),                // 104: engram.v1.ExploreCodeResponse
-	(*RecordUCICompletionRequest)(nil),         // 105: engram.v1.RecordUCICompletionRequest
-	(*RecordUCICompletionResponse)(nil),        // 106: engram.v1.RecordUCICompletionResponse
-	nil,                                        // 107: engram.v1.ProjectEvent.MetadataEntry
-	(*timestamppb.Timestamp)(nil),              // 108: google.protobuf.Timestamp
+	(HostAdvisorHostFamily)(0),                 // 1: engram.v1.HostAdvisorHostFamily
+	(HostAdvisorArtifactKind)(0),               // 2: engram.v1.HostAdvisorArtifactKind
+	(HostAdvisorSemantic)(0),                   // 3: engram.v1.HostAdvisorSemantic
+	(HostAdvisorAction)(0),                     // 4: engram.v1.HostAdvisorAction
+	(HostAdvisorContextInjectionMode)(0),       // 5: engram.v1.HostAdvisorContextInjectionMode
+	(HostAdvisorCallbackOrdering)(0),           // 6: engram.v1.HostAdvisorCallbackOrdering
+	(HostAdvisorAcknowledgement)(0),            // 7: engram.v1.HostAdvisorAcknowledgement
+	(HostAdvisorFactKind)(0),                   // 8: engram.v1.HostAdvisorFactKind
+	(HostAdvisorCandidateTier)(0),              // 9: engram.v1.HostAdvisorCandidateTier
+	(HostAdvisorAbstentionReason)(0),           // 10: engram.v1.HostAdvisorAbstentionReason
+	(HostAdvisorUnavailableCode)(0),            // 11: engram.v1.HostAdvisorUnavailableCode
+	(HostAdvisorObservationState)(0),           // 12: engram.v1.HostAdvisorObservationState
+	(HostAdvisorObservationReason)(0),          // 13: engram.v1.HostAdvisorObservationReason
+	(HostAdvisorAttestationKind)(0),            // 14: engram.v1.HostAdvisorAttestationKind
+	(HostAdvisorSemanticGapCode)(0),            // 15: engram.v1.HostAdvisorSemanticGapCode
+	(UCICompletionOutcome)(0),                  // 16: engram.v1.UCICompletionOutcome
+	(*SyncProjectStateRequest)(nil),            // 17: engram.v1.SyncProjectStateRequest
+	(*SyncProjectStateResponse)(nil),           // 18: engram.v1.SyncProjectStateResponse
+	(*ProjectEventsRequest)(nil),               // 19: engram.v1.ProjectEventsRequest
+	(*ProjectEvent)(nil),                       // 20: engram.v1.ProjectEvent
+	(*GetSessionStartContextRequest)(nil),      // 21: engram.v1.GetSessionStartContextRequest
+	(*GetSessionStartContextResponse)(nil),     // 22: engram.v1.GetSessionStartContextResponse
+	(*SessionStartIssue)(nil),                  // 23: engram.v1.SessionStartIssue
+	(*SessionStartRule)(nil),                   // 24: engram.v1.SessionStartRule
+	(*SessionStartRuleRouter)(nil),             // 25: engram.v1.SessionStartRuleRouter
+	(*SessionStartRulePacket)(nil),             // 26: engram.v1.SessionStartRulePacket
+	(*SessionStartMemory)(nil),                 // 27: engram.v1.SessionStartMemory
+	(*SessionStartMetaTagCount)(nil),           // 28: engram.v1.SessionStartMetaTagCount
+	(*SessionStartMetaSummary)(nil),            // 29: engram.v1.SessionStartMetaSummary
+	(*NegotiateVersionRequest)(nil),            // 30: engram.v1.NegotiateVersionRequest
+	(*NegotiateVersionResponse)(nil),           // 31: engram.v1.NegotiateVersionResponse
+	(*CallToolRequest)(nil),                    // 32: engram.v1.CallToolRequest
+	(*CallToolResponse)(nil),                   // 33: engram.v1.CallToolResponse
+	(*InitializeRequest)(nil),                  // 34: engram.v1.InitializeRequest
+	(*InitializeResponse)(nil),                 // 35: engram.v1.InitializeResponse
+	(*ToolDefinition)(nil),                     // 36: engram.v1.ToolDefinition
+	(*PingRequest)(nil),                        // 37: engram.v1.PingRequest
+	(*PingResponse)(nil),                       // 38: engram.v1.PingResponse
+	(*CodeChunkMeta)(nil),                      // 39: engram.v1.CodeChunkMeta
+	(*CodeIndexNegotiateRequest)(nil),          // 40: engram.v1.CodeIndexNegotiateRequest
+	(*CodeIndexNegotiateResponse)(nil),         // 41: engram.v1.CodeIndexNegotiateResponse
+	(*CodeChunkUpload)(nil),                    // 42: engram.v1.CodeChunkUpload
+	(*CodeIndexUploadReceipt)(nil),             // 43: engram.v1.CodeIndexUploadReceipt
+	(*ProjectLegacyIdentifierV3)(nil),          // 44: engram.v1.ProjectLegacyIdentifierV3
+	(*ProjectIdentityV3)(nil),                  // 45: engram.v1.ProjectIdentityV3
+	(*HostAdvisorProtocolRange)(nil),           // 46: engram.v1.HostAdvisorProtocolRange
+	(*HostAdvisorHost)(nil),                    // 47: engram.v1.HostAdvisorHost
+	(*HostAdvisorArtifact)(nil),                // 48: engram.v1.HostAdvisorArtifact
+	(*HostAdvisorEvidenceRef)(nil),             // 49: engram.v1.HostAdvisorEvidenceRef
+	(*HostAdvisorCorrelation)(nil),             // 50: engram.v1.HostAdvisorCorrelation
+	(*HostAdvisorCallback)(nil),                // 51: engram.v1.HostAdvisorCallback
+	(*HostCapability)(nil),                     // 52: engram.v1.HostCapability
+	(*HostHello)(nil),                          // 53: engram.v1.HostHello
+	(*AcceptedCapabilitySnapshot)(nil),         // 54: engram.v1.AcceptedCapabilitySnapshot
+	(*HostBinding)(nil),                        // 55: engram.v1.HostBinding
+	(*HostAdvisorBindRequest)(nil),             // 56: engram.v1.HostAdvisorBindRequest
+	(*HostAdvisorBindResponse)(nil),            // 57: engram.v1.HostAdvisorBindResponse
+	(*HostAdvisorTypedFact)(nil),               // 58: engram.v1.HostAdvisorTypedFact
+	(*HostAdvisorBeforeAgentStartFacts)(nil),   // 59: engram.v1.HostAdvisorBeforeAgentStartFacts
+	(*HostAdvisorReceiptIdentity)(nil),         // 60: engram.v1.HostAdvisorReceiptIdentity
+	(*HostAdvisorOccurrence)(nil),              // 61: engram.v1.HostAdvisorOccurrence
+	(*HostAdvisorAdviseRequest)(nil),           // 62: engram.v1.HostAdvisorAdviseRequest
+	(*HostAdvisorKnowledgeReference)(nil),      // 63: engram.v1.HostAdvisorKnowledgeReference
+	(*HostAdvisorPresentation)(nil),            // 64: engram.v1.HostAdvisorPresentation
+	(*HostAdvisorPacket)(nil),                  // 65: engram.v1.HostAdvisorPacket
+	(*HostAdvisorEmit)(nil),                    // 66: engram.v1.HostAdvisorEmit
+	(*HostAdvisorAbstain)(nil),                 // 67: engram.v1.HostAdvisorAbstain
+	(*HostAdvisorDeliveryAmbiguous)(nil),       // 68: engram.v1.HostAdvisorDeliveryAmbiguous
+	(*HostAdvisorUnavailable)(nil),             // 69: engram.v1.HostAdvisorUnavailable
+	(*HostAdvisorAdviseResponse)(nil),          // 70: engram.v1.HostAdvisorAdviseResponse
+	(*HostAdvisorAdapterAttestation)(nil),      // 71: engram.v1.HostAdvisorAdapterAttestation
+	(*HostAdvisorAdapterSemanticGap)(nil),      // 72: engram.v1.HostAdvisorAdapterSemanticGap
+	(*HostAdvisorReceiptBoundObservation)(nil), // 73: engram.v1.HostAdvisorReceiptBoundObservation
+	(*HostAdvisorChannelSemanticGap)(nil),      // 74: engram.v1.HostAdvisorChannelSemanticGap
+	(*HostAdvisorObserveRequest)(nil),          // 75: engram.v1.HostAdvisorObserveRequest
+	(*HostAdvisorObserveResponse)(nil),         // 76: engram.v1.HostAdvisorObserveResponse
+	(*ContextRef)(nil),                         // 77: engram.v1.ContextRef
+	(*CodeIndexScope)(nil),                     // 78: engram.v1.CodeIndexScope
+	(*BindCodeContextRequest)(nil),             // 79: engram.v1.BindCodeContextRequest
+	(*BindCodeContextResponse)(nil),            // 80: engram.v1.BindCodeContextResponse
+	(*CodeIndexIntentTarget)(nil),              // 81: engram.v1.CodeIndexIntentTarget
+	(*CodeIndexIntentClaim)(nil),               // 82: engram.v1.CodeIndexIntentClaim
+	(*PollCodeIndexIntentsRequest)(nil),        // 83: engram.v1.PollCodeIndexIntentsRequest
+	(*CodeIndexIntentOffer)(nil),               // 84: engram.v1.CodeIndexIntentOffer
+	(*PollCodeIndexIntentsResponse)(nil),       // 85: engram.v1.PollCodeIndexIntentsResponse
+	(*UpdateCodeIndexIntentRequest)(nil),       // 86: engram.v1.UpdateCodeIndexIntentRequest
+	(*UpdateCodeIndexIntentResponse)(nil),      // 87: engram.v1.UpdateCodeIndexIntentResponse
+	(*BeginCodeIndexRequest)(nil),              // 88: engram.v1.BeginCodeIndexRequest
+	(*BeginCodeIndexResponse)(nil),             // 89: engram.v1.BeginCodeIndexResponse
+	(*StageCodeIndexFrame)(nil),                // 90: engram.v1.StageCodeIndexFrame
+	(*StageCodeIndexResponse)(nil),             // 91: engram.v1.StageCodeIndexResponse
+	(*FinalizeCodeIndexRequest)(nil),           // 92: engram.v1.FinalizeCodeIndexRequest
+	(*FinalizeCodeIndexResponse)(nil),          // 93: engram.v1.FinalizeCodeIndexResponse
+	(*QueryCodeRequest)(nil),                   // 94: engram.v1.QueryCodeRequest
+	(*QueryCodeResponse)(nil),                  // 95: engram.v1.QueryCodeResponse
+	(*ExploreCodeRequest)(nil),                 // 96: engram.v1.ExploreCodeRequest
+	(*ExploreCodeResponse)(nil),                // 97: engram.v1.ExploreCodeResponse
+	(*RecordUCICompletionRequest)(nil),         // 98: engram.v1.RecordUCICompletionRequest
+	(*RecordUCICompletionResponse)(nil),        // 99: engram.v1.RecordUCICompletionResponse
+	nil,                                        // 100: engram.v1.ProjectEvent.MetadataEntry
+	(*timestamppb.Timestamp)(nil),              // 101: google.protobuf.Timestamp
 }
 var file_proto_engram_v1_engram_proto_depIdxs = []int32{
 	0,   // 0: engram.v1.ProjectEvent.event_type:type_name -> engram.v1.ProjectEventType
-	107, // 1: engram.v1.ProjectEvent.metadata:type_name -> engram.v1.ProjectEvent.MetadataEntry
-	47,  // 2: engram.v1.GetSessionStartContextRequest.project_identity_v3:type_name -> engram.v1.ProjectIdentityV3
-	24,  // 3: engram.v1.GetSessionStartContextResponse.issues:type_name -> engram.v1.SessionStartIssue
-	25,  // 4: engram.v1.GetSessionStartContextResponse.rules:type_name -> engram.v1.SessionStartRule
-	28,  // 5: engram.v1.GetSessionStartContextResponse.memories:type_name -> engram.v1.SessionStartMemory
-	108, // 6: engram.v1.GetSessionStartContextResponse.generated_at:type_name -> google.protobuf.Timestamp
-	26,  // 7: engram.v1.GetSessionStartContextResponse.rule_router:type_name -> engram.v1.SessionStartRuleRouter
-	30,  // 8: engram.v1.GetSessionStartContextResponse.meta_summary:type_name -> engram.v1.SessionStartMetaSummary
-	48,  // 9: engram.v1.GetSessionStartContextResponse.project_resolution_v3:type_name -> engram.v1.ProjectResolutionResultV3
-	108, // 10: engram.v1.SessionStartIssue.acknowledged_at:type_name -> google.protobuf.Timestamp
-	108, // 11: engram.v1.SessionStartIssue.resolved_at:type_name -> google.protobuf.Timestamp
-	108, // 12: engram.v1.SessionStartIssue.reopened_at:type_name -> google.protobuf.Timestamp
-	108, // 13: engram.v1.SessionStartIssue.closed_at:type_name -> google.protobuf.Timestamp
-	108, // 14: engram.v1.SessionStartIssue.created_at:type_name -> google.protobuf.Timestamp
-	108, // 15: engram.v1.SessionStartIssue.updated_at:type_name -> google.protobuf.Timestamp
-	108, // 16: engram.v1.SessionStartRule.created_at:type_name -> google.protobuf.Timestamp
-	108, // 17: engram.v1.SessionStartRule.updated_at:type_name -> google.protobuf.Timestamp
-	27,  // 18: engram.v1.SessionStartRuleRouter.kernel:type_name -> engram.v1.SessionStartRulePacket
-	27,  // 19: engram.v1.SessionStartRuleRouter.contextual:type_name -> engram.v1.SessionStartRulePacket
-	27,  // 20: engram.v1.SessionStartRuleRouter.suppressed:type_name -> engram.v1.SessionStartRulePacket
-	108, // 21: engram.v1.SessionStartMemory.created_at:type_name -> google.protobuf.Timestamp
-	108, // 22: engram.v1.SessionStartMemory.updated_at:type_name -> google.protobuf.Timestamp
-	29,  // 23: engram.v1.SessionStartMetaSummary.top_tags:type_name -> engram.v1.SessionStartMetaTagCount
-	108, // 24: engram.v1.SessionStartMetaSummary.oldest_created_at:type_name -> google.protobuf.Timestamp
-	108, // 25: engram.v1.SessionStartMetaSummary.newest_created_at:type_name -> google.protobuf.Timestamp
-	108, // 26: engram.v1.SessionStartMetaSummary.generated_at:type_name -> google.protobuf.Timestamp
-	45,  // 27: engram.v1.CallToolRequest.project_identity:type_name -> engram.v1.ProjectIdentityV2
-	47,  // 28: engram.v1.CallToolRequest.project_identity_v3:type_name -> engram.v1.ProjectIdentityV3
-	48,  // 29: engram.v1.CallToolResponse.project_resolution_v3:type_name -> engram.v1.ProjectResolutionResultV3
-	45,  // 30: engram.v1.InitializeRequest.project_identity:type_name -> engram.v1.ProjectIdentityV2
-	47,  // 31: engram.v1.InitializeRequest.project_identity_v3:type_name -> engram.v1.ProjectIdentityV3
-	37,  // 32: engram.v1.InitializeResponse.tools:type_name -> engram.v1.ToolDefinition
-	48,  // 33: engram.v1.InitializeResponse.project_resolution_v3:type_name -> engram.v1.ProjectResolutionResultV3
-	40,  // 34: engram.v1.CodeIndexNegotiateRequest.manifest:type_name -> engram.v1.CodeChunkMeta
-	40,  // 35: engram.v1.CodeChunkUpload.meta:type_name -> engram.v1.CodeChunkMeta
-	46,  // 36: engram.v1.ProjectIdentityV3.legacy_identifiers:type_name -> engram.v1.ProjectLegacyIdentifierV3
-	1,   // 37: engram.v1.ProjectResolutionResultV3.outcome:type_name -> engram.v1.ProjectResolutionOutcomeV3
-	47,  // 38: engram.v1.RegisterProjectIdentityV3Request.project_identity_v3:type_name -> engram.v1.ProjectIdentityV3
-	48,  // 39: engram.v1.RegisterProjectIdentityV3Response.project_resolution_v3:type_name -> engram.v1.ProjectResolutionResultV3
-	47,  // 40: engram.v1.GetAmbientCandidatesRequest.project_identity_v3:type_name -> engram.v1.ProjectIdentityV3
-	2,   // 41: engram.v1.HostAdvisorHost.family:type_name -> engram.v1.HostAdvisorHostFamily
-	3,   // 42: engram.v1.HostAdvisorArtifact.kind:type_name -> engram.v1.HostAdvisorArtifactKind
-	55,  // 43: engram.v1.HostAdvisorEvidenceRef.artifact:type_name -> engram.v1.HostAdvisorArtifact
-	7,   // 44: engram.v1.HostAdvisorCallback.ordering:type_name -> engram.v1.HostAdvisorCallbackOrdering
-	4,   // 45: engram.v1.HostCapability.semantic:type_name -> engram.v1.HostAdvisorSemantic
-	5,   // 46: engram.v1.HostCapability.allowed_actions:type_name -> engram.v1.HostAdvisorAction
-	6,   // 47: engram.v1.HostCapability.context_injection_modes:type_name -> engram.v1.HostAdvisorContextInjectionMode
-	57,  // 48: engram.v1.HostCapability.correlation:type_name -> engram.v1.HostAdvisorCorrelation
-	58,  // 49: engram.v1.HostCapability.callback:type_name -> engram.v1.HostAdvisorCallback
-	8,   // 50: engram.v1.HostCapability.acknowledgement:type_name -> engram.v1.HostAdvisorAcknowledgement
-	53,  // 51: engram.v1.HostHello.protocol_range:type_name -> engram.v1.HostAdvisorProtocolRange
-	54,  // 52: engram.v1.HostHello.host:type_name -> engram.v1.HostAdvisorHost
-	59,  // 53: engram.v1.HostHello.requested_capabilities:type_name -> engram.v1.HostCapability
-	56,  // 54: engram.v1.HostHello.evidence_ref:type_name -> engram.v1.HostAdvisorEvidenceRef
-	59,  // 55: engram.v1.AcceptedCapabilitySnapshot.capabilities:type_name -> engram.v1.HostCapability
-	61,  // 56: engram.v1.HostBinding.capability_snapshot:type_name -> engram.v1.AcceptedCapabilitySnapshot
-	108, // 57: engram.v1.HostBinding.expires_at:type_name -> google.protobuf.Timestamp
-	60,  // 58: engram.v1.HostAdvisorBindRequest.hello:type_name -> engram.v1.HostHello
-	62,  // 59: engram.v1.HostAdvisorBindResponse.binding:type_name -> engram.v1.HostBinding
-	9,   // 60: engram.v1.HostAdvisorTypedFact.kind:type_name -> engram.v1.HostAdvisorFactKind
-	65,  // 61: engram.v1.HostAdvisorBeforeAgentStartFacts.facts:type_name -> engram.v1.HostAdvisorTypedFact
-	4,   // 62: engram.v1.HostAdvisorOccurrence.phase:type_name -> engram.v1.HostAdvisorSemantic
-	66,  // 63: engram.v1.HostAdvisorOccurrence.before_agent_start:type_name -> engram.v1.HostAdvisorBeforeAgentStartFacts
-	67,  // 64: engram.v1.HostAdvisorOccurrence.predecessor:type_name -> engram.v1.HostAdvisorReceiptIdentity
-	47,  // 65: engram.v1.HostAdvisorAdviseRequest.project_evidence:type_name -> engram.v1.ProjectIdentityV3
-	68,  // 66: engram.v1.HostAdvisorAdviseRequest.occurrence:type_name -> engram.v1.HostAdvisorOccurrence
-	10,  // 67: engram.v1.HostAdvisorKnowledgeReference.source_tier:type_name -> engram.v1.HostAdvisorCandidateTier
-	6,   // 68: engram.v1.HostAdvisorPresentation.injection_mode:type_name -> engram.v1.HostAdvisorContextInjectionMode
-	67,  // 69: engram.v1.HostAdvisorPacket.receipt:type_name -> engram.v1.HostAdvisorReceiptIdentity
-	108, // 70: engram.v1.HostAdvisorPacket.expires_at:type_name -> google.protobuf.Timestamp
-	70,  // 71: engram.v1.HostAdvisorPacket.knowledge:type_name -> engram.v1.HostAdvisorKnowledgeReference
-	71,  // 72: engram.v1.HostAdvisorPacket.presentation:type_name -> engram.v1.HostAdvisorPresentation
-	67,  // 73: engram.v1.HostAdvisorEmit.receipt:type_name -> engram.v1.HostAdvisorReceiptIdentity
-	72,  // 74: engram.v1.HostAdvisorEmit.packet:type_name -> engram.v1.HostAdvisorPacket
-	67,  // 75: engram.v1.HostAdvisorAbstain.receipt:type_name -> engram.v1.HostAdvisorReceiptIdentity
-	11,  // 76: engram.v1.HostAdvisorAbstain.reason:type_name -> engram.v1.HostAdvisorAbstentionReason
-	67,  // 77: engram.v1.HostAdvisorDeliveryAmbiguous.receipt:type_name -> engram.v1.HostAdvisorReceiptIdentity
-	108, // 78: engram.v1.HostAdvisorUnavailable.expires_at:type_name -> google.protobuf.Timestamp
-	12,  // 79: engram.v1.HostAdvisorUnavailable.code:type_name -> engram.v1.HostAdvisorUnavailableCode
-	73,  // 80: engram.v1.HostAdvisorAdviseResponse.emit:type_name -> engram.v1.HostAdvisorEmit
-	74,  // 81: engram.v1.HostAdvisorAdviseResponse.abstain:type_name -> engram.v1.HostAdvisorAbstain
-	75,  // 82: engram.v1.HostAdvisorAdviseResponse.delivery_ambiguous:type_name -> engram.v1.HostAdvisorDeliveryAmbiguous
-	76,  // 83: engram.v1.HostAdvisorAdviseResponse.unavailable:type_name -> engram.v1.HostAdvisorUnavailable
-	15,  // 84: engram.v1.HostAdvisorAdapterAttestation.kind:type_name -> engram.v1.HostAdvisorAttestationKind
-	16,  // 85: engram.v1.HostAdvisorAdapterSemanticGap.code:type_name -> engram.v1.HostAdvisorSemanticGapCode
-	67,  // 86: engram.v1.HostAdvisorReceiptBoundObservation.decision_receipt:type_name -> engram.v1.HostAdvisorReceiptIdentity
-	78,  // 87: engram.v1.HostAdvisorReceiptBoundObservation.adapter_attested:type_name -> engram.v1.HostAdvisorAdapterAttestation
-	79,  // 88: engram.v1.HostAdvisorReceiptBoundObservation.adapter_semantic_gap:type_name -> engram.v1.HostAdvisorAdapterSemanticGap
-	79,  // 89: engram.v1.HostAdvisorChannelSemanticGap.adapter_semantic_gap:type_name -> engram.v1.HostAdvisorAdapterSemanticGap
-	80,  // 90: engram.v1.HostAdvisorObserveRequest.receipt_bound:type_name -> engram.v1.HostAdvisorReceiptBoundObservation
-	81,  // 91: engram.v1.HostAdvisorObserveRequest.channel_gap:type_name -> engram.v1.HostAdvisorChannelSemanticGap
-	13,  // 92: engram.v1.HostAdvisorObserveResponse.state:type_name -> engram.v1.HostAdvisorObservationState
-	14,  // 93: engram.v1.HostAdvisorObserveResponse.reason:type_name -> engram.v1.HostAdvisorObservationReason
-	84,  // 94: engram.v1.BindCodeContextRequest.requested_context:type_name -> engram.v1.ContextRef
-	84,  // 95: engram.v1.BindCodeContextResponse.context:type_name -> engram.v1.ContextRef
-	85,  // 96: engram.v1.BindCodeContextResponse.index_scope:type_name -> engram.v1.CodeIndexScope
-	85,  // 97: engram.v1.CodeIndexIntentTarget.scope:type_name -> engram.v1.CodeIndexScope
-	88,  // 98: engram.v1.PollCodeIndexIntentsRequest.target:type_name -> engram.v1.CodeIndexIntentTarget
-	84,  // 99: engram.v1.CodeIndexIntentOffer.previous_context:type_name -> engram.v1.ContextRef
-	108, // 100: engram.v1.CodeIndexIntentOffer.lease_expires_at:type_name -> google.protobuf.Timestamp
-	91,  // 101: engram.v1.PollCodeIndexIntentsResponse.offer:type_name -> engram.v1.CodeIndexIntentOffer
-	88,  // 102: engram.v1.UpdateCodeIndexIntentRequest.target:type_name -> engram.v1.CodeIndexIntentTarget
-	108, // 103: engram.v1.UpdateCodeIndexIntentResponse.lease_expires_at:type_name -> google.protobuf.Timestamp
-	85,  // 104: engram.v1.BeginCodeIndexRequest.scope:type_name -> engram.v1.CodeIndexScope
-	84,  // 105: engram.v1.BeginCodeIndexRequest.expected_parent:type_name -> engram.v1.ContextRef
-	89,  // 106: engram.v1.BeginCodeIndexRequest.intent_claim:type_name -> engram.v1.CodeIndexIntentClaim
-	85,  // 107: engram.v1.BeginCodeIndexResponse.scope:type_name -> engram.v1.CodeIndexScope
-	108, // 108: engram.v1.BeginCodeIndexResponse.lease_expires_at:type_name -> google.protobuf.Timestamp
-	85,  // 109: engram.v1.StageCodeIndexFrame.scope:type_name -> engram.v1.CodeIndexScope
-	89,  // 110: engram.v1.StageCodeIndexFrame.intent_claim:type_name -> engram.v1.CodeIndexIntentClaim
-	85,  // 111: engram.v1.FinalizeCodeIndexRequest.scope:type_name -> engram.v1.CodeIndexScope
-	84,  // 112: engram.v1.FinalizeCodeIndexRequest.expected_parent:type_name -> engram.v1.ContextRef
-	108, // 113: engram.v1.FinalizeCodeIndexRequest.scan_started_at:type_name -> google.protobuf.Timestamp
-	108, // 114: engram.v1.FinalizeCodeIndexRequest.scan_completed_at:type_name -> google.protobuf.Timestamp
-	89,  // 115: engram.v1.FinalizeCodeIndexRequest.intent_claim:type_name -> engram.v1.CodeIndexIntentClaim
-	84,  // 116: engram.v1.FinalizeCodeIndexResponse.published_context:type_name -> engram.v1.ContextRef
-	84,  // 117: engram.v1.QueryCodeRequest.context:type_name -> engram.v1.ContextRef
-	84,  // 118: engram.v1.QueryCodeResponse.context:type_name -> engram.v1.ContextRef
-	84,  // 119: engram.v1.ExploreCodeRequest.context:type_name -> engram.v1.ContextRef
-	84,  // 120: engram.v1.ExploreCodeResponse.context:type_name -> engram.v1.ContextRef
-	17,  // 121: engram.v1.RecordUCICompletionRequest.outcome:type_name -> engram.v1.UCICompletionOutcome
-	33,  // 122: engram.v1.EngramService.CallTool:input_type -> engram.v1.CallToolRequest
-	35,  // 123: engram.v1.EngramService.Initialize:input_type -> engram.v1.InitializeRequest
-	38,  // 124: engram.v1.EngramService.Ping:input_type -> engram.v1.PingRequest
-	18,  // 125: engram.v1.EngramService.SyncProjectState:input_type -> engram.v1.SyncProjectStateRequest
-	20,  // 126: engram.v1.EngramService.ProjectEvents:input_type -> engram.v1.ProjectEventsRequest
-	22,  // 127: engram.v1.EngramService.GetSessionStartContext:input_type -> engram.v1.GetSessionStartContextRequest
-	51,  // 128: engram.v1.EngramService.GetAmbientCandidates:input_type -> engram.v1.GetAmbientCandidatesRequest
-	31,  // 129: engram.v1.EngramService.NegotiateVersion:input_type -> engram.v1.NegotiateVersionRequest
-	41,  // 130: engram.v1.EngramService.CodeIndexNegotiate:input_type -> engram.v1.CodeIndexNegotiateRequest
-	43,  // 131: engram.v1.EngramService.CodeIndexUpload:input_type -> engram.v1.CodeChunkUpload
-	49,  // 132: engram.v1.EngramService.RegisterProjectIdentityV3:input_type -> engram.v1.RegisterProjectIdentityV3Request
-	63,  // 133: engram.v1.EngramService.Bind:input_type -> engram.v1.HostAdvisorBindRequest
-	69,  // 134: engram.v1.EngramService.Advise:input_type -> engram.v1.HostAdvisorAdviseRequest
-	82,  // 135: engram.v1.EngramService.Observe:input_type -> engram.v1.HostAdvisorObserveRequest
-	86,  // 136: engram.v1.EngramService.BindCodeContext:input_type -> engram.v1.BindCodeContextRequest
-	90,  // 137: engram.v1.EngramService.PollCodeIndexIntents:input_type -> engram.v1.PollCodeIndexIntentsRequest
-	93,  // 138: engram.v1.EngramService.UpdateCodeIndexIntent:input_type -> engram.v1.UpdateCodeIndexIntentRequest
-	95,  // 139: engram.v1.EngramService.BeginCodeIndex:input_type -> engram.v1.BeginCodeIndexRequest
-	97,  // 140: engram.v1.EngramService.StageCodeIndex:input_type -> engram.v1.StageCodeIndexFrame
-	99,  // 141: engram.v1.EngramService.FinalizeCodeIndex:input_type -> engram.v1.FinalizeCodeIndexRequest
-	101, // 142: engram.v1.EngramService.QueryCode:input_type -> engram.v1.QueryCodeRequest
-	103, // 143: engram.v1.EngramService.ExploreCode:input_type -> engram.v1.ExploreCodeRequest
-	105, // 144: engram.v1.EngramService.RecordUCICompletion:input_type -> engram.v1.RecordUCICompletionRequest
-	34,  // 145: engram.v1.EngramService.CallTool:output_type -> engram.v1.CallToolResponse
-	36,  // 146: engram.v1.EngramService.Initialize:output_type -> engram.v1.InitializeResponse
-	39,  // 147: engram.v1.EngramService.Ping:output_type -> engram.v1.PingResponse
-	19,  // 148: engram.v1.EngramService.SyncProjectState:output_type -> engram.v1.SyncProjectStateResponse
-	21,  // 149: engram.v1.EngramService.ProjectEvents:output_type -> engram.v1.ProjectEvent
-	23,  // 150: engram.v1.EngramService.GetSessionStartContext:output_type -> engram.v1.GetSessionStartContextResponse
-	52,  // 151: engram.v1.EngramService.GetAmbientCandidates:output_type -> engram.v1.GetAmbientCandidatesResponse
-	32,  // 152: engram.v1.EngramService.NegotiateVersion:output_type -> engram.v1.NegotiateVersionResponse
-	42,  // 153: engram.v1.EngramService.CodeIndexNegotiate:output_type -> engram.v1.CodeIndexNegotiateResponse
-	44,  // 154: engram.v1.EngramService.CodeIndexUpload:output_type -> engram.v1.CodeIndexUploadReceipt
-	50,  // 155: engram.v1.EngramService.RegisterProjectIdentityV3:output_type -> engram.v1.RegisterProjectIdentityV3Response
-	64,  // 156: engram.v1.EngramService.Bind:output_type -> engram.v1.HostAdvisorBindResponse
-	77,  // 157: engram.v1.EngramService.Advise:output_type -> engram.v1.HostAdvisorAdviseResponse
-	83,  // 158: engram.v1.EngramService.Observe:output_type -> engram.v1.HostAdvisorObserveResponse
-	87,  // 159: engram.v1.EngramService.BindCodeContext:output_type -> engram.v1.BindCodeContextResponse
-	92,  // 160: engram.v1.EngramService.PollCodeIndexIntents:output_type -> engram.v1.PollCodeIndexIntentsResponse
-	94,  // 161: engram.v1.EngramService.UpdateCodeIndexIntent:output_type -> engram.v1.UpdateCodeIndexIntentResponse
-	96,  // 162: engram.v1.EngramService.BeginCodeIndex:output_type -> engram.v1.BeginCodeIndexResponse
-	98,  // 163: engram.v1.EngramService.StageCodeIndex:output_type -> engram.v1.StageCodeIndexResponse
-	100, // 164: engram.v1.EngramService.FinalizeCodeIndex:output_type -> engram.v1.FinalizeCodeIndexResponse
-	102, // 165: engram.v1.EngramService.QueryCode:output_type -> engram.v1.QueryCodeResponse
-	104, // 166: engram.v1.EngramService.ExploreCode:output_type -> engram.v1.ExploreCodeResponse
-	106, // 167: engram.v1.EngramService.RecordUCICompletion:output_type -> engram.v1.RecordUCICompletionResponse
-	145, // [145:168] is the sub-list for method output_type
-	122, // [122:145] is the sub-list for method input_type
-	122, // [122:122] is the sub-list for extension type_name
-	122, // [122:122] is the sub-list for extension extendee
-	0,   // [0:122] is the sub-list for field type_name
+	100, // 1: engram.v1.ProjectEvent.metadata:type_name -> engram.v1.ProjectEvent.MetadataEntry
+	23,  // 2: engram.v1.GetSessionStartContextResponse.issues:type_name -> engram.v1.SessionStartIssue
+	24,  // 3: engram.v1.GetSessionStartContextResponse.rules:type_name -> engram.v1.SessionStartRule
+	27,  // 4: engram.v1.GetSessionStartContextResponse.memories:type_name -> engram.v1.SessionStartMemory
+	101, // 5: engram.v1.GetSessionStartContextResponse.generated_at:type_name -> google.protobuf.Timestamp
+	25,  // 6: engram.v1.GetSessionStartContextResponse.rule_router:type_name -> engram.v1.SessionStartRuleRouter
+	29,  // 7: engram.v1.GetSessionStartContextResponse.meta_summary:type_name -> engram.v1.SessionStartMetaSummary
+	101, // 8: engram.v1.SessionStartIssue.acknowledged_at:type_name -> google.protobuf.Timestamp
+	101, // 9: engram.v1.SessionStartIssue.resolved_at:type_name -> google.protobuf.Timestamp
+	101, // 10: engram.v1.SessionStartIssue.reopened_at:type_name -> google.protobuf.Timestamp
+	101, // 11: engram.v1.SessionStartIssue.closed_at:type_name -> google.protobuf.Timestamp
+	101, // 12: engram.v1.SessionStartIssue.created_at:type_name -> google.protobuf.Timestamp
+	101, // 13: engram.v1.SessionStartIssue.updated_at:type_name -> google.protobuf.Timestamp
+	101, // 14: engram.v1.SessionStartRule.created_at:type_name -> google.protobuf.Timestamp
+	101, // 15: engram.v1.SessionStartRule.updated_at:type_name -> google.protobuf.Timestamp
+	26,  // 16: engram.v1.SessionStartRuleRouter.kernel:type_name -> engram.v1.SessionStartRulePacket
+	26,  // 17: engram.v1.SessionStartRuleRouter.contextual:type_name -> engram.v1.SessionStartRulePacket
+	26,  // 18: engram.v1.SessionStartRuleRouter.suppressed:type_name -> engram.v1.SessionStartRulePacket
+	101, // 19: engram.v1.SessionStartMemory.created_at:type_name -> google.protobuf.Timestamp
+	101, // 20: engram.v1.SessionStartMemory.updated_at:type_name -> google.protobuf.Timestamp
+	28,  // 21: engram.v1.SessionStartMetaSummary.top_tags:type_name -> engram.v1.SessionStartMetaTagCount
+	101, // 22: engram.v1.SessionStartMetaSummary.oldest_created_at:type_name -> google.protobuf.Timestamp
+	101, // 23: engram.v1.SessionStartMetaSummary.newest_created_at:type_name -> google.protobuf.Timestamp
+	101, // 24: engram.v1.SessionStartMetaSummary.generated_at:type_name -> google.protobuf.Timestamp
+	36,  // 25: engram.v1.InitializeResponse.tools:type_name -> engram.v1.ToolDefinition
+	39,  // 26: engram.v1.CodeIndexNegotiateRequest.manifest:type_name -> engram.v1.CodeChunkMeta
+	39,  // 27: engram.v1.CodeChunkUpload.meta:type_name -> engram.v1.CodeChunkMeta
+	44,  // 28: engram.v1.ProjectIdentityV3.legacy_identifiers:type_name -> engram.v1.ProjectLegacyIdentifierV3
+	1,   // 29: engram.v1.HostAdvisorHost.family:type_name -> engram.v1.HostAdvisorHostFamily
+	2,   // 30: engram.v1.HostAdvisorArtifact.kind:type_name -> engram.v1.HostAdvisorArtifactKind
+	48,  // 31: engram.v1.HostAdvisorEvidenceRef.artifact:type_name -> engram.v1.HostAdvisorArtifact
+	6,   // 32: engram.v1.HostAdvisorCallback.ordering:type_name -> engram.v1.HostAdvisorCallbackOrdering
+	3,   // 33: engram.v1.HostCapability.semantic:type_name -> engram.v1.HostAdvisorSemantic
+	4,   // 34: engram.v1.HostCapability.allowed_actions:type_name -> engram.v1.HostAdvisorAction
+	5,   // 35: engram.v1.HostCapability.context_injection_modes:type_name -> engram.v1.HostAdvisorContextInjectionMode
+	50,  // 36: engram.v1.HostCapability.correlation:type_name -> engram.v1.HostAdvisorCorrelation
+	51,  // 37: engram.v1.HostCapability.callback:type_name -> engram.v1.HostAdvisorCallback
+	7,   // 38: engram.v1.HostCapability.acknowledgement:type_name -> engram.v1.HostAdvisorAcknowledgement
+	46,  // 39: engram.v1.HostHello.protocol_range:type_name -> engram.v1.HostAdvisorProtocolRange
+	47,  // 40: engram.v1.HostHello.host:type_name -> engram.v1.HostAdvisorHost
+	52,  // 41: engram.v1.HostHello.requested_capabilities:type_name -> engram.v1.HostCapability
+	49,  // 42: engram.v1.HostHello.evidence_ref:type_name -> engram.v1.HostAdvisorEvidenceRef
+	52,  // 43: engram.v1.AcceptedCapabilitySnapshot.capabilities:type_name -> engram.v1.HostCapability
+	54,  // 44: engram.v1.HostBinding.capability_snapshot:type_name -> engram.v1.AcceptedCapabilitySnapshot
+	101, // 45: engram.v1.HostBinding.expires_at:type_name -> google.protobuf.Timestamp
+	53,  // 46: engram.v1.HostAdvisorBindRequest.hello:type_name -> engram.v1.HostHello
+	55,  // 47: engram.v1.HostAdvisorBindResponse.binding:type_name -> engram.v1.HostBinding
+	8,   // 48: engram.v1.HostAdvisorTypedFact.kind:type_name -> engram.v1.HostAdvisorFactKind
+	58,  // 49: engram.v1.HostAdvisorBeforeAgentStartFacts.facts:type_name -> engram.v1.HostAdvisorTypedFact
+	3,   // 50: engram.v1.HostAdvisorOccurrence.phase:type_name -> engram.v1.HostAdvisorSemantic
+	59,  // 51: engram.v1.HostAdvisorOccurrence.before_agent_start:type_name -> engram.v1.HostAdvisorBeforeAgentStartFacts
+	60,  // 52: engram.v1.HostAdvisorOccurrence.predecessor:type_name -> engram.v1.HostAdvisorReceiptIdentity
+	45,  // 53: engram.v1.HostAdvisorAdviseRequest.project_evidence:type_name -> engram.v1.ProjectIdentityV3
+	61,  // 54: engram.v1.HostAdvisorAdviseRequest.occurrence:type_name -> engram.v1.HostAdvisorOccurrence
+	9,   // 55: engram.v1.HostAdvisorKnowledgeReference.source_tier:type_name -> engram.v1.HostAdvisorCandidateTier
+	5,   // 56: engram.v1.HostAdvisorPresentation.injection_mode:type_name -> engram.v1.HostAdvisorContextInjectionMode
+	60,  // 57: engram.v1.HostAdvisorPacket.receipt:type_name -> engram.v1.HostAdvisorReceiptIdentity
+	101, // 58: engram.v1.HostAdvisorPacket.expires_at:type_name -> google.protobuf.Timestamp
+	63,  // 59: engram.v1.HostAdvisorPacket.knowledge:type_name -> engram.v1.HostAdvisorKnowledgeReference
+	64,  // 60: engram.v1.HostAdvisorPacket.presentation:type_name -> engram.v1.HostAdvisorPresentation
+	60,  // 61: engram.v1.HostAdvisorEmit.receipt:type_name -> engram.v1.HostAdvisorReceiptIdentity
+	65,  // 62: engram.v1.HostAdvisorEmit.packet:type_name -> engram.v1.HostAdvisorPacket
+	60,  // 63: engram.v1.HostAdvisorAbstain.receipt:type_name -> engram.v1.HostAdvisorReceiptIdentity
+	10,  // 64: engram.v1.HostAdvisorAbstain.reason:type_name -> engram.v1.HostAdvisorAbstentionReason
+	60,  // 65: engram.v1.HostAdvisorDeliveryAmbiguous.receipt:type_name -> engram.v1.HostAdvisorReceiptIdentity
+	101, // 66: engram.v1.HostAdvisorUnavailable.expires_at:type_name -> google.protobuf.Timestamp
+	11,  // 67: engram.v1.HostAdvisorUnavailable.code:type_name -> engram.v1.HostAdvisorUnavailableCode
+	66,  // 68: engram.v1.HostAdvisorAdviseResponse.emit:type_name -> engram.v1.HostAdvisorEmit
+	67,  // 69: engram.v1.HostAdvisorAdviseResponse.abstain:type_name -> engram.v1.HostAdvisorAbstain
+	68,  // 70: engram.v1.HostAdvisorAdviseResponse.delivery_ambiguous:type_name -> engram.v1.HostAdvisorDeliveryAmbiguous
+	69,  // 71: engram.v1.HostAdvisorAdviseResponse.unavailable:type_name -> engram.v1.HostAdvisorUnavailable
+	14,  // 72: engram.v1.HostAdvisorAdapterAttestation.kind:type_name -> engram.v1.HostAdvisorAttestationKind
+	15,  // 73: engram.v1.HostAdvisorAdapterSemanticGap.code:type_name -> engram.v1.HostAdvisorSemanticGapCode
+	60,  // 74: engram.v1.HostAdvisorReceiptBoundObservation.decision_receipt:type_name -> engram.v1.HostAdvisorReceiptIdentity
+	71,  // 75: engram.v1.HostAdvisorReceiptBoundObservation.adapter_attested:type_name -> engram.v1.HostAdvisorAdapterAttestation
+	72,  // 76: engram.v1.HostAdvisorReceiptBoundObservation.adapter_semantic_gap:type_name -> engram.v1.HostAdvisorAdapterSemanticGap
+	72,  // 77: engram.v1.HostAdvisorChannelSemanticGap.adapter_semantic_gap:type_name -> engram.v1.HostAdvisorAdapterSemanticGap
+	73,  // 78: engram.v1.HostAdvisorObserveRequest.receipt_bound:type_name -> engram.v1.HostAdvisorReceiptBoundObservation
+	74,  // 79: engram.v1.HostAdvisorObserveRequest.channel_gap:type_name -> engram.v1.HostAdvisorChannelSemanticGap
+	12,  // 80: engram.v1.HostAdvisorObserveResponse.state:type_name -> engram.v1.HostAdvisorObservationState
+	13,  // 81: engram.v1.HostAdvisorObserveResponse.reason:type_name -> engram.v1.HostAdvisorObservationReason
+	77,  // 82: engram.v1.BindCodeContextRequest.requested_context:type_name -> engram.v1.ContextRef
+	77,  // 83: engram.v1.BindCodeContextResponse.context:type_name -> engram.v1.ContextRef
+	78,  // 84: engram.v1.BindCodeContextResponse.index_scope:type_name -> engram.v1.CodeIndexScope
+	78,  // 85: engram.v1.CodeIndexIntentTarget.scope:type_name -> engram.v1.CodeIndexScope
+	81,  // 86: engram.v1.PollCodeIndexIntentsRequest.target:type_name -> engram.v1.CodeIndexIntentTarget
+	77,  // 87: engram.v1.CodeIndexIntentOffer.previous_context:type_name -> engram.v1.ContextRef
+	101, // 88: engram.v1.CodeIndexIntentOffer.lease_expires_at:type_name -> google.protobuf.Timestamp
+	84,  // 89: engram.v1.PollCodeIndexIntentsResponse.offer:type_name -> engram.v1.CodeIndexIntentOffer
+	81,  // 90: engram.v1.UpdateCodeIndexIntentRequest.target:type_name -> engram.v1.CodeIndexIntentTarget
+	101, // 91: engram.v1.UpdateCodeIndexIntentResponse.lease_expires_at:type_name -> google.protobuf.Timestamp
+	78,  // 92: engram.v1.BeginCodeIndexRequest.scope:type_name -> engram.v1.CodeIndexScope
+	77,  // 93: engram.v1.BeginCodeIndexRequest.expected_parent:type_name -> engram.v1.ContextRef
+	82,  // 94: engram.v1.BeginCodeIndexRequest.intent_claim:type_name -> engram.v1.CodeIndexIntentClaim
+	78,  // 95: engram.v1.BeginCodeIndexResponse.scope:type_name -> engram.v1.CodeIndexScope
+	101, // 96: engram.v1.BeginCodeIndexResponse.lease_expires_at:type_name -> google.protobuf.Timestamp
+	78,  // 97: engram.v1.StageCodeIndexFrame.scope:type_name -> engram.v1.CodeIndexScope
+	82,  // 98: engram.v1.StageCodeIndexFrame.intent_claim:type_name -> engram.v1.CodeIndexIntentClaim
+	78,  // 99: engram.v1.FinalizeCodeIndexRequest.scope:type_name -> engram.v1.CodeIndexScope
+	77,  // 100: engram.v1.FinalizeCodeIndexRequest.expected_parent:type_name -> engram.v1.ContextRef
+	101, // 101: engram.v1.FinalizeCodeIndexRequest.scan_started_at:type_name -> google.protobuf.Timestamp
+	101, // 102: engram.v1.FinalizeCodeIndexRequest.scan_completed_at:type_name -> google.protobuf.Timestamp
+	82,  // 103: engram.v1.FinalizeCodeIndexRequest.intent_claim:type_name -> engram.v1.CodeIndexIntentClaim
+	77,  // 104: engram.v1.FinalizeCodeIndexResponse.published_context:type_name -> engram.v1.ContextRef
+	77,  // 105: engram.v1.QueryCodeRequest.context:type_name -> engram.v1.ContextRef
+	77,  // 106: engram.v1.QueryCodeResponse.context:type_name -> engram.v1.ContextRef
+	77,  // 107: engram.v1.ExploreCodeRequest.context:type_name -> engram.v1.ContextRef
+	77,  // 108: engram.v1.ExploreCodeResponse.context:type_name -> engram.v1.ContextRef
+	16,  // 109: engram.v1.RecordUCICompletionRequest.outcome:type_name -> engram.v1.UCICompletionOutcome
+	32,  // 110: engram.v1.EngramService.CallTool:input_type -> engram.v1.CallToolRequest
+	34,  // 111: engram.v1.EngramService.Initialize:input_type -> engram.v1.InitializeRequest
+	37,  // 112: engram.v1.EngramService.Ping:input_type -> engram.v1.PingRequest
+	17,  // 113: engram.v1.EngramService.SyncProjectState:input_type -> engram.v1.SyncProjectStateRequest
+	19,  // 114: engram.v1.EngramService.ProjectEvents:input_type -> engram.v1.ProjectEventsRequest
+	21,  // 115: engram.v1.EngramService.GetSessionStartContext:input_type -> engram.v1.GetSessionStartContextRequest
+	30,  // 116: engram.v1.EngramService.NegotiateVersion:input_type -> engram.v1.NegotiateVersionRequest
+	40,  // 117: engram.v1.EngramService.CodeIndexNegotiate:input_type -> engram.v1.CodeIndexNegotiateRequest
+	42,  // 118: engram.v1.EngramService.CodeIndexUpload:input_type -> engram.v1.CodeChunkUpload
+	56,  // 119: engram.v1.EngramService.Bind:input_type -> engram.v1.HostAdvisorBindRequest
+	62,  // 120: engram.v1.EngramService.Advise:input_type -> engram.v1.HostAdvisorAdviseRequest
+	75,  // 121: engram.v1.EngramService.Observe:input_type -> engram.v1.HostAdvisorObserveRequest
+	79,  // 122: engram.v1.EngramService.BindCodeContext:input_type -> engram.v1.BindCodeContextRequest
+	83,  // 123: engram.v1.EngramService.PollCodeIndexIntents:input_type -> engram.v1.PollCodeIndexIntentsRequest
+	86,  // 124: engram.v1.EngramService.UpdateCodeIndexIntent:input_type -> engram.v1.UpdateCodeIndexIntentRequest
+	88,  // 125: engram.v1.EngramService.BeginCodeIndex:input_type -> engram.v1.BeginCodeIndexRequest
+	90,  // 126: engram.v1.EngramService.StageCodeIndex:input_type -> engram.v1.StageCodeIndexFrame
+	92,  // 127: engram.v1.EngramService.FinalizeCodeIndex:input_type -> engram.v1.FinalizeCodeIndexRequest
+	94,  // 128: engram.v1.EngramService.QueryCode:input_type -> engram.v1.QueryCodeRequest
+	96,  // 129: engram.v1.EngramService.ExploreCode:input_type -> engram.v1.ExploreCodeRequest
+	98,  // 130: engram.v1.EngramService.RecordUCICompletion:input_type -> engram.v1.RecordUCICompletionRequest
+	33,  // 131: engram.v1.EngramService.CallTool:output_type -> engram.v1.CallToolResponse
+	35,  // 132: engram.v1.EngramService.Initialize:output_type -> engram.v1.InitializeResponse
+	38,  // 133: engram.v1.EngramService.Ping:output_type -> engram.v1.PingResponse
+	18,  // 134: engram.v1.EngramService.SyncProjectState:output_type -> engram.v1.SyncProjectStateResponse
+	20,  // 135: engram.v1.EngramService.ProjectEvents:output_type -> engram.v1.ProjectEvent
+	22,  // 136: engram.v1.EngramService.GetSessionStartContext:output_type -> engram.v1.GetSessionStartContextResponse
+	31,  // 137: engram.v1.EngramService.NegotiateVersion:output_type -> engram.v1.NegotiateVersionResponse
+	41,  // 138: engram.v1.EngramService.CodeIndexNegotiate:output_type -> engram.v1.CodeIndexNegotiateResponse
+	43,  // 139: engram.v1.EngramService.CodeIndexUpload:output_type -> engram.v1.CodeIndexUploadReceipt
+	57,  // 140: engram.v1.EngramService.Bind:output_type -> engram.v1.HostAdvisorBindResponse
+	70,  // 141: engram.v1.EngramService.Advise:output_type -> engram.v1.HostAdvisorAdviseResponse
+	76,  // 142: engram.v1.EngramService.Observe:output_type -> engram.v1.HostAdvisorObserveResponse
+	80,  // 143: engram.v1.EngramService.BindCodeContext:output_type -> engram.v1.BindCodeContextResponse
+	85,  // 144: engram.v1.EngramService.PollCodeIndexIntents:output_type -> engram.v1.PollCodeIndexIntentsResponse
+	87,  // 145: engram.v1.EngramService.UpdateCodeIndexIntent:output_type -> engram.v1.UpdateCodeIndexIntentResponse
+	89,  // 146: engram.v1.EngramService.BeginCodeIndex:output_type -> engram.v1.BeginCodeIndexResponse
+	91,  // 147: engram.v1.EngramService.StageCodeIndex:output_type -> engram.v1.StageCodeIndexResponse
+	93,  // 148: engram.v1.EngramService.FinalizeCodeIndex:output_type -> engram.v1.FinalizeCodeIndexResponse
+	95,  // 149: engram.v1.EngramService.QueryCode:output_type -> engram.v1.QueryCodeResponse
+	97,  // 150: engram.v1.EngramService.ExploreCode:output_type -> engram.v1.ExploreCodeResponse
+	99,  // 151: engram.v1.EngramService.RecordUCICompletion:output_type -> engram.v1.RecordUCICompletionResponse
+	131, // [131:152] is the sub-list for method output_type
+	110, // [110:131] is the sub-list for method input_type
+	110, // [110:110] is the sub-list for extension type_name
+	110, // [110:110] is the sub-list for extension extendee
+	0,   // [0:110] is the sub-list for field type_name
 }
 
 func init() { file_proto_engram_v1_engram_proto_init() }
@@ -8583,31 +7929,29 @@ func file_proto_engram_v1_engram_proto_init() {
 	if File_proto_engram_v1_engram_proto != nil {
 		return
 	}
-	file_proto_engram_v1_engram_proto_msgTypes[27].OneofWrappers = []any{}
-	file_proto_engram_v1_engram_proto_msgTypes[30].OneofWrappers = []any{}
-	file_proto_engram_v1_engram_proto_msgTypes[59].OneofWrappers = []any{
+	file_proto_engram_v1_engram_proto_msgTypes[53].OneofWrappers = []any{
 		(*HostAdvisorAdviseResponse_Emit)(nil),
 		(*HostAdvisorAdviseResponse_Abstain)(nil),
 		(*HostAdvisorAdviseResponse_DeliveryAmbiguous)(nil),
 		(*HostAdvisorAdviseResponse_Unavailable)(nil),
 	}
-	file_proto_engram_v1_engram_proto_msgTypes[62].OneofWrappers = []any{
+	file_proto_engram_v1_engram_proto_msgTypes[56].OneofWrappers = []any{
 		(*HostAdvisorReceiptBoundObservation_AdapterAttested)(nil),
 		(*HostAdvisorReceiptBoundObservation_AdapterSemanticGap)(nil),
 	}
-	file_proto_engram_v1_engram_proto_msgTypes[64].OneofWrappers = []any{
+	file_proto_engram_v1_engram_proto_msgTypes[58].OneofWrappers = []any{
 		(*HostAdvisorObserveRequest_ReceiptBound)(nil),
 		(*HostAdvisorObserveRequest_ChannelGap)(nil),
 	}
-	file_proto_engram_v1_engram_proto_msgTypes[66].OneofWrappers = []any{}
-	file_proto_engram_v1_engram_proto_msgTypes[81].OneofWrappers = []any{}
+	file_proto_engram_v1_engram_proto_msgTypes[60].OneofWrappers = []any{}
+	file_proto_engram_v1_engram_proto_msgTypes[75].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_engram_v1_engram_proto_rawDesc), len(file_proto_engram_v1_engram_proto_rawDesc)),
-			NumEnums:      18,
-			NumMessages:   90,
+			NumEnums:      17,
+			NumMessages:   84,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

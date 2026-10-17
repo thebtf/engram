@@ -1,10 +1,59 @@
 const fs = require("node:fs");
 const path = require("node:path");
+const os = require("node:os");
+const Module = require("node:module");
 const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
 const test = require("node:test");
 
-const { ExitCode, McpClient, contentText, createLifecycleTrace, deliberateRecall, failOpenSpec, lifecycleReceiptFor, main, parseArgs, r6ReceiptFor, r6Run, readOutcome, receiptFor, runChild, runFailOpen, runLifecycleChild, runLifecycleDiagnostic, runSessionSeed, statsCorroboration, validSessionID } = require("./agent-memory-dogfood.js");
+const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "engram-dogfood-test-"));
+const productionSourcePath = require.resolve("./agent-memory-dogfood.js");
+const fixtureFilename = path.join(fixtureRoot, "scripts", "production-smoke", "agent-memory-dogfood.js");
+const fixtureModule = new Module(fixtureFilename, module);
+fixtureModule.filename = fixtureFilename;
+fixtureModule.require = Module.createRequire(productionSourcePath);
+try {
+ fixtureModule._compile(fs.readFileSync(productionSourcePath, "utf8"), fixtureFilename);
+} catch (error) {
+ fs.rmSync(fixtureRoot, { recursive: true, force: true });
+ throw error;
+}
+const ownedSessionDirectories = new Set();
+const ownedTraceFiles = new Set();
+const ownedSeedFiles = new Set();
+
+function recordFixtureSession(args) {
+ const directory = args[args.indexOf("--session-dir") + 1];
+ assert.equal(path.dirname(directory), path.join(fixtureRoot, ".agent", "tmp"));
+ assert.equal(fs.statSync(directory).isDirectory(), true);
+ ownedSessionDirectories.add(directory);
+}
+
+function removeFixtureTrace(tracePath) {
+ assert.equal(path.dirname(tracePath), path.join(fixtureRoot, ".agent", "runs", "agent-memory-dogfooding"));
+ assert.equal(fs.existsSync(tracePath), true);
+ ownedTraceFiles.add(tracePath);
+ fs.rmSync(tracePath, { force: true });
+ assert.equal(fs.existsSync(tracePath), false);
+}
+
+test.after(() => {
+ try {
+  for (const artifact of [...ownedSessionDirectories, ...ownedTraceFiles, ...ownedSeedFiles]) {
+   assert.equal(fs.existsSync(artifact), false, `fixture artifact was not removed: ${artifact}`);
+   console.log(JSON.stringify({ owned_fixture_artifact: artifact, created: true, removed: true }));
+  }
+  for (const directory of [path.join(fixtureRoot, ".agent", "tmp"), path.join(fixtureRoot, ".agent", "runs", "agent-memory-dogfooding")]) {
+   if (fs.existsSync(directory)) assert.deepEqual(fs.readdirSync(directory), []);
+  }
+ } finally {
+  fs.rmSync(fixtureRoot, { recursive: true, force: true });
+  assert.equal(fs.existsSync(fixtureRoot), false);
+  console.log(JSON.stringify({ owned_fixture_root: fixtureRoot, removed: true }));
+ }
+});
+
+const { ExitCode, McpClient, contentText, createLifecycleTrace, deliberateRecall, failOpenSpec, lifecycleReceiptFor, main, parseArgs, r6ReceiptFor, r6Run, readOutcome, receiptFor, runChild, runFailOpen, runLifecycleChild, runLifecycleDiagnostic, runSessionSeed, statsCorroboration, validSessionID } = fixtureModule.exports;
 
 test("parses only supported phases and safe run IDs", () => {
  assert.deepEqual(parseArgs(["--phase", "read", "--run-id", "run_42"]), { phase: "read", runID: "run_42" });
@@ -28,7 +77,7 @@ test("receipt has an allowlisted secret-safe shape", () => {
 });
 
 test("lifecycle receipt remains writable after a finalized trace", () => {
- const repoRoot = path.resolve(__dirname, "../..");
+ const repoRoot = fixtureRoot;
  const receipt = lifecycleReceiptFor("lifecycle-receipt", {
   tracePath: path.join(repoRoot, ".agent", "runs", "agent-memory-dogfooding", "r6-lifecycle-trace.jsonl"),
   classification: { class: "H2_AUTO_DISCOVERY_EVENT_NOT_OBSERVED" },
@@ -154,7 +203,7 @@ test("R6 records an exact deliberate recall before session feedback with a runne
  const sessionID = "019fefed-3b53-7000-89fd-a0169a83cbcc";
  const runID = "r6-safe";
  const reason = "R6 r6-safe runner operational-correlation event completed";
- const project = "p2n_canonical";
+ const project = "11111111-1111-4111-8111-111111111111";
  const before = { status: 200, counts: { injection_count: 4, citation_count: 2, uncited_count: 1, total_sessions: 10, unrecorded_sessions: 7, success: 2 } };
  const after = { status: 200, counts: { injection_count: 4, citation_count: 2, uncited_count: 1, total_sessions: 10, unrecorded_sessions: 6, success: 3 } };
  const calls = [];
@@ -162,7 +211,7 @@ test("R6 records an exact deliberate recall before session feedback with a runne
  const receipt = r6ReceiptFor({ runID, endpointHost: "engram.example.test:37777" });
  await r6Run(runID, { token: "engram_redacted_secret" }, receipt, {
   stats: async () => { calls.push(`stats-${statsCalls + 1}`); return statsCalls++ === 0 ? before : after; },
-  canonicalProject: async () => { calls.push("canonical-project"); return { project, status: 200 }; },
+  canonicalProject: async () => { calls.push("canonical-project"); return { project }; },
   deliberateRecall: async (actualRunID, actualProject) => { calls.push("deliberate-recall"); assert.equal(actualRunID, runID); assert.equal(actualProject, project); return exactRecallEvidence(runID, project); },
   sessionSeed: async () => { calls.push("session-seed"); return { sessionID, exitCode: 0, budgetMs: 95_000 }; },
   initializeSession: async (_config, actualSessionID, actualProject, actualRunID) => {
@@ -202,13 +251,13 @@ test("R6 records an exact deliberate recall before session feedback with a runne
 
 test("R6 rejects non-exact final recall before any feedback", async (t) => {
  const runID = "r6-invalid-recall";
- const project = "p2n_canonical";
+ const project = "11111111-1111-4111-8111-111111111111";
  const cases = [
   ["zero count", { recalled: { count: 0 } }],
   ["wrong count", { recalled: { count: 2, memories: [{ id: 42, content: `agent-memory-dogfood:${runID}`, project }, { id: 43, content: `agent-memory-dogfood:${runID}`, project }] } }],
   ["wrong ID", { memory: { id: 43 } }],
   ["wrong content", { memory: { content: "agent-memory-dogfood:other-run" } }],
-  ["wrong project", { memory: { project: "p2n_other" } }],
+  ["wrong project", { memory: { project: "22222222-2222-4222-8222-222222222222" } }],
  ];
  for (const [name, patch] of cases) await t.test(name, async () => {
   const receipt = r6ReceiptFor({ runID, endpointHost: "engram.example.test" });
@@ -216,7 +265,7 @@ test("R6 rejects non-exact final recall before any feedback", async (t) => {
   await assert.rejects(
    r6Run(runID, {}, receipt, {
     stats: async () => ({ status: 200, counts: { injection_count: 0, citation_count: 0, uncited_count: 0, total_sessions: 1, unrecorded_sessions: 1, success: 0 } }),
-    canonicalProject: async () => { calls.push("canonical-project"); return { project, status: 200 }; },
+    canonicalProject: async () => { calls.push("canonical-project"); return { project }; },
     deliberateRecall: async () => { calls.push("deliberate-recall"); return exactRecallEvidence(runID, project, patch); },
     sessionSeed: async () => { calls.push("session-seed"); throw new Error("must not run"); },
     recordOutcome: async () => { calls.push("feedback"); throw new Error("must not run"); },
@@ -245,12 +294,12 @@ test("R6 receipt labels operational correlation without prohibited claims", () =
 
 test("R6 keeps a bad session ID as a typed session-seed failure", async () => {
  const runID = "r6-failure";
- const project = "p2n_canonical";
+ const project = "11111111-1111-4111-8111-111111111111";
  const receipt = r6ReceiptFor({ runID, endpointHost: "engram.example.test" });
  await assert.rejects(
   r6Run(runID, {}, receipt, {
    stats: async () => ({ status: 200, counts: { injection_count: 0, citation_count: 0, uncited_count: 0, total_sessions: 1, unrecorded_sessions: 1, success: 0 } }),
-   canonicalProject: async () => ({ project, status: 200 }),
+   canonicalProject: async () => ({ project }),
    deliberateRecall: async () => exactRecallEvidence(runID, project),
    sessionSeed: async () => ({ sessionID: "3236", exitCode: 0, budgetMs: 95_000 }),
   }),
@@ -272,7 +321,6 @@ test("R6 stats remain aggregate-only quiet-window corroboration", () => {
 test("R6 fail-open child overrides only its process environment", () => {
  const spec = failOpenSpec("C:\\agent-memory-dogfood-r6-fail-open");
  assert.equal(spec.command, "omp");
- assert.equal(spec.cwd.endsWith("engram"), true);
  assert.equal(spec.env.ENGRAM_URL, "http://127.0.0.1:9");
  assert.equal(spec.env.ENGRAM_TOKEN, "r6-unavailable-dummy");
  assert.equal(spec.env.ENGRAM_AUTH_ADMIN_TOKEN, undefined);
@@ -286,7 +334,9 @@ test("R6 creates a session seed without inspecting automatic-memory output", asy
  const session = await runSessionSeed("r6-child-contract", async (command, args, options) => {
   sessionCalls.push({ command, args, options });
   const sessionDirectory = args[args.indexOf("--session-dir") + 1];
+  recordFixtureSession(args);
   fs.writeFileSync(`${sessionDirectory}/session.jsonl`, `${JSON.stringify({ id: sessionID })}\n`);
+  ownedSeedFiles.add(path.join(sessionDirectory, "session.jsonl"));
   return { code: 0, stdout: "unrelated automatic-memory output" };
  });
  assert.equal(session.sessionID, sessionID);
@@ -296,6 +346,7 @@ test("R6 creates a session seed without inspecting automatic-memory output", asy
 
  const failOpenCalls = [];
  const failOpen = await runFailOpen("r6-child-contract", async (command, args, options) => {
+  recordFixtureSession(args);
   failOpenCalls.push({ command, args, options });
   return { code: 0, stdout: "OMP_CONTINUED" };
  });
@@ -389,7 +440,8 @@ test("child timeout has a bounded settlement when termination cannot close it", 
 test("lifecycle trace flushes header, fixture, and launch metadata before awaits", async () => {
  let checked = false;
  const result = await runLifecycleDiagnostic("lifecycle-flush", {
-  childRunner: async (_spec, tracePath) => {
+  childRunner: async (spec, tracePath) => {
+   recordFixtureSession(spec.args);
    const events = traceEvents(tracePath).map((entry) => entry.event);
    assert.deepEqual(events, ["trace-header", "fixture-listening-await", "fixture-listening", "child-launch"]);
    checked = true;
@@ -400,7 +452,7 @@ test("lifecycle trace flushes header, fixture, and launch metadata before awaits
   assert.equal(checked, true);
   assert.equal(fs.existsSync(result.tracePath), true);
  } finally {
-  fs.rmSync(result.tracePath, { force: true });
+  removeFixtureTrace(result.tracePath);
  }
 });
 
@@ -411,6 +463,7 @@ test("lifecycle trace redacts credentials, query values, and model input", async
  const result = await runLifecycleDiagnostic("lifecycle-redaction", {
   token,
   childRunner: async (spec) => {
+   recordFixtureSession(spec.args);
    const response = await fetch(`${spec.env.ENGRAM_URL}/api/hooks/ambient-candidates?query=${query}`, {
     method: "POST",
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
@@ -429,7 +482,7 @@ test("lifecycle trace redacts credentials, query values, and model input", async
   assert.match(trace, /"body_keys":\["prompt_text","session_id","limit"\]/);
   assert.match(trace, /"field_lengths":\{"prompt_text":35,"session_id":12,"limit":null\}/);
  } finally {
-  fs.rmSync(result.tracePath, { force: true });
+  removeFixtureTrace(result.tracePath);
  }
 });
 
@@ -462,13 +515,16 @@ test("lifecycle trace preserves exit and timeout kill events", async () => {
   assert.ok(events.includes("child-timeout"));
   assert.ok(events.includes("child-kill"));
  } finally {
-  fs.rmSync(tracePath, { force: true });
+  removeFixtureTrace(tracePath);
  }
 });
 
 test("lifecycle cleanup follows durable trace finalization and retains the trace", async () => {
  const result = await runLifecycleDiagnostic("lifecycle-cleanup", {
-  childRunner: async () => ({ code: 0, stdout_sentinel_match: false }),
+  childRunner: async (spec) => {
+   recordFixtureSession(spec.args);
+   return { code: 0, stdout_sentinel_match: false };
+  },
  });
  try {
   const events = traceEvents(result.tracePath).map((entry) => entry.event);
@@ -479,6 +535,6 @@ test("lifecycle cleanup follows durable trace finalization and retains the trace
   assert.ok(finalized >= 0 && finalized < cleanup && cleanup < removed && removed < complete);
   assert.equal(fs.existsSync(result.tracePath), true);
  } finally {
-  fs.rmSync(result.tracePath, { force: true });
+  removeFixtureTrace(result.tracePath);
  }
 });

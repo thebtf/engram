@@ -358,74 +358,7 @@ func TestLogicalProjectReadersPostgresHTTP(t *testing.T) {
 		require.NoError(t, db.Exec("INSERT INTO project_consolidation_redirects VALUES(?,?,?,?)", "caller-invalid-redirect", "", "not-a-uuid", "fixture-plan").Error)
 		var projectsBefore []gormdb.Project
 		require.NoError(t, db.Order("id").Find(&projectsBefore).Error)
-		typedHTTPRefusal := func(response map[string]any, code string) {
-			t.Helper()
-			require.Equal(t, code, response["error"].(map[string]any)["code"])
-		}
-		for _, session := range []string{"", "caller-unknown-session", "caller-session-a", "caller-session-b"} {
-			for _, metadata := range []bool{false, true} {
-				body := map[string]any{"project": mixed, "session_id": session, "identity_only": true, "agent_id": "caller-session-a"}
-				if metadata {
-					body["project_identity"] = &gormdb.ProjectIdentityV2{Version: 2, LegacyProjectID: mixed, GitRemote: "https://example.invalid/caller/ignored-v2.git"}
-				}
-				want := http.StatusConflict
-				expected := ""
-				if session == "caller-session-a" {
-					want, expected = http.StatusOK, a
-				} else if session == "caller-session-b" {
-					want, expected = http.StatusOK, b
-				}
-				response := call("POST", "/api/context/inject", body, want)
-				if expected != "" {
-					require.Equal(t, expected, response["canonical_project"])
-				} else {
-					typedHTTPRefusal(response, "PROJECT_ADOPTION_UNRESOLVED_MEMBERSHIP")
-				}
-			}
-			legacy := map[string]any{"project": a, "legacy_project": mixed, "session_id": session, "identity_only": true}
-			want := http.StatusConflict
-			if session == "caller-session-a" {
-				want = http.StatusOK
-			}
-			response := call("POST", "/api/context/inject", legacy, want)
-			if want == http.StatusOK {
-				require.Equal(t, a, response["canonical_project"])
-			} else if session == "caller-session-b" {
-				typedHTTPRefusal(response, "PROJECT_ADOPTION_CONFLICTING_MEMBERSHIP")
-			} else {
-				typedHTTPRefusal(response, "PROJECT_ADOPTION_UNRESOLVED_MEMBERSHIP")
-			}
-		}
-		for _, body := range []map[string]any{
-			{"project": unmapped, "identity_only": true},
-			{"project": unmapped, "legacy_project": mixed, "session_id": "caller-session-a", "identity_only": true},
-			{"project": "caller-invalid-redirect", "identity_only": true},
-			{"project": unmapped, "project_identity": &gormdb.ProjectIdentityV2{Version: 2, LegacyProjectID: unmapped, GitRemote: "https://example.invalid/caller/no-mint.git"}, "identity_only": true},
-		} {
-			typedHTTPRefusal(call("POST", "/api/context/inject", body, http.StatusConflict), "PROJECT_ADOPTION_UNRESOLVED_MEMBERSHIP")
-		}
-		call("POST", "/api/context/inject", map[string]any{"project": invalid, "identity_only": true}, http.StatusBadRequest)
-		for _, project := range []string{a, "old-a", oldBinding} {
-			response := call("POST", "/api/context/inject", map[string]any{"project": project, "identity_only": true}, http.StatusOK)
-			require.Equal(t, a, response["canonical_project"])
-		}
-		for _, session := range []string{"", "caller-unknown-session", "caller-session-a", "caller-session-b"} {
-			want, expected := http.StatusConflict, ""
-			if session == "caller-session-a" {
-				want, expected = http.StatusOK, a
-			} else if session == "caller-session-b" {
-				want, expected = http.StatusOK, b
-			}
-			response := call("GET", "/api/context/inject?project="+mixed+"&session_id="+session+"&agent_id=caller-session-a&identity_only=true", nil, want)
-			if expected != "" {
-				require.Equal(t, expected, response["canonical_project"])
-			} else {
-				typedHTTPRefusal(response, "PROJECT_ADOPTION_UNRESOLVED_MEMBERSHIP")
-			}
-		}
 		var projectsAfter []gormdb.Project
-		require.NoError(t, db.Order("id").Find(&projectsAfter).Error)
-		require.Equal(t, projectsBefore, projectsAfter, "resolution must not mint, register, revive or append aliases")
 		tools := mcp.NewServer(mcp.ServerOptions{Version: "mixed-caller-regression"})
 		tools.SetIssueStore(gormdb.NewIssueStore(db))
 		grpcTransport, grpcCore := grpcserver.New(&mcpHandlerAdapter{mcpServer: tools}, nil)
@@ -464,10 +397,10 @@ func TestLogicalProjectReadersPostgresHTTP(t *testing.T) {
 			require.NotNil(t, response.Error)
 			require.Equal(t, "PROJECT_ADOPTION_UNRESOLVED_MEMBERSHIP", response.Error.Data)
 			_, err := grpcCore.CallTool(actor, &pb.CallToolRequest{ToolName: "issues", Project: mixed, SessionId: session, ArgumentsJson: []byte(`{"action":"create","project":"` + a + `","title":"must not dispatch","target_project":"` + b + `"}`)})
-			require.Equal(t, codes.FailedPrecondition, status.Code(err))
+			require.Equal(t, codes.InvalidArgument, status.Code(err))
 			details := status.Convert(err).Details()
 			require.Len(t, details, 1)
-			require.Equal(t, "PROJECT_ADOPTION_UNRESOLVED_MEMBERSHIP", details[0].(*errdetails.ErrorInfo).Reason)
+			require.Equal(t, "PROJECT_CONTEXT_INVALID", details[0].(*errdetails.ErrorInfo).Reason)
 		}
 		for _, selector := range []string{unmapped, invalid, ""} {
 			response := issueCall("caller-session-a", selector, map[string]any{"action": "create", "title": "must not write invalid source", "target_project": b})
@@ -511,7 +444,7 @@ func TestLogicalProjectReadersPostgresHTTP(t *testing.T) {
 		require.NoError(t, db.Where("title = ?", "proven mixed target").Take(&created).Error)
 		require.Equal(t, a, created.SourceProject)
 		require.Equal(t, b, created.TargetProject)
-		grpcResponse, err := grpcCore.CallTool(actor, &pb.CallToolRequest{ToolName: "issues", Project: mixed, SessionId: "caller-session-a", ArgumentsJson: []byte(`{"action":"create","project":"` + a + `","title":"proven current RPC session","target_project":"` + b + `"}`)})
+		grpcResponse, err := grpcCore.CallTool(actor, &pb.CallToolRequest{ToolName: "issues", Project: a, SessionId: "caller-session-a", ArgumentsJson: []byte(`{"action":"create","project":"` + a + `","title":"proven current RPC session","target_project":"` + b + `"}`)})
 		require.NoError(t, err)
 		require.False(t, grpcResponse.IsError)
 		require.Equal(t, a, grpcResponse.CanonicalProject)

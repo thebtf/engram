@@ -28,7 +28,7 @@ type directDiscoveryFixture struct {
 }
 
 func (f *directDiscoveryFixture) Initialize(_ context.Context, request *pb.InitializeRequest) (*pb.InitializeResponse, error) {
-	if request.GetProject() != "" || request.GetProjectIdentity() != nil || request.GetProjectIdentityV3() != nil {
+	if request.GetProject() != "" {
 		return nil, errors.New("direct discovery must be unscoped")
 	}
 	f.requests <- request
@@ -286,7 +286,7 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 		}
 		select {
 		case request := <-discovery.requests:
-			if request.GetProject() != "" || request.GetProjectIdentity() != nil || request.GetProjectIdentityV3() != nil || request.GetClientName() != "engram-daemon" || request.GetClientVersion() == "" {
+			if request.GetProject() != "" || request.GetClientName() != "engram-daemon" || request.GetClientVersion() == "" {
 				t.Fatalf("direct Initialize was not unscoped capability discovery: %s", request)
 			}
 		default:

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Remove normal legacy identity selectors, relay selection and comparison writers while preserving authenticated task authority and retained history; allow legitimate project-free Issues and Vault operations without weakening scoped project guards.
+
 ## [7.0.0] - 2026-10-16
 
 Prepare the accepted v7.0.0 source identity for R1 canonical-project memory continuity ([#568](https://github.com/thebtf/engram/pull/568)). Align the daemon, Claude/Codex/OMP package manifests and marketplace metadata; OpenClaw remains independently versioned at 3.9.2 because this candidate changes its published plugin source. Preserve the implementation facts and evidence limits below. This entry is not proof of canonical policy generation, publication, installation or ordinary-consumer release acceptance. The full semantic/code/graph and two-dirty-worktree journey remains required R2 work, not a completed R1 outcome.

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/auth"
@@ -31,7 +32,7 @@ func newSessionStartContinuityFixture(t *testing.T) sessionStartContinuityFixtur
 		db:          db,
 		memoryStore: localgorm.NewMemoryStore(&localgorm.Store{DB: db}),
 		slotStore:   localgorm.NewContinuitySlotStore(db),
-		project:     fmt.Sprintf("grpc-session-start-continuity-%d", time.Now().UnixNano()),
+		project:     uuid.NewString(),
 	}
 	fixture.cleanupProject(t, fixture.project)
 	return fixture

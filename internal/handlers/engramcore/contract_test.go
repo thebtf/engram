@@ -51,13 +51,11 @@ type mockEngramServer struct {
 	// callResp is the response returned by CallTool.
 	callResp *pb.CallToolResponse
 	// callErr, if non-nil, is returned as an error from CallTool.
-	callErr       error
-	initReq       *pb.InitializeRequest
-	callReq       *pb.CallToolRequest
-	registerReq   *pb.RegisterProjectIdentityV3Request
-	callMetadata  metadata.MD
-	initCalls     int
-	registerCalls int
+	callErr      error
+	initReq      *pb.InitializeRequest
+	callReq      *pb.CallToolRequest
+	callMetadata metadata.MD
+	initCalls    int
 }
 
 func (s *mockEngramServer) Initialize(ctx context.Context, req *pb.InitializeRequest) (*pb.InitializeResponse, error) {
@@ -87,14 +85,6 @@ func (s *mockEngramServer) CallTool(ctx context.Context, req *pb.CallToolRequest
 		return &pb.CallToolResponse{}, nil
 	}
 	return s.callResp, nil
-}
-
-func (s *mockEngramServer) RegisterProjectIdentityV3(_ context.Context, req *pb.RegisterProjectIdentityV3Request) (*pb.RegisterProjectIdentityV3Response, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.registerReq = req
-	s.registerCalls++
-	return nil, status.Error(codes.Unimplemented, "project registration is retired")
 }
 
 // startMockGRPC starts a mock gRPC server on an ephemeral port, waits for its
@@ -788,7 +778,7 @@ func TestProxyHandleToolUsesTransportTagForUCITools(t *testing.T) {
 	if request == nil || request.GetSessionId() != "transport-tag-a" {
 		t.Fatalf("UCI CallTool session ID = %#v, want transport tag", request)
 	}
-	if request.GetProject() != "" || request.GetProjectIdentity() != nil || request.GetProjectIdentityV3() != nil {
+	if request.GetProject() != "" {
 		t.Fatalf("UCI CallTool carried project-derived authority: %#v", request)
 	}
 	if got := metadata.Get(auditcontext.SourceSessionMetadataKey); len(got) != 1 || got[0] != "transport-tag-a" {
@@ -845,13 +835,12 @@ func TestProxyHandleToolSkipsProjectV3ForUCITools(t *testing.T) {
 	}
 	srv.mu.Lock()
 	request := srv.callReq
-	registerRequest := srv.registerReq
 	srv.mu.Unlock()
 	if request == nil || request.GetSessionId() != "transport-tag-v3" {
 		t.Fatalf("UCI V3 CallTool session ID = %#v, want transport tag", request)
 	}
-	if request.GetProject() != "" || request.GetProjectIdentity() != nil || request.GetProjectIdentityV3() != nil || registerRequest != nil {
-		t.Fatalf("UCI V3 call reached project identity resolution: request=%#v registration=%#v", request, registerRequest)
+	if request.GetProject() != "" {
+		t.Fatalf("UCI call carried project authority: request=%#v", request)
 	}
 }
 
@@ -872,7 +861,7 @@ func TestProxyHandleToolAnchorsEveryUCIToolAndRejectsSpoofedMetadata(t *testing.
 		if got := callMetadata.Get(uci.NoAuthCodeClientInstanceMetadataKey); len(got) != 1 || got[0] != mod.v3ClientInstanceID {
 			t.Fatalf("%s metadata = %v, want one anchored ID", name, got)
 		}
-		if request.GetProjectIdentityV3() != nil || request.GetProject() != "" || request.GetProjectIdentity() != nil {
+		if request.GetProject() != "" {
 			t.Fatalf("%s carried legacy authority: %#v", name, request)
 		}
 	}
@@ -909,7 +898,7 @@ func TestProxyHandleToolKeepsHostSessionSeparateFromLogicalProject(t *testing.T)
 	if request == nil || request.GetSessionId() != "host-session" {
 		t.Fatalf("non-UCI CallTool session ID = %#v, want host session", request)
 	}
-	if request.GetProject() != contractProjectID || request.GetProjectIdentity() != nil || request.GetProjectIdentityV3() != nil {
+	if request.GetProject() != contractProjectID {
 		t.Fatalf("non-UCI CallTool did not use the logical UUID alone: %#v", request)
 	}
 	if got := metadata.Get(auditcontext.SourceSessionMetadataKey); len(got) != 0 {

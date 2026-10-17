@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/auth"
@@ -66,19 +68,19 @@ func TestGetSessionStartContext_InvalidArgument(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, codes.InvalidArgument, status.Code(err))
 
-	_, err = srv.GetSessionStartContext(context.Background(), &pb.GetSessionStartContextRequest{Project: "proj", MemoriesLimit: -1})
+	_, err = srv.GetSessionStartContext(context.Background(), &pb.GetSessionStartContextRequest{Project: grpcLogicalProjectID, MemoriesLimit: -1})
 	require.Error(t, err)
 	assert.Equal(t, codes.InvalidArgument, status.Code(err))
 
-	_, err = srv.GetSessionStartContext(context.Background(), &pb.GetSessionStartContextRequest{Project: "proj", IssuesLimit: -1})
+	_, err = srv.GetSessionStartContext(context.Background(), &pb.GetSessionStartContextRequest{Project: grpcLogicalProjectID, IssuesLimit: -1})
 	require.Error(t, err)
 	assert.Equal(t, codes.InvalidArgument, status.Code(err))
 
-	_, err = srv.GetSessionStartContext(context.Background(), &pb.GetSessionStartContextRequest{Project: "proj", MemoriesLimit: maxSessionStartMemoriesLimit + 1})
+	_, err = srv.GetSessionStartContext(context.Background(), &pb.GetSessionStartContextRequest{Project: grpcLogicalProjectID, MemoriesLimit: maxSessionStartMemoriesLimit + 1})
 	require.Error(t, err)
 	assert.Equal(t, codes.InvalidArgument, status.Code(err))
 
-	_, err = srv.GetSessionStartContext(context.Background(), &pb.GetSessionStartContextRequest{Project: "proj", IssuesLimit: maxSessionStartIssuesLimit + 1})
+	_, err = srv.GetSessionStartContext(context.Background(), &pb.GetSessionStartContextRequest{Project: grpcLogicalProjectID, IssuesLimit: maxSessionStartIssuesLimit + 1})
 	require.Error(t, err)
 	assert.Equal(t, codes.InvalidArgument, status.Code(err))
 }
@@ -173,8 +175,8 @@ func TestGetSessionStartContext_HappyPath(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	project := fmt.Sprintf("grpc-session-start-%d", time.Now().UnixNano())
-	otherProject := project + "-other"
+	project := uuid.NewString()
+	otherProject := uuid.NewString()
 
 	defer db.Exec(`DELETE FROM issue_comments WHERE issue_id IN (SELECT id FROM issues WHERE target_project IN (?, ?))`, project, otherProject)
 	defer db.Exec(`DELETE FROM issues WHERE target_project IN (?, ?)`, project, otherProject)
@@ -331,7 +333,7 @@ func TestGetSessionStartContext_PrincipalPrivateCrossPrincipalInvisible_FlagOff(
 	db, cleanup := openSessionStartTestDB(t)
 	defer cleanup()
 
-	project := fmt.Sprintf("grpc-session-start-principal-%d", time.Now().UnixNano())
+	project := uuid.NewString()
 	defer db.Exec(`DELETE FROM memories WHERE project = ?`, project)
 	t.Setenv("ENGRAM_VNEXT_ENABLED", "")
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
@@ -370,8 +372,8 @@ func TestGetSessionStartContext_MetaSummaryFlagOnDescribesMemoryLandscape(t *tes
 	db, cleanup := openSessionStartTestDB(t)
 	defer cleanup()
 
-	project := fmt.Sprintf("grpc-session-start-meta-summary-%d", time.Now().UnixNano())
-	otherProject := project + "-other"
+	project := uuid.NewString()
+	otherProject := uuid.NewString()
 	defer db.Exec(`DELETE FROM memories WHERE project IN (?, ?)`, project, otherProject)
 	t.Setenv("ENGRAM_V7_PLUG_ENABLED", "true")
 	t.Setenv("ENGRAM_V7_S2_METAMEM", "true")
@@ -423,8 +425,8 @@ func TestGetSessionStartContext_MetaSummaryCountsBeyondResponseCap(t *testing.T)
 	db, cleanup := openSessionStartTestDB(t)
 	defer cleanup()
 
-	project := fmt.Sprintf("grpc-session-start-meta-summary-capped-%d", time.Now().UnixNano())
-	otherProject := project + "-other"
+	project := uuid.NewString()
+	otherProject := uuid.NewString()
 	defer db.Exec(`DELETE FROM memories WHERE project IN (?, ?)`, project, otherProject)
 	t.Setenv("ENGRAM_V7_PLUG_ENABLED", "true")
 	t.Setenv("ENGRAM_V7_S2_METAMEM", "true")
@@ -459,7 +461,7 @@ func TestGetSessionStartContext_MetaSummaryFlagOffOmitted(t *testing.T) {
 	db, cleanup := openSessionStartTestDB(t)
 	defer cleanup()
 
-	project := fmt.Sprintf("grpc-session-start-meta-summary-off-%d", time.Now().UnixNano())
+	project := uuid.NewString()
 	defer db.Exec(`DELETE FROM memories WHERE project = ?`, project)
 	t.Setenv("ENGRAM_V7_PLUG_ENABLED", "")
 	t.Setenv("ENGRAM_V7_S2_METAMEM", "")
@@ -479,7 +481,7 @@ func TestGetSessionStartContext_MetaSummaryFlagOnEmptyProjectIsBoundedAndContent
 	db, cleanup := openSessionStartTestDB(t)
 	defer cleanup()
 
-	project := fmt.Sprintf("grpc-session-start-meta-summary-empty-%d", time.Now().UnixNano())
+	project := uuid.NewString()
 	defer db.Exec(`DELETE FROM memories WHERE project = ?`, project)
 	t.Setenv("ENGRAM_V7_PLUG_ENABLED", "true")
 	t.Setenv("ENGRAM_V7_S2_METAMEM", "true")
@@ -501,8 +503,6 @@ func TestGetSessionStartContext_T014_MetaSummaryRequiresMasterAndS2Flags(t *test
 	db, cleanup := openSessionStartTestDB(t)
 	defer cleanup()
 
-	projectPrefix := fmt.Sprintf("grpc-session-start-t014-toggle-%d", time.Now().UnixNano())
-	defer db.Exec(`DELETE FROM memories WHERE project LIKE ?`, projectPrefix+"%")
 	memoryStore := localgorm.NewMemoryStore(&localgorm.Store{DB: db})
 
 	tests := []struct {
@@ -521,7 +521,8 @@ func TestGetSessionStartContext_T014_MetaSummaryRequiresMasterAndS2Flags(t *test
 			t.Setenv("ENGRAM_V7_PLUG_ENABLED", tt.masterFlag)
 			t.Setenv("ENGRAM_V7_S2_METAMEM", tt.s2Flag)
 
-			project := fmt.Sprintf("%s-%d", projectPrefix, i)
+			project := uuid.NewString()
+			defer db.Exec(`DELETE FROM memories WHERE project = ?`, project)
 			content := fmt.Sprintf("baseline memory remains visible for T014 case %d", i)
 			insertSessionStartMetaSummaryMemory(t, db, memoryStore, project, content, []string{"t014", "s2-toggle"}, time.Date(2026, 7, 4, 8+i, 0, 0, 0, time.UTC))
 
@@ -658,8 +659,8 @@ func TestGetSessionStartContext_RuleRouterEnabledPacketShape(t *testing.T) {
 	t.Setenv("ENGRAM_RULE_ROUTER_MAX_RENDERED_CHARS", "12000")
 
 	ctx := context.Background()
-	project := fmt.Sprintf("grpc-session-start-router-%d", time.Now().UnixNano())
-	otherProject := project + "-other"
+	project := uuid.NewString()
+	otherProject := uuid.NewString()
 	defer db.Exec(`DELETE FROM behavioral_rules WHERE edited_by = ?`, project)
 	defer db.Exec(`DELETE FROM rule_versions WHERE content LIKE ?`, "RG-2 session-start router fixture "+project+"%")
 	defer db.Exec(`DELETE FROM rule_families WHERE family_key LIKE ?`, "rg2-session-start-"+project+"%")
@@ -752,7 +753,7 @@ func TestGetSessionStartContext_DefaultLimits(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	project := fmt.Sprintf("grpc-session-start-defaults-%d", time.Now().UnixNano())
+	project := uuid.NewString()
 	defer db.Exec(`DELETE FROM issues WHERE target_project = ?`, project)
 	defer db.Exec(`DELETE FROM memories WHERE project = ?`, project)
 

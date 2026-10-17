@@ -61,7 +61,6 @@ import (
 	"github.com/thebtf/engram/internal/uci"
 	"github.com/thebtf/engram/internal/update"
 	"github.com/thebtf/engram/internal/watcher"
-	"github.com/thebtf/engram/internal/worker/ambientcore"
 	"github.com/thebtf/engram/internal/worker/projectevents"
 	"github.com/thebtf/engram/internal/worker/reaper"
 	"github.com/thebtf/engram/internal/worker/sdk"
@@ -1375,13 +1374,6 @@ func (s *Service) initializeAsync() {
 	}
 	grpcInternalSrv.SetDB(store.DB)
 	grpcInternalSrv.SetBus(s.eventBus)
-	grpcInternalSrv.SetAmbientDependencies(ambientcore.Dependencies{
-		Registry: s.cognitiveRegistry,
-		Meter:    s.cognitiveMeter,
-		Queue:    s.cognitiveQueue,
-		Flags:    s.flagConfig,
-	})
-	grpcInternalSrv.SetSessionStartDeliveryCommitter(s)
 	s.initMu.Lock()
 	s.grpcServer = grpcSrv
 	s.grpcInternalServer = grpcInternalSrv
