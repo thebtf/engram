@@ -35,6 +35,7 @@ Prepare the accepted v7.0.0 source identity for R1 canonical-project memory cont
 
 ### Fixed
 
+- Make project-identity error unwrapping nil-receiver-safe so HTTP and gRPC fail closed on typed-nil errors instead of panicking; preserve non-nil error codes, messages and cause chains.
 - Reject repeated JSON object keys in project markers and common-directory caches before granting project UUID authority; preserve existing marker/cache bytes and valid canonical or transition inputs.
 - Align synthetic operator-console fixtures and selectors with canonical project scope and the current shared-auth contract; launch Playwright fixture servers with the current Node executable. Production behavior is unchanged; synthetic results do not establish installed acceptance.
 - Isolate Stop hook regressions from native-client release downloads with a private native-result fixture. Observe the real failed session-end HTTP attempt, marker cleanup and normal exit within the existing timeout; separately check that unavailable project resolution sends no POST and exits normally, without asserting an unresolved-project marker policy. Retain child output on failure. Production behavior, identity resolution and bootstrap policy are unchanged.

@@ -70,7 +70,12 @@ func (e *ProjectIdentityError) Error() string {
 	return e.Code + ": " + e.Err.Error()
 }
 
-func (e *ProjectIdentityError) Unwrap() error { return e.Err }
+func (e *ProjectIdentityError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
 
 func invalidProjectIdentity(reason string) error {
 	return &ProjectIdentityError{Code: ProjectIdentityInvalid, UpgradeAction: UpgradeActionRegenerateProjectIdentityV2, Err: fmt.Errorf("%s", reason)}
