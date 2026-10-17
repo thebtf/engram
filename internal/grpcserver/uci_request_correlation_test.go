@@ -131,7 +131,7 @@ func TestCallToolKeepsNonUCICompatibilityWhenCorrelationMetadataIsInvalid(t *tes
 	server := &Server{handler: handler}
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(auditcontext.UCIRequestCorrelationMetadataKey, "%%%"))
 
-	_, err := server.CallTool(ctx, &pb.CallToolRequest{ToolName: "recall", ArgumentsJson: []byte(`{}`)})
+	_, err := server.CallTool(ctx, &pb.CallToolRequest{ToolName: "recall", Project: grpcLogicalProjectID, ArgumentsJson: []byte(`{}`)})
 	require.NoError(t, err)
 	require.Equal(t, 1, handler.calls)
 	require.False(t, handler.found)
@@ -175,7 +175,7 @@ func TestCallToolNoAuthCodeInstanceMetadataBoundary(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, handler.calls)
 	memory := &uciRequestCorrelationHandler{}
-	_, err = (&Server{handler: memory}).CallTool(auth.WithIdentity(context.Background(), auth.AuthDisabled()), &pb.CallToolRequest{ToolName: "recall", ArgumentsJson: []byte(`{}`)})
+	_, err = (&Server{handler: memory}).CallTool(auth.WithIdentity(context.Background(), auth.AuthDisabled()), &pb.CallToolRequest{ToolName: "recall", Project: grpcLogicalProjectID, ArgumentsJson: []byte(`{}`)})
 	require.NoError(t, err)
 	require.Equal(t, 1, memory.calls)
 }
