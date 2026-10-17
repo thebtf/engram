@@ -214,3 +214,140 @@ test("parser policy is tied to the active plugin version and verified sibling by
   fs.writeFileSync(installed, "poisoned");
   await assert.rejects(installParser(roots, client, target, {}), /verification/);
 });
+
+async function observeCancelledAcquisition(t, mode, launch) {
+  const http = require("node:http");
+  const root = tempRoot();
+  const roots = objectRoots(root);
+  const policy = selected();
+  const target = policy.target.desired;
+  const controller = new AbortController();
+  let requestSeen;
+  const started = new Promise((resolve) => { requestSeen = resolve; });
+  let responseClosed = false;
+  let responseDidClose;
+  const closed = new Promise((resolve) => { responseDidClose = resolve; });
+  let clientRequest;
+  let requests = 0;
+  const server = http.createServer((_request, response) => {
+    response.once("close", () => { responseClosed = true; responseDidClose(); });
+    if (mode !== "deadline") {
+      response.writeHead(200, { "Content-Length": target.size });
+      response.write(fixture().bytes.subarray(0, 4));
+    }
+    if (mode === "deadline") requestSeen();
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const request = (_releaseURL, options, callback) => {
+    requests++;
+    // Only the transport is redirected; policy, streaming, hashing and publication stay real.
+    clientRequest = http.request(`http://127.0.0.1:${server.address().port}`, options, (response) => {
+      callback(response);
+      if (mode !== "deadline") requestSeen();
+    });
+    return clientRequest;
+  };
+  let outcome = "pending";
+  let errorMessage = "";
+  const pending = launch({
+    pluginRoot: root, pluginData: root, policy, parserTarget: null,
+    request, signal: controller.signal, timeoutMs: mode === "deadline" ? 50 : 1000
+  })
+    .then((value) => { outcome = value === null ? "null" : "resolved"; },
+      (error) => { outcome = "rejected"; errorMessage = error.message; });
+  let snapshot;
+  try {
+    const began = await Promise.race([started.then(() => true), new Promise((resolve) => setTimeout(() => resolve(false), 1000))]);
+    assert.equal(began, true, "fixture did not receive the actual acquisition request; not cancellation RED");
+    if (mode !== "deadline") controller.abort();
+    await Promise.race([pending, new Promise((resolve) => setTimeout(resolve, 300))]);
+    // A rejection alone is insufficient: the owned HTTP request must actually close.
+    if (outcome !== "pending" && !responseClosed) {
+      await Promise.race([closed, new Promise((resolve) => setTimeout(resolve, 300))]);
+    }
+    snapshot = {
+      outcome, requestDestroyed: clientRequest.destroyed, responseClosed,
+      requests, published: fs.existsSync(objectPath(roots, target)), staging: fs.readdirSync(roots.staging).length
+    };
+    t.diagnostic(JSON.stringify({ mode, ...snapshot, errorMessage }));
+  } finally {
+    clientRequest?.destroy(new Error("owned lifecycle fixture closed"));
+    server.closeAllConnections();
+    await pending;
+    await new Promise((resolve) => server.close(resolve));
+    assert.equal(fs.existsSync(objectPath(roots, target)), false, "cancelled acquisition published an object");
+    assert.deepEqual(fs.readdirSync(roots.staging), [], "owned staging survives request closure");
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+  assert.deepEqual(snapshot, {
+    outcome: mode === "callback" ? "null" : "rejected",
+    requestDestroyed: true, responseClosed: true, requests: 1, published: false, staging: 0
+  },
+    "supplied cancellation/deadline must settle acquisition and close its HTTP request before fixture cleanup");
+  if (mode !== "callback") assert.match(errorMessage, /abort|cancel|deadline|timeout/i);
+}
+
+test("plugin lifecycle: supplied abort closes trusted acquisition during the body", async (t) => {
+  await observeCancelledAcquisition(t, "abort", resolveForLaunch);
+});
+
+test("plugin lifecycle: supplied deadline closes trusted acquisition before response headers", async (t) => {
+  await observeCancelledAcquisition(t, "deadline", resolveForLaunch);
+});
+
+test("plugin lifecycle: actual OMP callback cancels acquisition through the public hook resolver without late context", async (t) => {
+  const { createEngramMemoryExtension } = await import("../extensions/engram-memory.mjs");
+  const { resolveHookProjectContext } = require("../hooks/lib.js");
+  let executions = 0;
+  let scopedRequests = 0;
+  t.after(() => {
+    assert.equal(executions, 0);
+    assert.equal(scopedRequests, 0);
+  });
+  await observeCancelledAcquisition(t, "callback", (fixtureOptions) => {
+    const adapter = createEngramMemoryExtension({
+      isQuiet: () => false,
+      resolveEngramRuntimeConfig: async () => ({ serverURL: "http://fixture.invalid", token: "", quiet: false }),
+      resolveHookProjectContext: (cwd, options) => resolveHookProjectContext(cwd, {
+        ...options, pluginRoot: fixtureOptions.pluginRoot, pluginData: fixtureOptions.pluginData,
+        resolve: (forwarded) => resolveForLaunch({
+          ...fixtureOptions, ...forwarded,
+          policy: fixtureOptions.policy, parserTarget: null,
+          signal: forwarded.signal, timeoutMs: forwarded.timeoutMs
+        }),
+        execFile() { executions++; throw new Error("cancelled callback must not execute a client"); },
+      }),
+      requestPost() { scopedRequests++; throw new Error("cancelled callback must not fetch context"); },
+    });
+    return adapter.sessionStartMessage({ cwd: fixtureOptions.pluginRoot, sessionId: "lifecycle-owned" }, {}, 50);
+  });
+  assert.equal(executions, 0);
+  assert.equal(scopedRequests, 0);
+});
+
+test("plugin lifecycle: cache hits retain hashing and already-aborted acquisition starts no request", async (t) => {
+  const root = tempRoot();
+  const roots = objectRoots(root);
+  const policy = selected();
+  const target = policy.target.desired;
+  const object = objectPath(roots, target);
+  let requests = 0;
+  const options = {
+    pluginRoot: root, pluginData: root, policy, parserTarget: null,
+    request() { requests++; throw new Error("owned fixture forbids network"); }
+  };
+  const controller = new AbortController();
+  controller.abort();
+  try {
+    fs.writeFileSync(object, fixture().bytes);
+    assert.equal((await resolveForLaunch(options)).path, object);
+    assert.equal(hashFile(object, target, roots.objects), true);
+    const cached = await resolveForLaunch({ ...options, signal: controller.signal }).then(() => "resolved", () => "rejected");
+    assert.equal(hashFile(object, target, roots.objects), true, "cancellation must not damage a verified cache hit");
+    fs.writeFileSync(object, "poisoned");
+    const poisoned = await resolveForLaunch({ ...options, signal: controller.signal }).then(() => "resolved", () => "rejected");
+    t.diagnostic(JSON.stringify({ cached, poisoned, requests }));
+    assert.deepEqual({ cached, poisoned, requests }, { cached: "rejected", poisoned: "rejected", requests: 0 });
+    assert.deepEqual(fs.readdirSync(roots.staging), []);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

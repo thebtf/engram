@@ -669,7 +669,7 @@ async function RunHook(hookName, handler) {
  // process. Each hook runs in its own Node process so env changes from
  // session-start.js do not carry over. This ensures config-file-only setups
  // (e.g. ~/.engram/config.json for Codex ≥0.139) work in all hook handlers.
- getEngramConfig();
+ const runtimeEnv = getEngramConfig();
 
  let rawInput = '';
  let input = {};
@@ -693,7 +693,9 @@ async function RunHook(hookName, handler) {
    HookEventName: typeof input.hook_event_name === 'string' ? input.hook_event_name : hookName,
    RawInput: rawInput,
   };
-  Object.assign(context, await resolveHookProjectContext(cwd));
+  if (hookName !== 'SessionStart' || runtimeEnv.serverURL) {
+   Object.assign(context, await resolveHookProjectContext(cwd));
+  }
   const additionalContext =
    typeof handler === 'function' ? await handler(context, input) : '';
   writeResponse(hookName, additionalContext);

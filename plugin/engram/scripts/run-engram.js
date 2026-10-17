@@ -93,9 +93,10 @@ async function resolveClient(options, projectOnly = false) {
  }
  const resolved = await (options.resolve || resolveForLaunch)({
   pluginRoot: options.pluginRoot, pluginData: options.pluginData, policy,
+  signal: options.signal, timeoutMs: options.timeoutMs, deadlineAt: options.deadlineAt,
   ...(projectOnly ? { parserTarget: null } : {}),
  });
- if (!(options.hash || hashFile)(resolved.path, resolved.target, (options.roots || objectRoots)(options.pluginData).objects)) {
+ if (!(options.hash || hashFile)(resolved.path, resolved.target, (options.roots || objectRoots)(options.pluginData).objects, options)) {
   throw new Error("resolved client failed final integrity verification");
  }
  return resolved;
@@ -107,13 +108,18 @@ function resolveHostRoot(env = process.env, cwd = process.cwd()) {
 
 async function resolveLogicalProject(root, options = {}) {
  if (typeof root !== 'string' || !root.trim()) throw new Error('PROJECT_CONTEXT_REQUIRED');
+ if (options.signal?.aborted) throw new Error('PROJECT_RESOLUTION_ABORTED');
+ options = { ...options, deadlineAt: options.deadlineAt ?? (options.timeoutMs === undefined ? undefined : Date.now() + options.timeoutMs) };
  const pluginRoot = options.pluginRoot || resolvePluginRoot();
  const pluginData = options.pluginData || resolvePluginData(pluginRoot);
  const resolved = await resolveClient({ ...options, pluginRoot, pluginData }, true);
+ const remaining = options.deadlineAt === undefined ? 15000 : options.deadlineAt - Date.now();
+ if (options.signal?.aborted) throw new Error('PROJECT_RESOLUTION_ABORTED');
+ if (remaining <= 0) throw new Error('PROJECT_RESOLUTION_DEADLINE_EXCEEDED');
  const raw = await new Promise((resolve, reject) => {
   (options.execFile || execFile)(resolved.path, ['project', 'resolve', '--root', root, '--json'], {
    env: childEnvForEngram(options.env || process.env), encoding: 'utf8', windowsHide: true,
-   timeout: options.timeoutMs ?? 15000, maxBuffer: 4096, signal: options.signal,
+   timeout: remaining, maxBuffer: 4096, signal: options.signal,
   }, (error, stdout) => {
    if (error) {
     let code = 'PROJECT_RESOLUTION_UNAVAILABLE';
@@ -125,6 +131,8 @@ async function resolveLogicalProject(root, options = {}) {
    } else resolve(stdout);
   });
  });
+ if (options.signal?.aborted) throw new Error('PROJECT_RESOLUTION_ABORTED');
+ if (options.deadlineAt !== undefined && Date.now() >= options.deadlineAt) throw new Error('PROJECT_RESOLUTION_DEADLINE_EXCEEDED');
  let project;
  try { project = JSON.parse(raw); } catch { throw new Error('PROJECT_CLIENT_UPGRADE_REQUIRED'); }
  if (!project || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(project.project_id) ||
