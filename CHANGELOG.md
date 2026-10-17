@@ -36,6 +36,7 @@ Prepare the accepted v7.0.0 source identity for R1 canonical-project memory cont
 
 ### Fixed
 
+- Publish shared Git project identity consistently across the common cache and root marker, and preserve the imported display name on explicit init.
 - Make override static-asset staging repeatable by removing deleted source assets, and include copier and mutation regressions in the ordinary console test selection.
 - Preserve retained-reader navigation intent across login/logout, prevent pending login-dialog dismissal, and ignore stale-generation 401 responses without weakening current-session authentication checks.
 - Align v7 archives, artifact validation and trusted installers with the declared relay-free OMP extension payload; retire the obsolete relay-only production probe while preserving historical capability-record readers and versioned installer safeguards.

@@ -147,26 +147,9 @@ func ResolveLogicalProject(ctx context.Context, cwd string, bootstrap func(conte
 	if err != nil || !info.IsDir() {
 		return Project{}, logicalError("PROJECT_CONTEXT_REQUIRED")
 	}
-	root, common := selected, ""
-	output, gitErr := anchorGitCommandV3(ctx, selected, "rev-parse", "--path-format=absolute", "--git-common-dir", "--is-bare-repository").Output()
-	if err := ctx.Err(); err != nil {
+	root, common, err := logicalProjectDirectories(ctx, selected)
+	if err != nil {
 		return Project{}, err
-	}
-	if gitErr == nil {
-		parts := strings.Split(strings.TrimSpace(string(output)), "\n")
-		if len(parts) != 2 {
-			return Project{}, logicalError("PROJECT_RESOLUTION_UNAVAILABLE")
-		}
-		common = strings.TrimSpace(parts[0])
-		if strings.TrimSpace(parts[1]) == "true" {
-			root = common
-		} else {
-			output, err = anchorGitCommandV3(ctx, selected, "rev-parse", "--show-toplevel").Output()
-			if err != nil {
-				return Project{}, logicalError("PROJECT_RESOLUTION_UNAVAILABLE")
-			}
-			root = strings.TrimSpace(string(output))
-		}
 	}
 	// A nested portable marker is an explicit boundary. A subdirectory alone is not.
 	for candidate := selected; ; candidate = filepath.Dir(candidate) {
@@ -229,6 +212,31 @@ func ResolveLogicalProject(ctx context.Context, cwd string, bootstrap func(conte
 		return Project{}, err
 	}
 	return project, nil
+}
+
+func logicalProjectDirectories(ctx context.Context, selected string) (string, string, error) {
+	root, common := selected, ""
+	output, gitErr := anchorGitCommandV3(ctx, selected, "rev-parse", "--path-format=absolute", "--git-common-dir", "--is-bare-repository").Output()
+	if err := ctx.Err(); err != nil {
+		return "", "", err
+	}
+	if gitErr == nil {
+		parts := strings.Split(strings.TrimSpace(string(output)), "\n")
+		if len(parts) != 2 {
+			return "", "", logicalError("PROJECT_RESOLUTION_UNAVAILABLE")
+		}
+		common = strings.TrimSpace(parts[0])
+		if strings.TrimSpace(parts[1]) == "true" {
+			root = common
+		} else {
+			output, err := anchorGitCommandV3(ctx, selected, "rev-parse", "--show-toplevel").Output()
+			if err != nil {
+				return "", "", logicalError("PROJECT_RESOLUTION_UNAVAILABLE")
+			}
+			root = strings.TrimSpace(string(output))
+		}
+	}
+	return root, common, nil
 }
 
 func readLogicalMarker(path string) (Project, bool, error) {
@@ -387,9 +395,26 @@ func InitLogicalProject(ctx context.Context, root, name string) (Project, error)
 	if err != nil || !info.IsDir() {
 		return Project{}, logicalError("PROJECT_CONTEXT_REQUIRED")
 	}
+	legacy, _, err := readLogicalMarker(filepath.Join(root, anchorFilenameV3))
+	if err != nil {
+		return Project{}, err
+	}
+	if name == "" {
+		name = legacy.Name
+	}
 	project = Project{ProjectID: uuid.NewString(), Name: name}
 	if err := ValidateProject(project); err != nil {
 		return Project{}, err
+	}
+	gitRoot, common, err := logicalProjectDirectories(ctx, root)
+	if err != nil {
+		return Project{}, err
+	}
+	if common != "" && samePath(root, gitRoot) {
+		// All writers pin the common cache before publishing its root marker.
+		if _, err := pinLogicalCache(common, project); err != nil {
+			return Project{}, err
+		}
 	}
 	if err := publishLogicalMarker(filepath.Join(root, anchorFilenameV3), project); err != nil {
 		return Project{}, err
