@@ -1,10 +1,7 @@
 package engramcore
 
-// contract_test.go verifies NFR-5 byte-identity: tools/list and tools/call JSON
-// envelope output must match the v4.2.0 reference for any given gRPC backend
-// response. The test is in package engramcore (not engramcore_test) so it can
-// access internal pool and cache state to pre-populate the slug cache and skip
-// the git I/O that ResolveProjectSlug would otherwise perform.
+// contract_test.go verifies tools/list and tools/call envelopes against the
+// backend response, together with transport cancellation and context isolation.
 
 import (
 	"context"
@@ -12,25 +9,18 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/thebtf/engram/internal/auditcontext"
-	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/config"
-	"github.com/thebtf/engram/internal/grpcserver"
 	loomhandler "github.com/thebtf/engram/internal/handlers/loom"
-	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/module"
 	"github.com/thebtf/engram/internal/module/dispatcher"
 	"github.com/thebtf/engram/internal/module/lifecycle"
 	"github.com/thebtf/engram/internal/module/registry"
-	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/internal/uci"
 	"github.com/thebtf/engram/internal/version"
 	pb "github.com/thebtf/engram/proto/engram/v1"
@@ -55,37 +45,26 @@ type mockEngramServer struct {
 	mu sync.Mutex
 
 	// initResp is the response returned by Initialize.
-	initResp         *pb.InitializeResponse
-	unscopedInitResp *pb.InitializeResponse
+	initResp *pb.InitializeResponse
 	// initErr, if non-nil, is returned as an error from Initialize.
 	initErr error
 	// callResp is the response returned by CallTool.
 	callResp *pb.CallToolResponse
 	// callErr, if non-nil, is returned as an error from CallTool.
-	callErr error
-	// registerResp is the response returned by RegisterProjectIdentityV3.
-	registerResp *pb.RegisterProjectIdentityV3Response
-	// registerErr, if non-nil, is returned by RegisterProjectIdentityV3.
-	registerErr      error
-	initReq          *pb.InitializeRequest
-	callReq          *pb.CallToolRequest
-	registerReq      *pb.RegisterProjectIdentityV3Request
-	initMetadata     metadata.MD
-	callMetadata     metadata.MD
-	registerMetadata metadata.MD
-	initCalls        int
-	registerCalls    int
+	callErr       error
+	initReq       *pb.InitializeRequest
+	callReq       *pb.CallToolRequest
+	registerReq   *pb.RegisterProjectIdentityV3Request
+	callMetadata  metadata.MD
+	initCalls     int
+	registerCalls int
 }
 
 func (s *mockEngramServer) Initialize(ctx context.Context, req *pb.InitializeRequest) (*pb.InitializeResponse, error) {
 	s.mu.Lock()
 	s.initReq = req
-	s.initMetadata, _ = metadata.FromIncomingContext(ctx)
 	s.initCalls++
 	resp, err := s.initResp, s.initErr
-	if req.GetProjectIdentityV3() == nil && s.unscopedInitResp != nil {
-		resp, err = s.unscopedInitResp, nil
-	}
 	s.mu.Unlock()
 	if err != nil {
 		return nil, err
@@ -110,20 +89,12 @@ func (s *mockEngramServer) CallTool(ctx context.Context, req *pb.CallToolRequest
 	return s.callResp, nil
 }
 
-func (s *mockEngramServer) RegisterProjectIdentityV3(ctx context.Context, req *pb.RegisterProjectIdentityV3Request) (*pb.RegisterProjectIdentityV3Response, error) {
+func (s *mockEngramServer) RegisterProjectIdentityV3(_ context.Context, req *pb.RegisterProjectIdentityV3Request) (*pb.RegisterProjectIdentityV3Response, error) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.registerReq = req
-	s.registerMetadata, _ = metadata.FromIncomingContext(ctx)
 	s.registerCalls++
-	resp, err := s.registerResp, s.registerErr
-	s.mu.Unlock()
-	if err != nil {
-		return nil, err
-	}
-	if resp == nil {
-		return &pb.RegisterProjectIdentityV3Response{}, nil
-	}
-	return resp, nil
+	return nil, status.Error(codes.Unimplemented, "project registration is retired")
 }
 
 // startMockGRPC starts a mock gRPC server on an ephemeral port, waits for its
@@ -158,7 +129,7 @@ func startMockGRPC(t *testing.T, srv pb.EngramServiceServer) string {
 // startDeferredMockGRPC starts a mock server immediately, but holds the first
 // accepted TCP connection until release observes the client's connection
 // attempt. This exercises the production dial path without scheduler delays.
-func startDeferredMockGRPC(t *testing.T, srv *mockEngramServer) (string, func() error) {
+func startDeferredMockGRPC(t *testing.T, srv *mockEngramServer) (string, func() error, <-chan struct{}) {
 	t.Helper()
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -201,7 +172,7 @@ func startDeferredMockGRPC(t *testing.T, srv *mockEngramServer) (string, func() 
 			t.Error("mock gRPC Serve did not stop")
 		}
 	})
-	return lis.Addr().String(), release
+	return lis.Addr().String(), release, acceptStarted
 }
 
 type delayedAcceptListener struct {
@@ -225,15 +196,12 @@ func (l *delayedAcceptListener) Accept() (net.Conn, error) {
 // Dispatcher bootstrap helpers for contract tests
 // ---------------------------------------------------------------------------
 
-// buildContractDispatcher creates a V2-compatible Dispatcher with one
-// engramcore module whose ENGRAM_URL is injected directly into the project env.
+// buildContractDispatcher injects a local backend without requiring project setup.
 func buildContractDispatcher(t *testing.T, grpcAddr string, staticModules ...module.EngramModule) (*dispatcher.Dispatcher, *Module, muxcore.ProjectContext) {
 	return buildContractDispatcherWithClientInstanceID(t, grpcAddr, "", staticModules...)
 }
 
-// buildV3ContractDispatcher creates a Dispatcher whose core module has V3
-// selected before registry registration, so the static registration tool is
-// present in the immutable ToolProvider inventory.
+// buildV3ContractDispatcher supplies the stable installed-client ID used by UCI.
 func buildV3ContractDispatcher(t *testing.T, grpcAddr string, staticModules ...module.EngramModule) (*dispatcher.Dispatcher, *Module, muxcore.ProjectContext) {
 	return buildContractDispatcherWithClientInstanceID(t, grpcAddr, "fixture-daemon-install", staticModules...)
 }
@@ -280,8 +248,6 @@ func buildContractDispatcherWithClientInstanceID(t *testing.T, grpcAddr, clientI
 		Env: map[string]string{},
 	}
 
-	// Pre-populate the slug cache so slug resolution skips the git call.
-	mod.cache.ForceCacheEntry(p, p.ID)
 	if grpcAddr == "" {
 		return disp, mod, p
 	}
@@ -317,14 +283,6 @@ func buildContractDispatcherWithClientInstanceID(t *testing.T, grpcAddr, clientI
 	mod.pool.conns.Store(grpcAddrKey, conn)
 
 	return disp, mod, p
-}
-
-func seedContractProjectIdentity(m *Module, p muxcore.ProjectContext) {
-	m.cache.identities.Store(cacheKey(p), &pb.ProjectIdentityV2{
-		Version:         2,
-		LegacyProjectId: p.ID,
-		DisplayName:     "contract-test",
-	})
 }
 
 // jsonrpcCallReq builds a raw tools/call JSON-RPC request.
@@ -483,10 +441,9 @@ func TestContract_ToolsList_WaitsForDelayedGRPCReadiness(t *testing.T) {
 		{Name: "memory_store", Description: "store"},
 		{Name: "memory_search", Description: "search"},
 	}}}
-	grpcAddr, release := startDeferredMockGRPC(t, srv)
-	disp, mod, p := buildContractDispatcher(t, "")
+	grpcAddr, release, _ := startDeferredMockGRPC(t, srv)
+	disp, _, p := buildContractDispatcher(t, "")
 	p.Env[config.EnvServerURL] = "http://" + grpcAddr
-	seedContractProjectIdentity(mod, p)
 	releaseResult := make(chan error, 1)
 	go func() {
 		releaseResult <- release()
@@ -526,99 +483,45 @@ func TestContract_ToolsList_WaitsForDelayedGRPCReadiness(t *testing.T) {
 	}
 }
 
-func TestContract_ToolsList_V3GitDiscoveryHonorsContext(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
+func TestContract_ToolsList_CancellationStopsNetworkDiscovery(t *testing.T) {
+	srv := &mockEngramServer{initResp: &pb.InitializeResponse{Tools: []*pb.ToolDefinition{{Name: "recall"}}}}
+	grpcAddr, release, accepted := startDeferredMockGRPC(t, srv)
+	disp, _, project := buildContractDispatcher(t, "")
+	project.Env[config.EnvServerURL] = "http://" + grpcAddr
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	result := make(chan []byte, 1)
+	requestErr := make(chan error, 1)
+	go func() {
+		response, err := disp.HandleRequest(ctx, project, jsonrpcListReq(1))
+		result <- response
+		requestErr <- err
+	}()
+	select {
+	case <-accepted:
+		cancel()
+	case <-time.After(5 * time.Second):
+		t.Fatal("network discovery did not attempt a connection")
+	}
+	select {
+	case response := <-result:
+		if err := <-requestErr; err != nil {
+			t.Fatal(err)
+		}
+		assertToolsListServiceUnavailable(t, response)
+		if !strings.Contains(string(response), context.Canceled.Error()) {
+			t.Fatalf("cancelled discovery response=%s", response)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("network discovery did not return after cancellation")
+	}
+	if err := release(); err != nil {
 		t.Fatal(err)
 	}
-	backend, _ := grpcserver.New(anchorDiscoveryHandler{mcp.NewServer(mcp.ServerOptions{Version: "discovery-context-test"})}, auth.NewValidator("context-fixture-token", nil))
-	go func() { _ = backend.Serve(listener) }()
-	t.Cleanup(backend.GracefulStop)
-	for _, mode := range []string{"cancel", "deadline"} {
-		t.Run(mode, func(t *testing.T) {
-			root := t.TempDir()
-			foreign := t.TempDir()
-			t.Setenv("GIT_DIR", foreign)
-			t.Setenv("GIT_INDEX_FILE", filepath.Join(foreign, "index"))
-			git := func(args ...string) {
-				t.Helper()
-				command := exec.Command("git", append([]string{"-C", root}, args...)...)
-				command.Env = projectidentity.RepositoryGitEnvironmentV3()
-				if output, err := command.CombinedOutput(); err != nil {
-					t.Fatalf("git %v: %v: %s", args, err, output)
-				}
-			}
-			git("init", "--quiet")
-			if err := os.WriteFile(filepath.Join(root, "tracked"), []byte("fixture"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			git("add", "--", "tracked")
-			marker := filepath.Join(root, ".git", "discovery-started")
-			hook := filepath.Join(root, ".git", "discovery-fsmonitor")
-			// The real Git index query blocks in its configured fsmonitor hook.
-			// Redirect the sleeping child so it cannot retain the client's pipes.
-			script := "#!/bin/sh\nprintf started > '" + strings.ReplaceAll(filepath.ToSlash(marker), "'", "'\\''") + "'\nexec sleep 4 >/dev/null 2>&1\n"
-			if err := os.WriteFile(hook, []byte(script), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			git("config", "core.fsmonitor", filepath.ToSlash(hook))
-			_, mod, project := buildV3ContractDispatcher(t, listener.Addr().String())
-			project.Cwd = root
-			project.Env[config.EnvWorkstationToken] = "context-fixture-token"
-			var ctx context.Context
-			var cancel context.CancelFunc
-			if mode == "deadline" {
-				ctx, cancel = context.WithTimeout(t.Context(), time.Second)
-			} else {
-				ctx, cancel = context.WithCancel(t.Context())
-			}
-			defer cancel()
-			cancelled := make(chan time.Time, 1)
-			go func() {
-				<-ctx.Done()
-				cancelled <- time.Now()
-			}()
-			if mode == "cancel" {
-				go func() {
-					ticker := time.NewTicker(5 * time.Millisecond)
-					defer ticker.Stop()
-					for {
-						select {
-						case <-ctx.Done():
-							return
-						case <-ticker.C:
-							if _, err := os.Stat(marker); err == nil {
-								cancel()
-								return
-							}
-						}
-					}
-				}()
-			}
-			started := time.Now()
-			tools, err := mod.ProxyTools(ctx, project)
-			elapsed := time.Since(started)
-			finished := time.Now()
-			// Let the owned finite hook exit before removing its fixture.
-			t.Cleanup(func() {
-				if remaining := 4*time.Second - time.Since(finished); remaining > 0 {
-					time.Sleep(remaining)
-				}
-			})
-			if mode == "cancel" {
-				if _, markerErr := os.Stat(marker); markerErr != nil {
-					t.Fatalf("actual Git index inspection did not reach fsmonitor: %v", markerErr)
-				}
-			}
-			if err == nil || len(tools) != 0 || ctx.Err() == nil {
-				t.Fatalf("Git discovery tools=%d error=%v context=%v elapsed=%s; want cancelled refusal", len(tools), err, ctx.Err(), elapsed)
-			}
-			cancellationLag := time.Since(<-cancelled)
-			if cancellationLag >= 2*time.Second {
-				t.Fatalf("Git discovery tools=%d context=%v cancellation lag=%s; want return before hook completes", len(tools), ctx.Err(), cancellationLag)
-			}
-			t.Logf("actual Git discovery %s: context=%v elapsed=%s cancellation lag=%s tools=%d", mode, ctx.Err(), elapsed, cancellationLag, len(tools))
-		})
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	if srv.initCalls != 0 {
+		t.Fatalf("cancelled discovery executed %d Initialize calls", srv.initCalls)
 	}
 }
 
@@ -626,10 +529,9 @@ func TestContract_ToolsList_DeadlineIsBoundedAndConnectionIsReusable(t *testing.
 	leakBaseline := goleak.IgnoreCurrent()
 	t.Cleanup(func() { goleak.VerifyNone(t, leakBaseline) })
 	srv := &mockEngramServer{initResp: &pb.InitializeResponse{Tools: []*pb.ToolDefinition{{Name: "memory_store"}}}}
-	grpcAddr, release := startDeferredMockGRPC(t, srv)
+	grpcAddr, release, _ := startDeferredMockGRPC(t, srv)
 	disp, mod, p := buildContractDispatcher(t, "")
 	p.Env[config.EnvServerURL] = "http://" + grpcAddr
-	seedContractProjectIdentity(mod, p)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
 	startedAt := time.Now()
@@ -988,17 +890,15 @@ func TestProxyHandleToolAnchorsEveryUCIToolAndRejectsSpoofedMetadata(t *testing.
 	}
 }
 
-func TestProxyHandleToolPreservesLegacySessionForNonUCITools(t *testing.T) {
+func TestProxyHandleToolKeepsHostSessionSeparateFromLogicalProject(t *testing.T) {
 	srv := &mockEngramServer{callResp: &pb.CallToolResponse{ContentJson: []byte(`[]`)}}
 	grpcAddr := startMockGRPC(t, srv)
 	_, mod, project := buildContractDispatcher(t, grpcAddr)
-	project.Env[config.EnvClaudeSessionID] = "legacy-host-session"
-	const legacySelector = "legacy-selector-fixture"
-	mod.cache.identities.Store(cacheKey(project), &pb.ProjectIdentityV2{Version: 2, LegacyProjectId: legacySelector})
-	t.Setenv("PATH", t.TempDir())
+	project.Env[config.EnvClaudeSessionID] = "host-session"
+	writeContractProjectMarker(t, project.Cwd, contractProjectID)
 	ctx := auditcontext.WithUCITransportSession(context.Background(), "transport-tag-a")
 
-	_, err := mod.ProxyHandleTool(ctx, project, "memory_store", json.RawMessage(`{}`))
+	_, err := mod.ProxyHandleTool(ctx, project, "store", json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("non-UCI proxy call: %v", err)
 	}
@@ -1006,11 +906,11 @@ func TestProxyHandleToolPreservesLegacySessionForNonUCITools(t *testing.T) {
 	request := srv.callReq
 	metadata := srv.callMetadata.Copy()
 	srv.mu.Unlock()
-	if request == nil || request.GetSessionId() != "legacy-host-session" {
-		t.Fatalf("non-UCI CallTool session ID = %#v, want legacy host session", request)
+	if request == nil || request.GetSessionId() != "host-session" {
+		t.Fatalf("non-UCI CallTool session ID = %#v, want host session", request)
 	}
-	if request.GetProject() != project.ID || request.GetProjectIdentity().GetLegacyProjectId() != legacySelector {
-		t.Fatalf("non-UCI CallTool selector=%q identity=%#v, want selector=%q legacy=%q", request.GetProject(), request.GetProjectIdentity(), project.ID, legacySelector)
+	if request.GetProject() != contractProjectID || request.GetProjectIdentity() != nil || request.GetProjectIdentityV3() != nil {
+		t.Fatalf("non-UCI CallTool did not use the logical UUID alone: %#v", request)
 	}
 	if got := metadata.Get(auditcontext.SourceSessionMetadataKey); len(got) != 0 {
 		t.Fatalf("non-UCI CallTool unexpectedly forwarded transport metadata %v", got)
