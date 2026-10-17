@@ -133,65 +133,67 @@ func (s *Service) handleListCredentials(w http.ResponseWriter, r *http.Request) 
 	}
 
 	project := r.URL.Query().Get("project")
-
-	type credItem struct {
-		Name      string `json:"name"`
-		Scope     string `json:"scope"`
-		Project   string `json:"project,omitempty"`
-		ProjectID any    `json:"project_id"`
-		CreatedAt string `json:"created_at,omitempty"`
-		ID        int64  `json:"id"`
-	}
-
-	// When no project specified, list ALL credentials (dashboard admin view).
+	var creds []*models.Credential
+	var err error
 	if project == "" {
-		allCreds, err := s.credentialStore.ListAll(r.Context())
-		if err != nil {
-			log.Error().Err(err).Msg("list all credentials failed")
-			http.Error(w, "failed to list credentials", http.StatusInternalServerError)
-			return
+		creds, err = s.credentialStore.ListAll(r.Context())
+	} else {
+		creds, err = s.credentialStore.List(r.Context(), project)
+		if err == nil {
+			var globalCreds []*models.Credential
+			globalCreds, err = s.credentialStore.List(r.Context(), "")
+			creds = append(creds, globalCreds...)
 		}
-		items := make([]credItem, 0, len(allCreds))
-		for _, c := range allCreds {
-			items = append(items, credItem{
-				Name:      c.Key,
-				Scope:     c.Scope,
-				Project:   c.Project,
-				ProjectID: credentialProjectID(c.Project),
-				ID:        c.ID,
-				CreatedAt: c.CreatedAt.Format(time.RFC3339),
-			})
-		}
-		writeJSON(w, items)
-		return
 	}
-
-	creds, err := s.credentialStore.List(r.Context(), project)
 	if err != nil {
 		log.Error().Err(err).Msg("list credentials failed")
 		http.Error(w, "failed to list credentials", http.StatusInternalServerError)
 		return
 	}
-	globalCreds, err := s.credentialStore.List(r.Context(), "")
+	var vault *crypto.Vault
+	if s.config != nil && crypto.VaultExists(s.config) {
+		if configured, err := s.getVault(); err == nil {
+			vault = configured
+		}
+	}
+	bindings, err := s.credentialStore.ListBindings(r.Context(), creds, vault)
 	if err != nil {
-		log.Error().Err(err).Msg("list global credentials failed")
-		http.Error(w, "failed to list credentials", http.StatusInternalServerError)
+		log.Error().Err(err).Msg("list credential membership metadata failed")
+		http.Error(w, "credential membership metadata unavailable", http.StatusInternalServerError)
 		return
 	}
-	creds = append(creds, globalCreds...)
-
-	items := make([]credItem, 0, len(creds))
-	for _, c := range creds {
-		items = append(items, credItem{
-			ID:        c.ID,
-			Name:      c.Key,
-			Scope:     c.Scope,
-			Project:   c.Project,
-			ProjectID: credentialProjectID(c.Project),
-			CreatedAt: c.CreatedAt.Format(time.RFC3339),
-		})
+	type credItem struct {
+		Name                string `json:"name"`
+		Scope               string `json:"scope"`
+		Project             string `json:"project,omitempty"`
+		ProjectID           any    `json:"project_id"`
+		UnresolvedReference string `json:"unresolved_reference,omitempty"`
+		BindingError        string `json:"binding_error,omitempty"`
+		OriginProject       string `json:"origin_project,omitempty"`
+		CreatedAt           string `json:"created_at,omitempty"`
+		ID                  int64  `json:"id"`
 	}
-
+	items := make([]credItem, len(creds))
+	for i, credential := range creds {
+		item := credItem{Name: credential.Key, Scope: credential.Scope, ID: credential.ID, CreatedAt: credential.CreatedAt.Format(time.RFC3339)}
+		if binding, inventoried := bindings[credential.ID]; inventoried {
+			item.BindingError = binding.UnavailableReason
+			item.UnresolvedReference = binding.UnresolvedReference
+			item.OriginProject = credential.Project
+			if binding.ProjectID != "" {
+				item.Project, item.ProjectID = binding.ProjectID, binding.ProjectID
+				item.OriginProject = ""
+			}
+		} else if credential.Scope == "global" && credential.Project == "" {
+			item.ProjectID = nil
+		} else if credential.Scope == "project" && operatorCodeUUID(credential.Project) {
+			item.Project, item.ProjectID = credential.Project, credential.Project
+		} else {
+			item.BindingError = "CREDENTIAL_BINDING_UNAVAILABLE"
+			item.OriginProject = credential.Project
+		}
+		items[i] = item
+	}
 	writeJSON(w, items)
 }
 

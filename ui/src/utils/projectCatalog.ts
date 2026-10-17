@@ -129,10 +129,25 @@ export interface CredentialBinding {
   name: string
   scope: 'project' | 'global'
   project_id: string | null
+  unresolved_reference?: string
+  binding_error?: string
+  origin_project?: string
 }
 
-export function credentialBinding(credential: { id: number; name: string; scope: string; project?: string; project_id?: string | null }): CredentialBinding {
-  if (!Number.isSafeInteger(credential.id) || credential.id <= 0 || !credential.name) throw new Error('Invalid credential metadata')
+export function credentialBinding(credential: { id: number; name: string; scope: string; project?: string; project_id?: string | null; unresolved_reference?: string; binding_error?: string; origin_project?: string }): CredentialBinding {
+  if (!Number.isSafeInteger(credential.id) || credential.id <= 0 || typeof credential.name !== 'string' || !credential.name
+    || (credential.origin_project !== undefined && typeof credential.origin_project !== 'string')) throw new Error('Invalid credential metadata')
+  if (credential.binding_error !== undefined) {
+    if ((credential.binding_error !== 'CREDENTIAL_BINDING_UNAVAILABLE' && credential.binding_error !== 'CREDENTIAL_BINDING_CONFLICT')
+      || credential.project_id !== null || credential.project || credential.unresolved_reference !== undefined
+      || (credential.scope !== 'project' && credential.scope !== 'global')) throw new Error('Invalid unavailable credential metadata')
+    return { id: credential.id, name: credential.name, scope: credential.scope, project_id: null, binding_error: credential.binding_error, origin_project: credential.origin_project }
+  }
+  if (credential.unresolved_reference !== undefined) {
+    if (credential.scope !== 'project' || credential.project_id !== null || credential.project
+      || typeof credential.unresolved_reference !== 'string' || !/^urn:engram:migration:unresolved:[0-9a-f]{64}$/.test(credential.unresolved_reference)) throw new Error('Invalid retained credential metadata')
+    return { id: credential.id, name: credential.name, scope: 'project', project_id: null, unresolved_reference: credential.unresolved_reference, origin_project: credential.origin_project }
+  }
   const project = credential.project_id === undefined ? credential.project || null : credential.project_id
   if (credential.scope === 'global' && project === null && !credential.project) return { id: credential.id, name: credential.name, scope: 'global', project_id: null }
   if (credential.scope === 'project' && isProjectId(project) && (!credential.project || credential.project === project)) return { id: credential.id, name: credential.name, scope: 'project', project_id: project }
@@ -141,8 +156,10 @@ export function credentialBinding(credential: { id: number; name: string; scope:
 
 export function assertCredentialMetadata(value: unknown, expected: CredentialBinding): void {
   const metadata = object(value)
+  if (metadata.binding_error !== expected.binding_error) throw new Error('Credential metadata scope mismatch')
+  if (metadata.unresolved_reference !== expected.unresolved_reference) throw new Error('Credential metadata scope mismatch')
   for (const key of ['id', 'name', 'scope', 'project_id'] as const) {
-    if (metadata[key] !== undefined && metadata[key] !== expected[key]) throw new Error('Credential metadata scope mismatch')
+    if ((expected.unresolved_reference !== undefined || metadata[key] !== undefined) && metadata[key] !== expected[key]) throw new Error('Credential metadata scope mismatch')
   }
   if (metadata.project !== undefined && metadata.project !== (expected.project_id ?? '')) throw new Error('Credential metadata scope mismatch')
 }

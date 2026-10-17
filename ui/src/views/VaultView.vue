@@ -250,10 +250,12 @@ async function handleDelete() {
                 </div>
               </TableCell>
               <TableCell class="text-xs text-muted-foreground font-mono">
-                {{ (cred.project_id ?? cred.project) ? projectName(cred.project_id ?? cred.project ?? '') : 'global' }}
+                {{ cred.binding_error ? `Unavailable #${cred.id}` : cred.unresolved_reference ? `Retained #${cred.id} · read-only` : (cred.project_id ?? cred.project) ? projectName(cred.project_id ?? cred.project ?? '') : 'global' }}
+                <div v-if="cred.binding_error">{{ cred.binding_error === 'CREDENTIAL_BINDING_CONFLICT' ? 'Conflicting membership' : 'Membership unavailable' }}</div>
+                <div v-if="cred.origin_project">Origin: {{ cred.origin_project }}</div>
               </TableCell>
               <TableCell>
-                <Badge variant="secondary" class="text-[10px]">{{ cred.scope }}</Badge>
+                <Badge variant="secondary" class="text-[10px]">{{ cred.binding_error ? 'unavailable' : cred.scope }}</Badge>
               </TableCell>
               <TableCell class="text-xs text-muted-foreground">
                 {{ safeAbsoluteDate(cred.created_at) }}
@@ -264,6 +266,8 @@ async function handleDelete() {
                     v-if="!revealedValues[cred.id]"
                     variant="outline"
                     size="xs"
+                    :disabled="Boolean(cred.binding_error)"
+                    :title="cred.binding_error ? 'Credential binding unavailable' : undefined"
                     @click="revealCredential(cred)"
                   >
                     <Eye class="size-3.5" />
@@ -273,7 +277,9 @@ async function handleDelete() {
                     variant="ghost"
                     size="icon-sm"
                     class="text-muted-foreground hover:text-destructive"
-                    :title="t.vault.delete"
+                    :disabled="Boolean(cred.binding_error || cred.unresolved_reference)"
+                    :aria-label="cred.binding_error ? 'Delete unavailable: credential membership is unavailable' : cred.unresolved_reference ? 'Delete unavailable: retained credential is read-only' : t.vault.delete"
+                    :title="cred.binding_error ? 'Credential binding unavailable' : cred.unresolved_reference ? 'Retained credential: read-only' : t.vault.delete"
                     @click="confirmDelete(cred)"
                   >
                     <Trash2 class="size-3.5" />

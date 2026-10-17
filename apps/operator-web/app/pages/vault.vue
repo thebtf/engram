@@ -136,7 +136,9 @@ const deleteCredentialMutation = useMutation({
             <div>
               <div class="text-sm font-semibold">{{ credential.name }}</div>
               <div class="mt-1 text-xs text-[var(--muted)]">
-                {{ (credential.project_id ?? credential.project) ? projectName(credential.project_id ?? credential.project ?? '') : 'global' }} · {{ credential.scope }}
+                {{ credential.binding_error ? `Unavailable #${credential.id}` : credential.unresolved_reference ? `Retained #${credential.id} · read-only` : (credential.project_id ?? credential.project) ? projectName(credential.project_id ?? credential.project ?? '') : 'global' }} · {{ credential.binding_error ? 'unavailable' : credential.scope }}
+                <div v-if="credential.binding_error">{{ credential.binding_error === 'CREDENTIAL_BINDING_CONFLICT' ? 'Conflicting membership' : 'Membership unavailable' }}</div>
+                <div v-if="credential.origin_project">Origin: {{ credential.origin_project }}</div>
               </div>
             </div>
             <div class="mono-data text-xs text-[var(--muted)]">
@@ -164,13 +166,16 @@ const deleteCredentialMutation = useMutation({
           <div class="flex flex-wrap gap-2">
             <button
               class="rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs font-semibold text-[var(--fg-2)]"
+              :disabled="Boolean(credential.binding_error)"
+              :title="credential.binding_error ? 'Credential binding unavailable' : undefined"
               @click="revealValue(credential)"
             >
               Reveal
             </button>
             <button
               class="rounded-md border border-[color:rgba(248,113,113,0.4)] bg-transparent px-3 py-2 text-xs font-semibold text-[var(--danger)] disabled:opacity-60"
-              :disabled="deleteCredentialMutation.isPending.value"
+              :disabled="deleteCredentialMutation.isPending.value || Boolean(credential.binding_error || credential.unresolved_reference)"
+              :title="credential.binding_error ? 'Credential binding unavailable' : credential.unresolved_reference ? 'Retained credential: read-only' : undefined"
               @click="deleteCredentialMutation.mutate(credential)"
             >
               Delete

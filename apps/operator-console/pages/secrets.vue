@@ -258,12 +258,12 @@ async function cleanupOrphans() {
                 <span v-if="revealError && openedName === c.id" class="err">{{ revealError }}</span>
               </div>
             </td>
-            <td><span class="vcol">{{ c.scope === 'global' ? t('rules.scope.global') : projectName(c.project) }}</span></td>
-            <td><span class="bdg">{{ c.scope }}</span></td>
+            <td><span class="vcol">{{ c.binding_error ? `Unavailable #${c.id}` : c.unresolved_reference ? `Retained #${c.id} · read-only` : c.scope === 'global' ? t('rules.scope.global') : projectName(c.project) }}</span><div v-if="c.binding_error" class="vcol">{{ c.binding_error === 'CREDENTIAL_BINDING_CONFLICT' ? 'Conflicting membership' : 'Membership unavailable' }}</div><div v-if="c.origin_project" class="vcol">Origin: {{ c.origin_project }}</div></td>
+            <td><span class="bdg">{{ c.binding_error ? 'unavailable' : c.scope }}</span></td>
             <td><span class="vcol">{{ c.created }}</span></td>
             <td class="r">
-              <button v-if="revealed?.id !== c.id" class="act" :data-testid="`secret-reveal-${c.id}`" @click.stop="revealSecret(c)">{{ t('secrets.reveal') }}</button>
-              <button class="act danger" :data-testid="`secret-delete-${c.id}`" @click.stop="requestDelete(c)">{{ deleteConfirm && openedName === c.id ? t('secrets.confirmDelete') : t('secrets.delete') }}</button>
+              <button v-if="revealed?.id !== c.id" class="act" :data-testid="`secret-reveal-${c.id}`" :disabled="Boolean(c.binding_error)" :title="c.binding_error ? 'Credential binding unavailable' : undefined" @click.stop="revealSecret(c)">{{ t('secrets.reveal') }}</button>
+              <button class="act danger" :data-testid="`secret-delete-${c.id}`" :disabled="Boolean(c.binding_error || c.unresolved_reference)" :title="c.binding_error ? 'Credential binding unavailable' : c.unresolved_reference ? 'Retained credential: read-only' : undefined" @click.stop="requestDelete(c)">{{ deleteConfirm && openedName === c.id ? t('secrets.confirmDelete') : t('secrets.delete') }}</button>
             </td>
           </tr>
         </template>
@@ -318,6 +318,7 @@ label span { display:block; margin-bottom:5px; color:var(--muted); font-size:var
 .act { font-size:var(--text-sm); padding:5px 11px; border:1px solid var(--border); border-radius:var(--r-sm); background:transparent; color:var(--fg); cursor:pointer; }
 .act:hover { background:var(--surface-warm); }
 .act.danger { margin-left:6px; border-color:color-mix(in oklab,var(--state-warn),transparent 45%); color:var(--state-warn); }
+.act:disabled { opacity:.5; cursor:not-allowed; }
 .err { margin-top:6px; color:var(--state-warn); font-size:var(--text-xs); }
 @media (max-width:960px) {
   .vs-grid, .inline-fields { grid-template-columns:1fr; }

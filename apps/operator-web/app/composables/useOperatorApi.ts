@@ -84,6 +84,9 @@ export interface VaultCredential {
   scope: string
   project?: string
   project_id?: string | null
+  unresolved_reference?: string
+  binding_error?: string
+  origin_project?: string
   created_at: string
   updated_at?: string
 }
@@ -309,7 +312,10 @@ export async function fetchCredentials(): Promise<VaultCredential[]> {
 
 export async function fetchCredential(credential: VaultCredential): Promise<{ name: string; value: string }> {
   const binding = credentialBinding(credential)
-  const params = new URLSearchParams(binding.project_id === null ? { scope: 'global' } : { project: binding.project_id })
+  if (binding.binding_error !== undefined) throw new Error(`Credential unavailable: ${binding.binding_error}`)
+  const params = new URLSearchParams(binding.unresolved_reference !== undefined
+    ? { id: String(binding.id), unresolved_reference: binding.unresolved_reference }
+    : binding.project_id === null ? { scope: 'global' } : { project: binding.project_id })
   const result = await apiGet<{ name: string; value: string }>(`/vault/credentials/${encodeURIComponent(binding.name)}?${params}`)
   assertCredentialMetadata(result, binding)
   const current = (await fetchCredentials()).find(row => row.id === binding.id)
@@ -320,6 +326,8 @@ export async function fetchCredential(credential: VaultCredential): Promise<{ na
 
 export async function deleteCredential(credential: VaultCredential): Promise<void> {
   const binding = credentialBinding(credential)
+  if (binding.binding_error !== undefined) throw new Error(`Credential unavailable: ${binding.binding_error}`)
+  if (binding.unresolved_reference !== undefined) throw new Error('Retained credentials are read-only; Delete is unsupported')
   const current = (await fetchCredentials()).find(row => row.id === binding.id)
   if (!current) throw new Error('Credential metadata readback missing')
   assertCredentialMetadata(credentialBinding(current), binding)

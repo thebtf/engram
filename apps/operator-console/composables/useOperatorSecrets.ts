@@ -1,6 +1,7 @@
 import { computed, ref as sharedRef, type Ref as SharedRef } from 'vue'
 import { startedLoads } from './useConsolePreferences'
 import { isCatalogProject, useOperatorProjectContext } from './useOperatorProjectContext'
+import { credentialBinding, assertCredentialMetadata } from '../../../ui/src/utils/projectCatalog'
 
 let sharedSecretsPageCreds: SharedRef<OperatorCredential[]> | undefined
 let sharedSecretsPageVault: SharedRef<OperatorVaultStatus> | undefined
@@ -36,6 +37,9 @@ export interface OperatorCredential {
   name: string
   project: string
   scope: 'project' | 'global'
+  unresolved_reference?: string
+  binding_error?: string
+  origin_project?: string
   created: string
 }
 
@@ -59,6 +63,9 @@ interface ApiVaultCredential {
   name: string
   project?: string
   project_id?: string | null
+  unresolved_reference?: string
+  binding_error?: string
+  origin_project?: string
   scope?: string
   created_at?: string
 }
@@ -76,6 +83,8 @@ interface ApiVaultReveal {
   value: string
   project?: string
   project_id?: string | null
+  unresolved_reference?: string
+  binding_error?: string
   id?: number
   scope?: string
 }
@@ -146,6 +155,10 @@ function compactAge(timestamp?: string): string {
 function mapCredential(row: ApiVaultCredential): OperatorCredential {
   const scope = row?.scope || 'project'
   const project = row?.project_id === undefined ? row?.project || '' : row.project_id || ''
+  if (row?.unresolved_reference !== undefined || row?.binding_error !== undefined) {
+    const binding = credentialBinding({ id: row.id ?? 0, name: row.name, scope, project: row.project, project_id: row.project_id, unresolved_reference: row.unresolved_reference, binding_error: row.binding_error, origin_project: row.origin_project })
+    return { id: String(binding.id), name: binding.name, project: '', scope: binding.scope, unresolved_reference: binding.unresolved_reference, binding_error: binding.binding_error, origin_project: binding.origin_project, created: compactAge(row.created_at) }
+  }
   if (!row || (scope !== 'project' && scope !== 'global') || (scope === 'global' ? project !== '' : !isCatalogProject(project)) || (row.project !== undefined && row.project !== project) || typeof row.name !== 'string' || !row.name || (row.id !== undefined && (!Number.isSafeInteger(row.id) || row.id < 1))) throw new TypeError('Invalid credential project identity')
   return {
     id: row.id !== undefined ? String(row.id) : `${scope}:${project}:${row.name}`,
@@ -157,7 +170,12 @@ function mapCredential(row: ApiVaultCredential): OperatorCredential {
 }
 
 function credentialUrl(cred: OperatorCredential): string {
+  if (cred.binding_error !== undefined) throw new TypeError('Credential binding unavailable; Reveal and Delete are unsupported')
   const base = `/api/vault/credentials/${encodeURIComponent(cred.name)}`
+  if (cred.unresolved_reference !== undefined) {
+    const binding = credentialBinding({ id: Number(cred.id), name: cred.name, scope: cred.scope, project: cred.project, project_id: null, unresolved_reference: cred.unresolved_reference })
+    return `${base}?${new URLSearchParams({ id: String(binding.id), unresolved_reference: cred.unresolved_reference })}`
+  }
   if (cred.scope === 'global' ? cred.project !== '' : !isCatalogProject(cred.project)) throw new TypeError('An exact credential scope is required')
 
   const params = new URLSearchParams(cred.scope === 'global' ? { scope: 'global' } : { project: cred.project })
@@ -261,8 +279,8 @@ export function useOperatorSecrets(): {
         if (context.error.value) throw context.error.value
         if (!Array.isArray(result.data)) throw new TypeError('Invalid credential metadata')
         const credentials = result.data.map(mapCredential)
-        const identities = new Set(credentials.map((cred) => `${cred.project}\u0000${cred.name}`))
-        if (identities.size !== credentials.length) throw new TypeError('Duplicate credential identity')
+        const identities = new Set(credentials.map((cred) => cred.binding_error !== undefined ? `unavailable\u0000${cred.id}` : cred.unresolved_reference !== undefined ? `${cred.unresolved_reference}\u0000${cred.id}` : `${cred.project}\u0000${cred.name}`))
+        if (identities.size !== credentials.length || new Set(credentials.map(cred => cred.id)).size !== credentials.length) throw new TypeError('Duplicate credential identity')
         replaceArray(credsState.value, credentials)
         loadStateValue.value = credsState.value.length ? liveState(credsEvidence, credsState.value) : emptyState(credsEvidence, credsState.value)
       } catch (cause) {
@@ -300,6 +318,16 @@ export function useOperatorSecrets(): {
         'vault-reveal',
       )
       if (payload.name !== cred.name || (payload.id !== undefined && String(payload.id) !== cred.id) || (payload.project !== undefined && payload.project !== cred.project) || (payload.project_id !== undefined && payload.project_id !== (cred.project || null)) || (payload.scope !== undefined && payload.scope !== cred.scope) || typeof payload.value !== 'string') throw new TypeError('Credential reveal identity mismatch')
+      if (payload.binding_error !== undefined) throw new TypeError('Credential binding unavailable')
+      if (payload.unresolved_reference !== cred.unresolved_reference) throw new TypeError('Credential reveal identity mismatch')
+      if (cred.unresolved_reference !== undefined) {
+        const binding = credentialBinding({ id: Number(cred.id), name: cred.name, scope: cred.scope, project_id: null, unresolved_reference: cred.unresolved_reference })
+        assertCredentialMetadata(payload, binding)
+        const rows = await operatorFetchJson<ApiVaultCredential[]>('/api/vault/credentials', undefined, 'vault-reveal-readback')
+        const current = rows.find(row => row.id === binding.id)
+        if (!current) throw new TypeError('Credential metadata readback missing')
+        assertCredentialMetadata(current, binding)
+      }
       return payload.value
     } catch (nextError) {
       const mapped = toOperatorSourceError(nextError, {
@@ -330,6 +358,7 @@ export function useOperatorSecrets(): {
   }
 
   async function deleteSecret(cred: OperatorCredential) {
+    if (cred.unresolved_reference !== undefined) throw new TypeError('Retained credentials are read-only; Delete is unsupported')
     const path = credentialUrl(cred)
     const result = await submitMutation('vault-delete', { credentialID: cred.id }, path, jsonInit('DELETE'), deleteSecretCurrentStateParser(cred.name, cred.project))
     if (result.kind !== 'committed_verified') return result
