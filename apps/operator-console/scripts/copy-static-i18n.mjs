@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { cpSync, existsSync, mkdirSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { resolveBuildPaths } from './build-paths.mjs'
 
@@ -14,6 +14,7 @@ if (!existsSync(sourceDir)) {
 }
 
 if (overridden) {
+  rmSync(publicDir, { recursive: true, force: true })
   cpSync(join(appRoot, 'public'), publicDir, { recursive: true, force: true })
 }
 

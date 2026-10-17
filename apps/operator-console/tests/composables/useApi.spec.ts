@@ -1,19 +1,54 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
-import {
- executeMutation,
- parseMutationResponse,
- parseMutationTransportFailure,
- type MutationRequest,
- type MutationResult,
-} from '../../composables/useApi.ts'
-import { createRuleCurrentStateParser } from '../../composables/useOperatorRules.ts'
-import { storeMemoryCurrentStateParser } from '../../composables/useOperatorMemoryLab.ts'
-import { createInvitationCurrentStateParser } from '../../composables/useOperatorAccess.ts'
-import { createKeycardCurrentStateParser } from '../../composables/useOperatorKeycards.ts'
-import { upsertDomainCurrentStateParser, deleteDomainCurrentStateParser } from '../../composables/useOperatorDomainRegistry.ts'
-import { projectArchiveCurrentStateParser } from '../../composables/useOperatorProjects.ts'
-import { cleanupOrphansCurrentStateParser, createSecretCurrentStateParser, deleteSecretCurrentStateParser } from '../../composables/useOperatorSecrets.ts'
+import ts from 'typescript'
+import * as vue from 'vue'
+import * as routing from 'vue-router'
+import * as projectCatalog from '../../../../ui/src/utils/projectCatalog.ts'
+import type { MutationRequest, MutationResult } from '../../composables/useApi.ts'
+import type * as ApiModule from '../../composables/useApi.ts'
+import type * as RulesModule from '../../composables/useOperatorRules.ts'
+import type * as MemoryLabModule from '../../composables/useOperatorMemoryLab.ts'
+import type * as AccessModule from '../../composables/useOperatorAccess.ts'
+import type * as KeycardsModule from '../../composables/useOperatorKeycards.ts'
+import type * as DomainRegistryModule from '../../composables/useOperatorDomainRegistry.ts'
+import type * as ProjectsModule from '../../composables/useOperatorProjects.ts'
+import type * as SecretsModule from '../../composables/useOperatorSecrets.ts'
+
+const modules = new Map<string, object>()
+function dependency<T>(name: string): T {
+ if (name === 'vue') return vue as T
+ if (name === 'vue-router') return routing as T
+ if (name.endsWith('projectCatalog')) return projectCatalog as T
+ if (!modules.has(name)) {
+  if (!name.startsWith('./') && name !== '../operator-config') throw new Error(`Unexpected test dependency: ${name}`)
+  const source = readFileSync(new URL(`../../composables/${name}.ts`, import.meta.url), 'utf8')
+  const code = ts.transpileModule(source, {
+   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+   transformers: {
+    before: [context => source => ts.visitNode(source, function visit(node) {
+     if (ts.isMetaProperty(node) && node.keywordToken === ts.SyntaxKind.ImportKeyword) return ts.factory.createIdentifier('importMeta')
+     return ts.visitEachChild(node, visit, context)
+    })],
+   },
+  }).outputText
+  const module = { exports: {} }
+  const window = { matchMedia: () => ({ matches: false, addEventListener() { } }) }
+  const document = { documentElement: { dataset: {}, classList: { toggle() { } } } }
+  new Function('require', 'module', 'exports', 'importMeta', 'window', 'document', code)(dependency, module, module.exports, { env: { DEV: false } }, window, document)
+  modules.set(name, module.exports)
+ }
+ return modules.get(name) as T
+}
+
+const { executeMutation, parseMutationResponse, parseMutationTransportFailure } = dependency<typeof ApiModule>('./useApi')
+const { createRuleCurrentStateParser } = dependency<typeof RulesModule>('./useOperatorRules')
+const { storeMemoryCurrentStateParser } = dependency<typeof MemoryLabModule>('./useOperatorMemoryLab')
+const { createInvitationCurrentStateParser } = dependency<typeof AccessModule>('./useOperatorAccess')
+const { createKeycardCurrentStateParser } = dependency<typeof KeycardsModule>('./useOperatorKeycards')
+const { upsertDomainCurrentStateParser, deleteDomainCurrentStateParser } = dependency<typeof DomainRegistryModule>('./useOperatorDomainRegistry')
+const { projectArchiveCurrentStateParser } = dependency<typeof ProjectsModule>('./useOperatorProjects')
+const { cleanupOrphansCurrentStateParser, createSecretCurrentStateParser, deleteSecretCurrentStateParser } = dependency<typeof SecretsModule>('./useOperatorSecrets')
 
 const request: MutationRequest<{ enabled: boolean; version: number }> = {
  requestId: 'request-42',

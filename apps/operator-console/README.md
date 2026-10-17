@@ -568,9 +568,11 @@ artifacts; an unset or empty value keeps the existing `.output` layout and local
 behavior. Absolute paths are used directly; relative paths resolve from this app directory.
 With an override, `npm run build` writes `public/index.html`, `public/_nuxt/`,
 `public/i18n/locales/`, `server/index.mjs`, `auto-imports.d.ts`, `components.d.ts` and
-Vite's `cache/` below that root. The locale producer first copies immutable source `public/`
-assets and current `i18n/locales/` into the root's `static-public/`; Vite uses that staging
-directory as `publicDir`, separately from the `public/` output it empties. Source `public/`,
+Vite's `cache/` below that root. The locale producer first recreates only the root's
+`static-public/` staging directory, then copies source `public/` assets and current
+`i18n/locales/` into it, so deleted source assets cannot survive repeated staging.
+Vite uses that staging directory as `publicDir`, separately from the `public/` output it
+empties. Other files below the output root are not removed by the copier. Source `public/`,
 the default `.output/` and existing `node_modules/` are not build destinations when the
 override is active. The build uses Vite's native config loader on the supported Node version,
 so it does not create a bundled config in `node_modules/.vite-temp`. Keep the same variable
@@ -600,6 +602,11 @@ npm run test:parity
 npm run test:browser
 npm run test:browser:live
 ```
+
+`test:seam` deliberately selects the copier regression, seven composable `.mjs` test
+files, and the mutation parser/executor cases in `tests/composables/useApi.spec.ts`.
+The latter uses the existing test-local TypeScript transpile/import convention for
+real production modules; Node strips only the test's own type annotations.
 
 Run only the focused commands selected by the active Feature 011 task from the exact bound
 candidate. Mock browser and parity checks are scoped evidence, not complete D-A acceptance.
