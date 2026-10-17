@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/thebtf/engram/internal/projectidentity"
 )
 
 type invalidIdentityVector struct {
@@ -96,6 +98,9 @@ func TestRegisterAndResolve_RejectsRawVsNormalizedSelectorsAndMetadata(t *testin
 		})
 	}
 	for _, vector := range loadInvalidIdentityVectors(t) {
+		if vector.InvalidTarget == "selector" {
+			continue
+		}
 		vector := vector
 		t.Run("shared-vector/"+vector.Name, func(t *testing.T) {
 			_, err := RegisterAndResolve(context.Background(), nil, vector.Selector, &ProjectIdentityV2{
@@ -112,6 +117,37 @@ func TestRegisterAndResolve_RejectsRawVsNormalizedSelectorsAndMetadata(t *testin
 				t.Fatalf("error=%T %v, want PROJECT_IDENTITY_INVALID before DB access", err, err)
 			}
 		})
+	}
+}
+
+func TestValidateLogicalProject_RejectsHistoricalSelectorVectors(t *testing.T) {
+	for _, vector := range loadInvalidIdentityVectors(t) {
+		if vector.InvalidTarget != "selector" {
+			continue
+		}
+		t.Run(vector.Name, func(t *testing.T) {
+			err := projectidentity.ValidateProject(projectidentity.Project{ProjectID: vector.Selector})
+			var identityErr *projectidentity.LogicalError
+			if !errors.As(err, &identityErr) || identityErr.Code != "PROJECT_IDENTITY_INVALID" {
+				t.Fatalf("error=%T %v, want historical selector rejected as project UUID", err, err)
+			}
+		})
+	}
+}
+
+func TestBootstrapLogicalProject_RejectsInvalidLocatorBeforeDatabaseAccess(t *testing.T) {
+	for _, locator := range []string{
+		" example.invalid/acme/repo",
+		"example.invalid/acme\trepo",
+		"example.invalid/acme/../repo",
+		"fixture-user:fixture-credential@example.invalid/acme/repo",
+		"fixture-user:fixture-credential@example.invalid/%zz",
+	} {
+		_, err := BootstrapLogicalProject(context.Background(), nil, projectidentity.BootstrapRequest{RepositoryLocator: locator})
+		var identityErr *projectidentity.LogicalError
+		if !errors.As(err, &identityErr) || identityErr.Code != "PROJECT_LOCATOR_INVALID" || strings.Contains(err.Error(), "fixture-credential") {
+			t.Fatal("invalid bootstrap locator reached the database boundary or leaked")
+		}
 	}
 }
 
