@@ -72,6 +72,21 @@ func consolidationColumns(tx *gormlib.DB) ([]consolidationColumn, error) {
 }
 
 func consolidationSchema(tx *gormlib.DB) (string, []consolidationColumn, []consolidationForeignKey, error) {
+	projection, columns, fks, err := consolidationSchemaProjection(tx)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	objects, err := consolidationCatalog(tx)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	return structuralDigest(struct {
+		Projection string
+		Objects    []consolidationCatalogObject
+	}{projection, objects}), columns, fks, nil
+}
+
+func consolidationSchemaProjection(tx *gormlib.DB) (string, []consolidationColumn, []consolidationForeignKey, error) {
 	columns, err := consolidationColumns(tx)
 	if err != nil {
 		return "", nil, nil, err
@@ -106,13 +121,62 @@ func consolidationSchema(tx *gormlib.DB) (string, []consolidationColumn, []conso
 	}{columns, definitions}), columns, fks, nil
 }
 
+type consolidationCatalogObject struct{ Kind, Name, Definition string }
+
+func consolidationCatalog(tx *gormlib.DB) ([]consolidationCatalogObject, error) {
+	var objects []consolidationCatalogObject
+	err := tx.Raw(`SELECT 'relation' AS kind,c.relname AS name,jsonb_build_object('owner',pg_get_userbyid(c.relowner),'acl',(SELECT array_agg(a::text ORDER BY a::text) FROM unnest(c.relacl)a),'rls',c.relrowsecurity,'force_rls',c.relforcerowsecurity,'persistence',c.relpersistence,'replica_identity',c.relreplident)::text AS definition
+	 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema()
+	 UNION ALL SELECT 'trigger',c.relname||'.'||t.tgname,jsonb_build_object('definition',pg_get_triggerdef(t.oid),'enabled',t.tgenabled::text)::text FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema() AND NOT t.tgisinternal
+	 UNION ALL SELECT 'policy',c.relname||'.'||p.polname,jsonb_build_object('command',p.polcmd,'permissive',p.polpermissive,'roles',(SELECT array_agg(CASE WHEN r=0 THEN 'PUBLIC' ELSE pg_get_userbyid(r) END ORDER BY CASE WHEN r=0 THEN 'PUBLIC' ELSE pg_get_userbyid(r) END) FROM unnest(p.polroles)r),'using',pg_get_expr(p.polqual,p.polrelid),'check',pg_get_expr(p.polwithcheck,p.polrelid))::text FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema()
+	 UNION ALL SELECT 'extension',e.extname,jsonb_build_object('owner',pg_get_userbyid(e.extowner),'schema',n.nspname,'version',e.extversion)::text FROM pg_extension e JOIN pg_namespace n ON n.oid=e.extnamespace
+	 UNION ALL SELECT 'enum',t.typname,jsonb_build_object('owner',pg_get_userbyid(t.typowner),'labels',(SELECT array_agg(e.enumlabel ORDER BY e.enumsortorder) FROM pg_enum e WHERE e.enumtypid=t.oid))::text FROM pg_type t JOIN pg_namespace n ON n.oid=t.typnamespace WHERE n.nspname=current_schema() AND t.typtype='e'
+	 UNION ALL SELECT 'domain',t.typname,jsonb_build_object('owner',pg_get_userbyid(t.typowner),'base',format_type(t.typbasetype,t.typtypmod),'not_null',t.typnotnull,'default',t.typdefault,'constraints',(SELECT array_agg(pg_get_constraintdef(c.oid) ORDER BY c.conname) FROM pg_constraint c WHERE c.contypid=t.oid))::text FROM pg_type t JOIN pg_namespace n ON n.oid=t.typnamespace WHERE n.nspname=current_schema() AND t.typtype='d'
+	 ORDER BY 1,2,3`).Scan(&objects).Error
+	return objects, err
+}
+
+func consolidationMetadataTable(name string) bool {
+	switch name {
+	case "project_consolidation_memberships", "project_consolidation_redirects", "project_consolidation_operations", "project_consolidation_backups", "project_consolidation_frames":
+		return true
+	default:
+		return false
+	}
+}
+
+func consolidationHistoricalCensus(census consolidationCensusState) (bool, error) {
+	seen := map[string]bool{}
+	metadata := 0
+	for _, table := range census.Tables {
+		if table.Name == "" || seen[table.Name] || table.Count < 0 {
+			return false, consolidationHold("STALE_PLAN")
+		}
+		seen[table.Name] = true
+		if consolidationMetadataTable(table.Name) {
+			metadata++
+		}
+	}
+	if metadata != 0 && metadata != 5 {
+		return false, consolidationHold("STALE_PLAN")
+	}
+	if metadata == 0 {
+		for _, row := range census.Rows {
+			if consolidationMetadataTable(row.Table) {
+				return false, consolidationHold("STALE_PLAN")
+			}
+		}
+	}
+	return metadata == 0, nil
+}
+
 func consolidationDataTables(tx *gormlib.DB) ([]consolidationTable, error) {
 	var tables []consolidationTable
-	err := tx.Raw(`SELECT t.table_name AS name, COALESCE(ARRAY(SELECT a.attname::text FROM pg_index i
+	err := tx.Raw(`SELECT t.relname AS name, COALESCE(ARRAY(SELECT a.attname::text FROM pg_index i
 		CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY k(num,ord) JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=k.num
-		WHERE i.indrelid=to_regclass(quote_ident(t.table_schema)||'.'||quote_ident(t.table_name)) AND i.indisprimary ORDER BY k.ord),'{}'::text[]) AS primary_key
-		FROM information_schema.tables t WHERE t.table_schema=current_schema() AND t.table_type='BASE TABLE'
-		AND t.table_name NOT LIKE 'project_consolidation_%' ORDER BY t.table_name`).Scan(&tables).Error
+		WHERE i.indrelid=t.oid AND i.indisprimary ORDER BY k.ord),'{}'::text[]) AS primary_key
+		FROM pg_class t JOIN pg_namespace n ON n.oid=t.relnamespace WHERE n.nspname=current_schema()
+		AND t.relkind IN ('r','p') ORDER BY t.relname`).Scan(&tables).Error
 	return tables, err
 }
 
@@ -133,6 +197,10 @@ func consolidationRevision(tx *gormlib.DB) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return consolidationRevisionFor(tx, tables)
+}
+
+func consolidationRevisionFor(tx *gormlib.DB, tables []consolidationTable) (string, error) {
 	h := sha256.New()
 	encoder := json.NewEncoder(h)
 	for _, table := range tables {
@@ -238,6 +306,9 @@ func (s *ProjectConsolidationStore) Census(ctx context.Context, sourceVersion st
 
 func (s *ProjectConsolidationStore) census(tx *gormlib.DB, sourceVersion string) (consolidationCensusState, error) {
 	state := consolidationCensusState{SourceVersion: sourceVersion, Gaps: []string{}}
+	if err := tx.Exec("SET LOCAL TimeZone='UTC'; SET LOCAL extra_float_digits=3; SET LOCAL row_security=off").Error; err != nil {
+		return state, err
+	}
 	var err error
 	state.Database, err = consolidationDatabaseIdentity(tx)
 	if err != nil {
@@ -273,7 +344,7 @@ func (s *ProjectConsolidationStore) census(tx *gormlib.DB, sourceVersion string)
 		table.Kind = consolidationDomain(table.Name)
 		var projection []string
 		for _, column := range columns {
-			if column.TableName != table.Name {
+			if column.TableName != table.Name || consolidationMetadataTable(table.Name) {
 				continue
 			}
 			if column.DataType == "jsonb" || column.DataType == "json" {
@@ -317,6 +388,12 @@ func (s *ProjectConsolidationStore) census(tx *gormlib.DB, sourceVersion string)
 			}
 			table.Count++
 			start := len(state.Rows)
+			if consolidationMetadataTable(table.Name) {
+				s.addCensusRow(&state, table.Name, "", "retained_migration_state", keyJSON, nil, "", false)
+				state.Rows[start].NativeVersion = version
+				byObject[consolidationObjectKey(table.Name, keyJSON)] = []int{start}
+				continue
+			}
 			for _, column := range columns {
 				if column.TableName != table.Name {
 					continue
@@ -487,15 +564,69 @@ func (s *ProjectConsolidationStore) addCensusRow(state *consolidationCensusState
 }
 
 func (s *ProjectConsolidationStore) fresh(tx *gormlib.DB, census consolidationCensusState) error {
-	identity, err := consolidationDatabaseIdentity(tx)
-	if err != nil {
+	historical, err := consolidationHistoricalCensus(census)
+	if err != nil || historical {
+		return consolidationHold("STALE_PLAN")
+	}
+	if err := tx.Exec("SET LOCAL TimeZone='UTC'; SET LOCAL extra_float_digits=3; SET LOCAL row_security=off").Error; err != nil {
 		return err
 	}
 	schema, _, _, err := consolidationSchema(tx)
 	if err != nil {
 		return err
 	}
-	snapshot, err := consolidationRevision(tx)
+	return consolidationFreshIdentity(tx, census, schema)
+}
+
+func (s *ProjectConsolidationStore) freshHistorical(tx *gormlib.DB, census consolidationCensusState) error {
+	historical, err := consolidationHistoricalCensus(census)
+	if err != nil || !historical {
+		return consolidationHold("STALE_PLAN")
+	}
+	if err := tx.Exec("SET LOCAL TimeZone='UTC'; SET LOCAL extra_float_digits=3; SET LOCAL row_security=off").Error; err != nil {
+		return err
+	}
+	schema, _, _, err := consolidationSchemaProjection(tx)
+	if err != nil {
+		return err
+	}
+	return consolidationFreshIdentity(tx, census, schema)
+}
+
+func consolidationFreshIdentity(tx *gormlib.DB, census consolidationCensusState, schema string) error {
+	identity, err := consolidationDatabaseIdentity(tx)
+	if err != nil {
+		return err
+	}
+	tables, err := consolidationDataTables(tx)
+	if err != nil {
+		return err
+	}
+	historical, err := consolidationHistoricalCensus(census)
+	if err != nil {
+		return err
+	}
+	metadata := 0
+	selected := tables[:0]
+	for _, table := range tables {
+		if consolidationMetadataTable(table.Name) {
+			metadata++
+			if historical {
+				continue
+			}
+		}
+		selected = append(selected, table)
+	}
+	if metadata != 5 || len(selected) != len(census.Tables) {
+		return consolidationHold("STALE_PLAN")
+	}
+	for i, table := range selected {
+		original := census.Tables[i]
+		if table.Name != original.Name || structuralDigest(table.PrimaryKey) != structuralDigest(original.PrimaryKey) || consolidationDomain(table.Name) != original.Kind {
+			return consolidationHold("STALE_PLAN")
+		}
+	}
+	snapshot, err := consolidationRevisionFor(tx, selected)
 	if err != nil {
 		return err
 	}
@@ -548,6 +679,8 @@ func consolidationFieldRole(table, column string) string {
 
 func consolidationDomain(table string) string {
 	switch table {
+	case "project_consolidation_memberships", "project_consolidation_redirects", "project_consolidation_operations", "project_consolidation_backups", "project_consolidation_frames":
+		return "retained_migration_state"
 	case "task_memory_intervention_receipts", "intervention_evidence_policies", "project_merge_audits", "project_merge_audit_sources", "project_resolution_attempts", "project_identity_comparisons":
 		return "immutable_audit"
 	case "sources", "space_sources", "legacy_context_aliases", "content_chunks", "knowledge_edges":
@@ -573,7 +706,6 @@ func consolidationLock(tx *gormlib.DB) error {
 	for _, table := range tables {
 		names = append(names, quoted(table.Name))
 	}
-	names = append(names, quoted("project_consolidation_backups"), quoted("project_consolidation_frames"), quoted("project_consolidation_operations"), quoted("project_consolidation_memberships"), quoted("project_consolidation_redirects"))
 	sort.Strings(names)
 	if len(names) == 0 {
 		return consolidationHold("INVENTORY_INCOMPLETE")

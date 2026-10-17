@@ -181,15 +181,8 @@ func TestProjectConsolidationNativePhysicalDatabaseIdentity(t *testing.T) {
 }
 
 func TestProjectConsolidationNativeStoreWorkflow(t *testing.T) {
-	dsnPath, output := os.Getenv("ENGRAM_CONSOLIDATION_FIXTURE_DSN_FILE"), os.Getenv("ENGRAM_CONSOLIDATION_TEST_OUTPUT")
-	if dsnPath == "" || output == "" {
-		t.Skip("exact admitted fixture binding absent; no owner-data proof")
-	}
-	deadline, err := time.Parse(time.RFC3339, os.Getenv("ENGRAM_CONSOLIDATION_FIXTURE_DEADLINE"))
-	require.NoError(t, err)
-	store, source, target := consolidationFixtureStore(t, deadline, dsnPath, output)
-	ctx, cancel := context.WithDeadline(context.Background(), deadline)
-	defer cancel()
+	f := consolidationFixtureStore(t)
+	store, source, target, ctx := f.store, f.source, f.target, f.ctx
 	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	for _, db := range []*ProjectConsolidationStore{NewProjectConsolidationStore(source, store.vault, nil), NewProjectConsolidationStore(target, store.vault, nil)} {
 		tx := db.db.Begin()
@@ -197,7 +190,7 @@ func TestProjectConsolidationNativeStoreWorkflow(t *testing.T) {
 		restore, err := consolidationSuspendWriteGuards(tx)
 		require.NoError(t, err)
 		require.NoError(t, tx.Create(&Project{ID: "native-mixed", CreatedAt: created, DisplayName: sql.NullString{String: "retained", Valid: true}}).Error)
-		require.NoError(t, tx.Create(&Memory{ID: 810001, Project: "native-mixed", Content: "native preserved content", Version: 1, CreatedAt: created, UpdatedAt: created}).Error)
+		require.NoError(t, tx.Create(&Memory{ID: 810001, Project: "native-mixed", Content: "native preserved content", Version: 1, CreatedAt: created, UpdatedAt: created, ValidFrom: &created}).Error)
 		require.NoError(t, restore())
 		require.NoError(t, tx.Commit().Error)
 	}
@@ -219,13 +212,14 @@ func TestProjectConsolidationNativeStoreWorkflow(t *testing.T) {
 	require.NoError(t, err)
 	beforeTarget, err := consolidationNativeRead(target.WithContext(ctx), nil)
 	require.NoError(t, err)
+	require.NoError(t, consolidationNativeCompare(beforeSource, beforeTarget, false), "native fixture source and target must match before migration")
 	request := ConsolidationNativeRequest{PlanReference: plan.Reference, PlanFingerprint: plan.Fingerprint}
 	var mode string
 	require.NoError(t, target.Raw("SELECT tgenabled::text FROM pg_trigger WHERE tgrelid='memories'::regclass AND tgname='engram_consolidation_scope_write' AND NOT tgisinternal").Scan(&mode).Error)
 	require.Contains(t, []string{"O", "R", "A"}, mode)
 	require.NoError(t, target.Exec("ALTER TABLE memories DISABLE TRIGGER engram_consolidation_scope_write").Error)
 	_, err = store.DryRunNative(ctx, request)
-	require.EqualError(t, err, "PROJECT_ADOPTION_CONSERVATION_FAILED")
+	require.EqualError(t, err, "PROJECT_ADOPTION_SCHEMA_MISMATCH")
 	restoreMode := "ENABLE"
 	if mode == "R" {
 		restoreMode = "ENABLE REPLICA"

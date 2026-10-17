@@ -3,9 +3,7 @@ package gorm
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -63,81 +61,17 @@ func TestProjectConsolidationMixedBucketAndEvidenceConflict(t *testing.T) {
 	require.EqualError(t, err, "PROJECT_ADOPTION_INVALID_EVIDENCE")
 }
 
-func consolidationFixtureStore(t *testing.T, deadline time.Time, dsnPath, output string) (*ProjectConsolidationStore, *gormlib.DB, *gormlib.DB) {
+func consolidationFixtureStore(t *testing.T) *streamIntegrityFixture {
 	t.Helper()
-	if !time.Now().Before(deadline) {
-		t.Fatal("admitted fixture deadline expired")
-	}
-	private, err := os.ReadFile(dsnPath)
-	if err != nil {
-		t.Fatal("private fixture DSN unavailable")
-	}
-	cfg, err := pgx.ParseConfig(strings.TrimSpace(string(private)))
-	if err != nil || cfg.Host != "127.0.0.1" || cfg.Port != 22366 || cfg.Database != "identity_fixture" {
-		t.Fatal("fixture does not match admitted exact target")
-	}
-	sourceConfig := consolidationTestDatabaseConfig(t, os.Getenv("DATABASE_DSN"), "source")
-	targetConfig := consolidationTestDatabaseConfig(t, os.Getenv("ENGRAM_CONSOLIDATION_RESTORE_TEST_DSN"), "restore")
-	for _, fixture := range []*pgx.ConnConfig{sourceConfig, targetConfig} {
-		require.Equal(t, cfg.Host, fixture.Host)
-		require.Equal(t, cfg.Port, fixture.Port)
-	}
-	require.Equal(t, strings.TrimSuffix(sourceConfig.Database, "_source"), strings.TrimSuffix(targetConfig.Database, "_restore"))
-	ctx, cancel := context.WithDeadline(context.Background(), deadline)
-	t.Cleanup(cancel)
-	schema := "stream_workflow_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-	open := func(fixture *pgx.ConnConfig) *gormlib.DB {
-		admin := stdlib.OpenDB(*fixture)
-		admin.SetMaxOpenConns(1)
-		_, err := admin.ExecContext(ctx, "CREATE SCHEMA "+pq.QuoteIdentifier(schema))
-		require.NoError(t, err)
-		t.Cleanup(func() {
-			_, err := admin.ExecContext(ctx, "DROP SCHEMA "+pq.QuoteIdentifier(schema)+" CASCADE")
-			require.NoError(t, err, "remove only this workflow's owned schema after its pool closes")
-			require.NoError(t, admin.Close())
-		})
-		copy := fixture.Copy()
-		copy.RuntimeParams["search_path"] = schema + ", public"
-		copy.RuntimeParams["application_name"] = "engram_ops_identity_migration"
-		pool := stdlib.OpenDB(*copy)
-		pool.SetMaxOpenConns(2)
-		t.Cleanup(func() { require.NoError(t, pool.Close()) })
-		db, err := gormlib.Open(postgres.New(postgres.Config{Conn: pool}), &gormlib.Config{Logger: logger.Default.LogMode(logger.Silent)})
-		require.NoError(t, err)
-		require.NoError(t, runMigrations(db.WithContext(ctx)))
-		return db
-	}
-	source, target := open(sourceConfig), open(targetConfig)
-	privateDir := filepath.Join(output, ".private")
-	require.NoError(t, os.MkdirAll(privateDir, 0o700))
-	keyPath := filepath.Join(privateDir, "vault.key")
-	key := make([]byte, 32)
-	_, err = rand.Read(key)
-	require.NoError(t, err)
-	file, err := os.OpenFile(keyPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	require.NoError(t, err)
-	_, err = file.WriteString(hex.EncodeToString(key))
-	require.NoError(t, err)
-	require.NoError(t, file.Close())
-	v, err := vaultcrypto.OpenExistingVault(&config.Config{EncryptionKeyFile: keyPath})
-	require.NoError(t, err)
-	return NewProjectConsolidationStore(source, v, target), source, target
+	return openStreamIntegrityFixture(t, streamIntegrityOracle, "stream_workflow_"+strings.ReplaceAll(uuid.NewString(), "-", ""), true)
 }
 
 // This single workflow runs real PostgreSQL constraints, complete source schema,
 // Vault encryption/decryption, ordinary readers, restore, row updates and replay.
 // Its generated corpus is not the owner's corpus or installed acceptance.
 func TestProjectConsolidationRealStoreWorkflow(t *testing.T) {
-	dsnPath := os.Getenv("ENGRAM_CONSOLIDATION_FIXTURE_DSN_FILE")
-	output := os.Getenv("ENGRAM_CONSOLIDATION_TEST_OUTPUT")
-	if dsnPath == "" || output == "" {
-		t.Skip("exact admitted fixture/private output binding absent; no owner-data or migration PASS")
-	}
-	deadline, err := time.Parse(time.RFC3339, os.Getenv("ENGRAM_CONSOLIDATION_FIXTURE_DEADLINE"))
-	require.NoError(t, err)
-	s, db, target := consolidationFixtureStore(t, deadline, dsnPath, output)
-	ctx, cancel := context.WithDeadline(context.Background(), deadline)
-	defer cancel()
+	f := consolidationFixtureStore(t)
+	s, db, target, ctx, output := f.store, f.source, f.target, f.ctx, f.directory
 	sequenceBefore, err := consolidationSequences(target)
 	require.NoError(t, err)
 	require.NotEmpty(t, sequenceBefore)
@@ -258,7 +192,7 @@ func TestProjectConsolidationRealStoreWorkflow(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, plan.Fingerprint, plan2.Fingerprint)
 	require.Equal(t, plan.Mapping, plan2.Mapping)
-	backupFile, err := os.OpenFile(filepath.Join(output, ".private", "fixture-backup.sealed"), os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	backupFile, err := os.OpenFile(filepath.Join(output, "fixture-backup.sealed"), os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 	require.NoError(t, err)
 	defer backupFile.Close()
 	require.NoError(t, s.Backup(ctx, plan.Reference, plan.Fingerprint, backupFile))
@@ -324,7 +258,7 @@ func TestProjectConsolidationRealStoreWorkflow(t *testing.T) {
 	require.NoError(t, err)
 	// Ordinary backup/restore verification reuses an unchanged verified target
 	// for the corrected plan; no direct writes to migration receipts.
-	correctedFile, err := os.OpenFile(filepath.Join(output, ".private", "fixture-backup-corrected.sealed"), os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	correctedFile, err := os.OpenFile(filepath.Join(output, "fixture-backup-corrected.sealed"), os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 	require.NoError(t, err)
 	defer correctedFile.Close()
 	require.NoError(t, s.Backup(ctx, plan.Reference, plan.Fingerprint, correctedFile))
@@ -532,6 +466,9 @@ func consolidationSnapshot(db *gormlib.DB) (map[string]json.RawMessage, error) {
 	}
 	result := map[string]json.RawMessage{}
 	for _, table := range tables {
+		if consolidationMetadataTable(table.Name) {
+			continue // Recovery rows have a separate exact all-table oracle.
+		}
 		var raw string
 		if err := db.Raw("SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text),'[]'::jsonb)::text FROM " + quoted(table.Name) + " t").Scan(&raw).Error; err != nil {
 			return nil, err

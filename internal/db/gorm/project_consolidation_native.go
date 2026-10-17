@@ -82,7 +82,6 @@ type consolidationNativeTable struct {
 
 type consolidationNativeSnapshot struct {
 	Schema    string
-	Objects   string
 	Sequences []consolidationSequence
 	Tables    map[string]consolidationNativeTable
 }
@@ -110,21 +109,7 @@ func consolidationNativeRead(tx *gormlib.DB, wanted map[string][]string) (consol
 	if err != nil {
 		return result, err
 	}
-	var objects []struct{ Kind, Name, Definition string }
-	err = tx.Raw(`SELECT 'relation' AS kind,c.relname AS name,jsonb_build_object('owner',pg_get_userbyid(c.relowner),'acl',(SELECT array_agg(a::text ORDER BY a::text) FROM unnest(c.relacl)a),'rls',c.relrowsecurity,'force_rls',c.relforcerowsecurity,'persistence',c.relpersistence,'replica_identity',c.relreplident)::text AS definition
-	 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema()
-	 UNION ALL SELECT 'trigger',c.relname||'.'||t.tgname,jsonb_build_object('definition',pg_get_triggerdef(t.oid),'enabled',t.tgenabled::text)::text FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema() AND NOT t.tgisinternal
-	 UNION ALL SELECT 'policy',c.relname||'.'||p.polname,jsonb_build_object('command',p.polcmd,'permissive',p.polpermissive,'roles',(SELECT array_agg(CASE WHEN r=0 THEN 'PUBLIC' ELSE pg_get_userbyid(r) END ORDER BY CASE WHEN r=0 THEN 'PUBLIC' ELSE pg_get_userbyid(r) END) FROM unnest(p.polroles)r),'using',pg_get_expr(p.polqual,p.polrelid),'check',pg_get_expr(p.polwithcheck,p.polrelid))::text FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema()
-	 UNION ALL SELECT 'extension',e.extname,jsonb_build_object('owner',pg_get_userbyid(e.extowner),'schema',n.nspname,'version',e.extversion)::text FROM pg_extension e JOIN pg_namespace n ON n.oid=e.extnamespace
-	 UNION ALL SELECT 'enum',t.typname,jsonb_build_object('owner',pg_get_userbyid(t.typowner),'labels',(SELECT array_agg(e.enumlabel ORDER BY e.enumsortorder) FROM pg_enum e WHERE e.enumtypid=t.oid))::text FROM pg_type t JOIN pg_namespace n ON n.oid=t.typnamespace WHERE n.nspname=current_schema() AND t.typtype='e'
-	 UNION ALL SELECT 'domain',t.typname,jsonb_build_object('owner',pg_get_userbyid(t.typowner),'base',format_type(t.typbasetype,t.typtypmod),'not_null',t.typnotnull,'default',t.typdefault,'constraints',(SELECT array_agg(pg_get_constraintdef(c.oid) ORDER BY c.conname) FROM pg_constraint c WHERE c.contypid=t.oid))::text FROM pg_type t JOIN pg_namespace n ON n.oid=t.typnamespace WHERE n.nspname=current_schema() AND t.typtype='d'
-	 ORDER BY 1,2,3`).Scan(&objects).Error
-	if err != nil {
-		return result, err
-	}
-	result.Objects = structuralDigest(objects)
-	var tables []consolidationTable
-	err = tx.Raw(`SELECT t.table_name AS name,COALESCE(ARRAY(SELECT a.attname::text FROM pg_index i CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY k(num,ord) JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=k.num WHERE i.indrelid=to_regclass(quote_ident(t.table_schema)||'.'||quote_ident(t.table_name)) AND i.indisprimary ORDER BY k.ord),'{}'::text[]) AS primary_key FROM information_schema.tables t WHERE t.table_schema=current_schema() AND t.table_type='BASE TABLE' ORDER BY t.table_name`).Scan(&tables).Error
+	tables, err := consolidationDataTables(tx)
 	if err != nil {
 		return result, err
 	}
@@ -204,7 +189,7 @@ func consolidationNativeCompareTable(expected, actual consolidationNativeTable, 
 }
 
 func consolidationNativeCompare(expected, actual consolidationNativeSnapshot, versions bool) error {
-	if expected.Schema != actual.Schema || expected.Objects != actual.Objects || !reflect.DeepEqual(expected.Sequences, actual.Sequences) || len(expected.Tables) != len(actual.Tables) {
+	if expected.Schema != actual.Schema || !reflect.DeepEqual(expected.Sequences, actual.Sequences) || len(expected.Tables) != len(actual.Tables) {
 		return consolidationHold("CONSERVATION_FAILED")
 	}
 	for name, table := range expected.Tables {
@@ -275,10 +260,6 @@ func (s *ProjectConsolidationStore) prepareNative(ctx context.Context, state con
 		if mapping.ProjectID != "" {
 			projects[mapping.ProjectID] = true
 		}
-		if !row.Global {
-			key, _ := json.Marshal(map[string]string{"reference": row.Reference})
-			wanted["project_consolidation_memberships"] = append(wanted["project_consolidation_memberships"], string(key))
-		}
 		if mapping.ProjectID == "" || row.Global || row.Column == "" || !consolidationMutable(row.Kind) {
 			continue
 		}
@@ -320,7 +301,7 @@ func (s *ProjectConsolidationStore) prepareNative(ctx context.Context, state con
 			return nil, err
 		}
 	}
-	native.expected = consolidationNativeSnapshot{Schema: native.source.Schema, Objects: native.source.Objects, Sequences: native.source.Sequences, Tables: map[string]consolidationNativeTable{}}
+	native.expected = consolidationNativeSnapshot{Schema: native.source.Schema, Sequences: native.source.Sequences, Tables: map[string]consolidationNativeTable{}}
 	for name, table := range native.source.Tables {
 		rows := make(map[string]consolidationNativeRow, len(table.Rows))
 		for key, row := range table.Rows {
@@ -416,7 +397,7 @@ func (n *consolidationNativeState) expect(table string, key JSONRaw, object JSON
 
 func (n *consolidationNativeState) expectMetadata(state consolidationPlanState) error {
 	for i, row := range state.Census.Rows {
-		if row.Global {
+		if row.Global || consolidationMetadataTable(row.Table) {
 			continue
 		}
 		address := consolidationObjectKey(row.Table, row.Key)
@@ -427,46 +408,42 @@ func (n *consolidationNativeState) expectMetadata(state consolidationPlanState) 
 		if after, ok := n.afterKeys[address]; ok {
 			key = after
 		}
-		ref, _ := json.Marshal(map[string]string{"reference": row.Reference})
-		table := n.source.Tables["project_consolidation_memberships"]
-		if _, existed := table.Rows[string(ref)]; existed {
-			if !n.changedKeys[address] && string(key) == string(row.Key) {
-				continue
-			}
-			var object map[string]json.RawMessage
-			if json.Unmarshal(table.Objects[string(ref)], &object) != nil {
-				return consolidationHold("INVENTORY_INCOMPLETE")
-			}
-			object["row_key"] = json.RawMessage(key)
-			raw, err := json.Marshal(object)
-			if err != nil {
-				return err
-			}
-			if err := n.expect("project_consolidation_memberships", JSONRaw(ref), raw); err != nil {
-				return err
-			}
-			continue
-		}
-		membership := consolidationMembershipFor(state, row, state.Mapping[i], key)
-		raw, err := json.Marshal(struct {
-			Reference           string  `json:"reference"`
-			UnresolvedReference string  `json:"unresolved_reference"`
-			Table               string  `json:"table_name"`
-			RowKey              json.RawMessage `json:"row_key"`
-			SourceRowKey        json.RawMessage `json:"source_row_key"`
-			FieldPath           json.RawMessage `json:"field_path"`
-			SelectorReference   string  `json:"selector_reference"`
-			ProjectID           *string `json:"project_id"`
-			Reason              string  `json:"reason"`
-			PlanFingerprint     string  `json:"plan_fingerprint"`
-			NativeVersion       string  `json:"native_version"`
-			SourceSnapshot      string  `json:"source_snapshot"`
-		}{membership.Reference, membership.UnresolvedReference, membership.Table, json.RawMessage(membership.RowKey), json.RawMessage(membership.SourceRowKey), json.RawMessage(membership.FieldPath), membership.SelectorReference, membership.ProjectID, membership.Reason, membership.PlanFingerprint, membership.NativeVersion, membership.SourceSnapshot})
+		member, _, err := consolidationPlannedMembership(state, row, state.Mapping[i], key)
 		if err != nil {
 			return err
 		}
+		raw, err := consolidationMembershipObject(member)
+		if err != nil {
+			return err
+		}
+		ref, _ := json.Marshal(map[string]string{"reference": member.Reference})
 		if err := n.expect("project_consolidation_memberships", JSONRaw(ref), raw); err != nil {
 			return err
+		}
+	}
+	if state.retained != nil {
+		for address, members := range state.retained.objects {
+			key, moved := n.targetKeys[address]
+			if after, ok := n.afterKeys[address]; ok {
+				key, moved = after, true
+			}
+			if !moved {
+				continue
+			}
+			for _, member := range members {
+				ref, _ := json.Marshal(map[string]string{"reference": member.Reference})
+				if _, planned := n.pending["project_consolidation_memberships"][string(ref)]; planned {
+					continue
+				}
+				member.RowKey = key
+				raw, err := consolidationMembershipObject(member)
+				if err != nil {
+					return err
+				}
+				if err := n.expect("project_consolidation_memberships", JSONRaw(ref), raw); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	basic, sessions := consolidationRedirectBindings(state)
@@ -509,8 +486,13 @@ func (n *consolidationNativeState) expectRedirect(selector, session, target, fin
 	return n.expect("project_consolidation_redirects", JSONRaw(key), raw)
 }
 
-func (n *consolidationNativeState) createdProject(project Project) error {
+func consolidationProjectObject(project Project) (JSONRaw, error) {
 	raw, err := json.Marshal(map[string]any{"id": project.ID, "created_at": project.CreatedAt, "git_remote": nil, "relative_path": nil, "display_name": nil, "project_key": nil, "anchor_project_id": nil, "identity_scope": nil, "identity_status": nil, "removed_at": nil, "last_heartbeat": nil, "legacy_ids": nil})
+	return JSONRaw(raw), err
+}
+
+func (n *consolidationNativeState) createdProject(project Project) error {
+	raw, err := consolidationProjectObject(project)
 	if err != nil {
 		return err
 	}
@@ -536,15 +518,23 @@ func consolidationNativeCanonicalProject(raw JSONRaw, id string) error {
 	return nil
 }
 
-func (n *consolidationNativeState) operation(operation consolidationOperation) error {
+func consolidationOperationObject(operation consolidationOperation) (JSONRaw, error) {
 	raw, err := json.Marshal(struct {
-		Key         string    `json:"idempotency_key"`
-		ID          string    `json:"operation_id"`
-		PlanID      string    `json:"plan_id"`
-		Fingerprint string    `json:"plan_fingerprint"`
+		Key         string          `json:"idempotency_key"`
+		ID          string          `json:"operation_id"`
+		PlanID      string          `json:"plan_id"`
+		Fingerprint string          `json:"plan_fingerprint"`
 		Receipt     json.RawMessage `json:"receipt"`
-		Completed   time.Time `json:"completed_at"`
+		Completed   time.Time       `json:"completed_at"`
 	}{operation.IdempotencyKey, operation.OperationID, operation.PlanID, operation.PlanFingerprint, json.RawMessage(operation.Receipt), operation.CompletedAt})
+	if err != nil {
+		return nil, err
+	}
+	return JSONRaw(raw), nil
+}
+
+func (n *consolidationNativeState) operation(operation consolidationOperation) error {
+	raw, err := consolidationOperationObject(operation)
 	if err != nil {
 		return err
 	}

@@ -167,6 +167,7 @@ type consolidationPlanState struct {
 	Mapping     []ConsolidationMapping `json:"-"`
 	Evidence    []ConsolidationEvidence
 	native      *consolidationNativeState
+	retained    *consolidationRetainedBindings
 }
 
 type consolidationBackupState struct {
@@ -387,7 +388,7 @@ func (s *ProjectConsolidationStore) Preflight(ctx context.Context, request Conso
 func (s *ProjectConsolidationStore) buildMapping(rows []consolidationRow, evidence []ConsolidationEvidence) ([]ConsolidationMapping, error) {
 	known := make(map[string]bool, len(rows))
 	for _, row := range rows {
-		known[row.Reference] = true
+		known[row.Reference] = !consolidationMetadataTable(row.Table)
 	}
 	groups := map[string]map[string]bool{}
 	for _, e := range evidence {
@@ -415,8 +416,12 @@ func (s *ProjectConsolidationStore) buildMapping(rows []consolidationRow, eviden
 			groups[e.Group][e.ProjectID] = true
 		}
 		for _, ref := range e.Rows {
-			if !known[ref] {
+			permitted, exists := known[ref]
+			if !exists {
 				return nil, consolidationHold("STALE_PLAN")
+			}
+			if !permitted {
+				return nil, consolidationHold("INVALID_EVIDENCE")
 			}
 		}
 	}
@@ -430,6 +435,11 @@ func (s *ProjectConsolidationStore) buildMapping(rows []consolidationRow, eviden
 	resolved := map[string]string{}
 	for _, row := range rows {
 		m := ConsolidationMapping{Reference: row.Reference, Family: row.Table, Role: row.Column, SelectorReference: row.SelectorReference}
+		if consolidationMetadataTable(row.Table) {
+			m.Reason = "retained_migration_state"
+			result = append(result, m)
+			continue
+		}
 		targets := map[string]bool{}
 		conflicts := false
 		for _, e := range claims[row.Reference] {
@@ -499,7 +509,7 @@ func (s *ProjectConsolidationStore) buildMapping(rows []consolidationRow, eviden
 		}
 	}
 	for i, row := range rows {
-		if result[i].ProjectID == "" && !row.Global {
+		if result[i].ProjectID == "" && !row.Global && !consolidationMetadataTable(row.Table) {
 			result[i].UnresolvedReference = s.opaque("unresolved", row.SelectorReference)
 			if row.SelectorReference == "" {
 				result[i].UnresolvedReference = s.opaque("unresolved", row.Reference)
@@ -588,6 +598,31 @@ func (s *ProjectConsolidationStore) applyPrepared(ctx context.Context, request C
 	if err := consolidationLock(tx); err != nil {
 		return ConsolidationNativeResult{}, err
 	}
+	if err := tx.Exec("SET LOCAL TimeZone='UTC'; SET LOCAL extra_float_digits=3; SET LOCAL row_security=off").Error; err != nil {
+		return ConsolidationNativeResult{}, err
+	}
+	schema, _, _, err := consolidationSchema(tx)
+	if err != nil {
+		return ConsolidationNativeResult{}, err
+	}
+	if schema != state.Census.Schema {
+		return ConsolidationNativeResult{}, consolidationHold("SCHEMA_MISMATCH")
+	}
+	if err := consolidationControlBuffer(tx); err != nil {
+		return ConsolidationNativeResult{}, err
+	}
+	if native {
+		if err := s.db.WithContext(ctx).Transaction(func(source *gormlib.DB) error {
+			if err := s.fresh(source, state.Census); err != nil {
+				return err
+			}
+			var err error
+			state.retained, err = s.retainedMemberships(source, state.Census.Rows)
+			return err
+		}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true}); err != nil {
+			return ConsolidationNativeResult{}, err
+		}
+	}
 	if native {
 		var names []string
 		if err := tx.Raw("SELECT table_name FROM information_schema.tables WHERE table_schema=current_schema() AND table_type='BASE TABLE' ORDER BY table_name").Scan(&names).Error; err != nil {
@@ -609,7 +644,7 @@ func (s *ProjectConsolidationStore) applyPrepared(ctx context.Context, request C
 		result.TargetIdentity = identity
 	}
 	var prior consolidationOperation
-	err := tx.Where("idempotency_key = ?", request.IdempotencyKey).First(&prior).Error
+	err = tx.Where("idempotency_key = ?", request.IdempotencyKey).First(&prior).Error
 	if err == nil {
 		if prior.PlanID != state.ID || prior.PlanFingerprint != state.Fingerprint || json.Unmarshal(prior.Receipt, &result.Receipt) != nil {
 			return ConsolidationNativeResult{}, consolidationHold("REPLAY_CONFLICT")
@@ -694,45 +729,62 @@ func (s *ProjectConsolidationStore) applyPrepared(ctx context.Context, request C
 			return ConsolidationNativeResult{}, err
 		}
 	}
-	result.Receipt, err = s.execute(tx, state)
-	if err == nil && !native {
-		err = s.walkStored(tx, backup.BackupID, state, &state, false)
-	}
-	if err != nil {
-		return ConsolidationNativeResult{}, err
-	}
-	if err := s.db.WithContext(ctx).Transaction(func(source *gormlib.DB) error { return s.fresh(source, state.Census) }, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true}); err != nil {
-		return ConsolidationNativeResult{}, err
-	}
-	if !dryRun {
-		encoded, err := json.Marshal(result.Receipt)
+	if !native {
+		state.retained, err = s.retainedMemberships(tx, state.Census.Rows)
 		if err != nil {
 			return ConsolidationNativeResult{}, err
 		}
-		completed := time.Now().UTC()
-		if native {
-			completed = completed.Truncate(time.Microsecond)
-		}
-		operation := consolidationOperation{IdempotencyKey: request.IdempotencyKey, OperationID: result.Receipt.OperationID, PlanID: state.ID, PlanFingerprint: state.Fingerprint, Receipt: JSONRaw(encoded), CompletedAt: completed}
-		if err := tx.Create(&operation).Error; err != nil {
-			return ConsolidationNativeResult{}, err
-		}
-		if native {
-			if err := state.native.operation(operation); err != nil {
-				return ConsolidationNativeResult{}, err
-			}
-		}
+	}
+	result.Receipt, err = s.execute(tx, state)
+	if err != nil {
+		return ConsolidationNativeResult{}, err
+	}
+	encoded, err := json.Marshal(result.Receipt)
+	if err != nil {
+		return ConsolidationNativeResult{}, err
+	}
+	operation := consolidationOperation{IdempotencyKey: request.IdempotencyKey, OperationID: result.Receipt.OperationID, PlanID: state.ID, PlanFingerprint: state.Fingerprint, Receipt: JSONRaw(encoded), CompletedAt: time.Now().UTC().Truncate(time.Microsecond)}
+	if err := tx.Create(&operation).Error; err != nil {
+		return ConsolidationNativeResult{}, err
+	}
+	result.Receipt.Snapshot, err = consolidationRevision(tx)
+	if err != nil {
+		return ConsolidationNativeResult{}, err
+	}
+	operation.Receipt, err = json.Marshal(result.Receipt)
+	if err != nil {
+		return ConsolidationNativeResult{}, err
+	}
+	// Receipt finalization retains the operation INSERT's transaction xmin.
+	if err := tx.Model(&consolidationOperation{}).Where("idempotency_key=?", operation.IdempotencyKey).Update("receipt", operation.Receipt).Error; err != nil {
+		return ConsolidationNativeResult{}, err
+	}
+	object, err := consolidationOperationObject(operation)
+	if err != nil {
+		return ConsolidationNativeResult{}, err
+	}
+	key, _ := json.Marshal(map[string]string{"idempotency_key": operation.IdempotencyKey})
+	if err := consolidationExpectControl(tx, "project_consolidation_operations", JSONRaw(key), object); err != nil {
+		return ConsolidationNativeResult{}, err
 	}
 	if native {
+		if err := state.native.operation(operation); err != nil {
+			return ConsolidationNativeResult{}, err
+		}
 		if err := state.native.verifyAfter(tx); err != nil {
 			return ConsolidationNativeResult{}, err
 		}
 		if err := s.nativeSourceUnchanged(ctx, state.native); err != nil {
 			return ConsolidationNativeResult{}, err
 		}
-		if err := s.db.WithContext(ctx).Transaction(func(source *gormlib.DB) error { return s.fresh(source, state.Census) }, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true}); err != nil {
-			return ConsolidationNativeResult{}, err
-		}
+	} else if err := s.walkStored(tx, backup.BackupID, state, &state, false); err != nil {
+		return ConsolidationNativeResult{}, err
+	}
+	if err := consolidationCheckControls(tx); err != nil {
+		return ConsolidationNativeResult{}, err
+	}
+	if err := s.db.WithContext(ctx).Transaction(func(source *gormlib.DB) error { return s.fresh(source, state.Census) }, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true}); err != nil {
+		return ConsolidationNativeResult{}, err
 	}
 	if dryRun {
 		return result, nil
