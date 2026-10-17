@@ -410,6 +410,8 @@ func openWorkerUCIContextCompositionStore(t *testing.T) *gormstore.Store {
 	require.NoError(t, err)
 	adminSQL, err := adminDB.DB()
 	require.NoError(t, err)
+	adminSQL.SetMaxOpenConns(2)
+	adminSQL.SetMaxIdleConns(1)
 	schema := "worker_uci_context_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	require.NoError(t, adminDB.Exec("CREATE SCHEMA "+schema).Error)
 	t.Cleanup(func() {

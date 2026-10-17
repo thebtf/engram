@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Register the same canonical project atomically with its first versioned-document write; roll registration back on insert failure without creating projects on reads or resurrecting removed/merged projects. Preserve global and SQL-owned migration inputs; recorded HTTP/store regressions contain 12 PASS, not installed acceptance.
 - Preserve native ID and verified retained membership in both Vault list modes and all three Vault/Secrets clients; keep retained Reveal read-only and unavailable/conflicting rows visible without canonical/global fallback. Refuse unsupported Reveal/Delete before dispatch while preserving valid sibling operations.
 - Accept canonical retained-content pages without invented page-level provenance in all three UI readers. Preserve record/history origin, native IDs and scope/cursor/error guards; keep known unresolved selections noncanonical and initialize the cached Rules create form with its selected UUID. Reuse focused decoder/component evidence, not a whole-candidate build or installed acceptance claim.
+- Bound shared migration/UCI PostgreSQL fixture admin and data pools to max-open 2 and max-idle 1 before fixture SQL. Preserve schema ownership, migration and cleanup behavior; reuse the recorded document HTTP/store 12 PASS on these exact helper bytes without repeating accepted database work.
 
 ## [7.0.0] - 2026-10-16
 
