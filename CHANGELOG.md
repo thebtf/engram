@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Remove normal legacy identity selectors, relay selection and comparison writers while preserving authenticated task authority and retained history; allow legitimate project-free Issues and Vault operations without weakening scoped project guards.
 - Preserve all persistent recovery/history tables in new owner streams and bind native/stream schema checks to effective PostgreSQL objects. Conserve exact historical/local/current recovery rows and retained membership provenance through restore, Apply and replay; keep genuine old partial archives Verify-only. Reuse the recorded focused PostgreSQL, composite HTTP/native and historical-reader proofs; no installed or release acceptance is claimed.
+- Register the same canonical project atomically with its first versioned-document write; roll registration back on insert failure without creating projects on reads or resurrecting removed/merged projects. Preserve global and SQL-owned migration inputs; recorded HTTP/store regressions contain 12 PASS, not installed acceptance.
 
 ## [7.0.0] - 2026-10-16
 

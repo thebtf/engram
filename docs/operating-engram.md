@@ -343,6 +343,10 @@ remote через `/api/projects/bootstrap`; результат закрепля
 и keycard остаются отдельными credentials доступа. Исторические записи,
 миграционные readers и проверки авторизации не отменяются этим cutover.
 
+### Первая запись документа
+
+Первая запись versioned document с canonical UUID регистрирует тот же проект в каталоге внутри транзакции документа. Ошибка вставки откатывает и регистрацию; обычное чтение проект не создаёт. Удалённый или merged проект не восстанавливается автоматически. Global input не создаёт project UUID, а historical selectors остаются под существующим SQL guard: доказанный redirect сохраняется, unresolved input получает отказ. Сохранённые HTTP/store regressions в `.agent/runs/pr568-review/document-first-write/green-result.json` дали 12 PASS без fail/skip с обычной авторизацией и включённым SQL guard. Это focused source proof, не browser/installed acceptance.
+
 ### Проверка миграции проектов на восстановленной копии
 
 Эти операции не выполняют production cutover. `ProjectConsolidationStore` меняет только явно настроенную отдельную восстановленную БД. Авторизация чтения данных, приватность записей и правила Vault остаются вне определения Project ID. Census/Preflight ниже общие; для native restore используй maintenance CLI, а не custom HTTP backup/VerifyBackup.

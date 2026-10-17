@@ -82,6 +82,10 @@ func (s *VersionedDocumentStore) Create(
 
 	var docID int64
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := ensureLogicalProjectForWrite(ctx, tx, project); err != nil {
+			return err
+		}
+
 		// Lock all existing rows for this path+project to prevent concurrent version races.
 		var existing []VersionedDocument
 		if err := tx.
