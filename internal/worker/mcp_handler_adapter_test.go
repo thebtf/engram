@@ -23,6 +23,7 @@ func TestMCPHandlerAdapter_ReadOnlyMutationIsToolErrorOverGRPC(t *testing.T) {
 
 	response, err := grpcServer.CallTool(ctx, &pb.CallToolRequest{
 		ToolName:      "docs",
+		Project:       "11111111-1111-4111-8111-111111111111",
 		ArgumentsJson: []byte(`{"action":"create","content":"api_key=must-not-appear"}`),
 	})
 	require.NoError(t, err)

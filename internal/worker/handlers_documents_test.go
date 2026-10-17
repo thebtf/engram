@@ -196,9 +196,11 @@ func (f *fakeDocumentStore) GetComments(_ context.Context, documentID int64) ([]
 	return f.commentsRows, nil
 }
 
+const documentReaderTestProject = "11111111-1111-4111-8111-111111111111"
+
 func documentsTestService(store versionedDocumentStore) *Service {
 	service := &Service{documentStore: store}
-	useKnowledgeTestProject(service, "engram")
+	useKnowledgeTestProject(service, documentReaderTestProject)
 	return service
 }
 
@@ -330,19 +332,19 @@ func TestHandlersDocuments_List(t *testing.T) {
 
 	fake := &fakeDocumentStore{
 		listRows: []gormdb.VersionedDocument{
-			{ID: 1, Path: "notes/a.md", Project: "engram", Version: 2},
+			{ID: 1, Path: "notes/a.md", Project: documentReaderTestProject, Version: 2},
 		},
 	}
 	svc := documentsTestService(fake)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/documents?project=engram&doc_type=markdown&path_prefix=notes/&limit=25", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/documents?project="+documentReaderTestProject+"&doc_type=markdown&path_prefix=notes/&limit=25", nil)
 	w := httptest.NewRecorder()
 
 	svc.handleListDocuments(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code)
 	require.True(t, fake.listCall.called, "handler must call the document page store directly")
-	assert.Equal(t, "engram", fake.listCall.project)
+	assert.Equal(t, documentReaderTestProject, fake.listCall.project)
 	assert.Equal(t, []string{"markdown"}, fake.listCall.docTypes)
 	assert.Equal(t, "notes/", fake.listCall.pathPrefix)
 	assert.Equal(t, 25, fake.listCall.limit)
@@ -378,13 +380,13 @@ func TestHandlersDocuments_History(t *testing.T) {
 
 	fake := &fakeDocumentStore{
 		historyRows: []gormdb.VersionedDocument{
-			{ID: 2, Path: "notes/a.md", Project: "engram", Version: 2},
-			{ID: 1, Path: "notes/a.md", Project: "engram", Version: 1},
+			{ID: 2, Path: "notes/a.md", Project: documentReaderTestProject, Version: 2},
+			{ID: 1, Path: "notes/a.md", Project: documentReaderTestProject, Version: 1},
 		},
 	}
 	svc := documentsTestService(fake)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/documents/history?path=notes/a.md&project=engram&limit=10", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/documents/history?path=notes/a.md&project="+documentReaderTestProject+"&limit=10", nil)
 	w := httptest.NewRecorder()
 
 	svc.handleDocumentHistory(w, req)
@@ -392,7 +394,7 @@ func TestHandlersDocuments_History(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	require.True(t, fake.historyCall.called, "handler must call VersionedDocumentStore.GetHistory directly")
 	assert.Equal(t, "notes/a.md", fake.historyCall.path)
-	assert.Equal(t, "engram", fake.historyCall.project)
+	assert.Equal(t, documentReaderTestProject, fake.historyCall.project)
 	assert.Equal(t, 10, fake.historyCall.limit)
 
 	var resp map[string]any
@@ -407,7 +409,7 @@ func TestHandlersDocuments_History_RequiresPathAndProject(t *testing.T) {
 	fake := &fakeDocumentStore{}
 	svc := documentsTestService(fake)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/documents/history?project=engram", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/documents/history?project="+documentReaderTestProject, nil)
 	w := httptest.NewRecorder()
 
 	svc.handleDocumentHistory(w, req)
@@ -470,11 +472,11 @@ func TestHandlersDocuments_Read(t *testing.T) {
 	t.Parallel()
 
 	fake := &fakeDocumentStore{
-		readLatestDoc: &gormdb.VersionedDocument{ID: 5, Path: "notes/a.md", Project: "engram", Version: 3, Content: "latest"},
+		readLatestDoc: &gormdb.VersionedDocument{ID: 5, Path: "notes/a.md", Project: documentReaderTestProject, Version: 3, Content: "latest"},
 	}
 	svc := documentsTestService(fake)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/documents/read?path=notes/a.md&project=engram", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/documents/read?path=notes/a.md&project="+documentReaderTestProject, nil)
 	w := httptest.NewRecorder()
 
 	svc.handleReadDocument(w, req)
@@ -482,7 +484,7 @@ func TestHandlersDocuments_Read(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	require.True(t, fake.readCall.called, "handler must call VersionedDocumentStore.ReadLatest directly")
 	assert.Equal(t, "notes/a.md", fake.readCall.path)
-	assert.Equal(t, "engram", fake.readCall.project)
+	assert.Equal(t, documentReaderTestProject, fake.readCall.project)
 	assert.Equal(t, 0, fake.readCall.version)
 
 	var resp map[string]any
@@ -496,17 +498,19 @@ func TestHandlersDocuments_Read_SpecificVersion(t *testing.T) {
 	t.Parallel()
 
 	fake := &fakeDocumentStore{
-		readVersionDoc: &gormdb.VersionedDocument{ID: 4, Path: "notes/a.md", Project: "engram", Version: 2, Content: "older"},
+		readVersionDoc: &gormdb.VersionedDocument{ID: 4, Path: "notes/a.md", Project: documentReaderTestProject, Version: 2, Content: "older"},
 	}
 	svc := documentsTestService(fake)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/documents/read?path=notes/a.md&project=engram&version=2", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/documents/read?path=notes/a.md&project="+documentReaderTestProject+"&version=2", nil)
 	w := httptest.NewRecorder()
 
 	svc.handleReadDocument(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code)
 	require.True(t, fake.readCall.called)
+	assert.Equal(t, "notes/a.md", fake.readCall.path)
+	assert.Equal(t, documentReaderTestProject, fake.readCall.project)
 	assert.Equal(t, 2, fake.readCall.version)
 
 	var resp map[string]any
@@ -522,7 +526,7 @@ func TestHandlersDocuments_Read_NotFound(t *testing.T) {
 	fake := &fakeDocumentStore{readLatestErr: gormlib.ErrRecordNotFound}
 	svc := documentsTestService(fake)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/documents/read?path=missing.md&project=engram", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/documents/read?path=missing.md&project="+documentReaderTestProject, nil)
 	w := httptest.NewRecorder()
 
 	svc.handleReadDocument(w, req)

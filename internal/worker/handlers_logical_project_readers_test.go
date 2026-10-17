@@ -37,8 +37,12 @@ import (
 )
 
 func TestLogicalProjectReadersPostgresHTTP(t *testing.T) {
-	dsnFile := os.Getenv("ENGRAM_IDENTITY_TEST_DSN_FILE")
-	deadline, err := time.Parse(time.RFC3339, os.Getenv("ENGRAM_READERS_FIXTURE_DEADLINE"))
+	dsnFile, hasDSN := os.LookupEnv("ENGRAM_IDENTITY_TEST_DSN_FILE")
+	rawDeadline, hasDeadline := os.LookupEnv("ENGRAM_READERS_FIXTURE_DEADLINE")
+	if !hasDSN && !hasDeadline {
+		t.Skip("requires assigned private PostgreSQL fixture and current reader admission; PostgreSQL proof not run")
+	}
+	deadline, err := time.Parse(time.RFC3339, rawDeadline)
 	if dsnFile == "" || err != nil || time.Until(deadline) < 15*time.Second {
 		t.Fatal("requires current exact-target fixture admission")
 	}
