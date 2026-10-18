@@ -46,9 +46,10 @@ func newMemoryServerForT007(t *testing.T, project string) t007TestEnv {
 	srv.memoryStore = memoryStore
 
 	t.Cleanup(func() {
-		_ = store.DB.WithContext(context.Background()).
-			Exec(`DELETE FROM memories WHERE project = ?`, project).Error
-		_ = store.Close()
+		require.NoError(t, store.DB.WithContext(context.Background()).
+			Exec(`DELETE FROM memories WHERE project = ?`, project).Error)
+		require.NoError(t, store.DB.Where("id = ?", project).Delete(&dbgorm.Project{}).Error)
+		require.NoError(t, store.Close())
 	})
 
 	return t007TestEnv{srv: srv, store: store}
@@ -79,10 +80,11 @@ func newMemoryServerForT007(t *testing.T, project string) t007TestEnv {
 // Anti-stub: removing the tag-derived UPDATE from migration 125 breaks the
 // `scope:global` assertion — that row would default to 'project' incorrectly.
 func TestEC_F1_TagDerivedBackfill_T007(t *testing.T) {
-	project := "t007-ec-f1-" + uuid.NewString()
+	project := uuid.NewString()
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
 	env := newMemoryServerForT007(t, project)
 	db := env.store.DB
+	require.NoError(t, db.Create(&dbgorm.Project{ID: project}).Error)
 
 	// Insert three v6.4-style fixture rows directly into the DB. Each carries
 	// only a Tags entry — no privacy_scope field set, so the column DEFAULT
@@ -176,9 +178,10 @@ func TestEC_F1_TagDerivedBackfill_T007(t *testing.T) {
 // but project/shared/global rows still admitted). The test here is that the
 // flag-OFF path doesn't enter the filter loop at all.
 func TestEC_F1_HandleRecallSearch_FlagOff_BackwardCompat_T007(t *testing.T) {
-	project := "t007-ec-f1-flagoff-" + uuid.NewString()
+	project := uuid.NewString()
 	env := newMemoryServerForT007(t, project)
 	db := env.store.DB
+	require.NoError(t, db.Create(&dbgorm.Project{ID: project}).Error)
 
 	// Explicitly clear the flag for this subprocess.
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")

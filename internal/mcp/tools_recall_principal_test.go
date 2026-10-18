@@ -15,9 +15,10 @@ import (
 )
 
 func TestRecallMemoryPrincipalDefault_OwnSharedLegacyVisibleOtherPrivateHidden(t *testing.T) {
-	project := "pmq-recall-default-" + uuid.NewString()
+	project := uuid.NewString()
 	env := newMemoryServerForT007(t, project)
 	db := env.store.DB
+	require.NoError(t, db.Create(&dbgorm.Project{ID: project}).Error)
 
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
 	t.Setenv("ENGRAM_VNEXT_ENABLED", "")
@@ -105,7 +106,7 @@ func TestRecallMemoryIncludePrincipals_SchemaAdvertised(t *testing.T) {
 
 func TestRecallMemoryIncludePrincipals_ValidationAndPrivacy(t *testing.T) {
 	t.Run("rejects duplicate principals", func(t *testing.T) {
-		env := newPrincipalRecallEnv(t, "pmq-recall-include-dup-"+uuid.NewString())
+		env := newPrincipalRecallEnv(t, uuid.NewString())
 		ctx := auth.WithIdentity(context.Background(),
 			auth.ClientWithPrincipal("read-write", "keycard-alice", "agent/alice", auth.PrincipalKindAgent))
 
@@ -124,7 +125,7 @@ func TestRecallMemoryIncludePrincipals_ValidationAndPrivacy(t *testing.T) {
 	})
 
 	t.Run("rejects blank and invalid principals clearly", func(t *testing.T) {
-		env := newPrincipalRecallEnv(t, "pmq-recall-include-invalid-"+uuid.NewString())
+		env := newPrincipalRecallEnv(t, uuid.NewString())
 		ctx := auth.WithIdentity(context.Background(),
 			auth.ClientWithPrincipal("read-write", "keycard-alice", "agent/alice", auth.PrincipalKindAgent))
 
@@ -159,7 +160,7 @@ func TestRecallMemoryIncludePrincipals_ValidationAndPrivacy(t *testing.T) {
 	})
 
 	t.Run("self include is allowed and deduplicated", func(t *testing.T) {
-		env := newPrincipalRecallEnv(t, "pmq-recall-include-self-"+uuid.NewString())
+		env := newPrincipalRecallEnv(t, uuid.NewString())
 		insertPrincipalMemory(t, env, "alice widen marker private self", "agent/alice", "agent", "private")
 		ctx := auth.WithIdentity(context.Background(),
 			auth.ClientWithPrincipal("read-write", "keycard-alice", "agent/alice", auth.PrincipalKindAgent))
@@ -181,7 +182,7 @@ func TestRecallMemoryIncludePrincipals_ValidationAndPrivacy(t *testing.T) {
 	})
 
 	t.Run("non-admin cross-principal include skips private rows", func(t *testing.T) {
-		env := newPrincipalRecallEnv(t, "pmq-recall-include-nonadmin-"+uuid.NewString())
+		env := newPrincipalRecallEnv(t, uuid.NewString())
 		insertPrincipalMemory(t, env, "bob widen marker private hidden", "agent/bob", "agent", "private")
 		ctx := auth.WithIdentity(context.Background(),
 			auth.ClientWithPrincipal("read-write", "keycard-alice", "agent/alice", auth.PrincipalKindAgent))
@@ -201,7 +202,7 @@ func TestRecallMemoryIncludePrincipals_ValidationAndPrivacy(t *testing.T) {
 	})
 
 	t.Run("non-admin cross-principal include appends shared rows", func(t *testing.T) {
-		env := newPrincipalRecallEnv(t, "pmq-recall-include-shared-"+uuid.NewString())
+		env := newPrincipalRecallEnv(t, uuid.NewString())
 		insertPrincipalMemory(t, env, "bob widen marker shared visible", "agent/bob", "agent", "shared")
 		insertPrincipalMemory(t, env, "bob widen marker private hidden", "agent/bob", "agent", "private")
 		ctx := auth.WithIdentity(context.Background(),
@@ -225,7 +226,7 @@ func TestRecallMemoryIncludePrincipals_ValidationAndPrivacy(t *testing.T) {
 	})
 
 	t.Run("admin cross-private include writes durable audit before returning private row", func(t *testing.T) {
-		env := newPrincipalRecallEnv(t, "pmq-recall-include-admin-"+uuid.NewString())
+		env := newPrincipalRecallEnv(t, uuid.NewString())
 		bobID := insertPrincipalMemory(t, env, "bob widen marker private audited", "agent/bob", "agent", "private")
 		var before int64
 		require.NoError(t, env.store.DB.Model(&dbgorm.AuditLogEntry{}).
@@ -259,7 +260,7 @@ func TestRecallMemoryIncludePrincipals_ValidationAndPrivacy(t *testing.T) {
 	})
 
 	t.Run("admin cross-private include reapplies recall filters", func(t *testing.T) {
-		env := newPrincipalRecallEnv(t, "pmq-recall-include-filter-"+uuid.NewString())
+		env := newPrincipalRecallEnv(t, uuid.NewString())
 		insertPrincipalMemoryWithTags(t, env, "bob widen marker private plain", "agent/bob", "agent", "private", `["type:fact"]`)
 		insertPrincipalMemoryWithTags(t, env, "bob widen marker private decision", "agent/bob", "agent", "private", `["type:fact","decision"]`)
 		ctx := auth.WithIdentity(context.Background(), auth.Admin())
@@ -318,13 +319,14 @@ type principalRecallEnv struct {
 func newPrincipalRecallEnv(t *testing.T, project string) principalRecallEnv {
 	t.Helper()
 	env := newMemoryServerForT007(t, project)
+	require.NoError(t, env.store.DB.Create(&dbgorm.Project{ID: project}).Error)
 	env.srv.SetPrincipalMemoryQueryService(principalmemory.NewPrincipalMemoryQueryService(
 		dbgorm.NewMemoryStore(env.store),
 		dbgorm.NewAuditStore(env.store.DB),
 	))
 	t.Cleanup(func() {
 		_ = env.store.DB.WithContext(context.Background()).
-			Exec(`DELETE FROM audit_log WHERE action = 'principal_memory_private_read' AND reason = 'admin_private_widening'`).Error
+			Exec(`DELETE FROM audit_log WHERE action = 'principal_memory_private_read' AND reason = 'admin_private_widening' AND memory_id IN (SELECT id FROM memories WHERE project = ?)`, project).Error
 	})
 	return principalRecallEnv{t007TestEnv: env, project: project}
 }

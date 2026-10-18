@@ -69,13 +69,15 @@ func TestRecallMemory_CompatV3_VnextFEnabled_ZeroTG3Params_T021b(t *testing.T) {
 			t.Skip("T021b runtime: DATABASE_DSN not set or -short; skipping DB-dependent assertion")
 		}
 
-		project := "t021b-compat-v3-vnext-f"
+		project := uuid.NewString()
 		store, err := dbgorm.NewStore(dbgorm.Config{DSN: dsn, MaxConns: 2})
 		require.NoError(t, err)
 		t.Cleanup(func() {
 			_ = store.DB.Exec(`DELETE FROM memories WHERE project = ?`, project).Error
+			_ = store.DB.Where("id = ?", project).Delete(&dbgorm.Project{}).Error
 			_ = store.Close()
 		})
+		require.NoError(t, store.DB.Create(&dbgorm.Project{ID: project}).Error)
 
 		memoryStore := dbgorm.NewMemoryStore(store)
 		now := time.Now().UTC()
@@ -178,8 +180,10 @@ func TestRecallMemory_CompatV3_ZeroFlagsShape_T021(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() {
 			_ = store.DB.Exec(`DELETE FROM memories WHERE project = ?`, project).Error
+			_ = store.DB.Where("id = ?", project).Delete(&dbgorm.Project{}).Error
 			_ = store.Close()
 		})
+		require.NoError(t, store.DB.Create(&dbgorm.Project{ID: project}).Error)
 
 		memoryStore := dbgorm.NewMemoryStore(store)
 

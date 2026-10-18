@@ -29,7 +29,7 @@ import (
 // distinction when private scope is requested (private -> scope stays
 // 'project' since legacy 2-tier has no private representation).
 func TestRI_F2_DualFieldResponse_FlagOn_T008(t *testing.T) {
-	project := "t008-ri-f2-flagon-" + uuid.NewString()
+	project := uuid.NewString()
 	env := newMemoryServerForT007(t, project)
 	db := env.store.DB
 
@@ -121,7 +121,7 @@ func TestRI_F2_DualFieldResponse_FlagOn_T008(t *testing.T) {
 // Anti-stub: leaking `privacy_scope` into the flag-OFF response fails this
 // assertion.
 func TestRI_F2_DualFieldResponse_FlagOff_LegacyOnly_T008(t *testing.T) {
-	project := "t008-ri-f2-flagoff-" + uuid.NewString()
+	project := uuid.NewString()
 	env := newMemoryServerForT007(t, project)
 	db := env.store.DB
 	require.NoError(t, db.Exec(`DELETE FROM memories WHERE project = ?`, project).Error)
@@ -167,7 +167,7 @@ func TestRI_F2_DualFieldResponse_FlagOff_LegacyOnly_T008(t *testing.T) {
 // is part of the RI-F2 contract surface — clients parse the error_code
 // regardless of which response-shape (dual-field or legacy-only) they're on.
 func TestRI_F2_InvalidPrivacyScope_StillStructuredErrorUnderFlagOn_T008(t *testing.T) {
-	project := "t008-ri-f2-invalid-" + uuid.NewString()
+	project := uuid.NewString()
 	env := newMemoryServerForT007(t, project)
 
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")

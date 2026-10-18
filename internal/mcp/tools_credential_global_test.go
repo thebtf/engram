@@ -25,9 +25,13 @@ func TestVaultGlobalCredentialLifecycleAndProjectCoexistence(t *testing.T) {
 	cleanupStore, _ := openVaultCredentialTestStore(t)
 
 	key := fmt.Sprintf("global-vault-coexist-%d", time.Now().UnixNano())
-	project := "global-vault-project"
+	project := uuid.NewString()
 	require.NoError(t, cleanupStore.DB.Exec("DELETE FROM credentials WHERE key = ?", key).Error)
 	defer cleanupStore.DB.Exec("DELETE FROM credentials WHERE key = ?", key)
+	require.NoError(t, cleanupStore.DB.Create(&gormstore.Project{ID: project}).Error)
+	t.Cleanup(func() {
+		require.NoError(t, cleanupStore.DB.Where("id = ?", project).Delete(&gormstore.Project{}).Error)
+	})
 
 	vault, err := crypto.NewVault(&config.Config{
 		EncryptionKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",

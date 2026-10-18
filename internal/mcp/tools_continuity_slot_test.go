@@ -31,7 +31,7 @@ func newContinuitySlotTestEnv(t *testing.T) continuitySlotTestEnv {
 	t.Setenv("ENGRAM_CONTINUITY_SLOT_ENABLED", "true")
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
 
-	project := "test-mcp-continuity-slot-" + uuid.NewString()
+	project := uuid.NewString()
 	base := newMemoryServerForT007(t, project)
 	slots := dbgorm.NewContinuitySlotStore(base.store.GetDB())
 	audits := dbgorm.NewAuditStore(base.store.GetDB())
@@ -259,10 +259,11 @@ func TestContinuitySlot_DeniesProjectOwnerAndVisibilityWithoutDisclosure(t *test
 	ctx := continuitySlotContext(env.project, "agent/alice")
 	foreignOwner := env.createMemory(t, env.project, "agent/bob", "release", "project", "keycard-agent/bob")
 	invisible := env.createMemory(t, env.project, "agent/alice", "release", "private", "keycard-other")
-	otherProject := "test-mcp-continuity-slot-other-" + uuid.NewString()
+	otherProject := uuid.NewString()
 	crossProject := env.createMemory(t, otherProject, "agent/alice", "release", "project", "keycard-agent/alice")
 	t.Cleanup(func() {
 		require.NoError(t, env.store.DB.Where("project = ?", otherProject).Delete(&dbgorm.Memory{}).Error)
+		require.NoError(t, env.store.DB.Where("id = ?", otherProject).Delete(&dbgorm.Project{}).Error)
 	})
 
 	argsFor := func(memoryID int64) json.RawMessage {

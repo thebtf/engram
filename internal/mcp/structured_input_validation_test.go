@@ -7,8 +7,8 @@ import (
 	"os"
 	"sync"
 	"testing"
-	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
@@ -40,7 +40,7 @@ func newStructuredMutationHarness(t *testing.T) *structuredMutationHarness {
 	t.Setenv("ENGRAM_V7_S6_OUTCOME", "true")
 	store, err := gormdb.NewStore(gormdb.Config{DSN: dsn, MaxConns: 4, LogLevel: logger.Silent})
 	require.NoError(t, err)
-	marker := fmt.Sprintf("mb1-strict-%d", time.Now().UnixNano())
+	marker := uuid.NewString()
 	require.NoError(t, store.DB.Create(&gormdb.Project{ID: marker}).Error)
 	auditStore := gormdb.NewAuditStore(store.DB)
 	versionedStore := gormdb.NewVersionedDocumentStore(store)
