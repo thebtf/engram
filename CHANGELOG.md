@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Remove the obsolete static Codex archive input; Codex setup already generates the host-local MCP launcher configuration.
 - Include the shared project-catalog helper in the common operator-console Docker build stage, preserving its repository-relative import path.
 
 - Regenerate the data-model table block from registered migrations and remove obsolete fixed-baseline assertions; retain exact generated-artifact conformance without claiming runtime migration proof.
