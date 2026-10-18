@@ -204,9 +204,12 @@ func TestInitLogicalProjectPreservesNameOnlyLabel(t *testing.T) {
 				kind = "git/"
 			}
 			t.Run(kind+tc.name, func(t *testing.T) {
-				root := t.TempDir()
+				var root string
 				if git {
+					root = t.TempDir()
 					gitLogical(t, root, "init", "--quiet")
+				} else {
+					root = nonGitLogicalTempDir(t)
 				}
 				markerPath := filepath.Join(root, anchorFilenameV3)
 				legacy := []byte("{ \"name\" : \"Old label\" }\n")

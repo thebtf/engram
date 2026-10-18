@@ -77,7 +77,7 @@ func TestLogicalProjectCommonDirAndConflict(t *testing.T) {
 }
 
 func TestLogicalProjectNoImplicitNonGitCreation(t *testing.T) {
-	root := t.TempDir()
+	root := nonGitLogicalTempDir(t)
 	if _, err := ResolveLogicalProject(t.Context(), root, nil); ProjectErrorCode(err) != "PROJECT_CONTEXT_REQUIRED" {
 		t.Fatal(err)
 	}
@@ -136,6 +136,24 @@ func TestResolveLogicalProjectRejectsDuplicateProjectID(t *testing.T) {
 	if !bytes.Equal(after, raw) {
 		t.Errorf("duplicate project_id marker was rewritten: %s", after)
 	}
+}
+
+func nonGitLogicalTempDir(t *testing.T) string {
+	t.Helper()
+	base := os.Getenv("ENGRAM_TEST_LOGICAL_NONGIT_TMPDIR")
+	if base == "" {
+		return t.TempDir()
+	}
+	root, err := os.MkdirTemp(base, "logical-project-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(root); err != nil {
+			t.Error(err)
+		}
+	})
+	return root
 }
 
 func gitLogical(t *testing.T, root string, args ...string) {

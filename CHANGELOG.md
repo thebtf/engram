@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Isolate only non-Git logical-project test fixtures through an explicit test-only temporary root, while keeping Git and SDK fixtures on native physical Windows paths. Preserve identity assertions, Git common-dir handling and production path semantics.
+
 - Adopt the byte-identical historical project-identity golden vectors into tracked testdata and read them there from the remaining GORM rejection tests, so clean source checkouts no longer depend on coordination-only `.agent` files. Preserve validation and retired-runtime boundaries.
 
 - Execute consolidation transaction-local PostgreSQL settings as individual prepared statements across Census, freshness, native and restore paths. Preserve normal prepared-query mode, transaction/read-only boundaries, freeze and authorization guards; cover the repair with a real prepared-store Census/Preflight regression and the existing registered HTTP workflow on a separately qualified synthetic pair. No installed or retained-owner cutover acceptance is claimed.
