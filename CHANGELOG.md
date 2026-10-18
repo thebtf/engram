@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Canonicalize graph, bulk-operation, crystallization, embedding and retirement-fixture project setup while preserving rollback/collision negatives, all ten retired-writer checks and retained readers. Reuse 73 focused PASS covering all 62 original failed events; production core guards and installed acceptance are unchanged.
 - Isolate canonical GORM/gRPC fixtures, bound their pools and await caller-owned audit writes before schema cleanup; retain restore guards and public data. Reuse focused retention/audit/gRPC proofs; the earlier 37-PASS run remains preservation FAIL (audit rows 37→40), followed by seven focused PASS with 40→40 preservation, not a full-suite or installed-acceptance claim.
 - Use registered canonical UUIDs and authenticated caller project context in MCP fixtures without weakening default-deny, privacy or pre-mutation rejection guards. Reuse 119 prior PASS plus one exact retry PASS after the context fix, not 120 fresh PASS or installed acceptance.
+- Seed the isolated operator-code fixture with a registered canonical project UUID while preserving five queue candidates, published/no-view checks and redacted provisioning errors.
 
 ## [7.0.0] - 2026-10-16
 

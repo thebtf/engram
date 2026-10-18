@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/uci"
@@ -237,7 +238,7 @@ func newPostgresFixtureEnvironment(t *testing.T) *postgresFixtureEnvironment {
 		t.Fatalf("scope fixture database: %v", err)
 	}
 	fixture.projectPrefix = fmt.Sprintf("operator-code-live-%d", time.Now().UnixNano())
-	fixture.publishedProject = fixture.projectPrefix + "-published"
+	fixture.publishedProject = uuid.NewString()
 	fixture.noViewProject = fixture.projectPrefix + "-no-view"
 	fixture.email = fixture.projectPrefix + "@fixture.invalid"
 	fixture.password = "fixture-browser-password-" + fixture.projectPrefix
@@ -342,6 +343,10 @@ func (fixture *postgresFixtureEnvironment) assertPublishedDurableState(t *testin
 		t.Fatalf("published fixture view = %#v, %v", view, err)
 	}
 	fixture.assertPublishedIndexState(t, store, source.SourceID)
+	var project gormdb.Project
+	if err := store.DB.Where("id = ?", fixture.publishedProject).First(&project).Error; err != nil {
+		t.Fatalf("load canonical fixture queue project: %v", err)
+	}
 	candidates, err := gormdb.NewCandidateStore(store.DB, nil).ListByStatus(context.Background(), fixture.publishedProject, models.CandidateStatusPending, fixtureQueueSeedCount+1)
 	if err != nil || len(candidates) != fixtureQueueSeedCount {
 		t.Fatalf("published fixture queue candidates = %d, %v", len(candidates), err)
