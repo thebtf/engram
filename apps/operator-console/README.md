@@ -40,6 +40,40 @@ Navigation groups project entry, knowledge, Workspace, attention, and administra
 The shared project selector uses the server's canonical IDs; equal display names stay
 distinct. The knowledge project is not a code Source/Checkout/View selection or a grant.
 
+### Обычный вход R1: существующее решение
+
+Установка, обновление и сохранность client-data/Vault описаны в
+[operating guide](../../docs/operating-engram.md#версия-установка-и-обновление).
+Manifest `7.0.0` в source-кандидате `ef76bc0569f39db64de1398b01d9676d0b650c15`
+не доказывает публикацию или установленную версию. Не меняй сервер, auth mode,
+профиль, `.engram-project` или Vault key ради успешного входа.
+
+1. Открой обычный установленный агент в настоящем каталоге проекта и WebUI
+   того же настроенного сервера. Сверь подтверждённый `project_id` с каноническим
+   проектом в Home/**Проекты**. Одинаковые названия не объединяют проекты.
+2. В **Память** выполни буквальный поиск существующего полезного решения.
+   При необходимости продолжи страницы, затем открой конкретную запись.
+3. Прочитай полный доступный текст, источник, актуальность и аудит.
+   Аудит не выдаётся за прежние версии текста. **Назад**/Escape возвращает
+   выбранный проект, запрос, фильтры и страницу, в том числе после поиска.
+4. Для документа сохраняй path, выбранную версию, сравнение и страницы истории.
+   Отсутствующая на странице версия остаётся недоступной до её реального чтения,
+   а не заменяется другой. Ошибка каталога/reader не превращается в нулевой итог.
+5. Для старой неразрешённой ссылки используй отдельный retained review с её
+   reason/provenance. Выбирай только предложенные виды reader. Metadata-only
+   означает отсутствие reader в этом обзоре, не отсутствие исходных данных.
+   Unsupported/denied/unavailable состояние не подменяется другим проектом,
+   видом или успешно пустым ответом. Затем вернись по исходной ссылке возврата.
+6. После обновления проверь то же решение в свежей обычной сессии агента и WebUI.
+   Ошибку identity передай владельцу без угадывания UUID, удаления marker/cache,
+   переинициализации БД/Vault или обхода авторизации.
+
+Это R1. Полный semantic/code/graph/two-worktree путь ниже остаётся R2,
+не условием каждого R1 и не отменённой функцией. Сохранность исторических View,
+полезных записей/версий, секретов и применимые retired-writer, security, migration,
+platform и rollback проверки не откладываются под названием R2.
+
+
 The shared header grows with the full project error instead of reserving a fixed
 48px row; its selector, retry and account/menu controls remain above main content.
 The unconfigured-host 503 smoke on 2026-10-15 covered 1440×900 and 390×844 in
@@ -152,9 +186,18 @@ real record/history metadata and scoped selection/navigation. The focused
 `canonical retained SFC renders decoded records without page provenance` case in
 `tests/composables/auth-session.spec.mjs` compiles the real Vue page and renders real
 decoder output, checking record IDs, bodies, metadata fields and absence of render errors.
-These checks use synthetic public DTOs, not a live API or browser. Actual migrated-reader,
-privacy and installed acceptance remain Main's integration dependencies. No production
-migration or release completion is claimed by this source slice.
+These checks use synthetic public DTOs, not a live API or browser. Separately,
+Root accepted local real-reader evidence for the existing full 1000-byte memory,
+source/audit/return and the affected positive reader-kind controls in the recorded
+`a8f989c6855dad9928820f362b9b0f8dcc81dae3` UI/build540 + backend683 composition.
+The original locator-group 404 was identity-joined to that same metadata-only group;
+it is not a missing readable document. The old raw404/causeUNKNOWN and historical
+47513 preservationUNKNOWN remain unchanged. This does not close other legitimate
+document path/version/paging, R2 or installed/fresh-session obligations.
+Those receipts keep their original source/build/input identities: this doc-only edit
+does not rebuild or relabel build540, and the README is one of its producer inputs.
+Final Main build and delivery proof remain separate; no all-input equality, whole-ef76,
+production migration, human/principal privacy or release completion is claimed here.
 
 Human issue deletion sends `DELETE /api/issues/{id}?source_project=<selected canonical UUID>&source_agent=human`
 with no body. The selected acting project is separate from the content ID and the
@@ -243,10 +286,12 @@ responses. Owner/privacy search remains a disclosed separate scope; collapsing i
 not widen access. Audit events are not fictional previous-content versions.
 
 The source includes RU/EN/ZH task copy and retained accessibility affordances. Build
-success is compilation evidence only. Acceptance still requires the integrated NEXT
-backend, real known older records and documents, duplicate labels, empty/error recovery,
-1440×900 and 390px keyboard journeys, followed by the installed consumer walkthrough.
-Deployed 6.51 responses do not implement the NEXT envelopes and cannot prove this slice.
+success is compilation evidence only. Preserve the accepted local reader proofs at
+their exact identities; they do not certify all records, document versions/continuation,
+duplicate labels, privacy or viewport/keyboard cases outside their observed scope.
+Remaining applicable integration cases and the ordinary installed/fresh-session
+walkthrough stay open. A historical deployed 6.51 response, planned 7.0 manifest or
+local synthetic actor cannot prove current installed delivery.
 
 ### Ordinary sign-in and recovery
 

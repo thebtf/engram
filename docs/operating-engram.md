@@ -1,9 +1,95 @@
 # Operating Engram
 
-Operational guide for engram server administrators. Covers environment configuration,
-redaction rules, startup verification, and restart procedures.
+Operational guide for Engram installation/update, existing project knowledge,
+server configuration, retained readers, Code Workspace, and restart procedures.
 
 ---
+
+## Версия, установка и обновление
+
+В сравниваемом source-кандидате `ef76bc0569f39db64de1398b01d9676d0b650c15`
+серверный daemon и plugin/client/parser manifests объявляют `7.0.0`.
+Это версия исходников, а не доказательство опубликованного релиза, обновлённого
+каталога marketplace или установленного комплекта. Установленные версии и байты
+проверяются отдельно. Локальная synthetic/no-auth проверка не подтверждает
+production, principal, обычную свежую сессию или установку.
+
+R1 — обычный установленный агент и WebUI выбирают один логический проект,
+находят и открывают существующее полезное решение с источником, историей и
+возвратом. Сохранность данных, Vault и независимых снимков кода остаётся
+обязательной. Полный semantic/code/graph/two-worktree путь — следующий R2,
+не условие каждого выпуска R1 и не отменённая функция. Применимые проверки
+безопасности, миграции, retired writers, платформ и rollback определяет
+[release-протокол](RELEASE-PROTOCOL.md); разделение R1/R2 их не отменяет.
+
+1. До обновления зафиксируй фактические версии и пути установленных компонентов,
+   серверный origin и режим из `/api/auth/me`. Не меняй auth mode ради установки.
+2. Сохрани восстановимую резервную копию полезной БД, документов/версий, истории,
+   Vault с его прежним ключом, серверных настроек и client/plugin-data. Не включай
+   значения ключей или токенов в отчёт. Destructive cutover требует отдельной
+   проверенной процедуры восстановления и полномочия владельца, не этой инструкции.
+3. Сервер обновляй по существующему deployment-пути. Для поддерживаемого
+   digest-pinned Compose используй [deployment guide](DEPLOYMENT.md): согласованные
+   три image digest и retained `publication-result.json`, не source build или `latest`
+   как доказательство версии. Сохрани прежний комплект и данные для rollback;
+   смена image сама по себе не делает старую схему БД совместимой с rollback.
+4. Для первой установки plugin нужны Node.js 18+ и обычный marketplace выбранного
+   host. В OMP: `omp plugin marketplace add thebtf/engram-marketplace`, затем
+   `omp plugin install engram@engram`. В Claude Code: `/plugin marketplace add
+   thebtf/engram-marketplace`, затем `/plugin install engram`. Это host-specific
+   пути из [Installation](../README.md#installation). Standalone
+   [Bash](../scripts/install.sh) и [PowerShell](../scripts/install.ps1) installers
+   регистрируют Claude Code, не OMP; без заданной версии выбирают GitHub latest.
+   Не используй uninstall/reinstall как обычное обновление: удаление может затронуть
+   plugin-data или `~/.engram`.
+5. При обновлении существующего OMP plugin используй
+   `omp plugin upgrade engram@engram`. Обновление marketplace меняет только каталог.
+   Затем выполни поддерживаемый host reload `/reload-plugins` или открой свежую
+   сессию по [setup](../plugin/engram/commands/setup.md#updating-omp). Это не обещание
+   перезапуска daemon и не повод перезапускать действующий root без его владельца.
+6. Настрой установленный launcher на тот же bare server origin, без `/mcp` и `/sse`.
+   Для уже подтверждённого no-auth режима достаточно `server_url` в
+   `~/.engram/config.json`; auth-enabled режим требует выданный workstation keycard
+   в `api_token`, не серверный `ENGRAM_AUTH_ADMIN_TOKEN`. Сохрани прежние значения
+   при обновлении. Непустые environment/plugin options имеют приоритет над файлом;
+   путь файла выбирается как `ENGRAM_CONFIG_FILE` → существующий plugin-data
+   `config.json` → `~/.engram/config.json`. Защити файл с keycard правами пользователя.
+   Не печатай его содержимое. Для Codex используй его отдельный cwd-safe порядок
+   в [setup](../plugin/engram/commands/setup.md#codex-mcp-launcher-and-project-root).
+7. В обычном host проверь свежее обнаружение MCP и фактическую identity проекта,
+   затем выполни сценарий R1 ниже. Доступность `/api/ready`, версия manifest и
+   успешная установка plugin не заменяют чтение полезной памяти и fresh-session proof.
+
+## Открыть существующую полезную память
+
+1. Открой обычный установленный агент из настоящего каталога проекта на том же
+   сервере, что и WebUI. Сохрани существующий `.engram-project` и Git common-dir
+   `engram-project.json`. Имя, путь и remote URL не являются project ID.
+2. Сверь подтверждённый `project_id` агента с каноническим проектом в селекторе
+   Home или **Проекты**. При одинаковых названиях используй выданный qualifier и ID,
+   не угадывай связь по имени. Ошибка каталога не означает успешный пустой проект.
+3. Открой **Память**, выполни буквальный поиск известного решения в выбранном
+   проекте и при необходимости перейди на следующую страницу. Не создавай новую
+   тестовую память вместо проверки существующей полезной записи.
+4. Открой найденную запись. Проверь полный доступный текст, источник и поля
+   актуальности. Открой аудит; он не является полным текстом прежних версий.
+   Используй **Назад** или Escape: проект, запрос, фильтры и страница сохраняются.
+5. Для документа открой нужный path, требуемую версию, историю и сравнение.
+   Недоступная версия не заменяется другой. Историю за пределами страницы читай
+   продолжением; отказ чтения не означает пустую историю.
+6. Если старая ссылка ведёт в **Неразрешённые проекты**, используй отдельный
+   retained review. Проверяй reason, provenance и только предложенные `reader_kinds`.
+   Metadata-only группа остаётся метаинформацией без content/history запроса;
+   это не доказательство отсутствия исходных данных. Unsupported или недоступный
+   reader остаётся явным отказом, без подстановки другого вида или проекта.
+7. После штатного обновления проверь то же решение в свежей обычной сессии агента
+   и WebUI. При неверной identity останови scoped-чтение и сохрани данные:
+   не угадывай UUID/label, не удаляй marker/cache/client-data, не создавай новую БД
+   или Vault key и не отключай auth. Диагностика identity приведена ниже.
+
+Подробные маршруты, version/history и return-контракты:
+[console README](../apps/operator-console/README.md#project-knowledge-journey-2026-10-11).
+
 
 ## Сессионный stdio для памяти
 
@@ -65,8 +151,8 @@ gRPC-соединения закрываются перед выходом. Пе
 ## Обычная запись памяти без principal
 
 В режиме `ENGRAM_AUTH_DISABLED=true` обычный вызов `store` не должен передавать
-`agent_visibility`. В существующей установке 6.50.3 для памяти проекта используй,
-например, `{"action":"create","content":"Решение по проекту","project":"nvmd-devops","privacy_scope":"project"}`.
+`agent_visibility`. Для уже подтверждённого канонического проекта используй,
+например, `{"action":"create","content":"Решение по проекту","project":"<подтверждённый project_id>","privacy_scope":"project"}`.
 `privacy_scope` управляет видимостью проекта/рабочей станции, когда включён
 `ENGRAM_VNEXT_F_ENABLED`; его существующие ограничения сохраняются.
 
@@ -123,21 +209,23 @@ Rules are applied in order. Each match is replaced; unmatched content is preserv
 
 ### Startup Verification
 
-At startup, engram logs the loaded rule file path and its SHA-256 checksum:
+For a nonempty successfully loaded rule set, startup logs report its path and count:
 
+```text
+INFO redaction: rules loaded path=/etc/engram/redaction-rules.json rules=2
 ```
-INFO  redaction: loaded rule file path=/etc/engram/redaction-rules.json sha256=a3f9... rules=2
-```
 
-Operators can use this log line to verify the active rule set matches the expected
-configuration. If the expected checksum differs from the logged value, a restart with
-the correct rule file is required.
+The current implementation does **not** log a SHA-256 checksum. Its admin-only
+`redaction_rules_status`, when advertised, reports active/inactive, `rule_count`
+and `restart_required`, not a load checksum or source path. Do not treat a file hash
+computed after startup as proof of the loaded bytes. Preserve the intended rule file
+and its checksum as deployment evidence, and verify startup with that unchanged file.
 
-If `ENGRAM_REDACTION_RULES_PATH` is set but the file is **absent at startup**,
-the server logs a warning and runs with redaction **disabled** (no-op fallback):
+If the configured file is missing, unreadable, invalid JSON or has an invalid regex,
+startup logs a warning and leaves the layer disabled; this is not active protection:
 
-```
-WARN  redaction: rule file not found — running with redaction disabled path=/etc/engram/redaction-rules.json
+```text
+WARN redaction: failed to load rules, layer disabled path=/etc/engram/redaction-rules.json error=...
 ```
 
 ### Restart Required for Rule Changes (EC-F9)
@@ -151,20 +239,17 @@ be partially redacted under one rule set and stored under another).
 
 To apply updated rules:
 
-1. Edit the rule file.
-2. Restart the server (or send `SIGHUP` if the SIGHUP handler is enabled in your build).
-3. Verify the startup log shows the new SHA-256 checksum.
+1. Preserve the intended rule file and its checksum, then edit the rule file.
+2. Restart the exact server through its existing deployment/service owner; preserve
+   the database volume, configuration and Vault key. See [deployment](DEPLOYMENT.md).
+3. Verify readiness and the startup `redaction: rules loaded` path/count with the
+   intended file unchanged. If the admin status tool is available, confirm its loaded
+   rule count; neither that count nor HTTP readiness proves the exact rule bytes.
 
-```bash
-# Restart example (systemd)
-sudo systemctl restart engram-server
-
-# Verify in logs
-journalctl -u engram-server | grep "redaction: loaded"
-```
-
-> **Note:** SIGHUP-based reload is optional and must be explicitly enabled at build time.
-> Consult the build configuration for your deployment. When in doubt, use a full restart.
+The server entry point handles `SIGINT` and `SIGTERM` for shutdown. This source
+does not implement a redaction `SIGHUP` reload or a build switch enabling one.
+Do not send `SIGHUP` as a substitute for a supported server restart. A client
+reconnect, browser reload or daemon restart does not reload server redaction rules.
 
 ### Full Redaction Rejection (EC-F5)
 
@@ -252,11 +337,11 @@ This guide covers the current single-user `ENGRAM_AUTH_DISABLED=true` installati
 
 1. Record the configured server URL, server version and image digest or source commit, browser bundle, installed plugin and daemon path and version, parser executable and bundle digest, and embedding model and dimensions. Inspect installed components, not a different `engram` binary on `PATH`. Do not record secrets, database DSNs, or private source bodies.
 2. At the configured server origin, check `/api/version`, `/api/selfcheck`, `/api/flags`, `/api/auth/me`, and `/api/ready`. Confirm that the effective auth mode is `auth_disabled=true`; do not infer it from a local environment file. A healthy HTTP process does not prove an indexed View or MCP connection.
-3. Confirm that the installed server, console, and ordinary plugin actually contain this Workspace implementation. The previous installation's memory service and an older client can remain available separately; neither proves that the new client registered code tools. Source-candidate checks do not certify installation.
+3. Confirm that the installed server, console, and ordinary plugin actually contain this Workspace implementation. Before cutover, preserve useful old data and rollback inputs; after a verified v7 cutover, an old client is not the normal fallback for a wrong identity or missing tool. Source-candidate checks do not certify the new installation or its code-tool discovery.
 
 ### Preserve the installed client and Vault
 
-The no-auth Workspace path does not require an owner grant chooser or its Vault-sealed grant references. If an auth-enabled installation uses the chooser, retain its existing persistent Vault key; replicas must share that key. Replacing it also affects existing encrypted credentials. Do not expose key material in diagnostics.
+The no-auth Workspace path needs no browser read grant, but the server still uses its Vault key to seal chooser references. Preserve the existing key in either auth mode, including for encrypted credentials and settings. Configuration prefers `ENGRAM_VAULT_KEY`, then its `ENGRAM_ENCRYPTION_KEY` alias; absent an inline key, an explicit `ENGRAM_ENCRYPTION_KEY_FILE` is used, otherwise the persistent default key file (`/data/vault.key` when `/data` exists, else the server data directory). Never remove it to trigger generation of a replacement. Replicas serving the same encrypted data and references need the same key; independent installations must not share credentials merely for convenience. Do not expose key material in diagnostics.
 
 The current client selects a muxcore daemon namespace from a hash of its persistent `ENGRAM_CLIENT_INSTANCE_ID`. The plugin launcher stores an installation ID in its own plugin-data directory unless an explicit ID is configured. Preserve that directory and keep the ID stable across launches; separate installs must not share an explicit ID. A pre-upgrade v6.49.3 daemon may still run in the old global `engram` namespace while the new installation's daemon runs in its own namespace. The old marker does not identify the installation that owns it. Do not assume the new launcher adopted or stopped that daemon.
 
@@ -320,6 +405,19 @@ engram project resolve --root <actual-directory> --json
 remote через `/api/projects/bootstrap`; результат закрепляется в cache и marker.
 Это не перенос исторической памяти. Неверный marker или конфликт UUID остаётся
 ошибкой, а не поводом переписать существующую identity.
+
+For a diagnostic matching the launcher's configuration, use the **installed plugin
+path reported by the host**, not an arbitrary PATH binary:
+
+```text
+node <installed-plugin-path>/scripts/run-engram.js project resolve --root <actual-project-directory> --json
+```
+
+This is not guaranteed read-only: without a pinned ID, resolution can ask
+`/api/projects/bootstrap` for the primary-remote binding and persist the returned ID.
+An ambiguous or unmigrated binding needs its owner; do not invent a UUID or call
+retired `project_identity.register_v3`. The host's actual callback cwd matters;
+a shell `cd` alone does not change a running host's project context.
 
 `tools/list` не требует проекта. Отсутствующий или конфликтующий контекст
 отклоняет только операцию, которой нужен проект; используй JSON-код ошибки
@@ -448,6 +546,11 @@ Production переключение требует актуальной инве
 
 Используй собственный тестовый репозиторий и два настоящих Git worktree. Изменения можно сохранять без коммита: индекс отражает рабочую копию, а не только Git HEAD. Не выполняй rename/delete на полезных пользовательских файлах ради проверки.
 
+Для проверки изоляции используй одинаковые relative path, symbol и записанную
+ревизию, но разные сохранённые dirty-тексты и вызываемые функции. Два клиента
+одного daemon и две вкладки должны одновременно читать свои source/graph без
+cross-worktree результатов. Разные HEAD сами по себе не доказывают этот случай.
+
 1. Подключи и проиндексируй копию A по инструкции выше.
 2. Открой вторую вкладку консоли через Home → **Рабочее место**.
 3. Открой установленный агент из Git-корня копии B.
@@ -470,7 +573,7 @@ Production переключение требует актуальной инве
 - Новая UCI-регистрация не мигрирует память или Issues. Не создавай другой UUID ради индексации: сохрани существующую `.engram-project` и cache. `engram project init` предназначен для явно нового проекта; переход со старого name-only marker не доказывает миграцию исторических данных.
 - Сохраняй установленный plugin-data и его `ENGRAM_CLIENT_INSTANCE_ID`, Vault key и полезную историю. Не делись ключами между независимыми установками и не выводи их в отчёт. Ограничение opaque handles: native daemon удерживает не более 1024 транспортных владельцев с LRU eviction; после вытеснения получи свежую серверную привязку.
 
-Рабочий продукт проверяет независимый инженер по этой инструкции на установленных компонентах. Source fixture, старые donor receipts, успешный memory recall и HTTP readiness не заменяют installed-путь: Home → подключение → два worktree → реальные векторы → типизированная связь → исходник того же View. Fresh-host automatic context — отдельная приёмка; инструкция не выдаёт её за выполненную.
+Полный R2-путь проверяет независимый инженер на установленных компонентах: Home → подключение → два worktree → реальные векторы → типизированная связь → исходник того же View. Source fixture, старые donor receipts, memory recall и HTTP readiness его не заменяют. Это не условие обычного R1-чтения полезной памяти. Fresh-host automatic context — отдельная приёмка; инструкция не выдаёт её за выполненную.
 
 ### Index and inspect an authorized View
 
@@ -530,7 +633,14 @@ No-auth HTTP LAN access assumes a trusted single-user deployment; it is not an a
 
 ### Verify F1–F7 on installed components
 
-Use an agreed disposable repository. Set expected answers before querying, and record installed component identities without secrets or private source in the record. A second operator should be able to follow this guide without private hints.
+F1–F5 and the full code journey are R2 acceptance, not a blanket R1 release gate. F6 retirement and retention checks remain independently applicable to any cutover shipping those changes; F7 applies to the journey being delivered. The owning [release protocol](RELEASE-PROTOCOL.md) still governs security, data/migration, platform, artifact and rollback checks. For the R2 checks below, use an agreed disposable repository, set expected answers before querying, and record installed identities without secrets or private source. Another operator must be able to follow the guide without private hints.
+
+The complete R2 obligations remain in [Feature 010](../specs/010-unified-code-intelligence/spec.md)
+and [Feature 011](../specs/011-operator-code-console/spec.md): promised language/corpus
+coverage, the twelve-task value/baseline set, same-View evidence, recovery, privacy and
+non-content exposure integrity, plus the populated responsive/zoom/keyboard/task-language
+journey. Earlier S2/S4 receipts retain their own candidates and are not current installed
+acceptance. The summary below does not replace or narrow those contracts.
 
 1. **F1: first use.** Follow **Первый запуск: от меню до исходника** from Home with an empty browser catalog. Use its visible task in the ordinary installed native host; do not pre-register the source as hidden fixture setup, initialize project identity, write SQL, or supply UUIDs.
 2. **F2: two working copies.** Follow **Две независимые dirty-копии**, including saved divergent code, rename, delete, explicit View switches, and the confirmed supported daemon restart. Record A/B isolation and historical View retention. A client reconnect alone is not daemon restart evidence. Preserve ordinary memory independently before and after rollout.
@@ -576,4 +686,4 @@ The Windows amd64 (`win32-x64`) parser has been built and smoke-tested as a sour
 | Saved changes do not appear | Inspect the owning checkout watcher, ignore rules, index job, and View publication; keep older Views intact. |
 | A result contains another working copy's code | Stop relying on the result and investigate authorization and context isolation before retrying. |
 
-Observe API and PostgreSQL readiness, daemon liveness, selected checkout and View, file coverage, embedding progress, job state, retrieval mode, and evidence limitations. `codebase_status` and the selected Workspace view are the relevant sources; memory aggregates are not code-index health. Apply updates through the supported installer or deployment path, preserve the prior components for rollback, reconnect the selected daemon, and repeat F1–F7 on the actual installed artifacts before claiming a release complete.
+Observe API and PostgreSQL readiness, daemon liveness, selected checkout and View, file coverage, embedding progress, job state, retrieval mode, and evidence limitations. `codebase_status` and the selected Workspace view are the relevant sources; memory aggregates are not code-index health. Apply updates through the supported installation/deployment path and preserve rollback inputs. Close R1 only with the ordinary installed agent/WebUI same-project/useful-decision and fresh-session oracle above. Close R2 only with its complete installed F1–F7/code contract; neither source checks nor a successful R1 silently closes it. Independently applicable release gates remain in force.

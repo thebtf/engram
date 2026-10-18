@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bind saved Rules selections and their operations to the server-normalized active all/global/canonical-project projection. Require deliberate reselection after a different-project restore while preserving same-projection explicit/page/frozen off-page targets, per-row replacement and existing owner/session/version/grant checks; no schema or migration change.
 - Regenerate the three v7.0.0 launcher pins from the settled client dependency closure with the canonical Go 1.26.9 Linux producer and unchanged release flags. Preserve the byte-identical parser policy; raw asset and bundle-identity checks do not claim archive publication or installed acceptance.
 - Normalize the expected watcher root with platform path semantics on Windows while retaining exact root registration and dirty-event assertions; keep test temporary roots outside enclosing repository identity markers.
+- Correct the operating and console guides for supported install/update, canonical existing-memory/audit/return, Vault preservation and redaction restart/status behavior; distinguish ordinary installed R1 proof from the complete follow-on R2 contract without waiving independent release checks.
 
 ## [7.0.0] - 2026-10-16
 
