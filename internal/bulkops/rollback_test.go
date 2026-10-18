@@ -95,7 +95,7 @@ func TestRollback_HappyPath(t *testing.T) {
 	// Create a test memory.
 	mem := &models.Memory{
 		Content:             "original content before bulk delete",
-		Project:             "tg6-rollback-test",
+		Project:             newBulkTestProject(t, db),
 		SourceAgent:         "claude-code",
 		SourceWorkstationID: "rollback-workstation",
 		OwnerPrincipal:      "agent/rollback-owner",
@@ -198,7 +198,7 @@ func TestRollback_Conflict_EC_F3(t *testing.T) {
 	// Create a test memory.
 	mem := &models.Memory{
 		Content:     "content to preserve",
-		Project:     "tg6-conflict-test",
+		Project:     newBulkTestProject(t, db),
 		SourceAgent: "claude-code",
 	}
 	created, err := memStore.Create(ctx, mem)
@@ -265,7 +265,7 @@ func TestRollback_LegacyBulkDeleteRollsBackWithoutClockComparison(t *testing.T) 
 	snapStore := gormdb.NewSnapshotStore(db)
 	ctx := context.Background()
 
-	before, err := memStore.Create(ctx, &models.Memory{Content: "legacy delete source", Project: "legacy-delete-conflict", SourceAgent: "test"})
+	before, err := memStore.Create(ctx, &models.Memory{Content: "legacy delete source", Project: newBulkTestProject(t, db), SourceAgent: "test"})
 	require.NoError(t, err)
 	snapshotID := fmt.Sprintf("rollback-legacy-delete-%d", time.Now().UnixNano())
 	t.Cleanup(func() {
@@ -313,14 +313,14 @@ func TestRollback_CandidateReviewPromoteDeletesMemoryAndRestoresPending(t *testi
 		PrivacyScope:            "project",
 		Status:                  models.CandidateStatusPending,
 		Fingerprint:             fmt.Sprintf("rollback-candidate-review-promote-%d", time.Now().UnixNano()),
-		AffectedProjects:        []string{"tg6-candidate-rollback-test"},
+		AffectedProjects:        []string{newBulkTestProject(t, db)},
 		Confidence:              0.9,
 		RecurrenceCount:         2,
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_ = db.Exec("DELETE FROM crystallization_candidates WHERE id = ?", candidate.ID).Error
-		_ = db.Exec("DELETE FROM memories WHERE project = ?", "tg6-candidate-rollback-test").Error
+		_ = db.Exec("DELETE FROM memories WHERE project = ?", candidate.AffectedProjects[0]).Error
 		_ = db.Exec(`DELETE FROM bulk_op_snapshots WHERE snapshot_id LIKE 'rollback-candidate-review-%'`).Error
 		_ = db.Exec(`DELETE FROM audit_log WHERE action = 'rollback' AND actor = 'master'`).Error
 	})
@@ -349,7 +349,7 @@ func TestRollback_CandidateReviewPromoteDeletesMemoryAndRestoresPending(t *testi
 
 	updatedCandidate, createdMemory, err := candidateStore.PromoteWithMemory(ctx, candidate.ID, &models.Memory{
 		Content:       candidate.ProposedContent,
-		Project:       "tg6-candidate-rollback-test",
+		Project:       candidate.AffectedProjects[0],
 		Tier:          "semantic",
 		EpistemicType: "decision",
 		Tags:          []string{fmt.Sprintf("candidate:%d", candidate.ID), "crystallized"},
@@ -398,14 +398,14 @@ func TestRollback_CandidateReviewPromoteEditedMemoryConflicts(t *testing.T) {
 		PrivacyScope:            "project",
 		Status:                  models.CandidateStatusPending,
 		Fingerprint:             fmt.Sprintf("rollback-candidate-review-edited-%d", time.Now().UnixNano()),
-		AffectedProjects:        []string{"tg6-candidate-rollback-edited-test"},
+		AffectedProjects:        []string{newBulkTestProject(t, db)},
 		Confidence:              0.9,
 		RecurrenceCount:         2,
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_ = db.Exec("DELETE FROM crystallization_candidates WHERE id = ?", candidate.ID).Error
-		_ = db.Exec("DELETE FROM memories WHERE project = ?", "tg6-candidate-rollback-edited-test").Error
+		_ = db.Exec("DELETE FROM memories WHERE project = ?", candidate.AffectedProjects[0]).Error
 		_ = db.Exec(`DELETE FROM bulk_op_snapshots WHERE snapshot_id LIKE 'rollback-candidate-review-edited-%'`).Error
 		_ = db.Exec(`DELETE FROM audit_log WHERE action IN ('rollback','rollback_attempted_with_conflict') AND actor = 'master'`).Error
 	})
@@ -434,7 +434,7 @@ func TestRollback_CandidateReviewPromoteEditedMemoryConflicts(t *testing.T) {
 
 	updatedCandidate, createdMemory, err := candidateStore.PromoteWithMemory(ctx, candidate.ID, &models.Memory{
 		Content:       candidate.ProposedContent,
-		Project:       "tg6-candidate-rollback-edited-test",
+		Project:       candidate.AffectedProjects[0],
 		Tier:          "semantic",
 		EpistemicType: "decision",
 		Tags:          []string{fmt.Sprintf("candidate:%d", candidate.ID), "crystallized"},
@@ -495,7 +495,7 @@ func TestRollback_CandidateReviewRejectAndSupersedeSnapshots(t *testing.T) {
 				fmt.Sprintf("rollback-%s-%d", test.name, time.Now().UnixNano()),
 				"candidate rollback state-token coverage",
 				"rule",
-				models.CandidateOptions{AffectedProjects: []string{"rollback-candidate-transition"}},
+				models.CandidateOptions{AffectedProjects: []string{newBulkTestProject(t, db)}},
 			)
 			require.NoError(t, err)
 			candidate.PrivacyScope = "project"
@@ -555,7 +555,7 @@ func TestRollback_LegacyTokenlessCandidateReviewEditConflicts(t *testing.T) {
 	audits := gormdb.NewAuditStore(db)
 	candidates := gormdb.NewCandidateStore(db, audits)
 	ctx := context.Background()
-	candidate, err := models.NewCrystallizationCandidate(fmt.Sprintf("legacy-review-reject-%d", time.Now().UnixNano()), "legacy tokenless candidate review rollback", "rule", models.CandidateOptions{AffectedProjects: []string{"legacy-review-reject"}})
+	candidate, err := models.NewCrystallizationCandidate(fmt.Sprintf("legacy-review-reject-%d", time.Now().UnixNano()), "legacy tokenless candidate review rollback", "rule", models.CandidateOptions{AffectedProjects: []string{newBulkTestProject(t, db)}})
 	require.NoError(t, err)
 	candidate.PrivacyScope = "project"
 	candidate, err = candidates.Create(ctx, candidate)
@@ -592,7 +592,7 @@ func TestRollback_ConflictDetectedAfterStalePreTransactionRead(t *testing.T) {
 
 	mem, err := memStore.Create(ctx, &models.Memory{
 		Content:     "before concurrent edit",
-		Project:     "tg6-rollback-stale-read",
+		Project:     newBulkTestProject(t, db),
 		SourceAgent: "claude-code",
 	})
 	require.NoError(t, err)
@@ -660,7 +660,7 @@ func TestRollback_LegacyTokenlessPromotionFailsClosedWithoutMemoryProof(t *testi
 	snapshots := gormdb.NewSnapshotStore(db)
 	candidates := gormdb.NewCandidateStore(db, nil)
 	ctx := context.Background()
-	project := fmt.Sprintf("legacy-tokenless-promote-%d", time.Now().UnixNano())
+	project := newBulkTestProject(t, db)
 	candidate, err := candidates.Create(ctx, &models.CrystallizationCandidate{SourceSessionID: "legacy-tokenless-promote", ProposedContent: "legacy tokenless candidate", ProposedTier: "semantic", ProposedPromotionTarget: "semantic", PrivacyScope: "project", Status: models.CandidateStatusPending, Fingerprint: project, AffectedProjects: []string{project}, Confidence: 0.9, RecurrenceCount: 1})
 	require.NoError(t, err)
 	memory, err := memories.Create(ctx, &models.Memory{Content: "legacy promoted memory", Project: project, SourceAgent: "test", Status: "active", Tags: models.JSONStringArray{}})
@@ -702,7 +702,7 @@ func TestRollback_MissingPromotedMemoryIsAnIdempotentDelete(t *testing.T) {
 	snapshots := gormdb.NewSnapshotStore(db)
 	candidates := gormdb.NewCandidateStore(db, nil)
 	ctx := context.Background()
-	project := fmt.Sprintf("missing-promoted-memory-%d", time.Now().UnixNano())
+	project := newBulkTestProject(t, db)
 	candidate, err := candidates.Create(ctx, &models.CrystallizationCandidate{
 		SourceSessionID:         "missing-promoted-memory",
 		ProposedContent:         "candidate with removed promoted memory",
@@ -776,7 +776,7 @@ func TestRollback_LegacyUnprefixedPromotionCollisionFailsClosed(t *testing.T) {
 		PrivacyScope:            "project",
 		Status:                  models.CandidateStatusPending,
 		Fingerprint:             fmt.Sprintf("legacy-collision-%d", time.Now().UnixNano()),
-		AffectedProjects:        []string{"legacy-collision-project"},
+		AffectedProjects:        []string{newBulkTestProject(t, db)},
 		Confidence:              0.9,
 		RecurrenceCount:         1,
 	})
@@ -784,7 +784,7 @@ func TestRollback_LegacyUnprefixedPromotionCollisionFailsClosed(t *testing.T) {
 	row := &gormdb.Memory{
 		ID:          candidate.ID,
 		Content:     "memory must remain untouched",
-		Project:     "legacy-collision-project",
+		Project:     candidate.AffectedProjects[0],
 		SourceAgent: "rollback-test",
 		Status:      "active",
 		Tags:        models.JSONStringArray{},
@@ -829,11 +829,11 @@ func TestRollback_LegacyPromotionParametersIgnoreUnrelatedEqualMemoryID(t *testi
 	snapshots := gormdb.NewSnapshotStore(db)
 	candidates := gormdb.NewCandidateStore(db, nil)
 	ctx := context.Background()
-	candidate, err := candidates.Create(ctx, &models.CrystallizationCandidate{SourceSessionID: "legacy-parameter", ProposedContent: "parameter-owned candidate", ProposedTier: "semantic", ProposedPromotionTarget: "semantic", PrivacyScope: "project", Status: models.CandidateStatusPending, Fingerprint: fmt.Sprintf("legacy-parameter-%d", time.Now().UnixNano()), AffectedProjects: []string{"legacy-parameter"}, Confidence: 0.9, RecurrenceCount: 1})
+	candidate, err := candidates.Create(ctx, &models.CrystallizationCandidate{SourceSessionID: "legacy-parameter", ProposedContent: "parameter-owned candidate", ProposedTier: "semantic", ProposedPromotionTarget: "semantic", PrivacyScope: "project", Status: models.CandidateStatusPending, Fingerprint: fmt.Sprintf("legacy-parameter-%d", time.Now().UnixNano()), AffectedProjects: []string{newBulkTestProject(t, db)}, Confidence: 0.9, RecurrenceCount: 1})
 	require.NoError(t, err)
 	promotedID := candidate.ID + 1000
-	require.NoError(t, db.Create(&gormdb.Memory{ID: candidate.ID, Content: "unrelated equal id", Project: "legacy-parameter", SourceAgent: "test", Status: "active", Tags: models.JSONStringArray{}}).Error)
-	require.NoError(t, db.Create(&gormdb.Memory{ID: promotedID, Content: "promoted memory", Project: "legacy-parameter", SourceAgent: "test", Status: "active", Tags: models.JSONStringArray{}}).Error)
+	require.NoError(t, db.Create(&gormdb.Memory{ID: candidate.ID, Content: "unrelated equal id", Project: candidate.AffectedProjects[0], SourceAgent: "test", Status: "active", Tags: models.JSONStringArray{}}).Error)
+	require.NoError(t, db.Create(&gormdb.Memory{ID: promotedID, Content: "promoted memory", Project: candidate.AffectedProjects[0], SourceAgent: "test", Status: "active", Tags: models.JSONStringArray{}}).Error)
 	t.Cleanup(func() {
 		_ = db.Exec("DELETE FROM crystallization_candidates WHERE id = ?", candidate.ID).Error
 		_ = db.Unscoped().Delete(&gormdb.Memory{}, "id IN ?", []int64{candidate.ID, promotedID}).Error
@@ -878,9 +878,9 @@ func TestRollback_PrefixedPromotionSameIDReturnsTypedConflicts(t *testing.T) {
 	snapshots := gormdb.NewSnapshotStore(db)
 	candidates := gormdb.NewCandidateStore(db, nil)
 	ctx := context.Background()
-	candidate, err := candidates.Create(ctx, &models.CrystallizationCandidate{SourceSessionID: "prefixed-same-id", ProposedContent: "prefixed candidate", ProposedTier: "semantic", ProposedPromotionTarget: "semantic", PrivacyScope: "project", Status: models.CandidateStatusPending, Fingerprint: fmt.Sprintf("prefixed-same-id-%d", time.Now().UnixNano()), AffectedProjects: []string{"prefixed-same-id"}, Confidence: 0.9, RecurrenceCount: 1})
+	candidate, err := candidates.Create(ctx, &models.CrystallizationCandidate{SourceSessionID: "prefixed-same-id", ProposedContent: "prefixed candidate", ProposedTier: "semantic", ProposedPromotionTarget: "semantic", PrivacyScope: "project", Status: models.CandidateStatusPending, Fingerprint: fmt.Sprintf("prefixed-same-id-%d", time.Now().UnixNano()), AffectedProjects: []string{newBulkTestProject(t, db)}, Confidence: 0.9, RecurrenceCount: 1})
 	require.NoError(t, err)
-	require.NoError(t, db.Create(&gormdb.Memory{ID: candidate.ID, Content: "prefixed promoted memory", Project: "prefixed-same-id", SourceAgent: "test", Status: "active", Tags: models.JSONStringArray{}}).Error)
+	require.NoError(t, db.Create(&gormdb.Memory{ID: candidate.ID, Content: "prefixed promoted memory", Project: candidate.AffectedProjects[0], SourceAgent: "test", Status: "active", Tags: models.JSONStringArray{}}).Error)
 	t.Cleanup(func() {
 		_ = db.Exec("DELETE FROM crystallization_candidates WHERE id = ?", candidate.ID).Error
 		_ = db.Unscoped().Delete(&gormdb.Memory{}, "id = ?", candidate.ID).Error
@@ -922,9 +922,9 @@ func TestRollback_LegacyPromotionParametersSameIDCollisionFailsClosed(t *testing
 	snapshots := gormdb.NewSnapshotStore(db)
 	candidates := gormdb.NewCandidateStore(db, nil)
 	ctx := context.Background()
-	candidate, err := candidates.Create(ctx, &models.CrystallizationCandidate{SourceSessionID: "legacy-parameter-collision", ProposedContent: "candidate remains promoted", ProposedTier: "semantic", ProposedPromotionTarget: "semantic", PrivacyScope: "project", Status: models.CandidateStatusPending, Fingerprint: fmt.Sprintf("legacy-parameter-collision-%d", time.Now().UnixNano()), AffectedProjects: []string{"legacy-parameter-collision"}, Confidence: 0.9, RecurrenceCount: 1})
+	candidate, err := candidates.Create(ctx, &models.CrystallizationCandidate{SourceSessionID: "legacy-parameter-collision", ProposedContent: "candidate remains promoted", ProposedTier: "semantic", ProposedPromotionTarget: "semantic", PrivacyScope: "project", Status: models.CandidateStatusPending, Fingerprint: fmt.Sprintf("legacy-parameter-collision-%d", time.Now().UnixNano()), AffectedProjects: []string{newBulkTestProject(t, db)}, Confidence: 0.9, RecurrenceCount: 1})
 	require.NoError(t, err)
-	row := &gormdb.Memory{ID: candidate.ID, Content: "promoted memory remains", Project: "legacy-parameter-collision", SourceAgent: "test", Status: "active", Tags: models.JSONStringArray{}}
+	row := &gormdb.Memory{ID: candidate.ID, Content: "promoted memory remains", Project: candidate.AffectedProjects[0], SourceAgent: "test", Status: "active", Tags: models.JSONStringArray{}}
 	require.NoError(t, db.Create(row).Error)
 	t.Cleanup(func() {
 		_ = db.Exec("DELETE FROM crystallization_candidates WHERE id = ?", candidate.ID).Error
@@ -959,7 +959,7 @@ func TestRollback_LegacyPromotionMissingPromotedMemoryEntryFailsClosed(t *testin
 	memories := gormdb.NewMemoryStore(store)
 	snapshots := gormdb.NewSnapshotStore(db)
 	candidates := gormdb.NewCandidateStore(db, nil)
-	candidate, err := candidates.Create(context.Background(), &models.CrystallizationCandidate{SourceSessionID: "legacy-missing-memory", ProposedContent: "candidate stays", ProposedTier: "semantic", ProposedPromotionTarget: "semantic", PrivacyScope: "project", Status: models.CandidateStatusPending, Fingerprint: fmt.Sprintf("legacy-missing-memory-%d", time.Now().UnixNano()), AffectedProjects: []string{"legacy-missing-memory"}, Confidence: 0.9, RecurrenceCount: 1})
+	candidate, err := candidates.Create(context.Background(), &models.CrystallizationCandidate{SourceSessionID: "legacy-missing-memory", ProposedContent: "candidate stays", ProposedTier: "semantic", ProposedPromotionTarget: "semantic", PrivacyScope: "project", Status: models.CandidateStatusPending, Fingerprint: fmt.Sprintf("legacy-missing-memory-%d", time.Now().UnixNano()), AffectedProjects: []string{newBulkTestProject(t, db)}, Confidence: 0.9, RecurrenceCount: 1})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Exec("DELETE FROM crystallization_candidates WHERE id = ?", candidate.ID).Error })
 	before, err := json.Marshal(candidate)

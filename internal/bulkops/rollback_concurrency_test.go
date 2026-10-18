@@ -27,7 +27,7 @@ func TestRollback_ConcurrentOverlappingEntriesCompleteWithoutDeadlock(t *testing
 		for row := range rowsPerSnapshot {
 			memory, err := memories.Create(ctx, &models.Memory{
 				Content:        fmt.Sprintf("rollback-concurrency-%d-%d", iteration, row),
-				Project:        "rollback-concurrency",
+				Project:        newBulkTestProject(t, db),
 				SourceAgent:    "test",
 				Status:         "active",
 				Tags:           models.JSONStringArray{},

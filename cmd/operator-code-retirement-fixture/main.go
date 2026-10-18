@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	_ "github.com/lib/pq"
 	booksdomain "github.com/thebtf/engram/internal/books"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
@@ -41,7 +42,6 @@ import (
 
 const (
 	retirementReceiptSchema = "operator-code-console/da03-retirement-fixture/v1"
-	retirementProject       = "operator-code-retirement-fixture"
 	retirementReason        = booksdomain.RetirementFailureReason
 )
 
@@ -314,7 +314,7 @@ func randomSecret() (string, error) {
 }
 
 func seedHistoricalFixture(ctx context.Context, store *gormdb.Store) (fixtureState, error) {
-	state := fixtureState{project: retirementProject, documentPath: "books/jobs/fixture/history.md", ruleContent: "retirement fixture rule remains readable", issueTitle: "retirement fixture issue remains readable"}
+	state := fixtureState{project: uuid.NewString(), documentPath: "books/jobs/fixture/history.md", ruleContent: "retirement fixture rule remains readable", issueTitle: "retirement fixture issue remains readable"}
 	if err := store.DB.WithContext(ctx).Create(&gormdb.Project{ID: state.project}).Error; err != nil {
 		return state, fmt.Errorf("seed canonical historical project: %w", err)
 	}

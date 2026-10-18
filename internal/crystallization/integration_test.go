@@ -10,14 +10,15 @@ import (
 	"os"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/crystallization"
+	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -33,7 +34,16 @@ func openIntegrationDB(t *testing.T) *gorm.DB {
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
 	require.NoError(t, sqlDB.Ping())
+	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
 	return db
+}
+
+func newCrystallizationTestProject(t *testing.T, db *gorm.DB) string {
+	t.Helper()
+	project := uuid.NewString()
+	require.NoError(t, db.Create(&gormdb.Project{ID: project}).Error)
+	t.Cleanup(func() { require.NoError(t, db.Delete(&gormdb.Project{}, "id = ?", project).Error) })
+	return project
 }
 
 // TestCrystallizationLifecycle_FullPath exercises the end-to-end crystallization flow:
@@ -56,8 +66,8 @@ func TestCrystallizationLifecycle_FullPath(t *testing.T) {
 
 	// Step 1: construct a decision directly (regex extraction path removed; LLM path
 	// tested separately via LLMExtractor unit tests).
-	sessionID := "integration-test-session-t029"
-	project := "integration-test-project-t029"
+	sessionID := uuid.NewString()
+	project := newCrystallizationTestProject(t, db)
 	decision := crystallization.ExtractedDecision{
 		Text:           "decided to use pgvector for similarity search because it integrates natively with PostgreSQL",
 		Confidence:     0.9,

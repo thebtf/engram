@@ -5,6 +5,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/pgvector/pgvector-go"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -147,12 +148,17 @@ func TestStoreStats_Populated(t *testing.T) {
 	tx, rollback := openTestTx(t, db)
 	defer rollback()
 
+	project := uuid.NewString()
+	if err := tx.Exec("INSERT INTO projects (id) VALUES (?)", project).Error; err != nil {
+		t.Fatalf("register canonical project: %v", err)
+	}
+
 	// Insert parent row and fetch ID atomically via RETURNING.
 	var memoryID int64
 	if err := tx.Raw(
 		`INSERT INTO memories (project, content)
-		 VALUES ('__test__', 'stats test memory')
-		 RETURNING id`,
+		 VALUES (?, 'stats test memory')
+		 RETURNING id`, project,
 	).Scan(&memoryID).Error; err != nil {
 		t.Fatalf("insert parent memory returning id: %v", err)
 	}
@@ -200,12 +206,17 @@ func TestStatsWithCoverage_ActiveMemories(t *testing.T) {
 	tx, rollback := openTestTx(t, db)
 	defer rollback()
 
+	project := uuid.NewString()
+	if err := tx.Exec("INSERT INTO projects (id) VALUES (?)", project).Error; err != nil {
+		t.Fatalf("register canonical project: %v", err)
+	}
+
 	// Insert memory with a chunk.
 	var mem1ID int64
 	if err := tx.Raw(
 		`INSERT INTO memories (project, content, status)
-		 VALUES ('__cov_test__', 'memory with chunk', 'active')
-		 RETURNING id`,
+		 VALUES (?, 'memory with chunk', 'active')
+		 RETURNING id`, project,
 	).Scan(&mem1ID).Error; err != nil {
 		t.Fatalf("insert memory 1 returning id: %v", err)
 	}
@@ -220,7 +231,7 @@ func TestStatsWithCoverage_ActiveMemories(t *testing.T) {
 	// Insert active memory without any chunk.
 	if err := tx.Exec(
 		`INSERT INTO memories (project, content, status)
-		 VALUES ('__cov_test__', 'memory without chunk', 'active')`,
+		 VALUES (?, 'memory without chunk', 'active')`, project,
 	).Error; err != nil {
 		t.Fatalf("insert memory 2: %v", err)
 	}

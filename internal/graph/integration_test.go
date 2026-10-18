@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	engramgorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
+	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
 
@@ -24,6 +25,14 @@ func openGraphIntegrationStore(t *testing.T, dsn string) *engramgorm.Store {
 	require.NoError(t, err, "initialize graph integration DB")
 	t.Cleanup(func() { assert.NoError(t, store.Close(), "close graph integration DB") })
 	return store
+}
+
+func newGraphIntegrationProject(t *testing.T, db *gorm.DB) string {
+	t.Helper()
+	project := uuid.NewString()
+	require.NoError(t, db.Create(&engramgorm.Project{ID: project}).Error)
+	t.Cleanup(func() { assert.NoError(t, db.Delete(&engramgorm.Project{}, "id = ?", project).Error) })
+	return project
 }
 
 // TestPathC_T015_SkillNodeEdgeRoundtrip verifies the full TG2 Path C roundtrip:
@@ -50,7 +59,7 @@ func TestPathC_T015_SkillNodeEdgeRoundtrip(t *testing.T) {
 	ns := NewNodesStore(db)
 	gs := NewStore(db, ns)
 
-	project := "t015-test-" + uuid.NewString()
+	project := newGraphIntegrationProject(t, db)
 	t.Cleanup(func() {
 		assert.NoError(t, db.Exec(`DELETE FROM knowledge_edges WHERE source_session_id = ?`, project).Error)
 		assert.NoError(t, db.Exec(`DELETE FROM memories WHERE project = ?`, project).Error)
@@ -126,7 +135,7 @@ func TestPathC_T015_NodeTypedEdgeListFilter(t *testing.T) {
 	ns := NewNodesStore(db)
 	gs := NewStore(db, ns)
 
-	project := "t015b-test-" + uuid.NewString()
+	project := newGraphIntegrationProject(t, db)
 	t.Cleanup(func() {
 		assert.NoError(t, db.Exec(`DELETE FROM knowledge_edges WHERE source_session_id = ?`, project).Error)
 		assert.NoError(t, db.Exec(`DELETE FROM memories WHERE project = ?`, project).Error)
@@ -221,7 +230,7 @@ func TestPathC_T015_NodeCreatedAtTimestamp(t *testing.T) {
 	ctx := context.Background()
 	ns := NewNodesStore(db)
 
-	project := "t015c-test-" + uuid.NewString()
+	project := newGraphIntegrationProject(t, db)
 	t.Cleanup(func() {
 		assert.NoError(t, db.Exec(`DELETE FROM knowledge_nodes WHERE project = ?`, project).Error)
 	})
@@ -248,7 +257,7 @@ func TestNodesStore_MetadataDefaults_Create(t *testing.T) {
 
 	db := openGraphIntegrationStore(t, dsn).DB
 
-	project := "graph-metadata-create-test-" + uuid.NewString()
+	project := newGraphIntegrationProject(t, db)
 	t.Cleanup(func() { assert.NoError(t, db.Exec("DELETE FROM knowledge_nodes WHERE project = ?", project).Error) })
 	ns := NewNodesStore(db)
 
@@ -288,7 +297,7 @@ func TestNodesStore_MetadataDefaults_Update(t *testing.T) {
 
 	db := openGraphIntegrationStore(t, dsn).DB
 
-	project := "graph-metadata-update-test-" + uuid.NewString()
+	project := newGraphIntegrationProject(t, db)
 	t.Cleanup(func() { assert.NoError(t, db.Exec("DELETE FROM knowledge_nodes WHERE project = ?", project).Error) })
 	ns := NewNodesStore(db)
 

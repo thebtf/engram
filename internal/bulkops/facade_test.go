@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -122,6 +123,14 @@ func openTestDB(t *testing.T) (*gorm.DB, *gormdb.Store) {
 	return store.DB, store
 }
 
+func newBulkTestProject(t *testing.T, db *gorm.DB) string {
+	t.Helper()
+	project := uuid.NewString()
+	require.NoError(t, db.Create(&gormdb.Project{ID: project}).Error)
+	t.Cleanup(func() { require.NoError(t, db.Delete(&gormdb.Project{}, "id = ?", project).Error) })
+	return project
+}
+
 // TestFacade_BulkDelete_Committed_AuditLogWritten verifies:
 //   - bulk_delete committed: snapshot created, memory rows soft-deleted, audit log entry written.
 //   - Spec §FR-F6, §FR-F5 enum, EC-F3 (no conflict for fresh rows).
@@ -140,7 +149,7 @@ func TestFacade_BulkDelete_Committed_AuditLogWritten(t *testing.T) {
 	// Create a test memory row to delete.
 	mem := &models.Memory{
 		Content:             "bulk_delete_test_memory",
-		Project:             "tg6-facade-test",
+		Project:             newBulkTestProject(t, db),
 		SourceAgent:         "claude-code",
 		PrivacyScope:        "private",
 		SourceWorkstationID: "facade-workstation",
@@ -208,7 +217,7 @@ func TestFacade_DryRunCountsOnlyEligibleUniqueRows(t *testing.T) {
 	candidateStore := gormdb.NewCandidateStore(db, auditStore)
 	facade := NewFacade(gormdb.NewSnapshotStore(db), candidateStore, memStore, auditStore)
 	ctx := context.Background()
-	project := fmt.Sprintf("bulk-dry-run-%d", time.Now().UnixNano())
+	project := newBulkTestProject(t, db)
 	active, err := memStore.Create(ctx, &models.Memory{Content: "active", Project: project, SourceAgent: "test"})
 	require.NoError(t, err)
 	deleted, err := memStore.Create(ctx, &models.Memory{Content: "deleted", Project: project, SourceAgent: "test"})
@@ -276,7 +285,7 @@ func TestFacade_BulkSupersede_Committed_AuditLogWritten(t *testing.T) {
 
 	mem := &models.Memory{
 		Content:     "bulk_supersede_test_memory",
-		Project:     "tg6-facade-test",
+		Project:     newBulkTestProject(t, db),
 		SourceAgent: "claude-code",
 	}
 	created, err := memStore.Create(ctx, mem)
@@ -326,7 +335,7 @@ func TestFacade_BulkMemoryRollback_RestoresOriginalVersion(t *testing.T) {
 
 			before, err := memStore.Create(ctx, &models.Memory{
 				Content:     "bulk rollback original " + string(opType),
-				Project:     "bulk-rollback-version",
+				Project:     newBulkTestProject(t, db),
 				SourceAgent: "test",
 			})
 			require.NoError(t, err)
@@ -368,7 +377,7 @@ func TestFacade_BulkSupersedeRollback_ConflictsAfterVersionAdvance(t *testing.T)
 	facade := NewFacade(snapStore, nil, memStore, auditStore)
 	ctx := context.Background()
 
-	before, err := memStore.Create(ctx, &models.Memory{Content: "rollback conflict source", Project: "bulk-rollback-conflict", SourceAgent: "test"})
+	before, err := memStore.Create(ctx, &models.Memory{Content: "rollback conflict source", Project: newBulkTestProject(t, db), SourceAgent: "test"})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Unscoped().Delete(&gormdb.Memory{}, "id = ?", before.ID).Error })
 	result, err := facade.Execute(ctx, adminIdentity(), BulkOp{Type: models.SnapshotOpBulkSupersede, MemoryIDs: []int64{before.ID}})
@@ -391,7 +400,7 @@ func TestFacade_BulkSupersedeRollback_ConflictsAfterVersionAdvance(t *testing.T)
 func TestFacade_BulkDelete_CaptureFailureDoesNotMutate(t *testing.T) {
 	db, store := openTestDB(t)
 	memStore := gormdb.NewMemoryStore(store)
-	before, err := memStore.Create(context.Background(), &models.Memory{Content: "capture failure source", Project: "bulk-capture-failure", SourceAgent: "test"})
+	before, err := memStore.Create(context.Background(), &models.Memory{Content: "capture failure source", Project: newBulkTestProject(t, db), SourceAgent: "test"})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Unscoped().Delete(&gormdb.Memory{}, "id = ?", before.ID).Error })
 
@@ -417,7 +426,7 @@ func TestFacade_BulkDelete_PartialSuccessSnapshotExcludesFailedRows(t *testing.T
 	snapStore := gormdb.NewSnapshotStore(db)
 	auditStore := gormdb.NewAuditStore(db)
 	ctx := context.Background()
-	before, err := memStore.Create(ctx, &models.Memory{Content: "partial delete source", Project: "bulk-partial-delete", SourceAgent: "test"})
+	before, err := memStore.Create(ctx, &models.Memory{Content: "partial delete source", Project: newBulkTestProject(t, db), SourceAgent: "test"})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Unscoped().Delete(&gormdb.Memory{}, "id = ?", before.ID).Error })
 
@@ -448,7 +457,7 @@ func TestFacade_BulkPromote_AmendFailureRollsBack(t *testing.T) {
 	candidateStore := gormdb.NewCandidateStore(db, nil)
 	f := NewFacade(snapStore, candidateStore, memStore, gormdb.NewAuditStore(db))
 
-	project := fmt.Sprintf("tg6-promote-amend-failure-%d", time.Now().UnixNano())
+	project := newBulkTestProject(t, db)
 	candidate, err := candidateStore.Create(context.Background(), &models.CrystallizationCandidate{
 		SourceSessionID:         "tg6-promote-amend-failure",
 		ProposedContent:         "snapshot amendment failure must not promote this candidate",
@@ -507,7 +516,7 @@ func TestFacade_BulkPromote_PreservesCandidateAuditAndSeparatesIDs(t *testing.T)
 	candidateStore := gormdb.NewCandidateStore(db, auditStore)
 	f := NewFacade(snapStore, candidateStore, memStore, auditStore)
 
-	project := fmt.Sprintf("tg6-promote-audit-%d", time.Now().UnixNano())
+	project := newBulkTestProject(t, db)
 	candidate, err := candidateStore.Create(context.Background(), &models.CrystallizationCandidate{
 		SourceSessionID:         "tg6-promote-audit",
 		ProposedContent:         "transaction-owned promotion keeps candidate audit",
@@ -554,7 +563,7 @@ func TestFacade_BulkPromote_RollbackExcludesFailedCandidates(t *testing.T) {
 	candidateStore := gormdb.NewCandidateStore(db, auditStore)
 	f := NewFacade(snapStore, candidateStore, memStore, auditStore)
 
-	project := fmt.Sprintf("tg6-promote-partial-rollback-%d", time.Now().UnixNano())
+	project := newBulkTestProject(t, db)
 	makeCandidate := func(content string) *models.CrystallizationCandidate {
 		candidate, err := candidateStore.Create(context.Background(), &models.CrystallizationCandidate{
 			SourceSessionID:         "tg6-promote-partial-rollback",
@@ -630,7 +639,7 @@ func TestFacade_BulkRollbackRejectsInjectionCountMutation(t *testing.T) {
 	memories := gormdb.NewMemoryStore(store)
 	snapshots := gormdb.NewSnapshotStore(db)
 	audits := gormdb.NewAuditStore(db)
-	before, err := memories.Create(context.Background(), &models.Memory{Content: "token injection source", Project: "bulk-token-injection", SourceAgent: "test"})
+	before, err := memories.Create(context.Background(), &models.Memory{Content: "token injection source", Project: newBulkTestProject(t, db), SourceAgent: "test"})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Unscoped().Delete(&gormdb.Memory{}, "id = ?", before.ID).Error })
 
@@ -650,7 +659,7 @@ func TestFacade_BulkPromoteRejectsConcurrentCandidateEdit(t *testing.T) {
 	audits := gormdb.NewAuditStore(db)
 	snapshots := gormdb.NewSnapshotStore(db)
 	candidates := gormdb.NewCandidateStore(db, audits)
-	project := fmt.Sprintf("bulk-token-candidate-%d", time.Now().UnixNano())
+	project := newBulkTestProject(t, db)
 	candidate, err := candidates.Create(context.Background(), &models.CrystallizationCandidate{SourceSessionID: "bulk-token", ProposedContent: "candidate token source", ProposedTier: "semantic", ProposedPromotionTarget: "semantic", PrivacyScope: "project", Status: models.CandidateStatusPending, Fingerprint: project, AffectedProjects: []string{project}, Confidence: 0.9, RecurrenceCount: 1})
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -674,7 +683,7 @@ func TestFacade_BulkPromoteAllFailedLeavesNoSnapshotOrAudit(t *testing.T) {
 	audits := gormdb.NewAuditStore(db)
 	snapshots := gormdb.NewSnapshotStore(db)
 	candidates := gormdb.NewCandidateStore(db, audits)
-	project := fmt.Sprintf("bulk-all-failed-%d", time.Now().UnixNano())
+	project := newBulkTestProject(t, db)
 	candidate, err := candidates.Create(context.Background(), &models.CrystallizationCandidate{SourceSessionID: "bulk-all-failed", ProposedContent: "cannot promote", ProposedTier: "semantic", ProposedPromotionTarget: "semantic", PrivacyScope: "project", Status: models.CandidateStatusPromoted, Fingerprint: project, AffectedProjects: []string{project}, Confidence: 0.9, RecurrenceCount: 1})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Exec("DELETE FROM crystallization_candidates WHERE id = ?", candidate.ID).Error })
@@ -702,7 +711,7 @@ func TestFacade_BulkSupersedeReverseOrderDoesNotDeadlock(t *testing.T) {
 	facade := NewFacade(snapshots, nil, memories, audits)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	project := fmt.Sprintf("bulk-reverse-locks-%d", time.Now().UnixNano())
+	project := newBulkTestProject(t, db)
 	first, err := memories.Create(ctx, &models.Memory{Content: "reverse lock first", Project: project, SourceAgent: "test", Status: "active", Tags: models.JSONStringArray{}})
 	require.NoError(t, err)
 	second, err := memories.Create(ctx, &models.Memory{Content: "reverse lock second", Project: project, SourceAgent: "test", Status: "active", Tags: models.JSONStringArray{}})

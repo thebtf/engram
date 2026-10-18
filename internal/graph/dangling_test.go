@@ -5,7 +5,6 @@ import (
 	"os"
 	"testing"
 
-	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	engramgorm "github.com/thebtf/engram/internal/db/gorm"
@@ -40,7 +39,7 @@ func TestDangling_T016_DanglingEdgeReturnsFlag(t *testing.T) {
 	ns := NewNodesStore(db)
 	gs := NewStore(db, ns)
 	ms := engramgorm.NewMemoryStore(store)
-	project := "t016-test-" + uuid.NewString()
+	project := newGraphIntegrationProject(t, db)
 	t.Cleanup(func() {
 		assert.NoError(t, db.Exec(`DELETE FROM knowledge_edges WHERE source_session_id = ?`, project).Error)
 		assert.NoError(t, db.Exec(`DELETE FROM memories WHERE project = ?`, project).Error)

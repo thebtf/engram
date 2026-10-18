@@ -107,7 +107,7 @@ func TestEC_F3_ConflictDetected_Integration(t *testing.T) {
 	// Step 1: Create memory.
 	mem := &models.Memory{
 		Content:     "EC-F3 original content",
-		Project:     "tg6-ec-f3-acceptance",
+		Project:     newBulkTestProject(t, store.DB),
 		SourceAgent: "claude-code",
 	}
 	created, err := memStore.Create(ctx, mem)
