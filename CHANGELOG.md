@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bound shared migration/UCI PostgreSQL fixture admin and data pools to max-open 2 and max-idle 1 before fixture SQL. Preserve schema ownership, migration and cleanup behavior; reuse the recorded document HTTP/store 12 PASS on these exact helper bytes without repeating accepted database work.
 - Bind saved Rules selections and their operations to the server-normalized active all/global/canonical-project projection. Require deliberate reselection after a different-project restore while preserving same-projection explicit/page/frozen off-page targets, per-row replacement and existing owner/session/version/grant checks; no schema or migration change.
 - Regenerate the three v7.0.0 launcher pins from the settled client dependency closure with the canonical Go 1.26.9 Linux producer and unchanged release flags. Preserve the byte-identical parser policy; raw asset and bundle-identity checks do not claim archive publication or installed acceptance.
+- Normalize the expected watcher root with platform path semantics on Windows while retaining exact root registration and dirty-event assertions; keep test temporary roots outside enclosing repository identity markers.
 
 ## [7.0.0] - 2026-10-16
 
