@@ -16,7 +16,7 @@ func TestMemoryStore_PrincipalFieldsRoundTrip(t *testing.T) {
 
 	ctx := context.Background()
 	store := NewMemoryStore(&Store{DB: db})
-	project := "test-memory-principal-roundtrip"
+	project := sessionTestProject(t, db)
 	t.Cleanup(func() {
 		_ = db.Exec(`DELETE FROM memories WHERE project = ?`, project).Error
 	})
@@ -49,7 +49,7 @@ func TestMemoryStore_PrincipalFieldsDefaultOwnedWritesToSharedHuman(t *testing.T
 
 	ctx := context.Background()
 	store := NewMemoryStore(&Store{DB: db})
-	project := "test-memory-principal-defaults"
+	project := sessionTestProject(t, db)
 	t.Cleanup(func() {
 		_ = db.Exec(`DELETE FROM memories WHERE project = ?`, project).Error
 	})
@@ -87,7 +87,7 @@ func TestMigration149_MemoryPrincipals(t *testing.T) {
 		var count int
 		require.NoError(t, db.Raw(`
 			SELECT COUNT(*) FROM information_schema.columns
-			WHERE table_schema = 'public' AND table_name = 'memories' AND column_name = ?
+			WHERE table_schema = current_schema() AND table_name = 'memories' AND column_name = ?
 		`, col).Scan(&count).Error)
 		require.Equal(t, 1, count, "column %q must exist in memories", col)
 	}
@@ -96,7 +96,8 @@ func TestMigration149_MemoryPrincipals(t *testing.T) {
 		var count int
 		require.NoError(t, db.Raw(`
 			SELECT COUNT(*) FROM pg_constraint
-			WHERE conname = ?
+			WHERE conrelid = 'memories'::regclass AND conname = ?
+			  AND contype = 'c' AND convalidated
 		`, constraint).Scan(&count).Error)
 		require.Equal(t, 1, count, "constraint %q must exist", constraint)
 	}
@@ -109,7 +110,7 @@ func TestMigration149_MemoryPrincipals(t *testing.T) {
 		var count int
 		require.NoError(t, db.Raw(`
 			SELECT COUNT(*) FROM pg_indexes
-			WHERE schemaname = 'public' AND tablename = 'memories' AND indexname = ?
+			WHERE schemaname = current_schema() AND tablename = 'memories' AND indexname = ?
 		`, index).Scan(&count).Error)
 		require.Equal(t, 1, count, "index %q must exist", index)
 	}

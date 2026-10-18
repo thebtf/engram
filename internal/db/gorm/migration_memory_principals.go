@@ -25,7 +25,8 @@ func memoryPrincipalsMigration149() *gormigrate.Migration {
 					IF NOT EXISTS (
 						SELECT 1
 						FROM pg_constraint
-						WHERE conname = 'memories_owner_principal_kind_chk'
+						WHERE conrelid = 'memories'::regclass
+						  AND conname = 'memories_owner_principal_kind_chk'
 					) THEN
 						ALTER TABLE memories
 							ADD CONSTRAINT memories_owner_principal_kind_chk
@@ -37,7 +38,8 @@ func memoryPrincipalsMigration149() *gormigrate.Migration {
 					IF NOT EXISTS (
 						SELECT 1
 						FROM pg_constraint
-						WHERE conname = 'memories_agent_visibility_chk'
+						WHERE conrelid = 'memories'::regclass
+						  AND conname = 'memories_agent_visibility_chk'
 					) THEN
 						ALTER TABLE memories
 							ADD CONSTRAINT memories_agent_visibility_chk
