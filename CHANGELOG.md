@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Include the shared project-catalog helper in the common operator-console Docker build stage, preserving its repository-relative import path.
+
 - Regenerate the data-model table block from registered migrations and remove obsolete fixed-baseline assertions; retain exact generated-artifact conformance without claiming runtime migration proof.
 
 - Bind migration149 principal enum CHECKs to the actual memories relation and add atomic forward correction188 for already-applied149 schemas. Preserve original enum values, valid rows/history and other schemas; reject invalid existing data without partial CHECKs or a successful188 ledger entry. Rollback refuses to remove constraints required by149.
