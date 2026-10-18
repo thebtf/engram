@@ -203,21 +203,19 @@ func TestProjectConsolidationMigration186RetainedRestoreAndPartialArray(t *testi
 	require.Equal(t, sourceConfig.Host, targetConfig.Host, "fixture pair must use the same admitted loopback node")
 	require.Equal(t, sourceConfig.Port, targetConfig.Port)
 	require.Equal(t, strings.TrimSuffix(sourceConfig.Database, "_source"), strings.TrimSuffix(targetConfig.Database, "_restore"))
-	sourceStore, closeSource := openIntegrationTestDB(t)
-	t.Cleanup(closeSource)
-	t.Setenv("DATABASE_DSN", restoreDSN)
-	targetStore, closeTarget := openIntegrationTestDB(t)
-	t.Cleanup(closeTarget)
-	source, target := sourceStore.GetDB(), targetStore.GetDB()
+	// Equal private schema names preserve schema-qualified fingerprints in distinct databases.
+	schema := "migration186_retention_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	source := openMigratedTestDBInSchema(t, sourceDSN, schema, "engram_migration186_retention_test")
+	target := openMigratedTestDBInSchema(t, restoreDSN, schema, "engram_migration186_retention_test")
 	ctx := context.Background()
 	vault, err := vaultcrypto.NewVault(&config.Config{EncryptionKey: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"})
 	require.NoError(t, err)
 	store := NewProjectConsolidationStore(source, vault, target)
 	require.NoError(t, store.distinctTarget(ctx), "restore must never use the source database")
 	for _, db := range []*gormlib.DB{source, target} {
-		var schema string
-		require.NoError(t, db.Raw(`SELECT current_schema()`).Scan(&schema).Error)
-		require.Equal(t, "public", schema, "schema-qualified index definitions must match across the two isolated databases")
+		var actualSchema string
+		require.NoError(t, db.Raw(`SELECT current_schema()`).Scan(&actualSchema).Error)
+		require.Equal(t, schema, actualSchema, "the isolated databases must use matching private schemas")
 		tables, err := consolidationDataTables(db)
 		require.NoError(t, err)
 		for _, table := range tables {
@@ -291,7 +289,8 @@ func TestProjectConsolidationMigration186RetainedRestoreAndPartialArray(t *testi
 	require.NoError(t, err)
 	backup, err := os.OpenFile(filepath.Join(t.TempDir(), "retained-backup.sealed"), os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = backup.Close() })
+	originalBackup := backup
+	t.Cleanup(func() { _ = originalBackup.Close() })
 	require.NoError(t, store.Backup(ctx, plan.Reference, plan.Fingerprint, backup))
 	_, err = backup.Seek(0, io.SeekStart)
 	require.NoError(t, err)
@@ -327,6 +326,19 @@ func TestProjectConsolidationMigration186RetainedRestoreAndPartialArray(t *testi
 	for _, db := range []*gormlib.DB{source, target} {
 		require.NoError(t, db.Exec(`ALTER TABLE crystallization_candidates DISABLE TRIGGER consolidation_test_copy_guard`).Error)
 	}
+	// Trigger modes are signed schema inputs; deliberate fixture DDL needs a fresh plan and backup.
+	census, err = store.Census(ctx, "migration186-retention-retry")
+	require.NoError(t, err)
+	plan, err = store.Preflight(ctx, ConsolidationPreflightRequest{
+		CensusReference: census.Reference, CensusFingerprint: census.Fingerprint,
+		Evidence: []ConsolidationEvidence{{Reference: "urn:engram:test:marker", Kind: "portable_marker", Group: "urn:engram:test:group", ProjectID: canonical, Rows: []string{mappedReference}}},
+	})
+	require.NoError(t, err)
+	retryBackup, err := os.OpenFile(filepath.Join(t.TempDir(), "retained-retry-backup.sealed"), os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = retryBackup.Close() })
+	backup = retryBackup
+	require.NoError(t, store.Backup(ctx, plan.Reference, plan.Fingerprint, backup))
 	_, err = backup.Seek(0, io.SeekStart)
 	require.NoError(t, err)
 	backupReference, err := store.VerifyBackup(ctx, plan.Reference, plan.Fingerprint, backup)
@@ -351,9 +363,27 @@ func TestProjectConsolidationMigration186RetainedRestoreAndPartialArray(t *testi
 	require.JSONEq(t, originalCandidate, consolidationTestRowJSON(t, target, "crystallization_candidates", candidate.ID), "dry-run must roll back mapped occurrence")
 	require.Equal(t, beforeModes, guardModes(target))
 
-	// Force a real mapping failure after its row UPDATE, not before the guarded transaction.
-	require.NoError(t, target.Create(&ConsolidationMembership{Reference: mappedReference, Table: "crystallization_candidates", RowKey: JSONRaw(`{"id":0}`), FieldPath: JSONRaw(`["affected_projects","0"]`), PlanFingerprint: "conflicting-fixture-plan"}).Error)
-	_, err = store.Apply(ctx, request)
+	// Inject only after freshness checks: pre-Apply metadata edits correctly invalidate the verified snapshot.
+	mappingMutationReached := false
+	func() {
+		callbacks := target.Callback().Raw()
+		const callbackName = "retention_mapping_rollback"
+		armed := true
+		require.NoError(t, callbacks.Before("gorm:raw").Register(callbackName, func(tx *gormlib.DB) {
+			if !armed || !strings.HasPrefix(tx.Statement.SQL.String(), `UPDATE "crystallization_candidates" t SET`) {
+				return
+			}
+			armed = false
+			probe := tx.Session(&gormlib.Session{NewDB: true})
+			updated := probe.Exec(`UPDATE crystallization_candidates SET affected_projects[1]=? WHERE id=?`, canonical, candidate.ID)
+			mappingMutationReached = updated.Error == nil && updated.RowsAffected == 1
+			tx.AddError(updated.Error)
+			tx.AddError(probe.Exec(`TRUNCATE pg_temp.engram_owner_row`).Error)
+		}))
+		defer func() { require.NoError(t, callbacks.Remove(callbackName)) }()
+		_, err = store.Apply(ctx, request)
+	}()
+	require.True(t, mappingMutationReached, "failure must follow a real mapped row UPDATE inside guarded Apply")
 	require.ErrorAs(t, err, &hold)
 	require.Equal(t, "PROJECT_ADOPTION_STALE_MAPPING", hold.Code)
 	require.JSONEq(t, originalCandidate, consolidationTestRowJSON(t, target, "crystallization_candidates", candidate.ID))
@@ -363,7 +393,6 @@ func TestProjectConsolidationMigration186RetainedRestoreAndPartialArray(t *testi
 	require.NoError(t, target.Model(&consolidationOperation{}).Count(&receipts).Error)
 	require.Zero(t, partialProjects)
 	require.Zero(t, receipts)
-	require.NoError(t, target.Where("reference = ?", mappedReference).Delete(&ConsolidationMembership{}).Error)
 
 	_, err = store.Apply(ctx, request)
 	require.NoError(t, err)

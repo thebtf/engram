@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Normalize the expected watcher root with platform path semantics on Windows while retaining exact root registration and dirty-event assertions; keep test temporary roots outside enclosing repository identity markers.
 - Correct the operating and console guides for supported install/update, canonical existing-memory/audit/return, Vault preservation and redaction restart/status behavior; distinguish ordinary installed R1 proof from the complete follow-on R2 contract without waiving independent release checks.
 - Canonicalize graph, bulk-operation, crystallization, embedding and retirement-fixture project setup while preserving rollback/collision negatives, all ten retired-writer checks and retained readers. Reuse 73 focused PASS covering all 62 original failed events; production core guards and installed acceptance are unchanged.
+- Isolate canonical GORM/gRPC fixtures, bound their pools and await caller-owned audit writes before schema cleanup; retain restore guards and public data. Reuse focused retention/audit/gRPC proofs; the earlier 37-PASS run remains preservation FAIL (audit rows 37→40), followed by seven focused PASS with 40→40 preservation, not a full-suite or installed-acceptance claim.
 
 ## [7.0.0] - 2026-10-16
 

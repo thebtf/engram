@@ -4,7 +4,9 @@ package gorm
 import (
 	"context"
 	"database/sql"
+	"net/url"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,10 +24,21 @@ func openIntegrationTestDB(t *testing.T) (*Store, func()) {
 	if dsn == "" {
 		t.Skip("DATABASE_DSN not set, skipping integration test")
 	}
+	_, schema := openInterventionReceiptMigrationTestDB(t)
+	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
+		parsed, err := url.Parse(dsn)
+		require.NoError(t, err)
+		query := parsed.Query()
+		query.Set("search_path", schema+",public")
+		parsed.RawQuery = query.Encode()
+		dsn = parsed.String()
+	} else {
+		dsn += " search_path='" + schema + ",public'"
+	}
 
 	cfg := Config{
 		DSN:      dsn,
-		MaxConns: 4,
+		MaxConns: 2,
 		LogLevel: logger.Silent,
 	}
 	store, err := NewStore(cfg)
@@ -139,12 +152,13 @@ func TestIntegration_SessionStoreCreateAndRetrieve(t *testing.T) {
 	const sid = "integration-test-session-compat-01"
 	defer store.DB.Exec("DELETE FROM sdk_sessions WHERE claude_session_id = ?", sid)
 
-	id, err := ss.CreateSDKSession(ctx, sid, "integration-project", "hello world")
+	project := sessionTestProject(t, store.DB)
+	id, err := ss.CreateSDKSession(ctx, sid, project, "hello world")
 	require.NoError(t, err)
 	assert.Greater(t, id, int64(0))
 
 	// Idempotent: same call returns same ID.
-	id2, err := ss.CreateSDKSession(ctx, sid, "integration-project", "hello world")
+	id2, err := ss.CreateSDKSession(ctx, sid, project, "hello world")
 	require.NoError(t, err)
 	assert.Equal(t, id, id2)
 
@@ -152,7 +166,7 @@ func TestIntegration_SessionStoreCreateAndRetrieve(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, sid, sess.ClaudeSessionID)
-	assert.Equal(t, "integration-project", sess.Project)
+	assert.Equal(t, project, sess.Project)
 }
 
 // TestIntegration_SessionStoreConcurrentPromptCounter verifies atomic counter increments under concurrency.
@@ -167,7 +181,7 @@ func TestIntegration_SessionStoreConcurrentPromptCounter(t *testing.T) {
 	const sid = "integration-test-concurrent-counter-01"
 	defer store.DB.Exec("DELETE FROM sdk_sessions WHERE claude_session_id = ?", sid)
 
-	id, err := ss.CreateSDKSession(ctx, sid, "concurrent-project", "")
+	id, err := ss.CreateSDKSession(ctx, sid, sessionTestProject(t, store.DB), "")
 	require.NoError(t, err)
 
 	const numGoroutines = 10
@@ -277,4 +291,3 @@ func TestIntegration_ResolveMaxConns(t *testing.T) {
 // ============================================================
 // shared helpers
 // ============================================================
-

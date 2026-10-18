@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/require"
@@ -22,33 +24,36 @@ import (
 
 const candidateTestDBApplicationName = "engram_candidate_store_test"
 
-// openCandidateTestDB opens a test PostgreSQL connection or skips the test.
+// openCandidateTestDB owns one migrated schema for the calling test.
 func openCandidateTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	dsn := os.Getenv("DATABASE_DSN")
 	if dsn == "" {
 		t.Skip("DATABASE_DSN not set, skipping integration test")
 	}
-	config, err := pgx.ParseConfig(dsn)
+	schema := "candidate_test_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	return openMigratedTestDBInSchema(t, dsn, schema, candidateTestDBApplicationName)
+}
+
+// openCandidateTestDBInScope gives lock probes a second pool for the same fixture rows.
+func openCandidateTestDBInScope(t *testing.T, scope *gorm.DB) *gorm.DB {
+	t.Helper()
+	var schema string
+	require.NoError(t, scope.Raw(`SELECT current_schema()`).Scan(&schema).Error)
+	config, err := pgx.ParseConfig(os.Getenv("DATABASE_DSN"))
 	require.NoError(t, err, "parse test DB config")
 	if config.RuntimeParams == nil {
 		config.RuntimeParams = make(map[string]string)
 	}
 	config.RuntimeParams["application_name"] = candidateTestDBApplicationName
-
+	config.RuntimeParams["search_path"] = schema + ",public"
 	sqlDB := stdlib.OpenDB(*config)
-	t.Cleanup(func() {
-		if err := sqlDB.Close(); err != nil {
-			t.Errorf("close candidate test DB pool: %v", err)
-		}
-	})
-
+	sqlDB.SetMaxOpenConns(2)
+	sqlDB.SetMaxIdleConns(1)
+	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
 	db, err := gorm.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gorm.Config{Logger: logger.Default.LogMode(logger.Warn)})
-	require.NoError(t, err, "open test DB")
+	require.NoError(t, err, "open scoped test DB pool")
 	require.NoError(t, sqlDB.Ping())
-
-	// Ensure migration chain is applied.
-	require.NoError(t, runMigrations(db), "runMigrations")
 	return db
 }
 
@@ -109,6 +114,7 @@ func TestCandidateStore_CRUDRoundtrip(t *testing.T) {
 	auditStore := NewAuditStore(db)
 	cs := NewCandidateStore(db, auditStore)
 	ctx := context.Background()
+	project := uuid.NewString()
 
 	// Build a valid candidate. Unique session ID prevents fingerprint collisions on re-run.
 	candidate, err := models.NewCrystallizationCandidate(
@@ -116,7 +122,7 @@ func TestCandidateStore_CRUDRoundtrip(t *testing.T) {
 		"we decided to use Redis because of cluster mode",
 		"rule",
 		models.CandidateOptions{
-			AffectedProjects: []string{"test-project"},
+			AffectedProjects: []string{project},
 		},
 	)
 	require.NoError(t, err)
@@ -136,7 +142,7 @@ func TestCandidateStore_CRUDRoundtrip(t *testing.T) {
 	require.Equal(t, created.Fingerprint, got.Fingerprint)
 
 	// List by status.
-	list, err := cs.ListByStatus(ctx, "test-project", models.CandidateStatusPending, 10)
+	list, err := cs.ListByStatus(ctx, project, models.CandidateStatusPending, 10)
 	require.NoError(t, err)
 	found := false
 	for _, c := range list {
@@ -154,6 +160,7 @@ func TestCandidateStore_StateMachine_AllTransitionsFromPending(t *testing.T) {
 	auditStore := NewAuditStore(db)
 	cs := NewCandidateStore(db, auditStore)
 	ctx := context.Background()
+	project := uuid.NewString()
 
 	for _, tc := range []struct {
 		name       string
@@ -166,8 +173,8 @@ func TestCandidateStore_StateMachine_AllTransitionsFromPending(t *testing.T) {
 				// We need a real memory ID for promote; insert a minimal memory first.
 				var memID int64
 				err := db.Raw(`INSERT INTO memories (project, content, tags, status, version)
-					VALUES ('test-project', 'mem for promote test', '[]', 'active', 1)
-					RETURNING id`).Scan(&memID).Error
+					VALUES (?, 'mem for promote test', '[]', 'active', 1)
+					RETURNING id`, project).Scan(&memID).Error
 				if err != nil {
 					return err
 				}
@@ -208,7 +215,7 @@ func TestCandidateStore_StateMachine_AllTransitionsFromPending(t *testing.T) {
 				fmt.Sprintf("session-sm-%s-%d", tc.name, time.Now().UnixNano()),
 				"content for "+tc.name,
 				"rule",
-				models.CandidateOptions{AffectedProjects: []string{"test-project"}},
+				models.CandidateOptions{AffectedProjects: []string{project}},
 			)
 			require.NoError(t, err)
 			created, err := cs.Create(ctx, candidate)
@@ -221,6 +228,11 @@ func TestCandidateStore_StateMachine_AllTransitionsFromPending(t *testing.T) {
 			got, err := cs.Get(ctx, created.ID)
 			require.NoError(t, err)
 			require.Equal(t, tc.wantStatus, got.Status, "status after %s transition", tc.name)
+
+			require.Eventually(t, func() bool {
+				var count int64
+				return db.Model(&AuditLogEntry{}).Where("source_session_id = ?", created.SourceSessionID).Count(&count).Error == nil && count == 1
+			}, 2*time.Second, 25*time.Millisecond, "transition audit must finish before its schema is released")
 		})
 	}
 }
@@ -240,6 +252,10 @@ func TestCandidateStore_StateMachine_IllegalTransition(t *testing.T) {
 	// Transition to rejected (legal).
 	_, err = cs.TransitionToRejected(ctx, created.ID, "first rejection")
 	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		var count int64
+		return db.Model(&AuditLogEntry{}).Where("source_session_id = ? AND action = ?", created.SourceSessionID, "reject_candidate").Count(&count).Error == nil && count == 1
+	}, 2*time.Second, 25*time.Millisecond, "rejection audit must finish before its schema is released")
 
 	// Attempt promoted from rejected (illegal — terminal state).
 	_, err = cs.TransitionToPromoted(ctx, created.ID, 999)
@@ -397,7 +413,7 @@ func TestCandidateStore_TransitionToRejected_PreservesProposedContent(t *testing
 		fmt.Sprintf("session-reject-preserve-%d", time.Now().UnixNano()),
 		originalContent,
 		"rule",
-		models.CandidateOptions{AffectedProjects: []string{"test-project"}},
+		models.CandidateOptions{AffectedProjects: []string{uuid.NewString()}},
 	)
 	require.NoError(t, err)
 	created, err := cs.Create(ctx, candidate)
@@ -417,6 +433,10 @@ func TestCandidateStore_TransitionToRejected_PreservesProposedContent(t *testing
 	require.NoError(t, err)
 	require.Equal(t, originalContent, got.ProposedContent,
 		"proposed_content must be preserved in the database after rejection")
+	require.Eventually(t, func() bool {
+		var count int64
+		return db.Model(&AuditLogEntry{}).Where("source_session_id = ? AND action = ? AND reason = ?", created.SourceSessionID, "reject_candidate", fmt.Sprintf("candidate %d transitioned to rejected: %s", created.ID, reason)).Count(&count).Error == nil && count == 1
+	}, 2*time.Second, 25*time.Millisecond, "rejection reason must persist before its schema is released")
 }
 
 // TestCandidateStore_PromoteWithMemory_AtomicRollback verifies MAJOR finding 2:
@@ -433,13 +453,14 @@ func TestCandidateStore_PromoteWithMemory_AtomicRollback(t *testing.T) {
 	auditStore := NewAuditStore(db)
 	cs := NewCandidateStore(db, auditStore)
 	ctx := context.Background()
+	project := uuid.NewString()
 
 	// Create a candidate and immediately reject it (terminal state).
 	candidate, err := models.NewCrystallizationCandidate(
 		fmt.Sprintf("session-promote-rollback-%d", time.Now().UnixNano()),
 		"content for atomic promote test",
 		"rule",
-		models.CandidateOptions{AffectedProjects: []string{"test-project"}},
+		models.CandidateOptions{AffectedProjects: []string{project}},
 	)
 	require.NoError(t, err)
 	created, err := cs.Create(ctx, candidate)
@@ -455,7 +476,7 @@ func TestCandidateStore_PromoteWithMemory_AtomicRollback(t *testing.T) {
 	// PromoteWithMemory must fail because the candidate is in a terminal state.
 	mem := &models.Memory{
 		Content:       "content for atomic promote test",
-		Project:       "test-project",
+		Project:       project,
 		EpistemicType: "decision",
 		Tier:          "episodic",
 		SourceAgent:   "crystallization",
@@ -477,13 +498,14 @@ func TestCandidateStore_PromoteWithMemory_InheritsCandidatePrivacyScope(t *testi
 	auditStore := NewAuditStore(db)
 	cs := NewCandidateStore(db, auditStore)
 	ctx := context.Background()
+	project := uuid.NewString()
 
 	candidate, err := models.NewCrystallizationCandidate(
 		fmt.Sprintf("session-promote-private-%d", time.Now().UnixNano()),
 		"content for private candidate promotion test",
 		"rule",
 		models.CandidateOptions{
-			AffectedProjects: []string{"test-project"},
+			AffectedProjects: []string{project},
 			PrivacyScope:     "private",
 		},
 	)
@@ -494,7 +516,7 @@ func TestCandidateStore_PromoteWithMemory_InheritsCandidatePrivacyScope(t *testi
 
 	mem := &models.Memory{
 		Content:       candidate.ProposedContent,
-		Project:       "test-project",
+		Project:       project,
 		EpistemicType: "decision",
 		Tier:          "episodic",
 		SourceAgent:   "crystallization",
@@ -517,12 +539,13 @@ func TestCandidateStore_PromoteWithMemoryAndSnapshot_AmendFailureRollsBackPromot
 	cs := NewCandidateStore(db, auditStore)
 	snapshotStore := NewSnapshotStore(db)
 	ctx := context.Background()
+	project := uuid.NewString()
 
 	candidate, err := models.NewCrystallizationCandidate(
 		fmt.Sprintf("session-promote-snapshot-rollback-%d", time.Now().UnixNano()),
 		"content for snapshot amend rollback test",
 		"rule",
-		models.CandidateOptions{AffectedProjects: []string{"test-project"}},
+		models.CandidateOptions{AffectedProjects: []string{project}},
 	)
 	require.NoError(t, err)
 	createdCandidate, err := cs.Create(ctx, candidate)
@@ -562,7 +585,7 @@ EXECUTE FUNCTION %s()`, triggerName, snapshot.SnapshotID, functionName)).Error)
 
 	mem := &models.Memory{
 		Content:       "content for snapshot amend rollback test",
-		Project:       "test-project",
+		Project:       project,
 		EpistemicType: "decision",
 		Tier:          "episodic",
 		SourceAgent:   "crystallization",
@@ -608,7 +631,7 @@ func TestCandidateStore_PromoteWithMemoryAndSnapshot_WritesCandidateReviewAudit(
 	require.NoError(t, err)
 	mem := &models.Memory{
 		Content:       candidate.ProposedContent,
-		Project:       "test-project",
+		Project:       candidate.AffectedProjects[0],
 		EpistemicType: "decision",
 		Tier:          "episodic",
 		SourceAgent:   "crystallization",
@@ -759,7 +782,7 @@ func createCandidateReviewStoreTestCandidate(t *testing.T, cs *CandidateStore, c
 		fmt.Sprintf("session-candidate-review-%s-%d", suffix, time.Now().UnixNano()),
 		"content for candidate review transaction test",
 		"rule",
-		models.CandidateOptions{AffectedProjects: []string{"test-project"}},
+		models.CandidateOptions{AffectedProjects: []string{uuid.NewString()}},
 	)
 	require.NoError(t, err)
 	candidate.PrivacyScope = "project"

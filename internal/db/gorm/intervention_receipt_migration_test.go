@@ -31,6 +31,12 @@ func openInterventionReceiptMigrationTestDB(t *testing.T) (*gormlib.DB, string) 
 	if dsn == "" {
 		t.Skip("DATABASE_DSN not set, skipping intervention receipt PostgreSQL integration test")
 	}
+	schema := "intervention_receipt_test_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	return openMigratedTestDBInSchema(t, dsn, schema, "engram_intervention_receipt_test"), schema
+}
+
+func openMigratedTestDBInSchema(t *testing.T, dsn, schema, applicationName string) *gormlib.DB {
+	t.Helper()
 
 	adminDB, err := gormlib.Open(postgres.Open(dsn), &gormlib.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	require.NoError(t, err, "open dedicated admin connection")
@@ -40,7 +46,6 @@ func openInterventionReceiptMigrationTestDB(t *testing.T) (*gormlib.DB, string) 
 	adminSQL.SetMaxIdleConns(1)
 	require.NoError(t, adminDB.Exec(`CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public`).Error, "install pgvector in stable public schema")
 
-	schema := "intervention_receipt_test_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	require.NoError(t, adminDB.Exec("CREATE SCHEMA "+schema).Error, "create isolated receipt schema")
 	t.Cleanup(func() {
 		if err := adminDB.Exec("DROP SCHEMA IF EXISTS " + schema + " CASCADE").Error; err != nil {
@@ -56,7 +61,7 @@ func openInterventionReceiptMigrationTestDB(t *testing.T) (*gormlib.DB, string) 
 	if config.RuntimeParams == nil {
 		config.RuntimeParams = make(map[string]string)
 	}
-	config.RuntimeParams["application_name"] = "engram_intervention_receipt_test"
+	config.RuntimeParams["application_name"] = applicationName
 	config.RuntimeParams["search_path"] = schema + ", public"
 
 	testSQL := stdlib.OpenDB(*config)
@@ -78,7 +83,7 @@ func openInterventionReceiptMigrationTestDB(t *testing.T) (*gormlib.DB, string) 
 	var actualSchema string
 	require.NoError(t, db.Raw(`SELECT current_schema()`).Scan(&actualSchema).Error)
 	require.Equal(t, schema, actualSchema, "test pool must resolve its isolated schema before public")
-	return db, schema
+	return db
 }
 
 type interventionReceiptColumn struct {

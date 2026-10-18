@@ -203,7 +203,7 @@ func TestGetSessionStartContext_ContinuitySlotInvalidTargetsFailOpen(t *testing.
 	t.Run("cross project target", func(t *testing.T) {
 		enableSessionStartContinuity(t)
 		fixture := newSessionStartContinuityFixture(t)
-		otherProject := fixture.project + "-other"
+		otherProject := uuid.NewString()
 		fixture.cleanupProject(t, otherProject)
 		target := fixture.createMemory(t, otherProject, "cross project slot target", nil)
 		ordinary := fixture.createMemory(t, fixture.project, "ordinary candidate", nil)

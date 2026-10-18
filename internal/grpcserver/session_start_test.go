@@ -23,9 +23,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/reflect/protoreflect"
-	gormpostgres "gorm.io/driver/postgres"
 	gormlib "gorm.io/gorm"
-	"gorm.io/gorm/logger"
 )
 
 func openSessionStartTestDB(t *testing.T) (*gormlib.DB, func()) {
@@ -40,24 +38,8 @@ func openSessionStartTestDB(t *testing.T) (*gormlib.DB, func()) {
 		t.Skip("DATABASE_DSN does not look like a dedicated test database")
 	}
 
-	store, err := localgorm.NewStore(localgorm.Config{
-		DSN:      dsn,
-		LogLevel: logger.Silent,
-	})
-	require.NoError(t, err, "NewStore (applies migrations)")
-
-	db, err := gormlib.Open(gormpostgres.Open(dsn), &gormlib.Config{Logger: logger.Default.LogMode(logger.Silent)})
-	require.NoError(t, err, "open postgres db handle")
-
-	sqlDB, err := db.DB()
-	require.NoError(t, err)
-	require.NoError(t, sqlDB.Ping())
-
-	cleanup := func() {
-		sqlDB.Close()
-		store.Close()
-	}
-	return db, cleanup
+	store, _ := openT02HostAdvisorStore(t)
+	return store.GetDB(), func() { require.NoError(t, store.Close()) }
 }
 
 func TestGetSessionStartContext_InvalidArgument(t *testing.T) {
@@ -252,7 +234,7 @@ func TestGetSessionStartContext_HappyPath(t *testing.T) {
 		Status:        "open",
 		Priority:      "high",
 		Type:          "bug",
-		SourceProject: "source-a",
+		SourceProject: uuid.NewString(),
 		TargetProject: project,
 		SourceAgent:   "agent-a",
 		Labels:        []string{"bug"},
@@ -266,7 +248,7 @@ func TestGetSessionStartContext_HappyPath(t *testing.T) {
 		Status:        "reopened",
 		Priority:      "critical",
 		Type:          "task",
-		SourceProject: "source-b",
+		SourceProject: uuid.NewString(),
 		TargetProject: project,
 		SourceAgent:   "agent-b",
 		Labels:        []string{"task"},
@@ -278,7 +260,7 @@ func TestGetSessionStartContext_HappyPath(t *testing.T) {
 		Status:        "resolved",
 		Priority:      "critical",
 		Type:          "bug",
-		SourceProject: "source-c",
+		SourceProject: uuid.NewString(),
 		TargetProject: project,
 		SourceAgent:   "agent-c",
 	})
@@ -289,7 +271,7 @@ func TestGetSessionStartContext_HappyPath(t *testing.T) {
 		Status:        "open",
 		Priority:      "critical",
 		Type:          "bug",
-		SourceProject: "source-d",
+		SourceProject: uuid.NewString(),
 		TargetProject: otherProject,
 		SourceAgent:   "agent-d",
 	})
@@ -775,7 +757,7 @@ func TestGetSessionStartContext_DefaultLimits(t *testing.T) {
 			Status:        "open",
 			Priority:      "medium",
 			Type:          "task",
-			SourceProject: "source",
+			SourceProject: uuid.NewString(),
 			TargetProject: project,
 			SourceAgent:   "agent",
 		})

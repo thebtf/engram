@@ -217,6 +217,8 @@ func openT02HostAdvisorStore(t *testing.T) (*gormdb.Store, *gormdb.InterventionR
 	adminConfig, err := pgx.ParseConfig(dsn)
 	require.NoError(t, err)
 	adminSQL := stdlib.OpenDB(*adminConfig)
+	adminSQL.SetMaxOpenConns(2)
+	adminSQL.SetMaxIdleConns(1)
 	_, err = adminSQL.ExecContext(context.Background(), `CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public`)
 	require.NoError(t, err)
 	require.NoError(t, adminSQL.Ping())
@@ -238,7 +240,7 @@ func openT02HostAdvisorStore(t *testing.T) (*gormdb.Store, *gormdb.InterventionR
 
 	testDSN, err := t02SchemaDSN(dsn, schema)
 	require.NoError(t, err)
-	store, err = gormdb.NewStore(gormdb.Config{DSN: testDSN, MaxConns: 8, LogLevel: logger.Silent})
+	store, err = gormdb.NewStore(gormdb.Config{DSN: testDSN, MaxConns: 2, LogLevel: logger.Silent})
 	require.NoError(t, err)
 	var actualSchema string
 	require.NoError(t, store.GetDB().Raw(`SELECT current_schema()`).Scan(&actualSchema).Error)
@@ -253,12 +255,27 @@ func t02SchemaDSN(dsn, schema string) (string, error) {
 			return "", err
 		}
 		query := parsed.Query()
-		query.Set("options", "-csearch_path="+schema+",public")
+		query.Set("search_path", schema+",public")
 		query.Set("application_name", "engram_hap03_t02_grpc")
 		parsed.RawQuery = query.Encode()
 		return parsed.String(), nil
 	}
-	return dsn + " application_name=engram_hap03_t02_grpc options='-c search_path=" + schema + ",public'", nil
+	return dsn + " application_name=engram_hap03_t02_grpc search_path='" + schema + ",public'", nil
+}
+
+func TestT02SchemaDSNOverridesExplicitSearchPath(t *testing.T) {
+	for _, dsn := range []string{
+		"postgres://fixture@127.0.0.1/fixture_test?search_path=public&options=-cstatement_timeout%3D1000",
+		"host=127.0.0.1 user=fixture dbname=fixture_test search_path=public options='-c statement_timeout=1000'",
+	} {
+		scoped, err := t02SchemaDSN(dsn, "fixture_schema")
+		require.NoError(t, err)
+		configuration, err := pgx.ParseConfig(scoped)
+		require.NoError(t, err)
+		require.Equal(t, "fixture_schema,public", configuration.RuntimeParams["search_path"])
+		require.Equal(t, "engram_hap03_t02_grpc", configuration.RuntimeParams["application_name"])
+		require.Contains(t, configuration.RuntimeParams["options"], "statement_timeout=1000")
+	}
 }
 
 func t02ExistingVaultKeyProvider(t *testing.T) (intervention.KeyProvider, intervention.KeyEpoch) {
