@@ -28,7 +28,7 @@ func TestMemoryStore_ListWithFilters_T017a(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
 
-	const project = "test-list-filters-t017a"
+	project := sessionTestProject(t, db)
 	defer db.Exec(`DELETE FROM memories WHERE project = ?`, project)
 
 	ctx := context.Background()

@@ -15,7 +15,6 @@ package gorm
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"testing"
 	"time"
 
@@ -62,7 +61,7 @@ func TestPurgeStore_PurgeProject_DeletesMemoriesRulesAndAttentionEvents(t *testi
 	db, cleanup := openTestDB(t)
 	defer cleanup()
 
-	const purgeProj = "test-purge-store"
+	purgeProj := sessionTestProject(t, db)
 
 	// Cleanup any leftover rows from a prior failed run.
 	db.Exec(`DELETE FROM attention_events WHERE project = ?`, purgeProj)
@@ -141,8 +140,8 @@ func TestPurgeStore_PurgeProject_DoesNotTouchOtherProject(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
 
-	const purgeProj = "test-purge-isolation-a"
-	const safeProj = "test-purge-isolation-b"
+	purgeProj := sessionTestProject(t, db)
+	safeProj := sessionTestProject(t, db)
 
 	db.Exec(`DELETE FROM attention_events WHERE project IN (?, ?)`, purgeProj, safeProj)
 	db.Exec(`DELETE FROM memories WHERE project IN (?, ?)`, purgeProj, safeProj)
@@ -215,11 +214,10 @@ func TestPurgeStore_PurgeProject_DeletesContinuitySlotsByProjectOrTarget(t *test
 	t.Cleanup(closeDB)
 
 	ctx := context.Background()
-	suffix := time.Now().UnixNano()
-	purgeProject := fmt.Sprintf("test-purge-continuity-a-%d", suffix)
-	safeProject := fmt.Sprintf("test-purge-continuity-b-%d", suffix)
-	targetSlotProject := fmt.Sprintf("test-purge-continuity-target-%d", suffix)
-	projectSlotProject := fmt.Sprintf("test-purge-continuity-project-%d", suffix)
+	purgeProject := sessionTestProject(t, db)
+	safeProject := sessionTestProject(t, db)
+	targetSlotProject := sessionTestProject(t, db)
+	projectSlotProject := sessionTestProject(t, db)
 
 	cleanup := func() {
 		require.NoError(t, db.Exec(`
@@ -287,7 +285,7 @@ func TestPurgeStore_PurgeProject_DoesNotTouchCredentials(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
 
-	const purgeProj = "test-purge-creds"
+	purgeProj := sessionTestProject(t, db)
 	db.Exec(`DELETE FROM memories WHERE project = ?`, purgeProj)
 	defer db.Exec(`DELETE FROM credentials WHERE project = ?`, purgeProj)
 
@@ -325,7 +323,7 @@ func TestPurgeStore_PurgeProject_EdgesDeletedAndCounted(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
 
-	const purgeProj = "test-purge-edges"
+	purgeProj := sessionTestProject(t, db)
 	db.Exec(`DELETE FROM memories WHERE project = ?`, purgeProj)
 
 	store := &Store{DB: db}
@@ -368,8 +366,8 @@ func TestPurgeStore_T009_Integration(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
 
-	const purgeProj = "test-purge-t009"
-	const safeProj = "test-purge-t009-safe"
+	purgeProj := sessionTestProject(t, db)
+	safeProj := sessionTestProject(t, db)
 
 	// Pre-clean; defer post-clean.
 	db.Exec(`DELETE FROM memories WHERE project IN (?, ?)`, purgeProj, safeProj)
@@ -497,7 +495,7 @@ func TestPurgeStore_PurgeProject_CitationLogDeletedAndCounted(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
 
-	const purgeProj = "test-purge-citation"
+	purgeProj := sessionTestProject(t, db)
 	db.Exec(`DELETE FROM memories WHERE project = ?`, purgeProj)
 	defer db.Exec(`DELETE FROM memories WHERE project = ?`, purgeProj)
 
@@ -534,7 +532,7 @@ func TestPurgeStore_PurgeProject_ContentChunksDeletedAndCounted(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
 
-	const purgeProj = "test-purge-chunks"
+	purgeProj := sessionTestProject(t, db)
 	db.Exec(`DELETE FROM memories WHERE project = ?`, purgeProj)
 	defer db.Exec(`DELETE FROM memories WHERE project = ?`, purgeProj)
 
@@ -573,7 +571,7 @@ func TestPurgeStore_PurgeProject_PromotionLogDeletedAndCounted(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
 
-	const purgeProj = "test-purge-promotion"
+	purgeProj := sessionTestProject(t, db)
 	db.Exec(`DELETE FROM memories WHERE project = ?`, purgeProj)
 	defer db.Exec(`DELETE FROM memories WHERE project = ?`, purgeProj)
 
@@ -637,13 +635,12 @@ func TestPurgeStore_PurgeProject_WaitsForConcurrentContinuitySet(t *testing.T) {
 	t.Cleanup(closeDB)
 	// A dedicated connection makes the purge's blocked SQL observable without
 	// confusing it with the setter or the test observer.
-	purgeDB := openCandidateTestDB(t)
+	purgeDB := openCandidateTestDBInScope(t, db)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	suffix := time.Now().UnixNano()
-	purgeProject := fmt.Sprintf("test-purge-continuity-race-%d", suffix)
-	safeProject := fmt.Sprintf("test-purge-continuity-race-safe-%d", suffix)
+	purgeProject := sessionTestProject(t, db)
+	safeProject := sessionTestProject(t, db)
 
 	t.Cleanup(func() {
 		require.NoError(t, db.Exec(`DELETE FROM project_continuity_slots WHERE project IN (?, ?)`, purgeProject, safeProject).Error)

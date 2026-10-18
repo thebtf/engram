@@ -49,14 +49,15 @@ func TestTagContainmentJSONHandlesControlCharacters(t *testing.T) {
 func TestMemoryStore_Create_StripsLifecycleFields(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
-	defer db.Exec(`DELETE FROM memories WHERE project = 'test-lifecycle-create-strip'`)
+	project := sessionTestProject(t, db)
+	defer db.Exec(`DELETE FROM memories WHERE project = ?`, project)
 
 	store := &Store{DB: db}
 	ms := NewMemoryStore(store)
 	ctx := context.Background()
 
 	mem := &models.Memory{
-		Project:     "test-lifecycle-create-strip",
+		Project:     project,
 		Content:     "test content with lifecycle fields",
 		SourceAgent: "test-strip",
 		// These MUST NOT be persisted by plain Create.
@@ -95,14 +96,15 @@ func TestMemoryStore_Create_StripsLifecycleFields(t *testing.T) {
 func TestMemoryStore_CreateWithLifecycle_PersistsFields(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
-	defer db.Exec(`DELETE FROM memories WHERE project = 'test-lifecycle-create-with'`)
+	project := sessionTestProject(t, db)
+	defer db.Exec(`DELETE FROM memories WHERE project = ?`, project)
 
 	store := &Store{DB: db}
 	ms := NewMemoryStore(store)
 	ctx := context.Background()
 
 	mem := &models.Memory{
-		Project:       "test-lifecycle-create-with",
+		Project:       project,
 		Content:       "test content with lifecycle fields persisted",
 		SourceAgent:   "crystallization",
 		Tier:          "episodic",
@@ -135,7 +137,8 @@ func TestMemoryStore_CreateWithLifecycle_PersistsFields(t *testing.T) {
 func TestMemoryStore_CreateWithLifecycle_DefaultTierEpisodic(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
-	defer db.Exec(`DELETE FROM memories WHERE project = 'test-lifecycle-default-tier'`)
+	project := sessionTestProject(t, db)
+	defer db.Exec(`DELETE FROM memories WHERE project = ?`, project)
 
 	store := &Store{DB: db}
 	ms := NewMemoryStore(store)
@@ -143,7 +146,7 @@ func TestMemoryStore_CreateWithLifecycle_DefaultTierEpisodic(t *testing.T) {
 
 	// No Tier set — must receive the DB default.
 	mem := &models.Memory{
-		Project:     "test-lifecycle-default-tier",
+		Project:     project,
 		Content:     "a fresh observation without explicit tier",
 		SourceAgent: "test-b4",
 	}
@@ -164,7 +167,8 @@ func TestMemoryStore_CreateWithLifecycle_DefaultTierEpisodic(t *testing.T) {
 func TestMemoryStore_ListBySourceAgentAndTag_FindsFingerprint(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
-	defer db.Exec(`DELETE FROM memories WHERE project = 'test-list-by-tag'`)
+	project := sessionTestProject(t, db)
+	defer db.Exec(`DELETE FROM memories WHERE project = ?`, project)
 
 	store := &Store{DB: db}
 	ms := NewMemoryStore(store)
@@ -172,7 +176,7 @@ func TestMemoryStore_ListBySourceAgentAndTag_FindsFingerprint(t *testing.T) {
 
 	// Insert a crystallization memory with a session tag and a fingerprint tag.
 	mem := &models.Memory{
-		Project:       "test-list-by-tag",
+		Project:       project,
 		Content:       "decided to use PostgreSQL because it scales.",
 		SourceAgent:   "crystallization",
 		Tags:          []string{"crystallization", "session:sess-abc", "fp:deadbeef01234567"},
@@ -184,7 +188,7 @@ func TestMemoryStore_ListBySourceAgentAndTag_FindsFingerprint(t *testing.T) {
 	assert.Greater(t, created.ID, int64(0))
 
 	// Query by source_agent + session tag — must find the row.
-	found, err := ms.ListBySourceAgentAndTag(ctx, "test-list-by-tag", "crystallization", "session:sess-abc")
+	found, err := ms.ListBySourceAgentAndTag(ctx, project, "crystallization", "session:sess-abc")
 	require.NoError(t, err)
 	require.Len(t, found, 1, "should find exactly one matching memory")
 	assert.Equal(t, created.ID, found[0].ID)
@@ -193,7 +197,7 @@ func TestMemoryStore_ListBySourceAgentAndTag_FindsFingerprint(t *testing.T) {
 	assert.Contains(t, found[0].Tags, "fp:deadbeef01234567", "fingerprint tag must be returned")
 
 	// Query with a different session tag — must return empty.
-	notFound, err := ms.ListBySourceAgentAndTag(ctx, "test-list-by-tag", "crystallization", "session:sess-other")
+	notFound, err := ms.ListBySourceAgentAndTag(ctx, project, "crystallization", "session:sess-other")
 	require.NoError(t, err)
 	assert.Empty(t, notFound, "different session tag must not match")
 }
@@ -201,7 +205,8 @@ func TestMemoryStore_ListBySourceAgentAndTag_FindsFingerprint(t *testing.T) {
 func TestMemoryStore_CreateWithLifecycleIfTagAbsent_SkipsDuplicate(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
-	defer db.Exec(`DELETE FROM memories WHERE project = 'test-create-if-tag-absent'`)
+	project := sessionTestProject(t, db)
+	defer db.Exec(`DELETE FROM memories WHERE project = ?`, project)
 
 	store := &Store{DB: db}
 	ms := NewMemoryStore(store)
@@ -209,7 +214,7 @@ func TestMemoryStore_CreateWithLifecycleIfTagAbsent_SkipsDuplicate(t *testing.T)
 	fpTag := "fp:abc123deadbeef00"
 
 	first := &models.Memory{
-		Project:       "test-create-if-tag-absent",
+		Project:       project,
 		Content:       "decided to use PostgreSQL because it scales.",
 		SourceAgent:   "crystallization",
 		Tags:          []string{"crystallization", "session:sess-dedup", fpTag},
@@ -222,7 +227,7 @@ func TestMemoryStore_CreateWithLifecycleIfTagAbsent_SkipsDuplicate(t *testing.T)
 	require.NotNil(t, created)
 
 	second := &models.Memory{
-		Project:       "test-create-if-tag-absent",
+		Project:       project,
 		Content:       "decided to use Redis because it is fast.",
 		SourceAgent:   "crystallization",
 		Tags:          []string{"crystallization", "session:sess-dedup", fpTag},
@@ -234,7 +239,7 @@ func TestMemoryStore_CreateWithLifecycleIfTagAbsent_SkipsDuplicate(t *testing.T)
 	require.True(t, duplicate)
 	require.Nil(t, created)
 
-	found, err := ms.ListBySourceAgentAndTag(ctx, "test-create-if-tag-absent", "crystallization", fpTag)
+	found, err := ms.ListBySourceAgentAndTag(ctx, project, "crystallization", fpTag)
 	require.NoError(t, err)
 	require.Len(t, found, 1)
 	assert.Equal(t, first.Content, found[0].Content)

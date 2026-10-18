@@ -84,7 +84,7 @@ func TestStateStore_ProjectStateRoundTrip(t *testing.T) {
 	store := NewStateStore(db, auditStore)
 	ctx := context.Background()
 
-	project := fmt.Sprintf("state-project-%d", time.Now().UnixNano())
+	project := sessionTestProject(t, db)
 	t.Cleanup(func() {
 		_ = db.Exec(`DELETE FROM agent_project_state WHERE project = ?`, project).Error
 		_ = db.Exec(`DELETE FROM audit_log WHERE action = 'write_project_state' AND reason LIKE ?`, "%"+project+"%").Error
@@ -107,6 +107,10 @@ func TestStateStore_ProjectStateRoundTrip(t *testing.T) {
 	require.True(t, want.DeadlineDate.Equal(*got.DeadlineDate))
 	require.Equal(t, want.Pressure, got.Pressure)
 	require.Equal(t, want.UpdatedBy, got.UpdatedBy)
+	require.Eventually(t, func() bool {
+		var count int64
+		return db.Model(&AuditLogEntry{}).Where("action = ? AND actor = ? AND reason = ?", "write_project_state", "agent", fmt.Sprintf("project state updated for %s", project)).Count(&count).Error == nil && count == 1
+	}, 2*time.Second, 25*time.Millisecond, "project state audit must finish before its schema is released")
 }
 
 func TestStateStore_ProjectStateRejectsNonAgentUpdatedBy(t *testing.T) {
@@ -169,7 +173,7 @@ func TestStateStore_AuditLogWrittenOnProjectWrite(t *testing.T) {
 	store := NewStateStore(db, auditStore)
 	ctx := context.Background()
 
-	project := fmt.Sprintf("state-audit-project-%d", time.Now().UnixNano())
+	project := sessionTestProject(t, db)
 	t.Cleanup(func() {
 		_ = db.Exec(`DELETE FROM agent_project_state WHERE project = ?`, project).Error
 		_ = db.Exec(`DELETE FROM audit_log WHERE action = 'write_project_state' AND reason LIKE ?`, "%"+project+"%").Error
@@ -312,7 +316,7 @@ func TestStateStore_ResumePacketNativeRoundTrip(t *testing.T) {
 	ctx := context.Background()
 
 	sessionID := fmt.Sprintf("state-resume-session-%d", time.Now().UnixNano())
-	project := fmt.Sprintf("state-resume-project-%d", time.Now().UnixNano())
+	project := sessionTestProject(t, db)
 	t.Cleanup(func() {
 		_ = db.Exec(`DELETE FROM agent_session_state WHERE session_id = ?`, sessionID).Error
 		_ = db.Exec(`DELETE FROM agent_project_state WHERE project = ?`, project).Error
@@ -408,7 +412,7 @@ func TestStateStore_ResumePacketProjectOnlyWithoutSessionID(t *testing.T) {
 	store := NewStateStore(db, nil)
 	ctx := context.Background()
 
-	project := fmt.Sprintf("state-resume-project-only-%d", time.Now().UnixNano())
+	project := sessionTestProject(t, db)
 	t.Cleanup(func() {
 		_ = db.Exec(`DELETE FROM agent_project_state WHERE project = ?`, project).Error
 	})

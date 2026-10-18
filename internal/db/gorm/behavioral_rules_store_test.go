@@ -3,7 +3,6 @@ package gorm
 import (
 	"context"
 	"fmt"
-	"os"
 	"strconv"
 	"testing"
 	"time"
@@ -19,14 +18,9 @@ func strPtr(s string) *string { return &s }
 
 func openBehavioralRulesStore(t *testing.T) *Store {
 	t.Helper()
-	dsn := os.Getenv("DATABASE_DSN")
-	if dsn == "" {
-		t.Skip("DATABASE_DSN is not set; behavioral-rules tests require a PostgreSQL database")
-	}
-	store, err := NewStore(Config{DSN: dsn, MaxConns: 2})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	return store
+	db, cleanup := openTestDB(t)
+	t.Cleanup(cleanup)
+	return &Store{DB: db}
 }
 
 // TestBehavioralRulesStore_CreateGetUpdateListDelete exercises the full
@@ -35,11 +29,11 @@ func openBehavioralRulesStore(t *testing.T) *Store {
 func TestBehavioralRulesStore_CreateGetUpdateListDelete(t *testing.T) {
 	store := openBehavioralRulesStore(t)
 	db := store.DB
-	defer db.Exec(`DELETE FROM behavioral_rules WHERE project = 'test-brules-store'`)
 	brs := NewBehavioralRulesStore(store)
 	ctx := context.Background()
 
-	proj := "test-brules-store"
+	proj := sessionTestProject(t, db)
+	defer db.Exec(`DELETE FROM behavioral_rules WHERE project = ?`, proj)
 
 	// --- Create project-scoped rule ---
 	rule := &models.BehavioralRule{
@@ -177,11 +171,11 @@ func TestBehavioralRulesStore_Create_ValidationErrors(t *testing.T) {
 func TestBehavioralRulesStore_List_GlobalRulesAlwaysIncluded(t *testing.T) {
 	store := openBehavioralRulesStore(t)
 	db := store.DB
-	defer db.Exec(`DELETE FROM behavioral_rules WHERE project = 'test-brules-global' OR (project IS NULL AND content LIKE 'global rule: never hardcode%')`)
 	brs := NewBehavioralRulesStore(store)
 	ctx := context.Background()
 
-	const proj = "test-brules-global"
+	proj := sessionTestProject(t, db)
+	defer db.Exec(`DELETE FROM behavioral_rules WHERE project = ? OR (project IS NULL AND content LIKE 'global rule: never hardcode%')`, proj)
 
 	// Create a global rule (project = nil).
 	globalRule, err := brs.Create(ctx, &models.BehavioralRule{
@@ -226,7 +220,7 @@ func TestBehavioralRulesStore_ApplySelectionOperation_OverTwoHundredRules(t *tes
 	brs := NewBehavioralRulesStore(store)
 	selections := NewCollectionSelectionStore(db)
 	ctx := context.Background()
-	project := fmt.Sprintf("test-brules-selection-%d", time.Now().UnixNano())
+	project := sessionTestProject(t, db)
 	t.Cleanup(func() { require.NoError(t, db.Exec("DELETE FROM behavioral_rules WHERE project = ?", project).Error) })
 
 	rules := make([]*models.BehavioralRule, 205)
@@ -360,7 +354,7 @@ func TestBehavioralRulesStore_ApplySelectionOperation_ReorderConflictRollsBackSc
 	brs := NewBehavioralRulesStore(store)
 	selections := NewCollectionSelectionStore(db)
 	ctx := context.Background()
-	project := fmt.Sprintf("test-brules-reorder-%d", time.Now().UnixNano())
+	project := sessionTestProject(t, db)
 	t.Cleanup(func() { require.NoError(t, db.Exec("DELETE FROM behavioral_rules WHERE project = ?", project).Error) })
 
 	rules := make([]*models.BehavioralRule, 4)
@@ -408,7 +402,7 @@ func TestBehavioralRulesStore_ApplySelectionOperation_ReorderInjectedFailureRoll
 	brs := NewBehavioralRulesStore(store)
 	selections := NewCollectionSelectionStore(db)
 	ctx := context.Background()
-	project := fmt.Sprintf("test-brules-reorder-failure-%d", time.Now().UnixNano())
+	project := sessionTestProject(t, db)
 	t.Cleanup(func() { require.NoError(t, db.Exec("DELETE FROM behavioral_rules WHERE project = ?", project).Error) })
 
 	rules := make([]*models.BehavioralRule, 3)
@@ -460,7 +454,7 @@ func TestBehavioralRulesStore_CollectionBridgePaginatesFreezesAndReconfirms(t *t
 	db := store.DB
 	brs := NewBehavioralRulesStore(store)
 	ctx := context.Background()
-	project := fmt.Sprintf("test-brules-collection-%d", time.Now().UnixNano())
+	project := sessionTestProject(t, db)
 	t.Cleanup(func() { require.NoError(t, db.Exec("DELETE FROM behavioral_rules WHERE project = ?", project).Error) })
 
 	rules := make([]*models.BehavioralRule, 205)

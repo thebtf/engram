@@ -16,7 +16,7 @@ func TestIssueStoreApplySelectionOperationPostgres(t *testing.T) {
 	db := openCandidateTestDB(t)
 	store := NewIssueStore(db)
 	ctx := context.Background()
-	project := fmt.Sprintf("issue-selection-%d", time.Now().UnixNano())
+	project := sessionTestProject(t, db)
 	t.Cleanup(func() {
 		require.NoError(t, db.Where("source_project = ?", project).Delete(&Issue{}).Error)
 	})

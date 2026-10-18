@@ -27,7 +27,7 @@ import (
 func TestInjectionLog_CitationLoopRewire(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
-	const proj = "test-injlog-cr1"
+	proj := sessionTestProject(t, db)
 	defer db.Exec(`DELETE FROM injection_log WHERE project = ?`, proj)
 	defer db.Exec(`DELETE FROM memories WHERE project = ?`, proj)
 

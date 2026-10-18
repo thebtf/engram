@@ -26,11 +26,9 @@ func TestMemoryStore_ListPrincipalMemory_FiltersAndPagination(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
 
-	const (
-		projectA = "test-principal-query-a"
-		projectB = "test-principal-query-b"
-		domain   = "operator-console"
-	)
+	projectA := sessionTestProject(t, db)
+	projectB := sessionTestProject(t, db)
+	const domain = "operator-console"
 	defer db.Exec(`DELETE FROM memories WHERE project IN (?, ?)`, projectA, projectB)
 
 	ctx := context.Background()
