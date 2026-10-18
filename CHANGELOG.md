@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Regenerate the data-model table block from registered migrations and remove obsolete fixed-baseline assertions; retain exact generated-artifact conformance without claiming runtime migration proof.
+
 - Bind migration149 principal enum CHECKs to the actual memories relation and add atomic forward correction188 for already-applied149 schemas. Preserve original enum values, valid rows/history and other schemas; reject invalid existing data without partial CHECKs or a successful188 ledger entry. Rollback refuses to remove constraints required by149.
 
 - Align normal GORM consumer fixtures with registered canonical projects and private schemas while retaining literal legacy-reader snapshots and rejection/race assertions. Reuse the recorded per-group proofs and exact audit-await retry; preserve the earlier audit 40→41 preservation failure and unknown/incomplete attempts. These fixture proofs precede the migration149/188 correction and do not claim a fresh full suite or installed acceptance.
