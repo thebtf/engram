@@ -724,7 +724,7 @@ func (s *ProjectConsolidationStore) VerifyBackup(ctx context.Context, token, fin
 	}
 	id := uuid.NewSHA1(uuid.NameSpaceOID, []byte(consolidationCipherHash(header))).String()
 	err = s.restoreDB.WithContext(ctx).Transaction(func(tx *gormlib.DB) error {
-		if err := tx.Exec("SET LOCAL TimeZone='UTC'; SET LOCAL extra_float_digits=3; SET LOCAL row_security=off").Error; err != nil {
+		if err := consolidationSetLocal(tx); err != nil {
 			return err
 		}
 		if err := consolidationLock(tx); err != nil {

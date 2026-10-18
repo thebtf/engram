@@ -90,7 +90,7 @@ type consolidationNativeSnapshot struct {
 // checks read every row digest; no frame table, archive or body copy is created.
 func consolidationNativeRead(tx *gormlib.DB, wanted map[string][]string) (consolidationNativeSnapshot, error) {
 	result := consolidationNativeSnapshot{Tables: map[string]consolidationNativeTable{}}
-	if err := tx.Exec("SET LOCAL TimeZone='UTC'; SET LOCAL extra_float_digits=3; SET LOCAL row_security=off").Error; err != nil {
+	if err := consolidationSetLocal(tx); err != nil {
 		return result, err
 	}
 	var unsupported int64

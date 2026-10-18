@@ -280,6 +280,15 @@ func consolidationJSONProjection(expression string) string {
 	 FILTER(WHERE active AND jsonb_typeof(value)='string' AND value#>>'{}'<>''),'[]'::jsonb) FROM fields)`
 }
 
+func consolidationSetLocal(tx *gormlib.DB) error {
+	for _, statement := range [...]string{"SET LOCAL TimeZone='UTC'", "SET LOCAL extra_float_digits=3", "SET LOCAL row_security=off"} {
+		if err := tx.Exec(statement).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *ProjectConsolidationStore) Census(ctx context.Context, sourceVersion string) (ConsolidationCensus, error) {
 	if err := s.available(); err != nil {
 		return ConsolidationCensus{}, err
@@ -306,7 +315,7 @@ func (s *ProjectConsolidationStore) Census(ctx context.Context, sourceVersion st
 
 func (s *ProjectConsolidationStore) census(tx *gormlib.DB, sourceVersion string) (consolidationCensusState, error) {
 	state := consolidationCensusState{SourceVersion: sourceVersion, Gaps: []string{}}
-	if err := tx.Exec("SET LOCAL TimeZone='UTC'; SET LOCAL extra_float_digits=3; SET LOCAL row_security=off").Error; err != nil {
+	if err := consolidationSetLocal(tx); err != nil {
 		return state, err
 	}
 	var err error
@@ -568,7 +577,7 @@ func (s *ProjectConsolidationStore) fresh(tx *gormlib.DB, census consolidationCe
 	if err != nil || historical {
 		return consolidationHold("STALE_PLAN")
 	}
-	if err := tx.Exec("SET LOCAL TimeZone='UTC'; SET LOCAL extra_float_digits=3; SET LOCAL row_security=off").Error; err != nil {
+	if err := consolidationSetLocal(tx); err != nil {
 		return err
 	}
 	schema, _, _, err := consolidationSchema(tx)
@@ -583,7 +592,7 @@ func (s *ProjectConsolidationStore) freshHistorical(tx *gormlib.DB, census conso
 	if err != nil || !historical {
 		return consolidationHold("STALE_PLAN")
 	}
-	if err := tx.Exec("SET LOCAL TimeZone='UTC'; SET LOCAL extra_float_digits=3; SET LOCAL row_security=off").Error; err != nil {
+	if err := consolidationSetLocal(tx); err != nil {
 		return err
 	}
 	schema, _, _, err := consolidationSchemaProjection(tx)

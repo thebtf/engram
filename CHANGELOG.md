@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Execute consolidation transaction-local PostgreSQL settings as individual prepared statements across Census, freshness, native and restore paths. Preserve normal prepared-query mode, transaction/read-only boundaries, freeze and authorization guards; cover the repair with a real prepared-store Census/Preflight regression and the existing registered HTTP workflow on a separately qualified synthetic pair. No installed or retained-owner cutover acceptance is claimed.
 - Remove the obsolete static Codex archive input; Codex setup already generates the host-local MCP launcher configuration.
 - Include the shared project-catalog helper in the common operator-console Docker build stage, preserving its repository-relative import path.
 

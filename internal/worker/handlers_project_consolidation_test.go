@@ -555,6 +555,11 @@ func TestProjectConsolidationUploadRealReadDeadline(t *testing.T) {
 func consolidationRegisteredFixture(t *testing.T, historical bool) (*Service, *httptest.Server, *gormlib.DB, *gormlib.DB, string) {
 	t.Helper()
 	path, deadlineText := os.Getenv("ENGRAM_STREAM_INTEGRITY_FIXTURE"), os.Getenv("ENGRAM_STREAM_INTEGRITY_DEADLINE")
+	isolated := os.Getenv("ENGRAM_CONSOLIDATION_PREPARED_FIXTURE") != ""
+	if isolated {
+		require.False(t, historical, "prepared fixtures cannot replace retained historical inputs")
+		path, deadlineText = os.Getenv("ENGRAM_CONSOLIDATION_PREPARED_FIXTURE"), os.Getenv("ENGRAM_CONSOLIDATION_PREPARED_DEADLINE")
+	}
 	if path == "" && deadlineText == "" {
 		t.Skip("no assigned existing22417 fixture; registered store/crypto proof not run")
 	}
@@ -568,19 +573,31 @@ func consolidationRegisteredFixture(t *testing.T, historical bool) (*Service, *h
 	gitDirectory := filepath.Clean(strings.TrimSpace(string(common)))
 	require.True(t, filepath.IsAbs(gitDirectory) && filepath.Base(gitDirectory) == ".git")
 	root := filepath.Join(filepath.Dir(gitDirectory), ".agent", "artifacts", "data", "pr568-stream-integrity-20261017", ".private")
+	if isolated {
+		root = filepath.Join(filepath.Dir(gitDirectory), ".agent", "artifacts", "data", "r1-census-prepared-20261018", ".private")
+	}
 	absolute, err := filepath.Abs(path)
 	require.NoError(t, err)
 	configurationName := "oracle-fixture.json"
-	if historical {
+	if historical || isolated {
 		configurationName = "fixture.json"
 	}
 	require.Equal(t, filepath.Join(root, configurationName), absolute)
-	var fixture struct{ Lease, SourceDSN, TargetDSN, KeyPath string }
+	var fixture struct{ Lease, SourceDSN, TargetDSN, KeyPath, SystemIdentifier, SourceOID, TargetOID string }
 	raw, err := os.ReadFile(absolute)
 	if err != nil || json.Unmarshal(raw, &fixture) != nil {
 		t.Fatal("private assigned fixture unavailable")
 	}
-	require.Equal(t, "r1-stream-integrity-20261017-01a0db09", fixture.Lease)
+	lease, system, user, port, host := "r1-stream-integrity-20261017-01a0db09", "7697507119866282022", "stream_fixture", uint16(22417), "127.0.0.1:22417"
+	if isolated {
+		lease, user, port, host = "r1-census-prepared-20261018", "prepared_fixture", 22479, "127.0.0.1:22479"
+		require.NotEmpty(t, fixture.SystemIdentifier)
+		require.NotEmpty(t, fixture.SourceOID)
+		require.NotEmpty(t, fixture.TargetOID)
+		require.NotEqual(t, fixture.SourceOID, fixture.TargetOID)
+		system = fixture.SystemIdentifier
+	}
+	require.Equal(t, lease, fixture.Lease)
 	require.Equal(t, filepath.Join(root, "vault.key"), filepath.Clean(fixture.KeyPath))
 	var schema string
 	if historical {
@@ -595,21 +612,27 @@ func consolidationRegisteredFixture(t *testing.T, historical bool) (*Service, *h
 	}
 	open := func(dsn string, source bool) (*gormlib.DB, string) {
 		cfg, err := pgx.ParseConfig(dsn)
-		if err != nil || cfg.Host != "127.0.0.1" || cfg.Port != 22417 || cfg.User != "stream_fixture" || cfg.TLSConfig != nil || len(cfg.Fallbacks) != 0 {
+		if err != nil || cfg.Host != "127.0.0.1" || cfg.Port != port || cfg.User != user || cfg.TLSConfig != nil || len(cfg.Fallbacks) != 0 {
 			t.Fatal("refusing unassigned HTTP fixture")
 		}
 		name, oid := "engram_migration186_scope_test_stream_oracle_20261017_restore", "22327"
+		if isolated {
+			name, oid = "engram_migration186_scope_test_prepared_restore", fixture.TargetOID
+		}
 		if historical {
 			name, oid = "engram_migration186_scope_test_stream_20261017_restore", "16390"
 		}
 		if source {
 			name, oid = "engram_migration186_scope_test_stream_oracle_20261017_source", "22326"
+			if isolated {
+				name, oid = "engram_migration186_scope_test_prepared_source", fixture.SourceOID
+			}
 			if historical {
 				name, oid = "engram_migration186_scope_test_stream_20261017_source", "16389"
 			}
 		}
 		require.Equal(t, name, cfg.Database)
-		u := &url.URL{Scheme: "postgres", Host: "127.0.0.1:22417", Path: "/" + cfg.Database, User: url.UserPassword(cfg.User, cfg.Password)}
+		u := &url.URL{Scheme: "postgres", Host: host, Path: "/" + cfg.Database, User: url.UserPassword(cfg.User, cfg.Password)}
 		query := url.Values{"sslmode": {"disable"}}
 		for name, value := range cfg.RuntimeParams {
 			query.Set(name, value)
@@ -619,11 +642,11 @@ func consolidationRegisteredFixture(t *testing.T, historical bool) (*Service, *h
 		query.Set("TimeZone", "UTC")
 		query.Set("statement_timeout", "60000")
 		query.Set("application_name", fixture.Lease+"-http")
-		if source && historical {
+		if source && (historical || isolated) {
 			query.Set("default_transaction_read_only", "on")
 		}
 		u.RawQuery = query.Encode()
-		db, err := gormlib.Open(postgres.Open(u.String()), &gormlib.Config{Logger: logger.Default.LogMode(logger.Silent)})
+		db, err := gormlib.Open(postgres.Open(u.String()), &gormlib.Config{PrepareStmt: source, Logger: logger.Default.LogMode(logger.Silent)})
 		if err != nil {
 			t.Fatal("assigned HTTP fixture connection failed")
 		}
@@ -634,7 +657,7 @@ func consolidationRegisteredFixture(t *testing.T, historical bool) (*Service, *h
 		db = db.WithContext(ctx)
 		var identity string
 		require.NoError(t, db.Raw(`SELECT (SELECT system_identifier::text FROM pg_control_system())||'|'||oid::text||'|'||datname FROM pg_database WHERE datname=current_database()`).Scan(&identity).Error)
-		require.Equal(t, "7697507119866282022|"+oid+"|"+name, identity)
+		require.Equal(t, system+"|"+oid+"|"+name, identity)
 		var actualSchema string
 		require.NoError(t, db.Raw(`SELECT current_schema()`).Scan(&actualSchema).Error)
 		require.Equal(t, schema, actualSchema, "never migrate or create a schema from the HTTP proof")

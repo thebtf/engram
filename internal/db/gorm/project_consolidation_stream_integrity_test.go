@@ -76,13 +76,22 @@ func streamIntegrityFixtureRoot(t *testing.T) string {
 	require.NoError(t, err, "resolve the primary fixture owner through the worktree's native Git common directory")
 	commonDirectory := filepath.Clean(strings.TrimSpace(string(output)))
 	require.True(t, filepath.IsAbs(commonDirectory) && filepath.Base(commonDirectory) == ".git", "fixture requires an absolute primary repository Git directory")
-	return filepath.Join(filepath.Dir(commonDirectory), ".agent", "artifacts", "data", "pr568-stream-integrity-20261017")
+	owner := "pr568-stream-integrity-20261017"
+	if os.Getenv("ENGRAM_CONSOLIDATION_PREPARED_FIXTURE") != "" {
+		owner = "r1-census-prepared-20261018"
+	}
+	return filepath.Join(filepath.Dir(commonDirectory), ".agent", "artifacts", "data", owner)
 }
 
 // No ambient DATABASE_DSN, old fixture admission or cleanup is inherited here.
 func openStreamIntegrityFixture(t *testing.T, binding, schema string, create bool) *streamIntegrityFixture {
 	t.Helper()
 	path, deadlineText := os.Getenv("ENGRAM_STREAM_INTEGRITY_FIXTURE"), os.Getenv("ENGRAM_STREAM_INTEGRITY_DEADLINE")
+	isolated := os.Getenv("ENGRAM_CONSOLIDATION_PREPARED_FIXTURE") != ""
+	if isolated {
+		require.Equal(t, streamIntegrityOracle, binding, "prepared fixtures cannot replace retained historical inputs")
+		path, deadlineText = os.Getenv("ENGRAM_CONSOLIDATION_PREPARED_FIXTURE"), os.Getenv("ENGRAM_CONSOLIDATION_PREPARED_DEADLINE")
+	}
 	if path == "" && deadlineText == "" {
 		t.Skip("no assigned stream-integrity fixture; this is not RED or conservation proof")
 	}
@@ -106,6 +115,12 @@ func openStreamIntegrityFixture(t *testing.T, binding, schema string, create boo
 	default:
 		t.Fatal("unknown stream-integrity fixture binding")
 	}
+	lease, system, user, port := streamIntegrityLease, "7697507119866282022", "stream_fixture", uint16(22417)
+	if isolated {
+		configurationName, identityName = "fixture.json", "fixture-identity.json"
+		sourceDatabase, targetDatabase = "engram_migration186_scope_test_prepared_source", "engram_migration186_scope_test_prepared_restore"
+		lease, user, port = "r1-census-prepared-20261018", "prepared_fixture", 22479
+	}
 	absolute, err := filepath.Abs(path)
 	require.NoError(t, err)
 	root := streamIntegrityFixtureRoot(t)
@@ -119,28 +134,35 @@ func openStreamIntegrityFixture(t *testing.T, binding, schema string, create boo
 	if err != nil || json.Unmarshal(raw, &private) != nil {
 		t.Fatal("private stream-integrity fixture configuration unavailable or invalid")
 	}
-	require.Equal(t, streamIntegrityLease, private.Lease)
+	require.Equal(t, lease, private.Lease)
 	require.Equal(t, root, filepath.Clean(private.Artifacts))
 	require.Equal(t, filepath.Join(root, ".private", "vault.key"), filepath.Clean(private.KeyPath))
 	var identity struct {
-		Lease            string
-		DatabaseIdentity []string
+		Lease, SystemIdentifier, SourceOID, TargetOID string
+		DatabaseIdentity                              []string
 	}
 	raw, err = os.ReadFile(filepath.Join(private.Artifacts, identityName))
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(raw, &identity))
-	require.Equal(t, streamIntegrityLease, identity.Lease)
+	require.Equal(t, lease, identity.Lease)
+	if isolated {
+		require.NotEmpty(t, identity.SystemIdentifier)
+		require.NotEmpty(t, identity.SourceOID)
+		require.NotEmpty(t, identity.TargetOID)
+		require.NotEqual(t, identity.SourceOID, identity.TargetOID)
+		system, sourceOID, targetOID = identity.SystemIdentifier, identity.SourceOID, identity.TargetOID
+	}
 	require.Len(t, identity.DatabaseIdentity, 2)
-	require.ElementsMatch(t, []string{"7697507119866282022|" + sourceOID + "|" + sourceDatabase, "7697507119866282022|" + targetOID + "|" + targetDatabase}, identity.DatabaseIdentity)
+	require.ElementsMatch(t, []string{system + "|" + sourceOID + "|" + sourceDatabase, system + "|" + targetOID + "|" + targetDatabase}, identity.DatabaseIdentity)
 	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	t.Cleanup(cancel)
 	open := func(dsn, role, database, oid string) *gormlib.DB {
 		cfg := consolidationTestDatabaseConfig(t, dsn, role)
 		require.Equal(t, "127.0.0.1", cfg.Host)
-		require.EqualValues(t, 22417, cfg.Port)
+		require.EqualValues(t, port, cfg.Port)
 		require.Equal(t, database, cfg.Database)
-		require.Equal(t, "stream_fixture", cfg.User)
-		cfg.RuntimeParams["application_name"] = streamIntegrityLease
+		require.Equal(t, user, cfg.User)
+		cfg.RuntimeParams["application_name"] = lease
 		cfg.RuntimeParams["row_security"] = "off"
 		cfg.RuntimeParams["TimeZone"] = "UTC"
 		cfg.RuntimeParams["statement_timeout"] = "60000"
@@ -156,7 +178,7 @@ func openStreamIntegrityFixture(t *testing.T, binding, schema string, create boo
 		if err != nil {
 			t.Fatal("assigned fixture identity connection failed; not a protected regression failure")
 		}
-		require.Equal(t, "7697507119866282022|"+oid+"|"+database, actual, "physical fixture identity changed")
+		require.Equal(t, system+"|"+oid+"|"+database, actual, "physical fixture identity changed")
 		var maintenance bool
 		require.NoError(t, admin.QueryRowContext(ctx, `SELECT rolsuper AND rolbypassrls FROM pg_roles WHERE rolname=current_user`).Scan(&maintenance))
 		require.True(t, maintenance, "fixture needs full maintenance visibility, not permission-dependent refusal")

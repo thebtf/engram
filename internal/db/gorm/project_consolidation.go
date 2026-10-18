@@ -598,7 +598,7 @@ func (s *ProjectConsolidationStore) applyPrepared(ctx context.Context, request C
 	if err := consolidationLock(tx); err != nil {
 		return ConsolidationNativeResult{}, err
 	}
-	if err := tx.Exec("SET LOCAL TimeZone='UTC'; SET LOCAL extra_float_digits=3; SET LOCAL row_security=off").Error; err != nil {
+	if err := consolidationSetLocal(tx); err != nil {
 		return ConsolidationNativeResult{}, err
 	}
 	schema, _, _, err := consolidationSchema(tx)

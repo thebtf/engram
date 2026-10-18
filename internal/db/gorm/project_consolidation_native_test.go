@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -117,6 +118,92 @@ func TestProjectConsolidationNativePlanIDIsDecodedNotCallerState(t *testing.T) {
 	request.ExpectedPlanID = state.ID
 	_, err = store.nativePlan(request, true)
 	require.NoError(t, err)
+}
+
+func TestProjectConsolidationPreparedCensusPreflight(t *testing.T) {
+	path, deadlineText := os.Getenv("ENGRAM_CONSOLIDATION_PREPARED_FIXTURE"), os.Getenv("ENGRAM_CONSOLIDATION_PREPARED_DEADLINE")
+	if path == "" && deadlineText == "" {
+		t.Skip("requires an assigned synthetic prepared-statement fixture")
+	}
+	deadline, err := time.Parse(time.RFC3339, deadlineText)
+	require.NoError(t, err)
+	require.True(t, time.Now().Before(deadline) && time.Until(deadline) <= 30*time.Minute)
+	ctx, cancel := context.WithDeadline(t.Context(), deadline)
+	defer cancel()
+	var fixture struct{ DSN, Identity string }
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(raw, &fixture))
+	cfg, err := pgx.ParseConfig(fixture.DSN)
+	require.NoError(t, err)
+	require.True(t, cfg.Host == "127.0.0.1" && cfg.Port == 22479 && cfg.User == "prepared_fixture" && cfg.Database == "engram_consolidation_prepared_test" && cfg.TLSConfig == nil && len(cfg.Fallbacks) == 0, "refusing an unassigned prepared-statement database")
+	admin, err := openGORM(Config{DSN: fixture.DSN, LogLevel: logger.Error})
+	require.NoError(t, err)
+	adminPool, err := admin.DB()
+	require.NoError(t, err)
+	defer adminPool.Close()
+	adminPool.SetMaxOpenConns(1)
+	var identity string
+	require.NoError(t, admin.WithContext(ctx).Raw(`SELECT (SELECT system_identifier::text FROM pg_control_system())||'|'||oid::text||'|'||datname FROM pg_database WHERE datname=current_database()`).Scan(&identity).Error)
+	require.NotEmpty(t, fixture.Identity)
+	require.Equal(t, fixture.Identity, identity)
+	schema := "prepared_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	require.NoError(t, admin.WithContext(ctx).Exec("CREATE SCHEMA "+quoted(schema)).Error)
+	defer func() { require.NoError(t, admin.Exec("DROP SCHEMA "+quoted(schema)+" CASCADE").Error) }()
+	u, err := url.Parse(fixture.DSN)
+	require.NoError(t, err)
+	query := u.Query()
+	query.Set("search_path", schema)
+	query.Set("application_name", "engram-prepared-census-regression")
+	u.RawQuery = query.Encode()
+	writer, err := openGORM(Config{DSN: u.String(), LogLevel: logger.Error})
+	require.NoError(t, err)
+	writerPool, err := writer.DB()
+	require.NoError(t, err)
+	defer writerPool.Close()
+	writerPool.SetMaxOpenConns(1)
+	require.NoError(t, writer.WithContext(ctx).Exec(`CREATE TABLE projects(id TEXT PRIMARY KEY)`).Error)
+	require.NoError(t, writer.WithContext(ctx).Exec(`CREATE TABLE memories(id BIGINT PRIMARY KEY,project TEXT NOT NULL REFERENCES projects(id),content TEXT NOT NULL)`).Error)
+	require.NoError(t, projectConsolidationMigration186().Migrate(writer.WithContext(ctx)))
+	project := uuid.NewString()
+	require.NoError(t, writer.WithContext(ctx).Exec(`INSERT INTO projects(id) VALUES(?)`, project).Error)
+	require.NoError(t, writer.WithContext(ctx).Exec(`INSERT INTO memories(id,project,content) VALUES(1,?,'prepared census retained row')`, project).Error)
+	query.Set("default_transaction_read_only", "on")
+	u.RawQuery = query.Encode()
+	source, err := openGORM(Config{DSN: u.String(), LogLevel: logger.Error})
+	require.NoError(t, err)
+	pool, err := source.DB()
+	require.NoError(t, err)
+	defer pool.Close()
+	pool.SetMaxOpenConns(1)
+	require.True(t, source.PrepareStmt, "use the normal store's prepared-statement configuration")
+	source = source.WithContext(ctx)
+	var frozen string
+	require.NoError(t, source.Raw(`SHOW default_transaction_read_only`).Scan(&frozen).Error)
+	require.Equal(t, "on", frozen)
+	var before string
+	require.NoError(t, source.Raw(`SELECT to_jsonb(m)::text||':'||xmin::text FROM memories m WHERE id=1`).Scan(&before).Error)
+	defer func() {
+		var after string
+		require.NoError(t, source.Raw(`SELECT to_jsonb(m)::text||':'||xmin::text FROM memories m WHERE id=1`).Scan(&after).Error)
+		require.Equal(t, before, after, "Census and Preflight must preserve the source row and xmin")
+	}()
+	vault, err := vaultcrypto.OpenExistingVault(&config.Config{EncryptionKey: strings.Repeat("ab", 32)})
+	require.NoError(t, err)
+	store := NewProjectConsolidationStore(source, vault, nil)
+	census, err := store.Census(ctx, "prepared-source-regression")
+	require.NoError(t, err, "normal prepared source must support Census")
+	require.Len(t, census.Tables, 7, "two nonempty data tables and the five real migration186 metadata tables")
+	require.NotEmpty(t, census.Rows)
+	require.NotEmpty(t, census.Reference)
+	plan, err := store.Preflight(ctx, ConsolidationPreflightRequest{CensusReference: census.Reference, CensusFingerprint: census.Fingerprint})
+	require.NoError(t, err, "the same prepared source must support ordinary Preflight freshness checks")
+	require.NotEmpty(t, plan.Reference)
+	require.Len(t, plan.Mapping, len(census.Rows))
+	repeated, err := store.Preflight(ctx, ConsolidationPreflightRequest{CensusReference: census.Reference, CensusFingerprint: census.Fingerprint})
+	require.NoError(t, err)
+	require.Equal(t, plan.Fingerprint, repeated.Fingerprint)
+	require.Equal(t, plan.Mapping, repeated.Mapping)
 }
 
 func TestProjectConsolidationNativePhysicalDatabaseIdentity(t *testing.T) {
