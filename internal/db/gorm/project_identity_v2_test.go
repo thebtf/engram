@@ -27,7 +27,7 @@ type invalidIdentityVector struct {
 
 func loadInvalidIdentityVectors(t *testing.T) []invalidIdentityVector {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "..", "..", ".agent", "specs", "security-project-identity", "evidence", "project-identity-v2-vectors.json"))
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "testdata", "project-identity", "project-identity-v2-vectors.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
