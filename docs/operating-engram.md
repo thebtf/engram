@@ -7,8 +7,8 @@ server configuration, retained readers, Code Workspace, and restart procedures.
 
 ## Версия, установка и обновление
 
-В сравниваемом source-кандидате `ef76bc0569f39db64de1398b01d9676d0b650c15`
-серверный daemon и plugin/client/parser manifests объявляют `7.0.0`.
+Для этого source-выпуска серверный daemon и plugin/client/parser manifests
+объявляют `7.0.1`.
 Это версия исходников, а не доказательство опубликованного релиза, обновлённого
 каталога marketplace или установленного комплекта. Установленные версии и байты
 проверяются отдельно. Локальная synthetic/no-auth проверка не подтверждает
