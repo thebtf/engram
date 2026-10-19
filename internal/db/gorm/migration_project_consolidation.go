@@ -113,3 +113,21 @@ func projectConsolidationMigration186() *gormigrate.Migration {
 		return nil
 	}, Rollback: func(tx *gormlib.DB) error { return consolidationHold("RETAIN_MIGRATION_METADATA") }}
 }
+
+func issueProjectWriteScopeMigration189() *gormigrate.Migration {
+	return &gormigrate.Migration{
+		ID: "189_issue_project_write_scope",
+		Migrate: func(tx *gormlib.DB) error {
+			// Metadata updates must not rebind retained issue provenance.
+			if err := tx.Exec(`CREATE OR REPLACE TRIGGER engram_consolidation_scope_write
+				BEFORE INSERT OR UPDATE OF source_project, target_project ON issues
+				FOR EACH ROW EXECUTE FUNCTION engram_consolidation_write_guard('source_project', 'target_project')`).Error; err != nil {
+				return fmt.Errorf("migration 189: %w", err)
+			}
+			return nil
+		},
+		Rollback: func(*gormlib.DB) error {
+			return fmt.Errorf("migration 189 rollback refused: retained issue metadata writes must remain independent of project-role assignments")
+		},
+	}
+}

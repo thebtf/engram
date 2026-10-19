@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Restore ordinary canonical-author comments and metadata updates on preserved issues through forward migration 189, without rebinding historical source/target project roles. Keep issue INSERT and explicit source/target project assignments under the existing unresolved/conflicting membership guard; preserve comment-author validation, authorization and atomic rollback.
+
 - Isolate only non-Git logical-project test fixtures through an explicit test-only temporary root, while keeping Git and SDK fixtures on native physical Windows paths. Preserve identity assertions, Git common-dir handling and production path semantics.
 
 - Adopt the byte-identical historical project-identity golden vectors into tracked testdata and read them there from the remaining GORM rejection tests, so clean source checkouts no longer depend on coordination-only `.agent` files. Preserve validation and retired-runtime boundaries.
