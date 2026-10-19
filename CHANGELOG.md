@@ -7,8 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Restore ordinary canonical-author comments and metadata updates on preserved issues through forward migration 189, without rebinding historical source/target project roles. Keep issue INSERT and explicit source/target project assignments under the existing unresolved/conflicting membership guard; preserve comment-author validation, authorization and atomic rollback.
-
 - Isolate only non-Git logical-project test fixtures through an explicit test-only temporary root, while keeping Git and SDK fixtures on native physical Windows paths. Preserve identity assertions, Git common-dir handling and production path semantics.
 
 - Adopt the byte-identical historical project-identity golden vectors into tracked testdata and read them there from the remaining GORM rejection tests, so clean source checkouts no longer depend on coordination-only `.agent` files. Preserve validation and retired-runtime boundaries.
@@ -37,6 +35,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Isolate canonical GORM/gRPC fixtures, bound their pools and await caller-owned audit writes before schema cleanup; retain restore guards and public data. Reuse focused retention/audit/gRPC proofs; the earlier 37-PASS run remains preservation FAIL (audit rows 37→40), followed by seven focused PASS with 40→40 preservation. Canonical continuity fixtures now migrate once per isolated parent (17→6), preserving every assertion and the unchanged 12m budget; reuse 22 focused lifecycle PASS plus three hash-bound slot CRUD/migration PASS from the earlier incomplete timeout run, not a full-suite or installed-acceptance claim.
 - Use registered canonical UUIDs and authenticated caller project context in MCP fixtures without weakening default-deny, privacy or pre-mutation rejection guards. Reuse 119 prior PASS plus one exact retry PASS after the context fix, not 120 fresh PASS or installed acceptance.
 - Seed the isolated operator-code fixture with a registered canonical project UUID while preserving five queue candidates, published/no-view checks and redacted provisioning errors.
+
+## [7.0.1] - 2026-10-19
+
+### Fixed
+
+- Restore ordinary canonical-author comments and metadata updates on preserved issues through forward migration 189, without rebinding historical source/target project roles. Keep issue INSERT and explicit source/target project assignments under the existing unresolved/conflicting membership guard; preserve comment-author validation, authorization and atomic rollback.
+
+### Changed
+
+- Align the server/daemon, Claude/Codex/OMP packages and marketplaces, and OpenClaw npm, descriptor and runtime metadata on 7.0.1. Regenerate package-bound client/parser policies with the qualified Go 1.26.9 Linux release producer; the unchanged parser keeps its original raw-byte provenance. Publication, production migration and installed-consumer proof remain separate release checks.
 
 ## [7.0.0] - 2026-10-16
 
@@ -2311,7 +2319,8 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v7.0.0...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v7.0.1...HEAD
+[7.0.1]: https://github.com/thebtf/engram/compare/v7.0.0...v7.0.1
 [7.0.0]: https://github.com/thebtf/engram/compare/v6.52.1...v7.0.0
 [6.52.1]: https://github.com/thebtf/engram/compare/v6.52.0...v6.52.1
 [6.52.0]: https://github.com/thebtf/engram/compare/v6.51.0...v6.52.0
