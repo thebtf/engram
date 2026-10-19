@@ -77,8 +77,25 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 		t.Fatalf("direct fixture primary Git directory unavailable: %s: %v", commonDir, err)
 	}
 	scratch := filepath.Join(filepath.Dir(commonDir), ".agent", "tmp")
+	if primary := os.Getenv("ENGRAM_TEST_PRIMARY_ROOT"); primary != "" {
+		if !filepath.IsAbs(primary) {
+			t.Fatalf("primary scratch root must be absolute: %q", primary)
+		}
+		primary, err = filepath.EvalSymlinks(primary)
+		if err != nil {
+			t.Fatal(err)
+		}
+		agent := filepath.Join(primary, ".agent")
+		if info, err := os.Lstat(agent); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			t.Fatalf("unsafe primary coordination directory %q: %v", agent, err)
+		}
+		scratch = filepath.Join(agent, "tmp")
+	}
 	if err := os.MkdirAll(scratch, 0o700); err != nil {
 		t.Fatal(err)
+	}
+	if info, err := os.Lstat(scratch); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("unsafe primary scratch directory %q: %v", scratch, err)
 	}
 	state, err := os.MkdirTemp(scratch, "ed-")
 	if err != nil {
