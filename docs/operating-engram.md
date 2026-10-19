@@ -7,8 +7,8 @@ server configuration, retained readers, Code Workspace, and restart procedures.
 
 ## Версия, установка и обновление
 
-В сравниваемом source-кандидате `ef76bc0569f39db64de1398b01d9676d0b650c15`
-серверный daemon и plugin/client/parser manifests объявляют `7.0.0`.
+Для этого source-выпуска серверный daemon и plugin/client/parser manifests
+объявляют `7.0.1`.
 Это версия исходников, а не доказательство опубликованного релиза, обновлённого
 каталога marketplace или установленного комплекта. Установленные версии и байты
 проверяются отдельно. Локальная synthetic/no-auth проверка не подтверждает
@@ -440,6 +440,28 @@ a shell `cd` alone does not change a running host's project context.
 конфигурацию и удаляет такие переменные из окружения child. Обычные server URL
 и keycard остаются отдельными credentials доступа. Исторические записи,
 миграционные readers и проверки авторизации не отменяются этим cutover.
+
+#### Комментарии к сохранённым Issues
+
+Миграция `189_issue_project_write_scope` сохраняет project guard на `INSERT issues`
+и на явных `UPDATE source_project/target_project`. Обновление только метаданных,
+включая `updated_at` при комментарии, не разрешает старые selectors заново и
+не меняет историческую project-привязку. Поэтому автор с canonical UUID может
+добавить обычный комментарий к сохранённому issue без ручного adoption его
+старых source/target selectors.
+
+Guard `issue_comments.author_project`, авторизация и проверки остальных
+project-ролей не меняются. Новые или явно записываемые project selectors без
+подтверждённого membership, а также применимые conflicting redirects получают
+прежний отказ. Ошибка вставки комментария или обновления родителя откатывает
+обе записи в одной транзакции.
+
+Миграция меняет один trigger, а не строки или memberships. Она выполняется
+обычной цепочкой запуска после `188`; production rollout требует отдельного
+допуска. DDL требует блокировку таблицы `issues`. Rollback миграции запрещён,
+чтобы не вернуть отказ комментариев; для последующего ремонта нужен forward
+путь. Старые sealed consolidation plans привязаны к прежней схеме: после
+изменения trigger получи свежий Census/Preflight, не переиспользуй старый plan.
 
 ### Первая запись документа
 

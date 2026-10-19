@@ -17,6 +17,7 @@ test('OpenClaw consumes the real Go UUID across concurrent roots and moves', asy
  const roots = ['one/same', 'two/same'].map(relative => path.join(base, relative));
  for (const root of roots) {
   fs.mkdirSync(root, { recursive: true });
+  execFileSync('git', ['init', '--quiet'], { cwd: root, stdio: 'pipe' });
   execFileSync(executable, ['project', 'init'], { cwd: root, stdio: 'pipe' });
  }
  const ids = roots.map(root => JSON.parse(execFileSync(executable, ['project', 'resolve', '--root', root, '--json'], { encoding: 'utf8' })).project_id);

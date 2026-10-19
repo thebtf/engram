@@ -36,6 +36,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Use registered canonical UUIDs and authenticated caller project context in MCP fixtures without weakening default-deny, privacy or pre-mutation rejection guards. Reuse 119 prior PASS plus one exact retry PASS after the context fix, not 120 fresh PASS or installed acceptance.
 - Seed the isolated operator-code fixture with a registered canonical project UUID while preserving five queue candidates, published/no-view checks and redacted provisioning errors.
 
+## [7.0.1] - 2026-10-19
+
+### Fixed
+
+- Restore ordinary canonical-author comments and metadata updates on preserved issues through forward migration 189, without rebinding historical source/target project roles. Keep issue INSERT and explicit source/target project assignments under the existing unresolved/conflicting membership guard; preserve comment-author validation, authorization and atomic rollback.
+
+### Changed
+
+- Align the server/daemon, Claude/Codex/OMP packages and marketplaces, and OpenClaw npm, descriptor and runtime metadata on 7.0.1. Regenerate package-bound client/parser policies with the qualified Go 1.26.9 Linux release producer; the unchanged parser keeps its original raw-byte provenance. Publication, production migration and installed-consumer proof remain separate release checks.
+
 ## [7.0.0] - 2026-10-16
 
 Prepare the accepted v7.0.0 source identity for R1 canonical-project memory continuity ([#568](https://github.com/thebtf/engram/pull/568)). Align the daemon, Claude/Codex/OMP package manifests and marketplace metadata; OpenClaw now follows the main Engram 7.0.0 release line in its npm package, descriptor, and runtime plugin metadata. The previously published OpenClaw 3.9.2 remains historical. Preserve the implementation facts and evidence limits below. This entry is not proof of canonical policy generation, publication, installation or ordinary-consumer release acceptance. The full semantic/code/graph and two-dirty-worktree journey remains required R2 work, not a completed R1 outcome.
@@ -2309,7 +2319,8 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v7.0.0...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v7.0.1...HEAD
+[7.0.1]: https://github.com/thebtf/engram/compare/v7.0.0...v7.0.1
 [7.0.0]: https://github.com/thebtf/engram/compare/v6.52.1...v7.0.0
 [6.52.1]: https://github.com/thebtf/engram/compare/v6.52.0...v6.52.1
 [6.52.0]: https://github.com/thebtf/engram/compare/v6.51.0...v6.52.0

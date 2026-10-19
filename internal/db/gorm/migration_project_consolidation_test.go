@@ -452,3 +452,64 @@ func consolidationTestDatabaseConfig(t *testing.T, dsn, role string) *pgx.ConnCo
 	require.Empty(t, cfg.Fallbacks, "fixture DSN must not fall back to another PostgreSQL target")
 	return cfg
 }
+
+func TestIssueProjectWriteScopeMigration189UpgradeAndReplay(t *testing.T) {
+	db, schema := openInterventionReceiptMigrationTestDB(t)
+	snapshot := func(query string, args ...any) string {
+		t.Helper()
+		var value string
+		require.NoError(t, db.Raw(query, args...).Row().Scan(&value))
+		return value
+	}
+	project := uuid.NewString()
+	require.NoError(t, db.Create(&Project{ID: project}).Error)
+	issue := Issue{Title: "preserved forward migration issue", SourceProject: project, TargetProject: project, SourceAgent: "original-agent"}
+	require.NoError(t, db.Create(&issue).Error)
+	require.NoError(t, db.Create(&IssueComment{IssueID: issue.ID, AuthorProject: project, AuthorAgent: "original-agent", Body: "preserved comment"}).Error)
+	// Reconstruct the already-applied 188 trigger state through its original owner.
+	require.NoError(t, projectConsolidationMigration186().Migrate(db))
+	migration := issueProjectWriteScopeMigration189()
+	deleted := db.Exec(`DELETE FROM migrations WHERE id = ?`, migration.ID)
+	require.NoError(t, deleted.Error)
+	require.EqualValues(t, 1, deleted.RowsAffected)
+	functionsSQL := `SELECT jsonb_agg(jsonb_build_object('oid', p.oid, 'definition', pg_get_functiondef(p.oid)) ORDER BY p.proname)::text
+		FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+		WHERE n.nspname = current_schema() AND p.proname IN ('engram_consolidation_scope', 'engram_consolidation_write_guard')`
+	otherTriggersSQL := `SELECT jsonb_agg(jsonb_build_object('oid', t.oid, 'mode', t.tgenabled, 'definition', pg_get_triggerdef(t.oid)) ORDER BY c.relname, t.tgname)::text
+		FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = current_schema() AND c.relname <> 'issues' AND NOT t.tgisinternal`
+	issueTriggerSQL := `SELECT pg_get_triggerdef(oid) FROM pg_trigger WHERE tgrelid = 'issues'::regclass AND tgname = 'engram_consolidation_scope_write'`
+	dataSQL := `SELECT jsonb_build_object(
+		'issues', (SELECT jsonb_agg(to_jsonb(i) ORDER BY id) FROM issues i),
+		'comments', (SELECT jsonb_agg(to_jsonb(c) ORDER BY id) FROM issue_comments c),
+		'memberships', (SELECT jsonb_agg(to_jsonb(m) ORDER BY reference) FROM project_consolidation_memberships m),
+		'redirects', (SELECT jsonb_agg(to_jsonb(r) ORDER BY selector, session_id) FROM project_consolidation_redirects r)
+	)::text`
+	functionsBefore, otherTriggersBefore, dataBefore := snapshot(functionsSQL), snapshot(otherTriggersSQL), snapshot(dataSQL)
+	require.NotContains(t, snapshot(issueTriggerSQL), "UPDATE OF")
+	require.NoError(t, runMigrations(db), "normal startup must apply the pending forward migration after 188")
+	var applied186, applied188, applied189 int
+	require.NoError(t, db.Raw(`SELECT count(*) FROM migrations WHERE id = '186_project_consolidation'`).Scan(&applied186).Error)
+	require.NoError(t, db.Raw(`SELECT count(*) FROM migrations WHERE id = '188_memory_principal_constraints'`).Scan(&applied188).Error)
+	require.NoError(t, db.Raw(`SELECT count(*) FROM migrations WHERE id = ?`, migration.ID).Scan(&applied189).Error)
+	require.Equal(t, 1, applied186)
+	require.Equal(t, 1, applied188)
+	require.Equal(t, 1, applied189)
+	triggerAfter := snapshot(issueTriggerSQL)
+	require.Contains(t, triggerAfter, "BEFORE INSERT OR UPDATE OF source_project, target_project")
+	require.Contains(t, triggerAfter, "engram_consolidation_write_guard('source_project', 'target_project')")
+	require.Contains(t, triggerAfter, "ON "+schema+".issues")
+	require.JSONEq(t, functionsBefore, snapshot(functionsSQL), "both scope functions must retain their exact OIDs and definitions")
+	require.JSONEq(t, otherTriggersBefore, snapshot(otherTriggersSQL), "comment-author and all other triggers must remain unchanged")
+	require.JSONEq(t, dataBefore, snapshot(dataSQL), "forward DDL must not rewrite rows, comments or memberships")
+	ledgerAfter := snapshot(`SELECT jsonb_agg(id ORDER BY id)::text FROM migrations`)
+	require.NoError(t, runMigrations(db), "completed startup replay must be a no-op")
+	require.NoError(t, migration.Migrate(db), "the one trigger replacement must be idempotent")
+	require.ErrorContains(t, migration.Rollback(db), "retained issue metadata writes must remain independent")
+	require.Equal(t, triggerAfter, snapshot(issueTriggerSQL))
+	require.JSONEq(t, ledgerAfter, snapshot(`SELECT jsonb_agg(id ORDER BY id)::text FROM migrations`))
+	require.JSONEq(t, functionsBefore, snapshot(functionsSQL))
+	require.JSONEq(t, otherTriggersBefore, snapshot(otherTriggersSQL))
+	require.JSONEq(t, dataBefore, snapshot(dataSQL))
+	t.Log("migration 189: original 188 trigger upgraded by normal startup; scope functions, other triggers and durable data unchanged; replay idempotent; rollback refused")
+}

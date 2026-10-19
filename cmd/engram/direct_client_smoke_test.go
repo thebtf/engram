@@ -44,6 +44,40 @@ func (f *directDiscoveryFixture) Initialize(_ context.Context, request *pb.Initi
 	}, nil
 }
 
+func directFixtureTempRoot(t *testing.T, cwd, physicalRoot string) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		return physicalRoot
+	}
+	relative, err := filepath.Rel(cwd, physicalRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return relative
+}
+
+func TestDirectFixtureTempRoot(t *testing.T) {
+	physical := "/primary/.agent/tmp/ed-1/temp"
+	cases := []struct{ cwd, want string }{
+		{"/candidate", "../primary/.agent/tmp/ed-1/temp"},
+		{"/candidate/cmd/engram", "../../../primary/.agent/tmp/ed-1/temp"},
+	}
+	if runtime.GOOS == "windows" {
+		physical = `D:\primary\.agent\tmp\ed-1\temp`
+		cases = []struct{ cwd, want string }{
+			{`C:\candidate`, physical},
+			{`C:\candidate\cmd\engram`, physical},
+		}
+	}
+	for _, tc := range cases {
+		t.Run(tc.cwd, func(t *testing.T) {
+			if got := directFixtureTempRoot(t, tc.cwd, physical); got != tc.want {
+				t.Fatalf("fixture temp root = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -77,8 +111,25 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 		t.Fatalf("direct fixture primary Git directory unavailable: %s: %v", commonDir, err)
 	}
 	scratch := filepath.Join(filepath.Dir(commonDir), ".agent", "tmp")
+	if primary := os.Getenv("ENGRAM_TEST_PRIMARY_ROOT"); primary != "" {
+		if !filepath.IsAbs(primary) {
+			t.Fatalf("primary scratch root must be absolute: %q", primary)
+		}
+		primary, err = filepath.EvalSymlinks(primary)
+		if err != nil {
+			t.Fatal(err)
+		}
+		agent := filepath.Join(primary, ".agent")
+		if info, err := os.Lstat(agent); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			t.Fatalf("unsafe primary coordination directory %q: %v", agent, err)
+		}
+		scratch = filepath.Join(agent, "tmp")
+	}
 	if err := os.MkdirAll(scratch, 0o700); err != nil {
 		t.Fatal(err)
+	}
+	if info, err := os.Lstat(scratch); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("unsafe primary scratch directory %q: %v", scratch, err)
 	}
 	state, err := os.MkdirTemp(scratch, "ed-")
 	if err != nil {
@@ -90,36 +141,25 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 	if err := os.Mkdir(physicalTempRoot, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	unixTempRoot, err := filepath.Rel(root, physicalTempRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tempRoot := unixTempRoot
-	if runtime.GOOS == "windows" {
-		// GetTempPath2 resolves Windows TEMP independently of the child cwd.
-		tempRoot = physicalTempRoot
-	}
+	tempRoot := directFixtureTempRoot(t, root, physicalTempRoot)
 	t.Cleanup(func() {
 		if err := os.RemoveAll(state); err != nil {
 			t.Error(err)
 		}
 	})
-	probeRoot, err := filepath.Rel(filepath.Join(root, "cmd", "engram"), physicalTempRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
+	probeRoot := directFixtureTempRoot(t, filepath.Join(root, "cmd", "engram"), physicalTempRoot)
 	namespace := muxcoreInstallationNamespace(strings.Repeat("0", 32))
-	for _, socketRoot := range []string{unixTempRoot, probeRoot} {
-		for _, socket := range []string{
-			muxserverid.DaemonControlPath(socketRoot, namespace),
-			muxserverid.ControlPath(socketRoot, namespace, strings.Repeat("0", 16)),
-		} {
-			if len([]byte(socket)) > 103 {
-				t.Fatalf("direct fixture Unix socket exceeds Darwin AF_UNIX pathname bound: %q (%d bytes)", socket, len([]byte(socket)))
+	if runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
+		for _, socketRoot := range []string{tempRoot, probeRoot} {
+			for _, socket := range []string{
+				muxserverid.DaemonControlPath(socketRoot, namespace),
+				muxserverid.ControlPath(socketRoot, namespace, strings.Repeat("0", 16)),
+			} {
+				if len([]byte(socket)) > 103 {
+					t.Fatalf("direct fixture Unix socket exceeds Darwin AF_UNIX pathname bound: %q (%d bytes)", socket, len([]byte(socket)))
+				}
 			}
 		}
-	}
-	if runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
 		for _, socket := range []string{
 			muxserverid.DaemonControlPath(probeRoot, namespace),
 			muxserverid.ControlPath(probeRoot, namespace, strings.Repeat("0", 16)),
@@ -166,13 +206,7 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	controlRoot, err := filepath.Rel(commandDir, physicalTempRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if runtime.GOOS == "windows" {
-		controlRoot = physicalTempRoot
-	}
+	controlRoot := directFixtureTempRoot(t, commandDir, physicalTempRoot)
 	t.Cleanup(func() {
 		identity, err := os.ReadFile(filepath.Join(state, "installation", "client-instance-id"))
 		if err != nil {

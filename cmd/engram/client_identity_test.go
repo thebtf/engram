@@ -1,28 +1,38 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // Keep installation fixtures under the physical primary checkout: macOS
 // t.TempDir can live beneath /var, a symlink to /private/var.
 func clientIdentityTempDir(t *testing.T) string {
 	t.Helper()
-	output, err := exec.Command("git", "rev-parse", "--path-format=absolute", "--git-common-dir").Output()
-	if err != nil {
-		t.Fatal(err)
+	primary := os.Getenv("ENGRAM_TEST_PRIMARY_ROOT")
+	if primary == "" {
+		output, err := exec.Command("git", "rev-parse", "--path-format=absolute", "--git-common-dir").Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		common := strings.TrimSpace(string(output))
+		if filepath.Base(common) != ".git" {
+			t.Fatalf("unexpected Git common directory %q", common)
+		}
+		primary = filepath.Dir(common)
+	} else if !filepath.IsAbs(primary) {
+		t.Fatalf("primary scratch root must be absolute: %q", primary)
 	}
-	common := strings.TrimSpace(string(output))
-	if filepath.Base(common) != ".git" {
-		t.Fatalf("unexpected Git common directory %q", common)
-	}
-	primary, err := filepath.EvalSymlinks(filepath.Dir(common))
+	primary, err := filepath.EvalSymlinks(primary)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,13 +49,23 @@ func clientIdentityTempDir(t *testing.T) string {
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		t.Fatalf("unsafe primary scratch directory %q: %v", scratch, err)
 	}
-	dir, err := os.MkdirTemp(scratch, "client-identity-")
+	dir, err := os.MkdirTemp(scratch, "clientidentity-")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := os.RemoveAll(dir); err != nil {
-			t.Error(err)
+		// Windows can briefly retain an exited client's executable mapping.
+		start, delay := time.Now(), time.Millisecond
+		for {
+			err := os.RemoveAll(dir)
+			if runtime.GOOS != "windows" || !errors.Is(err, syscall.Errno(5)) || time.Since(start)+delay >= 2*time.Second {
+				if err != nil {
+					t.Error(err)
+				}
+				return
+			}
+			time.Sleep(delay)
+			delay *= 2
 		}
 	})
 	return dir

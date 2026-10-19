@@ -44,7 +44,7 @@ distinct. The knowledge project is not a code Source/Checkout/View selection or 
 
 Установка, обновление и сохранность client-data/Vault описаны в
 [operating guide](../../docs/operating-engram.md#версия-установка-и-обновление).
-Manifest `7.0.0` в source-кандидате `ef76bc0569f39db64de1398b01d9676d0b650c15`
+Manifest `7.0.1` в этом source-выпуске
 не доказывает публикацию или установленную версию. Не меняй сервер, auth mode,
 профиль, `.engram-project` или Vault key ради успешного входа.
 
