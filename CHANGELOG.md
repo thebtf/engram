@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - Restore distinct historical Knowledge Projects through a sealed, local-only membership repair on a separately restored target; preserve labels, raw rows/history, original B7 provenance and sequences. Add explicit nullable canonical issue roles and reject foreign-project detail before loading body/comments. Keep named new-project projections exact without changing NULL-label behavior. Focused real-PostgreSQL store/HTTP and CLI guard tests pass; no whole-owner, nonempty Vault, installed or production acceptance is claimed.
+- Make retained readers discoverable on the first bounded page, separate reader and metadata counts, and keep selected content first. Bind issue lists and detail to nullable canonical role UUIDs while displaying historical project origins separately; retain scoped denial and visible failures. This composed local repair does not claim whole-owner migration, installation or production acceptance.
+- Bind new unassigned repair memberships to the actual read-only planning transaction snapshot, separately from database identity. Match only new project timestamps to PostgreSQL microsecond precision; preserve the complete native verifier and all previous timestamps, xmin and B7 provenance. Cover the actual typed CLI plan/dry-run/apply/replay cycle on synthetic PostgreSQL, with separate-kind and source-target refusal.
 
 - Isolate only non-Git logical-project test fixtures through an explicit test-only temporary root, while keeping Git and SDK fixtures on native physical Windows paths. Preserve identity assertions, Git common-dir handling and production path semantics.
 

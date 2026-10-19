@@ -82,6 +82,7 @@ type projectPartitionRepairState struct {
 	ID                  string
 	Fingerprint         string
 	SourceIdentity      string
+	SourceSnapshot      string
 	Source              consolidationNativeSnapshot
 	ParentOperationID   string
 	ParentReceiptDigest string
@@ -107,6 +108,9 @@ func (s *ProjectConsolidationStore) PlanProjectPartitionRepair(ctx context.Conte
 		var err error
 		state.SourceIdentity, err = consolidationDatabaseIdentity(tx)
 		if err != nil {
+			return err
+		}
+		if err := tx.Raw("SELECT txid_current_snapshot()::text").Scan(&state.SourceSnapshot).Error; err != nil {
 			return err
 		}
 		state.Source, err = consolidationNativeRead(tx, nil)
@@ -270,7 +274,7 @@ func (s *ProjectConsolidationStore) partitionRepairMapping(tx *gormlib.DB, state
 				if exists || role.table != "memories" && role.field != "source_project" {
 					continue
 				}
-				census := consolidationCensusState{NativeSnapshot: state.SourceIdentity}
+				census := consolidationCensusState{NativeSnapshot: state.SourceSnapshot}
 				s.addCensusRow(&census, role.table, role.field, "tenant", JSONRaw(key), nil, "", false)
 				occurrence := census.Rows[0]
 				occurrence.NativeVersion = row.Version
@@ -411,6 +415,7 @@ func (s *ProjectConsolidationStore) applyProjectPartitionRepair(ctx context.Cont
 				continue
 			}
 			project := Project{ID: partition.ProjectID, DisplayName: sql.NullString{String: partition.Label, Valid: true}}
+			project.CreatedAt = tx.NowFunc().UTC().Truncate(time.Microsecond)
 			if err := tx.Create(&project).Error; err != nil {
 				return consolidationCollision(err)
 			}

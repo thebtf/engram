@@ -637,6 +637,9 @@ let issueRows = [
     source_project: fixtureProjectIDs['operator-console'],
     source_agent: 'human',
     target_project: fixtureProjectIDs.engram,
+    source_project_id: fixtureProjectIDs['operator-console'],
+    target_project_id: fixtureProjectIDs.engram,
+    project_origin: { source_project: fixtureProjectIDs['operator-console'], target_project: fixtureProjectIDs.engram },
     source_project_display_name: 'Operator Console',
     target_project_display_name: 'Engram',
     labels: ['operator-created'],
@@ -1073,7 +1076,7 @@ const server = createServer(async (req, res) => {
     const records = {
       memory: [{ id: 901, project: 'legacy', content: 'Retained memory: the original content ID survives unresolved membership.', tags: ['retained'], epistemic_type: 'fact', version: 2, status: 'active', created_at: '2026-01-01T09:00:00Z' }],
       document: [{ id: 902, project: 'legacy', path: 'retained/notes.md', content: 'Retained document knowledge; do not merge by its project name.', version: 2, doc_type: 'markdown', author: 'fixture-author', created_at: '2026-01-02T09:00:00Z' }],
-      issue: [{ id: 903, source_project: 'legacy', target_project: 'legacy', title: 'Retained unresolved issue', body: 'Keep the original issue and its discussion available.', status: 'open', type: 'task', priority: 'medium', created_at: '2026-01-03T09:00:00Z' }],
+      issue: [{ id: 903, source_project: 'legacy', target_project: 'legacy', source_project_id: null, target_project_id: null, project_origin: { source_project: 'legacy', target_project: 'legacy' }, title: 'Retained unresolved issue', body: 'Keep the original issue and its discussion available.', status: 'open', type: 'task', priority: 'medium', created_at: '2026-01-03T09:00:00Z' }],
     }
     let rows = records[kind]
     if (unresolvedMatch[2] === 'history') {
@@ -1753,6 +1756,9 @@ const server = createServer(async (req, res) => {
         source_project: source,
         source_agent: 'human',
         target_project: target,
+        source_project_id: source,
+        target_project_id: target,
+        project_origin: { source_project: source, target_project: target },
         source_project_display_name: '',
         target_project_display_name: '',
         labels: Array.isArray(body.labels) ? body.labels.filter((label) => typeof label === 'string') : [],
@@ -1777,6 +1783,8 @@ const server = createServer(async (req, res) => {
     }
     if (req.method === 'GET') {
       const issue = issueRows[index]
+      const project = url.searchParams.get('project')
+      if (project && issue.source_project_id !== project && issue.target_project_id !== project) { json(res, 403, { error: 'issue project scope mismatch' }); return }
       const comments = issueComments.filter((comment) => comment.issue_id === id).map((comment) => ({ ...comment }))
       json(res, 200, {
         issue: { ...issue, labels: [...issue.labels] },
@@ -1979,8 +1987,8 @@ const server = createServer(async (req, res) => {
       const target = url.searchParams.get('target_project')
       const actor = url.searchParams.get('source_agent')
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500 || !Number.isSafeInteger(offset) || offset < 0 || [project, source, target].some((id) => id !== null && !projectIds.includes(id))) { json(res, 400, { error: 'invalid issue list filter' }); return }
-      const rows = issueRows.filter((row) => (!project || row.source_project === project || row.target_project === project)
-        && (!source || row.source_project === source) && (!target || row.target_project === target)
+      const rows = issueRows.filter((row) => (!project || row.target_project_id === project)
+        && (!source || row.source_project_id === source) && (!target || row.target_project_id === target)
         && (actor === null || row.source_agent === actor)
         && ['status', 'priority', 'type'].every((key) => !url.searchParams.has(key) || row[key] === url.searchParams.get(key)))
       json(res, 200, {

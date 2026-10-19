@@ -25,6 +25,9 @@ function issue(id: number) {
   type: 'task',
   source_project: sourceProject,
   target_project: targetProject,
+  source_project_id: sourceProject,
+  target_project_id: targetProject,
+  project_origin: { source_project: sourceProject, target_project: targetProject },
   labels: [],
   created_at: '2026-09-16T12:00:00.000Z',
   updated_at: '2026-09-16T12:00:00.000Z',
@@ -100,7 +103,7 @@ test('issue source and target choices use distinct catalog IDs, never row aliase
    ], unresolved: []
   }
  }))
- await page.route('**/api/issues?**', (route) => route.fulfill({ json: { issues: [{ ...issue(1), source_project: 'historical-row-alias' }], total: 1 } }))
+ await page.route('**/api/issues?**', (route) => route.fulfill({ json: { issues: [{ ...issue(1), source_project: 'historical-row-alias', project_origin: { source_project: 'historical-row-alias', target_project: targetProject } }], total: 1 } }))
  let trackedReads = 0
  page.on('request', (request) => { if (new URL(request.url()).pathname === '/api/issues/tracked-projects') trackedReads++ })
  await page.goto(`/issues?project=${targetProject}`)
@@ -126,7 +129,7 @@ test('human issue create and scoped detail links retain source UUID and explicit
  await page.route('**/api/issues?**', route => route.fulfill({ json: { issues: created ? [created] : [], total: created ? 1 : 0 } }))
  await page.route('**/api/issues', async route => {
   requested = route.request().postDataJSON()
-  created = { ...issue(99), title: 'Synthetic cross-project handoff', source_project: targetProject, target_project: sourceProject, priority: 'high', type: 'bug', labels: ['operator-created'] }
+  created = { ...issue(99), title: 'Synthetic cross-project handoff', source_project: targetProject, target_project: sourceProject, source_project_id: targetProject, target_project_id: sourceProject, project_origin: { source_project: targetProject, target_project: sourceProject }, priority: 'high', type: 'bug', labels: ['operator-created'] }
   await route.fulfill({ json: { id: 99, operation_state: 'completed' } })
  })
  await page.route('**/api/issues/99**', route => {

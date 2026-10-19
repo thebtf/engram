@@ -104,6 +104,9 @@ func TestProjectPartitionRepairPublicConsumers(t *testing.T) {
 					assert.Equal(t, &expected, actual)
 				}
 			}
+			var origin issueProjectOrigin
+			require.NoError(t, json.Unmarshal(result.Issues[0]["project_origin"], &origin))
+			assert.Equal(t, issueProjectOrigin{"former-http-alpha", "former-http-beta"}, origin)
 		}
 	})
 	t.Run("scoped_issue_detail_refuses_unrelated_project", func(t *testing.T) {
@@ -118,6 +121,13 @@ func TestProjectPartitionRepairPublicConsumers(t *testing.T) {
 			require.Equal(t, http.StatusOK, response.Code, response.Body.String())
 			require.Contains(t, response.Body.String(), issue.Body)
 			require.Contains(t, response.Body.String(), "preserved public history")
+			var result struct {
+				Issue issueReadItem `json:"issue"`
+			}
+			require.NoError(t, json.Unmarshal(response.Body.Bytes(), &result))
+			assert.Equal(t, &a, result.Issue.SourceProjectID)
+			assert.Equal(t, &b, result.Issue.TargetProjectID)
+			assert.Equal(t, issueProjectOrigin{"former-http-alpha", "former-http-beta"}, result.Issue.ProjectOrigin)
 		}
 	})
 	t.Run("legacy_selector_still_rejected", func(t *testing.T) {

@@ -144,10 +144,33 @@ func TestProjectPartitionRepairOrdinaryConsumers(t *testing.T) {
 	consolidationTestDatabaseConfig(t, targetDSN, "restore")
 	target := openMigratedTestDBInSchema(t, targetDSN, schema, "engram_partition_repair_target")
 	partitionRepairCloneFixture(t, source, target)
+	target.NowFunc = func() time.Time { return time.Date(2026, 10, 19, 12, 0, 0, 123456900, time.UTC) }
 	var parent consolidationOperation
 	require.NoError(t, source.Where("operation_id=?", parentID).Take(&parent).Error)
 	parentDigest := consolidationCipherHash(parent.Receipt)
 	engine := NewProjectConsolidationStore(source, vault, target)
+	t.Run("new_unassigned_plan_uses_actual_source_transaction_snapshot", func(t *testing.T) {
+		require.NoError(t, source.Transaction(func(tx *gormlib.DB) error {
+			var actualSnapshot string
+			require.NoError(t, tx.Raw("SELECT txid_current_snapshot()::text").Scan(&actualSnapshot).Error)
+			planner := NewProjectConsolidationStore(tx, vault, nil)
+			plan, err := planner.PlanProjectPartitionRepair(ctx, parentDigest)
+			require.NoError(t, err)
+			var captured projectPartitionRepairState
+			require.NoError(t, planner.open(plan.Reference, projectPartitionRepairKind, &captured))
+			assert.Equal(t, consolidationCipherHash([]byte(actualSnapshot)), consolidationCipherHash([]byte(captured.SourceSnapshot)))
+			additions := 0
+			for _, patch := range captured.Patches {
+				if patch.Before == nil {
+					additions++
+					assert.Equal(t, consolidationCipherHash([]byte(actualSnapshot)), consolidationCipherHash([]byte(patch.After.SourceSnapshot)))
+					assert.NotEqual(t, captured.SourceIdentity, patch.After.SourceSnapshot)
+				}
+			}
+			require.Equal(t, 1, additions)
+			return nil
+		}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true}))
+	})
 	t.Run("failed_receipt_append_rolls_back_every_table", func(t *testing.T) {
 		for _, fixture := range []*gormlib.DB{source, target} {
 			require.NoError(t, fixture.Exec(`ALTER TABLE project_consolidation_operations ADD CONSTRAINT partition_fixture_reject_repair CHECK (receipt->>'kind' IS DISTINCT FROM 'project-partition-repair/v1')`).Error)
@@ -196,6 +219,18 @@ func TestProjectPartitionRepairOrdinaryConsumers(t *testing.T) {
 	require.False(t, applied.Replay)
 	require.Equal(t, 10, applied.Receipt.MembershipChanges)
 	require.Equal(t, 1, applied.Receipt.UnassignedAdditions)
+	t.Run("new_unassigned_membership_preserves_sealed_source_snapshot", func(t *testing.T) {
+		var captured projectPartitionRepairState
+		require.NoError(t, engine.open(plan.Reference, projectPartitionRepairKind, &captured))
+		for _, patch := range captured.Patches {
+			if patch.Before == nil {
+				var stored ConsolidationMembership
+				require.NoError(t, target.Where("reference=?", patch.After.Reference).Take(&stored).Error)
+				assert.Equal(t, consolidationCipherHash([]byte(captured.SourceSnapshot)), consolidationCipherHash([]byte(stored.SourceSnapshot)))
+				assert.NotEqual(t, captured.SourceIdentity, stored.SourceSnapshot)
+			}
+		}
+	})
 	before := streamIntegrityRead(t, target)
 	replayed, err := engine.ApplyProjectPartitionRepair(ctx, request)
 	require.NoError(t, err)

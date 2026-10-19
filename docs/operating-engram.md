@@ -556,10 +556,11 @@ Production переключение требует актуальной инве
    ```
 
 Repair добавляет canonical registry rows с прежними labels, меняет только разрешённый `project_id` membership и добавляет недостающую unassigned metadata. Raw project values, bodies/history, прежние registry rows и B7 receipt, Vault, redirects, schema и sequences не переписываются. Unknown, ambiguous, empty-unproven и NULL Source остаются без придуманного UUID. Новая подписанная receipt хранится отдельно от B7; повтор того же Apply проверяет receipt и весь target без новой записи. Изменение source/target, неверный plan ID или конфликт не разрешают обход conservation guard.
+Новая unassigned membership сохраняет реальный `txid_current_snapshot()` read-only транзакции планирования; sealed plan связывает его отдельно от database identity. Прежний `SourceSnapshot` не меняется. Только новые registry rows получают UTC timestamp с точностью PostgreSQL до микросекунды; timestamps и `xmin` старых строк сохраняются.
 
 Обычные issue readers возвращают явные nullable `source_project_id` и `target_project_id`; исходные строки сохранены в `project_origin`. `project=<UUID>` фильтрует target, `source_project=<UUID>` — source; фильтры независимы, не ограничены по умолчанию `source_agent=human`. Detail с `project` проверяет одну из этих canonical ролей до выдачи body/comments. Unscoped reads сохраняют прежнюю политику доступа.
 
-Focused synthetic PostgreSQL proof: 3 новых проекта, 10 membership targets, 1 unassigned addition, 40 неизменённых sequences; source read-only, dry-run/failed-append rollback, replay и обычные store/HTTP readers прошли. CLI проверен на разборе аргументов, help и раннем отказе, не полным CLI data cycle. Это не whole-owner rehearsal, проверка непустого Vault corpus, установленного binary или production cutover.
+Focused synthetic PostgreSQL proof: 3 новых проекта, 10 membership targets, 1 unassigned addition, 40 неизменённых sequences; source read-only, dry-run/failed-append rollback, replay и обычные store/HTTP readers прошли. Отдельный реальный CLI data cycle проверяет приватный typed plan-файл, dry-run с полным откатом, Apply/replay, отказ от source-as-target и запрет использования repair plan как adoption plan. Regression clock с ненулевыми наносекундами и сверка sealed provenance проверены без ослабления native conservation. Это не whole-owner rehearsal, проверка непустого Vault corpus, установленного binary или production cutover.
 
 #### Существующий HTTP transport до проверенного cutover
 

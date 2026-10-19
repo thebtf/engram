@@ -88,6 +88,18 @@ within the same proven project scope. Scope changes clear rows and totals before
 the selection gate, including pending or unresolved selection. The create entry
 reflects its existing context guard; all-project browsing still permits an explicit
 canonical source/target form after a healthy catalog read.
+Issue list/detail DTOs carry independent `source_project_id` and
+`target_project_id` values (`UUID | null`). Those fields alone bind canonical
+scope and labels; raw `source_project`/`target_project` strings never substitute
+for either role. Required `project_origin: { source_project, target_project }`
+keeps the unchanged historical strings separately inspectable in detail's
+technical section. A null role stays unresolved, including when its origin
+resembles another canonical ID. Scoped detail accepts either proven role and
+clears body/comments on a mismatch or read failure. Incoming list `project`
+and outgoing `source_project` filters remain distinct; list reads do not add a
+human actor. Missing/malformed canonical roles or provenance are errors, not
+legacy fallbacks. This depends on the matching backend DTO repair; it is not
+installed acceptance or proof that project migration is complete.
 The `unavailable catalog and issue reads` compiled-consumer regression in
 `tests/composables/auth-session.spec.mjs` covers unknown/error/empty, same-scope
 retention and project isolation. The 2026-10-15 e38 frontend overlay over diagnostic
@@ -164,6 +176,17 @@ is sent for that group. This does not claim its original data is absent or grant
 access to separately authorized native/Vault readers. An explicitly linked
 unsupported kind remains visibly unavailable without silently substituting it.
 
+Group discovery starts with groups that advertise reader kinds, not metadata-only
+rows. It shows the actual total, reader-kind and metadata-only group counts;
+these are not record counts or proof of availability. The explicit metadata-only
+view preserves every remaining group and its reason. Both views use 20 groups
+per page and search group names, reasons and raw/localized reader-kind labels.
+Group search, view and pagination stay separate from content `q`/`cursor` and
+never change or reload the active reader. The selected reader appears before
+the group list; group links retain the exact opaque reference and original
+return context without carrying the previous group's kind or content cursor.
+This presentation neither assigns project membership nor completes migration.
+
 Document links retain their original path, requested version and comparison version.
 The review binds history to an explicit content ID, an exact matching record, or the
 single retained record for that path. It never substitutes another version as the
@@ -186,6 +209,11 @@ real record/history metadata and scoped selection/navigation. The focused
 `canonical retained SFC renders decoded records without page provenance` case in
 `tests/composables/auth-session.spec.mjs` compiles the real Vue page and renders real
 decoder output, checking record IDs, bodies, metadata fields and absence of render errors.
+The same `project-catalog.spec.mjs` owner imports
+`retained-reader-discovery.spec.mjs`, which compiles the real page with its real
+catalog, retained-reader and HTTP-status handling. It covers reader-first group
+selection, bounded group paging/search, separate metadata review and counters,
+selected-content ordering, exact return context and existing refusal/empty states.
 These checks use synthetic public DTOs, not a live API or browser. Separately,
 Root accepted local real-reader evidence for the existing full 1000-byte memory,
 source/audit/return and the affected positive reader-kind controls in the recorded

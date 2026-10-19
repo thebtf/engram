@@ -30,7 +30,7 @@ async function mount(t, project = selectedProject) {
   const calls = []
   let respond
   let deleted = false
-  let row = { id: 7, title: 'Synthetic handoff', body: '', status: 'open', priority: 'medium', type: 'task', source_project: issueSourceProject, target_project: targetProject, labels: [], created_at: '2026-10-01T12:00:00Z', updated_at: '2026-10-01T12:00:00Z' }
+  let row = { id: 7, title: 'Synthetic handoff', body: '', status: 'open', priority: 'medium', type: 'task', source_project: issueSourceProject, target_project: targetProject, source_project_id: issueSourceProject, target_project_id: targetProject, project_origin: { source_project: issueSourceProject, target_project: targetProject }, labels: [], created_at: '2026-10-01T12:00:00Z', updated_at: '2026-10-01T12:00:00Z' }
   const comments = []
   const fetch = async (path, init = {}) => {
     const url = new URL(path, 'http://synthetic.invalid')
@@ -42,7 +42,7 @@ async function mount(t, project = selectedProject) {
     }
     if (url.pathname === '/api/projects') return json(catalog)
     if (url.pathname === '/api/issues' && call.method === 'GET') return json({ issues: [row], total: 1 })
-    if (url.pathname === '/api/issues' && call.method === 'POST') { row = { ...row, ...call.body }; return json({ id: row.id, operation_state: 'completed' }) }
+    if (url.pathname === '/api/issues' && call.method === 'POST') { row = { ...row, ...call.body, source_project_id: call.body.source_project, target_project_id: call.body.target_project, project_origin: { source_project: call.body.source_project, target_project: call.body.target_project } }; return json({ id: row.id, operation_state: 'completed' }) }
     if (url.pathname === '/api/issues/7' && call.method === 'GET') return deleted ? json({}, 404) : json({ issue: row, comments })
     if (url.pathname === '/api/issues/7' && call.method === 'PATCH') {
       row = { ...row, ...Object.fromEntries(Object.entries(call.body).filter(([key]) => !['source_project', 'source_agent', 'comment'].includes(key))) }
@@ -251,4 +251,110 @@ test('pending selection and catalog errors cannot dispatch human issue actions d
     state.value = state === context.selectionPending ? false : null
     await tick()
   }
+})
+
+const migratedIssue = {
+  id: 7, title: 'Migrated issue', body: 'Preserved historical issue body', status: 'open', priority: 'medium', type: 'task',
+  source_project: 'historical-source-slug', target_project: 'historical-target-slug',
+  source_project_id: issueSourceProject, target_project_id: targetProject,
+  project_origin: { source_project: 'historical-source-slug', target_project: 'historical-target-slug' },
+  labels: [], created_at: '2026-10-01T12:00:00Z', updated_at: '2026-10-01T12:00:00Z',
+}
+
+for (const project of [issueSourceProject, targetProject]) test(`canonical issue roles: migrated detail accepts its proven ${project === issueSourceProject ? 'source' : 'target'} UUID, not historical slugs`, async t => {
+  const state = await mount(t, project)
+  state.setResponder(call => call.url.pathname === '/api/issues/7' ? json({ issue: migratedIssue, comments: [] }) : undefined)
+  await state.issues.openIssue(7)
+  assert.equal(state.issues.detailState.value.kind, 'live', 'Proven canonical role must not be compared with a historical slug')
+  assert.equal(state.issues.detail.value.body, migratedIssue.body)
+  assert.equal(state.issues.detail.value.sourceProject, issueSourceProject)
+  assert.equal(state.issues.detail.value.targetProject, targetProject)
+  assert.deepEqual(state.issues.detail.value.projectOrigin, { sourceProject: migratedIssue.source_project, targetProject: migratedIssue.target_project })
+  assert.equal(state.calls.at(-1).url.searchParams.get('project'), project)
+})
+
+test('canonical issue roles: an unrelated canonical scope cannot borrow a matching raw UUID or stale detail/comments', async t => {
+  const state = await mount(t, issueSourceProject)
+  await state.issues.openIssue(7)
+  assert.equal(state.issues.detailState.value.kind, 'live')
+  await state.router.push({ path: '/issues', query: { project: selectedProject } }); await tick()
+  const forgedRaw = { ...migratedIssue, source_project: selectedProject, project_origin: { ...migratedIssue.project_origin, source_project: selectedProject } }
+  state.setResponder(call => call.url.pathname === '/api/issues/7' ? json({ issue: forgedRaw, comments: [{ id: 901, body: 'Foreign comment must not render' }] }) : undefined)
+  await state.issues.openIssue(7)
+  assert.equal(state.issues.detailState.value.kind, 'error')
+  assert.equal(state.issues.detail.value, null)
+  assert.deepEqual(state.issues.comments, [])
+})
+
+test('canonical issue roles: a NULL source role remains unresolved even when its raw value equals the canonical target', async t => {
+  const state = await mount(t, targetProject)
+  const row = { ...migratedIssue, source_project: targetProject, source_project_id: null, project_origin: { ...migratedIssue.project_origin, source_project: targetProject } }
+  state.setResponder(call => call.url.pathname === '/api/issues/7' ? json({ issue: row, comments: [] }) : undefined)
+  await state.issues.openIssue(7)
+  assert.equal(state.issues.detailState.value.kind, 'live')
+  assert.equal(state.issues.detail.value.sourceProject, null)
+  assert.equal(state.issues.detail.value.sourceDisplayName, '')
+  assert.equal(state.issues.detail.value.targetProject, targetProject)
+  assert.equal(state.issues.detail.value.projectOrigin.sourceProject, targetProject)
+})
+
+test('canonical issue roles: unscoped all-project reading preserves two NULL roles without autoassignment', async t => {
+  const state = await mount(t, 'all')
+  const row = { ...migratedIssue, source_project_id: null, target_project_id: null }
+  state.setResponder(call => call.url.pathname === '/api/issues/7' ? json({ issue: row, comments: [] }) : undefined)
+  await state.issues.openIssue(7)
+  assert.equal(state.issues.detailState.value.kind, 'live')
+  assert.equal(state.issues.detail.value.sourceProject, null)
+  assert.equal(state.issues.detail.value.targetProject, null)
+  assert.equal(state.calls.at(-1).url.searchParams.has('project'), false)
+})
+
+for (const status of [401, 403]) test(`canonical issue roles: real HTTP ${status} never exposes detail or comments`, async t => {
+  const state = await mount(t, targetProject)
+  state.setResponder(call => call.url.pathname === '/api/issues/7' ? json({ error: 'Denied' }, status) : undefined)
+  await state.issues.openIssue(7)
+  assert.equal(state.issues.detailState.value.kind, 'error')
+  assert.equal(state.issues.detailState.value.error.status, status)
+  assert.equal(state.issues.detail.value, null)
+  assert.deepEqual(state.issues.comments, [])
+})
+
+test('canonical issue roles: incoming list scope does not become outgoing source or an implicit human actor', async t => {
+  const state = await mount(t, targetProject)
+  const list = state.calls.find(call => call.url.pathname === '/api/issues' && call.method === 'GET')
+  assert.equal(list.url.searchParams.get('project'), targetProject)
+  assert.equal(list.url.searchParams.has('source_project'), false)
+  assert.equal(list.url.searchParams.has('source_agent'), false)
+})
+
+test('canonical issue roles: NULL target is not inferred from a source role or raw UUID', async t => {
+  const state = await mount(t, issueSourceProject)
+  const row = { ...migratedIssue, target_project: issueSourceProject, target_project_id: null, project_origin: { ...migratedIssue.project_origin, target_project: issueSourceProject } }
+  state.setResponder(call => call.url.pathname === '/api/issues/7' ? json({ issue: row, comments: [] }) : undefined)
+  await state.issues.openIssue(7)
+  assert.equal(state.issues.detailState.value.kind, 'live')
+  assert.equal(state.issues.detail.value.sourceProject, issueSourceProject)
+  assert.equal(state.issues.detail.value.targetProject, null)
+  assert.equal(state.issues.detail.value.targetDisplayName, '')
+})
+
+for (const fields of [
+  { source_project_id: undefined },
+  { source_project_id: 'historical-source-slug' },
+  { target_project_id: undefined },
+  { target_project_id: 'urn:engram:migration:unresolved:not-a-project' },
+  { project_origin: undefined },
+  { project_origin: { source_project: null, target_project: '' } },
+]) test(`canonical issue roles: malformed role/origin ${JSON.stringify(fields)} is a visible refusal, not a raw fallback`, async t => {
+  const state = await mount(t, issueSourceProject)
+  const row = { ...migratedIssue, ...fields }
+  state.setResponder(call => call.url.pathname === '/api/issues/7' ? json({ issue: row, comments: [] }) : call.url.pathname === '/api/issues' ? json({ issues: [row], total: 1 }) : undefined)
+  await state.issues.openIssue(7)
+  assert.equal(state.issues.detailState.value.kind, 'error')
+  assert.equal(state.issues.detailState.value.error.category, 'invalid-response')
+  assert.equal(state.issues.detail.value, null)
+  assert.deepEqual(state.issues.comments, [])
+  await state.issues.refresh()
+  assert.equal(state.issues.loadState.value.kind, 'error')
+  assert.equal(state.issues.loadState.value.error.category, 'invalid-response')
 })

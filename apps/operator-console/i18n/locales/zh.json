@@ -29,7 +29,16 @@
     "noHistory": "读取器未返回此记录的可访问历史。",
     "notOnPage": "链接的记录或版本不在此内容页。原始 ID 已保留；请查看下一页或历史。",
     "versionNotOnPage": "所请求的版本不在此历史页。请查看下一页；不会替换为其他版本。",
-    "firstPage": "第一页"
+    "firstPage": "第一页",
+    "groupCounts": "保留分组：共 {total} 组 · 提供读取类型 {readers} 组 · 仅元数据 {metadata} 组。项目归属仍未确定。",
+    "groupDiscovery": "保留分组",
+    "readerGroups": "提供读取类型的分组（{count}）",
+    "metadataGroups": "仅含元数据的分组（{count}）",
+    "searchGroups": "按名称、原因或读取类型查找分组",
+    "groupPages": "保留分组分页",
+    "noGroupMatches": "所选视图中没有符合此查询的分组。",
+    "noReaderGroups": "没有分组提供读取类型。请查看仅含元数据的分组；这不表示原始数据不存在。",
+    "noMetadataGroups": "此目录中没有仅含元数据的分组。"
   },
   "knowledge": {
     "project": "项目",
