@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,6 +22,26 @@ import (
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/projectidentity"
 )
+
+type issueProjectOrigin struct {
+	SourceProject string `json:"source_project"`
+	TargetProject string `json:"target_project"`
+}
+
+type issueReadItem struct {
+	gormdb.Issue
+	gormdb.IssueProjectRoles
+	ProjectOrigin issueProjectOrigin `json:"project_origin"`
+}
+
+type issueListReadItem struct {
+	issueReadItem
+	CommentCount int64 `json:"comment_count"`
+}
+
+func issueReadProjection(issue gormdb.Issue, roles gormdb.IssueProjectRoles) issueReadItem {
+	return issueReadItem{Issue: issue, IssueProjectRoles: roles, ProjectOrigin: issueProjectOrigin{issue.SourceProject, issue.TargetProject}}
+}
 
 // issueMutationActor accepts only read-write SourceClient keycards or
 // authenticated non-client admins. Project and agent request fields are
@@ -156,24 +177,32 @@ func (s *Service) handleListIssues(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Collect unique project IDs to avoid redundant lookups (check map before querying).
+	ids := make([]int64, len(issues))
+	for i := range issues {
+		ids[i] = issues[i].ID
+	}
+	roles, err := s.issueStore.ProjectRoles(r.Context(), ids)
+	if err != nil {
+		writeIssueStoreError(w, err)
+		return
+	}
+	items := make([]issueListReadItem, len(issues))
 	projectNames := make(map[string]string)
-	for _, iss := range issues {
-		if iss.SourceProject != "" {
-			if _, ok := projectNames[iss.SourceProject]; !ok {
-				projectNames[iss.SourceProject] = s.getProjectDisplayName(r.Context(), iss.SourceProject)
-			}
-		}
-		if iss.TargetProject != "" {
-			if _, ok := projectNames[iss.TargetProject]; !ok {
-				projectNames[iss.TargetProject] = s.getProjectDisplayName(r.Context(), iss.TargetProject)
+	for i, issue := range issues {
+		resolved := roles[issue.ID]
+		items[i] = issueListReadItem{issueReadProjection(issue.Issue, resolved), issue.CommentCount}
+		for _, project := range []*string{resolved.SourceProjectID, resolved.TargetProjectID} {
+			if project != nil {
+				if _, exists := projectNames[*project]; !exists {
+					projectNames[*project] = s.getProjectDisplayName(r.Context(), *project)
+				}
 			}
 		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"issues":        issues,
+		"issues":        items,
 		"total":         total,
 		"project_names": projectNames,
 	})
@@ -188,9 +217,20 @@ func (s *Service) handleGetIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	issue, comments, err := s.issueStore.GetIssue(r.Context(), id)
+	params, err := urlParseIssueDetail(r)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		writeDocumentError(w, http.StatusBadRequest, "an exact canonical project ID is required")
+		return
+	}
+	var issue *gormdb.Issue
+	var comments []gormdb.IssueComment
+	if params != "" {
+		issue, comments, err = s.issueStore.GetIssueForProject(r.Context(), id, params)
+	} else {
+		issue, comments, err = s.issueStore.GetIssue(r.Context(), id)
+	}
+	if err != nil {
+		if errors.Is(err, gormdb.ErrIssueNotFound) || strings.Contains(err.Error(), "not found") {
 			http.Error(w, `{"error": "issue not found"}`, http.StatusNotFound)
 			return
 		}
@@ -198,14 +238,31 @@ func (s *Service) handleGetIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	roles, err := s.issueStore.ProjectRoles(r.Context(), []int64{id})
+	if err != nil {
+		writeIssueStoreError(w, err)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"issue":                       issue,
+		"issue":                       issueReadProjection(*issue, roles[id]),
 		"comments":                    comments,
 		"comment_count":               len(comments),
 		"source_project_display_name": s.getProjectDisplayName(r.Context(), issue.SourceProject),
 		"target_project_display_name": s.getProjectDisplayName(r.Context(), issue.TargetProject),
 	})
+}
+
+func urlParseIssueDetail(r *http.Request) (string, error) {
+	query, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil { return "", err }
+	if !query.Has("project") {
+		return "", nil
+	}
+	if len(query["project"]) != 1 || !projectidentity.ValidProjectID(query.Get("project")) {
+		return "", gormdb.ErrIssueForbidden
+	}
+	return query.Get("project"), nil
 }
 
 // handleCreateIssue handles POST /api/issues.

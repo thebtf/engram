@@ -487,7 +487,11 @@ func (n *consolidationNativeState) expectRedirect(selector, session, target, fin
 }
 
 func consolidationProjectObject(project Project) (JSONRaw, error) {
-	raw, err := json.Marshal(map[string]any{"id": project.ID, "created_at": project.CreatedAt, "git_remote": nil, "relative_path": nil, "display_name": nil, "project_key": nil, "anchor_project_id": nil, "identity_scope": nil, "identity_status": nil, "removed_at": nil, "last_heartbeat": nil, "legacy_ids": nil})
+	var displayName any
+	if project.DisplayName.Valid {
+		displayName = project.DisplayName.String
+	}
+	raw, err := json.Marshal(map[string]any{"id": project.ID, "created_at": project.CreatedAt, "git_remote": nil, "relative_path": nil, "display_name": displayName, "project_key": nil, "anchor_project_id": nil, "identity_scope": nil, "identity_status": nil, "removed_at": nil, "last_heartbeat": nil, "legacy_ids": nil})
 	return JSONRaw(raw), err
 }
 

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Restore distinct historical Knowledge Projects through a sealed, local-only membership repair on a separately restored target; preserve labels, raw rows/history, original B7 provenance and sequences. Add explicit nullable canonical issue roles and reject foreign-project detail before loading body/comments. Keep named new-project projections exact without changing NULL-label behavior. Focused real-PostgreSQL store/HTTP and CLI guard tests pass; no whole-owner, nonempty Vault, installed or production acceptance is claimed.
+
 - Isolate only non-Git logical-project test fixtures through an explicit test-only temporary root, while keeping Git and SDK fixtures on native physical Windows paths. Preserve identity assertions, Git common-dir handling and production path semantics.
 
 - Adopt the byte-identical historical project-identity golden vectors into tracked testdata and read them there from the remaining GORM rejection tests, so clean source checkouts no longer depend on coordination-only `.agent` files. Preserve validation and retired-runtime boundaries.

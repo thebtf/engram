@@ -29,6 +29,9 @@ var SourceCommit string
 // @in header
 // @name X-Auth-Token
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "repair-project-partitions" {
+		os.Exit(runProjectPartitionRepair(os.Args[2:]))
+	}
 	if len(os.Args) > 1 && os.Args[1] == "consolidate-projects" {
 		os.Exit(runProjectConsolidation(os.Args[2:]))
 	}

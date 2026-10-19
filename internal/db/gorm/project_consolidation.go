@@ -1039,7 +1039,7 @@ func (s *ProjectConsolidationStore) validateUnresolvedMembership(ctx context.Con
 			}
 			for i, value := range values {
 				row := b.members[i]
-				if value.Ordinal != i+1 || value.Matches != 1 || (row.SelectorReference != "" && s.opaque("selector", value.Selector) != row.SelectorReference) || (b.table == "sources" && b.pathValues[0] == "project_id" && row.SelectorReference == "" && value.Selector != "") {
+				if value.Ordinal != i+1 || value.Matches != 1 || (row.SelectorReference != "" && s.opaque("selector", value.Selector) != row.SelectorReference) || (row.Reason == "unproven_historical_scope" && value.Selector != "") || (b.table == "sources" && b.pathValues[0] == "project_id" && row.SelectorReference == "" && value.Selector != "") {
 					return consolidationHold("STALE_REFERENCE")
 				}
 			}
