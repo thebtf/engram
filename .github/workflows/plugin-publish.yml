@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'plugin/openclaw-engram/**'
+      - "plugin/openclaw-engram/**"
   workflow_dispatch:
 
 defaults:
@@ -16,15 +16,26 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write  # Required for OIDC trusted publishing
-    environment: npm  # Must match trusted publisher config on npmjs.com
+      id-token: write # Required for OIDC trusted publishing
+    environment: npm # Must match trusted publisher config on npmjs.com
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
-          registry-url: 'https://registry.npmjs.org'
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Build candidate Go client for consumer tests
+        working-directory: .
+        run: |
+          go build -o "$RUNNER_TEMP/engram" ./cmd/engram
+          printf 'ENGRAM_EXECUTABLE=%s\n' "$RUNNER_TEMP/engram" >> "$GITHUB_ENV"
 
       - name: Install dependencies
         run: npm install --ignore-scripts
