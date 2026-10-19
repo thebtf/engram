@@ -1,4 +1,5 @@
 import type { Stats } from '@/types'
+import { parseProjectCatalog, parseProjectResolution, parseRetainedPage, parseReaderPage, credentialBinding, assertCredentialMetadata, UnresolvedProjectError, type ProjectCatalog, type RetainedKind, type RetainedPage, type ReaderPage, type MemoryReaderQuery } from './projectCatalog'
 
 const API_BASE = '/api'
 const DEFAULT_TIMEOUT = 10000 // 10 seconds
@@ -7,9 +8,9 @@ const RETRY_DELAY = 1000 // 1 second base delay
 
 /** Options accepted by the internal fetch helpers. */
 interface FetchOptions {
-  timeout?: number
-  signal?: AbortSignal
-  retries?: number
+ timeout?: number
+ signal?: AbortSignal
+ retries?: number
 }
 
 /**
@@ -18,33 +19,33 @@ interface FetchOptions {
  * cancellation are respected.
  */
 async function fetchJson<T>(url: string, options: FetchOptions = {}): Promise<T> {
-  const { timeout = DEFAULT_TIMEOUT, signal } = options
+ const { timeout = DEFAULT_TIMEOUT, signal } = options
 
-  const timeoutController = new AbortController()
-  const timeoutId = setTimeout(() => timeoutController.abort(), timeout)
+ const timeoutController = new AbortController()
+ const timeoutId = setTimeout(() => timeoutController.abort(), timeout)
 
-  const combinedSignal = signal
-    ? combineAbortSignals(signal, timeoutController.signal)
-    : timeoutController.signal
+ const combinedSignal = signal
+  ? combineAbortSignals(signal, timeoutController.signal)
+  : timeoutController.signal
 
-  try {
-    const response = await fetch(url, { signal: combinedSignal })
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
-    }
-    return response.json()
-  } catch (err) {
-    if (err instanceof Error && err.name === 'AbortError') {
-      // Distinguish user-initiated cancellation from deadline expiry.
-      if (signal?.aborted) {
-        throw err
-      }
-      throw new Error('Request timed out')
-    }
-    throw err
-  } finally {
-    clearTimeout(timeoutId)
+ try {
+  const response = await fetch(url, { signal: combinedSignal })
+  if (!response.ok) {
+   throw new Error(`HTTP ${response.status}: ${response.statusText}`)
   }
+  return response.json()
+ } catch (err) {
+  if (err instanceof Error && err.name === 'AbortError') {
+   // Distinguish user-initiated cancellation from deadline expiry.
+   if (signal?.aborted) {
+    throw err
+   }
+   throw new Error('Request timed out')
+  }
+  throw err
+ } finally {
+  clearTimeout(timeoutId)
+ }
 }
 
 /**
@@ -52,15 +53,15 @@ async function fetchJson<T>(url: string, options: FetchOptions = {}): Promise<T>
  * source signal fires.
  */
 function combineAbortSignals(...signals: AbortSignal[]): AbortSignal {
-  const controller = new AbortController()
-  for (const signal of signals) {
-    if (signal.aborted) {
-      controller.abort()
-      break
-    }
-    signal.addEventListener('abort', () => controller.abort(), { once: true })
+ const controller = new AbortController()
+ for (const signal of signals) {
+  if (signal.aborted) {
+   controller.abort()
+   break
   }
-  return controller.signal
+  signal.addEventListener('abort', () => controller.abort(), { once: true })
+ }
+ return controller.signal
 }
 
 /**
@@ -68,283 +69,308 @@ function combineAbortSignals(...signals: AbortSignal[]): AbortSignal {
  * or 4xx responses; retries on network errors and 5xx.
  */
 async function fetchWithRetry<T>(url: string, options: FetchOptions = {}): Promise<T> {
-  const { retries = MAX_RETRIES, ...fetchOptions } = options
-  let lastError: Error | null = null
+ const { retries = MAX_RETRIES, ...fetchOptions } = options
+ let lastError: Error | null = null
 
-  for (let attempt = 0; attempt < retries; attempt++) {
-    try {
-      return await fetchJson<T>(url, fetchOptions)
-    } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err))
+ for (let attempt = 0; attempt < retries; attempt++) {
+  try {
+   return await fetchJson<T>(url, fetchOptions)
+  } catch (err) {
+   lastError = err instanceof Error ? err : new Error(String(err))
 
-      // Don't retry on user abort
-      if (lastError.name === 'AbortError') {
-        throw lastError
-      }
+   // Don't retry on user abort
+   if (lastError.name === 'AbortError') {
+    throw lastError
+   }
 
-      // Don't retry on client errors (4xx)
-      if (lastError.message.includes('HTTP 4')) {
-        throw lastError
-      }
+   // Don't retry on client errors (4xx)
+   if (lastError.message.includes('HTTP 4')) {
+    throw lastError
+   }
 
-      // Wait before retry (exponential backoff)
-      if (attempt < retries - 1) {
-        const delay = Math.min(RETRY_DELAY * Math.pow(2, attempt), 5000)
-        await new Promise(r => setTimeout(r, delay))
-      }
-    }
+   // Wait before retry (exponential backoff)
+   if (attempt < retries - 1) {
+    const delay = Math.min(RETRY_DELAY * Math.pow(2, attempt), 5000)
+    await new Promise(r => setTimeout(r, delay))
+   }
   }
+ }
 
-  throw lastError!
+ throw lastError!
 }
 
 export async function fetchStats(project?: string | null): Promise<Stats> {
-  const params = new URLSearchParams()
-  if (project) params.append('project', project)
-  const query = params.toString()
-  return fetchWithRetry<Stats>(`${API_BASE}/stats${query ? '?' + query : ''}`)
+ const params = new URLSearchParams()
+ if (project) params.append('project', await resolveProject(project))
+ const query = params.toString()
+ return fetchWithRetry<Stats>(`${API_BASE}/stats${query ? '?' + query : ''}`)
 }
 
-export async function fetchProjects(): Promise<string[]> {
-  return fetchWithRetry<string[]>(`${API_BASE}/projects`)
+let projectCatalog: ProjectCatalog | null = null
+
+export async function fetchProjects(signal?: AbortSignal): Promise<ProjectCatalog> {
+ const catalog = parseProjectCatalog(await fetchWithRetry<unknown>(`${API_BASE}/projects`, { signal }))
+ projectCatalog = catalog
+ return catalog
+}
+
+export async function resolveProject(project: string, signal?: AbortSignal): Promise<string> {
+ if (!project || project === 'all' || project === 'global') throw new Error('A concrete project is required')
+ const catalog = projectCatalog ?? await fetchProjects(signal)
+ if (catalog.items.some(item => item.project_id === project)) return project
+ const result = parseProjectResolution(await fetchWithRetry<unknown>(`${API_BASE}/projects/resolve?${new URLSearchParams({ legacy_id: project })}`, { signal }))
+ if (result.status === 'unresolved') throw new UnresolvedProjectError(result.reference, result.reason)
+ const current = catalog.items.some(item => item.project_id === result.project_id) ? catalog : await fetchProjects(signal)
+ if (!current.items.some(item => item.project_id === result.project_id)) throw new Error('Resolved project is absent from the catalog')
+ return result.project_id
+}
+
+export async function fetchRetainedContent(reference: string, kind: RetainedKind, id?: string | number, cursor?: string, q?: string): Promise<RetainedPage> {
+ const params = new URLSearchParams({ limit: '50' })
+ if (kind === 'code' && id !== undefined) throw new Error('Retained code has no content history reader')
+ if (kind !== 'code') params.set('kind', kind)
+ if (id !== undefined) params.set('id', String(id))
+ if (cursor) params.set('cursor', cursor)
+ if (q && id === undefined && kind !== 'code') params.set('q', q)
+ const data = await fetchWithRetry<unknown>(`${API_BASE}/projects/unresolved/${encodeURIComponent(reference)}/${kind === 'code' ? 'code' : id === undefined ? 'content' : 'history'}?${params}`)
+ return parseRetainedPage(data, reference, kind, id)
 }
 
 export interface NullableStringValue {
-  String: string
-  Valid: boolean
+ String: string
+ Valid: boolean
 }
 
 export interface SDKSession {
-  id: number
-  claude_session_id: string
-  project: string
-  status: string
-  started_at: string
-  started_at_epoch: number
-  prompt_counter: number
-  user_prompt: NullableStringValue
-  completed_at: NullableStringValue
-  outcome: NullableStringValue
-  outcome_reason: NullableStringValue
-  outcome_recorded_at: NullableStringValue
-  injection_strategy: NullableStringValue
+ id: number
+ claude_session_id: string
+ project: string
+ status: string
+ started_at: string
+ started_at_epoch: number
+ prompt_counter: number
+ user_prompt: NullableStringValue
+ completed_at: NullableStringValue
+ outcome: NullableStringValue
+ outcome_reason: NullableStringValue
+ outcome_recorded_at: NullableStringValue
+ injection_strategy: NullableStringValue
 }
 
 export interface SessionListResponse {
-  sessions: SDKSession[]
-  total: number
-  limit: number
-  offset: number
+ sessions: SDKSession[]
+ total: number
+ limit: number
+ offset: number
 }
 
 export async function fetchSessions(
-  params: {
-    project?: string
-    limit?: number
-    offset?: number
-  } = {},
-  signal?: AbortSignal,
+ params: {
+  project?: string
+  limit?: number
+  offset?: number
+ } = {},
+ signal?: AbortSignal,
 ): Promise<SessionListResponse> {
-  const searchParams = new URLSearchParams()
-  if (params.project) searchParams.set('project', params.project)
-  if (params.limit !== undefined) searchParams.set('limit', String(params.limit))
-  if (params.offset !== undefined) searchParams.set('offset', String(params.offset))
-  const query = searchParams.toString()
-  return fetchWithRetry<SessionListResponse>(`${API_BASE}/sessions/list${query ? '?' + query : ''}`, { signal })
+ const searchParams = new URLSearchParams()
+ if (params.project) searchParams.set('project', await resolveProject(params.project, signal))
+ if (params.limit !== undefined) searchParams.set('limit', String(params.limit))
+ if (params.offset !== undefined) searchParams.set('offset', String(params.offset))
+ const query = searchParams.toString()
+ return fetchWithRetry<SessionListResponse>(`${API_BASE}/sessions/list${query ? '?' + query : ''}`, { signal })
 }
 
 export interface Rule {
-  id: number
-  project?: string | null
-  content: string
-  edited_by?: string
-  priority: number
-  version: number
-  created_at: string
-  updated_at: string
+ id: number
+ project?: string | null
+ content: string
+ edited_by?: string
+ priority: number
+ version: number
+ created_at: string
+ updated_at: string
 }
 
 export interface RuleListResponse {
-  rules: Rule[]
-  total: number
+ rules: Rule[]
+ total: number
 }
 
 export async function fetchRules(
-  params: {
-    project?: string
-    limit?: number
-  } = {},
-  signal?: AbortSignal,
+ params: {
+  project?: string
+  limit?: number
+ } = {},
+ signal?: AbortSignal,
 ): Promise<RuleListResponse> {
-  const searchParams = new URLSearchParams()
-  if (params.project) searchParams.set('project', params.project)
-  if (params.limit !== undefined) searchParams.set('limit', String(params.limit))
-  const query = searchParams.toString()
-  return fetchWithRetry<RuleListResponse>(`${API_BASE}/rules${query ? '?' + query : ''}`, { signal })
+ const searchParams = new URLSearchParams()
+ if (params.project) searchParams.set('project', await resolveProject(params.project, signal))
+ if (params.limit !== undefined) searchParams.set('limit', String(params.limit))
+ const query = searchParams.toString()
+ return fetchWithRetry<RuleListResponse>(`${API_BASE}/rules${query ? '?' + query : ''}`, { signal })
 }
 
 export async function createRule(
-  payload: {
-    content: string
-    project?: string
-    priority?: number
-    edited_by?: string
-  },
-  signal?: AbortSignal,
+ payload: {
+  content: string
+  project?: string
+  priority?: number
+  edited_by?: string
+ },
+ signal?: AbortSignal,
 ): Promise<Rule> {
-  return postJson<Rule>(`${API_BASE}/rules`, payload, { signal })
+ const project = payload.project ? await resolveProject(payload.project, signal) : undefined
+ return postJson<Rule>(`${API_BASE}/rules`, { ...payload, project }, { signal })
 }
 
 export async function updateRule(
-  id: number,
-  payload: {
-    content?: string
-    priority?: number
-    edited_by?: string
-  },
-  signal?: AbortSignal,
+ id: number,
+ payload: {
+  content?: string
+  priority?: number
+  edited_by?: string
+ },
+ signal?: AbortSignal,
 ): Promise<Rule> {
-  return patchJson<Rule>(`${API_BASE}/rules/${id}`, payload, { signal })
+ return patchJson<Rule>(`${API_BASE}/rules/${id}`, payload, { signal })
 }
 
 export async function deleteRule(id: number, signal?: AbortSignal): Promise<void> {
-  await deleteJson<Record<string, unknown>>(`${API_BASE}/rules/${id}`, { signal })
+ await deleteJson<Record<string, unknown>>(`${API_BASE}/rules/${id}`, { signal })
 }
 
 export interface Memory {
-  id: number
-  project: string
-  content: string
-  tags: string[]
-  source_agent?: string
-  edited_by?: string
-  status?: string
-  tier?: string
-  epistemic_type?: string
-  privacy_scope?: string
-  owner_principal?: string
-  owner_principal_kind?: 'human' | 'agent' | 'service'
-  agent_visibility?: 'private' | 'shared'
-  domain?: string
-  confidence?: number
-  citation_count?: number
-  injection_count?: number
-  access_count?: number
-  created_at: string
-  updated_at: string
+ id: number
+ project: string
+ content: string
+ tags: string[]
+ source_agent?: string
+ edited_by?: string
+ status?: string
+ tier?: string
+ epistemic_type?: string
+ privacy_scope?: string
+ owner_principal?: string
+ owner_principal_kind?: 'human' | 'agent' | 'service'
+ agent_visibility?: 'private' | 'shared'
+ domain?: string
+ confidence?: number
+ citation_count?: number
+ injection_count?: number
+ access_count?: number
+ created_at: string
+ updated_at: string
 }
 
-export async function fetchMemories(
-  project: string,
-  limit = 100,
-  signal?: AbortSignal,
-): Promise<Memory[]> {
-  const params = new URLSearchParams({
-    project,
-    limit: String(limit),
-  })
-  return fetchWithRetry<Memory[]>(`${API_BASE}/memories?${params.toString()}`, { signal })
+export async function fetchMemories(query: MemoryReaderQuery, signal?: AbortSignal): Promise<ReaderPage<Memory>> {
+ const project = await resolveProject(query.project, signal)
+ const offset = query.offset ?? 0
+ const limit = query.limit ?? 100
+ const params = new URLSearchParams({ project, offset: String(offset), limit: String(limit) })
+ if (query.query) params.set('query', query.query)
+ for (const filter of query.filters ?? []) params.append('filter', filter)
+ return parseReaderPage(await fetchWithRetry<ReaderPage<Memory>>(`${API_BASE}/memories?${params}`, { signal }), project, offset, limit)
 }
 
 // POST JSON helper with retry logic
 async function postJson<T>(url: string, body: unknown, options: FetchOptions = {}): Promise<T> {
-  const { timeout = DEFAULT_TIMEOUT, signal, retries = MAX_RETRIES } = options
-  let lastError: Error | null = null
+ const { timeout = DEFAULT_TIMEOUT, signal, retries = MAX_RETRIES } = options
+ let lastError: Error | null = null
 
-  for (let attempt = 0; attempt < retries; attempt++) {
-    const timeoutController = new AbortController()
-    const timeoutId = setTimeout(() => timeoutController.abort(), timeout)
-    const combinedSignal = signal
-      ? combineAbortSignals(signal, timeoutController.signal)
-      : timeoutController.signal
+ for (let attempt = 0; attempt < retries; attempt++) {
+  const timeoutController = new AbortController()
+  const timeoutId = setTimeout(() => timeoutController.abort(), timeout)
+  const combinedSignal = signal
+   ? combineAbortSignals(signal, timeoutController.signal)
+   : timeoutController.signal
 
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: combinedSignal,
-      })
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
-      }
-      return response.json()
-    } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err))
-      if (lastError.name === 'AbortError') {
-        if (signal?.aborted) throw lastError
-        throw new Error('Request timed out')
-      }
-      if (lastError.message.includes('HTTP 4')) throw lastError
-      if (attempt < retries - 1) {
-        const delay = Math.min(RETRY_DELAY * Math.pow(2, attempt), 5000)
-        await new Promise(r => setTimeout(r, delay))
-      }
-    } finally {
-      clearTimeout(timeoutId)
-    }
+  try {
+   const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: combinedSignal,
+   })
+   if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+   }
+   return response.json()
+  } catch (err) {
+   lastError = err instanceof Error ? err : new Error(String(err))
+   if (lastError.name === 'AbortError') {
+    if (signal?.aborted) throw lastError
+    throw new Error('Request timed out')
+   }
+   if (lastError.message.includes('HTTP 4')) throw lastError
+   if (attempt < retries - 1) {
+    const delay = Math.min(RETRY_DELAY * Math.pow(2, attempt), 5000)
+    await new Promise(r => setTimeout(r, delay))
+   }
+  } finally {
+   clearTimeout(timeoutId)
   }
-  throw lastError!
+ }
+ throw lastError!
 }
 
 // DELETE helper (single attempt, no retry for mutations)
 async function deleteJson<T>(url: string, options: FetchOptions = {}): Promise<T> {
-  const { timeout = DEFAULT_TIMEOUT, signal } = options
-  const timeoutController = new AbortController()
-  const timeoutId = setTimeout(() => timeoutController.abort(), timeout)
-  const combinedSignal = signal
-    ? combineAbortSignals(signal, timeoutController.signal)
-    : timeoutController.signal
+ const { timeout = DEFAULT_TIMEOUT, signal } = options
+ const timeoutController = new AbortController()
+ const timeoutId = setTimeout(() => timeoutController.abort(), timeout)
+ const combinedSignal = signal
+  ? combineAbortSignals(signal, timeoutController.signal)
+  : timeoutController.signal
 
-  try {
-    const response = await fetch(url, {
-      method: 'DELETE',
-      signal: combinedSignal,
-    })
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
-    }
-    const text = await response.text()
-    return text ? JSON.parse(text) : ({} as T)
-  } catch (err) {
-    if (err instanceof Error && err.name === 'AbortError') {
-      if (signal?.aborted) throw err
-      throw new Error('Request timed out')
-    }
-    throw err
-  } finally {
-    clearTimeout(timeoutId)
+ try {
+  const response = await fetch(url, {
+   method: 'DELETE',
+   signal: combinedSignal,
+  })
+  if (!response.ok) {
+   throw new Error(`HTTP ${response.status}: ${response.statusText}`)
   }
+  const text = await response.text()
+  return text ? JSON.parse(text) : ({} as T)
+ } catch (err) {
+  if (err instanceof Error && err.name === 'AbortError') {
+   if (signal?.aborted) throw err
+   throw new Error('Request timed out')
+  }
+  throw err
+ } finally {
+  clearTimeout(timeoutId)
+ }
 }
 
 async function patchJson<T>(url: string, body: unknown, options: FetchOptions = {}): Promise<T> {
-  const { timeout = DEFAULT_TIMEOUT, signal } = options
-  const timeoutController = new AbortController()
-  const timeoutId = setTimeout(() => timeoutController.abort(), timeout)
-  const combinedSignal = signal
-    ? combineAbortSignals(signal, timeoutController.signal)
-    : timeoutController.signal
+ const { timeout = DEFAULT_TIMEOUT, signal } = options
+ const timeoutController = new AbortController()
+ const timeoutId = setTimeout(() => timeoutController.abort(), timeout)
+ const combinedSignal = signal
+  ? combineAbortSignals(signal, timeoutController.signal)
+  : timeoutController.signal
 
-  try {
-    const response = await fetch(url, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: combinedSignal,
-    })
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
-    }
-    return response.json()
-  } catch (err) {
-    if (err instanceof Error && err.name === 'AbortError') {
-      if (signal?.aborted) throw err
-      throw new Error('Request timed out')
-    }
-    throw err
-  } finally {
-    clearTimeout(timeoutId)
+ try {
+  const response = await fetch(url, {
+   method: 'PATCH',
+   headers: { 'Content-Type': 'application/json' },
+   body: JSON.stringify(body),
+   signal: combinedSignal,
+  })
+  if (!response.ok) {
+   throw new Error(`HTTP ${response.status}: ${response.statusText}`)
   }
+  return response.json()
+ } catch (err) {
+  if (err instanceof Error && err.name === 'AbortError') {
+   if (signal?.aborted) throw err
+   throw new Error('Request timed out')
+  }
+  throw err
+ } finally {
+  clearTimeout(timeoutId)
+ }
 }
 
 // ============================================================
@@ -352,41 +378,62 @@ async function patchJson<T>(url: string, body: unknown, options: FetchOptions = 
 // ============================================================
 
 export interface VaultCredential {
-  id: number
-  name: string
-  scope: string
-  project?: string
-  created_at: string
-  updated_at?: string
+ id: number
+ name: string
+ scope: string
+ project?: string
+ project_id?: string | null
+ unresolved_reference?: string
+ binding_error?: string
+ origin_project?: string
+ created_at: string
+ updated_at?: string
 }
 
 export interface VaultStatus {
-  encrypted: boolean
-  key_fingerprint?: string
-  credential_count: number
+ encrypted: boolean
+ key_fingerprint?: string
+ credential_count: number
 }
 
 export async function fetchVaultStatus(signal?: AbortSignal): Promise<VaultStatus> {
-  const raw = await fetchWithRetry<any>(`${API_BASE}/vault/status`, { signal })
-  return {
-    encrypted: raw.key_configured ?? false,
-    key_fingerprint: raw.fingerprint ?? raw.key_fingerprint,
-    credential_count: raw.credential_count ?? 0,
-  }
+ const raw = await fetchWithRetry<any>(`${API_BASE}/vault/status`, { signal })
+ return {
+  encrypted: raw.key_configured ?? false,
+  key_fingerprint: raw.fingerprint ?? raw.key_fingerprint,
+  credential_count: raw.credential_count ?? 0,
+ }
 }
 
 export async function fetchCredentials(signal?: AbortSignal): Promise<VaultCredential[]> {
-  return fetchWithRetry<VaultCredential[]>(`${API_BASE}/vault/credentials`, { signal })
+ return fetchWithRetry<VaultCredential[]>(`${API_BASE}/vault/credentials`, { signal })
 }
 
-export async function fetchCredential(name: string, project?: string, signal?: AbortSignal): Promise<{ name: string; value: string }> {
-  const params = project ? `?project=${encodeURIComponent(project)}` : ''
-  return fetchWithRetry<{ name: string; value: string }>(`${API_BASE}/vault/credentials/${encodeURIComponent(name)}${params}`, { signal })
+export async function fetchCredential(credential: VaultCredential, signal?: AbortSignal): Promise<{ name: string; value: string }> {
+ const binding = credentialBinding(credential)
+ if (binding.binding_error !== undefined) throw new Error(`Credential unavailable: ${binding.binding_error}`)
+ const params = new URLSearchParams(binding.unresolved_reference !== undefined
+  ? { id: String(binding.id), unresolved_reference: binding.unresolved_reference }
+  : binding.project_id === null ? { scope: 'global' } : { project: binding.project_id })
+ const result = await fetchWithRetry<{ name: string; value: string }>(`${API_BASE}/vault/credentials/${encodeURIComponent(binding.name)}?${params}`, { signal })
+ assertCredentialMetadata(result, binding)
+ const current = (await fetchCredentials(signal)).find(row => row.id === binding.id)
+ if (!current) throw new Error('Credential metadata readback missing')
+ assertCredentialMetadata(credentialBinding(current), binding)
+ return result
 }
 
-export async function deleteCredential(name: string, project?: string, signal?: AbortSignal): Promise<void> {
-  const params = project ? `?project=${encodeURIComponent(project)}` : ''
-  await deleteJson<Record<string, unknown>>(`${API_BASE}/vault/credentials/${encodeURIComponent(name)}${params}`, { signal })
+export async function deleteCredential(credential: VaultCredential, signal?: AbortSignal): Promise<void> {
+ const binding = credentialBinding(credential)
+ if (binding.binding_error !== undefined) throw new Error(`Credential unavailable: ${binding.binding_error}`)
+ if (binding.unresolved_reference !== undefined) throw new Error('Retained credentials are read-only; Delete is unsupported')
+ const current = (await fetchCredentials(signal)).find(row => row.id === binding.id)
+ if (!current) throw new Error('Credential metadata readback missing')
+ assertCredentialMetadata(credentialBinding(current), binding)
+ const params = new URLSearchParams(binding.project_id === null ? { scope: 'global' } : { project: binding.project_id })
+ const result = await deleteJson<{ current_state?: unknown }>(`${API_BASE}/vault/credentials/${encodeURIComponent(binding.name)}?${params}`, { signal })
+ if (result.current_state !== undefined) assertCredentialMetadata(result.current_state, binding)
+ if ((await fetchCredentials(signal)).some(row => row.id === binding.id)) throw new Error('Credential deletion readback failed')
 }
 
 // ============================================================
@@ -394,49 +441,49 @@ export async function deleteCredential(name: string, project?: string, signal?: 
 // ============================================================
 
 export interface ApiToken {
-  id: string
-  name: string
-  token_prefix: string
-  scope: string
-  principal: string
-  principal_kind: 'human' | 'agent' | 'service'
-  created_at: string
-  last_used_at?: string
-  request_count: number
-  error_count?: number
-  revoked: boolean
-  revoked_at?: string
+ id: string
+ name: string
+ token_prefix: string
+ scope: string
+ principal: string
+ principal_kind: 'human' | 'agent' | 'service'
+ created_at: string
+ last_used_at?: string
+ request_count: number
+ error_count?: number
+ revoked: boolean
+ revoked_at?: string
 }
 
 export interface CreateTokenResponse {
-  id: string
-  token: string
-  name: string
-  scope: string
-  token_prefix: string
-  prefix: string
-  principal: string
-  principal_kind: 'human' | 'agent' | 'service'
+ id: string
+ token: string
+ name: string
+ scope: string
+ token_prefix: string
+ prefix: string
+ principal: string
+ principal_kind: 'human' | 'agent' | 'service'
 }
 
 export type CreateTokenParams =
-  | { name: string; scope: string; principal: string; principal_kind?: 'human' | 'agent' | 'service' }
-  | { name: string; scope: string; principal?: undefined; principal_kind?: undefined }
+ | { name: string; scope: string; principal: string; principal_kind?: 'human' | 'agent' | 'service' }
+ | { name: string; scope: string; principal?: undefined; principal_kind?: undefined }
 
 export async function fetchTokens(signal?: AbortSignal): Promise<ApiToken[]> {
-  const response = await fetchWithRetry<{ tokens: ApiToken[] }>(`${API_BASE}/auth/tokens`, { signal })
-  return response.tokens
+ const response = await fetchWithRetry<{ tokens: ApiToken[] }>(`${API_BASE}/auth/tokens`, { signal })
+ return response.tokens
 }
 
 export async function createToken(
-  params: CreateTokenParams,
-  signal?: AbortSignal
+ params: CreateTokenParams,
+ signal?: AbortSignal
 ): Promise<CreateTokenResponse> {
-  return postJson<CreateTokenResponse>(`${API_BASE}/auth/tokens`, params, { signal })
+ return postJson<CreateTokenResponse>(`${API_BASE}/auth/tokens`, params, { signal })
 }
 
 export async function revokeToken(id: string, signal?: AbortSignal): Promise<void> {
-  await deleteJson<Record<string, unknown>>(`${API_BASE}/auth/tokens/${encodeURIComponent(id)}`, { signal })
+ await deleteJson<Record<string, unknown>>(`${API_BASE}/auth/tokens/${encodeURIComponent(id)}`, { signal })
 }
 
 // ============================================================
@@ -444,63 +491,63 @@ export async function revokeToken(id: string, signal?: AbortSignal): Promise<voi
 // ============================================================
 
 export interface Pattern {
-  id: number
-  name: string
-  type: string
-  frequency: number
-  confidence: number
-  created_at: string
-  last_seen_at: string
-  last_seen_at_epoch: number
+ id: number
+ name: string
+ type: string
+ frequency: number
+ confidence: number
+ created_at: string
+ last_seen_at: string
+ last_seen_at_epoch: number
 }
 
 export interface PatternInsight {
-  id: number
-  insight: string
-  examples?: string[]
+ id: number
+ insight: string
+ examples?: string[]
 }
 
 export interface PatternsResponse {
-  patterns: Pattern[]
-  total: number
+ patterns: Pattern[]
+ total: number
 }
 
 export async function fetchPatterns(
-  params?: { limit?: number; offset?: number; sort?: string },
-  signal?: AbortSignal
+ params?: { limit?: number; offset?: number; sort?: string },
+ signal?: AbortSignal
 ): Promise<PatternsResponse> {
-  const searchParams = new URLSearchParams()
-  if (params?.limit !== undefined) searchParams.append('limit', String(params.limit))
-  if (params?.offset !== undefined) searchParams.append('offset', String(params.offset))
-  if (params?.sort) searchParams.append('sort', params.sort)
-  const query = searchParams.toString()
-  return fetchWithRetry<PatternsResponse>(`${API_BASE}/patterns${query ? '?' + query : ''}`, { signal })
+ const searchParams = new URLSearchParams()
+ if (params?.limit !== undefined) searchParams.append('limit', String(params.limit))
+ if (params?.offset !== undefined) searchParams.append('offset', String(params.offset))
+ if (params?.sort) searchParams.append('sort', params.sort)
+ const query = searchParams.toString()
+ return fetchWithRetry<PatternsResponse>(`${API_BASE}/patterns${query ? '?' + query : ''}`, { signal })
 }
 
 export async function fetchPatternInsight(id: number, signal?: AbortSignal): Promise<PatternInsight> {
-  return fetchWithRetry<PatternInsight>(`${API_BASE}/patterns/${id}/insight`, { signal })
+ return fetchWithRetry<PatternInsight>(`${API_BASE}/patterns/${id}/insight`, { signal })
 }
 
 export interface PatternInsightResult {
-  summary: string
-  source_observations: Array<{ id: number; title: string; type: string }>
-  cached: boolean
+ summary: string
+ source_observations: Array<{ id: number; title: string; type: string }>
+ cached: boolean
 }
 
 export async function generatePatternInsight(id: number, signal?: AbortSignal): Promise<PatternInsightResult> {
-  return postJson<PatternInsightResult>(`${API_BASE}/patterns/${id}/insight`, {}, { signal })
+ return postJson<PatternInsightResult>(`${API_BASE}/patterns/${id}/insight`, {}, { signal })
 }
 
 export async function deprecatePattern(id: number, signal?: AbortSignal): Promise<void> {
-  await postJson<Record<string, unknown>>(`${API_BASE}/patterns/${id}/deprecate`, {}, { signal })
+ await postJson<Record<string, unknown>>(`${API_BASE}/patterns/${id}/deprecate`, {}, { signal })
 }
 
 export async function deletePattern(id: number, signal?: AbortSignal): Promise<void> {
-  await deleteJson<Record<string, unknown>>(`${API_BASE}/patterns/${id}`, { signal })
+ await deleteJson<Record<string, unknown>>(`${API_BASE}/patterns/${id}`, { signal })
 }
 
 export async function mergePatterns(ids: number[], signal?: AbortSignal): Promise<void> {
-  await postJson<Record<string, unknown>>(`${API_BASE}/patterns/merge`, { ids }, { signal })
+ await postJson<Record<string, unknown>>(`${API_BASE}/patterns/merge`, { ids }, { signal })
 }
 
 // ============================================================
@@ -508,27 +555,27 @@ export async function mergePatterns(ids: number[], signal?: AbortSignal): Promis
 // ============================================================
 
 export interface PatternCleanupResult {
-  orphans_found: number
-  orphans_archived: number
-  low_confidence_found: number
-  low_confidence_archived: number
-  confidence_recalculated: number
+ orphans_found: number
+ orphans_archived: number
+ low_confidence_found: number
+ low_confidence_archived: number
+ confidence_recalculated: number
 }
 
 export async function cleanupPatterns(
-  threshold: number,
-  dryRun: boolean,
-  signal?: AbortSignal
+ threshold: number,
+ dryRun: boolean,
+ signal?: AbortSignal
 ): Promise<PatternCleanupResult> {
-  return postJson<PatternCleanupResult>(
-    `${API_BASE}/maintenance/patterns/cleanup`,
-    { confidence_threshold: threshold, dry_run: dryRun },
-    { signal }
-  )
+ return postJson<PatternCleanupResult>(
+  `${API_BASE}/maintenance/patterns/cleanup`,
+  { confidence_threshold: threshold, dry_run: dryRun },
+  { signal }
+ )
 }
 
 export async function triggerConsolidation(signal?: AbortSignal): Promise<{ message: string }> {
-  return postJson<{ message: string }>(`${API_BASE}/maintenance/consolidate`, {}, { signal })
+ return postJson<{ message: string }>(`${API_BASE}/maintenance/consolidate`, {}, { signal })
 }
 
 // ============================================================
@@ -536,67 +583,67 @@ export async function triggerConsolidation(signal?: AbortSignal): Promise<{ mess
 // ============================================================
 
 export interface MaintenanceSubtask {
-  name: string
-  status: 'pending' | 'running' | 'completed' | 'failed'
+ name: string
+ status: 'pending' | 'running' | 'completed' | 'failed'
 }
 
 export interface MaintenanceLastRun {
-  started_at: string
-  duration_ms: number
-  subtask_count: number
+ started_at: string
+ duration_ms: number
+ subtask_count: number
 }
 
 export interface MaintenanceStatus {
-  running: boolean
-  current_subtask: string
-  subtasks: MaintenanceSubtask[]
-  last_run?: MaintenanceLastRun
-  next_run_at?: string
+ running: boolean
+ current_subtask: string
+ subtasks: MaintenanceSubtask[]
+ last_run?: MaintenanceLastRun
+ next_run_at?: string
 }
 
 export interface MaintenanceLogEntry {
-  timestamp: number
-  level: string
-  message: string
-  fields?: Record<string, unknown>
+ timestamp: number
+ level: string
+ message: string
+ fields?: Record<string, unknown>
 }
 
 export async function fetchMaintenanceStatus(signal?: AbortSignal): Promise<MaintenanceStatus> {
-  return fetchWithRetry<MaintenanceStatus>(`${API_BASE}/maintenance/status`, { signal })
+ return fetchWithRetry<MaintenanceStatus>(`${API_BASE}/maintenance/status`, { signal })
 }
 
 export async function fetchMaintenanceLogs(
-  limit = 100,
-  signal?: AbortSignal,
+ limit = 100,
+ signal?: AbortSignal,
 ): Promise<{ entries: MaintenanceLogEntry[]; total: number }> {
-  return fetchWithRetry<{ entries: MaintenanceLogEntry[]; total: number }>(
-    `${API_BASE}/maintenance/logs?limit=${limit}`,
-    { signal },
-  )
+ return fetchWithRetry<{ entries: MaintenanceLogEntry[]; total: number }>(
+  `${API_BASE}/maintenance/logs?limit=${limit}`,
+  { signal },
+ )
 }
 
 export async function triggerMaintenance(signal?: AbortSignal): Promise<{ message: string }> {
-  return postJson<{ message: string }>(`${API_BASE}/maintenance/run`, {}, { signal })
+ return postJson<{ message: string }>(`${API_BASE}/maintenance/run`, {}, { signal })
 }
 
 export interface MaintenanceStats {
-  last_consolidation?: string
-  last_maintenance?: string
-  observations_consolidated?: number
-  stale_removed?: number
+ last_consolidation?: string
+ last_maintenance?: string
+ observations_consolidated?: number
+ stale_removed?: number
 }
 
 export async function fetchMaintenanceStats(signal?: AbortSignal): Promise<MaintenanceStats> {
-  return fetchWithRetry<MaintenanceStats>(`${API_BASE}/maintenance/stats`, { signal })
+ return fetchWithRetry<MaintenanceStats>(`${API_BASE}/maintenance/stats`, { signal })
 }
 
 export async function checkForUpdate(signal?: AbortSignal): Promise<{
-  available: boolean
-  current_version: string
-  latest_version: string
-  release_notes?: string
+ available: boolean
+ current_version: string
+ latest_version: string
+ release_notes?: string
 }> {
-  return fetchWithRetry(`${API_BASE}/update/check`, { signal })
+ return fetchWithRetry(`${API_BASE}/update/check`, { signal })
 }
 
 // ============================================================
@@ -604,40 +651,40 @@ export async function checkForUpdate(signal?: AbortSignal): Promise<{
 // ============================================================
 
 export interface SearchMiss {
-  query: string
-  project?: string
-  frequency: number
-  last_seen: string
+ query: string
+ project?: string
+ frequency: number
+ last_seen: string
 }
 
 export async function fetchSearchMisses(signal?: AbortSignal): Promise<SearchMiss[]> {
-  const result = await postJson<{ miss_stats: Array<{ query: string; miss_count: number; last_seen: string; project?: string }> }>(
-    `${API_BASE}/analytics/search-misses`, {}, { signal }
-  )
-  return (result?.miss_stats || []).map(s => ({
-    query: s.query,
-    project: s.project || '',
-    frequency: s.miss_count,
-    last_seen: s.last_seen,
-  }))
+ const result = await postJson<{ miss_stats: Array<{ query: string; miss_count: number; last_seen: string; project?: string }> }>(
+  `${API_BASE}/analytics/search-misses`, {}, { signal }
+ )
+ return (result?.miss_stats || []).map(s => ({
+  query: s.query,
+  project: s.project || '',
+  frequency: s.miss_count,
+  last_seen: s.last_seen,
+ }))
 }
 
 export interface RetrievalStatsResponse {
-  total_requests: number
-  observations_served: number
-  search_requests: number
-  context_injections: number
-  stale_excluded: number
-  fresh_count: number
-  duplicates_removed: number
+ total_requests: number
+ observations_served: number
+ search_requests: number
+ context_injections: number
+ stale_excluded: number
+ fresh_count: number
+ duplicates_removed: number
 }
 
 export async function fetchRetrievalStats(project?: string, since?: string, signal?: AbortSignal): Promise<RetrievalStatsResponse> {
-  const params = new URLSearchParams()
-  if (project) params.append('project', project)
-  if (since) params.append('since', since)
-  const query = params.toString()
-  return fetchWithRetry<RetrievalStatsResponse>(`${API_BASE}/stats/retrieval${query ? '?' + query : ''}`, { signal })
+ const params = new URLSearchParams()
+ if (project) params.append('project', await resolveProject(project, signal))
+ if (since) params.append('since', since)
+ const query = params.toString()
+ return fetchWithRetry<RetrievalStatsResponse>(`${API_BASE}/stats/retrieval${query ? '?' + query : ''}`, { signal })
 }
 
 // ============================================================
@@ -645,129 +692,125 @@ export async function fetchRetrievalStats(project?: string, since?: string, sign
 // ============================================================
 
 export interface Issue {
-  id: number
-  title: string
-  body: string
-  status: 'open' | 'acknowledged' | 'resolved' | 'reopened' | 'closed' | 'rejected'
-  priority: 'critical' | 'high' | 'medium' | 'low'
-  type: 'bug' | 'feature' | 'improvement' | 'task'
-  source_project: string
-  target_project: string
-  source_agent: string
-  labels: string[]
-  comment_count?: number
-  acknowledged_at: string | null
-  resolved_at: string | null
-  reopened_at: string | null
-  closed_at: string | null
-  created_at: string
-  updated_at: string
+ id: number
+ title: string
+ body: string
+ status: 'open' | 'acknowledged' | 'resolved' | 'reopened' | 'closed' | 'rejected'
+ priority: 'critical' | 'high' | 'medium' | 'low'
+ type: 'bug' | 'feature' | 'improvement' | 'task'
+ source_project: string
+ target_project: string
+ source_agent: string
+ labels: string[]
+ comment_count?: number
+ acknowledged_at: string | null
+ resolved_at: string | null
+ reopened_at: string | null
+ closed_at: string | null
+ created_at: string
+ updated_at: string
 }
 
 export interface IssueComment {
-  id: number
-  issue_id: number
-  author_project: string
-  author_agent: string
-  body: string
-  created_at: string
+ id: number
+ issue_id: number
+ author_project: string
+ author_agent: string
+ body: string
+ created_at: string
 }
 
 export interface IssueListResponse {
-  issues: Issue[]
-  total: number
-  /** Map from project ID to human-readable display name */
-  project_names?: Record<string, string>
+ issues: Issue[]
+ total: number
+ /** Map from project ID to human-readable display name */
+ project_names?: Record<string, string>
 }
 
 export interface IssueDetailResponse {
-  issue: Issue
-  comments: IssueComment[]
-  comment_count: number
-  source_project_display_name?: string
-  target_project_display_name?: string
+ issue: Issue
+ comments: IssueComment[]
+ comment_count: number
+ source_project_display_name?: string
+ target_project_display_name?: string
 }
 
 export async function fetchIssues(
-  project?: string,
-  status?: string,
-  limit?: number,
-  offset?: number,
-  signal?: AbortSignal,
-  type?: string,
-  sourceProject?: string
+ project?: string,
+ status?: string,
+ limit?: number,
+ offset?: number,
+ signal?: AbortSignal,
+ type?: string,
+ sourceProject?: string,
+ sourceAgent?: string
 ): Promise<IssueListResponse> {
-  const params = new URLSearchParams()
-  if (project) params.set('project', project)
-  if (sourceProject) params.set('source_project', sourceProject)
-  if (status) params.set('status', status)
-  if (limit) params.set('limit', String(limit))
-  if (offset) params.set('offset', String(offset))
-  if (type) params.set('type', type)
-  return fetchWithRetry<IssueListResponse>(`${API_BASE}/issues?${params}`, { signal })
+ const params = new URLSearchParams()
+ if (project) params.set('project', await resolveProject(project, signal))
+ if (sourceProject) params.set('source_project', await resolveProject(sourceProject, signal))
+ if (sourceAgent) params.set('source_agent', sourceAgent)
+ if (status) params.set('status', status)
+ if (limit) params.set('limit', String(limit))
+ if (offset) params.set('offset', String(offset))
+ if (type) params.set('type', type)
+ return fetchWithRetry<IssueListResponse>(`${API_BASE}/issues?${params}`, { signal })
 }
 
 export async function fetchIssue(id: number, signal?: AbortSignal): Promise<IssueDetailResponse> {
-  return fetchWithRetry<IssueDetailResponse>(`${API_BASE}/issues/${id}`, { signal })
+ return fetchWithRetry<IssueDetailResponse>(`${API_BASE}/issues/${id}`, { signal })
 }
 
-export async function acknowledgeIssues(ids: number[], signal?: AbortSignal): Promise<{ acknowledged: number }> {
-  return postJson<{ acknowledged: number }>(`${API_BASE}/issues/acknowledge`, { ids }, { signal })
+export async function acknowledgeIssues(ids: number[], sourceProject: string, signal?: AbortSignal): Promise<{ acknowledged: number }> {
+ const source_project = await resolveProject(sourceProject, signal)
+ return postJson<{ acknowledged: number }>(`${API_BASE}/issues/acknowledge`, { ids, source_project, source_agent: 'human' }, { signal })
 }
 
-export async function deleteIssue(id: number, signal?: AbortSignal): Promise<void> {
-  await deleteJson<Record<string, unknown>>(`${API_BASE}/issues/${id}`, { signal })
+export async function deleteIssue(id: number, sourceProject: string, signal?: AbortSignal): Promise<void> {
+ const source_project = await resolveProject(sourceProject, signal)
+ const params = new URLSearchParams({ source_project, source_agent: 'human' })
+ await deleteJson<Record<string, unknown>>(`${API_BASE}/issues/${id}?${params}`, { signal })
 }
 
 export async function updateIssue(
-  id: number,
-  fields: {
-    status?: string
-    comment?: string
-    source_project?: string
-    source_agent?: string
-    title?: string
-    body?: string
-    priority?: string
-    type?: string
-    labels?: string[]
-  },
-  signal?: AbortSignal
+ id: number,
+ fields: {
+  status?: string
+  comment?: string
+  source_project: string
+  source_agent: 'human'
+  title?: string
+  body?: string
+  priority?: string
+  type?: string
+  labels?: string[]
+ },
+ signal?: AbortSignal
 ): Promise<{ message: string }> {
-  return patchJson<{ message: string }>(`${API_BASE}/issues/${id}`, fields, { signal })
+ const source_project = await resolveProject(fields.source_project, signal)
+ return patchJson<{ message: string }>(`${API_BASE}/issues/${id}`, { ...fields, source_project }, { signal })
 }
 
 export async function createIssue(
-  data: { title: string; body?: string; type?: string; priority?: string; target_project: string },
-  signal?: AbortSignal
+ data: { title: string; body?: string; type?: string; priority?: string; target_project: string; source_project: string },
+ signal?: AbortSignal
 ): Promise<{ id: number; message: string }> {
-  const targetProject = data.target_project?.trim()
-  if (!targetProject) {
-    throw new Error('target_project is required')
-  }
-  return postJson<{ id: number; message: string }>(
-    `${API_BASE}/issues`,
-    {
-      ...data,
-      target_project: targetProject,
-      type: data.type || 'task',
-      priority: data.priority || 'medium',
-      source_project: 'dashboard',
-      source_agent: 'human',
-    },
-    { signal },
-  )
+ const targetProject = await resolveProject(data.target_project, signal)
+ const sourceProject = await resolveProject(data.source_project, signal)
+ return postJson<{ id: number; message: string }>(
+  `${API_BASE}/issues`,
+  {
+   ...data,
+   target_project: targetProject,
+   type: data.type || 'task',
+   priority: data.priority || 'medium',
+   source_project: sourceProject,
+   source_agent: 'human',
+  },
+  { signal },
+ )
 }
 
-export async function fetchTrackedProjects(signal?: AbortSignal): Promise<string[]> {
-  try {
-    const data = await fetchWithRetry<{ projects?: string[] }>(`${API_BASE}/issues/tracked-projects`, { signal })
-    return data.projects || []
-  } catch {
-    return []
-  }
-}
 
 export async function fetchConfig(signal?: AbortSignal): Promise<Record<string, Record<string, unknown>>> {
-  return fetchWithRetry<Record<string, Record<string, unknown>>>(`${API_BASE}/config`, { signal })
+ return fetchWithRetry<Record<string, Record<string, unknown>>>(`${API_BASE}/config`, { signal })
 }

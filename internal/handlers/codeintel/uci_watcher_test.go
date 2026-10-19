@@ -253,7 +253,7 @@ func startUCIWatcher(t *testing.T, fixture *uciWatcherFixture, ctx context.Conte
 	t.Helper()
 	require.NoError(t, fixture.watcher.Start(ctx))
 	awaitUCIWatcherRescan(t, fixture.registry, codeintel.UCILocalRescanRestart)
-	require.Equal(t, []string{fixture.root}, fixture.source.addedPaths())
+	require.Equal(t, []string{filepath.Clean(fixture.root)}, fixture.source.addedPaths())
 }
 
 func stopUCIWatcher(t *testing.T, fixture *uciWatcherFixture) {

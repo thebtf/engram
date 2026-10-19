@@ -24,7 +24,7 @@ func TestMigration146_RuleInjectionEventsTable(t *testing.T) {
 		var count int64
 		require.NoError(t, db.Raw(`
 			SELECT COUNT(*) FROM pg_indexes
-			WHERE tablename = 'rule_injection_events' AND indexname = ?
+			WHERE schemaname = current_schema() AND tablename = 'rule_injection_events' AND indexname = ?
 		`, indexName).Scan(&count).Error)
 		require.Equal(t, int64(1), count, "index %s must exist", indexName)
 	}
@@ -32,7 +32,7 @@ func TestMigration146_RuleInjectionEventsTable(t *testing.T) {
 	err := db.Exec(`
 		INSERT INTO rule_injection_events (session_id, project, surface, event_type)
 		VALUES (?, ?, ?, ?)
-	`, "rg2-invalid-session", "rg2-project", "session-start", "invalid_event").Error
+	`, "rg2-invalid-session", sessionTestProject(t, db), "session-start", "invalid_event").Error
 	require.Error(t, err, "invalid rule injection event type must be rejected")
 }
 
@@ -41,7 +41,7 @@ func TestRuleInjectionEventStore_RecordAndListBySession(t *testing.T) {
 	store := NewRuleInjectionEventStore(db)
 	ctx := context.Background()
 
-	project := fmt.Sprintf("rg2-rule-events-%d", time.Now().UnixNano())
+	project := sessionTestProject(t, db)
 	sessionID := project + "-session"
 	t.Cleanup(func() {
 		_ = db.Exec(`DELETE FROM rule_injection_events WHERE project = ?`, project).Error
@@ -100,7 +100,7 @@ func TestRuleInjectionEventStore_AggregateByProjectRuleAndEventType(t *testing.T
 	store := NewRuleInjectionEventStore(db)
 	ctx := context.Background()
 
-	project := fmt.Sprintf("rg3-rule-telemetry-%d", time.Now().UnixNano())
+	project := sessionTestProject(t, db)
 	versionID := insertRuleVersionFixture(t, db, "rg3-telemetry-"+project, models.RuleStateActiveProject, "developer", 10)
 	otherVersionID := insertRuleVersionFixture(t, db, "rg3-telemetry-other-"+project, models.RuleStateActiveProject, "developer", 9)
 	since := time.Now().Add(-1 * time.Minute).UTC()

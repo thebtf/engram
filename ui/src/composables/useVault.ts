@@ -11,9 +11,8 @@ export function useVault() {
   const error = ref<string | null>(null)
   const actionError = ref<string | null>(null)
 
-  // Track revealed credentials: name -> { value, expiresAt }
-  const revealedValues = ref<Record<string, { value: string; expiresAt: number }>>({})
-  const revealTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  const revealedValues = ref<Record<number, { value: string; expiresAt: number }>>({})
+  const revealTimers = new Map<number, ReturnType<typeof setTimeout>>()
 
   let abortController: AbortController | null = null
 
@@ -39,24 +38,24 @@ export function useVault() {
     }
   }
 
-  async function revealCredential(name: string, project?: string) {
+  async function revealCredential(credential: VaultCredential) {
     actionError.value = null
     try {
-      const result = await fetchCredential(name, project)
+      const result = await fetchCredential(credential)
       const expiresAt = Date.now() + 30000
 
       revealedValues.value = {
         ...revealedValues.value,
-        [name]: { value: result.value, expiresAt },
+        [credential.id]: { value: result.value, expiresAt },
       }
 
-      const existingTimer = revealTimers.get(name)
+      const existingTimer = revealTimers.get(credential.id)
       if (existingTimer) clearTimeout(existingTimer)
 
       const timer = setTimeout(() => {
-        hideCredential(name)
+        hideCredential(credential.id)
       }, 30000)
-      revealTimers.set(name, timer)
+      revealTimers.set(credential.id, timer)
     } catch (err) {
       const msg = err instanceof Error ? err.message : ''
       const normalized = msg.toLowerCase()
@@ -68,22 +67,22 @@ export function useVault() {
     }
   }
 
-  function hideCredential(name: string) {
-    const { [name]: _, ...rest } = revealedValues.value
+  function hideCredential(id: number) {
+    const { [id]: _, ...rest } = revealedValues.value
     revealedValues.value = rest
-    const timer = revealTimers.get(name)
+    const timer = revealTimers.get(id)
     if (timer) {
       clearTimeout(timer)
-      revealTimers.delete(name)
+      revealTimers.delete(id)
     }
   }
 
-  async function removeCredential(name: string, project?: string) {
+  async function removeCredential(credential: VaultCredential) {
     actionError.value = null
     try {
-      await deleteCredential(name, project)
-      hideCredential(name)
-      credentials.value = credentials.value.filter(c => c.name !== name)
+      await deleteCredential(credential)
+      hideCredential(credential.id)
+      credentials.value = credentials.value.filter(c => c.id !== credential.id)
       if (vaultStatus.value) {
         vaultStatus.value = {
           ...vaultStatus.value,

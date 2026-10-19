@@ -2,328 +2,62 @@ package worker
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
-	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/pkg/models"
 )
 
-
-func TestContextInject_IdentityOnlyRegistersSynchronouslyAndIdempotently(t *testing.T) {
-	db, cleanup := setupProjectTestDB(t)
-	defer cleanup()
-	selector := "prc-http-identity-v2"
-	db.Exec(`DELETE FROM projects WHERE id = ? OR COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[]`, selector, selector)
-	defer func() {
-		db.Exec(`DELETE FROM projects WHERE id = ? OR COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[]`, selector, selector)
-	}()
-
-	svc := &Service{store: &gormdb.Store{DB: db}}
-	body := map[string]any{
-		"project":       selector,
-		"identity_only": true,
-		"project_identity": map[string]any{
-			"version":           2,
-			"legacy_project_id": selector,
-			"display_name":      "http-v2",
-			"git_remote":        "https://example.invalid/acme/http-v2.git",
-			"relative_path":     "packages/core/",
-		},
+func TestContextInject_PinnedUUIDDoesNotRegister(t *testing.T) {
+	project := "11111111-1111-4111-8111-111111111111"
+	service := newInjectTestService(true)
+	service.retrievalHooks.searchObservationsFTSFiltered = func(_ context.Context, _ string, scope retrievalScope, _ int) ([]*models.Observation, error) {
+		if scope.Project != project {
+			t.Fatalf("retrieval project=%q", scope.Project)
+		}
+		return nil, nil
 	}
-
-	var canonical string
-	for i := 0; i < 2; i++ {
-		payload, _ := json.Marshal(body)
-		req := httptest.NewRequest(http.MethodPost, "/api/context/inject", bytes.NewReader(payload))
-		rec := httptest.NewRecorder()
-		svc.handleContextInject(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("attempt %d status=%d body=%s", i, rec.Code, rec.Body.String())
+	service.retrievalHooks.getLastPromptBySession = func(context.Context, string, string) (*models.UserPromptWithSession, error) {
+		return nil, nil
+	}
+	service.retrievalHooks.retrieveRelevant = func(_ context.Context, selected, _ string, _ RetrievalOptions) ([]*models.Observation, map[int64]float64, error) {
+		if selected != project {
+			t.Fatalf("relevant project=%q", selected)
 		}
-		var response struct {
-			CanonicalProject string `json:"canonical_project"`
-		}
-		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		return nil, nil, nil
+	}
+	for range 2 {
+		payload, err := json.Marshal(map[string]any{"project": project, "session_id": "uuid-session"})
+		if err != nil {
 			t.Fatal(err)
 		}
-		if response.CanonicalProject == "" {
-			t.Fatal("empty canonical project")
+		rec := httptest.NewRecorder()
+		service.handleContextInject(rec, httptest.NewRequest(http.MethodPost, "/api/context/inject", bytes.NewReader(payload)))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 		}
-		if i == 0 {
-			canonical = response.CanonicalProject
+		var response struct {
+			Project string `json:"project"`
 		}
-		if response.CanonicalProject != canonical {
-			t.Fatalf("attempt %d diverged: %q != %q", i, response.CanonicalProject, canonical)
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil || response.Project != project {
+			t.Fatalf("response=%+v error=%v", response, err)
 		}
 	}
 }
 
-func TestContextInject_LegacyMetadataPreservesOuterCanonical(t *testing.T) {
-	db, cleanup := setupProjectTestDB(t)
-	defer cleanup()
-	canonical := "prc-http-legacy-outer"
-	legacy := "prc-http-legacy-path"
-	db.Exec(`DELETE FROM projects WHERE id IN (?, ?) OR COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[]`, canonical, legacy, legacy)
-	defer db.Exec(`DELETE FROM projects WHERE id IN (?, ?) OR COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[]`, canonical, legacy, legacy)
-
-	svc := &Service{store: &gormdb.Store{DB: db}}
-	payload, _ := json.Marshal(map[string]any{
-		"project":        canonical,
-		"legacy_project": legacy,
-		"identity_only":  true,
-	})
-	rec := httptest.NewRecorder()
-	svc.handleContextInject(rec, httptest.NewRequest(http.MethodPost, "/api/context/inject", bytes.NewReader(payload)))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	var response struct {
-		CanonicalProject string `json:"canonical_project"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
-		t.Fatal(err)
-	}
-	if response.CanonicalProject != canonical {
-		t.Fatalf("canonical=%q, want outer selector %q", response.CanonicalProject, canonical)
-	}
-	if resolved := gormdb.ResolveProjectID(t.Context(), db, legacy); resolved != canonical {
-		t.Fatalf("legacy alias resolves to %q, want %q", resolved, canonical)
-	}
-}
-
-func TestContextInject_LegacyAliasWithInternalWhitespaceRemainsCompatible(t *testing.T) {
-	db, cleanup := setupProjectTestDB(t)
-	defer cleanup()
-	canonical := "prc-http-r2-legacy-space-canonical"
-	legacy := "prc http r2 legacy path"
-	db.Unscoped().Exec(`DELETE FROM projects WHERE id IN (?, ?) OR COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[]`, canonical, legacy, legacy)
-	defer db.Unscoped().Exec(`DELETE FROM projects WHERE id IN (?, ?) OR COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[]`, canonical, legacy, legacy)
-
-	svc := &Service{store: &gormdb.Store{DB: db}}
-	payload, _ := json.Marshal(map[string]any{
-		"project":        canonical,
-		"legacy_project": legacy,
-		"identity_only":  true,
-	})
-	rec := httptest.NewRecorder()
-	svc.handleContextInject(rec, httptest.NewRequest(http.MethodPost, "/api/context/inject", bytes.NewReader(payload)))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	if resolved := gormdb.ResolveProjectID(t.Context(), db, legacy); resolved != canonical {
-		t.Fatalf("legacy alias resolves to %q, want %q", resolved, canonical)
-	}
-}
-
-func TestContextInject_LegacyMetadataDoesNotClaimForeignAlias(t *testing.T) {
-	db, cleanup := setupProjectTestDB(t)
-	defer cleanup()
-	canonical := "prc-http-legacy-new-canonical"
-	legacy := "prc-http-legacy-owned-alias"
-	owner := "prc-http-legacy-alias-owner"
-	db.Exec(`DELETE FROM projects WHERE id IN (?, ?) OR COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[]`, canonical, owner, legacy)
-	defer db.Exec(`DELETE FROM projects WHERE id IN (?, ?) OR COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[]`, canonical, owner, legacy)
-	if err := gormdb.UpsertProject(t.Context(), db, owner, legacy, "", "", "owner"); err != nil {
-		t.Fatal(err)
-	}
-
-	payload, _ := json.Marshal(map[string]any{"project": canonical, "legacy_project": legacy, "identity_only": true})
-	rec := httptest.NewRecorder()
-	(&Service{store: &gormdb.Store{DB: db}}).handleContextInject(rec, httptest.NewRequest(http.MethodPost, "/api/context/inject", bytes.NewReader(payload)))
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-
-	var canonicalCount int64
-	if err := db.Model(&gormdb.Project{}).Where("id = ?", canonical).Count(&canonicalCount).Error; err != nil {
-		t.Fatal(err)
-	}
-	if canonicalCount != 0 {
-		t.Fatalf("conflicting legacy metadata created %d canonical rows", canonicalCount)
-	}
-}
-
-func TestContextInject_FailsClosedWithoutIdentityStore(t *testing.T) {
-	payload, err := json.Marshal(map[string]any{"project": "prc-http-no-store"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	rec := httptest.NewRecorder()
-	(&Service{}).handleContextInject(rec, httptest.NewRequest(http.MethodPost, "/api/context/inject", bytes.NewReader(payload)))
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	var response struct {
-		Error struct {
-			Code          string `json:"code"`
-			UpgradeAction string `json:"upgrade_action"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
-		t.Fatal(err)
-	}
-	if response.Error.Code != gormdb.ProjectIdentityUnavailable || response.Error.UpgradeAction != gormdb.UpgradeActionRetryProjectRegistration {
-		t.Fatalf("error response=%+v", response.Error)
-	}
-}
-
-func TestProjectIdentityHTTPError_DoesNotExposeDatabaseDiagnostics(t *testing.T) {
-	rec := httptest.NewRecorder()
-	writeProjectIdentityHTTPError(rec, &gormdb.ProjectIdentityError{
-		Code:          gormdb.ProjectIdentityUnavailable,
-		UpgradeAction: gormdb.UpgradeActionRetryProjectRegistration,
-		Err:           errors.New("postgres internal-token-do-not-leak relation projects"),
-	})
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status=%d", rec.Code)
-	}
-	if bytes.Contains(rec.Body.Bytes(), []byte("do-not-leak")) || bytes.Contains(rec.Body.Bytes(), []byte("relation projects")) {
-		t.Fatalf("database diagnostics leaked: %s", rec.Body.String())
-	}
-}
-
-func TestProjectIdentityHTTPError_TypedNilFailsClosed(t *testing.T) {
-	var typedNil *gormdb.ProjectIdentityError
-	var err error = typedNil
-	rec := httptest.NewRecorder()
-	writeProjectIdentityHTTPError(rec, err)
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	if !bytes.Contains(rec.Body.Bytes(), []byte(gormdb.ProjectIdentityUnavailable)) {
-		t.Fatalf("typed-nil error did not fail closed: %s", rec.Body.String())
-	}
-}
-
-func TestContextInject_AmbiguousLegacyFailsWithUpgradeActionBeforeAccess(t *testing.T) {
-	db, cleanup := setupProjectTestDB(t)
-	defer cleanup()
-	selector := "prc-http-ambiguous-v2"
-	db.Exec(`DELETE FROM projects WHERE id IN (?, ?)`, selector+"-a", selector+"-b")
-	defer func() { db.Exec(`DELETE FROM projects WHERE id IN (?, ?)`, selector+"-a", selector+"-b") }()
-	if err := gormdb.UpsertProject(t.Context(), db, selector+"-a", selector, "", "", "a"); err != nil {
-		t.Fatal(err)
-	}
-	if err := gormdb.UpsertProject(t.Context(), db, selector+"-b", selector, "", "", "b"); err != nil {
-		t.Fatal(err)
-	}
-
-	svc := &Service{store: &gormdb.Store{DB: db}}
-	payload, _ := json.Marshal(map[string]any{"project": selector, "identity_only": true})
-	req := httptest.NewRequest(http.MethodPost, "/api/context/inject", bytes.NewReader(payload))
-	rec := httptest.NewRecorder()
-	svc.handleContextInject(rec, req)
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	var response struct {
-		Error struct {
-			Code          string `json:"code"`
-			UpgradeAction string `json:"upgrade_action"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
-		t.Fatal(err)
-	}
-	if response.Error.Code != gormdb.ProjectIdentityAmbiguous || response.Error.UpgradeAction != gormdb.UpgradeActionSendProjectIdentityV2 {
-		t.Fatalf("error response=%+v", response.Error)
-	}
-}
-
-func TestContextInject_RejectsRawSelectorAndMetadataBeforeProjectMutation(t *testing.T) {
-	db, cleanup := setupProjectTestDB(t)
-	defer cleanup()
-	cases := []struct {
-		name string
-		body map[string]any
-		key  string
-	}{
-		{
-			name: "outer selector with internal whitespace",
-			key:  "prc-http-r2-invalid selector",
-			body: map[string]any{"project": "prc-http-r2-invalid selector", "identity_only": true},
-		},
-		{
-			name: "legacy alias with edge whitespace",
-			key:  "prc-http-r2-invalid-legacy-alias",
-			body: map[string]any{
-				"project": "prc-http-r2-invalid-legacy-alias", "legacy_project": " legacy-alias ", "identity_only": true,
-			},
-		},
-		{
-			name: "display name with leading whitespace",
-			key:  "prc-http-r2-invalid-display",
-			body: map[string]any{
-				"project": "prc-http-r2-invalid-display", "identity_only": true,
-				"project_identity": map[string]any{
-					"version": 2, "legacy_project_id": "prc-http-r2-invalid-display", "display_name": " display",
-					"git_remote": "https://example.invalid/r2/display.git", "relative_path": "packages/core/",
-				},
-			},
-		},
-		{
-			name: "relative path with empty segment",
-			key:  "prc-http-r2-invalid-relative",
-			body: map[string]any{
-				"project": "prc-http-r2-invalid-relative", "identity_only": true,
-				"project_identity": map[string]any{
-					"version": 2, "legacy_project_id": "prc-http-r2-invalid-relative", "display_name": "relative",
-					"git_remote": "https://example.invalid/r2/relative.git", "relative_path": "packages//core/",
-				},
-			},
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			db.Unscoped().Exec(`DELETE FROM projects WHERE id = ? OR COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[]`, tc.key, tc.key)
-			defer db.Unscoped().Exec(`DELETE FROM projects WHERE id = ? OR COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[]`, tc.key, tc.key)
-			payload, _ := json.Marshal(tc.body)
-			rec := httptest.NewRecorder()
-			svc := &Service{store: &gormdb.Store{DB: db}}
-			svc.handleContextInject(rec, httptest.NewRequest(http.MethodPost, "/api/context/inject", bytes.NewReader(payload)))
-			if rec.Code != http.StatusBadRequest {
-				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-			}
-			var count int64
-			if err := db.Unscoped().Model(&gormdb.Project{}).
-				Where(`id = ? OR COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[]`, tc.key, tc.key).
-				Count(&count).Error; err != nil {
-				t.Fatal(err)
-			}
-			if count != 0 {
-				t.Fatalf("invalid request mutated %d project rows", count)
-			}
-		})
-	}
-}
-
-func TestContextInject_UnknownSelectorOnlyFailsBeforeProjectMutation(t *testing.T) {
-	db, cleanup := setupProjectTestDB(t)
-	defer cleanup()
-	selector := "ar1-fence-http-unknown"
-	db.Unscoped().Exec(`DELETE FROM projects WHERE id = ? OR COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[]`, selector, selector)
-	defer db.Unscoped().Exec(`DELETE FROM projects WHERE id = ? OR COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[]`, selector, selector)
-
-	payload, err := json.Marshal(map[string]any{"project": selector, "identity_only": true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	rec := httptest.NewRecorder()
-	(&Service{store: &gormdb.Store{DB: db}}).handleContextInject(rec, httptest.NewRequest(http.MethodPost, "/api/context/inject", bytes.NewReader(payload)))
-	if rec.Code != http.StatusConflict {
-		t.Errorf("status=%d body=%s, want selector-only refusal", rec.Code, rec.Body.String())
-	}
-
-	var count int64
-	if err := db.Unscoped().Model(&gormdb.Project{}).
-		Where(`id = ? OR COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[]`, selector, selector).
-		Count(&count).Error; err != nil {
-		t.Fatal(err)
-	}
-	if count != 0 {
-		t.Errorf("selector-only HTTP request created or retained %d project/alias rows, including soft-deleted rows", count)
+func TestContextInject_RejectsRawSelectorBeforeProjectMutation(t *testing.T) {
+	for _, project := range []string{"", "prc-http-no-store", "../project", "invalid selector"} {
+		payload, err := json.Marshal(map[string]string{"project": project})
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec := httptest.NewRecorder()
+		(&Service{}).handleContextInject(rec, httptest.NewRequest(http.MethodPost, "/api/context/inject", bytes.NewReader(payload)))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("project=%q status=%d body=%s", project, rec.Code, rec.Body.String())
+		}
 	}
 }

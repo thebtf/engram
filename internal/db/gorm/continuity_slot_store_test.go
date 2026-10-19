@@ -2,7 +2,6 @@ package gorm
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -48,7 +47,7 @@ func TestContinuitySlotStoreReplacesClearsAndPreservesMemoryTargets(t *testing.T
 	t.Cleanup(closeDB)
 
 	ctx := context.Background()
-	project := fmt.Sprintf("test-continuity-slot-%d", time.Now().UnixNano())
+	project := sessionTestProject(t, db)
 	t.Cleanup(func() { cleanupContinuitySlotTestProject(t, db, project) })
 
 	firstMemoryID := createContinuitySlotTestMemory(t, db, project, "first continuity target")
@@ -138,7 +137,7 @@ func TestContinuitySlotMigrationCreatesSchemaAndRestrictsTargetDeletion(t *testi
 	var tableCount int
 	require.NoError(t, db.Raw(`
 		SELECT COUNT(*) FROM information_schema.tables
-		WHERE table_schema = 'public' AND table_name = 'project_continuity_slots'
+		WHERE table_schema = current_schema() AND table_name = 'project_continuity_slots'
 	`).Scan(&tableCount).Error)
 	require.Equal(t, 1, tableCount)
 
@@ -149,7 +148,7 @@ func TestContinuitySlotMigrationCreatesSchemaAndRestrictsTargetDeletion(t *testi
 		var columnCount int
 		require.NoError(t, db.Raw(`
 			SELECT COUNT(*) FROM information_schema.columns
-			WHERE table_schema = 'public' AND table_name = 'project_continuity_slots' AND column_name = ?
+			WHERE table_schema = current_schema() AND table_name = 'project_continuity_slots' AND column_name = ?
 		`, column).Scan(&columnCount).Error)
 		require.Equal(t, 1, columnCount, "column %q must exist", column)
 	}
@@ -157,7 +156,7 @@ func TestContinuitySlotMigrationCreatesSchemaAndRestrictsTargetDeletion(t *testi
 	var indexCount int
 	require.NoError(t, db.Raw(`
 		SELECT COUNT(*) FROM pg_indexes
-		WHERE schemaname = 'public'
+		WHERE schemaname = current_schema()
 		  AND tablename = 'project_continuity_slots'
 		  AND indexname IN ('idx_project_continuity_slots_memory_id', 'idx_project_continuity_slots_expires_at')
 	`).Scan(&indexCount).Error)
@@ -171,7 +170,7 @@ func TestContinuitySlotMigrationCreatesSchemaAndRestrictsTargetDeletion(t *testi
 		  ON tc.constraint_catalog = rc.constraint_catalog
 		 AND tc.constraint_schema = rc.constraint_schema
 		 AND tc.constraint_name = rc.constraint_name
-		WHERE tc.table_schema = 'public'
+		WHERE tc.table_schema = current_schema()
 		  AND tc.table_name = 'project_continuity_slots'
 		  AND tc.constraint_type = 'FOREIGN KEY'
 	`).Scan(&deleteRule).Error)
@@ -183,7 +182,7 @@ func TestContinuitySlotMigrationRollbackRefusesNonEmptyTable(t *testing.T) {
 	t.Cleanup(closeDB)
 
 	ctx := context.Background()
-	project := fmt.Sprintf("test-continuity-rollback-%d", time.Now().UnixNano())
+	project := sessionTestProject(t, db)
 	t.Cleanup(func() { cleanupContinuitySlotTestProject(t, db, project) })
 
 	memoryID := createContinuitySlotTestMemory(t, db, project, "rollback continuity target")

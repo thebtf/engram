@@ -48,7 +48,7 @@ func (s *Server) ingestDocument(ctx context.Context, a ingestArgs) (string, erro
 		return "", fmt.Errorf("source_title required")
 	}
 	if a.Project == "" {
-		a.Project = projectFromContext(ctx)
+		a.Project = ProjectFromContext(ctx)
 	}
 	if a.Project == "" {
 		return "", fmt.Errorf("project required")

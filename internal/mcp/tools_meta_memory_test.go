@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
 	"github.com/thebtf/engram/internal/auth"
@@ -168,7 +169,7 @@ func TestKnowAbout_T005_ContextProjectFallbackAndLimitClamp(t *testing.T) {
 }
 
 func TestKnowAbout_T005_RealStoreCanonicalShapeAndMissingTopicEmptyPacket(t *testing.T) {
-	const project = "test-s2-meta-index-know-about-real"
+	project := uuid.NewString()
 	idx := openT005RealMetaMemoryIndex(t, project)
 	insertT005RealMetaMemory(t, idx, project, "handoff memory title\nthis body omits the lexical query marker", []string{"intent:handoff", "s2:meta"})
 
@@ -430,6 +431,7 @@ func openT005RealMetaMemoryIndex(t *testing.T, project string) *gormdb.MemorySto
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_ = store.DB.WithContext(context.Background()).Exec(`DELETE FROM memories WHERE project = ?`, project).Error
+		_ = store.DB.Where("id = ?", project).Delete(&gormdb.Project{}).Error
 		_ = store.Close()
 	})
 	return gormdb.NewMemoryStore(store)

@@ -1,8 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
 import { useOperatorCode } from '../composables/useOperatorCode'
+import { operatorDiagnosisKey } from '../composables/useOperatorApi'
+import { useOperatorProjectContext } from '../composables/useOperatorProjectContext'
 
 const { t } = useI18n()
+const projectContext = useOperatorProjectContext()
+const scopeError = computed(() => projectContext.selectionError.value || projectContext.error.value)
 const {
   canAdministerGrants,
   bootstrapPhase,
@@ -58,6 +62,10 @@ onMounted(() => {
       </div>
       <button class="btn" type="button" :disabled="pending || pinnedContext === null" @click="refreshStatus">{{ t('codeExplorer.refresh') }}</button>
     </header>
+    <p class="code-scope-note">{{ t('knowledge.codeScope') }}</p>
+    <p v-if="scopeError" class="code-scope-note" role="status" data-testid="code-project-error">{{ t(operatorDiagnosisKey(scopeError)) }} <button class="btn" @click="projectContext.refresh">{{ t('knowledge.retry') }}</button></p>
+    <p v-else-if="projectContext.selectionPending.value" class="code-scope-note" role="status">{{ t('knowledge.loading') }}</p>
+    <p v-else-if="!projectContext.project.value" class="code-scope-note" role="status">{{ t('projectCatalog.selectionRequired') }}</p>
 
     <CodeGrantChooser v-if="canAdministerGrants" />
 

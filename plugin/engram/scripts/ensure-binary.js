@@ -21,6 +21,11 @@ function fail(message) {
   throw new BootstrapError(message);
 }
 
+function checkAcquisition(options = {}) {
+  if (options.signal?.aborted) fail("client acquisition aborted");
+  if (options.deadlineAt !== undefined && Date.now() >= options.deadlineAt) fail("client acquisition deadline exceeded");
+}
+
 function platformKey(platform = process.platform, arch = process.arch) {
   const key = `${platform}-${arch}`;
   if (!Object.hasOwn(TARGET_ASSETS, key)) fail(`unsupported platform ${platform}/${arch}`);
@@ -77,14 +82,16 @@ function loadParserTarget(pluginRoot, packageVersion, key) {
   return Object.freeze(target);
 }
 
-async function installParser(roots, clientPath, target, options) {
+async function installParser(roots, clientPath, target, options = {}) {
+  options = { ...options, deadlineAt: options.deadlineAt ?? (options.timeoutMs === undefined ? undefined : Date.now() + options.timeoutMs) };
   const object = await acquire(roots, target, options);
-  if (!hashFile(object, target, roots.objects)) fail("parser object failed final verification");
+  if (!hashFile(object, target, roots.objects, options)) fail("parser object failed final verification");
   const directory = assertSafeDirectory(path.join(path.dirname(clientPath), "parser"));
   const parserPath = path.join(directory, `parser${path.extname(clientPath)}`);
+  checkAcquisition(options);
   try { fs.linkSync(object, parserPath); }
   catch (error) { if (error.code !== "EEXIST") throw error; }
-  if (!hashFile(parserPath, target, roots.objects)) fail("installed parser sibling failed verification");
+  if (!hashFile(parserPath, target, roots.objects, options)) fail("installed parser sibling failed verification");
   return parserPath;
 }
 
@@ -126,7 +133,8 @@ function objectPath(roots, target) {
   return candidate;
 }
 
-function hashFile(filePath, target, root) {
+function hashFile(filePath, target, root, options = {}) {
+  checkAcquisition(options);
   let stat;
   try { stat = fs.lstatSync(filePath); } catch (error) { if (error.code === "ENOENT") return false; throw error; }
   if (!stat.isFile() || stat.isSymbolicLink()) fail(`object is not a regular file: ${filePath}`);
@@ -138,11 +146,13 @@ function hashFile(filePath, target, root) {
   try {
     const buffer = Buffer.allocUnsafe(64 * 1024);
     for (; ;) {
+      checkAcquisition(options);
       const bytes = fs.readSync(fd, buffer, 0, buffer.length, null);
       if (!bytes) break;
       hash.update(buffer.subarray(0, bytes));
     }
   } finally { fs.closeSync(fd); }
+  checkAcquisition(options);
   return crypto.timingSafeEqual(Buffer.from(hash.digest("hex")), Buffer.from(target.sha256));
 }
 
@@ -157,13 +167,15 @@ function quarantineObject(filePath, roots, target) {
   } catch { return false; }
 }
 
-function verifyObject(roots, target, quarantine = true) {
+function verifyObject(roots, target, quarantine = true, options = {}) {
+  checkAcquisition(options);
   const candidate = objectPath(roots, target);
   try {
-    if (hashFile(candidate, target, roots.objects)) return candidate;
+    if (hashFile(candidate, target, roots.objects, options)) return candidate;
     if (fs.existsSync(candidate) && quarantine) quarantineObject(candidate, roots, target);
     return "";
   } catch (error) {
+    checkAcquisition(options);
     if (quarantine) quarantineObject(candidate, roots, target);
     if (error instanceof BootstrapError) throw error;
     throw new BootstrapError(`cannot verify object: ${error.message}`);
@@ -178,98 +190,118 @@ function uniqueStage(roots) {
   fail("could not allocate exclusive staging file");
 }
 
-function writeVerified(fd, source, target, deadlineMs = DOWNLOAD_DEADLINE_MS) {
+function writeVerified(fd, source, target, options = {}) {
   const hash = crypto.createHash("sha256");
   let size = 0;
   return new Promise((resolve, reject) => {
-    const deadline = setTimeout(() => source.destroy(new BootstrapError("download deadline exceeded")), deadlineMs);
-    const finish = (callback) => (value) => { clearTimeout(deadline); callback(value); };
+    const remaining = options.deadlineAt === undefined ? DOWNLOAD_DEADLINE_MS : options.deadlineAt - Date.now();
+    const deadline = setTimeout(() => source.destroy(new BootstrapError("download deadline exceeded")), Math.max(0, Math.min(DOWNLOAD_DEADLINE_MS, remaining)));
+    const onAbort = () => source.destroy(new BootstrapError("client acquisition aborted"));
+    const finish = (callback) => (value) => {
+      clearTimeout(deadline);
+      options.signal?.removeEventListener("abort", onAbort);
+      callback(value);
+    };
     source.on("data", (chunk) => {
-      size += chunk.length;
-      if (size > target.size) {
-        source.destroy(new BootstrapError("download exceeds expected size"));
-        return;
-      }
-      hash.update(chunk);
-      try { fs.writeSync(fd, chunk); } catch (error) { source.destroy(error); }
+      try {
+        checkAcquisition(options);
+        size += chunk.length;
+        if (size > target.size) throw new BootstrapError("download exceeds expected size");
+        hash.update(chunk);
+        fs.writeSync(fd, chunk);
+      } catch (error) { source.destroy(error); }
     });
     source.once("error", finish(reject));
     source.once("end", finish(() => {
-      if (size !== target.size) return reject(new BootstrapError("download size differs from policy"));
-      const actual = hash.digest("hex");
-      if (actual !== target.sha256) return reject(new BootstrapError("download digest differs from policy"));
-      resolve();
+      try {
+        checkAcquisition(options);
+        if (size !== target.size) throw new BootstrapError("download size differs from policy");
+        if (hash.digest("hex") !== target.sha256) throw new BootstrapError("download digest differs from policy");
+        resolve();
+      } catch (error) { reject(error); }
     }));
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+    if (options.signal?.aborted) onAbort();
   });
 }
 
-function requestStream(url, target, request = https.request, redirects = 0) {
+function requestStream(url, target, request = https.request, redirects = 0, options = {}) {
   return new Promise((resolve, reject) => {
+    checkAcquisition(options);
     let parsed;
     try { parsed = new URL(url); } catch { reject(new BootstrapError("download URL is invalid")); return; }
     if (parsed.protocol !== "https:" || !RELEASE_HOSTS.has(parsed.hostname) || parsed.username || parsed.password) {
       reject(new BootstrapError("download URL violates HTTPS host policy")); return;
     }
-    const req = request(parsed, { headers: { "User-Agent": "engram-plugin" }, timeout: 30_000 }, (response) => {
+    const req = request(parsed, { headers: { "User-Agent": "engram-plugin" }, timeout: 30_000, signal: options.signal }, (response) => {
+      try { checkAcquisition(options); }
+      catch (error) { response.destroy(); reject(error); return; }
       const status = response.statusCode || 0;
       if (status >= 300 && status < 400) {
         const location = response.headers.location;
-        response.resume();
+        response.destroy();
         if (!location || redirects >= MAX_REDIRECTS) { reject(new BootstrapError("download redirect limit reached")); return; }
-        resolve(requestStream(new URL(location, parsed).href, target, request, redirects + 1));
+        resolve(requestStream(new URL(location, parsed).href, target, request, redirects + 1, options));
         return;
       }
-      if (status !== 200) { response.resume(); reject(new BootstrapError(`download returned HTTP ${status}`)); return; }
+      if (status !== 200) { response.destroy(); reject(new BootstrapError(`download returned HTTP ${status}`)); return; }
       const length = response.headers["content-length"];
       if (length === undefined || !/^\d+$/.test(String(length)) || Number(length) !== target.size) {
-        response.resume(); reject(new BootstrapError("download Content-Length differs from policy")); return;
+        response.destroy(); reject(new BootstrapError("download Content-Length differs from policy")); return;
       }
       resolve(response);
     });
+    const deadline = options.deadlineAt === undefined ? undefined : setTimeout(
+      () => req.destroy(new BootstrapError("client acquisition deadline exceeded")), Math.max(0, options.deadlineAt - Date.now()));
+    req.once("close", () => clearTimeout(deadline));
     req.once("timeout", () => req.destroy(new BootstrapError("download connection timed out")));
-    req.once("error", reject);
+    req.once("error", (error) => { clearTimeout(deadline); reject(error); });
     req.end();
   });
 }
 
 async function downloadObject(roots, target, options = {}) {
+  options = { ...options, deadlineAt: options.deadlineAt ?? (options.timeoutMs === undefined ? undefined : Date.now() + options.timeoutMs) };
+  checkAcquisition(options);
   const stage = uniqueStage(roots);
   try {
     const url = `https://github.com/${REPO}/releases/download/v${target.version}/${target.asset}`;
-    const response = await requestStream(url, target, options.request || https.request);
-    await writeVerified(stage.fd, response, target);
+    const response = await requestStream(url, target, options.request || https.request, 0, options);
+    await writeVerified(stage.fd, response, target, options);
     fs.closeSync(stage.fd);
     stage.fd = undefined;
     // Defend against write or filesystem corruption after streaming completion.
-    if (!hashFile(stage.path, target, roots.staging)) fail("closed staging object failed verification");
-    return publishStage(stage.path, roots, target);
+    if (!hashFile(stage.path, target, roots.staging, options)) fail("closed staging object failed verification");
+    return publishStage(stage.path, roots, target, options);
   } finally {
     if (stage.fd !== undefined) fs.closeSync(stage.fd);
     try { fs.unlinkSync(stage.path); } catch (error) { if (error.code !== "ENOENT") throw error; }
   }
 }
 
-function publishStage(stage, roots, target) {
+function publishStage(stage, roots, target, options = {}) {
   const finalPath = objectPath(roots, target);
   try {
     // link is create-only: unlike rename it can never replace a concurrent winner.
+    checkAcquisition(options);
     fs.linkSync(stage, finalPath);
     if (process.platform !== "win32") fs.chmodSync(finalPath, 0o755);
   } catch (error) {
     if (error.code !== "EEXIST") throw new BootstrapError(`could not publish object: ${error.message}`);
   }
-  const verified = verifyObject(roots, target);
+  const verified = verifyObject(roots, target, true, options);
   if (!verified) fail("published object did not pass independent verification");
   return verified;
 }
 
-function importLegacy(roots, target) {
+function importLegacy(roots, target, options = {}) {
+  checkAcquisition(options);
   const legacy = path.join(roots.bin, process.platform === "win32" ? "engram.exe" : "engram");
   let stat;
   try { stat = fs.lstatSync(legacy); } catch (error) { if (error.code === "ENOENT") return ""; throw error; }
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== target.size) return "";
   // Authenticate bytes before creating an object. Never execute or mutate the legacy file.
-  if (!hashFile(legacy, target, roots.bin)) return "";
+  if (!hashFile(legacy, target, roots.bin, options)) return "";
   const stage = uniqueStage(roots);
   try {
     let offset = 0;
@@ -277,6 +309,7 @@ function importLegacy(roots, target) {
     try {
       const buffer = Buffer.allocUnsafe(64 * 1024);
       for (; ;) {
+        checkAcquisition(options);
         const bytes = fs.readSync(source, buffer, 0, buffer.length, null);
         if (!bytes) break;
         fs.writeSync(stage.fd, buffer, 0, bytes, offset);
@@ -284,8 +317,8 @@ function importLegacy(roots, target) {
       }
     } finally { fs.closeSync(source); }
     fs.closeSync(stage.fd); stage.fd = undefined;
-    if (!hashFile(stage.path, target, roots.staging)) return "";
-    return publishStage(stage.path, roots, target);
+    if (!hashFile(stage.path, target, roots.staging, options)) return "";
+    return publishStage(stage.path, roots, target, options);
   } finally {
     if (stage.fd !== undefined) fs.closeSync(stage.fd);
     try { fs.unlinkSync(stage.path); } catch { }
@@ -293,10 +326,13 @@ function importLegacy(roots, target) {
 }
 
 async function acquire(roots, target, options) {
-  return verifyObject(roots, target) || importLegacy(roots, target) || await downloadObject(roots, target, options);
+  checkAcquisition(options);
+  return verifyObject(roots, target, true, options) || importLegacy(roots, target, options) || await downloadObject(roots, target, options);
 }
 
 async function resolveForLaunch(options = {}) {
+  options = { ...options, deadlineAt: options.deadlineAt ?? (options.timeoutMs === undefined ? undefined : Date.now() + options.timeoutMs) };
+  checkAcquisition(options);
   const pluginRoot = options.pluginRoot || process.env.PLUGIN_ROOT || process.env.CLAUDE_PLUGIN_ROOT;
   const pluginData = options.pluginData || process.env.PLUGIN_DATA || process.env.CLAUDE_PLUGIN_DATA;
   if (!pluginRoot || !pluginData) fail("plugin root and plugin data are required");
@@ -307,13 +343,14 @@ async function resolveForLaunch(options = {}) {
   for (const target of candidates) {
     try {
       const object = await acquire(roots, target, options);
-      if (!hashFile(object, target, roots.objects)) fail("final object verification failed");
+      if (!hashFile(object, target, roots.objects, options)) fail("final object verification failed");
       const parserTarget = options.parserTarget === undefined
         ? loadParserTarget(pluginRoot, policy.package_version, policy.platform)
         : options.parserTarget;
       const parserPath = parserTarget ? await installParser(roots, object, parserTarget, options) : "";
+      checkAcquisition(options);
       return Object.freeze({ path: object, target, parserPath, parserTarget });
-    } catch (error) { lastError = error; }
+    } catch (error) { checkAcquisition(options); lastError = error; }
   }
   throw new BootstrapError(`no authorized client object is available: ${lastError ? lastError.message : "none"}`);
 }

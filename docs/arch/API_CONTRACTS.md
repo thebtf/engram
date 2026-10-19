@@ -36,6 +36,16 @@ These are the stable entry points. Action enums list only routes that have live 
 
 The expanded surface contains only provider-backed tools whose handler is currently usable. Retired compatibility names are neither advertised nor dispatched. Clients should inspect `tools/list` with `include_all: true` rather than assuming a historical alias exists.
 
+For hybrid `recall_memory` (`ENGRAM_VNEXT_ENABLED=true`), the advertised
+`tier_filter` selects retrieval layers: `tier0_exact`, `tier1_fts`,
+`tier1_vector`, or `tier2_graph`. Omitted or empty means all retrieval layers.
+Validate this enum independently of `ENGRAM_LIFECYCLE_ENABLED`; unknown values
+and lifecycle memory tiers return `invalid_tier_filter:` rather than silently
+selecting no retrieval layer. Privacy, ranking, limits and graph opt-in remain
+unchanged. When `ENGRAM_VNEXT_ENABLED=false`, preserve the existing unadvertised
+lifecycle-only filter under `ENGRAM_LIFECYCLE_ENABLED=true`; it is not an alias
+for the public hybrid enum.
+
 ### Conditional Tool Families
 
 | Family | Tools | Advertised when | Since |
@@ -122,6 +132,112 @@ Bypass: `ENGRAM_AUTH_SKIP_LOCAL=true` skips auth for RFC 1918 addresses.
 | `GET` | `/api/tokens` | List API tokens. |
 | `POST` | `/api/tokens` | Create worker keycard. |
 | `DELETE` | `/api/tokens/:id` | Revoke token. |
+
+### Knowledge readers
+
+`GET /api/projects` returns `{items:[{project_id,name,repository_qualifier?}],unresolved:[{reference,name,reason,reader_kinds}]}`.
+`items` contains live canonical `projects` rows, not session labels or legacy
+selectors. `project_id` is the canonical UUID; `name` is a human label that falls
+back to `Registered project` when missing or blank. The optional
+`repository_qualifier` is a normalized repository locator. Duplicate labels remain
+distinct UUIDs. Existing ordinary authenticated readers retain their server-wide project
+scope. HAP project/legacy credentials remain forbidden by the existing route
+policy. The catalog response is `private, no-store`, never publicly cached.
+
+`unresolved` describes retained data owners without a canonical project assignment.
+Each entry has an opaque `reference`, display `name`, `reason`, and `reader_kinds`
+identifying retained `memory`, `document`, `issue` or `code` data. This metadata
+neither verifies retained content nor grants reader access.
+
+`GET /api/memories` and `GET /api/documents` require one exact existing live
+canonical `project` ID and return `{items,total,offset,limit,has_more}`. No legacy
+array/`documents`/page-length `count` shape remains. Defaults: `offset=0`,
+`limit=50`; bounds: `offset>=0`, `1<=limit<=500`. `items` is always an array.
+`total` counts the visible query set before pagination; hidden rows affect neither
+count nor page. `has_more` compares the returned page with that visible total.
+
+`query` is a trimmed, case-insensitive literal substring (valid UTF-8, maximum
+1024 bytes, no control characters). SQL bind parameters and LIKE escaping keep
+`%`, `_`, `\\` and SQL-looking text literal. Memory queries search content, after
+the existing active/nondeleted/current-validity, workstation, principal, domain
+and flag-controlled legacy privacy filters. Ordering remains
+`created_at DESC, id DESC`; status and provenance fields keep their meaning.
+
+Memory accepts repeated exact `filter` values: `all`, `active`, `flagged`,
+`stale`, `low`, `chain`. For example, `filter=low&filter=chain` intersects the
+selected predicates with **AND before count/page**, preserving the independently
+toggleable Memory Lab chips. Omitted filters mean `all`; explicit `all` is neutral
+with other selections. Valid duplicates are deduplicated. At most six incoming
+values are accepted before deduplication; blank, unknown, differently cased or
+CSV values are 400, including an invalid later value. No scalar-first fallback,
+JSON/CSV alternative or page-local filtering exists. The existing active-only
+eligible corpus is unchanged. Zero-valued `omitempty` confidence/citation metrics
+remain unknown, not new ratings. `chain` matches exact tags or a supersession link.
+
+Memory `epistemic_type` repeats exact existing values `fact`, `experience`,
+`opinion`, `observation`; document `doc_type` repeats literal type values.
+Selected types use **OR within the type set**, AND with every other query,
+filter, status and canonical/privacy predicate before count/page. Omission is
+unrestricted; one value is the scalar subset. Each parameter accepts at most
+six raw values before deduplication and validates every value, including later
+ones. Blank/control/malformed UTF-8 values are 400. Document values retain the
+128-byte raw UTF-8 bound and Unicode whitespace trimming; comma-containing
+types are literal values, not CSV. Types apply after latest-version-per-path
+selection, so matching only an older version never admits the document.
+
+`GET /api/memories/:id?project=<exact live canonical ID>` requires the same
+fresh project authorization and uniquely owned alias set before loading the ID.
+It returns the existing memory DTO with `project` set to that canonical ID.
+Wrong project, hidden or unknown ID: nondisclosing 404; invalid ID/missing project:
+400; noncanonical/removed project: 403. Detail retains the existing nondeleted-row
+semantics; it does not broaden page eligibility or rewrite stored provenance.
+
+`GET /api/memories/:id/audit?project=<exact live canonical ID>` applies that same
+project/alias and workstation/principal/domain read policy before fetching audit
+rows, and retains the existing manage permission. Missing project is 400;
+nonlive/noncanonical project is 403; hidden, cross-project or unknown memory is
+nondisclosing 404. No context-free legacy fallback exists. `limit` retains its
+default 50 and range 1..200. The unchanged safe DTO includes action, actor,
+session reference, reason, timestamp and state-presence flags, never raw states.
+Audit validation errors (invalid ID, malformed query, missing/invalid project or
+limit) use plain-text 400 bodies; project authorization uses a JSON error object
+with status 403, matching the existing OpenAPI response schemas.
+
+Documents select the latest version of each path **before** filtering. Search is
+limited to public list metadata (`path`, `doc_type`, `author`), not content,
+arbitrary JSON metadata or secrets. `doc_type` (128 bytes) and literal
+`path_prefix` (4096 bytes) remain supported; ordering is `created_at DESC, id DESC`.
+Document content/version/history shapes and comments are unchanged. Content,
+version and history reads use the same exact live canonical project and lawful
+stored alias set as list/count. The current document schema has no independent
+principal/privacy ACL: its reader boundary is the existing authenticated
+project-reader scope.
+
+Missing/blank project or invalid parameters: 400. Noncanonical, missing, removed
+project or forbidden credential: nondisclosing 403. Authentication remains 401;
+unavailable store: 503; unexpected query failure: 500 without SQL diagnostics.
+Offsets are stable only while the dataset is unchanged, not snapshot/cursor
+tokens. An explicit UI “All projects” context uses descriptor IDs; empty project
+never widens server reads and does not trigger an automatic content scan.
+
+Stored legacy TEXT projects are readable only when the live canonical row's
+existing `legacy_ids` maps each selector uniquely back to that same ID. Aliases
+claimed by another, removed or merged project are excluded. Canonical descriptors
+come from `projects`, including memory-only/document-only registered projects,
+not from sessions or label grouping. Unregistered orphan TEXT rows have no lawful
+catalog ID and remain untouched; this reader cannot register or infer one.
+No orphan endpoint, migration, raw-selector fallback or automatic registration
+is introduced. Existing authorized data diagnostics are separate from this API.
+
+For real-API preview, compose this backend with the UI envelope consumers and an
+existing authorized database. No migration, provider or identity onboarding is
+introduced. The focused SQLite fixture executes production handlers/stores and
+SQL count/window/pagination, with an explicit test-only lowering of PostgreSQL
+array/JSON containment syntax over real fixture rows. It cannot certify those
+PostgreSQL operators, collation, session membership or migration/locking behavior.
+The same cases retain a conditional isolated `DATABASE_DSN` integration test;
+production data is not a fixture.
+
 
 ### Hook and Observation Endpoints
 

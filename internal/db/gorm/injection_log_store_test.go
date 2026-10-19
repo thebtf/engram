@@ -2,7 +2,9 @@ package gorm
 
 import (
 	"context"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -25,7 +27,7 @@ import (
 func TestInjectionLog_CitationLoopRewire(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
-	const proj = "test-injlog-cr1"
+	proj := sessionTestProject(t, db)
 	defer db.Exec(`DELETE FROM injection_log WHERE project = ?`, proj)
 	defer db.Exec(`DELETE FROM memories WHERE project = ?`, proj)
 
@@ -66,6 +68,44 @@ func TestInjectionLog_CitationLoopRewire(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, before.InjectionCount+1, after.InjectionCount,
 		"injection_count must increment by exactly 1 after one injection")
+}
+
+func TestInjectionLog_RetentionPreservesConsolidationMembership(t *testing.T) {
+	store := openStoreForStoreTest(t)
+	logs := NewInjectionLogStore(store)
+	ctx := context.Background()
+	projectID := "b0d60abf-27f8-4b3c-8691-c6dc7b36385a"
+	require.NoError(t, store.DB.Create(&Project{ID: projectID}).Error)
+	for _, session := range []string{"retention-retained", "retention-expired", "retention-current"} {
+		require.NoError(t, logs.Record(ctx, session, projectID, []int64{1}))
+	}
+	cutoff := time.Now().UTC().AddDate(0, 0, -90)
+	require.NoError(t, store.DB.Table("injection_log").
+		Where("session_id IN ?", []string{"retention-retained", "retention-expired"}).
+		Update("injected_at", cutoff.Add(-24*time.Hour)).Error)
+	var retainedID, expiredID int64
+	require.NoError(t, store.DB.Raw("SELECT id FROM injection_log WHERE session_id = ?", "retention-retained").Row().Scan(&retainedID))
+	require.NoError(t, store.DB.Raw("SELECT id FROM injection_log WHERE session_id = ?", "retention-expired").Row().Scan(&expiredID))
+	retainedKey := JSONRaw(fmt.Sprintf(`{"id":%d}`, retainedID))
+	otherKey := JSONRaw(fmt.Sprintf(`{"id":%d}`, expiredID))
+	memberships := []ConsolidationMembership{
+		{Reference: "retention-injection", Table: "injection_log", RowKey: retainedKey, SourceRowKey: retainedKey, FieldPath: JSONRaw(`["project"]`), ProjectID: &projectID, PlanFingerprint: "retention-fixture"},
+		{Reference: "retention-other-table", Table: "audit_log", RowKey: otherKey, SourceRowKey: otherKey, FieldPath: JSONRaw(`[""]`), ProjectID: &projectID, PlanFingerprint: "retention-fixture"},
+	}
+	require.NoError(t, store.DB.Create(&memberships).Error)
+
+	deleted, err := logs.DeleteOlderThan(ctx, cutoff)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), deleted)
+	retained, err := logs.GetBySession(ctx, "retention-retained")
+	require.NoError(t, err)
+	require.Equal(t, []int64{1}, retained)
+	expired, err := logs.GetBySession(ctx, "retention-expired")
+	require.NoError(t, err)
+	require.Empty(t, expired, "the same numeric key in another table must not retain the injection row")
+	current, err := logs.GetBySession(ctx, "retention-current")
+	require.NoError(t, err)
+	require.Equal(t, []int64{1}, current)
 }
 
 // TestBatchIncrementInjected_NoOpOnEmpty locks the empty-slice guard (pure, no DB

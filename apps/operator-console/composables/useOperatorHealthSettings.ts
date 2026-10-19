@@ -17,13 +17,13 @@ import { executeMutation, type MutationResult } from './useApi'
 import {
   endpointEvidence,
   loadOperatorJson,
-  operatorApiUrl,
+  operatorFetchResponse,
   pendingState,
 } from './useOperatorApi'
 function submitMutation<TIntent>(action: string, intent: TIntent, path: string, init: RequestInit): Promise<MutationResult<TIntent>> {
   return executeMutation(
     { requestId: crypto.randomUUID(), action, intent },
-    fetch(operatorApiUrl(path), { ...init, credentials: 'include' }),
+    operatorFetchResponse(path, { ...init, credentials: 'include' }),
     () => undefined,
   )
 }

@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
+	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -147,7 +149,6 @@ func (s *SessionStore) IncrementPromptCounter(ctx context.Context, id int64) (in
 		WHERE id = ?
 		RETURNING prompt_counter
 	`, id).Scan(&updated).Error
-
 	if err != nil {
 		// Fall back when the driver does not support RETURNING (e.g. SQLite).
 		if err.Error() == "near \"RETURNING\": syntax error" || updated == 0 {
@@ -199,19 +200,51 @@ func (s *SessionStore) GetSessionsToday(ctx context.Context) (int, error) {
 	return int(n), nil
 }
 
-// GetAllProjects returns the sorted, deduplicated list of non-empty project names
-// that appear across all sdk_sessions rows.
-func (s *SessionStore) GetAllProjects(ctx context.Context) ([]string, error) {
-	var names []string
-	if err := s.db.WithContext(ctx).
-		Model(&SDKSession{}).
-		Distinct("project").
-		Where("project IS NOT NULL AND project != ''").
-		Order("project ASC").
-		Pluck("project", &names).Error; err != nil {
+// ProjectDescriptor keeps canonical identity separate from its human label.
+type ProjectDescriptor struct {
+	ID                  string `json:"project_id"`
+	DisplayName         string `json:"name"`
+	RepositoryQualifier string `json:"repository_qualifier,omitempty"`
+}
+
+func liveKnowledgeProjects(q *gorm.DB) *gorm.DB {
+	return q.Model(&Project{}).Where("removed_at IS NULL").
+		Where("identity_status IS NULL OR identity_status = 'active'")
+}
+
+// GetAllProjects reads the canonical catalog, not untrusted session selectors.
+// Ordinary authenticated readers share the existing server-wide project scope.
+func (s *SessionStore) GetAllProjects(ctx context.Context) ([]ProjectDescriptor, error) {
+	var rows []Project
+	if err := liveKnowledgeProjects(s.db.WithContext(ctx)).Select("id, display_name, git_remote").Order("id ASC").Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	return names, nil
+	items := make([]ProjectDescriptor, 0, len(rows))
+	for _, row := range rows {
+		if !projectidentity.ValidProjectID(row.ID) {
+			continue
+		}
+		label := row.DisplayName.String
+		if !row.DisplayName.Valid || strings.TrimSpace(label) == "" {
+			label = "Registered project"
+		}
+		item := ProjectDescriptor{ID: row.ID, DisplayName: label}
+		if locator, err := projectidentity.NormalizeRepositoryLocator(row.GitRemote.String); err == nil {
+			item.RepositoryQualifier = locator
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+// CanonicalProjectExists never resolves labels or legacy aliases to authority.
+func (s *SessionStore) CanonicalProjectExists(ctx context.Context, project string) (bool, error) {
+	if !projectidentity.ValidProjectID(project) {
+		return false, nil
+	}
+	var total int64
+	err := liveKnowledgeProjects(s.db.WithContext(ctx)).Where("id = ?", project).Count(&total).Error
+	return total == 1, err
 }
 
 // ListSDKSessions returns a paginated page of sessions with the total matching count.

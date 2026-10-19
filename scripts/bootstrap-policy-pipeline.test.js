@@ -24,7 +24,7 @@ function installerPath(fakeBin) {
 }
 function shellQuote(value) { return `'${value.replaceAll("'", `'\\''`)}'`; }
 function temporaryDirectory() { return fs.mkdtempSync(path.join(root, ".tmp-bootstrap-policy-")); }
-function directInstallerFixture(temp, version = currentPolicyVersion, includeRelay = true, extension = "tar.gz") {
+function directInstallerFixture(temp, version = currentPolicyVersion, extension = "tar.gz") {
   const archiveRoot = path.join(temp, "archive");
   const fakeBin = path.join(temp, "bin");
   for (const directory of ["hooks", "scripts", ".claude-plugin", "extensions"]) fs.mkdirSync(path.join(archiveRoot, directory), { recursive: true });
@@ -33,9 +33,13 @@ function directInstallerFixture(temp, version = currentPolicyVersion, includeRel
   fs.writeFileSync(path.join(archiveRoot, "hooks", "hooks.json"), "{}\n");
   fs.writeFileSync(path.join(archiveRoot, "scripts", "bootstrap-policy.js"), "module.exports = {};\n");
   fs.copyFileSync(path.join(root, "plugin", "engram", "scripts", "register-plugin.js"), path.join(archiveRoot, "scripts", "register-plugin.js"));
-  fs.writeFileSync(path.join(archiveRoot, "package.json"), "{}\n");
-  fs.writeFileSync(path.join(archiveRoot, "extensions", "engram-memory.mjs"), "export {};\n");
-  if (includeRelay) fs.writeFileSync(path.join(archiveRoot, "extensions", "legacy-relay.mjs"), "export {};\n");
+  if (version === currentPolicyVersion) {
+    fs.copyFileSync(path.join(root, "plugin", "engram", "package.json"), path.join(archiveRoot, "package.json"));
+    fs.copyFileSync(path.join(root, "plugin", "engram", "extensions", "engram-memory.mjs"), path.join(archiveRoot, "extensions", "engram-memory.mjs"));
+  } else {
+    fs.writeFileSync(path.join(archiveRoot, "package.json"), "{}\n");
+    fs.writeFileSync(path.join(archiveRoot, "extensions", "engram-memory.mjs"), "export {};\n");
+  }
   fs.writeFileSync(path.join(archiveRoot, ".claude-plugin", "plugin.json"), "{}\n");
   if (version === currentPolicyVersion) {
     fs.copyFileSync(path.join(root, "plugin", "engram", "bootstrap-targets.json"), path.join(archiveRoot, "bootstrap-targets.json"));
@@ -54,7 +58,6 @@ function directInstallerFixture(temp, version = currentPolicyVersion, includeRel
   const archive = path.join(temp, `release.${extension}`);
   const entries = ["hooks/hook.js", "hooks/hooks.json", "scripts/bootstrap-policy.js", "scripts/register-plugin.js", "package.json", "extensions/engram-memory.mjs", ".claude-plugin/plugin.json", "bootstrap-targets.json"];
   if (version === currentPolicyVersion) entries.push("parser-targets.json");
-  if (includeRelay) entries.push("extensions/legacy-relay.mjs");
   if (extension === "zip") writeZip(archiveRoot, archive, entries);
   else {
     const archived = spawnSync("tar", ["-czf", archive, "-C", archiveRoot, "."], { encoding: "utf8" });
@@ -1783,7 +1786,7 @@ function writeZip(archiveRoot, archivePath, entries) {
 }
 
 function buildServerArchive(archiveRoot, archivePath) {
-  const entries = ["engram-server", "package.json", "extensions/engram-memory.mjs", "extensions/legacy-relay.mjs", "bootstrap-targets.json", "parser-targets.json"];
+  const entries = ["engram-server", "package.json", "extensions/engram-memory.mjs", "bootstrap-targets.json", "parser-targets.json"];
   if (archivePath.endsWith(".tar.gz")) {
     const archived = spawnSync("tar", ["-czf", archivePath, "-C", archiveRoot, ...entries], { encoding: "utf8" });
     assert.equal(archived.status, 0, archived.stderr);
@@ -1904,7 +1907,6 @@ test("generator check mode and combined artifact gate accept only the shared tar
     fs.writeFileSync(path.join(archiveRoot, "engram-server"), `#!/usr/bin/env bash\nprintf 'INF Starting engram server version=v${currentVersion}\\n' >&2\nexit 1\n`, { mode: 0o755 });
     fs.copyFileSync(path.join(root, "plugin", "engram", "package.json"), path.join(archiveRoot, "package.json"));
     fs.copyFileSync(path.join(root, "plugin", "engram", "extensions", "engram-memory.mjs"), path.join(archiveRoot, "extensions", "engram-memory.mjs"));
-    fs.copyFileSync(path.join(root, "plugin", "engram", "extensions", "legacy-relay.mjs"), path.join(archiveRoot, "extensions", "legacy-relay.mjs"));
     fs.copyFileSync(policyPath, path.join(archiveRoot, "bootstrap-targets.json"));
     fs.copyFileSync(parserPolicyPath, path.join(archiveRoot, "parser-targets.json"));
     const archives = [
@@ -1963,7 +1965,6 @@ test("direct installer rejects archive self-validation before install mutation",
     fs.writeFileSync(path.join(archiveRoot, ".claude-plugin", "plugin.json"), "{}\n");
     fs.writeFileSync(path.join(archiveRoot, "package.json"), "{}\n");
     fs.writeFileSync(path.join(archiveRoot, "extensions", "engram-memory.mjs"), "export {};\n");
-    fs.writeFileSync(path.join(archiveRoot, "extensions", "legacy-relay.mjs"), "export {};\n");
     const validPolicy = fs.readFileSync(path.join(root, "plugin", "engram", "bootstrap-targets.json"), "utf8");
     const duplicatePolicy = validPolicy.replace('"schema_version": 1,', '"schema_version": 1,\n  "\\u0073chema_version": 1,');
     fs.writeFileSync(path.join(archiveRoot, "bootstrap-targets.json"), duplicatePolicy);
@@ -1995,11 +1996,11 @@ test("direct installer rejects archive self-validation before install mutation",
     assert.match(powerShellInstaller, /Node\.js 18\+/);
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
-test("shell installer allows a relay-less v6.48 archive but rejects v6.49", () => {
+test("shell installer preserves historical relay requirements and accepts current relay-free payload", () => {
   const temp = temporaryDirectory();
   try {
-    for (const [version, accepted] of [["6.48.0", true], ["6.49.0", false]]) {
-      const fixture = directInstallerFixture(path.join(temp, version), version, false);
+    for (const [version, accepted] of [["6.48.0", true], ["6.49.0", false], [currentPolicyVersion, true]]) {
+      const fixture = directInstallerFixture(path.join(temp, version), version);
       const home = path.join(temp, `home-${version}`);
       const environment = `HOME=${shellQuote(bashPath(home))} PATH=${shellQuote(installerPath(fixture.fakeBin))} FAKE_RELEASE_ARCHIVE=${shellQuote(bashPath(fixture.archive))}`;
       const result = spawnSync("bash", ["-c", `printf '\n\n' | ${environment} bash scripts/install.sh v${version}`], { cwd: root, encoding: "utf8", env: process.env });
@@ -2007,17 +2008,22 @@ test("shell installer allows a relay-less v6.48 archive but rejects v6.49", () =
       const output = `${result.stdout}\n${result.stderr}`;
       if (!accepted) assert.match(output, /missing required OMP relay helper/);
       assert.equal(result.status === 0, accepted, output);
-      const helper = path.join(home, ".claude", "plugins", "marketplaces", "engram", "extensions", "legacy-relay.mjs");
-      assert.equal(fs.existsSync(helper), false);
+      const installed = path.join(home, ".claude", "plugins", "marketplaces", "engram");
+      assert.equal(fs.existsSync(path.join(installed, "extensions", "legacy-relay.mjs")), false);
+      if (version === currentPolicyVersion) {
+        for (const relative of ["package.json", "extensions/engram-memory.mjs"]) {
+          assert.deepEqual(fs.readFileSync(path.join(installed, relative)), fs.readFileSync(path.join(root, "plugin", "engram", relative)));
+        }
+      }
     }
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
 
-windowsTest("PowerShell installer allows a relay-less v6.48 archive but rejects v6.49", () => {
+windowsTest("PowerShell installer preserves historical relay requirements and accepts current relay-free payload", () => {
   const temp = temporaryDirectory();
   try {
-    for (const [version, accepted] of [["6.48.0", true], ["6.49.0", false]]) {
-      const fixture = directInstallerFixture(path.join(temp, version), version, false, "zip");
+    for (const [version, accepted] of [["6.48.0", true], ["6.49.0", false], [currentPolicyVersion, true]]) {
+      const fixture = directInstallerFixture(path.join(temp, version), version, "zip");
       const home = path.join(temp, `home-${version}`);
       const ps = `$env:USERPROFILE = '${powerShellQuote(home)}'
 $env:TEMP = '${powerShellQuote(temp)}'
@@ -2032,8 +2038,13 @@ Install-Release -Ver 'v${version}' -NodeExecutable '${powerShellQuote(process.ex
       const output = registryError(result);
       if (!accepted) assert.match(output, /missing required OMP relay helper/);
       assert.equal(result.status === 0, accepted, output);
-      const helper = path.join(home, ".claude", "plugins", "marketplaces", "engram", "extensions", "legacy-relay.mjs");
-      assert.equal(fs.existsSync(helper), false);
+      const installed = path.join(home, ".claude", "plugins", "marketplaces", "engram");
+      assert.equal(fs.existsSync(path.join(installed, "extensions", "legacy-relay.mjs")), false);
+      if (version === currentPolicyVersion) {
+        for (const relative of ["package.json", "extensions/engram-memory.mjs"]) {
+          assert.deepEqual(fs.readFileSync(path.join(installed, relative)), fs.readFileSync(path.join(root, "plugin", "engram", relative)));
+        }
+      }
     }
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
@@ -2109,7 +2120,7 @@ test("shell installer copies parser policy from macOS and Git Bash archives", ()
   try {
     const expected = fs.readFileSync(path.join(root, "plugin", "engram", "parser-targets.json"));
     for (const [name, system, arch, extension] of [["mac", "Darwin", "arm64", "tar.gz"], ["git-bash", "MINGW64_NT", "x86_64", "zip"]]) {
-      const fixture = directInstallerFixture(path.join(temp, name), currentPolicyVersion, true, extension);
+      const fixture = directInstallerFixture(path.join(temp, name), currentPolicyVersion, extension);
       fs.writeFileSync(path.join(fixture.fakeBin, "uname"), `#!/usr/bin/env bash\n[[ $1 == -s ]] && echo ${system} || echo ${arch}\n`, { mode: 0o755 });
       const home = path.join(temp, `home-${name}`);
       const environment = `HOME=${shellQuote(bashPath(home))} PATH=${shellQuote(installerPath(fixture.fakeBin))} FAKE_RELEASE_ARCHIVE=${shellQuote(bashPath(fixture.archive))} ENGRAM_URL=http://localhost:37777/mcp ENGRAM_API_TOKEN=`;
@@ -2127,12 +2138,12 @@ windowsTest("PowerShell installer installs parser policy on fresh install and up
     const destination = path.join(home, ".claude", "plugins", "marketplaces", "engram", "parser-targets.json");
     const expected = fs.readFileSync(path.join(root, "plugin", "engram", "parser-targets.json"));
     for (const name of ["fresh", "upgrade", "missing", "corrupt"]) {
-      const fixture = directInstallerFixture(path.join(temp, name), currentPolicyVersion, true, "zip");
+      const fixture = directInstallerFixture(path.join(temp, name), currentPolicyVersion, "zip");
       if (name === "missing" || name === "corrupt") {
         const archiveRoot = path.join(temp, name, "archive");
         if (name === "missing") fs.rmSync(path.join(archiveRoot, "parser-targets.json"));
         else fs.writeFileSync(path.join(archiveRoot, "parser-targets.json"), expected.toString("utf8").replace(/"sha256": "[a-f0-9]{64}"/, '"sha256": "bad"'));
-        const entries = ["hooks/hook.js", "hooks/hooks.json", "scripts/bootstrap-policy.js", "scripts/register-plugin.js", "package.json", "extensions/engram-memory.mjs", "extensions/legacy-relay.mjs", ".claude-plugin/plugin.json", "bootstrap-targets.json"];
+        const entries = ["hooks/hook.js", "hooks/hooks.json", "scripts/bootstrap-policy.js", "scripts/register-plugin.js", "package.json", "extensions/engram-memory.mjs", ".claude-plugin/plugin.json", "bootstrap-targets.json"];
         if (name === "corrupt") entries.push("parser-targets.json");
         writeZip(archiveRoot, fixture.archive, entries);
       }

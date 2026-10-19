@@ -4,7 +4,7 @@
 
 import { z } from 'zod';
 import { Type } from '@sinclair/typebox';
-import { resolveAndRegisterProject } from '../client.js';
+import { resolveProject } from '../client.js';
 import type { EngramRestClient, BulkImportRequest } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import { quotedPromptScalar } from '../context/formatter.js';
@@ -74,7 +74,7 @@ async function storeObservation(
     return 'engram is currently unreachable — memory store unavailable';
   }
 
-  const registration = await resolveAndRegisterProject(client, ctx.agentId ?? '', ctx.workspaceDir, config.project);
+  const registration = await resolveProject(client, ctx.agentId ?? '', ctx.workspaceDir, config.project);
   if (!registration.ok) {
     return `Project identity unavailable: ${registration.error.code} (${registration.error.upgradeAction})`;
   }

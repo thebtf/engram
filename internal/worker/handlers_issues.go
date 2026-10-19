@@ -19,6 +19,7 @@ import (
 
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/projectidentity"
 )
 
 // issueMutationActor accepts only read-write SourceClient keycards or
@@ -99,6 +100,16 @@ func writeIssueStoreError(w http.ResponseWriter, err error) {
 func (s *Service) handleListIssues(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
 	sourceProject := r.URL.Query().Get("source_project")
+	sourceAgent := r.URL.Query().Get("source_agent")
+	for _, selector := range []string{project, sourceProject} {
+		if selector == "" {
+			continue
+		}
+		if !projectidentity.ValidProjectID(selector) {
+			writeDocumentError(w, http.StatusBadRequest, "an exact canonical project ID is required")
+			return
+		}
+	}
 	statusParam := r.URL.Query().Get("status")
 	typeParam := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("type")))
 	limitStr := r.URL.Query().Get("limit")
@@ -126,6 +137,7 @@ func (s *Service) handleListIssues(w http.ResponseWriter, r *http.Request) {
 	params := gormdb.IssueListParams{
 		TargetProject: project,
 		SourceProject: sourceProject,
+		SourceAgent:   sourceAgent,
 		Statuses:      statuses,
 		Type:          typeParam,
 		Limit:         limit,
@@ -333,21 +345,60 @@ func (s *Service) handleUpdateIssue(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+type issueAcknowledgeRequest struct {
+	IDs           []int64 `json:"ids"`
+	SourceProject string  `json:"source_project"`
+	SourceAgent   string  `json:"source_agent"`
+}
+
+func validateIssueMutationSource(ctx context.Context, sourceProject, sourceAgent string) error {
+	identity, _ := auth.IdentityFrom(ctx)
+	human := identity.Source == auth.SourceSession || identity.PrincipalKind == auth.PrincipalKindHuman || sourceAgent == "human"
+	if human && (sourceAgent != "human" || !projectidentity.ValidProjectID(sourceProject)) {
+		return fmt.Errorf("%w: human issue mutations require source_project as an exact canonical UUID and source_agent=human", gormdb.ErrIssueInvalidInput)
+	}
+	return nil
+}
+
+func issueMutationAudit(ctx context.Context, action, sourceProject, sourceAgent string, ids []int64) *gormdb.AuditLogEntry {
+	if sourceProject == "" && sourceAgent == "" {
+		return nil
+	}
+	actor, sessionID := configAuditIdentity(ctx)
+	if identity, ok := auth.IdentityFrom(ctx); ok {
+		if subject, found := identity.SessionBrowserSubject(); found {
+			actor = string(identity.Source) + ":human:" + subject.Principal
+		}
+	}
+	return &gormdb.AuditLogEntry{
+		Action:          "issue." + action,
+		Actor:           actor,
+		SourceSessionID: sessionID,
+		AfterState: configAuditRaw(map[string]any{
+			"source_project": sourceProject,
+			"source_agent":   sourceAgent,
+			"issue_ids":      ids,
+		}),
+	}
+}
+
 // handleAcknowledgeIssues handles POST /api/issues/acknowledge.
 func (s *Service) handleAcknowledgeIssues(w http.ResponseWriter, r *http.Request) {
 	if err := requireIssueOperator(r.Context()); err != nil {
 		writeIssueAuthorizationError(w, err)
 		return
 	}
-	var req struct {
-		IDs []int64 `json:"ids"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var req issueAcknowledgeRequest
+	if _, err := operatorCodeReadJSON(r, &req); err != nil {
 		http.Error(w, `{"error": "invalid JSON body"}`, http.StatusBadRequest)
 		return
 	}
+	if err := validateIssueMutationSource(r.Context(), req.SourceProject, req.SourceAgent); err != nil {
+		writeIssueStoreError(w, err)
+		return
+	}
 
-	acknowledged, err := s.issueStore.AcknowledgeIssuesAtomically(r.Context(), req.IDs)
+	acknowledged, err := s.issueStore.AcknowledgeIssuesAtomically(r.Context(), req.IDs, issueMutationAudit(r.Context(), "acknowledge", req.SourceProject, req.SourceAgent, req.IDs))
 	if err != nil {
 		writeIssueStoreError(w, err)
 		return
@@ -390,7 +441,17 @@ func (s *Service) handleDeleteIssue(w http.ResponseWriter, r *http.Request) {
 		writeIssueAuthorizationError(w, err)
 		return
 	}
-	if err := s.issueStore.DeleteIssue(r.Context(), id); err != nil {
+	query := r.URL.Query()
+	if len(query["source_project"]) > 1 || len(query["source_agent"]) > 1 {
+		writeDocumentError(w, http.StatusBadRequest, "issue attribution must be supplied exactly once")
+		return
+	}
+	sourceProject, sourceAgent := query.Get("source_project"), query.Get("source_agent")
+	if err := validateIssueMutationSource(r.Context(), sourceProject, sourceAgent); err != nil {
+		writeIssueStoreError(w, err)
+		return
+	}
+	if err := s.issueStore.DeleteIssue(r.Context(), id, issueMutationAudit(r.Context(), "delete", sourceProject, sourceAgent, []int64{id})); err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			http.Error(w, `{"error": "issue not found"}`, http.StatusNotFound)
 			return
@@ -399,7 +460,7 @@ func (s *Service) handleDeleteIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Info().Int64("issue_id", id).Msg("Issue deleted by operator")
+	log.Info().Int64("issue_id", id).Str("source_project", sourceProject).Str("source_agent", sourceAgent).Msg("Issue deleted by operator")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -412,6 +473,7 @@ const (
 type issueSelectionFilter struct {
 	Project       string   `json:"project,omitempty"`
 	SourceProject string   `json:"source_project,omitempty"`
+	SourceAgent   string   `json:"source_agent,omitempty"`
 	Statuses      []string `json:"statuses,omitempty"`
 	Type          string   `json:"type,omitempty"`
 }
@@ -426,7 +488,9 @@ type issueSelectionCursor struct {
 }
 
 type issueSelectionSnapshotRequest struct {
-	Selection issueSelectionRequest `json:"selection"`
+	Selection     issueSelectionRequest `json:"selection"`
+	SourceProject string                `json:"source_project"`
+	SourceAgent   string                `json:"source_agent"`
 }
 
 type issueSelectionRequest struct {
@@ -437,21 +501,28 @@ type issueSelectionRequest struct {
 	ExcludedIDs []string                           `json:"excluded_ids,omitempty"`
 }
 
-type issueSelectionCurrentRequest struct{}
+type issueSelectionCurrentRequest struct {
+	SourceProject string `json:"source_project"`
+	SourceAgent   string `json:"source_agent"`
+}
 
 type issueSelectionPageRequest struct {
-	Filter *issueSelectionFilter `json:"filter"`
-	Cursor string                `json:"cursor,omitempty"`
-	Limit  int                   `json:"limit"`
+	Filter        *issueSelectionFilter `json:"filter"`
+	Cursor        string                `json:"cursor,omitempty"`
+	Limit         int                   `json:"limit"`
+	SourceProject string                `json:"source_project"`
+	SourceAgent   string                `json:"source_agent"`
 }
 
 type issueSelectionOperationRequest struct {
-	RequestID string                    `json:"request_id"`
-	Action    string                    `json:"action"`
-	Selection issueSelectionActionScope `json:"selection"`
-	Status    *string                   `json:"status,omitempty"`
-	Priority  *string                   `json:"priority,omitempty"`
-	Labels    *[]string                 `json:"labels,omitempty"`
+	RequestID     string                    `json:"request_id"`
+	Action        string                    `json:"action"`
+	Selection     issueSelectionActionScope `json:"selection"`
+	Status        *string                   `json:"status,omitempty"`
+	Priority      *string                   `json:"priority,omitempty"`
+	Labels        *[]string                 `json:"labels,omitempty"`
+	SourceProject string                    `json:"source_project"`
+	SourceAgent   string                    `json:"source_agent"`
 }
 
 type issueSelectionActionScope struct {
@@ -538,7 +609,7 @@ func (s *Service) HandleIssueSelectionSnapshot(w http.ResponseWriter, r *http.Re
 			writeIssueSelectionError(w, rowsErr)
 			return
 		}
-		selection.FilterFingerprint = filter.collectionFilter().Fingerprint
+		selection.FilterFingerprint = issueSelectionActorFilterFingerprint(filter.collectionFilter().Fingerprint, scope.ContextFingerprint)
 		selection.Targets = issueSelectionTargets(rows)
 		selection.ExpiresAt = time.Now().UTC().Add(time.Hour)
 	} else if selection.Kind == gormdb.CollectionSelectionPage {
@@ -637,10 +708,15 @@ func (s *Service) HandleIssueSelectionOperation(w http.ResponseWriter, r *http.R
 		writeIssueSelectionError(w, err)
 		return
 	}
+	ids := make([]int64, len(targets))
+	for index, target := range targets {
+		ids[index] = target.ID
+	}
 	result, err := s.issueStore.ApplyIssueSelectionOperation(r.Context(), gormdb.IssueSelectionOperation{
 		Action:  action,
 		Actor:   gormdb.IssueSelectionActor{KeycardID: keycardID, IsOperator: isOperator},
 		Targets: targets,
+		Audit:   issueMutationAudit(r.Context(), request.Action, request.SourceProject, request.SourceAgent, ids),
 	})
 	if err != nil {
 		writeIssueSelectionError(w, err)
@@ -712,7 +788,12 @@ func (s *Service) issueSelectionRequestScope(w http.ResponseWriter, r *http.Requ
 		operatorCodeWriteBodyless(w, http.StatusBadRequest)
 		return auth.Identity{}, gormdb.CollectionSelectionScope{}, nil, false
 	}
-	digest := sha256.Sum256([]byte(fmt.Sprintf("issues-collection-scope/v1\x00%d\x00%s\x00%s", subject.UserID, sessionID, issueSelectionDomain)))
+	sourceProject, sourceAgent, err := issueSelectionSource(r.Context(), target)
+	if err != nil {
+		writeIssueSelectionError(w, err)
+		return auth.Identity{}, gormdb.CollectionSelectionScope{}, nil, false
+	}
+	digest := sha256.Sum256([]byte(fmt.Sprintf("issues-collection-scope/v2\x00%d\x00%s\x00%s\x00%s\x00%s", subject.UserID, sessionID, issueSelectionDomain, sourceProject, sourceAgent)))
 	return identity, gormdb.CollectionSelectionScope{
 		SubjectUserID:      subject.UserID,
 		SessionID:          sessionID,
@@ -721,6 +802,54 @@ func (s *Service) issueSelectionRequestScope(w http.ResponseWriter, r *http.Requ
 		AuthorizationEpoch: 1,
 		CollectionVersion:  1,
 	}, gormdb.NewCollectionSelectionStore(s.store.GetDB()), true
+}
+
+func issueSelectionActorFilterFingerprint(rowFingerprint, contextFingerprint string) string {
+	digest := sha256.Sum256([]byte("issues-actor-filter/v1\x00" + rowFingerprint + "\x00" + contextFingerprint))
+	return issueSelectionDigestPrefix + hex.EncodeToString(digest[:])
+}
+
+func issueSelectionSource(ctx context.Context, target any) (string, string, error) {
+	var sourceProject, sourceAgent, cursor string
+	var filter *issueSelectionFilter
+	switch request := target.(type) {
+	case *issueSelectionSnapshotRequest:
+		sourceProject, sourceAgent = request.SourceProject, request.SourceAgent
+		filter, cursor = request.Selection.Filter, request.Selection.Cursor
+	case *issueSelectionCurrentRequest:
+		sourceProject, sourceAgent = request.SourceProject, request.SourceAgent
+	case *issueSelectionPageRequest:
+		sourceProject, sourceAgent = request.SourceProject, request.SourceAgent
+		filter, cursor = request.Filter, request.Cursor
+	case *issueSelectionOperationRequest:
+		sourceProject, sourceAgent = request.SourceProject, request.SourceAgent
+	default:
+		return "", "", gormdb.ErrCollectionSelectionInvalid
+	}
+	if err := validateIssueMutationSource(ctx, sourceProject, sourceAgent); err != nil {
+		return "", "", err
+	}
+	if cursor != "" {
+		resolved, _, err := issueSelectionPageFilter(filter, cursor)
+		if err != nil {
+			return "", "", err
+		}
+		filter = &resolved
+	}
+	if filter != nil {
+		normalized, err := normalizeIssueSelectionFilter(filter)
+		if err != nil {
+			return "", "", err
+		}
+		selected := normalized.Project
+		if selected == "" {
+			selected = normalized.SourceProject
+		}
+		if sourceAgent == "human" && selected != "" && sourceProject != selected {
+			return "", "", gormdb.ErrCollectionSelectionInvalid
+		}
+	}
+	return sourceProject, sourceAgent, nil
 }
 
 func (s *Service) issueSelectionSnapshot(ctx context.Context, request issueSelectionRequest) (gormdb.CollectionSelection, error) {
@@ -781,6 +910,7 @@ func (s *Service) issueSelectionRows(ctx context.Context, filter issueSelectionF
 	params := gormdb.IssueListParams{
 		TargetProject: filter.Project,
 		SourceProject: filter.SourceProject,
+		SourceAgent:   filter.SourceAgent,
 		Statuses:      append([]string(nil), filter.Statuses...),
 		Type:          filter.Type,
 		Limit:         gormdb.CollectionSelectionMaxTargets + 1,
@@ -875,11 +1005,17 @@ func normalizeIssueSelectionFilter(request *issueSelectionFilter) (issueSelectio
 	filter := issueSelectionFilter{
 		Project:       strings.TrimSpace(request.Project),
 		SourceProject: strings.TrimSpace(request.SourceProject),
+		SourceAgent:   strings.TrimSpace(request.SourceAgent),
 		Type:          strings.ToLower(strings.TrimSpace(request.Type)),
 	}
-	if filter.Project != request.Project || filter.SourceProject != request.SourceProject || filter.Type != request.Type ||
-		(len(filter.Project) > issueSelectionFilterLimit || len(filter.SourceProject) > issueSelectionFilterLimit) {
+	if filter.Project != request.Project || filter.SourceProject != request.SourceProject || filter.SourceAgent != request.SourceAgent || filter.Type != request.Type ||
+		(len(filter.Project) > issueSelectionFilterLimit || len(filter.SourceProject) > issueSelectionFilterLimit || len(filter.SourceAgent) > issueSelectionFilterLimit) {
 		return issueSelectionFilter{}, gormdb.ErrCollectionSelectionInvalid
+	}
+	for _, project := range []string{filter.Project, filter.SourceProject} {
+		if project != "" && !projectidentity.ValidProjectID(project) {
+			return issueSelectionFilter{}, gormdb.ErrCollectionSelectionInvalid
+		}
 	}
 	if filter.Type != "" && filter.Type != "bug" && filter.Type != "feature" && filter.Type != "improvement" && filter.Type != "task" {
 		return issueSelectionFilter{}, gormdb.ErrCollectionSelectionInvalid
@@ -903,7 +1039,7 @@ func normalizeIssueSelectionFilter(request *issueSelectionFilter) (issueSelectio
 }
 
 func sameIssueSelectionFilter(left, right issueSelectionFilter) bool {
-	if left.Project != right.Project || left.SourceProject != right.SourceProject || left.Type != right.Type || len(left.Statuses) != len(right.Statuses) {
+	if left.Project != right.Project || left.SourceProject != right.SourceProject || left.SourceAgent != right.SourceAgent || left.Type != right.Type || len(left.Statuses) != len(right.Statuses) {
 		return false
 	}
 	for index := range left.Statuses {
@@ -924,7 +1060,7 @@ func validIssueSelectionStatus(value string) bool {
 }
 
 func (filter issueSelectionFilter) collectionFilter() gormdb.CollectionFilter {
-	digest := sha256.Sum256([]byte("issues-collection-filter/v1\x00priority:asc\x00created_at:desc\x00" + filter.Project + "\x00" + filter.SourceProject + "\x00" + strings.Join(filter.Statuses, ",") + "\x00" + filter.Type))
+	digest := sha256.Sum256([]byte("issues-collection-filter/v1\x00priority:asc\x00created_at:desc\x00" + filter.Project + "\x00" + filter.SourceProject + "\x00" + strings.Join(filter.Statuses, ",") + "\x00" + filter.Type + "\x00" + filter.SourceAgent))
 	return gormdb.CollectionFilter{Fingerprint: issueSelectionDigestPrefix + hex.EncodeToString(digest[:]), Value: "issues"}
 }
 

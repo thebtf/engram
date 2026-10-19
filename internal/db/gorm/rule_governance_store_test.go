@@ -134,7 +134,7 @@ func TestMigration159_RuleGovernanceEscapeConstraintRepairIsIdempotent(t *testin
 	require.NoError(t, migration.Migrate(db))
 
 	store := NewRuleGovernanceStore(db)
-	candidate := ruleGovernanceCandidate("migration-159-escape")
+	candidate := ruleGovernanceCandidate(sessionTestProject(t, db), "migration-159-escape")
 	candidate.AntiCaptureStatus = "HYPOTHESIS: repair evidence"
 	candidate.ConflictStatus = "BLOCKED: repair evidence"
 	candidate.DecayPolicy = "NEEDS CLARIFICATION: repair evidence"
@@ -170,11 +170,12 @@ func TestRuleGovernanceStore_CandidateIdempotencyAndNoBehavioralRuleProjection(t
 	db := openCandidateTestDB(t)
 	store := NewRuleGovernanceStore(db)
 	ctx := context.Background()
+	project := sessionTestProject(t, db)
 
 	candidate := &models.RuleCandidate{
 		SourceSignalType:    "explicit_agent_proposal",
 		SourceSessionID:     "rg0-session-idempotency",
-		SourceProject:       "rg0-project",
+		SourceProject:       project,
 		SourceActor:         "codex",
 		ProposedContent:     "Always verify rule governance transitions with tests.",
 		ProposedScope:       "project",
@@ -186,7 +187,7 @@ func TestRuleGovernanceStore_CandidateIdempotencyAndNoBehavioralRuleProjection(t
 		Fingerprint:         "rg0-idempotent-fingerprint",
 		DecayPolicy:         "NO DATA",
 		LastEvaluatedAt:     time.Now().UTC(),
-		ActivationPredicate: map[string]any{"project": "rg0-project"},
+		ActivationPredicate: map[string]any{"project": project},
 	}
 
 	created, err := store.CreateRuleCandidate(ctx, candidate)
@@ -313,7 +314,7 @@ func TestRuleGovernanceStore_ListLegacyBehavioralRuleFallbackKeepsLegacyRowsCont
 	store := NewRuleGovernanceStore(db)
 	behavioralStore := &BehavioralRulesStore{db: db}
 	ctx := context.Background()
-	project := fmt.Sprintf("rg2-legacy-project-%d", time.Now().UnixNano())
+	project := sessionTestProject(t, db)
 
 	global, err := behavioralStore.Create(ctx, &models.BehavioralRule{
 		Content:  "rg2 legacy global fallback",
@@ -378,7 +379,7 @@ func TestRuleGovernanceStore_CreateCandidateRejectsNonPendingStatus(t *testing.T
 	store := NewRuleGovernanceStore(db)
 	ctx := context.Background()
 
-	candidate := ruleGovernanceCandidate("non-pending-create")
+	candidate := ruleGovernanceCandidate(sessionTestProject(t, db), "non-pending-create")
 	candidate.Status = models.RuleCandidateDrafted
 	_, err := store.CreateRuleCandidate(ctx, candidate)
 	require.Error(t, err)
@@ -393,11 +394,12 @@ func TestRuleGovernanceStore_CreateDraftFromCandidateIsIdempotent(t *testing.T) 
 	db := openCandidateTestDB(t)
 	store := NewRuleGovernanceStore(db)
 	ctx := context.Background()
+	project := sessionTestProject(t, db)
 
 	candidate := &models.RuleCandidate{
 		SourceSignalType:    "explicit_agent_proposal",
 		SourceSessionID:     "rg0-session-draft",
-		SourceProject:       "rg0-project",
+		SourceProject:       project,
 		SourceActor:         "codex",
 		ProposedContent:     "Treat global rule promotion as privileged.",
 		ProposedScope:       "project",
@@ -408,7 +410,7 @@ func TestRuleGovernanceStore_CreateDraftFromCandidateIsIdempotent(t *testing.T) 
 		Status:              models.RuleCandidatePending,
 		Fingerprint:         "rg0-draft-fingerprint",
 		DecayPolicy:         "NO DATA",
-		ActivationPredicate: map[string]any{"project": "rg0-project"},
+		ActivationPredicate: map[string]any{"project": project},
 	}
 	created, err := store.CreateRuleCandidate(ctx, candidate)
 	require.NoError(t, err)
@@ -431,7 +433,7 @@ func TestRuleGovernanceStore_UnknownActorKindCannotCreateDraft(t *testing.T) {
 	store := NewRuleGovernanceStore(db)
 	ctx := context.Background()
 
-	created, err := store.CreateRuleCandidate(ctx, ruleGovernanceCandidate("unknown-actor-kind"))
+	created, err := store.CreateRuleCandidate(ctx, ruleGovernanceCandidate(sessionTestProject(t, db), "unknown-actor-kind"))
 	require.NoError(t, err)
 
 	req := transitionReq("draft with unknown actor kind", "")
@@ -486,7 +488,7 @@ func TestRuleGovernanceStore_TransitionRequestRejectsWhitespaceRequiredFields(t 
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			created, err := store.CreateRuleCandidate(ctx, ruleGovernanceCandidate("blank-transition-"+tc.name))
+			created, err := store.CreateRuleCandidate(ctx, ruleGovernanceCandidate(sessionTestProject(t, db), "blank-transition-"+tc.name))
 			require.NoError(t, err)
 			req := transitionReq("draft", "")
 			tc.mutate(&req)
@@ -666,7 +668,7 @@ func TestRuleGovernanceStore_RejectsMalformedLegalEscapeOnCreate(t *testing.T) {
 	store := NewRuleGovernanceStore(db)
 	ctx := context.Background()
 
-	candidate := ruleGovernanceCandidate("bad-escape")
+	candidate := ruleGovernanceCandidate(sessionTestProject(t, db), "bad-escape")
 	candidate.DecayPolicy = "HYPOTHESIS"
 	_, err := store.CreateRuleCandidate(ctx, candidate)
 	require.Error(t, err)
@@ -676,7 +678,7 @@ func TestRuleGovernanceStore_RejectsMalformedLegalEscapeOnCreate(t *testing.T) {
 func createRuleGovernanceDraft(t *testing.T, store *RuleGovernanceStore, suffix string) *models.RuleVersion {
 	t.Helper()
 	ctx := context.Background()
-	candidate := ruleGovernanceCandidate(suffix)
+	candidate := ruleGovernanceCandidate(sessionTestProject(t, store.db), suffix)
 	created, err := store.CreateRuleCandidate(ctx, candidate)
 	require.NoError(t, err)
 	version, err := store.CreateDraftFromCandidate(ctx, created.ID, transitionReq("draft", ""))
@@ -684,12 +686,12 @@ func createRuleGovernanceDraft(t *testing.T, store *RuleGovernanceStore, suffix 
 	return version
 }
 
-func ruleGovernanceCandidate(suffix string) *models.RuleCandidate {
+func ruleGovernanceCandidate(project, suffix string) *models.RuleCandidate {
 	unique := fmt.Sprintf("%s-%d", suffix, time.Now().UnixNano())
 	return &models.RuleCandidate{
 		SourceSignalType:    "explicit_agent_proposal",
 		SourceSessionID:     "rg0-session-" + unique,
-		SourceProject:       "rg0-project",
+		SourceProject:       project,
 		SourceActor:         "codex",
 		ProposedContent:     "Rule governance fixture " + unique,
 		ProposedScope:       "project",
@@ -701,7 +703,7 @@ func ruleGovernanceCandidate(suffix string) *models.RuleCandidate {
 		Fingerprint:         "rg0-" + unique,
 		DecayPolicy:         "NO DATA",
 		LastEvaluatedAt:     time.Now().UTC(),
-		ActivationPredicate: map[string]any{"project": "rg0-project"},
+		ActivationPredicate: map[string]any{"project": project},
 	}
 }
 
@@ -728,6 +730,7 @@ func getRuleVersionState(t *testing.T, db *gorm.DB, versionID int64) models.Rule
 
 func insertRuleVersionFixture(t *testing.T, db *gorm.DB, suffix string, state models.RuleVersionState, audience string, priority int) int64 {
 	t.Helper()
+	project := sessionTestProject(t, db)
 	var familyID int64
 	require.NoError(t, db.Raw(`INSERT INTO rule_families (family_key) VALUES (?) RETURNING id`,
 		fmt.Sprintf("rg2-family-%s", suffix),
@@ -754,7 +757,7 @@ func insertRuleVersionFixture(t *testing.T, db *gorm.DB, suffix string, state mo
 		"project",
 		"codex",
 		audience,
-		`{"project":"rg2-project"}`,
+		fmt.Sprintf(`{"project":%q}`, project),
 		string(state),
 		"contextual",
 		"passed",
@@ -864,7 +867,7 @@ func TestRuleGovernanceStore_RollbackSnapshotSupportsLegacyRuleVersionShape(t *t
 	db := openCandidateTestDB(t)
 	store := NewRuleGovernanceStore(db)
 	ctx := context.Background()
-	project := fmt.Sprintf("rg3-rollback-legacy-%d", time.Now().UnixNano())
+	project := sessionTestProject(t, db)
 	versionID := insertRG3RuleVersionFixture(t, db, project, models.RuleStateActiveProject, "developer", 10)
 	snapshotID := uniqueSnapshot("rg3-rollback-legacy")
 

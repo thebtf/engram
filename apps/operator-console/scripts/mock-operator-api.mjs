@@ -4,6 +4,23 @@ import { createServer } from 'node:http'
 const port = Number(process.env.PORT || 37993)
 const host = process.env.HOST || '127.0.0.1'
 
+// Synthetic frontend fixtures only; this map is not migration evidence.
+const fixtureProjectIDs = {
+  'operator-console': '11111111-1111-4111-8111-111111111111',
+  'project-alpha': '22222222-2222-4222-8222-222222222222',
+  engram: '33333333-3333-4333-8333-333333333333',
+  alpha: '44444444-4444-4444-8444-444444444444',
+  beta: '55555555-5555-4555-8555-555555555555',
+}
+const fixtureProjects = [
+  { project_id: fixtureProjectIDs['operator-console'], name: 'Operator Console', repository_qualifier: 'engram/operator-console' },
+  { project_id: fixtureProjectIDs['project-alpha'], name: 'Project Alpha', repository_qualifier: 'examples/project-alpha' },
+  { project_id: fixtureProjectIDs.engram, name: 'Engram', repository_qualifier: 'thebtf/engram' },
+  { project_id: fixtureProjectIDs.alpha, name: 'Alpha', repository_qualifier: 'examples/alpha' },
+  { project_id: fixtureProjectIDs.beta, name: 'Alpha', repository_qualifier: 'examples/beta' },
+]
+const fixtureUnresolved = [{ reference: 'retained-legacy-fixture', name: 'Legacy fixture knowledge', reason: 'Synthetic ambiguous membership; no merge or assignment', reader_kinds: ['memory', 'document', 'issue', 'code'] }]
+
 function json(res, status, body) {
   const payload = JSON.stringify(body)
   res.writeHead(status, {
@@ -144,9 +161,10 @@ const codeTabs = new Map()
 let codeTabSequence = 41
 let codeIndexIntentBindingId = null
 
-function codeCatalogResponse() {
+function codeCatalogResponse(project = '') {
   return {
-    contexts: codeWorkspaces.map((workspace) => ({
+    contexts: [...codeWorkspaces.filter(() => !project || project === fixtureProjectIDs.engram).map((workspace) => ({
+      project_id: fixtureProjectIDs.engram,
       source_ref: workspace.sourceRef,
       checkout_ref: workspace.checkoutRef,
       repository: workspace.repository,
@@ -162,7 +180,7 @@ function codeCatalogResponse() {
       }),
       index_intent_available: workspace.snapshot === null,
       ...(workspace.snapshot === null ? { index_intent_selection_ref: workspace.indexIntentSelectionRef } : {}),
-    })),
+    })), ...(!project ? [{ project_id: null, unresolved_reference: fixtureUnresolved[0].reference, source_ref: 'retained-fixture-source', checkout_ref: 'retained-fixture-checkout', repository: 'Retained fixture repository', working_copy: 'Historical fixture working copy' }] : [])],
   }
 }
 
@@ -213,7 +231,7 @@ function selectedCodeWorkspace(bindingID) {
   return selectionRef ? codeWorkspaces.find((workspace) => workspace.selectionRef === selectionRef) ?? null : null
 }
 
-async function handleCodeRequest(req, res, path) {
+async function handleCodeRequest(req, res, path, url) {
   const body = req.method === 'GET' ? {} : await readRequestJson(req)
   if (req.method === 'POST' && path === '/api/code/tabs/handshake') {
     const tabBindingId = `60000000-0000-4000-8000-${String(codeTabSequence).padStart(12, '0')}`
@@ -232,7 +250,11 @@ async function handleCodeRequest(req, res, path) {
     return true
   }
   if (req.method === 'POST' && path === '/api/code/contexts') {
-    json(res, 200, codeCatalogResponse())
+    const project = url.searchParams.get('project')
+    const tab = codeTabs.get(body.tab_binding_id)
+    if (!tab || tab.documentProof !== body.document_proof) { json(res, 403, { error: 'tab binding proof is required' }); return true }
+    if (url.searchParams.getAll('project').length > 1 || (project !== null && !projectIds.includes(project))) { json(res, 400, { error: 'catalog project is required' }); return true }
+    json(res, 200, codeCatalogResponse(project || ''))
     return true
   }
   const pinMatch = path.match(/^\/api\/code\/tabs\/([^/]+)\/context$/)
@@ -350,7 +372,7 @@ const migrations = {
 const memoryRows = [
   {
     id: 101,
-    project: 'operator-console',
+    project: fixtureProjectIDs['operator-console'],
     content: 'operator console = data plane: manage memory PRODUCT, config one Settings tab',
     tags: ['product', 'operator-console'],
     tier: 'semantic',
@@ -367,7 +389,7 @@ const memoryRows = [
   },
   {
     id: 102,
-    project: 'operator-console',
+    project: fixtureProjectIDs['operator-console'],
     content: 'stale recall hits should be suppressed when they no longer help the current roadmap',
     tags: ['moderation', 'noise'],
     tier: 'episodic',
@@ -387,7 +409,7 @@ const memoryRows = [
 const deepLinkMemoryRows = [
   {
     id: 501,
-    project: 'operator-console',
+    project: fixtureProjectIDs['operator-console'],
     content: 'older memory omitted by the 500-row project list',
     tags: ['deep-link'],
     tier: 'semantic',
@@ -403,7 +425,7 @@ const deepLinkMemoryRows = [
 const searchGuidanceRows = [
   {
     id: 303,
-    project: 'operator-console',
+    project: fixtureProjectIDs['operator-console'],
     type: 'behavioral_rule',
     memory_type: 'guidance',
     title: 'behavioral rule guidance: preserve explicit memory evidence',
@@ -419,14 +441,14 @@ const memoryStates = new Map(memoryRows.map((row) => [String(row.id), { status: 
 let memorySelectionVersion = 0
 let memorySelection = { kind: 'none', selection_version: memorySelectionVersion, targets: [] }
 
-let projectIds = ['operator-console', 'project-alpha']
+let projectIds = fixtureProjects.map((row) => row.project_id)
 
 let sessionRows = [
   {
     id: 501,
     claude_session_id: 'sess-operator-1',
     sdk_session_id: { String: 'sdk-operator-1', Valid: true },
-    project: 'operator-console',
+    project: fixtureProjectIDs['operator-console'],
     status: 'active',
     started_at: '2026-06-23T08:00:00Z',
     completed_at: { String: '', Valid: false },
@@ -441,7 +463,7 @@ let sessionRows = [
     id: 502,
     claude_session_id: 'sess-alpha-1',
     sdk_session_id: { String: 'sdk-alpha-1', Valid: true },
-    project: 'project-alpha',
+    project: fixtureProjectIDs['project-alpha'],
     status: 'completed',
     started_at: '2026-06-22T08:00:00Z',
     completed_at: { String: '2026-06-22T09:00:00Z', Valid: true },
@@ -470,7 +492,7 @@ const candidateFixtureRows = [
     updated_at: '2026-06-23T08:00:00Z',
     review_after: '2026-06-24T08:00:00Z',
     evidence_handles: ['session:sess-301'],
-    affected_projects: ['operator-console'],
+    affected_projects: [fixtureProjectIDs['operator-console']],
     privacy_scope: 'project',
   },
   {
@@ -488,7 +510,7 @@ const candidateFixtureRows = [
     updated_at: '2026-06-23T09:00:00Z',
     review_after: '2026-06-24T09:00:00Z',
     evidence_handles: ['session:sess-302'],
-    affected_projects: ['operator-console'],
+    affected_projects: [fixtureProjectIDs['operator-console']],
     privacy_scope: 'project',
   },
 ]
@@ -515,7 +537,7 @@ let ruleRows = [
   },
   {
     id: 402,
-    project: 'operator-console',
+    project: fixtureProjectIDs['operator-console'],
     content: 'temporarily disabled guidance stays recoverable from the control plane',
     priority: 30,
     version: 3,
@@ -527,6 +549,7 @@ let ruleRows = [
 ]
 
 const ruleSelections = new Map()
+const ruleSelectionProjections = new Map()
 
 function ruleSession(req) {
   return /(?:^|;\s*)mock-rule-session=([^;]+)/.exec(req.headers.cookie || '')?.[1] || 'default'
@@ -559,7 +582,8 @@ const initialVaultCredentials = [
   {
     id: 1,
     name: 'shared-token',
-    project: 'alpha',
+    project: fixtureProjectIDs.alpha,
+    project_id: fixtureProjectIDs.alpha,
     scope: 'project',
     created_at: '2026-06-21T10:00:00Z',
     value: 'alpha-secret-value',
@@ -567,7 +591,8 @@ const initialVaultCredentials = [
   {
     id: 2,
     name: 'shared-token',
-    project: 'beta',
+    project: fixtureProjectIDs.beta,
+    project_id: fixtureProjectIDs.beta,
     scope: 'project',
     created_at: '2026-06-22T10:00:00Z',
     value: 'beta-secret-value',
@@ -575,11 +600,21 @@ const initialVaultCredentials = [
   {
     id: 3,
     name: 'orphaned-token',
-    project: 'legacy',
+    project: fixtureProjectIDs.alpha,
+    project_id: fixtureProjectIDs.alpha,
     scope: 'project',
     created_at: '2026-06-20T10:00:00Z',
     value: 'orphaned-secret-value',
     orphaned: true,
+  },
+  {
+    id: 4,
+    name: 'shared-token',
+    project: '',
+    project_id: null,
+    scope: 'global',
+    created_at: '2026-06-23T10:00:00Z',
+    value: 'global-fixture-value',
   },
 ]
 const vaultSessions = new Map()
@@ -599,8 +634,9 @@ let issueRows = [
     status: 'open',
     priority: 'high',
     type: 'bug',
-    source_project: 'operator-console',
-    target_project: 'engram',
+    source_project: fixtureProjectIDs['operator-console'],
+    source_agent: 'human',
+    target_project: fixtureProjectIDs.engram,
     source_project_display_name: 'Operator Console',
     target_project_display_name: 'Engram',
     labels: ['operator-created'],
@@ -629,17 +665,19 @@ function documentListResponse(url) {
   const docType = (url.searchParams.get('doc_type') || '').trim()
   const pathPrefix = (url.searchParams.get('path_prefix') || '').trim()
   const requestedLimit = Number(url.searchParams.get('limit') || 50)
-  const limit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.min(requestedLimit, 200) : 50
+  const limit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.min(requestedLimit, 500) : 50
+  const offset = Math.max(0, Number(url.searchParams.get('offset') || 0))
+  const query = (url.searchParams.get('query') || '').toLocaleLowerCase()
   const latestByPath = new Map()
   for (const row of documentRows) {
-    if (row.project !== project || (docType && row.doc_type !== docType) || (pathPrefix && !row.path.startsWith(pathPrefix))) continue
+    if (row.project !== project) continue
     if (!latestByPath.has(row.path) || latestByPath.get(row.path).version < row.version) latestByPath.set(row.path, row)
   }
-  const documents = [...latestByPath.values()]
-    .sort((left, right) => left.path.localeCompare(right.path))
-    .slice(0, limit)
-    .map(({ content, content_hash, metadata, ...row }) => ({ ...row }))
-  return { documents, project, ...(docType ? { doc_type: docType } : {}), ...(pathPrefix ? { path_prefix: pathPrefix } : {}), count: documents.length, limit }
+  const matching = [...latestByPath.values()]
+    .filter((row) => (!docType || row.doc_type === docType) && (!pathPrefix || row.path.startsWith(pathPrefix)) && (!query || [row.path, row.doc_type, row.author].some((value) => String(value || '').toLocaleLowerCase().includes(query))))
+    .sort((left, right) => right.created_at.localeCompare(left.created_at) || right.id - left.id)
+  const items = matching.slice(offset, offset + limit).map(({ content, content_hash, metadata, ...row }) => ({ ...row }))
+  return { items, total: matching.length, offset, limit, has_more: offset + items.length < matching.length }
 }
 
 function documentHistoryResponse(url) {
@@ -845,10 +883,12 @@ function ruleSelectionSnapshot(selection) {
 
 function saveRuleSelection(body, req) {
   if (!body || body.domain !== 'rules' || !body.selection || typeof body.selection !== 'object') return null
+  if (typeof body.filter?.scope !== 'string') return null
   const selection = body.selection
   if (selection.kind === 'none') {
     const next = { domain: 'rules', kind: 'none', selection_version: currentRuleSelection(req).selection_version + 1 }
     ruleSelections.set(ruleSession(req), next)
+    ruleSelectionProjections.set(ruleSession(req), body.filter.scope)
     return ruleSelectionSnapshot(next)
   }
   if (selection.kind !== 'explicit' || !Array.isArray(selection.targets) || !selection.targets.length) return null
@@ -862,6 +902,7 @@ function saveRuleSelection(body, req) {
   if (targets.some((target) => target === null)) return null
   const next = { domain: 'rules', kind: 'explicit', selection_version: currentRuleSelection(req).selection_version + 1, targets }
   ruleSelections.set(ruleSession(req), next)
+  ruleSelectionProjections.set(ruleSession(req), body.filter.scope)
   return ruleSelectionSnapshot(next)
 }
 
@@ -880,7 +921,7 @@ function ruleSelectionPage(body) {
 
 function applyRuleSelectionOperation(body, req) {
   const selection = currentRuleSelection(req)
-  if (!body || !['enable', 'disable'].includes(body.action) || body.selection?.selection_version !== selection.selection_version || selection.kind !== 'explicit') return null
+  if (!body || !['enable', 'disable'].includes(body.action) || typeof body.filter?.scope !== 'string' || body.filter.scope !== ruleSelectionProjections.get(ruleSession(req)) || selection.reconfirmation_required || body.selection?.selection_version !== selection.selection_version || selection.kind !== 'explicit') return null
   const enabled = body.action === 'enable'
   const now = new Date().toISOString()
   const targets = selection.targets.map((target) => Number(target.id))
@@ -1012,9 +1053,50 @@ const server = createServer(async (req, res) => {
     return
   }
 
+  const unresolvedMatch = path.match(/^\/api\/projects\/unresolved\/([^/]+)\/(content|history|code)$/)
+  if (req.method === 'GET' && unresolvedMatch) {
+    let reference
+    try { reference = decodeURIComponent(unresolvedMatch[1]) } catch { json(res, 400, { error: 'invalid reference encoding' }); return }
+    if (reference !== fixtureUnresolved[0].reference) { json(res, 404, { error: 'retained reference is unknown or stale' }); return }
+    const limit = Number(url.searchParams.get('limit') || 20)
+    const cursor = url.searchParams.get('cursor') || ''
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200 || (cursor && !/^fixture-page-[0-9]+$/.test(cursor))) { json(res, 400, { error: 'invalid retained reader input' }); return }
+    const offset = cursor ? Number(cursor.slice('fixture-page-'.length)) : 0
+    if (!Number.isSafeInteger(offset) || offset < 0) { json(res, 400, { error: 'invalid retained continuation' }); return }
+    if (unresolvedMatch[2] === 'code') {
+      const rows = [{ project_id: null, unresolved_reference: reference, source_ref: 'retained-fixture-source', checkout_ref: 'retained-fixture-checkout', repository: 'Retained fixture repository', working_copy: 'Historical fixture working copy', indexed_snapshot: { label: 'Historical retained snapshot', revision: 'fixture-revision', published_at: '2026-01-01T09:00:00Z' } }]
+      json(res, 200, { reference, items: rows.slice(offset, offset + limit), next_cursor: offset + limit < rows.length ? `fixture-page-${offset + limit}` : null })
+      return
+    }
+    const kind = url.searchParams.get('kind')
+    if (!['memory', 'document', 'issue'].includes(kind)) { json(res, 400, { error: 'invalid retained kind' }); return }
+    const records = {
+      memory: [{ id: 901, project: 'legacy', content: 'Retained memory: the original content ID survives unresolved membership.', tags: ['retained'], epistemic_type: 'fact', version: 2, status: 'active', created_at: '2026-01-01T09:00:00Z' }],
+      document: [{ id: 902, project: 'legacy', path: 'retained/notes.md', content: 'Retained document knowledge; do not merge by its project name.', version: 2, doc_type: 'markdown', author: 'fixture-author', created_at: '2026-01-02T09:00:00Z' }],
+      issue: [{ id: 903, source_project: 'legacy', target_project: 'legacy', title: 'Retained unresolved issue', body: 'Keep the original issue and its discussion available.', status: 'open', type: 'task', priority: 'medium', created_at: '2026-01-03T09:00:00Z' }],
+    }
+    let rows = records[kind]
+    if (unresolvedMatch[2] === 'history') {
+      const id = url.searchParams.get('id') || ''
+      if (!rows.some((row) => String(row.id) === id)) { json(res, 404, { error: 'retained content is not in this membership' }); return }
+      const histories = {
+        memory: [{ id: 9901, memory_id: 901, action: 'memory.store', actor: 'fixture-author', reason: 'Original retained history', before_state_present: false, after_state_present: true, created_at: '2026-01-01T09:00:00Z' }],
+        document: [{ id: 9922, version: 2, author: 'fixture-author', content: records.document[0].content, created_at: '2026-01-02T09:00:00Z' }, { id: 9921, version: 1, author: 'fixture-author', content: 'Earlier retained document version.', created_at: '2026-01-01T09:00:00Z' }],
+        issue: [{ id: 9931, issue_id: 903, author_project: 'legacy', author_agent: 'fixture-author', body: 'Original retained discussion.', created_at: '2026-01-03T09:00:00Z' }],
+      }
+      rows = histories[kind]
+      json(res, 200, { reference, kind, id, items: rows.slice(offset, offset + limit), next_cursor: offset + limit < rows.length ? `fixture-page-${offset + limit}` : null })
+    } else {
+      const q = (url.searchParams.get('q') || '').trim().toLocaleLowerCase()
+      rows = rows.filter((row) => !q || (kind === 'document' ? [row.path, row.doc_type, row.author] : kind === 'issue' ? [row.title, row.body] : [row.content]).some((value) => String(value || '').toLocaleLowerCase().includes(q)))
+      json(res, 200, { reference, kind, items: rows.slice(offset, offset + limit), next_cursor: offset + limit < rows.length ? `fixture-page-${offset + limit}` : null, provenance: { legacy_id: 'legacy', source: 'synthetic frontend fixture', mapping: 'unresolved; no real migration proof' } })
+    }
+    return
+  }
+
   if (path.startsWith('/api/code/')) {
     try {
-      if (await handleCodeRequest(req, res, path)) return
+      if (await handleCodeRequest(req, res, path, url)) return
     } catch (error) {
       json(res, 400, { error: error instanceof Error ? error.message : String(error) })
       return
@@ -1147,8 +1229,11 @@ const server = createServer(async (req, res) => {
       json(res, 400, { error: 'invalid memory id' })
       return
     }
+    const project = url.searchParams.get('project') || ''
+    if (!project) { json(res, 400, { error: 'project query parameter is required' }); return }
+    if (!projectIds.includes(project)) { json(res, 403, { error: 'project is unavailable' }); return }
     const row = [...memoryRows, ...deepLinkMemoryRows].find((item) => item.id === id)
-    if (!row) {
+    if (!row || row.project !== project) {
       json(res, 404, { error: 'memory not found' })
       return
     }
@@ -1381,18 +1466,37 @@ const server = createServer(async (req, res) => {
     return
   }
 
+  if (req.method === 'POST' && path === '/api/vault/credentials') {
+    try {
+      const body = await readRequestJson(req)
+      const project = typeof body.project === 'string' ? body.project : ''
+      const name = typeof body.name === 'string' ? body.name.trim() : ''
+      const value = typeof body.value === 'string' ? body.value : ''
+      if (!projectIds.includes(project) || body.scope !== 'project' || !name || !value) { json(res, 400, { error: 'catalog project, project scope, name and value are required' }); return }
+      const credentials = vaultCredentialsFor(req)
+      if (credentials.some((row) => row.name === name && row.project === project)) { json(res, 409, { error: 'credential already exists in this project' }); return }
+      const row = { id: Math.max(0, ...credentials.map((item) => item.id)) + 1, name, project, project_id: project, value, scope: 'project', created_at: new Date().toISOString() }
+      credentials.push(row)
+      const { value: _value, ...metadata } = row
+      json(res, 201, { operation_state: 'completed', readback: { authoritative: true, kind: 'current', current_state: metadata } })
+    } catch (error) { json(res, 400, { error: error instanceof Error ? error.message : String(error) }) }
+    return
+  }
+
   const vaultCredentialMatch = path.match(/^\/api\/vault\/credentials\/([^/]+)$/)
   if (vaultCredentialMatch) {
     const vaultCredentials = vaultCredentialsFor(req)
     const name = decodeURIComponent(vaultCredentialMatch[1])
-    const project = url.searchParams.get('project') || ''
-    const cred = vaultCredentials.find((item) => item.name === name && (item.project || '') === project)
+    const project = url.searchParams.get('project')
+    const global = url.searchParams.get('scope') === 'global'
+    if (url.searchParams.getAll('project').length > 1 || url.searchParams.getAll('scope').length > 1 || (global ? project !== null : !project || !projectIds.includes(project) || (url.searchParams.has('scope') && url.searchParams.get('scope') !== 'project'))) { json(res, 400, { error: 'exact project or explicit global scope is required' }); return }
+    const cred = vaultCredentials.find((item) => item.name === name && (global ? item.scope === 'global' && item.project_id === null : item.scope === 'project' && item.project_id === project))
     if (!cred) {
       json(res, 404, { error: 'credential not found' })
       return
     }
     if (req.method === 'GET') {
-      json(res, 200, { name: cred.name, value: cred.value, scope: cred.scope })
+      json(res, 200, { id: cred.id, name: cred.name, value: cred.value, scope: cred.scope, project: cred.project, project_id: cred.project_id })
       return
     }
     if (req.method === 'DELETE') {
@@ -1400,7 +1504,7 @@ const server = createServer(async (req, res) => {
       if (index >= 0) vaultCredentials.splice(index, 1)
       json(res, 200, {
         operation_state: 'completed',
-        readback: { authoritative: true, kind: 'authorized_absence' },
+        readback: { authoritative: true, kind: 'authorized_absence', current_state: { deleted: true, id: cred.id, name: cred.name, scope: cred.scope, project: cred.project, project_id: cred.project_id } },
       })
       return
     }
@@ -1434,11 +1538,17 @@ const server = createServer(async (req, res) => {
   if (req.method === 'POST' && path === '/api/collections/selection/current') {
     try {
       const body = await readRequestJson(req)
-      if (body.domain !== 'rules') {
-        json(res, 400, { error: 'rules selection domain is required' })
+      if (body.domain !== 'rules' || typeof body.filter?.scope !== 'string') {
+        json(res, 400, { error: 'rules selection domain and projection are required' })
         return
       }
-      json(res, 200, ruleSelectionSnapshot(currentRuleSelection(req)))
+      const selection = currentRuleSelection(req)
+      if (selection.kind !== 'none' && ruleSelectionProjections.get(ruleSession(req)) !== body.filter.scope && !selection.reconfirmation_required) {
+        selection.reconfirmation_required = true
+        selection.reconfirmation_reason = 'context_changed'
+        selection.selection_version += 1
+      }
+      json(res, 200, ruleSelectionSnapshot(selection))
     } catch (error) {
       json(res, 400, { error: error instanceof Error ? error.message : String(error) })
     }
@@ -1627,8 +1737,9 @@ const server = createServer(async (req, res) => {
       const body = await readRequestJson(req)
       const title = typeof body.title === 'string' ? body.title.trim() : ''
       const target = typeof body.target_project === 'string' ? body.target_project.trim() : ''
-      if (!title || !target) {
-        json(res, 400, { error: !title ? 'title is required' : 'target_project is required' })
+      const source = typeof body.source_project === 'string' ? body.source_project.trim() : ''
+      if (!title || !projectIds.includes(target) || !projectIds.includes(source) || body.source_agent !== 'human') {
+        json(res, 400, { error: 'title, canonical source/target projects and human actor are required' })
         return
       }
       const now = new Date().toISOString()
@@ -1639,7 +1750,8 @@ const server = createServer(async (req, res) => {
         status: 'open',
         priority: typeof body.priority === 'string' ? body.priority : 'medium',
         type: typeof body.type === 'string' ? body.type : 'task',
-        source_project: typeof body.source_project === 'string' && body.source_project.trim() ? body.source_project.trim() : 'operator-console',
+        source_project: source,
+        source_agent: 'human',
         target_project: target,
         source_project_display_name: '',
         target_project_display_name: '',
@@ -1678,6 +1790,7 @@ const server = createServer(async (req, res) => {
     if (req.method === 'PATCH') {
       try {
         const body = await readRequestJson(req)
+        if (!projectIds.includes(body.source_project) || body.source_agent !== 'human') { json(res, 400, { error: 'canonical source project and human actor are required' }); return }
         const current = issueRows[index]
         const updated = {
           ...current,
@@ -1694,8 +1807,8 @@ const server = createServer(async (req, res) => {
           issueComments.push({
             id: Math.max(0, ...issueComments.map((comment) => comment.id)) + 1,
             issue_id: id,
-            author_project: typeof body.source_project === 'string' ? body.source_project : 'dashboard',
-            author_agent: typeof body.source_agent === 'string' ? body.source_agent : 'operator-console',
+            author_project: body.source_project,
+            author_agent: 'human',
             body: body.comment,
             created_at: updated.updated_at,
           })
@@ -1733,7 +1846,7 @@ const server = createServer(async (req, res) => {
       return
     case '/api/selfcheck':
       json(res, 200, {
-        overall: 'ok',
+        overall: 'healthy',
         version: 'v6.29.0-smoke',
         uptime: '1m',
         components: [
@@ -1858,17 +1971,25 @@ const server = createServer(async (req, res) => {
     case '/api/issues/tracked-projects':
       json(res, 200, { projects: [...new Set(issueRows.flatMap((issue) => [issue.source_project, issue.target_project]))].sort(), count: issueRows.length })
       return
-    case '/api/issues':
+    case '/api/issues': {
+      const limit = Number(url.searchParams.get('limit') || 50)
+      const offset = Number(url.searchParams.get('offset') || 0)
+      const project = url.searchParams.get('project')
+      const source = url.searchParams.get('source_project')
+      const target = url.searchParams.get('target_project')
+      const actor = url.searchParams.get('source_agent')
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500 || !Number.isSafeInteger(offset) || offset < 0 || [project, source, target].some((id) => id !== null && !projectIds.includes(id))) { json(res, 400, { error: 'invalid issue list filter' }); return }
+      const rows = issueRows.filter((row) => (!project || row.source_project === project || row.target_project === project)
+        && (!source || row.source_project === source) && (!target || row.target_project === target)
+        && (actor === null || row.source_agent === actor)
+        && ['status', 'priority', 'type'].every((key) => !url.searchParams.has(key) || row[key] === url.searchParams.get(key)))
       json(res, 200, {
-        issues: issueRows.map((issue) => ({
-          ...issue,
-          labels: [...issue.labels],
-          comment_count: issueComments.filter((comment) => comment.issue_id === issue.id).length,
-        })),
-        total: issueRows.length,
-        project_names: {},
+        issues: rows.slice(offset, offset + limit).map((issue) => ({ ...issue, labels: [...issue.labels], comment_count: issueComments.filter((comment) => comment.issue_id === issue.id).length })),
+        total: rows.length,
+        project_names: Object.fromEntries(fixtureProjects.filter((row) => projectIds.includes(row.project_id)).map((row) => [row.project_id, row.name])),
       })
       return
+    }
     case '/api/context/search':
       {
         const project = (url.searchParams.get('project') || '').trim()
@@ -1904,6 +2025,10 @@ const server = createServer(async (req, res) => {
           json(res, 400, { error: 'project query parameter is required' })
           return
         }
+        const offset = Number(url.searchParams.get('offset') || 0)
+        const limit = Number(url.searchParams.get('limit') || 50)
+        if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 500) { json(res, 400, { error: 'invalid reader input' }); return }
+        if (!projectIds.includes(project)) { json(res, 403, { error: 'project is unavailable' }); return }
         json(res, 200, documentListResponse(url))
       }
       return
@@ -1989,13 +2114,50 @@ const server = createServer(async (req, res) => {
       json(res, 200, ruleResponse(url))
       return
     case '/api/projects':
-      json(res, 200, [...projectIds])
+      json(res, 200, { items: fixtureProjects.filter((row) => projectIds.includes(row.project_id)), unresolved: fixtureUnresolved })
       return
+    case '/api/projects/resolve': {
+      const legacy = url.searchParams.get('legacy_id') || ''
+      const projectID = fixtureProjectIDs[legacy]
+      const row = fixtureProjects.find((item) => item.project_id === (projectID || legacy) && projectIds.includes(item.project_id))
+      if (row) json(res, 200, { status: 'resolved', project_id: row.project_id, name: row.name })
+      else if (legacy === 'legacy') json(res, 200, { status: 'unresolved', reference: fixtureUnresolved[0].reference, reason: fixtureUnresolved[0].reason })
+      else json(res, 404, { error: 'no proven project mapping' })
+      return
+    }
     case '/api/memories/principal':
       json(res, 200, principalMemoryResponse(url))
       return
     case '/api/memories':
-      json(res, 200, memoryResponseForProject(url.searchParams.get('project') || 'operator-console'))
+      {
+        const project = url.searchParams.get('project') || ''
+        const offset = Number(url.searchParams.get('offset') || 0)
+        const limit = Number(url.searchParams.get('limit') || 50)
+        const incomingFilters = url.searchParams.getAll('filter')
+        if (!project || !Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 500 || incomingFilters.length > 6 || incomingFilters.some((filter) => !['all', 'active', 'flagged', 'stale', 'low', 'chain'].includes(filter))) { json(res, 400, { error: 'invalid reader input' }); return }
+        const filters = [...new Set(incomingFilters)]
+        if (!projectIds.includes(project)) { json(res, 403, { error: 'project is unavailable' }); return }
+        const query = (url.searchParams.get('query') || '').trim().toLocaleLowerCase()
+        const cutoff = Date.now() - 30 * 86_400_000
+        const rows = memoryResponseForProject(project).filter((row) => {
+          if (query && !row.content.toLocaleLowerCase().includes(query)) return false
+          const status = String(row.status || '').trim().toLowerCase()
+          const mapped = ['active', 'flagged', 'superseded', 'archived'].includes(status) ? status : ['noise', 'suppressed'].includes(status) ? 'flagged' : row.superseded_by ? 'superseded' : 'unknown'
+          return filters.every((filter) => {
+            switch (filter) {
+              case 'all': return true
+              case 'active': return mapped === 'active'
+              case 'flagged': return mapped === 'flagged' || ['noise', 'suppressed'].includes(status)
+              case 'stale': return ['superseded', 'archived'].includes(mapped) || (Date.parse(row.updated_at || row.created_at) <= cutoff && (!('citation_count' in row || 'injection_count' in row) || !row.citation_count))
+              case 'low': return typeof row.confidence === 'number' && row.confidence < 0.85
+              case 'chain': return mapped === 'superseded' || Boolean(row.superseded_by) || row.tags.some((tag) => ['superseded', 'replace', 'replacement'].includes(tag))
+              default: return false
+            }
+          })
+        }).sort((left, right) => String(right.created_at || '').localeCompare(String(left.created_at || '')) || right.id - left.id)
+        const items = rows.slice(offset, offset + limit)
+        json(res, 200, { items, total: rows.length, offset, limit, has_more: offset + items.length < rows.length })
+      }
       return
     case '/api/memory/candidates':
       json(res, 200, candidateResponse(

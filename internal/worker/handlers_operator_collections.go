@@ -2,10 +2,13 @@ package worker
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 )
@@ -130,6 +133,10 @@ func (adapter *OperatorCollectionHTTPAdapter) HandleSnapshot(w http.ResponseWrit
 	if !ok {
 		return
 	}
+	resolved, ok = adapter.resolveRulesProjection(w, r.Context(), resolved, request.Filter)
+	if !ok {
+		return
+	}
 
 	selection, ok := adapter.snapshotSelection(w, r, resolved, request)
 	if !ok {
@@ -157,6 +164,10 @@ func (adapter *OperatorCollectionHTTPAdapter) snapshotSelection(w http.ResponseW
 		operatorCodeWriteBodyless(w, http.StatusBadRequest)
 		return gormdb.CollectionSelection{}, false
 	}
+	if scope.Domain == operatorCollectionSelectionDomain && selection.Kind == gormdb.CollectionSelectionFrozenFilter && (request.Filter == nil || request.Selection.Filter == nil || request.Filter.Scope != request.Selection.Filter.Scope) {
+		operatorCodeWriteBodyless(w, http.StatusBadRequest)
+		return gormdb.CollectionSelection{}, false
+	}
 	switch selection.Kind {
 	case gormdb.CollectionSelectionFrozenFilter:
 		filter, normalized := adapter.normalizeFilter(w, r.Context(), scope, request.Selection.Filter)
@@ -179,6 +190,16 @@ func (adapter *OperatorCollectionHTTPAdapter) snapshotSelection(w http.ResponseW
 		}
 		selection.Targets, selection.ExpiresAt = frozen.Targets, frozen.ExpiresAt
 	case gormdb.CollectionSelectionPage:
+		if scope.Domain == operatorCollectionSelectionDomain {
+			if request.Filter == nil {
+				operatorCodeWriteBodyless(w, http.StatusBadRequest)
+				return gormdb.CollectionSelection{}, false
+			}
+			if err := gormdb.ValidateBehavioralRuleCollectionPageProjection(selection.Cursor, request.Filter.Scope); err != nil {
+				operatorCollectionWriteSnapshotError(w, err)
+				return gormdb.CollectionSelection{}, false
+			}
+		}
 		if adapter.freezer == nil {
 			operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
 			return gormdb.CollectionSelection{}, false
@@ -205,6 +226,10 @@ func (adapter *OperatorCollectionHTTPAdapter) HandleCurrent(w http.ResponseWrite
 		return
 	}
 	resolved, ok := adapter.resolveScope(w, r.Context(), identity, scope, request.Domain)
+	if !ok {
+		return
+	}
+	resolved, ok = adapter.resolveRulesProjection(w, r.Context(), resolved, request.Filter)
 	if !ok {
 		return
 	}
@@ -238,6 +263,14 @@ func (adapter *OperatorCollectionHTTPAdapter) HandlePage(w http.ResponseWriter, 
 	filter, normalized := adapter.normalizeFilter(w, r.Context(), resolved, request.Filter)
 	if !normalized {
 		return
+	}
+	if request.Domain == operatorCollectionSelectionDomain {
+		var err error
+		resolved, err = rulesCollectionProjectionScope(resolved, filter)
+		if err != nil {
+			operatorCodeWriteBodyless(w, http.StatusBadRequest)
+			return
+		}
 	}
 	pageRequest := request.pageRequest(filter)
 	if !pageRequest.Valid() {
@@ -338,6 +371,38 @@ func (adapter *OperatorCollectionHTTPAdapter) normalizeFilter(w http.ResponseWri
 	return filter, true
 }
 
+func (adapter *OperatorCollectionHTTPAdapter) resolveRulesProjection(w http.ResponseWriter, ctx context.Context, scope gormdb.CollectionSelectionScope, request *operatorCollectionFilterRequest) (gormdb.CollectionSelectionScope, bool) {
+	if scope.Domain != operatorCollectionSelectionDomain {
+		return scope, true
+	}
+	filter, ok := adapter.normalizeFilter(w, ctx, scope, request)
+	if !ok {
+		return gormdb.CollectionSelectionScope{}, false
+	}
+	qualified, err := rulesCollectionProjectionScope(scope, filter)
+	if err != nil {
+		operatorCodeWriteBodyless(w, http.StatusBadRequest)
+		return gormdb.CollectionSelectionScope{}, false
+	}
+	return qualified, true
+}
+
+func rulesCollectionProjectionScope(scope gormdb.CollectionSelectionScope, filter gormdb.CollectionFilter) (gormdb.CollectionSelectionScope, error) {
+	if scope.Domain != operatorCollectionSelectionDomain || !filter.Valid() {
+		return gormdb.CollectionSelectionScope{}, gormdb.ErrCollectionSelectionInvalid
+	}
+	if filter.Value != "all" && filter.Value != "global" {
+		project, err := uuid.Parse(filter.Value)
+		if err != nil || project.String() != filter.Value {
+			return gormdb.CollectionSelectionScope{}, gormdb.ErrCollectionSelectionInvalid
+		}
+	}
+	// The browser supplies a projection, never its server-owned identity digest.
+	digest := sha256.Sum256([]byte("rules-selection-projection/v1\x00" + scope.ContextFingerprint + "\x00" + filter.Fingerprint))
+	scope.ContextFingerprint = "sha256:" + hex.EncodeToString(digest[:])
+	return scope, nil
+}
+
 func operatorCollectionWriteSnapshotError(w http.ResponseWriter, err error) {
 	if errors.Is(err, gormdb.ErrCollectionSelectionInvalid) {
 		operatorCodeWriteBodyless(w, http.StatusBadRequest)
@@ -352,6 +417,7 @@ func operatorCollectionWriteSnapshotError(w http.ResponseWriter, err error) {
 
 type operatorCollectionSnapshotRequest struct {
 	Domain    string                             `json:"domain"`
+	Filter    *operatorCollectionFilterRequest   `json:"filter,omitempty"`
 	Selection operatorCollectionSelectionRequest `json:"selection"`
 }
 
@@ -368,7 +434,7 @@ type operatorCollectionFilterRequest struct {
 }
 
 func (request operatorCollectionSnapshotRequest) valid() bool {
-	return gormdb.ValidCollectionSelectionDomain(request.Domain) && request.Selection.Kind != ""
+	return gormdb.ValidCollectionSelectionDomain(request.Domain) && request.Selection.Kind != "" && (request.Domain == operatorCollectionSelectionDomain || request.Filter == nil)
 }
 
 func (request operatorCollectionSnapshotRequest) selection() (gormdb.CollectionSelection, error) {
@@ -388,11 +454,12 @@ func (request operatorCollectionSnapshotRequest) selection() (gormdb.CollectionS
 }
 
 type operatorCollectionCurrentRequest struct {
-	Domain string `json:"domain"`
+	Domain string                           `json:"domain"`
+	Filter *operatorCollectionFilterRequest `json:"filter,omitempty"`
 }
 
 func (request operatorCollectionCurrentRequest) valid() bool {
-	return gormdb.ValidCollectionSelectionDomain(request.Domain)
+	return gormdb.ValidCollectionSelectionDomain(request.Domain) && (request.Domain == operatorCollectionSelectionDomain || request.Filter == nil)
 }
 
 type operatorCollectionPageRequest struct {

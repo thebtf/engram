@@ -7,6 +7,8 @@ WORKDIR /workspace/apps/operator-console
 COPY apps/operator-console/package.json apps/operator-console/package-lock.json ./
 RUN npm ci
 COPY apps/operator-console/ ./
+# Preserve the repository-relative import used by the console's credential reader.
+COPY ui/src/utils/projectCatalog.ts /workspace/ui/src/utils/projectCatalog.ts
 # Whole design/operator-console tree: the parity gate (scripts/parity-check.repo.mjs)
 # hash-verifies PROMOTION-MANIFEST.json + contracts/ + mockups/ against designRoot,
 # so copying only contracts/ leaves the manifest absent and the gate fails hard.

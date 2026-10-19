@@ -13,7 +13,6 @@ import {
   fetchSessions,
   fetchSelfCheck,
   fetchStats,
-  fetchTrackedProjects,
   fetchVaultStatus,
 } from '~/composables/useOperatorApi'
 
@@ -25,12 +24,13 @@ export function useProjectsQuery() {
   })
 }
 
-export function useSessionsQuery(selectedProject: Ref<string>) {
+export function useSessionsQuery(selectedProject: Ref<string>, ready: Ref<boolean>) {
   return useQuery(() => ({
-    queryKey: ['sessions', selectedProject.value || 'all'],
+    queryKey: ['sessions', selectedProject.value],
+    enabled: ready.value && selectedProject.value !== '',
     queryFn: () =>
       fetchSessions({
-        project: selectedProject.value || undefined,
+        project: selectedProject.value === 'all' ? undefined : selectedProject.value,
         limit: 20,
         offset: 0,
       }),
@@ -38,12 +38,13 @@ export function useSessionsQuery(selectedProject: Ref<string>) {
   }))
 }
 
-export function useRulesQuery(selectedProject: Ref<string>) {
+export function useRulesQuery(selectedProject: Ref<string>, ready: Ref<boolean>) {
   return useQuery(() => ({
-    queryKey: ['rules', selectedProject.value || 'all'],
+    queryKey: ['rules', selectedProject.value],
+    enabled: ready.value && selectedProject.value !== '',
     queryFn: () =>
       fetchRules({
-        project: selectedProject.value || undefined,
+        project: selectedProject.value === 'all' ? undefined : selectedProject.value,
         limit: 50,
       }),
     staleTime: 15_000,
@@ -52,9 +53,11 @@ export function useRulesQuery(selectedProject: Ref<string>) {
 
 export function useIssuesQuery(filters: {
   project: Ref<string>
+  ready: Ref<boolean>
   status: Ref<string>
   type: Ref<string>
   sourceProject: Ref<string>
+  sourceAgent: Ref<string>
 }) {
   return useQuery(() => ({
     queryKey: [
@@ -63,13 +66,16 @@ export function useIssuesQuery(filters: {
       filters.status.value || 'all',
       filters.type.value || 'all',
       filters.sourceProject.value || 'all',
+      filters.sourceAgent.value || 'all',
     ],
+    enabled: filters.ready.value && filters.project.value !== '' && (filters.sourceAgent.value !== 'human' || filters.project.value !== 'all'),
     queryFn: () =>
       fetchIssues({
-        project: filters.project.value || undefined,
+        project: filters.project.value === 'all' || filters.sourceAgent.value === 'human' ? undefined : filters.project.value,
         status: filters.status.value || undefined,
         type: filters.type.value || undefined,
-        sourceProject: filters.sourceProject.value || undefined,
+        sourceProject: filters.sourceAgent.value === 'human' ? filters.project.value : filters.sourceProject.value || undefined,
+        sourceAgent: filters.sourceAgent.value || undefined,
         limit: 50,
         offset: 0,
       }),
@@ -86,13 +92,6 @@ export function useIssueDetailQuery(issueId: Ref<number>) {
   }))
 }
 
-export function useTrackedProjectsQuery() {
-  return useQuery({
-    queryKey: ['tracked-projects'],
-    queryFn: () => fetchTrackedProjects(),
-    staleTime: 60_000,
-  })
-}
 
 export function useVaultOverviewQuery() {
   return useQuery({
@@ -153,11 +152,11 @@ export function useUpdateCheckQuery() {
   })
 }
 
-export function useMemoriesQuery(selectedProject: Ref<string>) {
+export function useMemoriesQuery(selectedProject: Ref<string>, ready: Ref<boolean>, offset: Ref<number>, query: Ref<string>) {
   return useQuery(() => ({
-    queryKey: ['memories', selectedProject.value || 'none'],
-    queryFn: () => fetchMemories(selectedProject.value, 100),
-    enabled: Boolean(selectedProject.value),
+    queryKey: ['memories', selectedProject.value, offset.value, query.value],
+    queryFn: () => fetchMemories({ project: selectedProject.value, offset: offset.value, limit: 100, query: query.value }),
+    enabled: ready.value && selectedProject.value !== '' && selectedProject.value !== 'all',
     staleTime: 15_000,
   }))
 }

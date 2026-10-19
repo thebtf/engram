@@ -22,13 +22,13 @@ import (
 func TestMemoryStore_CreateGetUpdateListDelete(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
-	defer db.Exec(`DELETE FROM memories WHERE project = 'test-memory-store'`)
 
 	store := &Store{DB: db}
 	ms := NewMemoryStore(store)
 	ctx := context.Background()
 
-	const testProject = "test-memory-store"
+	testProject := sessionTestProject(t, db)
+	defer db.Exec(`DELETE FROM memories WHERE project = ?`, testProject)
 
 	// --- Create ---
 	mem := &models.Memory{
@@ -140,14 +140,14 @@ func TestMemoryStore_Create_ValidationErrors(t *testing.T) {
 func TestMemoryStore_List_FiltersByProject(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
-	defer db.Exec(`DELETE FROM memories WHERE project IN ('test-memory-list-proj1','test-memory-list-proj2')`)
 
 	store := &Store{DB: db}
 	ms := NewMemoryStore(store)
 	ctx := context.Background()
 
-	const proj1 = "test-memory-list-proj1"
-	const proj2 = "test-memory-list-proj2"
+	proj1 := sessionTestProject(t, db)
+	proj2 := sessionTestProject(t, db)
+	defer db.Exec(`DELETE FROM memories WHERE project IN (?, ?)`, proj1, proj2)
 
 	// Insert 2 memories for proj1 and 1 for proj2.
 	_, err := ms.Create(ctx, &models.Memory{Project: proj1, Content: "proj1 memory A"})
@@ -185,13 +185,13 @@ func TestMemoryStore_List_FiltersByProject(t *testing.T) {
 func TestMemoryStore_SearchFTS_OrFallback(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
-	defer db.Exec(`DELETE FROM memories WHERE project = 'test-fts-orfallback'`)
 
 	store := &Store{DB: db}
 	ms := NewMemoryStore(store)
 	ctx := context.Background()
 
-	const proj = "test-fts-orfallback"
+	proj := sessionTestProject(t, db)
+	defer db.Exec(`DELETE FROM memories WHERE project = ?`, proj)
 
 	// Two memories, each holding only SOME of the eventual query's terms. No
 	// single memory contains all of {updated, deferred, launcher, install}.
@@ -238,13 +238,13 @@ func TestMemoryStore_SearchFTS_OrFallback(t *testing.T) {
 func TestMemoryStore_QueryMetaIndex_TagOnlyAndFTSOnlyHits(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
-	defer db.Exec(`DELETE FROM memories WHERE project = 'test-s2-meta-index-hits'`)
 
 	store := &Store{DB: db}
 	ms := NewMemoryStore(store)
 	ctx := context.Background()
 
-	const project = "test-s2-meta-index-hits"
+	project := sessionTestProject(t, db)
+	defer db.Exec(`DELETE FROM memories WHERE project = ?`, project)
 	tagOnly := insertMetaIndexMemory(t, db, ms, ctx, project, "tag-only memory title\nthis body deliberately omits the lexical query marker", []string{"s2:meta", "intent:handoff"}, "agent/alice", models.AgentVisibilityShared, time.Unix(1700000100, 0).UTC())
 	ftsOnly := insertMetaIndexMemory(t, db, ms, ctx, project, "fts-only memory title\ncontains rarelexemetagless for retrieval without the requested tag", []string{"s2:meta"}, "agent/alice", models.AgentVisibilityShared, time.Unix(1700000200, 0).UTC())
 	insertMetaIndexMemory(t, db, ms, ctx, project, "distractor memory\nno matching tag or rare term", []string{"s2:other"}, "agent/alice", models.AgentVisibilityShared, time.Unix(1700000300, 0).UTC())
@@ -288,11 +288,11 @@ func TestMemoryStore_QueryMetaIndex_EmptyProjectRejected(t *testing.T) {
 func TestMemoryStore_QueryMetaIndex_ValidQueryWithoutMatchesReturnsEmptySlice(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
-	defer db.Exec(`DELETE FROM memories WHERE project = 'test-s2-meta-index-empty'`)
 
 	ms := NewMemoryStore(&Store{DB: db})
 	ctx := context.Background()
-	const project = "test-s2-meta-index-empty"
+	project := sessionTestProject(t, db)
+	defer db.Exec(`DELETE FROM memories WHERE project = ?`, project)
 	insertMetaIndexMemory(t, db, ms, ctx, project, "unrelated memory title\nthis body deliberately omits the missing lexical query", []string{"s2:meta", "different:tag"}, "agent/alice", models.AgentVisibilityShared, time.Unix(1700000400, 0).UTC())
 
 	hits, err := ms.QueryMetaIndex(ctx, MetaIndexQuery{
@@ -312,11 +312,11 @@ func TestMemoryStore_QueryMetaIndex_ValidQueryWithoutMatchesReturnsEmptySlice(t 
 func TestMemoryStore_QueryMetaIndex_VisibilityBeforeLimit(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
-	defer db.Exec(`DELETE FROM memories WHERE project = 'test-s2-meta-index-visibility'`)
 
 	ms := NewMemoryStore(&Store{DB: db})
 	ctx := context.Background()
-	const project = "test-s2-meta-index-visibility"
+	project := sessionTestProject(t, db)
+	defer db.Exec(`DELETE FROM memories WHERE project = ?`, project)
 
 	newerPrivate := insertMetaIndexMemory(t, db, ms, ctx, project, "newer bob private handoff", []string{"s2:meta", "intent:handoff"}, "agent/bob", models.AgentVisibilityPrivate, time.Unix(1700000600, 0).UTC())
 	olderVisible := insertMetaIndexMemory(t, db, ms, ctx, project, "older alice visible handoff", []string{"s2:meta", "intent:handoff"}, "agent/alice", models.AgentVisibilityShared, time.Unix(1700000500, 0).UTC())
@@ -337,11 +337,11 @@ func TestMemoryStore_QueryMetaIndex_VisibilityBeforeLimit(t *testing.T) {
 func TestMemoryStore_QueryMetaIndex_FTSVisibilityPagesUntilVisibleMatches(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
-	defer db.Exec(`DELETE FROM memories WHERE project = 'test-s2-meta-index-fts-visibility'`)
 
 	ms := NewMemoryStore(&Store{DB: db})
 	ctx := context.Background()
-	const project = "test-s2-meta-index-fts-visibility"
+	project := sessionTestProject(t, db)
+	defer db.Exec(`DELETE FROM memories WHERE project = ?`, project)
 	base := time.Unix(1700002000, 0).UTC()
 	for i := range 30 {
 		insertMetaIndexMemory(t, db, ms, ctx, project, fmt.Sprintf("rarelexeme rarelexeme hidden %02d", i), []string{"s2:meta"}, "agent/bob", models.AgentVisibilityPrivate, base.Add(time.Duration(30-i)*time.Second))
@@ -362,11 +362,11 @@ func TestMemoryStore_QueryMetaIndex_FTSVisibilityPagesUntilVisibleMatches(t *tes
 func TestMemoryStore_QueryMetaIndex_FTSFallbackIgnoresHiddenStrictVariant(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
-	defer db.Exec(`DELETE FROM memories WHERE project = 'test-s2-meta-index-fts-fallback-visibility'`)
 
 	ms := NewMemoryStore(&Store{DB: db})
 	ctx := context.Background()
-	const project = "test-s2-meta-index-fts-fallback-visibility"
+	project := sessionTestProject(t, db)
+	defer db.Exec(`DELETE FROM memories WHERE project = ?`, project)
 	base := time.Unix(1700002300, 0).UTC()
 	insertMetaIndexMemory(t, db, ms, ctx, project, "alpha beta hidden strict", []string{"s2:meta"}, "agent/bob", models.AgentVisibilityPrivate, base)
 	visibleID := insertMetaIndexMemory(t, db, ms, ctx, project, "alpha visible fallback", []string{"s2:meta"}, "agent/alice", models.AgentVisibilityShared, base.Add(-time.Minute))
@@ -385,11 +385,11 @@ func TestMemoryStore_QueryMetaIndex_FTSFallbackIgnoresHiddenStrictVariant(t *tes
 func TestMemoryStore_QueryMetaIndex_FTSVisibilityStopsAtScanBudget(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
-	defer db.Exec(`DELETE FROM memories WHERE project = 'test-s2-meta-index-fts-budget'`)
 
 	ms := NewMemoryStore(&Store{DB: db})
 	ctx := context.Background()
-	const project = "test-s2-meta-index-fts-budget"
+	project := sessionTestProject(t, db)
+	defer db.Exec(`DELETE FROM memories WHERE project = ?`, project)
 	base := time.Unix(1700002600, 0).UTC()
 	hiddenRows := normalizeMetaMemoryFTSScanBudget(1)
 	for i := range hiddenRows {
@@ -411,11 +411,11 @@ func TestMemoryStore_QueryMetaIndex_FTSVisibilityStopsAtScanBudget(t *testing.T)
 func TestMemoryStore_QueryMetaIndex_LimitsTieOrderAndContentFreeOutput(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
-	defer db.Exec(`DELETE FROM memories WHERE project = 'test-s2-meta-index-limits'`)
 
 	ms := NewMemoryStore(&Store{DB: db})
 	ctx := context.Background()
-	const project = "test-s2-meta-index-limits"
+	project := sessionTestProject(t, db)
+	defer db.Exec(`DELETE FROM memories WHERE project = ?`, project)
 	base := time.Unix(1700001000, 0).UTC()
 	var ids []int64
 	for i := range 30 {
@@ -464,11 +464,11 @@ func TestMemoryStore_QueryMetaIndex_LimitsTieOrderAndContentFreeOutput(t *testin
 func TestMemoryStore_QueryMetaIndex_TagPrefixEscapesSQLWildcards(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
-	defer db.Exec(`DELETE FROM memories WHERE project = 'test-s2-meta-index-tag-escape'`)
 
 	ms := NewMemoryStore(&Store{DB: db})
 	ctx := context.Background()
-	const project = "test-s2-meta-index-tag-escape"
+	project := sessionTestProject(t, db)
+	defer db.Exec(`DELETE FROM memories WHERE project = ?`, project)
 	base := time.Unix(1700003000, 0).UTC()
 	percentID := insertMetaIndexMemory(t, db, ms, ctx, project, "literal percent tag", []string{"literal%tag", "s2:meta"}, "agent/alice", models.AgentVisibilityShared, base)
 	underscoreID := insertMetaIndexMemory(t, db, ms, ctx, project, "literal underscore tag", []string{"literal_tag", "s2:meta"}, "agent/alice", models.AgentVisibilityShared, base.Add(time.Second))

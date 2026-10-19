@@ -1,14 +1,14 @@
-import { ref as sharedRef, type Ref as SharedRef } from 'vue'
-import { startedLoads } from './useConsolePreferences'
+import { computed, ref as sharedRef, watch, onBeforeUnmount, type Ref as SharedRef } from 'vue'
+import { isCatalogProject, projectName, useOperatorProjectContext } from './useOperatorProjectContext'
 
 let sharedIssuesPageRows: SharedRef<OperatorIssue[]> | undefined
 let sharedIssuesPageComments: SharedRef<OperatorIssueComment[]> | undefined
 let sharedIssuesPageProjectNames: SharedRef<Record<string, string>> | undefined
-let sharedIssuesPageTrackedProjects: SharedRef<string[]> | undefined
 let sharedIssuesPageTotal: SharedRef<number> | undefined
 let sharedIssuesPageDetail: SharedRef<OperatorIssue | null> | undefined
 let sharedIssuesPageState: SharedRef<OperatorLoadState<OperatorIssue[]>> | undefined
 let sharedIssuesPageDetailState: SharedRef<OperatorLoadState<OperatorIssue | null>> | undefined
+let sharedIssuesPageScope = ''
 
 import type { ComputedRef } from 'vue'
 import type { OperatorSelection, OperatorSelectionTarget } from './useOperatorSelection'
@@ -19,9 +19,10 @@ import {
  emptyState,
  endpointEvidence,
  errorState,
+ gatedState,
  liveState,
  loadOperatorJson,
- operatorApiUrl,
+ operatorFetchResponse,
  operatorFetchJson,
  pendingState,
  toOperatorSourceError,
@@ -66,7 +67,7 @@ export interface IssueCreateInput {
  body?: string
  priority: OperatorIssuePriority
  type: OperatorIssueType
- sourceProject?: string
+ sourceProject: string
  targetProject: string
  labels?: string[]
 }
@@ -209,7 +210,7 @@ async function issueMutation<TIntent>(
 ): Promise<{ mutation: MutationResult<TIntent, OperatorIssue>; body: unknown }> {
  let response: Response
  try {
-  response = await fetch(operatorApiUrl(path), { ...init, credentials: 'include' })
+  response = await operatorFetchResponse(path, { ...init, credentials: 'include' })
  } catch (error) {
   return { mutation: await executeMutation<TIntent, OperatorIssue>(request, Promise.reject(error), () => undefined), body: undefined }
  }
@@ -225,10 +226,6 @@ async function issueMutation<TIntent>(
 
 
 
-interface ApiTrackedProjects {
- projects?: string[]
- count?: number
-}
 
 function jsonInit(method: 'POST' | 'PATCH' | 'DELETE', body?: unknown): RequestInit {
  const init: RequestInit = { method }
@@ -287,17 +284,13 @@ function normalizeType(value?: string): OperatorIssueType {
  return 'task'
 }
 
-function displayName(project: string, projectNames: Record<string, string>, fallback?: string) {
- return fallback || projectNames[project] || project
-}
 
 function mapIssue(
  row: ApiIssueRow,
  commentCount = row.comment_count,
- projectNames: Record<string, string> = {},
 ): OperatorIssue {
- const sourceProject = row.source_project || 'operator-console'
- const targetProject = row.target_project || 'engram'
+ const sourceProject = row.source_project || ''
+ const targetProject = row.target_project || ''
  const createdAt = row.created_at || ''
  const updatedAt = row.updated_at || createdAt
  return {
@@ -311,8 +304,8 @@ function mapIssue(
   comments: typeof commentCount === 'number' ? commentCount : 0,
   sourceProject,
   targetProject,
-  sourceDisplayName: displayName(sourceProject, projectNames, row.source_project_display_name),
-  targetDisplayName: displayName(targetProject, projectNames, row.target_project_display_name),
+  sourceDisplayName: isCatalogProject(sourceProject) ? projectName(sourceProject) : '',
+  targetDisplayName: isCatalogProject(targetProject) ? projectName(targetProject) : '',
   labels: Array.isArray(row.labels) ? row.labels : [],
   createdAt,
   updatedAt,
@@ -324,7 +317,7 @@ function mapComment(row: ApiIssueComment): OperatorIssueComment {
  return {
   id: row.id || 0,
   issueId: row.issue_id || 0,
-  authorProject: row.author_project || 'operator-console',
+  authorProject: row.author_project || '',
   authorAgent: row.author_agent || 'operator',
   body: row.body || '',
   createdAt,
@@ -362,7 +355,7 @@ async function verifyCurrentIssue<TIntent>(
 async function verifyDeletedIssue<TIntent>(mutation: MutationResult<TIntent>, id: number): Promise<MutationResult<TIntent>> {
  if (mutation.kind !== 'committed_verification_pending' || mutation.commitment !== 'committed') return mutation
  try {
-  const response = await fetch(operatorApiUrl(`/api/issues/${id}`), { credentials: 'include' })
+  const response = await operatorFetchResponse(`/api/issues/${id}`, { credentials: 'include' })
   if (response.status === 404) {
    return {
     kind: 'committed_verified',
@@ -388,26 +381,6 @@ function sortIssues(rows: OperatorIssue[]) {
  })
 }
 
-function uniqueProjects(rows: OperatorIssue[], tracked: string[]) {
- return [...new Set([
-  'engram',
-  ...tracked,
-  ...rows.map((row) => row.sourceProject),
-  ...rows.map((row) => row.targetProject),
- ].filter(Boolean))].sort((left, right) => left.localeCompare(right))
-}
-
-function startOnce(key: string, run: () => Promise<void>) {
- const started = startedLoads.has(key)
- if (typeof window !== 'undefined' && !started) {
-  startedLoads.add(key)
-  void run().catch((error) => {
-   if (import.meta.env.DEV) {
-    console.warn(`[useOperatorIssues] ${key} live load failed`, error)
-   }
-  })
- }
-}
 
 export function useOperatorIssues(): {
  rows: OperatorIssue[]
@@ -427,21 +400,21 @@ export function useOperatorIssues(): {
  updateIssue: (id: number, input: IssueUpdateInput) => Promise<MutationResult<{ id: number; input: IssueUpdateInput }, OperatorIssue>>
  commentIssue: (id: number, body: string) => Promise<MutationResult<{ id: number; input: IssueUpdateInput }, OperatorIssue>>
  rejectIssue: (id: number, comment: string) => Promise<MutationResult<{ id: number; input: IssueUpdateInput }, OperatorIssue>>
- acknowledgeIssue: (id: number) => Promise<MutationResult<{ id: number }, OperatorIssue>>
+ acknowledgeIssue: (id: number, sourceProject: string) => Promise<MutationResult<{ id: number; sourceProject: string }, OperatorIssue>>
  saveIssueSelection: (selection: Exclude<OperatorSelection, { kind: 'frozen_filter' }>) => Promise<OperatorSelection>
  freezeIssueSelection: (filter: IssueSelectionFilter, excludedIds: string[]) => Promise<OperatorSelection>
  currentIssueSelection: () => Promise<OperatorSelection>
  loadIssuePage: (filter: IssueSelectionFilter, cursor?: string) => Promise<IssueSelectionPage>
- runIssueSelectionOperation: (selection: Exclude<OperatorSelection, { kind: 'none' }>, action: IssueSelectionAction) => Promise<MutationResult<{ selection: OperatorSelection; action: IssueSelectionAction }, IssueSelectionCurrent[]>>
- runIssueSelection: (ids: number[], action: IssueSelectionAction) => Promise<MutationResult<{ selection: OperatorSelection; action: IssueSelectionAction }, IssueSelectionCurrent[]>>
- deleteIssue: (id: number) => Promise<MutationResult<{ id: number }>>
+ runIssueSelectionOperation: (selection: Exclude<OperatorSelection, { kind: 'none' }>, action: IssueSelectionAction, sourceProject: string) => Promise<MutationResult<{ selection: OperatorSelection; action: IssueSelectionAction; sourceProject: string }, IssueSelectionCurrent[]>>
+ runIssueSelection: (ids: number[], action: IssueSelectionAction, sourceProject: string) => Promise<MutationResult<{ selection: OperatorSelection; action: IssueSelectionAction; sourceProject: string }, IssueSelectionCurrent[]>>
+ deleteIssue: (id: number) => Promise<MutationResult<{ id: number; sourceProject: string }>>
 } {
  const listEvidence = endpointEvidence('/api/issues?limit=200', 'issues-list')
  const detailEvidence = endpointEvidence('/api/issues/{id}', 'issues-detail')
  const rowsState = (sharedIssuesPageRows ??= sharedRef<OperatorIssue[]>((() => [])()))
  const commentsState = (sharedIssuesPageComments ??= sharedRef<OperatorIssueComment[]>((() => [])()))
  const projectNamesState = (sharedIssuesPageProjectNames ??= sharedRef<Record<string, string>>((() => ({}))()))
- const trackedProjectsState = (sharedIssuesPageTrackedProjects ??= sharedRef<string[]>((() => ['engram'])()))
+ const context = useOperatorProjectContext()
  const totalCountState = (sharedIssuesPageTotal ??= sharedRef<number>((() => 0)()))
  const detailStateValue = (sharedIssuesPageDetail ??= sharedRef<OperatorIssue | null>((() => null)()))
  const state = (sharedIssuesPageState ??= sharedRef<OperatorLoadState<OperatorIssue[]>>((() => pendingState(listEvidence, rowsState.value))()))
@@ -450,7 +423,7 @@ export function useOperatorIssues(): {
  const loadState = computed(() => state.value)
  const detailState = computed(() => detailLoadState.value)
  const detail = computed(() => detailStateValue.value)
- const trackedProjects = computed(() => uniqueProjects(rowsState.value, trackedProjectsState.value))
+ const trackedProjects = context.projects
  const registryTotal = computed(() => Math.max(totalCountState.value, rowsState.value.length))
  const pending = computed(() => state.value.kind === 'pending')
  const error = computed(() => state.value.kind === 'error' ? state.value.error.message : null)
@@ -460,30 +433,42 @@ export function useOperatorIssues(): {
   'Changing target_project is not exposed by the current issue update endpoint.',
  )
 
- async function loadTrackedProjects() {
-  try {
-   const payload = await operatorFetchJson<ApiTrackedProjects>('/api/issues/tracked-projects', undefined, 'issues-tracked-projects')
-   replaceArray(trackedProjectsState.value, payload.projects?.length ? payload.projects : ['engram'])
-  } catch (error) {
-   if (import.meta.env.DEV) {
-    console.warn('[useOperatorIssues] tracked projects live load failed', error)
-   }
-  }
+ let generation = 0
+ let detailGeneration = 0
+
+ function catalogFilter(filter: IssueSelectionFilter, project: string): IssueSelectionFilter {
+  if ((filter.project !== undefined && filter.project !== project) || (filter.sourceProject !== undefined && !isCatalogProject(filter.sourceProject))) throw new TypeError('Issue filter must use the selected catalog project')
+  return { ...filter, project }
+ }
+
+ function humanSource(sourceProject: string) {
+  if (context.selectionPending.value || context.selectionError.value || context.error.value || !isCatalogProject(sourceProject) || sourceProject !== context.project.value) throw new TypeError('Choose a catalog source project before changing issues')
+  return { source_project: sourceProject, source_agent: 'human' as const }
  }
 
  async function refresh() {
+  const current = ++generation
+  const scope = context.project.value
+  if (scope !== sharedIssuesPageScope) {
+   replaceArray(rowsState.value, [])
+   totalCountState.value = 0
+   sharedIssuesPageScope = scope
+  }
+  if (context.selectionPending.value || context.selectionError.value || context.error.value || !scope || (scope !== 'all' && !isCatalogProject(scope))) { state.value = gatedState(listEvidence, 'project-selection', 'Choose a catalog project before reading issues.', rowsState.value); return }
   state.value = pendingState(listEvidence, rowsState.value)
-  const result = await loadOperatorJson<ApiIssueList>('/api/issues?limit=200', {
+  const params = new URLSearchParams({ limit: '200' })
+  if (scope !== 'all') params.set('project', scope)
+  const result = await loadOperatorJson<ApiIssueList>(`/api/issues?${params}`, {
    source: 'issues-list',
    empty: (payload) => !(payload.issues || []).length,
   })
+  if (current !== generation || scope !== context.project.value) return
 
   if (result.kind === 'live' || result.kind === 'empty') {
-   replaceRecord(projectNamesState.value, result.data.project_names || {})
-   const nextRows = sortIssues((result.data.issues || []).map((row) => mapIssue(row, row.comment_count, projectNamesState.value)))
+   replaceRecord(projectNamesState.value, Object.fromEntries(context.projects.value.map((id) => [id, projectName(id)])))
+   const nextRows = sortIssues((result.data.issues || []).map((row) => mapIssue(row, row.comment_count)))
    replaceArray(rowsState.value, nextRows)
    totalCountState.value = typeof result.data.total === 'number' ? result.data.total : nextRows.length
-   await loadTrackedProjects()
    state.value = nextRows.length
     ? liveState(listEvidence, rowsState.value)
     : emptyState(listEvidence, rowsState.value)
@@ -504,31 +489,32 @@ export function useOperatorIssues(): {
  }
 
  async function openIssue(id: number) {
-  const evidence = endpointEvidence(`/api/issues/${id}`, 'issues-detail')
+  const scope = context.project.value
+  const current = ++detailGeneration
+  if (context.selectionPending.value || context.selectionError.value || context.error.value || !scope || (scope !== 'all' && !isCatalogProject(scope))) return
+  const endpoint = `/api/issues/${id}${scope === 'all' ? '' : `?project=${encodeURIComponent(scope)}`}`
+  const evidence = endpointEvidence(endpoint, 'issues-detail')
   detailLoadState.value = pendingState(evidence, detailStateValue.value)
   replaceArray(commentsState.value, [])
   try {
-   const payload = await operatorFetchJson<ApiIssueDetail>(`/api/issues/${id}`, undefined, 'issues-detail')
-   const detailProjectNames = {
-    ...projectNamesState.value,
-    ...(payload.issue?.source_project ? { [payload.issue.source_project]: payload.source_project_display_name || payload.issue.source_project } : {}),
-    ...(payload.issue?.target_project ? { [payload.issue.target_project]: payload.target_project_display_name || payload.issue.target_project } : {}),
-   }
-   replaceRecord(projectNamesState.value, detailProjectNames)
+   const payload = await operatorFetchJson<ApiIssueDetail>(endpoint, undefined, 'issues-detail')
+   if (current !== detailGeneration || scope !== context.project.value) return
    const next = payload.issue
     ? mapIssue({
      ...payload.issue,
      source_project_display_name: payload.source_project_display_name,
      target_project_display_name: payload.target_project_display_name,
-    }, payload.comment_count ?? payload.comments?.length, projectNamesState.value)
+    }, payload.comment_count ?? payload.comments?.length)
     : null
+   if (next && (next.id !== id || (scope !== 'all' && next.sourceProject !== scope && next.targetProject !== scope))) throw new TypeError('Issue detail identity or project mismatch')
    detailStateValue.value = next
    replaceArray(commentsState.value, (payload.comments || []).map((row) => mapComment(row)))
    detailLoadState.value = next ? liveState(evidence, next) : emptyState(evidence, null)
   } catch (nextError) {
+   if (current !== detailGeneration || scope !== context.project.value) return
    const mapped = toOperatorSourceError(nextError, {
     source: 'issues-detail',
-    path: `/api/issues/${id}`,
+    path: endpoint,
     method: 'GET',
    })
    detailLoadState.value = errorState(evidence, mapped, {
@@ -542,15 +528,17 @@ export function useOperatorIssues(): {
  }
 
  async function createIssue(input: IssueCreateInput) {
+  const sourceProject = input.sourceProject
+  if (context.selectionPending.value || context.selectionError.value || context.error.value || !isCatalogProject(sourceProject) || !isCatalogProject(input.targetProject) || (context.project.value !== 'all' && sourceProject !== context.project.value)) throw new TypeError('Explicit catalog source and target projects are required')
   const request = { requestId: crypto.randomUUID(), action: 'issue-create', intent: input }
   const response = await issueMutation(request, '/api/issues', jsonInit('POST', {
    title: input.title,
    body: input.body || '',
    priority: input.priority,
    type: input.type,
-   source_project: input.sourceProject || 'operator-console',
+   source_project: sourceProject,
    target_project: input.targetProject,
-   source_agent: 'operator-console',
+   source_agent: 'human',
    labels: input.labels || [],
   }))
   const id = typeof response.body === 'object' && response.body !== null && !Array.isArray(response.body)
@@ -561,13 +549,14 @@ export function useOperatorIssues(): {
    && issue.body === (input.body || '')
    && issue.priority === input.priority
    && issue.type === input.type
-   && issue.sourceProject === (input.sourceProject || 'operator-console')
+   && issue.sourceProject === sourceProject
    && issue.targetProject === input.targetProject
    && issue.labels.length === (input.labels || []).length
    && issue.labels.every((label, index) => label === (input.labels || [])[index]))
  }
 
  async function updateIssue(id: number, input: IssueUpdateInput) {
+  const source = humanSource(context.project.value)
   const request = { requestId: crypto.randomUUID(), action: 'issue-update', intent: { id, input } }
   const response = await issueMutation(request, `/api/issues/${id}`, jsonInit('PATCH', {
    ...(input.title === undefined ? {} : { title: input.title }),
@@ -577,8 +566,7 @@ export function useOperatorIssues(): {
    ...(input.status === undefined ? {} : { status: input.status }),
    ...(input.comment === undefined ? {} : { comment: input.comment }),
    ...(input.labels === undefined ? {} : { labels: input.labels }),
-   source_project: 'dashboard',
-   source_agent: 'operator-console',
+   ...source,
   }))
   return verifyCurrentIssue(response.mutation, id, (issue, comments) => (input.title === undefined || issue.title === input.title)
    && (input.body === undefined || issue.body === input.body)
@@ -597,21 +585,26 @@ export function useOperatorIssues(): {
   return updateIssue(id, { status: 'rejected', comment })
  }
 
- async function acknowledgeIssue(id: number) {
-  const request = { requestId: crypto.randomUUID(), action: 'issue-acknowledge', intent: { id } }
-  const response = await issueMutation(request, '/api/issues/acknowledge', jsonInit('POST', { ids: [id] }))
+ async function acknowledgeIssue(id: number, sourceProject: string) {
+  const source = humanSource(sourceProject)
+  const request = { requestId: crypto.randomUUID(), action: 'issue-acknowledge', intent: { id, sourceProject } }
+  const response = await issueMutation(request, '/api/issues/acknowledge', jsonInit('POST', { ids: [id], ...source }))
   return verifyCurrentIssue(response.mutation, id, (issue) => issue.status === 'acknowledged')
  }
 
  async function saveIssueSelection(selection: Exclude<OperatorSelection, { kind: 'frozen_filter' }>): Promise<OperatorSelection> {
+  const source = humanSource(context.project.value)
   const requestId = crypto.randomUUID()
   const response = await operatorFetchJson<SelectionEnvelope>('/api/issues/selection', selectionInit(requestId, {
    selection: issueSelectionPayload(selection),
+   ...source,
   }), 'issues-selection-snapshot')
   return parseIssueSelection(response)
  }
 
  async function freezeIssueSelection(filter: IssueSelectionFilter, excludedIds: string[]): Promise<OperatorSelection> {
+  const source = humanSource(context.project.value)
+  filter = catalogFilter(filter, source.source_project)
   const requestId = crypto.randomUUID()
   const response = await operatorFetchJson<SelectionEnvelope>('/api/issues/selection', selectionInit(requestId, {
    selection: {
@@ -624,17 +617,21 @@ export function useOperatorIssues(): {
     },
     excluded_ids: excludedIds,
    },
+   ...source,
   }), 'issues-selection-freeze')
   return parseIssueSelection(response)
  }
 
  async function currentIssueSelection(): Promise<OperatorSelection> {
+  const source = humanSource(context.project.value)
   const requestId = crypto.randomUUID()
-  const response = await operatorFetchJson<SelectionEnvelope>('/api/issues/selection/current', selectionInit(requestId, {}), 'issues-selection-current')
+  const response = await operatorFetchJson<SelectionEnvelope>('/api/issues/selection/current', selectionInit(requestId, source), 'issues-selection-current')
   return parseIssueSelection(response)
  }
 
  async function loadIssuePage(filter: IssueSelectionFilter, cursor = ''): Promise<IssueSelectionPage> {
+  const source = humanSource(context.project.value)
+  filter = catalogFilter(filter, source.source_project)
   const requestId = crypto.randomUUID()
   const response = await operatorFetchJson<IssueSelectionPageEnvelope>('/api/issues/selection/page', selectionInit(requestId, {
    ...(cursor ? { cursor } : {
@@ -646,14 +643,16 @@ export function useOperatorIssues(): {
     }
    }),
    limit: 50,
+   ...source,
   }), 'issues-selection-page')
   return parseIssueSelectionPage(response)
  }
 
- async function runIssueSelectionOperation(selection: Exclude<OperatorSelection, { kind: 'none' }>, action: IssueSelectionAction): Promise<MutationResult<{ selection: OperatorSelection; action: IssueSelectionAction }, IssueSelectionCurrent[]>> {
+ async function runIssueSelectionOperation(selection: Exclude<OperatorSelection, { kind: 'none' }>, action: IssueSelectionAction, sourceProject: string): Promise<MutationResult<{ selection: OperatorSelection; action: IssueSelectionAction; sourceProject: string }, IssueSelectionCurrent[]>> {
+  const source = humanSource(sourceProject)
   if (selection.version < 1 || (selection.kind === 'frozen_filter' && selection.reconfirmationRequired)) throw new TypeError('Issues selection must be freshly confirmed')
   const requestId = crypto.randomUUID()
-  const request = { requestId, action: `issues-${action.kind}`, intent: { selection, action } }
+  const request = { requestId, action: `issues-${action.kind}`, intent: { selection, action, sourceProject } }
   const actionBody = action.kind === 'status'
    ? { status: action.status }
    : action.kind === 'priority'
@@ -664,26 +663,36 @@ export function useOperatorIssues(): {
   const selectionBody = selection.kind === 'frozen_filter'
    ? { kind: 'frozen_filter', selection_version: selection.version, selection_token: selection.selectionToken }
    : { kind: selection.kind, selection_version: selection.version }
-  return executeMutation(request, fetch(operatorApiUrl('/api/issues/operations'), {
-   ...selectionInit(requestId, { request_id: requestId, action: action.kind, selection: selectionBody, ...actionBody }),
+  return executeMutation(request, operatorFetchResponse('/api/issues/operations', {
+   ...selectionInit(requestId, { request_id: requestId, action: action.kind, selection: selectionBody, ...actionBody, ...source }),
    credentials: 'include',
   }), parseIssueSelectionCurrent)
  }
 
- async function runIssueSelection(ids: number[], action: IssueSelectionAction) {
+ async function runIssueSelection(ids: number[], action: IssueSelectionAction, sourceProject: string) {
+  humanSource(sourceProject)
+  const current = generation
   const targets = ids.map((id) => ({ id: String(id) }))
   const selection = await saveIssueSelection({ kind: 'explicit', domain: 'issues', version: 0, targets })
+  if (current !== generation) throw new TypeError('Issue project scope changed before dispatch')
   if (selection.kind === 'none') throw new TypeError('Issues selection is empty')
-  return runIssueSelectionOperation(selection, action)
+  return runIssueSelectionOperation(selection, action, sourceProject)
  }
 
  async function deleteIssue(id: number) {
-  const request = { requestId: crypto.randomUUID(), action: 'issue-delete', intent: { id } }
-  const response = await issueMutation(request, `/api/issues/${id}`, jsonInit('DELETE'))
+  const source = humanSource(context.project.value)
+  const request = { requestId: crypto.randomUUID(), action: 'issue-delete', intent: { id, sourceProject: source.source_project } }
+  const response = await issueMutation(request, `/api/issues/${id}?${new URLSearchParams(source)}`, jsonInit('DELETE'))
   return verifyDeletedIssue(response.mutation, id)
  }
 
- startOnce('issues-page', refresh)
+ watch([context.project, context.selectionPending, context.selectionError], () => {
+  detailGeneration += 1
+  detailStateValue.value = null
+  replaceArray(commentsState.value, [])
+  void refresh()
+ }, { immediate: true, flush: 'sync' })
+ onBeforeUnmount(() => { generation += 1; detailGeneration += 1 })
 
  return {
   rows: rowsState.value,

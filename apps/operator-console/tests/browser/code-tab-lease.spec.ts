@@ -2,6 +2,7 @@ import { expect, test, type Route } from '@playwright/test'
 
 const TAB_BINDING_ID = '60000000-0000-4000-8000-000000000041'
 const DOCUMENT_PROOF = 'proof-current'
+const projectID = '33333333-3333-4333-8333-333333333333'
 
 test('Code Explorer renews its live tab lease and leaves no renewal timer after teardown', async ({ page }) => {
   const handshakePayloads: unknown[] = []
@@ -47,7 +48,7 @@ test('Code Explorer renews its live tab lease and leaves no renewal timer after 
     await route.fulfill({ status: 500 })
   })
 
-  await page.goto('/code')
+  await page.goto('/code?project=all')
   await expect(page.getByTestId('code-context-empty')).toBeVisible()
   await expect.poll(() => handshakePayloads).toHaveLength(1)
   expect(handshakePayloads[0]).not.toHaveProperty('ambiguous')
@@ -82,7 +83,7 @@ for (const navigationType of ['back_forward', 'unknown'] as const) {
     let resumes = 0
     const pins: unknown[] = []
     const contextualReads: string[] = []
-    const authorized = { source_ref: 'source-engram', checkout_ref: 'checkout-current', repository: 'Engram', working_copy: 'Operator desk', indexed_snapshot: { label: 'Authorized snapshot' }, view_ref: 'authorized-view', selection_ref: 'authorized-selection', index_intent_available: false }
+    const authorized = { project_id: projectID, source_ref: 'source-engram', checkout_ref: 'checkout-current', repository: 'Engram', working_copy: 'Operator desk', indexed_snapshot: { label: 'Authorized snapshot' }, view_ref: 'authorized-view', selection_ref: 'authorized-selection', index_intent_available: false }
     await page.route('**/api/auth/me', route => route.fulfill({ json: { auth_disabled: true } }))
     await page.addInitScript((type) => {
       const original = performance.getEntriesByType.bind(performance)
@@ -113,7 +114,7 @@ for (const navigationType of ['back_forward', 'unknown'] as const) {
     })
     await page.goto('/settings')
     await page.evaluate(() => sessionStorage.setItem('engram.operator-code.resume.v1', JSON.stringify({ tabBindingId: 'prior-binding', resumeNonce: 'prior-resume', reloadToken: 'prior-reload' })))
-    await page.goto('/code')
+    await page.goto('/code?project=all')
     await expect(page.locator('.phase')).toHaveAttribute('data-state', 'ambiguous')
     await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
     expect(handshakePayloads).toHaveLength(1)
@@ -145,7 +146,7 @@ test('Code Explorer distinguishes failed embedding from never-indexed and pendin
     if (pathname === '/api/code/tabs/handshake') {
       await route.fulfill({ json: { state: 'TAB_BINDING_READY', tab_binding_id: TAB_BINDING_ID, document_proof: DOCUMENT_PROOF, resume_nonce: 'resume-current', reload_token: 'reload-current' } })
     } else if (pathname === '/api/code/contexts') {
-      await route.fulfill({ json: { contexts: [{ source_ref: 'source-engram', checkout_ref: 'checkout-current', repository: 'Engram', working_copy: 'Current checkout', indexed_snapshot: { label: 'Current snapshot', revision: '1a9dad0', published_at: '2026-09-17T00:00:00Z' }, view_ref: 'view-current', selection_ref: 'context-current', index_intent_available: false }] } })
+      await route.fulfill({ json: { contexts: [{ project_id: projectID, source_ref: 'source-engram', checkout_ref: 'checkout-current', repository: 'Engram', working_copy: 'Current checkout', indexed_snapshot: { label: 'Current snapshot', revision: '1a9dad0', published_at: '2026-09-17T00:00:00Z' }, view_ref: 'view-current', selection_ref: 'context-current', index_intent_available: false }] } })
     } else if (pathname === `/api/code/tabs/${TAB_BINDING_ID}/context`) {
       await route.fulfill({ status: 204 })
     } else if (pathname === '/api/code/status') {
@@ -155,7 +156,7 @@ test('Code Explorer distinguishes failed embedding from never-indexed and pendin
     }
   })
 
-  await page.goto('/code')
+  await page.goto('/code?project=all')
   await page.getByTestId('code-context-repository').selectOption({ label: 'Engram' })
   await page.getByTestId('code-context-working-copy').selectOption({ label: 'Current checkout' })
   await page.getByTestId('code-context-snapshot').selectOption({ label: 'Current snapshot' })
@@ -191,6 +192,7 @@ test('Code Explorer resynchronizes a completed selection after catalog refresh w
   let contextRequests = 0
   const initialCatalog = {
     contexts: [{
+      project_id: projectID,
       source_ref: 'source-engram', checkout_ref: 'checkout-current',
       repository: 'Engram',
       working_copy: 'stale candidate checkout',
@@ -199,14 +201,7 @@ test('Code Explorer resynchronizes a completed selection after catalog refresh w
       selection_ref: 'context-current',
       index_intent_available: false,
     }, {
-      repository: 'Engram',
-      source_ref: 'source-engram', checkout_ref: 'checkout-malformed',
-      working_copy: null,
-      indexed_snapshot: { label: 'Malformed snapshot', revision: '1a9dad3', published_at: '2026-09-17T00:03:00Z' },
-      view_ref: 'view-malformed',
-      selection_ref: 'context-malformed',
-      index_intent_available: false,
-    }, {
+      project_id: projectID,
       repository: 'Other repository',
       source_ref: 'source-other', checkout_ref: 'checkout-manual',
       working_copy: 'manual checkout',
@@ -218,6 +213,7 @@ test('Code Explorer resynchronizes a completed selection after catalog refresh w
   }
   const refreshedCatalog = {
     contexts: [{
+      project_id: projectID,
       source_ref: 'source-engram', checkout_ref: 'checkout-current',
       repository: 'Engram',
       working_copy: 'refreshed candidate checkout',
@@ -225,7 +221,7 @@ test('Code Explorer resynchronizes a completed selection after catalog refresh w
       view_ref: 'view-new-generation',
       selection_ref: 'context-current',
       index_intent_available: false,
-    }, initialCatalog.contexts[2]],
+    }, initialCatalog.contexts[1]],
   }
 
   await page.route('**/api/code/**', async (route: Route) => {
@@ -241,7 +237,7 @@ test('Code Explorer resynchronizes a completed selection after catalog refresh w
     await route.fulfill({ status: 500 })
   })
 
-  await page.goto('/code', { waitUntil: 'domcontentloaded' })
+  await page.goto('/code?project=all', { waitUntil: 'domcontentloaded' })
   await page.getByTestId('code-context-repository').selectOption({ label: 'Engram' })
   await page.getByTestId('code-context-working-copy').selectOption({ label: 'stale candidate checkout' })
   await page.getByTestId('code-context-snapshot').selectOption({ label: 'Stale candidate snapshot' })
@@ -256,7 +252,7 @@ test('Code Explorer resynchronizes a completed selection after catalog refresh w
 test('watcher publication keeps a server-authorized older pin and results while offering the new View', async ({ page }) => {
   let published = false
   const pins: string[] = []
-  const old = { source_ref: 'source', checkout_ref: 'checkout', repository: 'Engram', working_copy: 'Desk', indexed_snapshot: { label: 'Original View' }, view_ref: 'old-view', selection_ref: 'old-choice', index_intent_available: false }
+  const old = { project_id: projectID, source_ref: 'source', checkout_ref: 'checkout', repository: 'Engram', working_copy: 'Desk', indexed_snapshot: { label: 'Original View' }, view_ref: 'old-view', selection_ref: 'old-choice', index_intent_available: false }
   const newer = { ...old, indexed_snapshot: { label: 'New View' }, view_ref: 'new-view', selection_ref: 'new-choice' }
   const context = { source_id: 'source-1', checkout_id: 'checkout-1', view_id: 'view-1', profile_id: 'profile-1', generation: 1 }
   const item = { ref: { source_id: 'source-1', view_id: 'view-1', entity_key: 'old-result' }, membership_id: '60000000-0000-4000-8000-000000000001', path: 'src/old-view.ts', span: { byte_start: 0, byte_end: 12, line_start: 1, line_end: 1 }, content_digest: 'digest', kind: 'function', language: 'typescript', excerpt: 'old result', match_sources: ['lexical'], score: 1 }
@@ -270,7 +266,7 @@ test('watcher publication keeps a server-authorized older pin and results while 
     else if (path === '/api/code/structure' || path === '/api/code/search') await route.fulfill({ json: envelope })
     else await route.fulfill({ status: 500 })
   })
-  await page.goto('/code')
+  await page.goto('/code?project=all')
   await page.getByTestId('code-context-snapshot').selectOption('old-choice')
   await page.getByTestId('code-pin-context').click()
   await page.getByTestId('code-query-input').fill('old result')
@@ -297,6 +293,7 @@ for (const rejectedStatus of ['denied', 'mismatch'] as const) {
     let changedSnapshot = false
     let pins = 0
     const context = (ref: string) => ({
+      project_id: projectID,
       source_ref: 'source-current', checkout_ref: 'checkout-current',
       repository: 'Engram', working_copy: 'operator desk',
       view_ref: changedSnapshot ? 'view-new-generation' : 'view-stable',
@@ -322,7 +319,7 @@ for (const rejectedStatus of ['denied', 'mismatch'] as const) {
         await route.fulfill({ status: 500 })
       }
     })
-    await page.goto('/code')
+    await page.goto('/code?project=all')
     await page.getByTestId('code-context-snapshot').selectOption('selection-first')
     await page.getByTestId('code-pin-context').click()
     await expect(page.getByTestId('code-context-pinned')).toBeVisible()
@@ -344,6 +341,7 @@ test('Failed and malformed catalog refresh revoke candidate pin authority until 
   let catalogMode: 'ready' | 'failed' | 'malformed' | 'rotated' = 'ready'
   const pins: unknown[] = []
   const context = (selection_ref: string) => ({
+    project_id: projectID,
     source_ref: 'source', checkout_ref: 'checkout', repository: 'Engram', working_copy: 'desk',
     indexed_snapshot: { label: 'Snapshot', revision: 'revision', published_at: '2026-09-17T00:00:00Z' },
     view_ref: 'view', selection_ref, index_intent_available: false,
@@ -365,7 +363,7 @@ test('Failed and malformed catalog refresh revoke candidate pin authority until 
       await route.fulfill({ status: 500 })
     }
   })
-  await page.goto('/code')
+  await page.goto('/code?project=all')
   await page.getByTestId('code-context-snapshot').selectOption('old')
   catalogMode = 'failed'
   await page.getByRole('button', { name: 'Обновить разрешённые варианты' }).click()
@@ -397,6 +395,7 @@ test('Reload restores only a unique View candidate, not a server pin, and uses t
   let duplicate = false
   const pins: unknown[] = []
   const entry = (viewRef: string, selectionRef: string) => ({
+    project_id: projectID,
     source_ref: 'source', checkout_ref: 'checkout', repository: 'Same label', working_copy: 'Same label',
     indexed_snapshot: { label: 'Same snapshot', revision: 'revision', published_at: '2026-09-17T00:00:00Z' },
     view_ref: viewRef, selection_ref: selectionRef, index_intent_available: false,
@@ -418,7 +417,7 @@ test('Reload restores only a unique View candidate, not a server pin, and uses t
       await route.fulfill({ status: 500 })
     }
   })
-  await page.goto('/code')
+  await page.goto('/code?project=all')
   await page.getByTestId('code-context-snapshot').selectOption('old-a')
   await page.getByTestId('code-pin-context').click()
   await expect(page.getByTestId('code-context-pinned')).toBeVisible()
@@ -442,7 +441,7 @@ for (const rotatedSource of [false, true]) test(`Lost noauth binding requires ex
   let restarted = false
   const requests: string[] = []
   const pins: unknown[] = []
-  const current = { source_ref: 'source-old', checkout_ref: 'checkout-old', repository: 'Engram', working_copy: 'Old desk', indexed_snapshot: { label: 'Old snapshot' }, view_ref: 'view-old', selection_ref: 'selection-old', index_intent_available: false }
+  const current = { project_id: projectID, source_ref: 'source-old', checkout_ref: 'checkout-old', repository: 'Engram', working_copy: 'Old desk', indexed_snapshot: { label: 'Old snapshot' }, view_ref: 'view-old', selection_ref: 'selection-old', index_intent_available: false }
   const fresh = { ...current, ...(rotatedSource ? { source_ref: 'source-fresh', checkout_ref: 'checkout-fresh' } : {}), working_copy: 'Fresh desk', selection_ref: 'selection-fresh', indexed_snapshot: { label: 'Fresh snapshot' } }
   await page.route('**/api/auth/me', async route => route.fulfill({ json: { auth_disabled: true } }))
   await page.route('**/api/code/**', async (route: Route) => {
@@ -460,7 +459,7 @@ for (const rotatedSource of [false, true]) test(`Lost noauth binding requires ex
     else await route.fulfill({ status: 204 })
   })
 
-  await page.goto('/code')
+  await page.goto('/code?project=all')
   await page.getByTestId('code-context-snapshot').selectOption('selection-old')
   await page.getByTestId('code-pin-context').click()
   await expect(page.getByTestId('code-context-pinned')).toContainText('Old desk')
@@ -498,6 +497,7 @@ test('Code Explorer resumes a same-document SPA remount but isolates copied stor
   }
   const catalog = {
     contexts: [{
+      project_id: projectID,
       source_ref: 'source-engram', checkout_ref: 'checkout-current',
       repository: 'Engram',
       working_copy: 'feature/operator-workspace · operator desk',
@@ -510,12 +510,14 @@ test('Code Explorer resumes a same-document SPA remount but isolates copied stor
       selection_ref: 'context-current',
       index_intent_available: false,
     }, {
+      project_id: projectID,
       source_ref: 'source-engram', checkout_ref: 'checkout-unnamed',
       repository: 'Engram',
       working_copy: '',
       index_intent_available: false,
     }, {
       repository: 'Other repository',
+      project_id: projectID,
       working_copy: 'D working copy',
       source_ref: 'source-other', checkout_ref: 'checkout-d',
       indexed_snapshot: {
@@ -613,7 +615,7 @@ test('Code Explorer resumes a same-document SPA remount but isolates copied stor
     await route.fulfill({ status: 500 })
   })
 
-  await page.goto('/code', { waitUntil: 'domcontentloaded' })
+  await page.goto('/code?project=all', { waitUntil: 'domcontentloaded' })
   await page.getByTestId('code-context-repository').selectOption({ label: 'Engram' })
   await page.getByTestId('code-context-working-copy').selectOption({ label: 'feature/operator-workspace · operator desk' })
   await page.getByTestId('code-context-snapshot').selectOption({ label: 'Current snapshot' })
@@ -624,10 +626,10 @@ test('Code Explorer resumes a same-document SPA remount but isolates copied stor
   await page.getByTestId('index-intent-reindex').click()
   await expect(page.getByTestId('index-intent-state')).toHaveAttribute('data-state', 'queued')
 
-  await page.locator('a[href="/memory"]').first().click()
-  await expect(page).toHaveURL(/\/memory$/)
+  await page.locator('a[href="/memory?project=all"]').first().click()
+  await expect(page).toHaveURL(/\/memory\?project=all$/)
   await page.goBack()
-  await expect(page).toHaveURL(/\/code$/)
+  await expect(page).toHaveURL(/\/code\?project=all$/)
 
   await expect.poll(() => resumePayloads.length).toBe(1)
   expect(resumePayloads[0]).toMatchObject({
@@ -690,8 +692,8 @@ test('Home opens a no-View working copy, then follows its released index to sear
       await route.fulfill({
         json: {
           contexts: [published
-            ? { source_ref: 'source-engram', checkout_ref: 'checkout-feature', repository: 'Engram', working_copy: 'feature/workspace', indexed_snapshot: { label: 'Published implementation' }, view_ref: 'view-1', selection_ref: 'server-issued-view', index_intent_available: false }
-            : { source_ref: 'source-engram', checkout_ref: 'checkout-feature', repository: 'Engram', working_copy: 'feature/workspace', index_intent_available: true, index_intent_selection_ref: 'server-issued-target' }]
+            ? { project_id: projectID, source_ref: 'source-engram', checkout_ref: 'checkout-feature', repository: 'Engram', working_copy: 'feature/workspace', indexed_snapshot: { label: 'Published implementation' }, view_ref: 'view-1', selection_ref: 'server-issued-view', index_intent_available: false }
+            : { project_id: projectID, source_ref: 'source-engram', checkout_ref: 'checkout-feature', repository: 'Engram', working_copy: 'feature/workspace', index_intent_available: true, index_intent_selection_ref: 'server-issued-target' }]
         }
       })
     } else if (pathname === '/api/code/index-intents') {
@@ -722,7 +724,7 @@ test('Home opens a no-View working copy, then follows its released index to sear
       await route.fulfill({ status: 500 })
     }
   })
-  await page.goto('/')
+  await page.goto('/?project=all')
   await page.getByTestId('overview-workspace-entry').click()
   await expect(page.getByTestId('code-context-working-copy').locator('option:checked')).toHaveText('feature/workspace')
   await expect(page.getByTestId('code-context-index-affordance')).toBeVisible()
@@ -757,7 +759,7 @@ test('Home opens a no-View working copy, then follows its released index to sear
 })
 
 test('Offline no-View first indexing reaches the mock intent while unknown targets stay denied', async ({ page, request }) => {
-  await page.goto('/code')
+  await page.goto('/code?project=all')
   await page.getByTestId('code-context-repository').selectOption({ label: 'Engram' })
   await page.getByTestId('code-context-working-copy').selectOption({ label: 'recovery · offline owner' })
   await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
@@ -793,8 +795,8 @@ test('An unnamed working copy remains selectable without confusing it with the p
       await route.fulfill({
         json: {
           contexts: [
-            { source_ref: 'source-engram', checkout_ref: 'checkout-unnamed', repository: 'Engram', working_copy: '', index_intent_available: true, index_intent_selection_ref: 'opaque-unnamed' },
-            { source_ref: 'source-engram', checkout_ref: 'checkout-other', repository: 'Engram', working_copy: 'other checkout', index_intent_available: false },
+            { project_id: projectID, source_ref: 'source-engram', checkout_ref: 'checkout-unnamed', repository: 'Engram', working_copy: '', index_intent_available: true, index_intent_selection_ref: 'opaque-unnamed' },
+            { project_id: projectID, source_ref: 'source-engram', checkout_ref: 'checkout-other', repository: 'Engram', working_copy: 'other checkout', index_intent_available: false },
           ]
         }
       })
@@ -802,7 +804,7 @@ test('An unnamed working copy remains selectable without confusing it with the p
       await route.fulfill({ status: 500 })
     }
   })
-  await page.goto('/code')
+  await page.goto('/code?project=all')
   await expect(page.getByTestId('code-context-index-affordance')).toHaveCount(0)
   await page.getByTestId('code-context-working-copy').selectOption({ label: 'Рабочая копия без имени' })
   await expect(page.getByTestId('code-context-index-affordance')).toBeVisible()
@@ -823,8 +825,8 @@ test('Home selects a published unnamed checkout and reads its authorized source'
       await route.fulfill({
         json: {
           contexts: [
-            { source_ref: 'source-engram', checkout_ref: 'checkout-unnamed', repository: 'Engram', working_copy: '', indexed_snapshot: { label: 'Published implementation' }, view_ref: 'view-1', selection_ref: 'server-issued-view', index_intent_available: false },
-            { source_ref: 'source-engram', checkout_ref: 'checkout-other', repository: 'Engram', working_copy: 'other checkout', index_intent_available: false },
+            { project_id: projectID, source_ref: 'source-engram', checkout_ref: 'checkout-unnamed', repository: 'Engram', working_copy: '', indexed_snapshot: { label: 'Published implementation' }, view_ref: 'view-1', selection_ref: 'server-issued-view', index_intent_available: false },
+            { project_id: projectID, source_ref: 'source-engram', checkout_ref: 'checkout-other', repository: 'Engram', working_copy: 'other checkout', index_intent_available: false },
           ]
         }
       })
@@ -843,7 +845,7 @@ test('Home selects a published unnamed checkout and reads its authorized source'
     }
   })
 
-  await page.goto('/')
+  await page.goto('/?project=all')
   await page.getByTestId('overview-workspace-entry').click()
   await expect(page.getByTestId('code-context-working-copy').getByRole('option', { name: 'Рабочая копия без имени' })).toHaveCount(1)
   await expect(page.getByTestId('code-context-index-affordance')).toHaveCount(0)
@@ -867,14 +869,14 @@ test('identical source and checkout labels retain separate first-index and publi
   const intents: string[] = []
   const pins: string[] = []
   const noViews = [
-    { source_ref: 'source-A', checkout_ref: 'checkout-A', repository: 'Engram', working_copy: '', index_intent_available: true, index_intent_selection_ref: 'index-A' },
-    { source_ref: 'source-A', checkout_ref: 'checkout-C', repository: 'Engram', working_copy: '', index_intent_available: true, index_intent_selection_ref: 'index-C' },
-    { source_ref: 'source-B', checkout_ref: 'checkout-B', repository: 'Engram', working_copy: '', index_intent_available: true, index_intent_selection_ref: 'index-B' },
+    { project_id: projectID, source_ref: 'source-A', checkout_ref: 'checkout-A', repository: 'Engram', working_copy: '', index_intent_available: true, index_intent_selection_ref: 'index-A' },
+    { project_id: projectID, source_ref: 'source-A', checkout_ref: 'checkout-C', repository: 'Engram', working_copy: '', index_intent_available: true, index_intent_selection_ref: 'index-C' },
+    { project_id: projectID, source_ref: 'source-B', checkout_ref: 'checkout-B', repository: 'Engram', working_copy: '', index_intent_available: true, index_intent_selection_ref: 'index-B' },
   ]
   const published = [
-    { source_ref: 'source-A', checkout_ref: 'checkout-A', repository: 'Engram', working_copy: '', indexed_snapshot: { label: 'Release' }, view_ref: 'stable-view-A', selection_ref: 'view-A', index_intent_available: false },
-    { source_ref: 'source-A', checkout_ref: 'checkout-C', repository: 'Engram', working_copy: '', indexed_snapshot: { label: 'Release' }, view_ref: 'stable-view-C', selection_ref: 'view-C', index_intent_available: false },
-    { source_ref: 'source-B', checkout_ref: 'checkout-B', repository: 'Engram', working_copy: '', indexed_snapshot: { label: 'Release' }, view_ref: 'stable-view-B', selection_ref: 'view-B', index_intent_available: false },
+    { project_id: projectID, source_ref: 'source-A', checkout_ref: 'checkout-A', repository: 'Engram', working_copy: '', indexed_snapshot: { label: 'Release' }, view_ref: 'stable-view-A', selection_ref: 'view-A', index_intent_available: false },
+    { project_id: projectID, source_ref: 'source-A', checkout_ref: 'checkout-C', repository: 'Engram', working_copy: '', indexed_snapshot: { label: 'Release' }, view_ref: 'stable-view-C', selection_ref: 'view-C', index_intent_available: false },
+    { project_id: projectID, source_ref: 'source-B', checkout_ref: 'checkout-B', repository: 'Engram', working_copy: '', indexed_snapshot: { label: 'Release' }, view_ref: 'stable-view-B', selection_ref: 'view-B', index_intent_available: false },
   ]
   await page.route('**/api/code/**', async (route) => {
     const pathname = new URL(route.request().url()).pathname
@@ -899,7 +901,7 @@ test('identical source and checkout labels retain separate first-index and publi
     }
   })
 
-  await page.goto('/code')
+  await page.goto('/code?project=all')
   const repository = page.getByTestId('code-context-repository')
   const checkout = page.getByTestId('code-context-working-copy')
   await expect(repository.locator('option:not([disabled])')).toHaveCount(2)
@@ -949,7 +951,7 @@ test('equal-count names expose minimal unique non-authorizing refs and offline f
     { source_ref: 'source-unique', checkout_ref: 'checkout-unique', repository: 'Other', working_copy: 'Unique', indexed_snapshot: { label: 'D' }, view_ref: 'view-d', selection_ref: 'selection-d' },
     { source_ref: 'source-twins-whole-a', checkout_ref: 'checkout-twin-a', repository: 'Twins', working_copy: 'Twin A', indexed_snapshot: { label: 'E' }, view_ref: 'view-e', selection_ref: 'selection-e' },
     { source_ref: 'source-twins-whole-b', checkout_ref: 'checkout-twin-b', repository: 'Twins', working_copy: 'Twin B', indexed_snapshot: { label: 'F' }, view_ref: 'view-f', selection_ref: 'selection-f' },
-  ].map(entry => ({ ...entry, index_intent_available: false }))
+  ].map(entry => ({ ...entry, project_id: projectID, index_intent_available: false }))
   await page.route('**/api/code/**', async route => {
     const pathname = new URL(route.request().url()).pathname
     if (pathname === '/api/code/tabs/handshake') await route.fulfill({ json: { state: 'TAB_BINDING_READY', tab_binding_id: TAB_BINDING_ID, document_proof: DOCUMENT_PROOF, resume_nonce: 'resume-current', reload_token: 'reload-current' } })
@@ -959,7 +961,7 @@ test('equal-count names expose minimal unique non-authorizing refs and offline f
     else await route.fulfill({ status: 500 })
   })
 
-  await page.goto('/code')
+  await page.goto('/code?project=all')
   const repositories = page.getByTestId('code-context-repository').locator('option:not([disabled])')
   await expect(repositories).toHaveCount(5)
   await expect(repositories.nth(0)).toContainText('· source-prefix-111a')
@@ -993,7 +995,7 @@ test('equal-count names expose minimal unique non-authorizing refs and offline f
 test('Home first use offers a native task, reads back the catalog, and labels lexical evidence honestly', async ({ page }) => {
   let catalogStage: 'empty' | 'registered' | 'published' = 'empty'
   const requests: string[] = []
-  const checkout = { source_ref: 'source-task', checkout_ref: 'checkout-task', repository: 'My service', working_copy: 'Feature A · desk' }
+  const checkout = { project_id: projectID, source_ref: 'source-task', checkout_ref: 'checkout-task', repository: 'My service', working_copy: 'Feature A · desk' }
   const context = { source_id: 'source-task', checkout_id: 'checkout-task', view_id: 'view-task', profile_id: 'profile-task', generation: 1 }
   await page.route('**/api/auth/me', route => route.fulfill({ json: { auth_disabled: true } }))
   await page.route('**/api/code/**', async route => {
@@ -1016,7 +1018,7 @@ test('Home first use offers a native task, reads back the catalog, and labels le
     } else await route.fulfill({ status: 204 })
   })
 
-  await page.goto('/')
+  await page.goto('/?project=all')
   await page.getByTestId('overview-workspace-entry').click()
   await expect(page.getByTestId('code-context-empty')).toBeVisible()
   await expect(page.locator('.phase')).toHaveText('Вкладка подключена')

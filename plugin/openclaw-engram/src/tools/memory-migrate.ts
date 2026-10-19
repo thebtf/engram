@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { Type } from '@sinclair/typebox';
 import { join, relative, resolve, normalize, isAbsolute } from 'node:path';
 import { createHash } from 'node:crypto';
-import { resolveAndRegisterProject } from '../client.js';
+import { resolveProject } from '../client.js';
 import type { EngramRestClient, BulkImportRequest } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import { quotedPromptScalar } from '../context/formatter.js';
@@ -166,7 +166,7 @@ async function runMigration(
   }
 
   // Import
-  const registration = await resolveAndRegisterProject(client, ctx.agentId ?? '', workspaceDir, config.project);
+  const registration = await resolveProject(client, ctx.agentId ?? '', workspaceDir, config.project);
   if (!registration.ok) {
     return `Project identity unavailable: ${registration.error.code} (${registration.error.upgradeAction})`;
   }

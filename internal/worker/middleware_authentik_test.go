@@ -15,13 +15,7 @@ import (
 )
 
 func TestTokenAuth_AuthentikProvisioningRequiresInitialAdminSetup(t *testing.T) {
-	dsn := os.Getenv("DATABASE_DSN")
-	if dsn == "" {
-		t.Skip("DATABASE_DSN not set, skipping Authentik provisioning integration test")
-	}
-	store, err := gormdb.NewStore(gormdb.Config{DSN: dsn, LogLevel: 0})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = store.Close() })
+	store := openAuthLifecycleEnv(t).store
 
 	var existing int64
 	require.NoError(t, store.DB.Model(&gormdb.User{}).Count(&existing).Error)
@@ -30,10 +24,6 @@ func TestTokenAuth_AuthentikProvisioningRequiresInitialAdminSetup(t *testing.T) 
 	prefix := fmt.Sprintf("zz-middleware-authentik-%d", time.Now().UnixNano())
 	adminEmail := prefix + "-admin@example.com"
 	operatorEmail := prefix + "-operator@example.com"
-	t.Cleanup(func() {
-		_ = store.DB.Exec(`DELETE FROM audit_log WHERE action = 'auth_setup_completed' AND actor = ?`, adminEmail).Error
-		_ = store.DB.Exec(`DELETE FROM users WHERE email IN (?, ?)`, adminEmail, operatorEmail).Error
-	})
 
 	tokenAuth, err := NewTokenAuth("test-token")
 	require.NoError(t, err)

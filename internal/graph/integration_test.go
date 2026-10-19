@@ -6,13 +6,34 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	engramgorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
-	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
+
+func openGraphIntegrationStore(t *testing.T, dsn string) *engramgorm.Store {
+	t.Helper()
+	store, err := engramgorm.NewStore(engramgorm.Config{
+		DSN:      dsn,
+		MaxConns: 2,
+		LogLevel: logger.Silent,
+	})
+	require.NoError(t, err, "initialize graph integration DB")
+	t.Cleanup(func() { assert.NoError(t, store.Close(), "close graph integration DB") })
+	return store
+}
+
+func newGraphIntegrationProject(t *testing.T, db *gorm.DB) string {
+	t.Helper()
+	project := uuid.NewString()
+	require.NoError(t, db.Create(&engramgorm.Project{ID: project}).Error)
+	t.Cleanup(func() { assert.NoError(t, db.Delete(&engramgorm.Project{}, "id = ?", project).Error) })
+	return project
+}
 
 // TestPathC_T015_SkillNodeEdgeRoundtrip verifies the full TG2 Path C roundtrip:
 //  1. Create a skill knowledge_node via NodesStore.
@@ -32,35 +53,30 @@ func TestPathC_T015_SkillNodeEdgeRoundtrip(t *testing.T) {
 		t.Skip("DATABASE_DSN not set, skipping T015 integration test")
 	}
 
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Warn),
-	})
-	require.NoError(t, err)
-
-	sqlDB, err := db.DB()
-	require.NoError(t, err)
-	defer sqlDB.Close()
+	db := openGraphIntegrationStore(t, dsn).DB
 
 	ctx := context.Background()
 	ns := NewNodesStore(db)
 	gs := NewStore(db, ns)
 
+	project := newGraphIntegrationProject(t, db)
+	t.Cleanup(func() {
+		assert.NoError(t, db.Exec(`DELETE FROM knowledge_edges WHERE source_session_id = ?`, project).Error)
+		assert.NoError(t, db.Exec(`DELETE FROM memories WHERE project = ?`, project).Error)
+		assert.NoError(t, db.Exec(`DELETE FROM knowledge_nodes WHERE project = ?`, project).Error)
+	})
+
 	// Insert a test memory to use as edge target.
 	var memID int64
 	require.NoError(t, db.Raw(
-		`INSERT INTO memories (project, content) VALUES ('t015-test', 'roundtrip target') RETURNING id`,
+		`INSERT INTO memories (project, content) VALUES (?, 'roundtrip target') RETURNING id`, project,
 	).Row().Scan(&memID))
-	t.Cleanup(func() {
-		_ = db.Exec(`DELETE FROM memories WHERE project = 't015-test'`).Error
-		_ = db.Exec(`DELETE FROM knowledge_nodes WHERE project = 't015-test'`).Error
-		_ = db.Exec(`DELETE FROM knowledge_edges WHERE source_session_id = 't015-test'`).Error
-	})
 
 	// Step 1: Create a skill node.
 	node, err := ns.Create(ctx, &models.KnowledgeNode{
 		NodeType:    models.NodeTypeSkill,
 		ExternalRef: "nvmd-architect",
-		Project:     "t015-test",
+		Project:     project,
 	})
 	require.NoError(t, err)
 	require.NotZero(t, node.ID)
@@ -74,9 +90,9 @@ func TestPathC_T015_SkillNodeEdgeRoundtrip(t *testing.T) {
 		TargetType:      "memory",
 		TargetID:        &memID,
 		NodeSourceID:    &node.ID,
-		EdgeType:        "uses",
+		EdgeType:        EdgeUses,
 		Weight:          1.0,
-		SourceSessionID: "t015-test",
+		SourceSessionID: project,
 	}
 	created, err := gs.Create(ctx, edge)
 	require.NoError(t, err)
@@ -113,51 +129,53 @@ func TestPathC_T015_NodeTypedEdgeListFilter(t *testing.T) {
 		t.Skip("DATABASE_DSN not set, skipping T015 integration test")
 	}
 
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Warn),
-	})
-	require.NoError(t, err)
-
-	sqlDB, err := db.DB()
-	require.NoError(t, err)
-	defer sqlDB.Close()
+	db := openGraphIntegrationStore(t, dsn).DB
 
 	ctx := context.Background()
 	ns := NewNodesStore(db)
 	gs := NewStore(db, ns)
 
+	project := newGraphIntegrationProject(t, db)
+	t.Cleanup(func() {
+		assert.NoError(t, db.Exec(`DELETE FROM knowledge_edges WHERE source_session_id = ?`, project).Error)
+		assert.NoError(t, db.Exec(`DELETE FROM memories WHERE project = ?`, project).Error)
+		assert.NoError(t, db.Exec(`DELETE FROM knowledge_nodes WHERE project = ?`, project).Error)
+	})
+
 	// Setup: two memories, one node.
 	var mem1, mem2 int64
 	require.NoError(t, db.Raw(
-		`INSERT INTO memories (project, content) VALUES ('t015b-test', 'mem1') RETURNING id`,
+		`INSERT INTO memories (project, content) VALUES (?, 'mem1') RETURNING id`, project,
 	).Row().Scan(&mem1))
 	require.NoError(t, db.Raw(
-		`INSERT INTO memories (project, content) VALUES ('t015b-test', 'mem2') RETURNING id`,
+		`INSERT INTO memories (project, content) VALUES (?, 'mem2') RETURNING id`, project,
 	).Row().Scan(&mem2))
-	t.Cleanup(func() {
-		_ = db.Exec(`DELETE FROM memories WHERE project = 't015b-test'`).Error
-		_ = db.Exec(`DELETE FROM knowledge_nodes WHERE project = 't015b-test'`).Error
-		_ = db.Exec(`DELETE FROM knowledge_edges WHERE source_session_id = 't015b-test'`).Error
-	})
 
 	node, err := ns.Create(ctx, &models.KnowledgeNode{
 		NodeType:    models.NodeTypeAgent,
 		ExternalRef: "engram-agent-v2",
-		Project:     "t015b-test",
+		Project:     project,
 	})
 	require.NoError(t, err)
 
-	// Create two outgoing edges from node.
-	for _, memID := range []int64{mem1, mem2} {
-		id := memID
+	// Create two outgoing edges with distinct allowed code edge types.
+	fixtures := []struct {
+		memoryID int64
+		edgeType string
+	}{
+		{memoryID: mem1, edgeType: EdgeUses},
+		{memoryID: mem2, edgeType: EdgeImports},
+	}
+	for _, fixture := range fixtures {
+		id := fixture.memoryID
 		_, err := gs.Create(ctx, &Edge{
 			SourceType:      "node",
 			TargetType:      "memory",
 			TargetID:        &id,
 			NodeSourceID:    &node.ID,
-			EdgeType:        "references",
+			EdgeType:        fixture.edgeType,
 			Weight:          1.0,
-			SourceSessionID: "t015b-test",
+			SourceSessionID: project,
 		})
 		require.NoError(t, err)
 	}
@@ -171,6 +189,18 @@ func TestPathC_T015_NodeTypedEdgeListFilter(t *testing.T) {
 	incoming, err := gs.ListByNode(ctx, node.ID, Incoming, "")
 	require.NoError(t, err)
 	assert.Empty(t, incoming, "expected 0 incoming edges for agent node")
+
+	for _, fixture := range fixtures {
+		filtered, err := gs.ListByNode(ctx, node.ID, Outgoing, fixture.edgeType)
+		require.NoError(t, err)
+		require.Len(t, filtered, 1, "edge-type filter must select only its own target")
+		assert.Equal(t, fixture.edgeType, filtered[0].EdgeType)
+		require.NotNil(t, filtered[0].TargetID)
+		assert.Equal(t, fixture.memoryID, *filtered[0].TargetID)
+	}
+	absent, err := gs.ListByNode(ctx, node.ID, Outgoing, EdgeDependsOn)
+	require.NoError(t, err)
+	assert.Empty(t, absent, "an allowed but absent edge type must not match")
 
 	// Resolve each edge and verify times are reasonable (non-zero).
 	for _, e := range edges {
@@ -195,27 +225,21 @@ func TestPathC_T015_NodeCreatedAtTimestamp(t *testing.T) {
 		t.Skip("DATABASE_DSN not set, skipping T015 integration test")
 	}
 
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Warn),
-	})
-	require.NoError(t, err)
-
-	sqlDB, err := db.DB()
-	require.NoError(t, err)
-	defer sqlDB.Close()
+	db := openGraphIntegrationStore(t, dsn).DB
 
 	ctx := context.Background()
 	ns := NewNodesStore(db)
 
+	project := newGraphIntegrationProject(t, db)
 	t.Cleanup(func() {
-		_ = db.Exec(`DELETE FROM knowledge_nodes WHERE project = 't015c-test'`).Error
+		assert.NoError(t, db.Exec(`DELETE FROM knowledge_nodes WHERE project = ?`, project).Error)
 	})
 
 	before := time.Now().UTC().Add(-time.Second)
 	node, err := ns.Create(ctx, &models.KnowledgeNode{
 		NodeType:    models.NodeTypeRule,
 		ExternalRef: "my-rule-001",
-		Project:     "t015c-test",
+		Project:     project,
 	})
 	after := time.Now().UTC().Add(time.Second)
 
@@ -231,14 +255,10 @@ func TestNodesStore_MetadataDefaults_Create(t *testing.T) {
 		t.Skip("DATABASE_DSN not set, skipping metadata integration test")
 	}
 
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Warn)})
-	require.NoError(t, err)
-	sqlDB, err := db.DB()
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = sqlDB.Close() })
+	db := openGraphIntegrationStore(t, dsn).DB
 
-	const project = "graph-metadata-create-test"
-	t.Cleanup(func() { _ = db.Exec("DELETE FROM knowledge_nodes WHERE project = ?", project).Error })
+	project := newGraphIntegrationProject(t, db)
+	t.Cleanup(func() { assert.NoError(t, db.Exec("DELETE FROM knowledge_nodes WHERE project = ?", project).Error) })
 	ns := NewNodesStore(db)
 
 	for _, tc := range []struct {
@@ -275,14 +295,10 @@ func TestNodesStore_MetadataDefaults_Update(t *testing.T) {
 		t.Skip("DATABASE_DSN not set, skipping metadata integration test")
 	}
 
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Warn)})
-	require.NoError(t, err)
-	sqlDB, err := db.DB()
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = sqlDB.Close() })
+	db := openGraphIntegrationStore(t, dsn).DB
 
-	const project = "graph-metadata-update-test"
-	t.Cleanup(func() { _ = db.Exec("DELETE FROM knowledge_nodes WHERE project = ?", project).Error })
+	project := newGraphIntegrationProject(t, db)
+	t.Cleanup(func() { assert.NoError(t, db.Exec("DELETE FROM knowledge_nodes WHERE project = ?", project).Error) })
 	ns := NewNodesStore(db)
 
 	for _, tc := range []struct {

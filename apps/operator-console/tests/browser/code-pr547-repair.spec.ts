@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 
-const entry = { source_ref: 'source', checkout_ref: 'checkout', repository: 'Engram', working_copy: 'Operator desk', indexed_snapshot: { label: 'Pinned snapshot' }, view_ref: 'legacy-view', selection_ref: 'selection', index_intent_available: false }
+const entry = { project_id: '33333333-3333-4333-8333-333333333333', source_ref: 'source', checkout_ref: 'checkout', repository: 'Engram', working_copy: 'Operator desk', indexed_snapshot: { label: 'Pinned snapshot' }, view_ref: 'legacy-view', selection_ref: 'selection', index_intent_available: false }
 const binding = { state: 'TAB_BINDING_READY', tab_binding_id: '60000000-0000-4000-8000-000000000041', document_proof: 'proof', resume_nonce: 'resume', reload_token: 'reload' }
 
 test('an unresponsive authentication-mode probe expires and allows a safe retry', async ({ page }) => {
@@ -10,6 +10,7 @@ test('an unresponsive authentication-mode probe expires and allows a safe retry'
   await page.clock.install()
   await page.route('**/api/auth/me', async route => {
     attempts++
+    if (attempts === 1) return route.fulfill({ json: { auth_disabled: true } })
     if (!recovered) await new Promise<void>(resolve => { releases.push(resolve) })
     await route.fulfill({ json: { auth_disabled: true } }).catch(() => { })
   })
@@ -18,7 +19,7 @@ test('an unresponsive authentication-mode probe expires and allows a safe retry'
     else if (route.request().url().endsWith('/contexts')) await route.fulfill({ json: { contexts: [entry] } })
     else await route.fulfill({ status: 500 })
   })
-  await page.goto('/code', { waitUntil: 'domcontentloaded' })
+  await page.goto('/code?project=all', { waitUntil: 'domcontentloaded' })
   await expect(page.locator('.phase')).toHaveAttribute('data-state', 'binding')
   await page.clock.fastForward('00:31')
   await expect(page.locator('.phase')).toHaveAttribute('data-state', 'identity-unavailable')
@@ -29,20 +30,24 @@ test('an unresponsive authentication-mode probe expires and allows a safe retry'
   expect(attempts).toBeGreaterThanOrEqual(2)
 })
 
-test('a documented auth-enabled 401 enters denied mode without mounting grants or binding', async ({ page }) => {
+test('a documented auth-enabled 401 locks the shell without mounting grants or binding', async ({ page }) => {
   const codeRequests: string[] = []
   await page.route('**/api/auth/me', route => route.fulfill({ status: 401, json: { authenticated: false, auth_disabled: false } }))
   await page.route('**/api/code/**', route => { codeRequests.push(new URL(route.request().url()).pathname); return route.fulfill({ status: 403 }) })
-  await page.goto('/code')
-  await expect(page.locator('.phase')).toHaveAttribute('data-state', 'denied')
+  await page.goto('/code?project=all')
+  await expect(page.locator('.identity')).toHaveAttribute('data-auth', 'locked')
+  await expect(page.locator('main.code-page')).toHaveCount(0)
+  await expect(page.locator('main.content > .session-recovery')).toBeVisible()
   await expect(page.getByTestId('code-grant-chooser')).toHaveCount(0)
   expect(codeRequests).toEqual([])
 })
 
 test('unknown and no-auth mode never mount grant administration', async ({ page }) => {
   const codeRequests: string[] = []
+  let probes = 0
   let releaseProbe: () => void = () => { }
   await page.route('**/api/auth/me', async route => {
+    if (++probes === 1) return route.fulfill({ json: { auth_disabled: true } })
     await new Promise<void>(resolve => { releaseProbe = resolve })
     await route.fulfill({ json: { authenticated: true, auth_disabled: true } })
   })
@@ -52,7 +57,7 @@ test('unknown and no-auth mode never mount grant administration', async ({ page 
     if (route.request().url().endsWith('/contexts')) return route.fulfill({ json: { contexts: [] } })
     return route.fulfill({ status: 403 })
   })
-  await page.goto('/code', { waitUntil: 'domcontentloaded' })
+  await page.goto('/code?project=all', { waitUntil: 'domcontentloaded' })
   await expect(page.locator('.phase')).toHaveAttribute('data-state', 'binding')
   await expect(page.getByTestId('code-grant-chooser')).toHaveCount(0)
   expect(codeRequests).toEqual([])
@@ -62,12 +67,14 @@ test('unknown and no-auth mode never mount grant administration', async ({ page 
   expect(codeRequests).toEqual(['/api/code/tabs/handshake', '/api/code/contexts'])
 })
 
-test('malformed auth-enabled 401 remains a retryable probe failure without grants', async ({ page }) => {
+test('malformed auth-enabled 401 cannot grant identity or mount protected code', async ({ page }) => {
   const codeRequests: string[] = []
   await page.route('**/api/auth/me', route => route.fulfill({ status: 401, json: { authenticated: true, auth_disabled: false } }))
   await page.route('**/api/code/**', route => { codeRequests.push(route.request().url()); return route.fulfill({ status: 403 }) })
-  await page.goto('/code')
-  await expect(page.locator('.phase')).toHaveAttribute('data-state', 'identity-unavailable')
+  await page.goto('/code?project=all')
+  await expect(page.locator('.identity')).toHaveAttribute('data-auth', 'locked')
+  await expect(page.locator('main.code-page')).toHaveCount(0)
+  await expect(page.locator('main.content > .session-recovery')).toBeVisible()
   await expect(page.getByTestId('code-grant-chooser')).toHaveCount(0)
   expect(codeRequests).toEqual([])
 })
@@ -89,22 +96,22 @@ test('an obsolete initialization cannot consume the pinned SPA remount', async (
     else if (path === '/api/code/status') await route.fulfill({ json: { total_chunks: 0, embedded_chunks: 0, embedding: { coverage: 'none', job_state: null, error_code: null } } })
     else await route.fulfill({ status: 403 })
   })
-  await page.goto('/code')
+  await page.goto('/code?project=all')
   await page.getByTestId('code-context-snapshot').selectOption('selection')
   await page.getByTestId('code-pin-context').click()
   await expect(page.getByTestId('code-context-pinned')).toBeVisible()
-  await page.locator('a[href="/memory"]').first().click()
-  await expect(page).toHaveURL(/\/memory$/)
+  await page.locator('a[href="/memory?project=all"]').first().click()
+  await expect(page).toHaveURL(/\/memory\?project=all$/)
   holdProbes = true
-  await page.locator('a[href="/code"]').first().click()
-  await expect(page).toHaveURL(/\/code$/)
+  await page.locator('a[href="/code?project=all"]').first().click()
+  await expect(page).toHaveURL(/\/code\?project=all$/)
   await expect.poll(() => releases.length).toBeGreaterThan(0)
   await expect(page.locator('.phase')).toHaveAttribute('data-state', 'binding')
-  await page.locator('a[href="/memory"]').first().click()
-  await expect(page).toHaveURL(/\/memory$/)
+  await page.locator('a[href="/memory?project=all"]').first().click()
+  await expect(page).toHaveURL(/\/memory\?project=all$/)
   holdProbes = false
   for (const release of releases) release()
-  await page.locator('a[href="/code"]').first().click()
+  await page.locator('a[href="/code?project=all"]').first().click()
   await expect(page.getByTestId('code-context-pinned')).toContainText('Pinned snapshot')
   expect(transitions.filter(path => path === '/api/code/tabs/resume')).toHaveLength(1)
 })
@@ -121,7 +128,7 @@ test('a prior raw viewRef restores only a unique authorized candidate, never a s
     else if (path === '/api/code/status') await route.fulfill({ json: { total_chunks: 0, embedded_chunks: 0, embedding: { coverage: 'none', job_state: null, error_code: null } } })
     else await route.fulfill({ status: 403 })
   })
-  await page.goto('/code')
+  await page.goto('/code?project=all')
   await page.getByTestId('code-context-snapshot').selectOption('selection')
   await page.getByTestId('code-pin-context').click()
   await expect(page.getByTestId('code-context-pinned')).toBeVisible()
@@ -139,9 +146,13 @@ test('a prior raw viewRef restores only a unique authorized candidate, never a s
 
 test('unbound refresh cannot erase a historical View candidate before identity retry', async ({ page }) => {
   let identityUnavailable = false
+  let shellProbe = true
   const requests: string[] = []
   const pins: unknown[] = []
-  await page.route('**/api/auth/me', route => route.fulfill(identityUnavailable ? { status: 503 } : { json: { auth_disabled: true } }))
+  await page.route('**/api/auth/me', route => {
+    if (shellProbe) { shellProbe = false; return route.fulfill({ json: { auth_disabled: true } }) }
+    return route.fulfill(identityUnavailable ? { status: 503 } : { json: { auth_disabled: true } })
+  })
   await page.route('**/api/code/**', async route => {
     const path = new URL(route.request().url()).pathname
     requests.push(path)
@@ -151,13 +162,14 @@ test('unbound refresh cannot erase a historical View candidate before identity r
     else if (path === '/api/code/status') await route.fulfill({ json: { total_chunks: 0, embedded_chunks: 0, embedding: { coverage: 'none', job_state: null, error_code: null } } })
     else await route.fulfill({ status: 403 })
   })
-  await page.goto('/code')
+  await page.goto('/code?project=all')
   await page.getByTestId('code-context-snapshot').selectOption('selection')
   await page.getByTestId('code-pin-context').click()
   await expect(page.getByTestId('code-context-pinned')).toContainText('Pinned snapshot')
   const stored = await page.evaluate(() => sessionStorage.getItem('engram.operator-code.view-candidate.v2'))
   expect(stored).not.toBeNull()
   identityUnavailable = true
+  shellProbe = true
   await page.reload()
   await expect(page.locator('.phase')).toHaveAttribute('data-state', 'identity-unavailable')
   await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
@@ -189,7 +201,7 @@ test('offline freshness renders its translated status instead of an i18n key', a
     else if (path === '/api/code/status') await route.fulfill({ json: { total_chunks: 1, embedded_chunks: 1, embedding: { coverage: 'complete', job_state: null, error_code: null }, freshness: { state: 'offline' } } })
     else await route.fulfill({ status: 403 })
   })
-  await page.goto('/code')
+  await page.goto('/code?project=all')
   await page.getByTestId('code-context-snapshot').selectOption('selection')
   await page.getByTestId('code-pin-context').click()
   await expect(page.getByTestId('code-status')).toContainText('Офлайн')
@@ -206,7 +218,7 @@ test('offline freshness has a distinct readiness label, not unknown freshness', 
     if (path === '/api/code/status') return route.fulfill({ json: { total_chunks: 1, embedded_chunks: 1, embedding: { coverage: 'complete', job_state: 'succeeded', error_code: null }, freshness: { state: 'offline' } } })
     return route.fulfill({ status: 403 })
   })
-  await page.goto('/code')
+  await page.goto('/code?project=all')
   await page.getByTestId('code-context-snapshot').selectOption('selection')
   await page.getByTestId('code-pin-context').click()
   await expect(page.locator('.readiness')).toHaveAttribute('data-state', 'offline')
@@ -241,20 +253,20 @@ for (const boundary of ['resume', 'handshake', 'catalog'] as const) {
       else await route.fulfill({ status: 403 })
     })
 
-    await page.goto('/code')
+    await page.goto('/code?project=all')
     await page.getByTestId('code-context-snapshot').selectOption('selection')
     await page.getByTestId('code-pin-context').click()
     await expect(page.getByTestId('code-context-pinned')).toBeVisible()
     const candidate = await page.evaluate(() => sessionStorage.getItem('engram.operator-code.view-candidate.v2'))
-    await page.locator('a[href="/memory"]').first().click()
-    await expect(page).toHaveURL(/\/memory$/)
+    await page.locator('a[href="/memory?project=all"]').first().click()
+    await expect(page).toHaveURL(/\/memory\?project=all$/)
     if (boundary === 'handshake') await page.evaluate(() => sessionStorage.removeItem('engram.operator-code.resume.v1'))
     held = boundary
-    await page.locator('a[href="/code"]').first().click()
-    await expect(page).toHaveURL(/\/code$/)
+    await page.locator('a[href="/code?project=all"]').first().click()
+    await expect(page).toHaveURL(/\/code\?project=all$/)
     await expect.poll(() => releases.length).toBe(1)
-    await page.locator('a[href="/memory"]').first().click()
-    await expect(page).toHaveURL(/\/memory$/)
+    await page.locator('a[href="/memory?project=all"]').first().click()
+    await expect(page).toHaveURL(/\/memory\?project=all$/)
 
     await page.evaluate(() => {
       const writes: string[] = []
@@ -285,7 +297,7 @@ for (const boundary of ['resume', 'handshake', 'catalog'] as const) {
     expect(requests.filter(path => path.endsWith('/lease'))).toEqual([])
 
     held = null
-    await page.locator('a[href="/code"]').first().click()
+    await page.locator('a[href="/code?project=all"]').first().click()
     await expect(page.getByTestId('code-context-snapshot').getByRole('option', { name: 'Pinned snapshot' })).toHaveCount(1)
     if (boundary === 'handshake') {
       await page.getByTestId('code-context-snapshot').selectOption('selection')
@@ -326,7 +338,7 @@ for (const failure of ['unavailable', 'timeout', 'offline', 'malformed'] as cons
       else if (path === '/api/code/index-intents/historical-intent') await route.fulfill({ json: intent })
       else await route.fulfill({ status: 500 })
     })
-    await page.goto('/code')
+    await page.goto('/code?project=all')
     await page.getByTestId('code-context-snapshot').selectOption('selection')
     await page.getByTestId('code-pin-context').click()
     await page.getByTestId('code-query-input').fill('old result')
@@ -408,18 +420,18 @@ for (const reauthorization of ['ready', 'unavailable', 'malformed', 'denied', 'm
       else if (path === '/api/code/source') { sourceRequests.push(route.request().postDataJSON()); await route.fulfill({ json: envelope }) }
       else await route.fulfill({ status: 500 })
     })
-    await page.goto('/code')
+    await page.goto('/code?project=all')
     await page.getByTestId('code-context-snapshot').selectOption('selection')
     await page.getByTestId('code-pin-context').click()
     await expect(page.getByTestId('code-structure-results')).toContainText('src/old-view.ts')
     const stored = await page.evaluate(() => sessionStorage.getItem('engram.operator-code.view-candidate.v2'))
     published = true
-    await page.locator('a[href="/memory"]').first().click()
-    await expect(page).toHaveURL(/\/memory$/)
+    await page.locator('a[href="/memory?project=all"]').first().click()
+    await expect(page).toHaveURL(/\/memory\?project=all$/)
     statusMode = reauthorization
     const remountStart = requests.length
-    await page.locator('a[href="/code"]').first().click()
-    await expect(page).toHaveURL(/\/code$/)
+    await page.locator('a[href="/code?project=all"]').first().click()
+    await expect(page).toHaveURL(/\/code\?project=all$/)
     if (reauthorization !== 'ready') {
       await expect(page.locator('main.code-page')).toHaveAttribute('data-catalog-state', reauthorization === 'denied' || reauthorization === 'mismatch' ? 'snapshot-rejected' : 'unavailable')
       await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
@@ -433,9 +445,9 @@ for (const reauthorization of ['ready', 'unavailable', 'malformed', 'denied', 'm
       await page.getByRole('button', { name: 'Обновить разрешённые варианты' }).click()
       if (reauthorization === 'denied' || reauthorization === 'mismatch') {
         await expect(page.getByTestId('code-context-snapshot').getByRole('option', { name: 'Newer snapshot' })).toHaveCount(1)
-        await page.locator('a[href="/memory"]').first().click()
-        await expect(page).toHaveURL(/\/memory$/)
-        await page.locator('a[href="/code"]').first().click()
+        await page.locator('a[href="/memory?project=all"]').first().click()
+        await expect(page).toHaveURL(/\/memory\?project=all$/)
+        await page.locator('a[href="/code?project=all"]').first().click()
         await expect(page.getByTestId('code-context-snapshot').getByRole('option', { name: 'Newer snapshot' })).toHaveCount(1)
         await expect(page.getByTestId('code-context-pinned')).toHaveCount(0)
         expect(requests.filter(path => path === '/api/code/status')).toHaveLength(2)
@@ -502,7 +514,7 @@ for (const { boundary, leaseStatus } of [
         await route.fulfill({ status: 204 })
       } else await route.fulfill({ status: 403 })
     })
-    await page.goto('/code')
+    await page.goto('/code?project=all')
     await page.getByTestId('code-context-snapshot').selectOption('selection')
     await page.getByTestId('code-pin-context').click()
     const refresh = page.getByRole('button', { name: 'Обновить разрешённые варианты' })
@@ -623,7 +635,7 @@ for (const boundary of ['structure', 'search', 'graph', 'source'] as const) {
           else await route.fulfill({ json: released(obsolete ? 'obsolete' : body.document_proof === 'proof' ? 'initial' : 'current', body.document_proof !== 'proof') })
         } else await route.fulfill({ status: 403 })
       })
-      await page.goto('/code')
+      await page.goto('/code?project=all')
       await page.getByTestId('code-context-snapshot').selectOption('selection')
       await page.getByTestId('code-pin-context').click()
       await expect(page.getByTestId('code-structure-results')).toContainText('src/initial.ts')
@@ -755,7 +767,7 @@ for (const leaseStatus of [503, 403]) {
         await route.fulfill({ json: { total_chunks: 1, embedded_chunks: 1, embedding: { coverage: 'complete' } } })
       } else await route.fulfill({ status: 403 })
     })
-    await page.goto('/code')
+    await page.goto('/code?project=all')
     await page.getByTestId('code-context-snapshot').selectOption('selection')
     await page.clock.fastForward('00:50')
     await page.getByTestId('code-pin-context').click()
@@ -830,7 +842,7 @@ for (const { boundary, invalidated } of [
       } else if (path === '/api/code/structure') await route.fulfill({ json: envelope })
       else await route.fulfill({ status: 403 })
     })
-    await page.goto('/code')
+    await page.goto('/code?project=all')
     await page.getByTestId('code-context-snapshot').selectOption('selection')
     await page.getByTestId('code-pin-context').click()
     await expect(page.getByTestId('code-query-input')).toBeEnabled()

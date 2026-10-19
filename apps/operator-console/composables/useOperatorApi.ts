@@ -1,4 +1,8 @@
+import { ref } from 'vue'
 import { operatorConfig } from '../operator-config'
+
+export const operatorUnauthorizedRevision = ref(0)
+export const authGeneration = ref(0)
 export const OPERATOR_LOAD_KINDS = [
  'pending',
  'error',
@@ -211,9 +215,11 @@ export function operatorDiagnosisCategory(
 
 /** Locale key for the primary operator copy of a failure. Presentation boundary only. */
 export function operatorDiagnosisKey(
- error: Pick<OperatorSourceError, 'category' | 'status'> | null | undefined,
+ error: (Pick<OperatorSourceError, 'category' | 'status'> & Partial<Pick<OperatorSourceError, 'path'>>) | null | undefined,
 ): string {
- return `errors.diagnosis.${operatorDiagnosisCategory(error)}`
+ const category = operatorDiagnosisCategory(error)
+ if (error?.path === '/api/projects' && (category === 'server-unavailable' || category === 'unreachable')) return 'projectCatalog.unavailable'
+ return `errors.diagnosis.${category}`
 }
 
 async function readOperatorResponseText(
@@ -239,6 +245,13 @@ async function readOperatorResponseText(
  }
 }
 
+export async function operatorFetchResponse(path: string, init: RequestInit = {}, base = operatorApiBase()): Promise<Response> {
+ const generation = authGeneration.value
+ const response = await fetch(operatorApiUrl(path, base), { ...init, credentials: 'include' })
+ if (response.status === 401 && path !== '/api/auth/user-login' && !init.signal?.aborted && generation === authGeneration.value) operatorUnauthorizedRevision.value++
+ return response
+}
+
 export async function operatorFetchJson<T>(
  path: string,
  init: RequestInit = {},
@@ -248,10 +261,7 @@ export async function operatorFetchJson<T>(
  let response: Response
 
  try {
-  response = await fetch(operatorApiUrl(path), {
-   ...init,
-   credentials: 'include',
-  })
+  response = await operatorFetchResponse(path, init)
  } catch (error) {
   const mapped = toOperatorSourceError(error, { source, path, method })
   throw new OperatorFetchError(mapped.message, mapped)

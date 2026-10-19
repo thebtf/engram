@@ -16,11 +16,10 @@ package grpcserver
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"testing"
-	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/auth"
@@ -41,7 +40,7 @@ func TestEC_F1_P1_GRPCSessionStart_FlagOff_ByteIdentity(t *testing.T) {
 	t.Setenv("ENGRAM_VNEXT_ENABLED", "false")
 
 	ctx := context.Background()
-	project := fmt.Sprintf("grpc-scope-w4-flagoff-%d", time.Now().UnixNano())
+	project := uuid.NewString()
 	defer db.Exec(`DELETE FROM memories WHERE project = ?`, project)
 
 	memStore := localgorm.NewMemoryStore(&localgorm.Store{DB: db})
@@ -96,7 +95,7 @@ func TestEC_F1_P1_GRPCSessionStart_FlagOn_PrivateCrossWorkstationInvisible(t *te
 	t.Setenv("ENGRAM_VNEXT_ENABLED", "false") // use the legacy (non-Thompson) branch
 
 	ctx := context.Background()
-	project := fmt.Sprintf("grpc-scope-w4-flagon-%d", time.Now().UnixNano())
+	project := uuid.NewString()
 	defer db.Exec(`DELETE FROM memories WHERE project = ?`, project)
 
 	memStore := localgorm.NewMemoryStore(&localgorm.Store{DB: db})
@@ -182,7 +181,7 @@ func TestEC_F1_P1_GRPCSessionStart_FlagOn_NoCallerIdentity_PrivateInvisible(t *t
 	t.Setenv("ENGRAM_VNEXT_ENABLED", "false")
 
 	ctx := context.Background()
-	project := fmt.Sprintf("grpc-scope-w4-noid-%d", time.Now().UnixNano())
+	project := uuid.NewString()
 	defer db.Exec(`DELETE FROM memories WHERE project = ?`, project)
 
 	memStore := localgorm.NewMemoryStore(&localgorm.Store{DB: db})

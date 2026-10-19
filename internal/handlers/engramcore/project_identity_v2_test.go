@@ -3,145 +3,126 @@ package engramcore
 import (
 	"context"
 	"encoding/json"
-	"strings"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/thebtf/engram/internal/config"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 )
 
-func TestProxyHandleTool_FirstCallBeforeHookSendsProjectIdentityV2(t *testing.T) {
-	srv := &mockEngramServer{callResp: &pb.CallToolResponse{ContentJson: []byte(`[]`)}}
-	grpcAddr := startMockGRPC(t, srv)
-	_, mod, project := buildContractDispatcher(t, grpcAddr)
+const (
+	contractProjectID      = "22222222-2222-4222-8222-222222222222"
+	otherContractProjectID = "33333333-3333-4333-8333-333333333333"
+)
 
-	if _, err := mod.ProxyHandleTool(context.Background(), project, "recall", json.RawMessage(`{}`)); err != nil {
+func writeContractProjectMarker(t *testing.T, root, projectID string) {
+	t.Helper()
+	raw := []byte(`{"project_id":"` + projectID + `","name":"private-display-name"}`)
+	if err := os.WriteFile(filepath.Join(root, ".engram-project"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProxyHandleTool_FirstCallBeforeHookUsesLogicalProject(t *testing.T) {
+	srv := &mockEngramServer{callResp: &pb.CallToolResponse{ContentJson: []byte(`[]`)}}
+	_, mod, project := buildContractDispatcher(t, startMockGRPC(t, srv))
+	writeContractProjectMarker(t, project.Cwd, contractProjectID)
+
+	if _, err := mod.ProxyHandleTool(t.Context(), project, "recall", json.RawMessage(`{"query":"saved decision"}`)); err != nil {
 		t.Fatalf("first CallTool before any hook/session-connect: %v", err)
 	}
 
 	srv.mu.Lock()
-	req := srv.callReq
-	srv.mu.Unlock()
-	if req == nil || req.ProjectIdentity == nil {
-		t.Fatal("first CallTool did not carry project_identity v2")
+	defer srv.mu.Unlock()
+	request := srv.callReq
+	if request == nil || request.GetProject() != contractProjectID || request.GetToolName() != "recall" {
+		t.Fatalf("first project-scoped request=%#v, want canonical UUID", request)
 	}
-	if req.ProjectIdentityV3 != nil {
-		t.Fatal("V2 compatibility path must not submit a V3 descriptor")
-	}
-	if req.ProjectIdentity.Version != 2 {
-		t.Fatalf("identity version=%d", req.ProjectIdentity.Version)
-	}
-	if req.ProjectIdentity.LegacyProjectId == "" {
-		t.Fatal("legacy selector is required for mixed-version convergence")
+	if srv.initCalls != 0 {
+		t.Fatal("normal project resolution required a discovery handshake")
 	}
 }
 
-func TestProxyHandleTool_ReusesCachedProjectIdentityV2UntilProjectRemoval(t *testing.T) {
+func TestProxyHandleTool_ReReadsMarkerInsteadOfSessionOrLegacyCache(t *testing.T) {
 	srv := &mockEngramServer{callResp: &pb.CallToolResponse{ContentJson: []byte(`[]`)}}
-	grpcAddr := startMockGRPC(t, srv)
-	_, mod, project := buildContractDispatcher(t, grpcAddr)
+	_, mod, project := buildContractDispatcher(t, startMockGRPC(t, srv))
+	project.Env[config.EnvClaudeSessionID] = "same-host-session"
+	mod.cache.ForceCacheEntry(project, "obsolete-selector-is-not-authority")
 
-	if _, err := mod.ProxyHandleTool(context.Background(), project, "recall", json.RawMessage(`{}`)); err != nil {
-		t.Fatalf("first CallTool: %v", err)
-	}
-
-	t.Setenv("PATH", t.TempDir())
-	if _, err := mod.ProxyHandleTool(context.Background(), project, "recall", json.RawMessage(`{}`)); err != nil {
-		t.Fatalf("cached CallTool required git: %v", err)
-	}
-
-	mod.cache.Forget(project.ID)
-	if _, err := mod.ProxyHandleTool(context.Background(), project, "recall", json.RawMessage(`{}`)); err == nil || !strings.Contains(err.Error(), "project identity v2") {
-		t.Fatalf("CallTool after Forget error=%v, want project identity resolution failure", err)
-	}
-}
-
-func TestProxyTools_SendsProjectIdentityV2OnInitialize(t *testing.T) {
-	srv := &mockEngramServer{initResp: &pb.InitializeResponse{}}
-	grpcAddr := startMockGRPC(t, srv)
-	_, mod, project := buildContractDispatcher(t, grpcAddr)
-
-	if _, err := mod.ProxyTools(context.Background(), project); err != nil {
-		t.Fatalf("Initialize: %v", err)
-	}
-
-	srv.mu.Lock()
-	req := srv.initReq
-	srv.mu.Unlock()
-	if req == nil || req.ProjectIdentity == nil || req.ProjectIdentity.Version != 2 {
-		t.Fatalf("Initialize project identity=%#v", req)
-	}
-}
-
-func TestToolsList_ConfiguredIdentityFailureIsServiceUnavailable(t *testing.T) {
-	srv := &mockEngramServer{initResp: &pb.InitializeResponse{}}
-	grpcAddr := startMockGRPC(t, srv)
-	disp, mod, project := buildContractDispatcher(t, grpcAddr)
-	mod.cache.Forget(project.ID)
-	t.Setenv("PATH", t.TempDir())
-
-	resp, err := disp.HandleRequest(context.Background(), project, jsonrpcListReq(1))
-	if err != nil {
-		t.Fatalf("HandleRequest: %v", err)
-	}
-	assertToolsListServiceUnavailable(t, resp)
-}
-
-func TestProxyHandleTool_SameProjectIDDifferentCWDKeepsSelectorAligned(t *testing.T) {
-	srv := &mockEngramServer{callResp: &pb.CallToolResponse{ContentJson: []byte(`[]`)}}
-	grpcAddr := startMockGRPC(t, srv)
-	_, mod, project := buildContractDispatcher(t, grpcAddr)
-	mod.cache.Forget(project.ID)
-
-	fixtures := []struct {
-		cwd      string
-		selector string
-		legacy   string
-	}{
-		{cwd: t.TempDir(), selector: "selector-one", legacy: "legacy-one"},
-		{cwd: t.TempDir(), selector: "selector-two", legacy: "legacy-two"},
-	}
-	selectors := make([]string, 0, len(fixtures))
-	for _, fixture := range fixtures {
-		project.Cwd = fixture.cwd
-		key := cacheKey(project)
-		mod.cache.entries.Store(key, resolvedSlug{id: fixture.selector})
-		mod.cache.identities.Store(key, &pb.ProjectIdentityV2{Version: 2, LegacyProjectId: fixture.legacy})
-
-		if _, err := mod.ProxyHandleTool(context.Background(), project, "recall", json.RawMessage(`{}`)); err != nil {
-			t.Fatalf("CallTool for %s: %v", fixture.cwd, err)
+	for _, projectID := range []string{contractProjectID, otherContractProjectID} {
+		writeContractProjectMarker(t, project.Cwd, projectID)
+		if _, err := mod.ProxyHandleTool(t.Context(), project, "recall", json.RawMessage(`{}`)); err != nil {
+			t.Fatal(err)
 		}
-
 		srv.mu.Lock()
-		req := srv.callReq
+		request := srv.callReq
 		srv.mu.Unlock()
-		if req == nil || req.ProjectIdentity == nil {
-			t.Fatalf("missing request identity for %s", fixture.cwd)
+		if request == nil || request.GetProject() != projectID || request.GetSessionId() != "same-host-session" {
+			t.Fatalf("marker %s was replaced by session/cache authority: %#v", projectID, request)
 		}
-		if req.Project != fixture.selector || req.ProjectIdentity.LegacyProjectId != fixture.legacy {
-			t.Fatalf("cwd=%s selector=%q legacy=%q, want selector=%q legacy=%q", fixture.cwd, req.Project, req.ProjectIdentity.LegacyProjectId, fixture.selector, fixture.legacy)
-		}
-		selectors = append(selectors, req.Project)
 	}
-	if selectors[0] == selectors[1] {
-		t.Fatalf("different cwd values reused selector %q", selectors[0])
+	mod.OnProjectRemoved(project.ID)
+	if _, err := mod.ProxyHandleTool(t.Context(), project, "recall", json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("removing transient host state invalidated the portable marker: %v", err)
+	}
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	if srv.callReq.GetProject() != otherContractProjectID {
+		t.Fatal("project removal changed the portable UUID")
 	}
 }
 
-func TestProjectIdentityV2_ProtoFieldNumbersRemainAdditive(t *testing.T) {
-	callReq := (&pb.CallToolRequest{}).ProtoReflect().Descriptor().Fields()
-	if got := callReq.ByName("project_identity").Number(); got != 5 {
-		t.Fatalf("CallToolRequest.project_identity tag=%d, want 5", got)
+func TestProxyTools_InitializeCarriesNoProjectAuthority(t *testing.T) {
+	srv := &mockEngramServer{initResp: &pb.InitializeResponse{Tools: []*pb.ToolDefinition{
+		{Name: "recall"}, {Name: "codebase_context"},
+	}}}
+	_, mod, project := buildContractDispatcher(t, startMockGRPC(t, srv))
+	project.Cwd = filepath.Join(t.TempDir(), "missing-client-directory")
+	project.Env[config.EnvClaudeSessionID] = "private-host-session"
+
+	tools, err := mod.ProxyTools(t.Context(), project)
+	if err != nil {
+		t.Fatal(err)
 	}
-	callResp := (&pb.CallToolResponse{}).ProtoReflect().Descriptor().Fields()
-	if got := callResp.ByName("canonical_project").Number(); got != 3 {
-		t.Fatalf("CallToolResponse.canonical_project tag=%d, want 3", got)
+	if len(tools) != 2 || tools[0].Name != "recall" || tools[1].Name != "codebase_context" {
+		t.Fatalf("unscoped discovery filtered the backend catalog: %#v", tools)
 	}
-	initReq := (&pb.InitializeRequest{}).ProtoReflect().Descriptor().Fields()
-	if got := initReq.ByName("project_identity").Number(); got != 4 {
-		t.Fatalf("InitializeRequest.project_identity tag=%d, want 4", got)
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	request := srv.initReq
+	if request == nil || request.GetProject() != "" {
+		t.Fatalf("Initialize carried project authority: %#v", request)
 	}
-	initResp := (&pb.InitializeResponse{}).ProtoReflect().Descriptor().Fields()
-	if got := initResp.ByName("canonical_project").Number(); got != 4 {
-		t.Fatalf("InitializeResponse.canonical_project tag=%d, want 4", got)
+	if request.GetClientName() != "engram-daemon" || request.GetClientVersion() != daemonClientVersion || srv.initCalls != 1 {
+		t.Fatalf("unexpected discovery handshake: %#v, calls=%d", request, srv.initCalls)
+	}
+}
+
+func TestProxyHandleTool_SameHostProjectDifferentCWDResolvesIndependently(t *testing.T) {
+	srv := &mockEngramServer{callResp: &pb.CallToolResponse{ContentJson: []byte(`[]`)}}
+	_, mod, project := buildContractDispatcher(t, startMockGRPC(t, srv))
+	first, second := project, project
+	second.Cwd = t.TempDir()
+	writeContractProjectMarker(t, first.Cwd, contractProjectID)
+	writeContractProjectMarker(t, second.Cwd, otherContractProjectID)
+
+	for _, selected := range []struct {
+		cwd, projectID string
+	}{
+		{first.Cwd, contractProjectID},
+		{second.Cwd, otherContractProjectID},
+		{first.Cwd, contractProjectID},
+	} {
+		project.Cwd = selected.cwd
+		if _, err := mod.ProxyHandleTool(context.Background(), project, "recall", json.RawMessage(`{}`)); err != nil {
+			t.Fatal(err)
+		}
+		srv.mu.Lock()
+		request := srv.callReq
+		srv.mu.Unlock()
+		if request == nil || request.GetProject() != selected.projectID {
+			t.Fatalf("cwd %s borrowed another client's project: %#v", selected.cwd, request)
+		}
 	}
 }

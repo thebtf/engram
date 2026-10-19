@@ -3,41 +3,34 @@ package gorm
 
 import (
 	"context"
+	"database/sql"
 	"errors"
-	"os"
 	"strconv"
 	"sync"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 
 	"github.com/thebtf/engram/pkg/models"
 )
 
-// openSessionTestDB opens a test PostgreSQL connection for SessionStore tests.
-// Skips the test when DATABASE_DSN is not set.
+// openSessionTestDB gives each session test its own migrated schema and bounded pool.
 func openSessionTestDB(t *testing.T) (*SessionStore, *gorm.DB, func()) {
 	t.Helper()
-	dsn := os.Getenv("DATABASE_DSN")
-	if dsn == "" {
-		t.Skip("DATABASE_DSN not set, skipping session store integration test")
-	}
-
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
-	require.NoError(t, err, "open test DB")
-
+	db, _ := openInterventionReceiptMigrationTestDB(t)
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
-	require.NoError(t, sqlDB.Ping())
-	require.NoError(t, runMigrations(db), "runMigrations")
+	return NewSessionStore(&Store{DB: db}), db, func() { require.NoError(t, sqlDB.Close()) }
+}
 
-	ss := &SessionStore{db: db}
-	cleanup := func() { sqlDB.Close() }
-	return ss, db, cleanup
+func sessionTestProject(t *testing.T, db *gorm.DB) string {
+	t.Helper()
+	project := uuid.NewString()
+	require.NoError(t, db.Create(&Project{ID: project}).Error)
+	return project
 }
 
 // TestSessionStore_CreateSDKSession verifies a new session is created and retrievable.
@@ -48,7 +41,8 @@ func TestSessionStore_CreateSDKSession(t *testing.T) {
 
 	ctx := context.Background()
 
-	id, err := ss.CreateSDKSession(ctx, "sst-create-01", "test-project", "initial prompt")
+	project := sessionTestProject(t, db)
+	id, err := ss.CreateSDKSession(ctx, "sst-create-01", project, "initial prompt")
 	require.NoError(t, err)
 	assert.Greater(t, id, int64(0))
 
@@ -56,7 +50,7 @@ func TestSessionStore_CreateSDKSession(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, "sst-create-01", sess.ClaudeSessionID)
-	assert.Equal(t, "test-project", sess.Project)
+	assert.Equal(t, project, sess.Project)
 	assert.Equal(t, models.SessionStatusActive, sess.Status)
 	assert.True(t, sess.UserPrompt.Valid)
 	assert.Equal(t, "initial prompt", sess.UserPrompt.String)
@@ -71,17 +65,18 @@ func TestSessionStore_CreateSDKSession_Idempotent(t *testing.T) {
 
 	ctx := context.Background()
 
-	id1, err := ss.CreateSDKSession(ctx, "sst-idempotent-01", "project-a", "prompt 1")
+	projectA, projectB := sessionTestProject(t, db), sessionTestProject(t, db)
+	id1, err := ss.CreateSDKSession(ctx, "sst-idempotent-01", projectA, "prompt 1")
 	require.NoError(t, err)
 
-	id2, err := ss.CreateSDKSession(ctx, "sst-idempotent-01", "project-b", "prompt 2")
+	id2, err := ss.CreateSDKSession(ctx, "sst-idempotent-01", projectB, "prompt 2")
 	require.NoError(t, err)
 	assert.Equal(t, id1, id2, "idempotent call must return the same ID")
 
-	// Project should be updated to "project-b".
+	// The second canonical project replaces the original project.
 	sess, err := ss.GetSessionByID(ctx, id1)
 	require.NoError(t, err)
-	assert.Equal(t, "project-b", sess.Project)
+	assert.Equal(t, projectB, sess.Project)
 	assert.Equal(t, "prompt 2", sess.UserPrompt.String)
 }
 
@@ -94,7 +89,7 @@ func TestSessionStore_CreateSDKSession_EmptyPrompt(t *testing.T) {
 
 	ctx := context.Background()
 
-	id, err := ss.CreateSDKSession(ctx, "sst-noprompt-01", "test-project", "")
+	id, err := ss.CreateSDKSession(ctx, "sst-noprompt-01", sessionTestProject(t, db), "")
 	require.NoError(t, err)
 	assert.Greater(t, id, int64(0))
 
@@ -110,7 +105,7 @@ func TestSessionStore_FindAnySDKSession(t *testing.T) {
 	defer db.Exec("DELETE FROM sdk_sessions WHERE claude_session_id = 'sst-find-01'")
 
 	ctx := context.Background()
-	_, err := ss.CreateSDKSession(ctx, "sst-find-01", "test-project", "")
+	_, err := ss.CreateSDKSession(ctx, "sst-find-01", sessionTestProject(t, db), "")
 	require.NoError(t, err)
 
 	sess, err := ss.FindAnySDKSession(ctx, "sst-find-01")
@@ -141,7 +136,7 @@ func TestSessionStore_IncrementPromptCounter(t *testing.T) {
 	defer db.Exec("DELETE FROM sdk_sessions WHERE claude_session_id = 'sst-counter-01'")
 
 	ctx := context.Background()
-	id, err := ss.CreateSDKSession(ctx, "sst-counter-01", "test-project", "")
+	id, err := ss.CreateSDKSession(ctx, "sst-counter-01", sessionTestProject(t, db), "")
 	require.NoError(t, err)
 
 	counter, err := ss.GetPromptCounter(ctx, id)
@@ -171,40 +166,38 @@ func TestSessionStore_GetSessionsToday(t *testing.T) {
 	before, err := ss.GetSessionsToday(ctx)
 	require.NoError(t, err)
 
-	_, _ = ss.CreateSDKSession(ctx, "sst-today-01", "project-1", "")
-	_, _ = ss.CreateSDKSession(ctx, "sst-today-02", "project-2", "")
+	_, err = ss.CreateSDKSession(ctx, "sst-today-01", sessionTestProject(t, db), "")
+	require.NoError(t, err)
+	_, err = ss.CreateSDKSession(ctx, "sst-today-02", sessionTestProject(t, db), "")
+	require.NoError(t, err)
 
 	after, err := ss.GetSessionsToday(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, before+2, after)
 }
 
-// TestSessionStore_GetAllProjects verifies distinct project listing.
+// TestSessionStore_GetAllProjects keeps duplicate labels as distinct identities.
 func TestSessionStore_GetAllProjects(t *testing.T) {
 	ss, db, cleanup := openSessionTestDB(t)
 	defer cleanup()
-	defer db.Exec("DELETE FROM sdk_sessions WHERE claude_session_id IN ('sst-proj-01', 'sst-proj-02', 'sst-proj-03')")
-
-	ctx := context.Background()
-
-	_, _ = ss.CreateSDKSession(ctx, "sst-proj-01", "alpha-project", "")
-	_, _ = ss.CreateSDKSession(ctx, "sst-proj-02", "beta-project", "")
-	_, _ = ss.CreateSDKSession(ctx, "sst-proj-03", "alpha-project", "") // duplicate
-
-	projects, err := ss.GetAllProjects(ctx)
-	require.NoError(t, err)
-
-	// alpha-project and beta-project must be present; duplicates collapsed.
-	has := func(s string) bool {
-		for _, p := range projects {
-			if p == s {
-				return true
-			}
+	ids := []string{uuid.NewString(), uuid.NewString(), uuid.NewString()}
+	t.Cleanup(func() { db.Where("id IN ?", ids).Delete(&Project{}) })
+	for i, id := range ids {
+		row := Project{ID: id}
+		if i < 2 {
+			row.DisplayName = sql.NullString{String: "Duplicate label", Valid: true}
 		}
-		return false
+		require.NoError(t, db.Create(&row).Error)
 	}
-	assert.True(t, has("alpha-project"))
-	assert.True(t, has("beta-project"))
+	projects, err := ss.GetAllProjects(context.Background())
+	require.NoError(t, err)
+	for i, id := range ids {
+		label := "Duplicate label"
+		if i == 2 {
+			label = "Registered project"
+		}
+		assert.Contains(t, projects, ProjectDescriptor{ID: id, DisplayName: label})
+	}
 }
 
 // TestSessionStore_UpdateSessionOutcome_ByClaudeSessionID verifies recording outcome via claude_session_id.
@@ -214,7 +207,7 @@ func TestSessionStore_UpdateSessionOutcome_ByClaudeSessionID(t *testing.T) {
 	defer db.Exec("DELETE FROM sdk_sessions WHERE claude_session_id = 'sst-outcome-01'")
 
 	ctx := context.Background()
-	id, err := ss.CreateSDKSession(ctx, "sst-outcome-01", "test-project", "prompt")
+	id, err := ss.CreateSDKSession(ctx, "sst-outcome-01", sessionTestProject(t, db), "prompt")
 	require.NoError(t, err)
 
 	err = ss.UpdateSessionOutcome(ctx, "sst-outcome-01", "success", "done")
@@ -238,7 +231,7 @@ func TestSessionStore_UpdateSessionOutcome_ByNumericDBIDString(t *testing.T) {
 	defer db.Exec("DELETE FROM sdk_sessions WHERE claude_session_id = 'sst-outcome-02'")
 
 	ctx := context.Background()
-	id, err := ss.CreateSDKSession(ctx, "sst-outcome-02", "test-project", "prompt")
+	id, err := ss.CreateSDKSession(ctx, "sst-outcome-02", sessionTestProject(t, db), "prompt")
 	require.NoError(t, err)
 
 	err = ss.UpdateSessionOutcome(ctx, strconv.FormatInt(id, 10), "partial", "some progress")
@@ -320,7 +313,7 @@ func TestSessionStore_UpdateSessionOutcome_IdempotentRepeatedWrite(t *testing.T)
 	defer db.Exec("DELETE FROM sdk_sessions WHERE claude_session_id = 'sst-outcome-03'")
 
 	ctx := context.Background()
-	id, err := ss.CreateSDKSession(ctx, "sst-outcome-03", "test-project", "prompt")
+	id, err := ss.CreateSDKSession(ctx, "sst-outcome-03", sessionTestProject(t, db), "prompt")
 	require.NoError(t, err)
 
 	require.NoError(t, ss.UpdateSessionOutcome(ctx, "sst-outcome-03", "success", "first reason"))
@@ -342,7 +335,7 @@ func TestSessionStore_UpdateSessionOutcome_ConflictingSecondOutcome(t *testing.T
 	defer db.Exec("DELETE FROM sdk_sessions WHERE claude_session_id = 'sst-outcome-04'")
 
 	ctx := context.Background()
-	_, err := ss.CreateSDKSession(ctx, "sst-outcome-04", "test-project", "prompt")
+	_, err := ss.CreateSDKSession(ctx, "sst-outcome-04", sessionTestProject(t, db), "prompt")
 	require.NoError(t, err)
 
 	require.NoError(t, ss.UpdateSessionOutcome(ctx, "sst-outcome-04", "partial", "first"))
@@ -374,7 +367,7 @@ func TestSessionStore_GetOutcome(t *testing.T) {
 
 	ctx := context.Background()
 
-	_, err := ss.CreateSDKSession(ctx, "sst-getoutcome-01", "project", "")
+	_, err := ss.CreateSDKSession(ctx, "sst-getoutcome-01", sessionTestProject(t, db), "")
 	require.NoError(t, err)
 
 	outcome, err := ss.GetOutcome(ctx, "sst-getoutcome-01")
@@ -407,7 +400,8 @@ func TestSessionStore_SessionFields(t *testing.T) {
 
 	ctx := context.Background()
 
-	id, err := ss.CreateSDKSession(ctx, "sst-fields-01", "test-project", "test prompt")
+	project := sessionTestProject(t, db)
+	id, err := ss.CreateSDKSession(ctx, "sst-fields-01", project, "test prompt")
 	require.NoError(t, err)
 
 	sess, err := ss.GetSessionByID(ctx, id)
@@ -418,7 +412,7 @@ func TestSessionStore_SessionFields(t *testing.T) {
 	assert.Equal(t, "sst-fields-01", sess.ClaudeSessionID)
 	assert.True(t, sess.SDKSessionID.Valid)
 	assert.Equal(t, "sst-fields-01", sess.SDKSessionID.String)
-	assert.Equal(t, "test-project", sess.Project)
+	assert.Equal(t, project, sess.Project)
 	assert.True(t, sess.UserPrompt.Valid)
 	assert.Equal(t, "test prompt", sess.UserPrompt.String)
 	assert.Equal(t, int64(0), sess.PromptCounter)
@@ -436,16 +430,20 @@ func TestSessionStore_ListSDKSessions(t *testing.T) {
 	defer db.Exec("DELETE FROM sdk_sessions WHERE claude_session_id IN ('sst-list-01', 'sst-list-02', 'sst-list-03')")
 
 	ctx := context.Background()
-	_, _ = ss.CreateSDKSession(ctx, "sst-list-01", "list-project", "")
-	_, _ = ss.CreateSDKSession(ctx, "sst-list-02", "list-project", "")
-	_, _ = ss.CreateSDKSession(ctx, "sst-list-03", "other-project", "")
+	project := sessionTestProject(t, db)
+	_, err := ss.CreateSDKSession(ctx, "sst-list-01", project, "")
+	require.NoError(t, err)
+	_, err = ss.CreateSDKSession(ctx, "sst-list-02", project, "")
+	require.NoError(t, err)
+	_, err = ss.CreateSDKSession(ctx, "sst-list-03", sessionTestProject(t, db), "")
+	require.NoError(t, err)
 
 	// Project filter
-	sessions, total, err := ss.ListSDKSessions(ctx, "list-project", 10, 0, 0, 0, 0)
+	sessions, total, err := ss.ListSDKSessions(ctx, project, 10, 0, 0, 0, 0)
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, total, int64(2))
 	for _, s := range sessions {
-		assert.Equal(t, "list-project", s.Project)
+		assert.Equal(t, project, s.Project)
 	}
 
 	// No filter
@@ -461,7 +459,7 @@ func TestSessionStore_UpdateInjectionStrategy(t *testing.T) {
 	defer db.Exec("DELETE FROM sdk_sessions WHERE claude_session_id = 'sst-strategy-01'")
 
 	ctx := context.Background()
-	id, err := ss.CreateSDKSession(ctx, "sst-strategy-01", "test-project", "")
+	id, err := ss.CreateSDKSession(ctx, "sst-strategy-01", sessionTestProject(t, db), "")
 	require.NoError(t, err)
 
 	err = ss.UpdateInjectionStrategy(ctx, "sst-strategy-01", "unified")
@@ -480,7 +478,7 @@ func TestSessionStore_UpdateUtilityPropagatedAt(t *testing.T) {
 	defer db.Exec("DELETE FROM sdk_sessions WHERE claude_session_id = 'sst-util-01'")
 
 	ctx := context.Background()
-	_, err := ss.CreateSDKSession(ctx, "sst-util-01", "test-project", "")
+	_, err := ss.CreateSDKSession(ctx, "sst-util-01", sessionTestProject(t, db), "")
 	require.NoError(t, err)
 
 	err = ss.UpdateUtilityPropagatedAt(ctx, "sst-util-01")
@@ -498,7 +496,7 @@ func TestSessionStore_UpdateUtilityPropagatedAtIfStale(t *testing.T) {
 	defer db.Exec("DELETE FROM sdk_sessions WHERE claude_session_id = 'sst-stale-01'")
 
 	ctx := context.Background()
-	_, err := ss.CreateSDKSession(ctx, "sst-stale-01", "test-project", "")
+	_, err := ss.CreateSDKSession(ctx, "sst-stale-01", sessionTestProject(t, db), "")
 	require.NoError(t, err)
 
 	// First call: session has no propagation timestamp → should claim.
@@ -519,7 +517,7 @@ func TestSessionStore_ClearUtilityPropagatedAt(t *testing.T) {
 	defer db.Exec("DELETE FROM sdk_sessions WHERE claude_session_id = 'sst-clear-util-01'")
 
 	ctx := context.Background()
-	_, err := ss.CreateSDKSession(ctx, "sst-clear-util-01", "test-project", "")
+	_, err := ss.CreateSDKSession(ctx, "sst-clear-util-01", sessionTestProject(t, db), "")
 	require.NoError(t, err)
 
 	require.NoError(t, ss.UpdateUtilityPropagatedAt(ctx, "sst-clear-util-01"))
@@ -538,13 +536,14 @@ func TestSessionStore_GetStrategyStats(t *testing.T) {
 	defer db.Exec("DELETE FROM sdk_sessions WHERE claude_session_id IN ('sst-stats-01', 'sst-stats-02')")
 
 	ctx := context.Background()
-	id1, _ := ss.CreateSDKSession(ctx, "sst-stats-01", "test-project", "")
-	id2, _ := ss.CreateSDKSession(ctx, "sst-stats-02", "test-project", "")
-	_ = ss.UpdateInjectionStrategy(ctx, "sst-stats-01", "unified")
-	_ = ss.UpdateInjectionStrategy(ctx, "sst-stats-02", "unified")
-	_ = ss.UpdateSessionOutcome(ctx, "sst-stats-01", "success", "ok")
-	_ = id1
-	_ = id2
+	project := sessionTestProject(t, db)
+	_, err := ss.CreateSDKSession(ctx, "sst-stats-01", project, "")
+	require.NoError(t, err)
+	_, err = ss.CreateSDKSession(ctx, "sst-stats-02", project, "")
+	require.NoError(t, err)
+	require.NoError(t, ss.UpdateInjectionStrategy(ctx, "sst-stats-01", "unified"))
+	require.NoError(t, ss.UpdateInjectionStrategy(ctx, "sst-stats-02", "unified"))
+	require.NoError(t, ss.UpdateSessionOutcome(ctx, "sst-stats-01", "success", "ok"))
 
 	stats, err := ss.GetStrategyStats(ctx)
 	require.NoError(t, err)
@@ -563,8 +562,10 @@ func TestSessionStore_GetLearningCurve(t *testing.T) {
 	defer db.Exec("DELETE FROM sdk_sessions WHERE claude_session_id = 'sst-curve-01'")
 
 	ctx := context.Background()
-	_, _ = ss.CreateSDKSession(ctx, "sst-curve-01", "test-project", "")
-	_ = ss.UpdateSessionOutcome(ctx, "sst-curve-01", "success", "done")
+	project := sessionTestProject(t, db)
+	_, err := ss.CreateSDKSession(ctx, "sst-curve-01", project, "")
+	require.NoError(t, err)
+	require.NoError(t, ss.UpdateSessionOutcome(ctx, "sst-curve-01", "success", "done"))
 
 	rows, err := ss.GetLearningCurve(ctx, 30, "")
 	require.NoError(t, err)
@@ -572,7 +573,7 @@ func TestSessionStore_GetLearningCurve(t *testing.T) {
 	_ = rows
 
 	// Negative days defaults to 30.
-	rows2, err := ss.GetLearningCurve(ctx, -1, "test-project")
+	rows2, err := ss.GetLearningCurve(ctx, -1, project)
 	require.NoError(t, err)
 	_ = rows2
 }

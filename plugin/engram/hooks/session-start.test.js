@@ -818,3 +818,84 @@ test('handleSessionStart returns no-cache banner when live fetch fails and cache
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+function runLifecycleSessionStart(configured) {
+  const { spawnSync } = require('node:child_process');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-lifecycle-session-start-'));
+  const cwd = path.join(root, 'unbound');
+  const data = path.join(root, 'data');
+  fs.mkdirSync(cwd);
+  fs.mkdirSync(data);
+  const script = `
+    let acquisitions = 0;
+    let contextRequests = 0;
+    require('node:https').request = () => {
+      acquisitions++;
+      throw new Error('UNEXPECTED_SETUP_ACQUISITION');
+    };
+    global.fetch = async () => {
+      contextRequests++;
+      throw new Error('UNEXPECTED_SCOPED_CONTEXT_REQUEST');
+    };
+    process.on('exit', () => process.stderr.write('lifecycle-fixture ' + JSON.stringify({ acquisitions, contextRequests }) + '\\n'));
+    const lib = require(${JSON.stringify(path.join(__dirname, 'lib.js'))});
+    const { handleSessionStart } = require(${JSON.stringify(path.join(__dirname, 'session-start.js'))});
+    lib.RunHook('SessionStart', handleSessionStart);
+  `;
+  try {
+    if (configured === 'file') {
+      fs.writeFileSync(path.join(root, 'absent-config.json'), JSON.stringify({
+        server_url: 'http://127.0.0.1:9', client_instance_id: 'lifecycle-owned',
+      }));
+    }
+    const result = spawnSync(process.execPath, ['-e', script], {
+      cwd,
+      input: JSON.stringify({ session_id: '', cwd: configured ? '' : cwd, hook_event_name: 'SessionStart' }),
+      encoding: 'utf8',
+      timeout: 10000,
+      env: {
+        PATH: process.env.PATH, SystemRoot: process.env.SystemRoot,
+        TEMP: process.env.TEMP, TMP: process.env.TMP,
+        HOME: root, USERPROFILE: root,
+        PLUGIN_ROOT: path.resolve(__dirname, '..'), PLUGIN_DATA: data, ENGRAM_DATA_DIR: data,
+        ENGRAM_CONFIG_FILE: path.join(root, 'absent-config.json'),
+        ...(configured === true ? { ENGRAM_URL: 'http://127.0.0.1:9', ENGRAM_CLIENT_INSTANCE_ID: 'lifecycle-owned' } : {}),
+      },
+    });
+    assert.equal(result.error, undefined, 'child runner error is INVALID, not lifecycle RED');
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(fs.existsSync(path.join(cwd, '.engram-project')), false, 'setup must not invent project identity');
+    assert.equal(fs.existsSync(path.join(cwd, '.git')), false);
+    const diagnostic = result.stderr.match(/lifecycle-fixture (\{[^\n]+\})/);
+    assert.ok(diagnostic, result.stderr);
+    return { output: JSON.parse(result.stdout), stderr: result.stderr, ...JSON.parse(diagnostic[1]) };
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}
+
+test('plugin lifecycle: fresh unconfigured SessionStart reaches unscoped setup before client acquisition', (t) => {
+  const result = runLifecycleSessionStart(false);
+  t.diagnostic(JSON.stringify(result));
+  assert.match(result.output.hookSpecificOutput?.additionalContext || '', /<engram-setup>[\s\S]*Set ENGRAM_URL[\s\S]*<\/engram-setup>/);
+  assert.equal(result.acquisitions, 0, 'unscoped setup has no native client prerequisite');
+  assert.equal(result.contextRequests, 0);
+  assert.doesNotMatch(JSON.stringify(result.output), /engram-static-memories|user-behavior-rules|open-issues|project_id/);
+});
+
+test('plugin lifecycle: configured SessionStart still fails closed when host project context is missing', (t) => {
+  const result = runLifecycleSessionStart(true);
+  t.diagnostic(JSON.stringify(result));
+  assert.deepEqual(result.output, { continue: true });
+  assert.match(result.stderr, /PROJECT_CONTEXT_REQUIRED/);
+  assert.doesNotMatch(JSON.stringify(result.output), /engram-setup|engram-static-memories/);
+  assert.equal(result.acquisitions, 0);
+  assert.equal(result.contextRequests, 0);
+});
+
+test('configured SessionStart hydrates its file before requiring project identity', () => {
+  const result = runLifecycleSessionStart('file');
+  assert.deepEqual(result.output, { continue: true });
+  assert.match(result.stderr, /PROJECT_CONTEXT_REQUIRED/);
+  assert.doesNotMatch(JSON.stringify(result.output), /engram-setup|engram-static-memories/);
+  assert.equal(result.acquisitions, 0);
+  assert.equal(result.contextRequests, 0);
+});

@@ -20,8 +20,7 @@ import (
 )
 
 const (
-	defaultDocumentListLimit       = 50
-	maxDocumentListLimit           = 200
+	maxDocumentListLimit            = 200
 	documentSelectionInvalidMessage = "invalid document selection"
 	engramRequestIDHeader           = "X-Engram-Request-ID"
 )
@@ -32,6 +31,7 @@ type versionedDocumentStore interface {
 	ReadVersion(ctx context.Context, path, project string, version int) (*gormdb.VersionedDocument, error)
 	ReadByID(ctx context.Context, id int64) (*gormdb.VersionedDocument, error)
 	List(ctx context.Context, project, docType, pathPrefix string, limit int) ([]gormdb.VersionedDocument, error)
+	ListPage(context.Context, string, []string, string, string, int, int) ([]gormdb.VersionedDocument, int64, error)
 	GetHistory(ctx context.Context, path, project string, limit int) ([]gormdb.VersionedDocument, error)
 	AddComment(ctx context.Context, documentID int64, author, content string, lineStart, lineEnd *int) (int64, error)
 	GetComments(ctx context.Context, documentID int64) ([]gormdb.VersionedDocumentComment, error)
@@ -58,12 +58,11 @@ type documentListItem struct {
 }
 
 type documentListResponse struct {
-	Documents  []documentListItem `json:"documents"`
-	Project    string             `json:"project"`
-	DocType    string             `json:"doc_type,omitempty"`
-	PathPrefix string             `json:"path_prefix,omitempty"`
-	Count      int                `json:"count"`
-	Limit      int                `json:"limit"`
+	Items   []documentListItem `json:"items"`
+	Total   int64              `json:"total"`
+	Offset  int                `json:"offset"`
+	Limit   int                `json:"limit"`
+	HasMore bool               `json:"has_more"`
 }
 
 type documentReadResponse struct {
@@ -522,21 +521,6 @@ func parseDocumentRequiredQuery(r *http.Request, name string) (string, error) {
 	return value, nil
 }
 
-func parseDocumentListLimit(raw string) (int, error) {
-	value := strings.TrimSpace(raw)
-	if value == "" {
-		return defaultDocumentListLimit, nil
-	}
-	limit, err := strconv.Atoi(value)
-	if err != nil || limit <= 0 {
-		return 0, fmt.Errorf("invalid limit %q", raw)
-	}
-	if limit > maxDocumentListLimit {
-		limit = maxDocumentListLimit
-	}
-	return limit, nil
-}
-
 func parseDocumentHistoryLimit(raw string) (int, error) {
 	value := strings.TrimSpace(raw)
 	if value == "" {
@@ -942,6 +926,24 @@ func writeDocumentOperationFailure(w http.ResponseWriter, status int, requestID,
 	writeJSONStatus(w, status, documentOperationResponse{RequestID: requestID, OperationState: state})
 }
 
+// handleListDocuments godoc
+// @Summary List current documents for one canonical project
+// @Description Pages public metadata of the latest version per path, ordered by created_at DESC, id DESC. Content and arbitrary JSON metadata are not searched.
+// @Tags Documents
+// @Produce json
+// @Security ApiKeyAuth
+// @Param project query string true "Existing canonical project ID"
+// @Param query query string false "Literal case-insensitive path/type/author substring, maximum 1024 UTF-8 bytes"
+// @Param doc_type query []string false "Repeat literal latest-version document types; OR within types, AND other criteria before count/page; at most six raw values, each 128 UTF-8 bytes" collectionFormat(multi)
+// @Param path_prefix query string false "Literal path prefix"
+// @Param offset query int false "Visible rows to skip (default 0)"
+// @Param limit query int false "Page size 1..500 (default 50)"
+// @Success 200 {object} documentListResponse
+// @Failure 400 {object} documentErrorResponse "invalid reader parameters"
+// @Failure 403 {object} documentErrorResponse "project read forbidden"
+// @Failure 503 {object} documentErrorResponse "store unavailable"
+// @Failure 500 {object} documentErrorResponse "read unavailable"
+// @Router /api/documents [get]
 func (s *Service) handleListDocuments(w http.ResponseWriter, r *http.Request) {
 	store := s.currentDocumentStore()
 	if store == nil {
@@ -949,33 +951,33 @@ func (s *Service) handleListDocuments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	project, err := parseDocumentRequiredQuery(r, "project")
+	page, err := parseKnowledgePage(r)
 	if err != nil {
 		writeDocumentError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	docType := strings.TrimSpace(r.URL.Query().Get("doc_type"))
-	pathPrefix := strings.TrimSpace(r.URL.Query().Get("path_prefix"))
-	limit, err := parseDocumentListLimit(r.URL.Query().Get("limit"))
-	if err != nil {
-		writeDocumentError(w, http.StatusBadRequest, err.Error())
+	pathPrefix := r.URL.Query().Get("path_prefix")
+	if !boundedKnowledgeText(pathPrefix, 4096) {
+		writeDocumentError(w, http.StatusBadRequest, "invalid document filters")
 		return
 	}
-
-	docs, err := store.List(r.Context(), project, docType, pathPrefix, limit)
-	if err != nil {
-		writeDocumentError(w, http.StatusInternalServerError, err.Error())
+	pathPrefix = strings.TrimSpace(pathPrefix)
+	if !s.authorizeKnowledgeProject(w, r, page.project) {
 		return
 	}
-
+	docs, total, err := store.ListPage(r.Context(), page.project, page.types, pathPrefix, page.query, page.limit, page.offset)
+	if err != nil {
+		if errors.Is(err, gormdb.ErrKnowledgeProjectForbidden) {
+			writeDocumentError(w, http.StatusForbidden, "project read forbidden")
+			return
+		}
+		writeDocumentError(w, http.StatusInternalServerError, "document read unavailable")
+		return
+	}
 	items := documentListItems(docs)
 	writeJSON(w, documentListResponse{
-		Documents:  items,
-		Project:    project,
-		DocType:    docType,
-		PathPrefix: pathPrefix,
-		Count:      len(items),
-		Limit:      limit,
+		Items: items, Total: total, Offset: page.offset, Limit: page.limit,
+		HasMore: knowledgeHasMore(total, page.offset, len(items)),
 	})
 }
 
@@ -991,20 +993,28 @@ func (s *Service) handleDocumentHistory(w http.ResponseWriter, r *http.Request) 
 		writeDocumentError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	project, err := parseDocumentRequiredQuery(r, "project")
+	page, err := parseKnowledgePage(r)
 	if err != nil {
 		writeDocumentError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	project := page.project
 	limit, err := parseDocumentHistoryLimit(r.URL.Query().Get("limit"))
 	if err != nil {
 		writeDocumentError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if !s.authorizeKnowledgeProject(w, r, project) {
+		return
+	}
 
 	docs, err := store.GetHistory(r.Context(), path, project, limit)
 	if err != nil {
-		writeDocumentError(w, http.StatusInternalServerError, err.Error())
+		if errors.Is(err, gormdb.ErrKnowledgeProjectForbidden) {
+			writeDocumentError(w, http.StatusForbidden, "project read forbidden")
+			return
+		}
+		writeDocumentError(w, http.StatusInternalServerError, "document history unavailable")
 		return
 	}
 
@@ -1029,9 +1039,13 @@ func (s *Service) handleReadDocument(w http.ResponseWriter, r *http.Request) {
 		writeDocumentError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	project, err := parseDocumentRequiredQuery(r, "project")
+	page, err := parseKnowledgePage(r)
 	if err != nil {
 		writeDocumentError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	project := page.project
+	if !s.authorizeKnowledgeProject(w, r, project) {
 		return
 	}
 
@@ -1048,11 +1062,15 @@ func (s *Service) handleReadDocument(w http.ResponseWriter, r *http.Request) {
 		doc, err = store.ReadVersion(r.Context(), path, project, version)
 	}
 	if err != nil {
+		if errors.Is(err, gormdb.ErrKnowledgeProjectForbidden) {
+			writeDocumentError(w, http.StatusForbidden, "project read forbidden")
+			return
+		}
 		if errors.Is(err, gormlib.ErrRecordNotFound) {
 			writeDocumentError(w, http.StatusNotFound, "document not found")
 			return
 		}
-		writeDocumentError(w, http.StatusInternalServerError, err.Error())
+		writeDocumentError(w, http.StatusInternalServerError, "document read unavailable")
 		return
 	}
 

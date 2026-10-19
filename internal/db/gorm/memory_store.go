@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"sort"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"gorm.io/gorm/clause"
 
 	"github.com/thebtf/engram/internal/auditcontext"
+	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -390,7 +392,7 @@ func (s *MemoryStore) Create(ctx context.Context, mem *models.Memory) (*models.M
 	copyPrivacyFields(row, mem)
 	copyPrincipalMemoryFields(row, mem)
 
-	if err := s.db.WithContext(ctx).Create(row).Error; err != nil {
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error { return createMemoryRowForProjectTx(ctx, tx, row) }); err != nil {
 		return nil, fmt.Errorf("create memory for project %q: %w", mem.Project, err)
 	}
 	return memoryRowToModel(row), nil
@@ -420,7 +422,7 @@ func (s *MemoryStore) CreateWithLifecycle(ctx context.Context, mem *models.Memor
 	copyPrivacyFields(row, mem)
 	copyPrincipalMemoryFields(row, mem)
 
-	if err := s.db.WithContext(ctx).Create(row).Error; err != nil {
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error { return createMemoryRowForProjectTx(ctx, tx, row) }); err != nil {
 		return nil, fmt.Errorf("create memory with lifecycle for project %q: %w", mem.Project, err)
 	}
 	return memoryRowToModel(row), nil
@@ -447,10 +449,17 @@ func createMemoryWithLifecycleTx(ctx context.Context, tx *gorm.DB, mem *models.M
 	row := memoryRowForCreate(mem, now, true)
 	copyPrivacyFields(row, mem)
 	copyPrincipalMemoryFields(row, mem)
-	if err := tx.WithContext(ctx).Create(row).Error; err != nil {
+	if err := createMemoryRowForProjectTx(ctx, tx, row); err != nil {
 		return nil, fmt.Errorf("create memory with lifecycle (tx) for project %q: %w", mem.Project, err)
 	}
 	return memoryRowToModel(row), nil
+}
+
+func createMemoryRowForProjectTx(ctx context.Context, tx *gorm.DB, row *Memory) error {
+	if err := ensureLogicalProjectForWrite(ctx, tx, row.Project); err != nil {
+		return err
+	}
+	return tx.WithContext(ctx).Create(row).Error
 }
 
 // CreateWithLifecycleIfTagAbsent inserts a lifecycle memory only when no active
@@ -503,7 +512,7 @@ func (s *MemoryStore) CreateWithLifecycleIfTagAbsent(
 		// CreateWithLifecycle — codex P1 PR #221).
 		copyPrivacyFields(row, mem)
 		copyPrincipalMemoryFields(row, mem)
-		if err := tx.Create(row).Error; err != nil {
+		if err := createMemoryRowForProjectTx(ctx, tx, row); err != nil {
 			return fmt.Errorf("create memory with lifecycle for project %q: %w", mem.Project, err)
 		}
 		created = memoryRowToModel(row)
@@ -612,6 +621,80 @@ func (s *MemoryStore) List(ctx context.Context, project string, limit int) ([]*m
 		return nil, fmt.Errorf("list memories for project %q: %w", project, err)
 	}
 	return result, nil
+}
+
+func (s *MemoryStore) visibleKnowledgeQuery(ctx context.Context, project string, caller scope.KeycardContext, opts scope.MemoryVisibilityOptions) (*gorm.DB, error) {
+	q, err := canonicalProjectRows(ctx, s.db.Model(&Memory{}), project, "memories", "m")
+	if err != nil {
+		return nil, err
+	}
+	return memoryReaderPrivacy(q.Where("m.deleted_at IS NULL"), caller, opts), nil
+}
+
+// GetVisible scopes the exact-ID read before loading content. Detail retains
+// Get's nondeleted-row semantics, rather than the list's active-only corpus.
+func (s *MemoryStore) GetVisible(ctx context.Context, id int64, project string, caller scope.KeycardContext, opts scope.MemoryVisibilityOptions) (*models.Memory, error) {
+	q, err := s.visibleKnowledgeQuery(ctx, project, caller, opts)
+	if err != nil {
+		return nil, err
+	}
+	var row Memory
+	if err := q.Where("m.id = ?", id).Take(&row).Error; err != nil {
+		return nil, err
+	}
+	memory := memoryRowToModel(&row)
+	memory.Project = project
+	return memory, nil
+}
+
+// ListVisiblePage applies the shared read policy before both count and page.
+// The caller supplies a server-authorized canonical project, never a label.
+func (s *MemoryStore) ListVisiblePage(ctx context.Context, project, query string, filters, epistemicTypes []string, caller scope.KeycardContext, opts scope.MemoryVisibilityOptions, limit, offset int) ([]*models.Memory, int64, error) {
+	if project == "" || limit < 1 || limit > 500 || offset < 0 || len(filters) > 6 || len(epistemicTypes) > 6 {
+		return nil, 0, fmt.Errorf("invalid memory page")
+	}
+	q, err := s.visibleKnowledgeQuery(ctx, project, caller, opts)
+	if err != nil {
+		return nil, 0, err
+	}
+	q = baseMemoryListQuery(q).Where("m.status = 'active'")
+	if len(epistemicTypes) != 0 {
+		q = q.Where("m.epistemic_type IN ?", epistemicTypes)
+	}
+	if query != "" {
+		q = q.Where("LOWER(m.content) LIKE ? ESCAPE '\\'", "%"+escapeSQLLike(strings.ToLower(query))+"%")
+	}
+	// The eligible corpus remains status=active. Zero-valued omitempty metrics
+	// are absent in the DTO, not known zero-confidence values.
+	for _, filter := range filters {
+		switch filter {
+		case "all", "active":
+		case "flagged":
+			q = q.Where("FALSE")
+		case "stale":
+			q = q.Where("COALESCE(m.updated_at, m.created_at) <= ? AND COALESCE(m.citation_count, 0) = 0", time.Now().UTC().Add(-30*24*time.Hour))
+		case "low":
+			q = q.Where("m.confidence <> 0 AND m.confidence >= ? AND m.confidence < ?", -math.MaxFloat64, 0.85)
+		case "chain":
+			q = q.Where(`m.superseded_by IS NOT NULL OR m.tags @> ?::jsonb OR m.tags @> ?::jsonb OR m.tags @> ?::jsonb`, `["superseded"]`, `["replace"]`, `["replacement"]`)
+		default:
+			return nil, 0, fmt.Errorf("invalid memory filter")
+		}
+	}
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var rows []Memory
+	if err := q.Order("m.created_at DESC, m.id DESC").Limit(limit).Offset(offset).Find(&rows).Error; err != nil {
+		return nil, 0, err
+	}
+	items := make([]*models.Memory, len(rows))
+	for i := range rows {
+		items[i] = memoryRowToModel(&rows[i])
+		items[i].Project = project
+	}
+	return items, total, nil
 }
 
 // ListOptions controls the optional filters applied by ListWithFilters.

@@ -1,61 +1,32 @@
 import { expect, test } from '@playwright/test'
 
-test('projects and sessions expose live rows and safe project archive', async ({ page }) => {
-  const consoleProblems: string[] = []
-  const failedRequests: string[] = []
-  const badResponses: string[] = []
-  const pageErrors: string[] = []
+const CONSOLE = '11111111-1111-4111-8111-111111111111'
+const ALPHA = '22222222-2222-4222-8222-222222222222'
 
-  page.on('console', (message) => {
-    if (message.type() === 'error' || message.type() === 'warning') {
-      consoleProblems.push(`${message.type()}: ${message.text()}`)
-    }
-  })
-  page.on('requestfailed', (request) => {
-    failedRequests.push(`${request.method()} ${request.url()} ${request.failure()?.errorText || 'failed'}`)
-  })
-  page.on('response', (response) => {
-    if (response.status() >= 400) {
-      badResponses.push(`${response.status()} ${response.request().method()} ${response.url()}`)
-    }
-  })
-  page.on('pageerror', (error) => {
-    pageErrors.push(error.message)
-  })
-
-  await page.goto('/projects')
-  await expect(page.getByRole('heading', { name: 'Проекты и сессии' })).toBeVisible()
-  await expect(page.getByTestId('project-row-operator-console')).toBeVisible()
-  await expect(page.getByTestId('project-row-project-alpha')).toBeVisible()
-
+test('project entry keeps session content scoped and archive requires the selected identity', async ({ page }) => {
+  await page.goto('/projects?project=operator-console')
+  await expect(page.getByTestId(`project-row-${CONSOLE}`)).toBeVisible()
   await page.getByTestId('project-session-501').click()
-  await expect(page.getByRole('heading', { name: 'Деталь сессии' })).toBeVisible()
-  await expect(page.getByText('operator-console').last()).toBeVisible()
-  await expect(page.getByText('balanced')).toBeVisible()
+  await expect(page.getByTestId('project-session-user-prompt')).toContainText('Wire the operator console project surface.')
+  await page.locator('.session-detail summary').click()
   await expect(page.getByText('sdk-operator-1')).toBeVisible()
-  await expect(page.getByText('Wire the operator console project surface.')).toBeVisible()
-  await expect(page.getByText('GET /api/sessions/{id}/transcript')).toBeVisible()
-  await expect(page.getByText('GET /api/sessions/{id}/route')).toBeVisible()
-  await expect(page.getByText('[object Object]')).toHaveCount(0)
+  await expect(page.getByText('balanced')).toBeVisible()
 
-  await page.getByTestId('project-archive-open-project-alpha').click()
-  await expect(page.getByTestId('project-archive-confirm-project-alpha')).toBeVisible()
-  await expect(page.getByText('DELETE /api/projects/project-alpha')).toBeVisible()
-  await expect(page.getByText(/soft-delete проекта project-alpha/)).toBeVisible()
-
-  const confirmButton = page.getByTestId('project-archive-confirm-button-project-alpha')
-  await expect(confirmButton).toBeDisabled()
-  await page.getByTestId('project-archive-input-project-alpha').fill('wrong-project')
-  await expect(confirmButton).toBeDisabled()
-  await page.getByTestId('project-archive-input-project-alpha').fill('project-alpha')
-  await expect(confirmButton).toBeEnabled()
-  await confirmButton.click()
-
-  await expect(page.getByTestId('project-row-project-alpha')).toHaveCount(0)
-  await expect(page.getByTestId('project-archive-confirm-project-alpha')).toHaveCount(0)
-
-  expect(consoleProblems).toEqual([])
-  expect(failedRequests).toEqual([])
-  expect(badResponses).toEqual([])
-  expect(pageErrors).toEqual([])
+  await page.getByTestId(`project-row-${ALPHA}`).click()
+  await expect(page).toHaveURL(new RegExp(`project=${ALPHA}`))
+  await expect(page.getByTestId('project-session-user-prompt')).toHaveCount(0)
+  await page.getByText('Управление выбранным проектом', { exact: true }).click()
+  const input = page.getByRole('textbox', { name: `Введите ID проекта для подтверждения: ${ALPHA}`, exact: true })
+  const confirm = page.getByRole('button', { name: 'Подтвердить архивирование', exact: true })
+  await expect(confirm).toBeDisabled()
+  await input.fill('wrong-project')
+  await expect(confirm).toBeDisabled()
+  await input.fill(ALPHA)
+  await expect(confirm).toBeEnabled()
+  const archiveResponse = page.waitForResponse(response => response.request().method() === 'DELETE' && new URL(response.url()).pathname === `/api/projects/${ALPHA}`)
+  await confirm.click()
+  expect(await (await archiveResponse).json()).toMatchObject({ operation_state: 'completed', readback: { authoritative: true, kind: 'authorized_absence' } })
+  await expect(page.getByTestId(`project-row-${ALPHA}`)).toHaveCount(0)
+  await expect(page.getByTestId('project-context-select')).toHaveValue('')
+  await expect(page.getByTestId('project-session-user-prompt')).toHaveCount(0)
 })

@@ -1,8 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Database, RefreshCw, Tag } from 'lucide-vue-next'
 import { useUiI18n } from '@/composables/useUiI18n'
-import { fetchMemories, fetchProjects, type Memory } from '@/utils/api'
+import { fetchMemories, type Memory } from '@/utils/api'
+import type { ReaderPage } from '@/utils/projectCatalog'
+import { useProjectCatalog } from '@/composables/useProjectCatalog'
+import ProjectCatalogStatus from '@/components/ProjectCatalogStatus.vue'
 import { safeAbsoluteDate, truncate } from '@/utils/formatters'
 import EmptyState from '@/components/layout/EmptyState.vue'
 import { Button } from '@/components/ui/button'
@@ -24,14 +27,16 @@ import {
   TableRow,
 } from '@/components/ui/table'
 
-const projects = ref<string[]>([])
-const selectedProject = ref('')
-const memories = ref<Memory[]>([])
+const { projects, unresolved, selectedProject, selectionPending, selectionError, unresolvedReference, projectName, refresh } = useProjectCatalog()
+const page = ref<ReaderPage<Memory> | null>(null)
+const memories = computed(() => page.value?.items ?? [])
+const offset = ref(0)
+const searchQuery = ref('')
 const selectedMemoryId = ref<number | null>(null)
 const loading = ref(false)
 const bootLoading = ref(true)
 const error = ref<string | null>(null)
-const { t } = useUiI18n()
+const { locale, t } = useUiI18n()
 
 let abortController: AbortController | null = null
 
@@ -39,47 +44,47 @@ const selectedMemory = computed(() =>
   memories.value.find(memory => memory.id === selectedMemoryId.value) ?? null,
 )
 
-async function loadProjects() {
-  projects.value = await fetchProjects()
-  if (!selectedProject.value && projects.value.length > 0) {
-    selectedProject.value = projects.value[0]
-  }
-}
 
 async function loadMemories() {
-  if (!selectedProject.value) {
-    memories.value = []
+  abortController?.abort()
+  if (selectionPending.value || selectionError.value || !selectedProject.value || selectedProject.value === 'all') {
+    page.value = null
     selectedMemoryId.value = null
+    loading.value = false
     return
   }
 
-  abortController?.abort()
-  abortController = new AbortController()
+  const project = selectedProject.value
+  const request = new AbortController()
+  abortController = request
+  const from = offset.value
+  const query = searchQuery.value
 
   loading.value = true
   error.value = null
+  page.value = null
   try {
-    const items = await fetchMemories(selectedProject.value, 100, abortController.signal)
-    memories.value = items
-    if (!items.some(memory => memory.id === selectedMemoryId.value)) {
-      selectedMemoryId.value = items[0]?.id ?? null
+    const result = await fetchMemories({ project, offset: from, limit: 100, query }, request.signal)
+    if (request.signal.aborted || selectionPending.value || selectedProject.value !== project || offset.value !== from || searchQuery.value !== query) return
+    page.value = result
+    if (!result.items.some(memory => memory.id === selectedMemoryId.value)) {
+      selectedMemoryId.value = result.items[0]?.id ?? null
     }
-  } catch (err: any) {
-    if (err?.name !== 'AbortError') {
-      error.value = err?.message || t.value.memories.loadMemoriesError
-      memories.value = []
+  } catch (err) {
+    if (!request.signal.aborted) {
+      error.value = err instanceof Error ? err.message : t.value.memories.loadMemoriesError
+      page.value = null
       selectedMemoryId.value = null
     }
   } finally {
-    loading.value = false
+    if (abortController === request) loading.value = false
   }
 }
 
 onMounted(async () => {
   bootLoading.value = true
   try {
-    await loadProjects()
-    await loadMemories()
+    await refresh()
   } catch (err: any) {
     error.value = err?.message || t.value.memories.loadProjectsError
   } finally {
@@ -87,15 +92,14 @@ onMounted(async () => {
   }
 })
 
-watch(selectedProject, async (next, prev) => {
-  if (next && next !== prev) {
-    await loadMemories()
-  }
-})
+watch([selectedProject, searchQuery], () => { offset.value = 0 })
+watch([selectedProject, selectionPending, offset, searchQuery], () => { void loadMemories() })
+onUnmounted(() => { abortController?.abort() })
 </script>
 
 <template>
   <div class="space-y-4 pt-4">
+    <ProjectCatalogStatus :records="unresolved" :pending="selectionPending" :error="selectionError" :reference="unresolvedReference" />
     <div class="flex items-center justify-between gap-3 flex-wrap">
       <div class="flex items-center gap-3">
         <Database class="size-5 text-primary" />
@@ -112,16 +116,24 @@ watch(selectedProject, async (next, prev) => {
             <SelectValue :placeholder="t.memories.projectSelect" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem v-for="project in projects" :key="project" :value="project">
-              {{ project }}
+            <SelectItem v-for="project in projects" :key="project.project_id" :value="project.project_id">
+              {{ projectName(project.project_id) }}
             </SelectItem>
           </SelectContent>
         </Select>
-        <Button variant="outline" size="sm" :disabled="loading || !selectedProject" @click="loadMemories">
+        <Button variant="outline" size="sm" :disabled="loading || selectionPending || Boolean(selectionError) || !selectedProject || selectedProject === 'all'" @click="loadMemories">
           <RefreshCw :class="['size-4', loading && 'animate-spin']" />
           {{ t.common.refresh }}
         </Button>
       </div>
+    </div>
+    <label class="block text-sm">Search memories
+      <input v-model="searchQuery" type="search" class="ml-2 rounded-md border bg-background px-3 py-2" />
+    </label>
+    <div v-if="page" class="flex flex-wrap items-center gap-3 text-sm text-muted-foreground" aria-live="polite">
+      <span>{{ page.items.length ? page.offset + 1 : 0 }}–{{ page.offset + page.items.length }} / {{ page.total }}</span>
+      <Button variant="outline" size="sm" :disabled="loading || page.offset === 0" @click="offset = Math.max(0, page.offset - page.limit)">Previous page</Button>
+      <Button variant="outline" size="sm" :disabled="loading || !page.has_more" @click="offset = page.offset + page.limit">Next page</Button>
     </div>
 
     <div v-if="bootLoading" class="text-sm text-muted-foreground">
@@ -142,8 +154,8 @@ watch(selectedProject, async (next, prev) => {
     <EmptyState
       v-else-if="!loading && memories.length === 0"
       icon="fa-brain"
-      :title="t.memories.emptyTitle"
-      :description="t.memories.emptyDescription"
+      :title="locale === 'ru' ? 'На этой странице нет результатов' : 'No results on this page'"
+      :description="locale === 'ru' ? 'Данные ограничены выбранным проектом, поиском и страницей.' : 'Results are bounded by the selected project, search and page.'"
     />
 
     <div v-else class="grid gap-4 xl:grid-cols-[minmax(0,1.3fr)_minmax(320px,0.9fr)]">
@@ -151,7 +163,7 @@ watch(selectedProject, async (next, prev) => {
         <CardHeader class="pb-3">
           <CardTitle class="text-sm font-medium">{{ t.memories.listTitle }}</CardTitle>
           <CardDescription>
-            {{ t.memories.listDescription }}: <span class="font-mono">{{ selectedProject }}</span> · {{ memories.length }} записей
+            {{ t.memories.listDescription }}: {{ projectName(selectedProject) }} · {{ memories.length }} / {{ page?.total ?? 0 }}
           </CardDescription>
         </CardHeader>
         <CardContent class="pt-0">

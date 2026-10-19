@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/auth"
@@ -31,7 +32,7 @@ func newSessionStartContinuityFixture(t *testing.T) sessionStartContinuityFixtur
 		db:          db,
 		memoryStore: localgorm.NewMemoryStore(&localgorm.Store{DB: db}),
 		slotStore:   localgorm.NewContinuitySlotStore(db),
-		project:     fmt.Sprintf("grpc-session-start-continuity-%d", time.Now().UnixNano()),
+		project:     uuid.NewString(),
 	}
 	fixture.cleanupProject(t, fixture.project)
 	return fixture
@@ -202,7 +203,7 @@ func TestGetSessionStartContext_ContinuitySlotInvalidTargetsFailOpen(t *testing.
 	t.Run("cross project target", func(t *testing.T) {
 		enableSessionStartContinuity(t)
 		fixture := newSessionStartContinuityFixture(t)
-		otherProject := fixture.project + "-other"
+		otherProject := uuid.NewString()
 		fixture.cleanupProject(t, otherProject)
 		target := fixture.createMemory(t, otherProject, "cross project slot target", nil)
 		ordinary := fixture.createMemory(t, fixture.project, "ordinary candidate", nil)

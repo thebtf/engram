@@ -448,6 +448,9 @@ func fixtureClientKeycard(ctx context.Context, store *gormdb.Store, name string,
 }
 
 func seedFixtureQueueCandidates(ctx context.Context, db *gorm.DB, project string) error {
+	if err := gormdb.UpsertProject(ctx, db, project, "", "", "", project); err != nil {
+		return fmt.Errorf("register fixture queue project: %w", err)
+	}
 	candidates := gormdb.NewCandidateStore(db, nil)
 	for index := range fixtureQueueSeedCount {
 		candidate, err := models.NewCrystallizationCandidate(

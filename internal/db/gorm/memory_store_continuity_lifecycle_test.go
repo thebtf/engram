@@ -25,14 +25,11 @@ type continuityLifecycleFixture struct {
 	project   string
 }
 
-func newContinuityLifecycleFixture(t *testing.T) continuityLifecycleFixture {
+func newContinuityLifecycleFixture(t *testing.T, db *gormlib.DB) continuityLifecycleFixture {
 	t.Helper()
 
-	db, closeDB := openTestDB(t)
-	t.Cleanup(closeDB)
-
 	ctx := context.Background()
-	project := fmt.Sprintf("test-continuity-lifecycle-%d", time.Now().UnixNano())
+	project := sessionTestProject(t, db)
 	t.Cleanup(func() {
 		require.NoError(t, db.Where("action = ? AND reason LIKE ?", continuitySlotLifecycleAuditAction, "%"+project+"%").Delete(&AuditLogEntry{}).Error)
 		cleanupContinuitySlotTestProject(t, db, project)
@@ -108,6 +105,9 @@ func TestMemoryStoreInvalidationsClearContinuitySlot(t *testing.T) {
 	t.Setenv("ENGRAM_CONTINUITY_SLOT_ENABLED", "true")
 	t.Setenv("ENGRAM_VNEXT_ENABLED", "true")
 
+	db, closeDB := openTestDB(t)
+	t.Cleanup(closeDB)
+
 	cases := []struct {
 		name               string
 		invalidationAction string
@@ -176,7 +176,7 @@ func TestMemoryStoreInvalidationsClearContinuitySlot(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			fixture := newContinuityLifecycleFixture(t)
+			fixture := newContinuityLifecycleFixture(t, db)
 			ctx := continuityLifecycleAuditContext()
 
 			require.NoError(t, tc.mutate(ctx, fixture))
@@ -206,6 +206,9 @@ func TestMemoryStoreInvalidationsClearContinuitySlot(t *testing.T) {
 func TestMemoryStoreInvalidationRollbackPreservesMemoryAndContinuitySlot(t *testing.T) {
 	t.Setenv("ENGRAM_CONTINUITY_SLOT_ENABLED", "true")
 	t.Setenv("ENGRAM_VNEXT_ENABLED", "true")
+
+	db, closeDB := openTestDB(t)
+	t.Cleanup(closeDB)
 
 	sentinel := errors.New("force transaction rollback")
 	cases := []struct {
@@ -241,7 +244,7 @@ func TestMemoryStoreInvalidationRollbackPreservesMemoryAndContinuitySlot(t *test
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			fixture := newContinuityLifecycleFixture(t)
+			fixture := newContinuityLifecycleFixture(t, db)
 			ctx := continuityLifecycleAuditContext()
 
 			err := fixture.db.Transaction(func(tx *gormlib.DB) error {
@@ -265,6 +268,9 @@ func TestMemoryStoreUnrelatedLifecycleUpdatesKeepContinuitySlot(t *testing.T) {
 	t.Setenv("ENGRAM_CONTINUITY_SLOT_ENABLED", "true")
 	t.Setenv("ENGRAM_VNEXT_ENABLED", "true")
 
+	db, closeDB := openTestDB(t)
+	t.Cleanup(closeDB)
+
 	cases := []struct {
 		name   string
 		fields map[string]any
@@ -281,7 +287,7 @@ func TestMemoryStoreUnrelatedLifecycleUpdatesKeepContinuitySlot(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			fixture := newContinuityLifecycleFixture(t)
+			fixture := newContinuityLifecycleFixture(t, db)
 			ctx := continuityLifecycleAuditContext()
 
 			require.NoError(t, fixture.memories.UpdateLifecycleFields(ctx, fixture.target.ID, tc.fields))
@@ -297,7 +303,10 @@ func TestMemoryStoreInvalidationWithoutSlotDoesNotAudit(t *testing.T) {
 	t.Setenv("ENGRAM_CONTINUITY_SLOT_ENABLED", "true")
 	t.Setenv("ENGRAM_VNEXT_ENABLED", "true")
 
-	fixture := newContinuityLifecycleFixture(t)
+	db, closeDB := openTestDB(t)
+	t.Cleanup(closeDB)
+
+	fixture := newContinuityLifecycleFixture(t, db)
 	ctx := continuityLifecycleAuditContext()
 	cleared, err := fixture.slots.Clear(ctx, fixture.project)
 	require.NoError(t, err)
@@ -308,6 +317,9 @@ func TestMemoryStoreInvalidationWithoutSlotDoesNotAudit(t *testing.T) {
 }
 
 func TestMemoryStoreHardDeleteClearsContinuitySlotWhenFlagsOff(t *testing.T) {
+	db, closeDB := openTestDB(t)
+	t.Cleanup(closeDB)
+
 	cases := []struct {
 		name               string
 		continuitySlotFlag string
@@ -321,7 +333,7 @@ func TestMemoryStoreHardDeleteClearsContinuitySlotWhenFlagsOff(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("ENGRAM_CONTINUITY_SLOT_ENABLED", tc.continuitySlotFlag)
 			t.Setenv("ENGRAM_VNEXT_ENABLED", tc.vnextFlag)
-			fixture := newContinuityLifecycleFixture(t)
+			fixture := newContinuityLifecycleFixture(t, db)
 			ctx := continuityLifecycleAuditContext()
 
 			require.NoError(t, fixture.db.Transaction(func(tx *gormlib.DB) error {
@@ -342,6 +354,9 @@ func TestMemoryStoreHardDeleteClearsContinuitySlotWhenFlagsOff(t *testing.T) {
 func TestMemoryStoreInvalidationsClearSlotAfterConcurrentSet(t *testing.T) {
 	t.Setenv("ENGRAM_CONTINUITY_SLOT_ENABLED", "true")
 	t.Setenv("ENGRAM_VNEXT_ENABLED", "true")
+
+	db, closeDB := openTestDB(t)
+	t.Cleanup(closeDB)
 
 	cases := []struct {
 		name               string
@@ -403,7 +418,7 @@ func TestMemoryStoreInvalidationsClearSlotAfterConcurrentSet(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			fixture := newContinuityLifecycleFixture(t)
+			fixture := newContinuityLifecycleFixture(t, db)
 			ctx, cancel := context.WithTimeout(continuityLifecycleAuditContext(), 5*time.Second)
 			defer cancel()
 

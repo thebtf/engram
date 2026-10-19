@@ -141,6 +141,9 @@ The promoted operator-console host path has dedicated smoke scripts:
   - local stack proof for `postgres + server + operator-console`
   - builds current-source images
   - validates dedicated browser host `:3000`, worker root proxy on `:37777`, `/api` proxy, and issue mutation flow
+  - requires `-SourceProject` for issue mutations: explicitly select an existing `items[].project_id` UUID from `/api/projects` on this same smoke backend; the script validates catalog membership before creating an issue
+  - no default, first-item/name lookup, random UUID, or project creation; an empty catalog is not a mutation-ready fixture
+  - `-ParityOnly` and `-PageSmokesOnly` skip the stack and issue mutations, so they do not require `-SourceProject`
 - `scripts/smoke-operator-console-remote.ps1`
   - remote/public URL smoke for a deployed operator-console target
   - requires the actual deployed browser `BaseUrl` explicitly; no baked-in `:3000` assumption
@@ -150,5 +153,23 @@ The promoted operator-console host path has dedicated smoke scripts:
 Convenience target:
 
 ```powershell
-make smoke-operator-console
+make smoke-operator-console SOURCE_PROJECT="$SourceProject"
+```
+
+Set `$SourceProject` to the canonical UUID you explicitly selected from that backend's catalog before invoking the target. The Makefile target always runs the mutation flow and rejects missing `SOURCE_PROJECT`. Do not reuse a UUID from another backend or treat a display name as an ID.
+
+Direct script calls use the same selected input:
+
+```powershell
+pwsh -NoProfile -File scripts/smoke-operator-console.ps1 -SourceProject "$SourceProject"
+pwsh -NoProfile -File scripts/smoke-operator-web.ps1 -SourceProject "$SourceProject"
+```
+
+`smoke-operator-web.ps1` retains the older local operator-web smoke flow and always requires the catalog-selected UUID from its own backend. Both scripts send `source_agent=human` with the selected `source_project`; issue DELETE and failure cleanup use bodyless requests with those exact query parameters. Original issue provenance and the existing create → acknowledge → resolve/comment → delete checks remain unchanged.
+
+Non-mutating console modes can be invoked without a source UUID:
+
+```powershell
+pwsh -NoProfile -File scripts/smoke-operator-console.ps1 -ParityOnly
+pwsh -NoProfile -File scripts/smoke-operator-console.ps1 -PageSmokesOnly
 ```

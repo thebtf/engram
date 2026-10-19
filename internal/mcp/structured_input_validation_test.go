@@ -7,8 +7,8 @@ import (
 	"os"
 	"sync"
 	"testing"
-	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
@@ -40,7 +40,8 @@ func newStructuredMutationHarness(t *testing.T) *structuredMutationHarness {
 	t.Setenv("ENGRAM_V7_S6_OUTCOME", "true")
 	store, err := gormdb.NewStore(gormdb.Config{DSN: dsn, MaxConns: 4, LogLevel: logger.Silent})
 	require.NoError(t, err)
-	marker := fmt.Sprintf("mb1-strict-%d", time.Now().UnixNano())
+	marker := uuid.NewString()
+	require.NoError(t, store.DB.Create(&gormdb.Project{ID: marker}).Error)
 	auditStore := gormdb.NewAuditStore(store.DB)
 	versionedStore := gormdb.NewVersionedDocumentStore(store)
 	documentID, err := versionedStore.Create(context.Background(), marker+".md", marker, "fixture", "markdown", "{}", marker)
@@ -77,6 +78,7 @@ func newStructuredMutationHarness(t *testing.T) *structuredMutationHarness {
 		_ = store.DB.Exec("DELETE FROM audit_log WHERE actor = ? OR source_session_id = ?", marker, marker).Error
 		_ = store.DB.Exec("DELETE FROM bulk_op_snapshots WHERE actor = ? OR source_session_id = ?", marker, marker).Error
 		_ = store.DB.Exec("DELETE FROM model_settings WHERE key LIKE ?", marker+"%").Error
+		_ = store.DB.Where("id = ?", marker).Delete(&gormdb.Project{}).Error
 		require.NoError(t, store.Close())
 	})
 	return &structuredMutationHarness{server: server, store: store, rules: rules, significance: significance, editor: editor, ctx: ctx, marker: marker, documentID: documentID, suppressID: suppressFixture.ID, ragCollection: ragCollection, ragPath: ragPath, ragHash: ragDocument.Hash.String}

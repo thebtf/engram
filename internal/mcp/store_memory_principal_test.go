@@ -13,7 +13,7 @@ import (
 )
 
 func TestStoreMemory_PrincipalOwnerDerivedFromIdentity(t *testing.T) {
-	project := "test-mcp-memory-principal-" + uuid.NewString()
+	project := uuid.NewString()
 	env := newMemoryServerForT007(t, project)
 
 	args := mustJSON(t, map[string]any{

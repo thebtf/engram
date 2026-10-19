@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"github.com/stretchr/testify/require"
 	gormlib "gorm.io/gorm"
 
@@ -200,6 +201,19 @@ func TestInterventionPolicyStore_ReconcileCreatesValidAndInsufficientPoliciesFro
 
 func TestInterventionPolicyStore_ListCompileSourcesOrdersRawCurrentVersionsAndBoundsLimit(t *testing.T) {
 	fixture := newInterventionPolicyStoreFixture(t)
+	tx := fixture.db.Begin()
+	require.NoError(t, tx.Error)
+	t.Cleanup(func() { require.NoError(t, tx.Rollback().Error) })
+	var schema string
+	require.NoError(t, tx.Raw(`SELECT current_schema()`).Scan(&schema).Error)
+	// Policy compilation reads a historical pre-186 snapshot; current base-table writes stay guarded.
+	require.NoError(t, tx.Exec(`CREATE TEMPORARY TABLE memories (LIKE `+pq.QuoteIdentifier(schema)+`.memories INCLUDING DEFAULTS INCLUDING GENERATED) ON COMMIT DROP`).Error)
+	var guarded bool
+	require.NoError(t, tx.Raw(`SELECT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = ?::regclass AND tgname = 'engram_consolidation_scope_write' AND tgenabled <> 'D')`, pq.QuoteIdentifier(schema)+`.memories`).Scan(&guarded).Error)
+	require.True(t, guarded, "the current base table must retain its canonical membership fence")
+	fixture.db = tx
+	fixture.memories = NewMemoryStore(&Store{DB: tx})
+	fixture.policies = NewInterventionPolicyStore(tx)
 	first := fixture.createMemory(t, "First ordered source", []string{"first"}, nil)
 	second := fixture.createMemory(t, "Second ordered source", []string{"second"}, nil)
 	_, err := fixture.memories.Create(context.Background(), &models.Memory{

@@ -27,6 +27,7 @@ import (
 	dbstore "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/grpcserver"
 	"github.com/thebtf/engram/internal/mcp"
+	"github.com/thebtf/engram/internal/projectidentity"
 	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/grpc"
 	"gorm.io/driver/postgres"
@@ -37,8 +38,6 @@ import (
 )
 
 const (
-	memoryTestAnchorA  = "11111111-1111-4111-8111-111111111111"
-	memoryTestAnchorB  = "22222222-2222-4222-8222-222222222222"
 	memoryTestProjectA = "33333333-3333-4333-8333-333333333333"
 	memoryTestProjectB = "44444444-4444-4444-8444-444444444444"
 	// Public synthetic auth-test keycards, never installed credentials.
@@ -86,7 +85,7 @@ func newMemoryTestBackend(t *testing.T) *memoryTestBackend {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, model := range []any{dbstore.Memory{}, dbstore.Project{}, dbstore.ProjectResolutionAttempt{}, dbstore.ProjectIdentityComparison{}} {
+	for _, model := range []any{dbstore.Memory{}} {
 		parsed, err := schema.Parse(model, &sync.Map{}, schema.NamingStrategy{})
 		if err != nil {
 			t.Fatal(err)
@@ -110,15 +109,6 @@ func newMemoryTestBackend(t *testing.T) *memoryTestBackend {
 			columns = append(columns, fmt.Sprintf("%q %s", field.DBName, kind))
 		}
 		if err := db.Exec(fmt.Sprintf("CREATE TABLE %q (%s)", parsed.Table, strings.Join(columns, ","))).Error; err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := db.Exec("CREATE UNIQUE INDEX fixture_comparison_idempotency ON project_identity_comparisons(idempotency_key)").Error; err != nil {
-		t.Fatal(err)
-	}
-	for _, binding := range []struct{ anchor, project string }{{memoryTestAnchorA, memoryTestProjectA}, {memoryTestAnchorB, memoryTestProjectB}} {
-		row := dbstore.Project{ID: binding.project, ProjectKey: sql.NullString{String: binding.project, Valid: true}, AnchorProjectID: sql.NullString{String: binding.anchor, Valid: true}, IdentityScope: sql.NullString{String: "repository", Valid: true}, IdentityStatus: sql.NullString{String: "active", Valid: true}, LegacyIDs: []string{}}
-		if err := db.Create(&row).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -444,17 +434,20 @@ func memoryTestEvent(t *testing.T, events <-chan string, want string) {
 	}
 }
 
-func memoryTestRepository(t *testing.T, parent, name, anchor string) string {
+func memoryTestRepository(t *testing.T, parent, name, project string) string {
 	t.Helper()
 	root := filepath.Join(parent, name)
 	if err := os.Mkdir(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	marker, _ := json.Marshal(map[string]any{"version": 3, "project_id": anchor, "name": name, "scope": "repository"})
+	marker, err := json.Marshal(projectidentity.Project{ProjectID: project, Name: name})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(root, ".engram-project"), marker, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{{"init", "--quiet", "-b", "main"}, {"add", "--", ".engram-project"}, {"-c", "user.name=Local Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "Owned local fixture anchor"}} {
+	for _, args := range [][]string{{"init", "--quiet", "-b", "main"}, {"add", "--", ".engram-project"}, {"-c", "user.name=Local Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "Owned local fixture project"}} {
 		command := exec.Command("git", args...)
 		command.Dir = root
 		if raw, err := command.CombinedOutput(); err != nil {
@@ -581,12 +574,12 @@ func TestSessionMemoryTransport(t *testing.T) {
 		binary += ".exe"
 		goName += ".exe"
 	}
-	build := exec.Command(filepath.Join(runtime.GOROOT(), "bin", goName), "build", "-p=2", "-o", binary, ".")
+	build := exec.Command(filepath.Join(runtime.GOROOT(), "bin", goName), "build", "-p=1", "-o", binary, ".")
 	if raw, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build actual CLI: %v: %s", err, raw)
 	}
-	rootA := memoryTestRepository(t, scratch, "a", memoryTestAnchorA)
-	rootB := memoryTestRepository(t, scratch, "b", memoryTestAnchorB)
+	rootA := memoryTestRepository(t, scratch, "a", memoryTestProjectA)
+	rootB := memoryTestRepository(t, scratch, "b", memoryTestProjectB)
 	installationA, installationB := filepath.Join(scratch, "install-a"), filepath.Join(scratch, "install-b")
 	for _, flag := range []string{"true", "false"} {
 		t.Run("privacy_flag_"+flag, func(t *testing.T) {
@@ -605,6 +598,20 @@ func TestSessionMemoryTransport(t *testing.T) {
 			memoryTestRecall(t, a, memoryTestProjectA, memoryTestProjectA, wantA)
 			memoryTestRecall(t, b, memoryTestProjectB, memoryTestProjectA, []int64{92001, 92002})
 			t.Logf("actual CLI initialize/list/recall: A=%v B=[92001 92002], flag=%s; foreign principal/domain excluded", wantA, flag)
+			for _, binding := range []struct{ root, project string }{{rootA, memoryTestProjectA}, {rootB, memoryTestProjectB}} {
+				raw, err := os.ReadFile(filepath.Join(binding.root, ".git", "engram-project.json"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				var cached projectidentity.Project
+				if err := json.Unmarshal(raw, &cached); err != nil || cached.ProjectID != binding.project {
+					t.Fatalf("common-dir cache %s: project=%+v error=%v", binding.root, cached, err)
+				}
+			}
+			if err := os.Remove(filepath.Join(rootA, ".engram-project")); err != nil {
+				t.Fatal(err)
+			}
+			memoryTestRecall(t, a, memoryTestProjectA, memoryTestProjectB, wantA)
 			for _, token := range []string{"", "invalid-local-fixture-token"} {
 				denied := startMemoryTestClient(t, binary, rootA, installationA, backend.url, token)
 				denied.call(t, 1, "initialize", nil)
@@ -618,19 +625,19 @@ func TestSessionMemoryTransport(t *testing.T) {
 			}
 			badIdentity := startMemoryTestClient(t, binary, rootA, installationA, backend.url, memoryTestTokenA, "ENGRAM_CLIENT_INSTANCE_ID=https://invalid")
 			badIdentity.close(t, true)
-			if err := os.WriteFile(filepath.Join(rootA, ".engram-project"), []byte(`{"version":3,"project_id":"invalid","scope":"repository"}`), 0o600); err != nil {
+			if err := os.WriteFile(filepath.Join(rootA, ".engram-project"), []byte(`{"project_id":"invalid"}`), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			badMarker := startMemoryTestClient(t, binary, rootA, installationA, backend.url, memoryTestTokenA)
-			badMarker.call(t, 1, "initialize", nil)
-			if !memoryTestRefused(badMarker.call(t, 2, "tools/list", nil)) {
-				t.Fatal("invalid tracked anchor discovered memory")
-			}
+			memoryTestInitialize(t, badMarker)
 			if !memoryTestRefused(badMarker.call(t, 3, "tools/call", map[string]any{"name": "recall", "arguments": map[string]any{"project": memoryTestProjectA}})) {
-				t.Fatal("invalid anchor fell back to caller scope")
+				t.Fatal("invalid project marker fell back to caller scope or the pinned cache")
 			}
 			badMarker.close(t, false)
-			marker, _ := json.Marshal(map[string]any{"version": 3, "project_id": memoryTestAnchorA, "name": "a", "scope": "repository"})
+			marker, err := json.Marshal(projectidentity.Project{ProjectID: memoryTestProjectA, Name: "a"})
+			if err != nil {
+				t.Fatal(err)
+			}
 			if err := os.WriteFile(filepath.Join(rootA, ".engram-project"), marker, 0o600); err != nil {
 				t.Fatal(err)
 			}

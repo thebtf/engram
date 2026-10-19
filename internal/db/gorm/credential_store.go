@@ -3,11 +3,14 @@ package gorm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"gorm.io/gorm"
 
+	"github.com/thebtf/engram/internal/crypto"
+	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -108,22 +111,14 @@ func (s *CredentialStore) Get(ctx context.Context, project, key string) (*models
 	return credentialRowToModel(&row), nil
 }
 
-// GetByName returns the first active credential matching the given key across all projects.
-// Used by the dashboard admin view where the caller doesn't know the project.
-// Global credentials are preferred, then project rows are ordered deterministically.
-// Returns a wrapped gorm.ErrRecordNotFound if no active row exists.
-func (s *CredentialStore) GetByName(ctx context.Context, key string) (*models.Credential, error) {
-	if key == "" {
-		return nil, fmt.Errorf("key: must not be empty")
+// GetByID reads an active native row after the caller validates its retained membership.
+func (s *CredentialStore) GetByID(ctx context.Context, id int64) (*models.Credential, error) {
+	if id < 1 {
+		return nil, fmt.Errorf("credential ID must be positive")
 	}
 	var row Credential
-	err := s.db.WithContext(ctx).
-		Where("key = ? AND deleted_at IS NULL", key).
-		Order("CASE WHEN project = '' THEN 0 ELSE 1 END").
-		Order("project ASC").
-		First(&row).Error
-	if err != nil {
-		return nil, fmt.Errorf("get credential by name %q: %w", key, err)
+	if err := s.db.WithContext(ctx).Where("id = ? AND deleted_at IS NULL", id).First(&row).Error; err != nil {
+		return nil, fmt.Errorf("get credential by ID: %w", err)
 	}
 	return credentialRowToModel(&row), nil
 }
@@ -164,6 +159,68 @@ func (s *CredentialStore) ListAll(ctx context.Context) ([]*models.Credential, er
 	return result, nil
 }
 
+// CredentialListBinding describes selection metadata, not authorization or native readability.
+type CredentialListBinding struct {
+	ProjectID           string
+	UnresolvedReference string
+	UnavailableReason   string
+}
+
+// ListBindings validates stored membership envelopes without auditing native payloads.
+func (s *CredentialStore) ListBindings(ctx context.Context, credentials []*models.Credential, vault *crypto.Vault) (map[int64]CredentialListBinding, error) {
+	bindings := make(map[int64]CredentialListBinding)
+	byID := make(map[int64]*models.Credential, len(credentials))
+	for _, credential := range credentials {
+		byID[credential.ID] = credential
+	}
+	verifier := NewProjectConsolidationStore(s.db, vault, nil)
+	for start := 0; start < len(credentials); start += consolidationMembershipBatchSize {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		end := min(start+consolidationMembershipBatchSize, len(credentials))
+		ids := make([]int64, end-start)
+		for i, credential := range credentials[start:end] {
+			ids[i] = credential.ID
+		}
+		var rows []struct {
+			CredentialID            int64 `gorm:"column:credential_id"`
+			ConsolidationMembership `gorm:"embedded"`
+		}
+		if err := s.db.WithContext(ctx).Table("credentials AS credential").
+			Select("membership.*, credential.id AS credential_id").
+			Joins("JOIN project_consolidation_memberships AS membership ON membership.table_name = ? AND membership.row_key->>'id' = credential.id::text", "credentials").
+			Where("credential.id IN ?", ids).
+			Order("credential.id, membership.reference").Scan(&rows).Error; err != nil {
+			return nil, err
+		}
+		for i := range rows {
+			row := &rows[i]
+			credential := byID[row.CredentialID]
+			binding := CredentialListBinding{UnavailableReason: "CREDENTIAL_BINDING_UNAVAILABLE"}
+			var path []string
+			var key map[string]json.RawMessage
+			var id int64
+			if credential != nil && credential.Scope == "project" && credential.Project != "" && row.PlanFingerprint != "" &&
+				json.Unmarshal(row.FieldPath, &path) == nil && len(path) == 1 && path[0] == "project" &&
+				json.Unmarshal(row.RowKey, &key) == nil && len(key) == 1 && json.Unmarshal(key["id"], &id) == nil && id == credential.ID {
+				if row.ProjectID != nil && row.UnresolvedReference == "" && *row.ProjectID == credential.Project && projectidentity.ValidProjectID(*row.ProjectID) {
+					binding = CredentialListBinding{ProjectID: *row.ProjectID}
+				} else if row.ProjectID == nil && vault != nil {
+					if _, _, err := verifier.unresolvedMembershipMetadata(&row.ConsolidationMembership); err == nil {
+						binding = CredentialListBinding{UnresolvedReference: row.UnresolvedReference}
+					}
+				}
+			}
+			if previous, exists := bindings[row.CredentialID]; exists && (previous != binding || previous.UnavailableReason != "") {
+				binding = CredentialListBinding{UnavailableReason: "CREDENTIAL_BINDING_CONFLICT"}
+			}
+			bindings[row.CredentialID] = binding
+		}
+	}
+	return bindings, nil
+}
+
 // Delete permanently removes the credential matching the exact (project, key)
 // namespace. An empty project selects the global namespace.
 // Returns gorm.ErrRecordNotFound if no row exists.
@@ -189,29 +246,6 @@ func (s *CredentialStore) Delete(ctx context.Context, project, key string) error
 	}
 	if result.RowsAffected == 0 {
 		return fmt.Errorf("delete credential %q/%q: %w", project, key, gorm.ErrRecordNotFound)
-	}
-	return nil
-}
-
-// DeleteByName hard-deletes the first active credential matching the given key across
-// all projects, preferring the exact global row. Used by the dashboard admin view
-// where the caller doesn't know the project. Returns gorm.ErrRecordNotFound if absent.
-func (s *CredentialStore) DeleteByName(ctx context.Context, key string) error {
-	if key == "" {
-		return fmt.Errorf("key: must not be empty")
-	}
-	// Find the exact row first; a global credential wins when names coexist.
-	var row Credential
-	if err := s.db.WithContext(ctx).
-		Where("key = ? AND deleted_at IS NULL", key).
-		Order("CASE WHEN project = '' THEN 0 ELSE 1 END").
-		Order("project ASC").
-		First(&row).Error; err != nil {
-		return fmt.Errorf("delete credential by name %q: %w", key, err)
-	}
-	result := s.db.WithContext(ctx).Delete(&Credential{}, row.ID)
-	if result.Error != nil {
-		return fmt.Errorf("delete credential by name %q: %w", key, result.Error)
 	}
 	return nil
 }

@@ -36,7 +36,7 @@ const groups = computed(() => navGroups)
           <NuxtLink
             v-for="item in group.items"
             :key="item.to"
-            :to="item.to"
+            :to="{ path: item.to, query: route.query.project === undefined ? {} : { project: route.query.project } }"
             class="block rounded-xl border px-3 py-2 transition-colors"
             :class="isActive(item.to)
               ? 'border-[var(--accent)] bg-[color:rgba(76,141,255,0.12)] text-[var(--fg)]'

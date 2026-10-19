@@ -12,23 +12,30 @@ import (
 	"github.com/thebtf/engram/pkg/models"
 )
 
+func openRG3LifecycleHealthTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	tx := openCandidateTestDB(t).Begin()
+	require.NoError(t, tx.Error)
+	t.Cleanup(func() { require.NoError(t, tx.Rollback().Error) })
+	require.NoError(t, tx.Exec(`CREATE TEMPORARY TABLE rule_arbiter_runs (LIKE public.rule_arbiter_runs INCLUDING ALL) ON COMMIT DROP`).Error)
+	return tx
+}
+
 func TestRuleGovernanceStore_GetLifecycleHealthAggregatesGovernanceTables(t *testing.T) {
-	db := openCandidateTestDB(t)
+	db := openRG3LifecycleHealthTestDB(t)
 	store := NewRuleGovernanceStore(db)
 	eventStore := NewRuleInjectionEventStore(db)
 	ctx := context.Background()
-	project := fmt.Sprintf("rg3-health-%d", time.Now().UnixNano())
+	project := sessionTestProject(t, db)
 	since := time.Now().Add(-1 * time.Minute).UTC()
 
-	pending := ruleGovernanceCandidate(project + "-pending")
-	pending.SourceProject = project
+	pending := ruleGovernanceCandidate(project, project+"-pending")
 	pending.ProposedScope = "project"
 	pending.ActivationPredicate = map[string]any{"project": project}
 	createdPending, err := store.CreateRuleCandidate(ctx, pending)
 	require.NoError(t, err)
 
-	rejected := ruleGovernanceCandidate(project + "-rejected")
-	rejected.SourceProject = project
+	rejected := ruleGovernanceCandidate(project, project+"-rejected")
 	rejected.ProposedScope = "project"
 	rejected.ActivationPredicate = map[string]any{"project": project}
 	createdRejected, err := store.CreateRuleCandidate(ctx, rejected)
@@ -48,6 +55,11 @@ func TestRuleGovernanceStore_GetLifecycleHealthAggregatesGovernanceTables(t *tes
 		CandidatesRejected:  1,
 	}, "")
 	require.NoError(t, err)
+	require.NoError(t, db.Exec(`INSERT INTO rule_arbiter_runs (trigger, status, started_at, finished_at)
+		VALUES (?, ?, ?, ?), (?, ?, ?, ?)`,
+		"rg3-health-before-since", models.RuleArbiterRunStatusCompleted, since.Add(-time.Second), since.Add(-time.Second),
+		"rg3-health-failed", models.RuleArbiterRunStatusFailed, since, since,
+	).Error)
 
 	_, err = store.TransitionRuleVersion(ctx, draftVersionID, models.RuleStateShadow, transitionReq("rg3 shadow for health", ""))
 	require.NoError(t, err)
@@ -91,24 +103,39 @@ func TestRuleGovernanceStore_GetLifecycleHealthAggregatesGovernanceTables(t *tes
 	require.Equal(t, 1, health.VersionStateCounts[models.RuleStateActiveProject])
 	require.Equal(t, 1, health.VersionStateCounts[models.RuleStateSuperseded])
 	require.Equal(t, 1, health.ArbiterRunStatusCounts[models.RuleArbiterRunStatusCompleted])
+	require.Equal(t, 1, health.ArbiterRunStatusCounts[models.RuleArbiterRunStatusFailed])
 	require.Equal(t, 1, health.TransitionActionCounts["candidate_to_rejected"])
 	require.Equal(t, 1, health.TransitionActionCounts["rule_version_transition"])
 	require.Equal(t, 1, health.SnapshotStatusCounts["committed"])
 	require.Equal(t, 1, health.InjectionEventTypeCounts[models.RuleInjectionEmittedContextual])
 	require.Equal(t, 1, health.InjectionEventTypeCounts[models.RuleInjectionSuppressedState])
 	require.Contains(t, health.EvidenceHandles, fmt.Sprintf("rule_candidate:%d", createdPending.ID))
+
+	allTime, err := store.GetLifecycleHealth(ctx, RuleGovernanceHealthParams{
+		Project:                       project,
+		Limit:                         50,
+		IncludeGlobalArbiterRunCounts: true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, allTime.ArbiterRunStatusCounts[models.RuleArbiterRunStatusCompleted])
+	require.Equal(t, 1, allTime.ArbiterRunStatusCounts[models.RuleArbiterRunStatusFailed])
 }
 
 func TestRuleGovernanceStore_GetLifecycleHealthOmitsGlobalArbiterRunsForProjectScopedReads(t *testing.T) {
-	db := openCandidateTestDB(t)
+	db := openRG3LifecycleHealthTestDB(t)
 	store := NewRuleGovernanceStore(db)
 	ctx := context.Background()
-	project := fmt.Sprintf("rg3-health-scoped-%d", time.Now().UnixNano())
+	project := sessionTestProject(t, db)
 	run, err := store.StartRuleArbiterRun(ctx, "rg3-health-scoped")
 	require.NoError(t, err)
 	_, err = store.FinishRuleArbiterRun(ctx, run.ID, models.RuleArbiterRunStatusCompleted, models.RuleArbiterRunCounts{
 		CandidatesSeen: 1,
 	}, "")
+	require.NoError(t, err)
+
+	otherProjectID := sessionTestProject(t, db)
+	other := ruleGovernanceCandidate(otherProjectID, project+"-other")
+	createdOther, err := store.CreateRuleCandidate(ctx, other)
 	require.NoError(t, err)
 
 	scoped, err := store.GetLifecycleHealth(ctx, RuleGovernanceHealthParams{
@@ -118,6 +145,8 @@ func TestRuleGovernanceStore_GetLifecycleHealthOmitsGlobalArbiterRunsForProjectS
 	require.NoError(t, err)
 	require.Empty(t, scoped.ArbiterRunStatusCounts)
 	require.True(t, scoped.NoData)
+	require.Empty(t, scoped.CandidateStatusCounts)
+	require.NotContains(t, scoped.EvidenceHandles, fmt.Sprintf("rule_candidate:%d", createdOther.ID))
 
 	admin, err := store.GetLifecycleHealth(ctx, RuleGovernanceHealthParams{
 		Project:                       project,
@@ -127,6 +156,16 @@ func TestRuleGovernanceStore_GetLifecycleHealthOmitsGlobalArbiterRunsForProjectS
 	require.NoError(t, err)
 	require.Equal(t, 1, admin.ArbiterRunStatusCounts[models.RuleArbiterRunStatusCompleted])
 	require.False(t, admin.NoData)
+
+	otherProject, err := store.GetLifecycleHealth(ctx, RuleGovernanceHealthParams{
+		Project:                       other.SourceProject,
+		Limit:                         50,
+		IncludeGlobalArbiterRunCounts: true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, otherProject.CandidateStatusCounts[models.RuleCandidatePending])
+	require.Equal(t, 1, otherProject.ArbiterRunStatusCounts[models.RuleArbiterRunStatusCompleted])
+	require.False(t, otherProject.NoData)
 }
 
 func TestRuleGovernanceStore_ListExceptionQueueGroupsByReason(t *testing.T) {
@@ -134,10 +173,9 @@ func TestRuleGovernanceStore_ListExceptionQueueGroupsByReason(t *testing.T) {
 	store := NewRuleGovernanceStore(db)
 	eventStore := NewRuleInjectionEventStore(db)
 	ctx := context.Background()
-	project := fmt.Sprintf("rg3-queue-%d", time.Now().UnixNano())
+	project := sessionTestProject(t, db)
 
-	global := ruleGovernanceCandidate(project + "-global")
-	global.SourceProject = project
+	global := ruleGovernanceCandidate(project, project+"-global")
 	global.ProposedScope = "global"
 	global.AntiCaptureStatus = "passed"
 	global.ConflictStatus = "none"
@@ -145,24 +183,21 @@ func TestRuleGovernanceStore_ListExceptionQueueGroupsByReason(t *testing.T) {
 	_, err := store.CreateRuleCandidate(ctx, global)
 	require.NoError(t, err)
 
-	conflict := ruleGovernanceCandidate(project + "-conflict")
-	conflict.SourceProject = project
+	conflict := ruleGovernanceCandidate(project, project+"-conflict")
 	conflict.ProposedScope = "project"
 	conflict.ConflictStatus = "active_rule_conflict"
 	conflict.EvidenceHandles = []string{"evidence:" + project + ":conflict"}
 	_, err = store.CreateRuleCandidate(ctx, conflict)
 	require.NoError(t, err)
 
-	hold := ruleGovernanceCandidate(project + "-hold")
-	hold.SourceProject = project
+	hold := ruleGovernanceCandidate(project, project+"-hold")
 	hold.ProposedScope = "project"
 	hold.AntiCaptureStatus = "reject_review_hold"
 	hold.EvidenceHandles = []string{"evidence:" + project + ":hold"}
 	_, err = store.CreateRuleCandidate(ctx, hold)
 	require.NoError(t, err)
 
-	unclear := ruleGovernanceCandidate(project + "-unclear")
-	unclear.SourceProject = project
+	unclear := ruleGovernanceCandidate(project, project+"-unclear")
 	unclear.ProposedScope = "private"
 	unclear.ConflictStatus = "none"
 	unclear.EvidenceHandles = []string{"evidence:" + project + ":unclear"}
@@ -223,17 +258,15 @@ func TestRuleGovernanceStore_ListExceptionQueueFiltersCandidatesBeforeLimitAndSt
 	db := openCandidateTestDB(t)
 	store := NewRuleGovernanceStore(db)
 	ctx := context.Background()
-	project := fmt.Sprintf("rg3-queue-filter-%d", time.Now().UnixNano())
+	project := sessionTestProject(t, db)
 
-	liveConflict := ruleGovernanceCandidate(project + "-live-conflict")
-	liveConflict.SourceProject = project
+	liveConflict := ruleGovernanceCandidate(project, project+"-live-conflict")
 	liveConflict.ProposedScope = "project"
 	liveConflict.ConflictStatus = "active_rule_conflict"
 	createdLiveConflict, err := store.CreateRuleCandidate(ctx, liveConflict)
 	require.NoError(t, err)
 
-	resolvedConflict := ruleGovernanceCandidate(project + "-resolved-conflict")
-	resolvedConflict.SourceProject = project
+	resolvedConflict := ruleGovernanceCandidate(project, project+"-resolved-conflict")
 	resolvedConflict.ProposedScope = "project"
 	resolvedConflict.ConflictStatus = "active_rule_conflict"
 	createdResolvedConflict, err := store.CreateRuleCandidate(ctx, resolvedConflict)
@@ -242,8 +275,7 @@ func TestRuleGovernanceStore_ListExceptionQueueFiltersCandidatesBeforeLimitAndSt
 	require.NoError(t, err)
 
 	for i := 0; i < 3; i++ {
-		noise := ruleGovernanceCandidate(fmt.Sprintf("%s-noise-%d", project, i))
-		noise.SourceProject = project
+		noise := ruleGovernanceCandidate(project, fmt.Sprintf("%s-noise-%d", project, i))
 		noise.ProposedScope = "project"
 		noise.ConflictStatus = "none"
 		_, err = store.CreateRuleCandidate(ctx, noise)
@@ -268,7 +300,7 @@ func TestRuleGovernanceStore_ListPinAndRollbackSnapshotsDetectsConflict(t *testi
 	db := openCandidateTestDB(t)
 	store := NewRuleGovernanceStore(db)
 	ctx := context.Background()
-	project := fmt.Sprintf("rg3-snapshot-%d", time.Now().UnixNano())
+	project := sessionTestProject(t, db)
 	versionID := insertRG3RuleVersionFixture(t, db, project, models.RuleStateActiveProject, "developer", 10)
 	snapshotID := uniqueSnapshot("rg3-rollback")
 
@@ -331,7 +363,7 @@ func TestRuleGovernanceStore_RollbackSnapshotRestoresBeforeState(t *testing.T) {
 	db := openCandidateTestDB(t)
 	store := NewRuleGovernanceStore(db)
 	ctx := context.Background()
-	project := fmt.Sprintf("rg3-rollback-success-%d", time.Now().UnixNano())
+	project := sessionTestProject(t, db)
 	versionID := insertRG3RuleVersionFixture(t, db, project, models.RuleStateActiveProject, "developer", 10)
 	snapshotID := uniqueSnapshot("rg3-rollback-success")
 
@@ -364,7 +396,7 @@ func TestRuleGovernanceStore_RollbackTransitionCreatedSnapshotRestoresBeforeStat
 	db := openCandidateTestDB(t)
 	store := NewRuleGovernanceStore(db)
 	ctx := context.Background()
-	project := fmt.Sprintf("rg3-rollback-transition-%d", time.Now().UnixNano())
+	project := sessionTestProject(t, db)
 	versionID := insertRG3RuleVersionFixture(t, db, project, models.RuleStateCanary, "developer", 10)
 	snapshotID := uniqueSnapshot("rg3-transition-created")
 
@@ -392,7 +424,7 @@ func TestRuleGovernanceStore_RollbackSnapshotRejectsNonCommittedStatus(t *testin
 	db := openCandidateTestDB(t)
 	store := NewRuleGovernanceStore(db)
 	ctx := context.Background()
-	project := fmt.Sprintf("rg3-rollback-status-%d", time.Now().UnixNano())
+	project := sessionTestProject(t, db)
 	versionID := insertRG3RuleVersionFixture(t, db, project, models.RuleStateActiveProject, "developer", 10)
 	snapshotID := uniqueSnapshot("rg3-rollback-status")
 
@@ -427,7 +459,7 @@ func TestRuleGovernanceStore_RollbackSnapshotRefusesPinnedOrProtectedVersions(t 
 	db := openCandidateTestDB(t)
 	store := NewRuleGovernanceStore(db)
 	ctx := context.Background()
-	project := fmt.Sprintf("rg3-rollback-protected-%d", time.Now().UnixNano())
+	project := sessionTestProject(t, db)
 	protectedVersionID := insertRG3RuleVersionFixture(t, db, project, models.RuleStateActiveProject, "developer", 10)
 	pinnedVersionID := insertRG3RuleVersionFixture(t, db, project, models.RuleStateActiveProject, "developer", 9)
 	require.NoError(t, db.Exec(`UPDATE rule_versions SET protected = true WHERE id = ?`, protectedVersionID).Error)

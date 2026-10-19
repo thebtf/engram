@@ -11,7 +11,7 @@ const router = createRouter({
   history: createWebHistory(),
   routes: Object.entries(pages).map(([file, component]) => {
     const name = file.slice('./pages/'.length, -'.vue'.length)
-    return { name, path: name === 'index' ? '/' : `/${name}`, component }
+    return { name, path: name === 'index' ? '/' : name === 'unresolved' ? '/projects/unresolved' : name === 'issues' ? '/issues/:id(\\d+)?' : `/${name}`, component }
   }),
 })
 installChunkRecovery(router)

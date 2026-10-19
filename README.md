@@ -157,7 +157,7 @@ existing does not mean the workflow behind it is accepted** — read the ledger'
 
 ### Workspace
 
-In a new Git repository, run `engram project init --name "Example Workspace"` offline from its Git root. Explicitly `git add -- .engram-project` and commit the V3 anchor; initialization does not stage or commit it. Do not replace a legacy marker or treat a new anchor as migration of old project memories and issues.
+For a new project, run `engram project init --name "Example Workspace"` offline from its selected directory. It prints the portable `project_id` UUID and optional name; it does not stage or commit `.engram-project`. Carry that file into clones, and explicitly track it in Git when appropriate. Check the selected identity with `engram project resolve --root <actual-directory> --json`; MCP and hooks use the same UUID without a separate identity-registration tool. A new UUID or UCI Source is not migration of historical memories and issues.
 
 With the current `ENGRAM_AUTH_DISABLED=true` installation, open the configured HTTP LAN console and choose **Home → Workspace → Repository → Working copy → Indexed snapshot → Pin selected View**. No login, grants, HTTPS, or proxy are needed for this single-user path. Register A and B from the ordinary installed plugin's `codebase_context` tool, then index and check daemon-side `codebase_status` until each published View and its code embeddings are ready. If labels repeat, distinguish entries by their indexed working-copy and snapshot counts; never guess an internal ID. Set the embedding provider's `ENGRAM_EMBEDDING_URL` to its base URL (a trailing `/v1` is accepted) and use an `ENGRAM_EMBEDDING_MODEL` returning 1536-dimensional vectors.
 

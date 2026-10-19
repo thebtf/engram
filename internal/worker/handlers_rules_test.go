@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -472,7 +473,7 @@ func TestRulesCollectionBridgeRoutesFreezeAndPageOverTwoHundredRules(t *testing.
 	ruleStore := openRulesCollectionBridgeStore(t)
 	store := dbgorm.NewBehavioralRulesStore(ruleStore)
 	ctx := context.Background()
-	project := "test-rules-collection-bridge-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	project := uuid.NewString()
 	t.Cleanup(func() {
 		require.NoError(t, ruleStore.DB.Exec("DELETE FROM behavioral_rules WHERE project = ?", project).Error)
 	})
@@ -529,7 +530,7 @@ func TestRulesCollectionBridgeRoutesFreezeAndPageOverTwoHundredRules(t *testing.
 	require.EqualValues(t, len(rules), *first.Total)
 	require.Equal(t, dbgorm.CollectionSelectionTarget{ID: strconv.FormatInt(rules[0].ID, 10), ExpectedVersion: uint64(rules[0].Version)}, first.Targets[0])
 
-	pageSelection := call("/api/collections/selection", `{"domain":"rules","selection":{"kind":"page","cursor":"`+first.Cursor+`","targets":[{"id":"999999","expected_version":9}]}}`)
+	pageSelection := call("/api/collections/selection", `{"domain":"rules","filter":{"scope":"`+project+`"},"selection":{"kind":"page","cursor":"`+first.Cursor+`","targets":[{"id":"999999","expected_version":9}]}}`)
 	require.Equal(t, http.StatusOK, pageSelection.Code, pageSelection.Body.String())
 	var pageSnapshot struct {
 		Selection struct {
@@ -554,7 +555,7 @@ func TestRulesCollectionBridgeRoutesFreezeAndPageOverTwoHundredRules(t *testing.
 	require.Empty(t, second.NextCursor)
 	require.Equal(t, dbgorm.CollectionSelectionTarget{ID: strconv.FormatInt(rules[200].ID, 10), ExpectedVersion: uint64(rules[200].Version)}, second.Targets[0])
 
-	frozenSnapshot := call("/api/collections/selection", `{"domain":"rules","selection":{"kind":"frozen_filter","filter":{"scope":"`+project+`"},"excluded_ids":["`+strconv.FormatInt(rules[0].ID, 10)+`"]}}`)
+	frozenSnapshot := call("/api/collections/selection", `{"domain":"rules","filter":{"scope":"`+project+`"},"selection":{"kind":"frozen_filter","filter":{"scope":"`+project+`"},"excluded_ids":["`+strconv.FormatInt(rules[0].ID, 10)+`"]}}`)
 	require.Equal(t, http.StatusOK, frozenSnapshot.Code, frozenSnapshot.Body.String())
 	var frozen struct {
 		Selection struct {
@@ -630,7 +631,7 @@ func ioNopCloser(body string) nopReadCloser {
 }
 
 func TestHandleCreateBehavioralRule_SelectionOperationReauthorizesAndReportsTruth(t *testing.T) {
-	project := "test-rules-handler-selection-operation"
+	project := uuid.NewString()
 	const sessionID = "rules-selection-operation-session"
 	svc, brs, selections, ruleStore := newRulesSelectionTestService(t, project)
 	ctx := context.Background()
@@ -647,13 +648,17 @@ func TestHandleCreateBehavioralRule_SelectionOperationReauthorizesAndReportsTrut
 	})
 	scope, err := (operatorCollectionScopeAuthority{}).ResolveOperatorCollectionScope(ctx, identity, sessionID, operatorCollectionSelectionDomain)
 	require.NoError(t, err)
+	projection, err := brs.NormalizeCollectionFilter(ctx, scope, project)
+	require.NoError(t, err)
+	scope, err = rulesCollectionProjectionScope(scope, projection)
+	require.NoError(t, err)
 	explicit, err := selections.Save(ctx, scope, dbgorm.CollectionSelection{
 		Kind:    dbgorm.CollectionSelectionExplicit,
 		Targets: []dbgorm.CollectionSelectionTarget{{ID: strconv.FormatInt(first.ID, 10), ExpectedVersion: uint64(first.Version)}},
 	})
 	require.NoError(t, err)
 
-	body := `{"request_id":"rules-operation-disable","action":"disable","selection":{"kind":"explicit","selection_version":` + strconv.FormatInt(explicit.Version, 10) + `}}`
+	body := `{"request_id":"rules-operation-disable","filter":{"scope":"` + project + `"},"action":"disable","selection":{"kind":"explicit","selection_version":` + strconv.FormatInt(explicit.Version, 10) + `}}`
 	request := httptest.NewRequest(http.MethodPost, "/api/rules", strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("X-Engram-Request-ID", "rules-operation-disable")
@@ -690,7 +695,7 @@ func TestHandleCreateBehavioralRule_SelectionOperationReauthorizesAndReportsTrut
 	require.NoError(t, err)
 	_, err = brs.SetEnabled(ctx, second.ID, false, nil)
 	require.NoError(t, err)
-	body = `{"request_id":"rules-operation-stale","action":"disable","selection":{"kind":"explicit","selection_version":` + strconv.FormatInt(stale.Version, 10) + `}}`
+	body = `{"request_id":"rules-operation-stale","filter":{"scope":"` + project + `"},"action":"disable","selection":{"kind":"explicit","selection_version":` + strconv.FormatInt(stale.Version, 10) + `}}`
 	request = httptest.NewRequest(http.MethodPost, "/api/rules", strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("X-Engram-Request-ID", "rules-operation-stale")
@@ -710,7 +715,7 @@ func TestHandleCreateBehavioralRule_SelectionOperationReauthorizesAndReportsTrut
 		ExpiresAt:         time.Now().UTC().Add(15 * time.Minute),
 	})
 	require.NoError(t, err)
-	body = `{"request_id":"rules-operation-forbidden","action":"delete","selection":{"kind":"frozen_filter","selection_version":` + strconv.FormatInt(frozen.Version, 10) + `,"selection_token":"` + frozen.Token + `"}}`
+	body = `{"request_id":"rules-operation-forbidden","filter":{"scope":"` + project + `"},"action":"delete","selection":{"kind":"frozen_filter","selection_version":` + strconv.FormatInt(frozen.Version, 10) + `,"selection_token":"` + frozen.Token + `"}}`
 	request = httptest.NewRequest(http.MethodPost, "/api/rules", strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("X-Engram-Request-ID", "rules-operation-forbidden")
@@ -731,7 +736,7 @@ func TestHandleCreateBehavioralRule_SelectionOperationReauthorizesAndReportsTrut
 		Targets: []dbgorm.CollectionSelectionTarget{{ID: strconv.FormatInt(second.ID, 10), ExpectedVersion: uint64(currentSecond.Version)}},
 	})
 	require.NoError(t, err)
-	body = `{"request_id":"rules-operation-delete","action":"delete","selection":{"kind":"explicit","selection_version":` + strconv.FormatInt(deletion.Version, 10) + `}}`
+	body = `{"request_id":"rules-operation-delete","filter":{"scope":"` + project + `"},"action":"delete","selection":{"kind":"explicit","selection_version":` + strconv.FormatInt(deletion.Version, 10) + `}}`
 	request = httptest.NewRequest(http.MethodPost, "/api/rules", strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("X-Engram-Request-ID", "rules-operation-delete")
@@ -757,12 +762,16 @@ func TestHandleCreateBehavioralRule_SelectionOperationReauthorizesAndReportsTrut
 }
 
 func TestHandleCreateBehavioralRule_SelectionOperationSafetyBranches(t *testing.T) {
-	project := "test-rules-handler-selection-safety-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	project := uuid.NewString()
 	const sessionID = "rules-selection-safety-session"
 	svc, brs, selections, ruleStore := newRulesSelectionTestService(t, project)
 	ctx := context.Background()
 	identity := auth.SessionForBrowserUser("operator", 41)
 	scope, err := (operatorCollectionScopeAuthority{}).ResolveOperatorCollectionScope(ctx, identity, sessionID, operatorCollectionSelectionDomain)
+	require.NoError(t, err)
+	projection, err := brs.NormalizeCollectionFilter(ctx, scope, project)
+	require.NoError(t, err)
+	scope, err = rulesCollectionProjectionScope(scope, projection)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		require.NoError(t, ruleStore.DB.Exec(
@@ -779,6 +788,12 @@ func TestHandleCreateBehavioralRule_SelectionOperationSafetyBranches(t *testing.
 	require.NoError(t, err)
 
 	call := func(requestID, body string) *httptest.ResponseRecorder {
+		var payload map[string]any
+		require.NoError(t, json.Unmarshal([]byte(body), &payload))
+		payload["filter"] = map[string]string{"scope": project}
+		encoded, marshalErr := json.Marshal(payload)
+		require.NoError(t, marshalErr)
+		body = string(encoded)
 		request := httptest.NewRequest(http.MethodPost, "/api/rules", strings.NewReader(body))
 		request.Header.Set("Content-Type", "application/json")
 		request.Header.Set("X-Engram-Request-ID", requestID)

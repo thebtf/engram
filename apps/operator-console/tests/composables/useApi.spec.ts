@@ -1,19 +1,54 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
-import {
- executeMutation,
- parseMutationResponse,
- parseMutationTransportFailure,
- type MutationRequest,
- type MutationResult,
-} from '../../composables/useApi.ts'
-import { createRuleCurrentStateParser } from '../../composables/useOperatorRules.ts'
-import { storeMemoryCurrentStateParser } from '../../composables/useOperatorMemoryLab.ts'
-import { createInvitationCurrentStateParser } from '../../composables/useOperatorAccess.ts'
-import { createKeycardCurrentStateParser } from '../../composables/useOperatorKeycards.ts'
-import { upsertDomainCurrentStateParser, deleteDomainCurrentStateParser } from '../../composables/useOperatorDomainRegistry.ts'
-import { projectArchiveCurrentStateParser } from '../../composables/useOperatorProjects.ts'
-import { cleanupOrphansCurrentStateParser, createSecretCurrentStateParser, deleteSecretCurrentStateParser } from '../../composables/useOperatorSecrets.ts'
+import ts from 'typescript'
+import * as vue from 'vue'
+import * as routing from 'vue-router'
+import * as projectCatalog from '../../../../ui/src/utils/projectCatalog.ts'
+import type { MutationRequest, MutationResult } from '../../composables/useApi.ts'
+import type * as ApiModule from '../../composables/useApi.ts'
+import type * as RulesModule from '../../composables/useOperatorRules.ts'
+import type * as MemoryLabModule from '../../composables/useOperatorMemoryLab.ts'
+import type * as AccessModule from '../../composables/useOperatorAccess.ts'
+import type * as KeycardsModule from '../../composables/useOperatorKeycards.ts'
+import type * as DomainRegistryModule from '../../composables/useOperatorDomainRegistry.ts'
+import type * as ProjectsModule from '../../composables/useOperatorProjects.ts'
+import type * as SecretsModule from '../../composables/useOperatorSecrets.ts'
+
+const modules = new Map<string, object>()
+function dependency<T>(name: string): T {
+ if (name === 'vue') return vue as T
+ if (name === 'vue-router') return routing as T
+ if (name.endsWith('projectCatalog')) return projectCatalog as T
+ if (!modules.has(name)) {
+  if (!name.startsWith('./') && name !== '../operator-config') throw new Error(`Unexpected test dependency: ${name}`)
+  const source = readFileSync(new URL(`../../composables/${name}.ts`, import.meta.url), 'utf8')
+  const code = ts.transpileModule(source, {
+   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+   transformers: {
+    before: [context => source => ts.visitNode(source, function visit(node) {
+     if (ts.isMetaProperty(node) && node.keywordToken === ts.SyntaxKind.ImportKeyword) return ts.factory.createIdentifier('importMeta')
+     return ts.visitEachChild(node, visit, context)
+    })],
+   },
+  }).outputText
+  const module = { exports: {} }
+  const window = { matchMedia: () => ({ matches: false, addEventListener() { } }) }
+  const document = { documentElement: { dataset: {}, classList: { toggle() { } } } }
+  new Function('require', 'module', 'exports', 'importMeta', 'window', 'document', code)(dependency, module, module.exports, { env: { DEV: false } }, window, document)
+  modules.set(name, module.exports)
+ }
+ return modules.get(name) as T
+}
+
+const { executeMutation, parseMutationResponse, parseMutationTransportFailure } = dependency<typeof ApiModule>('./useApi')
+const { createRuleCurrentStateParser } = dependency<typeof RulesModule>('./useOperatorRules')
+const { storeMemoryCurrentStateParser } = dependency<typeof MemoryLabModule>('./useOperatorMemoryLab')
+const { createInvitationCurrentStateParser } = dependency<typeof AccessModule>('./useOperatorAccess')
+const { createKeycardCurrentStateParser } = dependency<typeof KeycardsModule>('./useOperatorKeycards')
+const { upsertDomainCurrentStateParser, deleteDomainCurrentStateParser } = dependency<typeof DomainRegistryModule>('./useOperatorDomainRegistry')
+const { projectArchiveCurrentStateParser } = dependency<typeof ProjectsModule>('./useOperatorProjects')
+const { cleanupOrphansCurrentStateParser, createSecretCurrentStateParser, deleteSecretCurrentStateParser } = dependency<typeof SecretsModule>('./useOperatorSecrets')
 
 const request: MutationRequest<{ enabled: boolean; version: number }> = {
  requestId: 'request-42',
@@ -330,14 +365,16 @@ test('one-time keycard and invitation receipts expose only validated create-resp
 })
 
 test('project, vault, and domain receipts require validated synchronous evidence', async () => {
- const project = 'project-alpha'
- const secret = { name: 'API_KEY', value: 'secret', project: 'engram', scope: 'project' as const }
+ const project = '44444444-4444-4444-8444-444444444444'
+ const secret = { name: 'API_KEY', value: 'secret', project, scope: 'project' as const }
  const domain = { domain: 'memory-lab', ownerPrincipal: 'agent/alice', ownerPrincipalKind: 'agent' as const, mode: 'warn' as const }
  const validDomain = { domain: domain.domain, owner_principal: domain.ownerPrincipal, owner_principal_kind: domain.ownerPrincipalKind, mode: domain.mode, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' }
  const valid = await Promise.all([
   parseMutationResponse({ requestId: 'project', action: 'project-archive', intent: { project } }, jsonResponse(200, { id: project, removed_at: '2026-01-01T00:00:00Z' }), projectArchiveCurrentStateParser(project)),
   parseMutationResponse({ requestId: 'vault-create', action: 'vault-store', intent: secret }, jsonResponse(201, { id: 9, name: secret.name, scope: secret.scope, message: 'Credential stored successfully' }), createSecretCurrentStateParser(secret)),
-  parseMutationResponse({ requestId: 'vault-delete', action: 'vault-delete', intent: { credentialID: '9' } }, jsonResponse(200, { deleted: true, name: secret.name }), deleteSecretCurrentStateParser(secret.name)),
+  parseMutationResponse({ requestId: 'vault-delete', action: 'vault-delete', intent: { credentialID: '9' } }, jsonResponse(200, { deleted: true, name: secret.name }), deleteSecretCurrentStateParser(secret.name, secret.project)),
+  parseMutationResponse({ requestId: 'vault-project-bound', action: 'vault-delete', intent: { credentialID: '9' } }, jsonResponse(200, { deleted: true, name: secret.name, project_id: secret.project }), deleteSecretCurrentStateParser(secret.name, secret.project)),
+  parseMutationResponse({ requestId: 'vault-global-bound', action: 'vault-delete', intent: { credentialID: '10' } }, jsonResponse(200, { deleted: true, name: secret.name, project_id: null }), deleteSecretCurrentStateParser(secret.name, '')),
   parseMutationResponse({ requestId: 'vault-cleanup', action: 'vault-orphan-cleanup', intent: undefined }, jsonResponse(200, { status: 'ok', deleted: 1 }), cleanupOrphansCurrentStateParser),
   parseMutationResponse({ requestId: 'domain-upsert', action: 'memory-domain-upsert', intent: domain }, jsonResponse(200, validDomain), upsertDomainCurrentStateParser(domain)),
   parseMutationResponse({ requestId: 'domain-delete', action: 'memory-domain-delete', intent: { domain: domain.domain } }, jsonResponse(200, { deleted: true, domain: domain.domain }), deleteDomainCurrentStateParser(domain.domain)),
@@ -349,7 +386,9 @@ test('project, vault, and domain receipts require validated synchronous evidence
   parseMutationResponse({ requestId: 'vault-malformed', action: 'vault-store', intent: secret }, jsonResponse(201, { id: '9', name: secret.name }), createSecretCurrentStateParser(secret)),
   parseMutationResponse({ requestId: 'domain-malformed', action: 'memory-domain-upsert', intent: domain }, jsonResponse(200, { ...validDomain, owner_principal: 'agent/bob' }), upsertDomainCurrentStateParser(domain)),
   parseMutationResponse({ requestId: 'project-pending', action: 'project-archive', intent: { project } }, jsonResponse(200, { operation_state: 'pending', id: project, removed_at: '2026-01-01T00:00:00Z' }), projectArchiveCurrentStateParser(project)),
-  parseMutationResponse({ requestId: 'vault-pending', action: 'vault-delete', intent: { credentialID: '9' } }, jsonResponse(200, { operation_state: 'pending', deleted: true, name: secret.name }), deleteSecretCurrentStateParser(secret.name)),
+  parseMutationResponse({ requestId: 'vault-pending', action: 'vault-delete', intent: { credentialID: '9' } }, jsonResponse(200, { operation_state: 'pending', deleted: true, name: secret.name }), deleteSecretCurrentStateParser(secret.name, secret.project)),
+  parseMutationResponse({ requestId: 'vault-foreign-delete', action: 'vault-delete', intent: { credentialID: '9' } }, jsonResponse(200, { deleted: true, name: secret.name, project_id: '55555555-5555-4555-8555-555555555555' }), deleteSecretCurrentStateParser(secret.name, secret.project)),
+  parseMutationResponse({ requestId: 'vault-foreign-create', action: 'vault-store', intent: secret }, jsonResponse(201, { id: 9, name: secret.name, scope: secret.scope, project_id: '55555555-5555-4555-8555-555555555555' }), createSecretCurrentStateParser(secret)),
   parseMutationResponse({ requestId: 'domain-pending', action: 'memory-domain-delete', intent: { domain: domain.domain } }, jsonResponse(200, { operation_state: 'pending', deleted: true, domain: domain.domain }), deleteDomainCurrentStateParser(domain.domain)),
  ])
  for (const result of rejected) assertMutationKind(result, 'committed_verification_pending')

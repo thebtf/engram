@@ -32,6 +32,343 @@ The reviewed 2026.09.17 snapshot is already promoted. `PROMOTION-MANIFEST.json` 
 
 The [responsive-layout receipt](../../specs/011-operator-code-console/acceptance/da-workspace-responsive-layout-receipt.json) proves Workspace shell layout and drawer behavior only. It does not reassert semantic-provider explorer evidence (`embedded_chunks=0 of 64`) or substitute for the installed exact-head normal-homepage DA01–DA04 release proof, which remains pending.
 
+## Project knowledge journey (2026-10-11)
+
+The accepted operator-knowledge change refines the inherited Vue/Vite Operate world.
+It does not promote a new visual system or change the historical snapshot hashes.
+Navigation groups project entry, knowledge, Workspace, attention, and administration.
+The shared project selector uses the server's canonical IDs; equal display names stay
+distinct. The knowledge project is not a code Source/Checkout/View selection or a grant.
+
+### Обычный вход R1: существующее решение
+
+Установка, обновление и сохранность client-data/Vault описаны в
+[operating guide](../../docs/operating-engram.md#версия-установка-и-обновление).
+Manifest `7.0.0` в source-кандидате `ef76bc0569f39db64de1398b01d9676d0b650c15`
+не доказывает публикацию или установленную версию. Не меняй сервер, auth mode,
+профиль, `.engram-project` или Vault key ради успешного входа.
+
+1. Открой обычный установленный агент в настоящем каталоге проекта и WebUI
+   того же настроенного сервера. Сверь подтверждённый `project_id` с каноническим
+   проектом в Home/**Проекты**. Одинаковые названия не объединяют проекты.
+2. В **Память** выполни буквальный поиск существующего полезного решения.
+   При необходимости продолжи страницы, затем открой конкретную запись.
+3. Прочитай полный доступный текст, источник, актуальность и аудит.
+   Аудит не выдаётся за прежние версии текста. **Назад**/Escape возвращает
+   выбранный проект, запрос, фильтры и страницу, в том числе после поиска.
+4. Для документа сохраняй path, выбранную версию, сравнение и страницы истории.
+   Отсутствующая на странице версия остаётся недоступной до её реального чтения,
+   а не заменяется другой. Ошибка каталога/reader не превращается в нулевой итог.
+5. Для старой неразрешённой ссылки используй отдельный retained review с её
+   reason/provenance. Выбирай только предложенные виды reader. Metadata-only
+   означает отсутствие reader в этом обзоре, не отсутствие исходных данных.
+   Unsupported/denied/unavailable состояние не подменяется другим проектом,
+   видом или успешно пустым ответом. Затем вернись по исходной ссылке возврата.
+6. После обновления проверь то же решение в свежей обычной сессии агента и WebUI.
+   Ошибку identity передай владельцу без угадывания UUID, удаления marker/cache,
+   переинициализации БД/Vault или обхода авторизации.
+
+Это R1. Полный semantic/code/graph/two-worktree путь ниже остаётся R2,
+не условием каждого R1 и не отменённой функцией. Сохранность исторических View,
+полезных записей/версий, секретов и применимые retired-writer, security, migration,
+platform и rollback проверки не откладываются под названием R2.
+
+
+The shared header grows with the full project error instead of reserving a fixed
+48px row; its selector, retry and account/menu controls remain above main content.
+The unconfigured-host 503 smoke on 2026-10-15 covered 1440×900 and 390×844 in
+existing Edge, including visible Tab focus and Enter retry. It proves layout and
+recovery reachability only, not catalog data, authentication or installed acceptance.
+
+Catalog transport/503 errors name the project catalog, not the whole server;
+independent service health and authentication keep their own evidence. Issues show
+counts and empty results only after a successful scoped list read. A failed refresh
+keeps prior rows visibly marked as previous results, without current totals, only
+within the same proven project scope. Scope changes clear rows and totals before
+the selection gate, including pending or unresolved selection. The create entry
+reflects its existing context guard; all-project browsing still permits an explicit
+canonical source/target form after a healthy catalog read.
+The `unavailable catalog and issue reads` compiled-consumer regression in
+`tests/composables/auth-session.spec.mjs` covers unknown/error/empty, same-scope
+retention and project isolation. The 2026-10-15 e38 frontend overlay over diagnostic
+API375C rendered the scoped error and unknown Issues at desktop and 390px before
+the additional isolation fix. Its live proof is retained, not proof of the final
+bundle. The final isolation-corrected bundle is checked only against a genuine
+unconfigured-host503 with unknown auth. Neither proves catalog data, actor writes,
+successful-empty backend data, installed delivery or release acceptance.
+
+| Route | Task and scope |
+|---|---|
+| `/` | Choose a project, open its knowledge or the independent code Workspace. A concrete project loads at most three latest memories and three document summaries, not every project's bodies. |
+| `/projects` | Choose one canonical project, enter memory/documents/code, and read up to 50 existing sessions. Project archive remains secondary and requires typing the exact selected ID. |
+| `/memory` | Server-filtered content search and paging, then the real ID reader, origin/currentness fields, source sessions, and up to 200 accessible audit events. Suppress, restore, archive, delete, and explicit bulk suppress use existing mutation/readback contracts. |
+| `/documents` | Metadata search, type/path-prefix filtering and paging, then current/version content, real version history, comparison, version-specific comments, and the existing export action. Download is exposed only after `committed_verified`; a new attempt or reader scope/version/state change clears its artifact. |
+| `/search` | Optional project context search through the existing context reader. Memory-backed results open the canonical scoped ID reader and return to the original query. Unsupported, forbidden, stale and unavailable search offers the same literal query in real project-scoped memory content or document-metadata search; these are not semantic/similarity results. Request evidence and search diagnostics remain secondary. |
+| `/code` | Existing independently selected and server-pinned Workspace. Knowledge labels never establish repository linkage or source access. |
+| `/rules`, `/queue` | Retained supported actions follow the shared selected project. Rules retain their explicit global scope; candidates retain the existing flag and explicit all-project contract. |
+| `/noise` | Secondary server-wide retrieval/outcome diagnostics. Missing numeric fields stay unknown; unavailable decorative trends are not a primary task. |
+
+Rules saved selections belong to the active `all`, `global`, or canonical-project projection.
+Selection snapshot/current requests and selection operations send that scope in the existing
+top-level `filter`; the server normalizes it and binds the stored context itself. Restoring
+another projection requires deliberate reselection, even after a remount. Same-projection
+explicit, page and frozen selections retain their off-page targets; per-row actions replace
+old intent with the clicked row. Browser owner/session, target versions and grants remain
+independent checks. This request binding adds no table or migration.
+
+The canonical catalog is one shape, not an optional compatibility mode:
+
+```ts
+type ProjectsResponse = {
+  items: { project_id: string; name: string; repository_qualifier?: string }[]
+  unresolved: { reference: string; name: string; reason: string; reader_kinds: ('memory' | 'document' | 'issue' | 'code')[] }[]
+}
+type ReaderPage<T> = { items: T[]; total: number; offset: number; limit: number; has_more: boolean }
+```
+
+Only validated catalog UUIDs are normal project values. Names are mutable labels,
+not identity or authority. Equal names retain distinct IDs and use repository
+qualifiers when supplied; missing qualifiers remain visibly ambiguous. Workspace
+Repository/Working copy/Indexed snapshot selection remains independent.
+
+The shared context retains `project`, `projects`, `descriptors`, `pending`, `error`,
+`label`, `refresh`, `select`, `to`, and `remember`. It adds `unresolved`,
+`selectionPending`, `selectionError`, `isCatalogProject(id)` and
+`resolveCatalogProject(id): Promise<string | null>`. Null means a proven unresolved
+mapping; request/protocol errors throw. During route translation the selected project
+is blank. Temporary `GET /api/projects/resolve?legacy_id=...` is the only translator
+for old `project`, `memoryProject`, `docProject`, and explicit `principalProject`
+anchors. It preserves content IDs, query/filter/version/history and search-return
+state, and rejects late responses belonging to an older route. Missing scope never
+means all projects; explicit `all`/`current`/global policies are not Project IDs.
+
+`/projects/unresolved` separately lists retained groups and reads memory, document
+and issue records through `GET /api/projects/unresolved/{reference}/content` with
+`kind`, `limit`, `cursor`, and `q`. The matching `/history` reader takes the original
+`id`, `kind`, `limit`, and `cursor`. Records, version/audit fields and provenance
+supplied in those records, query, continuation and the original return link remain visible. The opaque reference
+never enters a normal project query, selector, identity computation or write form.
+Unknown/stale references and failed/mismatched readers show errors, not empty success.
+Content pages use the public Go DTO `{ reference, kind, items, total, next_cursor }`;
+`next_cursor` is null or a nonempty continuation string. Page-level `provenance` is
+not part of that response. The review keeps the real catalog reason/reference,
+original location, record metadata and history instead of requiring invented data.
+
+The required `reader_kinds` array is derived only from retained membership tables:
+`memories`, `versioned_documents`, `issues`, and `sources`. It is not a payload,
+availability, count or authorization claim. The review offers only those kinds,
+preferring memory when present; it never carries a previous group's kind into a
+new group. An empty array keeps the group visible as metadata-only for this
+review, including a group backed only by `projects`. No content/history request
+is sent for that group. This does not claim its original data is absent or grant
+access to separately authorized native/Vault readers. An explicitly linked
+unsupported kind remains visibly unavailable without silently substituting it.
+
+Document links retain their original path, requested version and comparison version.
+The review binds history to an explicit content ID, an exact matching record, or the
+single retained record for that path. It never substitutes another version as the
+selected content. Requested versions are highlighted in the read-only history;
+versions outside its current page remain visibly unavailable and history paging stays
+available. Issue detail links retain `/issues/{id}?project=<UUID>`; unresolved
+translation carries the same issue ID into the separate review.
+
+The review's Code choice uses `GET /api/projects/unresolved/{reference}/code` with
+`limit` and `cursor` only. It renders retained repository, working-copy and snapshot
+metadata; IDs and refs are technical provenance, never pin/read/index grants.
+The normal `POST /api/code/contexts` catalog retains Source/Checkout/View refs and
+may be narrowed with `project=<catalog UUID>`. Its `project_id: null` /
+`unresolved_reference` variant links to this review and is never a normal selection.
+
+These are coordinated source interfaces, not proof that Main readers or migrated data are live.
+
+The project-catalog seam checks canonical content decoding, malformed-record rejection,
+real record/history metadata and scoped selection/navigation. The focused
+`canonical retained SFC renders decoded records without page provenance` case in
+`tests/composables/auth-session.spec.mjs` compiles the real Vue page and renders real
+decoder output, checking record IDs, bodies, metadata fields and absence of render errors.
+These checks use synthetic public DTOs, not a live API or browser. Separately,
+Root accepted local real-reader evidence for the existing full 1000-byte memory,
+source/audit/return and the affected positive reader-kind controls in the recorded
+`a8f989c6855dad9928820f362b9b0f8dcc81dae3` UI/build540 + backend683 composition.
+The original locator-group 404 was identity-joined to that same metadata-only group;
+it is not a missing readable document. The old raw404/causeUNKNOWN and historical
+47513 preservationUNKNOWN remain unchanged. This does not close other legitimate
+document path/version/paging, R2 or installed/fresh-session obligations.
+Those receipts keep their original source/build/input identities: this doc-only edit
+does not rebuild or relabel build540, and the README is one of its producer inputs.
+Final Main build and delivery proof remain separate; no all-input equality, whole-ef76,
+production migration, human/principal privacy or release completion is claimed here.
+
+Human issue deletion sends `DELETE /api/issues/{id}?source_project=<selected canonical UUID>&source_agent=human`
+with no body. The selected acting project is separate from the content ID and the
+issue's original source/target; missing, all, pending or failed selection cannot dispatch.
+Issue selection snapshot, current and page POSTs carry the same actor fields at the
+top level, including cursor-only and empty-selection requests. Nested filter source
+fields remain row predicates, not actor attribution. Atomic operations retain the
+same acting context, generation guards, expiry and ID-bound readback.
+
+
+The mock uses the real bound `POST /api/code/contexts?project=<UUID>` shape, including
+`tab_binding_id` and `document_proof`. Human issue fixtures require explicit canonical
+source/target projects and `source_agent=human`; list filters apply before paging and
+counts. Vault fixtures retain exact project/name binding, explicit `scope=global`
+without `project`, and UUID/null `project_id` metadata. Values are returned only by
+the explicit reveal reader, never catalog, history or mutation readback metadata.
+
+
+Memory and document inventories require `project=<exact selected canonical ID>`.
+Their server-side literal, case-insensitive `query` and authorized `total` apply before
+offset/limit. Ordering is `created_at DESC, id DESC`, not last-update order.
+Memory filters use repeated parameters, such as `filter=low&filter=chain`, with independently
+enabled chips combined by AND before the visible total and page. Values are
+`all|active|flagged|stale|low|chain`; omitted means all, and explicit all is neutral.
+The server validates at most six incoming values, deduplicates them, and rejects unknown,
+blank or CSV values. Unknown confidence is not zero. Document query searches `path`, `doc_type`, and `author`,
+never bodies or vault data. Documents choose the latest version per path before filters.
+No array, `details=true`, stored-alias, display-name, or client 500-body fallback exists.
+
+Repeated `filter` values remain status/quality predicates, separate from types.
+The agreed Main type-reader contract uses repeated `epistemic_type` values for memory:
+exact `fact|experience|opinion|observation`, not legacy observation `decision/bugfix`.
+Documents use repeated literal `doc_type` values, without a fixed enum. `markdown` and
+`text` are examples, not the only choices. Omitted types are unrestricted; one selected
+type is the scalar subset. Any selected type matches (IN/OR), AND all other query/status/
+quality/canonical/privacy criteria before count/page. Document types apply after latest
+version selection per path, never to historical versions before choosing the latest.
+Each selector accepts at most six raw values before deduplication. Document values use
+Unicode whitespace trimming, valid UTF-8 up to128 bytes, no control characters, and
+nonempty values. There is no CSV parsing or blanket comma rejection for literal types.
+Visible memory chips toggle independently; document literal-entry chips are removable.
+The existing `docType` route field now retains arrays; `epistemic_type` is allowlisted
+safe navigation intent. Invalid/over-bound input stays explicit and becomes a visible
+local validation error without an unfiltered request, fake HTTP status or zero total.
+Raw `docType` URL entries are strictly decoded at the existing safe-navigation boundary.
+An undecodable entry stays an explicit null/invalid choice through list reading, visible
+chips, session storage and reauth return; it never becomes a valid percent-containing
+literal or an omitted filter. The existing nonempty-value check rejects that choice.
+Intentional `%FF` entered as a decoded literal or encoded as `docType=%25FF` remains
+valid, as do valid Unicode and commas. Every repeated entry is checked, including later
+corrupt values. This is scoped to the real type route boundary, not a blanket percent ban.
+All valid selected types use `URLSearchParams.append`, never a page-local500-row filter.
+This agreed interface authorizes UI source implementation; real backend SQL/privacy and
+actual integrated API/browser acceptance still require Main's implementation and proof.
+
+`GET /api/memories/:id?project=<canonical ID>` uses that same selected context; its DTO
+`project` must be canonical. Document current/version/history requests likewise use the
+selected canonical ID, never a raw stored alias. The server owns strict unique legacy
+alias resolution and privacy. Unknown/unregistered or ambiguous identities are not
+invented, auto-registered, merged, or presented as successfully empty projects.
+
+`GET /api/memories/:id/audit?project=<canonical ID>&limit=200` now requires the
+same exact selected canonical project as the detail reader; its DTO remains
+`{ memory_id, entries[] }`. Missing project is 400, nonlive project is 403, and
+cross-project/private-hidden memories are nondisclosing 404. Main owns the server's
+read-privacy and manage-permission enforcement; the client is not that security gate.
+The reader captures its target project, open ID and authentication revision before
+awaiting requests, rejects mismatched audit identities, drops obsolete responses,
+and clears rendered audit content on scope change or session loss/unmount. Explicit
+all-project browsing still audits only the selected record's canonical project,
+never `project=all`, a stored alias or a display label. Denials remain visible errors,
+not empty history. Existing query/filter/page and search return remain unchanged.
+
+“All projects” is explicit. Home never fans out knowledge bodies. Inventories require
+an explicit Find submission before composing pages over canonical descriptor IDs;
+ordering is by project, then by creation time within each project. A failed member
+read remains an error rather than a partial total presented as complete.
+
+The route preserves project, query, filters, page, page size, selected record/path,
+and document version/comparison. Per-project route state also stays in this tab's
+session storage so navigation back from another knowledge page survives a reload.
+Desktop uses master/detail; the narrow layout uses one reader column and hides the list.
+Opening focuses and scrolls the reader title into view. Back/Escape restores the result
+and its context. Generation guards isolate late list, content, version and mutation
+responses. Owner/privacy search remains a disclosed separate scope; collapsing it does
+not widen access. Audit events are not fictional previous-content versions.
+
+The source includes RU/EN/ZH task copy and retained accessibility affordances. Build
+success is compilation evidence only. Preserve the accepted local reader proofs at
+their exact identities; they do not certify all records, document versions/continuation,
+duplicate labels, privacy or viewport/keyboard cases outside their observed scope.
+Remaining applicable integration cases and the ordinary installed/fresh-session
+walkthrough stay open. A historical deployed 6.51 response, planned 7.0 manifest or
+local synthetic actor cannot prove current installed delivery.
+
+### Ordinary sign-in and recovery
+
+The shared header and an authentication-required notice expose ordinary email/password
+sign-in through the existing `POST /api/auth/user-login` contract. The API wrapper keeps
+`credentials: include`; Go owns the HttpOnly cookie. No token, password, account, provider
+or proxy model is introduced. The dialog clears both fields after submission and on close,
+Escape or backdrop dismissal; credentials never enter browser storage or diagnostics.
+
+Only fresh `GET /api/auth/me` evidence establishes authentication, the server role and
+`auth_disabled`. Anonymous, expired and unavailable identity states do not invent an
+operator, role, provider or current session. All JSON and raw-response API callers share
+401 observation through the existing request seam, including mutation readback and code
+readers/grants. A protected-data or authMe 401 removes the prior verified identity and
+offers sign-in again. Credential-login 400/401 does not revoke a verified session; 403
+remains an authorization error, not a role upgrade. Diagnostic 401 still requires sign-in.
+Unsupported 404/405 and forbidden diagnostics do not declare a whole-server outage:
+the shared status reports unavailable diagnostics and leaves unknown health/count/version
+unknown. Two core transport/server failures report unavailable; one reports degraded.
+Observed unhealthy service checks also report degraded; healthy zero needs actual healthy
+selfcheck evidence. Session login/logout does not depend on diagnostic capability.
+The footer makes no database-engine/version claim; the existing selfcheck version is
+shown only when present, otherwise unknown. Technical failures remain in settings.
+A server-confirmed `auth_disabled` mode remains distinct from a human login session.
+
+The layout does not render its protected page slot or settings payload until authMe
+confirms authentication or legitimate `auth_disabled`. On auth loss it unmounts readers;
+late responses cannot restore them. A successful account logout also withholds cached
+content while authMe checks the ended session. Failed logout 405/503 keeps the verified
+session and reports failure.
+
+After confirmed login, a fresh document refetches content under the current cookie.
+The existing knowledge-navigation seam retains only allowlisted canonical project,
+query/AND filters/page, reader-return and document version/comparison intent, including
+unsubmitted search/path/type drafts captured before readers unmount. It stores no reader
+payload, export artifact, mutation result, credential or session secret. Principal filter
+controls retain their exact visibility but require an explicit new query; recovery never
+replays a failed mutation or automatically repeats a private-scope read.
+Account sign-out uses `POST /api/auth/user-logout`, not master-token logout. An unavailable
+endpoint (including 405), server error or unconfirmed readback stays a visible failure;
+the UI does not fabricate successful session clearing.
+
+The focused `tests/composables/auth-session.spec.mjs` checks the real shared transport,
+session state and login-dialog submission/clearing with finite synthetic responses. It is
+not proof of cookie persistence,
+native-dialog keyboard behavior or ordinary-user acceptance: those require the parent's
+fresh real-API Chrome journey against the integrated candidate.
+
+The F3/F4 regression subset in that same test file mounts the actual Vue search/layout/
+memory consumers and exercises real composable requests with finite synthetic responses.
+It checks unsupported/forbidden/outage recovery, literal canonical text links, retry,
+selected-memory return, unknown diagnostics and observed health/version. It is not new
+ordinary-credential, Chrome, production, PostgreSQL or installed-delivery proof. The
+original R3 ordinary journey remains an input; changed-surface acceptance still requires
+the parent's existing isolated Chrome target after coherent backend fixes. Memory audit
+availability and standalone multiple-type selection remain separate owner boundaries.
+
+The F1 `memory audit` regression subset mounts the same actual Vue/composable consumers
+with finite synthetic responses. It checks authorized history rendering, visible denial,
+canonical record/project binding, late-context and late-auth response rejection, logout
+payload clearing, and preserved query/filter return. It is not real backend privacy,
+legitimate-event, ordinary-credential or Chrome acceptance; those remain with Main/Root.
+
+The `multi-type` compiled-consumer subset checks ordinary visible type choices, OR with
+other criteria AND, server-page totals/older-page consumption, detail/version return,
+canonical scope, safe reauth/navigation persistence and malformed/over-bound input.
+Its finite synthetic reader responses exercise the actual UI, not real SQL/privacy or
+Chrome/mobile acceptance. Historical build1002/A/F1 proofs are preserved inputs; the
+parent must rebind the final committed build before a narrow real-consumer walkthrough.
+The `raw type URL` edge subset reproduces the installed Vue Router decode fallback and
+checks malformed escapes/UTF-8, later repeated corruption, invalid reauth preservation,
+valid encoded/decoded percent literals, Unicode/comma, control/byte bounds and page/
+version return. Its RED/GREEN source proof does not relabel historical14/build1045 or
+prove actual backend SQL/privacy/Chrome behavior.
+
+
+
 ## Runtime invariants
 
 - Source/Checkout/View and explicit grants remain server authority. Human repository,
@@ -289,6 +626,27 @@ The standalone Compose file maps `OPERATOR_WEB_API_TARGET` to that same
 Its static host listens on `HOST=0.0.0.0` and `PORT=3000`; no Nuxt/Nitro
 environment aliases remain in this deployment path.
 
+The optional process environment variable `ENGRAM_OPERATOR_OUTPUT_ROOT` redirects build
+artifacts; an unset or empty value keeps the existing `.output` layout and locale-copy
+behavior. Absolute paths are used directly; relative paths resolve from this app directory.
+With an override, `npm run build` writes `public/index.html`, `public/_nuxt/`,
+`public/i18n/locales/`, `server/index.mjs`, `auto-imports.d.ts`, `components.d.ts` and
+Vite's `cache/` below that root. The locale producer first recreates only the root's
+`static-public/` staging directory, then copies source `public/` assets and current
+`i18n/locales/` into it, so deleted source assets cannot survive repeated staging.
+Vite uses that staging directory as `publicDir`, separately from the `public/` output it
+empties. Other files below the output root are not removed by the copier. Source `public/`,
+the default `.output/` and existing `node_modules/` are not build destinations when the
+override is active. The build uses Vite's native config loader on the supported Node version,
+so it does not create a bundled config in `node_modules/.vite-temp`. Keep the same variable
+for `node scripts/check-static-assets.mjs`; launch the prepared host with
+`node <output-root>/server/index.mjs` instead of the default `npm run preview`.
+The caller must admit the exact finite output root first: the variable grants no filesystem
+permission or byte quota. For a confined npm invocation, also put npm's own cache/logs
+(`npm_config_cache`) and OS temporary files (`TMPDIR`, `TMP`, `TEMP`) inside that admitted
+root; capture build logs there. Budget staged public/locales, generated public bundles,
+both declaration files, the host entry, cache, temporary files and logs together.
+
 Use Node 22.22.3 or newer. The release script and Docker build pin the same Linux Node
 version; the release archive checksum and Docker digest remain independent pins. Run
 `npm ci`, `npm audit --package-lock-only --audit-level=high --json`, `npm run build`
@@ -308,6 +666,11 @@ npm run test:browser
 npm run test:browser:live
 ```
 
+`test:seam` deliberately selects the copier regression, seven composable `.mjs` test
+files, and the mutation parser/executor cases in `tests/composables/useApi.spec.ts`.
+The latter uses the existing test-local TypeScript transpile/import convention for
+real production modules; Node strips only the test's own type annotations.
+
 Run only the focused commands selected by the active Feature 011 task from the exact bound
 candidate. Mock browser and parity checks are scoped evidence, not complete D-A acceptance.
 The mock Rules selection follows the real browser-session boundary: browser tests set a
@@ -322,3 +685,9 @@ switch refusal, committed switches with lost/timed-out responses, same-context i
 continuity across reconfirmation/reload, and current-snapshot rejection. This is UI-layer
 smoke evidence, not a real-API, physical-LAN, semantic-provider, installed or release
 acceptance claim.
+
+Knowledge browser fixtures retain mutation-result, privacy, deep-link, and late-response
+coverage with canonical project parameters and reader envelopes. Old assertions that
+required Home charts, automatic all-project body loading, disabled capability buttons,
+or a page-local capped corpus were removed rather than repinned as product requirements.
+They remain fixture checks, not ordinary-user or installed acceptance.

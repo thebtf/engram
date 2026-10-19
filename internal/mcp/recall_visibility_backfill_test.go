@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/thebtf/engram/internal/auth"
+	dbgorm "github.com/thebtf/engram/internal/db/gorm"
 )
 
 // TestRecall_ScopeInvisibleNewestDoNotTruncate_CodexP1Cycle3 is the regression
@@ -42,9 +43,10 @@ import (
 // count==2 fails because the older project rows never enter the candidate
 // pool.
 func TestRecall_ScopeInvisibleNewestDoNotTruncate_CodexP1Cycle3(t *testing.T) {
-	project := "t009-recall-backfill-" + uuid.NewString()
+	project := uuid.NewString()
 	env := newMemoryServerForT007(t, project)
 	db := env.store.DB
+	require.NoError(t, db.Create(&dbgorm.Project{ID: project}).Error)
 
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
 
@@ -136,9 +138,10 @@ func TestRecall_ScopeInvisibleNewestDoNotTruncate_CodexP1Cycle3(t *testing.T) {
 }
 
 func TestRecall_PrincipalPrivateInvisibleNewestDoNotTruncate_FlagOff(t *testing.T) {
-	project := "pim-recall-backfill-" + uuid.NewString()
+	project := uuid.NewString()
 	env := newMemoryServerForT007(t, project)
 	db := env.store.DB
+	require.NoError(t, db.Create(&dbgorm.Project{ID: project}).Error)
 
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
 
@@ -191,9 +194,10 @@ func TestRecall_PrincipalPrivateInvisibleNewestDoNotTruncate_FlagOff(t *testing.
 }
 
 func TestRecallMemory_PrincipalPrivateInvisibleAndSharedAttributed_FlagOff(t *testing.T) {
-	project := "pim-recall-memory-" + uuid.NewString()
+	project := uuid.NewString()
 	env := newMemoryServerForT007(t, project)
 	db := env.store.DB
+	require.NoError(t, db.Create(&dbgorm.Project{ID: project}).Error)
 
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
 	t.Setenv("ENGRAM_VNEXT_ENABLED", "")
@@ -232,9 +236,10 @@ func TestRecallMemory_PrincipalPrivateInvisibleAndSharedAttributed_FlagOff(t *te
 }
 
 func TestRecallMemory_DomainOwnedInvisibleNewestDoNotTruncate_FlagOff(t *testing.T) {
-	project := "pim-recall-domain-backfill-" + uuid.NewString()
+	project := uuid.NewString()
 	env := newMemoryServerForT007(t, project)
 	db := env.store.DB
+	require.NoError(t, db.Create(&dbgorm.Project{ID: project}).Error)
 
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
 	t.Setenv("ENGRAM_VNEXT_ENABLED", "")
@@ -290,9 +295,10 @@ func TestRecallMemory_DomainOwnedInvisibleNewestDoNotTruncate_FlagOff(t *testing
 }
 
 func TestRecallMemory_TG3IncludeSupersededLegacyPath(t *testing.T) {
-	project := "pim-recall-superseded-" + uuid.NewString()
+	project := uuid.NewString()
 	env := newMemoryServerForT007(t, project)
 	db := env.store.DB
+	require.NoError(t, db.Create(&dbgorm.Project{ID: project}).Error)
 
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
 	t.Setenv("ENGRAM_VNEXT_ENABLED", "")
@@ -337,7 +343,7 @@ func TestRecallMemory_IncludeSupersededFlagOffIgnoredInHybrid(t *testing.T) {
 		t.Skip("DATABASE_DSN not set, skipping hybrid DB-backed compatibility test")
 	}
 
-	project := "pim-recall-superseded-hybrid-flagoff-" + uuid.NewString()
+	project := uuid.NewString()
 	env := newMemoryServerForT007(t, project)
 
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")

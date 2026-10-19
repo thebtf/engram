@@ -3,48 +3,23 @@ package engramcore
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/module"
 	"github.com/thebtf/engram/internal/projectidentity"
-	"github.com/thebtf/engram/internal/proxy"
 	"github.com/thebtf/engram/internal/uci"
 	"github.com/thebtf/engram/internal/version"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
-	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
-	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/encoding/protojson"
 )
 
-const (
-	proxyToolsDiscoveryTimeout        = 30 * time.Second
-	projectIdentityV3RegistrationTool = "project_identity.register_v3"
-)
+const proxyToolsDiscoveryTimeout = 30 * time.Second
 
-const (
-	projectIdentityResolutionRefusedMessage     = "project identity resolution refused"
-	projectIdentityResolutionUnavailableMessage = "project identity resolution unavailable"
-)
-
-var projectIdentityV3RegistrationSchema = json.RawMessage(`{"type":"object","additionalProperties":false}`)
-
-func daemonComparisonContextV3(ctx context.Context) context.Context {
-	outgoing, _ := metadata.FromOutgoingContext(ctx)
-	outgoing = outgoing.Copy()
-	if len(outgoing.Get("x-request-id")) != 1 {
-		outgoing.Set("x-request-id", uuid.NewString())
-	}
-	outgoing.Set("x-engram-project-identity-adapter", "daemon")
-	return metadata.NewOutgoingContext(ctx, outgoing)
-}
+const projectIdentityResolutionRefusedMessage = "project identity resolution refused"
 
 // ProxyTools fetches the dynamic tool set from the engram server via a gRPC
 // Initialize handshake. Implements module.ProxyToolProvider per FR-11a.
@@ -66,10 +41,6 @@ func (m *Module) ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]mo
 	token := m.envFor(p, config.EnvWorkstationToken)
 	discoveryCtx, cancel := context.WithTimeout(ctx, proxyToolsDiscoveryTimeout)
 	defer cancel()
-	v3Identity, v3Enabled, err := m.v3Identity(discoveryCtx, p)
-	if err != nil {
-		return nil, &module.RequiredProxyToolsError{Cause: err}
-	}
 
 	conn, err := m.pool.getOrDialGRPC(serverURL, token)
 	if err != nil {
@@ -77,43 +48,15 @@ func (m *Module) ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]mo
 	}
 	client := pb.NewEngramServiceClient(conn)
 
+	// The catalogue is independent of local project state.
 	request := &pb.InitializeRequest{ClientName: "engram-daemon", ClientVersion: daemonClientVersion}
-	unscopedUCIDiscovery := v3Enabled && v3Identity == nil
-	if v3Enabled && !unscopedUCIDiscovery {
-		request.ProjectIdentityV3 = v3Identity
-		discoveryCtx = daemonComparisonContextV3(discoveryCtx)
-	} else if !v3Enabled {
-		project, projectIdentity, identityErr := m.proxyV2Identity(discoveryCtx, p)
-		if identityErr != nil {
-			return nil, &module.RequiredProxyToolsError{Cause: fmt.Errorf("project identity v2: %w", identityErr)}
-		}
-		request.Project = project
-		request.ProjectIdentity = projectIdentity
-	}
-
 	resp, err := client.Initialize(discoveryCtx, request, grpc.WaitForReady(true))
-	if v3Enabled && !unscopedUCIDiscovery && isV3OnboardingRequired(err) {
-		request.ProjectIdentityV3 = nil
-		unscopedUCIDiscovery = true
-		resp, err = client.Initialize(discoveryCtx, request, grpc.WaitForReady(true))
-	}
 	if err != nil {
-		if v3Enabled {
-			return nil, &module.RequiredProxyToolsError{Cause: v3ProxyError(err)}
-		}
 		return nil, &module.RequiredProxyToolsError{Cause: fmt.Errorf("gRPC Initialize: %w", err)}
-	}
-	if v3Enabled && !unscopedUCIDiscovery {
-		if err := validateV3Resolution(resp.GetProjectResolutionV3(), resp.GetCanonicalProject(), v3Identity); err != nil {
-			return nil, &module.RequiredProxyToolsError{Cause: err}
-		}
 	}
 
 	tools := make([]module.ToolDef, 0, len(resp.Tools))
 	for _, t := range resp.Tools {
-		if t.GetName() == projectIdentityV3RegistrationTool || (unscopedUCIDiscovery && !isUCIProxyTool(t.GetName())) {
-			continue
-		}
 		tools = append(tools, module.ToolDef{
 			Name:        t.Name,
 			Description: t.Description,
@@ -128,75 +71,6 @@ func (m *Module) ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]mo
 	}
 
 	return tools, nil
-}
-
-// Tools returns the one stable setup tool for a V3-configured daemon. V2
-// instances return no extra static tool and retain their existing surface.
-// V3 dispatch is static; V2 rejects the reserved name before proxy work.
-func (m *Module) Tools() []module.ToolDef {
-	if m.v3ClientInstanceID == "" {
-		return nil
-	}
-	return []module.ToolDef{{
-		Name:        projectIdentityV3RegistrationTool,
-		Description: "Explicitly register the current repository's V3 project identity. Takes no arguments and requires a server-authenticated master/admin identity.",
-		InputSchema: projectIdentityV3RegistrationSchema,
-	}}
-}
-
-// HandleTool executes the descriptor-only V3 registration setup operation.
-// It never constructs a V2 selector or accepts client project authority.
-func (m *Module) HandleTool(ctx context.Context, p muxcore.ProjectContext, name string, args json.RawMessage) (json.RawMessage, error) {
-	if name != projectIdentityV3RegistrationTool {
-		return nil, &module.ModuleError{Code: "tool_not_found", Message: "unknown tool"}
-	}
-	if m.v3ClientInstanceID != "" {
-		m.cache.Forget(p.ID)
-	}
-	if !hasNoRegistrationArguments(args) {
-		return nil, &module.ModuleError{Code: "tool_input_invalid", Message: "project_identity.register_v3 accepts no arguments"}
-	}
-
-	identity, v3Enabled, err := m.v3Identity(ctx, p)
-	if err != nil {
-		return nil, err
-	}
-	if !v3Enabled {
-		return nil, &module.ModuleError{Code: "PROJECT_DESCRIPTOR_UNSUPPORTED", Message: projectIdentityResolutionRefusedMessage}
-	}
-	if identity == nil {
-		return nil, &module.ModuleError{Code: "PROJECT_ANCHOR_INVALID", Message: projectIdentityResolutionRefusedMessage}
-	}
-	serverURL, err := m.requireServerURL(p)
-	if err != nil {
-		return nil, &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: projectIdentityResolutionUnavailableMessage}
-	}
-	conn, err := m.pool.getOrDialGRPC(serverURL, m.envFor(p, config.EnvWorkstationToken))
-	if err != nil {
-		return nil, &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: projectIdentityResolutionUnavailableMessage}
-	}
-	response, err := pb.NewEngramServiceClient(conn).RegisterProjectIdentityV3(daemonComparisonContextV3(ctx),
-		&pb.RegisterProjectIdentityV3Request{ProjectIdentityV3: identity}, grpc.WaitForReady(true))
-	if err != nil {
-		return nil, v3ProxyError(err)
-	}
-	resolution := response.GetProjectResolutionV3()
-	if err := validateV3Resolution(resolution, resolution.GetProjectKey(), identity); err != nil {
-		return nil, err
-	}
-	result, err := protojson.Marshal(resolution)
-	if err != nil {
-		return nil, &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: projectIdentityResolutionUnavailableMessage}
-	}
-	return result, nil
-}
-
-func hasNoRegistrationArguments(args json.RawMessage) bool {
-	if len(args) == 0 {
-		return true
-	}
-	var fields map[string]json.RawMessage
-	return json.Unmarshal(args, &fields) == nil && fields != nil && len(fields) == 0
 }
 
 // ProxyHandleTool forwards a tools/call request to the engram server via
@@ -220,9 +94,6 @@ func hasNoRegistrationArguments(args json.RawMessage) bool {
 //	    sentinel and wraps with isError:true. End result is byte-identical
 //	    to v4.2.0 both in content and in the isError boolean.
 func (m *Module) ProxyHandleTool(ctx context.Context, p muxcore.ProjectContext, name string, args json.RawMessage) (json.RawMessage, error) {
-	if name == projectIdentityV3RegistrationTool {
-		return nil, &module.ModuleError{Code: "PROJECT_DESCRIPTOR_UNSUPPORTED", Message: projectIdentityResolutionRefusedMessage}
-	}
 	sessionID, uciTool, err := m.proxyToolSession(ctx, p, name)
 	if err != nil {
 		return nil, err
@@ -242,7 +113,7 @@ func (m *Module) ProxyHandleTool(ctx context.Context, p muxcore.ProjectContext, 
 		return nil, fmt.Errorf("gRPC connect: %w", err)
 	}
 	request := &pb.CallToolRequest{ToolName: name, ArgumentsJson: args, SessionId: sessionID}
-	callCtx, v3Identity, v3Enabled, err := m.proxyToolCallContext(ctx, p, request, uciTool)
+	callCtx, err := m.proxyToolCallContext(ctx, p, request, uciTool)
 	if err != nil {
 		return nil, err
 	}
@@ -251,15 +122,7 @@ func (m *Module) ProxyHandleTool(ctx context.Context, p muxcore.ProjectContext, 
 	}
 	response, err := pb.NewEngramServiceClient(conn).CallTool(callCtx, request)
 	if err != nil {
-		if !uciTool && v3Enabled {
-			return nil, v3ProxyError(err)
-		}
 		return nil, fmt.Errorf("gRPC CallTool: %w", err)
-	}
-	if !uciTool && v3Enabled {
-		if err := validateV3Resolution(response.GetProjectResolutionV3(), response.GetCanonicalProject(), v3Identity); err != nil {
-			return nil, err
-		}
 	}
 	block, mErr := buildInnerBlock(response.ContentJson)
 	if mErr != nil {
@@ -286,29 +149,24 @@ func (m *Module) proxyToolSession(ctx context.Context, project muxcore.ProjectCo
 	return sessionID, true, err
 }
 
-func (m *Module) proxyToolCallContext(ctx context.Context, project muxcore.ProjectContext, request *pb.CallToolRequest, uciTool bool) (context.Context, *pb.ProjectIdentityV3, bool, error) {
+func (m *Module) proxyToolCallContext(ctx context.Context, project muxcore.ProjectContext, request *pb.CallToolRequest, uciTool bool) (context.Context, error) {
 	if uciTool {
-		callCtx, err := uciClientOutgoingContext(ctx, m.v3ClientInstanceID)
-		return callCtx, nil, false, err
+		return uciClientOutgoingContext(ctx, m.v3ClientInstanceID)
 	}
-	v3Identity, v3Enabled, err := m.v3Identity(ctx, project)
+	if !projectidentity.ToolRequiresProject(request.ToolName, request.ArgumentsJson) {
+		return ctx, nil
+	}
+	serverURL, err := m.requireServerURL(project)
 	if err != nil {
-		return nil, nil, false, err
+		return nil, err
 	}
-	if v3Enabled {
-		if v3Identity == nil {
-			return nil, nil, false, &module.ModuleError{Code: "PROJECT_ANCHOR_INVALID", Message: projectIdentityResolutionRefusedMessage}
-		}
-		request.ProjectIdentityV3 = v3Identity
-		return daemonComparisonContextV3(ctx), v3Identity, true, nil
-	}
-	projectSlug, projectIdentity, err := m.proxyV2Identity(ctx, project)
+	resolved, err := projectidentity.ResolveLogicalProject(ctx, project.Cwd,
+		projectidentity.HTTPBootstrap(serverURL, m.envFor(project, config.EnvWorkstationToken)))
 	if err != nil {
-		return nil, nil, false, fmt.Errorf("project identity v2: %w", err)
+		return nil, &module.ModuleError{Code: projectidentity.ProjectErrorCode(err), Message: "project context unavailable"}
 	}
-	request.Project = projectSlug
-	request.ProjectIdentity = projectIdentity
-	return ctx, nil, false, nil
+	request.Project = resolved.ProjectID
+	return ctx, nil
 }
 
 func isUCIProxyTool(name string) bool {
@@ -318,110 +176,6 @@ func isUCIProxyTool(name string) bool {
 	default:
 		return false
 	}
-}
-
-func (m *Module) proxyV2Identity(ctx context.Context, p muxcore.ProjectContext) (string, *pb.ProjectIdentityV2, error) {
-	if m.v3ClientInstanceID == "" {
-		slug := m.cache.Resolve(ctx, p)
-		identity, err := m.cache.ResolveIdentity(ctx, p)
-		return slug, identity, err
-	}
-	m.cache.mu.RLock()
-	defer m.cache.mu.RUnlock()
-	key := cacheKey(p)
-	if _, ok := m.cache.legacy[key]; !ok {
-		return "", nil, errors.New("legacy workspace identity invalidated")
-	}
-	slug, slugOK := m.cache.entries.Load(key)
-	identity, identityOK := m.cache.identities.Load(key)
-	if !slugOK || !identityOK {
-		return "", nil, errors.New("legacy workspace identity unavailable")
-	}
-	return slug.(resolvedSlug).id, identity.(*pb.ProjectIdentityV2), ctx.Err()
-}
-
-// v3Identity selects the existing V2 producer for validated legacy Git
-// workspaces. Every other configured scope remains exclusively V3.
-func (m *Module) v3Identity(ctx context.Context, p muxcore.ProjectContext) (*pb.ProjectIdentityV3, bool, error) {
-	if m.v3ClientInstanceID == "" {
-		return nil, false, nil
-	}
-	legacy, legacyErr := m.cache.resolveLegacyWorkspace(ctx, p)
-	if legacyErr != nil {
-		return nil, true, &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: projectIdentityResolutionUnavailableMessage}
-	}
-	if legacy {
-		return nil, false, nil
-	}
-	identity, err := m.cache.ResolveIdentityV3(ctx, p, m.v3ClientInstanceID)
-	if err == nil {
-		return identity, true, nil
-	}
-	var inputErr *projectIdentityV3InputError
-	if errors.As(err, &inputErr) {
-		return nil, true, &module.ModuleError{Code: inputErr.code, Message: projectIdentityResolutionRefusedMessage}
-	}
-	return nil, true, &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: projectIdentityResolutionUnavailableMessage}
-}
-
-func isV3OnboardingRequired(err error) bool {
-	grpcStatus, ok := status.FromError(err)
-	if !ok || grpcStatus.Code() != codes.FailedPrecondition {
-		return false
-	}
-	details := grpcStatus.Details()
-	if len(details) != 1 {
-		return false
-	}
-	info, ok := details[0].(*errdetails.ErrorInfo)
-	return ok && info.GetDomain() == "engram.project_identity.v3" && info.GetReason() == string(projectidentity.ProjectOnboardingRequiredOutcomeV3)
-}
-
-// v3ProxyError preserves only the server's typed refusal outcome. It rejects
-// every other upstream diagnostic so paths, credentials, candidates, and DB
-// text cannot reach an MCP client.
-func v3ProxyError(err error) error {
-	if grpcStatus, ok := status.FromError(err); ok {
-		for _, detail := range grpcStatus.Details() {
-			info, ok := detail.(*errdetails.ErrorInfo)
-			if !ok || info.GetDomain() != "engram.project_identity.v3" {
-				continue
-			}
-			outcome := projectidentity.ResolutionOutcomeV3(info.GetReason())
-			if outcome.IsRefusal() {
-				return &module.ModuleError{Code: info.GetReason(), Message: projectIdentityResolutionRefusedMessage}
-			}
-		}
-	}
-	return &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: projectIdentityResolutionUnavailableMessage}
-}
-
-// validateV3Resolution admits only a complete, server-issued canonical scope
-// consistent with the submitted descriptor. The daemon does not cache or reuse
-// the result as client authority.
-func validateV3Resolution(resolution *pb.ProjectResolutionResultV3, canonicalProject string, identity *pb.ProjectIdentityV3) error {
-	if resolution == nil || identity == nil || canonicalProject != resolution.GetProjectKey() || identity.GetScope() != resolution.GetResolvedScope() {
-		return &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: projectIdentityResolutionUnavailableMessage}
-	}
-	projectKey, err := projectidentity.NewProjectKeyV3(resolution.GetProjectKey())
-	if err != nil {
-		return &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: projectIdentityResolutionUnavailableMessage}
-	}
-	correlation, err := projectidentity.NewCorrelationV3(resolution.GetCorrelation())
-	if err != nil {
-		return &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: projectIdentityResolutionUnavailableMessage}
-	}
-	if _, err := projectidentity.NewSuccessResultV3(
-		projectidentity.ResolveExistingIntentV3,
-		projectidentity.ResolutionOutcomeV3(resolution.GetOutcome().String()),
-		projectKey,
-		projectidentity.ResolvedScopeV3(resolution.GetResolvedScope()),
-		projectidentity.RedirectReferenceV3(resolution.GetRedirectReference()),
-		correlation,
-	); err != nil {
-		return &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: projectIdentityResolutionUnavailableMessage}
-	}
-	return nil
 }
 
 // buildInnerBlock wraps the server-provided content bytes in the standard
@@ -443,19 +197,3 @@ func buildInnerBlock(contentJSON []byte) (json.RawMessage, error) {
 // daemonClientVersion is the ClientVersion string sent in gRPC
 // InitializeRequest. Bumped alongside Constitution §15 unified version.
 var daemonClientVersion = version.Daemon
-
-func resolveProjectIdentityV2(ctx context.Context, cwd string) (*pb.ProjectIdentityV2, error) {
-	identity, err := proxy.ResolveProjectIdentityV2(ctx, cwd)
-	if err != nil {
-		return nil, err
-	}
-	return &pb.ProjectIdentityV2{
-		Version:         identity.Version,
-		LegacyProjectId: identity.LegacyProjectID,
-		DisplayName:     identity.DisplayName,
-		GitRemote:       identity.GitRemote,
-		RelativePath:    identity.RelativePath,
-		NonGitAnchor:    identity.NonGitAnchor,
-		AnchorShared:    identity.AnchorShared,
-	}, nil
-}

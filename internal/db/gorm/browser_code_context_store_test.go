@@ -37,7 +37,7 @@ func TestBrowserCodeContextStore_CatalogDistinguishesPublishedAndInitialTargets(
 		"expires_at": expiredAt,
 	}).Error)
 
-	entries, err := fixture.store.ListCatalog(context.Background(), fixture.user.ID)
+	entries, err := fixture.store.ListCatalog(context.Background(), fixture.user.ID, BrowserCodeCatalogFilter{})
 	require.NoError(t, err)
 	require.Len(t, entries, 2)
 
@@ -111,7 +111,7 @@ func TestBrowserCodeContextStore_CatalogDistinguishesSameBranchWorktreesByOwnerL
 	_, err = grants.SetOwnerChoiceLabel(ctx, fixture.user.ID, principal, secondCheckout.CheckoutID, "Laptop workstation · release")
 	require.NoError(t, err)
 
-	entries, err := fixture.store.ListCatalog(ctx, fixture.user.ID)
+	entries, err := fixture.store.ListCatalog(ctx, fixture.user.ID, BrowserCodeCatalogFilter{})
 	require.NoError(t, err)
 	byCheckout := make(map[string]BrowserCodeContextCatalogEntry, len(entries))
 	for _, entry := range entries {
@@ -338,7 +338,7 @@ func TestBrowserCodeContextStoreExpiredGrantDeniesPinAndReauthorization(t *testi
 	assertBrowserCodeContextAuditCount(t, fixture.db, "code_context_pinned", 0)
 	_, err = fixture.store.ReauthorizeIndexIntent(ctx, target)
 	require.ErrorIs(t, err, ErrBrowserCodeContextDenied)
-	entries, err := fixture.store.ListCatalog(ctx, fixture.user.ID)
+	entries, err := fixture.store.ListCatalog(ctx, fixture.user.ID, BrowserCodeCatalogFilter{})
 	require.NoError(t, err)
 	require.Empty(t, entries)
 
@@ -365,7 +365,7 @@ func TestBrowserCodeContextStore_OwnerTransferAndDisabledIssuerDenyCatalogAndPin
 	fixture.binding, err = NewBrowserTabBindingStore(fixture.db).Create(ctx, browserTabBindingTestCreate(fixture.caller, fixture.materials))
 	require.NoError(t, err)
 
-	entries, err := fixture.store.ListCatalog(ctx, reader.ID)
+	entries, err := fixture.store.ListCatalog(ctx, reader.ID, BrowserCodeCatalogFilter{})
 	require.NoError(t, err)
 	require.Len(t, entries, 1, "legitimate reader sees the owner's published View")
 	require.Equal(t, fixture.reference(), *entries[0].Context)
@@ -373,7 +373,7 @@ func TestBrowserCodeContextStore_OwnerTransferAndDisabledIssuerDenyCatalogAndPin
 	checkDenied := func() {
 		t.Helper()
 		pinErr := fixture.store.Pin(ctx, fixture.pin(fixture.reference()))
-		entries, err := fixture.store.ListCatalog(ctx, reader.ID)
+		entries, err := fixture.store.ListCatalog(ctx, reader.ID, BrowserCodeCatalogFilter{})
 		require.NoError(t, err)
 		require.ErrorIs(t, pinErr, ErrBrowserCodeContextDenied)
 		require.Empty(t, entries)

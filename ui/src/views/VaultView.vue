@@ -1,9 +1,12 @@
 <script setup lang="ts">
-import { ref, computed, watch, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useUiI18n } from '@/composables/useUiI18n'
 import { useVault } from '@/composables/useVault'
 import { safeAbsoluteDate } from '@/utils/formatters'
 import { copyToClipboard } from '@/utils/clipboard'
+import type { VaultCredential } from '@/utils/api'
+import { useProjectCatalog } from '@/composables/useProjectCatalog'
+import ProjectCatalogStatus from '@/components/ProjectCatalogStatus.vue'
 import EmptyState from '@/components/layout/EmptyState.vue'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -53,10 +56,12 @@ const {
   removeCredential,
 } = useVault()
 const { t } = useUiI18n()
+const { unresolved, selectionPending, selectionError, unresolvedReference, projectName, refresh } = useProjectCatalog('all')
+onMounted(() => { void refresh().catch(() => {}) })
 
-const deleteTarget = ref<{ name: string; project?: string } | null>(null)
+const deleteTarget = ref<VaultCredential | null>(null)
 const showDeleteConfirm = ref(false)
-const copyFeedback = ref<string | null>(null)
+const copyFeedback = ref<number | null>(null)
 
 // Countdown tick for revealed values
 const now = ref(Date.now())
@@ -89,22 +94,22 @@ onUnmounted(() => {
   stopTick()
 })
 
-function remainingSeconds(name: string): number {
-  const entry = revealedValues.value[name]
+function remainingSeconds(id: number): number {
+  const entry = revealedValues.value[id]
   if (!entry) return 0
   return Math.max(0, Math.ceil((entry.expiresAt - now.value) / 1000))
 }
 
-async function copyValue(value: string, name: string) {
+async function copyValue(value: string, id: number) {
   const ok = await copyToClipboard(value)
   if (ok) {
-    copyFeedback.value = name
+    copyFeedback.value = id
     setTimeout(() => { copyFeedback.value = null }, 2000)
   }
 }
 
-function confirmDelete(name: string, project?: string) {
-  deleteTarget.value = { name, project }
+function confirmDelete(credential: VaultCredential) {
+  deleteTarget.value = credential
   showDeleteConfirm.value = true
 }
 
@@ -112,7 +117,7 @@ async function handleDelete() {
   if (!deleteTarget.value) return
   showDeleteConfirm.value = false
   try {
-    await removeCredential(deleteTarget.value.name, deleteTarget.value.project)
+    await removeCredential(deleteTarget.value)
   } catch {
     // Error handled by composable
   }
@@ -124,6 +129,7 @@ async function handleDelete() {
 
 <template>
   <div class="space-y-6 pt-4">
+    <ProjectCatalogStatus :records="unresolved" :pending="selectionPending" :error="selectionError" :reference="unresolvedReference" />
     <!-- Header -->
     <div class="flex items-center justify-between">
       <div class="flex items-center gap-3">
@@ -210,44 +216,46 @@ async function handleDelete() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            <TableRow v-for="cred in credentials" :key="cred.name">
+            <TableRow v-for="cred in credentials" :key="cred.id">
               <TableCell>
                 <div class="flex items-center gap-2">
                   <Key class="size-3.5 text-amber-500/70 shrink-0" />
                   <span class="font-medium text-sm">{{ cred.name }}</span>
                 </div>
                 <!-- Revealed value inline -->
-                <div v-if="revealedValues[cred.name]" class="mt-2 flex items-center gap-2">
+                <div v-if="revealedValues[cred.id]" class="mt-2 flex items-center gap-2">
                   <code class="px-2 py-1 rounded bg-muted border text-xs text-green-500 font-mono max-w-xs truncate">
-                    {{ revealedValues[cred.name].value }}
+                    {{ revealedValues[cred.id].value }}
                   </code>
                   <span class="text-[10px] text-amber-500 whitespace-nowrap">
-                    {{ t.vault.hidesIn.replace('{seconds}', String(remainingSeconds(cred.name))) }}
+                    {{ t.vault.hidesIn.replace('{seconds}', String(remainingSeconds(cred.id))) }}
                   </span>
                   <Button
                     variant="ghost"
                     size="icon-sm"
-                    :title="copyFeedback === cred.name ? t.vault.copied : t.vault.copy"
-                    @click="copyValue(revealedValues[cred.name].value, cred.name)"
+                    :title="copyFeedback === cred.id ? t.vault.copied : t.vault.copy"
+                    @click="copyValue(revealedValues[cred.id].value, cred.id)"
                   >
-                    <Check v-if="copyFeedback === cred.name" class="size-3.5 text-green-500" />
+                    <Check v-if="copyFeedback === cred.id" class="size-3.5 text-green-500" />
                     <Copy v-else class="size-3.5" />
                   </Button>
                   <Button
                     variant="ghost"
                     size="icon-sm"
                     :title="t.vault.hide"
-                    @click="hideCredential(cred.name)"
+                    @click="hideCredential(cred.id)"
                   >
                     <EyeOff class="size-3.5" />
                   </Button>
                 </div>
               </TableCell>
               <TableCell class="text-xs text-muted-foreground font-mono">
-                {{ cred.project || t.common.none }}
+                {{ cred.binding_error ? `Unavailable #${cred.id}` : cred.unresolved_reference ? `Retained #${cred.id} · read-only` : (cred.project_id ?? cred.project) ? projectName(cred.project_id ?? cred.project ?? '') : 'global' }}
+                <div v-if="cred.binding_error">{{ cred.binding_error === 'CREDENTIAL_BINDING_CONFLICT' ? 'Conflicting membership' : 'Membership unavailable' }}</div>
+                <div v-if="cred.origin_project">Origin: {{ cred.origin_project }}</div>
               </TableCell>
               <TableCell>
-                <Badge variant="secondary" class="text-[10px]">{{ cred.scope }}</Badge>
+                <Badge variant="secondary" class="text-[10px]">{{ cred.binding_error ? 'unavailable' : cred.scope }}</Badge>
               </TableCell>
               <TableCell class="text-xs text-muted-foreground">
                 {{ safeAbsoluteDate(cred.created_at) }}
@@ -255,10 +263,12 @@ async function handleDelete() {
               <TableCell class="text-right">
                 <div class="flex items-center justify-end gap-1">
                   <Button
-                    v-if="!revealedValues[cred.name]"
+                    v-if="!revealedValues[cred.id]"
                     variant="outline"
                     size="xs"
-                    @click="revealCredential(cred.name, cred.project)"
+                    :disabled="Boolean(cred.binding_error)"
+                    :title="cred.binding_error ? 'Credential binding unavailable' : undefined"
+                    @click="revealCredential(cred)"
                   >
                     <Eye class="size-3.5" />
                     {{ t.vault.reveal }}
@@ -267,8 +277,10 @@ async function handleDelete() {
                     variant="ghost"
                     size="icon-sm"
                     class="text-muted-foreground hover:text-destructive"
-                    :title="t.vault.delete"
-                    @click="confirmDelete(cred.name, cred.project)"
+                    :disabled="Boolean(cred.binding_error || cred.unresolved_reference)"
+                    :aria-label="cred.binding_error ? 'Delete unavailable: credential membership is unavailable' : cred.unresolved_reference ? 'Delete unavailable: retained credential is read-only' : t.vault.delete"
+                    :title="cred.binding_error ? 'Credential binding unavailable' : cred.unresolved_reference ? 'Retained credential: read-only' : t.vault.delete"
+                    @click="confirmDelete(cred)"
                   >
                     <Trash2 class="size-3.5" />
                   </Button>

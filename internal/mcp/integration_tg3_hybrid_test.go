@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/pgvector/pgvector-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -39,14 +40,16 @@ func TestHybridTG3_ConfidenceMin_FloorEnforced_T022(t *testing.T) {
 		t.Skip("T022: DATABASE_DSN not set or -short; skipping DB-dependent assertion")
 	}
 
-	const project = "test-hybrid-tg3-confidence-t022"
+	project := uuid.NewString()
 	store, err := dbgorm.NewStore(dbgorm.Config{DSN: dsn, MaxConns: 2})
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_ = store.DB.WithContext(context.Background()).
 			Exec(`DELETE FROM memories WHERE project = ?`, project).Error
+		_ = store.DB.Where("id = ?", project).Delete(&dbgorm.Project{}).Error
 		_ = store.Close()
 	})
+	require.NoError(t, store.DB.Create(&dbgorm.Project{ID: project}).Error)
 
 	ms := dbgorm.NewMemoryStore(store)
 	now := time.Now().UTC()
@@ -145,14 +148,16 @@ func TestHybridTG3_IncludeSuperseded_False_NoError_T022c(t *testing.T) {
 		t.Skip("T022c: DATABASE_DSN not set or -short; skipping DB-dependent assertion")
 	}
 
-	const project = "test-hybrid-tg3-superseded-false-t022c"
+	project := uuid.NewString()
 	store, err := dbgorm.NewStore(dbgorm.Config{DSN: dsn, MaxConns: 2})
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_ = store.DB.WithContext(context.Background()).
 			Exec(`DELETE FROM memories WHERE project = ?`, project).Error
+		_ = store.DB.Where("id = ?", project).Delete(&dbgorm.Project{}).Error
 		_ = store.Close()
 	})
+	require.NoError(t, store.DB.Create(&dbgorm.Project{ID: project}).Error)
 
 	ms := dbgorm.NewMemoryStore(store)
 
@@ -170,6 +175,85 @@ func TestHybridTG3_IncludeSuperseded_False_NoError_T022c(t *testing.T) {
 	// Must not error — include_superseded=false is the default and is always safe.
 	_, err = srv.handleRecallMemory(context.Background(), args)
 	assert.NoError(t, err, "include_superseded=false must not error in hybrid mode")
+}
+
+func TestRecallMemoryHybrid_TierFilterContract(t *testing.T) {
+	dsn := os.Getenv("DATABASE_DSN")
+	if dsn == "" || testing.Short() {
+		t.Skip("DATABASE_DSN not set or -short; requires isolated PostgreSQL with vector")
+	}
+	project := uuid.NewString()
+	const query = "tiercontractprobe"
+	store, err := dbgorm.NewStore(dbgorm.Config{DSN: dsn, MaxConns: 2})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, store.DB.Exec(`DELETE FROM memories WHERE project = ?`, project).Error)
+		require.NoError(t, store.DB.Where("id = ?", project).Delete(&dbgorm.Project{}).Error)
+		require.NoError(t, store.Close())
+	})
+	require.NoError(t, store.DB.Create(&dbgorm.Project{ID: project}).Error)
+	visible := &dbgorm.Memory{
+		Project: project, Content: query + " visible memory", Status: "active",
+		PrivacyScope: "project", AgentVisibility: "shared",
+		OwnerPrincipal: "agent/bob", OwnerPrincipalKind: "agent", Confidence: 0.9,
+	}
+	require.NoError(t, store.DB.Create(visible).Error)
+	hidden := &dbgorm.Memory{
+		Project: project, Content: query + " private memory", Status: "active",
+		PrivacyScope: "project", AgentVisibility: "private",
+		OwnerPrincipal: "agent/bob", OwnerPrincipalKind: "agent", Confidence: 0.9,
+	}
+	require.NoError(t, store.DB.Create(hidden).Error)
+	t.Setenv("ENGRAM_VNEXT_ENABLED", "true")
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
+	srv := NewServer(ServerOptions{Version: "tier-contract-fixture"})
+	srv.memoryStore = dbgorm.NewMemoryStore(store)
+	caller := auth.WithIdentity(context.Background(), auth.ClientWithPrincipal("read-write", "keycard-alice", "agent/alice", auth.PrincipalKindAgent))
+	call := func(t *testing.T, tiers []string) *Response {
+		t.Helper()
+		args := map[string]any{"query": query, "project": project, "format": "items", "limit": 1, "explain": true}
+		if tiers != nil {
+			args["tier_filter"] = tiers
+		}
+		return srv.HandleRequest(caller, &Request{
+			JSONRPC: "2.0", ID: t.Name(), Method: "tools/call",
+			Params: mustJSON(t, ToolCallParams{Name: "recall_memory", Arguments: mustJSON(t, args)}),
+		})
+	}
+	for _, lifecycle := range []string{"true", "false"} {
+		t.Run("lifecycle_"+lifecycle, func(t *testing.T) {
+			t.Setenv("ENGRAM_LIFECYCLE_ENABLED", lifecycle)
+			for _, tc := range []struct {
+				name  string
+				tiers []string
+			}{
+				{name: "default"},
+				{name: "empty", tiers: []string{}},
+				{name: "selected_fts", tiers: []string{"tier1_fts"}},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					response := call(t, tc.tiers)
+					require.Nil(t, response.Error, "real MCP recall failed: %+v", response.Error)
+					out := response.Result.(map[string]any)["content"].([]map[string]any)[0]["text"].(string)
+					var rows []map[string]any
+					require.NoError(t, json.Unmarshal([]byte(out), &rows))
+					require.Len(t, rows, 1)
+					require.EqualValues(t, visible.ID, rows[0]["id"])
+					require.Equal(t, project, rows[0]["project"])
+					require.Equal(t, "tier1_fts", rows[0]["ranking_explanation"].(map[string]any)["source_tier"])
+				})
+			}
+			for _, invalid := range []string{"working", "episodic", "semantic", "procedural", "unknown-tier"} {
+				t.Run("reject_"+invalid, func(t *testing.T) {
+					response := call(t, []string{"tier1_fts", invalid})
+					require.NotNil(t, response.Error)
+					require.Equal(t, -32000, response.Error.Code)
+					require.Contains(t, response.Error.Message, "invalid_tier_filter:")
+					require.Nil(t, response.Result)
+				})
+			}
+		})
+	}
 }
 
 func TestRecallMemoryHybrid_EmbeddingBudget(t *testing.T) {
@@ -216,7 +300,13 @@ func TestRecallMemoryHybrid_EmbeddingBudget(t *testing.T) {
 		{name: "rationale_format", mode: "stall", format: "items", wantTier: "tier1_fts", rationale: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			project := "test-hybrid-budget-" + tc.name
+			project, otherProject := uuid.NewString(), uuid.NewString()
+			t.Cleanup(func() {
+				require.NoError(t, store.DB.Exec(`DELETE FROM content_chunks WHERE memory_id IN (SELECT id FROM memories WHERE project IN (?, ?))`, project, otherProject).Error)
+				require.NoError(t, store.DB.Exec(`DELETE FROM memories WHERE project IN (?, ?)`, project, otherProject).Error)
+				require.NoError(t, store.DB.Where("id IN ?", []string{project, otherProject}).Delete(&dbgorm.Project{}).Error)
+			})
+			require.NoError(t, store.DB.Create(&[]dbgorm.Project{{ID: project}, {ID: otherProject}}).Error)
 			const query = "budgetstarvation"
 			insert := func(content, rowProject, visibility, privacy string, confidence float64, tags []string) *dbgorm.Memory {
 				t.Helper()
@@ -234,17 +324,13 @@ func TestRecallMemoryHybrid_EmbeddingBudget(t *testing.T) {
 			vectorOnly := insert("semantic authorized content", project, "shared", "project", 0.9, goodTags)
 			insert(query+" private principal", project, "private", "project", 0.9, goodTags)
 			insert(query+" private workstation", project, "shared", "private", 0.9, goodTags)
-			insert(query+" other project", project+"-other", "shared", "project", 0.9, goodTags)
+			insert(query+" other project", otherProject, "shared", "project", 0.9, goodTags)
 			insert(query+" low confidence", project, "shared", "project", 0.2, goodTags)
 			insert(query+" wrong type", project, "shared", "project", 0.9, []string{"type:decision", "budget-fixture"})
 			insert(query+" wrong tag", project, "shared", "project", 0.9, []string{"type:fact", "other-tag"})
 			if tc.rerun {
 				insert(query, project, "private", "project", 0.9, goodTags)
 			}
-			t.Cleanup(func() {
-				require.NoError(t, store.DB.Exec(`DELETE FROM content_chunks WHERE memory_id IN (SELECT id FROM memories WHERE project IN (?, ?))`, project, project+"-other").Error)
-				require.NoError(t, store.DB.Exec(`DELETE FROM memories WHERE project IN (?, ?)`, project, project+"-other").Error)
-			})
 			embStore := embedding.NewStore(store.DB)
 			require.NoError(t, embStore.StoreChunks(context.Background(), []embedding.Chunk{
 				{MemoryID: vectorOnly.ID, Text: vectorOnly.Content, Embedding: pgvector.NewVector(vector), Model: "offline-fixture"},

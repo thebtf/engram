@@ -23,7 +23,7 @@ import (
 func TestBatchIncrementCitedN_ImportanceFactor(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
-	const proj = "test-rank6-importance"
+	proj := sessionTestProject(t, db)
 	defer db.Exec(`DELETE FROM memories WHERE project = ?`, proj)
 
 	ms := NewMemoryStore(&Store{DB: db})

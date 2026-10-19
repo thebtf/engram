@@ -106,8 +106,9 @@ operator-console:
 	@cd apps/operator-console && npm ci --silent && npm run parity && npm run build
 
 smoke-operator-console:
+	$(if $(strip $(SOURCE_PROJECT)),,$(error SOURCE_PROJECT is required; select a canonical UUID from this smoke backend's /api/projects catalog))
 	@echo "Running local promoted operator-console smoke..."
-	@pwsh -NoProfile -File scripts/smoke-operator-console.ps1
+	@pwsh -NoProfile -File scripts/smoke-operator-console.ps1 -SourceProject "$(SOURCE_PROJECT)"
 
 # Cross-platform builds (CI / release verification)
 build-all: build-linux build-darwin build-windows
@@ -258,7 +259,7 @@ help:
 	@echo "  make build          Build all binaries"
 	@echo "  make worker         Build server only"
 	@echo "  make operator-console Build and validate promoted operator console"
-	@echo "  make smoke-operator-console Run local promoted operator-console smoke"
+	@echo "  make smoke-operator-console SOURCE_PROJECT=<catalog UUID> Run local promoted operator-console smoke"
 	@echo "  make build-all      Build for all platforms"
 	@echo "  make install        Install to Claude plugins directory (restarts worker)"
 	@echo "  make uninstall      Remove from Claude plugins directory"

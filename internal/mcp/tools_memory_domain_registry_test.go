@@ -16,12 +16,12 @@ import (
 )
 
 func TestStoreMemoryDomainRegistry_WarnRejectAndCompatibility(t *testing.T) {
-	project := "test-mcp-domain-registry-" + uuid.NewString()
+	project := uuid.NewString()
 	env := newMCPDomainWriteTestEnv(t, project)
 	domains := dbgorm.NewDomainOwnerStore(env.store)
 
 	t.Run("missing row preserves current behavior", func(t *testing.T) {
-		domain := "test-mcp-domain-missing-" + uuid.NewString()
+		domain := "test-mcp-domain-missing-" + project
 		out, err := storeMCPMemoryWithDomain(t, env.srv, project, domain, "agent/bob")
 		require.NoError(t, err)
 
@@ -32,7 +32,7 @@ func TestStoreMemoryDomainRegistry_WarnRejectAndCompatibility(t *testing.T) {
 	})
 
 	t.Run("off allows cross owner", func(t *testing.T) {
-		domain := "test-mcp-domain-off-" + uuid.NewString()
+		domain := "test-mcp-domain-off-" + project
 		_, err := domains.Upsert(context.Background(), &dbgorm.DomainOwner{
 			Domain:             domain,
 			OwnerPrincipal:     "agent/alice",
@@ -47,7 +47,7 @@ func TestStoreMemoryDomainRegistry_WarnRejectAndCompatibility(t *testing.T) {
 	})
 
 	t.Run("same owner allows without warning", func(t *testing.T) {
-		domain := "test-mcp-domain-same-" + uuid.NewString()
+		domain := "test-mcp-domain-same-" + project
 		_, err := domains.Upsert(context.Background(), &dbgorm.DomainOwner{
 			Domain:             domain,
 			OwnerPrincipal:     "agent/alice",
@@ -65,7 +65,7 @@ func TestStoreMemoryDomainRegistry_WarnRejectAndCompatibility(t *testing.T) {
 	})
 
 	t.Run("warn allows with structured warning", func(t *testing.T) {
-		domain := "test-mcp-domain-warn-" + uuid.NewString()
+		domain := "test-mcp-domain-warn-" + project
 		_, err := domains.Upsert(context.Background(), &dbgorm.DomainOwner{
 			Domain:             domain,
 			OwnerPrincipal:     "agent/alice",
@@ -87,7 +87,7 @@ func TestStoreMemoryDomainRegistry_WarnRejectAndCompatibility(t *testing.T) {
 	})
 
 	t.Run("reject denies before persistence", func(t *testing.T) {
-		domain := "test-mcp-domain-reject-" + uuid.NewString()
+		domain := "test-mcp-domain-reject-" + project
 		_, err := domains.Upsert(context.Background(), &dbgorm.DomainOwner{
 			Domain:             domain,
 			OwnerPrincipal:     "agent/alice",
@@ -104,11 +104,11 @@ func TestStoreMemoryDomainRegistry_WarnRejectAndCompatibility(t *testing.T) {
 }
 
 func TestStoreMemoryDomainRegistry_AuditFailureBlocksBeforePersistence(t *testing.T) {
-	project := "test-mcp-domain-registry-audit-" + uuid.NewString()
+	project := uuid.NewString()
 	env := newMCPDomainWriteTestEnv(t, project)
 	env.srv.SetDomainRegistryService(&fakeMCPDomainRegistryService{err: errors.New("domain write audit: unavailable")})
 
-	domain := "test-mcp-domain-audit-" + uuid.NewString()
+	domain := "test-mcp-domain-audit-" + project
 	_, err := storeMCPMemoryWithDomain(t, env.srv, project, domain, "agent/bob")
 
 	require.Error(t, err)
@@ -117,7 +117,7 @@ func TestStoreMemoryDomainRegistry_AuditFailureBlocksBeforePersistence(t *testin
 }
 
 func TestStoreMemoryDomainRegistry_RejectionRunsBeforeSupersedeMutation(t *testing.T) {
-	project := "test-mcp-domain-registry-supersede-" + uuid.NewString()
+	project := uuid.NewString()
 	env := newMCPDomainWriteTestEnv(t, project)
 	domains := dbgorm.NewDomainOwnerStore(env.store)
 
@@ -125,7 +125,7 @@ func TestStoreMemoryDomainRegistry_RejectionRunsBeforeSupersedeMutation(t *testi
 	require.NoError(t, err)
 	oldID := storedMemoryIDFromMCPResult(t, oldOut)
 
-	domain := "test-mcp-domain-reject-supersede-" + uuid.NewString()
+	domain := "test-mcp-domain-reject-supersede-" + project
 	_, err = domains.Upsert(context.Background(), &dbgorm.DomainOwner{
 		Domain:             domain,
 		OwnerPrincipal:     "agent/alice",
@@ -138,10 +138,11 @@ func TestStoreMemoryDomainRegistry_RejectionRunsBeforeSupersedeMutation(t *testi
 		"content":    "domain governed replacement",
 		"project":    project,
 		"domain":     domain,
+		"session_id": project,
 		"supersedes": []int64{oldID},
 	})
-	ctx := auth.WithIdentity(context.Background(),
-		auth.ClientWithPrincipal("read-write", "keycard-domain-test", "agent/bob", auth.PrincipalKindAgent))
+	ctx := ContextWithProject(auth.WithIdentity(context.Background(),
+		auth.ClientWithPrincipal("read-write", "keycard-domain-test", "agent/bob", auth.PrincipalKindAgent)), project)
 
 	_, err = env.srv.handleStoreMemory(ctx, args)
 
@@ -155,10 +156,10 @@ func TestStoreMemoryDomainRegistry_RejectionRunsBeforeSupersedeMutation(t *testi
 }
 
 func TestStoreMemoryDomainRegistry_InvalidWriterKindRejectsBeforePersistence(t *testing.T) {
-	project := "test-mcp-domain-registry-kind-" + uuid.NewString()
+	project := uuid.NewString()
 	env := newMCPDomainWriteTestEnv(t, project)
 
-	domain := "test-mcp-domain-kind-" + uuid.NewString()
+	domain := "test-mcp-domain-kind-" + project
 	args := mustJSON(t, map[string]any{
 		"content": "domain governed memory",
 		"project": project,
@@ -182,8 +183,8 @@ func newMCPDomainWriteTestEnv(t *testing.T, project string) t007TestEnv {
 		dbgorm.NewAuditStore(env.store.DB),
 	))
 	t.Cleanup(func() {
-		require.NoError(t, env.store.DB.WithContext(context.Background()).Exec("DELETE FROM memory_domain_owners WHERE domain LIKE 'test-mcp-domain-%'").Error)
-		require.NoError(t, env.store.DB.WithContext(context.Background()).Exec("DELETE FROM audit_log WHERE action IN (?, ?)", principalmemory.AuditActionDomainWriteWarn, principalmemory.AuditActionDomainWriteReject).Error)
+		require.NoError(t, env.store.DB.WithContext(context.Background()).Exec("DELETE FROM memory_domain_owners WHERE domain LIKE ?", "test-mcp-domain-%"+project).Error)
+		require.NoError(t, env.store.DB.WithContext(context.Background()).Exec("DELETE FROM audit_log WHERE action IN (?, ?) AND source_session_id = ?", principalmemory.AuditActionDomainWriteWarn, principalmemory.AuditActionDomainWriteReject, project).Error)
 	})
 	return env
 }
@@ -191,9 +192,10 @@ func newMCPDomainWriteTestEnv(t *testing.T, project string) t007TestEnv {
 func storeMCPMemoryWithDomain(t *testing.T, srv *Server, project, domain, principal string) (string, error) {
 	t.Helper()
 	args := mustJSON(t, map[string]any{
-		"content": "domain governed memory",
-		"project": project,
-		"domain":  domain,
+		"content":    "domain governed memory",
+		"project":    project,
+		"domain":     domain,
+		"session_id": project,
 	})
 	id := auth.ClientWithPrincipal("read-write", "keycard-domain-test", principal, auth.PrincipalKindAgent)
 	ctx := auth.WithIdentity(context.Background(), id)

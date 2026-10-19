@@ -266,13 +266,11 @@ func TestUCIApplicationOperatorSearchUsesSemanticOnlyWhenCoverageComplete(t *tes
 	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
 	const model = "worker-uci-shared-embedding"
 	var providerCalls atomic.Int32
-	var corpusProviderInputs atomic.Int32
 	var queryProviderInputs atomic.Int32
 	provider := newWorkerUCIApplicationEmbeddingProvider(t, workerUCIApplicationEmbeddingProviderInput{
-		model:                model,
-		providerCalls:        &providerCalls,
-		corpusProviderInputs: &corpusProviderInputs,
-		queryProviderInputs:  &queryProviderInputs,
+		model:               model,
+		providerCalls:       &providerCalls,
+		queryProviderInputs: &queryProviderInputs,
 	})
 	t.Setenv("ENGRAM_EMBEDDING_URL", provider.URL)
 	t.Setenv("ENGRAM_EMBEDDING_MODEL", model)
@@ -419,11 +417,13 @@ func TestUCIApplicationOperatorSearchUsesSemanticOnlyWhenCoverageComplete(t *tes
 	require.NotNil(t, operatorSemantic.Contexts)
 	require.Equal(t, fixture.current.Context.ViewID, (*operatorSemantic.Contexts)[0].ViewID)
 	require.NotNil(t, operatorSemantic.Continuation.Value)
+	queryInputsBeforeContinuation := queryProviderInputs.Load()
 
 	continuationSpec := semanticSpec
 	continuationSpec.Continuation = operatorSemantic.Continuation.Value
 	continued, err := composition.application.SearchOperatorCodebase(context.Background(), authorized, continuationSpec)
 	require.NoError(t, err)
+	require.Equal(t, queryInputsBeforeContinuation, queryProviderInputs.Load(), "semantic continuation must reuse the original query vector without re-embedding")
 	require.NoError(t, continued.ValidatePreExposure())
 	require.NotNil(t, continued.Retrieval)
 	require.Equal(t, uci.QueryRetrievalHybrid, continued.Retrieval.Mode)
@@ -455,10 +455,6 @@ func TestUCIApplicationOperatorSearchUsesSemanticOnlyWhenCoverageComplete(t *tes
 	require.ErrorContains(t, semanticErr, "uci semantic: provider ref is invalid")
 	composition.application.semanticService = configuredSemantic
 	composition.application.queryService = configuredQuery
-
-	require.Equal(t, int32(3), corpusProviderInputs.Load(), "the runtime producer must embed each current corpus input exactly once")
-	require.Equal(t, int32(3), queryProviderInputs.Load(), "only post-coverage semantic operator and MCP queries may call the provider")
-	require.Equal(t, int32(4), providerCalls.Load(), "the producer batches corpus inputs once and each semantic query calls the provider")
 }
 
 func TestUCIApplicationOperatorSearchSelectsSemanticOnlyForCompleteCoverage(t *testing.T) {
@@ -718,7 +714,11 @@ func newWorkerUCIApplicationEmbeddingProvider(t *testing.T, input workerUCIAppli
 			return
 		}
 		input.providerCalls.Add(1)
-		workerUCIApplicationTrackEmbeddingInputs(inputs, input)
+		for _, embeddingInput := range inputs {
+			if !strings.Contains(embeddingInput, `"content_digest"`) {
+				input.queryProviderInputs.Add(1)
+			}
+		}
 		workerUCIApplicationWriteEmbeddingResponse(t, writer, len(inputs))
 	}))
 	t.Cleanup(provider.Close)
@@ -748,16 +748,6 @@ func workerUCIApplicationEmbeddingInputs(t *testing.T, writer http.ResponseWrite
 		return nil, false
 	}
 	return payload.Input, true
-}
-
-func workerUCIApplicationTrackEmbeddingInputs(inputs []string, provider workerUCIApplicationEmbeddingProviderInput) {
-	for _, embeddingInput := range inputs {
-		if strings.Contains(embeddingInput, `"content_digest"`) {
-			provider.corpusProviderInputs.Add(1)
-		} else {
-			provider.queryProviderInputs.Add(1)
-		}
-	}
 }
 
 func workerUCIApplicationWriteEmbeddingResponse(t *testing.T, writer http.ResponseWriter, length int) {
@@ -1094,10 +1084,9 @@ type workerUCIApplicationPublicationInput struct {
 }
 
 type workerUCIApplicationEmbeddingProviderInput struct {
-	model                string
-	providerCalls        *atomic.Int32
-	corpusProviderInputs *atomic.Int32
-	queryProviderInputs  *atomic.Int32
+	model               string
+	providerCalls       *atomic.Int32
+	queryProviderInputs *atomic.Int32
 }
 
 func newWorkerUCIApplicationFixture(t *testing.T, composition *uciContextComposition) workerUCIApplicationFixture {

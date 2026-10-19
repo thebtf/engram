@@ -1,5 +1,6 @@
 import { computed, onBeforeUnmount, onMounted, ref, unref, watch } from 'vue'
-import { operatorApiUrl } from './useOperatorApi'
+import { operatorFetchResponse } from './useOperatorApi'
+import { isCatalogProject, isProjectUUID, useOperatorProjectContext } from './useOperatorProjectContext'
 
 export type CodeBootstrapPhase = 'idle' | 'binding' | 'ready' | 'collision' | 'ambiguous' | 'reload-pending' | 'denied' | 'secure-origin-required' | 'identity-unavailable' | 'error'
 export type CodePresentationKind = 'idle' | 'loading' | 'ready' | 'empty' | 'partial' | 'stale' | 'denied' | 'unsupported' | 'timeout' | 'offline' | 'error'
@@ -34,7 +35,7 @@ export interface IndexIntentTarget {
   selectionRef: string
 }
 
-export interface CodeCatalogEntry {
+export type CodeCatalogEntry = ({ projectId: string; unresolvedReference: null } | { projectId: null; unresolvedReference: string; retainedSnapshot: CodeSnapshot | null; retainedViewRef: string | null }) & {
   sourceRef: string
   checkoutRef: string
   repository: string
@@ -246,6 +247,7 @@ const TAB_LEASE_RENEWAL_DELAY_MS = TAB_LEASE_TTL_MS / 2
 interface SpaRemount {
   tabBindingId: string | null
   pinnedContext: CodeSafeContext | null
+  projectScope: string
 }
 
 let spaRemount: SpaRemount | null = null
@@ -367,12 +369,27 @@ function parseCatalogSnapshot(value: unknown): CodeSnapshot | null {
 
 function parseCatalogEntry(value: unknown): CodeCatalogEntry | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
+  const projectId = Reflect.get(value, 'project_id')
+  const unresolvedValue = Reflect.get(value, 'unresolved_reference')
+  const unresolvedReference = typeof unresolvedValue === 'string' && unresolvedValue.trim() ? unresolvedValue : null
+  let membership: { projectId: string; unresolvedReference: null } | { projectId: null; unresolvedReference: string }
+  if (projectId === null && unresolvedReference !== null) membership = { projectId: null, unresolvedReference }
+  else if (isProjectUUID(projectId)) membership = { projectId, unresolvedReference: null }
+  else return null
   const sourceRef = text(Reflect.get(value, 'source_ref'))
   const checkoutRef = text(Reflect.get(value, 'checkout_ref'))
   const repository = text(Reflect.get(value, 'repository'))
   const workingCopyValue = Reflect.get(value, 'working_copy')
   const workingCopy = typeof workingCopyValue === 'string' ? workingCopyValue.trim() : null
   const snapshotValue = Reflect.get(value, 'indexed_snapshot')
+  if (sourceRef === null || checkoutRef === null || repository === null || workingCopy === null) return null
+  if (membership.projectId === null) {
+    const retainedSnapshot = snapshotValue === undefined || snapshotValue === null ? null : parseCatalogSnapshot(snapshotValue)
+    const rawViewRef = Reflect.get(value, 'view_ref')
+    const retainedViewRef = rawViewRef === undefined || rawViewRef === null ? null : text(rawViewRef)
+    if ((snapshotValue !== undefined && snapshotValue !== null && retainedSnapshot === null) || (rawViewRef !== undefined && rawViewRef !== null && retainedViewRef === null)) return null
+    return { ...membership, retainedSnapshot, retainedViewRef, sourceRef, checkoutRef, repository, workingCopy, view: null, indexIntentAvailable: false, indexIntentTarget: null }
+  }
   const selectionRefValue = Reflect.get(value, 'selection_ref')
   const viewRefValue = Reflect.get(value, 'view_ref')
   const indexIntentAvailable = Reflect.get(value, 'index_intent_available')
@@ -384,12 +401,12 @@ function parseCatalogEntry(value: unknown): CodeCatalogEntry | null {
 
   if (snapshotValue === undefined || snapshotValue === null) {
     if (viewRef !== null || selectionRef !== null || indexIntentAvailable !== (indexSelectionRef !== null)) return null
-    return { sourceRef, checkoutRef, repository, workingCopy, view: null, indexIntentAvailable, indexIntentTarget: indexSelectionRef === null ? null : { selectionRef: indexSelectionRef } }
+    return { ...membership, sourceRef, checkoutRef, repository, workingCopy, view: null, indexIntentAvailable, indexIntentTarget: indexSelectionRef === null ? null : { selectionRef: indexSelectionRef } }
   }
 
   const snapshot = parseCatalogSnapshot(snapshotValue)
   if (snapshot === null || viewRef === null || selectionRef === null || indexIntentAvailable || indexSelectionRef !== null) return null
-  return { sourceRef, checkoutRef, repository, workingCopy, view: { sourceRef, checkoutRef, repository, workingCopy, snapshot, viewRef, selectionRef }, indexIntentAvailable: false, indexIntentTarget: null }
+  return { ...membership, sourceRef, checkoutRef, repository, workingCopy, view: { sourceRef, checkoutRef, repository, workingCopy, snapshot, viewRef, selectionRef }, indexIntentAvailable: false, indexIntentTarget: null }
 }
 
 function parseCatalog(value: unknown): CodeCatalogEntry[] | null {
@@ -400,8 +417,8 @@ function parseCatalog(value: unknown): CodeCatalogEntry[] | null {
   const selections = new Set<string>()
   for (const value of values) {
     const entry = parseCatalogEntry(value)
-    if (entry === null) continue
-    if (entry.view !== null) {
+    if (entry === null) return null
+    if (entry.projectId !== null && entry.view !== null) {
       if (selections.has(entry.view.selectionRef)) return null
       selections.add(entry.view.selectionRef)
     }
@@ -908,6 +925,7 @@ function clearIndexIntentResume(): void {
 }
 
 export function useOperatorCode() {
+  const projectContext = useOperatorProjectContext()
   const bootstrapPhase = ref<CodeBootstrapPhase>('idle')
   const authDisabled = ref(false)
   const canAdministerGrants = ref(false)
@@ -1017,7 +1035,7 @@ export function useOperatorCode() {
     const headers: Record<string, string> = { 'X-Engram-Request-ID': id, ...extraHeaders }
     if (body !== undefined) headers['Content-Type'] = 'application/json'
     try {
-      const response = await fetch(operatorApiUrl(path), {
+      const response = await operatorFetchResponse(path, {
         method,
         credentials: 'include',
         headers,
@@ -1077,6 +1095,17 @@ export function useOperatorCode() {
     clearIndexIntent()
     clearPersistedPinCandidate()
   }
+
+  watch([projectContext.project, projectContext.selectionPending, projectContext.selectionError, projectContext.error], ([project, resolving, selectionError, catalogError], [previous]) => {
+    if (project !== previous || resolving || selectionError || catalogError) {
+      contextCandidate.value = null
+      contextCatalog.value = []
+      if (previous || !project || resolving || selectionError || catalogError) clearPinnedContext()
+      else clearContextualResults()
+      contextState.value = 'idle'
+    }
+    if (!resolving && !selectionError && !catalogError && binding.value !== null && contextCatalog.value.length === 0 && (project === 'all' || isCatalogProject(project))) void discoverContext()
+  }, { flush: 'sync' })
 
   function matchesPinnedResponse(envelope: CodeEnvelope): boolean {
     if (envelope.status === 'context_required' || envelope.status === 'forbidden') {
@@ -1182,6 +1211,7 @@ export function useOperatorCode() {
 
   async function submitIndexIntent(kind: IndexIntentKind, target?: IndexIntentTarget): Promise<void> {
     if (binding.value === null || target === undefined && pinnedContext.value === null || indexIntentPending.value || pending.value) return
+    if (projectContext.selectionPending.value || projectContext.selectionError.value || projectContext.error.value || (!isCatalogProject(projectContext.project.value) && projectContext.project.value !== 'all') || (target !== undefined && !contextCatalog.value.some(entry => entry.projectId !== null && entry.indexIntentTarget?.selectionRef === target.selectionRef))) return
     const existing = indexIntentResume.value
     const requestRef = existing !== null && existing.kind === kind && existing.intentRef === undefined
       && (existing.target === undefined || target === undefined ? existing.target === target : existing.target.selectionRef === target.selectionRef)
@@ -1360,11 +1390,18 @@ export function useOperatorCode() {
   }
 
   function refreshedContext(catalog: CodeCatalogEntry[], previous: CodeSafeContext): CodeSafeContext | null {
-    const matches = catalog.flatMap((entry) => entry.view === null ? [] : [entry.view]).filter((view) => sameContext(view, previous))
+    const matches = catalog.flatMap((entry) => entry.projectId === null || entry.view === null ? [] : [entry.view]).filter((view) => sameContext(view, previous))
     return matches.length === 1 ? matches[0] ?? null : null
   }
 
   async function discoverContext(): Promise<void> {
+    const project = projectContext.project.value
+    if (projectContext.selectionPending.value || projectContext.selectionError.value || projectContext.error.value || (!isCatalogProject(project) && project !== 'all')) {
+      contextCatalog.value = []
+      contextCandidate.value = null
+      contextState.value = 'idle'
+      return
+    }
     const ownsRequest = contextualRequestOwner()
     const payload = bindingPayload()
     if (payload === null || pending.value) return
@@ -1375,8 +1412,9 @@ export function useOperatorCode() {
     contextCatalog.value = []
     contextState.value = 'loading'
     pending.value = true
-    const result = await request('/code/contexts', 'POST', payload)
-    if (!ownsRequest()) return
+    const endpoint = project === 'all' ? '/code/contexts' : `/code/contexts?project=${encodeURIComponent(project)}`
+    const result = await request(endpoint, 'POST', payload)
+    if (!ownsRequest() || project !== projectContext.project.value) return
     pending.value = false
     if (result.kind !== 'success') {
       if (result.kind === 'denied' || result.status === 409) clearPinnedContext()
@@ -1390,8 +1428,17 @@ export function useOperatorCode() {
       contextState.value = 'unavailable'
       return
     }
+    if (catalog.some((entry) => (project !== 'all' && entry.projectId !== project) || (entry.projectId !== null && !isCatalogProject(entry.projectId)))) {
+      clearPinnedContext()
+      contextState.value = 'unavailable'
+      return
+    }
     contextCatalog.value = catalog
-    contextState.value = catalog.length === 0 ? 'empty' : 'ready'
+    contextState.value = catalog.some((entry) => entry.projectId !== null) ? 'ready' : catalog.length === 0 ? 'empty' : 'unavailable'
+    if (pinned !== null && catalog.some((entry) => entry.projectId === null && entry.sourceRef === pinned.sourceRef && entry.checkoutRef === pinned.checkoutRef)) {
+      clearPinnedContext()
+      return
+    }
     if (selected !== null) {
       contextCandidate.value = refreshedContext(catalog, selected)
       if (contextCandidate.value === null && pinned === null) clearPersistedPinCandidate()
@@ -1405,13 +1452,14 @@ export function useOperatorCode() {
         // The current-only catalog cannot authorize or revoke this tab's historical pin.
         if (await refreshStatus() && ownsRequest() && (restoring || sameContext(selected, pinned))) {
           contextCandidate.value = refreshedContext(catalog, pinned)
-            ?? catalog.find((entry) => entry.sourceRef === pinned.sourceRef && entry.checkoutRef === pinned.checkoutRef && entry.view !== null)?.view ?? null
+            ?? catalog.find((entry) => entry.projectId !== null && entry.sourceRef === pinned.sourceRef && entry.checkoutRef === pinned.checkoutRef && entry.view !== null)?.view ?? null
         }
       }
     }
   }
 
   function selectContext(context: CodeSafeContext | null): void {
+    if (context !== null && !contextCatalog.value.some((entry) => entry.projectId !== null && entry.view !== null && sameContext(entry.view, context) && (projectContext.project.value === 'all' || entry.projectId === projectContext.project.value))) return
     if (!sameContext(context, pinnedContext.value)) {
       if (pinnedContext.value !== null) suspendedContext.value = { pin: pinnedContext.value, response: pinnedResponseContext.value }
       pinnedContext.value = null
@@ -1425,7 +1473,7 @@ export function useOperatorCode() {
   function restorePersistedPinCandidate(): boolean {
     const stored = loadPersistedPinCandidate()
     if (stored === null) { clearPersistedPinCandidate(); return false }
-    const matches = contextCatalog.value.flatMap((entry) => entry.view === null ? [] : [entry.view]).filter((entry) =>
+    const matches = contextCatalog.value.flatMap((entry) => entry.projectId === null || entry.view === null ? [] : [entry.view]).filter((entry) =>
       typeof stored === 'string' ? entry.viewRef === stored : entry.sourceRef === stored.sourceRef && entry.checkoutRef === stored.checkoutRef && entry.viewRef === stored.viewRef)
     if (matches.length !== 1) { clearPersistedPinCandidate(); return false }
     contextCandidate.value = matches[0]!
@@ -1442,7 +1490,7 @@ export function useOperatorCode() {
     authProbeAbort = controller
     const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
     try {
-      const response = await fetch(operatorApiUrl('/auth/me'), { credentials: 'include', cache: 'no-store', signal: controller.signal })
+      const response = await operatorFetchResponse('/auth/me', { credentials: 'include', cache: 'no-store', signal: controller.signal })
       if (!response.ok && response.status !== 401) {
         bootstrapPhase.value = 'identity-unavailable'
         return
@@ -1473,7 +1521,8 @@ export function useOperatorCode() {
       bootstrapPhase.value = 'secure-origin-required'
       return
     }
-    const remount = spaRemount ?? remountState
+    const retainedRemount = spaRemount ?? remountState
+    const remount = retainedRemount?.projectScope === projectContext.project.value && !projectContext.selectionPending.value && !projectContext.selectionError.value && !projectContext.error.value ? retainedRemount : null
     spaRemount = null
     remountState = remount
     const documentNonce = requestId()
@@ -1517,6 +1566,7 @@ export function useOperatorCode() {
   }
 
   async function pinContext(): Promise<void> {
+    if (projectContext.selectionPending.value || projectContext.selectionError.value || projectContext.error.value || (!isCatalogProject(projectContext.project.value) && projectContext.project.value !== 'all')) return
     const selected = contextCandidate.value
     if (binding.value === null || contextState.value !== 'ready' || selected === null || pending.value) return
     const ownsRequest = contextualRequestOwner()
@@ -1817,6 +1867,7 @@ export function useOperatorCode() {
       spaRemount = {
         tabBindingId: binding.value?.tabBindingId ?? retained?.tabBindingId ?? null,
         pinnedContext: pinnedContext.value ?? suspendedContext.value?.pin ?? retained?.pinnedContext ?? null,
+        projectScope: projectContext.project.value,
       }
     }
     stopIndexIntentPolling()

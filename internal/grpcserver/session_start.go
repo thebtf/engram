@@ -42,27 +42,14 @@ type sessionStartMemoryPager interface {
 // The payload is SQL-backed only: active issues, behavioral rules, recent memories,
 // plus the timestamp when the response was generated.
 func (s *Server) GetSessionStartContext(ctx context.Context, req *pb.GetSessionStartContextRequest) (*pb.GetSessionStartContextResponse, error) {
-	relayRequest, err := validateRelaySessionStart(ctx, req)
-	if err != nil {
-		return nil, err
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "session-start request required")
 	}
 	project := req.GetProject()
-	var resolutionV3 *pb.ProjectResolutionResultV3
-	if identity := req.GetProjectIdentityV3(); identity != nil {
-		resolution, err := s.resolveProjectIdentityV3(ctx, identity, projectidentity.ReadFilterIntentV3)
-		if err != nil {
-			return nil, err
-		}
-		project = string(resolution.CanonicalProjectKey())
-		resolutionV3 = projectIdentityV3Proto(resolution)
-	} else if project == "" {
-		return nil, status.Error(codes.InvalidArgument, "project must not be empty")
+	if !projectidentity.ValidProjectID(project) {
+		return nil, status.Error(codes.InvalidArgument, "project must be a canonical UUID")
 	}
-	if relayRequest {
-		if err := requireProjectServiceMatch(ctx, project); err != nil {
-			return nil, err
-		}
-	} else if err := s.requireLegacyDirectMatch(ctx, project); err != nil {
+	if err := s.requireLegacyDirectMatch(ctx, project); err != nil {
 		return nil, err
 	}
 	if req.GetMemoriesLimit() < 0 {
@@ -193,12 +180,11 @@ func (s *Server) GetSessionStartContext(ctx context.Context, req *pb.GetSessionS
 
 	generatedAt := time.Now().UTC()
 	response := &pb.GetSessionStartContextResponse{
-		Issues:              mapSessionStartIssues(issueRows),
-		Rules:               rules,
-		Memories:            mapSessionStartMemories(memoryRows),
-		GeneratedAt:         timestamppb.New(generatedAt),
-		RuleRouter:          ruleRouter,
-		ProjectResolutionV3: resolutionV3,
+		Issues:      mapSessionStartIssues(issueRows),
+		Rules:       rules,
+		Memories:    mapSessionStartMemories(memoryRows),
+		GeneratedAt: timestamppb.New(generatedAt),
+		RuleRouter:  ruleRouter,
 	}
 	if metaSummaryEnabled {
 		summary, summaryErr := buildSessionStartMetaSummary(ctx, memoryStore, project, callerCtx, visibilityOpts, generatedAt, sessionStartVisibilityScanBudget)
@@ -206,9 +192,6 @@ func (s *Server) GetSessionStartContext(ctx context.Context, req *pb.GetSessionS
 			return nil, status.Error(codes.Internal, "failed to summarize session-start memories")
 		}
 		response.MetaSummary = summary
-	}
-	if relayRequest {
-		s.commitRelaySessionStartDelivery(req.GetHostSessionRef(), project, response.GetMemories())
 	}
 	return response, nil
 }

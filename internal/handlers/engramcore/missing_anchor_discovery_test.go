@@ -3,7 +3,6 @@ package engramcore
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net"
 	"os"
 	"os/exec"
@@ -14,212 +13,79 @@ import (
 	"github.com/google/uuid"
 	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/config"
+	gormstore "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/grpcserver"
 	"github.com/thebtf/engram/internal/mcp"
-	"github.com/thebtf/engram/internal/module"
-	"github.com/thebtf/engram/internal/projectidentity"
+	"github.com/thebtf/engram/internal/uci"
+	"github.com/thebtf/engram/internal/worker"
 )
 
-// This uses the production gRPC authentication/Initialize and MCP tool catalog,
-// not a mock Initialize response or a helper-only anchor assertion.
-func TestV3MissingAnchorToolsList(t *testing.T) {
+// Exercise production authentication, Initialize and the complete MCP catalog.
+func TestToolsList_ProjectStateDoesNotFilterAuthenticatedCatalog(t *testing.T) {
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
+	contexts := gormstore.NewUCIContextStore(nil)
+	contextApplication, err := mcp.NewUCIContextApplication(
+		uci.NewContextResolver(contexts, gormstore.NewUCIContextAuthorizer(contexts), contexts), contexts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projections := gormstore.NewUCIProjectionStore(nil)
+	application, err := worker.NewUCIApplication(contextApplication,
+		uci.NewAliasResolver(contexts.LookupLegacyAliasRecords), uci.NewQueryService(projections), nil,
+		uci.NewGraphService(projections), uci.NewVersionedReadService(projections), uci.NewIndexStatusService(projections, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := mcp.NewServer(mcp.ServerOptions{Version: daemonClientVersion})
+	catalog.SetCodebaseContextApplication(application)
+	expected := make(map[string]mcp.Tool)
+	for _, tool := range catalog.ListTools() {
+		expected[tool.Name] = tool
+	}
+	for _, required := range []string{"store", "recall", "codebase_context", "codebase_search", "codebase_read", "codebase_graph"} {
+		if _, ok := expected[required]; !ok {
+			t.Fatalf("production catalog fixture omitted %s", required)
+		}
+	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	token := uuid.NewString()
-	backend, _ := grpcserver.New(anchorDiscoveryHandler{mcp.NewServer(mcp.ServerOptions{Version: "anchor-discovery-test"})}, auth.NewValidator(token, nil))
+	backend, _ := grpcserver.New(anchorDiscoveryHandler{catalog}, auth.NewValidator(token, nil))
 	go func() { _ = backend.Serve(listener) }()
 	t.Cleanup(backend.GracefulStop)
 
-	for _, state := range []string{"absent", "neveranchored-linked", "neveranchored-packed", "neveranchored-untracked-sibling", "sibling-index-anchor", "sibling-index-error", "git-foreign-directory", "git-foreign-discovery", "git-foreign-common", "malformed", "untracked", "unreadable", "tracked-deletion", "staged-deletion", "git-index-error", "git-detached-head-error", "git-symbolic-head-error", "git-malformed-head-ref", "git-missing-head-ref", "visible-branch-anchor", "packed-branch-anchor", "linked-preanchor", "detached-sibling-anchor", "dangling-symlink", "unauthenticated"} {
+	for _, state := range []string{"absent", "portable", "malformed", "directory", "git-index-error", "missing-cwd", "unauthenticated"} {
 		t.Run(state, func(t *testing.T) {
 			root := t.TempDir()
-			git := func(args ...string) {
-				t.Helper()
-				command := exec.Command("git", append([]string{"-C", root}, args...)...)
-				if output, err := command.CombinedOutput(); err != nil {
-					t.Fatalf("git %v: %v: %s", args, err, output)
-				}
-			}
-			git("init", "--quiet")
-			git("-c", "user.name=Anchor Test", "-c", "user.email=anchor@example.test", "-c", "commit.gpgsign=false", "commit", "--quiet", "--allow-empty", "-m", "Existing repository")
-			anchorPath := filepath.Join(root, ".engram-project")
-			validAnchor := []byte(`{"version":3,"project_id":"22222222-2222-4222-8222-222222222222","name":"private-display-name","scope":"repository"}`)
+			marker := filepath.Join(root, ".engram-project")
+			var beforeMarker []byte
 			switch state {
+			case "portable", "unauthenticated":
+				writeContractProjectMarker(t, root, contractProjectID)
 			case "malformed":
-				if err := os.WriteFile(anchorPath, []byte(`{"version":3`), 0o600); err != nil {
+				if err := os.WriteFile(marker, []byte(`{"project_id":"private-invalid-uuid"}`), 0o600); err != nil {
 					t.Fatal(err)
 				}
-				git("add", "--", ".engram-project")
-			case "untracked", "tracked-deletion":
-				if err := os.WriteFile(anchorPath, validAnchor, 0o600); err != nil {
+			case "directory":
+				if err := os.Mkdir(marker, 0o700); err != nil {
 					t.Fatal(err)
-				}
-				if state == "tracked-deletion" {
-					git("add", "--", ".engram-project")
-					if err := os.Remove(anchorPath); err != nil {
-						t.Fatal(err)
-					}
-				}
-			case "staged-deletion", "git-malformed-head-ref", "git-missing-head-ref":
-				if err := os.WriteFile(anchorPath, validAnchor, 0o600); err != nil {
-					t.Fatal(err)
-				}
-				git("add", "--", ".engram-project")
-				git("-c", "user.name=Anchor Test", "-c", "user.email=anchor@example.test", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "Tracked anchor")
-				git("rm", "--quiet", "--", ".engram-project")
-				if state != "staged-deletion" {
-					branch, err := exec.Command("git", "-C", root, "symbolic-ref", "HEAD").Output()
-					if err != nil {
-						t.Fatal(err)
-					}
-					refPath := filepath.Join(root, ".git", filepath.FromSlash(strings.TrimSpace(string(branch))))
-					if state == "git-malformed-head-ref" {
-						if err := os.WriteFile(refPath, []byte("not-an-object\n"), 0o600); err != nil {
-							t.Fatal(err)
-						}
-					} else if err := os.Remove(refPath); err != nil {
-						t.Fatal(err)
-					}
-				}
-			case "visible-branch-anchor", "packed-branch-anchor", "linked-preanchor", "detached-sibling-anchor":
-				git("branch", "pre-anchor")
-				if err := os.WriteFile(anchorPath, validAnchor, 0o600); err != nil {
-					t.Fatal(err)
-				}
-				git("add", "--", ".engram-project")
-				if state == "detached-sibling-anchor" {
-					tree, err := exec.Command("git", "-C", root, "write-tree").Output()
-					if err != nil {
-						t.Fatal(err)
-					}
-					commit, err := exec.Command("git", "-C", root, "-c", "user.name=Anchor Test", "-c", "user.email=anchor@example.test", "commit-tree", strings.TrimSpace(string(tree)), "-p", "HEAD", "-m", "Visible detached anchor").Output()
-					if err != nil {
-						t.Fatal(err)
-					}
-					git("rm", "--cached", "--quiet", "--", ".engram-project")
-					if err := os.Remove(anchorPath); err != nil {
-						t.Fatal(err)
-					}
-					git("worktree", "add", "--quiet", "--detach", filepath.Join(t.TempDir(), "anchored"), strings.TrimSpace(string(commit)))
-				} else {
-					git("-c", "user.name=Anchor Test", "-c", "user.email=anchor@example.test", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "Tracked anchor")
-					if state == "linked-preanchor" {
-						linked := filepath.Join(t.TempDir(), "preanchor")
-						git("worktree", "add", "--quiet", linked, "pre-anchor")
-						root = linked
-						anchorPath = filepath.Join(root, ".engram-project")
-					} else {
-						git("checkout", "--quiet", "pre-anchor")
-						if state == "packed-branch-anchor" {
-							git("pack-refs", "--all")
-						}
-					}
-				}
-			case "git-foreign-directory", "git-foreign-discovery", "git-foreign-common":
-				if err := os.WriteFile(anchorPath, validAnchor, 0o600); err != nil {
-					t.Fatal(err)
-				}
-				git("add", "--", ".engram-project")
-				git("-c", "user.name=Anchor Test", "-c", "user.email=anchor@example.test", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "Tracked anchor")
-				git("rm", "--quiet", "--", ".engram-project")
-				foreign := t.TempDir()
-				for _, args := range [][]string{{"init", "--quiet"}, {"-c", "user.name=Anchor Test", "-c", "user.email=anchor@example.test", "-c", "commit.gpgsign=false", "commit", "--quiet", "--allow-empty", "-m", "Foreign empty repository"}} {
-					if out, err := exec.Command("git", append([]string{"-C", foreign}, args...)...).CombinedOutput(); err != nil {
-						t.Fatalf("foreign fixture: %v: %s", err, out)
-					}
-				}
-				if state == "git-foreign-common" {
-					t.Setenv("GIT_COMMON_DIR", filepath.Join(foreign, ".git"))
-				} else {
-					t.Setenv("GIT_DIR", filepath.Join(foreign, ".git"))
-					if state == "git-foreign-directory" {
-						t.Setenv("GIT_WORK_TREE", root)
-					}
 				}
 			case "git-index-error":
-				indexPath := filepath.Join(root, ".git", "index")
-				if err := os.Remove(indexPath); err != nil && !os.IsNotExist(err) {
+				if output, err := exec.Command("git", "-C", root, "init", "--quiet").CombinedOutput(); err != nil {
+					t.Fatalf("fixture git: %v: %s", err, output)
+				}
+				if err := os.Mkdir(filepath.Join(root, ".git", "index"), 0o700); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.Mkdir(indexPath, 0o700); err != nil {
-					t.Fatal(err)
-				}
-			case "git-detached-head-error", "git-symbolic-head-error":
-				badObject := strings.Repeat("1", 40) + "\n"
-				if state == "git-detached-head-error" {
-					if err := os.WriteFile(filepath.Join(root, ".git", "HEAD"), []byte(badObject), 0o600); err != nil {
-						t.Fatal(err)
-					}
-				} else {
-					git("symbolic-ref", "HEAD", "refs/heads/broken-head")
-					if err := os.WriteFile(filepath.Join(root, ".git", "refs", "heads", "broken-head"), []byte(badObject), 0o600); err != nil {
-						t.Fatal(err)
-					}
-				}
-			case "neveranchored-linked":
-				linked := filepath.Join(t.TempDir(), "neveranchored")
-				git("worktree", "add", "--quiet", "--detach", linked, "HEAD")
-				root = linked
-				anchorPath = filepath.Join(root, ".engram-project")
-			case "neveranchored-packed":
-				git("branch", "other-neveranchored")
-				git("pack-refs", "--all")
-			case "sibling-index-anchor", "sibling-index-error", "neveranchored-untracked-sibling":
-				linked := filepath.Join(t.TempDir(), "anchor sibling кириллица")
-				git("worktree", "add", "--quiet", "--detach", linked, "HEAD")
-				if err := os.WriteFile(filepath.Join(linked, ".engram-project"), validAnchor, 0o600); err != nil {
-					t.Fatal(err)
-				}
-				if state == "sibling-index-anchor" {
-					if out, err := exec.Command("git", "-C", linked, "add", "--", ".engram-project").CombinedOutput(); err != nil {
-						t.Fatalf("track sibling anchor: %v: %s", err, out)
-					}
-					anchor, err := projectidentity.DiscoverAnchorV3(t.Context(), linked, "repository")
-					if err != nil || anchor.ProjectID != "22222222-2222-4222-8222-222222222222" {
-						t.Fatalf("actual producer rejected index-tracked sibling: %+v: %v", anchor, err)
-					}
-					t.Log("actual DiscoverAnchorV3 accepts sibling anchor after git add, before commit")
-				} else if state == "sibling-index-error" {
-					index, err := exec.Command("git", "-C", linked, "rev-parse", "--git-path", "index").Output()
-					if err != nil {
-						t.Fatal(err)
-					}
-					if err := os.Remove(strings.TrimSpace(string(index))); err != nil {
-						t.Fatal(err)
-					}
-					if err := os.Mkdir(strings.TrimSpace(string(index)), 0o700); err != nil {
-						t.Fatal(err)
-					}
-				}
-			case "unreadable":
-				if err := os.Mkdir(anchorPath, 0o700); err != nil {
-					t.Fatal(err)
-				}
-				if _, err := os.ReadFile(anchorPath); err == nil || os.IsNotExist(err) {
-					t.Fatalf("unreadable fixture did not produce a non-ENOENT read error: %v", err)
-				}
-			case "dangling-symlink":
-				if err := os.Symlink(filepath.Join(root, "missing-target"), anchorPath); err != nil {
-					t.Skipf("symlinks unavailable: %v", err)
-				}
+			case "missing-cwd":
+				root = filepath.Join(root, "missing")
+				marker = filepath.Join(root, ".engram-project")
 			}
-			indexCommand := exec.Command("git", "-C", root, "rev-parse", "--git-path", "index")
-			indexCommand.Env = projectidentity.RepositoryGitEnvironmentV3()
-			indexPath, err := indexCommand.Output()
-			if err != nil {
-				t.Fatal(err)
-			}
-			selectedIndex := strings.TrimSpace(string(indexPath))
-			if !filepath.IsAbs(selectedIndex) {
-				selectedIndex = filepath.Join(root, selectedIndex)
-			}
-			var before []byte
-			if state != "git-index-error" {
-				var err error
-				before, err = os.ReadFile(selectedIndex)
-				if err != nil && !os.IsNotExist(err) {
+			if state == "portable" || state == "malformed" || state == "unauthenticated" {
+				beforeMarker, err = os.ReadFile(marker)
+				if err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -229,42 +95,69 @@ func TestV3MissingAnchorToolsList(t *testing.T) {
 			if state == "unauthenticated" {
 				project.Env[config.EnvWorkstationToken] = ""
 			}
-			response, err := dispatcher.HandleRequest(context.Background(), project, jsonrpcListReq(1))
+			response, err := dispatcher.HandleRequest(t.Context(), project, jsonrpcListReq(1))
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Logf("tools/list %s: %s", state, response)
-			if state == "absent" || strings.HasPrefix(state, "neveranchored-") {
-				assertOnlyRegistrationTool(t, response)
-				_, callErr := mod.ProxyHandleTool(context.Background(), project, "recall", json.RawMessage(`{}`))
-				var moduleErr *module.ModuleError
-				if !errors.As(callErr, &moduleErr) || moduleErr.Code != "PROJECT_ANCHOR_INVALID" {
-					t.Fatalf("missing-anchor scoped recall error=%v, want PROJECT_ANCHOR_INVALID", callErr)
-				}
-				if _, err := os.Lstat(anchorPath); !os.IsNotExist(err) {
-					t.Fatalf("discovery created an anchor: %v", err)
-				}
-			} else {
+			if state == "unauthenticated" {
 				assertToolsListServiceUnavailable(t, response)
-				if state != "unauthenticated" && !strings.Contains(string(response), "PROJECT_ANCHOR_INVALID") {
-					t.Fatal("invalid anchor lost its typed refusal")
+			} else {
+				var got struct {
+					Error any `json:"error"`
+					Result struct {
+						Tools []struct {
+							Name        string          `json:"name"`
+							Description string          `json:"description"`
+							InputSchema json.RawMessage `json:"inputSchema"`
+						} `json:"tools"`
+					} `json:"result"`
+				}
+				if err := json.Unmarshal(response, &got); err != nil {
+					t.Fatal(err)
+				}
+				if got.Error != nil || len(got.Result.Tools) != len(expected) {
+					t.Fatalf("%s tools/list=%s, want the complete production catalog", state, response)
+				}
+				seen := make(map[string]bool)
+				for _, tool := range got.Result.Tools {
+					definition, ok := expected[tool.Name]
+					if !ok || seen[tool.Name] || tool.Description != definition.Description {
+						t.Fatalf("catalog descriptor changed or duplicated: %q", tool.Name)
+					}
+					schema, err := json.Marshal(definition.InputSchema)
+					if err != nil {
+						t.Fatal(err)
+					}
+					assertJSONEqual(t, tool.Name+" schema", tool.InputSchema, schema)
+					seen[tool.Name] = true
 				}
 			}
-			for _, private := range []string{root, project.ID, "private-display-name", "22222222-2222-4222-8222-222222222222", token} {
+			for _, private := range []string{root, project.ID, "private-display-name", "private-invalid-uuid", contractProjectID, token} {
 				if strings.Contains(string(response), private) {
-					t.Fatal("discovery leaked private identity or credentials")
+					t.Fatal("discovery leaked private project context or credentials")
 				}
 			}
 			if mod.cache.HasEntry(project.ID) {
-				t.Fatal("discovery retained legacy project authority")
+				t.Fatal("catalog discovery created legacy project authority")
 			}
-			if state != "git-index-error" {
-				after, err := os.ReadFile(selectedIndex)
-				if err != nil && !os.IsNotExist(err) {
-					t.Fatal(err)
+			if beforeMarker != nil {
+				after, err := os.ReadFile(marker)
+				if err != nil || string(after) != string(beforeMarker) {
+					t.Fatal("discovery changed a portable marker")
 				}
-				if string(before) != string(after) {
-					t.Fatal("discovery mutated the repository index")
+			} else if state == "directory" {
+				if info, err := os.Lstat(marker); err != nil || !info.IsDir() {
+					t.Fatal("discovery changed the nonregular marker")
+				}
+			} else if _, err := os.Lstat(marker); !os.IsNotExist(err) {
+				t.Fatalf("discovery created a portable marker: %v", err)
+			}
+			if state == "git-index-error" {
+				if info, err := os.Lstat(filepath.Join(root, ".git", "index")); err != nil || !info.IsDir() {
+					t.Fatal("discovery changed the repository index")
+				}
+				if _, err := os.Lstat(filepath.Join(root, ".git", "engram-project.json")); !os.IsNotExist(err) {
+					t.Fatalf("catalog discovery created a project cache: %v", err)
 				}
 			}
 		})

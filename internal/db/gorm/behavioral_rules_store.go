@@ -370,6 +370,18 @@ func decodeBehavioralRuleCollectionCursor(cursor string) (behavioralRuleCollecti
 	return state, filter, nil
 }
 
+// ValidateBehavioralRuleCollectionPageProjection rejects replay into another Rules projection.
+func ValidateBehavioralRuleCollectionPageProjection(cursor, projection string) error {
+	_, filter, err := decodeBehavioralRuleCollectionCursor(cursor)
+	if err != nil {
+		return err
+	}
+	if filter.scope != projection {
+		return ErrCollectionSelectionReconfirmationRequired
+	}
+	return nil
+}
+
 // Create inserts a new behavioral rule. Returns a new *models.BehavioralRule populated with
 // the database-assigned ID and timestamps. The caller's input is never mutated.
 func (s *BehavioralRulesStore) Create(ctx context.Context, rule *models.BehavioralRule) (*models.BehavioralRule, error) {

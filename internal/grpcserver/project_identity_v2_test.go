@@ -3,86 +3,57 @@ package grpcserver
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"net"
-	"net/url"
-	"os"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/thebtf/engram/internal/auth"
-	localgorm "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/mcp"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	gormlib "gorm.io/gorm"
 )
 
-func setAR1FixtureDSN(t *testing.T) {
-	t.Helper()
-	dsn := os.Getenv("ENGRAM_RECOVERY_FIXTURE_DSN")
-	if dsn == "" {
-		t.Skip("ENGRAM_RECOVERY_FIXTURE_DSN not set, skipping AR-1 fixture test")
-	}
-	fixtureURL, err := url.Parse(dsn)
-	if err != nil || fixtureURL.User == nil {
-		t.Skip("ENGRAM_RECOVERY_FIXTURE_DSN is not the dedicated fixture endpoint")
-	}
-	_, hasPassword := fixtureURL.User.Password()
-	fixtureIP := net.ParseIP(fixtureURL.Hostname())
-	if fixtureURL.Scheme != "postgres" || fixtureURL.User.Username() != "fixture" || hasPassword || fixtureIP == nil || !fixtureIP.IsLoopback() || fixtureURL.Port() != "55432" || fixtureURL.Path != "/engram_fixture" || fixtureURL.RawPath != "" || fixtureURL.RawQuery != "sslmode=disable" || fixtureURL.Fragment != "" {
-		t.Skip("ENGRAM_RECOVERY_FIXTURE_DSN is not the dedicated fixture endpoint")
-	}
-	t.Setenv("DATABASE_DSN", dsn)
-}
+const grpcLogicalProjectID = "33333333-3333-4333-8333-333333333333"
 
 type identityOrderHandler struct {
 	steps     *[]string
 	arguments *[]byte
+	project   *string
+	tools     []ToolDef
 }
 
-func (h identityOrderHandler) HandleToolCall(_ context.Context, _ string, args []byte) ([]byte, bool, error) {
+func (h identityOrderHandler) HandleToolCall(ctx context.Context, _ string, args []byte) ([]byte, bool, error) {
 	*h.steps = append(*h.steps, "handler")
 	if h.arguments != nil {
 		*h.arguments = append((*h.arguments)[:0], args...)
 	}
+	if h.project != nil {
+		*h.project = mcp.ProjectFromContext(ctx)
+	}
 	return []byte(`[]`), false, nil
 }
-func (identityOrderHandler) ToolDefinitions() []ToolDef   { return nil }
+func (h identityOrderHandler) ToolDefinitions() []ToolDef { return h.tools }
 func (identityOrderHandler) ServerInfo() (string, string) { return "test", "test" }
 
-func TestCallTool_RegistersAndResolvesBeforeHandler(t *testing.T) {
+func TestCallTool_UsesPortableProjectWithoutRegistration(t *testing.T) {
 	steps := []string{}
-	srv := &Server{handler: identityOrderHandler{steps: &steps}}
-	srv.identityResolver = func(_ context.Context, _ *gormlib.DB, selector string, identity *pb.ProjectIdentityV2) (string, error) {
-		steps = append(steps, "resolve")
-		if selector != "legacy" || identity == nil || identity.Version != 2 {
-			t.Fatalf("resolver input selector=%q identity=%#v", selector, identity)
-		}
-		return "canonical", nil
-	}
+	var project string
+	srv := &Server{handler: identityOrderHandler{steps: &steps, project: &project}}
 
 	resp, err := srv.CallTool(context.Background(), &pb.CallToolRequest{
 		ToolName: "recall",
-		Project:  "legacy",
-		ProjectIdentity: &pb.ProjectIdentityV2{
-			Version:         2,
-			LegacyProjectId: "legacy",
-			GitRemote:       "https://example.invalid/acme/mono.git",
-			RelativePath:    "packages/core/",
-		},
+		Project:  grpcLogicalProjectID,
 	})
 	if err != nil {
 		t.Fatalf("CallTool: %v", err)
 	}
-	if !reflect.DeepEqual(steps, []string{"resolve", "handler"}) {
+	if !reflect.DeepEqual(steps, []string{"handler"}) {
 		t.Fatalf("order=%v", steps)
 	}
-	if resp.CanonicalProject != "canonical" {
-		t.Fatalf("canonical response=%q", resp.CanonicalProject)
+	if resp.CanonicalProject != grpcLogicalProjectID || project != grpcLogicalProjectID {
+		t.Fatalf("response=%v handler project=%q", resp, project)
 	}
 }
 
@@ -90,19 +61,16 @@ func TestCallTool_RewritesProjectArgumentToCanonicalBeforeHandler(t *testing.T) 
 	steps := []string{}
 	var captured []byte
 	srv := &Server{handler: identityOrderHandler{steps: &steps, arguments: &captured}}
-	srv.identityResolver = func(_ context.Context, _ *gormlib.DB, _ string, _ *pb.ProjectIdentityV2) (string, error) {
-		return "canonical", nil
-	}
 
 	resp, err := srv.CallTool(context.Background(), &pb.CallToolRequest{
-		ToolName:      "codebase_search",
-		Project:       "legacy",
+		ToolName:      "recall",
+		Project:       grpcLogicalProjectID,
 		ArgumentsJson: []byte(`{"query":"needle","project":"other","limit":7}`),
 	})
 	if err != nil {
 		t.Fatalf("CallTool: %v", err)
 	}
-	if resp.CanonicalProject != "canonical" {
+	if resp.CanonicalProject != grpcLogicalProjectID {
 		t.Fatalf("canonical response=%q", resp.CanonicalProject)
 	}
 	var args struct {
@@ -113,7 +81,7 @@ func TestCallTool_RewritesProjectArgumentToCanonicalBeforeHandler(t *testing.T) 
 	if err := json.Unmarshal(captured, &args); err != nil {
 		t.Fatalf("decode handler args: %v", err)
 	}
-	if args.Project != "canonical" || args.Query != "needle" || args.Limit != 7 {
+	if args.Project != grpcLogicalProjectID || args.Query != "needle" || args.Limit != 7 {
 		t.Fatalf("handler args=%+v", args)
 	}
 	if !reflect.DeepEqual(steps, []string{"handler"}) {
@@ -127,13 +95,10 @@ func TestCallTool_PreservesDocumentedUnscopedReviewSelector(t *testing.T) {
 			steps := []string{}
 			var captured []byte
 			srv := &Server{handler: identityOrderHandler{steps: &steps, arguments: &captured}}
-			srv.identityResolver = func(_ context.Context, _ *gormlib.DB, _ string, _ *pb.ProjectIdentityV2) (string, error) {
-				return "canonical", nil
-			}
 
 			_, err := srv.CallTool(context.Background(), &pb.CallToolRequest{
 				ToolName:      toolName,
-				Project:       "legacy",
+				Project:       grpcLogicalProjectID,
 				ArgumentsJson: []byte(`{"project":"all","limit":5}`),
 			})
 			if err != nil {
@@ -156,10 +121,6 @@ func TestCallTool_WithoutOuterProjectSkipsIdentityResolution(t *testing.T) {
 	steps := []string{}
 	var captured []byte
 	srv := &Server{handler: identityOrderHandler{steps: &steps, arguments: &captured}}
-	srv.identityResolver = func(_ context.Context, _ *gormlib.DB, _ string, _ *pb.ProjectIdentityV2) (string, error) {
-		t.Fatal("identity resolver called for unscoped tool request")
-		return "", nil
-	}
 
 	arguments := []byte(`{"project":"all","limit":5}`)
 	resp, err := srv.CallTool(context.Background(), &pb.CallToolRequest{
@@ -182,7 +143,7 @@ func TestCallTool_PreservesExplicitTargetProjectFilters(t *testing.T) {
 		wantProject string
 	}{
 		{name: "issues list target", toolName: "issues", arguments: `{"action":"list","project":"target-project","limit":5}`, wantProject: "target-project"},
-		{name: "issues create actor", toolName: "issues", arguments: `{"action":"create","project":"other","target_project":"target-project"}`, wantProject: "canonical"},
+		{name: "issues create actor", toolName: "issues", arguments: `{"action":"create","project":"other","target_project":"target-project"}`, wantProject: grpcLogicalProjectID},
 		{name: "issues default list target", toolName: "issues", arguments: `{"project":"target-project","limit":5}`, wantProject: "target-project"},
 		{name: "review metrics filter", toolName: "review_metrics.read", arguments: `{"project":"target-project","limit":5}`, wantProject: "target-project"},
 		{name: "review queue filter", toolName: "review_queue.read", arguments: `{"project":"target-project","limit":5}`, wantProject: "target-project"},
@@ -196,13 +157,10 @@ func TestCallTool_PreservesExplicitTargetProjectFilters(t *testing.T) {
 			steps := []string{}
 			var captured []byte
 			srv := &Server{handler: identityOrderHandler{steps: &steps, arguments: &captured}}
-			srv.identityResolver = func(_ context.Context, _ *gormlib.DB, _ string, _ *pb.ProjectIdentityV2) (string, error) {
-				return "canonical", nil
-			}
 
 			_, err := srv.CallTool(context.Background(), &pb.CallToolRequest{
 				ToolName:      tt.toolName,
-				Project:       "legacy",
+				Project:       grpcLogicalProjectID,
 				ArgumentsJson: []byte(tt.arguments),
 			})
 			if err != nil {
@@ -226,13 +184,10 @@ func TestCallTool_RejectsMalformedActionBeforeProjectExemption(t *testing.T) {
 		t.Run(action, func(t *testing.T) {
 			steps := []string{}
 			srv := &Server{handler: identityOrderHandler{steps: &steps}}
-			srv.identityResolver = func(_ context.Context, _ *gormlib.DB, _ string, _ *pb.ProjectIdentityV2) (string, error) {
-				return "canonical", nil
-			}
 
 			_, err := srv.CallTool(context.Background(), &pb.CallToolRequest{
 				ToolName:      "issues",
-				Project:       "legacy",
+				Project:       grpcLogicalProjectID,
 				ArgumentsJson: []byte(`{"action":` + action + `,"project":"target-project"}`),
 			})
 			if status.Code(err) != codes.InvalidArgument {
@@ -249,19 +204,16 @@ func TestCallTool_PreservesAdminPurgeProjectTarget(t *testing.T) {
 	steps := []string{}
 	var captured []byte
 	srv := &Server{handler: identityOrderHandler{steps: &steps, arguments: &captured}}
-	srv.identityResolver = func(_ context.Context, _ *gormlib.DB, _ string, _ *pb.ProjectIdentityV2) (string, error) {
-		return "canonical", nil
-	}
 
 	resp, err := srv.CallTool(context.Background(), &pb.CallToolRequest{
 		ToolName:      "admin",
-		Project:       "legacy",
+		Project:       grpcLogicalProjectID,
 		ArgumentsJson: []byte(`{"action":"purge_project","project":"target-project","confirm":"target-project"}`),
 	})
 	if err != nil {
 		t.Fatalf("CallTool: %v", err)
 	}
-	if resp.CanonicalProject != "canonical" {
+	if resp.CanonicalProject != grpcLogicalProjectID {
 		t.Fatalf("canonical response=%q", resp.CanonicalProject)
 	}
 	var args struct {
@@ -280,13 +232,10 @@ func TestCallTool_PreservesAdminPurgeProjectTarget(t *testing.T) {
 func TestCallTool_RejectsNonStringProjectArgumentBeforeHandler(t *testing.T) {
 	steps := []string{}
 	srv := &Server{handler: identityOrderHandler{steps: &steps}}
-	srv.identityResolver = func(_ context.Context, _ *gormlib.DB, _ string, _ *pb.ProjectIdentityV2) (string, error) {
-		return "canonical", nil
-	}
 
 	_, err := srv.CallTool(context.Background(), &pb.CallToolRequest{
-		ToolName:      "codebase_search",
-		Project:       "legacy",
+		ToolName:      "recall",
+		Project:       grpcLogicalProjectID,
 		ArgumentsJson: []byte(`{"query":"needle","project":42}`),
 	})
 	if status.Code(err) != codes.InvalidArgument {
@@ -310,13 +259,10 @@ func TestCallTool_RejectsCaseVariantProjectArgumentBeforeHandler(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			steps := []string{}
 			srv := &Server{handler: identityOrderHandler{steps: &steps}}
-			srv.identityResolver = func(_ context.Context, _ *gormlib.DB, _ string, _ *pb.ProjectIdentityV2) (string, error) {
-				return "canonical", nil
-			}
 
 			_, err := srv.CallTool(context.Background(), &pb.CallToolRequest{
-				ToolName:      "codebase_search",
-				Project:       "legacy",
+				ToolName:      "recall",
+				Project:       grpcLogicalProjectID,
 				ArgumentsJson: tt.args,
 			})
 			if status.Code(err) != codes.InvalidArgument {
@@ -329,77 +275,54 @@ func TestCallTool_RejectsCaseVariantProjectArgumentBeforeHandler(t *testing.T) {
 	}
 }
 
-func TestInitialize_WithoutProjectIdentitySkipsResolution(t *testing.T) {
-	srv := &Server{handler: identityOrderHandler{steps: &[]string{}}}
-	srv.identityResolver = func(_ context.Context, _ *gormlib.DB, _ string, _ *pb.ProjectIdentityV2) (string, error) {
-		t.Fatal("identity resolver called for legacy capability discovery")
-		return "", nil
+func TestInitialize_ReturnsCompleteUnscopedCatalog(t *testing.T) {
+	definitions := []ToolDef{
+		{Name: "recall", Description: "read project memory", InputSchemaJSON: []byte(`{"type":"object"}`)},
+		{Name: "codebase_context", Description: "select authorized checkout", InputSchemaJSON: []byte(`{"type":"object"}`)},
+		{Name: "codebase_search", Description: "search authorized view", InputSchemaJSON: []byte(`{"type":"object"}`)},
 	}
+	srv := &Server{handler: identityOrderHandler{steps: &[]string{}, tools: definitions}}
 
-	resp, err := srv.Initialize(context.Background(), &pb.InitializeRequest{})
+	resp, err := srv.Initialize(context.Background(), &pb.InitializeRequest{ClientName: "portable-project-client", ClientVersion: "1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.ServerName != "test" || resp.CanonicalProject != "" {
+	if resp.ServerName != "test" || resp.ServerVersion != "test" || resp.CanonicalProject != "" || len(resp.Tools) != len(definitions) {
 		t.Fatalf("response=%#v", resp)
 	}
+	for index, definition := range definitions {
+		tool := resp.Tools[index]
+		if tool.Name != definition.Name || tool.Description != definition.Description || !reflect.DeepEqual(tool.InputSchemaJson, definition.InputSchemaJSON) {
+			t.Fatalf("catalog entry %d=%v want %+v", index, tool, definition)
+		}
+	}
 }
 
-func TestInitialize_ResolvesBeforeReturningTools(t *testing.T) {
-	srv := &Server{handler: identityOrderHandler{steps: &[]string{}}}
-	srv.identityResolver = func(_ context.Context, _ *gormlib.DB, _ string, _ *pb.ProjectIdentityV2) (string, error) {
-		return "canonical", nil
-	}
-	resp, err := srv.Initialize(context.Background(), &pb.InitializeRequest{Project: "legacy", ProjectIdentity: &pb.ProjectIdentityV2{Version: 2, GitRemote: "https://example.invalid/acme/mono.git", RelativePath: "packages/core/"}})
-	if err != nil {
+func TestInitialize_DoesNotAdmitProjectOperations(t *testing.T) {
+	steps := []string{}
+	srv := &Server{handler: identityOrderHandler{steps: &steps}}
+	if _, err := srv.Initialize(context.Background(), &pb.InitializeRequest{}); err != nil {
 		t.Fatal(err)
 	}
-	if resp.CanonicalProject != "canonical" {
-		t.Fatalf("canonical response=%q", resp.CanonicalProject)
-	}
-}
-
-func TestCallTool_StableIdentityErrorsPrecedeMutation(t *testing.T) {
-	srv := &Server{handler: identityOrderHandler{steps: &[]string{}}}
-	srv.identityResolver = func(_ context.Context, _ *gormlib.DB, _ string, _ *pb.ProjectIdentityV2) (string, error) {
-		return "", &localgorm.ProjectIdentityError{Code: localgorm.ProjectIdentityAmbiguous, UpgradeAction: localgorm.UpgradeActionSendProjectIdentityV2, Err: errors.New("ambiguous selector")}
-	}
-	_, err := srv.CallTool(context.Background(), &pb.CallToolRequest{ToolName: "recall", Project: "legacy"})
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("status=%v error=%v", status.Code(err), err)
+	response, err := srv.CallTool(context.Background(), &pb.CallToolRequest{ToolName: "recall", ArgumentsJson: []byte(`{"project":"` + grpcLogicalProjectID + `"}`)})
+	if status.Code(err) != codes.FailedPrecondition || response != nil || len(steps) != 0 {
+		t.Fatalf("unbound project call: response=%v error=%v steps=%v", response, err, steps)
 	}
 	st, _ := status.FromError(err)
 	if len(st.Details()) != 1 {
-		t.Fatalf("stable machine-readable detail missing: %#v", st.Details())
+		t.Fatalf("stable project-context detail missing: %#v", st.Details())
+	}
+	detail, ok := st.Details()[0].(*errdetails.ErrorInfo)
+	if !ok || detail.Reason != "PROJECT_CONTEXT_REQUIRED" || detail.Domain != "engram.project" {
+		t.Fatalf("project-context detail=%v", st.Details())
 	}
 }
 
-func TestCallTool_TypedNilIdentityErrorFailsClosed(t *testing.T) {
-	steps := []string{}
-	srv := &Server{handler: identityOrderHandler{steps: &steps}}
-	srv.identityResolver = func(_ context.Context, _ *gormlib.DB, _ string, _ *pb.ProjectIdentityV2) (string, error) {
-		var typedNil *localgorm.ProjectIdentityError
-		return "", typedNil
-	}
-	_, err := srv.CallTool(context.Background(), &pb.CallToolRequest{ToolName: "recall", Project: "legacy"})
-	if status.Code(err) != codes.Unavailable {
-		t.Fatalf("status=%v error=%v, want Unavailable", status.Code(err), err)
-	}
-	if len(steps) != 0 {
-		t.Fatalf("handler ran after typed-nil identity error: %v", steps)
-	}
-}
-
-func TestSelectorDoesNotBypassAuthentication(t *testing.T) {
+func TestProjectIDDoesNotBypassAuthentication(t *testing.T) {
 	srv := &Server{validator: auth.NewValidator("master-secret", &stubReader{})}
 	req := &pb.CallToolRequest{
 		ToolName: "recall",
-		Project:  "known-private-selector",
-		ProjectIdentity: &pb.ProjectIdentityV2{
-			Version:         2,
-			LegacyProjectId: "known-private-selector",
-			GitRemote:       "https://example.invalid/private.git",
-		},
+		Project:  grpcLogicalProjectID,
 	}
 	handler := func(_ context.Context, _ any) (any, error) {
 		t.Fatal("identity metadata must not bypass the auth interceptor")
@@ -408,24 +331,6 @@ func TestSelectorDoesNotBypassAuthentication(t *testing.T) {
 	_, err := srv.authInterceptor(context.Background(), req, &grpc.UnaryServerInfo{FullMethod: pb.EngramService_CallTool_FullMethodName}, handler)
 	if status.Code(err) != codes.Unauthenticated {
 		t.Fatalf("status=%v error=%v", status.Code(err), err)
-	}
-}
-
-func TestProjectIdentityUnavailable_DoesNotExposeDatabaseDiagnostics(t *testing.T) {
-	srv := &Server{handler: identityOrderHandler{steps: &[]string{}}}
-	srv.identityResolver = func(_ context.Context, _ *gormlib.DB, _ string, _ *pb.ProjectIdentityV2) (string, error) {
-		return "", &localgorm.ProjectIdentityError{
-			Code:          localgorm.ProjectIdentityUnavailable,
-			UpgradeAction: localgorm.UpgradeActionRetryProjectRegistration,
-			Err:           errors.New("postgres internal-token-do-not-leak relation projects"),
-		}
-	}
-	_, err := srv.CallTool(context.Background(), &pb.CallToolRequest{ToolName: "recall", Project: "legacy"})
-	if status.Code(err) != codes.Unavailable {
-		t.Fatalf("status=%v error=%v", status.Code(err), err)
-	}
-	if strings.Contains(err.Error(), "do-not-leak") || strings.Contains(err.Error(), "relation projects") {
-		t.Fatalf("database diagnostics leaked: %v", err)
 	}
 }
 
@@ -446,44 +351,12 @@ func TestCallTool_DefaultResolverRejectsMalformedSelectorsBeforeHandler(t *testi
 			if !ok {
 				t.Fatalf("detail=%T, want ErrorInfo", st.Details()[0])
 			}
-			if detail.Reason != localgorm.ProjectIdentityInvalid || detail.Domain != "engram.project_identity" || detail.Metadata["upgrade_action"] != localgorm.UpgradeActionRegenerateProjectIdentityV2 {
+			if detail.Reason != "PROJECT_CONTEXT_INVALID" || detail.Domain != "engram.project" {
 				t.Fatalf("detail=%#v", detail)
 			}
 			if len(steps) != 0 {
 				t.Fatalf("handler ran before selector rejection: %v", steps)
 			}
 		})
-	}
-}
-
-func TestCallTool_UnknownSelectorOnlyFailsBeforeProjectMutation(t *testing.T) {
-	setAR1FixtureDSN(t)
-	db, cleanup := testGRPCSyncDB(t)
-	defer cleanup()
-	selector := "ar1-fence-grpc-unknown"
-	db.Unscoped().Exec(`DELETE FROM projects WHERE id = ? OR COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[]`, selector, selector)
-	defer db.Unscoped().Exec(`DELETE FROM projects WHERE id = ? OR COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[]`, selector, selector)
-
-	steps := []string{}
-	srv := &Server{db: db, handler: identityOrderHandler{steps: &steps}}
-	response, err := srv.CallTool(context.Background(), &pb.CallToolRequest{ToolName: "recall", Project: selector})
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Errorf("status=%v error=%v, want selector-only refusal", status.Code(err), err)
-	}
-	if response != nil {
-		t.Errorf("response=%#v, want no handler response after selector-only refusal", response)
-	}
-	if len(steps) != 0 {
-		t.Errorf("handler ran after selector-only request: %v", steps)
-	}
-
-	var count int64
-	if err := db.Unscoped().Model(&localgorm.Project{}).
-		Where(`id = ? OR COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[]`, selector, selector).
-		Count(&count).Error; err != nil {
-		t.Fatal(err)
-	}
-	if count != 0 {
-		t.Errorf("selector-only gRPC request created or retained %d project/alias rows, including soft-deleted rows", count)
 	}
 }

@@ -7,9 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/thebtf/engram/internal/auth"
 	dbgorm "github.com/thebtf/engram/internal/db/gorm"
 )
 
@@ -67,13 +69,15 @@ func TestRecallMemory_CompatV3_VnextFEnabled_ZeroTG3Params_T021b(t *testing.T) {
 			t.Skip("T021b runtime: DATABASE_DSN not set or -short; skipping DB-dependent assertion")
 		}
 
-		project := "t021b-compat-v3-vnext-f"
+		project := uuid.NewString()
 		store, err := dbgorm.NewStore(dbgorm.Config{DSN: dsn, MaxConns: 2})
 		require.NoError(t, err)
 		t.Cleanup(func() {
 			_ = store.DB.Exec(`DELETE FROM memories WHERE project = ?`, project).Error
+			_ = store.DB.Where("id = ?", project).Delete(&dbgorm.Project{}).Error
 			_ = store.Close()
 		})
+		require.NoError(t, store.DB.Create(&dbgorm.Project{ID: project}).Error)
 
 		memoryStore := dbgorm.NewMemoryStore(store)
 		now := time.Now().UTC()
@@ -171,13 +175,15 @@ func TestRecallMemory_CompatV3_ZeroFlagsShape_T021(t *testing.T) {
 			t.Skip("T021 runtime: DATABASE_DSN not set or -short; skipping DB-dependent assertion")
 		}
 
-		project := "t021-compat-v3"
+		project := uuid.NewString()
 		store, err := dbgorm.NewStore(dbgorm.Config{DSN: dsn, MaxConns: 2})
 		require.NoError(t, err)
 		t.Cleanup(func() {
 			_ = store.DB.Exec(`DELETE FROM memories WHERE project = ?`, project).Error
+			_ = store.DB.Where("id = ?", project).Delete(&dbgorm.Project{}).Error
 			_ = store.Close()
 		})
+		require.NoError(t, store.DB.Create(&dbgorm.Project{ID: project}).Error)
 
 		memoryStore := dbgorm.NewMemoryStore(store)
 
@@ -253,4 +259,63 @@ func TestRecallMemory_CompatV3_ZeroFlagsShape_T021(t *testing.T) {
 				"individual memory object must not have 'ranking_rationale' key in flag-OFF mode (NFR-F1)")
 		}
 	})
+}
+
+func TestRecallSearch_DefaultsToCallerProject(t *testing.T) {
+	project, explicitProject := uuid.NewString(), uuid.NewString()
+	env := newMemoryServerForT007(t, project)
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
+	t.Setenv("ENGRAM_VNEXT_ENABLED", "")
+	t.Cleanup(func() {
+		require.NoError(t, env.store.DB.Exec("DELETE FROM memories WHERE project = ?", explicitProject).Error)
+	})
+	rows := []dbgorm.Memory{
+		{Project: project, Content: "context recall marker: intended saved memory", Status: "active", Version: 1, PrivacyScope: "project"},
+		{Project: explicitProject, Content: "context recall marker: explicitly selected memory", Status: "active", Version: 1, PrivacyScope: "project"},
+		{Project: project, Content: "context recall marker: another principal's private memory", Status: "active", Version: 1, PrivacyScope: "project", OwnerPrincipal: "agent/other", OwnerPrincipalKind: "agent", AgentVisibility: "private"},
+	}
+	require.NoError(t, env.store.DB.Create(&rows).Error)
+	caller := auth.WithIdentity(context.Background(), auth.ClientWithPrincipal("read-only", "recall-default-workstation", "agent/caller", auth.PrincipalKindAgent))
+	bound := ContextWithProject(caller, project)
+	for _, testcase := range []struct {
+		name string
+		ctx  context.Context
+		args map[string]any
+		want *dbgorm.Memory
+	}{
+		{"omitted project", bound, map[string]any{"query": "context recall marker"}, &rows[0]},
+		{"empty project", bound, map[string]any{"query": "context recall marker", "project": ""}, &rows[0]},
+		{"explicit project wins", bound, map[string]any{"query": "context recall marker", "project": explicitProject}, &rows[1]},
+		{"unbound stays unscoped", caller, map[string]any{"query": "context recall marker"}, nil},
+	} {
+		t.Run(testcase.name, func(t *testing.T) {
+			args := mustJSON(t, testcase.args)
+			original := string(args)
+			result, err := env.srv.callTool(testcase.ctx, "recall", args)
+			require.NoError(t, err)
+			require.Equal(t, original, string(args), "recall must not rewrite caller arguments")
+			var response struct {
+				Count    int `json:"count"`
+				Memories []struct {
+					ID      int64  `json:"id"`
+					Project string `json:"project"`
+					Content string `json:"content"`
+				} `json:"memories"`
+				Note string `json:"note"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(result), &response))
+			if testcase.want == nil {
+				require.Zero(t, response.Count)
+				require.Empty(t, response.Memories)
+				require.Equal(t, "project parameter is required for memory search", response.Note)
+				return
+			}
+			require.Equal(t, 1, response.Count)
+			require.Len(t, response.Memories, 1)
+			require.Equal(t, testcase.want.ID, response.Memories[0].ID)
+			require.Equal(t, testcase.want.Project, response.Memories[0].Project)
+			require.Equal(t, testcase.want.Content, response.Memories[0].Content)
+			require.Empty(t, response.Note)
+		})
+	}
 }

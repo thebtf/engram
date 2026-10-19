@@ -8,13 +8,8 @@ const {
   pending,
   error,
   refresh,
-  noiseTrendGap,
 } = useOperatorSearchNoise()
 
-const ratio = computed(() => {
-  if (vnextState.value.kind !== 'live') return 0
-  return Math.max(0, Math.min(1, vnextState.value.data.noise_ratio || 0))
-})
 </script>
 
 <template>
@@ -22,7 +17,7 @@ const ratio = computed(() => {
     <header class="head">
       <div>
         <h1>{{ t('noisePage.title') }}</h1>
-        <p>{{ t('noisePage.subtitle') }}</p>
+        <p>{{ t('knowledge.serverScope') }}</p>
       </div>
       <button class="btn" type="button" :disabled="pending" @click="refresh">{{ t('noisePage.refresh') }}</button>
     </header>
@@ -31,8 +26,8 @@ const ratio = computed(() => {
     <div v-if="error" class="state error">{{ t('noisePage.state.error', { message: error }) }}</div>
 
     <section class="hero">
-      <div class="gauge" :style="`--p:${ratio * 100}`">
-        <div class="gv">{{ vnextState.kind === 'live' ? (vnextState.data.noise_ratio ?? 0).toFixed(2) : '—' }}</div>
+      <div class="snapshot-value">
+        <div class="gv">{{ vnextState.kind === 'live' && typeof vnextState.data.noise_ratio === 'number' ? vnextState.data.noise_ratio.toFixed(2) : '—' }}</div>
         <div class="gl">{{ t('noisePage.gauge.label') }}</div>
       </div>
       <div class="metrics">
@@ -53,19 +48,19 @@ const ratio = computed(() => {
         <dl class="stats">
           <div>
             <dt>{{ t('noisePage.analytics.total') }}</dt>
-            <dd>{{ analyticsState.kind === 'live' ? analyticsState.data.total_searches ?? 0 : '—' }}</dd>
+            <dd>{{ analyticsState.kind === 'live' ? analyticsState.data.total_searches ?? '—' : '—' }}</dd>
           </div>
           <div>
             <dt>{{ t('noisePage.analytics.today') }}</dt>
-            <dd>{{ analyticsState.kind === 'live' ? analyticsState.data.searches_today ?? 0 : '—' }}</dd>
+            <dd>{{ analyticsState.kind === 'live' ? analyticsState.data.searches_today ?? '—' : '—' }}</dd>
           </div>
           <div>
             <dt>{{ t('noisePage.analytics.latency') }}</dt>
-            <dd>{{ analyticsState.kind === 'live' ? analyticsState.data.avg_latency_ms ?? 0 : '—' }}</dd>
+            <dd>{{ analyticsState.kind === 'live' ? analyticsState.data.avg_latency_ms ?? '—' : '—' }}</dd>
           </div>
           <div>
             <dt>{{ t('noisePage.analytics.errors') }}</dt>
-            <dd>{{ analyticsState.kind === 'live' ? analyticsState.data.search_errors ?? 0 : '—' }}</dd>
+            <dd>{{ analyticsState.kind === 'live' ? analyticsState.data.search_errors ?? '—' : '—' }}</dd>
           </div>
         </dl>
       </article>
@@ -78,19 +73,19 @@ const ratio = computed(() => {
         <dl class="stats">
           <div>
             <dt>{{ t('noisePage.retrieval.requests') }}</dt>
-            <dd>{{ retrievalState.kind === 'live' ? retrievalState.data.total_requests ?? 0 : '—' }}</dd>
+            <dd>{{ retrievalState.kind === 'live' ? retrievalState.data.total_requests ?? '—' : '—' }}</dd>
           </div>
           <div>
             <dt>{{ t('noisePage.retrieval.served') }}</dt>
-            <dd>{{ retrievalState.kind === 'live' ? retrievalState.data.observations_served ?? 0 : '—' }}</dd>
+            <dd>{{ retrievalState.kind === 'live' ? retrievalState.data.observations_served ?? '—' : '—' }}</dd>
           </div>
           <div>
             <dt>{{ t('noisePage.retrieval.stale') }}</dt>
-            <dd>{{ retrievalState.kind === 'live' ? retrievalState.data.stale_excluded ?? 0 : '—' }}</dd>
+            <dd>{{ retrievalState.kind === 'live' ? retrievalState.data.stale_excluded ?? '—' : '—' }}</dd>
           </div>
           <div>
             <dt>{{ t('noisePage.retrieval.duplicates') }}</dt>
-            <dd>{{ retrievalState.kind === 'live' ? retrievalState.data.duplicates_removed ?? 0 : '—' }}</dd>
+            <dd>{{ retrievalState.kind === 'live' ? retrievalState.data.duplicates_removed ?? '—' : '—' }}</dd>
           </div>
         </dl>
       </article>
@@ -101,17 +96,9 @@ const ratio = computed(() => {
           <code>{{ vnextState.evidence.endpoint }}</code>
         </div>
         <p>{{ t('noisePage.unrecorded.body') }}</p>
-        <strong class="big">{{ vnextState.kind === 'live' && vnextState.data.outcomes ? `${Math.round((vnextState.data.outcomes.unrecorded_fraction || 0) * 100)}%` : '—' }}</strong>
+        <strong class="big">{{ vnextState.kind === 'live' && typeof vnextState.data.outcomes?.unrecorded_fraction === 'number' ? `${Math.round(vnextState.data.outcomes.unrecorded_fraction * 100)}%` : '—' }}</strong>
       </article>
 
-      <article class="card gap">
-        <div class="card-head">
-          <h2>{{ t('noisePage.trend.title') }}</h2>
-          <HonestyBadge cls="mustbuild" :evidence="noiseTrendGap.evidence.endpoint" />
-        </div>
-        <p>{{ t('noisePage.trend.body') }}</p>
-        <code>{{ noiseTrendGap.evidence.endpoint }}</code>
-      </article>
     </section>
   </div>
 </template>

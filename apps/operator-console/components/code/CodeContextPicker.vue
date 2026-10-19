@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import type { CodeBootstrapEvidence, CodeBootstrapPhase, CodeCatalogEntry, CodeCatalogState, CodeSafeContext, IndexIntentTarget } from '~/composables/useOperatorCode'
+import { projectName, useOperatorProjectContext } from '~/composables/useOperatorProjectContext'
 
 const { t } = useI18n()
+const projectContext = useOperatorProjectContext()
 
 const props = defineProps<{
   phase: CodeBootstrapPhase
@@ -27,14 +29,23 @@ const workingCopy = ref('')
 const workingCopyChosen = ref(false)
 const snapshotRef = ref('')
 const selectionDirty = ref(false)
-const repositories = computed(() => [...new Map(props.catalog.map((entry) => [entry.sourceRef, entry])).values()])
-const workingCopies = computed(() => [...new Map(props.catalog.filter((entry) => entry.sourceRef === repository.value).map((entry) => [entry.checkoutRef, entry])).values()])
-const snapshotEntries = computed(() => workingCopyChosen.value ? props.catalog.filter((entry) => entry.sourceRef === repository.value && entry.checkoutRef === workingCopy.value && entry.view !== null) : [])
-const noViewEntry = computed(() => workingCopyChosen.value && snapshotEntries.value.length === 0 ? props.catalog.find((entry) => entry.sourceRef === repository.value && entry.checkoutRef === workingCopy.value && entry.view === null) ?? null : null)
+watch([projectContext.project, projectContext.selectionPending], () => {
+  repository.value = ''
+  workingCopy.value = ''
+  workingCopyChosen.value = false
+  snapshotRef.value = ''
+  selectionDirty.value = false
+}, { flush: 'sync' })
+const resolvedCatalog = computed(() => projectContext.selectionPending.value || projectContext.selectionError.value || projectContext.error.value ? [] : props.catalog.filter((entry) => entry.projectId !== null))
+const unresolvedEntries = computed(() => props.catalog.filter((entry) => entry.projectId === null))
+const repositories = computed(() => [...new Map(resolvedCatalog.value.map((entry) => [entry.sourceRef, entry])).values()])
+const workingCopies = computed(() => [...new Map(resolvedCatalog.value.filter((entry) => entry.sourceRef === repository.value).map((entry) => [entry.checkoutRef, entry])).values()])
+const snapshotEntries = computed(() => workingCopyChosen.value ? resolvedCatalog.value.filter((entry) => entry.sourceRef === repository.value && entry.checkoutRef === workingCopy.value && entry.view !== null) : [])
+const noViewEntry = computed(() => workingCopyChosen.value && snapshotEntries.value.length === 0 ? resolvedCatalog.value.find((entry) => entry.sourceRef === repository.value && entry.checkoutRef === workingCopy.value && entry.view === null) ?? null : null)
 const duplicateRepositories = computed(() => new Set(repositories.value.filter((entry) => repositories.value.filter((other) => other.repository === entry.repository).length > 1).map((entry) => entry.repository)))
 const duplicateWorkingCopies = computed(() => new Set(workingCopies.value.filter((entry) => workingCopies.value.filter((other) => other.workingCopy === entry.workingCopy).length > 1).map((entry) => entry.workingCopy)))
-function indexedCopies(sourceRef: string): number { return new Set(props.catalog.filter((entry) => entry.sourceRef === sourceRef && entry.view !== null).map((entry) => entry.checkoutRef)).size }
-function indexedSnapshots(checkoutRef: string): number { return props.catalog.filter((entry) => entry.checkoutRef === checkoutRef && entry.view !== null).length }
+function indexedCopies(sourceRef: string): number { return new Set(resolvedCatalog.value.filter((entry) => entry.sourceRef === sourceRef && entry.view !== null).map((entry) => entry.checkoutRef)).size }
+function indexedSnapshots(checkoutRef: string): number { return resolvedCatalog.value.filter((entry) => entry.checkoutRef === checkoutRef && entry.view !== null).length }
 function uniquePrefix(ref: string, peers: string[]): string {
   let length = 1
   while (length < ref.length && peers.some((other) => other !== ref && other.startsWith(ref.slice(0, length)))) length++
@@ -81,6 +92,8 @@ watch([() => props.catalog, () => props.candidate, () => props.pinned], ([catalo
   }
   if (candidate === null && previousCatalog !== undefined && catalog !== previousCatalog || snapshotRef.value !== '' && !snapshotEntries.value.some((entry) => entry.view?.selectionRef === snapshotRef.value)) snapshotRef.value = ''
   repository.value = repositories.value.find((entry) => indexedCopies(entry.sourceRef) > 0)?.sourceRef ?? repositories.value[0]?.sourceRef ?? ''
+  workingCopy.value = ''
+  workingCopyChosen.value = false
   if (workingCopies.value.length === 1) {
     workingCopy.value = workingCopies.value[0]?.checkoutRef ?? ''
     workingCopyChosen.value = true
@@ -118,13 +131,15 @@ function chooseSnapshot(event: Event): void {
       <div>
         <h2 id="code-context-heading">{{ t('workspace.contextTitle') }}</h2>
         <p>{{ t('workspace.contextHelp') }}</p>
+        <p v-if="projectContext.project.value === 'all'">{{ t('knowledge.allProjects') }}</p>
+        <p v-else>{{ projectContext.project.value ? projectName(projectContext.project.value) : t('knowledge.chooseProject') }}</p>
       </div>
       <span class="phase" :data-state="phase">{{ phaseLabel }}</span>
     </div>
 
     <p v-if="phaseMessage" class="message" aria-live="polite" data-testid="code-context-message">{{ phaseMessage }}</p>
 
-    <div v-if="catalog.length > 0" class="selectors" role="group" :aria-label="t('codeExplorer.context.selectionGroup')">
+    <div v-if="resolvedCatalog.length > 0" class="selectors" role="group" :aria-label="t('codeExplorer.context.selectionGroup')">
       <label class="selector">
         <span>{{ t('workspace.repository') }}</span>
         <select :value="repository" :disabled="pending" data-testid="code-context-repository" @change="chooseRepository">
@@ -151,6 +166,16 @@ function chooseSnapshot(event: Event): void {
       <strong>{{ t('codeExplorer.context.emptyTitle') }}</strong>
       <p>{{ t('codeExplorer.context.emptyBody') }}</p>
     </div>
+
+    <section v-if="unresolvedEntries.length" class="empty" data-testid="code-unresolved-membership">
+      <strong>{{ t('projectCatalog.unresolvedTitle') }}</strong>
+      <ul>
+        <li v-for="entry in unresolvedEntries" :key="`${entry.unresolvedReference}:${entry.sourceRef}:${entry.checkoutRef}:${entry.projectId === null ? entry.retainedViewRef || '' : ''}`">
+          <span>{{ entry.repository }} · {{ entry.workingCopy || t('codeExplorer.context.unnamedWorkingCopy') }}<template v-if="entry.projectId === null && entry.retainedSnapshot"> · {{ entry.retainedSnapshot.label }}</template></span>
+          <RouterLink :to="{ path: '/projects/unresolved', query: { reference: entry.unresolvedReference || undefined, kind: 'code' } }">{{ t('projectCatalog.review') }}</RouterLink>
+        </li>
+      </ul>
+    </section>
 
     <div v-if="noViewEntry !== null" class="no-view" aria-live="polite" data-testid="code-context-index-affordance">
       <strong>{{ t('codeExplorer.context.noViewOnlyTitle') }}</strong>

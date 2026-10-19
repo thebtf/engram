@@ -1,4 +1,7 @@
 import { copyFileSync, mkdirSync } from 'node:fs'
+import { join } from 'node:path'
+import { resolveBuildPaths } from './build-paths.mjs'
 
-mkdirSync('.output/server', { recursive: true })
-copyFileSync('scripts/static-host.mjs', '.output/server/index.mjs')
+const { appRoot, serverDir } = resolveBuildPaths(process.env.ENGRAM_OPERATOR_OUTPUT_ROOT)
+mkdirSync(serverDir, { recursive: true })
+copyFileSync(join(appRoot, 'scripts', 'static-host.mjs'), join(serverDir, 'index.mjs'))

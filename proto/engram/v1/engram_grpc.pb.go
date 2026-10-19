@@ -19,29 +19,27 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	EngramService_CallTool_FullMethodName                  = "/engram.v1.EngramService/CallTool"
-	EngramService_Initialize_FullMethodName                = "/engram.v1.EngramService/Initialize"
-	EngramService_Ping_FullMethodName                      = "/engram.v1.EngramService/Ping"
-	EngramService_SyncProjectState_FullMethodName          = "/engram.v1.EngramService/SyncProjectState"
-	EngramService_ProjectEvents_FullMethodName             = "/engram.v1.EngramService/ProjectEvents"
-	EngramService_GetSessionStartContext_FullMethodName    = "/engram.v1.EngramService/GetSessionStartContext"
-	EngramService_GetAmbientCandidates_FullMethodName      = "/engram.v1.EngramService/GetAmbientCandidates"
-	EngramService_NegotiateVersion_FullMethodName          = "/engram.v1.EngramService/NegotiateVersion"
-	EngramService_CodeIndexNegotiate_FullMethodName        = "/engram.v1.EngramService/CodeIndexNegotiate"
-	EngramService_CodeIndexUpload_FullMethodName           = "/engram.v1.EngramService/CodeIndexUpload"
-	EngramService_RegisterProjectIdentityV3_FullMethodName = "/engram.v1.EngramService/RegisterProjectIdentityV3"
-	EngramService_Bind_FullMethodName                      = "/engram.v1.EngramService/Bind"
-	EngramService_Advise_FullMethodName                    = "/engram.v1.EngramService/Advise"
-	EngramService_Observe_FullMethodName                   = "/engram.v1.EngramService/Observe"
-	EngramService_BindCodeContext_FullMethodName           = "/engram.v1.EngramService/BindCodeContext"
-	EngramService_PollCodeIndexIntents_FullMethodName      = "/engram.v1.EngramService/PollCodeIndexIntents"
-	EngramService_UpdateCodeIndexIntent_FullMethodName     = "/engram.v1.EngramService/UpdateCodeIndexIntent"
-	EngramService_BeginCodeIndex_FullMethodName            = "/engram.v1.EngramService/BeginCodeIndex"
-	EngramService_StageCodeIndex_FullMethodName            = "/engram.v1.EngramService/StageCodeIndex"
-	EngramService_FinalizeCodeIndex_FullMethodName         = "/engram.v1.EngramService/FinalizeCodeIndex"
-	EngramService_QueryCode_FullMethodName                 = "/engram.v1.EngramService/QueryCode"
-	EngramService_ExploreCode_FullMethodName               = "/engram.v1.EngramService/ExploreCode"
-	EngramService_RecordUCICompletion_FullMethodName       = "/engram.v1.EngramService/RecordUCICompletion"
+	EngramService_CallTool_FullMethodName               = "/engram.v1.EngramService/CallTool"
+	EngramService_Initialize_FullMethodName             = "/engram.v1.EngramService/Initialize"
+	EngramService_Ping_FullMethodName                   = "/engram.v1.EngramService/Ping"
+	EngramService_SyncProjectState_FullMethodName       = "/engram.v1.EngramService/SyncProjectState"
+	EngramService_ProjectEvents_FullMethodName          = "/engram.v1.EngramService/ProjectEvents"
+	EngramService_GetSessionStartContext_FullMethodName = "/engram.v1.EngramService/GetSessionStartContext"
+	EngramService_NegotiateVersion_FullMethodName       = "/engram.v1.EngramService/NegotiateVersion"
+	EngramService_CodeIndexNegotiate_FullMethodName     = "/engram.v1.EngramService/CodeIndexNegotiate"
+	EngramService_CodeIndexUpload_FullMethodName        = "/engram.v1.EngramService/CodeIndexUpload"
+	EngramService_Bind_FullMethodName                   = "/engram.v1.EngramService/Bind"
+	EngramService_Advise_FullMethodName                 = "/engram.v1.EngramService/Advise"
+	EngramService_Observe_FullMethodName                = "/engram.v1.EngramService/Observe"
+	EngramService_BindCodeContext_FullMethodName        = "/engram.v1.EngramService/BindCodeContext"
+	EngramService_PollCodeIndexIntents_FullMethodName   = "/engram.v1.EngramService/PollCodeIndexIntents"
+	EngramService_UpdateCodeIndexIntent_FullMethodName  = "/engram.v1.EngramService/UpdateCodeIndexIntent"
+	EngramService_BeginCodeIndex_FullMethodName         = "/engram.v1.EngramService/BeginCodeIndex"
+	EngramService_StageCodeIndex_FullMethodName         = "/engram.v1.EngramService/StageCodeIndex"
+	EngramService_FinalizeCodeIndex_FullMethodName      = "/engram.v1.EngramService/FinalizeCodeIndex"
+	EngramService_QueryCode_FullMethodName              = "/engram.v1.EngramService/QueryCode"
+	EngramService_ExploreCode_FullMethodName            = "/engram.v1.EngramService/ExploreCode"
+	EngramService_RecordUCICompletion_FullMethodName    = "/engram.v1.EngramService/RecordUCICompletion"
 )
 
 // EngramServiceClient is the client API for EngramService service.
@@ -71,9 +69,6 @@ type EngramServiceClient interface {
 	// GetSessionStartContext returns static session-start context entities for a project.
 	// No ranking or LLM filtering is applied; the server returns SQL-backed entities only.
 	GetSessionStartContext(ctx context.Context, in *GetSessionStartContextRequest, opts ...grpc.CallOption) (*GetSessionStartContextResponse, error)
-	// GetAmbientCandidates returns bounded same-turn ambient context through the
-	// existing service. It is private to the credential-neutral legacy bridge.
-	GetAmbientCandidates(ctx context.Context, in *GetAmbientCandidatesRequest, opts ...grpc.CallOption) (*GetAmbientCandidatesResponse, error)
 	// NegotiateVersion validates MAJOR-version compatibility between client and server.
 	NegotiateVersion(ctx context.Context, in *NegotiateVersionRequest, opts ...grpc.CallOption) (*NegotiateVersionResponse, error)
 	// CodeIndexNegotiate performs a delta negotiation: the client sends its full
@@ -88,9 +83,6 @@ type EngramServiceClient interface {
 	// index_session_id does not match the negotiated session) and returns a
 	// receipt with counts of embedded and deleted rows.
 	CodeIndexUpload(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[CodeChunkUpload, CodeIndexUploadReceipt], error)
-	// RegisterProjectIdentityV3 explicitly establishes a V3 anchor binding.
-	// Authentication and registration authority are derived solely by the server.
-	RegisterProjectIdentityV3(ctx context.Context, in *RegisterProjectIdentityV3Request, opts ...grpc.CallOption) (*RegisterProjectIdentityV3Response, error)
 	// Bind establishes a private host-advisor capability binding.
 	Bind(ctx context.Context, in *HostAdvisorBindRequest, opts ...grpc.CallOption) (*HostAdvisorBindResponse, error)
 	// Advise is reserved for the host-advisor delivery semantics owned by HAP-03.
@@ -196,16 +188,6 @@ func (c *engramServiceClient) GetSessionStartContext(ctx context.Context, in *Ge
 	return out, nil
 }
 
-func (c *engramServiceClient) GetAmbientCandidates(ctx context.Context, in *GetAmbientCandidatesRequest, opts ...grpc.CallOption) (*GetAmbientCandidatesResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GetAmbientCandidatesResponse)
-	err := c.cc.Invoke(ctx, EngramService_GetAmbientCandidates_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *engramServiceClient) NegotiateVersion(ctx context.Context, in *NegotiateVersionRequest, opts ...grpc.CallOption) (*NegotiateVersionResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(NegotiateVersionResponse)
@@ -238,16 +220,6 @@ func (c *engramServiceClient) CodeIndexUpload(ctx context.Context, opts ...grpc.
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type EngramService_CodeIndexUploadClient = grpc.ClientStreamingClient[CodeChunkUpload, CodeIndexUploadReceipt]
-
-func (c *engramServiceClient) RegisterProjectIdentityV3(ctx context.Context, in *RegisterProjectIdentityV3Request, opts ...grpc.CallOption) (*RegisterProjectIdentityV3Response, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(RegisterProjectIdentityV3Response)
-	err := c.cc.Invoke(ctx, EngramService_RegisterProjectIdentityV3_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
 
 func (c *engramServiceClient) Bind(ctx context.Context, in *HostAdvisorBindRequest, opts ...grpc.CallOption) (*HostAdvisorBindResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -399,9 +371,6 @@ type EngramServiceServer interface {
 	// GetSessionStartContext returns static session-start context entities for a project.
 	// No ranking or LLM filtering is applied; the server returns SQL-backed entities only.
 	GetSessionStartContext(context.Context, *GetSessionStartContextRequest) (*GetSessionStartContextResponse, error)
-	// GetAmbientCandidates returns bounded same-turn ambient context through the
-	// existing service. It is private to the credential-neutral legacy bridge.
-	GetAmbientCandidates(context.Context, *GetAmbientCandidatesRequest) (*GetAmbientCandidatesResponse, error)
 	// NegotiateVersion validates MAJOR-version compatibility between client and server.
 	NegotiateVersion(context.Context, *NegotiateVersionRequest) (*NegotiateVersionResponse, error)
 	// CodeIndexNegotiate performs a delta negotiation: the client sends its full
@@ -416,9 +385,6 @@ type EngramServiceServer interface {
 	// index_session_id does not match the negotiated session) and returns a
 	// receipt with counts of embedded and deleted rows.
 	CodeIndexUpload(grpc.ClientStreamingServer[CodeChunkUpload, CodeIndexUploadReceipt]) error
-	// RegisterProjectIdentityV3 explicitly establishes a V3 anchor binding.
-	// Authentication and registration authority are derived solely by the server.
-	RegisterProjectIdentityV3(context.Context, *RegisterProjectIdentityV3Request) (*RegisterProjectIdentityV3Response, error)
 	// Bind establishes a private host-advisor capability binding.
 	Bind(context.Context, *HostAdvisorBindRequest) (*HostAdvisorBindResponse, error)
 	// Advise is reserved for the host-advisor delivery semantics owned by HAP-03.
@@ -473,9 +439,6 @@ func (UnimplementedEngramServiceServer) ProjectEvents(*ProjectEventsRequest, grp
 func (UnimplementedEngramServiceServer) GetSessionStartContext(context.Context, *GetSessionStartContextRequest) (*GetSessionStartContextResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetSessionStartContext not implemented")
 }
-func (UnimplementedEngramServiceServer) GetAmbientCandidates(context.Context, *GetAmbientCandidatesRequest) (*GetAmbientCandidatesResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetAmbientCandidates not implemented")
-}
 func (UnimplementedEngramServiceServer) NegotiateVersion(context.Context, *NegotiateVersionRequest) (*NegotiateVersionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method NegotiateVersion not implemented")
 }
@@ -484,9 +447,6 @@ func (UnimplementedEngramServiceServer) CodeIndexNegotiate(context.Context, *Cod
 }
 func (UnimplementedEngramServiceServer) CodeIndexUpload(grpc.ClientStreamingServer[CodeChunkUpload, CodeIndexUploadReceipt]) error {
 	return status.Error(codes.Unimplemented, "method CodeIndexUpload not implemented")
-}
-func (UnimplementedEngramServiceServer) RegisterProjectIdentityV3(context.Context, *RegisterProjectIdentityV3Request) (*RegisterProjectIdentityV3Response, error) {
-	return nil, status.Error(codes.Unimplemented, "method RegisterProjectIdentityV3 not implemented")
 }
 func (UnimplementedEngramServiceServer) Bind(context.Context, *HostAdvisorBindRequest) (*HostAdvisorBindResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Bind not implemented")
@@ -646,24 +606,6 @@ func _EngramService_GetSessionStartContext_Handler(srv interface{}, ctx context.
 	return interceptor(ctx, in, info, handler)
 }
 
-func _EngramService_GetAmbientCandidates_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetAmbientCandidatesRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(EngramServiceServer).GetAmbientCandidates(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: EngramService_GetAmbientCandidates_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EngramServiceServer).GetAmbientCandidates(ctx, req.(*GetAmbientCandidatesRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _EngramService_NegotiateVersion_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(NegotiateVersionRequest)
 	if err := dec(in); err != nil {
@@ -706,24 +648,6 @@ func _EngramService_CodeIndexUpload_Handler(srv interface{}, stream grpc.ServerS
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type EngramService_CodeIndexUploadServer = grpc.ClientStreamingServer[CodeChunkUpload, CodeIndexUploadReceipt]
-
-func _EngramService_RegisterProjectIdentityV3_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RegisterProjectIdentityV3Request)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(EngramServiceServer).RegisterProjectIdentityV3(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: EngramService_RegisterProjectIdentityV3_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EngramServiceServer).RegisterProjectIdentityV3(ctx, req.(*RegisterProjectIdentityV3Request))
-	}
-	return interceptor(ctx, in, info, handler)
-}
 
 func _EngramService_Bind_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(HostAdvisorBindRequest)
@@ -958,20 +882,12 @@ var EngramService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _EngramService_GetSessionStartContext_Handler,
 		},
 		{
-			MethodName: "GetAmbientCandidates",
-			Handler:    _EngramService_GetAmbientCandidates_Handler,
-		},
-		{
 			MethodName: "NegotiateVersion",
 			Handler:    _EngramService_NegotiateVersion_Handler,
 		},
 		{
 			MethodName: "CodeIndexNegotiate",
 			Handler:    _EngramService_CodeIndexNegotiate_Handler,
-		},
-		{
-			MethodName: "RegisterProjectIdentityV3",
-			Handler:    _EngramService_RegisterProjectIdentityV3_Handler,
 		},
 		{
 			MethodName: "Bind",

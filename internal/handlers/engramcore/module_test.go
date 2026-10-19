@@ -16,7 +16,6 @@ import (
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/moduletest"
 	"github.com/thebtf/engram/internal/proxy"
-	pb "github.com/thebtf/engram/proto/engram/v1"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
 )
 
@@ -72,23 +71,15 @@ func TestSlugCacheResolutionAndForgetSerialize(t *testing.T) {
 	project := muxcore.ProjectContext{ID: "serialized-project", Cwd: t.TempDir()}
 	key := cacheKey(project)
 	cache.entries.Store(key, resolvedSlug{id: "cached"})
-	cache.identities.Store(key, &pb.ProjectIdentityV2{Version: 2})
 
 	cache.mu.Lock()
 	slugStarted, slugDone := make(chan struct{}), make(chan struct{})
-	identityStarted, identityDone := make(chan struct{}), make(chan struct{})
 	go func() {
 		close(slugStarted)
 		_ = cache.Resolve(context.Background(), project)
 		close(slugDone)
 	}()
-	go func() {
-		close(identityStarted)
-		_, _ = cache.ResolveIdentity(context.Background(), project)
-		close(identityDone)
-	}()
 	<-slugStarted
-	<-identityStarted
 	assertBlocked := func(name string, done <-chan struct{}) {
 		t.Helper()
 		select {
@@ -98,10 +89,9 @@ func TestSlugCacheResolutionAndForgetSerialize(t *testing.T) {
 		}
 	}
 	assertBlocked("Resolve", slugDone)
-	assertBlocked("ResolveIdentity", identityDone)
 	cache.mu.Unlock()
 
-	for name, done := range map[string]<-chan struct{}{"Resolve": slugDone, "ResolveIdentity": identityDone} {
+	for name, done := range map[string]<-chan struct{}{"Resolve": slugDone} {
 		select {
 		case <-done:
 		case <-time.After(time.Second):
@@ -126,9 +116,6 @@ func TestSlugCacheResolutionAndForgetSerialize(t *testing.T) {
 	}
 	if cache.HasEntry(project.ID) {
 		t.Fatal("Forget left a compatibility slug entry")
-	}
-	if _, ok := cache.identities.Load(key); ok {
-		t.Fatal("Forget left a v2 identity entry")
 	}
 }
 

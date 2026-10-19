@@ -1,0 +1,48 @@
+{
+  "marker": {
+    "project_id": "11111111-1111-4111-8111-111111111111",
+    "name": "Example"
+  },
+  "locators": [
+    {
+      "input": "git@EXAMPLE.test:Team/Repo.git",
+      "expected": "example.test/Team/Repo"
+    },
+    {
+      "input": "ssh://git@example.test:22/Team/Repo.git",
+      "expected": "example.test/Team/Repo"
+    },
+    {
+      "input": "https://user:secret@example.test:443/Team/Repo.git?access_token=test",
+      "expected": "example.test/Team/Repo"
+    },
+    {
+      "input": "ssh://git@example.test:2222/Team/Repo.git",
+      "expected": "example.test:2222/Team/Repo"
+    },
+    {
+      "input": "https://example.test/team/Repo.git",
+      "expected": "example.test/team/Repo"
+    },
+    {
+      "input": "https://example.test/Fork/Repo.git",
+      "expected": "example.test/Fork/Repo"
+    }
+  ],
+  "invalid_locators": [
+    "file:///tmp/repo",
+    "C:/Dev/repo",
+    "https://example.test/../repo.git",
+    "https://example.test/Team%2FRepo.git"
+  ],
+  "invariants": [
+    "same marker -> same Project ID",
+    "common-dir cache -> same ID on an older detached worktree",
+    "fork primary origin != common upstream identity",
+    "same basename != same project",
+    "pinned remote rename -> unchanged UUID",
+    "marker/cache disagreement -> PROJECT_IDENTITY_CONFLICT",
+    "missing call root -> PROJECT_CONTEXT_REQUIRED",
+    "tools/list without context -> full catalog"
+  ]
+}

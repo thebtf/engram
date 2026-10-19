@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { density, theme, startedLoads } from '../composables/useConsolePreferences'
+import { density, theme } from '../composables/useConsolePreferences'
 import { locales, setLocale } from '../i18n/i18n.config'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useNav, type NavItem } from '../composables/useNav'
-import { operatorFetchJson } from '../composables/useOperatorApi'
+import { operatorDiagnosisKey, toOperatorSourceError, type OperatorSourceError } from '../composables/useOperatorApi'
 import { useOperatorShellStatus } from '../composables/useOperatorShell'
+import { operatorProjectReturnTo, safeNavigation, useOperatorProjectContext } from '../composables/useOperatorProjectContext'
 
 const { NAV } = useNav()
 const shell = useOperatorShellStatus()
@@ -13,6 +14,7 @@ const route = useRoute()
 const router = useRouter()
 const { t, locale } = useI18n()
 const { settingsModalOpen, settingsModalTab, openSettingsModal } = useSettingsModal()
+const projectContext = useOperatorProjectContext()
 
 const NAV_COLLAPSE_KEY = 'engram.console.navCollapsed'
 const navCollapsed = ref<boolean>(false)
@@ -28,6 +30,16 @@ const identityMenuOpen = ref(false)
 const identityMenuRef = ref<HTMLElement | null>(null)
 const profileModalOpen = ref(false)
 const logoutInFlight = ref(false)
+const loginModalOpen = ref(false)
+const logoutError = ref<OperatorSourceError | null>(null)
+const logoutUnverified = ref(false)
+const identityName = computed(() => info.value.identityName || t(info.value.authPosture === 'auth-disabled' ? 'auth.noAuthIdentity' : info.value.authPosture === 'authenticated' ? 'auth.verifiedIdentity' : info.value.authPosture === 'locked' ? 'auth.anonymousIdentity' : 'auth.unknownIdentity'))
+const canSignIn = computed(() => !info.value.authDisabled && !info.value.authenticated)
+const recoveryRequired = ref(false)
+const protectedContentVisible = computed(() => !recoveryRequired.value && (info.value.authPosture === 'authenticated' || info.value.authPosture === 'auth-disabled'))
+watch(() => info.value.authPosture, (posture, previous) => {
+  if (posture === 'locked' || ((previous === 'authenticated' || previous === 'auth-disabled') && posture === 'unknown')) recoveryRequired.value = true
+}, { flush: 'sync' })
 
 const NAV_ICONS: Record<string, string> = {
   overview: '<rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/>',
@@ -176,7 +188,7 @@ function cycleLocale() {
 
 function goSearch() {
   const query = search.value.trim()
-  void router.push(query ? { path: '/search', query: { q: query } } : '/search')
+  void router.push({ path: '/memory', query: { project: projectContext.project.value || undefined, q: query || undefined } })
 }
 
 function handleNavItemClick(event: MouseEvent, item: NavItem) {
@@ -220,13 +232,48 @@ function openIdentityProfile() {
   profileModalOpen.value = true
 }
 
+function openLogin() {
+  closeIdentityMenu()
+  profileModalOpen.value = false
+  recoveryRequired.value = true
+  loginModalOpen.value = true
+}
+
+function reloadSession() {
+  const target = projectContext.to(route.path)
+  if (route.path === '/projects/unresolved') {
+    const query = safeNavigation(route.query, route.fullPath)
+    for (const key of ['reference', 'kind', 'id', 'cursor', 'historyCursor', 'originalLocation']) {
+      if (typeof route.query[key] === 'string') query[key] = route.query[key]
+    }
+    if (route.query.returnTo !== undefined) query.returnTo = operatorProjectReturnTo(route.query.returnTo, router, route.fullPath)
+    target.query = query
+  }
+  window.location.assign(router.resolve({ ...target, hash: route.path === '/projects/unresolved' ? route.hash : undefined }).href)
+}
+
+function authenticated() {
+  loginModalOpen.value = false
+  // A new document drops cached payloads and refetches under the verified cookie.
+  reloadSession()
+}
+
+async function refreshSession() {
+  await shell.refresh()
+  if (recoveryRequired.value && (info.value.authPosture === 'authenticated' || info.value.authPosture === 'auth-disabled')) authenticated()
+}
+
 async function logoutIdentity() {
   if (!canLogout.value || logoutInFlight.value) return
   logoutInFlight.value = true
   closeIdentityMenu()
+  logoutError.value = null
+  logoutUnverified.value = false
   try {
-    await operatorFetchJson('/api/auth/logout', { method: 'POST' }, 'shell-auth-logout')
-    await shell.refresh()
+    if (await shell.logout()) reloadSession()
+    else logoutUnverified.value = true
+  } catch (cause) {
+    logoutError.value = toOperatorSourceError(cause, { source: 'shell-user-logout', path: '/api/auth/user-logout', method: 'POST' })
   } finally {
     logoutInFlight.value = false
   }
@@ -277,7 +324,7 @@ function onDocumentKeydown(event: KeyboardEvent) {
       @pointerleave="onNavLeave"
     >
       <div class="navhead">
-        <RouterLink to="/" class="navbrand" :title="t('shell.brandHome')" @click="closeMobileNav">
+        <RouterLink :to="projectContext.to('/')" class="navbrand" :title="t('shell.brandHome')" @click="closeMobileNav">
           <span class="glyph">e</span>
           <span class="navbrand-wm">engram</span>
         </RouterLink>
@@ -301,7 +348,7 @@ function onDocumentKeydown(event: KeyboardEvent) {
           <RouterLink
             v-for="item in group.items"
             :key="item.id"
-            :to="item.to"
+            :to="projectContext.to(item.to)"
             class="nav-item"
             :class="{ tomb: item.cls === 'stale' }"
             exact-active-class="on"
@@ -323,10 +370,11 @@ function onDocumentKeydown(event: KeyboardEvent) {
 
     <header class="topbar" :inert="compactViewport && mobileNavOpen">
       <button ref="mobileMenuButton" class="tbtn mobile-menu-button" type="button" :aria-label="t('shell.mobileMenu')" :aria-expanded="mobileNavOpen" aria-controls="primary-navigation" @click="toggleMobileNav">☰</button>
-      <form class="gsearch-wrap" @submit.prevent="goSearch">
+      <ProjectContext />
+      <form class="gsearch-wrap" @submit.prevent="goSearch" :aria-label="t('knowledge.searchMemory')">
         <div class="gsearch">
           <span>⌕</span>
-          <input v-model="search" name="operator-console-search" :placeholder="t('shell.searchPlaceholder')" />
+          <input v-model="search" name="operator-console-search" :aria-label="t('knowledge.searchMemory')" :placeholder="t('knowledge.searchMemory')" />
           <kbd>/</kbd>
         </div>
       </form>
@@ -337,12 +385,13 @@ function onDocumentKeydown(event: KeyboardEvent) {
       </div>
       <button class="tbtn lang topbar-secondary" :title="t('shell.language')" @click="cycleLocale">{{ String(locale).toUpperCase() }}</button>
       <button class="tbtn topbar-secondary" @click="toggleTheme" :title="theme === 'dark' ? t('shell.themeToLight') : t('shell.themeToDark')">◐</button>
+      <button v-if="canSignIn" class="tbtn sign-in" type="button" @click="openLogin">{{ t('auth.signIn') }}</button>
       <div ref="identityMenuRef" class="identity-wrap">
         <button
           class="identity"
           type="button"
-          :title="t('shell.identityTitle')"
-          :aria-label="t('shell.profileMenu')"
+          :title="`${t('shell.identityTitle')} · ${identityName} · ${authPostureLabel}`"
+          :aria-label="`${t('shell.profileMenu')} · ${identityName} · ${authPostureLabel}`"
           :aria-expanded="identityMenuOpen"
           aria-haspopup="menu"
           :data-auth="info.authPosture"
@@ -350,7 +399,7 @@ function onDocumentKeydown(event: KeyboardEvent) {
         >
           <span class="iav">{{ info.identityInitials }}</span>
           <span class="iwho">
-            <span class="iname">{{ info.identityName }}</span>
+            <span class="iname">{{ identityName }}</span>
             <span class="imeta">{{ authPostureLabel }}</span>
           </span>
           <span class="icaret">⌄</span>
@@ -359,12 +408,13 @@ function onDocumentKeydown(event: KeyboardEvent) {
           <div class="idm-head">
             <span class="iav">{{ info.identityInitials }}</span>
             <span class="idm-id">
-              <b>{{ info.identityName }}</b>
-              <span>{{ info.identityProvider }}</span>
+              <b>{{ identityName }}</b>
+              <span>{{ info.identityProvider || t('knowledge.unknown') }}</span>
               <span class="idm-via">{{ authPostureLabel }}</span>
             </span>
           </div>
           <div class="idm-list">
+            <button v-if="canSignIn" class="idm-item" type="button" role="menuitem" @click="openLogin">{{ t('auth.signIn') }}</button>
             <button class="idm-item" type="button" role="menuitem" @click="openIdentityProfile">
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="5.5" r="2.6"/><path d="M3 13.4c0-2.5 2.2-4 5-4s5 1.5 5 4"/></svg>
               <span>{{ t('shell.profileMenuProfile') }}</span>
@@ -391,36 +441,43 @@ function onDocumentKeydown(event: KeyboardEvent) {
     </header>
 
     <main class="content" :inert="compactViewport && mobileNavOpen">
-      <slot />
+      <section v-if="info.authPosture === 'locked'" class="session-recovery" role="status">
+        <p>{{ t('errors.diagnosis.unauthorized') }}</p><button class="tbtn" type="button" @click="openLogin">{{ t('auth.signIn') }}</button>
+      </section>
+      <section v-if="logoutError || logoutUnverified" class="session-recovery" role="alert">
+        <p>{{ t(logoutError?.status === 404 || logoutError?.status === 405 ? 'auth.logoutUnavailable' : logoutUnverified ? 'auth.logoutUnverified' : 'auth.logoutFailed') }} <span v-if="logoutError">{{ t(operatorDiagnosisKey(logoutError)) }}</span></p>
+      </section>
+      <section v-if="info.authPosture === 'unknown' || (recoveryRequired && info.authPosture !== 'locked')" class="session-recovery" role="status"><p>{{ t('auth.unknownIdentity') }}</p><button class="tbtn" type="button" @click="refreshSession">{{ t('knowledge.retry') }}</button></section>
+      <slot v-if="protectedContentVisible" />
     </main>
 
     <footer class="statusbar" :inert="compactViewport && mobileNavOpen">
       <span class="si" :data-state="info.backendStatus"><span class="dot" />{{ backendStatusLabel }}</span>
-      <button type="button" class="si status-action" @click="openSettingsModal('general')"><span>{{ info.host }}</span><strong>{{ info.version }}</strong></button>
-      <span class="si">{{ t('shell.postgres') }}</span>
+      <button type="button" class="si status-action" @click="openSettingsModal('general')"><span>{{ info.host }}</span><strong>{{ info.version === '-' ? t('knowledge.unknown') : info.version }}</strong></button>
       <span class="si">{{ currentArea }}</span>
       <span class="ssp" />
-      <RouterLink to="/health" class="si warn"><span class="dot" />{{ t('shell.statusDegradation') }} <strong>{{ info.health }}</strong></RouterLink>
-      <span class="si" data-testid="shell-memory-count" :data-count-state="activeMemoryCountState">{{ activeMemoryRecordsLabel }}</span>
-      <RouterLink to="/noise" class="si warn"><span class="dot" />{{ t('shell.statusNoise') }} <strong>{{ info.noise }}</strong></RouterLink>
-      <RouterLink to="/queue" class="si" data-testid="shell-review-queue-count">{{ reviewQueueLabel }}</RouterLink>
+      <RouterLink to="/health" class="si">{{ t('knowledge.diagnostics') }}</RouterLink>
 
       <span class="si">{{ t('shell.uptime', { value: info.uptime }) }}</span>
     </footer>
 
-    <SettingsModal v-if="settingsModalOpen" v-model:open="settingsModalOpen" v-model:active-tab="settingsModalTab" />
-    <ProfileModal v-model:open="profileModalOpen" :info="info" :auth-posture-label="authPostureLabel" />
+    <SettingsModal v-if="settingsModalOpen && protectedContentVisible" v-model:open="settingsModalOpen" v-model:active-tab="settingsModalTab" />
+    <ProfileModal v-model:open="profileModalOpen" :info="info" :identity-name="identityName" :auth-posture-label="authPostureLabel" @sign-in="openLogin" />
+    <LoginModal v-if="loginModalOpen" @close="loginModalOpen = false" @authenticated="authenticated" />
   </div>
 </template>
 
 <style scoped>
+.session-recovery { display:flex; flex-wrap:wrap; align-items:center; gap:12px; padding:14px; margin-bottom:16px; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--surface-warm); }
+.session-recovery p { margin:0; }
+.sign-in { min-height:44px; white-space:nowrap; }
 .app {
   --nav-rail-w:60px;
   --nav-w:236px;
   position:relative;
   display:grid;
   grid-template-columns:var(--nav-w) 1fr;
-  grid-template-rows:48px 1fr 26px;
+  grid-template-rows:minmax(48px, auto) minmax(0, 1fr) 26px;
   grid-template-areas:"nav topbar" "nav content" "nav statusbar";
   height:100vh;
   background:var(--bg);
@@ -501,9 +558,9 @@ function onDocumentKeydown(event: KeyboardEvent) {
 .nav-item .cnt { font-family:var(--font-mono); font-size:10px; font-weight:700; padding:1px 6px; border-radius:var(--radius-pill); background:color-mix(in oklab,var(--accent),transparent 84%); color:var(--fg); }
 .nav-item .flag,
 .nav-item .lock { font-size:11px; color:var(--muted); }
-.topbar { display:flex; align-items:center; gap:var(--space-3); padding:0 var(--space-4); background:var(--surface); border-bottom:1px solid var(--border); min-width:0; }
+.topbar { display:flex; align-items:center; gap:var(--space-3); padding:4px var(--space-4); background:var(--surface); border-bottom:1px solid var(--border); min-width:0; }
 .gsearch-wrap { position:relative; }
-.gsearch { display:flex; align-items:center; gap:7px; width:min(360px,30vw); min-width:280px; background:var(--surface-warm); border:1px solid var(--border); border-radius:var(--r-sm); padding:5px 10px; color:var(--muted); font-size:var(--text-sm); transition:border-color var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard); }
+.gsearch { display:flex; align-items:center; gap:7px; width:min(280px,20vw); min-width:160px; background:var(--surface-warm); border:1px solid var(--border); border-radius:var(--r-sm); padding:5px 10px; color:var(--muted); font-size:var(--text-sm); }
 .gsearch:focus-within { background:var(--surface); border-color:var(--accent); box-shadow:var(--focus-ring); }
 .gsearch input { border:0; background:transparent; color:var(--fg); font-size:var(--text-sm); width:100%; outline:none; }
 .gsearch kbd { font-family:var(--font-mono); font-size:10px; border:1px solid var(--border); border-radius:4px; padding:1px 5px; color:var(--muted); }
@@ -545,28 +602,33 @@ function onDocumentKeydown(event: KeyboardEvent) {
 .statusbar button.si { border:0; background:transparent; padding:0; font:inherit; cursor:pointer; }
 .statusbar button.si:hover { color:var(--fg-2); }
 .statusbar .si strong { color:var(--fg-2); }
-.statusbar .si .dot { width:6px; height:6px; border-radius:50%; background:var(--class-live); flex:none; }
+.statusbar .si .dot { width:6px; height:6px; border-radius:50%; background:var(--muted); flex:none; }
+.statusbar .si[data-state="ready"] .dot { background:var(--class-live); }
+.statusbar .si[data-state="auth-required"] .dot, .statusbar .si[data-state="degraded"] .dot, .statusbar .si[data-state="unavailable"] .dot { background:var(--state-warn); }
 .statusbar .si.warn { color:var(--state-warn); }
 .statusbar .si.warn .dot { background:var(--state-warn); }
 .statusbar .ssp { flex:1; }
 @media (pointer:coarse) {
   .nav-item,
   .tbtn,
-  .seg button { min-height:40px; }
+  .seg button { min-height:44px; }
 }
 @media (max-width:980px) {
   .app,
   .app.nav-collapsed { grid-template-columns:1fr; grid-template-areas:"topbar" "content" "statusbar"; }
-  .topbar { gap:8px; padding:0 10px; }
+  .topbar { gap:8px; padding:4px 10px; }
   .topbar .mobile-menu-button { display:inline-flex; width:44px; height:44px; justify-content:center; padding:0; }
   .topbar-secondary { display:none; }
-  .gsearch { min-width:0; width:min(360px,48vw); }
+  .gsearch-wrap { display:none; }
+  .tspacer { display:none; }
   .app > .nav { position:fixed; top:0; bottom:0; left:0; width:min(320px, calc(100vw - 48px)); transform:translateX(-100%); transition:none; z-index:60; }
   .app > .nav.open { transform:none; }
   .nav-scrim { display:block; position:fixed; inset:0; z-index:50; border:0; background:color-mix(in srgb, #000, transparent 52%); cursor:pointer; }
   .navcollapse,
-  .identity,
   .statusbar .si:nth-last-child(-n+3) { display:none; }
+  .identity { height:44px; padding:3px 8px; }
+  .identity .iwho, .identity .icaret { display:none; }
   .content { padding:18px 14px 70px; }
 }
+@media(max-width:760px) { .topbar :deep(.project-context) { flex:1; min-width:0; } .nav-item { min-height:44px; } }
 </style>

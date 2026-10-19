@@ -12,9 +12,10 @@ func TestIssueStorePersistsCreatorKeycardID(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
 	store := NewIssueStore(db)
+	project := sessionTestProject(t, db)
 
 	id, err := store.CreateIssue(context.Background(), &Issue{
-		Title: "credential owner persistence", SourceProject: "test", TargetProject: "test",
+		Title: "credential owner persistence", SourceProject: project, TargetProject: project,
 		Type: "bug", Priority: "medium", CreatorKeycardID: "keycard-creator",
 	})
 	require.NoError(t, err)
@@ -32,8 +33,9 @@ func TestCloseIssueWithCommentRollsBackWhenCommentInsertFails(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
 	store := NewIssueStore(db)
+	project := sessionTestProject(t, db)
 	id, err := store.CreateIssue(context.Background(), &Issue{
-		Title: "close rollback", SourceProject: "test", TargetProject: "test",
+		Title: "close rollback", SourceProject: project, TargetProject: project,
 		Status: "resolved", Type: "bug", Priority: "medium",
 	})
 	require.NoError(t, err)
@@ -59,7 +61,7 @@ func TestCloseIssueWithCommentRollsBackWhenCommentInsertFails(t *testing.T) {
 func TestAcknowledgeIssuesAtomicallyTypesInvalidInput(t *testing.T) {
 	store := NewIssueStore(nil)
 	for _, ids := range [][]int64{nil, {0}, {1, 1}} {
-		_, err := store.AcknowledgeIssuesAtomically(context.Background(), ids)
+		_, err := store.AcknowledgeIssuesAtomically(context.Background(), ids, nil)
 		require.ErrorIs(t, err, ErrIssueInvalidInput)
 	}
 }

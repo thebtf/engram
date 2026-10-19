@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { operatorApiUrl } from '../composables/useOperatorApi'
+import { operatorFetchResponse } from '../composables/useOperatorApi'
 
 interface CheckoutChoice { choice_ref: string; repository: string; working_copy: string }
 interface TargetChoice { target_ref: string; label: string }
@@ -22,7 +22,7 @@ const loaded = ref(false)
 
 async function call(path: string, method: 'GET' | 'POST', body?: object): Promise<Response> {
   if (!window.isSecureContext || typeof crypto.randomUUID !== 'function') throw new Error('Secure browser required')
-  return fetch(operatorApiUrl(path), {
+  return operatorFetchResponse(path, {
     method,
     credentials: 'include',
     headers: { 'X-Engram-Request-ID': crypto.randomUUID(), ...(body ? { 'Content-Type': 'application/json' } : {}) },

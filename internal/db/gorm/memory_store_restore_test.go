@@ -18,10 +18,13 @@ func TestMemoryStore_RestoreRawTx_RestoresCompleteSnapshot(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 	store := NewMemoryStore(&Store{DB: db})
+	anchorProject := sessionTestProject(t, db)
+	beforeProject := sessionTestProject(t, db)
+	mutatedProject := sessionTestProject(t, db)
 
 	anchors := []Memory{
-		{Project: "restore-raw-anchor", Content: "supersedes anchor", SourceAgent: "test"},
-		{Project: "restore-raw-anchor", Content: "superseded-by anchor", SourceAgent: "test"},
+		{Project: anchorProject, Content: "supersedes anchor", SourceAgent: "test"},
+		{Project: anchorProject, Content: "superseded-by anchor", SourceAgent: "test"},
 	}
 	require.NoError(t, db.Create(&anchors).Error)
 
@@ -37,7 +40,7 @@ func TestMemoryStore_RestoreRawTx_RestoresCompleteSnapshot(t *testing.T) {
 	supersededBy := anchors[1].ID
 
 	row := &Memory{
-		Project:                  "restore-raw-before",
+		Project:                  beforeProject,
 		Content:                  "complete snapshot content",
 		Tags:                     models.JSONStringArray{"snapshot", "complete"},
 		SourceAgent:              "snapshot-agent",
@@ -94,7 +97,7 @@ func TestMemoryStore_RestoreRawTx_RestoresCompleteSnapshot(t *testing.T) {
 	mutatedSupersededBy := anchors[0].ID
 	const mutatedVersion = 19
 	require.NoError(t, db.Unscoped().Model(&Memory{}).Where("id = ?", row.ID).Updates(map[string]any{
-		"project":                    "restore-raw-mutated",
+		"project":                    mutatedProject,
 		"content":                    "mutated content",
 		"tags":                       models.JSONStringArray{"mutated"},
 		"source_agent":               "mutated-agent",
@@ -157,7 +160,7 @@ func TestMemoryStore_RestoreRawTx_EmptySourceSessionsRemainNonNull(t *testing.T)
 	store := NewMemoryStore(&Store{DB: db})
 
 	row := &Memory{
-		Project:        "restore-raw-empty-sessions",
+		Project:        sessionTestProject(t, db),
 		Content:        "empty source sessions snapshot",
 		SourceAgent:    "test",
 		SourceSessions: pq.StringArray{},

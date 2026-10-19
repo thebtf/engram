@@ -61,7 +61,6 @@ import (
 	"github.com/thebtf/engram/internal/uci"
 	"github.com/thebtf/engram/internal/update"
 	"github.com/thebtf/engram/internal/watcher"
-	"github.com/thebtf/engram/internal/worker/ambientcore"
 	"github.com/thebtf/engram/internal/worker/projectevents"
 	"github.com/thebtf/engram/internal/worker/reaper"
 	"github.com/thebtf/engram/internal/worker/sdk"
@@ -161,6 +160,8 @@ type Service struct {
 	graphNodeStoreSeam                  graphNodeStore                                // test seam for graph REST handlers
 	snapshotStore                       *gorm.SnapshotStore                           // Milestone-F TG6: non-nil when ENGRAM_VNEXT_F_ENABLED=true
 	legacyDirectProjectResolver         func(context.Context, string) (string, error) // test seam; production uses strict DB lookup
+	projectConsolidationVerifierSeam    projectConsolidationVerifier                  // test seam; data-admin authorization still applies
+	knowledgeProjectExistsSeam          func(context.Context, string) (bool, error)   // test seam; production reads canonical projects only
 	writelintTokenStore                 writelint.TokenStore                          // Milestone-F TG5: non-nil when ENGRAM_VNEXT_F_ENABLED=true
 	redactionRules                      []redaction.CompiledRule                      // Milestone-F TG5: compiled at startup from ENGRAM_REDACTION_RULES_PATH
 	interventionReconciler              policyReconciler                              // optional automatic policy compiler/reconciler
@@ -1373,13 +1374,6 @@ func (s *Service) initializeAsync() {
 	}
 	grpcInternalSrv.SetDB(store.DB)
 	grpcInternalSrv.SetBus(s.eventBus)
-	grpcInternalSrv.SetAmbientDependencies(ambientcore.Dependencies{
-		Registry: s.cognitiveRegistry,
-		Meter:    s.cognitiveMeter,
-		Queue:    s.cognitiveQueue,
-		Flags:    s.flagConfig,
-	})
-	grpcInternalSrv.SetSessionStartDeliveryCommitter(s)
 	s.initMu.Lock()
 	s.grpcServer = grpcSrv
 	s.grpcInternalServer = grpcInternalSrv
@@ -1688,8 +1682,8 @@ func (a *mcpHandlerAdapter) RecordUCICompletion(ctx context.Context, callback uc
 //  4. Recoverer     — catch panics from all downstream handlers
 //  5. RealIP        — unwrap X-Forwarded-For before rate-limit keying
 //  6. SecurityHeaders — X-Frame-Options, HSTS, CSP
-//  7. MaxBodySize   — 10 MB cap prevents DoS via oversized payloads
-//  8. RequireJSONContentType — enforce Content-Type on mutating requests
+//  7. requestBodySize — 10 MiB ordinary / 2 GiB exact backup verification POST
+//  8. RequireJSONContentType — JSON mutations / ordered multipart verification
 //  9. Compress(5)   — gzip responses; level 5 balances latency vs ratio
 //  10. Rate limiter  — per-client token bucket (after RealIP for accurate keying)
 //  11. TokenAuth     — bearer-token or session-cookie validation
@@ -1703,7 +1697,7 @@ func (s *Service) setupMiddleware() {
 	s.router.Use(middleware.Recoverer)
 	s.router.Use(middleware.RealIP)
 	s.router.Use(SecurityHeaders)
-	s.router.Use(MaxBodySize(10 * 1024 * 1024))
+	s.router.Use(requestBodySize)
 	s.router.Use(RequireJSONContentType)
 	s.router.Use(middleware.Compress(5))
 	if s.rateLimiter != nil {
@@ -1844,7 +1838,7 @@ func (s *Service) setupRoutes() {
 	// requireReady returns 503 with a descriptive body until initializeAsync completes.
 	s.router.Group(func(r chi.Router) {
 		r.Use(s.requireReady)
-		r.Use(middleware.Timeout(DefaultHTTPTimeout))
+		r.Use(requestTimeout)
 
 		// Session lifecycle
 		r.Post("/api/sessions/init", s.handleSessionInit)
@@ -1905,6 +1899,17 @@ func (s *Service) setupRoutes() {
 		// Observation and project data
 		r.Get("/api/observations", s.handleGetObservations)
 		r.Get("/api/projects", s.handleGetProjects)
+		r.Post("/api/projects/bootstrap", s.handleProjectBootstrap)
+		r.Get("/api/projects/resolve", s.handleResolveLogicalProject)
+		r.Get("/api/projects/unresolved/{reference}/content", s.handleRetainedProjectContent)
+		r.Get("/api/projects/unresolved/{reference}/history", s.handleRetainedProjectHistory)
+		r.Get("/api/projects/unresolved/{reference}/code", s.handleRetainedProjectCode)
+		r.Get("/api/projects/consolidation/census", s.handleProjectConsolidationCensus)
+		r.Post("/api/projects/consolidation/preflight", s.handleProjectConsolidationPreflight)
+		r.Post("/api/projects/consolidation/backup", s.handleProjectConsolidationBackup)
+		r.Post("/api/projects/consolidation/verify-backup", s.handleProjectConsolidationVerifyBackup)
+		r.Post("/api/projects/consolidation/dry-run", s.handleProjectConsolidationDryRun)
+		r.Post("/api/projects/consolidation/apply", s.handleProjectConsolidationApply)
 		r.Delete("/api/projects/{id}", s.handleDeleteProject)
 		r.Get("/api/stats", s.handleGetStats)
 		r.Get("/api/stats/retrieval", s.handleGetRetrievalStats)

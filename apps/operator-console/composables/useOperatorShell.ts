@@ -1,4 +1,4 @@
-import { ref as sharedRef, type Ref as SharedRef } from 'vue'
+import { ref as sharedRef, watch, type Ref as SharedRef } from 'vue'
 import { startedLoads } from './useConsolePreferences'
 import { operatorConfig } from '../operator-config'
 
@@ -6,19 +6,44 @@ let sharedShellStatus: SharedRef<ShellInfo> | undefined
 let sharedShellStatusPending: SharedRef<boolean> | undefined
 let sharedShellStatusError: SharedRef<string | null> | undefined
 
-import { operatorApiBase, loadOperatorJson, type OperatorLoadState } from './useOperatorApi'
+import { operatorApiBase, operatorFetchJson, loadOperatorJson, operatorUnauthorizedRevision, authGeneration, type OperatorLoadState } from './useOperatorApi'
 
-interface AuthMe {
-  auth_disabled?: boolean
-  authenticated?: boolean
-  role?: string
-  source?: string
-  synthetic?: boolean
-  user?: {
-    name?: string
-    email?: string
-  }
+type ShellIdentity = Pick<ShellInfo, 'authDisabled' | 'authenticated' | 'role' | 'source' | 'synthetic' | 'authPosture' | 'identityName' | 'identityInitials' | 'identityProvider'>
+
+function unknownIdentity(): ShellIdentity {
+  return { authDisabled: false, authenticated: false, role: '', source: '', synthetic: false, authPosture: 'unknown', identityName: '', identityInitials: '?', identityProvider: '' }
 }
+
+function identityFrom(payload: unknown): ShellIdentity | null {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null
+  const authDisabled = Reflect.get(payload, 'auth_disabled')
+  const authenticated = Reflect.get(payload, 'authenticated')
+  if (authDisabled !== true && (authDisabled !== false || typeof authenticated !== 'boolean')) return null
+  const identity = unknownIdentity()
+  identity.authDisabled = authDisabled === true
+  identity.authenticated = authenticated === true
+  identity.authPosture = identity.authDisabled ? 'auth-disabled' : identity.authenticated ? 'authenticated' : 'locked'
+  if (identity.authPosture === 'locked') return identity
+  const role = Reflect.get(payload, 'role')
+  const source = Reflect.get(payload, 'source')
+  identity.role = typeof role === 'string' ? role : ''
+  identity.source = typeof source === 'string' ? source : ''
+  identity.synthetic = Reflect.get(payload, 'synthetic') === true
+  identity.identityProvider = identity.source
+  const user = Reflect.get(payload, 'user')
+  if (!identity.authDisabled && user && typeof user === 'object' && !Array.isArray(user)) {
+    const name = Reflect.get(user, 'name')
+    const email = Reflect.get(user, 'email')
+    identity.identityName = typeof name === 'string' && name.trim() ? name : typeof email === 'string' ? email : ''
+    identity.identityInitials = initials(identity.identityName)
+  }
+  return identity
+}
+
+watch(operatorUnauthorizedRevision, () => {
+  authGeneration.value++
+  if (sharedShellStatus) sharedShellStatus.value = { ...sharedShellStatus.value, ...unknownIdentity(), authPosture: 'locked', backendStatus: 'auth-required' }
+}, { flush: 'sync' })
 
 interface ApiStats {
   uptime?: string
@@ -53,7 +78,7 @@ export interface ShellInfo {
   identityName: string
   identityInitials: string
   identityProvider: string
-  backendStatus: 'ready' | 'degraded' | 'unavailable'
+  backendStatus: 'ready' | 'degraded' | 'unavailable' | 'auth-required' | 'diagnostics-unavailable' | 'unknown'
   activeMemoryCount: number | null
 }
 
@@ -111,16 +136,8 @@ function initialShellInfo(): ShellInfo {
     uptime: '-',
     health: '-',
     noise: '-',
-    authDisabled: false,
-    authenticated: false,
-    role: 'operator',
-    source: 'unknown',
-    synthetic: false,
-    authPosture: 'unknown',
-    identityName: 'operator',
-    identityInitials: 'EG',
-    identityProvider: 'session',
-    backendStatus: 'unavailable',
+    ...unknownIdentity(),
+    backendStatus: 'unknown',
     activeMemoryCount: null,
   }
 }
@@ -142,12 +159,38 @@ export function useOperatorShellStatus() {
   const pending = (sharedShellStatusPending ??= sharedRef<boolean>((() => false)()))
   const error = (sharedShellStatusError ??= sharedRef<string | null>((() => null)()))
 
+  async function refreshIdentity() {
+    const generation = ++authGeneration.value
+    info.value = { ...info.value, ...unknownIdentity() }
+    const state = await loadOperatorJson<unknown>('/api/auth/me', { source: 'shell-auth', cache: 'no-store' })
+    if (generation !== authGeneration.value) return false
+    const identity = isLive(state) ? identityFrom(state.data) : state.kind === 'error' && state.error.status === 401 ? { ...unknownIdentity(), authPosture: 'locked' as const } : null
+    info.value = { ...info.value, ...(identity ?? unknownIdentity()) }
+    return identity !== null
+  }
+
+  async function login(email: string, password: string) {
+    await operatorFetchJson<unknown>('/api/auth/user-login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }),
+    }, 'shell-user-login')
+    await refreshIdentity()
+    return info.value.authPosture === 'authenticated'
+  }
+
+  async function logout() {
+    await operatorFetchJson<unknown>('/api/auth/user-logout', { method: 'POST' }, 'shell-user-logout')
+    await refreshIdentity()
+    return info.value.authPosture === 'locked'
+  }
+
   async function refresh() {
     pending.value = true
     error.value = null
 
+    const identityRequest = refreshIdentity()
+    const generation = authGeneration.value
     const [authResult, selfcheckResult, statsResult, vnextResult] = await Promise.allSettled([
-      loadOperatorJson<AuthMe>('/api/auth/me', { source: 'shell-auth' }),
+      identityRequest,
       loadOperatorJson<ApiSelfcheck>('/api/selfcheck', { source: 'shell-selfcheck' }),
       loadOperatorJson<ApiStats>('/api/stats', { source: 'shell-stats' }),
       loadOperatorJson<ApiStatsVnext>('/api/stats/vnext', { source: 'shell-stats-vnext' }),
@@ -156,24 +199,11 @@ export function useOperatorShellStatus() {
     const next = initialShellInfo()
     const failures: string[] = []
 
-    if (authResult.status === 'fulfilled' && isLive(authResult.value)) {
-      const auth = authResult.value.data
-      next.authDisabled = Boolean(auth.auth_disabled)
-      next.authenticated = Boolean(auth.authenticated)
-      next.role = auth.role || (next.authDisabled ? 'admin' : 'operator')
-      next.source = auth.source || (next.authDisabled ? 'auth-disabled' : 'unknown')
-      next.synthetic = Boolean(auth.synthetic)
-      next.authPosture = next.authDisabled ? 'auth-disabled' : next.authenticated ? 'authenticated' : 'locked'
-      next.identityName = auth.user?.name || next.role || 'operator'
-      next.identityInitials = initials(next.identityName)
-      next.identityProvider = next.source
-    } else {
-      failures.push('/api/auth/me')
-    }
+    if (authResult.status !== 'fulfilled' || !authResult.value) failures.push('/api/auth/me')
 
     if (selfcheckResult.status === 'fulfilled' && isLive(selfcheckResult.value)) {
       const selfcheck = selfcheckResult.value.data
-      next.version = selfcheck.version || next.version
+      next.version = typeof selfcheck.version === 'string' && selfcheck.version.trim() ? selfcheck.version : next.version
       next.uptime = selfcheck.uptime || next.uptime
       const degraded = (selfcheck.components || []).filter((component) => component.status && component.status !== 'healthy').length
       next.health = selfcheck.overall === 'healthy' ? 0 : degraded || selfcheck.overall || next.health
@@ -201,11 +231,17 @@ export function useOperatorShellStatus() {
     }
 
 
-    const coreFailures = failures.filter((path) => path === '/api/selfcheck' || path === '/api/stats').length
-    next.backendStatus = coreFailures === 2 ? 'unavailable' : failures.length ? 'degraded' : 'ready'
+    const coreResults = [selfcheckResult, statsResult]
+    const coreAuthRequired = generation === authGeneration.value && coreResults.some((result) => result.status === 'fulfilled' && result.value.kind === 'error' && result.value.error.status === 401)
+    const coreOutages = coreResults.filter((result) => result.status === 'fulfilled' && result.value.kind === 'error' && (result.value.error.category === 'unreachable' || result.value.error.category === 'server-unavailable')).length
+    next.backendStatus = info.value.authPosture === 'locked' || coreAuthRequired ? 'auth-required'
+      : coreOutages === 2 ? 'unavailable'
+        : coreOutages || (next.health !== '-' && next.health !== 0) ? 'degraded'
+          : failures.length ? 'diagnostics-unavailable'
+            : next.health === 0 ? 'ready' : 'unknown'
 
-    info.value = next
-    error.value = failures.length ? `Unavailable shell endpoints: ${failures.join(', ')}` : null
+    info.value = { ...next, authDisabled: info.value.authDisabled, authenticated: info.value.authenticated, role: info.value.role, source: info.value.source, synthetic: info.value.synthetic, authPosture: info.value.authPosture, identityName: info.value.identityName, identityInitials: info.value.identityInitials, identityProvider: info.value.identityProvider }
+    error.value = failures.length ? `Diagnostic requests failed: ${failures.join(', ')}` : null
     pending.value = false
   }
 
@@ -216,5 +252,7 @@ export function useOperatorShellStatus() {
     pending,
     error,
     refresh,
+    login,
+    logout,
   }
 }

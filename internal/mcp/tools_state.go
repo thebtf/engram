@@ -165,7 +165,7 @@ func (s *Server) handleGetState(ctx context.Context, args json.RawMessage) (stri
 		})
 	case "project":
 		if a.Project == "" {
-			a.Project = projectFromContext(ctx)
+			a.Project = ProjectFromContext(ctx)
 		}
 		if a.Project == "" {
 			return "", fmt.Errorf("project required")

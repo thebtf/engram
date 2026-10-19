@@ -13,7 +13,7 @@ func TestAttentionEventsMigrationCreatesBoundedTableAndIndexes(t *testing.T) {
 	var tableCount int
 	require.NoError(t, db.Raw(`
 		SELECT COUNT(*) FROM information_schema.tables
-		WHERE table_schema = 'public' AND table_name = 'attention_events'
+		WHERE table_schema = current_schema() AND table_name = 'attention_events'
 	`).Scan(&tableCount).Error)
 	require.Equal(t, 1, tableCount, "attention_events table must exist after migration 158")
 
@@ -21,7 +21,7 @@ func TestAttentionEventsMigrationCreatesBoundedTableAndIndexes(t *testing.T) {
 		var colCount int
 		require.NoError(t, db.Raw(`
 			SELECT COUNT(*) FROM information_schema.columns
-			WHERE table_schema = 'public' AND table_name = 'attention_events' AND column_name = ?
+			WHERE table_schema = current_schema() AND table_name = 'attention_events' AND column_name = ?
 		`, col).Scan(&colCount).Error)
 		require.Equal(t, 1, colCount, "column %q must exist in attention_events", col)
 	}
@@ -29,7 +29,7 @@ func TestAttentionEventsMigrationCreatesBoundedTableAndIndexes(t *testing.T) {
 	var rawColumnCount int
 	require.NoError(t, db.Raw(`
 		SELECT COUNT(*) FROM information_schema.columns
-		WHERE table_schema = 'public'
+		WHERE table_schema = current_schema()
 		  AND table_name = 'attention_events'
 		  AND column_name IN ('text', 'raw_text', 'source_turn', 'raw_source_turn', 'prompt', 'user_prompt')
 	`).Scan(&rawColumnCount).Error)
@@ -38,7 +38,7 @@ func TestAttentionEventsMigrationCreatesBoundedTableAndIndexes(t *testing.T) {
 	var indexCount int
 	require.NoError(t, db.Raw(`
 		SELECT COUNT(*) FROM pg_indexes
-		WHERE schemaname = 'public'
+		WHERE schemaname = current_schema()
 		  AND tablename = 'attention_events'
 		  AND indexname IN ('idx_attention_events_project_created', 'idx_attention_events_session_created')
 	`).Scan(&indexCount).Error)
@@ -48,7 +48,8 @@ func TestAttentionEventsMigrationCreatesBoundedTableAndIndexes(t *testing.T) {
 func TestAttentionEventsMigrationEnforcesConfirmedHashHorizonAndPrivacyConstraints(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
-	defer db.Exec(`DELETE FROM attention_events WHERE project = 'test-attention-constraint'`)
+	project := sessionTestProject(t, db)
+	defer db.Exec(`DELETE FROM attention_events WHERE project = ?`, project)
 
 	baseInsert := `
 		INSERT INTO attention_events (project, session_id, source_turn_hash, derived_intent, agent_confirmed, horizon, privacy_class)
@@ -56,11 +57,11 @@ func TestAttentionEventsMigrationEnforcesConfirmedHashHorizonAndPrivacyConstrain
 	`
 
 	validHash := validAttentionHash("a")
-	require.NoError(t, db.Exec(baseInsert, "test-attention-constraint", validHash, true, "project", "secret").Error)
-	require.Error(t, db.Exec(baseInsert, "test-attention-constraint", validHash, false, "project", "secret").Error, "agent_confirmed=false must be rejected by the database constraint")
-	require.Error(t, db.Exec(baseInsert, "test-attention-constraint", "RAW_SOURCE_TURN_NEVER_STORE", true, "project", "secret").Error, "non-canonical source_turn_hash must be rejected by the database constraint")
-	require.Error(t, db.Exec(baseInsert, "test-attention-constraint", validHash, true, "forever", "secret").Error, "invalid horizon must be rejected by the database constraint")
-	require.Error(t, db.Exec(baseInsert, "test-attention-constraint", validHash, true, "project", "private-ish").Error, "invalid privacy class must be rejected by the database constraint")
+	require.NoError(t, db.Exec(baseInsert, project, validHash, true, "project", "secret").Error)
+	require.Error(t, db.Exec(baseInsert, project, validHash, false, "project", "secret").Error, "agent_confirmed=false must be rejected by the database constraint")
+	require.Error(t, db.Exec(baseInsert, project, "RAW_SOURCE_TURN_NEVER_STORE", true, "project", "secret").Error, "non-canonical source_turn_hash must be rejected by the database constraint")
+	require.Error(t, db.Exec(baseInsert, project, validHash, true, "forever", "secret").Error, "invalid horizon must be rejected by the database constraint")
+	require.Error(t, db.Exec(baseInsert, project, validHash, true, "project", "private-ish").Error, "invalid privacy class must be rejected by the database constraint")
 }
 
 func TestAttentionEventsMigrationRollbackDropsTable(t *testing.T) {

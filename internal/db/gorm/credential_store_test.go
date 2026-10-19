@@ -2,45 +2,23 @@ package gorm
 
 import (
 	"context"
-	"os"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 
 	"github.com/thebtf/engram/pkg/models"
 )
 
-// openTestDB opens a real PostgreSQL connection for integration testing.
-// Requires DATABASE_DSN env var; skips the test if it is not set.
+// openTestDB gives each integration test a private migrated schema and bounded pool.
 func openTestDB(t *testing.T) (*gorm.DB, func()) {
 	t.Helper()
-	dsn := os.Getenv("DATABASE_DSN")
-	if dsn == "" {
-		t.Skip("DATABASE_DSN not set, skipping credential store integration test")
-	}
-
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Silent),
-	})
-	require.NoError(t, err, "open test db")
-
+	db, _ := openInterventionReceiptMigrationTestDB(t)
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
-	require.NoError(t, sqlDB.Ping())
-
-	// Apply migrations so the credentials table exists.
-	require.NoError(t, runMigrations(db), "runMigrations")
-
-	cleanup := func() {
-		// Remove test rows inserted by this test run; leave other data intact.
-		db.Exec(`DELETE FROM credentials WHERE project = 'test-credential-store'`)
-		sqlDB.Close()
-	}
-	return db, cleanup
+	return db, func() { require.NoError(t, sqlDB.Close()) }
 }
 
 // TestCredentialStore_CreateGetCountDelete exercises the full Create→Get→Count→Delete
@@ -54,7 +32,7 @@ func TestCredentialStore_CreateGetCountDelete(t *testing.T) {
 	cs := NewCredentialStore(store)
 	ctx := context.Background()
 
-	const testProject = "test-credential-store"
+	testProject := uuid.NewString()
 	const testKey = "api-key-smoke"
 	secret := []byte("ciphertext-placeholder-nonce-prefixed")
 	fingerprint := "testfingerprint01"
@@ -149,7 +127,7 @@ func TestCredentialStore_GlobalAndProjectSameNameCoexist(t *testing.T) {
 	cs := NewCredentialStore(store)
 	ctx := context.Background()
 
-	const project = "test-credential-store-global"
+	project := uuid.NewString()
 	const key = "global-project-coexist"
 	const fingerprint = "globalfingerprint01"
 	require.NoError(t, db.Exec("DELETE FROM credentials WHERE key = ?", key).Error)
@@ -186,10 +164,6 @@ func TestCredentialStore_GlobalAndProjectSameNameCoexist(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, projectCreated.ID, projectFetched.ID)
 
-	byName, err := cs.GetByName(ctx, key)
-	require.NoError(t, err)
-	assert.Equal(t, globalCreated.ID, byName.ID, "project-less lookup must prefer the exact global row")
-
 	globalList, err := cs.List(ctx, "")
 	require.NoError(t, err)
 	require.Len(t, globalList, 1)
@@ -208,9 +182,9 @@ func TestCredentialStore_GlobalAndProjectSameNameCoexist(t *testing.T) {
 
 	globalCreated, err = cs.Create(ctx, globalInput)
 	require.NoError(t, err)
-	require.NoError(t, cs.DeleteByName(ctx, key))
+	require.NoError(t, cs.Delete(ctx, "", key))
 	_, err = cs.Get(ctx, "", key)
-	require.Error(t, err, "project-less delete must remove the preferred global row")
+	require.Error(t, err, "exact global delete must preserve project credentials")
 	projectFetched, err = cs.Get(ctx, project, key)
 	require.NoError(t, err)
 	assert.Equal(t, projectCreated.ID, projectFetched.ID)
@@ -226,7 +200,7 @@ func TestCredentialStore_DeleteOrphanedByFingerprint(t *testing.T) {
 	cs := NewCredentialStore(store)
 	ctx := context.Background()
 
-	const testProject = "test-credential-store"
+	testProject := uuid.NewString()
 	const goodFP = "goodfingerprint01"
 	const badFP = "badfingerprint099"
 

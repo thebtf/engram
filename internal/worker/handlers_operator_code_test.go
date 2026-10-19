@@ -1557,14 +1557,14 @@ type operatorCodeHTTPTestContextStore struct {
 	noViewBinding    gormdb.BrowserCodeIndexIntentBinding
 }
 
-func (store *operatorCodeHTTPTestContextStore) ListCatalog(_ context.Context, _ int64) ([]gormdb.BrowserCodeContextCatalogEntry, error) {
+func (store *operatorCodeHTTPTestContextStore) ListCatalog(_ context.Context, _ int64, _ gormdb.BrowserCodeCatalogFilter) ([]gormdb.BrowserCodeContextCatalogEntry, error) {
 	if store.listErr != nil {
 		return nil, store.listErr
 	}
 	return append([]gormdb.BrowserCodeContextCatalogEntry(nil), store.entries...), nil
 }
 
-func (store *operatorCodeHTTPTestContextStore) ListNoAuthCatalog(context.Context) ([]gormdb.BrowserCodeContextCatalogEntry, error) {
+func (store *operatorCodeHTTPTestContextStore) ListNoAuthCatalog(context.Context, gormdb.BrowserCodeCatalogFilter) ([]gormdb.BrowserCodeContextCatalogEntry, error) {
 	return append([]gormdb.BrowserCodeContextCatalogEntry(nil), store.entries...), store.listErr
 }
 

@@ -1,19 +1,20 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { useProjectsQuery, useRulesQuery, useSessionsQuery } from '~/composables/useOperatorQueries'
+import { computed } from 'vue'
+import { useRulesQuery, useSessionsQuery } from '~/composables/useOperatorQueries'
+import { useProjectCatalog } from '~/composables/useProjectCatalog'
+import ProjectCatalogStatus from '~/components/ProjectCatalogStatus.vue'
 
-const selectedProject = ref('')
-const projectsQuery = useProjectsQuery()
-const sessionsQuery = useSessionsQuery(selectedProject)
-const rulesQuery = useRulesQuery(selectedProject)
-
-const projectCount = computed(() => projectsQuery.data.value?.length ?? 0)
+const { projects, unresolved, selectedProject, selectionPending, selectionError, ready, unresolvedReference } = useProjectCatalog('all')
+const sessionsQuery = useSessionsQuery(selectedProject, ready)
+const rulesQuery = useRulesQuery(selectedProject, ready)
+const projectCount = computed(() => projects.value.length)
 const sessionCount = computed(() => sessionsQuery.data.value?.total ?? 0)
 const ruleCount = computed(() => rulesQuery.data.value?.total ?? 0)
 </script>
 
 <template>
   <section class="space-y-5">
+    <ProjectCatalogStatus :records="unresolved" :pending="selectionPending" :error="selectionError" :reference="unresolvedReference" />
     <div class="surface-panel p-5">
       <div class="mb-2 text-xs uppercase tracking-[0.08em] text-[var(--muted)]">
         Foundation checkpoint

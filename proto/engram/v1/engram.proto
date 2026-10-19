@@ -37,10 +37,6 @@ service EngramService {
   // No ranking or LLM filtering is applied; the server returns SQL-backed entities only.
   rpc GetSessionStartContext(GetSessionStartContextRequest) returns (GetSessionStartContextResponse);
 
-  // GetAmbientCandidates returns bounded same-turn ambient context through the
-  // existing service. It is private to the credential-neutral legacy bridge.
-  rpc GetAmbientCandidates(GetAmbientCandidatesRequest) returns (GetAmbientCandidatesResponse);
-
   // NegotiateVersion validates MAJOR-version compatibility between client and server.
   rpc NegotiateVersion(NegotiateVersionRequest) returns (NegotiateVersionResponse);
 
@@ -60,9 +56,6 @@ service EngramService {
   // receipt with counts of embedded and deleted rows.
   rpc CodeIndexUpload(stream CodeChunkUpload) returns (CodeIndexUploadReceipt);
 
-  // RegisterProjectIdentityV3 explicitly establishes a V3 anchor binding.
-  // Authentication and registration authority are derived solely by the server.
-  rpc RegisterProjectIdentityV3(RegisterProjectIdentityV3Request) returns (RegisterProjectIdentityV3Response);
   // Bind establishes a private host-advisor capability binding.
   rpc Bind(HostAdvisorBindRequest) returns (HostAdvisorBindResponse);
 
@@ -185,7 +178,7 @@ enum ProjectEventType {
 // ---- Session-start context messages --------------------------------------
 
 message GetSessionStartContextRequest {
-  // project is the target project slug used to fetch static context entities.
+  // project is the pinned canonical project UUID.
   string project = 1;
 
   // memories_limit is the maximum number of memories to return, ordered by newest first.
@@ -196,17 +189,8 @@ message GetSessionStartContextRequest {
   // Zero means the server default.
   int32 issues_limit = 3;
 
-  // project_identity_v3 selects V3 central resolution. When present, project
-  // is legacy compatibility input and MUST NOT be used for scoped access.
-  ProjectIdentityV3 project_identity_v3 = 4;
-
-  // host_session_ref is the opaque host-session reference bound by the relay.
-  // Its presence selects the private bridge compatibility branch.
-  string host_session_ref = 5;
-
-  // relay_revision is the installed private relay revision. The server admits
-  // it only when the dedicated relay gate accepts this exact revision.
-  string relay_revision = 6;
+  reserved 4, 5, 6;
+  reserved "project_identity_v3", "host_session_ref", "relay_revision";
 }
 
 message GetSessionStartContextResponse {
@@ -217,9 +201,8 @@ message GetSessionStartContextResponse {
   SessionStartRuleRouter rule_router = 5;
   SessionStartMetaSummary meta_summary = 6;
 
-  // project_resolution_v3 is populated only for V3 requests. Its project_key
-  // and resolved_scope are absent on a refusal.
-  ProjectResolutionResultV3 project_resolution_v3 = 7;
+  reserved 7;
+  reserved "project_resolution_v3";
 }
 
 message SessionStartIssue {
@@ -325,15 +308,12 @@ message CallToolRequest {
   string tool_name = 1;
   // Tool arguments as JSON bytes (same as MCP JSON-RPC params.arguments).
   bytes arguments_json = 2;
-  // Project identity for scope isolation (from git-derived slug).
+  // Pinned canonical project UUID; never an authorization credential.
   string project = 3;
   // Claude session ID for tracking and outcome propagation.
   string session_id = 4;
-  // Full versioned identity metadata. Additive: old servers ignore it.
-  ProjectIdentityV2 project_identity = 5;
-  // Version 3 descriptor. Its presence selects the V3 resolver; project and
-  // project_identity are retained solely for the explicit V2 compatibility branch.
-  ProjectIdentityV3 project_identity_v3 = 6;
+  reserved 5, 6;
+  reserved "project_identity", "project_identity_v3";
 }
 
 // CallToolResponse carries the result of an MCP tool call.
@@ -344,8 +324,8 @@ message CallToolResponse {
   bytes content_json = 2;
   // Server-resolved canonical selector used for this call.
   string canonical_project = 3;
-  // Present only for a V3 request that resolved successfully.
-  ProjectResolutionResultV3 project_resolution_v3 = 4;
+  reserved 4;
+  reserved "project_resolution_v3";
 }
 
 // InitializeRequest is the handshake from daemon to server.
@@ -353,9 +333,8 @@ message InitializeRequest {
   string client_name = 1;
   string client_version = 2;
   string project = 3;
-  ProjectIdentityV2 project_identity = 4;
-  // Version 3 descriptor. Its presence selects the V3 resolver.
-  ProjectIdentityV3 project_identity_v3 = 5;
+  reserved 4, 5;
+  reserved "project_identity", "project_identity_v3";
 }
 
 // InitializeResponse carries server capabilities and tool definitions.
@@ -364,8 +343,8 @@ message InitializeResponse {
   string server_version = 2;
   repeated ToolDefinition tools = 3;
   string canonical_project = 4;
-  // Present only for a V3 request that resolved successfully.
-  ProjectResolutionResultV3 project_resolution_v3 = 5;
+  reserved 5;
+  reserved "project_resolution_v3";
   // Present only for an eligible authenticated workstation keycard.
   bytes authenticated_subject_proof_sha256 = 6;
 }
@@ -438,22 +417,6 @@ message CodeIndexUploadReceipt {
   repeated string errors = 3;
 }
 
-// ProjectIdentityV2 carries one complete identity source. Git identities use
-// git_remote+relative_path. Non-git identities use a 128-bit anchor and require
-// explicit anchor_shared presence. The selector remains on the outer request
-// for old-server compatibility; metadata is not an authentication credential.
-// Appended after the existing message declarations to minimize generated-code
-// churn while preserving every pre-v2 descriptor index.
-message ProjectIdentityV2 {
-  uint32 version = 1;
-  string legacy_project_id = 2;
-  string display_name = 3;
-  string git_remote = 4;
-  string relative_path = 5;
-  string non_git_anchor = 6;
-  optional bool anchor_shared = 7;
-}
-
 // ProjectLegacyIdentifierV3 is non-authoritative compatibility evidence.
 message ProjectLegacyIdentifierV3 {
   string scheme = 1;
@@ -461,8 +424,8 @@ message ProjectLegacyIdentifierV3 {
   string provenance = 3;
 }
 
-// ProjectIdentityV3 is the versioned project descriptor submitted by a V3-capable client.
-// It deliberately has no project_key: clients cannot select canonical project authority.
+// ProjectIdentityV3 carries project evidence for authenticated HostAdvisor task authority.
+// Normal tool and session requests use the canonical UUID directly.
 message ProjectIdentityV3 {
   uint32 version = 1;
   string anchor_project_id = 2;
@@ -471,62 +434,6 @@ message ProjectIdentityV3 {
   repeated string normalized_git_remotes = 5;
   repeated ProjectLegacyIdentifierV3 legacy_identifiers = 6;
   string client_instance_id = 7;
-}
-
-// ProjectResolutionOutcomeV3 is the closed transport representation of V3 outcomes.
-enum ProjectResolutionOutcomeV3 {
-  PROJECT_RESOLUTION_OUTCOME_V3_UNSPECIFIED = 0;
-  PROJECT_RESOLVED = 1;
-  PROJECT_REDIRECTED = 2;
-  PROJECT_ONBOARDING_REQUIRED = 3;
-  PROJECT_ANCHOR_INVALID = 4;
-  PROJECT_SCOPE_MISMATCH = 5;
-  PROJECT_NESTED_REPOSITORY_UNRESOLVED = 6;
-  PROJECT_ANCHOR_DECISION_REQUIRED = 7;
-  PROJECT_IDENTITY_AMBIGUOUS = 8;
-  PROJECT_DESCRIPTOR_UNSUPPORTED = 9;
-  PROJECT_DESCRIPTOR_INVALID = 10;
-  PROJECT_KEY_CLIENT_ASSERTION_FORBIDDEN = 11;
-}
-
-// ProjectResolutionResultV3 carries only public resolution facts. project_key,
-// resolved_scope, and redirect_reference are set only for successful outcomes.
-message ProjectResolutionResultV3 {
-  ProjectResolutionOutcomeV3 outcome = 1;
-  string correlation = 2;
-  optional string project_key = 3;
-  optional string resolved_scope = 4;
-  optional string redirect_reference = 5;
-}
-
-// RegisterProjectIdentityV3Request is deliberately descriptor-only. It carries
-// neither project authority nor registration authorization from the client.
-message RegisterProjectIdentityV3Request {
-  ProjectIdentityV3 project_identity_v3 = 1;
-
-  // relay_revision selects the additive registration branch used only by the
-  // private bridge. An omitted value preserves existing registration behavior.
-  string relay_revision = 2;
-}
-
-// RegisterProjectIdentityV3Response returns the existing typed V3 resolution result.
-message RegisterProjectIdentityV3Response {
-  ProjectResolutionResultV3 project_resolution_v3 = 1;
-}
-
-// GetAmbientCandidatesRequest contains only relay-bound callback facts. It has
-// no raw project selector: the V3 descriptor is resolved by the server.
-message GetAmbientCandidatesRequest {
-  ProjectIdentityV3 project_identity_v3 = 1;
-  string host_session_ref = 2;
-  string query_text = 3;
-  int32 limit = 4;
-  string relay_revision = 5;
-}
-
-// GetAmbientCandidatesResponse returns only bounded, untrusted ambient text.
-message GetAmbientCandidatesResponse {
-  string additional_context = 1;
 }
 
 // HostAdvisorHostFamily identifies the host family that owns callback facts.

@@ -1,10 +1,15 @@
 <script setup lang="ts">
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { operatorDiagnosisKey } from '../composables/useOperatorApi'
+import { isCatalogProject, useOperatorProjectContext, projectName } from '../composables/useOperatorProjectContext'
+import { useOperatorSearchNoise } from '../composables/useOperatorSearchNoise'
 const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
-const query = ref('')
+const context = useOperatorProjectContext()
+const query = ref(typeof route.query.draftQ === 'string' ? route.query.draftQ : '')
 const requestedQuery = computed(() => typeof route.query.q === 'string' ? route.query.q.trim() : '')
-const requestedProject = computed(() => typeof route.query.project === 'string' ? route.query.project.trim() : '')
+const requestedProject = context.project
 const appliedRouteSearch = ref('')
 const {
   projects,
@@ -18,35 +23,48 @@ const {
   error,
   refresh,
   runSearch,
-  tombstoneGap,
 } = useOperatorSearchNoise()
 
 const hasProjects = computed(() => projects.value.length > 0)
-const hasRequestedProject = computed(() => Boolean(requestedProject.value) && projects.value.includes(requestedProject.value))
+const hasRequestedProject = computed(() => isCatalogProject(requestedProject.value) && !context.selectionPending.value && !context.selectionError.value && !context.error.value)
+const searchError = computed(() => context.selectionError.value || context.error.value || (searchState.value.kind === 'error' ? searchState.value.error : null))
+
+async function refreshSearch() {
+  await refresh()
+  if (hasRequestedProject.value && requestedQuery.value && selectedProject.value === requestedProject.value) await runSearch(requestedQuery.value, requestedProject.value)
+}
 
 watch([requestedQuery, requestedProject, hasRequestedProject], async ([nextQuery, nextProject, projectAvailable]) => {
-  query.value = nextQuery
+  query.value = typeof route.query.draftQ === 'string' ? route.query.draftQ : nextQuery
   if (!nextQuery || !nextProject || !projectAvailable) {
     appliedRouteSearch.value = ''
     await runSearch('', '')
     return
   }
 
-  selectedProject.value = nextProject
+  if (selectedProject.value !== nextProject) return
   const searchKey = `${nextProject}\u0000${nextQuery}`
   if (appliedRouteSearch.value === searchKey) return
   appliedRouteSearch.value = searchKey
   await runSearch(nextQuery, nextProject)
-}, { immediate: true })
+  if (requestedProject.value !== nextProject || requestedQuery.value !== nextQuery) return
+  const memory = typeof route.query.focusMemory === 'string' ? route.query.focusMemory : ''
+  if (memory) { await nextTick(); document.querySelector<HTMLElement>(`[data-testid="search-result-open-${CSS.escape(memory)}"]`)?.focus() }
+}, { immediate: true, flush: 'sync' })
 
 async function submitSearch() {
-  await runSearch(query.value, selectedProject.value)
+  if (!hasRequestedProject.value) return
+  await router.push({ path: '/search', query: { project: selectedProject.value, q: query.value.trim() } })
 }
 
-function openResult(project: string, memory: string) {
-  if (!project || project === '-' || !memory) return
-  void router.push({ path: '/memory', query: { project, memory } })
+function openResult(resultProject: string, memory: string) {
+  const project = selectedProject.value
+  if (!hasRequestedProject.value || resultProject !== project || !memory) return
+  void router.push({ path: '/memory', query: { ...context.to('/memory').query, project, memory, from: 'search', searchQuery: requestedQuery.value } })
 }
+onBeforeUnmount(() => {
+  if (route.path === '/search') context.remember('/search', { ...route.query, draftQ: query.value })
+})
 </script>
 
 <template>
@@ -56,46 +74,50 @@ function openResult(project: string, memory: string) {
         <h1>{{ t('searchPage.title') }}</h1>
         <p>{{ t('searchPage.subtitle') }}</p>
       </div>
-      <button class="btn" type="button" :disabled="pending" @click="refresh">{{ t('searchPage.actions.refresh') }}</button>
+      <button class="btn" type="button" :disabled="pending" @click="refreshSearch">{{ t('searchPage.actions.refresh') }}</button>
     </header>
 
     <form class="search-panel" @submit.prevent="submitSearch">
       <label>
         <span>{{ t('searchPage.form.project') }}</span>
-        <select v-model="selectedProject" :disabled="!hasProjects">
-          <option v-if="!hasProjects" value="">{{ t('searchPage.form.noProjects') }}</option>
-          <option v-for="project in projects" :key="project" :value="project">{{ project }}</option>
+        <select :value="selectedProject" :disabled="!hasProjects" @change="context.select(($event.target as HTMLSelectElement).value)">
+          <option v-if="!selectedProject" value="" disabled>{{ t('knowledge.chooseProject') }}</option>
+          <option v-if="selectedProject === 'all'" value="all" disabled>{{ t('knowledge.chooseProject') }}</option>
+          <option v-for="project in projects" :key="project" :value="project">{{ projectName(project) }}</option>
         </select>
       </label>
       <label class="query">
         <span>{{ t('searchPage.form.query') }}</span>
         <input v-model="query" :placeholder="t('searchPage.placeholder')" autocomplete="off">
       </label>
-      <button class="btn primary" type="submit" :disabled="pending || !query.trim() || !selectedProject">
+      <button class="btn primary" type="submit" :disabled="pending || !query.trim() || !hasRequestedProject">
         {{ t('searchPage.actions.search') }}
       </button>
     </form>
 
-    <div v-if="pending" class="state pending">{{ t('searchPage.state.pending') }}</div>
-    <div v-if="error" class="state error">{{ t('searchPage.state.error', { message: error }) }}</div>
+    <div v-if="pending || context.selectionPending.value" class="state pending" role="status">{{ t('searchPage.state.pending') }}</div>
+    <div v-if="searchError" class="state error" role="status"><p>{{ t(operatorDiagnosisKey(searchError)) }}</p><button class="btn" type="button" :disabled="pending" @click="refreshSearch">{{ t('knowledge.retry') }}</button></div>
+    <nav v-if="hasRequestedProject && requestedQuery" class="text-recovery" :aria-label="t('searchPage.recovery.title')">
+      <p>{{ t('searchPage.recovery.body') }}</p>
+      <RouterLink class="btn" data-testid="search-text-memory" :to="{ path: '/memory', query: { project: requestedProject, q: requestedQuery, page: '1' } }">{{ t('knowledge.searchMemory') }}</RouterLink>
+      <RouterLink class="btn" data-testid="search-text-documents" :to="{ path: '/documents', query: { project: requestedProject, q: requestedQuery, page: '1' } }">{{ t('knowledge.searchDocuments') }}</RouterLink>
+    </nav>
 
     <section class="grid">
       <article class="card results">
         <div class="card-head">
           <div>
             <h2>{{ t('searchPage.results.title') }}</h2>
-            <p>{{ t('searchPage.results.source') }}</p>
           </div>
-          <HonestyBadge :cls="searchState.kind === 'stale' ? 'stale' : searchState.kind === 'error' ? 'dormant' : 'live'" :evidence="searchState.kind === 'stale' ? searchState.evidence.endpoint : searchState.kind === 'error' ? searchState.error.message : undefined" />
         </div>
 
-        <div v-if="searchState.kind === 'empty'" class="empty">
-          <strong>{{ t('searchPage.results.emptyTitle') }}</strong>
-          <p>{{ t('searchPage.results.emptyBody') }}</p>
+        <div v-if="searchError || searchState.kind === 'stale'" class="empty">
+          <strong>{{ t('searchPage.results.unavailableTitle') }}</strong>
+          <p>{{ t('searchPage.results.unavailableBody') }}</p>
         </div>
-        <div v-else-if="searchState.kind === 'stale'" class="empty stale">
-          <strong>{{ t('searchPage.results.staleTitle') }}</strong>
-          <p>{{ searchState.reason }}</p>
+        <div v-else-if="searchState.kind === 'empty'" class="empty">
+          <strong>{{ t(requestedQuery && appliedRouteSearch ? 'knowledge.noMatches' : 'searchPage.results.emptyTitle') }}</strong>
+          <p>{{ t('searchPage.results.emptyBody') }}</p>
         </div>
         <div v-else class="rows">
           <div v-for="row in searchResults" :key="row.id" class="result-row">
@@ -104,16 +126,20 @@ function openResult(project: string, memory: string) {
               <p>{{ row.body || t('searchPage.results.noBody') }}</p>
             </div>
             <div class="meta">
-              <span>{{ row.project }}</span>
-              <code>{{ row.type }}</code>
-              <code>{{ row.score }}</code>
+              <span>{{ projectName(selectedProject) }}</span>
+              <details><summary>{{ t('knowledge.technical') }}</summary><code>{{ row.type }} · {{ row.score }}</code></details>
               <button v-if="row.memoryBacked" class="btn" type="button" :data-testid="`search-result-open-${row.id}`" @click="openResult(row.project, row.id)">{{ t('searchPage.actions.openMemory') }}</button>
             </div>
           </div>
         </div>
       </article>
 
-      <aside class="side">
+      <details class="side card">
+        <summary>{{ t('knowledge.technical') }}</summary>
+        <code>{{ searchState.evidence.endpoint }}</code>
+        <p v-if="searchError">{{ searchError.message }}</p>
+        <p v-if="searchState.kind === 'stale'">{{ searchState.reason }}</p>
+        <p v-if="error && error !== searchError?.message">{{ error }}</p>
         <article class="card">
           <div class="card-head">
             <h2>{{ t('searchPage.recent.title') }}</h2>
@@ -136,24 +162,16 @@ function openResult(project: string, memory: string) {
           <dl class="stats">
             <div>
               <dt>{{ t('searchPage.analytics.total') }}</dt>
-              <dd>{{ analyticsState.kind === 'live' ? analyticsState.data.total_searches ?? 0 : '—' }}</dd>
+              <dd>{{ analyticsState.kind === 'live' ? analyticsState.data.total_searches ?? '—' : '—' }}</dd>
             </div>
             <div>
               <dt>{{ t('searchPage.analytics.zeroRate') }}</dt>
-              <dd>{{ analyticsState.kind === 'live' ? analyticsState.data.zero_result_rate ?? 0 : '—' }}</dd>
+              <dd>{{ analyticsState.kind === 'live' ? analyticsState.data.zero_result_rate ?? '—' : '—' }}</dd>
             </div>
           </dl>
         </article>
 
-        <article class="card tombstone">
-          <div class="card-head">
-            <h2>{{ t('searchPage.tombstone.title') }}</h2>
-            <HonestyBadge cls="stale" />
-          </div>
-          <p>{{ t('searchPage.tombstone.body') }}</p>
-          <code>{{ tombstoneGap.evidence.endpoint }}</code>
-        </article>
-      </aside>
+      </details>
     </section>
   </div>
 </template>
@@ -169,6 +187,10 @@ function openResult(project: string, memory: string) {
 .search-panel { border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); padding:14px; display:grid; grid-template-columns:minmax(160px,220px) 1fr auto; gap:12px; align-items:end; }
 label { display:grid; gap:6px; color:var(--muted); font-size:var(--text-xs); text-transform:uppercase; letter-spacing:.04em; }
 input, select { width:100%; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--bg); color:var(--fg); padding:9px 10px; font:inherit; text-transform:none; letter-spacing:0; }
+.text-recovery { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+.text-recovery p { flex-basis:100%; margin:0; color:var(--muted); font-size:var(--text-sm); }
+.side summary { cursor:pointer; min-height:44px; display:flex; align-items:center; }
+.card code { overflow-wrap:anywhere; }
 .state { border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); padding:10px 12px; color:var(--fg-2); font-size:var(--text-sm); }
 .state.pending { border-color:color-mix(in oklab,var(--accent),transparent 55%); }
 .state.error { color:var(--state-warn); border-color:color-mix(in oklab,var(--state-warn),transparent 45%); }
@@ -182,7 +204,7 @@ input, select { width:100%; border:1px solid var(--border); border-radius:var(--
 .result-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:14px; border-top:1px solid var(--border-soft); padding:12px 0; }
 .result-row:first-child { border-top:0; padding-top:0; }
 .result-row strong { display:block; color:var(--fg); }
-.result-row p, .tombstone p { margin:4px 0 0; color:var(--muted); font-size:var(--text-sm); }
+.result-row p { margin:4px 0 0; color:var(--muted); font-size:var(--text-sm); }
 .meta { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:6px; color:var(--muted); font-size:var(--text-xs); }
 .recent-row { display:flex; justify-content:space-between; gap:10px; border-top:1px solid var(--border-soft); padding-top:8px; color:var(--fg-2); }
 .recent-row:first-child { border-top:0; padding-top:0; }
@@ -193,7 +215,6 @@ input, select { width:100%; border:1px solid var(--border); border-radius:var(--
 .empty strong { display:block; color:var(--fg); margin-bottom:5px; }
 .empty p { margin:0; }
 .empty.small { padding:16px; }
-.empty.stale { border-color:color-mix(in oklab,var(--class-stale),transparent 35%); }
 @media (max-width: 920px) {
   .search-panel, .grid { grid-template-columns:1fr; }
   .head { display:grid; }

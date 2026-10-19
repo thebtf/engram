@@ -97,7 +97,6 @@ func TestMigrationsIntegration_PatternsDropped(t *testing.T) {
 	}
 }
 
-
 // TestMigration125_AddPrivacyScope verifies migration 125_privacy_scope_addition
 // adds the privacy_scope + source_sessions columns to memories with the correct
 // types, defaults, and CHECK constraint, and that the rollback drops them cleanly.
@@ -114,20 +113,9 @@ func TestMigrationsIntegration_PatternsDropped(t *testing.T) {
 //
 // Engram vNext Milestone F TG1/T001.
 func TestMigration125_AddPrivacyScope(t *testing.T) {
-	dsn := os.Getenv("DATABASE_DSN")
-	if dsn == "" {
-		t.Skip("DATABASE_DSN not set, skipping integration test")
-	}
-
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Warn),
-	})
-	require.NoError(t, err)
-
-	sqlDB, err := db.DB()
-	require.NoError(t, err)
-	defer sqlDB.Close()
-	require.NoError(t, sqlDB.Ping())
+	db, cleanup := openTestDB(t)
+	t.Cleanup(cleanup)
+	project := sessionTestProject(t, db)
 
 	// Run the full migration chain — must include 125.
 	require.NoError(t, runMigrations(db), "full migration chain must succeed")
@@ -136,7 +124,7 @@ func TestMigration125_AddPrivacyScope(t *testing.T) {
 	// panic or failure mid-test does not leave orphaned 't001-test' rows in the
 	// shared DB across runs.
 	t.Cleanup(func() {
-		if err := db.Exec(`DELETE FROM memories WHERE project = 't001-test'`).Error; err != nil {
+		if err := db.Exec(`DELETE FROM memories WHERE project = ?`, project).Error; err != nil {
 			t.Logf("TestMigration125 cleanup: failed to delete test rows: %v", err)
 		}
 	})
@@ -146,7 +134,7 @@ func TestMigration125_AddPrivacyScope(t *testing.T) {
 	row := db.Raw(`
 		SELECT data_type, is_nullable, column_default
 		FROM information_schema.columns
-		WHERE table_schema = 'public'
+		WHERE table_schema = current_schema()
 		  AND table_name = 'memories'
 		  AND column_name = 'privacy_scope'
 	`).Row()
@@ -160,7 +148,7 @@ func TestMigration125_AddPrivacyScope(t *testing.T) {
 	row = db.Raw(`
 		SELECT data_type, is_nullable, column_default
 		FROM information_schema.columns
-		WHERE table_schema = 'public'
+		WHERE table_schema = current_schema()
 		  AND table_name = 'memories'
 		  AND column_name = 'source_sessions'
 	`).Row()
@@ -172,11 +160,11 @@ func TestMigration125_AddPrivacyScope(t *testing.T) {
 	// Assert CHECK constraint admits the 4 enum values and rejects others.
 	for _, valid := range []string{"private", "project", "shared", "global"} {
 		err := db.Exec(`INSERT INTO memories (project, content, privacy_scope) VALUES (?, ?, ?)`,
-			"t001-test", "T001 fixture content", valid).Error
+			project, "T001 fixture content", valid).Error
 		require.NoError(t, err, "privacy_scope=%q must be admitted by CHECK constraint", valid)
 	}
-	err = db.Exec(`INSERT INTO memories (project, content, privacy_scope) VALUES (?, ?, ?)`,
-		"t001-test", "T001 invalid fixture", "invalid_scope").Error
+	err := db.Exec(`INSERT INTO memories (project, content, privacy_scope) VALUES (?, ?, ?)`,
+		project, "T001 invalid fixture", "invalid_scope").Error
 	require.Error(t, err, "privacy_scope='invalid_scope' must be rejected by CHECK constraint")
 
 	// Cleanup runs via t.Cleanup registered above — survives failure/panic.
@@ -200,20 +188,9 @@ func TestMigration125_AddPrivacyScope(t *testing.T) {
 //
 // Engram vNext Milestone F TG1 / T006.
 func TestMigration125_TagDerivedBackfill_T006(t *testing.T) {
-	dsn := os.Getenv("DATABASE_DSN")
-	if dsn == "" {
-		t.Skip("DATABASE_DSN not set, skipping integration test")
-	}
-
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Warn),
-	})
-	require.NoError(t, err)
-
-	sqlDB, err := db.DB()
-	require.NoError(t, err)
-	defer sqlDB.Close()
-	require.NoError(t, sqlDB.Ping())
+	db, cleanup := openTestDB(t)
+	t.Cleanup(cleanup)
+	project := sessionTestProject(t, db)
 
 	// Run the full migration chain — migration 125 with the T006 backfill
 	// statement is in the slice.
@@ -221,7 +198,7 @@ func TestMigration125_TagDerivedBackfill_T006(t *testing.T) {
 
 	// Register cleanup BEFORE inserting fixtures so failure/panic still cleans.
 	t.Cleanup(func() {
-		if err := db.Exec(`DELETE FROM memories WHERE project = 't006-backfill-test'`).Error; err != nil {
+		if err := db.Exec(`DELETE FROM memories WHERE project = ?`, project).Error; err != nil {
 			t.Logf("TestMigration125_TagDerivedBackfill_T006 cleanup: %v", err)
 		}
 	})
@@ -231,7 +208,7 @@ func TestMigration125_TagDerivedBackfill_T006(t *testing.T) {
 	// Without this, a stale row from an aborted previous run would make the
 	// `require.Len(..., 3)` assertion below flaky on shared staging DBs.
 	require.NoError(t, db.Exec(
-		`DELETE FROM memories WHERE project = 't006-backfill-test'`,
+		`DELETE FROM memories WHERE project = ?`, project,
 	).Error, "pre-test cleanup of residual fixtures")
 
 	// Seed three fixture rows. Because migration 125 has already run on a
@@ -242,22 +219,22 @@ func TestMigration125_TagDerivedBackfill_T006(t *testing.T) {
 	// migration IDs but the SQL itself is the contract under test).
 	require.NoError(t, db.Exec(
 		`INSERT INTO memories (project, content, tags) VALUES (?, ?, ?::jsonb)`,
-		"t006-backfill-test", "T006 fixture global-tagged", `["scope:global"]`,
+		project, "T006 fixture global-tagged", `["scope:global"]`,
 	).Error)
 	require.NoError(t, db.Exec(
 		`INSERT INTO memories (project, content, tags) VALUES (?, ?, ?::jsonb)`,
-		"t006-backfill-test", "T006 fixture project-tagged", `["scope:project"]`,
+		project, "T006 fixture project-tagged", `["scope:project"]`,
 	).Error)
 	require.NoError(t, db.Exec(
 		`INSERT INTO memories (project, content, tags) VALUES (?, ?, ?::jsonb)`,
-		"t006-backfill-test", "T006 fixture untagged", `[]`,
+		project, "T006 fixture untagged", `[]`,
 	).Error)
 
 	// Force the freshly-inserted global-tagged row off the default so the
 	// backfill UPDATE has work to do on subsequent runs.
 	require.NoError(t, db.Exec(
 		`UPDATE memories SET privacy_scope = 'project'
-			WHERE project = 't006-backfill-test' AND tags ? 'scope:global'`,
+			WHERE project = ? AND tags ? 'scope:global'`, project,
 	).Error)
 
 	// Run the T006 backfill statement (mirroring the line in migration 125).
@@ -279,8 +256,8 @@ func TestMigration125_TagDerivedBackfill_T006(t *testing.T) {
 	var rows []row
 	require.NoError(t, db.Raw(
 		`SELECT tags::text AS tags, privacy_scope FROM memories
-			WHERE project = 't006-backfill-test'
-			ORDER BY id`,
+			WHERE project = ?
+			ORDER BY id`, project,
 	).Scan(&rows).Error)
 	require.Len(t, rows, 3, "expected 3 fixture rows")
 
@@ -298,8 +275,8 @@ func TestMigration125_TagDerivedBackfill_T006(t *testing.T) {
 	var rowsAfter []row
 	require.NoError(t, db.Raw(
 		`SELECT tags::text AS tags, privacy_scope FROM memories
-			WHERE project = 't006-backfill-test'
-			ORDER BY id`,
+			WHERE project = ?
+			ORDER BY id`, project,
 	).Scan(&rowsAfter).Error)
 	require.Equal(t, rows, rowsAfter, "backfill must be idempotent across runs")
 }
@@ -320,27 +297,16 @@ func TestMigration125_TagDerivedBackfill_T006(t *testing.T) {
 // See spec.md §FR-F1 AMEND 2026-05-25 for the column-semantics contract
 // and how empty-string interacts with scope.Resolve ScopePrivate.
 func TestMigration130_AddSourceWorkstationID(t *testing.T) {
-	dsn := os.Getenv("DATABASE_DSN")
-	if dsn == "" {
-		t.Skip("DATABASE_DSN not set, skipping integration test")
-	}
-
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Warn),
-	})
-	require.NoError(t, err)
-
-	sqlDB, err := db.DB()
-	require.NoError(t, err)
-	defer sqlDB.Close()
-	require.NoError(t, sqlDB.Ping())
+	db, cleanup := openTestDB(t)
+	t.Cleanup(cleanup)
+	project := sessionTestProject(t, db)
 
 	// Run the full migration chain — must include 130.
 	require.NoError(t, runMigrations(db), "full migration chain must succeed")
 
 	// Register cleanup BEFORE inserting test row.
 	t.Cleanup(func() {
-		if err := db.Exec(`DELETE FROM memories WHERE project = 't001b-test'`).Error; err != nil {
+		if err := db.Exec(`DELETE FROM memories WHERE project = ?`, project).Error; err != nil {
 			t.Logf("TestMigration130 cleanup: failed to delete test rows: %v", err)
 		}
 	})
@@ -350,7 +316,7 @@ func TestMigration130_AddSourceWorkstationID(t *testing.T) {
 	row := db.Raw(`
 		SELECT data_type, is_nullable, column_default
 		FROM information_schema.columns
-		WHERE table_schema = 'public'
+		WHERE table_schema = current_schema()
 		  AND table_name = 'memories'
 		  AND column_name = 'source_workstation_id'
 	`).Row()
@@ -361,19 +327,19 @@ func TestMigration130_AddSourceWorkstationID(t *testing.T) {
 
 	// Verify rows inserted without specifying the column receive empty default.
 	require.NoError(t, db.Exec(`INSERT INTO memories (project, content) VALUES (?, ?)`,
-		"t001b-test", "T001b default-empty fixture").Error,
+		project, "T001b default-empty fixture").Error,
 		"row insertable without source_workstation_id (default applies)")
 
 	var observed string
 	require.NoError(t, db.Raw(
-		`SELECT source_workstation_id FROM memories WHERE project = 't001b-test' LIMIT 1`,
+		`SELECT source_workstation_id FROM memories WHERE project = ? LIMIT 1`, project,
 	).Row().Scan(&observed))
 	require.Equal(t, "", observed, "default-inserted row must carry empty source_workstation_id")
 
 	// Verify explicit non-empty insert also accepted.
 	require.NoError(t, db.Exec(
 		`INSERT INTO memories (project, content, source_workstation_id) VALUES (?, ?, ?)`,
-		"t001b-test", "T001b explicit fixture", "ws-abc-123",
+		project, "T001b explicit fixture", "ws-abc-123",
 	).Error, "row insertable with explicit source_workstation_id")
 }
 
@@ -387,25 +353,14 @@ func TestMigration130_AddSourceWorkstationID(t *testing.T) {
 //
 // Engram vNext Milestone F TG2 / T009.
 func TestMigration126_KnowledgeNodesTable(t *testing.T) {
-	dsn := os.Getenv("DATABASE_DSN")
-	if dsn == "" {
-		t.Skip("DATABASE_DSN not set, skipping integration test")
-	}
-
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Warn),
-	})
-	require.NoError(t, err)
-
-	sqlDB, err := db.DB()
-	require.NoError(t, err)
-	defer sqlDB.Close()
-	require.NoError(t, sqlDB.Ping())
+	db, cleanup := openTestDB(t)
+	t.Cleanup(cleanup)
+	project := sessionTestProject(t, db)
 
 	require.NoError(t, runMigrations(db), "full migration chain including 126 must succeed")
 
 	t.Cleanup(func() {
-		_ = db.Exec(`DELETE FROM knowledge_nodes WHERE project = 't009-test'`).Error
+		_ = db.Exec(`DELETE FROM knowledge_nodes WHERE project = ?`, project).Error
 	})
 
 	// Verify table exists with all required columns.
@@ -414,7 +369,7 @@ func TestMigration126_KnowledgeNodesTable(t *testing.T) {
 		var count int
 		require.NoError(t, db.Raw(`
 			SELECT COUNT(*) FROM information_schema.columns
-			WHERE table_schema = 'public' AND table_name = 'knowledge_nodes' AND column_name = ?
+			WHERE table_schema = current_schema() AND table_name = 'knowledge_nodes' AND column_name = ?
 		`, col).Scan(&count).Error)
 		require.Equal(t, 1, count, "column %q must exist in knowledge_nodes", col)
 	}
@@ -424,7 +379,7 @@ func TestMigration126_KnowledgeNodesTable(t *testing.T) {
 	require.NoError(t, db.Raw(`
 		SELECT is_nullable, column_default
 		FROM information_schema.columns
-		WHERE table_schema = 'public' AND table_name = 'knowledge_nodes' AND column_name = 'privacy_scope'
+		WHERE table_schema = current_schema() AND table_name = 'knowledge_nodes' AND column_name = 'privacy_scope'
 	`).Row().Scan(&psNullable, &psDefault))
 	require.Equal(t, "NO", psNullable, "privacy_scope must be NOT NULL")
 	require.Contains(t, psDefault, "'project'", "privacy_scope default must be 'project'")
@@ -434,26 +389,26 @@ func TestMigration126_KnowledgeNodesTable(t *testing.T) {
 	for _, nt := range validTypes {
 		err := db.Exec(
 			`INSERT INTO knowledge_nodes (node_type, external_ref, project) VALUES (?, ?, ?)`,
-			nt, "ref-"+nt, "t009-test",
+			nt, "ref-"+nt, project,
 		).Error
 		require.NoError(t, err, "node_type=%q must be admitted by CHECK constraint", nt)
 	}
 
 	// Verify CHECK constraint rejects an unknown type.
-	err = db.Exec(
+	err := db.Exec(
 		`INSERT INTO knowledge_nodes (node_type, external_ref, project) VALUES (?, ?, ?)`,
-		"invalid_node_type", "ref-invalid", "t009-test",
+		"invalid_node_type", "ref-invalid", project,
 	).Error
 	require.Error(t, err, "unknown node_type must be rejected by CHECK constraint")
 
 	// Verify UNIQUE constraint on (node_type, external_ref) WHERE deleted_at IS NULL.
 	require.NoError(t, db.Exec(
 		`INSERT INTO knowledge_nodes (node_type, external_ref, project) VALUES (?, ?, ?)`,
-		"skill", "unique-test-skill", "t009-test",
+		"skill", "unique-test-skill", project,
 	).Error)
 	err = db.Exec(
 		`INSERT INTO knowledge_nodes (node_type, external_ref, project) VALUES (?, ?, ?)`,
-		"skill", "unique-test-skill", "t009-test",
+		"skill", "unique-test-skill", project,
 	).Error
 	require.Error(t, err, "duplicate (node_type, external_ref) while both deleted_at IS NULL must be rejected")
 }
@@ -474,25 +429,14 @@ func TestMigration126_KnowledgeNodesTable(t *testing.T) {
 //
 // Engram vNext Milestone F TG2 / T010.
 func TestMigration127_EdgeDiscriminatorsAndNodeFKs(t *testing.T) {
-	dsn := os.Getenv("DATABASE_DSN")
-	if dsn == "" {
-		t.Skip("DATABASE_DSN not set, skipping integration test")
-	}
-
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Warn),
-	})
-	require.NoError(t, err)
-
-	sqlDB, err := db.DB()
-	require.NoError(t, err)
-	defer sqlDB.Close()
-	require.NoError(t, sqlDB.Ping())
+	db, cleanup := openTestDB(t)
+	t.Cleanup(cleanup)
+	project := sessionTestProject(t, db)
 
 	require.NoError(t, runMigrations(db), "full migration chain including 127 must succeed")
 
 	t.Cleanup(func() {
-		_ = db.Exec(`DELETE FROM knowledge_nodes WHERE project = 't010-test'`).Error
+		_ = db.Exec(`DELETE FROM knowledge_nodes WHERE project = ?`, project).Error
 	})
 
 	// Verify new columns exist on knowledge_edges.
@@ -501,7 +445,7 @@ func TestMigration127_EdgeDiscriminatorsAndNodeFKs(t *testing.T) {
 		var count int
 		require.NoError(t, db.Raw(`
 			SELECT COUNT(*) FROM information_schema.columns
-			WHERE table_schema = 'public' AND table_name = 'knowledge_edges' AND column_name = ?
+			WHERE table_schema = current_schema() AND table_name = 'knowledge_edges' AND column_name = ?
 		`, col).Scan(&count).Error)
 		require.Equal(t, 1, count, "column %q must exist in knowledge_edges after migration 127", col)
 	}
@@ -511,7 +455,7 @@ func TestMigration127_EdgeDiscriminatorsAndNodeFKs(t *testing.T) {
 		var colDefault string
 		require.NoError(t, db.Raw(`
 			SELECT column_default FROM information_schema.columns
-			WHERE table_schema = 'public' AND table_name = 'knowledge_edges' AND column_name = ?
+			WHERE table_schema = current_schema() AND table_name = 'knowledge_edges' AND column_name = ?
 		`, col).Row().Scan(&colDefault))
 		require.Contains(t, colDefault, "'memory'", "%q default must be 'memory'", col)
 	}
@@ -521,7 +465,7 @@ func TestMigration127_EdgeDiscriminatorsAndNodeFKs(t *testing.T) {
 		var isNullable string
 		require.NoError(t, db.Raw(`
 			SELECT is_nullable FROM information_schema.columns
-			WHERE table_schema = 'public' AND table_name = 'knowledge_edges' AND column_name = ?
+			WHERE table_schema = current_schema() AND table_name = 'knowledge_edges' AND column_name = ?
 		`, col).Row().Scan(&isNullable))
 		require.Equal(t, "YES", isNullable, "%q must be nullable", col)
 	}
@@ -531,17 +475,17 @@ func TestMigration127_EdgeDiscriminatorsAndNodeFKs(t *testing.T) {
 	// First create a real memory row to have a valid source_id.
 	var memID int64
 	require.NoError(t, db.Raw(
-		`INSERT INTO memories (project, content) VALUES ('t010-test', 'edge-check fixture') RETURNING id`,
+		`INSERT INTO memories (project, content) VALUES (?, 'edge-check fixture') RETURNING id`, project,
 	).Row().Scan(&memID))
 	t.Cleanup(func() {
-		_ = db.Exec(`DELETE FROM memories WHERE project = 't010-test'`).Error
+		_ = db.Exec(`DELETE FROM memories WHERE project = ?`, project).Error
 		_ = db.Exec(`DELETE FROM knowledge_edges WHERE source_session_id = 't010-test'`).Error
 	})
 
 	// Create a knowledge_node to use as node-type source.
 	var nodeID int64
 	require.NoError(t, db.Raw(
-		`INSERT INTO knowledge_nodes (node_type, external_ref, project) VALUES ('skill', 't010-test-skill', 't010-test') RETURNING id`,
+		`INSERT INTO knowledge_nodes (node_type, external_ref, project) VALUES ('skill', 't010-test-skill', ?) RETURNING id`, project,
 	).Row().Scan(&nodeID))
 
 	// Legal memory→memory edge (source_type='memory', source_id set, node_source_id NULL).
@@ -567,7 +511,7 @@ func TestMigration127_EdgeDiscriminatorsAndNodeFKs(t *testing.T) {
 	var checkCount int
 	require.NoError(t, db.Raw(`
 		SELECT COUNT(*) FROM information_schema.check_constraints
-		WHERE constraint_schema = 'public'
+		WHERE constraint_schema = current_schema()
 		  AND constraint_name LIKE '%knowledge_edges%source%'
 	`).Scan(&checkCount).Error)
 	// Constraint presence is the key assertion — the exact count may vary.

@@ -10,7 +10,7 @@ import {
   endpointEvidence,
   errorState,
   liveState,
-  operatorApiUrl,
+  operatorFetchResponse,
   operatorFetchJson,
   pendingState,
   toOperatorSourceError,
@@ -203,7 +203,7 @@ export function useOperatorKeycards(): OperatorKeycardsComposable {
   function createKeycard(input: OperatorKeycardCreateInput) {
     return executeMutation(
       { requestId: crypto.randomUUID(), action: 'access-create-keycard', intent: input },
-      fetch(operatorApiUrl(KEYCARDS_ENDPOINT), { ...keycardCreateInit(input), credentials: 'include' }),
+      operatorFetchResponse(KEYCARDS_ENDPOINT, { ...keycardCreateInit(input), credentials: 'include' }),
       createKeycardCurrentStateParser(input),
     )
   }
@@ -212,7 +212,7 @@ export function useOperatorKeycards(): OperatorKeycardsComposable {
     const path = `${KEYCARDS_ENDPOINT}/${encodeURIComponent(keycardID)}`
     return executeMutation(
       { requestId: crypto.randomUUID(), action: 'access-revoke-keycard', intent: { keycardID } },
-      fetch(operatorApiUrl(path), { method: 'DELETE', credentials: 'include' }),
+      operatorFetchResponse(path, { method: 'DELETE', credentials: 'include' }),
       () => undefined,
     )
   }

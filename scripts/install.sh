@@ -68,8 +68,8 @@ require_node() {
     fi
 }
 
-# Releases before v6.49.0 did not ship the relay helper. Invalid tags fail
-# closed by requiring it, while historical release lines remain installable.
+# Only v6.49 through v6.x require the retired relay helper. Invalid tags fail
+# closed; v7 uses the declared extension without the retired transport.
 relay_helper_required() {
     local version="${1#v}"
     if [[ ! "$version" =~ ^(0|[1-9][0-9]*)\.([0]|[1-9][0-9]*)\.([0]|[1-9][0-9]*)(-(0|[1-9A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9A-Za-z-][0-9A-Za-z-]*))*)?$ ]]; then
@@ -77,7 +77,7 @@ relay_helper_required() {
     fi
     local major="${BASH_REMATCH[1]}"
     local minor="${BASH_REMATCH[2]}"
-    (( major > 6 || (major == 6 && minor >= 49) ))
+    (( major == 6 && minor >= 49 ))
 }
 
 # Parser policy first shipped with v6.50.0; older archives remain installable.
@@ -204,11 +204,9 @@ download_release() {
         || error "Release archive is missing required OMP package.json"
     [[ -f "$tmp_dir/extensions/engram-memory.mjs" ]] \
         || error "Release archive is missing required OMP extension"
-    if [[ ! -f "$tmp_dir/extensions/legacy-relay.mjs" ]]; then
-        if relay_helper_required "$version"; then
-            error "Release archive is missing required OMP relay helper"
-        fi
-        warn "Release archive predates the OMP relay helper; continuing without it"
+    if relay_helper_required "$version"; then
+        [[ -f "$tmp_dir/extensions/legacy-relay.mjs" ]] \
+            || error "Release archive is missing required OMP relay helper"
     fi
     # This validator is part of the trusted installer, not the release archive.
     # A release payload must never be allowed to validate its own policy.
@@ -331,7 +329,7 @@ NODE
         || error "Failed to copy OMP package manifest from release archive"
     cp "$tmp_dir/extensions/engram-memory.mjs" "$INSTALL_DIR/extensions/" \
         || error "Failed to copy OMP extension from release archive"
-    if [[ -f "$tmp_dir/extensions/legacy-relay.mjs" ]]; then
+    if relay_helper_required "$version"; then
         cp "$tmp_dir/extensions/legacy-relay.mjs" "$INSTALL_DIR/extensions/" \
             || error "Failed to copy OMP relay helper from release archive"
     fi

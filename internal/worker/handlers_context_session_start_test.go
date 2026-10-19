@@ -19,6 +19,8 @@ import (
 	pb "github.com/thebtf/engram/proto/engram/v1"
 )
 
+const sessionStartLogicalProjectID = "11111111-1111-4111-8111-111111111111"
+
 type stubSessionStartContextServer struct {
 	grpcserver.Server
 	resp *pb.GetSessionStartContextResponse
@@ -47,16 +49,16 @@ func TestHandleSessionStartContextStatic_HappyPath(t *testing.T) {
 				Priority:      "high",
 				Type:          "bug",
 				SourceProject: "source",
-				TargetProject: "engram",
+				TargetProject: sessionStartLogicalProjectID,
 			}},
 			Rules: []*pb.SessionStartRule{{
 				Id:      2,
 				Content: "Rule content",
-				Project: "engram",
+				Project: sessionStartLogicalProjectID,
 			}},
 			Memories: []*pb.SessionStartMemory{{
 				Id:      3,
-				Project: "engram",
+				Project: sessionStartLogicalProjectID,
 				Content: "Memory content",
 			}},
 			GeneratedAt: mustProtoTimestamp(t, generatedAt),
@@ -64,14 +66,14 @@ func TestHandleSessionStartContextStatic_HappyPath(t *testing.T) {
 	}
 	service := &Service{grpcInternalServer: server}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/context/session-start?project=engram", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/context/session-start?project="+sessionStartLogicalProjectID, nil)
 	w := httptest.NewRecorder()
 
 	service.handleSessionStartContextStatic(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code)
 	require.NotNil(t, server.req)
-	assert.Equal(t, "engram", server.req.GetProject())
+	assert.Equal(t, sessionStartLogicalProjectID, server.req.GetProject())
 
 	var body sessionStartCompatibilityResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
@@ -91,7 +93,7 @@ func TestHandleSessionStartContextStatic_MapsGrpcErrors(t *testing.T) {
 		err: grpcstatus.Error(codes.Unavailable, "database not ready"),
 	}}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/context/session-start?project=engram", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/context/session-start?project="+sessionStartLogicalProjectID, nil)
 	w := httptest.NewRecorder()
 
 	service.handleSessionStartContextStatic(w, req)
@@ -178,13 +180,13 @@ func TestHandleSessionStartContextStatic_POSTSessionIDNoStorePanic(t *testing.T)
 
 	server := &stubSessionStartContextServer{
 		resp: &pb.GetSessionStartContextResponse{
-			Memories: []*pb.SessionStartMemory{{Id: 3, Project: "engram", Content: "Memory content"}},
+			Memories: []*pb.SessionStartMemory{{Id: 3, Project: sessionStartLogicalProjectID, Content: "Memory content"}},
 		},
 	}
 	// grpcInternalServer set; injectionLogStore + memoryStore deliberately nil.
 	service := &Service{grpcInternalServer: server}
 
-	body := `{"project":"engram","session_id":"sess-X"}`
+	body := `{"project":"` + sessionStartLogicalProjectID + `","session_id":"sess-X"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/context/session-start", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -194,7 +196,7 @@ func TestHandleSessionStartContextStatic_POSTSessionIDNoStorePanic(t *testing.T)
 	})
 	require.Equal(t, http.StatusOK, w.Code)
 	require.NotNil(t, server.req)
-	assert.Equal(t, "engram", server.req.GetProject())
+	assert.Equal(t, sessionStartLogicalProjectID, server.req.GetProject())
 
 	var respBody sessionStartCompatibilityResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &respBody))

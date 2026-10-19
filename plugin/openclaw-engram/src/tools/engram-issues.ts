@@ -11,7 +11,7 @@
 
 import { z } from 'zod';
 import { Type } from '@sinclair/typebox';
-import { resolveAndRegisterProject } from '../client.js';
+import { resolveProject } from '../client.js';
 import type { EngramRestClient } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import { quotedPromptPayload, quotedPromptScalar } from '../context/formatter.js';
@@ -188,7 +188,7 @@ export function createEngramIssuesTool(
       }
 
       const sourceAgent = ctx.agentId || 'openclaw';
-      const registration = await resolveAndRegisterProject(client, ctx.agentId ?? '', ctx.workspaceDir, config.project);
+      const registration = await resolveProject(client, ctx.agentId ?? '', ctx.workspaceDir, config.project);
       if (!registration.ok) {
         return `Project identity unavailable: ${registration.error.code} (${registration.error.upgradeAction})`;
       }

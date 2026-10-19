@@ -1,3 +1,4 @@
+import { resolveProject } from '~/composables/useOperatorApi'
 import type { Rule } from '~/composables/useOperatorApi'
 
 export interface CreateRuleInput {
@@ -39,7 +40,7 @@ async function apiDelete<T>(path: string): Promise<T> {
 }
 
 export async function createRule(input: CreateRuleInput): Promise<Rule> {
-  const project = input.project?.trim()
+  const project = input.project ? await resolveProject(input.project) : undefined
   return apiPost<Rule>('/rules', {
     project: project || undefined,
     content: input.content.trim(),

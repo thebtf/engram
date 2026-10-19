@@ -37,7 +37,7 @@ func TestEC_F4_OrphanBehavior(t *testing.T) {
 		"we decided to hard-delete memories to verify EC-F4 ON DELETE SET NULL",
 		"rule",
 		models.CandidateOptions{
-			AffectedProjects: []string{"orphan-test-project"},
+			AffectedProjects: []string{newCrystallizationTestProject(t, db)},
 		},
 	)
 	require.NoError(t, err)
@@ -48,7 +48,7 @@ func TestEC_F4_OrphanBehavior(t *testing.T) {
 	// Step 2: create a memory (the "promoted memory").
 	mem := &models.Memory{
 		Content:       created.ProposedContent,
-		Project:       "orphan-test-project",
+		Project:       created.AffectedProjects[0],
 		EpistemicType: "decision",
 		Tier:          "episodic",
 		SourceAgent:   "crystallization",
@@ -98,7 +98,7 @@ func TestEC_F4_OrphanBehavior_SoftDelete(t *testing.T) {
 		"we decided to test soft-delete boundary for EC-F4 null propagation",
 		"rule",
 		models.CandidateOptions{
-			AffectedProjects: []string{"orphan-soft-project"},
+			AffectedProjects: []string{newCrystallizationTestProject(t, db)},
 		},
 	)
 	require.NoError(t, err)
@@ -107,7 +107,7 @@ func TestEC_F4_OrphanBehavior_SoftDelete(t *testing.T) {
 
 	mem := &models.Memory{
 		Content:       created.ProposedContent,
-		Project:       "orphan-soft-project",
+		Project:       created.AffectedProjects[0],
 		EpistemicType: "decision",
 		Tier:          "episodic",
 		SourceAgent:   "crystallization",
@@ -152,7 +152,7 @@ func TestEC_F4_StateAfterPromotion_InvalidTransition(t *testing.T) {
 		"we decided to test that terminal state rejects further transitions",
 		"rule",
 		models.CandidateOptions{
-			AffectedProjects: []string{"terminal-test-project"},
+			AffectedProjects: []string{newCrystallizationTestProject(t, db)},
 		},
 	)
 	require.NoError(t, err)
@@ -160,10 +160,10 @@ func TestEC_F4_StateAfterPromotion_InvalidTransition(t *testing.T) {
 	require.NoError(t, err)
 
 	mem := &models.Memory{
-		Content: created.ProposedContent,
-		Project: "terminal-test-project",
+		Content:     created.ProposedContent,
+		Project:     created.AffectedProjects[0],
 		SourceAgent: "crystallization",
-		Tags:    []string{"crystallized"},
+		Tags:        []string{"crystallized"},
 	}
 	createdMem, err := ms.CreateWithLifecycle(ctx, mem)
 	require.NoError(t, err)

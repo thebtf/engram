@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
+	"time"
 
 	"github.com/thebtf/engram/internal/projectidentity"
 )
@@ -13,39 +15,54 @@ import (
 func runProjectInit(args []string, root string, out io.Writer) error {
 	flags := flag.NewFlagSet("project init", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	name := flags.String("name", "", "project display name")
+	name := flags.String("name", "", "optional project display name")
 	if err := flags.Parse(args); err != nil {
-		return fmt.Errorf("project init: %w; usage: engram project init --name <display>", err)
+		return err
 	}
-	if flags.NArg() != 0 || *name == "" {
-		return fmt.Errorf("usage: engram project init --name <display>")
+	if flags.NArg() != 0 {
+		return fmt.Errorf("usage: engram project init [--name <display>]")
 	}
-	anchor, created, tracked, err := projectidentity.InitRepositoryAnchorV3(root, *name)
+	project, err := projectidentity.InitLogicalProject(context.Background(), root, *name)
 	if err != nil {
 		return err
 	}
-	status := "UNTRACKED"
-	if tracked {
-		status = "TRACKED"
-	}
-	verb := "Existing"
-	if created {
-		verb = "Created"
-	}
-	fmt.Fprintf(out, "%s V3 repository anchor: %s (%s, project %s)\n", verb, filepath.Join(root, ".engram-project"), status, anchor.Name)
-	if !tracked {
-		fmt.Fprintln(out, "Next step (explicit): git add -- .engram-project")
-	}
-	return nil
+	return json.NewEncoder(out).Encode(project)
 }
 
 func runProjectCommand(args []string, out io.Writer) error {
-	if len(args) < 1 || args[0] != "init" {
-		return fmt.Errorf("usage: engram project init --name <display>")
+	if len(args) < 1 {
+		return fmt.Errorf("usage: engram project init|resolve [--root <directory>] [--name <display>] --json")
 	}
-	root, err := os.Getwd()
+	if args[0] == "init" {
+		root, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		return runProjectInit(args[1:], root, out)
+	}
+	if args[0] != "resolve" {
+		return fmt.Errorf("unknown project command")
+	}
+	flags := flag.NewFlagSet("project resolve", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	root := flags.String("root", "", "actual host call directory; required")
+	jsonOutput := flags.Bool("json", false, "portable project JSON")
+	if err := flags.Parse(args[1:]); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || !*jsonOutput {
+		return fmt.Errorf("usage: engram project resolve --root <directory> --json")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	serverURL := os.Getenv("ENGRAM_URL")
+	if serverURL == "" {
+		serverURL = os.Getenv("ENGRAM_SERVER_URL")
+	}
+	project, err := projectidentity.ResolveLogicalProject(ctx, *root, projectidentity.HTTPBootstrap(serverURL, os.Getenv("ENGRAM_TOKEN")))
 	if err != nil {
-		return fmt.Errorf("project init: current directory: %w", err)
+		_ = json.NewEncoder(out).Encode(map[string]string{"code": projectidentity.ProjectErrorCode(err)})
+		return err
 	}
-	return runProjectInit(args[1:], root, out)
+	return json.NewEncoder(out).Encode(project)
 }

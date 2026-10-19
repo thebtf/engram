@@ -33,7 +33,8 @@ let sharedServerInfo: SharedRef<{ host: string; version: string; uptime: string;
  */
 
 import { computed } from 'vue'
-import { operatorApiBase, operatorApiUrl } from './useOperatorApi'
+import { operatorApiBase, operatorFetchResponse } from './useOperatorApi'
+import { parseProjectCatalog } from './useOperatorProjectContext'
 import { useOperatorMemoryLab } from './useOperatorMemoryLab'
 import { useOperatorRules } from './useOperatorRules'
 import { useOperatorSecrets } from './useOperatorSecrets'
@@ -42,8 +43,8 @@ export interface Memory {
  id: string
  content: string
  tags: string[]
- status: 'active' | 'flagged' | 'superseded' | 'archived'
- tier: 'semantic' | 'episodic' | 'procedural'
+ status: 'active' | 'flagged' | 'superseded' | 'archived' | 'unknown'
+ tier: 'semantic' | 'episodic' | 'procedural' | 'unknown'
  type: string
  project: string
  conf: number
@@ -56,6 +57,12 @@ export interface Memory {
  supersededBy?: string
  sourceSessions: string[]
  noise?: boolean
+ createdAt?: string
+ updatedAt?: string
+ sourceAgent?: string
+ version?: number
+ lastConfirmed?: string
+ reviewAfter?: string
 }
 
 export interface Issue {
@@ -320,10 +327,7 @@ function startOnce(key: string, run: () => Promise<void>) {
 }
 
 async function fetchApi(path: string, init: RequestInit = {}): Promise<Response> {
- const response = await fetch(operatorApiUrl(path, apiBase()), {
-  credentials: 'include',
-  ...init,
- })
+ const response = await operatorFetchResponse(path, init, apiBase())
 
  if (!response.ok) {
   const text = await response.text()
@@ -456,8 +460,8 @@ function mapModelRegistry(payload: ApiModelsResponse | undefined): ModelRegistry
 }
 
 async function listProjects(): Promise<string[]> {
- const projects = await fetchJson<string[]>('/api/projects')
- return [...new Set((projects || []).filter((value) => typeof value === 'string' && value.trim()))]
+ const projects = await fetchJson<unknown>('/api/projects')
+ return parseProjectCatalog(projects).items.map((row) => row.project_id)
 }
 
 
@@ -476,7 +480,8 @@ async function loadProjectSummaries(): Promise<ProjectSummary[]> {
 
  for (const session of sessions) {
   const project = normalizeProject(session.project)
-  const current = perProject.get(project) || { sessions: 0, lastStamp: 0, last: '—' }
+  const current = perProject.get(project)
+  if (!current) continue
   current.sessions += 1
   const stamp = Date.parse(session.started_at || '')
   if (!Number.isNaN(stamp) && stamp >= current.lastStamp) {

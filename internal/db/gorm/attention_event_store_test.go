@@ -19,8 +19,8 @@ func TestAttentionEventStoreCreateGetListByProject(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
 
-	project := fmt.Sprintf("test-attention-event-%d", time.Now().UnixNano())
-	otherProject := project + "-other"
+	project := sessionTestProject(t, db)
+	otherProject := sessionTestProject(t, db)
 	defer db.Exec(`DELETE FROM attention_events WHERE project IN (?, ?)`, project, otherProject)
 
 	store := NewAttentionEventStore(db)

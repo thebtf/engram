@@ -23,8 +23,6 @@ function jsonRoute(body: unknown, status = 200) {
 }
 
 const RU = {
- shellReady: 'console reachable · server ready',
- shellUnavailable: 'console reachable · server unavailable',
  diagnosis: {
   unauthorized: 'Войдите снова, чтобы продолжить.',
   forbidden: 'Текущая сессия не имеет доступа к этой поверхности.',
@@ -75,11 +73,11 @@ const GRAPH_NODES = {
 
 async function routeGraphFoundation(page: Page, graphEnabled = true) {
  await page.route('**/api/flags', jsonRoute({ flags: { ENGRAM_GRAPH_ENABLED: graphEnabled } }))
- await page.route('**/api/projects', jsonRoute(['demo']))
+ await page.route('**/api/projects', jsonRoute({ items: [{ id: 'demo', display_name: 'Demo' }] }))
 }
 
 async function expectShellReady(page: Page) {
- await expect(page.locator('.statusbar .si').first()).toHaveText(RU.shellReady)
+ await expect(page.locator('.statusbar .si[data-state]')).toHaveAttribute('data-state', 'ready')
 }
 
 async function expectNoHorizontalOverflow(page: Page) {
@@ -120,16 +118,18 @@ test('Access empty responses render live state with real zero counts, not synthe
  await expectShellReady(page)
 })
 
-test('Access 401 is unauthorized with localized primary copy and disabled surface', async ({ page }) => {
+test('Access 401 locks the shared session with localized recovery and removes protected content', async ({ page }) => {
  await page.route('**/api/access/**', jsonRoute({ error: 'unauthorized' }, 401))
  await page.goto('/access')
- await expect(page.locator('.access-page')).toHaveAttribute('data-state', 'unauthorized')
- const guard = page.getByRole('alert')
+ await expect(page.locator('.identity')).toHaveAttribute('data-auth', 'locked')
+ const guard = page.locator('main.content > .session-recovery')
  await expect(guard).toBeVisible()
- await expect(guard).toContainText('сессия')
+ await expect(guard).toHaveAttribute('role', 'status')
  await expect(guard).not.toContainText('Sign in again')
+ await expect(guard.getByRole('button', { name: 'Войти', exact: true })).toBeEnabled()
+ await expect(page.locator('.access-page')).toHaveCount(0)
  await expect(page.locator('.access-grid')).toHaveCount(0)
- await expectShellReady(page)
+ await expect(page.locator('.statusbar .si[data-state]')).toHaveAttribute('data-state', 'auth-required')
  await evidenceShot(page, 'access-unauthorized-1280.png')
 })
 

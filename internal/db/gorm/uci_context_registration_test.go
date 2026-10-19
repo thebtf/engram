@@ -13,7 +13,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/internal/uci"
+	gormlib "gorm.io/gorm"
 )
 
 func TestCanonicalUCILocalGitLocatorPreservesWorktreeBoundaries(t *testing.T) {
@@ -47,7 +49,7 @@ func TestRegisterLocalGitLabelsDistinguishRealmsWorktreesAndDevices(t *testing.T
 				require.NoError(t, db.Create(owner).Error)
 				ownerID, principal = owner.ID, fmt.Sprintf("browser-user/%d", owner.ID)
 			}
-			input := RegisterLocalGitInput{AuthRealm: realm, Principal: principal, WorkstationID: "device-one", SourceLabel: "repository", Locator: "file:///private/one/repo"}
+			input := RegisterLocalGitInput{ProjectID: registrationProject(t, db), AuthRealm: realm, Principal: principal, WorkstationID: "device-one", SourceLabel: "repository", Locator: "file:///private/one/repo"}
 			first, err := store.RegisterLocalGit(ctx, input)
 			require.NoError(t, err)
 			input.Locator = "file:///private/two/repo"
@@ -72,7 +74,7 @@ func TestRegisterLocalGitLabelsDistinguishRealmsWorktreesAndDevices(t *testing.T
 			require.NotEqual(t, labels[first.CheckoutID], labels[second.CheckoutID])
 			require.NotEqual(t, labels[first.CheckoutID], labels[third.CheckoutID])
 			if realm == uci.NoAuthCodeRealm {
-				entries, err := NewBrowserCodeContextStore(db).ListNoAuthCatalog(ctx)
+				entries, err := NewBrowserCodeContextStore(db).ListNoAuthCatalog(ctx, BrowserCodeCatalogFilter{})
 				require.NoError(t, err)
 				require.Len(t, entries, 3)
 				for _, entry := range entries {
@@ -111,6 +113,7 @@ func TestRegisterLocalGitLabelsDistinguishRealmsWorktreesAndDevices(t *testing.T
 func TestRegisterLocalGitLabelBoundsUnsafeCanonicalComponents(t *testing.T) {
 	db, store := openUCIContextMigrationStore(t)
 	input := RegisterLocalGitInput{
+		ProjectID: registrationProject(t, db),
 		AuthRealm: uci.NoAuthCodeRealm, Principal: uci.NoAuthCodePrincipal,
 		WorkstationID: "device-one", SourceLabel: "repository",
 		Locator: (&url.URL{Scheme: "file", Path: "/private/" + strings.Repeat("漫", 100) + "/repo\n\u202esecret"}).String(),
@@ -136,7 +139,7 @@ func TestRegisterLocalGitUnboundLegacyCheckoutRefusesRecovery(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			db, store := openUCIContextMigrationStore(t)
 			ctx := context.Background()
-			owner := RegisterLocalGitInput{AuthRealm: "client", Principal: "browser-user/41", WorkstationID: "keycard-41", SourceLabel: "legacy", Locator: "file:///legacy/worktree"}
+			owner := RegisterLocalGitInput{ProjectID: registrationProject(t, db), AuthRealm: "client", Principal: "browser-user/41", WorkstationID: "keycard-41", SourceLabel: "legacy", Locator: "file:///legacy/worktree"}
 			original, err := store.RegisterLocalGit(ctx, owner)
 			require.NoError(t, err)
 			if withWrongView {
@@ -193,6 +196,7 @@ func TestRegisterLocalGitParserProfileAdmitsCrossHostSemanticArtifact(t *testing
 	ctx := context.Background()
 	parser := true
 	registered, err := store.RegisterLocalGit(ctx, RegisterLocalGitInput{
+		ProjectID: registrationProject(t, db),
 		AuthRealm: "client", Principal: "browser-user/41", WorkstationID: "keycard-41",
 		SourceLabel: "cross-host-parser", Locator: "file:///worktrees/cross-host-parser", ParserBundle: &parser,
 	})
@@ -255,6 +259,7 @@ func TestRegisterLocalGitGoOnlyProfileStagesNativeArtifactAndView(t *testing.T) 
 	db, store := openUCIContextMigrationStore(t)
 	ctx := context.Background()
 	registered, err := store.RegisterLocalGit(ctx, RegisterLocalGitInput{
+		ProjectID: registrationProject(t, db),
 		AuthRealm: "client", Principal: "browser-user/41", WorkstationID: "keycard-41",
 		SourceLabel: "native-go", Locator: "file:///worktrees/native-go",
 	})
@@ -283,6 +288,7 @@ func TestRegisterLocalGitLegacyParserReplayPreservesPinnedViewAndStagesNewProfil
 	ctx := context.Background()
 	parser := true
 	in := RegisterLocalGitInput{
+		ProjectID: registrationProject(t, db),
 		AuthRealm: "client", Principal: "browser-user/41", WorkstationID: "keycard-41",
 		SourceLabel: "legacy-parser", Locator: "file:///worktrees/legacy-parser", ParserBundle: &parser,
 	}
@@ -353,7 +359,9 @@ func TestRegisterLocalGitLegacyParserTransitionPublishesOverPinnedView(t *testin
 	caller := fixture.caller("legacy-owner")
 	_, pinned := fixture.publish(t, fixture.publisher, caller, fixture.publishInput("legacy-build", fixture.checkout, fixture.profile.ProfileID, nil, uci.IndexManifestFull, uci.IndexJobInitial, oldDraft))
 	parser := true
-	in := RegisterLocalGitInput{AuthRealm: fixture.realm, Principal: fixture.principal, WorkstationID: fixture.checkout.WorkstationID, SourceID: fixture.source.SourceID, Locator: fixture.checkout.LocatorRef, ParserBundle: &parser}
+	projectID := registrationProject(t, fixture.db)
+	require.NoError(t, fixture.db.Model(&UCISource{}).Where("source_id = ?", fixture.source.SourceID).Update("project_id", projectID).Error)
+	in := RegisterLocalGitInput{ProjectID: projectID, AuthRealm: fixture.realm, Principal: fixture.principal, WorkstationID: fixture.checkout.WorkstationID, SourceID: fixture.source.SourceID, Locator: fixture.checkout.LocatorRef, ParserBundle: &parser}
 	updated, err := fixture.context.RegisterLocalGit(ctx, in)
 	require.NoError(t, err)
 	require.NotEqual(t, fixture.profile.ProfileID, updated.ProfileID)
@@ -432,7 +440,7 @@ func TestRegisterLocalGitTwoDirtyWorktreesOwnerIsolation(t *testing.T) {
 		}
 		return (&url.URL{Scheme: "file", Path: p}).String()
 	}
-	owner := RegisterLocalGitInput{AuthRealm: "client", Principal: ownerPrincipal, WorkstationID: "keycard-41", SourceLabel: "engram", Locator: locator(a)}
+	owner := RegisterLocalGitInput{ProjectID: registrationProject(t, db), AuthRealm: "client", Principal: ownerPrincipal, WorkstationID: "keycard-41", SourceLabel: "engram", Locator: locator(a)}
 	first, err := store.RegisterLocalGit(ctx, owner)
 	require.NoError(t, err)
 	alias := owner
@@ -481,10 +489,10 @@ func TestRegisterLocalGitTwoDirtyWorktreesOwnerIsolation(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, first, replayed)
 	for _, invalid := range []RegisterLocalGitInput{
-		{AuthRealm: owner.AuthRealm, Principal: owner.Principal, WorkstationID: owner.WorkstationID, SourceLabel: owner.SourceLabel, Locator: "https://private/checkout"},
-		{AuthRealm: owner.AuthRealm, Principal: owner.Principal, WorkstationID: owner.WorkstationID, SourceLabel: " invalid ", Locator: owner.Locator},
-		{AuthRealm: owner.AuthRealm, Principal: owner.Principal, WorkstationID: owner.WorkstationID, SourceID: "not-a-uuid", Locator: owner.Locator},
-		{AuthRealm: owner.AuthRealm, Principal: owner.Principal, WorkstationID: owner.WorkstationID, SourceID: first.SourceID, SourceLabel: owner.SourceLabel, Locator: owner.Locator},
+		{ProjectID: owner.ProjectID, AuthRealm: owner.AuthRealm, Principal: owner.Principal, WorkstationID: owner.WorkstationID, SourceLabel: owner.SourceLabel, Locator: "https://private/checkout"},
+		{ProjectID: owner.ProjectID, AuthRealm: owner.AuthRealm, Principal: owner.Principal, WorkstationID: owner.WorkstationID, SourceLabel: " invalid ", Locator: owner.Locator},
+		{ProjectID: owner.ProjectID, AuthRealm: owner.AuthRealm, Principal: owner.Principal, WorkstationID: owner.WorkstationID, SourceID: "not-a-uuid", Locator: owner.Locator},
+		{ProjectID: owner.ProjectID, AuthRealm: owner.AuthRealm, Principal: owner.Principal, WorkstationID: owner.WorkstationID, SourceID: first.SourceID, SourceLabel: owner.SourceLabel, Locator: owner.Locator},
 	} {
 		_, err = store.RegisterLocalGit(ctx, invalid)
 		var contextErr *uci.ContextError
@@ -591,7 +599,7 @@ func TestRegisterLocalGitTwoDirtyWorktreesOwnerIsolation(t *testing.T) {
 	require.Equal(t, first.CheckoutID, firstIntent.Scope.CheckoutID)
 	_, err = catalog.AuthorizeInitialIndexIntent(ctx, request(second))
 	require.ErrorIs(t, err, ErrBrowserCodeContextDenied)
-	entries, err := catalog.ListCatalog(ctx, user.ID)
+	entries, err := catalog.ListCatalog(ctx, user.ID, BrowserCodeCatalogFilter{})
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	require.Equal(t, first.CheckoutID, entries[0].CheckoutID)
@@ -602,7 +610,7 @@ func TestRegisterLocalGitTwoDirtyWorktreesOwnerIsolation(t *testing.T) {
 	readB, err = grants.CanRead(ctx, user.ID, second.SourceID, second.CheckoutID)
 	require.NoError(t, err)
 	require.True(t, readB)
-	entries, err = catalog.ListCatalog(ctx, user.ID)
+	entries, err = catalog.ListCatalog(ctx, user.ID, BrowserCodeCatalogFilter{})
 	require.NoError(t, err)
 	require.Len(t, entries, 2)
 	require.NotEqual(t, entries[0].CheckoutID, entries[1].CheckoutID)
@@ -612,4 +620,94 @@ func TestRegisterLocalGitTwoDirtyWorktreesOwnerIsolation(t *testing.T) {
 	require.Equal(t, second.CheckoutID, secondIntent.Scope.CheckoutID)
 	require.NotEqual(t, firstIntent.Scope, secondIntent.Scope)
 	require.True(t, entries[1].IndexIntentAvailable)
+}
+
+func registrationProject(t *testing.T, db *gormlib.DB) string {
+	t.Helper()
+	id := uuid.NewString()
+	require.NoError(t, db.Exec("INSERT INTO projects (id, display_name) VALUES (?, ?)", id, "Registration fixture").Error)
+	return id
+}
+
+func TestRegisterLocalGitLogicalProjectTransaction(t *testing.T) {
+	db, store := openUCIContextMigrationStore(t)
+	ctx := context.Background()
+	project := registrationProject(t, db)
+	other := registrationProject(t, db)
+	in := RegisterLocalGitInput{ProjectID: project, AuthRealm: "client", Principal: "browser-user/41", WorkstationID: "device", SourceLabel: "same repository", Locator: "file:///worktrees/one"}
+	for _, invalid := range []string{"", "old-selector"} {
+		bad := in
+		bad.ProjectID = invalid
+		_, err := store.RegisterLocalGit(ctx, bad)
+		var refusal *projectidentity.LogicalError
+		require.ErrorAs(t, err, &refusal)
+		require.Equal(t, "PROJECT_CONTEXT_REQUIRED", refusal.Code)
+	}
+	first, err := store.RegisterLocalGit(ctx, in)
+	require.NoError(t, err)
+	in.SourceID, in.SourceLabel, in.Locator = first.SourceID, "", "file:///worktrees/two"
+	second, err := store.RegisterLocalGit(ctx, in)
+	require.NoError(t, err)
+	require.Equal(t, first.SourceID, second.SourceID)
+	require.NotEqual(t, first.CheckoutID, second.CheckoutID)
+	views := make([]string, 0, 2)
+	for _, registered := range []RegisteredLocalGit{first, second} {
+		checkout, err := store.GetCheckout(ctx, registered.CheckoutID)
+		require.NoError(t, err)
+		profile, err := store.GetProfile(ctx, registered.ProfileID)
+		require.NoError(t, err)
+		input := newUCIContextMigrationViewInput(checkout, profile, 1, uuid.NewString())
+		input.Dirty = true
+		view, err := store.CreateView(ctx, input)
+		require.NoError(t, err)
+		views = append(views, view.ViewID)
+	}
+	in.ProjectID, in.Locator = other, "file:///worktrees/foreign"
+	_, err = store.RegisterLocalGit(ctx, in)
+	var conflict *projectidentity.LogicalError
+	require.ErrorAs(t, err, &conflict)
+	require.Equal(t, "PROJECT_IDENTITY_CONFLICT", conflict.Code)
+	var source UCISource
+	require.NoError(t, db.Where("source_id = ?", first.SourceID).Take(&source).Error)
+	require.Equal(t, project, *source.ProjectID)
+	var count int64
+	require.NoError(t, db.Model(&UCICheckout{}).Where("source_id = ?", first.SourceID).Count(&count).Error)
+	require.EqualValues(t, 2, count)
+	require.NoError(t, db.Model(&UCIView{}).Where("view_id IN ? AND dirty = true", views).Count(&count).Error)
+	require.EqualValues(t, 2, count)
+	require.NoError(t, db.Model(&UCIAnalysisProfile{}).Where("profile_id NOT IN ?", []string{first.ProfileID, second.ProfileID}).Count(&count).Error)
+	require.Zero(t, count, "refused registration must not leave a partial profile")
+}
+
+func TestLogicalSourceProjectMigration187RetainsOnlyProvenMembership(t *testing.T) {
+	db, store := openUCIContextMigrationStore(t)
+	ctx := context.Background()
+	project, other := registrationProject(t, db), registrationProject(t, db)
+	sources := make([]*UCISource, 4)
+	for i := range sources {
+		source, err := store.CreateSource(ctx, CreateSourceInput{AuthRealm: "client", Kind: UCISourceGit, DisplayName: fmt.Sprintf("retained-%d", i)})
+		require.NoError(t, err)
+		sources[i] = source
+	}
+	member := func(source *UCISource, owner *string, suffix string) {
+		t.Helper()
+		key := JSONRaw(fmt.Sprintf(`{"source_id":%q}`, source.SourceID))
+		require.NoError(t, db.Create(&ConsolidationMembership{Reference: "fixture-" + suffix, Table: "sources", RowKey: key, FieldPath: JSONRaw(`[""]`), ProjectID: owner, PlanFingerprint: "proven-fixture"}).Error)
+	}
+	member(sources[0], &project, "proven")
+	member(sources[1], nil, "unresolved")
+	member(sources[2], &project, "conflict-one")
+	member(sources[2], &other, "conflict-two")
+	require.NoError(t, db.Model(&UCISource{}).Where("source_id = ?", sources[3].SourceID).Update("project_id", other).Error)
+	member(sources[3], &project, "never-overwrite")
+	for range 2 {
+		require.NoError(t, logicalSourceProjectMigration187().Migrate(db))
+		for i, expected := range []*string{&project, nil, nil, &other} {
+			actual, err := store.GetSource(ctx, sources[i].SourceID)
+			require.NoError(t, err)
+			require.Equal(t, expected, actual.ProjectID)
+		}
+	}
+	require.Error(t, db.Model(&UCISource{}).Where("source_id = ?", sources[0].SourceID).Update("project_id", "historical-selector").Error)
+	require.Error(t, db.Model(&UCISource{}).Where("source_id = ?", sources[0].SourceID).Update("project_id", uuid.NewString()).Error)
 }

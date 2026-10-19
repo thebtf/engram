@@ -6,7 +6,7 @@
  * can track the conversation from the beginning.
  */
 
-import { resolveAndRegisterProject } from '../client.js';
+import { resolveProject } from '../client.js';
 import type { EngramRestClient } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import type {
@@ -35,7 +35,7 @@ export async function handleSessionStart(
     if (!client.isAvailable()) return;
 
     const agentId = ctx.agentId ?? '';
-    const registration = await resolveAndRegisterProject(client, agentId, ctx.workspaceDir, config.project);
+    const registration = await resolveProject(client, agentId, ctx.workspaceDir, config.project);
     if (!registration.ok) {
       (logger ?? console).warn(`[engram] session-start: project registration failed: ${registration.error.code}`);
       return;

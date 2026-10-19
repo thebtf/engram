@@ -3,25 +3,31 @@ import { computed, ref, watch } from 'vue'
 import { useMutation, useQueryClient } from '@tanstack/vue-query'
 import { createIssue, type Issue } from '~/composables/useOperatorApi'
 import { acknowledgeIssues } from '~/composables/useOperatorIssueActions'
-import { useIssuesQuery, useTrackedProjectsQuery } from '~/composables/useOperatorQueries'
-import { formatRelativeTime, shortProjectName } from '~/utils/formatters'
+import { useIssuesQuery } from '~/composables/useOperatorQueries'
+import { useProjectCatalog } from '~/composables/useProjectCatalog'
+import ProjectCatalogStatus from '~/components/ProjectCatalogStatus.vue'
+import { useOperatorI18n } from '~/composables/useOperatorI18n'
+import { formatRelativeTime } from '~/utils/formatters'
 
 const queryClient = useQueryClient()
 
-const projectFilter = ref('')
+const { t } = useOperatorI18n()
+const { projects: trackedProjects, unresolved, selectedProject: projectFilter, selectionPending, selectionError, ready, unresolvedReference, projectName } = useProjectCatalog('all')
 const statusFilter = ref('open,acknowledged,resolved,reopened')
 const typeFilter = ref('')
 const sourceProjectFilter = ref('')
 const myIssuesOnly = ref(false)
+const sourceAgentFilter = computed(() => myIssuesOnly.value ? 'human' : '')
 
 const issuesQuery = useIssuesQuery({
   project: projectFilter,
+  ready,
   status: statusFilter,
   type: typeFilter,
   sourceProject: sourceProjectFilter,
+  sourceAgent: sourceAgentFilter,
 })
 
-const trackedProjectsQuery = useTrackedProjectsQuery()
 
 const newTitle = ref('')
 const newBody = ref('')
@@ -32,8 +38,6 @@ const createError = ref('')
 
 const issues = computed(() => issuesQuery.data.value?.issues ?? [])
 const total = computed(() => issuesQuery.data.value?.total ?? 0)
-const projectNames = computed(() => issuesQuery.data.value?.project_names ?? {})
-const trackedProjects = computed(() => trackedProjectsQuery.data.value ?? [])
 const selectedIssueIds = ref<Set<number>>(new Set())
 const bulkActionError = ref('')
 const bulkActionMessage = ref('')
@@ -58,6 +62,7 @@ const createIssueMutation = useMutation({
       type: newType.value,
       priority: newPriority.value,
       target_project: newTargetProject.value,
+      source_project: projectFilter.value,
     }),
   onSuccess: async () => {
     newTitle.value = ''
@@ -73,7 +78,7 @@ const createIssueMutation = useMutation({
 })
 
 const bulkAcknowledgeMutation = useMutation({
-  mutationFn: () => acknowledgeIssues(selectedOpenIds.value),
+  mutationFn: () => acknowledgeIssues(selectedOpenIds.value, projectFilter.value),
   onSuccess: async (result) => {
     selectedIssueIds.value = new Set()
     bulkActionError.value = ''
@@ -92,13 +97,23 @@ watch(issues, (currentIssues) => {
 })
 
 function toggleMyIssues() {
+  if (!ready.value || !trackedProjects.value.some(project => project.project_id === projectFilter.value)) {
+    createError.value = t('projectCatalog.selectionRequired')
+    return
+  }
   myIssuesOnly.value = !myIssuesOnly.value
-  sourceProjectFilter.value = myIssuesOnly.value ? 'dashboard' : ''
+  sourceProjectFilter.value = myIssuesOnly.value ? projectFilter.value : ''
 }
+watch(projectFilter, project => {
+  if (myIssuesOnly.value) {
+    if (!trackedProjects.value.some(item => item.project_id === project)) myIssuesOnly.value = false
+    sourceProjectFilter.value = myIssuesOnly.value ? project : ''
+  }
+})
 
 function submitIssue() {
-  if (!newTitle.value.trim() || !newTargetProject.value.trim()) {
-    createError.value = 'Нужны title и target project'
+  if (!ready.value || !trackedProjects.value.some(project => project.project_id === projectFilter.value) || !newTitle.value.trim() || !trackedProjects.value.some(project => project.project_id === newTargetProject.value)) {
+    createError.value = 'Choose a canonical source project, title and target project.'
     return
   }
 
@@ -135,6 +150,10 @@ function toggleAllOpenIssues() {
 }
 
 function submitBulkAcknowledge() {
+  if (!ready.value || !trackedProjects.value.some(project => project.project_id === projectFilter.value)) {
+    bulkActionError.value = t('projectCatalog.selectionRequired')
+    return
+  }
   if (selectedOpenIds.value.length === 0) {
     bulkActionError.value = 'Bulk acknowledge поддержан только для выбранных open issues.'
     bulkActionMessage.value = ''
@@ -176,6 +195,13 @@ function priorityBadgeClass(priority: string): string {
 
 <template>
   <section class="space-y-5">
+    <ProjectCatalogStatus :records="unresolved" :pending="selectionPending" :error="selectionError" :reference="unresolvedReference" />
+    <label class="block text-sm">Project context (source for human actions)
+      <select v-model="projectFilter" :disabled="selectionPending" class="ml-2 rounded border p-2">
+        <option value="all">{{ t('common.allProjects') }}</option>
+        <option v-for="project in trackedProjects" :key="project.project_id" :value="project.project_id">{{ projectName(project.project_id) }}</option>
+      </select>
+    </label>
     <div class="surface-panel p-5">
       <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div>
@@ -255,7 +281,7 @@ function priorityBadgeClass(priority: string): string {
             </button>
             <button
               class="rounded-lg border border-[var(--accent)] bg-[var(--accent)] px-3 py-2 text-xs font-semibold text-[var(--accent-on)] disabled:cursor-not-allowed disabled:opacity-60"
-              :disabled="selectedOpenIds.length === 0 || bulkAcknowledgeMutation.isPending.value"
+              :disabled="!ready || !trackedProjects.some(project => project.project_id === projectFilter) || selectedOpenIds.length === 0 || bulkAcknowledgeMutation.isPending.value"
               @click="submitBulkAcknowledge"
             >
               {{ bulkAcknowledgeMutation.isPending.value ? 'Acknowledging...' : `Acknowledge selected (${selectedOpenIds.length})` }}
@@ -299,12 +325,12 @@ function priorityBadgeClass(priority: string): string {
                   />
                 </label>
 
-                <NuxtLink :to="`/issues/${issue.id}`" class="min-w-0 flex-1">
+                <NuxtLink :to="{ path: `/issues/${issue.id}`, query: { project: projectFilter } }" class="min-w-0 flex-1">
                   <div class="mb-2 flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <div class="text-sm font-semibold">#{{ issue.id }} · {{ issue.title }}</div>
                       <div class="mt-1 text-xs text-[var(--muted)]">
-                        {{ shortProjectName(issue.source_project, projectNames) }} → {{ shortProjectName(issue.target_project, projectNames) }}
+                        {{ projectName(issue.source_project) }} → {{ projectName(issue.target_project) }}
                       </div>
                     </div>
                     <div class="flex flex-wrap gap-2">
@@ -362,8 +388,8 @@ function priorityBadgeClass(priority: string): string {
                 class="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--fg)]"
               >
                 <option value="">select target</option>
-                <option v-for="project in trackedProjects" :key="project" :value="project">
-                  {{ project }}
+                <option v-for="project in trackedProjects" :key="project.project_id" :value="project.project_id">
+                  {{ projectName(project.project_id) }}
                 </option>
               </select>
             </label>
@@ -402,7 +428,7 @@ function priorityBadgeClass(priority: string): string {
 
             <button
               class="rounded-lg border border-[var(--accent)] bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-[var(--accent-on)] disabled:cursor-not-allowed disabled:opacity-60"
-              :disabled="createIssueMutation.isPending.value"
+              :disabled="!ready || !trackedProjects.some(project => project.project_id === projectFilter) || createIssueMutation.isPending.value"
               @click="submitIssue"
             >
               {{ createIssueMutation.isPending.value ? 'Создание...' : 'Создать issue' }}

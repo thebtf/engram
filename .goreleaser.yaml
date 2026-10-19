@@ -121,9 +121,6 @@ archives:
       - src: plugin/engram/extensions/engram-memory.mjs
         dst: extensions
         strip_parent: true
-      - src: plugin/engram/extensions/legacy-relay.mjs
-        dst: extensions
-        strip_parent: true
       - src: plugin/engram/hooks/*.js
         dst: hooks
         strip_parent: true
@@ -141,9 +138,6 @@ archives:
         strip_parent: true
       - src: plugin/engram/skills/*/*.md
         dst: skills
-      - src: plugin/engram/codex.mcp.json
-        dst: .
-        strip_parent: true
       - src: plugin/engram/.mcp.json
         dst: .
         strip_parent: true

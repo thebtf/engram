@@ -1,343 +1,92 @@
 <script setup lang="ts">
+import { computed, ref, watch } from 'vue'
+import { useOperatorProjectContext, projectName } from '../composables/useOperatorProjectContext'
+import { useOperatorProjects } from '../composables/useOperatorProjects'
+import { operatorDiagnosisKey } from '../composables/useOperatorApi'
 const { t } = useI18n()
-const {
-  projectRows,
-  sessions,
-  selectedProject,
-  selectedSession,
-  projectsState,
-  sessionsState,
-  detailState,
-  pending,
-  error,
-  refresh,
-  openProject,
-  openSession,
-  deleteProject,
-  sessionDetailGap,
-  sessionRouteGap,
-  codeIntelGap,
-} = useOperatorProjects()
-
-const projectArchiveTarget = ref('')
-const projectArchiveInput = ref('')
-const projectArchivePending = ref('')
+const route = useRoute()
+const router = useRouter()
+const context = useOperatorProjectContext()
+const { project, projects, descriptors, unresolved, pending: catalogPending, error: projectError, selectionPending, selectionError } = context
+const { sessions, selectedSession, sessionsState, detailState, pending, refresh, openProject, openSession, openSessionByID, deleteProject } = useOperatorProjects(project)
+const search = ref('')
+const visibleProjects = computed(() => projects.value.filter((id) => `${projectName(id)} ${id}`.toLocaleLowerCase().includes(search.value.toLocaleLowerCase())))
+const archiveInput = ref('')
+const archiveBusy = ref(false)
 const mutationResult = ref<Awaited<ReturnType<typeof deleteProject>> | null>(null)
-
-const selectedProjectRow = computed(() => projectRows.value.find((project) => project.id === selectedProject.value) || null)
-const sessionCountLabel = computed(() => t('projects.sessionsCount', sessions.length))
-
-function openProjectRow(project: string) {
-  void openProject(project)
-}
-
-function openSessionRow(session: typeof sessions[number]) {
-  void openSession(session)
-}
-
-function toggleArchiveProject(project: string) {
-  if (projectArchivePending.value) return
-
-  if (projectArchiveTarget.value === project) {
-    cancelArchiveProject()
-    return
-  }
-
-  projectArchiveTarget.value = project
-  projectArchiveInput.value = ''
-}
-
-async function submitArchiveProject(project: string) {
-  if (projectArchivePending.value || projectArchiveTarget.value !== project || projectArchiveInput.value !== project) return
-
-  projectArchivePending.value = project
-  const result = await deleteProject(project)
-  projectArchivePending.value = ''
-  mutationResult.value = result
-  if (result.kind !== 'committed_verified') return
-  await refresh()
-
-  projectArchiveTarget.value = ''
-  projectArchiveInput.value = ''
-}
-
-function cancelArchiveProject() {
-  if (projectArchivePending.value) return
-  projectArchiveTarget.value = ''
-  projectArchiveInput.value = ''
-}
-
-function projectArchiveEndpoint(project: string) {
-  return `/api/projects/${encodeURIComponent(project)}`
+let generation = 0
+watch([project, () => route.query.session], async () => {
+  const id = project.value
+  archiveInput.value = ''
+  const current = ++generation
+  await openProject(id)
+  if (current !== generation || !context.isCatalogProject(id)) return
+  const requested = typeof route.query.session === 'string' ? route.query.session : ''
+  const session = sessions.find((row) => row.claudeSessionId === requested || row.id === requested)
+  if (session) await openSession(session)
+  else if (requested) await openSessionByID(requested)
+}, { immediate: true, flush: 'sync' })
+async function archive() {
+  const id = project.value
+  if (!context.isCatalogProject(id) || archiveInput.value !== id || archiveBusy.value) return
+  archiveBusy.value = true
+  try {
+    const result = await deleteProject(id)
+    if (project.value !== id) return
+    mutationResult.value = result
+    if (result.kind === 'committed_verified') { await context.refresh(); archiveInput.value = '' }
+  } finally { archiveBusy.value = false }
 }
 </script>
 
 <template>
   <div class="projects-page">
-    <header class="head">
-      <div>
-        <h1>{{ t('projects.title') }}</h1>
-        <p>{{ t('projects.subtitle') }}</p>
-      </div>
-      <button class="btn" type="button" :disabled="pending" @click="refresh">{{ t('projects.actions.refresh') }}</button>
-    </header>
-
-    <div v-if="pending" class="state pending">{{ t('projects.state.pending') }}</div>
-    <div v-if="error" class="state error">
-      <span>{{ t('projects.state.error', { message: error }) }}</span>
-      <button class="link" type="button" @click="refresh">{{ t('projects.state.retry') }}</button>
-    </div>
-    <div v-if="projectsState.kind === 'empty'" class="state">{{ t('projects.state.emptyProjects') }}</div>
-    <div v-if="sessionsState.kind === 'empty' && selectedProject" class="state">{{ t('projects.state.emptySessions') }}</div>
-    <div v-if="projectsState.kind === 'error' || sessionsState.kind === 'error' || detailState.kind === 'error'" class="state muted">
-      {{ t('projects.state.source') }}:
-      <code>{{ projectsState.kind === 'error' ? projectsState.evidence.endpoint : sessionsState.kind === 'error' ? sessionsState.evidence.endpoint : detailState.evidence.endpoint }}</code>
-    </div>
-
-    <section class="summary">
-      <div class="metric">
-        <span>{{ t('projects.summary.projects') }}</span>
-        <strong>{{ projectRows.length }}</strong>
-      </div>
-      <div class="metric">
-        <span>{{ t('projects.summary.selected') }}</span>
-        <strong>{{ selectedProject || '—' }}</strong>
-      </div>
-      <div class="metric">
-        <span>{{ t('projects.summary.sessions') }}</span>
-        <strong>{{ sessions.length }}</strong>
-      </div>
-      <div class="metric">
-        <span>{{ t('projects.summary.active') }}</span>
-        <strong>{{ selectedProjectRow?.activeSessions ?? 0 }}</strong>
-      </div>
-    </section>
-
-    <section class="content">
-      <div class="panel">
-        <div class="panel-head">
-          <h2>{{ t('projects.list.title') }}</h2>
-          <span>{{ t('projects.list.count', projectRows.length) }}</span>
-        </div>
-        <div class="rows">
-          <template v-for="project in projectRows" :key="project.id">
-          <EntityRow
-            :data-testid="`project-row-${project.id}`"
-            :open="project.id === selectedProject"
-            status="live"
-            :preview="project.id"
-            :meta="[t('projects.meta.sessions', { count: project.sessionCount }), t('projects.meta.active', { count: project.activeSessions }), t('projects.meta.last', { value: project.lastActivity })]"
-            @open="openProjectRow(project.id)"
-          >
-            <template #side>
-              <button
-                class="mini danger"
-                type="button"
-                :data-testid="`project-archive-open-${project.id}`"
-                :aria-expanded="projectArchiveTarget === project.id"
-                :aria-label="t('projects.actions.archiveProject', { project: project.id })"
-                :disabled="projectArchivePending === project.id"
-                @click="toggleArchiveProject(project.id)"
-              >
-                {{ projectArchivePending === project.id ? t('projects.actions.archiving') : t('projects.actions.archive') }}
-              </button>
-              <HonestyBadge cls="live" />
-            </template>
-          </EntityRow>
-          <div
-            v-if="projectArchiveTarget === project.id"
-            class="archive-confirm"
-            :data-testid="`project-archive-confirm-${project.id}`"
-          >
-            <div>
-              <strong>{{ t('projects.archive.title') }}</strong>
-              <p>{{ t('projects.archive.body', { project: project.id }) }}</p>
-              <code>{{ t('projects.archive.endpoint', { endpoint: projectArchiveEndpoint(project.id) }) }}</code>
-            </div>
-            <label>
-              <span>{{ t('projects.archive.inputLabel') }}</span>
-              <input
-                v-model="projectArchiveInput"
-                type="text"
-                :disabled="projectArchivePending === project.id"
-                :placeholder="t('projects.archive.inputPlaceholder')"
-                :data-testid="`project-archive-input-${project.id}`"
-                @keydown.enter.prevent="submitArchiveProject(project.id)"
-              />
-            </label>
-            <div class="archive-actions">
-              <button class="mini" type="button" :disabled="Boolean(projectArchivePending)" @click="cancelArchiveProject">
-                {{ t('projects.actions.cancel') }}
-              </button>
-              <button
-                class="mini danger"
-                type="button"
-                :disabled="projectArchiveInput !== project.id || Boolean(projectArchivePending)"
-                :data-testid="`project-archive-confirm-button-${project.id}`"
-                @click="submitArchiveProject(project.id)"
-              >
-                {{ projectArchivePending === project.id ? t('projects.actions.archiving') : t('projects.actions.confirmArchive') }}
-              </button>
-            </div>
-            <MutationResultNotice :result="mutationResult" :recheck-label="t('projects.actions.refresh')" @recheck="refresh" />
-          </div>
+    <header><h1>{{ t('nav.items.projects') }}</h1><p>{{ t('knowledge.entryLead') }}</p></header>
+    <div v-if="projectError" class="state error"><span>{{ t(operatorDiagnosisKey(projectError)) }}</span><button class="btn" @click="context.refresh">{{ t('knowledge.retry') }}</button></div>
+    <p v-if="selectionPending" role="status">{{ t('projectCatalog.loading') }}</p>
+    <div v-if="selectionError" role="alert"><p>{{ t('projectCatalog.unknownProject') }} {{ t(operatorDiagnosisKey(selectionError)) }}</p><button class="btn" @click="context.refresh">{{ t('knowledge.retry') }}</button></div>
+    <RouterLink v-if="unresolved.length" to="/projects/unresolved">{{ t('projectCatalog.review') }} ({{ unresolved.length }})</RouterLink>
+    <div class="project-workspace">
+      <section class="project-list"><label><span>{{ t('knowledge.findProject') }}</span><input v-model="search" type="search" /></label><p v-if="catalogPending" role="status">{{ t('knowledge.loading') }}</p><p v-else-if="!projectError && !projects.length">{{ t('knowledge.noProjects') }}</p><p v-else-if="!projectError && !visibleProjects.length">{{ t('knowledge.noProjectMatch') }}</p><button v-for="id in visibleProjects" :key="id" class="project-row" :aria-pressed="project === id" :data-testid="`project-row-${id}`" @click="context.select(id)"><strong>{{ projectName(id) }}</strong><span v-if="descriptors.filter(row => projectName(row.project_id) === projectName(id)).length > 1">{{ t('projectCatalog.ambiguousName') }} · {{ id }}</span></button><button class="btn" @click="context.select('all')">{{ t('knowledge.browseAll') }}</button></section>
+      <section v-if="project" class="project-content">
+        <h2>{{ project === 'all' ? t('knowledge.allProjects') : projectName(project) }}</h2>
+        <nav class="project-links"><RouterLink :to="context.to('/memory')">{{ t('nav.items.memory') }}</RouterLink><RouterLink :to="context.to('/documents')">{{ t('nav.items.documents') }}</RouterLink><RouterLink :to="context.to('/code')">{{ t('nav.items.code') }}</RouterLink><RouterLink :to="context.to('/')">{{ t('nav.items.overview') }}</RouterLink></nav>
+        <section class="sessions">
+          <div class="section-head"><h3>{{ t('knowledge.recentSessions') }}</h3><button class="btn" :disabled="pending" @click="refresh">{{ t('knowledge.refresh') }}</button></div>
+          <p v-if="project === 'all'">{{ t('knowledge.allSessionsHelp') }}</p>
+          <p v-else-if="sessionsState.kind === 'pending'" role="status">{{ t('knowledge.loading') }}</p>
+          <div v-else-if="sessionsState.kind === 'error'" class="state error" role="status"><p>{{ t(operatorDiagnosisKey(sessionsState.error)) }}</p><button class="btn" @click="refresh">{{ t('knowledge.retry') }}</button></div>
+          <p v-else-if="!sessions.length">{{ t('knowledge.noSessions') }}</p>
+          <button v-for="session in sessions" :key="session.id" class="session-row" :data-testid="`project-session-${session.id}`" :aria-pressed="selectedSession?.id === session.id" @click="router.push({ path: '/projects', query: { ...route.query, session: session.claudeSessionId || session.id } })"><strong>{{ session.userPrompt || t('knowledge.originSession') }}</strong><span>{{ session.status }} · {{ session.startedAt || t('knowledge.unknown') }} · {{ t('projects.meta.prompts', { count: session.promptCounter }) }}</span></button>
+        </section>
+        <section v-if="selectedSession || detailState.kind === 'pending' || detailState.kind === 'error'" class="session-detail">
+          <h3>{{ t('knowledge.sessionDetails') }}</h3>
+          <p v-if="detailState.kind === 'pending'" role="status">{{ t('knowledge.loading') }}</p>
+          <div v-else-if="detailState.kind === 'error'" class="state error" role="status"><p>{{ t(operatorDiagnosisKey(detailState.error)) }}</p><button class="btn" @click="openSessionByID(String(route.query.session || ''))">{{ t('knowledge.retry') }}</button></div>
+          <template v-else-if="selectedSession">
+            <dl><dt>{{ t('projects.detail.status') }}</dt><dd>{{ selectedSession.status }}</dd><dt>{{ t('projects.detail.startedAt') }}</dt><dd>{{ selectedSession.startedAt || t('knowledge.unknown') }}</dd><dt>{{ t('projects.detail.completedAt') }}</dt><dd>{{ selectedSession.completedAt || t('knowledge.notRecorded') }}</dd><dt>{{ t('projects.detail.outcome') }}</dt><dd>{{ selectedSession.outcome }}</dd></dl>
+            <p v-if="selectedSession.outcomeReason">{{ selectedSession.outcomeReason }}</p><div class="prompt" data-testid="project-session-user-prompt">{{ selectedSession.userPrompt || t('knowledge.notRecorded') }}</div>
+            <details><summary>{{ t('knowledge.technical') }}</summary><dl><dt>ID</dt><dd>{{ selectedSession.id }}</dd><dt>{{ t('projects.detail.claudeSessionId') }}</dt><dd>{{ selectedSession.claudeSessionId }}</dd><dt>{{ t('projects.detail.sdkSessionId') }}</dt><dd>{{ selectedSession.sdkSessionId }}</dd><dt>{{ t('projects.detail.worker') }}</dt><dd>{{ selectedSession.workerPort }}</dd><dt>{{ t('projects.detail.strategy') }}</dt><dd>{{ selectedSession.injectionStrategy }}</dd></dl></details>
           </template>
-        </div>
-      </div>
-
-      <div class="panel">
-        <div class="panel-head">
-          <h2>{{ t('projects.sessions.title') }}</h2>
-          <span>{{ sessionCountLabel }}</span>
-        </div>
-        <div v-if="!sessions.length" class="empty">
-          <strong>{{ t('projects.sessions.emptyTitle') }}</strong>
-          <span>{{ t('projects.sessions.emptyBody') }}</span>
-        </div>
-        <div v-else class="sessions">
-          <button
-            v-for="session in sessions"
-            :key="session.id"
-            type="button"
-            class="session-row"
-            :data-testid="`project-session-${session.id}`"
-            :class="{ open: selectedSession?.id === session.id }"
-            @click="openSessionRow(session)"
-          >
-            <span class="session-id">{{ session.claudeSessionId || session.id }}</span>
-            <span>{{ session.status }}</span>
-            <span>{{ t('projects.meta.prompts', { count: session.promptCounter }) }}</span>
-            <span>{{ session.startedAt || '—' }}</span>
-          </button>
-        </div>
-      </div>
-    </section>
-
-    <section class="detail">
-      <div class="panel-head">
-        <h2>{{ t('projects.detail.title') }}</h2>
-        <HonestyBadge cls="live" />
-      </div>
-      <div v-if="detailState.kind === 'pending'" class="state pending">{{ t('projects.detail.loading') }}</div>
-      <div v-if="!selectedSession" class="empty">
-        <strong>{{ t('projects.detail.emptyTitle') }}</strong>
-        <span>{{ t('projects.detail.emptyBody') }}</span>
-      </div>
-      <div v-else class="detail-grid">
-        <div><span>{{ t('projects.detail.id') }}</span><strong>{{ selectedSession.id }}</strong></div>
-        <div><span>{{ t('projects.detail.claudeSessionId') }}</span><strong>{{ selectedSession.claudeSessionId || t('projects.detail.noValue') }}</strong></div>
-        <div><span>{{ t('projects.detail.sdkSessionId') }}</span><strong>{{ selectedSession.sdkSessionId }}</strong></div>
-        <div><span>{{ t('projects.detail.project') }}</span><strong>{{ selectedSession.project }}</strong></div>
-        <div><span>{{ t('projects.detail.status') }}</span><strong>{{ selectedSession.status }}</strong></div>
-        <div><span>{{ t('projects.detail.startedAt') }}</span><strong>{{ selectedSession.startedAt || t('projects.detail.noValue') }}</strong></div>
-        <div><span>{{ t('projects.detail.completedAt') }}</span><strong>{{ selectedSession.completedAt || t('projects.detail.noValue') }}</strong></div>
-        <div><span>{{ t('projects.detail.prompts') }}</span><strong>{{ selectedSession.promptCounter }}</strong></div>
-        <div><span>{{ t('projects.detail.worker') }}</span><strong>{{ selectedSession.workerPort }}</strong></div>
-        <div><span>{{ t('projects.detail.strategy') }}</span><strong>{{ selectedSession.injectionStrategy }}</strong></div>
-        <div><span>{{ t('projects.detail.outcome') }}</span><strong>{{ selectedSession.outcome }}</strong></div>
-        <div><span>{{ t('projects.detail.outcomeReason') }}</span><strong>{{ selectedSession.outcomeReason || t('projects.detail.noValue') }}</strong></div>
-      </div>
-      <div v-if="selectedSession" class="detail-note" data-testid="project-session-user-prompt">
-        <span>{{ t('projects.detail.userPrompt') }}</span>
-        <pre>{{ selectedSession.userPrompt || t('projects.detail.noValue') }}</pre>
-      </div>
-      <div class="gaps">
-        <div class="gap">
-          <HonestyBadge cls="mustbuild" :evidence="sessionDetailGap.evidence.endpoint" />
-          <span>{{ t('projects.gaps.transcript') }}</span>
-        </div>
-        <div class="gap">
-          <HonestyBadge cls="mustbuild" :evidence="sessionRouteGap.evidence.endpoint" />
-          <span>{{ t('projects.gaps.route') }}</span>
-        </div>
-        <div class="gap">
-          <HonestyBadge cls="mustbuild" :evidence="codeIntelGap.evidence.endpoint" />
-          <span>{{ t('projects.gaps.codeIntel') }}</span>
-        </div>
-      </div>
-    </section>
+          <RouterLink :to="context.to('/memory')">{{ t('knowledge.openMemory') }}</RouterLink>
+        </section>
+        <details v-if="project !== 'all'"><summary>{{ t('knowledge.projectActions') }}</summary><p>{{ t('projects.archive.body', { project: projectName(project) }) }}</p><label><span>{{ t('projects.archive.inputLabel') }}: <code>{{ project }}</code></span><input v-model="archiveInput" @keydown.enter.prevent="archive" /></label><button class="btn danger" :disabled="archiveBusy || archiveInput !== project" @click="archive">{{ t('projects.actions.confirmArchive') }}</button><MutationResultNotice :result="mutationResult" :recheck-label="t('knowledge.refresh')" @recheck="context.refresh" /></details>
+      </section>
+      <div v-else class="empty"><h2>{{ t('knowledge.chooseProject') }}</h2><p>{{ t('knowledge.chooseProjectHelp') }}</p></div>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.projects-page { display:grid; gap:16px; }
-.head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
-.head h1 { margin:0 0 4px; font-size:var(--text-xl); font-weight:700; }
-.head p { margin:0; font-size:var(--text-sm); color:var(--muted); }
-.btn, .mini, .link {
-  border:1px solid var(--border);
-  border-radius:var(--r-sm);
-  background:var(--surface);
-  color:var(--fg);
-  font:inherit;
-  cursor:pointer;
-}
-.btn { padding:9px 14px; font-weight:700; }
-.btn:disabled { opacity:.55; cursor:wait; }
-.mini { padding:5px 9px; font-size:var(--text-xs); }
-.mini.danger { border-color:color-mix(in oklab,var(--state-warn),transparent 45%); color:var(--state-warn); }
-.mini:disabled { opacity:.55; cursor:not-allowed; }
-.link { padding:3px 8px; color:var(--accent); }
-.state { display:flex; align-items:center; gap:10px; border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); padding:10px 12px; font-size:var(--text-sm); color:var(--fg-2); }
-.state.pending { border-color:color-mix(in oklab,var(--accent),transparent 55%); }
-.state.error { border-color:color-mix(in oklab,var(--state-warn),transparent 45%); color:var(--state-warn); }
-.state.muted { color:var(--muted); }
-.summary { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; }
-.metric, .panel, .detail {
-  border:1px solid var(--border);
-  border-radius:var(--r-md);
-  background:var(--surface);
-}
-.metric { padding:14px 16px; }
-.metric span { display:block; color:var(--muted); font-size:var(--text-xs); text-transform:uppercase; letter-spacing:.04em; }
-.metric strong { display:block; margin-top:7px; font-family:var(--font-mono); font-size:var(--text-2xl); color:var(--fg); overflow:hidden; text-overflow:ellipsis; }
-.content { display:grid; grid-template-columns:minmax(260px,.9fr) minmax(320px,1.1fr); gap:16px; align-items:start; }
-.panel, .detail { overflow:hidden; }
-.panel-head { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:14px 16px; border-bottom:1px solid var(--border-soft); }
-.panel-head h2 { margin:0; font-size:var(--text-sm); font-weight:800; }
-.panel-head span { color:var(--muted); font-size:var(--text-xs); }
-.rows { max-height:440px; overflow:auto; }
-.archive-confirm {
-  display:grid;
-  gap:12px;
-  padding:14px;
-  border-bottom:1px solid var(--border-soft);
-  background:color-mix(in oklab,var(--state-warn),transparent 92%);
-}
-.archive-confirm strong { display:block; margin-bottom:4px; color:var(--fg); }
-.archive-confirm p { margin:0; color:var(--fg-2); font-size:var(--text-xs); }
-.archive-confirm code { display:inline-block; margin-top:8px; color:var(--muted); font-size:var(--text-xs); }
-.archive-confirm label { display:grid; gap:6px; color:var(--muted); font-size:var(--text-xs); }
-.archive-confirm input {
-  width:100%;
-  border:1px solid var(--border);
-  border-radius:var(--r-sm);
-  background:var(--bg);
-  color:var(--fg);
-  padding:8px 10px;
-  font:inherit;
-}
-.archive-actions { display:flex; flex-wrap:wrap; gap:8px; justify-content:flex-end; }
-.archive-error { color:var(--state-warn); }
-.sessions { display:grid; }
-.session-row { display:grid; grid-template-columns:minmax(0,1.8fr) .7fr .7fr 1fr; gap:12px; align-items:center; width:100%; border:0; border-bottom:1px solid var(--border-soft); background:transparent; color:var(--fg-2); padding:12px 16px; text-align:left; cursor:pointer; }
-.session-row:hover, .session-row.open { background:var(--surface-warm); color:var(--fg); }
-.session-row.open { box-shadow:inset 3px 0 0 var(--accent); }
-.session-id { font-family:var(--font-mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.empty { display:grid; gap:5px; padding:24px 16px; color:var(--muted); text-align:center; }
-.empty strong { color:var(--fg); }
-.detail-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:10px; padding:16px; }
-.detail-grid div { border:1px solid var(--border-soft); border-radius:var(--r-sm); padding:10px; }
-.detail-grid span { display:block; color:var(--muted); font-size:var(--text-xs); text-transform:uppercase; letter-spacing:.04em; }
-.detail-grid strong { display:block; margin-top:6px; color:var(--fg); font-family:var(--font-mono); overflow:hidden; text-overflow:ellipsis; }
-.detail-note { display:grid; gap:8px; margin:0 16px 16px; border:1px solid var(--border-soft); border-radius:var(--r-sm); padding:12px; }
-.detail-note span { color:var(--muted); font-size:var(--text-xs); text-transform:uppercase; letter-spacing:.04em; }
-.detail-note pre { margin:0; max-height:150px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; color:var(--fg-2); font:inherit; }
-.gaps { display:grid; gap:10px; padding:0 16px 16px; }
-.gap { display:flex; align-items:center; justify-content:space-between; gap:12px; border:1px dashed var(--border); border-radius:var(--r-sm); padding:10px 12px; color:var(--muted); font-size:var(--text-xs); }
-@media (max-width: 860px) {
-  .head { display:grid; }
-  .content { grid-template-columns:1fr; }
-  .session-row { grid-template-columns:1fr; }
-}
+.projects-page { display:grid; gap:24px; min-width:0; } h1 { font-size:var(--text-xl); margin:0 0 6px; } h2 { font-size:var(--text-lg); margin:0 0 12px; } h3 { font-size:var(--text-base); margin:0; } p { color:var(--muted); }
+.project-workspace { display:grid; grid-template-columns:minmax(230px,.7fr) minmax(0,1.5fr); gap:28px; align-items:start; }
+.project-list, .project-content { min-width:0; } .project-list { max-height:75vh; overflow:auto; } .project-list > label { margin-bottom:12px; }
+.project-row, .session-row { width:100%; display:grid; text-align:left; gap:8px; padding:16px 12px; background:transparent; color:var(--fg); border:0; border-bottom:1px solid var(--border); cursor:pointer; }
+.project-row:hover, .session-row:hover, [aria-pressed=true] { background:var(--surface-warm); } .project-row span { color:var(--muted); font-size:var(--text-xs); overflow-wrap:anywhere; } .session-row strong { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; font-weight:500; white-space:pre-wrap; overflow-wrap:anywhere; } .session-row span { color:var(--muted); font-size:var(--text-sm); }
+.project-links, .section-head { display:flex; flex-wrap:wrap; gap:16px; align-items:center; } .section-head { justify-content:space-between; margin-bottom:8px; } .project-content > section, .project-content > details { margin-top:28px; border-top:1px solid var(--border); padding-top:18px; }
+.btn { min-height:40px; padding:8px 12px; color:var(--fg); background:var(--surface); border:1px solid var(--border); border-radius:var(--r-sm); cursor:pointer; } .btn:disabled { opacity:.5; cursor:not-allowed; } .danger { color:var(--state-danger); }
+label { display:grid; gap:6px; color:var(--muted); } input { width:100%; min-height:40px; padding:8px 10px; color:var(--fg); background:var(--surface); border:1px solid var(--border); border-radius:var(--r-sm); }
+.state { padding:14px; border:1px solid var(--border); border-radius:var(--r-sm); } .error { color:var(--state-warn); }
+dl { display:grid; grid-template-columns:140px minmax(0,1fr); gap:8px 12px; margin:16px 0; } dt { color:var(--muted); } dd { margin:0; overflow-wrap:anywhere; } .prompt { white-space:pre-wrap; overflow-wrap:anywhere; } summary { min-height:40px; padding:8px 0; cursor:pointer; color:var(--fg-2); }
+@media(max-width:760px) { .project-workspace { grid-template-columns:1fr; } .project-list { max-height:35vh; } .btn, input { min-height:44px; } dl { grid-template-columns:100px minmax(0,1fr); } }
 </style>

@@ -30,7 +30,8 @@ func TestOperatorCollectionHTTPAdapter_FrozenSelectionUsesServerSnapshot(t *test
 
 	request := operatorCollectionHTTPTestRequest(t, http.MethodPost, `{
 		"domain":"rules",
-		"selection":{"kind":"frozen_filter","filter":{"scope":"project"},"excluded_ids":["rule-2"]}
+		"filter":{"scope":"global"},
+		"selection":{"kind":"frozen_filter","filter":{"scope":"global"},"excluded_ids":["rule-2"]}
 	}`)
 	recorder := httptest.NewRecorder()
 	adapter.HandleSnapshot(recorder, request)
@@ -41,7 +42,8 @@ func TestOperatorCollectionHTTPAdapter_FrozenSelectionUsesServerSnapshot(t *test
 	require.Equal(t, []string{"rule-2"}, store.saved[0].selection.ExcludedIDs)
 	require.Equal(t, []gormdb.CollectionSelectionTarget{{ID: "rule-1", ExpectedVersion: 4}, {ID: "rule-2", ExpectedVersion: 5}}, store.saved[0].selection.Targets)
 	require.Len(t, freezer.calls, 1)
-	require.Equal(t, operatorCollectionTestScope("rules"), freezer.calls[0].scope)
+	require.Equal(t, store.saved[0].scope, freezer.calls[0].scope)
+	require.NotEqual(t, operatorCollectionTestScope("rules").ContextFingerprint, freezer.calls[0].scope.ContextFingerprint)
 	require.Equal(t, normalizer.filter, freezer.calls[0].filter)
 
 	var response struct {
@@ -61,7 +63,7 @@ func TestOperatorCollectionHTTPAdapter_DeniesStaleCursorAndRejectsTokenReplay(t 
 	normalizer := &operatorCollectionHTTPTestNormalizer{}
 	adapter := NewOperatorCollectionHTTPAdapter(store, &operatorCollectionHTTPTestResolver{scope: operatorCollectionTestScope("rules")}, normalizer, nil, pager)
 
-	staleCursor := operatorCollectionHTTPTestRequest(t, http.MethodPost, `{"domain":"rules","filter":{"scope":"project"},"cursor":"opaque-stale-cursor","limit":50}`)
+	staleCursor := operatorCollectionHTTPTestRequest(t, http.MethodPost, `{"domain":"rules","filter":{"scope":"global"},"cursor":"opaque-stale-cursor","limit":50}`)
 	staleCursorRecorder := httptest.NewRecorder()
 	adapter.HandlePage(staleCursorRecorder, staleCursor)
 	require.Equal(t, http.StatusForbidden, staleCursorRecorder.Code)

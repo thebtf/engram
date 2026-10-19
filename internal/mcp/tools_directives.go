@@ -54,7 +54,7 @@ func (s *Server) handleRememberDirective(ctx context.Context, args json.RawMessa
 	if err != nil {
 		return "", err
 	}
-	project := projectFromContext(ctx)
+	project := ProjectFromContext(ctx)
 	if project == "" {
 		return "", fmt.Errorf("project is required")
 	}

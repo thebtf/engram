@@ -31,7 +31,7 @@ test('behavioral rules apply selected-rule disable with an authoritative readbac
     pageErrors.push(error.message)
   })
 
-  await page.goto('/rules')
+  await page.goto('/rules?project=all')
 
   const status = page.getByTestId('rule-status-401')
   const toggle = page.getByTestId('rule-enable-toggle-401')
@@ -76,7 +76,7 @@ test('behavioral rules apply selected-rule disable with an authoritative readbac
 })
 
 test('a second browser session cannot replace a pending rule selection operation', async ({ page, browser }) => {
-  await page.goto('/rules')
+  await page.goto('/rules?project=all')
   const toggle = page.getByTestId('rule-enable-toggle-402')
   await expect(toggle).toHaveAttribute('aria-checked', 'false')
 
@@ -90,7 +90,7 @@ test('a second browser session cannot replace a pending rule selection operation
     await page.route('**/api/rules', async (route) => {
       if (route.request().method() === 'POST' && route.request().postDataJSON().action === 'enable') {
         const competingSave = await otherSession.request.post('/api/collections/selection', {
-          data: { domain: 'rules', selection: { kind: 'explicit', targets: [{ id: '401' }] } },
+          data: { domain: 'rules', filter: { scope: 'all' }, selection: { kind: 'explicit', targets: [{ id: '401' }] } },
         })
         expect(competingSave.ok()).toBe(true)
       }
@@ -106,4 +106,19 @@ test('a second browser session cannot replace a pending rule selection operation
   } finally {
     await otherSession.close()
   }
+})
+
+test('Rules require an explicit scope and preserve its canonical ID through refresh', async ({ page }) => {
+  const reads: URL[] = []
+  page.on('request', (request) => { const url = new URL(request.url()); if (request.method() === 'GET' && url.pathname === '/api/rules') reads.push(url) })
+  await page.goto('/rules')
+  await expect(page.getByTestId('project-context-select')).toHaveValue('')
+  expect(reads).toHaveLength(0)
+  const project = '11111111-1111-4111-8111-111111111111'
+  await page.goto(`/rules?project=${project}`)
+  await expect.poll(() => reads.length).toBeGreaterThan(0)
+  await page.locator('.toolbar button').click()
+  await expect.poll(() => reads.length).toBeGreaterThan(1)
+  expect(reads.every((url) => url.searchParams.get('project') === project)).toBe(true)
+  await expect(page.getByTestId('project-context-select')).toHaveValue(project)
 })

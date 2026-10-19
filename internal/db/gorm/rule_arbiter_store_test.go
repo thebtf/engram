@@ -38,7 +38,7 @@ func TestRuleGovernanceStore_ArbiterRunEvaluationAndCandidateAnnotation(t *testi
 	store := NewRuleGovernanceStore(db)
 	ctx := context.Background()
 
-	candidate, err := store.CreateRuleCandidate(ctx, ruleGovernanceCandidate("arbiter-annotation"))
+	candidate, err := store.CreateRuleCandidate(ctx, ruleGovernanceCandidate(sessionTestProject(t, db), "arbiter-annotation"))
 	require.NoError(t, err)
 
 	run, err := store.StartRuleArbiterRun(ctx, "unit-test")
@@ -92,7 +92,7 @@ func TestRuleGovernanceStore_AnnotatedDueCandidateCanBeReclaimed(t *testing.T) {
 	db := openCandidateTestDB(t)
 	store := NewRuleGovernanceStore(db)
 	ctx := context.Background()
-	candidate, err := store.CreateRuleCandidate(ctx, ruleGovernanceCandidate("arbiter-reclaim"))
+	candidate, err := store.CreateRuleCandidate(ctx, ruleGovernanceCandidate(sessionTestProject(t, db), "arbiter-reclaim"))
 	require.NoError(t, err)
 
 	firstRun, err := store.StartRuleArbiterRun(ctx, "unit-test-first")
@@ -119,7 +119,7 @@ func TestRuleGovernanceStore_ArbiterRejectsTerminalRunEvaluation(t *testing.T) {
 	store := NewRuleGovernanceStore(db)
 	ctx := context.Background()
 
-	candidate, err := store.CreateRuleCandidate(ctx, ruleGovernanceCandidate("arbiter-terminal-run"))
+	candidate, err := store.CreateRuleCandidate(ctx, ruleGovernanceCandidate(sessionTestProject(t, db), "arbiter-terminal-run"))
 	require.NoError(t, err)
 	run, err := store.StartRuleArbiterRun(ctx, "unit-test")
 	require.NoError(t, err)
@@ -147,9 +147,9 @@ func TestRuleGovernanceStore_AnnotateRequiresMatchingEvaluation(t *testing.T) {
 	store := NewRuleGovernanceStore(db)
 	ctx := context.Background()
 
-	candidate, err := store.CreateRuleCandidate(ctx, ruleGovernanceCandidate("arbiter-annotation-mismatch"))
+	candidate, err := store.CreateRuleCandidate(ctx, ruleGovernanceCandidate(sessionTestProject(t, db), "arbiter-annotation-mismatch"))
 	require.NoError(t, err)
-	other, err := store.CreateRuleCandidate(ctx, ruleGovernanceCandidate("arbiter-annotation-other"))
+	other, err := store.CreateRuleCandidate(ctx, ruleGovernanceCandidate(sessionTestProject(t, db), "arbiter-annotation-other"))
 	require.NoError(t, err)
 	run, err := store.StartRuleArbiterRun(ctx, "unit-test")
 	require.NoError(t, err)
@@ -180,7 +180,7 @@ func TestRuleGovernanceStore_AnnotatedCandidateWaitsUntilReviewAfter(t *testing.
 	store := NewRuleGovernanceStore(db)
 	ctx := context.Background()
 
-	candidate, err := store.CreateRuleCandidate(ctx, ruleGovernanceCandidate("arbiter-requeue"))
+	candidate, err := store.CreateRuleCandidate(ctx, ruleGovernanceCandidate(sessionTestProject(t, db), "arbiter-requeue"))
 	require.NoError(t, err)
 	run, err := store.StartRuleArbiterRun(ctx, "unit-test")
 	require.NoError(t, err)
@@ -226,7 +226,7 @@ func TestRuleGovernanceStore_ArbiterRejectsUnclaimedEvaluationAndConcurrentClaim
 	store := NewRuleGovernanceStore(db)
 	ctx := context.Background()
 
-	candidate, err := store.CreateRuleCandidate(ctx, ruleGovernanceCandidate("arbiter-claim-race"))
+	candidate, err := store.CreateRuleCandidate(ctx, ruleGovernanceCandidate(sessionTestProject(t, db), "arbiter-claim-race"))
 	require.NoError(t, err)
 	firstRun, err := store.StartRuleArbiterRun(ctx, "unit-test-claim-first")
 	require.NoError(t, err)
@@ -261,7 +261,7 @@ func TestRuleGovernanceStore_ArbiterRejectsInvalidConfidence(t *testing.T) {
 	store := NewRuleGovernanceStore(db)
 	ctx := context.Background()
 
-	candidate, err := store.CreateRuleCandidate(ctx, ruleGovernanceCandidate("arbiter-confidence"))
+	candidate, err := store.CreateRuleCandidate(ctx, ruleGovernanceCandidate(sessionTestProject(t, db), "arbiter-confidence"))
 	require.NoError(t, err)
 	run, err := store.StartRuleArbiterRun(ctx, "unit-test-confidence")
 	require.NoError(t, err)

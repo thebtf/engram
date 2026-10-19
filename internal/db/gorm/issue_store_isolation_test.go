@@ -6,11 +6,21 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lib/pq"
 	"github.com/stretchr/testify/require"
 )
 
 func TestIssueStore_ListIssuesExTreatsProjectSelectorsAsLiteralIdentities(t *testing.T) {
-	db := openCandidateTestDB(t)
+	db := openCandidateTestDB(t).Begin()
+	require.NoError(t, db.Error)
+	t.Cleanup(func() { require.NoError(t, db.Rollback().Error) })
+	var schema string
+	require.NoError(t, db.Raw(`SELECT current_schema()`).Scan(&schema).Error)
+	// The reader consumes a historical pre-186 snapshot, not new legacy writes to the guarded base table.
+	require.NoError(t, db.Exec(`CREATE TEMPORARY TABLE issues (LIKE `+pq.QuoteIdentifier(schema)+`.issues INCLUDING DEFAULTS INCLUDING GENERATED) ON COMMIT DROP`).Error)
+	var guarded bool
+	require.NoError(t, db.Raw(`SELECT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = ?::regclass AND tgname = 'engram_consolidation_scope_write' AND tgenabled <> 'D')`, pq.QuoteIdentifier(schema)+`.issues`).Scan(&guarded).Error)
+	require.True(t, guarded, "the current base table must retain its canonical membership fence")
 	store := NewIssueStore(db)
 	ctx := context.Background()
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())

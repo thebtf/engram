@@ -41,19 +41,28 @@ call-path evidence and is the place to update when source changes.
 
 ## Project identity routing
 
-Every project-scoped request resolves a versioned workspace identity to the
-canonical project before data access. The local stdio daemon carries the outer
-legacy selector plus `ProjectIdentityV2` over gRPC; lifecycle hooks and OpenClaw
-use the REST identity-only registration endpoint and wait for `canonical_project`
-before issuing context, memory, issue, vault, or session requests. Registration
-failure short-circuits the downstream request.
+The supported Go logical-project resolver pins one portable UUID in
+`.engram-project`, shared locally through the real Git common directory. Current
+native, hook, OMP and OpenClaw consumers pass that UUID in `Project` or
+`project_id`. Normal tool and context requests do not register or resolve V1/V2/V3
+descriptors, derive an identity from authentication, or emit identity-comparison
+observations. The retired protobuf fields reserve both their numbers and names;
+the registration and ambient-relay RPC variants are removed.
 
-Project identity is routing metadata, not authentication. Supplying a selector,
-Git remote/path, or non-Git anchor never grants access; existing bearer and
-principal-visibility checks still govern endpoints that require them. The
-protobuf field is additive,
-so legacy clients may continue only while their selector resolves unambiguously.
-Ambiguous legacy selectors fail closed with `PROJECT_IDENTITY_AMBIGUOUS` and the
-`send_project_identity_v2` upgrade action. Non-Git workspaces use 16 random bytes
-encoded as 32 lowercase hexadecimal characters in `.engram-project-v2.json`,
-with sharing enabled only by an explicit opt-in flag.
+Project identity is routing metadata, not authentication. Existing bearer,
+actor, principal-visibility and session checks still govern data access. UCI
+keeps independent Source, Checkout and pinned View contracts; its installation
+client-instance metadata is not a project selector.
+
+HostAdvisor task authority still consumes `ProjectIdentityV3` as evidence through
+its existing authenticated task-memory boundary. Its read-filter authorization,
+anchor-binding lookup, typed refusals and audit remain separate from normal
+project routing, without the retired comparison-writer bridge. This retained
+consumer does not restore registration or descriptor selection on ordinary RPCs.
+
+Historical project rows, migration metadata, comparison records, receipt and
+snapshot readers, and cryptographic provenance remain intact. Compatibility for
+this single-install cutover preserves useful data, not executable old clients.
+The opt-in AR2 five-callable comparison runtime and its obsolete OpenClaw driver
+are retired, not replaced by a four-callable claim. Independent snapshot
+preflight, daemon parsing and historical five-callable receipt formats remain.

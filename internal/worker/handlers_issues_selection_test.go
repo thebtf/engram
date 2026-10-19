@@ -45,6 +45,10 @@ func issueSelectionHTTPRequest(t *testing.T, path string, body any, identity aut
 func issueSelectionCall(t *testing.T, handler func(http.ResponseWriter, *http.Request), path string, body any, identity auth.Identity, sessionID, requestID string) *httptest.ResponseRecorder {
 	t.Helper()
 	recorder := httptest.NewRecorder()
+	payload, ok := body.(map[string]any)
+	require.True(t, ok)
+	payload["source_project"] = issueActorTestProject
+	payload["source_agent"] = "human"
 	handler(recorder, issueSelectionHTTPRequest(t, path, body, identity, sessionID, requestID))
 	return recorder
 }
@@ -52,7 +56,7 @@ func issueSelectionCall(t *testing.T, handler func(http.ResponseWriter, *http.Re
 func TestIssueSelectionHandlers_OverOneHundredIssuesRemainBoundedAndTruthful(t *testing.T) {
 	service, store := newIssueSelectionHTTPTestService(t)
 	ctx := context.Background()
-	project := fmt.Sprintf("issues-selection-handler-%d", time.Now().UnixNano())
+	project := issueActorTestProject
 	const sessionID = "issues-selection-handler-session"
 	identity := auth.SessionForBrowserUser("admin", 41)
 
@@ -73,6 +77,7 @@ func TestIssueSelectionHandlers_OverOneHundredIssuesRemainBoundedAndTruthful(t *
 	}
 	t.Cleanup(func() {
 		require.NoError(t, store.GetDB().Exec("DELETE FROM collection_selections WHERE subject_user_id = ? AND session_id = ? AND domain = ?", 41, sessionID, issueSelectionDomain).Error)
+		require.NoError(t, store.GetDB().Exec("DELETE FROM audit_log WHERE action LIKE 'issue.%' AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(after_state->'issue_ids') AS audit_ids(value) WHERE value::bigint IN ?)", ids).Error)
 		require.NoError(t, store.GetDB().Exec("DELETE FROM issue_comments WHERE issue_id IN ?", ids).Error)
 		require.NoError(t, store.GetDB().Exec("DELETE FROM issues WHERE id IN ?", ids).Error)
 	})

@@ -213,7 +213,16 @@ func filterVisibleWriteGateCandidates(ctx context.Context, sessionID string, exi
 	return visible
 }
 
-func domainManageAllowed(ctx context.Context, mem *models.Memory) bool {
+func memoryManageAllowed(ctx context.Context, mem *models.Memory) bool {
+	if mem == nil {
+		return false
+	}
+	if config.Get().EnforceSourceProject {
+		project := ProjectFromContext(ctx)
+		if project == "" || mem.Project != project {
+			return false
+		}
+	}
 	return scope.ResolveMemoryManage(writeLintVisibilityCaller(ctx, ""), mem)
 }
 
@@ -450,12 +459,21 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	params.Domain = coerceString(m["domain"], "")
 	params.AgentSource = coerceString(m["agent_source"], "")
 	if config.Get().EnforceSourceProject {
-		params.Project = projectFromContext(ctx)
+		params.Project = ProjectFromContext(ctx)
 		if params.Project == "" {
 			params.Project = coerceString(m["project"], "")
 		}
 	} else {
 		params.Project = coerceString(m["project"], "")
+		if params.Project == "" {
+			defaultScope := params.Scope
+			if vnextFEnabled() && params.PrivacyScope != "" {
+				defaultScope = deriveLegacyScopeFromPrivacy(params.PrivacyScope)
+			}
+			if !alwaysInject || defaultScope != string(models.ScopeGlobal) {
+				params.Project = ProjectFromContext(ctx)
+			}
+		}
 	}
 	params.AlwaysInject = alwaysInject
 	params.DryRun = dryRun
@@ -939,6 +957,21 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	if err := applyPrincipalMemoryMetadata(ctx, memory, params.AgentVisibility, params.Domain); err != nil {
 		return "", err
 	}
+	supersedeTargets := make([]*models.Memory, 0, len(params.Supersedes))
+	for _, sid := range params.Supersedes {
+		if sid <= 0 {
+			continue
+		}
+		beforeMem, getErr := s.memoryStore.Get(ctx, sid)
+		if getErr != nil {
+			log.Warn().Err(getErr).Int64("superseded_id", sid).Msg("store: supersede target not found")
+			continue
+		}
+		if !memoryManageAllowed(ctx, beforeMem) {
+			return "", fmt.Errorf("store: memory %d not found", sid)
+		}
+		supersedeTargets = append(supersedeTargets, beforeMem)
+	}
 	domainDecision, err := s.checkDomainWriteMCP(ctx, memory, params.SessionID)
 	if err != nil {
 		return "", fmt.Errorf("domain registry check failed: %w", err)
@@ -950,31 +983,14 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	inheritedImportance := memory.ImportanceBase
 	var primarySupersededID *int64
 	var supersededIDs []int64
-	for _, sid := range params.Supersedes {
-		if sid <= 0 {
-			continue
-		}
-		// Read before-state for audit before calling Supersede (which mutates the row).
-		var beforeMem *models.Memory
-		if bm, getErr := s.memoryStore.Get(ctx, sid); getErr == nil {
-			beforeMem = bm
-		} else {
-			log.Warn().Err(getErr).Int64("superseded_id", sid).Msg("store: supersede target not found")
-			continue
-		}
-		if !domainManageAllowed(ctx, beforeMem) {
-			return "", fmt.Errorf("store: memory %d not found", sid)
-		}
+	for _, beforeMem := range supersedeTargets {
+		sid := beforeMem.ID
 		oldImportance, supErr := s.memoryStore.Supersede(ctx, sid)
 		if supErr != nil {
 			log.Warn().Err(supErr).Int64("superseded_id", sid).Msg("store: supersede failed")
 			continue
 		}
 		// Audit: fire-and-forget supersede event.
-		if beforeMem == nil {
-			tmp := &models.Memory{ID: sid}
-			beforeMem = tmp
-		}
 		logAuditSupersede(ctx, s, beforeMem, actorFromContext(ctx))
 		supersededIDs = append(supersededIDs, sid)
 		if primarySupersededID == nil {
@@ -1190,21 +1206,7 @@ func (s *Server) handleEditMemory(ctx context.Context, args json.RawMessage) (st
 		return "", fmt.Errorf("edit_memory: memory %d not found", id)
 	}
 
-	// Finding 2 (first review) + CRIT (second review): enforce project scope so a
-	// caller cannot edit another project's memory by id. Return not-found (don't
-	// leak existence) on mismatch or on empty caller project.
-	//
-	// When EnforceSourceProject=true an empty ctxProject must DENY — the same
-	// treatment as handleStoreMemory — not silently skip the check.  A caller
-	// arriving without a project context (no ContextWithProject injection) cannot
-	// be authorised to edit an arbitrary memory by id.
-	if config.Get().EnforceSourceProject {
-		ctxProject := projectFromContext(ctx)
-		if ctxProject == "" || before.Project != ctxProject {
-			return "", fmt.Errorf("edit_memory: memory %d not found", id)
-		}
-	}
-	if !domainManageAllowed(ctx, before) {
+	if !memoryManageAllowed(ctx, before) {
 		return "", fmt.Errorf("edit_memory: memory %d not found", id)
 	}
 
@@ -1411,11 +1413,20 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 	project := strings.TrimSpace(coerceString(m["project"], ""))
 	tags := coerceStringSlice(m["tags"])
 
-	// B4 resolution (2026-06-11): tier_filter for recall_memory — spec FR-B2 requires
-	// recall_memory to accept an optional tier filter. Gated behind ENGRAM_LIFECYCLE_ENABLED.
-	tierFilterEnabled := os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true"
-	tierFilterSet := make(map[string]bool)
-	if tierFilterEnabled {
+	// Hybrid tier_filter selects retrieval legs, not lifecycle memory tiers.
+	// Preserve the lifecycle-only filter when hybrid retrieval is disabled.
+	vnextEnabled := os.Getenv("ENGRAM_VNEXT_ENABLED") == "true"
+	var tierFilterSet map[string]bool
+	if vnextEnabled {
+		for _, tf := range coerceStringSlice(m["tier_filter"]) {
+			switch tf {
+			case "tier0_exact", "tier1_fts", "tier1_vector", "tier2_graph":
+			default:
+				return "", fmt.Errorf("invalid_tier_filter: %q must be one of tier0_exact, tier1_fts, tier1_vector, tier2_graph", tf)
+			}
+		}
+	} else if os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true" {
+		tierFilterSet = make(map[string]bool)
 		for _, tf := range coerceStringSlice(m["tier_filter"]) {
 			if lifecycle.ValidTier(tf) {
 				tierFilterSet[tf] = true
@@ -1438,7 +1449,7 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 		format = "text"
 	}
 	if project == "" {
-		project = strings.TrimSpace(projectFromContext(ctx))
+		project = strings.TrimSpace(ProjectFromContext(ctx))
 	}
 	if project == "" {
 		return "", fmt.Errorf("project is required for recall_memory in v5")
@@ -1495,7 +1506,6 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 	// Caller identity + visibility context are fully built above; pass them into
 	// handleRecallMemoryHybrid so hybrid results are subject to the same
 	// predicate as the legacy List path below.
-	vnextEnabled := os.Getenv("ENGRAM_VNEXT_ENABLED") == "true"
 	if vnextEnabled && !includePrincipalsSet {
 		return s.handleRecallMemoryHybrid(ctx, m, query, project, format, limit, obsType, tags, caller, visibilityOpts, tg3Active, tg3ConfidenceMin, tg3IncludeSuperseded, tg3IncludeRationale)
 	}
@@ -2375,7 +2385,7 @@ func (s *Server) handleSuppressMemory(ctx context.Context, args json.RawMessage)
 		}
 		return "", fmt.Errorf("feedback suppress: %w", getErr)
 	}
-	if !domainManageAllowed(ctx, beforeMem) {
+	if !memoryManageAllowed(ctx, beforeMem) {
 		return "", fmt.Errorf("feedback suppress: memory %d not found", id)
 	}
 
