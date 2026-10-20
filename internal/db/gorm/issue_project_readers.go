@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 
+	"github.com/lib/pq"
 	"github.com/thebtf/engram/internal/projectidentity"
 	gormlib "gorm.io/gorm"
 )
@@ -35,7 +36,7 @@ func (s *IssueStore) ProjectRoles(ctx context.Context, ids []int64) (map[int64]I
 		return result, nil
 	}
 	var rows []IssueProjectRoles
-	err := s.db.WithContext(ctx).Table("issues").Select("issues.id,"+canonicalIssueRoleSQL("source_project")+" AS source_project_id,"+canonicalIssueRoleSQL("target_project")+" AS target_project_id").Where("issues.id IN ?", ids).Scan(&rows).Error
+	err := s.db.WithContext(ctx).Table("issues").Select("issues.id,"+canonicalIssueRoleSQL("source_project")+" AS source_project_id,"+canonicalIssueRoleSQL("target_project")+" AS target_project_id").Where("issues.id = ANY(?)", pq.Array(ids)).Scan(&rows).Error
 	if err != nil {
 		return nil, err
 	}
