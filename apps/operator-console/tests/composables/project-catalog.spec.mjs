@@ -4,6 +4,7 @@ import test from 'node:test'
 import ts from 'typescript'
 import * as vue from 'vue'
 import * as routing from 'vue-router'
+import './retained-reader-discovery.spec.mjs'
 
 const A = '11111111-1111-4111-8111-111111111111'
 const B = '22222222-2222-4222-8222-222222222222'

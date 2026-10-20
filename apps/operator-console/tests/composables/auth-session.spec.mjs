@@ -374,7 +374,9 @@ async function mountRecovery(t, consumer, location, pageName, actualLogin = fals
   }
   const layout = component('layouts/default.vue')
   const reader = pageName ? component(`pages/${pageName}.vue`) : { render: () => vue.h('article', 'synthetic cached payload') }
-  const router = routing.createRouter({ history: routing.createMemoryHistory(), routes: [{ path: '/:pathMatch(.*)*', component: { render: () => null } }] })
+  const routes = [{ path: '/:pathMatch(.*)*', component: { render: () => null } }]
+  if (pageName === 'issues') routes.unshift({ path: '/issues/:id(\\d+)?', component: { render: () => null } })
+  const router = routing.createRouter({ history: routing.createMemoryHistory(), routes })
   await router.push(location)
   let layoutState, readerState, loginState
   const app = renderer.createApp({ render: () => vue.h(layout, { ref: (instance) => { if (instance) layoutState = instance.$.setupState } }, { default: () => vue.h(reader, { ref: (instance) => { if (instance) readerState = instance.$.setupState } }) }) })
@@ -1090,7 +1092,7 @@ test('unavailable catalog and issue reads never render known empty; refresh reta
   assert.ok(rendered().includes('issues.empty.title'))
   assert.equal(reader().registryTotal, 0)
 
-  response = () => Response.json({ issues: Array.from({ length: 12 }, (_, index) => ({ id: index + 1, title: `retained issue ${index + 1}`, status: 'open', source_project: projectID, target_project: projectID })), total: 12 })
+  response = () => Response.json({ issues: Array.from({ length: 12 }, (_, index) => ({ id: index + 1, title: `retained issue ${index + 1}`, status: 'open', source_project: projectID, target_project: projectID, source_project_id: projectID, target_project_id: projectID, project_origin: { source_project: projectID, target_project: projectID } })), total: 12 })
   await reader().refresh(); await tick()
   reader().page = 2
   await tick()
@@ -1120,7 +1122,7 @@ test('unavailable catalog and issue reads never render known empty; refresh reta
   assert.equal(reader().registryTotal, 0)
   assert.ok(!rendered().includes('retained issue'))
 
-  response = () => Response.json({ issues: [{ id: 1, title: 'retained issue A', status: 'open', source_project: projectID, target_project: projectID }], total: 1 })
+  response = () => Response.json({ issues: [{ id: 1, title: 'retained issue A', status: 'open', source_project: projectID, target_project: projectID, source_project_id: projectID, target_project_id: projectID, project_origin: { source_project: projectID, target_project: projectID } }], total: 1 })
   await mounted.router.push(`/issues?project=${projectID}`); await tick()
   assert.ok(rendered().includes('retained issue A'))
   const readsBeforeSelection = consumer.calls.filter(call => call.path.startsWith('/api/issues')).length
@@ -1348,4 +1350,48 @@ test('canonical retained SFC renders decoded records without page provenance', a
     assert.ok(text(host).includes(originalLocation))
     assert.equal(walk(host).some((entry) => entry.props['data-testid'] === 'unresolved-error'), false)
   })
+})
+
+test('canonical issue roles: compiled ordinary detail renders migrated content and explicit raw provenance', async t => {
+  const issue = { id: 7, title: 'Migrated canonical issue', body: 'Preserved migrated body', status: 'open', priority: 'medium', type: 'task', source_project: 'old-source-slug', target_project: 'old-target-slug', source_project_id: projectID, target_project_id: otherProjectID, project_origin: { source_project: 'old-source-slug', target_project: 'old-target-slug' }, labels: [] }
+  const consumer = session(t, undefined, url => {
+    if (url.pathname === '/api/issues') return Response.json({ issues: [], total: 0 })
+    if (url.pathname === '/api/issues/7') return Response.json({ issue, comments: [{ id: 71, issue_id: 7, body: 'Preserved discussion', author_project: 'historical-comment-origin' }] })
+  }, undefined, [{ project_id: projectID, name: 'Canonical source' }, { project_id: otherProjectID, name: 'Canonical target' }])
+  await consumer.shell.refresh()
+  const mounted = await mountRecovery(t, consumer, `/issues/7?project=${otherProjectID}`, 'issues')
+  await tick()
+  const state = mounted.reader()
+  assert.equal(state.detailState.kind, 'live', 'Ordinary detail must bind the canonical target, not compare its UUID to a slug')
+  assert.equal(state.activeIssue.id, 7)
+  const body = walk(mounted.host).find(row => row.props.class === 'issue-body md')
+  assert.ok(body.props.innerHTML.includes(issue.body), 'The actual compiled v-html output must contain the retained body')
+  assert.ok(text(mounted.host).includes('Canonical source → Canonical target'))
+  const provenance = walk(mounted.host).find(row => row.props['data-testid'] === 'issue-project-origin')
+  assert.ok(provenance, 'Historical project strings must remain separately inspectable provenance')
+  assert.ok(text(provenance).includes('old-source-slug'))
+  assert.ok(text(provenance).includes('old-target-slug'))
+  assert.ok(consumer.calls.every(call => call.method === 'GET'))
+})
+
+test('canonical issue roles: compiled detail clears unrelated body/comments and never promotes a NULL side', async t => {
+  const unrelated = '33333333-3333-4333-8333-333333333333'
+  const issue = { id: 7, title: 'Canonical target issue', body: 'Scope-bound migrated body', status: 'open', priority: 'medium', type: 'task', source_project: unrelated, target_project: 'old-target', source_project_id: null, target_project_id: otherProjectID, project_origin: { source_project: unrelated, target_project: 'old-target' }, labels: [] }
+  const consumer = session(t, undefined, url => {
+    if (url.pathname === '/api/issues') return Response.json({ issues: [], total: 0 })
+    if (url.pathname === '/api/issues/7') return Response.json({ issue, comments: [{ id: 71, issue_id: 7, body: 'Scope-bound discussion' }] })
+  }, undefined, [{ project_id: otherProjectID, name: 'Canonical target' }, { project_id: unrelated, name: 'Unrelated canonical project' }])
+  await consumer.shell.refresh()
+  const mounted = await mountRecovery(t, consumer, `/issues/7?project=${otherProjectID}`, 'issues')
+  await tick()
+  assert.equal(mounted.reader().detailState.kind, 'live')
+  assert.equal(mounted.reader().activeIssue.sourceProject, null)
+  assert.ok(text(mounted.host).includes('projectCatalog.unknownProject → Canonical target'))
+  await mounted.router.push(`/issues/7?project=${unrelated}`); await tick()
+  assert.equal(mounted.reader().detailState.kind, 'error')
+  assert.equal(mounted.reader().detail, null)
+  assert.equal(mounted.reader().activeIssue, null)
+  assert.equal(mounted.reader().comments.length, 0)
+  assert.ok(walk(mounted.host).every(row => !String(row.props.innerHTML || '').includes(issue.body)))
+  assert.ok(walk(mounted.host).every(row => !String(row.props.innerHTML || '').includes('Scope-bound discussion')))
 })

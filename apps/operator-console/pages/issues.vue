@@ -111,6 +111,7 @@ let scopeGeneration = 0
 
 const activeIssue = computed(() => {
   if (activeId.value === null) return null
+  if (detailState.value.kind === 'error') return null
   if (detail.value?.id === activeId.value) return detail.value
   return rows.find((issue) => issue.id === activeId.value) || null
 })
@@ -247,7 +248,7 @@ function selectedCountText() {
 }
 
 function rowRoute(issue: OperatorIssue) {
-  return `${isCatalogProject(issue.sourceProject) ? projectName(issue.sourceProject) : t('projectCatalog.unknownProject')} → ${isCatalogProject(issue.targetProject) ? projectName(issue.targetProject) : t('projectCatalog.unknownProject')}`
+  return `${issue.sourceDisplayName || t('projectCatalog.unknownProject')} → ${issue.targetDisplayName || t('projectCatalog.unknownProject')}`
 }
 
 function targetFor(issue: OperatorIssue): OperatorSelectionTarget {
@@ -956,6 +957,16 @@ function renderMarkdown(value: string) {
               <button class="act" :disabled="pending || !humanSourceReady" @click="acknowledgeCurrent">{{ t('issues.detail.acknowledge') }}</button>
             </div>
           </div>
+
+          <details class="issue-card" data-testid="issue-project-origin">
+            <summary>{{ t('knowledge.technical') }}</summary>
+            <dl>
+              <dt>source_project_id</dt><dd>{{ activeIssue.sourceProject ?? 'null' }}</dd>
+              <dt>target_project_id</dt><dd>{{ activeIssue.targetProject ?? 'null' }}</dd>
+              <dt>project_origin.source_project</dt><dd>{{ activeIssue.projectOrigin.sourceProject }}</dd>
+              <dt>project_origin.target_project</dt><dd>{{ activeIssue.projectOrigin.targetProject }}</dd>
+            </dl>
+          </details>
 
           <div class="issue-card">
             <div class="dsh">{{ t('issues.detail.actions') }}</div>

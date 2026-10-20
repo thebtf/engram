@@ -29,7 +29,16 @@
     "noHistory": "The reader returned no accessible history for this record.",
     "notOnPage": "The linked record or version is not on this content page. Its original identity is retained; use the next page or its history.",
     "versionNotOnPage": "The requested version is not on this history page. Check the next history page; no other version is substituted.",
-    "firstPage": "First page"
+    "firstPage": "First page",
+    "groupCounts": "Retained groups: {total} total · {readers} with reader kinds · {metadata} metadata-only. Project membership remains unresolved.",
+    "groupDiscovery": "Retained groups",
+    "readerGroups": "Groups with reader kinds ({count})",
+    "metadataGroups": "Metadata-only groups ({count})",
+    "searchGroups": "Find a group by name, reason or reader kind",
+    "groupPages": "Retained group pages",
+    "noGroupMatches": "No groups match this search in the selected view.",
+    "noReaderGroups": "No groups advertise a reader kind. Review metadata-only groups; this does not mean the original data is absent.",
+    "noMetadataGroups": "There are no metadata-only groups in this catalog."
   },
   "knowledge": {
     "project": "Project",

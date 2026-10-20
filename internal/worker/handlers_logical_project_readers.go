@@ -275,7 +275,24 @@ func (s *Service) readRetainedProject(w http.ResponseWriter, r *http.Request, hi
 			response.Items, response.Total, err = items, total, readErr
 		} else {
 			items, total, readErr := s.sessionStore.RetainedIssues(r.Context(), ids, r.URL.Query().Get("q"), limit, offset)
-			response.Items, response.Total, err = items, total, readErr
+			if readErr != nil {
+				err = readErr
+				break
+			}
+			issueIDs := make([]int64, len(items))
+			for i := range items {
+				issueIDs[i] = items[i].ID
+			}
+			roles, readErr := s.issueStore.ProjectRoles(r.Context(), issueIDs)
+			if readErr != nil {
+				err = readErr
+				break
+			}
+			projected := make([]issueReadItem, len(items))
+			for i := range items {
+				projected[i] = issueReadProjection(items[i], roles[items[i].ID])
+			}
+			response.Items, response.Total = projected, total
 		}
 	default:
 		writeDocumentError(w, 400, "invalid content kind")

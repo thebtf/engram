@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useOperatorProjectContext } from '../composables/useOperatorProjectContext'
 import { useOperatorUnresolved } from '../composables/useOperatorUnresolved'
 import { operatorDiagnosisKey } from '../composables/useOperatorApi'
@@ -11,6 +11,23 @@ const reader = useOperatorUnresolved(context)
 const { reference, retained, availableKinds, kind, metadataOnly, unsupportedKind, q, id, selected, historyID, content, history, pending, historyPending, error, historyError, returnTo, originalLocation } = reader
 const query = ref(q.value)
 watch(q, (value) => { query.value = value })
+const groupMode = ref<'readers' | 'metadata'>('readers')
+const groupSearch = ref('')
+const groupPage = ref(1)
+const groupPageSize = 20
+const readerGroupCount = computed(() => unresolved.value.filter(row => row.reader_kinds.length).length)
+const metadataGroupCount = computed(() => unresolved.value.length - readerGroupCount.value)
+const matchingGroups = computed(() => {
+  const needle = groupSearch.value.trim().toLowerCase()
+  return unresolved.value.filter(row => {
+    if (Boolean(row.reader_kinds.length) !== (groupMode.value === 'readers')) return false
+    return !needle || row.name.toLowerCase().includes(needle) || row.reason.toLowerCase().includes(needle) || row.reader_kinds.some(choice => choice.includes(needle) || t(choice === 'code' ? 'nav.items.code' : `projectCatalog.${choice}`).toLowerCase().includes(needle))
+  })
+})
+const groupPageCount = computed(() => Math.max(1, Math.ceil(matchingGroups.value.length / groupPageSize)))
+const groupRows = computed(() => matchingGroups.value.slice((groupPage.value - 1) * groupPageSize, groupPage.value * groupPageSize))
+watch([groupMode, groupSearch], () => { groupPage.value = 1 }, { flush: 'sync' })
+watch(groupPageCount, count => { groupPage.value = Math.min(groupPage.value, count) }, { flush: 'sync' })
 function changeKind(event: Event) {
   if (event.target instanceof HTMLSelectElement) void reader.update({ kind: event.target.value, cursor: undefined, historyCursor: undefined, id: undefined, memory: undefined, path: undefined, version: undefined, compare: undefined })
 }
@@ -21,9 +38,7 @@ function changeKind(event: Event) {
     <header><h1>{{ t('projectCatalog.unresolvedTitle') }}</h1><p>{{ t('projectCatalog.readOnlyHelp') }}</p><RouterLink :to="returnTo" data-testid="unresolved-back">{{ t('projectCatalog.back') }}</RouterLink> · <RouterLink to="/projects">{{ t('knowledge.chooseProject') }}</RouterLink></header>
     <p v-if="catalogPending" role="status">{{ t('knowledge.loading') }}</p>
     <div v-if="catalogError" role="alert"><p>{{ t(operatorDiagnosisKey(catalogError)) }}</p><button class="btn" @click="context.refresh">{{ t('knowledge.retry') }}</button></div>
-    <nav class="retained-list" :aria-label="t('projectCatalog.unresolvedTitle')">
-      <RouterLink v-for="row in unresolved" :key="row.reference" :to="{ path: '/projects/unresolved', query: { reference: row.reference, returnTo } }" :aria-current="reference === row.reference ? 'page' : undefined"><strong>{{ row.name }}</strong><span>{{ row.reason }}</span><span v-if="!row.reader_kinds.length">{{ t('projectCatalog.metadataOnly') }}</span></RouterLink>
-    </nav>
+    <p v-if="!catalogPending && !catalogError" role="status" data-testid="unresolved-group-counts">{{ t('projectCatalog.groupCounts', { total: unresolved.length, readers: readerGroupCount, metadata: metadataGroupCount }) }}</p>
     <p v-if="!reference && !catalogPending && !catalogError && !unresolved.length">{{ t('projectCatalog.noUnresolved') }}</p>
     <p v-else-if="!reference">{{ t('projectCatalog.chooseUnresolved') }}</p>
     <section v-else class="reader">
@@ -68,9 +83,28 @@ function changeKind(event: Event) {
         </template>
       </section>
     </section>
+    <section v-if="!catalogError && unresolved.length" class="group-discovery" aria-labelledby="retained-groups-heading">
+      <h2 id="retained-groups-heading">{{ t('projectCatalog.groupDiscovery') }}</h2>
+      <div class="filters">
+        <button class="btn" :aria-pressed="groupMode === 'readers'" data-testid="unresolved-reader-groups" @click="groupMode = 'readers'">{{ t('projectCatalog.readerGroups', { count: readerGroupCount }) }}</button>
+        <button class="btn" :aria-pressed="groupMode === 'metadata'" data-testid="unresolved-metadata-groups" @click="groupMode = 'metadata'">{{ t('projectCatalog.metadataGroups', { count: metadataGroupCount }) }}</button>
+        <label><span>{{ t('projectCatalog.searchGroups') }}</span><input v-model="groupSearch" type="search" data-testid="unresolved-group-search" /></label>
+      </div>
+      <p>{{ t(groupMode === 'metadata' ? 'projectCatalog.metadataOnly' : 'projectCatalog.readerKindsHelp') }}</p>
+      <nav class="retained-list" :aria-label="t('projectCatalog.groupDiscovery')">
+        <RouterLink v-for="row in groupRows" :key="row.reference" :to="{ path: '/projects/unresolved', query: { reference: row.reference, returnTo, originalLocation: typeof route.query.originalLocation === 'string' ? route.query.originalLocation : undefined }, hash: route.hash }" :aria-current="reference === row.reference ? 'page' : undefined"><strong>{{ row.name }}</strong><span>{{ row.reason }}</span><span v-if="!row.reader_kinds.length">{{ t('projectCatalog.metadataOnly') }}</span><span v-else>{{ row.reader_kinds.map(choice => choice === 'code' ? t('nav.items.code') : t(`projectCatalog.${choice}`)).join(' · ') }}</span></RouterLink>
+      </nav>
+      <p v-if="!matchingGroups.length">{{ t(groupSearch.trim() ? 'projectCatalog.noGroupMatches' : groupMode === 'readers' ? 'projectCatalog.noReaderGroups' : 'projectCatalog.noMetadataGroups') }}</p>
+      <nav class="paging" :aria-label="t('projectCatalog.groupPages')">
+        <button class="btn" :disabled="groupPage <= 1" data-testid="unresolved-groups-previous" @click="groupPage--">{{ t('knowledge.previous') }}</button>
+        <span role="status">{{ t('knowledge.pageOf', { page: groupPage, total: groupPageCount }) }}</span>
+        <button class="btn" :disabled="groupPage >= groupPageCount" data-testid="unresolved-groups-next" @click="groupPage++">{{ t('knowledge.next') }}</button>
+      </nav>
+    </section>
   </div>
 </template>
 
 <style scoped>
 .unresolved-page { display:grid; gap:24px; max-width:1100px; min-width:0; } h1 { font-size:var(--text-xl); margin:0 0 8px; } h2 { font-size:var(--text-lg); } h3,h4 { margin:0 0 12px; } p,dt { color:var(--muted); } .retained-list { display:grid; gap:12px; } .retained-list a { display:grid; gap:6px; padding:14px; border:1px solid var(--border); color:var(--fg); } .retained-list [aria-current=page],article.selected { border-color:var(--accent); } .retained-list span { color:var(--muted); } .reader { display:grid; gap:16px; min-width:0; } .filters,.paging { display:flex; align-items:end; gap:12px; flex-wrap:wrap; } label { display:grid; gap:6px; } input,select,.btn { min-height:44px; padding:8px 12px; color:var(--fg); background:var(--surface); border:1px solid var(--border); border-radius:var(--r-sm); } .btn { cursor:pointer; } article { padding:18px; border:1px solid var(--border); border-radius:var(--r-sm); min-width:0; } .body { white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.6; } dl { display:grid; grid-template-columns:minmax(100px,180px) minmax(0,1fr); gap:8px 12px; } dt,dd,code { overflow-wrap:anywhere; } dd { margin:0; white-space:pre-wrap; } summary { cursor:pointer; min-height:44px; } .history { border-top:1px solid var(--border); padding-top:20px; display:grid; gap:16px; } @media(max-width:760px) { dl { grid-template-columns:1fr; } dt { margin-top:8px; } .filters label,.filters input { width:100%; } }
+.group-discovery { display:grid; gap:16px; min-width:0; } .group-discovery input { max-width:100%; } .btn:disabled { cursor:default; opacity:0.55; } .btn[aria-pressed=true] { border-color:var(--accent); } .retained-list a { overflow-wrap:anywhere; }
 </style>

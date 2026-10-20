@@ -112,6 +112,8 @@ func consolidationCLIError(err error) string {
 		switch domain.Code {
 		case "PROJECT_ADOPTION_PLAN_ID_REQUIRED", "PROJECT_ADOPTION_STALE_PLAN", "PROJECT_ADOPTION_INVENTORY_INCOMPLETE", "PROJECT_ADOPTION_BACKUP_MISSING", "PROJECT_ADOPTION_ISOLATED_TARGET_MISSING", "PROJECT_ADOPTION_TARGET_IS_SOURCE", "PROJECT_ADOPTION_SOURCE_IDENTITY_UNAVAILABLE", "PROJECT_ADOPTION_CONSERVATION_FAILED", "PROJECT_ADOPTION_SCHEMA_MISMATCH", "PROJECT_ADOPTION_UNSTABLE_NATIVE_KEY", "PROJECT_ADOPTION_STALE_MAPPING", "PROJECT_ADOPTION_REPLAY_CONFLICT", "PROJECT_ADOPTION_COLLISION", "PROJECT_ADOPTION_SECRET_UNREADABLE":
 			return domain.Code
+		case "PROJECT_ADOPTION_PARENT_RECEIPT_INVALID", "PROJECT_ADOPTION_PARENT_RECEIPT_REQUIRED", "PROJECT_ADOPTION_CONFLICTING_MEMBERSHIP", "PROJECT_ADOPTION_UNSAFE_PROJECT_LABEL", "PROJECT_ADOPTION_STALE_REFERENCE", "PROJECT_ADOPTION_UNKNOWN_REFERENCE", "PROJECT_ADOPTION_METADATA_CAPACITY_EXCEEDED":
+			return domain.Code
 		}
 	}
 	if errors.Is(err, context.Canceled) {
@@ -121,6 +123,26 @@ func consolidationCLIError(err error) string {
 		return "PROJECT_ADOPTION_DEADLINE"
 	}
 	return "PROJECT_ADOPTION_NATIVE_OPERATION_FAILED"
+}
+
+func openConsolidationDatabase(dsn string, source bool) (*gormlib.DB, func() error, error) {
+	configuration, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		return nil, nil, errors.New("PROJECT_ADOPTION_CONNECTION_INVALID")
+	}
+	configuration.RuntimeParams["application_name"] = "engram_project_maintenance"
+	if source {
+		configuration.RuntimeParams["default_transaction_read_only"] = "on"
+	}
+	pool := stdlib.OpenDB(*configuration)
+	pool.SetMaxOpenConns(2)
+	pool.SetMaxIdleConns(1)
+	db, err := gormlib.Open(postgres.New(postgres.Config{Conn: pool}), &gormlib.Config{Logger: logger.Default.LogMode(logger.Silent), DisableAutomaticPing: true})
+	if err != nil {
+		_ = pool.Close()
+		return nil, nil, err
+	}
+	return db, pool.Close, nil
 }
 
 func runProjectConsolidation(args []string) int {
@@ -164,31 +186,12 @@ func runProjectConsolidationOutput(args []string, stdout, stderr io.Writer) int 
 	if err != nil {
 		return fail("PROJECT_ADOPTION_EXISTING_VAULT_REQUIRED")
 	}
-	open := func(dsn string, source bool) (*gormlib.DB, func() error, error) {
-		configuration, err := pgx.ParseConfig(dsn)
-		if err != nil {
-			return nil, nil, errors.New("PROJECT_ADOPTION_CONNECTION_INVALID")
-		}
-		configuration.RuntimeParams["application_name"] = "engram_consolidate_projects"
-		if source {
-			configuration.RuntimeParams["default_transaction_read_only"] = "on"
-		}
-		pool := stdlib.OpenDB(*configuration)
-		pool.SetMaxOpenConns(2)
-		pool.SetMaxIdleConns(1)
-		db, err := gormlib.Open(postgres.New(postgres.Config{Conn: pool}), &gormlib.Config{Logger: logger.Default.LogMode(logger.Silent), DisableAutomaticPing: true})
-		if err != nil {
-			_ = pool.Close()
-			return nil, nil, err
-		}
-		return db, pool.Close, nil
-	}
-	source, closeSource, err := open(sourceDSN, true)
+	source, closeSource, err := openConsolidationDatabase(sourceDSN, true)
 	if err != nil {
 		return fail("PROJECT_ADOPTION_CONNECTION_INVALID")
 	}
 	defer closeSource()
-	target, closeTarget, err := open(targetDSN, false)
+	target, closeTarget, err := openConsolidationDatabase(targetDSN, false)
 	if err != nil {
 		return fail("PROJECT_ADOPTION_CONNECTION_INVALID")
 	}

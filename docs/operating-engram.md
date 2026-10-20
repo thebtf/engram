@@ -531,6 +531,37 @@ project-ролей не меняются. Новые или явно запис�
 
 Production переключение требует актуальной инвентаризации записей после snapshot и контролируемой остановки writers (quiescence), проверенного restorable backup, изолированного rehearsal и явного разрешения владельца на точный cutover effect. Прежние 9 добавлений/128 изменений/0 удалений относятся к двум историческим снимкам, не к текущему production delta. Здесь нет разрешения на live SQL, destructive cutover или установку. При подтверждённом cutover native-путь заменяет custom transport writers/entrypoints после проверки consumers; это не две постоянные системы миграции. Старый HTTP путь пока не объявлен удалённым; нужные migration/rollback readers и owner data сохраняются.
 
+#### Membership-only repair исторических проектов
+
+`engram-server repair-project-partitions` восстанавливает отдельные Knowledge Projects по сохранённым registry occurrences. Совпадение remote или имени не объединяет проекты. Команда не запускает сервис, migrations, backup или restore. Разрешены только отдельно допущенные source и физически другая восстановленная target; это не live in-place repair и не разрешение на production effects.
+
+Используй существующий Vault key и те же приватные DSN-файлы. Получи SHA-256 точного сохранённого parent B7 `receipt::text` в PostgreSQL; digest заново сериализованного JSON не заменяет его.
+
+1. Создай новый приватный sealed plan-файл. `plan` читает только source, не принимает target и отказывает при уже существующем plan-файле:
+
+   ```bash
+   engram-server repair-project-partitions plan --source-dsn-file "/private/source.dsn" --plan-file "/private/partition-plan.json" --parent-receipt-digest "<точный SHA-256 parent receipt>"
+   ```
+
+2. На допущенной восстановленной target проверь тот же executor с откатом:
+
+   ```bash
+   engram-server repair-project-partitions dry-run --source-dsn-file "/private/source.dsn" --target-dsn-file "/private/target.dsn" --plan-file "/private/partition-plan.json"
+   ```
+
+3. Только после успешного dry-run и отдельного допуска Apply на эту target используй тот же файл и возвращённый `receipt.plan_id`:
+
+   ```bash
+   engram-server repair-project-partitions apply --source-dsn-file "/private/source.dsn" --target-dsn-file "/private/target.dsn" --plan-file "/private/partition-plan.json" --plan-id "<receipt.plan_id из dry-run>"
+   ```
+
+Repair добавляет canonical registry rows с прежними labels, меняет только разрешённый `project_id` membership и добавляет недостающую unassigned metadata. Raw project values, bodies/history, прежние registry rows и B7 receipt, Vault, redirects, schema и sequences не переписываются. Unknown, ambiguous, empty-unproven и NULL Source остаются без придуманного UUID. Новая подписанная receipt хранится отдельно от B7; повтор того же Apply проверяет receipt и весь target без новой записи. Изменение source/target, неверный plan ID или конфликт не разрешают обход conservation guard.
+Новая unassigned membership сохраняет реальный `txid_current_snapshot()` read-only транзакции планирования; sealed plan связывает его отдельно от database identity. Прежний `SourceSnapshot` не меняется. Только новые registry rows получают UTC timestamp с точностью PostgreSQL до микросекунды; timestamps и `xmin` старых строк сохраняются.
+
+Обычные issue readers возвращают явные nullable `source_project_id` и `target_project_id`; исходные строки сохранены в `project_origin`. `project=<UUID>` фильтрует target, `source_project=<UUID>` — source; фильтры независимы, не ограничены по умолчанию `source_agent=human`. Detail с `project` проверяет одну из этих canonical ролей до выдачи body/comments. Unscoped reads сохраняют прежнюю политику доступа.
+
+Focused synthetic PostgreSQL proof: 3 новых проекта, 10 membership targets, 1 unassigned addition, 40 неизменённых sequences; source read-only, dry-run/failed-append rollback, replay и обычные store/HTTP readers прошли. Отдельный реальный CLI data cycle проверяет приватный typed plan-файл, dry-run с полным откатом, Apply/replay, отказ от source-as-target и запрет использования repair plan как adoption plan. Regression clock с ненулевыми наносекундами и сверка sealed provenance проверены без ослабления native conservation. Это не whole-owner rehearsal, проверка непустого Vault corpus, установленного binary или production cutover.
+
 #### Существующий HTTP transport до проверенного cutover
 
 Следующие шаги описывают ещё существующий custom transport и его ограничения, а не обязательный backup/VerifyBackup перед native CLI. Не выполняй оба пути как две последовательные миграции.

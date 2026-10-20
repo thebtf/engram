@@ -1,5 +1,5 @@
 import { computed, ref as sharedRef, watch, onBeforeUnmount, type Ref as SharedRef } from 'vue'
-import { isCatalogProject, projectName, useOperatorProjectContext } from './useOperatorProjectContext'
+import { isCatalogProject, isProjectUUID, projectName, useOperatorProjectContext } from './useOperatorProjectContext'
 
 let sharedIssuesPageRows: SharedRef<OperatorIssue[]> | undefined
 let sharedIssuesPageComments: SharedRef<OperatorIssueComment[]> | undefined
@@ -43,8 +43,9 @@ export interface OperatorIssue {
  type: OperatorIssueType
  age: string
  comments: number
- sourceProject: string
- targetProject: string
+ sourceProject: string | null
+ targetProject: string | null
+ projectOrigin: { sourceProject: string; targetProject: string }
  sourceDisplayName: string
  targetDisplayName: string
  labels: string[]
@@ -170,10 +171,9 @@ interface ApiIssueRow {
  status?: string
  priority?: string
  type?: string
- source_project?: string
- target_project?: string
- source_project_display_name?: string
- target_project_display_name?: string
+ source_project_id: string | null
+ target_project_id: string | null
+ project_origin: { source_project: string; target_project: string }
  labels?: string[]
  comment_count?: number
  created_at?: string
@@ -199,8 +199,6 @@ interface ApiIssueDetail {
  issue?: ApiIssueRow
  comments?: ApiIssueComment[]
  comment_count?: number
- source_project_display_name?: string
- target_project_display_name?: string
 }
 
 async function issueMutation<TIntent>(
@@ -289,8 +287,9 @@ function mapIssue(
  row: ApiIssueRow,
  commentCount = row.comment_count,
 ): OperatorIssue {
- const sourceProject = row.source_project || ''
- const targetProject = row.target_project || ''
+ if ((row.source_project_id !== null && !isProjectUUID(row.source_project_id)) || (row.target_project_id !== null && !isProjectUUID(row.target_project_id)) || !row.project_origin || typeof row.project_origin.source_project !== 'string' || typeof row.project_origin.target_project !== 'string') throw new TypeError('Invalid canonical issue project roles or origin')
+ const sourceProject = row.source_project_id
+ const targetProject = row.target_project_id
  const createdAt = row.created_at || ''
  const updatedAt = row.updated_at || createdAt
  return {
@@ -304,8 +303,9 @@ function mapIssue(
   comments: typeof commentCount === 'number' ? commentCount : 0,
   sourceProject,
   targetProject,
-  sourceDisplayName: isCatalogProject(sourceProject) ? projectName(sourceProject) : '',
-  targetDisplayName: isCatalogProject(targetProject) ? projectName(targetProject) : '',
+  projectOrigin: { sourceProject: row.project_origin.source_project, targetProject: row.project_origin.target_project },
+  sourceDisplayName: sourceProject && isCatalogProject(sourceProject) ? projectName(sourceProject) : '',
+  targetDisplayName: targetProject && isCatalogProject(targetProject) ? projectName(targetProject) : '',
   labels: Array.isArray(row.labels) ? row.labels : [],
   createdAt,
   updatedAt,
@@ -466,7 +466,15 @@ export function useOperatorIssues(): {
 
   if (result.kind === 'live' || result.kind === 'empty') {
    replaceRecord(projectNamesState.value, Object.fromEntries(context.projects.value.map((id) => [id, projectName(id)])))
-   const nextRows = sortIssues((result.data.issues || []).map((row) => mapIssue(row, row.comment_count)))
+   let nextRows: OperatorIssue[]
+   try {
+    nextRows = sortIssues((result.data.issues || []).map((row) => mapIssue(row, row.comment_count)))
+   } catch (cause) {
+    const mapped = toOperatorSourceError(cause, { source: 'issues-list', path: listEvidence.endpoint, method: 'GET' })
+    mapped.category = 'invalid-response'
+    state.value = errorState(listEvidence, mapped, { source: 'issues-list', run: async () => { await refresh(); return state.value } }, rowsState.value)
+    return
+   }
    replaceArray(rowsState.value, nextRows)
    totalCountState.value = typeof result.data.total === 'number' ? result.data.total : nextRows.length
    state.value = nextRows.length
@@ -500,11 +508,7 @@ export function useOperatorIssues(): {
    const payload = await operatorFetchJson<ApiIssueDetail>(endpoint, undefined, 'issues-detail')
    if (current !== detailGeneration || scope !== context.project.value) return
    const next = payload.issue
-    ? mapIssue({
-     ...payload.issue,
-     source_project_display_name: payload.source_project_display_name,
-     target_project_display_name: payload.target_project_display_name,
-    }, payload.comment_count ?? payload.comments?.length)
+    ? mapIssue(payload.issue, payload.comment_count ?? payload.comments?.length)
     : null
    if (next && (next.id !== id || (scope !== 'all' && next.sourceProject !== scope && next.targetProject !== scope))) throw new TypeError('Issue detail identity or project mismatch')
    detailStateValue.value = next
@@ -517,13 +521,16 @@ export function useOperatorIssues(): {
     path: endpoint,
     method: 'GET',
    })
+   if (nextError instanceof TypeError) mapped.category = 'invalid-response'
+   detailStateValue.value = null
+   replaceArray(commentsState.value, [])
    detailLoadState.value = errorState(evidence, mapped, {
     source: 'issues-detail',
     run: async () => {
      await openIssue(id)
      return detailLoadState.value
     },
-   }, detailStateValue.value)
+   }, null)
   }
  }
 

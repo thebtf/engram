@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Bind issue-role lookups as one PostgreSQL ID array instead of expanding one parameter per issue. Preserve complete large selections, independent nullable canonical roles and retained-membership privacy without changing public limits.
+
+- Preserve seven fixed partition-repair refusal codes in private CLI diagnostics; retain generic output for untyped or unknown errors. Require both PostgreSQL fixture DSNs before public-consumer setup, and navigate the explicit metadata-only view in the retained-reader browser regression without changing reader-first discovery.
+
 - Isolate only non-Git logical-project test fixtures through an explicit test-only temporary root, while keeping Git and SDK fixtures on native physical Windows paths. Preserve identity assertions, Git common-dir handling and production path semantics.
 
 - Adopt the byte-identical historical project-identity golden vectors into tracked testdata and read them there from the remaining GORM rejection tests, so clean source checkouts no longer depend on coordination-only `.agent` files. Preserve validation and retired-runtime boundaries.
@@ -35,6 +39,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Isolate canonical GORM/gRPC fixtures, bound their pools and await caller-owned audit writes before schema cleanup; retain restore guards and public data. Reuse focused retention/audit/gRPC proofs; the earlier 37-PASS run remains preservation FAIL (audit rows 37→40), followed by seven focused PASS with 40→40 preservation. Canonical continuity fixtures now migrate once per isolated parent (17→6), preserving every assertion and the unchanged 12m budget; reuse 22 focused lifecycle PASS plus three hash-bound slot CRUD/migration PASS from the earlier incomplete timeout run, not a full-suite or installed-acceptance claim.
 - Use registered canonical UUIDs and authenticated caller project context in MCP fixtures without weakening default-deny, privacy or pre-mutation rejection guards. Reuse 119 prior PASS plus one exact retry PASS after the context fix, not 120 fresh PASS or installed acceptance.
 - Seed the isolated operator-code fixture with a registered canonical project UUID while preserving five queue candidates, published/no-view checks and redacted provisioning errors.
+
+## [7.0.2] - 2026-10-19
+
+### Fixed
+
+- Restore distinct historical Knowledge Projects through sealed, local-only membership repair on a separately restored target. Preserve labels, raw rows and history, original B7 provenance, sequences and credential ciphertexts; bind new unassigned memberships to the actual read-only planning snapshot.
+- Discover retained readers on the first bounded page, separate reader and metadata counts, and keep selected content first. Bind issue lists and details to nullable canonical role UUIDs, display historical project origins separately, and reject foreign-project detail before loading body or comments.
+- Keep named new-project projections exact without changing NULL-label behavior; match only new project timestamps to PostgreSQL microsecond precision while preserving previous timestamps and xmin.
+
+### Changed
+
+- Align server/daemon, Claude/Codex/OMP packages and marketplace metadata, and OpenClaw package, descriptor and runtime metadata on 7.0.2. Regenerate package-bound launcher and parser policies through the qualified Go 1.26.9 Linux release producer. Retain earlier local repair/rehearsal proof under its original source and artifact identity; final release gates, deployment and ordinary installed-consumer acceptance remain separate checks.
 
 ## [7.0.1] - 2026-10-19
 
@@ -2319,7 +2335,8 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v7.0.1...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v7.0.2...HEAD
+[7.0.2]: https://github.com/thebtf/engram/compare/v7.0.1...v7.0.2
 [7.0.1]: https://github.com/thebtf/engram/compare/v7.0.0...v7.0.1
 [7.0.0]: https://github.com/thebtf/engram/compare/v6.52.1...v7.0.0
 [6.52.1]: https://github.com/thebtf/engram/compare/v6.52.0...v6.52.1
