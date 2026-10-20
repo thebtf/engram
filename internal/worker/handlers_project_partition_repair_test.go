@@ -29,6 +29,9 @@ import (
 )
 
 func TestProjectPartitionRepairPublicConsumers(t *testing.T) {
+	if os.Getenv("DATABASE_DSN") == "" || os.Getenv("ENGRAM_CONSOLIDATION_RESTORE_TEST_DSN") == "" {
+		t.Skip("DATABASE_DSN and ENGRAM_CONSOLIDATION_RESTORE_TEST_DSN are required for separate PostgreSQL fixtures")
+	}
 	backing := openWorkerUCIContextCompositionStore(t)
 	db := backing.DB
 	vault := newTestVault(t)
@@ -166,7 +169,6 @@ func partitionHTTPRepairFixture(t *testing.T, source *gormdb.Store, vault *vault
 	require.NoError(t, source.DB.Raw(`SELECT encode(sha256(convert_to(receipt::text,'UTF8')),'hex') FROM project_consolidation_operations WHERE idempotency_key=?`, id).Scan(&digest).Error)
 	require.NoError(t, source.DB.Raw("SELECT current_schema()").Scan(&schema).Error)
 	dsn := os.Getenv("ENGRAM_CONSOLIDATION_RESTORE_TEST_DSN")
-	require.NotEmpty(t, dsn)
 	admin, err := gormlib.Open(postgres.Open(dsn), &gormlib.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	require.NoError(t, err)
 	pool, err := admin.DB()

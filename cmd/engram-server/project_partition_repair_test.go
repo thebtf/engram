@@ -127,6 +127,15 @@ func TestProjectPartitionRepairCLIRealStoreComposition(t *testing.T) {
 	require.NoError(t, os.WriteFile(sourceFile, []byte(sourceDSN), 0o600))
 	require.NoError(t, os.WriteFile(targetFile, []byte(targetDSN), 0o600))
 	sourceBefore, targetBefore := snapshot(stores[0].DB), snapshot(stores[1].DB)
+	t.Run("invalid_parent_receipt_is_a_private_typed_refusal", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		require.Equal(t, 1, runProjectPartitionRepairOutput([]string{"plan", "--source-dsn-file", sourceFile, "--plan-file", planFile, "--parent-receipt-digest", strings.Repeat("0", 64)}, &stdout, &stderr))
+		require.Empty(t, stdout.String())
+		require.JSONEq(t, `{"code":"PROJECT_ADOPTION_PARENT_RECEIPT_INVALID"}`, stderr.String())
+		require.NoFileExists(t, planFile)
+		require.Equal(t, sourceBefore, snapshot(stores[0].DB))
+		require.Equal(t, targetBefore, snapshot(stores[1].DB))
+	})
 	call := func(args ...string) []byte {
 		t.Helper()
 		var stdout, stderr bytes.Buffer

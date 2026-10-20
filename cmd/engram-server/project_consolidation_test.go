@@ -2,12 +2,16 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	gormdb "github.com/thebtf/engram/internal/db/gorm"
 )
 
 func TestProjectConsolidationCLIRequiresPrivateFilesAndExplicitCommitPlan(t *testing.T) {
@@ -69,4 +73,33 @@ func TestProjectConsolidationCLINeverPrintsInputOrFallsBackToLiveDSN(t *testing.
 	require.NotContains(t, stderr.String(), "private-test-value")
 	require.NotContains(t, stderr.String(), "never-print-this-token")
 	require.Contains(t, stderr.String(), "PROJECT_ADOPTION_TARGET_IS_SOURCE")
+}
+
+func TestProjectConsolidationCLIErrorPreservesFixedRepairCodes(t *testing.T) {
+	for _, code := range []string{
+		"PROJECT_ADOPTION_PARENT_RECEIPT_INVALID",
+		"PROJECT_ADOPTION_PARENT_RECEIPT_REQUIRED",
+		"PROJECT_ADOPTION_CONFLICTING_MEMBERSHIP",
+		"PROJECT_ADOPTION_UNSAFE_PROJECT_LABEL",
+		"PROJECT_ADOPTION_STALE_REFERENCE",
+		"PROJECT_ADOPTION_UNKNOWN_REFERENCE",
+		"PROJECT_ADOPTION_METADATA_CAPACITY_EXCEEDED",
+		"PROJECT_ADOPTION_STALE_PLAN",
+	} {
+		t.Run(code, func(t *testing.T) {
+			domain := &gormdb.ConsolidationError{Code: code}
+			require.Equal(t, code, consolidationCLIError(domain))
+			require.Equal(t, code, consolidationCLIError(fmt.Errorf("private owner diagnostic: %w", domain)))
+		})
+	}
+	for _, err := range []error{
+		errors.New("PROJECT_ADOPTION_PARENT_RECEIPT_INVALID"),
+		errors.New("private database diagnostic"),
+		&gormdb.ConsolidationError{Code: "PROJECT_ADOPTION_UNKNOWN_PRIVATE_CODE"},
+		&gormdb.ConsolidationError{Code: "PROJECT_ADOPTION_PARENT_RECEIPT_INVALID private owner diagnostic"},
+	} {
+		require.Equal(t, "PROJECT_ADOPTION_NATIVE_OPERATION_FAILED", consolidationCLIError(err))
+	}
+	require.Equal(t, "PROJECT_ADOPTION_CANCELLED", consolidationCLIError(fmt.Errorf("private diagnostic: %w", context.Canceled)))
+	require.Equal(t, "PROJECT_ADOPTION_DEADLINE", consolidationCLIError(fmt.Errorf("private diagnostic: %w", context.DeadlineExceeded)))
 }
