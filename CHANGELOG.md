@@ -7,8 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Page the complete Issues result using server limit/offset/status and matching totals; label All as 200 per page and keep every page reachable. Expose the selected canonical project's incoming-target versus source-owned filter without changing backend role predicates, nullable provenance, actor authority or foreign detail/comment isolation. Cover 502 IDs, issue477 and existing comment1562 through the real compiled page and isolated HTTP fixture; installed delivery remains separate.
-
 - Bind issue-role lookups as one PostgreSQL ID array instead of expanding one parameter per issue. Preserve complete large selections, independent nullable canonical roles and retained-membership privacy without changing public limits.
 
 - Preserve seven fixed partition-repair refusal codes in private CLI diagnostics; retain generic output for untyped or unknown errors. Require both PostgreSQL fixture DSNs before public-consumer setup, and navigate the explicit metadata-only view in the retained-reader browser regression without changing reader-first discovery.
@@ -41,6 +39,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Isolate canonical GORM/gRPC fixtures, bound their pools and await caller-owned audit writes before schema cleanup; retain restore guards and public data. Reuse focused retention/audit/gRPC proofs; the earlier 37-PASS run remains preservation FAIL (audit rows 37→40), followed by seven focused PASS with 40→40 preservation. Canonical continuity fixtures now migrate once per isolated parent (17→6), preserving every assertion and the unchanged 12m budget; reuse 22 focused lifecycle PASS plus three hash-bound slot CRUD/migration PASS from the earlier incomplete timeout run, not a full-suite or installed-acceptance claim.
 - Use registered canonical UUIDs and authenticated caller project context in MCP fixtures without weakening default-deny, privacy or pre-mutation rejection guards. Reuse 119 prior PASS plus one exact retry PASS after the context fix, not 120 fresh PASS or installed acceptance.
 - Seed the isolated operator-code fixture with a registered canonical project UUID while preserving five queue candidates, published/no-view checks and redacted provisioning errors.
+
+## [7.0.3] - 2026-10-21
+
+### Fixed
+
+- Page the complete Issues result using server limit/offset/status and matching totals; label All as 200 per page and keep every page reachable. Expose the selected canonical project's incoming-target versus source-owned filter without changing backend role predicates, nullable provenance, actor authority or foreign detail/comment isolation. Cover 502 IDs, issue477 and existing comment1562 through the real compiled page and isolated HTTP fixture; installed delivery remains separate.
+
+### Changed
+
+- Align server/daemon, Claude/Codex/OMP packages and marketplace metadata, and OpenClaw package, descriptor and runtime metadata on 7.0.3. Regenerate package-bound launcher and parser policies through the canonical Go 1.26.9 Linux producer; preserve byte-identical parser inputs and raw bytes, the 7.0.2 migrations, data and privacy guards. Final release gates and ordinary installed-navigation proof remain separate.
 
 ## [7.0.2] - 2026-10-19
 
@@ -2337,7 +2345,8 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v7.0.2...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v7.0.3...HEAD
+[7.0.3]: https://github.com/thebtf/engram/compare/v7.0.2...v7.0.3
 [7.0.2]: https://github.com/thebtf/engram/compare/v7.0.1...v7.0.2
 [7.0.1]: https://github.com/thebtf/engram/compare/v7.0.0...v7.0.1
 [7.0.0]: https://github.com/thebtf/engram/compare/v6.52.1...v7.0.0
