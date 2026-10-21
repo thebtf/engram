@@ -35,14 +35,18 @@ function issue(id: number) {
  }
 }
 
-test('Select all freezes every matching issue when the loaded page is capped at 200 rows', async ({ page }) => {
+test('Select all freezes every matching issue beyond the currently loaded bounded page', async ({ page }) => {
  const rows = Array.from({ length: 201 }, (_, index) => issue(index + 1))
  const selectionRequests: Array<Record<string, unknown>> = []
  const operationRequests: Array<Record<string, unknown>> = []
 
- await page.route('**/api/issues?**', (route: Route) => route.fulfill({
-  json: { issues: rows.slice(0, 200), total: rows.length, project_names: {} },
- }))
+ await page.route('**/api/issues?**', (route: Route) => {
+  const query = new URL(route.request().url()).searchParams
+  const matching = rows.filter(row => !query.has('status') || query.get('status')!.split(',').includes(row.status))
+  const offset = Number(query.get('offset') || 0)
+  const limit = Number(query.get('limit') || 50)
+  return route.fulfill({ json: { issues: matching.slice(offset, offset + limit), total: matching.length, project_names: {} } })
+ })
  await page.route('**/api/issues/selection', async (route: Route) => {
   selectionRequests.push(route.request().postDataJSON() as Record<string, unknown>)
   await route.fulfill({ json: { selection: frozenSelection } })

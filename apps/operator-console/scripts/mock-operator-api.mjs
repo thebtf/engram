@@ -648,6 +648,18 @@ let issueRows = [
   },
 ]
 let issueComments = []
+if (process.env.OPERATOR_ISSUE_DISCOVERY_FIXTURE === '1') {
+  const source = fixtureProjectIDs['operator-console']
+  const other = fixtureProjectIDs['project-alpha']
+  const target = fixtureProjectIDs.engram
+  issueRows = Array.from({ length: 502 }, (_, index) => {
+    const id = index + 1
+    const sourceID = id === 477 || id === 478 ? source : id === 479 ? null : other
+    const targetID = id === 477 || id === 480 ? null : id === 481 ? source : id === 478 ? other : target
+    return { id, title: `Discovery issue ${id}`, body: `Preserved issue body ${id}`, status: id % 2 ? 'open' : 'resolved', priority: id === 477 ? 'low' : 'medium', type: 'task', source_agent: 'agent', source_project: id === 479 ? source : 'historical-source', target_project: id === 480 ? source : 'historical-target', source_project_id: sourceID, target_project_id: targetID, project_origin: { source_project: id === 479 ? source : 'historical-source', target_project: id === 480 ? source : 'historical-target' }, labels: [], created_at: new Date(Date.UTC(2026, 9, 1, 0, 0, id)).toISOString(), updated_at: '2026-10-01T12:00:00Z' }
+  }).sort((left, right) => (left.id === 477 ? 1 : right.id === 477 ? -1 : right.id - left.id))
+  issueComments = [{ id: 1562, issue_id: 477, body: 'Existing discussion 1562', author_project: 'historical-author', author_agent: 'agent', created_at: '2026-10-01T12:00:00Z' }]
+}
 let bookJobs = []
 let documentRows = []
 
@@ -1990,7 +2002,7 @@ const server = createServer(async (req, res) => {
       const rows = issueRows.filter((row) => (!project || row.target_project_id === project)
         && (!source || row.source_project_id === source) && (!target || row.target_project_id === target)
         && (actor === null || row.source_agent === actor)
-        && ['status', 'priority', 'type'].every((key) => !url.searchParams.has(key) || row[key] === url.searchParams.get(key)))
+        && ['status', 'priority', 'type'].every((key) => !url.searchParams.has(key) || url.searchParams.get(key).split(',').includes(row[key])))
       json(res, 200, {
         issues: rows.slice(offset, offset + limit).map((issue) => ({ ...issue, labels: [...issue.labels], comment_count: issueComments.filter((comment) => comment.issue_id === issue.id).length })),
         total: rows.length,

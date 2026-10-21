@@ -96,6 +96,13 @@ export interface IssueSelectionFilter {
  type?: OperatorIssueType
 }
 
+interface IssueListOptions {
+ limit: number
+ offset: number
+ role: 'target' | 'source'
+ statuses: OperatorIssueStatus[]
+}
+
 export interface IssueSelectionPage {
  cursor: string
  nextCursor: string
@@ -382,7 +389,7 @@ function sortIssues(rows: OperatorIssue[]) {
 }
 
 
-export function useOperatorIssues(): {
+export function useOperatorIssues(options?: Readonly<SharedRef<IssueListOptions>>): {
  rows: OperatorIssue[]
  comments: OperatorIssueComment[]
  projectNames: Record<string, string>
@@ -437,8 +444,9 @@ export function useOperatorIssues(): {
  let detailGeneration = 0
 
  function catalogFilter(filter: IssueSelectionFilter, project: string): IssueSelectionFilter {
-  if ((filter.project !== undefined && filter.project !== project) || (filter.sourceProject !== undefined && !isCatalogProject(filter.sourceProject))) throw new TypeError('Issue filter must use the selected catalog project')
-  return { ...filter, project }
+  const sourceRole = options?.value.role === 'source'
+  if ((filter.project !== undefined && (!isCatalogProject(filter.project) || (!sourceRole && filter.project !== project))) || (filter.sourceProject !== undefined && (!isCatalogProject(filter.sourceProject) || (sourceRole && filter.sourceProject !== project)))) throw new TypeError('Issue filter must use the selected catalog project role')
+  return { ...filter, ...(sourceRole ? { sourceProject: project } : { project }) }
  }
 
  function humanSource(sourceProject: string) {
@@ -449,15 +457,17 @@ export function useOperatorIssues(): {
  async function refresh() {
   const current = ++generation
   const scope = context.project.value
-  if (scope !== sharedIssuesPageScope) {
+  const listScope = `${scope}:${options?.value.role || 'target'}:${options?.value.statuses.join(',') || ''}`
+  if (listScope !== sharedIssuesPageScope) {
    replaceArray(rowsState.value, [])
    totalCountState.value = 0
-   sharedIssuesPageScope = scope
+   sharedIssuesPageScope = listScope
   }
   if (context.selectionPending.value || context.selectionError.value || context.error.value || !scope || (scope !== 'all' && !isCatalogProject(scope))) { state.value = gatedState(listEvidence, 'project-selection', 'Choose a catalog project before reading issues.', rowsState.value); return }
   state.value = pendingState(listEvidence, rowsState.value)
-  const params = new URLSearchParams({ limit: '200' })
-  if (scope !== 'all') params.set('project', scope)
+  const params = new URLSearchParams({ limit: String(options?.value.limit ?? 200), offset: String(options?.value.offset ?? 0) })
+  if (scope !== 'all') params.set(options?.value.role === 'source' ? 'source_project' : 'project', scope)
+  if (options?.value.statuses.length) params.set('status', options.value.statuses.join(','))
   const result = await loadOperatorJson<ApiIssueList>(`/api/issues?${params}`, {
    source: 'issues-list',
    empty: (payload) => !(payload.issues || []).length,
@@ -699,6 +709,7 @@ export function useOperatorIssues(): {
   replaceArray(commentsState.value, [])
   void refresh()
  }, { immediate: true, flush: 'sync' })
+ if (options) watch(options, () => { void refresh() })
  onBeforeUnmount(() => { generation += 1; detailGeneration += 1 })
 
  return {

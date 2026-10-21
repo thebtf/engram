@@ -235,6 +235,24 @@ top level, including cursor-only and empty-selection requests. Nested filter sou
 fields remain row predicates, not actor attribution. Atomic operations retain the
 same acting context, generation guards, expiry and ID-bound readback.
 
+Issue discovery uses bounded server-side `limit`/`offset` pages and the server's
+matching `total`, including status filters. Numeric sizes request 10, 25 or 50 rows;
+the explicitly labelled “All · 200 per page” option traverses every match in pages
+of at most 200, not an unbounded download or a truncated one-page result. Status
+figures describe the current page; the matching total and pager describe the full
+filtered result. With a canonical project selected, choose “Incoming (target project)”
+for the existing `project=<UUID>` predicate or “Created by (source project)” for
+`source_project=<UUID>`. All projects omits both role predicates. These choices
+never infer either nullable role from raw origin labels or change the acting human
+project, scoped detail membership checks, or selection authorization.
+
+The focused `tests/composables/issue-discovery.spec.mjs` regression compiles the real
+Issues page/composables and uses the existing isolated HTTP mock with
+`OPERATOR_ISSUE_DISCOVERY_FIXTURE=1`: 502 distinct IDs across 200/200/102 rows,
+issue477 after the first page, existing comment1562, numeric/status pages,
+independent source/target and NULL/raw-origin cases, and foreign detail clearance.
+This is local UI/HTTP-layer proof, not PostgreSQL, deployment or installed acceptance.
+
 
 The mock uses the real bound `POST /api/code/contexts?project=<UUID>` shape, including
 `tab_binding_id` and `document_proof`. Human issue fixtures require explicit canonical

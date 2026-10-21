@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Page the complete Issues result using server limit/offset/status and matching totals; label All as 200 per page and keep every page reachable. Expose the selected canonical project's incoming-target versus source-owned filter without changing backend role predicates, nullable provenance, actor authority or foreign detail/comment isolation. Cover 502 IDs, issue477 and existing comment1562 through the real compiled page and isolated HTTP fixture; installed delivery remains separate.
+
 - Bind issue-role lookups as one PostgreSQL ID array instead of expanding one parameter per issue. Preserve complete large selections, independent nullable canonical roles and retained-membership privacy without changing public limits.
 
 - Preserve seven fixed partition-repair refusal codes in private CLI diagnostics; retain generic output for untyped or unknown errors. Require both PostgreSQL fixture DSNs before public-consumer setup, and navigate the explicit metadata-only view in the retained-reader browser regression without changing reader-first discovery.
