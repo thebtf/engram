@@ -45,10 +45,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Page the complete Issues result using server limit/offset/status and matching totals; label All as 200 per page and keep every page reachable. Expose the selected canonical project's incoming-target versus source-owned filter without changing backend role predicates, nullable provenance, actor authority or foreign detail/comment isolation. Cover 502 IDs, issue477 and existing comment1562 through the real compiled page and isolated HTTP fixture; installed delivery remains separate.
+- Correct the unavailable-read fixture to honor issue limit/offset/total and its real stale IDs; upgrade the operator-console build dependency to Vite 8.3.4 without changing issue authorization or privacy guards.
 
 ### Changed
 
-- Align server/daemon, Claude/Codex/OMP packages and marketplace metadata, and OpenClaw package, descriptor and runtime metadata on 7.0.3. Regenerate package-bound launcher and parser policies through the canonical Go 1.26.9 Linux producer; preserve byte-identical parser inputs and raw bytes, the 7.0.2 migrations, data and privacy guards. Final release gates and ordinary installed-navigation proof remain separate.
+- Align server/daemon, Claude/Codex/OMP packages and marketplace metadata, and OpenClaw package, descriptor and runtime metadata on 7.0.3. Advance the pinned Go builder and exact installer boundary to Go 1.26.10 for GO-2026-6809, and regenerate all three launcher policies and the Windows parser policy with the canonical Linux producer and unchanged MinGW 13-win32 compiler. Preserve the 7.0.2 migrations, data and privacy guards; release gates and ordinary installed-navigation proof remain separate.
 
 ## [7.0.2] - 2026-10-19
 

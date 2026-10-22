@@ -23,7 +23,7 @@ function installerPath(fakeBin) {
     : `${bashPath(fakeBin)}:${process.env.PATH}`;
 }
 function shellQuote(value) { return `'${value.replaceAll("'", `'\\''`)}'`; }
-function temporaryDirectory() { return fs.mkdtempSync(path.join(root, ".tmp-bootstrap-policy-")); }
+function temporaryDirectory() { return fs.mkdtempSync(path.join(os.tmpdir(), ".tmp-bootstrap-policy-")); }
 function directInstallerFixture(temp, version = currentPolicyVersion, extension = "tar.gz") {
   const archiveRoot = path.join(temp, "archive");
   const fakeBin = path.join(temp, "bin");
@@ -51,7 +51,7 @@ function directInstallerFixture(temp, version = currentPolicyVersion, extension 
       "darwin-arm64": target(version, "engram-darwin-arm64", bytes),
     });
     const [major, minor, patch] = version.split("-", 1)[0].split(".").map(Number);
-    policy.build_contract.go_version = major > 6 || (major === 6 && (minor > 50 || (minor === 50 && patch >= 4))) ? "1.26.9" : major === 6 && (minor > 47 || (minor === 47 && patch >= 6)) ? "1.26.6" : "1.25.12";
+    policy.build_contract.go_version = major > 7 || (major === 7 && (minor > 0 || patch >= 3)) ? "1.26.10" : major > 6 || (major === 6 && (minor > 50 || (minor === 50 && patch >= 4))) ? "1.26.9" : major === 6 && (minor > 47 || (minor === 47 && patch >= 6)) ? "1.26.6" : "1.25.12";
     fs.writeFileSync(path.join(archiveRoot, "bootstrap-targets.json"), JSON.stringify(policy));
   }
   if (version === currentPolicyVersion) fs.copyFileSync(path.join(root, "plugin", "engram", "parser-targets.json"), path.join(archiveRoot, "parser-targets.json"));
@@ -1682,6 +1682,14 @@ test("trusted installers preserve the Go toolchain version boundary", () => {
       ["security-future-patch", "6.50.5", "1.26.9", true],
       ["security-future-minor", "6.51.0", "1.26.9", true],
       ["security-future-major", "7.0.0", "1.26.9", true],
+      ["last-x509-old-toolchain", "7.0.2", "1.26.9", true],
+      ["last-x509-old-toolchain-wrong", "7.0.2", "1.26.10", false],
+      ["x509-security-patch", "7.0.3", "1.26.10", true],
+      ["x509-security-patch-old-toolchain", "7.0.3", "1.26.9", false],
+      ["x509-security-prerelease", "7.0.3-rc.1", "1.26.10", true],
+      ["x509-security-prerelease-old-toolchain", "7.0.3-rc.1", "1.26.9", false],
+      ["x509-security-future-patch", "7.0.4", "1.26.10", true],
+      ["x509-security-future-minor", "7.1.0", "1.26.10", true],
     ];
     for (const installer of ["install.ps1", "install.sh"]) {
       const validator = installerValidator(fs.readFileSync(path.join(root, "scripts", installer), "utf8"));
@@ -1797,7 +1805,7 @@ function buildServerArchive(archiveRoot, archivePath) {
 
 test("parser policy generator accepts package SemVer and rejects mismatched or unsafe versions", () => {
   const temp = temporaryDirectory();
-  const generator = "../scripts/prepare-parser-targets.sh";
+  const generator = shellQuote(path.join(root, "scripts", "prepare-parser-targets.sh").split(path.sep).join("/"));
   const policy = path.join(temp, "parser-targets.json");
   const go = path.join(temp, "go");
   const compiler = path.join(temp, "cc");
@@ -1810,7 +1818,7 @@ test("parser policy generator accepts package SemVer and rejects mismatched or u
   };
   try {
     for (const name of manifests) fs.mkdirSync(path.join(temp, "plugin", "engram", name), { recursive: true });
-    fs.writeFileSync(go, "#!/usr/bin/env bash\nif [[ $1 == version ]]; then printf '%s\\n' \"${FAKE_GO_VERSION:-go version go1.26.9 linux/amd64}\"; exit 0; fi\nfor arg in \"$@\"; do if [[ $arg == -o ]]; then output=1; continue; fi; if [[ ${output:-0} == 1 ]]; then printf 'parser-fixture' > \"$arg\"; exit 0; fi; done\nexit 1\n", { mode: 0o755 });
+    fs.writeFileSync(go, "#!/usr/bin/env bash\nif [[ $1 == version ]]; then printf '%s\\n' \"${FAKE_GO_VERSION:-go version go1.26.10 linux/amd64}\"; exit 0; fi\nfor arg in \"$@\"; do if [[ $arg == -o ]]; then output=1; continue; fi; if [[ ${output:-0} == 1 ]]; then printf 'parser-fixture' > \"$arg\"; exit 0; fi; done\nexit 1\n", { mode: 0o755 });
     fs.writeFileSync(compiler, "#!/usr/bin/env bash\n[[ $1 == --version ]] || exit 1\nprintf '%s\\n' \"${FAKE_CC_VERSION:-x86_64-w64-mingw32-gcc (GCC) 13-win32}\"\n", { mode: 0o755 });
     for (const version of ["6.50.0", "6.50.0-rc.1", "6.50.0+build.5", "6.50.0-rc.1+build.5"]) {
       setManifestVersion(version);
@@ -1829,10 +1837,11 @@ test("parser policy generator accepts package SemVer and rejects mismatched or u
     }
     setManifestVersion("6.50.0");
     for (const env of [
-      { FAKE_GO_VERSION: "go version go1.26.9 windows/amd64" },
+      { FAKE_GO_VERSION: "go version go1.26.10 windows/amd64" },
       { FAKE_GO_VERSION: "go version go1.26.5 linux/amd64" },
       { FAKE_GO_VERSION: "go version go1.26.6 linux/amd64" },
       { FAKE_GO_VERSION: "go version go1.26.8 linux/amd64" },
+      { FAKE_GO_VERSION: "go version go1.26.9 linux/amd64" },
       { FAKE_CC_VERSION: "x86_64-w64-mingw32-gcc (GCC) 13-posix" },
       { FAKE_CC_VERSION: "x86_64-w64-mingw32-gcc (GCC) 14.2.0" },
     ]) {
@@ -1879,7 +1888,7 @@ test("generator check mode and combined artifact gate accept only the shared tar
     const dist = path.join(temp, "dist");
     const currentVersion = JSON.parse(fs.readFileSync(path.join(root, "plugin", "engram", "package.json"), "utf8")).version;
     fs.mkdirSync(fakeBin, { recursive: true });
-    fs.writeFileSync(fakeGo, "#!/usr/bin/env bash\nif [[ $1 == version ]]; then echo 'go version go1.26.9 linux/amd64'; exit 0; fi\nfor arg in \"$@\"; do [[ $arg == ./tools/uci-parser ]] && parser=1; done\nwhile [[ $# -gt 0 ]]; do\n  if [[ $1 == -ldflags ]]; then [[ $2 == *-buildid=* ]] || exit 1; shift 2; continue; fi\n  if [[ $1 == -o ]]; then shift; if [[ ${parser:-0} == 1 ]]; then printf 'parser-windows-amd64' > \"$1\"; else printf '%s-%s' \"$GOOS\" \"$GOARCH\" > \"$1\"; fi; exit 0; fi\n  shift\ndone\nexit 1\n", { mode: 0o755 });
+    fs.writeFileSync(fakeGo, "#!/usr/bin/env bash\nif [[ $1 == version ]]; then echo 'go version go1.26.10 linux/amd64'; exit 0; fi\nfor arg in \"$@\"; do [[ $arg == ./tools/uci-parser ]] && parser=1; done\nwhile [[ $# -gt 0 ]]; do\n  if [[ $1 == -ldflags ]]; then [[ $2 == *-buildid=* ]] || exit 1; shift 2; continue; fi\n  if [[ $1 == -o ]]; then shift; if [[ ${parser:-0} == 1 ]]; then printf 'parser-windows-amd64' > \"$1\"; else printf '%s-%s' \"$GOOS\" \"$GOARCH\" > \"$1\"; fi; exit 0; fi\n  shift\ndone\nexit 1\n", { mode: 0o755 });
     const fakeCompiler = path.join(fakeBin, "cc");
     fs.writeFileSync(fakeCompiler, "#!/usr/bin/env bash\n[[ $1 == --version ]] || exit 1\nprintf '%s\\n' 'x86_64-w64-mingw32-gcc (GCC) 13-win32'\n", { mode: 0o755 });
     const fakeGoArgument = shellQuote(bashPath(fakeGo));

@@ -8,8 +8,8 @@
       "desired": {
         "version": "7.0.3",
         "asset": "engram-windows-amd64.exe",
-        "size": 23262720,
-        "sha256": "6b1ff00de32d58557d214fb22a2972add7ccc51aab890b7969c57f51ba7b745f"
+        "size": 23264768,
+        "sha256": "cccffec25e660e5def9dda57d59df4ced2c738ef77c6c195bb6da433a25d30c0"
       },
       "predecessor": null
     },
@@ -18,7 +18,7 @@
         "version": "7.0.3",
         "asset": "engram-linux-amd64",
         "size": 22577278,
-        "sha256": "93f9bb452d5cd9d62dbbd1abe52d6621bb79234fbd20c7038685ccd1d655475d"
+        "sha256": "28cbf5b013aa59d92b112b5ceb32612e15c5214fccd9d8408e35770fd10ee522"
       },
       "predecessor": null
     },
@@ -27,14 +27,14 @@
         "version": "7.0.3",
         "asset": "engram-darwin-arm64",
         "size": 21984690,
-        "sha256": "ae3ef0a76b5ad9a90b147139875755e616ea3f659dff2551e349ea030e918074"
+        "sha256": "7cc755325a5e848ab879227f5461a4b6c08c536960e817cd683bacab9fe807fb"
       },
       "predecessor": null
     }
   },
   "revoked_sha256": [],
   "build_contract": {
-    "go_version": "1.26.9",
+    "go_version": "1.26.10",
     "trimpath": true,
     "buildvcs": false,
     "client_cgo": false,
