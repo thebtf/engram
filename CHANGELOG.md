@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Stabilize issue-page ties with descending issue IDs, convert Windows fixture PATH entries with Git Bash, and pin the PostgreSQL CA bundle to 20260909-r3.
+
 - Make package fixtures portable across private temporary roots and Git Bash: check retained-backup identity, resolve generator paths from their fixture cwd, preserve the qualified shell PATH and match archive formats to the exercised host. Keep recovery and rejection checks unchanged.
 
 - Bind issue-role lookups as one PostgreSQL ID array instead of expanding one parameter per issue. Preserve complete large selections, independent nullable canonical roles and retained-membership privacy without changing public limits.
