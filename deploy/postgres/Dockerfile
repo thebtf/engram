@@ -7,6 +7,7 @@ FROM docker.io/chainguard/wolfi-base@sha256:02dab76bd852a70556b5b2002195c8a5fdab
 RUN apk --repositories-file /dev/null --repository https://packages.wolfi.dev/os --no-cache add \
   bash=5.3-r12 \
   busybox=1.38.0-r2 \
+  ca-certificates-bundle=20260909-r3 \
   gosu=1.19-r13 \
   libcrypto3=3.6.4-r5 \
   libssl3=3.6.4-r5 \
