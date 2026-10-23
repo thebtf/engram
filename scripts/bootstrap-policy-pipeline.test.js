@@ -18,13 +18,15 @@ function run(command, args, options = {}) {
 
 function bashPath(value) { return path.relative(root, value).split(path.sep).join("/"); }
 function installerPath(fakeBin) {
-  return process.platform === "win32"
-    ? `${bashPath(fakeBin)}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`
-    : `${bashPath(fakeBin)}:${process.env.PATH}`;
+  if (process.platform !== "win32") return `${bashPath(fakeBin)}:${process.env.PATH}`;
+  const inherited = spawnSync("bash", ["-c", 'printf "%s" "$PATH"'], { encoding: "utf8", env: process.env });
+  assert.ifError(inherited.error);
+  assert.equal(inherited.status, 0, inherited.stderr);
+  return `${bashPath(fakeBin)}:${inherited.stdout}`;
 }
 function shellQuote(value) { return `'${value.replaceAll("'", `'\\''`)}'`; }
 function temporaryDirectory() { return fs.mkdtempSync(path.join(os.tmpdir(), ".tmp-bootstrap-policy-")); }
-function directInstallerFixture(temp, version = currentPolicyVersion, extension = "tar.gz") {
+function directInstallerFixture(temp, version = currentPolicyVersion, extension = process.platform === "win32" ? "zip" : "tar.gz") {
   const archiveRoot = path.join(temp, "archive");
   const fakeBin = path.join(temp, "bin");
   for (const directory of ["hooks", "scripts", ".claude-plugin", "extensions"]) fs.mkdirSync(path.join(archiveRoot, directory), { recursive: true });
@@ -64,7 +66,7 @@ function directInstallerFixture(temp, version = currentPolicyVersion, extension 
     assert.equal(archived.status, 0, archived.stderr);
   }
   fs.writeFileSync(path.join(fakeBin, "curl"), "#!/usr/bin/env bash\nwhile [[ $# -gt 0 ]]; do if [[ $1 == -o ]]; then cp \"$FAKE_RELEASE_ARCHIVE\" \"$2\"; exit 0; fi; shift; done\nexit 1\n", { mode: 0o755 });
-  return { archive, fakeBin };
+  return { archive, fakeBin, entries };
 }
 const registrationStaged = (file) => /(?:installed_plugins|settings|known_marketplaces)\.json\.staged-\d+-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\.tmp$/.test(String(file));
 const registrationBackup = (file) => /(?:installed_plugins|settings|known_marketplaces)\.json\.backup-\d+-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(String(file));
@@ -1805,7 +1807,7 @@ function buildServerArchive(archiveRoot, archivePath) {
 
 test("parser policy generator accepts package SemVer and rejects mismatched or unsafe versions", () => {
   const temp = temporaryDirectory();
-  const generator = shellQuote(path.join(root, "scripts", "prepare-parser-targets.sh").split(path.sep).join("/"));
+  const generator = shellQuote(path.relative(temp, path.join(root, "scripts", "prepare-parser-targets.sh")).split(path.sep).join("/"));
   const policy = path.join(temp, "parser-targets.json");
   const go = path.join(temp, "go");
   const compiler = path.join(temp, "cc");
@@ -1977,9 +1979,13 @@ test("direct installer rejects archive self-validation before install mutation",
     const validPolicy = fs.readFileSync(path.join(root, "plugin", "engram", "bootstrap-targets.json"), "utf8");
     const duplicatePolicy = validPolicy.replace('"schema_version": 1,', '"schema_version": 1,\n  "\\u0073chema_version": 1,');
     fs.writeFileSync(path.join(archiveRoot, "bootstrap-targets.json"), duplicatePolicy);
-    const archive = path.join(temp, "hostile-release.tar.gz");
-    const archived = spawnSync("tar", ["-czf", archive, "-C", archiveRoot, "."], { encoding: "utf8" });
-    assert.equal(archived.status, 0, archived.stderr);
+    const archive = path.join(temp, process.platform === "win32" ? "hostile-release.zip" : "hostile-release.tar.gz");
+    if (archive.endsWith(".zip")) {
+      writeZip(archiveRoot, archive, ["hooks/hook.js", "hooks/hooks.json", "scripts/bootstrap-policy.js", "scripts/register-plugin.js", "package.json", "extensions/engram-memory.mjs", ".claude-plugin/plugin.json", "bootstrap-targets.json"]);
+    } else {
+      const archived = spawnSync("tar", ["-czf", archive, "-C", archiveRoot, "."], { encoding: "utf8" });
+      assert.equal(archived.status, 0, archived.stderr);
+    }
     const fakeCurl = path.join(fakeBin, "curl");
     fs.writeFileSync(fakeCurl, "#!/usr/bin/env bash\nwhile [[ $# -gt 0 ]]; do if [[ $1 == -o ]]; then cp \"$FAKE_RELEASE_ARCHIVE\" \"$2\"; exit 0; fi; shift; done\nexit 1\n", { mode: 0o755 });
 
@@ -2105,8 +2111,12 @@ test("direct installer installs parser policy on fresh install and upgrade and r
         const archiveRoot = path.join(temp, name, "archive");
         if (parser === null) fs.rmSync(path.join(archiveRoot, "parser-targets.json"));
         else fs.writeFileSync(path.join(archiveRoot, "parser-targets.json"), parser);
-        const archived = spawnSync("tar", ["-czf", fixture.archive, "-C", archiveRoot, "."], { encoding: "utf8" });
-        assert.equal(archived.status, 0, archived.stderr);
+        if (fixture.archive.endsWith(".zip")) {
+          writeZip(archiveRoot, fixture.archive, fixture.entries.filter((entry) => fs.existsSync(path.join(archiveRoot, entry))));
+        } else {
+          const archived = spawnSync("tar", ["-czf", fixture.archive, "-C", archiveRoot, "."], { encoding: "utf8" });
+          assert.equal(archived.status, 0, archived.stderr);
+        }
       }
       if (name === "upgrade") fs.writeFileSync(destination, "stale policy");
       const environment = `HOME=${shellQuote(bashPath(home))} PATH=${shellQuote(installerPath(fixture.fakeBin))} FAKE_RELEASE_ARCHIVE=${shellQuote(bashPath(fixture.archive))} ENGRAM_URL=http://localhost:37777/mcp ENGRAM_API_TOKEN=`;
@@ -2376,7 +2386,8 @@ test("direct installer retains an orphan backup when post-commit cleanup fails",
     assert.equal(backups.length, 1);
     assert.ok(backups[0].startsWith(`${pluginsFile}.backup-`));
     assert.deepEqual(fs.readFileSync(backups[0]), before[0]);
-    assert.ok(output.includes(bashPath(backups[0])));
+    const recoveryPath = output.match(/remove (.+): injected first registration backup unlink failure/)[1];
+    run("bash", ["-c", `test ${shellQuote(recoveryPath)} -ef ${shellQuote(bashPath(backups[0]))}`]);
     assert.deepEqual(artifacts.filter(registrationStaged), []);
     assert.match(fs.readFileSync(failureLog, "utf8").trimEnd().replaceAll("\\", "/"), new RegExp(`${path.basename(backups[0]).replaceAll(".", "\\.")}$`));
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
