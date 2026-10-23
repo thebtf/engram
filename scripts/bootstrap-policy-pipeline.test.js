@@ -19,10 +19,10 @@ function run(command, args, options = {}) {
 function bashPath(value) { return path.relative(root, value).split(path.sep).join("/"); }
 function installerPath(fakeBin) {
   if (process.platform !== "win32") return `${bashPath(fakeBin)}:${process.env.PATH}`;
-  const inherited = spawnSync("bash", ["-c", 'printf "%s" "$PATH"'], { encoding: "utf8", env: process.env });
+  const inherited = spawnSync("bash", ["-c", 'fake_bin=$(cygpath -u "$1") && printf "%s:%s" "$fake_bin" "$PATH"', "bash", fakeBin], { cwd: root, encoding: "utf8", env: process.env });
   assert.ifError(inherited.error);
   assert.equal(inherited.status, 0, inherited.stderr);
-  return `${bashPath(fakeBin)}:${inherited.stdout}`;
+  return inherited.stdout;
 }
 function shellQuote(value) { return `'${value.replaceAll("'", `'\\''`)}'`; }
 function temporaryDirectory() { return fs.mkdtempSync(path.join(os.tmpdir(), ".tmp-bootstrap-policy-")); }
