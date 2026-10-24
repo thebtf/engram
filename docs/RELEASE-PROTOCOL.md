@@ -7,6 +7,28 @@
 
 Repository-only procedure or CI corrections reach `main` through normal review and Actions; they do not require a new product version/tag or consumer binary release unless their accepted scope changes a shipped surface. Source-only scope does not waive required PR rules or proof for the changed procedure.
 
+## Production latest channel
+
+The owner's production Unraid `Repository` stays `ghcr.io/thebtf/engram:latest`.
+Never replace it with an immutable `@sha256`, `:vX.Y.Z` or `:sha-COMMIT` reference.
+
+1. After the applicable release approvals and gates, promote `latest` to the chosen
+   published release through [Promote Latest Release Images](../.github/workflows/promote-latest-release-images.yml)
+   and its existing journal/recovery. That owner resolves the official stable
+   GitHub release; do not bypass its release selection, provenance checks or
+   recoverable three-image promotion.
+2. Read back `latest` and the desired versioned images: require matching manifest
+   and config digests and OCI source/version/revision. Retain immutable digests
+   for verification, audit and rollback; build/dependency image pins remain
+   required. The `latest` string alone does not prove the installed version.
+3. Observe the ordinary production updater, post-update health and ordinary client
+   journey. Promotion success is not installed-consumer acceptance. Do not directly
+   replace containers or disable the updater as a substitute; a different deployment
+   path needs a new explicit owner exception.
+
+Existing scan/freshness, approval, migration/data-preservation and rollback
+obligations remain binding.
+
 ## Additional Release Surfaces
 
 | Surface | Version source | Publish command | Verification |
@@ -128,10 +150,12 @@ Project default: `auto_private_patch_minor` for reviewed PRs and active-goal mil
 
 ## Published-image freshness and remediation
 
-Exact image pins and digests are required for reproducibility; they do not
-prove that a published image remains free of HIGH/CRITICAL vulnerabilities.
-The scheduled published-image rescan is read-only and does not rewrite source,
-workflow, or version pins.
+Exact build/dependency image pins and release-image digests are required for
+reproducibility and artifact verification, not as production `Repository`
+configuration (see [Production latest channel](#production-latest-channel)).
+They do not prove that a published image remains free of HIGH/CRITICAL
+vulnerabilities. The scheduled published-image rescan is read-only and does not
+rewrite source, workflow, or version pins.
 
 The rescan is post-publication monitoring. Its first run must start within 24
 hours of publication, and later evidence must be no older than 36 hours by the

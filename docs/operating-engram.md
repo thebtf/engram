@@ -28,11 +28,15 @@ R1 — обычный установленный агент и WebUI выбир�
    Vault с его прежним ключом, серверных настроек и client/plugin-data. Не включай
    значения ключей или токенов в отчёт. Destructive cutover требует отдельной
    проверенной процедуры восстановления и полномочия владельца, не этой инструкции.
-3. Сервер обновляй по существующему deployment-пути. Для поддерживаемого
-   digest-pinned Compose используй [deployment guide](DEPLOYMENT.md): согласованные
-   три image digest и retained `publication-result.json`, не source build или `latest`
-   как доказательство версии. Сохрани прежний комплект и данные для rollback;
-   смена image сама по себе не делает старую схему БД совместимой с rollback.
+3. В production владельца оставь Unraid `Repository` = `ghcr.io/thebtf/engram:latest`;
+   доставляй релиз переключением `latest` по [release-протоколу](RELEASE-PROTOCOL.md#production-latest-channel),
+   а не заменой `Repository` на digest или версионный тег. Проверяй фактические
+   digest и OCI-метки: строка `latest` сама по себе не доказывает версию.
+   Для отдельного digest-pinned Compose-пути используй [deployment guide](DEPLOYMENT.md):
+   согласованные три image digest и retained `publication-result.json`, не source build
+   как доказательство версии. Это не замена production-канала владельца.
+   Сохрани прежний комплект и данные для rollback; смена image сама по себе
+   не делает старую схему БД совместимой с rollback.
 4. Для первой установки plugin нужны Node.js 18+ и обычный marketplace выбранного
    host. В OMP: `omp plugin marketplace add thebtf/engram-marketplace`, затем
    `omp plugin install engram@engram`. В Claude Code: `/plugin marketplace add
