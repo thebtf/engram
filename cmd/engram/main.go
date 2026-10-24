@@ -588,10 +588,13 @@ func waitForMuxcoreDaemonVersionOrExit(ctx context.Context, predecessor muxcoreP
 				if predecessor != nil {
 					unowned, err := probeMuxcoreDaemonNamespace(ctx, &status)
 					if err != nil {
-						return err
+						if !errors.Is(err, errMuxcoreDaemonStillLower) {
+							return err
+						}
+						break
 					}
 					if unowned {
-						return errMuxcoreDaemonStillLower
+						break
 					}
 				}
 				return nil

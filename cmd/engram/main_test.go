@@ -1375,3 +1375,26 @@ func TestReconcileMuxcoreDaemonVersionPreservesCanceledCaller(t *testing.T) {
 		t.Fatalf("canceled caller was handed to cold start: %v", err)
 	}
 }
+
+func TestWaitForMuxcoreDaemonVersionOrExitRetainsExitFenceAfterCurrentDisappears(t *testing.T) {
+	oldStatus, oldAction, oldDial, oldLock := readMuxcoreDaemonStatusIdentity, readLiveMuxcoreDaemonAction, dialMuxcoreControl, acquireRestartLock
+	t.Cleanup(func() {
+		readMuxcoreDaemonStatusIdentity, readLiveMuxcoreDaemonAction, dialMuxcoreControl, acquireRestartLock = oldStatus, oldAction, oldDial, oldLock
+	})
+	readMuxcoreDaemonStatusIdentity = func(string) (muxcoreDaemonStatusIdentity, bool) {
+		return muxcoreDaemonStatusIdentity{PID: 43, DaemonGeneration: "advertised-current"}, true
+	}
+	readLiveMuxcoreDaemonAction = func(muxcoreDaemonStatusIdentity, daemonConvergenceIdentity) (daemonConvergenceAction, error) {
+		return daemonConvergenceJoin, nil
+	}
+	dialMuxcoreControl = func(string, time.Duration) (net.Conn, error) { return nil, os.ErrNotExist }
+	acquireRestartLock = func() (io.Closer, error) {
+		t.Fatal("vanished current bypassed the still-live predecessor")
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if err := waitForMuxcoreDaemonVersionOrExit(ctx, fixtureProcessExitProof{}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("vanished current was handed to the unfenced outer loop: %v", err)
+	}
+}
