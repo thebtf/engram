@@ -127,6 +127,11 @@ func ValidateRepositoryLocator(locator string) error {
 // ToolRequiresProject exempts only recognized project-free operations, not whole tools.
 func ToolRequiresProject(name string, arguments []byte) bool {
 	switch name {
+	case "codebase_context":
+		var values struct {
+			Action string `json:"action"`
+		}
+		return json.Unmarshal(arguments, &values) == nil && values.Action == "register"
 	case "issues", "vault":
 		var values map[string]any
 		if err := json.Unmarshal(arguments, &values); err != nil || values == nil {

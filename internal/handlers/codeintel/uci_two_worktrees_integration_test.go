@@ -40,6 +40,7 @@ import (
 	"github.com/thebtf/engram/internal/module/dispatcher"
 	"github.com/thebtf/engram/internal/module/lifecycle"
 	"github.com/thebtf/engram/internal/module/registry"
+	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/internal/uci"
 	"github.com/thebtf/engram/internal/worker"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
@@ -374,6 +375,18 @@ func (client *uciT001Client) search(handle, query string) uci.QueryResponse {
 func (client *uciT001Client) requireDenied(name string, arguments map[string]any, reason string) {
 	client.t.Helper()
 	resp := client.request(time.Now().Add(20*time.Second), "tools/call", map[string]any{"name": name, "arguments": arguments})
+	if resp.Error == nil {
+		var result uciT001ToolResult
+		require.NoError(client.t, json.Unmarshal(resp.Result, &result))
+		require.Truef(client.t, result.IsError, "tool %s must be denied: %s", name, resp.Result)
+		require.Len(client.t, result.Content, 1)
+		var block uciT001TextBlock
+		require.NoError(client.t, json.Unmarshal(result.Content[0], &block))
+		require.Contains(client.t, block.Text, reason)
+		require.NotContains(client.t, block.Text, uciT001AlphaMarker)
+		require.NotContains(client.t, block.Text, uciT001BetaMarker)
+		return
+	}
 	require.NotNil(client.t, resp.Error)
 	require.Equal(client.t, -32603, resp.Error.Code)
 	require.Contains(client.t, resp.Error.Message, reason)
@@ -408,9 +421,10 @@ func TestUCITwoRealWorktreesRemainIsolated(t *testing.T) {
 	t.Setenv("ENGRAM_TLS_CA", "")
 
 	store := uciT001OpenStore(t)
-	projectID := uuid.NewString()
-	require.NoError(t, store.DB.Exec("INSERT INTO projects (id, display_name) VALUES (?, ?)", projectID, "Two-worktree fixture").Error)
 	fixture := uciT001NewGitFixture(t)
+	project, err := projectidentity.InitLogicalProject(t.Context(), fixture.primary, "Two-worktree fixture")
+	require.NoError(t, err)
+	require.NoError(t, store.DB.Exec("INSERT INTO projects (id, display_name) VALUES (?, ?)", project.ProjectID, project.Name).Error)
 	mcpServer := mcp.NewServer(mcp.ServerOptions{Version: "uci-t001"})
 	contexts := dbgorm.NewUCIContextStore(store.DB)
 	authorizer := dbgorm.NewUCIContextAuthorizer(contexts)
@@ -419,7 +433,7 @@ func TestUCITwoRealWorktreesRemainIsolated(t *testing.T) {
 	require.NoError(t, err)
 	contextApplication.SetLocalGitRegistration(func(ctx context.Context, caller uci.ResolveContextInput, sourceID, label, locator string, parserBundle *bool) (uci.RegisteredCheckoutSelector, error) {
 		registered, err := contexts.RegisterLocalGit(ctx, dbgorm.RegisterLocalGitInput{
-			ProjectID: projectID,
+			ProjectID: mcp.ProjectFromContext(ctx),
 			AuthRealm: caller.AuthRealm, Principal: caller.Principal, WorkstationID: caller.WorkstationID,
 			SourceID: sourceID, SourceLabel: label, Locator: locator, ParserBundle: parserBundle,
 		})
@@ -528,9 +542,36 @@ func TestUCITwoRealWorktreesRemainIsolated(t *testing.T) {
 		require.Zero(t, nativeDaemon.OwnerCount(), "owned daemon must retire every admitted owner")
 	})
 
+	unboundRoot := t.TempDir()
+	uciT001RunGit(t, unboundRoot, "init", "--quiet", "--template=")
+	unbound := uciT001SpawnClient(t, controlPath, unboundRoot, serverURL)
+	unbound.initialize("uci-t001-unbound")
+	var listed struct {
+		Contexts []json.RawMessage `json:"contexts"`
+	}
+	unbound.proxyPayload("codebase_context", map[string]any{"action": "list"}, &listed)
+	require.Empty(t, listed.Contexts)
+	unbound.requireDenied("codebase_context", map[string]any{"action": "resolve"}, "CONTEXT_REQUIRED")
+	unbound.requireDenied("codebase_context", map[string]any{"action": "select", "context_handle": "unowned-selection"}, "CONTEXT_MISMATCH")
+	for _, path := range []string{filepath.Join(unboundRoot, ".engram-project"), filepath.Join(unboundRoot, ".git", "engram-project.json")} {
+		_, err := os.Lstat(path)
+		require.True(t, os.IsNotExist(err), "project-free query must not create %s", path)
+	}
+	t.Log("unbound native list/resolve reached real UCI without creating project identity")
+
 	clientA := uciT001SpawnClient(t, controlPath, fixture.primary, serverURL)
 	clientA.initialize("uci-t001-a")
 	registeredA := clientA.register(map[string]any{"source_label": "uci-t001"})
+	var storedSource dbgorm.UCISource
+	require.NoError(t, store.DB.First(&storedSource, "source_id = ?", registeredA.SourceID).Error)
+	require.NotNil(t, storedSource.ProjectID)
+	require.Equal(t, project.ProjectID, *storedSource.ProjectID, "native registration must persist its canonical Project-to-Source binding")
+	var storedCheckout dbgorm.UCICheckout
+	require.NoError(t, store.DB.First(&storedCheckout, "checkout_id = ?", registeredA.CheckoutID).Error)
+	require.Equal(t, registeredA.SourceID, storedCheckout.SourceID)
+	require.Equal(t, uciT001Locator(t, fixture.primary), storedCheckout.LocatorRef, "omitted locator must select the admitted native caller checkout")
+	require.Equal(t, uci.NoAuthCodePrincipal, storedCheckout.OwnerPrincipal)
+	require.Nil(t, storedCheckout.CurrentViewID, "registration must not invent a View")
 	clientB := uciT001SpawnClient(t, controlPath, fixture.linked, serverURL)
 	clientB.initialize("uci-t001-b")
 	registeredB := clientB.register(map[string]any{"source_id": registeredA.SourceID, "locator": uciT001Locator(t, fixture.linked)})
