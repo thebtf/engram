@@ -532,7 +532,7 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 				// Bootstrap window before initializeAsync wires the validator.
 				// Reject defensively — better than silently allowing.
 				log.Warn().Str("path", r.URL.Path).Msg("auth: validator not yet wired, rejecting bearer")
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				writeAuthUnauthorized(w, r, authDisabled)
 				return
 			}
 
@@ -549,7 +549,7 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 						Str("remote_addr", r.RemoteAddr).
 						Err(err).
 						Msg("auth: bearer rejected")
-					http.Error(w, "unauthorized", http.StatusUnauthorized)
+					writeAuthUnauthorized(w, r, authDisabled)
 				default:
 					// Wrapped store / bcrypt error — auth machinery itself
 					// is broken. Surface as 500 so monitoring distinguishes
@@ -631,7 +631,7 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 					// Authentik the unaudited first dashboard identity.
 					user, err = uStore.ProvisionAuthentikOperator(r.Context(), authentikEmail)
 					if errors.Is(err, gormdb.ErrInitialAdminSetupRequired) {
-						http.Error(w, "unauthorized", http.StatusUnauthorized)
+						writeAuthUnauthorized(w, r, authDisabled)
 						return
 					}
 				}
@@ -649,8 +649,19 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 
 		// 5. No valid auth.
 		log.Warn().Str("path", r.URL.Path).Str("remote_addr", r.RemoteAddr).Msg("auth: rejected unauthenticated request")
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeAuthUnauthorized(w, r, authDisabled)
 	})
+}
+
+func writeAuthUnauthorized(w http.ResponseWriter, r *http.Request, authDisabled bool) {
+	if r.URL.Path == "/api/auth/me" {
+		writeJSONStatus(w, http.StatusUnauthorized, map[string]any{
+			"authenticated": false,
+			"auth_disabled": authDisabled,
+		})
+		return
+	}
+	http.Error(w, "unauthorized", http.StatusUnauthorized)
 }
 
 // extractHTTPBearer pulls the bearer string from (1) X-Auth-Token header,

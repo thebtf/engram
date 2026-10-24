@@ -1,11 +1,17 @@
 package worker
 
 import (
+	"bufio"
+	"context"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +24,7 @@ import (
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"gorm.io/driver/postgres"
 	gormlib "gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"gorm.io/gorm/logger"
 	_ "modernc.org/sqlite"
 )
@@ -380,4 +387,148 @@ func TestAuthBoundaryInvalidOriginStopsWorkerStartup(t *testing.T) {
 	s, err := NewService("invalid-origin-must-not-start", nil)
 	require.ErrorContains(t, err, "ENGRAM_AUTH_ALLOWED_ORIGINS")
 	require.Nil(t, s)
+}
+
+func TestAuthBoundaryReview929LogoutIdempotent(t *testing.T) {
+	t.Setenv("ENGRAM_AUTH_DISABLED", "false")
+	db, _ := openAuthBoundaryReads(t)
+	// SQLite lacks FOR UPDATE; omit only that dialect clause, not store queries or transactions.
+	db.ClauseBuilders["FOR"] = func(clause.Clause, clause.Builder) {}
+	sessions := gormdb.NewAuthSessionStore(db)
+	_, err := sessions.RevokeSession("absent-review-session", nil, "admin action")
+	require.ErrorIs(t, err, gormlib.ErrRecordNotFound, "admin revoke must retain not-found semantics")
+	s := authBoundaryRouter(t, NewAuthHandlers(nil, nil, sessions, nil))
+	cookie := authBoundaryCookie(t, s.tokenAuth, time.Now().Add(time.Hour))
+	active, err := sessions.CreateSession(1, time.Hour, "review fixture", "127.0.0.1")
+	require.NoError(t, err)
+	for _, tc := range []struct{ name, id string }{
+		{name: "first logout", id: active.ID},
+		{name: "repeated logout", id: active.ID},
+		{name: "already absent session", id: "absent-review-session"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "http://localhost:37777/api/auth/user-logout", nil)
+			req.Header.Set("Origin", "http://localhost:37777")
+			req.AddCookie(cookie)
+			req.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: tc.id})
+			rec := httptest.NewRecorder()
+			s.router.ServeHTTP(rec, req)
+			assert.Equal(t, http.StatusOK, rec.Code, "logout of an already absent/revoked session must complete, not require endless retry; body=%s", rec.Body.String())
+			cookies := rec.Result().Cookies()
+			if assert.Len(t, cookies, 1) {
+				assert.Equal(t, authSessionCookieName, cookies[0].Name)
+				assert.Less(t, cookies[0].MaxAge, 0)
+			}
+		})
+	}
+	_, err = sessions.GetSession(active.ID)
+	require.ErrorIs(t, err, gormdb.ErrAuthSessionRevoked, "successful first logout must really revoke the store row")
+}
+
+func TestAuthBoundaryReview929MeJSONDenial(t *testing.T) {
+	t.Setenv("ENGRAM_AUTH_DISABLED", "false")
+	s := authBoundaryRouter(t, nil)
+	for _, tc := range []struct {
+		name, bearer string
+		cookie       *http.Cookie
+		noValidator  bool
+	}{
+		{name: "anonymous"},
+		{name: "expired HMAC", cookie: authBoundaryCookie(t, s.tokenAuth, time.Now().Add(-time.Hour))},
+		{name: "invalid bearer wins over valid HMAC", bearer: "invalid-review-token", cookie: authBoundaryCookie(t, s.tokenAuth, time.Now().Add(time.Hour))},
+		{name: "validator not wired", bearer: "review-bootstrap-token", noValidator: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.noValidator {
+				s.tokenAuth.SetValidator(nil)
+			}
+			for _, path := range []string{"/api/auth/me", "/api/flags"} {
+				req := httptest.NewRequest(http.MethodGet, path, nil)
+				if tc.cookie != nil {
+					req.AddCookie(tc.cookie)
+				}
+				if tc.bearer != "" {
+					req.Header.Set("Authorization", "Bearer "+tc.bearer)
+				}
+				rec := httptest.NewRecorder()
+				s.router.ServeHTTP(rec, req)
+				require.Equal(t, http.StatusUnauthorized, rec.Code)
+				if path != "/api/auth/me" {
+					assert.Equal(t, "unauthorized\n", rec.Body.String(), "normal protected-route denial must not change")
+					continue
+				}
+				assert.Contains(t, rec.Header().Get("Content-Type"), "application/json", "useOperatorCode parses the accepted auth/me 401 as JSON")
+				var identity map[string]any
+				if assert.NoError(t, json.Unmarshal(rec.Body.Bytes(), &identity), "auth/me must expose an anonymous identity, not identity-unavailable") {
+					assert.Equal(t, false, identity["authenticated"])
+					assert.Equal(t, false, identity["auth_disabled"])
+				}
+			}
+		})
+	}
+}
+
+func TestAuthBoundaryReview929RealConsoleWorkerPeer(t *testing.T) {
+	t.Setenv("ENGRAM_AUTH_DISABLED", "false")
+	ta, err := NewTokenAuth("review-relay-test-only")
+	require.NoError(t, err)
+	s := &Service{router: chi.NewRouter(), tokenAuth: ta, config: &config.Config{}}
+	s.setupMiddleware()
+	observed := make(chan struct{ remote, xff, trueClient string }, 1)
+	s.router.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			observed <- struct{ remote, xff, trueClient string }{r.RemoteAddr, r.Header.Get("X-Forwarded-For"), r.Header.Get("True-Client-IP")}
+			next.ServeHTTP(w, r)
+		})
+	})
+	s.setupRoutes()
+	worker := httptest.NewServer(s.router)
+	t.Cleanup(worker.Close)
+	reservation, err := net.Listen("tcp4", "127.0.0.1:0")
+	require.NoError(t, err)
+	address := reservation.Addr().String()
+	_, port, err := net.SplitHostPort(address)
+	require.NoError(t, err)
+	require.NoError(t, reservation.Close())
+	script, err := filepath.Abs("../../apps/operator-console/scripts/static-host.mjs")
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	t.Cleanup(cancel)
+	cmd := exec.CommandContext(ctx, "node", script)
+	cmd.Env = append(os.Environ(), "HOST=127.0.0.1", "PORT="+port, "ENGRAM_OPERATOR_API_TARGET="+worker.URL)
+	stdout, err := cmd.StdoutPipe()
+	require.NoError(t, err)
+	require.NoError(t, cmd.Start())
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	ready := make(chan bool, 1)
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			if strings.Contains(scanner.Text(), "Operator console listening on") {
+				ready <- true
+				return
+			}
+		}
+		ready <- false
+	}()
+	select {
+	case ok := <-ready:
+		require.True(t, ok, "real console must reach its listening callback")
+	case <-ctx.Done():
+		t.Fatal("real console readiness: ", ctx.Err())
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+address+"/api/flags", nil)
+	require.NoError(t, err)
+	req.Header.Set("X-Auth-Token", ta.Token())
+	req.Header.Set("True-Client-IP", "192.0.2.90")
+	req.Header.Set("X-Real-IP", "192.0.2.91")
+	req.Header.Set("X-Forwarded-For", "192.0.2.92")
+	response, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = response.Body.Close() })
+	require.Equal(t, http.StatusOK, response.StatusCode, "legitimate credential must reach the actual worker handler")
+	actual := <-observed
+	assert.Empty(t, actual.trueClient, "client True-Client-IP must not cross the public relay")
+	assert.Equal(t, "127.0.0.1", actual.xff, "the public relay must supply its actual client socket address")
+	assert.Equal(t, "127.0.0.1", actual.remote, "chi RealIP at the real worker must not select attacker-controlled True-Client-IP")
 }

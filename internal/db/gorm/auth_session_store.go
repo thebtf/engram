@@ -104,9 +104,12 @@ func (s *AuthSessionStore) RevokeSession(id string, revokedBy *int64, reason str
 	return changed, err
 }
 
-// DeleteSession revokes a single session by ID.
+// DeleteSession revokes a session; an already absent session is a completed logout.
 func (s *AuthSessionStore) DeleteSession(id string) error {
 	_, err := s.RevokeSession(id, nil, "logout")
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil
+	}
 	return err
 }
 

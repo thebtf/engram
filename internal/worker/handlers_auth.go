@@ -157,7 +157,7 @@ func (s *Service) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 // @Produce json
 // @Security ApiKeyAuth
 // @Success 200 {object} map[string]interface{}
-// @Failure 401 {string} string "unauthorized"
+// @Failure 401 {object} map[string]interface{}
 // @Router /api/auth/me [get]
 func (s *Service) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 	authDisabled := isAuthDisabled()
@@ -186,12 +186,7 @@ func (s *Service) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Not authenticated
-	w.WriteHeader(http.StatusUnauthorized)
-	writeJSON(w, map[string]any{
-		"authenticated": false,
-		"auth_disabled": authDisabled,
-	})
+	writeAuthUnauthorized(w, r, authDisabled)
 }
 
 // handleListTokens godoc

@@ -685,8 +685,9 @@ The standalone Compose file maps `OPERATOR_WEB_API_TARGET` to that same
 Its static host listens on `HOST=0.0.0.0` and `PORT=3000`; no Nuxt/Nitro
 environment aliases remain in this deployment path.
 The public console relay removes all client `X-Authentik-*`, `X-Forwarded-*`,
-`X-Real-IP` and `Forwarded` claims. It preserves normal credentials, Origin/Fetch
-Metadata and document/tab/request headers; it does not manufacture a public origin.
+`True-Client-IP`, `X-Real-IP` and `Forwarded` claims, then sets `X-Forwarded-For`
+only from its actual client socket address. It preserves normal credentials,
+Origin/Fetch Metadata and document/tab/request headers; it does not manufacture a public origin.
 Direct Authentik integration must use a separately trusted upstream, whose transport
 peer is captured by the worker before RealIP rewrites the client address.
 

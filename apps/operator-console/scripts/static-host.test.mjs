@@ -96,6 +96,7 @@ test('static host does not relay client identity or forged peer headers', { time
     'x-authentik-groups': 'admins',
     'x-authentik-uid': 'forged-user',
     'x-authentik-entitlements': 'forged-admin-entitlement',
+    'true-client-ip': '192.0.2.90',
     'x-forwarded-server': 'forged-server',
     'x-real-ip': '192.0.2.1',
     'x-forwarded-for': '192.0.2.1',
@@ -107,4 +108,5 @@ test('static host does not relay client identity or forged peer headers', { time
   assert.equal(fixture.received.length, 1)
   const leaked = Object.entries(forged).filter(([key, value]) => fixture.received[0].headers[key] === value).map(([key]) => key)
   assert.deepEqual(leaked, [], 'public console must not promote client identity or peer claims into trusted upstream headers')
+  assert.equal(fixture.received[0].headers['x-forwarded-for'], '127.0.0.1', 'forwarded client address must derive from the actual console socket, not incoming claims')
 })
