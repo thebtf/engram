@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Preserve the current Issues list page when returning from a detail with “Back to list” or browser Back, while retaining page resets for project, filter and row-size changes. Start newly opened details at the heading instead of inheriting the long list's scroll position.
+
 - Restore native `codebase_context register` by resolving the actual caller's canonical Project and carrying it in the outer gRPC request, without adding a public `project` argument or weakening Source/Checkout/handle authorization. Keep list, resolve, select and other UCI operations project-free. Cover pinned and cold HTTP-bootstrap registration with real native/gRPC/PostgreSQL fixtures, including independent worktrees and no-View first use.
 
 - Preserve caller cancellation before decoding embedding HTTP responses, while retaining decode errors for active callers and existing retry and timeout behavior.
