@@ -12,19 +12,19 @@
     "generate": "npm run build",
     "preview": "node .output/server/index.mjs",
     "parity": "node scripts/parity-check.repo.mjs",
-    "test:seam": "node --test scripts/copy-static-i18n.test.mjs tests/composables/document-export.spec.mjs tests/composables/memory-filters.spec.mjs tests/composables/auth-session.spec.mjs tests/composables/issue-actions.spec.mjs tests/composables/project-catalog.spec.mjs tests/composables/rules-selection-context.spec.mjs tests/composables/retained-vault.test.mjs tests/composables/useApi.spec.ts",
+    "test:seam": "node --test scripts/copy-static-i18n.test.mjs tests/composables/document-export.spec.mjs tests/composables/memory-filters.spec.mjs tests/composables/auth-session.spec.mjs tests/composables/issue-actions.spec.mjs tests/composables/issue-discovery.spec.mjs tests/composables/project-catalog.spec.mjs tests/composables/rules-selection-context.spec.mjs tests/composables/retained-vault.test.mjs tests/composables/useApi.spec.ts",
     "test:parity": "node --test scripts/parity-promotion.test.mjs",
     "test:browser": "playwright test",
     "test:browser:live": "npm run build && playwright test --config playwright.live.config.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.0",
-    "@vitejs/plugin-vue": "6.0.9",
     "@types/node": "^22.19.0",
+    "@vitejs/plugin-vue": "6.0.9",
     "typescript": "^5.9.3",
     "unplugin-auto-import": "21.1.0",
     "unplugin-vue-components": "32.1.0",
-    "vite": "8.3.2"
+    "vite": "8.3.4"
   },
   "dependencies": {
     "vue": "3.5.43",

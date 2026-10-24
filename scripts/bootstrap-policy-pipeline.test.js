@@ -18,13 +18,15 @@ function run(command, args, options = {}) {
 
 function bashPath(value) { return path.relative(root, value).split(path.sep).join("/"); }
 function installerPath(fakeBin) {
-  return process.platform === "win32"
-    ? `${bashPath(fakeBin)}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`
-    : `${bashPath(fakeBin)}:${process.env.PATH}`;
+  if (process.platform !== "win32") return `${bashPath(fakeBin)}:${process.env.PATH}`;
+  const inherited = spawnSync("bash", ["-c", 'fake_bin=$(cygpath -u "$1") && printf "%s:%s" "$fake_bin" "$PATH"', "bash", fakeBin], { cwd: root, encoding: "utf8", env: process.env });
+  assert.ifError(inherited.error);
+  assert.equal(inherited.status, 0, inherited.stderr);
+  return inherited.stdout;
 }
 function shellQuote(value) { return `'${value.replaceAll("'", `'\\''`)}'`; }
-function temporaryDirectory() { return fs.mkdtempSync(path.join(root, ".tmp-bootstrap-policy-")); }
-function directInstallerFixture(temp, version = currentPolicyVersion, extension = "tar.gz") {
+function temporaryDirectory() { return fs.mkdtempSync(path.join(os.tmpdir(), ".tmp-bootstrap-policy-")); }
+function directInstallerFixture(temp, version = currentPolicyVersion, extension = process.platform === "win32" ? "zip" : "tar.gz") {
   const archiveRoot = path.join(temp, "archive");
   const fakeBin = path.join(temp, "bin");
   for (const directory of ["hooks", "scripts", ".claude-plugin", "extensions"]) fs.mkdirSync(path.join(archiveRoot, directory), { recursive: true });
@@ -51,7 +53,7 @@ function directInstallerFixture(temp, version = currentPolicyVersion, extension 
       "darwin-arm64": target(version, "engram-darwin-arm64", bytes),
     });
     const [major, minor, patch] = version.split("-", 1)[0].split(".").map(Number);
-    policy.build_contract.go_version = major > 6 || (major === 6 && (minor > 50 || (minor === 50 && patch >= 4))) ? "1.26.9" : major === 6 && (minor > 47 || (minor === 47 && patch >= 6)) ? "1.26.6" : "1.25.12";
+    policy.build_contract.go_version = major > 7 || (major === 7 && (minor > 0 || patch >= 3)) ? "1.26.10" : major > 6 || (major === 6 && (minor > 50 || (minor === 50 && patch >= 4))) ? "1.26.9" : major === 6 && (minor > 47 || (minor === 47 && patch >= 6)) ? "1.26.6" : "1.25.12";
     fs.writeFileSync(path.join(archiveRoot, "bootstrap-targets.json"), JSON.stringify(policy));
   }
   if (version === currentPolicyVersion) fs.copyFileSync(path.join(root, "plugin", "engram", "parser-targets.json"), path.join(archiveRoot, "parser-targets.json"));
@@ -64,7 +66,7 @@ function directInstallerFixture(temp, version = currentPolicyVersion, extension 
     assert.equal(archived.status, 0, archived.stderr);
   }
   fs.writeFileSync(path.join(fakeBin, "curl"), "#!/usr/bin/env bash\nwhile [[ $# -gt 0 ]]; do if [[ $1 == -o ]]; then cp \"$FAKE_RELEASE_ARCHIVE\" \"$2\"; exit 0; fi; shift; done\nexit 1\n", { mode: 0o755 });
-  return { archive, fakeBin };
+  return { archive, fakeBin, entries };
 }
 const registrationStaged = (file) => /(?:installed_plugins|settings|known_marketplaces)\.json\.staged-\d+-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\.tmp$/.test(String(file));
 const registrationBackup = (file) => /(?:installed_plugins|settings|known_marketplaces)\.json\.backup-\d+-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(String(file));
@@ -1682,6 +1684,14 @@ test("trusted installers preserve the Go toolchain version boundary", () => {
       ["security-future-patch", "6.50.5", "1.26.9", true],
       ["security-future-minor", "6.51.0", "1.26.9", true],
       ["security-future-major", "7.0.0", "1.26.9", true],
+      ["last-x509-old-toolchain", "7.0.2", "1.26.9", true],
+      ["last-x509-old-toolchain-wrong", "7.0.2", "1.26.10", false],
+      ["x509-security-patch", "7.0.3", "1.26.10", true],
+      ["x509-security-patch-old-toolchain", "7.0.3", "1.26.9", false],
+      ["x509-security-prerelease", "7.0.3-rc.1", "1.26.10", true],
+      ["x509-security-prerelease-old-toolchain", "7.0.3-rc.1", "1.26.9", false],
+      ["x509-security-future-patch", "7.0.4", "1.26.10", true],
+      ["x509-security-future-minor", "7.1.0", "1.26.10", true],
     ];
     for (const installer of ["install.ps1", "install.sh"]) {
       const validator = installerValidator(fs.readFileSync(path.join(root, "scripts", installer), "utf8"));
@@ -1797,7 +1807,7 @@ function buildServerArchive(archiveRoot, archivePath) {
 
 test("parser policy generator accepts package SemVer and rejects mismatched or unsafe versions", () => {
   const temp = temporaryDirectory();
-  const generator = "../scripts/prepare-parser-targets.sh";
+  const generator = shellQuote(path.relative(temp, path.join(root, "scripts", "prepare-parser-targets.sh")).split(path.sep).join("/"));
   const policy = path.join(temp, "parser-targets.json");
   const go = path.join(temp, "go");
   const compiler = path.join(temp, "cc");
@@ -1810,7 +1820,7 @@ test("parser policy generator accepts package SemVer and rejects mismatched or u
   };
   try {
     for (const name of manifests) fs.mkdirSync(path.join(temp, "plugin", "engram", name), { recursive: true });
-    fs.writeFileSync(go, "#!/usr/bin/env bash\nif [[ $1 == version ]]; then printf '%s\\n' \"${FAKE_GO_VERSION:-go version go1.26.9 linux/amd64}\"; exit 0; fi\nfor arg in \"$@\"; do if [[ $arg == -o ]]; then output=1; continue; fi; if [[ ${output:-0} == 1 ]]; then printf 'parser-fixture' > \"$arg\"; exit 0; fi; done\nexit 1\n", { mode: 0o755 });
+    fs.writeFileSync(go, "#!/usr/bin/env bash\nif [[ $1 == version ]]; then printf '%s\\n' \"${FAKE_GO_VERSION:-go version go1.26.10 linux/amd64}\"; exit 0; fi\nfor arg in \"$@\"; do if [[ $arg == -o ]]; then output=1; continue; fi; if [[ ${output:-0} == 1 ]]; then printf 'parser-fixture' > \"$arg\"; exit 0; fi; done\nexit 1\n", { mode: 0o755 });
     fs.writeFileSync(compiler, "#!/usr/bin/env bash\n[[ $1 == --version ]] || exit 1\nprintf '%s\\n' \"${FAKE_CC_VERSION:-x86_64-w64-mingw32-gcc (GCC) 13-win32}\"\n", { mode: 0o755 });
     for (const version of ["6.50.0", "6.50.0-rc.1", "6.50.0+build.5", "6.50.0-rc.1+build.5"]) {
       setManifestVersion(version);
@@ -1829,10 +1839,11 @@ test("parser policy generator accepts package SemVer and rejects mismatched or u
     }
     setManifestVersion("6.50.0");
     for (const env of [
-      { FAKE_GO_VERSION: "go version go1.26.9 windows/amd64" },
+      { FAKE_GO_VERSION: "go version go1.26.10 windows/amd64" },
       { FAKE_GO_VERSION: "go version go1.26.5 linux/amd64" },
       { FAKE_GO_VERSION: "go version go1.26.6 linux/amd64" },
       { FAKE_GO_VERSION: "go version go1.26.8 linux/amd64" },
+      { FAKE_GO_VERSION: "go version go1.26.9 linux/amd64" },
       { FAKE_CC_VERSION: "x86_64-w64-mingw32-gcc (GCC) 13-posix" },
       { FAKE_CC_VERSION: "x86_64-w64-mingw32-gcc (GCC) 14.2.0" },
     ]) {
@@ -1879,7 +1890,7 @@ test("generator check mode and combined artifact gate accept only the shared tar
     const dist = path.join(temp, "dist");
     const currentVersion = JSON.parse(fs.readFileSync(path.join(root, "plugin", "engram", "package.json"), "utf8")).version;
     fs.mkdirSync(fakeBin, { recursive: true });
-    fs.writeFileSync(fakeGo, "#!/usr/bin/env bash\nif [[ $1 == version ]]; then echo 'go version go1.26.9 linux/amd64'; exit 0; fi\nfor arg in \"$@\"; do [[ $arg == ./tools/uci-parser ]] && parser=1; done\nwhile [[ $# -gt 0 ]]; do\n  if [[ $1 == -ldflags ]]; then [[ $2 == *-buildid=* ]] || exit 1; shift 2; continue; fi\n  if [[ $1 == -o ]]; then shift; if [[ ${parser:-0} == 1 ]]; then printf 'parser-windows-amd64' > \"$1\"; else printf '%s-%s' \"$GOOS\" \"$GOARCH\" > \"$1\"; fi; exit 0; fi\n  shift\ndone\nexit 1\n", { mode: 0o755 });
+    fs.writeFileSync(fakeGo, "#!/usr/bin/env bash\nif [[ $1 == version ]]; then echo 'go version go1.26.10 linux/amd64'; exit 0; fi\nfor arg in \"$@\"; do [[ $arg == ./tools/uci-parser ]] && parser=1; done\nwhile [[ $# -gt 0 ]]; do\n  if [[ $1 == -ldflags ]]; then [[ $2 == *-buildid=* ]] || exit 1; shift 2; continue; fi\n  if [[ $1 == -o ]]; then shift; if [[ ${parser:-0} == 1 ]]; then printf 'parser-windows-amd64' > \"$1\"; else printf '%s-%s' \"$GOOS\" \"$GOARCH\" > \"$1\"; fi; exit 0; fi\n  shift\ndone\nexit 1\n", { mode: 0o755 });
     const fakeCompiler = path.join(fakeBin, "cc");
     fs.writeFileSync(fakeCompiler, "#!/usr/bin/env bash\n[[ $1 == --version ]] || exit 1\nprintf '%s\\n' 'x86_64-w64-mingw32-gcc (GCC) 13-win32'\n", { mode: 0o755 });
     const fakeGoArgument = shellQuote(bashPath(fakeGo));
@@ -1968,9 +1979,13 @@ test("direct installer rejects archive self-validation before install mutation",
     const validPolicy = fs.readFileSync(path.join(root, "plugin", "engram", "bootstrap-targets.json"), "utf8");
     const duplicatePolicy = validPolicy.replace('"schema_version": 1,', '"schema_version": 1,\n  "\\u0073chema_version": 1,');
     fs.writeFileSync(path.join(archiveRoot, "bootstrap-targets.json"), duplicatePolicy);
-    const archive = path.join(temp, "hostile-release.tar.gz");
-    const archived = spawnSync("tar", ["-czf", archive, "-C", archiveRoot, "."], { encoding: "utf8" });
-    assert.equal(archived.status, 0, archived.stderr);
+    const archive = path.join(temp, process.platform === "win32" ? "hostile-release.zip" : "hostile-release.tar.gz");
+    if (archive.endsWith(".zip")) {
+      writeZip(archiveRoot, archive, ["hooks/hook.js", "hooks/hooks.json", "scripts/bootstrap-policy.js", "scripts/register-plugin.js", "package.json", "extensions/engram-memory.mjs", ".claude-plugin/plugin.json", "bootstrap-targets.json"]);
+    } else {
+      const archived = spawnSync("tar", ["-czf", archive, "-C", archiveRoot, "."], { encoding: "utf8" });
+      assert.equal(archived.status, 0, archived.stderr);
+    }
     const fakeCurl = path.join(fakeBin, "curl");
     fs.writeFileSync(fakeCurl, "#!/usr/bin/env bash\nwhile [[ $# -gt 0 ]]; do if [[ $1 == -o ]]; then cp \"$FAKE_RELEASE_ARCHIVE\" \"$2\"; exit 0; fi; shift; done\nexit 1\n", { mode: 0o755 });
 
@@ -2096,8 +2111,12 @@ test("direct installer installs parser policy on fresh install and upgrade and r
         const archiveRoot = path.join(temp, name, "archive");
         if (parser === null) fs.rmSync(path.join(archiveRoot, "parser-targets.json"));
         else fs.writeFileSync(path.join(archiveRoot, "parser-targets.json"), parser);
-        const archived = spawnSync("tar", ["-czf", fixture.archive, "-C", archiveRoot, "."], { encoding: "utf8" });
-        assert.equal(archived.status, 0, archived.stderr);
+        if (fixture.archive.endsWith(".zip")) {
+          writeZip(archiveRoot, fixture.archive, fixture.entries.filter((entry) => fs.existsSync(path.join(archiveRoot, entry))));
+        } else {
+          const archived = spawnSync("tar", ["-czf", fixture.archive, "-C", archiveRoot, "."], { encoding: "utf8" });
+          assert.equal(archived.status, 0, archived.stderr);
+        }
       }
       if (name === "upgrade") fs.writeFileSync(destination, "stale policy");
       const environment = `HOME=${shellQuote(bashPath(home))} PATH=${shellQuote(installerPath(fixture.fakeBin))} FAKE_RELEASE_ARCHIVE=${shellQuote(bashPath(fixture.archive))} ENGRAM_URL=http://localhost:37777/mcp ENGRAM_API_TOKEN=`;
@@ -2367,7 +2386,8 @@ test("direct installer retains an orphan backup when post-commit cleanup fails",
     assert.equal(backups.length, 1);
     assert.ok(backups[0].startsWith(`${pluginsFile}.backup-`));
     assert.deepEqual(fs.readFileSync(backups[0]), before[0]);
-    assert.ok(output.includes(bashPath(backups[0])));
+    const recoveryPath = output.match(/remove (.+): injected first registration backup unlink failure/)[1];
+    run("bash", ["-c", `test ${shellQuote(recoveryPath)} -ef ${shellQuote(bashPath(backups[0]))}`]);
     assert.deepEqual(artifacts.filter(registrationStaged), []);
     assert.match(fs.readFileSync(failureLog, "utf8").trimEnd().replaceAll("\\", "/"), new RegExp(`${path.basename(backups[0]).replaceAll(".", "\\.")}$`));
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }

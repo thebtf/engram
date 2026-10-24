@@ -1443,10 +1443,10 @@
       "resetFilter": "Reset filter"
     },
     "stats": {
-      "open": "open issues",
-      "work": "in progress · reopened",
-      "done": "closed · resolved",
-      "total": "total in registry"
+      "open": "open on this page",
+      "work": "in progress · reopened on this page",
+      "done": "closed · resolved on this page",
+      "total": "matching issues"
     },
     "create": {
       "title": "New issue",
@@ -1504,11 +1504,15 @@
       "count": "{count} issue | {count} issues",
       "countInFilter": "{shown} of {total} in current filter",
       "rows": "Rows",
-      "allRows": "All",
+      "allRows": "All · 200 per page",
       "pageRange": "{from}–{to} of {total}",
-      "filteredTotal": "{shown} shown · {total} in registry"
+      "filteredTotal": "{shown} on this page · {total} matching"
     },
     "filters": {
+      "projectRole": "Selected project role",
+      "incoming": "Incoming (target project)",
+      "sourceOwned": "Created by (source project)",
+      "allProjectRoles": "All projects · source and target roles are not filtered",
       "all": "All",
       "open": "Open",
       "work": "In progress",

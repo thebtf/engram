@@ -1058,7 +1058,7 @@ for (const [label, encoded] of [['control', encodeURIComponent('te\u0000xt')], [
 test('unavailable catalog and issue reads never render known empty; refresh retains prior rows', async (t) => {
   let response = () => Response.json({ issues: [], total: 0 })
   let resolveSelection
-  const consumer = session(t, undefined, (url) => url.pathname === '/api/issues' ? response() : url.pathname === '/api/projects/resolve' ? new Promise(resolve => { resolveSelection = resolve }) : undefined, undefined, [{ project_id: projectID, name: 'Synthetic project' }, { project_id: otherProjectID, name: 'Other project' }])
+  const consumer = session(t, undefined, (url) => url.pathname === '/api/issues' ? response(url) : url.pathname === '/api/projects/resolve' ? new Promise(resolve => { resolveSelection = resolve }) : undefined, undefined, [{ project_id: projectID, name: 'Synthetic project' }, { project_id: otherProjectID, name: 'Other project' }])
   consumer.projectStatus(503)
   await consumer.shell.refresh()
   const mounted = await mountRecovery(t, consumer, `/issues?project=${projectID}`, 'issues')
@@ -1092,25 +1092,35 @@ test('unavailable catalog and issue reads never render known empty; refresh reta
   assert.ok(rendered().includes('issues.empty.title'))
   assert.equal(reader().registryTotal, 0)
 
-  response = () => Response.json({ issues: Array.from({ length: 12 }, (_, index) => ({ id: index + 1, title: `retained issue ${index + 1}`, status: 'open', source_project: projectID, target_project: projectID, source_project_id: projectID, target_project_id: projectID, project_origin: { source_project: projectID, target_project: projectID } })), total: 12 })
+  const retainedIssues = Array.from({ length: 12 }, (_, index) => ({ id: index + 1, title: `retained issue ${index + 1}`, status: 'open', source_project: projectID, target_project: projectID, source_project_id: projectID, target_project_id: projectID, project_origin: { source_project: projectID, target_project: projectID } }))
+  response = (url) => {
+    const offset = Number(url.searchParams.get('offset') || 0)
+    const limit = Number(url.searchParams.get('limit') || 50)
+    return Response.json({ issues: retainedIssues.slice(offset, offset + limit), total: retainedIssues.length })
+  }
   await reader().refresh(); await tick()
   reader().page = 2
   await tick()
   assert.equal(reader().pageRows.length, 2)
+  assert.deepEqual(reader().pageRows.map(issue => issue.id).sort((left, right) => left - right), [11, 12])
+  assert.equal(reader().registryTotal, 12)
+  assert.ok(consumer.calls.some(call => { const query = new URL(call.path, 'http://synthetic.invalid').searchParams; return call.path.startsWith('/api/issues?') && query.get('offset') === '10' && query.get('limit') === '10' }))
   let resolveRead
   response = () => new Promise(resolve => { resolveRead = resolve })
   const refresh = reader().refresh()
   await tick()
   assert.equal(reader().loadState.kind, 'pending')
   assert.equal(reader().page, 2)
-  assert.equal(reader().rows.length, 12)
+  assert.deepEqual(reader().rows.map(issue => issue.id).sort((left, right) => left - right), [11, 12])
+  assert.equal(reader().registryTotal, 12)
   assert.equal(hasTotals(), false)
   assert.ok(rendered().includes('issues.state.stale'))
   resolveRead(Response.json({}, { status: 503 }))
   await refresh; await tick()
   assert.equal(reader().loadState.kind, 'error')
   assert.equal(reader().page, 2)
-  assert.equal(reader().rows.length, 12)
+  assert.deepEqual(reader().rows.map(issue => issue.id).sort((left, right) => left - right), [11, 12])
+  assert.equal(reader().registryTotal, 12)
   assert.equal(hasTotals(), false)
   assert.ok(rendered().includes('retained issue'))
   assert.ok(!rendered().includes('issues.empty.title'))

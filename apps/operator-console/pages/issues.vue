@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
-import { resolvePageSize, usePersistentPageSize } from '../composables/usePersistentPageSize'
+import { usePersistentPageSize } from '../composables/usePersistentPageSize'
 import { isCatalogProject, projectName, useOperatorProjectContext } from '../composables/useOperatorProjectContext'
 import {
   useOperatorIssues,
@@ -29,6 +29,19 @@ const requestedId = computed(() => {
 const scopeError = computed(() => context.selectionError.value || context.error.value)
 const scopeReady = computed(() => !context.selectionPending.value && !scopeError.value && (context.project.value === 'all' || isCatalogProject(context.project.value)))
 const humanSourceReady = computed(() => scopeReady.value && isCatalogProject(context.project.value))
+const filterStatuses: Record<IssueFilter, OperatorIssueStatus[]> = {
+  all: [],
+  open: ['open'],
+  work: ['acknowledged', 'reopened'],
+  closed: ['resolved', 'closed'],
+  rejected: ['rejected'],
+}
+const { pageSize, pageSizeOptions } = usePersistentPageSize('issues', 10)
+const page = ref(1)
+const filter = ref<IssueFilter>('all')
+const projectRole = ref<'target' | 'source'>('target')
+const effectivePageSize = computed(() => pageSize.value === 'all' ? 200 : pageSize.value)
+const listOptions = computed(() => ({ limit: effectivePageSize.value, offset: (page.value - 1) * effectivePageSize.value, role: projectRole.value, statuses: filterStatuses[filter.value] }))
 const {
   rows,
   comments,
@@ -51,27 +64,17 @@ const {
   saveIssueSelection,
   freezeIssueSelection,
   runIssueSelectionOperation,
-} = useOperatorIssues()
+} = useOperatorIssues(listOptions)
 
 const priorityOptions: OperatorIssuePriority[] = ['critical', 'high', 'medium', 'low']
 const typeOptions: OperatorIssueType[] = ['bug', 'feature', 'improvement', 'task']
 const statusOptions: OperatorIssueStatus[] = ['open', 'acknowledged', 'reopened', 'resolved', 'closed', 'rejected']
 const bulkStatusOptions = statusOptions.filter((status) => status !== 'rejected')
 const filterOptions: IssueFilter[] = ['all', 'open', 'work', 'closed', 'rejected']
-const filterStatuses: Record<IssueFilter, OperatorIssueStatus[]> = {
-  all: [],
-  open: ['open'],
-  work: ['acknowledged', 'reopened'],
-  closed: ['resolved', 'closed'],
-  rejected: ['rejected'],
-}
 const templateOptions: CreateTemplate[] = ['bug', 'handoff', 'question', 'improvement']
 
 const selection = createOperatorSelection('issues')
 
-const { pageSize, pageSizeOptions } = usePersistentPageSize('issues', 10)
-const page = ref(1)
-const filter = ref<IssueFilter>('all')
 const activeId = ref<number | null>(null)
 const showCreate = ref(false)
 const showReject = ref(false)
@@ -131,19 +134,15 @@ const stats = computed(() => ({
   total: registryTotal.value,
 }))
 
-const filteredRows = computed(() => filterStatuses[filter.value].length
-  ? rows.filter((issue) => filterStatuses[filter.value].includes(issue.status))
-  : rows)
-
-const effectivePageSize = computed(() => resolvePageSize(pageSize.value, filteredRows.value.length))
-const totalPages = computed(() => Math.max(1, Math.ceil(filteredRows.value.length / effectivePageSize.value)))
+const filteredRows = computed(() => rows)
+const totalPages = computed(() => Math.max(1, Math.ceil(registryTotal.value / effectivePageSize.value)))
 const pageRange = computed(() => {
   if (!filteredRows.value.length) return { from: 0, to: 0 }
   const from = (page.value - 1) * effectivePageSize.value + 1
-  const to = Math.min(filteredRows.value.length, page.value * effectivePageSize.value)
+  const to = from + filteredRows.value.length - 1
   return { from, to }
 })
-const pageRows = computed(() => filteredRows.value.slice((page.value - 1) * effectivePageSize.value, page.value * effectivePageSize.value))
+const pageRows = filteredRows
 const canCreate = computed(() => scopeReady.value && createTitle.value.trim().length > 0 && isCatalogProject(createSourceProject.value) && isCatalogProject(createTargetProject.value) && (context.project.value === 'all' || createSourceProject.value === context.project.value) && !pending.value)
 const canComment = computed(() => humanSourceReady.value && Boolean(activeIssue.value) && commentDraft.value.trim().length > 0 && !pending.value)
 const canReject = computed(() => humanSourceReady.value && Boolean(activeIssue.value) && rejectComment.value.trim().length > 0 && !pending.value)
@@ -192,9 +191,10 @@ watch([context.project, context.selectionPending, scopeError, requestedId], () =
     void openIssue(requestedId.value)
   }
 }, { immediate: true, flush: 'sync' })
-watch(filter, () => {
+watch([filter, projectRole], () => {
   scopeGeneration += 1
   page.value = 1
+  activeId.value = null
   selection.invalidate('filter_changed')
 })
 
@@ -275,7 +275,7 @@ function setSelectionError(error: unknown) {
 
 function selectionFilter() {
   const statuses = filterStatuses[filter.value]
-  return { ...(context.project.value === 'all' ? {} : { project: context.project.value }), ...(statuses.length ? { statuses } : {}) }
+  return { ...(context.project.value === 'all' ? {} : projectRole.value === 'source' ? { sourceProject: context.project.value } : { project: context.project.value }), ...(statuses.length ? { statuses } : {}) }
 }
 
 async function toggleSelection(issue: OperatorIssue) {
@@ -322,11 +322,12 @@ function clearSelection() {
 
 function resetFilter() {
   filter.value = 'all'
+  projectRole.value = 'target'
   page.value = 1
 }
 
 function hasFilter() {
-  return filter.value !== 'all'
+  return filter.value !== 'all' || projectRole.value !== 'target'
 }
 
 async function selectIssue(issue: OperatorIssue) {
@@ -699,7 +700,7 @@ function renderMarkdown(value: string) {
             <button class="tbtn" :disabled="!filteredRows.length || !humanSourceReady" @click="selectAllFiltered">{{ t('issues.actions.selectAll') }}</button>
             <button class="tbtn" :disabled="!selectedCount" @click="clearSelection">{{ t('issues.actions.clearSelection') }}</button>
             <button class="tbtn" :disabled="!hasFilter()" @click="resetFilter">{{ t('issues.actions.resetFilter') }}</button>
-            <span v-if="listReady" class="fcount">{{ t('issues.list.countInFilter', { shown: filteredRows.length, total: rows.length }) }}</span>
+            <span v-if="listReady" class="fcount">{{ t('issues.list.countInFilter', { shown: filteredRows.length, total: registryTotal }) }}</span>
           </div>
           <div class="op-right">
             <label class="rows">
@@ -711,10 +712,10 @@ function renderMarkdown(value: string) {
               </select>
             </label>
             <template v-if="listReady">
-              <span class="fcount">{{ t('issues.list.pageRange', { from: pageRange.from, to: pageRange.to, total: filteredRows.length }) }}</span>
-              <button class="pager" :disabled="page <= 1" @click="page--">‹</button>
-              <button class="pager on">{{ page }}</button>
-              <button class="pager" :disabled="page >= totalPages" @click="page++">›</button>
+              <span class="fcount" role="status">{{ t('issues.list.pageRange', { from: pageRange.from, to: pageRange.to, total: registryTotal }) }}</span>
+              <button class="pager" :disabled="pending || page <= 1" :aria-label="t('knowledge.previous')" @click="page--">‹</button>
+              <button class="pager on" :aria-label="t('knowledge.pageOf', { page, total: totalPages })">{{ page }}</button>
+              <button class="pager" :disabled="pending || page >= totalPages" :aria-label="t('knowledge.next')" @click="page++">›</button>
             </template>
           </div>
         </div>
@@ -736,6 +737,14 @@ function renderMarkdown(value: string) {
         </div>
 
         <div class="filterbar">
+          <label class="rows">
+            <span>{{ t('issues.filters.projectRole') }}</span>
+            <select v-model="projectRole" class="select" name="issues-project-role" :disabled="!scopeReady || context.project.value === 'all'">
+              <option value="target">{{ t('issues.filters.incoming') }}</option>
+              <option value="source">{{ t('issues.filters.sourceOwned') }}</option>
+            </select>
+          </label>
+          <span v-if="context.project.value === 'all'" class="fcount">{{ t('issues.filters.allProjectRoles') }}</span>
           <button
             v-for="item in filterOptions"
             :key="item"

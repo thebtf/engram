@@ -236,7 +236,7 @@ func (s *IssueStore) ListIssuesEx(ctx context.Context, params IssueListParams) (
 	var issues []IssueWithCount
 	err := query.
 		Select("issues.*, (SELECT COUNT(*) FROM issue_comments WHERE issue_comments.issue_id = issues.id) AS comment_count").
-		Order("CASE priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 WHEN 'low' THEN 4 END, created_at DESC").
+		Order("CASE priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 WHEN 'low' THEN 4 END, created_at DESC, issues.id DESC").
 		Limit(limit).
 		Offset(params.Offset).
 		Find(&issues).Error

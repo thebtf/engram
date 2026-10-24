@@ -250,6 +250,9 @@ func (c *Client) Embed(ctx context.Context, texts []string) ([][]float32, error)
 
 		respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxEmbeddingResponseBytes+1))
 		resp.Body.Close()
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if readErr != nil {
 			lastErr = readErr
 			continue

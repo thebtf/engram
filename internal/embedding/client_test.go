@@ -294,3 +294,58 @@ func TestEmbedPreservesProviderHTTPStatus(t *testing.T) {
 		t.Fatalf("provider status = %d, want %d", got, http.StatusTooManyRequests)
 	}
 }
+
+func TestEmbedCancellationPrecedesResponseDecode(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		cancel bool
+	}{
+		{name: "active"},
+		{name: "canceled", cancel: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			calls := make(chan struct{}, 3)
+			server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				calls <- struct{}{}
+			}))
+			defer server.Close()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			httpClient := server.Client()
+			transport := httpClient.Transport
+			httpClient.Transport = embeddingRoundTripperFunc(func(request *http.Request) (*http.Response, error) {
+				response, err := transport.RoundTrip(request)
+				if err == nil && test.cancel {
+					cancel()
+				}
+				return response, err
+			})
+			client := &Client{
+				baseURL:        server.URL,
+				model:          "test-model",
+				retryBaseDelay: 0,
+				httpClient:     httpClient,
+			}
+			_, err := client.Embed(ctx, []string{"conceptual query"})
+			if got := len(calls); got != 1 {
+				t.Fatalf("HTTP calls = %d, want 1", got)
+			}
+			if test.cancel {
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("Embed() error = %v, want context.Canceled", err)
+				}
+				return
+			}
+			var syntaxError *json.SyntaxError
+			if !errors.As(err, &syntaxError) {
+				t.Fatalf("Embed() error = %v, want json.SyntaxError", err)
+			}
+		})
+	}
+}
+
+type embeddingRoundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (roundTrip embeddingRoundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return roundTrip(request)
+}

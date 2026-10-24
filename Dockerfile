@@ -16,7 +16,7 @@ COPY design/operator-console /workspace/design/operator-console
 RUN npm run parity && npm run build
 
 # --- Go build stage ---
-FROM golang:1.26.9-bookworm@sha256:d9c68c2c51161e12fd77e4c6320687c9cd86e1af1e3ad6e6cd63ff970641453c AS builder
+FROM golang:1.26.10-bookworm@sha256:5b1f78db1f54cc8cb46e652c51d3f854441c4310a449161b6fe9fb553edab505 AS builder
 
 WORKDIR /src
 
