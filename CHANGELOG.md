@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Preserve caller cancellation before decoding embedding HTTP responses, while retaining decode errors for active callers and existing retry and timeout behavior.
+
 - Separate Windows audit-lock fixture startup from the reader lifetime, preserving the one-second sharing-violation assertion and owned-child cleanup.
 
 - Stabilize issue-page ties with descending issue IDs, convert Windows fixture PATH entries with Git Bash, and pin the PostgreSQL CA bundle to 20260909-r3.
