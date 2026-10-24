@@ -25,7 +25,7 @@ import (
 
 // The receiver deliberately ACKs and exits without starting a successor.
 // Production admission, peer binding, locking and readiness are not stubbed.
-func TestReconcileRecoversAfterAcknowledgedSuccessorIsAbsent(t *testing.T) {
+func TestOrdinaryShimRecoversAfterAcknowledgedSuccessorIsAbsent(t *testing.T) {
 	root, current := os.Getenv("ENGRAM_TEST_MISSING_ROOT"), os.Getenv("ENGRAM_TEST_MISSING_CURRENT")
 	if root == "" || current == "" {
 		t.Skip("requires private missing-successor allocation and current executable")
@@ -67,7 +67,7 @@ func TestReconcileRecoversAfterAcknowledgedSuccessorIsAbsent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	receiver := filepath.Join(filepath.Dir(root), "inputs", "receiver", "receiver.exe")
+	receiver := filepath.Join(filepath.Dir(root), "inputs", "caller-receiver", "receiver.exe")
 	from, err := os.Open(self)
 	if err != nil {
 		t.Fatal(err)
@@ -81,9 +81,6 @@ func TestReconcileRecoversAfterAcknowledgedSuccessorIsAbsent(t *testing.T) {
 	if err := errors.Join(copyErr, to.Close(), from.Close()); err != nil {
 		t.Fatal(err)
 	}
-	originalExecutable := currentExecutable
-	currentExecutable = func() (string, error) { return current, nil }
-	t.Cleanup(func() { currentExecutable = originalExecutable })
 
 	for _, scenario := range []string{"compatible-current-not-stolen", "pingable-lower-not-ready", "ack-exit-no-successor"} {
 		t.Run(scenario, func(t *testing.T) {
@@ -178,8 +175,8 @@ func TestReconcileRecoversAfterAcknowledgedSuccessorIsAbsent(t *testing.T) {
 				t.Log("CONTROL_PASS: pingable lower generation is not current-version readiness")
 				return
 			}
-			reconcileErr := reconcileMuxcoreDaemonVersion(ctx)
 			if scenario == "compatible-current-not-stolen" {
+				reconcileErr := reconcileMuxcoreDaemonVersion(ctx)
 				after, ok := readMuxcoreDaemonStatusIdentity(control)
 				if reconcileErr != nil || !ok || after != before {
 					t.Fatalf("compatible generation stolen: err=%v before=%+v after=%+v", reconcileErr, before, after)
@@ -190,6 +187,26 @@ func TestReconcileRecoversAfterAcknowledgedSuccessorIsAbsent(t *testing.T) {
 				t.Log("CONTROL_PASS: compatible current PID/full generation remains bound")
 				return
 			}
+			// Exercise main's ordinary entry. It may delegate cold start to engine.Run;
+			// reconcile itself is not required to create a daemon or marker.
+			clientProcess, err := uciStartInstalledHarnessComponent(tree, uciInstallHarnessComponent{role: "ordinary-current-client", installedExecutable: current}, os.Environ(), root, true)
+			if clientProcess != nil {
+				processes = append(processes, clientProcess)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(tree.fallback) != 0 {
+				t.Fatal("ordinary client lacks private job containment")
+			}
+			client, err := newUCIInstalledAcceptanceMCPClient("ordinary-current", clientProcess)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The published binary has its real two-minute reconciliation deadline.
+			mcpCtx, mcpCancel := context.WithTimeout(context.Background(), 140*time.Second)
+			defer mcpCancel()
+			initialized, _, initializeErr := client.call(mcpCtx, "initialize", map[string]any{"protocolVersion": "2025-11-25", "capabilities": map[string]any{}, "clientInfo": map[string]string{"name": "missing-successor-caller-proof", "version": "1"}})
 			select {
 			case err := <-exited:
 				if err != nil || process.command.ProcessState.ExitCode() != 0 {
@@ -208,45 +225,43 @@ func TestReconcileRecoversAfterAcknowledgedSuccessorIsAbsent(t *testing.T) {
 			}
 			status, live := readMuxcoreDaemonStatusIdentity(control)
 			marker, markerErr := readMuxcoreDaemonVersionMarker(control + ".marker.json")
-			t.Logf("ACK_EXIT: predecessor_pid=%d exit=0 successor_exe=%s; AFTER live=%v status=%+v marker=%+v marker_error=%v reconcile_error=%v", before.PID, ack.SuccessorExe, live, status, marker, markerErr, reconcileErr)
-			if !live || markerErr != nil || status.PID == before.PID || status.DaemonGeneration == before.DaemonGeneration || marker.PID != status.PID || marker.DaemonGeneration != status.DaemonGeneration || marker.ProductVersion != daemonVersion || marker.DaemonCompatEpoch != muxcoreDaemonCompatEpoch || !strings.EqualFold(marker.Exe, current) {
-				t.Fatalf("MISSING_SUCCESSOR_AVAILABILITY_RED: real admitted restart ACKed and predecessor exited, but no requested-current executable/version/epoch-bound replacement became ready; err=%v", reconcileErr)
+			t.Logf("CALLER_ACK_EXIT: predecessor_pid=%d exit=0 successor_exe=%s ordinary_pid=%d; AFTER live=%v status=%+v marker=%+v marker_error=%v initialize_error=%v", before.PID, ack.SuccessorExe, clientProcess.command.Process.Pid, live, status, marker, markerErr, initializeErr)
+			if initializeErr != nil {
+				callerExited := make(chan error, 1)
+				go func() { callerExited <- clientProcess.wait() }()
+				select {
+				case err := <-callerExited:
+					if err != nil || clientProcess.command.ProcessState.ExitCode() != 1 {
+						t.Fatalf("ordinary caller did not expose its own exit1: err=%v", err)
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatal("ordinary caller did not close naturally after initialize failure")
+				}
+				t.Fatalf("MISSING_SUCCESSOR_CALLER_AVAILABILITY_RED: ordinary current executable exited1 before current-version MCP after valid restart ACK and predecessor exit: %v", initializeErr)
 			}
-			peer, err = missingSuccessorPeer(control)
-			if err != nil || peer != status.PID || reconcileErr != nil {
-				t.Fatalf("recovered current generation is not a successful peer-bound result: peer=%d status=%+v err=%v reconcile=%v", peer, status, err, reconcileErr)
-			}
-			// A future repair must serve actual current-version MCP, not merely create a marker.
-			clientProcess, err := uciStartInstalledHarnessComponent(tree, uciInstallHarnessComponent{role: "recovered-current-client", installedExecutable: current}, os.Environ(), root, true)
-			if clientProcess != nil {
-				processes = append(processes, clientProcess)
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			client, err := newUCIInstalledAcceptanceMCPClient("recovered-current", clientProcess)
-			if err != nil {
-				t.Fatal(err)
-			}
-			mcpCtx, mcpCancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer mcpCancel()
-			initialized, _, err := client.call(mcpCtx, "initialize", map[string]any{"protocolVersion": "2025-11-25", "capabilities": map[string]any{}, "clientInfo": map[string]string{"name": "missing-successor-proof", "version": "1"}})
 			var info struct {
 				ServerInfo struct {
 					Version string `json:"version"`
 				} `json:"serverInfo"`
 			}
-			if err != nil || json.Unmarshal(initialized, &info) != nil || info.ServerInfo.Version != daemonVersion {
-				t.Fatalf("recovered initialize is unavailable/stale: %s err=%v", initialized, err)
+			if json.Unmarshal(initialized, &info) != nil || info.ServerInfo.Version != daemonVersion {
+				t.Fatalf("ordinary initialize is invalid/stale: %s", initialized)
+			}
+			if !live || markerErr != nil || status.PID == before.PID || status.DaemonGeneration == before.DaemonGeneration || marker.PID != status.PID || marker.DaemonGeneration != status.DaemonGeneration || marker.ProductVersion != daemonVersion || marker.DaemonCompatEpoch != muxcoreDaemonCompatEpoch || !strings.EqualFold(marker.Exe, current) {
+				t.Fatal("ordinary MCP did not join the exact current-version/epoch replacement")
+			}
+			peer, err = missingSuccessorPeer(control)
+			if err != nil || peer != status.PID {
+				t.Fatalf("ordinary current generation is not peer-bound: peer=%d status=%+v err=%v", peer, status, err)
 			}
 			if err := client.notification("notifications/initialized", map[string]any{}); err != nil {
 				t.Fatal(err)
 			}
 			listed, _, err := client.call(mcpCtx, "tools/list", map[string]any{})
 			if err != nil || !strings.Contains(string(listed), `"codebase_search"`) {
-				t.Fatalf("recovered tools/list unavailable: %s err=%v", listed, err)
+				t.Fatalf("ordinary tools/list unavailable: %s err=%v", listed, err)
 			}
-			t.Log("RECOVERY_GREEN: requested current executable/version/epoch/peer and real MCP are ready")
+			t.Log("CALLER_RECOVERY_GREEN: ordinary input reached current-version/epoch/peer MCP through the existing cold-start owner")
 		})
 	}
 }
