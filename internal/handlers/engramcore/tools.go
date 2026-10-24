@@ -151,7 +151,11 @@ func (m *Module) proxyToolSession(ctx context.Context, project muxcore.ProjectCo
 
 func (m *Module) proxyToolCallContext(ctx context.Context, project muxcore.ProjectContext, request *pb.CallToolRequest, uciTool bool) (context.Context, error) {
 	if uciTool {
-		return uciClientOutgoingContext(ctx, m.v3ClientInstanceID)
+		var err error
+		ctx, err = uciClientOutgoingContext(ctx, m.v3ClientInstanceID)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if !projectidentity.ToolRequiresProject(request.ToolName, request.ArgumentsJson) {
 		return ctx, nil

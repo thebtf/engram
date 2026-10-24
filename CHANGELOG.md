@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Restore native `codebase_context register` by resolving the actual caller's canonical Project and carrying it in the outer gRPC request, without adding a public `project` argument or weakening Source/Checkout/handle authorization. Keep list, resolve, select and other UCI operations project-free. Cover pinned and cold HTTP-bootstrap registration with real native/gRPC/PostgreSQL fixtures, including independent worktrees and no-View first use.
+
 - Preserve caller cancellation before decoding embedding HTTP responses, while retaining decode errors for active callers and existing retry and timeout behavior.
 
 - Separate Windows audit-lock fixture startup from the reader lifetime, preserving the one-second sharing-violation assertion and owned-child cleanup.

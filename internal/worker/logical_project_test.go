@@ -20,6 +20,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/soheilhy/cmux"
+	"github.com/stretchr/testify/require"
+	"github.com/thebtf/engram/internal/auditcontext"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/grpcserver"
 	"github.com/thebtf/engram/internal/handlers/engramcore"
@@ -439,4 +442,118 @@ func TestLogicalProjectConcurrentFirstBootstrap(t *testing.T) {
 		t.Fatal("collision changed the existing binding owner")
 	}
 	t.Log("PASS first creation: 8 synchronized requests, one UUID/project/active binding with provenance, stable replay; metadata edit and fresh clone retain catalog identity; pinned marker makes zero bootstrap calls; unique collision typed with full rollback and no orphan")
+}
+
+func TestNativeCodeContextRegistrationBootstrapsCanonicalProject(t *testing.T) {
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
+	store := openWorkerUCIContextCompositionStore(t)
+	service := &Service{store: store}
+	mcpServer := mcp.NewServer(mcp.ServerOptions{Version: "native-cold-registration"})
+	composition, err := composeUCIContext(true, store.DB, mcpServer, workerUCISemanticConfig())
+	require.NoError(t, err)
+	grpcServer, internal := grpcserver.New(&mcpHandlerAdapter{mcpServer: mcpServer}, nil)
+	internal.SetDB(store.DB)
+	internal.SetUCITransport(composition.transport)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	shared := cmux.New(listener)
+	grpcListener := shared.MatchWithWriters(cmux.HTTP2MatchHeaderFieldPrefixSendSettings("content-type", "application/grpc"))
+	httpListener := shared.Match(cmux.Any())
+	var bootstrapCalls atomic.Int32
+	routes := http.NewServeMux()
+	routes.HandleFunc("/api/projects/bootstrap", func(w http.ResponseWriter, r *http.Request) {
+		bootstrapCalls.Add(1)
+		service.handleProjectBootstrap(w, r)
+	})
+	httpServer := &http.Server{Handler: routes}
+	finished := make(chan error, 3)
+	go func() { finished <- grpcServer.Serve(grpcListener) }()
+	go func() { finished <- httpServer.Serve(httpListener) }()
+	go func() { finished <- shared.Serve() }()
+	t.Cleanup(func() {
+		_ = httpServer.Close()
+		grpcServer.Stop()
+		_ = listener.Close()
+		for range 3 {
+			select {
+			case <-finished:
+			case <-time.After(2 * time.Second):
+				t.Error("cold registration fixture listener did not stop")
+			}
+		}
+	})
+	root := t.TempDir()
+	for _, args := range [][]string{{"init", "--quiet", "--template="}, {"remote", "add", "origin", "https://example.test/Native/Cold-" + uuid.NewString() + ".git"}} {
+		command := exec.CommandContext(t.Context(), "git", append([]string{"-C", root}, args...)...)
+		command.Env = projectidentity.RepositoryGitEnvironmentV3()
+		output, err := command.CombinedOutput()
+		require.NoError(t, err, "%s", output)
+	}
+	nested := filepath.Join(root, "src")
+	require.NoError(t, os.Mkdir(nested, 0o700))
+	for _, path := range []string{filepath.Join(root, ".engram-project"), filepath.Join(root, ".git", "engram-project.json")} {
+		_, err := os.Lstat(path)
+		require.True(t, os.IsNotExist(err), "first native registration must start without %s", path)
+	}
+	core := engramcore.NewModuleWithClientInstanceID("native-cold-registration")
+	t.Cleanup(func() { require.NoError(t, core.Shutdown(context.Background())) })
+	project := muxcore.ProjectContext{ID: "not-canonical-authority", Cwd: nested, Env: map[string]string{
+		"ENGRAM_URL": "http://" + listener.Addr().String(), "ENGRAM_TOKEN": "",
+	}}
+	ctx := auditcontext.WithUCITransportSession(t.Context(), "native-cold-session")
+	type registeredContext struct {
+		ContextHandle string          `json:"context_handle"`
+		SourceID      string          `json:"source_id"`
+		CheckoutID    string          `json:"checkout_id"`
+		Context       json.RawMessage `json:"context"`
+	}
+	var first registeredContext
+	for attempt := range 2 {
+		block, err := core.ProxyHandleTool(ctx, project, "codebase_context", json.RawMessage(`{"action":"register","source_label":"Cold native repository"}`))
+		require.NoError(t, err)
+		var outer struct {
+			Text string `json:"text"`
+		}
+		require.NoError(t, json.Unmarshal(block, &outer))
+		var result struct {
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+			IsError bool `json:"isError"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(outer.Text), &result))
+		require.False(t, result.IsError)
+		require.Len(t, result.Content, 1)
+		var registered registeredContext
+		require.NoError(t, json.Unmarshal([]byte(result.Content[0].Text), &registered))
+		require.NotEmpty(t, registered.ContextHandle)
+		require.JSONEq(t, "null", string(registered.Context))
+		if attempt == 0 {
+			first = registered
+		} else {
+			require.Equal(t, first.SourceID, registered.SourceID)
+			require.Equal(t, first.CheckoutID, registered.CheckoutID)
+		}
+	}
+	require.EqualValues(t, 1, bootstrapCalls.Load(), "pinned replay must not bootstrap again")
+	canonical, err := projectidentity.ResolveLogicalProject(t.Context(), nested, nil)
+	require.NoError(t, err)
+	var storedProject gormdb.Project
+	require.NoError(t, store.DB.First(&storedProject, "id = ?", canonical.ProjectID).Error)
+	require.Equal(t, canonical.ProjectID, storedProject.ProjectKey.String)
+	var source gormdb.UCISource
+	require.NoError(t, store.DB.First(&source, "source_id = ?", first.SourceID).Error)
+	require.NotNil(t, source.ProjectID)
+	require.Equal(t, canonical.ProjectID, *source.ProjectID)
+	var checkout gormdb.UCICheckout
+	require.NoError(t, store.DB.First(&checkout, "checkout_id = ?", first.CheckoutID).Error)
+	require.Equal(t, first.SourceID, checkout.SourceID)
+	physical, err := filepath.EvalSymlinks(root)
+	require.NoError(t, err)
+	locator, err := url.Parse(checkout.LocatorRef)
+	require.NoError(t, err)
+	require.Equal(t, "file", locator.Scheme)
+	require.Equal(t, strings.TrimPrefix(filepath.ToSlash(physical), "/"), strings.TrimPrefix(locator.Path, "/"))
+	require.Nil(t, checkout.CurrentViewID)
+	t.Log("PASS native cold register(label, no locator/project) -> real HTTP bootstrap -> canonical PostgreSQL Project -> real gRPC/MCP Source/Checkout; no View; replay stays pinned")
 }
