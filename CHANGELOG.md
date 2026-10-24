@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Recover ordinary native-client startup when an acknowledged daemon restart leaves no successor: prove the bound predecessor exited, revalidate namespace ownership under the existing restart fence, and return cold start to the existing shim engine. Preserve current-version/epoch/generation/peer checks, lower-version replacement, cancellation and no-steal behavior without another launcher or snapshot replay.
+
 - Bind issue-role lookups as one PostgreSQL ID array instead of expanding one parameter per issue. Preserve complete large selections, independent nullable canonical roles and retained-membership privacy without changing public limits.
 
 - Preserve seven fixed partition-repair refusal codes in private CLI diagnostics; retain generic output for untyped or unknown errors. Require both PostgreSQL fixture DSNs before public-consumer setup, and navigate the explicit metadata-only view in the retained-reader browser regression without changing reader-first discovery.

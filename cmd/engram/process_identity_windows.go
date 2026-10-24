@@ -11,6 +11,37 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+type windowsProcessExitProof struct {
+	handle windows.Handle
+}
+
+func openProcessExitProof(pid int) (muxcoreProcessExitProof, error) {
+	handle, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(pid))
+	if err != nil {
+		return nil, err
+	}
+	return &windowsProcessExitProof{handle: handle}, nil
+}
+
+func (process *windowsProcessExitProof) Exited() (bool, error) {
+	status, err := windows.WaitForSingleObject(process.handle, 0)
+	if err != nil {
+		return false, err
+	}
+	switch status {
+	case windows.WAIT_OBJECT_0:
+		return true, nil
+	case uint32(windows.WAIT_TIMEOUT):
+		return false, nil
+	default:
+		return false, fmt.Errorf("unexpected process wait status %d", status)
+	}
+}
+
+func (process *windowsProcessExitProof) Close() error {
+	return windows.CloseHandle(process.handle)
+}
+
 func liveProcessImageIdentity(pid int) (*processImageIdentity, error) {
 	process, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
 	if err != nil {

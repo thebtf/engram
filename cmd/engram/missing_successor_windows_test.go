@@ -4,6 +4,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -81,8 +83,18 @@ func TestOrdinaryShimRecoversAfterAcknowledgedSuccessorIsAbsent(t *testing.T) {
 	if err := errors.Join(copyErr, to.Close(), from.Close()); err != nil {
 		t.Fatal(err)
 	}
+	currentFile, err := os.Open(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedHash := sha256.New()
+	_, hashErr := io.Copy(expectedHash, currentFile)
+	if err := errors.Join(hashErr, currentFile.Close()); err != nil {
+		t.Fatal(err)
+	}
+	expectedImage := hex.EncodeToString(expectedHash.Sum(nil))
 
-	for _, scenario := range []string{"compatible-current-not-stolen", "pingable-lower-not-ready", "ack-exit-no-successor"} {
+	for _, scenario := range []string{"compatible-current-not-stolen", "pingable-lower-not-ready", "ack-exit-no-successor", "reappearing-lower-after-exit"} {
 		t.Run(scenario, func(t *testing.T) {
 			version := "v7.0.3"
 			if scenario == "compatible-current-not-stolen" {
@@ -187,6 +199,85 @@ func TestOrdinaryShimRecoversAfterAcknowledgedSuccessorIsAbsent(t *testing.T) {
 				t.Log("CONTROL_PASS: compatible current PID/full generation remains bound")
 				return
 			}
+			if scenario == "reappearing-lower-after-exit" {
+				oldLock, oldExecutable := acquireRestartLock, currentExecutable
+				t.Cleanup(func() { acquireRestartLock, currentExecutable = oldLock, oldExecutable })
+				currentExecutable = func() (string, error) { return current, nil }
+				acquisitions := 0
+				newAck := filepath.Join(root, scenario+"-new-lower-ack.json")
+				var newLower muxcoreDaemonStatusIdentity
+				var newExited chan error
+				acquireRestartLock = func() (io.Closer, error) {
+					lock, err := oldLock()
+					if err != nil {
+						return nil, err
+					}
+					acquisitions++
+					if acquisitions == 2 {
+						if err := uciWaitInstalledAcceptanceProcessExit(before.PID, time.Second); err != nil {
+							_ = lock.Close()
+							return nil, err
+						}
+						environment := append(os.Environ(), "ENGRAM_TEST_MISSING_RECEIVER=1", "ENGRAM_TEST_MISSING_ACK="+newAck)
+						reappeared, err := uciStartInstalledHarnessComponent(tree, component, environment, root, false)
+						if reappeared != nil {
+							processes = append(processes, reappeared)
+						}
+						if err != nil {
+							_ = lock.Close()
+							return nil, err
+						}
+						newExited = make(chan error, 1)
+						go func() { newExited <- reappeared.wait() }()
+						if _, err := uciWaitForInstalledAcceptanceDaemonPID(ctx, os.TempDir(), receiver); err != nil {
+							_ = lock.Close()
+							return nil, err
+						}
+						var found bool
+						newLower, found = readMuxcoreDaemonStatusIdentity(control)
+						if !found || sameMuxcoreDaemon(newLower, before) {
+							_ = lock.Close()
+							return nil, errors.New("lower fixture did not replace the exited generation")
+						}
+						t.Logf("REAPPEARED_LOWER: under revalidation fence pid=%d full_generation=%s old_pid=%d", newLower.PID, newLower.DaemonGeneration, before.PID)
+					}
+					return lock, nil
+				}
+				reconcileErr := reconcileMuxcoreDaemonVersion(ctx)
+				acquireRestartLock, currentExecutable = oldLock, oldExecutable
+				if reconcileErr != nil {
+					t.Fatalf("fresh lower revalidation failed: %v", reconcileErr)
+				}
+				if newExited == nil {
+					t.Fatal("new handback revalidation boundary was not exercised")
+				}
+				select {
+				case err := <-newExited:
+					if err != nil {
+						t.Fatal(err)
+					}
+				case <-time.After(time.Second):
+					t.Fatal("new lower was treated as ready instead of being freshly replaced")
+				}
+				for _, expected := range []struct {
+					path   string
+					status muxcoreDaemonStatusIdentity
+				}{{ackPath, before}, {newAck, newLower}} {
+					raw, err := os.ReadFile(expected.path)
+					var ack struct {
+						muxcontrol.GracefulRestartOptions
+						PID        int
+						Generation string
+					}
+					if err != nil || json.Unmarshal(raw, &ack) != nil || ack.PID != expected.status.PID || ack.Generation != expected.status.DaemonGeneration || ack.SuccessorExe != current {
+						t.Fatalf("restart did not bind the fresh lower generation: %s err=%v", raw, err)
+					}
+				}
+				if status, found := readMuxcoreDaemonStatusIdentity(control); found && status.PID == newLower.PID {
+					t.Fatal("reappeared lower was accepted as upgraded")
+				}
+				t.Log("REVALIDATION_PASS: both lower generations ACKed under their own peer/full-generation binding; no stale stop or lower-ready handback")
+			}
 			// Exercise main's ordinary entry. It may delegate cold start to engine.Run;
 			// reconcile itself is not required to create a daemon or marker.
 			clientProcess, err := uciStartInstalledHarnessComponent(tree, uciInstallHarnessComponent{role: "ordinary-current-client", installedExecutable: current}, os.Environ(), root, true)
@@ -254,6 +345,23 @@ func TestOrdinaryShimRecoversAfterAcknowledgedSuccessorIsAbsent(t *testing.T) {
 			if err != nil || peer != status.PID {
 				t.Fatalf("ordinary current generation is not peer-bound: peer=%d status=%+v err=%v", peer, status, err)
 			}
+			image, err := liveProcessImageIdentity(status.PID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := sameLegacyProcessExecutable(current, image); err != nil {
+				_ = image.Close()
+				t.Fatal(err)
+			}
+			liveHash := sha256.New()
+			_, hashErr := io.Copy(liveHash, image.File)
+			if err := errors.Join(hashErr, image.Close()); err != nil {
+				t.Fatal(err)
+			}
+			if observed := hex.EncodeToString(liveHash.Sum(nil)); observed != expectedImage {
+				t.Fatalf("current live image SHA256=%s want=%s", observed, expectedImage)
+			}
+			t.Logf("CURRENT_IMAGE: pid=%d full_generation=%s peer=%d version=%s epoch=%d sha256=%s", status.PID, status.DaemonGeneration, peer, marker.ProductVersion, marker.DaemonCompatEpoch, expectedImage)
 			if err := client.notification("notifications/initialized", map[string]any{}); err != nil {
 				t.Fatal(err)
 			}
@@ -320,7 +428,11 @@ func (receiver *missingSuccessorReceiver) HandleGracefulRestartWithOptions(optio
 	}
 	return "", func() {
 		// muxcore calls this only after the real OK response has been written/closed.
-		raw, err := json.Marshal(options)
+		raw, err := json.Marshal(struct {
+			muxcontrol.GracefulRestartOptions
+			PID        int
+			Generation string
+		}{options, os.Getpid(), receiver.generation})
 		if err != nil {
 			panic(err)
 		}

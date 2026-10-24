@@ -36,6 +36,34 @@ type darwinProcUniqueIdentifierInfo struct {
 
 var _ [56]byte = [unsafe.Sizeof(darwinProcUniqueIdentifierInfo{})]byte{}
 
+type darwinProcessExitProof struct {
+	pid      int
+	uniqueID uint64
+}
+
+func openProcessExitProof(pid int) (muxcoreProcessExitProof, error) {
+	identity, err := darwinProcessIdentity(pid)
+	if err != nil {
+		return nil, err
+	}
+	return &darwinProcessExitProof{pid: pid, uniqueID: identity.UniqueID}, nil
+}
+
+func (process *darwinProcessExitProof) Exited() (bool, error) {
+	identity, err := darwinProcessIdentity(process.pid)
+	if errors.Is(err, syscall.ESRCH) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return identity.UniqueID != process.uniqueID, nil
+}
+
+func (*darwinProcessExitProof) Close() error {
+	return nil
+}
+
 func liveProcessImageIdentity(pid int) (*processImageIdentity, error) {
 	process, err := darwinProcessIdentity(pid)
 	if err != nil {

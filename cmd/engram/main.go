@@ -239,6 +239,11 @@ func muxcoreDaemonConvergenceAction(path string, status muxcoreDaemonStatusIdent
 	return classifyDaemonConvergence(client, daemonConvergenceIdentity{ProductVersion: marker.ProductVersion, DaemonCompatEpoch: marker.DaemonCompatEpoch})
 }
 
+type muxcoreProcessExitProof interface {
+	io.Closer
+	Exited() (bool, error)
+}
+
 // processImageIdentity owns the single opened file that proves both the
 // marker's filesystem identity and the Go build metadata of the live image.
 // Darwin fills its kernel process binding fields before returning it.
@@ -506,6 +511,8 @@ var (
 	sendMuxcoreControlRequest                                             = sendMuxcoreControlRequestAndReadResponse
 	restartMuxcoreDaemon                                                  = restartMuxcoreDaemonBound
 	waitForCurrentMuxcoreDaemonReady                                      = waitForMuxcoreDaemonVersion
+	openMuxcorePredecessorProcess                                         = openProcessExitProof
+	waitForRestartedMuxcoreDaemon                                         = waitForMuxcoreDaemonVersionOrExit
 	acquireRestartLock                          func() (io.Closer, error) = func() (io.Closer, error) { return acquireMuxcoreDaemonLock() }
 	muxcoreMarkerPublicationTimeout                                       = muxcoreDaemonMarkerPublicationTimeout
 )
@@ -558,6 +565,10 @@ func acquireRestartLockWithContext(ctx context.Context) (io.Closer, error) {
 }
 
 func waitForMuxcoreDaemonVersion(ctx context.Context) error {
+	return waitForMuxcoreDaemonVersionOrExit(ctx, nil)
+}
+
+func waitForMuxcoreDaemonVersionOrExit(ctx context.Context, predecessor muxcoreProcessExitProof) error {
 	const pollInterval = 100 * time.Millisecond
 	client, err := clientDaemonIdentity()
 	if err != nil {
@@ -566,17 +577,53 @@ func waitForMuxcoreDaemonVersion(ctx context.Context) error {
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		status, ok := readMuxcoreDaemonStatusIdentity(serverid.DaemonControlPath("", muxcoreNamespace))
 		if ok {
 			action, actionErr := readLiveMuxcoreDaemonAction(status, client)
 			switch {
 			case actionErr == nil && action == daemonConvergenceJoin:
+				if predecessor != nil {
+					unowned, err := probeMuxcoreDaemonNamespace(ctx, &status)
+					if err != nil {
+						return err
+					}
+					if unowned {
+						return errMuxcoreDaemonStillLower
+					}
+				}
 				return nil
 			case actionErr == nil && action == daemonConvergenceReplace:
-				return errMuxcoreDaemonStillLower
+				if predecessor == nil {
+					return errMuxcoreDaemonStillLower
+				}
 			case errors.Is(actionErr, os.ErrNotExist), errors.Is(actionErr, errMuxcoreDaemonMarkerUncorrelated):
 			case action == daemonConvergenceFail && actionErr != nil:
 				return actionErr
+			}
+		}
+		if predecessor != nil {
+			exited, err := predecessor.Exited()
+			if err != nil {
+				return fmt.Errorf("read bound muxcore predecessor exit: %w", err)
+			}
+			if exited {
+				lock, err := acquireRestartLockWithContext(ctx)
+				if err != nil {
+					return err
+				}
+				unowned, probeErr := probeMuxcoreDaemonNamespace(ctx, nil)
+				closeErr := lock.Close()
+				if probeErr != nil || closeErr != nil {
+					return errors.Join(probeErr, closeErr)
+				}
+				if unowned {
+					// Re-enter admission; the ordinary shim's engine owns cold start.
+					return errMuxcoreDaemonLockAvailable
+				}
+				return errMuxcoreDaemonStillLower
 			}
 		}
 		select {
@@ -585,6 +632,49 @@ func waitForMuxcoreDaemonVersion(ctx context.Context) error {
 		case <-ticker.C:
 		}
 	}
+}
+
+func probeMuxcoreDaemonNamespace(ctx context.Context, expected *muxcoreDaemonStatusIdentity) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	timeout := 2 * time.Second
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < timeout {
+		timeout = time.Until(deadline)
+	}
+	connection, err := dialMuxcoreControl(serverid.DaemonControlPath("", muxcoreNamespace), timeout)
+	if ctx.Err() != nil {
+		if connection != nil {
+			_ = connection.Close()
+		}
+		return false, ctx.Err()
+	}
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED) {
+			return true, nil
+		}
+		return false, fmt.Errorf("probe muxcore namespace ownership: %w", err)
+	}
+	defer connection.Close()
+	peer, err := readMuxcoreControlPeerPID(connection)
+	if err != nil {
+		return false, err
+	}
+	response, err := sendMuxcoreControlRequest(ctx, connection, muxcontrol.Request{Cmd: "status"})
+	if err != nil {
+		return false, err
+	}
+	if response == nil || !response.OK {
+		return false, errors.New("muxcore namespace owner rejected status")
+	}
+	var status muxcoreDaemonStatusIdentity
+	if err := json.Unmarshal(response.Data, &status); err != nil || status.PID <= 0 || status.PID != peer || strings.TrimSpace(status.DaemonGeneration) == "" {
+		return false, errors.New("muxcore namespace status does not identify its live peer")
+	}
+	if expected != nil && (!sameMuxcoreDaemon(*expected, status) || status.ShuttingDown) {
+		return false, errMuxcoreDaemonStillLower
+	}
+	return false, nil
 }
 
 func waitForMuxcoreDaemonMarker(ctx context.Context) error {
@@ -678,6 +768,9 @@ func reconcileMuxcoreDaemonVersion(parent context.Context) error {
 	defer cancel()
 
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		status, ok := readMuxcoreDaemonStatusIdentity(serverid.DaemonControlPath("", muxcoreNamespace))
 		if !ok {
 			return nil // muxcore elects the cold-start daemon after this shim begins.
@@ -751,23 +844,31 @@ func reconcileMuxcoreDaemonVersion(parent context.Context) error {
 			_ = lock.Close()
 			return fmt.Errorf("resolve muxcore successor executable: path %q is not absolute", successorExe)
 		}
+		predecessor, err := openMuxcorePredecessorProcess(current.PID)
+		if err != nil {
+			return errors.Join(fmt.Errorf("bind muxcore predecessor PID %d: %w", current.PID, err), lock.Close())
+		}
 		restartErr := restartMuxcoreDaemon(ctx, current, successorExe)
 		closeErr := lock.Close()
 		if restartErr != nil {
+			processCloseErr := predecessor.Close()
 			if closeErr != nil {
-				return fmt.Errorf("restart fenced lower muxcore daemon PID %d with %s: %w; additionally failed to release restart lock: %v", current.PID, daemonVersion, restartErr, closeErr)
+				return errors.Join(fmt.Errorf("restart fenced lower muxcore daemon PID %d with %s: %w; additionally failed to release restart lock: %v", current.PID, daemonVersion, restartErr, closeErr), processCloseErr)
 			}
-			return fmt.Errorf("restart fenced lower muxcore daemon PID %d with %s: %w", current.PID, daemonVersion, restartErr)
+			return errors.Join(fmt.Errorf("restart fenced lower muxcore daemon PID %d with %s: %w", current.PID, daemonVersion, restartErr), processCloseErr)
 		}
 		if closeErr != nil {
 			fmt.Fprintf(os.Stderr, "[engram] WARN: released muxcore daemon restart lock with error: %v\n", closeErr)
 		}
-		waitErr := waitForMuxcoreDaemonMarker(ctx)
+		waitErr := waitForRestartedMuxcoreDaemon(ctx, predecessor)
+		if err := predecessor.Close(); err != nil {
+			return errors.Join(fmt.Errorf("close bound muxcore predecessor: %w", err), waitErr)
+		}
 		if waitErr == nil {
 			fmt.Fprintf(os.Stderr, "[engram] replaced lower muxcore daemon PID %d with %s\n", current.PID, daemonVersion)
 			return nil
 		}
-		if errors.Is(waitErr, errMuxcoreDaemonStillLower) {
+		if errors.Is(waitErr, errMuxcoreDaemonStillLower) || errors.Is(waitErr, errMuxcoreDaemonLockAvailable) {
 			continue
 		}
 		return fmt.Errorf("restart fenced lower muxcore daemon PID %d did not converge to %s: %w", current.PID, daemonVersion, waitErr)

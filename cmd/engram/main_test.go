@@ -337,8 +337,27 @@ func TestMuxcoreDaemonConfigPreservesPersistentAlwaysConnectedPolicy(t *testing.
 	}
 }
 
+type fixtureProcessExitProof struct {
+	exited bool
+	err    error
+}
+
+func (process fixtureProcessExitProof) Exited() (bool, error) { return process.exited, process.err }
+func (fixtureProcessExitProof) Close() error                  { return nil }
+
+func stubMuxcorePredecessorProof(t *testing.T) {
+	t.Helper()
+	oldOpen, oldWait := openMuxcorePredecessorProcess, waitForRestartedMuxcoreDaemon
+	openMuxcorePredecessorProcess = func(int) (muxcoreProcessExitProof, error) { return fixtureProcessExitProof{}, nil }
+	waitForRestartedMuxcoreDaemon = func(ctx context.Context, _ muxcoreProcessExitProof) error {
+		return waitForCurrentMuxcoreDaemonReady(ctx)
+	}
+	t.Cleanup(func() { openMuxcorePredecessorProcess, waitForRestartedMuxcoreDaemon = oldOpen, oldWait })
+}
+
 func stubReconciliation(t *testing.T, status muxcoreDaemonStatusIdentity, action daemonConvergenceAction, actionErr error) {
 	t.Helper()
+	stubMuxcorePredecessorProof(t)
 	oldStatus, oldAction, oldExe, oldRestart, oldWait := readMuxcoreDaemonStatusIdentity, readLiveMuxcoreDaemonAction, currentExecutable, restartMuxcoreDaemon, waitForCurrentMuxcoreDaemonReady
 	oldLock, oldContended := acquireRestartLock, isRestartLockContended
 	readMuxcoreDaemonStatusIdentity = func(string) (muxcoreDaemonStatusIdentity, bool) { return status, true }
@@ -1115,6 +1134,7 @@ func TestReadLiveMuxcoreDaemonActionTreatsShuttingDownAsTransient(t *testing.T) 
 }
 
 func TestReconcileMuxcoreDaemonVersionReprobesFreedLock(t *testing.T) {
+	stubMuxcorePredecessorProof(t)
 	status := muxcoreDaemonStatusIdentity{PID: 42, DaemonGeneration: "daemon-old"}
 	oldStatus, oldAction, oldLock, oldContended, oldExe, oldRestart, oldWait := readMuxcoreDaemonStatusIdentity, readLiveMuxcoreDaemonAction, acquireRestartLock, isRestartLockContended, currentExecutable, restartMuxcoreDaemon, waitForCurrentMuxcoreDaemonReady
 	defer func() {
@@ -1285,5 +1305,73 @@ func TestRestartMuxcoreDaemonBoundDoesNotFallbackToShutdown(t *testing.T) {
 	}
 	if dialCount != 1 {
 		t.Fatalf("control dials=%d, want no shutdown fallback reconnect", dialCount)
+	}
+}
+
+func TestWaitForMuxcoreDaemonVersionOrExitRequiresBoundProcessExit(t *testing.T) {
+	oldStatus, oldAction, oldLock := readMuxcoreDaemonStatusIdentity, readLiveMuxcoreDaemonAction, acquireRestartLock
+	t.Cleanup(func() {
+		readMuxcoreDaemonStatusIdentity, readLiveMuxcoreDaemonAction, acquireRestartLock = oldStatus, oldAction, oldLock
+	})
+	readLiveMuxcoreDaemonAction = func(muxcoreDaemonStatusIdentity, daemonConvergenceIdentity) (daemonConvergenceAction, error) {
+		return daemonConvergenceReplace, nil
+	}
+	acquireRestartLock = func() (io.Closer, error) {
+		t.Fatal("missing endpoint bypassed a live/unproven predecessor")
+		return nil, nil
+	}
+	for _, endpointPresent := range []bool{false, true} {
+		readMuxcoreDaemonStatusIdentity = func(string) (muxcoreDaemonStatusIdentity, bool) {
+			return muxcoreDaemonStatusIdentity{PID: 42, DaemonGeneration: "still-draining-lower"}, endpointPresent
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+		err := waitForMuxcoreDaemonVersionOrExit(ctx, fixtureProcessExitProof{})
+		cancel()
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("live predecessor endpointPresent=%v result=%v", endpointPresent, err)
+		}
+	}
+	if err := waitForMuxcoreDaemonVersionOrExit(context.Background(), fixtureProcessExitProof{err: os.ErrPermission}); !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("unproven predecessor exit was hidden: %v", err)
+	}
+}
+
+func TestProbeMuxcoreDaemonNamespaceFailsClosedOnLiveStatusOrPeerError(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		response muxcontrol.Response
+		peer     int
+	}{
+		{"rejected status", muxcontrol.Response{OK: false}, 42},
+		{"unbound peer", muxcontrol.Response{OK: true, Data: json.RawMessage(`{"pid":43,"daemon_generation":"other"}`)}, 42},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client, server := net.Pipe()
+			defer server.Close()
+			oldDial, oldPeer := dialMuxcoreControl, readMuxcoreControlPeerPID
+			t.Cleanup(func() { dialMuxcoreControl, readMuxcoreControlPeerPID = oldDial, oldPeer })
+			dialMuxcoreControl = func(string, time.Duration) (net.Conn, error) { return client, nil }
+			readMuxcoreControlPeerPID = func(net.Conn) (int, error) { return test.peer, nil }
+			go func() {
+				var request muxcontrol.Request
+				if json.NewDecoder(server).Decode(&request) == nil {
+					_ = json.NewEncoder(server).Encode(test.response)
+				}
+			}()
+			if unowned, err := probeMuxcoreDaemonNamespace(context.Background(), nil); unowned || err == nil {
+				t.Fatalf("live control treated as unowned: %v %v", unowned, err)
+			}
+		})
+	}
+}
+
+func TestReconcileMuxcoreDaemonVersionPreservesCanceledCaller(t *testing.T) {
+	oldStatus := readMuxcoreDaemonStatusIdentity
+	t.Cleanup(func() { readMuxcoreDaemonStatusIdentity = oldStatus })
+	readMuxcoreDaemonStatusIdentity = func(string) (muxcoreDaemonStatusIdentity, bool) { return muxcoreDaemonStatusIdentity{}, false }
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := reconcileMuxcoreDaemonVersion(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled caller was handed to cold start: %v", err)
 	}
 }
