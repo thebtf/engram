@@ -1854,8 +1854,10 @@ func TestUCITreeSitterChildAuditWindowsSharingBoundary(t *testing.T) {
 	for _, persistent := range []bool{false, true} {
 		t.Run(fmt.Sprintf("persistent=%t", persistent), func(t *testing.T) {
 			auditFile := filepath.Join(t.TempDir(), "child.json")
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
+			watchdog := time.AfterFunc(uciTreeSitterFixtureTimeout, cancel)
+			defer watchdog.Stop()
 			script := "$ErrorActionPreference='Stop'; $f=[IO.File]::Open('" + strings.ReplaceAll(auditFile, "'", "''") + "',[IO.FileMode]::CreateNew,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None); try { $b=[Text.Encoding]::UTF8.GetBytes(('{\"pid\":'+$PID+'}')); $f.Write($b,0,$b.Length); $f.Flush(); [Console]::Out.WriteLine('locked'); [Console]::Out.Flush(); $null=[Console]::In.ReadLine() } finally { $f.Dispose() }"
 			command := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
 			var stderr bytes.Buffer
@@ -1868,17 +1870,26 @@ func TestUCITreeSitterChildAuditWindowsSharingBoundary(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			childStarted := time.Now()
 			if err := command.Start(); err != nil {
 				t.Fatal(err)
 			}
 			defer func() {
 				cancel()
-				_ = command.Wait()
+				if command.ProcessState == nil {
+					_ = command.Wait()
+				}
 			}()
 			ready, err := bufio.NewReader(stdout).ReadString('\n')
-			if err != nil || strings.TrimSpace(ready) != "locked" {
-				t.Fatalf("lock child readiness %q err=%v stderr=%s", ready, err, stderr.String())
+			if err != nil || strings.TrimSpace(ready) != "locked" || !watchdog.Stop() {
+				contextErr := ctx.Err()
+				cancel()
+				waitErr := command.Wait()
+				t.Fatalf("lock child readiness %q err=%v after=%s context=%v exit=%v stderr=%s", ready, err, time.Since(childStarted), contextErr, waitErr, stderr.String())
 			}
+			// Shell startup must not consume the lock's one-second reader window.
+			watchdog.Reset(5 * time.Second)
+			t.Logf("lock child PID %d ready after %s", command.Process.Pid, time.Since(childStarted))
 			if _, err := os.ReadFile(auditFile); !errors.Is(err, syscall.Errno(32)) {
 				t.Fatalf("native exclusive audit lock error = %v, want sharing violation", err)
 			}
@@ -1901,7 +1912,10 @@ func TestUCITreeSitterChildAuditWindowsSharingBoundary(t *testing.T) {
 			observed := <-done
 			if persistent {
 				if !errors.Is(observed.err, syscall.Errno(32)) || time.Since(started) < time.Second {
-					t.Fatalf("persistent lock returned before readiness deadline or lost last error: %v", observed.err)
+					contextErr := ctx.Err()
+					cancel()
+					waitErr := command.Wait()
+					t.Fatalf("persistent lock returned before readiness deadline or lost last error: %v elapsed=%s context=%v exit=%v stderr=%s", observed.err, time.Since(started), contextErr, waitErr, stderr.String())
 				}
 				if _, err := io.WriteString(stdin, "\n"); err != nil {
 					t.Fatal(err)
@@ -1912,6 +1926,10 @@ func TestUCITreeSitterChildAuditWindowsSharingBoundary(t *testing.T) {
 			if err := command.Wait(); err != nil {
 				t.Fatalf("owned lock child completion: %v stderr=%s", err, stderr.String())
 			}
+			if audit := uciRequireTreeSitterChildAudit(t, auditFile); audit.PID != command.Process.Pid {
+				t.Fatalf("completed lock child audit PID = %d, want %d", audit.PID, command.Process.Pid)
+			}
+			t.Logf("owned lock child PID %d exited with code %d after reader window %s", command.Process.Pid, command.ProcessState.ExitCode(), time.Since(started))
 		})
 	}
 }
