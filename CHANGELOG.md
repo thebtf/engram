@@ -7,14 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Preserve caller cancellation before decoding embedding HTTP responses, while retaining decode errors for active callers and existing retry and timeout behavior.
-
-- Separate Windows audit-lock fixture startup from the reader lifetime, preserving the one-second sharing-violation assertion and owned-child cleanup.
-
-- Stabilize issue-page ties with descending issue IDs, convert Windows fixture PATH entries with Git Bash, and pin the PostgreSQL CA bundle to 20260909-r3.
-
-- Make package fixtures portable across private temporary roots and Git Bash: check retained-backup identity, resolve generator paths from their fixture cwd, preserve the qualified shell PATH and match archive formats to the exercised host. Keep recovery and rejection checks unchanged.
-
 - Bind issue-role lookups as one PostgreSQL ID array instead of expanding one parameter per issue. Preserve complete large selections, independent nullable canonical roles and retained-membership privacy without changing public limits.
 
 - Preserve seven fixed partition-repair refusal codes in private CLI diagnostics; retain generic output for untyped or unknown errors. Require both PostgreSQL fixture DSNs before public-consumer setup, and navigate the explicit metadata-only view in the retained-reader browser regression without changing reader-first discovery.
@@ -48,10 +40,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Use registered canonical UUIDs and authenticated caller project context in MCP fixtures without weakening default-deny, privacy or pre-mutation rejection guards. Reuse 119 prior PASS plus one exact retry PASS after the context fix, not 120 fresh PASS or installed acceptance.
 - Seed the isolated operator-code fixture with a registered canonical project UUID while preserving five queue candidates, published/no-view checks and redacted provisioning errors.
 
+## [7.0.4] - 2026-10-24
+
+### Fixed
+
+- Preserve the current Issues list page when returning from a detail with “Back to list” or browser Back, while retaining page resets for project, filter and row-size changes. Start newly opened details at the heading instead of inheriting the long list's scroll position.
+
+- Restore native `codebase_context register` by resolving the actual caller's canonical Project and carrying it in the outer gRPC request, without adding a public `project` argument or weakening Source/Checkout/handle authorization. Keep list, resolve, select and other UCI operations project-free. Cover pinned and cold HTTP-bootstrap registration with real native/gRPC/PostgreSQL fixtures, including independent worktrees and no-View first use.
+
 ## [7.0.3] - 2026-10-21
 
 ### Fixed
 
+- Preserve caller cancellation before decoding embedding HTTP responses, while retaining decode errors for active callers and existing retry and timeout behavior.
+- Separate Windows audit-lock fixture startup from the reader lifetime, preserving the one-second sharing-violation assertion and owned-child cleanup.
+- Stabilize issue-page ties with descending issue IDs, convert Windows fixture PATH entries with Git Bash, and pin the PostgreSQL CA bundle to 20260909-r3.
+- Make package fixtures portable across private temporary roots and Git Bash: check retained-backup identity, resolve generator paths from their fixture cwd, preserve the qualified shell PATH and match archive formats to the exercised host. Keep recovery and rejection checks unchanged.
 - Page the complete Issues result using server limit/offset/status and matching totals; label All as 200 per page and keep every page reachable. Expose the selected canonical project's incoming-target versus source-owned filter without changing backend role predicates, nullable provenance, actor authority or foreign detail/comment isolation. Cover 502 IDs, issue477 and existing comment1562 through the real compiled page and isolated HTTP fixture; installed delivery remains separate.
 - Correct the unavailable-read fixture to honor issue limit/offset/total and its real stale IDs; upgrade the operator-console build dependency to Vite 8.3.4 without changing issue authorization or privacy guards.
 
@@ -2354,7 +2358,8 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v7.0.3...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v7.0.4...HEAD
+[7.0.4]: https://github.com/thebtf/engram/compare/v7.0.3...v7.0.4
 [7.0.3]: https://github.com/thebtf/engram/compare/v7.0.2...v7.0.3
 [7.0.2]: https://github.com/thebtf/engram/compare/v7.0.1...v7.0.2
 [7.0.1]: https://github.com/thebtf/engram/compare/v7.0.0...v7.0.1

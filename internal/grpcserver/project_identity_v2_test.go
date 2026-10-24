@@ -89,6 +89,28 @@ func TestCallTool_RewritesProjectArgumentToCanonicalBeforeHandler(t *testing.T) 
 	}
 }
 
+func TestCallTool_CodeContextRegistrationKeepsProjectOuterOnly(t *testing.T) {
+	steps := []string{}
+	var captured []byte
+	var project string
+	srv := &Server{handler: identityOrderHandler{steps: &steps, arguments: &captured, project: &project}}
+	arguments := []byte(`{"action":"register","source_label":"native-fixture","locator":"file:///private/worktree"}`)
+	response, err := srv.CallTool(context.Background(), &pb.CallToolRequest{
+		ToolName: "codebase_context", Project: grpcLogicalProjectID, ArgumentsJson: arguments,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if project != grpcLogicalProjectID || response.CanonicalProject != grpcLogicalProjectID || !reflect.DeepEqual(captured, arguments) {
+		t.Fatalf("registration must preserve outer-only project: context=%q response=%q arguments=%s", project, response.CanonicalProject, captured)
+	}
+	steps = nil
+	_, err = srv.CallTool(context.Background(), &pb.CallToolRequest{ToolName: "codebase_context", ArgumentsJson: arguments})
+	if status.Code(err) != codes.FailedPrecondition || len(steps) != 0 {
+		t.Fatalf("registration without canonical project reached handler: error=%v steps=%v", err, steps)
+	}
+}
+
 func TestCallTool_PreservesDocumentedUnscopedReviewSelector(t *testing.T) {
 	for _, toolName := range []string{"review_metrics.read", "review_queue.read"} {
 		t.Run(toolName, func(t *testing.T) {

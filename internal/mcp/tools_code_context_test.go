@@ -115,6 +115,7 @@ func TestUCICodebaseContextToolDefinition(t *testing.T) {
 	properties, ok := tool.InputSchema["properties"].(map[string]any)
 	require.True(t, ok, "codebase_context must expose an object property schema")
 	require.Contains(t, tool.InputSchema["required"], "action")
+	require.Equal(t, false, tool.InputSchema["additionalProperties"], "canonical project must stay outside public codebase_context arguments")
 
 	action, ok := properties["action"].(map[string]any)
 	require.True(t, ok, "codebase_context.action must be declared")

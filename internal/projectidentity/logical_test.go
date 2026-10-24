@@ -163,3 +163,28 @@ func gitLogical(t *testing.T, root string, args ...string) {
 		t.Fatalf("git: %v: %s", err, output)
 	}
 }
+
+func TestCodeContextProjectRequirementActionAware(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		tool      string
+		arguments string
+		want      bool
+	}{
+		{"register", "codebase_context", `{"action":"register","source_label":"native-fixture"}`, true},
+		{"list", "codebase_context", `{"action":"list"}`, false},
+		{"resolve", "codebase_context", `{"action":"resolve"}`, false},
+		{"select", "codebase_context", `{"action":"select","context_handle":"opaque-selection"}`, false},
+		{"index", "codebase_index", `{}`, false},
+		{"status", "codebase_status", `{}`, false},
+		{"search", "codebase_search", `{"query":"fixture"}`, false},
+		{"read", "codebase_read", `{}`, false},
+		{"graph", "codebase_graph", `{}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ToolRequiresProject(tc.tool, []byte(tc.arguments)); got != tc.want {
+				t.Errorf("ToolRequiresProject(%q, %s) = %t, want %t", tc.tool, tc.arguments, got, tc.want)
+			}
+		})
+	}
+}

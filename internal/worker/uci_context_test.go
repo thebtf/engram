@@ -143,7 +143,10 @@ func TestComposeUCIContextFirstUseRegistrationBindsPrivateNoViewScope(t *testing
 	require.NoError(t, err)
 	identity := auth.ClientWithPrincipal("read-write", uuid.NewString(), "browser-user/41", auth.PrincipalKindHuman)
 	const session = "first-use-client"
+	projectID := uuid.NewString()
+	require.NoError(t, store.GetDB().Exec("INSERT INTO projects (id, display_name) VALUES (?, ?)", projectID, "First-use registration fixture").Error)
 	client := auth.WithIdentity(mcp.ContextWithSession(context.Background(), session), identity)
+	client = mcp.ContextWithProject(client, projectID)
 	params, err := json.Marshal(map[string]any{"name": "codebase_context", "arguments": map[string]any{
 		"action": "register", "source_label": "engram", "locator": "file:///private/worktree-a",
 	}})
@@ -170,6 +173,10 @@ func TestComposeUCIContextFirstUseRegistrationBindsPrivateNoViewScope(t *testing
 	require.Nil(t, target.Context)
 	require.NotEmpty(t, target.ContextHandle)
 	require.NotContains(t, text, "/private/")
+	var storedSource gormstore.UCISource
+	require.NoError(t, store.GetDB().First(&storedSource, "source_id = ?", target.SourceID).Error)
+	require.NotNil(t, storedSource.ProjectID)
+	require.Equal(t, projectID, *storedSource.ProjectID)
 	_, grpcInternal := grpcserver.New(nil, nil)
 	grpcInternal.SetUCITransport(composition.transport)
 	grpcContext := auth.WithIdentity(context.Background(), identity)

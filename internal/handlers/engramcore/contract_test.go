@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -760,10 +761,12 @@ func TestProxyHandleToolUsesTransportTagForUCITools(t *testing.T) {
 	srv := &mockEngramServer{callResp: &pb.CallToolResponse{ContentJson: []byte(`[]`)}}
 	grpcAddr := startMockGRPC(t, srv)
 	_, mod, project := buildContractDispatcher(t, grpcAddr)
+	registrationRoot := daemonV3Repository(t)
 	mod.v3ClientInstanceID = "fixture-daemon-install"
 	project.Env[config.EnvClaudeSessionID] = "host-session-must-not-be-used"
 	project.Cwd = "untrusted-cwd-must-not-be-inspected"
 	mod.cache.Forget(project.ID)
+	originalPath := os.Getenv("PATH")
 	t.Setenv("PATH", t.TempDir())
 	ctx := auditcontext.WithUCITransportSession(context.Background(), "transport-tag-a")
 
@@ -802,6 +805,8 @@ func TestProxyHandleToolUsesTransportTagForUCITools(t *testing.T) {
 		t.Fatal("UCI proxy dispatched a request without a transport tag")
 	}
 	mod.ConfigureRegistrationParser()
+	t.Setenv("PATH", originalPath)
+	project.Cwd = registrationRoot
 	registerArgs := json.RawMessage(`{"action":"register","source_label":"engram","locator":"file:///private/worktree"}`)
 	if _, err := mod.ProxyHandleTool(ctx, project, "codebase_context", registerArgs); err != nil {
 		t.Fatal(err)
@@ -812,6 +817,12 @@ func TestProxyHandleToolUsesTransportTagForUCITools(t *testing.T) {
 	srv.mu.Unlock()
 	if string(registered.GetArgumentsJson()) != string(registerArgs) {
 		t.Fatalf("registration arguments mutated: %s", registered.GetArgumentsJson())
+	}
+	if registered.GetProject() != "22222222-2222-4222-8222-222222222222" {
+		t.Fatalf("registration canonical project = %q", registered.GetProject())
+	}
+	if got := parserMetadata.Get(auditcontext.SourceSessionMetadataKey); len(got) != 1 || got[0] != "transport-tag-a" {
+		t.Fatalf("registration source session metadata = %v", got)
 	}
 	if got := parserMetadata.Get(uci.NoAuthCodeClientInstanceMetadataKey); len(got) != 1 || got[0] != "fixture-daemon-install" {
 		t.Fatalf("registration client instance metadata = %v", got)

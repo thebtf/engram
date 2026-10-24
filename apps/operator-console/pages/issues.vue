@@ -82,6 +82,7 @@ const showDelete = ref(false)
 const showBulkField = ref(false)
 const showBulkLabels = ref(false)
 const notice = ref('')
+const detailHeading = ref<HTMLElement | null>(null)
 const createBodyInput = ref<HTMLTextAreaElement | null>(null)
 const commentInput = ref<HTMLTextAreaElement | null>(null)
 const activeTemplate = ref<CreateTemplate>('bug')
@@ -172,9 +173,12 @@ const hoverThreadStats = computed(() => {
   }
 })
 
+watch([context.project, context.selectionPending, scopeError], () => {
+  page.value = 1
+}, { flush: 'sync' })
+
 watch([context.project, context.selectionPending, scopeError, requestedId], () => {
   scopeGeneration += 1
-  page.value = 1
   activeId.value = null
   selection.invalidate('filter_changed')
   notice.value = ''
@@ -220,6 +224,10 @@ watch(activeIssue, (issue) => {
   showReject.value = false
   showDelete.value = false
 })
+
+watch(() => activeIssue.value?.id, (id) => {
+  if (id) detailHeading.value?.scrollIntoView({ block: 'start' })
+}, { flush: 'post' })
 
 function resetCreate() {
   createTitle.value = ''
@@ -674,7 +682,7 @@ function renderMarkdown(value: string) {
 
 <template>
   <div class="issues-page">
-    <header class="head">
+    <header ref="detailHeading" class="head">
       <h1>{{ pageTitle }}</h1>
       <p>{{ pageSubtitle }}</p>
     </header>

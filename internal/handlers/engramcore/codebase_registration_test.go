@@ -29,7 +29,7 @@ func TestNativeCodebaseRegistrationUsesActualGitRootWithoutProjectMutation(t *te
 	server := &uciIndexAdapterGRPCServer{call: func(_ context.Context, request *pb.CallToolRequest) (*pb.CallToolResponse, error) {
 		require.Equal(t, "codebase_context", request.GetToolName())
 		require.Equal(t, "native-onboarding-session", request.GetSessionId())
-		require.Empty(t, request.GetProject())
+		require.Equal(t, "22222222-2222-4222-8222-222222222222", request.GetProject())
 		var args nativeCodebaseRegistrationArgs
 		require.NoError(t, json.Unmarshal(request.GetArgumentsJson(), &args))
 		require.NotNil(t, args.SourceLabel)
@@ -188,7 +188,7 @@ func TestNativeCodebaseRegistrationRejectsUnboundSourceIDInAutoLocatorMode(t *te
 	require.Empty(t, server.callRequestsSnapshot(), "an otherwise valid local Git root must not authorize a caller-supplied Source")
 
 	// Explicit locator registration keeps the existing server-owned contract.
-	project.Cwd = "explicit-locator-must-not-inspect-cwd"
+	project.Cwd = daemonV3Repository(t)
 	explicit := json.RawMessage(`{"action":"register","source_id":"` + otherSourceID + `","locator":"file:///private/worktree"}`)
 	_, err = mod.ProxyHandleTool(ctx, project, "codebase_context", explicit)
 	require.NoError(t, err)
