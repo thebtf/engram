@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Separate Windows audit-lock fixture startup from the reader lifetime, preserving the one-second sharing-violation assertion and owned-child cleanup.
+
 - Stabilize issue-page ties with descending issue IDs, convert Windows fixture PATH entries with Git Bash, and pin the PostgreSQL CA bundle to 20260909-r3.
 
 - Make package fixtures portable across private temporary roots and Git Bash: check retained-backup identity, resolve generator paths from their fixture cwd, preserve the qualified shell PATH and match archive formats to the exercised host. Keep recovery and rejection checks unchanged.
