@@ -33,6 +33,7 @@ are silently ignored (compiled defaults used).
 | `ENGRAM_AUTH_ADMIN_TOKEN` | (none) | Operator token for server admin. Lives ONLY on the server host. |
 | `ENGRAM_AUTH_SKIP_LOCAL` | `false` | Skip auth for RFC 1918 (private) IP addresses. Useful for local dev. |
 | `ENGRAM_AUTH_TRUSTED_PROXY` | (none) | Trusted reverse proxy address for X-Forwarded-For parsing. |
+| `ENGRAM_AUTH_ALLOWED_ORIGINS` | (empty) | Comma-separated exact public HTTP(S) browser origins admitted for logout in split console/backend deployments, e.g. `https://console.example.test`. No wildcard, trailing slash/path, userinfo, query or fragment; malformed entries fail worker configuration. This does not trust forwarded headers or grant authentication. |
 | `ENGRAM_AUTHENTIK_ENABLED` | `false` | Enable Authentik SSO forward-auth integration. |
 | `ENGRAM_AUTHENTIK_AUTO_PROVISION` | `false` | Auto-create users from Authentik headers. |
 | `ENGRAM_AUTHENTIK_TRUSTED_PROXIES` | (none) | Comma-separated trusted proxy IPs for Authentik headers. |

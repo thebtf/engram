@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Resolve authentication status through the protected-route credential chain, preserve browser identity, and reject expired HMAC sessions. Bind Authentik trust to the transport peer before RealIP, strip client identity/peer claims at the maintained console proxy, and reject foreign logout origins before mutation while preserving explicit local UI origins. Failed session revocation now returns an error without clearing the retry cookie.
+- Preserve split public-HTTPS-console logout with explicit exact `ENGRAM_AUTH_ALLOWED_ORIGINS` in the worker's canonical configuration. Keep an empty default, fail malformed configuration, and reject unconfigured/sibling/forged origins without trusting forwarded host/proto.
+
 - Bind issue-role lookups as one PostgreSQL ID array instead of expanding one parameter per issue. Preserve complete large selections, independent nullable canonical roles and retained-membership privacy without changing public limits.
 
 - Preserve seven fixed partition-repair refusal codes in private CLI diagnostics; retain generic output for untyped or unknown errors. Require both PostgreSQL fixture DSNs before public-consumer setup, and navigate the explicit metadata-only view in the retained-reader browser regression without changing reader-first discovery.

@@ -12,7 +12,7 @@ const runtimeConfig = JSON.stringify({
   apiDisplayHost: process.env.ENGRAM_PUBLIC_API_DISPLAY_HOST || '',
 })
 const mime = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.ico': 'image/x-icon', '.woff': 'font/woff', '.woff2': 'font/woff2' }
-const ignoredHeaders = { 'transfer-encoding': true, 'accept-encoding': true, connection: true, 'keep-alive': true, upgrade: true, expect: true, host: true, accept: true }
+const ignoredHeaders = { 'transfer-encoding': true, 'accept-encoding': true, connection: true, 'keep-alive': true, upgrade: true, expect: true, host: true, accept: true, 'x-real-ip': true, forwarded: true }
 
 const server = createServer(async (req, res) => {
   try {
@@ -26,7 +26,7 @@ const server = createServer(async (req, res) => {
       const base = target.pathname.replace(/\/+$/, '')
       target.pathname = `${/\/api$/i.test(base) ? base : `${base}/api`}${url.pathname.slice(4)}`
       target.search = url.search
-      const headers = Object.fromEntries(Object.entries(req.headers).filter(([key]) => !ignoredHeaders[key]))
+      const headers = Object.fromEntries(Object.entries(req.headers).filter(([key]) => !ignoredHeaders[key] && !key.startsWith('x-authentik-') && !key.startsWith('x-forwarded-')))
       const upstream = (target.protocol === 'https:' ? httpsRequest : httpRequest)(target, { method: req.method, headers }, (response) => {
         res.writeHead(response.statusCode, response.headers)
         response.pipe(res)

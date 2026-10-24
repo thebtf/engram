@@ -133,6 +133,9 @@ func (s *Service) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} map[string]interface{}
 // @Router /api/auth/logout [post]
 func (s *Service) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
+	if !s.requireLogoutOrigin(w, r) {
+		return
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    "",
@@ -157,8 +160,6 @@ func (s *Service) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 // @Failure 401 {string} string "unauthorized"
 // @Router /api/auth/me [get]
 func (s *Service) handleAuthMe(w http.ResponseWriter, r *http.Request) {
-	// This endpoint is exempt from auth middleware so the SPA can check auth status.
-	// We manually verify auth here and return the result.
 	authDisabled := isAuthDisabled()
 	if authDisabled {
 		writeJSON(w, map[string]any{
@@ -173,53 +174,16 @@ func (s *Service) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 
 	role := getAuthRole(r)
 	if role != "" {
-		writeJSON(w, map[string]any{
+		body := map[string]any{
 			"authenticated": true,
 			"role":          role,
 			"auth_disabled": authDisabled,
-		})
+		}
+		if user, ok := r.Context().Value(authenticatedBrowserUserKey{}).(*gormdb.User); ok {
+			body["user"] = map[string]any{"id": user.ID, "email": user.Email, "role": user.Role}
+		}
+		writeJSON(w, body)
 		return
-	}
-
-	// Check HMAC session cookie (legacy token-based login)
-	if s.tokenAuth != nil {
-		s.tokenAuth.mu.RLock()
-		cookieKey := s.tokenAuth.cookieKey
-		s.tokenAuth.mu.RUnlock()
-
-		if cookie, err := r.Cookie("engram_session"); err == nil && len(cookieKey) > 0 {
-			parts := strings.SplitN(cookie.Value, ".", 2)
-			if len(parts) == 2 {
-				payload, _ := base64.RawURLEncoding.DecodeString(parts[0])
-				sig, _ := base64.RawURLEncoding.DecodeString(parts[1])
-				expectedSig := computeHMAC(payload, cookieKey)
-				if hmac.Equal(sig, expectedSig) {
-					writeJSON(w, map[string]any{
-						"authenticated": true,
-						"role":          "admin",
-						"auth_disabled": authDisabled,
-					})
-					return
-				}
-			}
-		}
-	}
-
-	// Check DB-backed auth session cookie (user/pass login)
-	if s.authHandlers != nil {
-		if cookie, err := r.Cookie("engram_auth"); err == nil && cookie.Value != "" {
-			if sess, err := s.authHandlers.sessions.GetSession(cookie.Value); err == nil {
-				if user, err := s.authHandlers.users.GetUserByID(sess.UserID); err == nil && !user.Disabled {
-					writeJSON(w, map[string]any{
-						"authenticated": true,
-						"role":          user.Role,
-						"auth_disabled": authDisabled,
-						"user":          map[string]any{"id": user.ID, "email": user.Email, "role": user.Role},
-					})
-					return
-				}
-			}
-		}
 	}
 
 	// Not authenticated
