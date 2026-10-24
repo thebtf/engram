@@ -362,6 +362,9 @@ selfcheck evidence. Session login/logout does not depend on diagnostic capabilit
 The footer makes no database-engine/version claim; the existing selfcheck version is
 shown only when present, otherwise unknown. Technical failures remain in settings.
 A server-confirmed `auth_disabled` mode remains distinct from a human login session.
+`/api/auth/me` uses the same bearer, HMAC expiry, DB session and trusted Authentik
+authentication chain as protected routes. Browser-user identity remains server-resolved;
+an expired signed cookie cannot establish a live operator.
 
 The layout does not render its protected page slot or settings payload until authMe
 confirms authentication or legitimate `auth_disabled`. On auth loss it unmounts readers;
@@ -379,6 +382,16 @@ replays a failed mutation or automatically repeats a private-scope read.
 Account sign-out uses `POST /api/auth/user-logout`, not master-token logout. An unavailable
 endpoint (including 405), server error or unconfirmed readback stays a visible failure;
 the UI does not fabricate successful session clearing.
+The worker rejects foreign or opaque logout origins before session/cookie mutation.
+Explicit local UI origins (including `http://localhost:5173`) and nonbrowser callers
+without cross-site browser metadata remain supported. A failed DB revocation returns
+503 without clearing the session cookie, so the caller can retry. Forwarded host/proto
+headers do not authorize an otherwise foreign origin.
+For a split public HTTPS console relaying to an internal HTTP worker, deliberately set
+the worker's `ENGRAM_AUTH_ALLOWED_ORIGINS=https://console.example.test` to the exact
+browser origin. The default is empty; multiple origins are comma-separated. Wildcards,
+trailing slash/paths, userinfo, query and fragment are invalid and fail configuration.
+This admits only logout origin checks, not authentication or arbitrary forwarded claims.
 
 The focused `tests/composables/auth-session.spec.mjs` checks the real shared transport,
 session state and login-dialog submission/clearing with finite synthetic responses. It is
@@ -671,6 +684,12 @@ The standalone Compose file maps `OPERATOR_WEB_API_TARGET` to that same
 `ENGRAM_OPERATOR_API_TARGET`, defaulting to `http://host.docker.internal:37777`.
 Its static host listens on `HOST=0.0.0.0` and `PORT=3000`; no Nuxt/Nitro
 environment aliases remain in this deployment path.
+The public console relay removes all client `X-Authentik-*`, `X-Forwarded-*`,
+`True-Client-IP`, `X-Real-IP` and `Forwarded` claims, then sets `X-Forwarded-For`
+only from its actual client socket address. It preserves normal credentials,
+Origin/Fetch Metadata and document/tab/request headers; it does not manufacture a public origin.
+Direct Authentik integration must use a separately trusted upstream, whose transport
+peer is captured by the worker before RealIP rewrites the client address.
 
 The optional process environment variable `ENGRAM_OPERATOR_OUTPUT_ROOT` redirects build
 artifacts; an unset or empty value keeps the existing `.output` layout and locale-copy

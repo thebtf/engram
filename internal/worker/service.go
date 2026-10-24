@@ -665,7 +665,10 @@ func (s *Service) setupCallbacks(mgr *session.Manager) {
 // runs in a goroutine. Callers should watch WaitReady or poll /api/ready before
 // issuing data-plane requests.
 func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) {
-	cfg := config.Get()
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, fmt.Errorf("load worker config: %w", err)
+	}
 
 	// Cancellable root context — cancelled in Shutdown to drain all goroutines.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1695,6 +1698,7 @@ func (s *Service) setupMiddleware() {
 	s.router.Use(s.requestActivityMiddleware)
 	s.router.Use(debugRequestLogger)
 	s.router.Use(middleware.Recoverer)
+	s.router.Use(captureTransportPeer)
 	s.router.Use(middleware.RealIP)
 	s.router.Use(SecurityHeaders)
 	s.router.Use(requestBodySize)

@@ -3,8 +3,12 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
+	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -73,6 +77,7 @@ type Config struct {
 	EnforceSourceProject      bool     `json:"enforce_source_project"`       // ENGRAM_ENFORCE_SOURCE_PROJECT (default: true)
 	AuthSkipLocal             bool     `json:"auth_skip_local"`
 	AuthTrustedProxy          string   `json:"auth_trusted_proxy"`
+	AuthAllowedOrigins        []string `json:"auth_allowed_origins"` // env-only: exact public logout origins
 
 	// Signal weights for reward computation (closed-loop learning FR-7)
 	SignalWeights map[string]float64 `json:"signal_weights"`
@@ -171,7 +176,7 @@ func SettingsPath() string {
 // EnsureDataDir creates the data directory if it doesn't exist.
 // Uses 0700 permissions (owner-only) for security.
 func EnsureDataDir() error {
-	return os.MkdirAll(DataDir(), 0700)
+	return os.MkdirAll(DataDir(), 0o700)
 }
 
 // EnsureSettings creates a default settings file if it doesn't exist.
@@ -192,7 +197,7 @@ func EnsureSettings() error {
   "ENGRAM_CONTEXT_SESSION_COUNT": 10
 }
 `
-	return os.WriteFile(path, []byte(defaultSettings), 0600)
+	return os.WriteFile(path, []byte(defaultSettings), 0o600)
 }
 
 // SaveSettings merges validated operator-facing settings into settings.json.
@@ -247,7 +252,7 @@ func SaveSettings(updates map[string]any) error {
 		_ = tmp.Close()
 		return err
 	}
-	if err := tmp.Chmod(0600); err != nil {
+	if err := tmp.Chmod(0o600); err != nil {
 		_ = tmp.Close()
 		return err
 	}
@@ -469,6 +474,9 @@ func Load() (*Config, error) {
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_AUTH_TRUSTED_PROXY")); v != "" {
 		cfg.AuthTrustedProxy = v
 	}
+	if cfg.AuthAllowedOrigins, err = parseAuthAllowedOrigins(os.Getenv(EnvAuthAllowedOrigins)); err != nil {
+		return nil, err
+	}
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_TRANSCRIPT_RETENTION_DAYS")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 			cfg.TranscriptRetentionDays = n
@@ -522,6 +530,35 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func parseAuthAllowedOrigins(value string) ([]string, error) {
+	if strings.TrimSpace(value) == "" {
+		return nil, nil
+	}
+	origins := strings.Split(value, ",")
+	for i, origin := range origins {
+		origin = strings.TrimSpace(origin)
+		u, err := url.Parse(origin)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" ||
+			u.User != nil || strings.ContainsAny(u.Host, "*\\ \t\r\n") || strings.HasSuffix(u.Host, ":") ||
+			origin != u.Scheme+"://"+u.Host {
+			return nil, fmt.Errorf("%s: entry %d must be an exact HTTP(S) origin", EnvAuthAllowedOrigins, i+1)
+		}
+		if strings.HasPrefix(u.Host, "[") {
+			if _, err := netip.ParseAddr(u.Hostname()); err != nil {
+				return nil, fmt.Errorf("%s: entry %d has an invalid IP address", EnvAuthAllowedOrigins, i+1)
+			}
+		}
+		if port := u.Port(); port != "" {
+			n, err := strconv.Atoi(port)
+			if err != nil || n > 65535 {
+				return nil, fmt.Errorf("%s: entry %d has an invalid port", EnvAuthAllowedOrigins, i+1)
+			}
+		}
+		origins[i] = origin
+	}
+	return origins, nil
 }
 
 // splitTrim splits a comma-separated string and trims whitespace.
@@ -596,6 +633,9 @@ func Reload() (*Config, []string, error) {
 		}
 		if old.AuthTrustedProxy != newCfg.AuthTrustedProxy {
 			changed = append(changed, "auth_trusted_proxy")
+		}
+		if !slices.Equal(old.AuthAllowedOrigins, newCfg.AuthAllowedOrigins) {
+			changed = append(changed, "auth_allowed_origins")
 		}
 	}
 

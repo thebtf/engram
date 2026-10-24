@@ -283,7 +283,6 @@ func (h *AuthHandlers) requireAccessSessionAdmin(w http.ResponseWriter, r *http.
 		return nil, nil, false
 	}
 	return sess, user, true
-
 }
 
 func decodeOptionalJSON(r *http.Request, dst any) error {
@@ -583,9 +582,14 @@ func (h *AuthHandlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 // handleLogout invalidates the DB session and clears the engram_auth cookie.
 func (h *AuthHandlers) handleLogout(w http.ResponseWriter, r *http.Request) {
-	if h.sessions != nil {
-		if cookie, err := r.Cookie(authSessionCookieName); err == nil && strings.TrimSpace(cookie.Value) != "" {
-			_ = h.sessions.DeleteSession(cookie.Value)
+	if cookie, err := r.Cookie(authSessionCookieName); err == nil && strings.TrimSpace(cookie.Value) != "" {
+		if h.sessions == nil {
+			writeAuthJSONError(w, http.StatusServiceUnavailable, "session store unavailable")
+			return
+		}
+		if err := h.sessions.DeleteSession(cookie.Value); err != nil {
+			writeAuthJSONError(w, http.StatusServiceUnavailable, "session revocation failed")
+			return
 		}
 	}
 	http.SetCookie(w, &http.Cookie{
@@ -1159,6 +1163,9 @@ func (s *Service) handleUserLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) handleUserLogout(w http.ResponseWriter, r *http.Request) {
+	if !s.requireLogoutOrigin(w, r) {
+		return
+	}
 	s.initMu.RLock()
 	h := s.authHandlers
 	s.initMu.RUnlock()

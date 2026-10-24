@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"mime"
 	"net/http"
+	"net/netip"
 	"os"
 	"regexp"
 	"slices"
@@ -36,6 +37,44 @@ type requestIDKey struct{}
 // HTTP authentication. It is never read from a request header or cookie by a
 // guarded handler.
 type authenticatedBrowserSessionKey struct{}
+
+type (
+	authenticatedBrowserUserKey struct{}
+	transportPeerKey            struct{}
+)
+
+// Capture before RealIP so forwarded client addresses cannot grant proxy trust.
+func captureTransportPeer(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(r.Context(), transportPeerKey{}, r.RemoteAddr)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+func (s *Service) requireLogoutOrigin(w http.ResponseWriter, r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		if r.Header.Get("Sec-Fetch-Site") != "cross-site" {
+			return true
+		}
+	} else {
+		scheme := "http"
+		if r.TLS != nil {
+			scheme = "https"
+		}
+		if allowedOrigins[origin] || origin == scheme+"://"+r.Host {
+			return true
+		}
+		s.initMu.RLock()
+		cfg := s.config
+		s.initMu.RUnlock()
+		if cfg != nil && slices.Contains(cfg.AuthAllowedOrigins, origin) {
+			return true
+		}
+	}
+	writeAuthJSONError(w, http.StatusForbidden, "logout origin not allowed")
+	return false
+}
 
 // emptyTokenStore satisfies auth.TokenStoreReader with an always-empty
 // candidate set. Used as the bootstrap reader for the validator until
@@ -337,7 +376,6 @@ func NewTokenAuth(token string) (*TokenAuth, error) {
 			"/api/version":           true,
 			"/api/auth/login":        true,
 			"/api/auth/logout":       true,
-			"/api/auth/me":           true, // Must be accessible to check auth status (returns 401 if not authed)
 			"/api/auth/setup-needed": true,
 			"/api/auth/setup":        true,
 			"/api/auth/user-login":   true,
@@ -418,11 +456,24 @@ func (ta *TokenAuth) SetAuthentikConfig(enabled, autoProvision bool, trustedProx
 // Returns false if no trusted proxies are configured (deny-by-default).
 func isTrustedProxy(r *http.Request, trustedProxies []string) bool {
 	if len(trustedProxies) == 0 {
-		return false // No trusted proxies = don't trust any
+		return false
 	}
-	remoteIP := strings.Split(r.RemoteAddr, ":")[0]
+	peer, captured := r.Context().Value(transportPeerKey{}).(string)
+	if !captured {
+		// Direct middleware consumers have no preceding RealIP rewrite.
+		peer = r.RemoteAddr
+	}
+	remoteIP, err := netip.ParseAddr(peer)
+	if err != nil {
+		addrPort, err := netip.ParseAddrPort(peer)
+		if err != nil {
+			return false
+		}
+		remoteIP = addrPort.Addr()
+	}
 	for _, trusted := range trustedProxies {
-		if remoteIP == trusted {
+		trustedIP, err := netip.ParseAddr(trusted)
+		if err == nil && remoteIP.Unmap() == trustedIP.Unmap() {
 			return true
 		}
 	}
@@ -481,7 +532,7 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 				// Bootstrap window before initializeAsync wires the validator.
 				// Reject defensively — better than silently allowing.
 				log.Warn().Str("path", r.URL.Path).Msg("auth: validator not yet wired, rejecting bearer")
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				writeAuthUnauthorized(w, r, authDisabled)
 				return
 			}
 
@@ -498,7 +549,7 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 						Str("remote_addr", r.RemoteAddr).
 						Err(err).
 						Msg("auth: bearer rejected")
-					http.Error(w, "unauthorized", http.StatusUnauthorized)
+					writeAuthUnauthorized(w, r, authDisabled)
 				default:
 					// Wrapped store / bcrypt error — auth machinery itself
 					// is broken. Surface as 500 so monitoring distinguishes
@@ -560,6 +611,9 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 					if user, err := uStore.GetUserByID(sess.UserID); err == nil && !user.Disabled {
 						id := authpkg.SessionForBrowserUser(user.Role, user.ID)
 						ctx := withAuthenticatedBrowserSession(r.Context(), authCookie.Value)
+						if r.URL.Path == "/api/auth/me" {
+							ctx = context.WithValue(ctx, authenticatedBrowserUserKey{}, user)
+						}
 						next.ServeHTTP(w, r.WithContext(buildAuthCtx(ctx, id)))
 						return
 					}
@@ -577,13 +631,16 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 					// Authentik the unaudited first dashboard identity.
 					user, err = uStore.ProvisionAuthentikOperator(r.Context(), authentikEmail)
 					if errors.Is(err, gormdb.ErrInitialAdminSetupRequired) {
-						http.Error(w, "unauthorized", http.StatusUnauthorized)
+						writeAuthUnauthorized(w, r, authDisabled)
 						return
 					}
 				}
 				if err == nil && user != nil && !user.Disabled {
 					id := authpkg.SessionForBrowserUser(user.Role, user.ID)
 					ctx := withAuthenticatedBrowserSession(r.Context(), authentikBrowserSessionID(user.ID))
+					if r.URL.Path == "/api/auth/me" {
+						ctx = context.WithValue(ctx, authenticatedBrowserUserKey{}, user)
+					}
 					next.ServeHTTP(w, r.WithContext(buildAuthCtx(ctx, id)))
 					return
 				}
@@ -592,8 +649,19 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 
 		// 5. No valid auth.
 		log.Warn().Str("path", r.URL.Path).Str("remote_addr", r.RemoteAddr).Msg("auth: rejected unauthenticated request")
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeAuthUnauthorized(w, r, authDisabled)
 	})
+}
+
+func writeAuthUnauthorized(w http.ResponseWriter, r *http.Request, authDisabled bool) {
+	if r.URL.Path == "/api/auth/me" {
+		writeJSONStatus(w, http.StatusUnauthorized, map[string]any{
+			"authenticated": false,
+			"auth_disabled": authDisabled,
+		})
+		return
+	}
+	http.Error(w, "unauthorized", http.StatusUnauthorized)
 }
 
 // extractHTTPBearer pulls the bearer string from (1) X-Auth-Token header,

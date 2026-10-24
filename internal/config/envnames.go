@@ -43,6 +43,9 @@ const (
 	// Reading this from a workstation context is a contract violation.
 	EnvAdminToken = "ENGRAM_AUTH_ADMIN_TOKEN"
 
+	// EnvAuthAllowedOrigins admits exact public console origins at split deployments.
+	EnvAuthAllowedOrigins = "ENGRAM_AUTH_ALLOWED_ORIGINS"
+
 	// EnvWorkstationToken is the per-workstation client api token (keycard),
 	// issued through the authenticated POST /api/auth/tokens admin endpoint.
 	// The daemon and the serverevents bridge read it; nothing else does.
