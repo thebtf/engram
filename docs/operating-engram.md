@@ -19,8 +19,20 @@ server configuration, retained readers, Code Workspace, and restart procedures.
 Это не подтверждает поиск исторических записей из нового кандидата, полный
 Workspace/search/graph/two-worktree путь или версию загруженного OMP extension.
 Консолидация канонических проектов остаётся OPEN; этот выпуск её не выполняет.
-Последняя отдельно подтверждённая npm-версия плагина openclaw-engram — `7.0.4`;
-обычный установленный OpenClaw runtime остаётся NOT_PROVEN. Обновление host не входит в scope.
+Последняя отдельно подтверждённая npm-версия плагина openclaw-engram — `7.0.4`.
+Кандидат `7.0.6` объявляет существующие tools через `contracts.tools` и переносит
+статический контекст с игнорируемого `before_agent_start` на `before_prompt_build`.
+Контекст каждого запуска заново использует текущий проект; session cache нет.
+Для автоматического контекста внешний плагин требует разрешение host:
+`plugins.entries.engram.hooks.allowConversationAccess: true`.
+Это не поле `plugins.entries.engram.config`: разрешение открывает prompt hooks
+доступ к запросу и подготовленной истории. Без него, а также при
+`hooks.allowPromptInjection: false`, host блокирует автоматический контекст.
+Плагин не меняет эти настройки. Проверка официального `openclaw@2026.10.7`
+охватывает manifest parser, регистрацию, hook runner и преобразование tool result;
+она не подтверждает полный loader, discovery/trust/config validation или установленный
+store→recall/context. Обычный установленный OpenClaw runtime остаётся NOT_PROVEN.
+Обновление host не входит в scope.
 Версии исходников и локальная synthetic/no-auth проверка не подтверждают
 публикацию `7.0.6`, marketplace, production, principal или свежую установленную сессию.
 
