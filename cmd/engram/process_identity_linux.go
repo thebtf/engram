@@ -7,7 +7,39 @@ import (
 	"net"
 	"os"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
+
+type linuxProcessExitProof struct {
+	poll [1]unix.PollFd
+}
+
+func openProcessExitProof(pid int) (muxcoreProcessExitProof, error) {
+	fd, err := unix.PidfdOpen(pid, 0)
+	if err != nil {
+		return nil, err
+	}
+	return &linuxProcessExitProof{poll: [1]unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}}, nil
+}
+
+func (process *linuxProcessExitProof) Exited() (bool, error) {
+	n, err := unix.Poll(process.poll[:], 0)
+	if err == unix.EINTR {
+		return false, nil
+	}
+	if err != nil || n == 0 {
+		return false, err
+	}
+	if process.poll[0].Revents&(unix.POLLIN|unix.POLLHUP) != 0 {
+		return true, nil
+	}
+	return false, fmt.Errorf("unexpected pidfd poll status %d", process.poll[0].Revents)
+}
+
+func (process *linuxProcessExitProof) Close() error {
+	return unix.Close(int(process.poll[0].Fd))
+}
 
 func liveProcessImageIdentity(pid int) (*processImageIdentity, error) {
 	image, err := os.Open(fmt.Sprintf("/proc/%d/exe", pid))

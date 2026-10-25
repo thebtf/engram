@@ -7,10 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Resolve authentication status through the protected-route credential chain, preserve browser identity, and reject expired HMAC sessions. Bind Authentik trust to the transport peer before RealIP, strip client identity/peer claims at the maintained console proxy, and reject foreign logout origins before mutation while preserving explicit local UI origins. Failed session revocation now returns an error without clearing the retry cookie.
-- Preserve split public-HTTPS-console logout with explicit exact `ENGRAM_AUTH_ALLOWED_ORIGINS` in the worker's canonical configuration. Keep an empty default, fail malformed configuration, and reject unconfigured/sibling/forged origins without trusting forwarded host/proto.
-- Preserve JSON identity on every authentication-status 401, complete logout for already absent sessions without masking storage failures, and derive console-relayed client addresses only from the actual socket after discarding incoming peer claims (including `True-Client-IP`).
-
 - Bind issue-role lookups as one PostgreSQL ID array instead of expanding one parameter per issue. Preserve complete large selections, independent nullable canonical roles and retained-membership privacy without changing public limits.
 
 - Preserve seven fixed partition-repair refusal codes in private CLI diagnostics; retain generic output for untyped or unknown errors. Require both PostgreSQL fixture DSNs before public-consumer setup, and navigate the explicit metadata-only view in the retained-reader browser regression without changing reader-first discovery.
@@ -43,6 +39,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Isolate canonical GORM/gRPC fixtures, bound their pools and await caller-owned audit writes before schema cleanup; retain restore guards and public data. Reuse focused retention/audit/gRPC proofs; the earlier 37-PASS run remains preservation FAIL (audit rows 37→40), followed by seven focused PASS with 40→40 preservation. Canonical continuity fixtures now migrate once per isolated parent (17→6), preserving every assertion and the unchanged 12m budget; reuse 22 focused lifecycle PASS plus three hash-bound slot CRUD/migration PASS from the earlier incomplete timeout run, not a full-suite or installed-acceptance claim.
 - Use registered canonical UUIDs and authenticated caller project context in MCP fixtures without weakening default-deny, privacy or pre-mutation rejection guards. Reuse 119 prior PASS plus one exact retry PASS after the context fix, not 120 fresh PASS or installed acceptance.
 - Seed the isolated operator-code fixture with a registered canonical project UUID while preserving five queue candidates, published/no-view checks and redacted provisioning errors.
+
+## [7.0.5] - 2026-10-25
+
+### Fixed
+
+- Recover ordinary native-client startup after an acknowledged restart leaves no successor: require a bound predecessor exit proof and fresh fenced namespace validation before returning cold start to the existing shim engine. Keep exit-proof support supplemental for ordinary strict restart-to-current convergence, including the still-visible lower interval after ACK; unavailable pidfd support never authorizes cold start. Revalidate fresh OS peer/PID/full-generation and current marker/version/epoch at one final admission boundary for every post-ACK current handback, including readiness and concurrent convergence. Preserve cancellation and no-steal behavior without another launcher, snapshot replay or longer deadline.
+- Treat an interrupted Linux pidfd poll as unconfirmed exit and retry through the existing context-aware readiness loop; preserve actual exit events, other errors and handle lifetime.
+- Resolve authentication status through the protected-route credential chain, preserve browser identity, and reject expired HMAC sessions. Bind Authentik trust to the transport peer before RealIP, strip client identity/peer claims at the maintained console proxy, and reject foreign logout origins before mutation while preserving explicit local UI origins. Failed session revocation now returns an error without clearing the retry cookie. ([#581](https://github.com/thebtf/engram/pull/581))
+- Preserve split public-HTTPS-console logout with explicit exact `ENGRAM_AUTH_ALLOWED_ORIGINS` in the worker's canonical configuration. Keep an empty default, fail malformed configuration, and reject unconfigured/sibling/forged origins without trusting forwarded host/proto.
+- Preserve JSON identity on every authentication-status 401, complete logout for already absent sessions without masking storage failures, and derive console-relayed client addresses only from the actual socket after discarding incoming peer claims (including `True-Client-IP`).
 
 ## [7.0.4] - 2026-10-24
 

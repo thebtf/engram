@@ -9,6 +9,10 @@ import (
 
 var errProcessIdentityUnsupported = errors.New("process identity lookup is unsupported on this platform")
 
+func openProcessExitProof(int) (muxcoreProcessExitProof, error) {
+	return nil, errProcessIdentityUnsupported
+}
+
 func liveProcessImageIdentity(int) (*processImageIdentity, error) {
 	return nil, errProcessIdentityUnsupported
 }
