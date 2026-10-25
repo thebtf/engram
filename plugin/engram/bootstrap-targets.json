@@ -8,8 +8,8 @@
       "desired": {
         "version": "7.0.6",
         "asset": "engram-windows-amd64.exe",
-        "size": 23283712,
-        "sha256": "43f011560f2f2299fb05af0d417686e544061a63580a0765ddebf20bbd414f3b"
+        "size": 23289856,
+        "sha256": "4f246ddcfe0110c2e63a82b0bdf2491cfbe6026810c739b1d0081f9140c96d8b"
       },
       "predecessor": null
     },
