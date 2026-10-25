@@ -352,7 +352,7 @@ func stubMuxcorePredecessorProof(t *testing.T) {
 	t.Helper()
 	oldOpen, oldWait := openMuxcorePredecessorProcess, waitForRestartedMuxcoreDaemon
 	openMuxcorePredecessorProcess = func(int) (muxcoreProcessExitProof, error) { return fixtureProcessExitProof{}, nil }
-	waitForRestartedMuxcoreDaemon = func(ctx context.Context, _ muxcoreProcessExitProof) error {
+	waitForRestartedMuxcoreDaemon = func(ctx context.Context, _ muxcoreProcessExitProof, _ muxcoreDaemonStatusIdentity) error {
 		return waitForCurrentMuxcoreDaemonReady(ctx)
 	}
 	t.Cleanup(func() { openMuxcorePredecessorProcess, waitForRestartedMuxcoreDaemon = oldOpen, oldWait })
@@ -1328,13 +1328,13 @@ func TestWaitForMuxcoreDaemonVersionOrExitRequiresBoundProcessExit(t *testing.T)
 			return muxcoreDaemonStatusIdentity{PID: 42, DaemonGeneration: "still-draining-lower"}, endpointPresent
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
-		err := waitForMuxcoreDaemonVersionOrExit(ctx, fixtureProcessExitProof{})
+		err := waitForMuxcoreDaemonVersionOrExit(ctx, fixtureProcessExitProof{}, muxcoreDaemonStatusIdentity{})
 		cancel()
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("live predecessor endpointPresent=%v result=%v", endpointPresent, err)
 		}
 	}
-	if err := waitForMuxcoreDaemonVersionOrExit(context.Background(), fixtureProcessExitProof{err: os.ErrPermission}); !errors.Is(err, os.ErrPermission) {
+	if err := waitForMuxcoreDaemonVersionOrExit(context.Background(), fixtureProcessExitProof{err: os.ErrPermission}, muxcoreDaemonStatusIdentity{}); !errors.Is(err, os.ErrPermission) {
 		t.Fatalf("unproven predecessor exit was hidden: %v", err)
 	}
 }
@@ -1397,7 +1397,7 @@ func TestWaitForMuxcoreDaemonVersionOrExitRetainsExitFenceAfterCurrentDisappears
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
-	if err := waitForMuxcoreDaemonVersionOrExit(ctx, fixtureProcessExitProof{}); !errors.Is(err, context.DeadlineExceeded) {
+	if err := waitForMuxcoreDaemonVersionOrExit(ctx, fixtureProcessExitProof{}, muxcoreDaemonStatusIdentity{}); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("vanished current was handed to the unfenced outer loop: %v", err)
 	}
 }
@@ -1541,23 +1541,22 @@ func TestReconcileMuxcoreDaemonVersionExitProofCapabilityIsSupplemental(t *testi
 				t.Fatal(err)
 			}
 			ack := make(chan struct{})
+			oldAfterAckReads := 0
 			namespace.Lock()
 			namespace.restart = func(options muxcontrol.GracefulRestartOptions) (string, func(), error) {
 				if options.SuccessorExe != executable {
 					return "", nil, errors.New("unexpected successor executable")
 				}
 				namespace.Lock()
+				if namespace.phase == "restarting" {
+					namespace.Unlock()
+					return "", nil, errors.New("admitted predecessor is still draining")
+				}
+				namespace.phase = "restarting"
 				if missing {
 					namespace.owner = muxcoreDaemonStatusIdentity{}
-				} else {
-					namespace.owner = current
 				}
 				namespace.Unlock()
-				if !missing {
-					if err := writeReviewAdmissionMarker(marker, executable, current, daemonVersion, muxcoreDaemonCompatEpoch); err != nil {
-						return "", nil, err
-					}
-				}
 				return "", func() {
 					close(ack)
 					if missing {
@@ -1566,9 +1565,9 @@ func TestReconcileMuxcoreDaemonVersionExitProofCapabilityIsSupplemental(t *testi
 				}, nil
 			}
 			namespace.Unlock()
-			oldOpen, oldAction, oldLock, oldExecutable := openMuxcorePredecessorProcess, readLiveMuxcoreDaemonAction, acquireRestartLock, currentExecutable
+			oldOpen, oldAction, oldLock, oldExecutable, oldStatus := openMuxcorePredecessorProcess, readLiveMuxcoreDaemonAction, acquireRestartLock, currentExecutable, readMuxcoreDaemonStatusIdentity
 			t.Cleanup(func() {
-				openMuxcorePredecessorProcess, readLiveMuxcoreDaemonAction, acquireRestartLock, currentExecutable = oldOpen, oldAction, oldLock, oldExecutable
+				openMuxcorePredecessorProcess, readLiveMuxcoreDaemonAction, acquireRestartLock, currentExecutable, readMuxcoreDaemonStatusIdentity = oldOpen, oldAction, oldLock, oldExecutable, oldStatus
 			})
 			openMuxcorePredecessorProcess = func(int) (muxcoreProcessExitProof, error) { return nil, syscall.ENOSYS }
 			readLiveMuxcoreDaemonAction = func(status muxcoreDaemonStatusIdentity, client daemonConvergenceIdentity) (daemonConvergenceAction, error) {
@@ -1576,7 +1575,27 @@ func TestReconcileMuxcoreDaemonVersionExitProofCapabilityIsSupplemental(t *testi
 			}
 			acquireRestartLock = func() (io.Closer, error) { return closerFunc(func() error { return nil }), nil }
 			currentExecutable = func() (string, error) { return executable, nil }
-			ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+			readMuxcoreDaemonStatusIdentity = func(path string) (muxcoreDaemonStatusIdentity, bool) {
+				select {
+				case <-ack:
+					namespace.Lock()
+					if !missing && namespace.owner == lower {
+						if oldAfterAckReads == 4 {
+							if err := writeReviewAdmissionMarker(marker, executable, current, daemonVersion, muxcoreDaemonCompatEpoch); err != nil {
+								namespace.Unlock()
+								t.Fatal(err)
+							}
+							namespace.owner = current
+						} else {
+							oldAfterAckReads++
+						}
+					}
+					namespace.Unlock()
+				default:
+				}
+				return muxcoreDaemonStatus(path)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 			admission := reconcileMuxcoreDaemonVersion(ctx)
 			if missing {
@@ -1587,8 +1606,8 @@ func TestReconcileMuxcoreDaemonVersionExitProofCapabilityIsSupplemental(t *testi
 				case <-ack:
 					stop()
 					t.Log("NO_EXIT_PROOF_COLDSTART_REFUSED: after real ACK, no supplemental proof authorized cold start")
-				default:
-					t.Log("NO_EXIT_PROOF_EARLY_REFUSAL: baseline blocked before ACK; not post-ACK negative coverage yet")
+				case <-time.After(time.Second):
+					t.Fatal("missing-successor refusal did not exercise an actual restart ACK")
 				}
 				return
 			}
@@ -1600,6 +1619,9 @@ func TestReconcileMuxcoreDaemonVersionExitProofCapabilityIsSupplemental(t *testi
 			case <-time.After(time.Second):
 				t.Fatal("successful admission had no real restart ACK")
 			}
+			if oldAfterAckReads != 4 {
+				t.Fatalf("normal post-ACK lower interval was not observed: %d", oldAfterAckReads)
+			}
 			live, found := muxcoreDaemonStatus(control)
 			client, err := clientDaemonIdentity()
 			if err != nil {
@@ -1609,7 +1631,7 @@ func TestReconcileMuxcoreDaemonVersionExitProofCapabilityIsSupplemental(t *testi
 			if !found || live != current || actionErr != nil || action != daemonConvergenceJoin {
 				t.Fatalf("admission was not authenticated current: live=%+v action=%v error=%v", live, action, actionErr)
 			}
-			t.Log("OPTIONAL_EXIT_PROOF_CURRENT: real ACK and authenticated current generation admitted")
+			t.Log("OPTIONAL_EXIT_PROOF_CURRENT: real ACK, still-visible lower interval, and authenticated current generation admitted")
 		})
 	}
 }
