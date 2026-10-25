@@ -90,15 +90,35 @@ func memoriesToObservations(mems []*models.Memory) []*models.Observation {
 	return result
 }
 
+// handleSearchByPromptGET godoc
+// @Summary Search observations by prompt
+// @Description Searches observations relevant to a user prompt using query parameters. JSON bodies are ignored; use POST for large prompts.
+// @Tags Search
+// @Produce json
+// @Security ApiKeyAuth
+// @Param project query string true "Canonical project UUID"
+// @Param query query string true "Nonempty user prompt"
+// @Param cwd query string false "Working directory (ignored server-side)"
+// @Param agent_id query string false "Agent attribution; never project identity"
+// @Param session_id query string false "Optional source-session audit attribution; does not change project-scoped search visibility"
+// @Param files_being_edited query []string false "File paths; repeat the query parameter" collectionFormat(multi)
+// @Param limit query int false "Number of results (default 50, max 200)"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {string} string "project and query required"
+// @Router /api/context/search [get]
+func (s *Service) handleSearchByPromptGET(w http.ResponseWriter, r *http.Request) {
+	s.handleSearchByPrompt(w, r)
+}
+
 // handleSearchByPrompt godoc
 // @Summary Search observations by prompt
-// @Description Searches observations relevant to a user prompt using hybrid vector + FTS search with query expansion, cross-encoder reranking, and clustering. Supports both GET (query params) and POST (JSON body) to avoid URL length limits.
+// @Description Searches observations relevant to a user prompt using hybrid vector + FTS search with query expansion, cross-encoder reranking, and clustering. A nonempty project and query are each required in the query string or JSON body. Nonempty JSON fields override query parameters; session_id overrides even when empty. Invalid or absent JSON falls back to query parameters.
 // @Tags Search
 // @Accept json
 // @Produce json
 // @Security ApiKeyAuth
-// @Param project query string true "Canonical project UUID"
-// @Param query query string false "GET requires a nonempty query parameter; POST requires query here or in the JSON body"
+// @Param project query string false "Canonical project UUID; required here or in JSON"
+// @Param query query string false "Nonempty prompt; required here or in JSON"
 // @Param cwd query string false "Working directory (ignored server-side)"
 // @Param agent_id query string false "Agent attribution; never project identity"
 // @Param session_id query string false "Optional source-session audit attribution; does not change project-scoped search visibility"
@@ -107,7 +127,6 @@ func memoriesToObservations(mems []*models.Memory) []*models.Observation {
 // @Param body body object false "POST body: {project, query, agent_id, session_id, cwd, obs_type, files_being_edited}; nonempty fields override query params; session_id overrides even when empty; obs_type is body-only, limit is query-only"
 // @Success 200 {object} map[string]interface{}
 // @Failure 400 {string} string "project and query required"
-// @Router /api/context/search [get]
 // @Router /api/context/search [post]
 func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
@@ -463,15 +482,36 @@ func compactObservationsWithLimit(observations []*models.Observation, fullCount 
 
 type sessionStartCompatibilityResponse = sessioncompat.Payload
 
-// handleSessionStartContextStatic godoc
+// handleSessionStartContextStaticGET godoc
 // @Summary Get static session-start context
-// @Description Returns static session-start context sourced from the server gRPC implementation: active issues, behavioral rules, recent memories, and generated_at.
+// @Description Returns static session-start context sourced from the server gRPC implementation: active issues, behavioral rules, recent memories, and generated_at. JSON bodies are ignored; limits use server defaults.
 // @Tags Context
 // @Produce json
 // @Security ApiKeyAuth
 // @Param project query string true "Canonical project UUID"
+// @Param session_id query string false "Injection-event session ID"
+// @Success 200 {object} sessionStartCompatibilityResponse
+// @Failure 400 {string} string "canonical project UUID required or invalid limits"
+// @Failure 401 {string} string "unauthorized"
+// @Failure 403 {string} string "forbidden"
+// @Failure 404 {string} string "not found"
+// @Failure 503 {string} string "session-start service unavailable"
+// @Failure 500 {string} string "internal error"
+// @Router /api/context/session-start [get]
+func (s *Service) handleSessionStartContextStaticGET(w http.ResponseWriter, r *http.Request) {
+	s.handleSessionStartContextStatic(w, r)
+}
+
+// handleSessionStartContextStatic godoc
+// @Summary Get static session-start context
+// @Description Returns static session-start context sourced from the server gRPC implementation: active issues, behavioral rules, recent memories, and generated_at. Canonical project UUID is required in the query string or JSON body; nonempty trimmed JSON project/session_id values override query values. Invalid or empty JSON bodies are rejected; use an empty object to retain query values and default limits.
+// @Tags Context
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param project query string false "Canonical project UUID; required here or in JSON"
 // @Param session_id query string false "Injection-event session ID; a nonempty POST body value overrides this query value"
-// @Param body body object false "POST body: {project, session_id, memories_limit, issues_limit}"
+// @Param body body object true "JSON object: {project, session_id, memories_limit, issues_limit}; project may instead be supplied in the query string; use {} to retain query values and default limits"
 // @Success 200 {object} sessionStartCompatibilityResponse
 // @Failure 400 {string} string "canonical project UUID required or invalid limits"
 // @Failure 401 {string} string "unauthorized"
@@ -480,7 +520,6 @@ type sessionStartCompatibilityResponse = sessioncompat.Payload
 // @Failure 503 {string} string "session-start service unavailable"
 // @Failure 500 {string} string "internal error"
 // @Router /api/context/session-start [post]
-// @Router /api/context/session-start [get]
 func (s *Service) handleSessionStartContextStatic(w http.ResponseWriter, r *http.Request) {
 	project := strings.TrimSpace(r.URL.Query().Get("project"))
 	// session_id enables injection-event recording on this primary injection path
@@ -588,37 +627,54 @@ func grpcCodeToHTTP(code codes.Code) int {
 	}
 }
 
-// handleContextInject godoc
-// @Summary Inject context for session start
-// @Description Returns context for injection at session start. Response includes recent (last 5), relevant (top 10 semantic), and guidance sections. Supports GET (deprecated) and POST. Critical startup path — optimized for speed.
+type contextInjectRequest struct {
+	Project          string   `json:"project" validate:"required"`
+	AgentID          string   `json:"agent_id"`
+	Cwd              string   `json:"cwd"`
+	SessionID        string   `json:"session_id"`
+	FilesBeingEdited []string `json:"files_being_edited"`
+}
+
+// handleContextInjectGET godoc
+// @Summary Inject context for session start (deprecated GET)
+// @Description Returns context using query parameters. JSON bodies are ignored. Use POST for session-start injection.
 // @Tags Context
-// @Accept json
 // @Produce json
 // @Security ApiKeyAuth
 // @Param project query string true "Pinned canonical project UUID"
 // @Param agent_id query string false "Agent attribution; never substitutes for project or session"
-// @Param session_id query string false "GET session ID for session-scoped prompt retrieval and injection tracking"
-// @Param cwd query string false "GET working directory (ignored server-side)"
-// @Param files_being_edited query []string false "GET file paths; repeat the parameter for each path" collectionFormat(multi)
+// @Param session_id query string false "Session ID for session-scoped prompt retrieval and injection tracking"
+// @Param cwd query string false "Working directory (ignored server-side)"
+// @Param files_being_edited query []string false "File paths; repeat the parameter for each path" collectionFormat(multi)
 // @Param format query string false "Response format: 'compact' for minimal payload"
-// @Param body body object false "POST body: {project, session_id, agent_id, cwd, files_being_edited}"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {string} string "canonical project UUID required"
+// @Failure 500 {string} string "internal error"
+// @Deprecated
+// @Router /api/context/inject [get]
+func (s *Service) handleContextInjectGET(w http.ResponseWriter, r *http.Request) {
+	s.handleContextInject(w, r)
+}
+
+// handleContextInject godoc
+// @Summary Inject context for session start
+// @Description Returns context for injection at session start. Response includes recent, relevant, and guidance sections. Canonical project UUID and attribution fields are read only from JSON; query values do not substitute for them. cwd is ignored server-side. format remains a query parameter.
+// @Tags Context
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param format query string false "Response format: 'compact' for minimal payload"
+// @Param body body contextInjectRequest true "Session-start injection request; project must be a canonical UUID; agent_id never substitutes for project or session"
 // @Success 200 {object} map[string]interface{}
 // @Failure 400 {string} string "canonical project UUID required"
 // @Failure 500 {string} string "internal error"
 // @Router /api/context/inject [post]
-// @Router /api/context/inject [get]
 func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 	var project, agentID, cwd, sessionID string
 	var filesBeingEdited []string
 
 	if r.Method == http.MethodPost {
-		var req struct {
-			Project          string   `json:"project"`
-			AgentID          string   `json:"agent_id"`
-			Cwd              string   `json:"cwd"`
-			SessionID        string   `json:"session_id"`
-			FilesBeingEdited []string `json:"files_being_edited"`
-		}
+		var req contextInjectRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
 			return

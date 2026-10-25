@@ -581,17 +581,15 @@
                         "ApiKeyAuth": []
                     }
                 ],
-                "description": "Returns context for injection at session start. Response includes recent (last 5), relevant (top 10 semantic), and guidance sections. Supports GET (deprecated) and POST. Critical startup path — optimized for speed.",
-                "consumes": [
-                    "application/json"
-                ],
+                "description": "Returns context using query parameters. JSON bodies are ignored. Use POST for session-start injection.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "Context"
                 ],
-                "summary": "Inject context for session start",
+                "summary": "Inject context for session start (deprecated GET)",
+                "deprecated": true,
                 "parameters": [
                     {
                         "type": "string",
@@ -608,13 +606,13 @@
                     },
                     {
                         "type": "string",
-                        "description": "GET session ID for session-scoped prompt retrieval and injection tracking",
+                        "description": "Session ID for session-scoped prompt retrieval and injection tracking",
                         "name": "session_id",
                         "in": "query"
                     },
                     {
                         "type": "string",
-                        "description": "GET working directory (ignored server-side)",
+                        "description": "Working directory (ignored server-side)",
                         "name": "cwd",
                         "in": "query"
                     },
@@ -624,7 +622,7 @@
                             "type": "string"
                         },
                         "collectionFormat": "multi",
-                        "description": "GET file paths; repeat the parameter for each path",
+                        "description": "File paths; repeat the parameter for each path",
                         "name": "files_being_edited",
                         "in": "query"
                     },
@@ -633,14 +631,6 @@
                         "description": "Response format: 'compact' for minimal payload",
                         "name": "format",
                         "in": "query"
-                    },
-                    {
-                        "description": "POST body: {project, session_id, agent_id, cwd, files_being_edited}",
-                        "name": "body",
-                        "in": "body",
-                        "schema": {
-                            "type": "object"
-                        }
                     }
                 ],
                 "responses": {
@@ -671,7 +661,7 @@
                         "ApiKeyAuth": []
                     }
                 ],
-                "description": "Returns context for injection at session start. Response includes recent (last 5), relevant (top 10 semantic), and guidance sections. Supports GET (deprecated) and POST. Critical startup path — optimized for speed.",
+                "description": "Returns context for injection at session start. Response includes recent, relevant, and guidance sections. Canonical project UUID and attribution fields are read only from JSON; query values do not substitute for them. cwd is ignored server-side. format remains a query parameter.",
                 "consumes": [
                     "application/json"
                 ],
@@ -685,51 +675,17 @@
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Pinned canonical project UUID",
-                        "name": "project",
-                        "in": "query",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "Agent attribution; never substitutes for project or session",
-                        "name": "agent_id",
-                        "in": "query"
-                    },
-                    {
-                        "type": "string",
-                        "description": "GET session ID for session-scoped prompt retrieval and injection tracking",
-                        "name": "session_id",
-                        "in": "query"
-                    },
-                    {
-                        "type": "string",
-                        "description": "GET working directory (ignored server-side)",
-                        "name": "cwd",
-                        "in": "query"
-                    },
-                    {
-                        "type": "array",
-                        "items": {
-                            "type": "string"
-                        },
-                        "collectionFormat": "multi",
-                        "description": "GET file paths; repeat the parameter for each path",
-                        "name": "files_being_edited",
-                        "in": "query"
-                    },
-                    {
-                        "type": "string",
                         "description": "Response format: 'compact' for minimal payload",
                         "name": "format",
                         "in": "query"
                     },
                     {
-                        "description": "POST body: {project, session_id, agent_id, cwd, files_being_edited}",
+                        "description": "Session-start injection request; project must be a canonical UUID; agent_id never substitutes for project or session",
                         "name": "body",
                         "in": "body",
+                        "required": true,
                         "schema": {
-                            "type": "object"
+                            "$ref": "#/definitions/worker.contextInjectRequest"
                         }
                     }
                 ],
@@ -763,10 +719,7 @@
                         "ApiKeyAuth": []
                     }
                 ],
-                "description": "Searches observations relevant to a user prompt using hybrid vector + FTS search with query expansion, cross-encoder reranking, and clustering. Supports both GET (query params) and POST (JSON body) to avoid URL length limits.",
-                "consumes": [
-                    "application/json"
-                ],
+                "description": "Searches observations relevant to a user prompt using query parameters. JSON bodies are ignored; use POST for large prompts.",
                 "produces": [
                     "application/json"
                 ],
@@ -784,9 +737,10 @@
                     },
                     {
                         "type": "string",
-                        "description": "GET requires a nonempty query parameter; POST requires query here or in the JSON body",
+                        "description": "Nonempty user prompt",
                         "name": "query",
-                        "in": "query"
+                        "in": "query",
+                        "required": true
                     },
                     {
                         "type": "string",
@@ -812,23 +766,15 @@
                             "type": "string"
                         },
                         "collectionFormat": "multi",
-                        "description": "File paths; repeat the query parameter or supply a POST JSON array",
+                        "description": "File paths; repeat the query parameter",
                         "name": "files_being_edited",
                         "in": "query"
                     },
                     {
                         "type": "integer",
-                        "description": "Query-only number of results (default 50, max 200)",
+                        "description": "Number of results (default 50, max 200)",
                         "name": "limit",
                         "in": "query"
-                    },
-                    {
-                        "description": "POST body: {project, query, agent_id, session_id, cwd, obs_type, files_being_edited}; nonempty fields override query params; session_id overrides even when empty; obs_type is body-only, limit is query-only",
-                        "name": "body",
-                        "in": "body",
-                        "schema": {
-                            "type": "object"
-                        }
                     }
                 ],
                 "responses": {
@@ -853,7 +799,7 @@
                         "ApiKeyAuth": []
                     }
                 ],
-                "description": "Searches observations relevant to a user prompt using hybrid vector + FTS search with query expansion, cross-encoder reranking, and clustering. Supports both GET (query params) and POST (JSON body) to avoid URL length limits.",
+                "description": "Searches observations relevant to a user prompt using hybrid vector + FTS search with query expansion, cross-encoder reranking, and clustering. A nonempty project and query are each required in the query string or JSON body. Nonempty JSON fields override query parameters; session_id overrides even when empty. Invalid or absent JSON falls back to query parameters.",
                 "consumes": [
                     "application/json"
                 ],
@@ -867,14 +813,13 @@
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Canonical project UUID",
+                        "description": "Canonical project UUID; required here or in JSON",
                         "name": "project",
-                        "in": "query",
-                        "required": true
+                        "in": "query"
                     },
                     {
                         "type": "string",
-                        "description": "GET requires a nonempty query parameter; POST requires query here or in the JSON body",
+                        "description": "Nonempty prompt; required here or in JSON",
                         "name": "query",
                         "in": "query"
                     },
@@ -945,7 +890,7 @@
                         "ApiKeyAuth": []
                     }
                 ],
-                "description": "Returns static session-start context sourced from the server gRPC implementation: active issues, behavioral rules, recent memories, and generated_at.",
+                "description": "Returns static session-start context sourced from the server gRPC implementation: active issues, behavioral rules, recent memories, and generated_at. JSON bodies are ignored; limits use server defaults.",
                 "produces": [
                     "application/json"
                 ],
@@ -963,17 +908,9 @@
                     },
                     {
                         "type": "string",
-                        "description": "Injection-event session ID; a nonempty POST body value overrides this query value",
+                        "description": "Injection-event session ID",
                         "name": "session_id",
                         "in": "query"
-                    },
-                    {
-                        "description": "POST body: {project, session_id, memories_limit, issues_limit}",
-                        "name": "body",
-                        "in": "body",
-                        "schema": {
-                            "type": "object"
-                        }
                     }
                 ],
                 "responses": {
@@ -1027,7 +964,10 @@
                         "ApiKeyAuth": []
                     }
                 ],
-                "description": "Returns static session-start context sourced from the server gRPC implementation: active issues, behavioral rules, recent memories, and generated_at.",
+                "description": "Returns static session-start context sourced from the server gRPC implementation: active issues, behavioral rules, recent memories, and generated_at. Canonical project UUID is required in the query string or JSON body; nonempty trimmed JSON project/session_id values override query values. Invalid or empty JSON bodies are rejected; use an empty object to retain query values and default limits.",
+                "consumes": [
+                    "application/json"
+                ],
                 "produces": [
                     "application/json"
                 ],
@@ -1038,10 +978,9 @@
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Canonical project UUID",
+                        "description": "Canonical project UUID; required here or in JSON",
                         "name": "project",
-                        "in": "query",
-                        "required": true
+                        "in": "query"
                     },
                     {
                         "type": "string",
@@ -1050,9 +989,10 @@
                         "in": "query"
                     },
                     {
-                        "description": "POST body: {project, session_id, memories_limit, issues_limit}",
+                        "description": "JSON object: {project, session_id, memories_limit, issues_limit}; project may instead be supplied in the query string; use {} to retain query values and default limits",
                         "name": "body",
                         "in": "body",
+                        "required": true,
                         "schema": {
                             "type": "object"
                         }
@@ -5157,6 +5097,32 @@
                     "type": "string"
                 },
                 "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "worker.contextInjectRequest": {
+            "type": "object",
+            "required": [
+                "project"
+            ],
+            "properties": {
+                "agent_id": {
+                    "type": "string"
+                },
+                "cwd": {
+                    "type": "string"
+                },
+                "files_being_edited": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "project": {
+                    "type": "string"
+                },
+                "session_id": {
                     "type": "string"
                 }
             }

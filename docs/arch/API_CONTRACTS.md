@@ -109,11 +109,33 @@ derives local Go package directories from the server dependency graph, puts
 enabled and dependency parsing disabled. Package discovery and generation
 errors stop the build; generated files must not be patched by hand.
 
-The shared GET/POST annotations describe context search's conditional `query`
-requirement in text: GET requires the query parameter; POST may supply it in
-the query string or JSON body. Swagger 2 does not encode that alternative in
-the shared parameter's `required` flag. Generic request-body schemas and the
-existing project-parameter annotations are not a complete conditional schema.
+Context GET and POST operations have separate annotations on real routed handlers;
+the GET entry points delegate to the same implementation without changing request
+semantics. GET requires `project` in the query string, and context search also
+requires a nonempty `query`. GET ignores JSON bodies. POST `/api/context/inject`
+requires JSON with a canonical `project` UUID; query `project`, `agent_id`,
+`session_id`, `cwd`, and `files_being_edited` are not fallbacks. Its `format`
+selector remains query-only. The request schema uses the same DTO as the decoder;
+the `project` requirement describes the existing canonical-UUID validation.
+
+POST context search and session-start preserve their query/JSON alternatives:
+query `project` and JSON `project` are individually optional, but a canonical
+project UUID must be supplied through one of them. Search also requires a nonempty
+`query` through either location. Nonempty body fields override query values;
+search `session_id` overrides even when empty, while session-start trims project
+and session ID and only overrides with nonempty values. Search tolerates an
+invalid/absent body and retains query values; session-start requires a JSON body
+and rejects invalid or empty JSON (use `{}` to retain query values). Search
+`limit` remains query-only (default 50, maximum 200), `obs_type` body-only;
+session-start limits remain body-only, with zero
+delegating to the existing server defaults. Source session IDs remain attribution,
+not authentication or a new visibility boundary; client `cwd` is ignored.
+
+Swagger 2 cannot encode the cross-location project/query alternatives for those
+two POST operations. Their descriptions and existing HTTP fixtures remain the
+contract for that condition; generic search/session-start body and response
+schemas are not complete conditional schemas. Separate inject GET/POST schemas
+remove the false required query field, not every existing schema limitation.
 
 ### Authentication (v6)
 

@@ -596,6 +596,23 @@ definitions:
       updated_at:
         type: string
     type: object
+  worker.contextInjectRequest:
+    properties:
+      agent_id:
+        type: string
+      cwd:
+        type: string
+      files_being_edited:
+        items:
+          type: string
+        type: array
+      project:
+        type: string
+      session_id:
+        type: string
+    required:
+    - project
+    type: object
   worker.documentErrorResponse:
     properties:
       error:
@@ -1290,11 +1307,9 @@ paths:
       - Context
   /api/context/inject:
     get:
-      consumes:
-      - application/json
-      description: Returns context for injection at session start. Response includes
-        recent (last 5), relevant (top 10 semantic), and guidance sections. Supports
-        GET (deprecated) and POST. Critical startup path — optimized for speed.
+      deprecated: true
+      description: Returns context using query parameters. JSON bodies are ignored.
+        Use POST for session-start injection.
       parameters:
       - description: Pinned canonical project UUID
         in: query
@@ -1305,17 +1320,17 @@ paths:
         in: query
         name: agent_id
         type: string
-      - description: GET session ID for session-scoped prompt retrieval and injection
+      - description: Session ID for session-scoped prompt retrieval and injection
           tracking
         in: query
         name: session_id
         type: string
-      - description: GET working directory (ignored server-side)
+      - description: Working directory (ignored server-side)
         in: query
         name: cwd
         type: string
       - collectionFormat: multi
-        description: GET file paths; repeat the parameter for each path
+        description: File paths; repeat the parameter for each path
         in: query
         items:
           type: string
@@ -1325,11 +1340,6 @@ paths:
         in: query
         name: format
         type: string
-      - description: 'POST body: {project, session_id, agent_id, cwd, files_being_edited}'
-        in: body
-        name: body
-        schema:
-          type: object
       produces:
       - application/json
       responses:
@@ -1348,50 +1358,28 @@ paths:
             type: string
       security:
       - ApiKeyAuth: []
-      summary: Inject context for session start
+      summary: Inject context for session start (deprecated GET)
       tags:
       - Context
     post:
       consumes:
       - application/json
       description: Returns context for injection at session start. Response includes
-        recent (last 5), relevant (top 10 semantic), and guidance sections. Supports
-        GET (deprecated) and POST. Critical startup path — optimized for speed.
+        recent, relevant, and guidance sections. Canonical project UUID and attribution
+        fields are read only from JSON; query values do not substitute for them. cwd
+        is ignored server-side. format remains a query parameter.
       parameters:
-      - description: Pinned canonical project UUID
-        in: query
-        name: project
-        required: true
-        type: string
-      - description: Agent attribution; never substitutes for project or session
-        in: query
-        name: agent_id
-        type: string
-      - description: GET session ID for session-scoped prompt retrieval and injection
-          tracking
-        in: query
-        name: session_id
-        type: string
-      - description: GET working directory (ignored server-side)
-        in: query
-        name: cwd
-        type: string
-      - collectionFormat: multi
-        description: GET file paths; repeat the parameter for each path
-        in: query
-        items:
-          type: string
-        name: files_being_edited
-        type: array
       - description: 'Response format: ''compact'' for minimal payload'
         in: query
         name: format
         type: string
-      - description: 'POST body: {project, session_id, agent_id, cwd, files_being_edited}'
+      - description: Session-start injection request; project must be a canonical
+          UUID; agent_id never substitutes for project or session
         in: body
         name: body
+        required: true
         schema:
-          type: object
+          $ref: '#/definitions/worker.contextInjectRequest'
       produces:
       - application/json
       responses:
@@ -1415,22 +1403,18 @@ paths:
       - Context
   /api/context/search:
     get:
-      consumes:
-      - application/json
-      description: Searches observations relevant to a user prompt using hybrid vector
-        + FTS search with query expansion, cross-encoder reranking, and clustering.
-        Supports both GET (query params) and POST (JSON body) to avoid URL length
-        limits.
+      description: Searches observations relevant to a user prompt using query parameters.
+        JSON bodies are ignored; use POST for large prompts.
       parameters:
       - description: Canonical project UUID
         in: query
         name: project
         required: true
         type: string
-      - description: GET requires a nonempty query parameter; POST requires query
-          here or in the JSON body
+      - description: Nonempty user prompt
         in: query
         name: query
+        required: true
         type: string
       - description: Working directory (ignored server-side)
         in: query
@@ -1446,24 +1430,16 @@ paths:
         name: session_id
         type: string
       - collectionFormat: multi
-        description: File paths; repeat the query parameter or supply a POST JSON
-          array
+        description: File paths; repeat the query parameter
         in: query
         items:
           type: string
         name: files_being_edited
         type: array
-      - description: Query-only number of results (default 50, max 200)
+      - description: Number of results (default 50, max 200)
         in: query
         name: limit
         type: integer
-      - description: 'POST body: {project, query, agent_id, session_id, cwd, obs_type,
-          files_being_edited}; nonempty fields override query params; session_id overrides
-          even when empty; obs_type is body-only, limit is query-only'
-        in: body
-        name: body
-        schema:
-          type: object
       produces:
       - application/json
       responses:
@@ -1486,16 +1462,15 @@ paths:
       - application/json
       description: Searches observations relevant to a user prompt using hybrid vector
         + FTS search with query expansion, cross-encoder reranking, and clustering.
-        Supports both GET (query params) and POST (JSON body) to avoid URL length
-        limits.
+        A nonempty project and query are each required in the query string or JSON
+        body. Nonempty JSON fields override query parameters; session_id overrides
+        even when empty. Invalid or absent JSON falls back to query parameters.
       parameters:
-      - description: Canonical project UUID
+      - description: Canonical project UUID; required here or in JSON
         in: query
         name: project
-        required: true
         type: string
-      - description: GET requires a nonempty query parameter; POST requires query
-          here or in the JSON body
+      - description: Nonempty prompt; required here or in JSON
         in: query
         name: query
         type: string
@@ -1551,23 +1526,18 @@ paths:
   /api/context/session-start:
     get:
       description: 'Returns static session-start context sourced from the server gRPC
-        implementation: active issues, behavioral rules, recent memories, and generated_at.'
+        implementation: active issues, behavioral rules, recent memories, and generated_at.
+        JSON bodies are ignored; limits use server defaults.'
       parameters:
       - description: Canonical project UUID
         in: query
         name: project
         required: true
         type: string
-      - description: Injection-event session ID; a nonempty POST body value overrides
-          this query value
+      - description: Injection-event session ID
         in: query
         name: session_id
         type: string
-      - description: 'POST body: {project, session_id, memories_limit, issues_limit}'
-        in: body
-        name: body
-        schema:
-          type: object
       produces:
       - application/json
       responses:
@@ -1605,22 +1575,30 @@ paths:
       tags:
       - Context
     post:
+      consumes:
+      - application/json
       description: 'Returns static session-start context sourced from the server gRPC
-        implementation: active issues, behavioral rules, recent memories, and generated_at.'
+        implementation: active issues, behavioral rules, recent memories, and generated_at.
+        Canonical project UUID is required in the query string or JSON body; nonempty
+        trimmed JSON project/session_id values override query values. Invalid or empty
+        JSON bodies are rejected; use an empty object to retain query values and default
+        limits.'
       parameters:
-      - description: Canonical project UUID
+      - description: Canonical project UUID; required here or in JSON
         in: query
         name: project
-        required: true
         type: string
       - description: Injection-event session ID; a nonempty POST body value overrides
           this query value
         in: query
         name: session_id
         type: string
-      - description: 'POST body: {project, session_id, memories_limit, issues_limit}'
+      - description: 'JSON object: {project, session_id, memories_limit, issues_limit};
+          project may instead be supplied in the query string; use {} to retain query
+          values and default limits'
         in: body
         name: body
+        required: true
         schema:
           type: object
       produces:

@@ -220,7 +220,7 @@ func TestLogicalProjectReadersPostgresHTTP(t *testing.T) {
 	router.Get("/api/documents", service.handleListDocuments)
 	router.Get("/api/issues", service.handleListIssues)
 	router.Post("/api/context/inject", service.handleContextInject)
-	router.Get("/api/context/inject", service.handleContextInject)
+	router.Get("/api/context/inject", service.handleContextInjectGET)
 	router.Post("/api/code/tabs/handshake", adapter.HandleHandshake)
 	router.Post("/api/code/contexts", adapter.HandleContexts)
 	server := httptest.NewServer(router)
