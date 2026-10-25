@@ -1,8 +1,6 @@
 /**
- * Local type definitions matching the real OpenClaw Plugin SDK.
- *
- * These are locally defined since no SDK package is published.
- * Shapes match openclaw/openclaw:src/plugins/types.ts (verified via Nia research).
+ * Local adapter subset of the OpenClaw Plugin SDK.
+ * Runtime compatibility is checked against the official 2026.10.7 fixture.
  */
 
 // ---------------------------------------------------------------------------
@@ -131,7 +129,7 @@ export interface OpenClawPluginToolContext {
 // ---------------------------------------------------------------------------
 
 export type PluginHookName =
-  | 'before_model_resolve' | 'before_prompt_build' | 'before_agent_start'
+  | 'before_model_resolve' | 'before_prompt_build'
   | 'llm_input' | 'llm_output' | 'agent_end'
   | 'before_compaction' | 'after_compaction' | 'before_reset'
   | 'message_received' | 'message_sending' | 'message_sent'
@@ -162,17 +160,9 @@ export interface SessionStartEvent extends BaseHookEvent {
   initialPrompt?: string;
 }
 
-export interface BeforeAgentStartEvent extends BaseHookEvent {
-  initialPrompt?: string;
-}
-
-export interface BeforeAgentStartResult {
-  prependContext?: string;
-  appendSystemContext?: string;
-}
-
 export interface BeforePromptBuildEvent extends BaseHookEvent {
   prompt?: string;
+  currentUserMessage?: string;
   turnIndex?: number;
   /** Session messages prepared for this run (from OpenClaw). */
   messages?: unknown[];
@@ -223,12 +213,11 @@ export interface BeforeToolCallResult {
   appendSystemContext?: string;
 }
 
-export type HookResult = void | PromptBuildResult | SessionStartResult | BeforeAgentStartResult | BeforeToolCallResult | undefined;
+export type HookResult = void | PromptBuildResult | SessionStartResult | BeforeToolCallResult | undefined;
 
 /** Map hook names to their event types (for hooks we use). */
 export interface HookEventMap {
   session_start: SessionStartEvent;
-  before_agent_start: BeforeAgentStartEvent;
   before_prompt_build: BeforePromptBuildEvent;
   before_tool_call: BeforeToolCallEvent;
   after_tool_call: AfterToolCallEvent;

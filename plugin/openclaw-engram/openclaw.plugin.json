@@ -71,23 +71,32 @@
   },
   "hooks": [
     "session_start",
-    "before_agent_start",
     "before_prompt_build",
     "after_tool_call",
     "before_compaction",
     "session_end"
   ],
-  "tools": [
-    "engram_search",
-    "engram_remember",
-    "engram_decisions",
-    "memory_search",
-    "memory_store",
-    "memory_forget",
-    "memory_get",
-    "memory_migrate",
-    "engram_issues"
-  ],
+  "contracts": {
+    "tools": [
+      "engram_search",
+      "memory_search",
+      "engram_remember",
+      "memory_store",
+      "engram_decisions",
+      "memory_forget",
+      "memory_get",
+      "memory_migrate",
+      "engram_rate",
+      "engram_suppress",
+      "engram_outcome",
+      "engram_timeline",
+      "engram_changes",
+      "engram_how_it_works",
+      "engram_vault_store",
+      "engram_vault_get",
+      "engram_issues"
+    ]
+  },
   "commands": [
     "memory",
     "remember",

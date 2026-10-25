@@ -27,7 +27,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { handleSessionStart } from './hooks/session-start.js';
-import { handleBeforeAgentStart } from './hooks/before-agent-start.js';
+import { handleSessionContext } from './hooks/session-context.js';
 import { handleBeforePromptBuild } from './hooks/before-prompt-build.js';
 import { handleAfterToolCall } from './hooks/after-tool-call.js';
 import { handleBeforeCompaction } from './hooks/before-compaction.js';
@@ -78,8 +78,8 @@ const plugin: OpenClawPluginDefinition = {
    handleSessionStart(event, ctx, client, config, api.logger),
   );
 
-  api.on('before_agent_start', (event, ctx: PluginHookContext) =>
-   handleBeforeAgentStart(event, ctx, client, config, api.logger),
+  api.on('before_prompt_build', (event, ctx: PluginHookContext) =>
+   handleSessionContext(event, ctx, client, config, api.logger),
   );
 
   api.on('before_prompt_build', (event, ctx: PluginHookContext) =>
@@ -134,6 +134,9 @@ const plugin: OpenClawPluginDefinition = {
     'memory_forget',
     'memory_get',
     'memory_migrate',
+    'engram_rate', 'engram_suppress', 'engram_outcome', 'engram_timeline',
+    'engram_changes', 'engram_how_it_works',
+    'engram_vault_store', 'engram_vault_get', 'engram_issues',
    ],
   });
 

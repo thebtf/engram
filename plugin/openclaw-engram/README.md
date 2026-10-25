@@ -90,19 +90,53 @@ uses the configured `workspaceDir` or the documented `~/.openclaw/workspace/`
 default. Before importing, it resolves that workspace through the Go client unless
 a valid `project` UUID override is configured.
 
+### OpenClaw 2026.10.7 prompt-hook access
+
+For this non-bundled plugin, automatic prompt enrichment requires an explicit
+host-owned opt-in at `plugins.entries.engram.hooks.allowConversationAccess: true`.
+It is **not** a field under `plugins.entries.engram.config`. For example, merge
+this entry into your existing OpenClaw configuration only if you want to grant it:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "engram": {
+        "hooks": { "allowConversationAccess": true }
+      }
+    }
+  }
+}
+```
+
+The grant lets prompt hooks access the current request and prepared conversation
+history and enrich the model prompt. Engram sends its context query to your
+configured Engram server. Without the grant, OpenClaw blocks these prompt hooks;
+explicit memory tools remain separate. `hooks.allowPromptInjection: false` also
+blocks prompt enrichment. The plugin does not change either host policy.
+
+The compatibility regression exercises the official `openclaw@2026.10.7` manifest
+parser, registrars and hook runner. It is not proof of plugin discovery/trust,
+full configuration validation, or installed store/recall/context delivery.
+
 ## What it provides
 
 ### Hooks
 
-The plugin hooks into the agent lifecycle automatically — no configuration needed:
+Hooks register automatically; prompt enrichment additionally needs the host opt-in above:
 
 | Hook | Effect |
 |---|---|
-| `session_start` | Injects up to `sessionContextLimit` relevant observations into system context |
-| `before_prompt_build` | Injects up to `contextLimit` observations relevant to the current turn |
+| `session_start` | Initializes session tracking; it does not modify prompt context |
+| `before_prompt_build` | Adds bounded session context to system context and query-matched context to the current turn |
 | `after_tool_call` | Forwards tool events to engram for self-learning |
 | `before_compaction` | Backfills conversation transcript into engram before context is compacted |
 | `session_end` | Final transcript backfill when the session closes |
+
+Session context is resolved and fetched for the current workspace on each prompt
+build. No previous project's session context is reused if the workspace binding
+changes or current identity resolution fails. Query-matched context keeps its
+per-turn path; both use bounded, quoted context formatting.
 
 ### Agent tools
 
@@ -156,6 +190,8 @@ This is cosmetic — the plugin loads and works correctly. No action needed.
 2. Check `url` and `token` are set correctly
 3. Increase `logLevel` to `debug` and restart the gateway to see injection details
 4. Confirm `plugins.slots.memory` is set to `engram`
+5. On OpenClaw 2026.10.7, check the host-owned `hooks.allowConversationAccess`
+   grant and ensure `hooks.allowPromptInjection` is not false
 
 **Context injection is slow or times out**
 

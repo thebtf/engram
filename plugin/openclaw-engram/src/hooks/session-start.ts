@@ -1,8 +1,8 @@
 /**
  * session_start hook — initializes the engram session record.
  *
- * Context injection has moved to the before_agent_start hook, which receives
- * full agent identity via ctx. This hook only calls initSession so the server
+ * Context injection runs in before_prompt_build, which receives workspace
+ * identity via ctx. This hook only calls initSession so the server
  * can track the conversation from the beginning.
  */
 

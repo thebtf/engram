@@ -10,7 +10,7 @@ import {
   formatRuleRouter,
   isRouterPayloadEnabled,
 } from '../dist/context/formatter.js';
-import { buildStaticInstructions, handleBeforeAgentStart } from '../dist/hooks/before-agent-start.js';
+import { buildStaticInstructions, handleSessionContext } from '../dist/hooks/session-context.js';
 import { handleBeforePromptBuild } from '../dist/hooks/before-prompt-build.js';
 import { formatFileContext } from '../dist/hooks/before-tool-call.js';
 import { formatDecisions } from '../dist/tools/engram-decisions.js';
@@ -178,7 +178,7 @@ test('before-prompt-build prefers router packets over legacy always-inject wordi
   assert.doesNotMatch(result.prependContext, /legacy always-inject text/);
 });
 
-test('before-agent-start renders router-only context payloads', async () => {
+test('session context renders router-only context payloads', async () => {
   const client = {
     isAvailable: () => true,
     getContextInject: async () => ({
@@ -202,8 +202,8 @@ test('before-agent-start renders router-only context payloads', async () => {
     markInjected: async () => { },
   };
 
-  const result = await handleBeforeAgentStart(
-    { initialPrompt: 'Start the session.' },
+  const result = await handleSessionContext(
+    { prompt: 'Start the session.' },
     {
       agentId: 'agent-test',
       sessionId: 'session-test',
@@ -220,6 +220,29 @@ test('before-agent-start renders router-only context payloads', async () => {
   assert.match(result.appendSystemContext, /<engram-rule-router>/);
   assert.match(result.appendSystemContext, /Keep session-start router packets bounded\./);
   assert.doesNotMatch(result.appendSystemContext, /Always Active/);
+});
+
+test('session context limits observations without changing the response', async () => {
+  const observations = [
+    { id: 301, type: 'decision', title: 'Keep this decision', narrative: 'Bounded session guidance.' },
+    { id: 302, type: 'decision', title: 'Omit this decision', narrative: 'Outside the configured count.' },
+  ];
+  let marked;
+  const result = await handleSessionContext(
+    { prompt: 'Continue safely.' },
+    { agentId: 'bounded-agent', sessionId: 'bounded-session' },
+    {
+      isAvailable: () => true,
+      getContextInject: async () => ({ observations, sessionId: 7 }),
+      markInjected: async (_session, ids) => { marked = ids; },
+      initSession: async () => ({}),
+    },
+    { project: '11111111-1111-4111-8111-111111111111', tokenBudget: 1000, sessionContextLimit: 1 },
+  );
+  assert.match(result.appendSystemContext, /Keep this decision/);
+  assert.doesNotMatch(result.appendSystemContext, /Omit this decision/);
+  assert.deepEqual(marked, [301]);
+  assert.equal(observations.length, 2);
 });
 
 test('before-prompt-build keeps legacy always-inject when search observations are empty', async () => {

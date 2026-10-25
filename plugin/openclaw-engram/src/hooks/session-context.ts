@@ -1,11 +1,4 @@
-/**
- * before_agent_start hook — fetches static session context from engram and
- * injects it as appendSystemContext so it is available for the entire session.
- *
- * This hook replaces the context-injection logic that was previously in
- * session_start. The SDK passes agent identity via ctx (not event), so all
- * identity resolution happens here via the ctx parameter.
- */
+/** Session context for the supported before_prompt_build hook. */
 
 import { resolveProject } from '../client.js';
 import type { EngramRestClient } from '../client.js';
@@ -17,36 +10,36 @@ import {
  quotedPromptScalar,
 } from '../context/formatter.js';
 import type {
- BeforeAgentStartEvent,
- BeforeAgentStartResult,
+ BeforePromptBuildEvent,
+ PromptBuildResult,
  PluginHookContext,
  PluginLogger,
 } from '../types/openclaw.js';
 
 /**
- * Handle the before_agent_start hook.
+ * Fetch static session context for prompt construction.
  *
- * @param event  - The before_agent_start event from OpenClaw.
+ * @param event  - The before_prompt_build event from OpenClaw.
  * @param ctx    - The hook context containing agent identity fields.
  * @param client - Shared engram REST client.
  * @param config - Resolved plugin config.
  * @param logger - Optional logger (falls back to console).
  * @returns      Append-system-context result, or void if nothing to inject.
  */
-export async function handleBeforeAgentStart(
- event: BeforeAgentStartEvent,
+export async function handleSessionContext(
+ event: BeforePromptBuildEvent,
  ctx: PluginHookContext,
  client: EngramRestClient,
  config: PluginConfig,
  logger?: PluginLogger,
-): Promise<BeforeAgentStartResult | void> {
+): Promise<PromptBuildResult | void> {
  try {
   if (!client.isAvailable()) return;
 
   const agentId = ctx.agentId ?? '';
   const registration = await resolveProject(client, agentId, ctx.workspaceDir, config.project);
   if (!registration.ok) {
-   (logger ?? console).warn(`[engram] before-agent-start: project registration failed: ${registration.error.code}`);
+   (logger ?? console).warn(`[engram] session-context: project registration failed: ${registration.error.code}`);
    return;
   }
   const project = registration.canonicalProject;
@@ -59,7 +52,9 @@ export async function handleBeforeAgentStart(
 
   if (!response) return;
 
-  const observations = Array.isArray(response.observations) ? response.observations : [];
+  const observations = Array.isArray(response.observations)
+   ? response.observations.slice(0, config.sessionContextLimit)
+   : [];
   const { context, injectedIds, trimmedCount } = formatContext(
    observations,
    { tokenBudget: config.tokenBudget },
@@ -70,7 +65,7 @@ export async function handleBeforeAgentStart(
 
   if (trimmedCount > 0) {
    (logger ?? console).warn(
-    `[engram] before-agent-start: trimmed ${trimmedCount} observations to fit token budget`,
+    `[engram] session-context: trimmed ${trimmedCount} observations to fit token budget`,
    );
   }
 
@@ -85,18 +80,18 @@ export async function handleBeforeAgentStart(
   const claudeSessionId = ctx.sessionId ?? agentId;
   if (!claudeSessionId) {
    (logger ?? console).warn(
-    '[engram] before-agent-start: no sessionId or agentId available — skipping session init',
+    '[engram] session-context: no sessionId or agentId available — skipping session init',
    );
   } else {
    void client.initSession({
     claudeSessionId,
     project,
-    prompt: event.initialPrompt,
+    prompt: event.currentUserMessage ?? event.prompt,
    });
   }
 
   (logger ?? console).warn(
-   `[engram] before-agent-start: injected ${injectedIds.length} observations for project ${project}`,
+   `[engram] session-context: injected ${injectedIds.length} observations for project ${project}`,
   );
 
   // Build static instructions + dynamic session context
