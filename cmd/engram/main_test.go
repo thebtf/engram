@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -16,6 +17,8 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -1396,5 +1399,352 @@ func TestWaitForMuxcoreDaemonVersionOrExitRetainsExitFenceAfterCurrentDisappears
 	defer cancel()
 	if err := waitForMuxcoreDaemonVersionOrExit(ctx, fixtureProcessExitProof{}); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("vanished current was handed to the unfenced outer loop: %v", err)
+	}
+}
+
+type reviewAdmissionNamespace struct {
+	sync.Mutex
+	owner                                                         muxcoreDaemonStatusIdentity
+	fault                                                         string
+	phase                                                         string
+	fenced, revalidated, acknowledged, predecessorExited, stopped bool
+	restart                                                       func(muxcontrol.GracefulRestartOptions) (string, func(), error)
+}
+
+func (namespace *reviewAdmissionNamespace) HandleStatus() map[string]interface{} {
+	namespace.Lock()
+	defer namespace.Unlock()
+	if namespace.fenced && namespace.owner.DaemonGeneration == "review-owner-B" {
+		namespace.revalidated = true
+	}
+	switch namespace.fault {
+	case "rejected":
+		return map[string]interface{}{"not_json": make(chan struct{})}
+	case "malformed":
+		return map[string]interface{}{"pid": "invalid", "daemon_generation": namespace.owner.DaemonGeneration}
+	}
+	return map[string]interface{}{"pid": namespace.owner.PID, "daemon_generation": namespace.owner.DaemonGeneration, "shutting_down": namespace.owner.ShuttingDown}
+}
+
+func (namespace *reviewAdmissionNamespace) HandleShutdown(int) string {
+	namespace.Lock()
+	namespace.stopped = true
+	namespace.Unlock()
+	return "fixture refuses shutdown"
+}
+
+func (namespace *reviewAdmissionNamespace) HandleGracefulRestartWithOptions(options muxcontrol.GracefulRestartOptions) (string, func(), error) {
+	namespace.Lock()
+	restart := namespace.restart
+	namespace.Unlock()
+	if restart == nil {
+		return "", nil, errors.New("admission fixture restart is not configured")
+	}
+	return restart(options)
+}
+
+func (*reviewAdmissionNamespace) HandleGracefulRestart(int) (string, func(), error) {
+	return "", nil, errors.New("explicit successor required")
+}
+
+func (*reviewAdmissionNamespace) HandleSpawn(muxcontrol.Request) (string, string, string, error) {
+	return "", "", "", errors.New("owner service unavailable in admission fixture")
+}
+
+func (*reviewAdmissionNamespace) HandleRemove(string) error {
+	return errors.New("owner removal forbidden in admission fixture")
+}
+
+func (*reviewAdmissionNamespace) HandleRefreshSessionToken(string) (string, error) {
+	return "", errors.New("sessions unavailable in admission fixture")
+}
+
+func (*reviewAdmissionNamespace) HandleReconnectGiveUp(string) error {
+	return errors.New("sessions unavailable in admission fixture")
+}
+
+func (*reviewAdmissionNamespace) HandleListOwners(muxcontrol.Request) (muxcontrol.ListOwnersResponse, error) {
+	return muxcontrol.ListOwnersResponse{}, errors.New("owner service unavailable in admission fixture")
+}
+
+type reviewAdmissionExitProof struct{ namespace *reviewAdmissionNamespace }
+
+func (proof reviewAdmissionExitProof) Exited() (bool, error) {
+	proof.namespace.Lock()
+	defer proof.namespace.Unlock()
+	return proof.namespace.predecessorExited, nil
+}
+func (reviewAdmissionExitProof) Close() error { return nil }
+
+func startReviewAdmissionNamespace(t *testing.T, namespace *reviewAdmissionNamespace) (string, func()) {
+	t.Helper()
+	directory, err := os.MkdirTemp("", "rr-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(directory); err != nil {
+			t.Error(err)
+		}
+	})
+	oldNamespace := muxcoreNamespace
+	muxcoreNamespace = "review-admission"
+	t.Cleanup(func() { muxcoreNamespace = oldNamespace })
+	for _, key := range []string{"TEMP", "TMP", "TMPDIR"} {
+		t.Setenv(key, directory)
+	}
+	control := serverid.DaemonControlPath("", muxcoreNamespace)
+	server, err := muxcontrol.NewServer(control, namespace, log.New(os.Stderr, "review-admission: ", log.LstdFlags))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.Start()
+	var once sync.Once
+	stop := func() {
+		once.Do(func() {
+			server.Close()
+			if _, err := muxcontrol.SendWithTimeout(control, muxcontrol.Request{Cmd: "ping"}, 100*time.Millisecond); err == nil {
+				t.Error("review fixture control remained reachable after closure")
+			}
+			t.Logf("REVIEW_NAMESPACE_CLOSED: %s", control)
+		})
+	}
+	t.Cleanup(stop)
+	return control, stop
+}
+
+func writeReviewAdmissionMarker(path, executable string, owner muxcoreDaemonStatusIdentity, product string, epoch int) error {
+	raw, err := json.Marshal(muxcoreDaemonVersionMarker{SchemaVersion: 2, ProductVersion: product, DaemonCompatEpoch: epoch, PID: owner.PID, DaemonGeneration: owner.DaemonGeneration, Exe: executable})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, raw, 0o600)
+}
+
+func TestReconcileMuxcoreDaemonVersionExitProofCapabilityIsSupplemental(t *testing.T) {
+	for _, missing := range []bool{false, true} {
+		name := "verified-current"
+		if missing {
+			name = "no-proof-missing-successor-refused"
+		}
+		t.Run(name, func(t *testing.T) {
+			lower := muxcoreDaemonStatusIdentity{PID: os.Getpid(), DaemonGeneration: "review-owner-A"}
+			current := muxcoreDaemonStatusIdentity{PID: os.Getpid(), DaemonGeneration: "review-current"}
+			namespace := &reviewAdmissionNamespace{owner: lower}
+			control, stop := startReviewAdmissionNamespace(t, namespace)
+			executable, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			marker := control + ".marker.json"
+			if err := writeReviewAdmissionMarker(marker, executable, lower, "v7.0.3", muxcoreDaemonCompatEpoch); err != nil {
+				t.Fatal(err)
+			}
+			ack := make(chan struct{})
+			namespace.Lock()
+			namespace.restart = func(options muxcontrol.GracefulRestartOptions) (string, func(), error) {
+				if options.SuccessorExe != executable {
+					return "", nil, errors.New("unexpected successor executable")
+				}
+				namespace.Lock()
+				if missing {
+					namespace.owner = muxcoreDaemonStatusIdentity{}
+				} else {
+					namespace.owner = current
+				}
+				namespace.Unlock()
+				if !missing {
+					if err := writeReviewAdmissionMarker(marker, executable, current, daemonVersion, muxcoreDaemonCompatEpoch); err != nil {
+						return "", nil, err
+					}
+				}
+				return "", func() {
+					close(ack)
+					if missing {
+						go stop()
+					}
+				}, nil
+			}
+			namespace.Unlock()
+			oldOpen, oldAction, oldLock, oldExecutable := openMuxcorePredecessorProcess, readLiveMuxcoreDaemonAction, acquireRestartLock, currentExecutable
+			t.Cleanup(func() {
+				openMuxcorePredecessorProcess, readLiveMuxcoreDaemonAction, acquireRestartLock, currentExecutable = oldOpen, oldAction, oldLock, oldExecutable
+			})
+			openMuxcorePredecessorProcess = func(int) (muxcoreProcessExitProof, error) { return nil, syscall.ENOSYS }
+			readLiveMuxcoreDaemonAction = func(status muxcoreDaemonStatusIdentity, client daemonConvergenceIdentity) (daemonConvergenceAction, error) {
+				return muxcoreDaemonConvergenceAction(marker, status, client)
+			}
+			acquireRestartLock = func() (io.Closer, error) { return closerFunc(func() error { return nil }), nil }
+			currentExecutable = func() (string, error) { return executable, nil }
+			ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+			defer cancel()
+			admission := reconcileMuxcoreDaemonVersion(ctx)
+			if missing {
+				if admission == nil {
+					t.Fatal("NO_EXIT_PROOF_UNSAFE_HANDOFF: unavailable proof admitted a missing successor")
+				}
+				select {
+				case <-ack:
+					stop()
+					t.Log("NO_EXIT_PROOF_COLDSTART_REFUSED: after real ACK, no supplemental proof authorized cold start")
+				default:
+					t.Log("NO_EXIT_PROOF_EARLY_REFUSAL: baseline blocked before ACK; not post-ACK negative coverage yet")
+				}
+				return
+			}
+			if admission != nil {
+				t.Fatalf("EXIT_PROOF_CAPABILITY_RED: unavailable supplemental exit proof blocked ordinary strict restart/current admission: %v", admission)
+			}
+			select {
+			case <-ack:
+			case <-time.After(time.Second):
+				t.Fatal("successful admission had no real restart ACK")
+			}
+			live, found := muxcoreDaemonStatus(control)
+			client, err := clientDaemonIdentity()
+			if err != nil {
+				t.Fatal(err)
+			}
+			action, actionErr := muxcoreDaemonConvergenceAction(marker, live, client)
+			if !found || live != current || actionErr != nil || action != daemonConvergenceJoin {
+				t.Fatalf("admission was not authenticated current: live=%+v action=%v error=%v", live, action, actionErr)
+			}
+			t.Log("OPTIONAL_EXIT_PROOF_CURRENT: real ACK and authenticated current generation admitted")
+		})
+	}
+}
+
+func TestReconcileMuxcoreDaemonVersionPostAckReentryRetainsNamespaceAdmission(t *testing.T) {
+	for _, test := range []struct {
+		point, fault string
+		incompatible bool
+	}{
+		{"loop", "transport", false},
+		{"loop", "rejected", true},
+		{"loop", "malformed", false},
+		{"post-lock", "transport", false},
+		{"post-lock", "rejected", false},
+		{"post-lock", "malformed", false},
+	} {
+		t.Run(test.point+"/"+test.fault, func(t *testing.T) {
+			ownerA := muxcoreDaemonStatusIdentity{PID: os.Getpid(), DaemonGeneration: "review-owner-A"}
+			ownerB := muxcoreDaemonStatusIdentity{PID: os.Getpid(), DaemonGeneration: "review-owner-B"}
+			namespace := &reviewAdmissionNamespace{owner: ownerA, phase: "initial"}
+			control, _ := startReviewAdmissionNamespace(t, namespace)
+			executable, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			marker := control + ".marker.json"
+			if err := writeReviewAdmissionMarker(marker, executable, ownerA, "v7.0.3", muxcoreDaemonCompatEpoch); err != nil {
+				t.Fatal(err)
+			}
+			namespace.Lock()
+			namespace.restart = func(options muxcontrol.GracefulRestartOptions) (string, func(), error) {
+				namespace.Lock()
+				if namespace.owner != ownerA {
+					namespace.Unlock()
+					return "", nil, errors.New("live B refuses replacement; owner remains bound")
+				}
+				if options.SuccessorExe != executable {
+					namespace.Unlock()
+					return "", nil, errors.New("unexpected successor executable")
+				}
+				namespace.owner = muxcoreDaemonStatusIdentity{}
+				namespace.Unlock()
+				return "", func() {
+					namespace.Lock()
+					namespace.acknowledged, namespace.predecessorExited, namespace.phase = true, true, "acked"
+					namespace.Unlock()
+				}, nil
+			}
+			namespace.Unlock()
+			oldOpen, oldAction, oldLock, oldExecutable, oldStatus := openMuxcorePredecessorProcess, readLiveMuxcoreDaemonAction, acquireRestartLock, currentExecutable, readMuxcoreDaemonStatusIdentity
+			t.Cleanup(func() {
+				openMuxcorePredecessorProcess, readLiveMuxcoreDaemonAction, acquireRestartLock, currentExecutable, readMuxcoreDaemonStatusIdentity = oldOpen, oldAction, oldLock, oldExecutable, oldStatus
+			})
+			openMuxcorePredecessorProcess = func(int) (muxcoreProcessExitProof, error) { return reviewAdmissionExitProof{namespace}, nil }
+			readLiveMuxcoreDaemonAction = func(status muxcoreDaemonStatusIdentity, client daemonConvergenceIdentity) (daemonConvergenceAction, error) {
+				return muxcoreDaemonConvergenceAction(marker, status, client)
+			}
+			currentExecutable = func() (string, error) { return executable, nil }
+			acquireRestartLock = func() (io.Closer, error) {
+				namespace.Lock()
+				namespace.fenced = true
+				if namespace.phase == "acked" {
+					namespace.owner, namespace.phase = ownerB, "B-fenced"
+					epoch := muxcoreDaemonCompatEpoch
+					if test.incompatible {
+						epoch++
+					}
+					if err := writeReviewAdmissionMarker(marker, executable, ownerB, "v7.0.3", epoch); err != nil {
+						namespace.Unlock()
+						return nil, err
+					}
+				} else if namespace.phase == "retry" {
+					namespace.phase = "B-post-lock"
+				}
+				namespace.Unlock()
+				return closerFunc(func() error {
+					namespace.Lock()
+					defer namespace.Unlock()
+					namespace.fenced = false
+					if namespace.phase == "B-fenced" && namespace.revalidated {
+						namespace.phase = "retry"
+					}
+					return nil
+				}), nil
+			}
+			faultInjected := false
+			readMuxcoreDaemonStatusIdentity = func(string) (muxcoreDaemonStatusIdentity, bool) {
+				namespace.Lock()
+				inject := !faultInjected && ((test.point == "loop" && namespace.phase == "retry") || (test.point == "post-lock" && namespace.phase == "B-post-lock"))
+				if inject {
+					faultInjected = true
+					namespace.phase, namespace.fault = "faulted", test.fault
+				}
+				namespace.Unlock()
+				target := control
+				if inject && test.fault == "transport" {
+					target += ".unreachable"
+				}
+				status, found := muxcoreDaemonStatus(target)
+				if inject {
+					namespace.Lock()
+					namespace.fault = ""
+					namespace.Unlock()
+					if found {
+						t.Fatal("fault fixture returned a valid status")
+					}
+				}
+				return status, found
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			admission := reconcileMuxcoreDaemonVersion(ctx)
+			namespace.Lock()
+			acked, revalidated, stopped := namespace.acknowledged, namespace.revalidated, namespace.stopped
+			namespace.Unlock()
+			if !acked || !revalidated || !faultInjected {
+				t.Fatalf("fixture did not reach the outer post-ACK fault: ack=%v boundB=%v fault=%v result=%v", acked, revalidated, faultInjected, admission)
+			}
+			ping, err := muxcontrol.SendWithTimeout(control, muxcontrol.Request{Cmd: "ping"}, time.Second)
+			live, found := muxcoreDaemonStatus(control)
+			if err != nil || ping == nil || !ping.OK || !found || live != ownerB || stopped {
+				t.Fatalf("live other owner was not preserved: live=%+v ping=%+v error=%v stopped=%v", live, ping, err, stopped)
+			}
+			client, err := clientDaemonIdentity()
+			if err != nil {
+				t.Fatal(err)
+			}
+			action, actionErr := muxcoreDaemonConvergenceAction(marker, live, client)
+			if action == daemonConvergenceJoin && actionErr == nil {
+				t.Fatal("fixture B unexpectedly became compatible current")
+			}
+			if admission == nil {
+				t.Fatalf("POST_ACK_REENTRY_ADMISSION_RED: %s status %s yielded engine handback while peer-bound B remained live and non-current: owner=%+v action=%v error=%v", test.point, test.fault, live, action, actionErr)
+			}
+			t.Logf("POST_ACK_OWNER_PRESERVED: %s/%s rejected unverified handback: %v", test.point, test.fault, admission)
+		})
 	}
 }
