@@ -25,6 +25,9 @@ func openProcessExitProof(pid int) (muxcoreProcessExitProof, error) {
 
 func (process *linuxProcessExitProof) Exited() (bool, error) {
 	n, err := unix.Poll(process.poll[:], 0)
+	if err == unix.EINTR {
+		return false, nil
+	}
 	if err != nil || n == 0 {
 		return false, err
 	}
