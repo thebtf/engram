@@ -69,7 +69,7 @@ role/zoom, material-cycle and installed-delivery acceptance remain separate.
 
 Установка, обновление и сохранность client-data/Vault описаны в
 [operating guide](../../docs/operating-engram.md#версия-установка-и-обновление).
-Manifest `7.0.1` в этом source-выпуске
+Версия manifest в этом source-кандидате (см. operating guide)
 не доказывает публикацию или установленную версию. Не меняй сервер, auth mode,
 профиль, `.engram-project` или Vault key ради успешного входа.
 

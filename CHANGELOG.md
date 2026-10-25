@@ -7,14 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Parse Git untracked directory records in both status and candidate censuses before applying existing nested-repository and reparse exclusions; retain strict file-path validation and avoid reading nested repository contents.
-
-- Initialize the shared Vault before publishing reader readiness even when CodeIntel is disabled; reuse the same singleton for optional UCI and fail startup on an invalid required Vault key instead of serving catalog/history discovery as unavailable.
-
-- Add explicit bounded retained-record discovery on `/api/projects` for historical memories, document versions and issues without changing the full no-view catalog. Verify unresolved witnesses through the shared fail-closed validator, preserve native payloads/privacy and role provenance, and seal consumed-prefix continuations with retained-specific Vault AES-GCM bound to the effective caller and normalized query. Keep valid witnesses across the 200-work boundary, exact selected native-ID body/history reads, full document version history and safe private/no-store failures. No stored ownership rewrite, schema/index change or installed-consumer acceptance is implied.
-- Add explicit saved historical memory/document/issue discovery to the existing unresolved page, using the separate native record projection and exact historical reader/history binding. Keep literal search/work-cursor/results on return; continue empty or short work pages without inventing totals. Preserve both catalog parsers' family occurrence/support metadata, metadata-only groups and separate group/code/Vault readers; disclose provenance and place object/history/return actions before full text. This is source behavior, not live-corpus or installed acceptance.
-
-
 - Regenerate the API through the maintained worker target using canonical local Go package directories and Swag 1.16.6, with real producer errors stopping the build. Correct existing context search/inject/session-start annotations without changing handlers; document the shared GET/POST conditional-query limitation. The actual producer and server build pass, with 40 named schema checks and all 76 references resolved; that producer checkpoint established compile-only retained-reader oracle provenance, with later native query proof recorded separately, and installed/release acceptance remains separate.
 
 - Add retained catalog `families` metadata with kind, technical table, saved membership-occurrence count and declared/separate/metadata-only reader boundary. Preserve every group, opaque reference, safe label and reason without payload previews, readable-record totals, availability or historical ownership assignment. This descriptor change does not provide cross-group record discovery or installed-consumer acceptance.
@@ -51,6 +43,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Isolate canonical GORM/gRPC fixtures, bound their pools and await caller-owned audit writes before schema cleanup; retain restore guards and public data. Reuse focused retention/audit/gRPC proofs; the earlier 37-PASS run remains preservation FAIL (audit rows 37→40), followed by seven focused PASS with 40→40 preservation. Canonical continuity fixtures now migrate once per isolated parent (17→6), preserving every assertion and the unchanged 12m budget; reuse 22 focused lifecycle PASS plus three hash-bound slot CRUD/migration PASS from the earlier incomplete timeout run, not a full-suite or installed-acceptance claim.
 - Use registered canonical UUIDs and authenticated caller project context in MCP fixtures without weakening default-deny, privacy or pre-mutation rejection guards. Reuse 119 prior PASS plus one exact retry PASS after the context fix, not 120 fresh PASS or installed acceptance.
 - Seed the isolated operator-code fixture with a registered canonical project UUID while preserving five queue candidates, published/no-view checks and redacted provisioning errors.
+
+## [7.0.6] - 2026-10-25
+
+Prepare one corrective slice over released 7.0.5: retained-record discovery, independent Vault startup, and Git directory indexing. Canonical project consolidation remains OPEN; this slice performs no stored ownership rewrite, schema/index migration, consolidation cutover or consumer-host update. Focused source/runtime evidence is not ordinary retained-corpus or installed acceptance.
+
+### Fixed
+
+- Add explicit bounded historical memory/document/issue discovery to `/api/projects` and the existing unresolved page. Preserve fail-closed membership/privacy checks, native IDs and payloads, role provenance, document version history, caller/query-bound Vault continuations and the 200-work boundary. Keep metadata-only families separate, preserve literal search/cursor/results on return, and offer exact body/history/Back without invented totals or group fan-out.
+- Initialize the shared Vault before publishing reader readiness even when CodeIntel is disabled; reuse the singleton for optional UCI and fail startup on an invalid required Vault key rather than advertising unavailable catalog/history discovery.
+- Parse Git untracked directory records in both status and candidate censuses before applying existing nested-repository and reparse exclusions. Keep strict file-path validation and do not read nested repository contents.
+
+### Changed
+
+- Align maintained server/daemon, Claude/Codex/OMP package/marketplace and OpenClaw package/descriptor/runtime versions on 7.0.6. The committed 7.0.5 bootstrap/parser policies remain unchanged until canonical producer regeneration; their historical hashes do not prove 7.0.6 artifacts. Publication, applicable release gates and ordinary installed acceptance remain separate. Ordinary installed OpenClaw is NOT_PROVEN; no OpenClaw host upgrade is included.
 
 ## [7.0.5] - 2026-10-25
 
@@ -2380,7 +2386,9 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v7.0.4...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v7.0.6...HEAD
+[7.0.6]: https://github.com/thebtf/engram/compare/v7.0.5...v7.0.6
+[7.0.5]: https://github.com/thebtf/engram/compare/v7.0.4...v7.0.5
 [7.0.4]: https://github.com/thebtf/engram/compare/v7.0.3...v7.0.4
 [7.0.3]: https://github.com/thebtf/engram/compare/v7.0.2...v7.0.3
 [7.0.2]: https://github.com/thebtf/engram/compare/v7.0.1...v7.0.2

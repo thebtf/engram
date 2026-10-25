@@ -7,12 +7,22 @@ server configuration, retained readers, Code Workspace, and restart procedures.
 
 ## Версия, установка и обновление
 
-Для этого source-выпуска серверный daemon и plugin/client/parser manifests
-объявляют `7.0.1`.
-Это версия исходников, а не доказательство опубликованного релиза, обновлённого
-каталога marketplace или установленного комплекта. Установленные версии и байты
-проверяются отдельно. Локальная synthetic/no-auth проверка не подтверждает
-production, principal, обычную свежую сессию или установку.
+Этот кандидат готовит `7.0.6`: поиск сохранённых исторических записей,
+независимый запуск Vault и исправление индексации Git directory records.
+Серверный daemon, package/marketplace manifests и OpenClaw runtime metadata
+объявляют `7.0.6`. Generated bootstrap/parser policies пока сохраняют `7.0.5`;
+до выпуска их должен пересоздать канонический producer по
+[release-протоколу](RELEASE-PROTOCOL.md). Это не готовый комплект для установки.
+
+По сохранённой приёмке от 2026-10-25 опубликован `7.0.5`; установленный сервер
+и обычные клиентские чтения приняты только для исправления запуска/context admission.
+Это не подтверждает поиск исторических записей из нового кандидата, полный
+Workspace/search/graph/two-worktree путь или версию загруженного OMP extension.
+Консолидация канонических проектов остаётся OPEN; этот выпуск её не выполняет.
+Последняя отдельно подтверждённая npm-версия плагина openclaw-engram — `7.0.4`;
+обычный установленный OpenClaw runtime остаётся NOT_PROVEN. Обновление host не входит в scope.
+Версии исходников и локальная synthetic/no-auth проверка не подтверждают
+публикацию `7.0.6`, marketplace, production, principal или свежую установленную сессию.
 
 R1 — обычный установленный агент и WebUI выбирают один логический проект,
 находят и открывают существующее полезное решение с источником, историей и
@@ -735,7 +745,7 @@ Repeat all 10 checks with `ENGRAM_GRAPH_ENABLED=true` and `ENGRAM_BOOKS_ENABLED=
 
 The linked DA03 source receipt records **NOT_PROVEN** for full source acceptance because its bookmark browser test selectors failed. Repeat the two bookmark checks with scoped selectors on the exact installed UI; do not convert its HTTP/MCP fixture results into a release PASS.
 
-The Windows amd64 (`win32-x64`) parser has been built and smoke-tested as a source candidate, but its release asset is not published and the ordinary installed Windows parser is not yet certified. Linux amd64 and macOS arm64 have no parser targets in the generated package policy, even though launcher clients exist for those platforms; do not infer JS, TS, or TSX facts or graph coverage from a source build. On Windows, Go and structured text remain in the first scope; JS, TS, and TSX require a published parser bundle installed by the supported plugin path. At release, check the published asset against the `win32-x64` `asset`, `size`, and executable `sha256` in the matching package's generated `plugin/engram/parser-targets.json`, then check the installed parser's `--bundle-digest` output and daemon diagnostics for the separate compatible bundle digest. A candidate policy entry alone is not installation evidence. Full C#, Python, Vue SFC, communities, and the old manual graph or Book workflows are not promised. The source evidence manifest `tools/uci-parser/manifest.json` still marks Windows and Linux amd64 `not_claimed` and `not_reverified` for the v2 facts contract, with macOS targets blocked; do not turn candidate smoke evidence into a manifest or installed-release PASS.
+The Windows amd64 (`win32-x64`) parser is published in [v7.0.5](https://github.com/thebtf/engram/releases/tag/v7.0.5): the retained release readback matches the package policy's raw asset, 7,946,240 bytes and SHA-256 `114ae44ea81c20d4ce4452b12331abe2b2094bae4cb4cb49aeae43bac03209ad`. This proves publication, not an ordinary installed Windows parser or JS/TS/TSX search/graph journey. The 7.0.6 candidate still carries that 7.0.5 policy pending canonical regeneration; do not relabel historical bytes as successor proof. Linux amd64 and macOS arm64 have no parser targets in this generated policy, although launcher clients exist. At release, compare the published asset with the matching package's generated `plugin/engram/parser-targets.json` (`asset`, `size`, executable `sha256`); separately verify the installed parser's `--bundle-digest`, daemon diagnostics and actual language behavior. The source manifest `tools/uci-parser/manifest.json` describes facts/v9 over the v2 parser protocol; its platform evidence remains `not_claimed` / `not_reverified`, with macOS blocked. Neither that historical manifest nor package publication certifies installed platform coverage. Full C#, Python, Vue SFC, communities, and the old manual graph or Book workflows are not promised.
 
 ### Diagnose by symptom
 
