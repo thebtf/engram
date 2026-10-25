@@ -166,7 +166,7 @@ export function useOperatorUnresolved(catalog: { unresolved: Ref<OperatorUnresol
   const recordsError = ref<OperatorSourceError | null>(null)
   let recordsGeneration = 0
   let recordsRequest: AbortController | undefined
-  watch(() => [route.query.view, route.query.attribution_scope, route.query.kind, route.query.q, route.query.limit, route.query.cursor, retryRevision.value], async () => {
+  watch([() => route.query.view, () => route.query.attribution_scope, () => route.query.kind, () => route.query.q, () => route.query.limit, () => route.query.cursor, retryRevision], async () => {
     const generation = ++recordsGeneration
     recordsRequest?.abort()
     recordsRequest = new AbortController()

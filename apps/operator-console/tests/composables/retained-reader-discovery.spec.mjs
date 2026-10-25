@@ -438,43 +438,139 @@ test('historical records C1: empty and short cursor pages stay actionable until 
   assertReadOnly(state)
 })
 
-test('historical records C1: issued document identity, path versions and current search survive reader history and return', async t => {
+test('historical records C1: issued document body, history and original results survive navigation without rediscovery', async t => {
   const reference = opaque(90000), foreign = opaque(90001)
   const records = [savedRecord('document', 902), savedRecord('document', 901), savedRecord('document', 903, foreign)]
+  let queries = 0
   const state = await mount(t, {
     location: discoveryLocation('document', { cursor: 'current-work' }),
     catalogResponse: { items: catalog.items, unresolved: [reference, foreign].map(reference => ({ reference, name: 'Synthetic document group', reason: 'unproven', reader_kinds: ['document'] })) },
     respond: url => {
-      if (url.pathname === '/api/projects' && url.searchParams.has('view')) return Response.json(savedPage('document', records, 'later-work'))
+      if (url.pathname === '/api/projects' && url.searchParams.has('view')) return ++queries === 1
+        ? Response.json(savedPage('document', records, 'later-work'))
+        : Response.json({ error: 'Discovery unavailable after issuing results' }, { status: 503 })
       if (!url.pathname.startsWith('/api/projects/unresolved/')) return
       const requested = decodeURIComponent(url.pathname.split('/')[4])
       assert.equal(requested, reference, 'Opening version 1 must not select another group with the same path')
       assert.equal(url.searchParams.get('kind'), 'document')
       assert.equal(url.searchParams.get('id'), '901')
       assert.equal(url.searchParams.get('attribution_scope'), historicalScope)
-      assert.ok(!url.searchParams.has('q') && !url.searchParams.has('cursor'), 'Discovery search/work cursor must not leak into exact readers')
-      return Response.json({ reference, kind: 'document', attribution_scope: historicalScope, ...(url.pathname.endsWith('/history') ? { id: 901, items: records.slice(0, 2).map(row => row.record) } : { items: [records[1].record] }), next_cursor: null })
+      assert.ok(!url.searchParams.has('q'), 'Discovery search must not leak into exact readers')
+      if (url.pathname.endsWith('/history')) {
+        const cursor = url.searchParams.get('cursor')
+        assert.ok(cursor === null || cursor === 'history-next', 'Only the history continuation belongs in history requests')
+        return Response.json({ reference, kind: 'document', attribution_scope: historicalScope, id: 901, items: (cursor ? records.slice(1, 2) : records.slice(0, 2)).map(row => row.record), next_cursor: cursor ? null : 'history-next' })
+      }
+      assert.ok(!url.searchParams.has('cursor'), 'Discovery work cursor must not leak into exact body reads')
+      return Response.json({ reference, kind: 'document', attribution_scope: historicalScope, items: [records[1].record], next_cursor: null })
     },
   })
   assertDiscoveryRequest(discoveryCalls(state)[0], 'document', 'current-work')
+  const original = state.reader.records.value
+  const assertResults = () => {
+    assert.equal(state.reader.records.value, original, 'Keep the original issued page, not a successful rediscovery echo')
+    assert.equal(state.reader.records.value.nextCursor, 'later-work')
+    assert.equal(state.reader.recordsError.value, null)
+    assert.equal(state.router.currentRoute.value.query.q, literalQuery)
+    assert.equal(state.router.currentRoute.value.query.cursor, 'current-work')
+    assert.equal(discoveryCalls(state).length, 1, 'Detail/history/return-only navigation must not rediscover')
+  }
+  const read = async () => {
+    const result = walk(state.host).find(row => row.tag === 'article' && text(row).includes('Saved document 901'))
+    const open = result && walk(result).find(row => row.tag === 'button' || row.tag === 'a')
+    assert.ok(open, 'An issued result must expose an actual reader/history action')
+    await click(open)
+    t.diagnostic(`issued read: discoveryRequests=${discoveryCalls(state).length}; discoveryStatus=${state.reader.recordsError.value?.status ?? 'ok'}; selected=${state.reader.selected.value?.id ?? 'none'}; history=${state.reader.history.value?.items.map(row => row.id).join(',') ?? 'none'}`)
+    assert.equal(state.reader.selected.value?.id, '901', 'The issued exact body stays readable even if discovery would fail')
+    assert.equal(state.reader.selected.value?.content, 'Saved document 901')
+    assert.ok(text(article(state.host)).includes('Saved document 901'))
+    assert.equal(state.reader.history.value?.reference, reference)
+    assert.deepEqual(state.reader.history.value?.items.map(row => row.id), ['902', '901'])
+    assert.ok(!text(byTestID(state.host, 'unresolved-history')).includes('Saved document 903'))
+    assertResults()
+  }
   for (const row of records) assert.ok(text(state.host).includes(row.record.content), 'Same-path versions and foreign-group rows must not be deduplicated by path')
-  const result = walk(state.host).find(row => row.tag === 'article' && text(row).includes('Saved document 901'))
-  const open = result && walk(result).find(row => row.tag === 'button' || row.tag === 'a')
-  assert.ok(open, 'An issued result must expose an actual reader/history action')
-  await click(open)
+  await read()
   assert.equal(state.router.currentRoute.value.query.reference, reference)
   assert.equal(state.router.currentRoute.value.query.id, '901')
-  assert.equal(state.reader.selected.value?.id, '901')
-  assert.equal(state.reader.history.value?.reference, reference)
+  await click(moreButton(byTestID(state.host, 'unresolved-history')))
+  assert.equal(state.router.currentRoute.value.query.historyCursor, 'history-next')
+  assert.deepEqual(state.reader.history.value?.items.map(row => row.id), ['901'])
+  assert.ok(text(byTestID(state.host, 'unresolved-history')).includes('Saved document 901'))
+  assert.equal(state.reader.selected.value?.content, 'Saved document 901')
+  assertResults()
+  state.router.back(); await tick()
+  assert.equal(state.router.currentRoute.value.query.historyCursor, undefined)
   assert.deepEqual(state.reader.history.value?.items.map(row => row.id), ['902', '901'])
-  assert.ok(!text(byTestID(state.host, 'unresolved-history')).includes('Saved document 903'))
-  assert.ok(readerCalls(state.calls).some(call => call.url.pathname.endsWith('/content')))
-  assert.ok(readerCalls(state.calls).some(call => call.url.pathname.endsWith('/history')))
+  assert.equal(state.reader.selected.value?.id, '901')
+  assertResults()
   state.router.back(); await tick()
   assert.deepEqual(state.router.currentRoute.value.query, discoveryLocation('document', { cursor: 'current-work' }).query)
   for (const row of records) assert.ok(text(state.host).includes(row.record.content))
+  assertResults()
+  await read()
+  await click(walk(state.host).find(row => row.tag === 'button' && text(row).trim() === locale.projectCatalog.returnResults))
+  assert.deepEqual(state.router.currentRoute.value.query, discoveryLocation('document', { cursor: 'current-work' }).query)
+  for (const row of records) assert.ok(text(state.host).includes(row.record.content))
+  assertResults()
+  state.reader.retry(); await tick()
+  assert.equal(discoveryCalls(state).length, 2, 'Explicit retry must still perform discovery and expose its genuine failure')
+  assert.equal(state.reader.recordsError.value?.status, 503)
+  assert.equal(state.reader.records.value, null)
   assertReadOnly(state)
 })
+
+test('historical records C1: discovery selectors and retry still refresh while aborted late pages cannot replace current results', async t => {
+  let release, slowSignal
+  const delayed = new Promise(resolve => { release = resolve })
+  t.after(() => release())
+  const stale = savedRecord('document', 901), current = savedRecord('document', 902), memory = savedRecord('memory', 903)
+  const state = await mount(t, {
+    location: discoveryLocation('document'), catalogResponse: { items: catalog.items, unresolved: [] },
+    respond: async (url, init) => {
+      if (url.pathname !== '/api/projects' || !url.searchParams.has('view')) return
+      if (url.searchParams.get('q') === 'slow-query') {
+        slowSignal = init.signal
+        await delayed
+        return Response.json(savedPage('document', [stale]))
+      }
+      return Response.json(url.searchParams.get('kind') === 'memory' ? savedPage('memory', [memory]) : savedPage('document', [current]))
+    },
+  })
+  const update = async query => {
+    const before = discoveryCalls(state).length
+    await state.reader.update(query); await tick()
+    assert.equal(discoveryCalls(state).length, before + 1, 'Each genuine discovery selector change must issue a fresh request')
+  }
+  await update({ q: 'slow-query' })
+  assert.equal(state.reader.recordsPending.value, true)
+  await update({ q: 'current-query' })
+  assert.equal(slowSignal.aborted, true, 'A new discovery query must abort its predecessor')
+  assert.equal(state.reader.records.value.items[0].content, 'Saved document 902')
+  release(); await tick()
+  assert.equal(state.reader.records.value.items[0].content, 'Saved document 902', 'An aborted late discovery response must not overwrite newer results')
+  await update({ kind: 'memory' })
+  assert.ok(text(state.host).includes('Saved memory 903'))
+  await update({ cursor: 'real-work-cursor' })
+  assert.equal(discoveryCalls(state).at(-1).url.searchParams.get('cursor'), 'real-work-cursor')
+  await update({ limit: '5' })
+  assert.equal(discoveryCalls(state).at(-1).url.searchParams.get('limit'), '5')
+  for (const query of [{ attribution_scope: 'canonical' }, { view: 'catalog' }]) {
+    const before = discoveryCalls(state).length
+    await state.reader.update(query); await tick()
+    assert.equal(discoveryCalls(state).length, before, 'An invalid discovery scope/view must fail before transport')
+    assert.equal(state.reader.records.value, null)
+    assert.equal(state.reader.recordsError.value?.category, 'invalid-response')
+    await update({ attribution_scope: historicalScope, view: 'retained_records' })
+    assert.ok(text(state.host).includes('Saved memory 903'))
+  }
+  const before = discoveryCalls(state).length
+  state.reader.retry(); await tick()
+  assert.equal(discoveryCalls(state).length, before + 1)
+  assert.ok(text(state.host).includes('Saved memory 903'))
+  assertReadOnly(state)
+})
+
 
 for (const refusal of [401, 403, 404, 503, 'foreign']) test(`historical records C1: ${refusal} clears an already open historical issue without widening`, async t => {
   const reference = opaque(90000)
