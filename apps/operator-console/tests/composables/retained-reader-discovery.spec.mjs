@@ -48,7 +48,7 @@ function payload(reference, kind) {
         : { id: 901, content: 'Memory retained body', source_project: 'historical-owner-not-canonical-id' }
   return { reference, ...(kind === 'code' ? {} : { kind }), items: [item], total: 1, next_cursor: null }
 }
-async function mount(t, { location = '/projects/unresolved', catalogResponse = catalog, catalogStatus = 200, contentStatus = 200, emptyContent = false, language = 'en' } = {}) {
+async function mount(t, { location = '/projects/unresolved', catalogResponse = catalog, catalogStatus = 200, contentStatus = 200, emptyContent = false, language = 'en', respond } = {}) {
   const calls = [], errors = [], modules = new Map(), storage = new Map()
   let context, reader
   const globals = {
@@ -56,6 +56,10 @@ async function mount(t, { location = '/projects/unresolved', catalogResponse = c
     fetch: async (path, init) => {
       const url = new URL(path, 'http://synthetic.invalid')
       calls.push({ url, method: init.method || 'GET', credentials: init.credentials, headers: init.headers })
+      if (respond) {
+        const response = await respond(url, init)
+        if (response !== undefined) return response
+      }
       if (url.pathname === '/api/projects') return Response.json(catalogResponse, { status: catalogStatus })
       if (url.pathname.startsWith('/api/projects/unresolved/')) {
         const reference = decodeURIComponent(url.pathname.split('/')[4])
@@ -97,7 +101,7 @@ async function mount(t, { location = '/projects/unresolved', catalogResponse = c
   await tick()
   assert.deepEqual(errors, [], 'Real compiled page, composables and transport must mount without harness errors')
   assert.equal(context.pending.value, false)
-  return { host, router, context, reader, calls, errors, api: load('useOperatorApi') }
+  return { host, router, context, reader, calls, errors, api: load('useOperatorApi'), load }
 }
 function groupLinks(host) { return walk(host).filter(row => row.tag === 'a' && row.props.href && new URL(row.props.href, 'http://synthetic.invalid').pathname === '/projects/unresolved' && new URL(row.props.href, 'http://synthetic.invalid').searchParams.has('reference')) }
 const referenceOf = link => new URL(link.props.href, 'http://synthetic.invalid').searchParams.get('reference')
@@ -349,4 +353,181 @@ test('retained discovery: a metadata-only catalog preserves its review and does 
   await click(groupLinks(state.host)[0])
   assert.equal(state.reader.metadataOnly.value, true)
   assert.equal(readerCalls(state.calls).length, 0)
+})
+
+const historicalScope = 'unresolved_history'
+const literalQuery = 'saved %_\\ note'
+const discoveryLocation = (kind, extra = {}) => ({ path: '/projects/unresolved', query: { view: 'retained_records', attribution_scope: historicalScope, kind, q: literalQuery, ...extra } })
+const savedRecord = (kind, id, reference = opaque(90000)) => ({
+  reference, id,
+  record: { id, attribution_scope: historicalScope, project: 'synthetic-historical-label', ...(kind === 'document' ? { path: 'same.md', version: id === 901 ? 1 : 2, content: `Saved document ${id}` } : kind === 'issue' ? { title: `Saved issue ${id}`, body: `Saved issue body ${id}`, status: 'open' } : { content: `Saved memory ${id}` }) },
+})
+const savedPage = (kind, items, next_cursor = null) => ({ view: 'retained_records', attribution_scope: historicalScope, kind, items, next_cursor })
+const discoveryCalls = state => state.calls.filter(call => call.url.pathname === '/api/projects' && call.url.searchParams.get('view') === 'retained_records')
+function assertDiscoveryRequest(call, kind, cursor) {
+  assert.ok(call, 'The compiled page must request the separate historical record projection, not only the group catalog')
+  assert.equal(call.url.searchParams.get('attribution_scope'), historicalScope)
+  assert.equal(call.url.searchParams.get('kind'), kind)
+  assert.equal(call.url.searchParams.get('q'), literalQuery, 'Search characters remain literal and are not replaced with group filters')
+  assert.equal(call.url.searchParams.get('cursor'), cursor ?? null)
+  assert.ok(Number(call.url.searchParams.get('limit')) > 0 && Number(call.url.searchParams.get('limit')) <= 200)
+  assert.ok([...call.url.searchParams.keys()].every(key => ['view', 'attribution_scope', 'kind', 'q', 'limit', 'cursor'].includes(key)))
+}
+const moreButton = host => walk(host).find(row => row.tag === 'button' && text(row).trim() === locale.projectCatalog.more)
+
+test('historical records C1: declared parser accepts the separate native envelope and empty work pages', async t => {
+  const state = await mount(t, { catalogResponse: { items: catalog.items, unresolved: [] } })
+  const parser = state.load('useOperatorUnresolved').parseRetainedRecordQuery
+  assert.equal(typeof parser, 'function', 'Declared production seam parseRetainedRecordQuery is not implemented')
+  for (const kind of ['memory', 'document', 'issue']) {
+    const item = savedRecord(kind, 901)
+    const page = parser(savedPage(kind, [item], 'work-next'), kind, 20)
+    assert.equal(page.items.length, 1)
+    assert.equal(page.items[0].reference, item.reference)
+    assert.equal(String(page.items[0].id), '901')
+    assert.equal(page.nextCursor, 'work-next')
+    assert.equal(parser(savedPage(kind, [], 'work-next'), kind, 20).nextCursor, 'work-next')
+    assert.equal(parser(savedPage(kind, []), kind, 20).nextCursor, null)
+    for (const malformed of [
+      { ...savedPage(kind, [item]), view: 'catalog' },
+      { ...savedPage(kind, [item]), attribution_scope: 'canonical' },
+      savedPage(kind === 'memory' ? 'issue' : 'memory', [item]),
+      savedPage(kind, [{ ...item, id: 0 }]),
+      savedPage(kind, [{ ...item, record: { ...item.record, id: 902 } }]),
+      savedPage(kind, [{ ...item, record: { ...item.record, attribution_scope: 'canonical' } }]),
+      savedPage(kind, [{ ...item, record: { ...item.record, project_key: A } }]),
+      { ...savedPage(kind, []), next_cursor: undefined },
+    ]) assert.throws(() => parser(malformed, kind, 20), TypeError)
+  }
+})
+
+for (const kind of ['memory', 'document', 'issue']) test(`historical records C1: compiled ${kind} discovery requests and displays native records without group fan-out`, async t => {
+  const item = savedRecord(kind, 901)
+  const state = await mount(t, {
+    location: discoveryLocation(kind), catalogResponse: { items: catalog.items, unresolved: [] },
+    respond: url => url.pathname === '/api/projects' && url.searchParams.has('view') ? Response.json(savedPage(kind, [item])) : undefined,
+  })
+  assertDiscoveryRequest(discoveryCalls(state)[0], kind)
+  assert.ok(text(state.host).includes(item.record.content || item.record.body), 'The actual compiled page must display the native record body')
+  assert.equal(readerCalls(state.calls).length, 0, 'Discovery must not read every catalog group')
+  assert.equal(state.context.unresolved.value.length, 0, 'A record envelope must not replace catalog metadata')
+  assertReadOnly(state)
+})
+
+test('historical records C1: empty and short cursor pages stay actionable until observed exhaustion', async t => {
+  const item = savedRecord('memory', 901)
+  const state = await mount(t, {
+    location: discoveryLocation('memory'), catalogResponse: { items: catalog.items, unresolved: [] },
+    respond: url => {
+      if (url.pathname !== '/api/projects' || !url.searchParams.has('view')) return
+      const cursor = url.searchParams.get('cursor')
+      return Response.json(savedPage('memory', cursor === 'work-1' ? [item] : [], cursor === null ? 'work-1' : cursor === 'work-1' ? 'work-2' : null))
+    },
+  })
+  assertDiscoveryRequest(discoveryCalls(state)[0], 'memory')
+  for (const cursor of ['work-1', 'work-2']) {
+    assert.equal(walk(state.host).filter(row => row.props.role === 'alert').length, 0)
+    assert.ok(!text(state.host).includes(locale.projectCatalog.noContent), 'A work cursor must not be labelled final empty')
+    const more = moreButton(state.host)
+    assert.ok(more && !more.props.disabled, 'Even an empty/short work page must offer continuation')
+    await click(more)
+    assertDiscoveryRequest(discoveryCalls(state).at(-1), 'memory', cursor)
+    if (cursor === 'work-1') assert.ok(text(state.host).includes(item.record.content))
+  }
+  assert.equal(moreButton(state.host), undefined, 'Null cursor is observed exhaustion')
+  assertReadOnly(state)
+})
+
+test('historical records C1: issued document identity, path versions and current search survive reader history and return', async t => {
+  const reference = opaque(90000), foreign = opaque(90001)
+  const records = [savedRecord('document', 902), savedRecord('document', 901), savedRecord('document', 903, foreign)]
+  const state = await mount(t, {
+    location: discoveryLocation('document', { cursor: 'current-work' }),
+    catalogResponse: { items: catalog.items, unresolved: [reference, foreign].map(reference => ({ reference, name: 'Synthetic document group', reason: 'unproven', reader_kinds: ['document'] })) },
+    respond: url => {
+      if (url.pathname === '/api/projects' && url.searchParams.has('view')) return Response.json(savedPage('document', records, 'later-work'))
+      if (!url.pathname.startsWith('/api/projects/unresolved/')) return
+      const requested = decodeURIComponent(url.pathname.split('/')[4])
+      assert.equal(requested, reference, 'Opening version 1 must not select another group with the same path')
+      assert.equal(url.searchParams.get('kind'), 'document')
+      assert.equal(url.searchParams.get('id'), '901')
+      assert.equal(url.searchParams.get('attribution_scope'), historicalScope)
+      assert.ok(!url.searchParams.has('q') && !url.searchParams.has('cursor'), 'Discovery search/work cursor must not leak into exact readers')
+      return Response.json({ reference, kind: 'document', attribution_scope: historicalScope, ...(url.pathname.endsWith('/history') ? { id: 901, items: records.slice(0, 2).map(row => row.record) } : { items: [records[1].record] }), next_cursor: null })
+    },
+  })
+  assertDiscoveryRequest(discoveryCalls(state)[0], 'document', 'current-work')
+  for (const row of records) assert.ok(text(state.host).includes(row.record.content), 'Same-path versions and foreign-group rows must not be deduplicated by path')
+  const result = walk(state.host).find(row => row.tag === 'article' && text(row).includes('Saved document 901'))
+  const open = result && walk(result).find(row => row.tag === 'button' || row.tag === 'a')
+  assert.ok(open, 'An issued result must expose an actual reader/history action')
+  await click(open)
+  assert.equal(state.router.currentRoute.value.query.reference, reference)
+  assert.equal(state.router.currentRoute.value.query.id, '901')
+  assert.equal(state.reader.selected.value?.id, '901')
+  assert.equal(state.reader.history.value?.reference, reference)
+  assert.deepEqual(state.reader.history.value?.items.map(row => row.id), ['902', '901'])
+  assert.ok(!text(byTestID(state.host, 'unresolved-history')).includes('Saved document 903'))
+  assert.ok(readerCalls(state.calls).some(call => call.url.pathname.endsWith('/content')))
+  assert.ok(readerCalls(state.calls).some(call => call.url.pathname.endsWith('/history')))
+  state.router.back(); await tick()
+  assert.deepEqual(state.router.currentRoute.value.query, discoveryLocation('document', { cursor: 'current-work' }).query)
+  for (const row of records) assert.ok(text(state.host).includes(row.record.content))
+  assertReadOnly(state)
+})
+
+for (const refusal of [401, 403, 404, 503, 'foreign']) test(`historical records C1: ${refusal} clears an already open historical issue without widening`, async t => {
+  const reference = opaque(90000)
+  let denied = false
+  const state = await mount(t, {
+    location: discoveryLocation('issue', { reference, id: '901' }),
+    catalogResponse: { items: catalog.items, unresolved: [{ reference, name: 'Synthetic issue group', reason: 'unproven', reader_kinds: ['issue'] }] },
+    respond: url => {
+      if (url.pathname === '/api/projects' && url.searchParams.has('view')) return Response.json(savedPage('issue', [savedRecord('issue', 901)]))
+      if (!url.pathname.startsWith('/api/projects/unresolved/')) return
+      if (denied && refusal !== 'foreign') return Response.json({ error: 'Synthetic refusal' }, { status: refusal })
+      return Response.json({ reference: denied ? opaque(90001) : reference, kind: 'issue', attribution_scope: historicalScope, ...(url.pathname.endsWith('/history') ? { id: 901 } : {}), items: [{ id: 901, title: 'Saved issue 901', body: 'Saved issue body 901', action: 'issue.update', attribution_scope: historicalScope }], next_cursor: null })
+    },
+  })
+  assert.ok(text(state.host).includes('Saved issue body 901'), 'Establish an actual open body before invalidating it')
+  assert.ok(state.reader.history.value, 'Establish actual history before invalidating it')
+  denied = true
+  state.reader.retry(); await tick()
+  assert.equal(state.reader.content.value, null)
+  assert.equal(state.reader.history.value, null)
+  assert.ok(!text(state.host).includes('Saved issue body 901'), 'Old open body/history must be absent after refusal')
+  assert.ok(state.reader.error.value || state.reader.historyError.value)
+  assert.ok(readerCalls(state.calls).every(call => decodeURIComponent(call.url.pathname.split('/')[4]) === reference))
+  assert.ok(state.calls.every(call => call.url.pathname === '/api/projects' || call.url.pathname.startsWith('/api/projects/unresolved/')), 'No canonical issue/project guess or resolve fallback')
+  const reads = readerCalls(state.calls)
+  assert.ok(reads.every(call => call.url.searchParams.get('id') === '901' && call.url.searchParams.get('attribution_scope') === historicalScope), 'Every actual body/history read must use the issued historical binding')
+  assertReadOnly(state)
+})
+
+test('historical records C1: a late historical body cannot overwrite a newer issued binding', async t => {
+  const slow = opaque(90000), current = opaque(90001)
+  let release
+  const delayed = new Promise(resolve => { release = resolve })
+  const state = await mount(t, {
+    location: discoveryLocation('memory', { reference: slow, id: '901' }),
+    catalogResponse: { items: catalog.items, unresolved: [slow, current].map(reference => ({ reference, name: 'Synthetic memory group', reason: 'unproven', reader_kinds: ['memory'] })) },
+    respond: async url => {
+      if (url.pathname === '/api/projects' && url.searchParams.has('view')) return Response.json(savedPage('memory', [savedRecord('memory', 901, slow), savedRecord('memory', 902, current)]))
+      if (!url.pathname.startsWith('/api/projects/unresolved/')) return
+      const reference = decodeURIComponent(url.pathname.split('/')[4])
+      if (reference === slow) await delayed
+      const id = reference === slow ? 901 : 902
+      return Response.json({ reference, kind: 'memory', attribution_scope: historicalScope, ...(url.pathname.endsWith('/history') ? { id } : {}), items: [{ id, content: `Historical body ${id}`, action: 'memory.store', attribution_scope: historicalScope }], next_cursor: null })
+    },
+  })
+  await state.router.push(discoveryLocation('memory', { reference: current, id: '902' })); await tick()
+  assert.equal(state.reader.content.value?.reference, current)
+  assert.equal(state.reader.history.value?.reference, current)
+  release(); await tick()
+  assert.equal(state.reader.content.value?.reference, current)
+  assert.equal(state.reader.history.value?.reference, current)
+  assert.ok(text(state.host).includes('Historical body 902'))
+  assert.ok(!text(state.host).includes('Historical body 901'))
+  assert.ok(readerCalls(state.calls).every(call => call.url.searchParams.get('attribution_scope') === historicalScope), 'Late-response safety must also retain historical attribution on the real requests')
+  assertReadOnly(state)
 })

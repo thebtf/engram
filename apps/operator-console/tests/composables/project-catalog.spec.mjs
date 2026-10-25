@@ -14,7 +14,7 @@ const catalog = {
 }
 const tick = async () => { await new Promise(setImmediate); await vue.nextTick() }
 function evaluate(file, dependencies) {
-  const source = readFileSync(new URL(`../../composables/${file}.ts`, import.meta.url), 'utf8')
+  const source = readFileSync(file instanceof URL ? file : new URL(`../../composables/${file}.ts`, import.meta.url), 'utf8')
   const code = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText
   const module = { exports: {} }
   const storage = new Map()
@@ -482,4 +482,48 @@ test('a document path can read its retained history without selecting a differen
   assert.equal(reader.historyID.value, '902')
   assert.equal(reader.history.value.items[0].content, 'Original version')
   assert.equal(calls.find((url) => url.pathname.endsWith('/history')).searchParams.get('id'), '902')
+})
+for (const variant of ['primary', 'legacy']) test(`historical records C1: ${variant} catalog preserves saved families without promoting reader authority`, () => {
+  const parser = evaluate(variant === 'primary' ? 'useOperatorProjectContext' : new URL('../../../../ui/src/utils/projectCatalog.ts', import.meta.url), name => name === 'vue' ? vue : name === 'vue-router' ? routing : {})
+  const families = [
+    { kind: 'credential', table_name: 'credentials', membership_count: 2, reader_support: 'separate' },
+    { kind: 'memory', table_name: 'memories', membership_count: 7, reader_support: 'declared' },
+    { kind: 'native', table_name: 'sdk_sessions', membership_count: 3, reader_support: 'metadata_only' },
+  ]
+  const metadataFamilies = [{ kind: 'native', table_name: 'projects', membership_count: 4, reader_support: 'metadata_only' }]
+  const input = {
+    items: catalog.items, unresolved: [
+      { ...catalog.unresolved[0], reader_kinds: ['memory'], families },
+      { reference: 'metadata-only', name: 'Synthetic registry', reason: 'unproven', reader_kinds: [], families: metadataFamilies },
+    ]
+  }
+  const result = parser.parseProjectCatalog(input)
+  assert.deepEqual(result.items, input.items)
+  assert.deepEqual(result.unresolved.map(row => row.reference), input.unresolved.map(row => row.reference))
+  assert.deepEqual(result.unresolved.map(row => row.reader_kinds), [['memory'], []], 'Family support is metadata, never a new credential/native reader')
+  assert.deepEqual(result.unresolved[0].families, families, 'Saved occurrence counts and separate/declared/metadata support must not be projected away')
+  assert.deepEqual(result.unresolved[1].families, metadataFamilies)
+})
+
+test('historical records C1: separate Vault binding and old metadata/code/canonical readers remain distinct', async t => {
+  const legacy = evaluate(new URL('../../../../ui/src/utils/projectCatalog.ts', import.meta.url), () => ({}))
+  const reference = `urn:engram:migration:unresolved:${'b'.repeat(64)}`
+  assert.deepEqual(legacy.credentialBinding({ id: 7, name: 'Synthetic credential metadata', scope: 'project', project_id: null, unresolved_reference: reference }), { id: 7, name: 'Synthetic credential metadata', scope: 'project', project_id: null, unresolved_reference: reference, origin_project: undefined })
+  const groups = [{ reference: 'metadata-only', name: 'Registry', reason: 'unproven', reader_kinds: [] }, { reference, name: 'Code metadata', reason: 'unproven', reader_kinds: ['code'] }]
+  const state = await mount(t, '/projects/unresolved?reference=metadata-only', url => {
+    if (url.pathname === '/api/projects') return { ...catalog, unresolved: groups }
+    assert.equal(decodeURIComponent(url.pathname.split('/')[4]), reference)
+    assert.ok(url.pathname.endsWith('/code'))
+    assert.equal(url.searchParams.has('attribution_scope'), false)
+    return { reference, items: [{ project_id: null, unresolved_reference: reference, source_ref: 'synthetic-source', checkout_ref: 'synthetic-checkout', view_ref: 'synthetic-view', repository: 'Synthetic code metadata' }], next_cursor: null }
+  })
+  assert.deepEqual(state.context.projects.value, [A, B])
+  assert.equal(state.reader.metadataOnly.value, true)
+  assert.equal(state.calls.length, 1)
+  await state.router.push({ path: '/projects/unresolved', query: { reference, kind: 'code' } }); await tick()
+  assert.equal(state.reader.content.value.kind, 'code')
+  assert.equal(state.reader.content.value.items[0].id, 'synthetic-view')
+  assert.equal(state.reader.history.value, null)
+  assert.equal(state.calls.filter(url => url.pathname.endsWith('/code')).length, 1)
+  assert.ok(!state.calls.some(url => /credentials|reveal|source\/read/.test(url.pathname)))
 })

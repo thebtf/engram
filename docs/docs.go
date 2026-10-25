@@ -81,7 +81,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.loginRequest"
+                            "$ref": "#/definitions/worker.loginRequest"
                         }
                     }
                 ],
@@ -216,7 +216,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.tokenCreateRequest"
+                            "$ref": "#/definitions/worker.tokenCreateRequest"
                         }
                     }
                 ],
@@ -373,7 +373,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.BackfillSessionRequest"
+                            "$ref": "#/definitions/worker.BackfillSessionRequest"
                         }
                     }
                 ],
@@ -381,7 +381,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.BackfillSessionResponse"
+                            "$ref": "#/definitions/worker.BackfillSessionResponse"
                         }
                     },
                     "400": {
@@ -418,7 +418,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.BackfillStatus"
+                            "$ref": "#/definitions/worker.BackfillStatus"
                         }
                     }
                 }
@@ -600,9 +600,10 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Pinned project UUID or proven historical selector (required)",
+                        "description": "Pinned canonical project UUID",
                         "name": "project",
-                        "in": "query"
+                        "in": "query",
+                        "required": true
                     },
                     {
                         "type": "string",
@@ -612,14 +613,24 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Actual caller session for historical selector translation",
+                        "description": "GET session ID for session-scoped prompt retrieval and injection tracking",
                         "name": "session_id",
                         "in": "query"
                     },
                     {
-                        "type": "boolean",
-                        "description": "Return the canonical project UUID without retrieval",
-                        "name": "identity_only",
+                        "type": "string",
+                        "description": "GET working directory (ignored server-side)",
+                        "name": "cwd",
+                        "in": "query"
+                    },
+                    {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "collectionFormat": "multi",
+                        "description": "GET file paths; repeat the parameter for each path",
+                        "name": "files_being_edited",
                         "in": "query"
                     },
                     {
@@ -629,7 +640,7 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
-                        "description": "POST body: {project, session_id, agent_id, cwd, legacy_project, project_identity, identity_only}",
+                        "description": "POST body: {project, session_id, agent_id, cwd, files_being_edited}",
                         "name": "body",
                         "in": "body",
                         "schema": {
@@ -646,29 +657,15 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "project required",
+                        "description": "canonical project UUID required",
                         "schema": {
                             "type": "string"
-                        }
-                    },
-                    "409": {
-                        "description": "unresolved or conflicting historical project membership",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
                         }
                     },
                     "500": {
                         "description": "internal error",
                         "schema": {
                             "type": "string"
-                        }
-                    },
-                    "503": {
-                        "description": "project identity resolution unavailable",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
                         }
                     }
                 }
@@ -693,9 +690,10 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Pinned project UUID or proven historical selector (required)",
+                        "description": "Pinned canonical project UUID",
                         "name": "project",
-                        "in": "query"
+                        "in": "query",
+                        "required": true
                     },
                     {
                         "type": "string",
@@ -705,14 +703,24 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Actual caller session for historical selector translation",
+                        "description": "GET session ID for session-scoped prompt retrieval and injection tracking",
                         "name": "session_id",
                         "in": "query"
                     },
                     {
-                        "type": "boolean",
-                        "description": "Return the canonical project UUID without retrieval",
-                        "name": "identity_only",
+                        "type": "string",
+                        "description": "GET working directory (ignored server-side)",
+                        "name": "cwd",
+                        "in": "query"
+                    },
+                    {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "collectionFormat": "multi",
+                        "description": "GET file paths; repeat the parameter for each path",
+                        "name": "files_being_edited",
                         "in": "query"
                     },
                     {
@@ -722,7 +730,7 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
-                        "description": "POST body: {project, session_id, agent_id, cwd, legacy_project, project_identity, identity_only}",
+                        "description": "POST body: {project, session_id, agent_id, cwd, files_being_edited}",
                         "name": "body",
                         "in": "body",
                         "schema": {
@@ -739,29 +747,15 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "project required",
+                        "description": "canonical project UUID required",
                         "schema": {
                             "type": "string"
-                        }
-                    },
-                    "409": {
-                        "description": "unresolved or conflicting historical project membership",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
                         }
                     },
                     "500": {
                         "description": "internal error",
                         "schema": {
                             "type": "string"
-                        }
-                    },
-                    "503": {
-                        "description": "project identity resolution unavailable",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
                         }
                     }
                 }
@@ -788,13 +782,14 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Project filter",
+                        "description": "Canonical project UUID",
                         "name": "project",
-                        "in": "query"
+                        "in": "query",
+                        "required": true
                     },
                     {
                         "type": "string",
-                        "description": "Search query",
+                        "description": "GET requires a nonempty query parameter; POST requires query here or in the JSON body",
                         "name": "query",
                         "in": "query"
                     },
@@ -806,18 +801,28 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Agent ID (acts as project scope if project empty)",
+                        "description": "Agent attribution; never project identity",
                         "name": "agent_id",
                         "in": "query"
                     },
                     {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "collectionFormat": "multi",
+                        "description": "File paths; repeat the query parameter or supply a POST JSON array",
+                        "name": "files_being_edited",
+                        "in": "query"
+                    },
+                    {
                         "type": "integer",
-                        "description": "Number of results (default 50, max 200)",
+                        "description": "Query-only number of results (default 50, max 200)",
                         "name": "limit",
                         "in": "query"
                     },
                     {
-                        "description": "POST body: {project, query, agent_id, cwd, limit, project_descriptor}",
+                        "description": "POST body: {project, query, agent_id, cwd, obs_type, files_being_edited}; nonempty fields override query params; obs_type is body-only, limit is query-only",
                         "name": "body",
                         "in": "body",
                         "schema": {
@@ -837,24 +842,6 @@ const docTemplate = `{
                         "description": "project and query required",
                         "schema": {
                             "type": "string"
-                        }
-                    },
-                    "409": {
-                        "description": "V3 project resolution refused",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "503": {
-                        "description": "V3 project resolution unavailable",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
                         }
                     }
                 }
@@ -879,13 +866,14 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Project filter",
+                        "description": "Canonical project UUID",
                         "name": "project",
-                        "in": "query"
+                        "in": "query",
+                        "required": true
                     },
                     {
                         "type": "string",
-                        "description": "Search query",
+                        "description": "GET requires a nonempty query parameter; POST requires query here or in the JSON body",
                         "name": "query",
                         "in": "query"
                     },
@@ -897,18 +885,28 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Agent ID (acts as project scope if project empty)",
+                        "description": "Agent attribution; never project identity",
                         "name": "agent_id",
                         "in": "query"
                     },
                     {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "collectionFormat": "multi",
+                        "description": "File paths; repeat the query parameter or supply a POST JSON array",
+                        "name": "files_being_edited",
+                        "in": "query"
+                    },
+                    {
                         "type": "integer",
-                        "description": "Number of results (default 50, max 200)",
+                        "description": "Query-only number of results (default 50, max 200)",
                         "name": "limit",
                         "in": "query"
                     },
                     {
-                        "description": "POST body: {project, query, agent_id, cwd, limit, project_descriptor}",
+                        "description": "POST body: {project, query, agent_id, cwd, obs_type, files_being_edited}; nonempty fields override query params; obs_type is body-only, limit is query-only",
                         "name": "body",
                         "in": "body",
                         "schema": {
@@ -928,24 +926,6 @@ const docTemplate = `{
                         "description": "project and query required",
                         "schema": {
                             "type": "string"
-                        }
-                    },
-                    "409": {
-                        "description": "V3 project resolution refused",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "503": {
-                        "description": "V3 project resolution unavailable",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
                         }
                     }
                 }
@@ -969,12 +949,19 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Project slug (required without project_descriptor)",
+                        "description": "Canonical project UUID",
                         "name": "project",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Injection-event session ID; a nonempty POST body value overrides this query value",
+                        "name": "session_id",
                         "in": "query"
                     },
                     {
-                        "description": "POST body: {project, project_descriptor, memories_limit, issues_limit}",
+                        "description": "POST body: {project, session_id, memories_limit, issues_limit}",
                         "name": "body",
                         "in": "body",
                         "schema": {
@@ -986,25 +973,31 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.sessionStartCompatibilityResponse"
+                            "$ref": "#/definitions/worker.sessionStartCompatibilityResponse"
                         }
                     },
                     "400": {
-                        "description": "invalid V3 project descriptor",
+                        "description": "canonical project UUID required or invalid limits",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "type": "string"
                         }
                     },
-                    "409": {
-                        "description": "V3 project resolution refused",
+                    "401": {
+                        "description": "unauthorized",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "forbidden",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "not found",
+                        "schema": {
+                            "type": "string"
                         }
                     },
                     "500": {
@@ -1014,12 +1007,9 @@ const docTemplate = `{
                         }
                     },
                     "503": {
-                        "description": "V3 project resolution unavailable",
+                        "description": "session-start service unavailable",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "type": "string"
                         }
                     }
                 }
@@ -1041,12 +1031,19 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Project slug (required without project_descriptor)",
+                        "description": "Canonical project UUID",
                         "name": "project",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Injection-event session ID; a nonempty POST body value overrides this query value",
+                        "name": "session_id",
                         "in": "query"
                     },
                     {
-                        "description": "POST body: {project, project_descriptor, memories_limit, issues_limit}",
+                        "description": "POST body: {project, session_id, memories_limit, issues_limit}",
                         "name": "body",
                         "in": "body",
                         "schema": {
@@ -1058,25 +1055,31 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.sessionStartCompatibilityResponse"
+                            "$ref": "#/definitions/worker.sessionStartCompatibilityResponse"
                         }
                     },
                     "400": {
-                        "description": "invalid V3 project descriptor",
+                        "description": "canonical project UUID required or invalid limits",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "type": "string"
                         }
                     },
-                    "409": {
-                        "description": "V3 project resolution refused",
+                    "401": {
+                        "description": "unauthorized",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "forbidden",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "not found",
+                        "schema": {
+                            "type": "string"
                         }
                     },
                     "500": {
@@ -1086,12 +1089,9 @@ const docTemplate = `{
                         }
                     },
                     "503": {
-                        "description": "V3 project resolution unavailable",
+                        "description": "session-start service unavailable",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "type": "string"
                         }
                     }
                 }
@@ -1211,31 +1211,31 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.documentListResponse"
+                            "$ref": "#/definitions/worker.documentListResponse"
                         }
                     },
                     "400": {
                         "description": "invalid reader parameters",
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.documentErrorResponse"
+                            "$ref": "#/definitions/worker.documentErrorResponse"
                         }
                     },
                     "403": {
                         "description": "project read forbidden",
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.documentErrorResponse"
+                            "$ref": "#/definitions/worker.documentErrorResponse"
                         }
                     },
                     "500": {
                         "description": "read unavailable",
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.documentErrorResponse"
+                            "$ref": "#/definitions/worker.documentErrorResponse"
                         }
                     },
                     "503": {
                         "description": "store unavailable",
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.documentErrorResponse"
+                            "$ref": "#/definitions/worker.documentErrorResponse"
                         }
                     }
                 }
@@ -1266,7 +1266,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.IngestRequest"
+                            "$ref": "#/definitions/worker.IngestRequest"
                         }
                     }
                 ],
@@ -1339,7 +1339,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.sessionEndRequest"
+                            "$ref": "#/definitions/worker.sessionEndRequest"
                         }
                     }
                 ],
@@ -1411,7 +1411,7 @@ const docTemplate = `{
                         "name": "body",
                         "in": "body",
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.InstinctsImportRequest"
+                            "$ref": "#/definitions/worker.InstinctsImportRequest"
                         }
                     }
                 ],
@@ -1591,19 +1591,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.memoryListResponse"
+                            "$ref": "#/definitions/worker.memoryListResponse"
                         }
                     },
                     "400": {
                         "description": "invalid reader parameters",
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.documentErrorResponse"
+                            "$ref": "#/definitions/worker.documentErrorResponse"
                         }
                     },
                     "403": {
                         "description": "project read forbidden",
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.documentErrorResponse"
+                            "$ref": "#/definitions/worker.documentErrorResponse"
                         }
                     },
                     "500": {
@@ -1644,7 +1644,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.storeMemoryRequest"
+                            "$ref": "#/definitions/worker.storeMemoryRequest"
                         }
                     }
                 ],
@@ -1652,7 +1652,7 @@ const docTemplate = `{
                     "201": {
                         "description": "Created",
                         "schema": {
-                            "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.Memory"
+                            "$ref": "#/definitions/models.Memory"
                         }
                     },
                     "400": {
@@ -1701,7 +1701,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.suppressMemoriesRequest"
+                            "$ref": "#/definitions/worker.suppressMemoriesRequest"
                         }
                     }
                 ],
@@ -1711,7 +1711,7 @@ const docTemplate = `{
                         "schema": {
                             "type": "array",
                             "items": {
-                                "$ref": "#/definitions/internal_worker.memoryActionReceipt"
+                                "$ref": "#/definitions/worker.memoryActionReceipt"
                             }
                         }
                     },
@@ -1777,7 +1777,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.Memory"
+                            "$ref": "#/definitions/models.Memory"
                         }
                     },
                     "400": {
@@ -1789,7 +1789,7 @@ const docTemplate = `{
                     "403": {
                         "description": "project read forbidden",
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.documentErrorResponse"
+                            "$ref": "#/definitions/worker.documentErrorResponse"
                         }
                     },
                     "404": {
@@ -1913,7 +1913,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.memoryAuditResponse"
+                            "$ref": "#/definitions/worker.memoryAuditResponse"
                         }
                     },
                     "400": {
@@ -1925,7 +1925,7 @@ const docTemplate = `{
                     "403": {
                         "description": "project read forbidden",
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.documentErrorResponse"
+                            "$ref": "#/definitions/worker.documentErrorResponse"
                         }
                     },
                     "404": {
@@ -1980,7 +1980,7 @@ const docTemplate = `{
                         "name": "body",
                         "in": "body",
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.suppressMemoryRequest"
+                            "$ref": "#/definitions/worker.suppressMemoryRequest"
                         }
                     }
                 ],
@@ -1988,7 +1988,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.memoryActionReceipt"
+                            "$ref": "#/definitions/worker.memoryActionReceipt"
                         }
                     },
                     "400": {
@@ -2057,7 +2057,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.candidateListResponse"
+                            "$ref": "#/definitions/worker.candidateListResponse"
                         }
                     },
                     "400": {
@@ -2115,7 +2115,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.candidateReviewItem"
+                            "$ref": "#/definitions/worker.candidateReviewItem"
                         }
                     },
                     "400": {
@@ -2176,7 +2176,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.MemoryTriggerRequest"
+                            "$ref": "#/definitions/worker.MemoryTriggerRequest"
                         }
                     }
                 ],
@@ -2186,7 +2186,7 @@ const docTemplate = `{
                         "schema": {
                             "type": "array",
                             "items": {
-                                "$ref": "#/definitions/internal_worker.MemoryTriggerMatch"
+                                "$ref": "#/definitions/worker.MemoryTriggerMatch"
                             }
                         }
                     },
@@ -2326,25 +2326,356 @@ const docTemplate = `{
                         "ApiKeyAuth": []
                     }
                 ],
-                "description": "Returns the live canonical project catalog with authoritative display labels. Requires the existing ordinary authenticated reader scope.",
+                "description": "Without view, returns the unchanged full canonical catalog and unresolved metadata. Only view=retained_records selects bounded historical discovery: attribution_scope=unresolved_history and kind are required, q is trimmed literal UTF-8 (1024 bytes), limit defaults to 50 (1..200). That mode returns retainedRecordResponse, not projectListResponse. Its authenticated cursor binds the effective caller and normalized query; empty/short pages with a cursor are intermediate search WORK, not exhaustion. No total, has_more, canonical owner or snapshot is promised. All retained responses/errors are private,no-store. Memory privacy remains enforced; documents/issues retain ordinary authenticated route plus exact membership authority, not a new per-row ACL.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "Observations"
                 ],
-                "summary": "List projects",
+                "summary": "List projects or retained historical records",
+                "parameters": [
+                    {
+                        "enum": [
+                            "retained_records"
+                        ],
+                        "type": "string",
+                        "description": "Explicit retained-record mode; omitted preserves the full catalog",
+                        "name": "view",
+                        "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "unresolved_history"
+                        ],
+                        "type": "string",
+                        "description": "Required only with view=retained_records",
+                        "name": "attribution_scope",
+                        "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "memory",
+                            "document",
+                            "issue"
+                        ],
+                        "type": "string",
+                        "description": "Required only with view=retained_records",
+                        "name": "kind",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Retained-mode trimmed literal search, at most 1024 UTF-8 bytes",
+                        "name": "q",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Retained-mode page limit 1..200, default 50",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Retained-mode server-issued authenticated continuation of remaining work",
+                        "name": "cursor",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.projectListResponse"
+                            "$ref": "#/definitions/worker.projectListResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Retained mode: INVALID_QUERY or INVALID_CURSOR, before data work",
+                        "schema": {
+                            "$ref": "#/definitions/worker.documentErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "project read forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/worker.documentErrorResponse"
                         }
                     },
                     "500": {
                         "description": "internal error",
                         "schema": {
                             "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "Retained mode: RETAINED_RECORDS_UNAVAILABLE, never a partial or terminal-empty page",
+                        "schema": {
+                            "$ref": "#/definitions/worker.documentErrorResponse"
+                        }
+                    }
+                },
+                "x-retained-records-response": {
+                    "properties": {
+                        "attribution_scope": {
+                            "enum": [
+                                "unresolved_history"
+                            ],
+                            "type": "string"
+                        },
+                        "items": {
+                            "items": {
+                                "properties": {
+                                    "id": {
+                                        "format": "int64",
+                                        "minimum": 1,
+                                        "type": "integer"
+                                    },
+                                    "record": {
+                                        "additionalProperties": true,
+                                        "description": "Genuine native family payload, attribution_scope=unresolved_history, no project_key; historical fields are provenance, not canonical ownership",
+                                        "type": "object"
+                                    },
+                                    "reference": {
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "reference",
+                                    "id",
+                                    "record"
+                                ],
+                                "type": "object"
+                            },
+                            "type": "array"
+                        },
+                        "kind": {
+                            "enum": [
+                                "memory",
+                                "document",
+                                "issue"
+                            ],
+                            "type": "string"
+                        },
+                        "next_cursor": {
+                            "description": "Remaining search work, including intermediate empty/short pages; null only on observed exhaustion",
+                            "type": "string",
+                            "x-nullable": true
+                        },
+                        "view": {
+                            "enum": [
+                                "retained_records"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "view",
+                        "attribution_scope",
+                        "kind",
+                        "items",
+                        "next_cursor"
+                    ],
+                    "type": "object"
+                }
+            }
+        },
+        "/api/projects/unresolved/{reference}/content": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Validates the complete selected reference/kind group, then reads its visible historical native payloads. Optional positive id selects only that exact member; without id the old whole-group behavior remains. Optional attribution_scope accepts only unresolved_history; omitted scope has the same historical meaning. Responses and record projections identify unresolved_history and omit project_key. A stale group is refused, never repaired through another group. Memory privacy remains enforced; documents/issues have ordinary authenticated route and exact-membership authority. private,no-store on success and errors.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Observations"
+                ],
+                "summary": "Read an exact retained association",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Exact issued unresolved reference",
+                        "name": "reference",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "enum": [
+                            "memory",
+                            "document",
+                            "issue"
+                        ],
+                        "type": "string",
+                        "description": "Native family",
+                        "name": "kind",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "enum": [
+                            "unresolved_history"
+                        ],
+                        "type": "string",
+                        "description": "Historical attribution only",
+                        "name": "attribution_scope",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Exact positive native ID within this reference and kind",
+                        "name": "id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Literal retained-reader search",
+                        "name": "q",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page size 1..200, default 50",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Continuation bound to reference, group revision, reader, kind, id, query and limit",
+                        "name": "cursor",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/worker.retainedProjectResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "invalid retained reader parameters",
+                        "schema": {
+                            "$ref": "#/definitions/worker.documentErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "project read forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/worker.documentErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "unknown/stale association or foreign native ID",
+                        "schema": {
+                            "$ref": "#/definitions/worker.documentErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "retained content unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/worker.documentErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/projects/unresolved/{reference}/history": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Requires the exact issued reference/kind/positive id and complete current group validation. Optional attribution_scope accepts only unresolved_history; old omitted scope keeps that meaning. Document history preserves validated group IDs plus the selected path and historical project, including other versions, never one-ID truncation. Memory history keeps visibility and manage checks. Historical projections omit project_key. Stale/foreign selections are refused without reassociation. private,no-store on success and errors.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Observations"
+                ],
+                "summary": "Read history for an exact retained native record",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Exact issued unresolved reference",
+                        "name": "reference",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "enum": [
+                            "memory",
+                            "document",
+                            "issue"
+                        ],
+                        "type": "string",
+                        "description": "Native family",
+                        "name": "kind",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Exact positive native ID within this reference and kind",
+                        "name": "id",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "enum": [
+                            "unresolved_history"
+                        ],
+                        "type": "string",
+                        "description": "Historical attribution only",
+                        "name": "attribution_scope",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page size 1..200, default 50",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Continuation bound to the exact selection and group revision",
+                        "name": "cursor",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/worker.retainedProjectResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "invalid retained reader parameters",
+                        "schema": {
+                            "$ref": "#/definitions/worker.documentErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "project read forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/worker.documentErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "unknown/stale/foreign/hidden association or denied memory history",
+                        "schema": {
+                            "$ref": "#/definitions/worker.documentErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "retained history unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/worker.documentErrorResponse"
                         }
                     }
                 }
@@ -2505,7 +2836,7 @@ const docTemplate = `{
                         "schema": {
                             "type": "array",
                             "items": {
-                                "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.BehavioralRule"
+                                "$ref": "#/definitions/models.BehavioralRule"
                             }
                         }
                     },
@@ -2553,7 +2884,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.behavioralRuleRequest"
+                            "$ref": "#/definitions/worker.behavioralRuleRequest"
                         }
                     }
                 ],
@@ -2561,7 +2892,7 @@ const docTemplate = `{
                     "201": {
                         "description": "Created",
                         "schema": {
-                            "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.BehavioralRule"
+                            "$ref": "#/definitions/models.BehavioralRule"
                         }
                     },
                     "400": {
@@ -2677,7 +3008,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.behavioralRuleRequest"
+                            "$ref": "#/definitions/worker.behavioralRuleRequest"
                         }
                     }
                 ],
@@ -2685,7 +3016,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.BehavioralRule"
+                            "$ref": "#/definitions/models.BehavioralRule"
                         }
                     },
                     "400": {
@@ -2747,7 +3078,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.behavioralRuleEnabledRequest"
+                            "$ref": "#/definitions/worker.behavioralRuleEnabledRequest"
                         }
                     }
                 ],
@@ -2755,7 +3086,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.BehavioralRule"
+                            "$ref": "#/definitions/models.BehavioralRule"
                         }
                     },
                     "400": {
@@ -2890,7 +3221,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.SelfCheckResponse"
+                            "$ref": "#/definitions/worker.SelfCheckResponse"
                         }
                     }
                 }
@@ -2973,7 +3304,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.CheckSessionsRequest"
+                            "$ref": "#/definitions/worker.CheckSessionsRequest"
                         }
                     }
                 ],
@@ -3093,7 +3424,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.SessionInitRequest"
+                            "$ref": "#/definitions/worker.SessionInitRequest"
                         }
                     }
                 ],
@@ -3101,7 +3432,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.SessionInitResponse"
+                            "$ref": "#/definitions/worker.SessionInitResponse"
                         }
                     },
                     "400": {
@@ -3196,7 +3527,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.SubagentCompleteRequest"
+                            "$ref": "#/definitions/worker.SubagentCompleteRequest"
                         }
                     }
                 ],
@@ -3312,7 +3643,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.vnextStatsResponse"
+                            "$ref": "#/definitions/worker.vnextStatsResponse"
                         }
                     }
                 }
@@ -3525,7 +3856,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.storeCredentialRequest"
+                            "$ref": "#/definitions/worker.storeCredentialRequest"
                         }
                     }
                 ],
@@ -3854,7 +4185,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.SessionStartRequest"
+                            "$ref": "#/definitions/worker.SessionStartRequest"
                         }
                     }
                 ],
@@ -3915,7 +4246,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_worker.SummarizeRequest"
+                            "$ref": "#/definitions/worker.SummarizeRequest"
                         }
                     }
                 ],
@@ -3961,7 +4292,22 @@ const docTemplate = `{
         }
     },
     "definitions": {
-        "github_com_thebtf_engram_internal_db_gorm.CollectionSelectionKind": {
+        "embedding.EmbedError": {
+            "type": "object",
+            "properties": {
+                "at": {
+                    "type": "string"
+                },
+                "message": {
+                    "description": "truncated to ≤200 chars",
+                    "type": "string"
+                },
+                "status_code": {
+                    "type": "integer"
+                }
+            }
+        },
+        "gorm.CollectionSelectionKind": {
             "type": "string",
             "enum": [
                 "none",
@@ -3976,7 +4322,7 @@ const docTemplate = `{
                 "CollectionSelectionFrozenFilter"
             ]
         },
-        "github_com_thebtf_engram_internal_db_gorm.ProjectDescriptor": {
+        "gorm.ProjectDescriptor": {
             "type": "object",
             "properties": {
                 "name": {
@@ -3990,9 +4336,15 @@ const docTemplate = `{
                 }
             }
         },
-        "github_com_thebtf_engram_internal_db_gorm.UnresolvedProject": {
+        "gorm.UnresolvedProject": {
             "type": "object",
             "properties": {
+                "families": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/gorm.UnresolvedProjectFamily"
+                    }
+                },
                 "name": {
                     "type": "string"
                 },
@@ -4016,173 +4368,39 @@ const docTemplate = `{
                 }
             }
         },
-        "github_com_thebtf_engram_internal_embedding.EmbedError": {
+        "gorm.UnresolvedProjectFamily": {
             "type": "object",
             "properties": {
-                "at": {
-                    "type": "string"
-                },
-                "message": {
-                    "description": "truncated to ≤200 chars",
-                    "type": "string"
-                },
-                "status_code": {
-                    "type": "integer"
-                }
-            }
-        },
-        "github_com_thebtf_engram_internal_operability.ResultStatus": {
-            "type": "string",
-            "enum": [
-                "computed",
-                "not_computable"
-            ],
-            "x-enum-varnames": [
-                "Computed",
-                "NotComputable"
-            ]
-        },
-        "github_com_thebtf_engram_internal_reviewpacket.CandidateAuditPolicy": {
-            "type": "object",
-            "properties": {
-                "action": {
-                    "type": "string"
-                },
-                "status": {
-                    "type": "string"
-                },
-                "store": {
-                    "type": "string"
-                }
-            }
-        },
-        "github_com_thebtf_engram_internal_reviewpacket.CandidateDecisionPolicy": {
-            "type": "object",
-            "properties": {
-                "allowed_actions": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "default_action": {
-                    "type": "string"
-                },
-                "epistemic_type": {
-                    "type": "string"
-                },
-                "promotion_target": {
-                    "type": "string"
-                },
-                "tier": {
-                    "type": "string"
-                }
-            }
-        },
-        "github_com_thebtf_engram_internal_reviewpacket.CandidateEvidence": {
-            "type": "object",
-            "properties": {
-                "handle": {
-                    "type": "string"
-                },
                 "kind": {
-                    "type": "string"
-                }
-            }
-        },
-        "github_com_thebtf_engram_internal_reviewpacket.CandidateMutationRequirements": {
-            "type": "object",
-            "properties": {
-                "audit_write_required": {
-                    "type": "boolean"
+                    "type": "string",
+                    "enum": [
+                        "memory",
+                        "document",
+                        "issue",
+                        "code",
+                        "credential",
+                        "native"
+                    ]
                 },
-                "privacy_scope_required": {
-                    "type": "boolean"
-                },
-                "snapshot_required": {
-                    "type": "boolean"
-                },
-                "structural_loss_check_required": {
-                    "type": "boolean"
-                }
-            }
-        },
-        "github_com_thebtf_engram_internal_reviewpacket.CandidateReviewPacket": {
-            "type": "object",
-            "properties": {
-                "audit": {
-                    "$ref": "#/definitions/github_com_thebtf_engram_internal_reviewpacket.CandidateAuditPolicy"
-                },
-                "candidate_id": {
+                "membership_count": {
+                    "description": "MembershipCount counts saved occurrences, not distinct or authorized records.",
                     "type": "integer"
                 },
-                "decision": {
-                    "$ref": "#/definitions/github_com_thebtf_engram_internal_reviewpacket.CandidateDecisionPolicy"
+                "reader_support": {
+                    "description": "ReaderSupport declares a reader boundary, not payload availability or access.",
+                    "type": "string",
+                    "enum": [
+                        "declared",
+                        "separate",
+                        "metadata_only"
+                    ]
                 },
-                "evidence": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/github_com_thebtf_engram_internal_reviewpacket.CandidateEvidence"
-                    }
-                },
-                "kind": {
-                    "type": "string"
-                },
-                "mutation_requirements": {
-                    "$ref": "#/definitions/github_com_thebtf_engram_internal_reviewpacket.CandidateMutationRequirements"
-                },
-                "packet_id": {
-                    "type": "string"
-                },
-                "read_only": {
-                    "type": "boolean"
-                },
-                "scope": {
-                    "$ref": "#/definitions/github_com_thebtf_engram_internal_reviewpacket.CandidateScope"
-                },
-                "snapshot": {
-                    "$ref": "#/definitions/github_com_thebtf_engram_internal_reviewpacket.CandidateSnapshotPolicy"
-                },
-                "status": {
+                "table_name": {
                     "type": "string"
                 }
             }
         },
-        "github_com_thebtf_engram_internal_reviewpacket.CandidateScope": {
-            "type": "object",
-            "properties": {
-                "privacy_scope": {
-                    "type": "string"
-                },
-                "projects": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "source_session_id": {
-                    "type": "string"
-                }
-            }
-        },
-        "github_com_thebtf_engram_internal_reviewpacket.CandidateSnapshotPolicy": {
-            "type": "object",
-            "properties": {
-                "operation": {
-                    "type": "string"
-                },
-                "required": {
-                    "type": "boolean"
-                },
-                "status": {
-                    "type": "string"
-                },
-                "store": {
-                    "type": "string"
-                }
-            }
-        },
-        "github_com_thebtf_engram_pkg_models.BehavioralRule": {
+        "models.BehavioralRule": {
             "type": "object",
             "properties": {
                 "content": {
@@ -4217,7 +4435,7 @@ const docTemplate = `{
                 }
             }
         },
-        "github_com_thebtf_engram_pkg_models.Memory": {
+        "models.Memory": {
             "type": "object",
             "properties": {
                 "access_count": {
@@ -4367,7 +4585,158 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.BackfillSessionRequest": {
+        "operability.ResultStatus": {
+            "type": "string",
+            "enum": [
+                "computed",
+                "not_computable"
+            ],
+            "x-enum-varnames": [
+                "Computed",
+                "NotComputable"
+            ]
+        },
+        "reviewpacket.CandidateAuditPolicy": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "store": {
+                    "type": "string"
+                }
+            }
+        },
+        "reviewpacket.CandidateDecisionPolicy": {
+            "type": "object",
+            "properties": {
+                "allowed_actions": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "default_action": {
+                    "type": "string"
+                },
+                "epistemic_type": {
+                    "type": "string"
+                },
+                "promotion_target": {
+                    "type": "string"
+                },
+                "tier": {
+                    "type": "string"
+                }
+            }
+        },
+        "reviewpacket.CandidateEvidence": {
+            "type": "object",
+            "properties": {
+                "handle": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                }
+            }
+        },
+        "reviewpacket.CandidateMutationRequirements": {
+            "type": "object",
+            "properties": {
+                "audit_write_required": {
+                    "type": "boolean"
+                },
+                "privacy_scope_required": {
+                    "type": "boolean"
+                },
+                "snapshot_required": {
+                    "type": "boolean"
+                },
+                "structural_loss_check_required": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "reviewpacket.CandidateReviewPacket": {
+            "type": "object",
+            "properties": {
+                "audit": {
+                    "$ref": "#/definitions/reviewpacket.CandidateAuditPolicy"
+                },
+                "candidate_id": {
+                    "type": "integer"
+                },
+                "decision": {
+                    "$ref": "#/definitions/reviewpacket.CandidateDecisionPolicy"
+                },
+                "evidence": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/reviewpacket.CandidateEvidence"
+                    }
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "mutation_requirements": {
+                    "$ref": "#/definitions/reviewpacket.CandidateMutationRequirements"
+                },
+                "packet_id": {
+                    "type": "string"
+                },
+                "read_only": {
+                    "type": "boolean"
+                },
+                "scope": {
+                    "$ref": "#/definitions/reviewpacket.CandidateScope"
+                },
+                "snapshot": {
+                    "$ref": "#/definitions/reviewpacket.CandidateSnapshotPolicy"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "reviewpacket.CandidateScope": {
+            "type": "object",
+            "properties": {
+                "privacy_scope": {
+                    "type": "string"
+                },
+                "projects": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "source_session_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "reviewpacket.CandidateSnapshotPolicy": {
+            "type": "object",
+            "properties": {
+                "operation": {
+                    "type": "string"
+                },
+                "required": {
+                    "type": "boolean"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "store": {
+                    "type": "string"
+                }
+            }
+        },
+        "worker.BackfillSessionRequest": {
             "type": "object",
             "properties": {
                 "content": {
@@ -4388,7 +4757,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.BackfillSessionResponse": {
+        "worker.BackfillSessionResponse": {
             "type": "object",
             "properties": {
                 "deprecated": {
@@ -4405,13 +4774,13 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.BackfillStatus": {
+        "worker.BackfillStatus": {
             "type": "object",
             "properties": {
                 "active_runs": {
                     "type": "object",
                     "additionalProperties": {
-                        "$ref": "#/definitions/internal_worker.RunInfo"
+                        "$ref": "#/definitions/worker.RunInfo"
                     }
                 },
                 "total_observations": {
@@ -4422,7 +4791,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.CheckSessionsRequest": {
+        "worker.CheckSessionsRequest": {
             "type": "object",
             "properties": {
                 "session_ids": {
@@ -4433,7 +4802,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.ComponentHealth": {
+        "worker.ComponentHealth": {
             "type": "object",
             "properties": {
                 "message": {
@@ -4448,7 +4817,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.IngestRequest": {
+        "worker.IngestRequest": {
             "type": "object",
             "properties": {
                 "project": {
@@ -4467,7 +4836,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.InstinctsImportRequest": {
+        "worker.InstinctsImportRequest": {
             "type": "object",
             "properties": {
                 "path": {
@@ -4475,7 +4844,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.MemoryTriggerMatch": {
+        "worker.MemoryTriggerMatch": {
             "type": "object",
             "properties": {
                 "blurb": {
@@ -4489,7 +4858,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.MemoryTriggerRequest": {
+        "worker.MemoryTriggerRequest": {
             "type": "object",
             "properties": {
                 "params": {
@@ -4507,7 +4876,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.RunInfo": {
+        "worker.RunInfo": {
             "type": "object",
             "properties": {
                 "errors": {
@@ -4527,13 +4896,13 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.SelfCheckResponse": {
+        "worker.SelfCheckResponse": {
             "type": "object",
             "properties": {
                 "components": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/internal_worker.ComponentHealth"
+                        "$ref": "#/definitions/worker.ComponentHealth"
                     }
                 },
                 "overall": {
@@ -4548,7 +4917,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.SessionInitRequest": {
+        "worker.SessionInitRequest": {
             "type": "object",
             "properties": {
                 "claudeSessionId": {
@@ -4565,7 +4934,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.SessionInitResponse": {
+        "worker.SessionInitResponse": {
             "type": "object",
             "properties": {
                 "promptNumber": {
@@ -4582,7 +4951,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.SessionStartRequest": {
+        "worker.SessionStartRequest": {
             "type": "object",
             "properties": {
                 "promptNumber": {
@@ -4593,7 +4962,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.SubagentCompleteRequest": {
+        "worker.SubagentCompleteRequest": {
             "type": "object",
             "properties": {
                 "claudeSessionId": {
@@ -4604,7 +4973,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.SummarizeRequest": {
+        "worker.SummarizeRequest": {
             "type": "object",
             "properties": {
                 "lastAssistantMessage": {
@@ -4615,7 +4984,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.behavioralRuleEnabledRequest": {
+        "worker.behavioralRuleEnabledRequest": {
             "type": "object",
             "properties": {
                 "edited_by": {
@@ -4626,7 +4995,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.behavioralRuleOperationOrderTarget": {
+        "worker.behavioralRuleOperationOrderTarget": {
             "type": "object",
             "properties": {
                 "expected_version": {
@@ -4637,7 +5006,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.behavioralRuleOperationScope": {
+        "worker.behavioralRuleOperationScope": {
             "type": "object",
             "properties": {
                 "project": {
@@ -4645,11 +5014,11 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.behavioralRuleOperationSelection": {
+        "worker.behavioralRuleOperationSelection": {
             "type": "object",
             "properties": {
                 "kind": {
-                    "$ref": "#/definitions/github_com_thebtf_engram_internal_db_gorm.CollectionSelectionKind"
+                    "$ref": "#/definitions/gorm.CollectionSelectionKind"
                 },
                 "selection_token": {
                     "type": "string"
@@ -4659,7 +5028,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.behavioralRuleRequest": {
+        "worker.behavioralRuleRequest": {
             "type": "object",
             "properties": {
                 "action": {
@@ -4671,10 +5040,13 @@ const docTemplate = `{
                 "edited_by": {
                     "type": "string"
                 },
+                "filter": {
+                    "$ref": "#/definitions/worker.operatorCollectionFilterRequest"
+                },
                 "order": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/internal_worker.behavioralRuleOperationOrderTarget"
+                        "$ref": "#/definitions/worker.behavioralRuleOperationOrderTarget"
                     }
                 },
                 "priority": {
@@ -4687,20 +5059,20 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "scope": {
-                    "$ref": "#/definitions/internal_worker.behavioralRuleOperationScope"
+                    "$ref": "#/definitions/worker.behavioralRuleOperationScope"
                 },
                 "selection": {
-                    "$ref": "#/definitions/internal_worker.behavioralRuleOperationSelection"
+                    "$ref": "#/definitions/worker.behavioralRuleOperationSelection"
                 }
             }
         },
-        "internal_worker.candidateListResponse": {
+        "worker.candidateListResponse": {
             "type": "object",
             "properties": {
                 "candidates": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/internal_worker.candidateReviewItem"
+                        "$ref": "#/definitions/worker.candidateReviewItem"
                     }
                 },
                 "count": {
@@ -4717,7 +5089,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.candidateReviewItem": {
+        "worker.candidateReviewItem": {
             "type": "object",
             "properties": {
                 "affected_projects": {
@@ -4769,7 +5141,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "review_packet": {
-                    "$ref": "#/definitions/github_com_thebtf_engram_internal_reviewpacket.CandidateReviewPacket"
+                    "$ref": "#/definitions/reviewpacket.CandidateReviewPacket"
                 },
                 "source_session_id": {
                     "type": "string"
@@ -4782,7 +5154,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.documentErrorResponse": {
+        "worker.documentErrorResponse": {
             "type": "object",
             "properties": {
                 "error": {
@@ -4790,7 +5162,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.documentListItem": {
+        "worker.documentListItem": {
             "type": "object",
             "properties": {
                 "author": {
@@ -4816,7 +5188,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.documentListResponse": {
+        "worker.documentListResponse": {
             "type": "object",
             "properties": {
                 "has_more": {
@@ -4825,7 +5197,7 @@ const docTemplate = `{
                 "items": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/internal_worker.documentListItem"
+                        "$ref": "#/definitions/worker.documentListItem"
                     }
                 },
                 "limit": {
@@ -4839,7 +5211,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.embeddingTelemetry": {
+        "worker.embeddingTelemetry": {
             "type": "object",
             "properties": {
                 "active_memory_count": {
@@ -4865,7 +5237,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "last_embed_error": {
-                    "$ref": "#/definitions/github_com_thebtf_engram_internal_embedding.EmbedError"
+                    "$ref": "#/definitions/embedding.EmbedError"
                 },
                 "memories_with_chunks": {
                     "type": "integer"
@@ -4875,7 +5247,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.loginRequest": {
+        "worker.loginRequest": {
             "type": "object",
             "properties": {
                 "token": {
@@ -4883,7 +5255,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.memoryActionReceipt": {
+        "worker.memoryActionReceipt": {
             "type": "object",
             "properties": {
                 "action": {
@@ -4900,7 +5272,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.memoryAuditEntryResponse": {
+        "worker.memoryAuditEntryResponse": {
             "type": "object",
             "properties": {
                 "action": {
@@ -4932,13 +5304,13 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.memoryAuditResponse": {
+        "worker.memoryAuditResponse": {
             "type": "object",
             "properties": {
                 "entries": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/internal_worker.memoryAuditEntryResponse"
+                        "$ref": "#/definitions/worker.memoryAuditEntryResponse"
                     }
                 },
                 "memory_id": {
@@ -4946,7 +5318,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.memoryListResponse": {
+        "worker.memoryListResponse": {
             "type": "object",
             "properties": {
                 "has_more": {
@@ -4955,7 +5327,7 @@ const docTemplate = `{
                 "items": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.Memory"
+                        "$ref": "#/definitions/models.Memory"
                     }
                 },
                 "limit": {
@@ -4969,7 +5341,15 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.outcomeTelemetry": {
+        "worker.operatorCollectionFilterRequest": {
+            "type": "object",
+            "properties": {
+                "scope": {
+                    "type": "string"
+                }
+            }
+        },
+        "worker.outcomeTelemetry": {
             "type": "object",
             "properties": {
                 "by_outcome": {
@@ -4986,14 +5366,14 @@ const docTemplate = `{
                     "type": "number"
                 },
                 "unrecorded_fraction_result_status": {
-                    "$ref": "#/definitions/github_com_thebtf_engram_internal_operability.ResultStatus"
+                    "$ref": "#/definitions/operability.ResultStatus"
                 },
                 "unrecorded_sessions": {
                     "type": "integer"
                 }
             }
         },
-        "internal_worker.projectCitationRate": {
+        "worker.projectCitationRate": {
             "type": "object",
             "properties": {
                 "citation_rate": {
@@ -5013,24 +5393,48 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.projectListResponse": {
+        "worker.projectListResponse": {
             "type": "object",
             "properties": {
                 "items": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/github_com_thebtf_engram_internal_db_gorm.ProjectDescriptor"
+                        "$ref": "#/definitions/gorm.ProjectDescriptor"
                     }
                 },
                 "unresolved": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/github_com_thebtf_engram_internal_db_gorm.UnresolvedProject"
+                        "$ref": "#/definitions/gorm.UnresolvedProject"
                     }
                 }
             }
         },
-        "internal_worker.sessionEndRequest": {
+        "worker.retainedProjectResponse": {
+            "type": "object",
+            "properties": {
+                "attribution_scope": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "items": {},
+                "kind": {
+                    "type": "string"
+                },
+                "next_cursor": {
+                    "type": "string"
+                },
+                "reference": {
+                    "type": "string"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "worker.sessionEndRequest": {
             "type": "object",
             "properties": {
                 "agent_output_text": {
@@ -5044,7 +5448,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.sessionStartCompatibilityResponse": {
+        "worker.sessionStartCompatibilityResponse": {
             "type": "object",
             "properties": {
                 "generated_at": {
@@ -5073,7 +5477,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.storeCredentialRequest": {
+        "worker.storeCredentialRequest": {
             "type": "object",
             "properties": {
                 "name": {
@@ -5096,7 +5500,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.storeMemoryRequest": {
+        "worker.storeMemoryRequest": {
             "type": "object",
             "properties": {
                 "agent_visibility": {
@@ -5134,7 +5538,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.suppressMemoriesRequest": {
+        "worker.suppressMemoriesRequest": {
             "type": "object",
             "properties": {
                 "ids": {
@@ -5148,7 +5552,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.suppressMemoryRequest": {
+        "worker.suppressMemoryRequest": {
             "type": "object",
             "properties": {
                 "reason": {
@@ -5156,7 +5560,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.tokenCreateRequest": {
+        "worker.tokenCreateRequest": {
             "type": "object",
             "properties": {
                 "expires_at": {
@@ -5181,14 +5585,14 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.vnextStatsResponse": {
+        "worker.vnextStatsResponse": {
             "type": "object",
             "properties": {
                 "citation_count": {
                     "type": "integer"
                 },
                 "embedding": {
-                    "$ref": "#/definitions/internal_worker.embeddingTelemetry"
+                    "$ref": "#/definitions/worker.embeddingTelemetry"
                 },
                 "generated_at": {
                     "type": "string"
@@ -5200,15 +5604,15 @@ const docTemplate = `{
                     "type": "number"
                 },
                 "noise_ratio_result_status": {
-                    "$ref": "#/definitions/github_com_thebtf_engram_internal_operability.ResultStatus"
+                    "$ref": "#/definitions/operability.ResultStatus"
                 },
                 "outcomes": {
-                    "$ref": "#/definitions/internal_worker.outcomeTelemetry"
+                    "$ref": "#/definitions/worker.outcomeTelemetry"
                 },
                 "project_citation_rates": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/internal_worker.projectCitationRate"
+                        "$ref": "#/definitions/worker.projectCitationRate"
                     }
                 },
                 "uncited_count": {

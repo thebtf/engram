@@ -98,11 +98,12 @@ func memoriesToObservations(mems []*models.Memory) []*models.Observation {
 // @Produce json
 // @Security ApiKeyAuth
 // @Param project query string true "Canonical project UUID"
-// @Param query query string false "Search query"
+// @Param query query string false "GET requires a nonempty query parameter; POST requires query here or in the JSON body"
 // @Param cwd query string false "Working directory (ignored server-side)"
 // @Param agent_id query string false "Agent attribution; never project identity"
-// @Param limit query int false "Number of results (default 50, max 200)"
-// @Param body body object false "POST body: {project, query, agent_id, cwd, limit}"
+// @Param files_being_edited query []string false "File paths; repeat the query parameter or supply a POST JSON array" collectionFormat(multi)
+// @Param limit query int false "Query-only number of results (default 50, max 200)"
+// @Param body body object false "POST body: {project, query, agent_id, cwd, obs_type, files_being_edited}; nonempty fields override query params; obs_type is body-only, limit is query-only"
 // @Success 200 {object} map[string]interface{}
 // @Failure 400 {string} string "project and query required"
 // @Router /api/context/search [get]
@@ -462,9 +463,13 @@ type sessionStartCompatibilityResponse = sessioncompat.Payload
 // @Produce json
 // @Security ApiKeyAuth
 // @Param project query string true "Canonical project UUID"
+// @Param session_id query string false "Injection-event session ID; a nonempty POST body value overrides this query value"
 // @Param body body object false "POST body: {project, session_id, memories_limit, issues_limit}"
 // @Success 200 {object} sessionStartCompatibilityResponse
 // @Failure 400 {string} string "canonical project UUID required or invalid limits"
+// @Failure 401 {string} string "unauthorized"
+// @Failure 403 {string} string "forbidden"
+// @Failure 404 {string} string "not found"
 // @Failure 503 {string} string "session-start service unavailable"
 // @Failure 500 {string} string "internal error"
 // @Router /api/context/session-start [post]
@@ -585,6 +590,9 @@ func grpcCodeToHTTP(code codes.Code) int {
 // @Security ApiKeyAuth
 // @Param project query string true "Pinned canonical project UUID"
 // @Param agent_id query string false "Agent attribution; never substitutes for project or session"
+// @Param session_id query string false "GET session ID for session-scoped prompt retrieval and injection tracking"
+// @Param cwd query string false "GET working directory (ignored server-side)"
+// @Param files_being_edited query []string false "GET file paths; repeat the parameter for each path" collectionFormat(multi)
 // @Param format query string false "Response format: 'compact' for minimal payload"
 // @Param body body object false "POST body: {project, session_id, agent_id, cwd, files_being_edited}"
 // @Success 200 {object} map[string]interface{}

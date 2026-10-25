@@ -9,6 +9,7 @@ export interface UnresolvedProject {
   name: string
   reason: string
   reader_kinds: RetainedKind[]
+  families?: Array<{ kind: string; table_name: string; membership_count: number; reader_support: 'declared' | 'separate' | 'metadata_only' }>
 }
 
 export interface ProjectCatalog {
@@ -60,7 +61,19 @@ export function parseProjectCatalog(value: unknown): ProjectCatalog {
       throw new Error('Invalid retained reader kind')
     })
     if (new Set(reader_kinds).size !== reader_kinds.length) throw new Error('Duplicate retained reader kind')
-    return { reference, name: text(row.name), reason: text(row.reason), reader_kinds }
+    let families: UnresolvedProject['families']
+    if (row.families !== undefined) {
+      if (!Array.isArray(row.families)) throw new Error('Invalid retained families')
+      const tables = new Set<string>()
+      families = row.families.map(value => {
+        const family = object(value)
+        const kind = text(family.kind), table_name = text(family.table_name)
+        if (tables.has(table_name) || typeof family.membership_count !== 'number' || !Number.isSafeInteger(family.membership_count) || family.membership_count < 0 || (family.reader_support !== 'declared' && family.reader_support !== 'separate' && family.reader_support !== 'metadata_only')) throw new Error('Invalid retained family metadata')
+        tables.add(table_name)
+        return { kind, table_name, membership_count: family.membership_count, reader_support: family.reader_support }
+      })
+    }
+    return { reference, name: text(row.name), reason: text(row.reason), reader_kinds, ...(families === undefined ? {} : { families }) }
   })
   return { items, unresolved }
 }

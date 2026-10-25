@@ -4,7 +4,10 @@ import { operatorFetchJson, toOperatorSourceError, type OperatorSourceError } fr
 
 export interface OperatorProjectDescriptor { project_id: string; name: string; repository_qualifier?: string }
 export type OperatorRetainedReaderKind = 'memory' | 'document' | 'issue' | 'code'
-export interface OperatorUnresolvedProject { reference: string; name: string; reason: string; reader_kinds: OperatorRetainedReaderKind[] }
+export interface OperatorUnresolvedProject {
+  reference: string; name: string; reason: string; reader_kinds: OperatorRetainedReaderKind[]
+  families?: Array<{ kind: string; table_name: string; membership_count: number; reader_support: 'declared' | 'separate' | 'metadata_only' }>
+}
 export interface OperatorProjectCatalog { items: OperatorProjectDescriptor[]; unresolved: OperatorUnresolvedProject[] }
 export type OperatorProjectResolution = { status: 'resolved'; project_id: string; name: string } | { status: 'unresolved'; reference: string; reason: string }
 export interface OperatorKnowledgePage<T> { items: T[]; total: number; offset: number; limit: number; has_more: boolean }
@@ -98,7 +101,17 @@ export function parseProjectCatalog(payload: unknown): OperatorProjectCatalog {
     })
     if (new Set(reader_kinds).size !== reader_kinds.length) throw new TypeError('Duplicate retained reader kind')
     references.add(row.reference)
-    return { reference: row.reference, name: row.name, reason: row.reason, reader_kinds }
+    let families: OperatorUnresolvedProject['families']
+    if (row.families !== undefined) {
+      if (!Array.isArray(row.families)) throw new TypeError('Invalid retained families')
+      const tables = new Set<string>()
+      families = row.families.map((family: unknown) => {
+        if (!object(family) || !nonempty(family.kind) || !nonempty(family.table_name) || tables.has(family.table_name) || typeof family.membership_count !== 'number' || !Number.isSafeInteger(family.membership_count) || family.membership_count < 0 || (family.reader_support !== 'declared' && family.reader_support !== 'separate' && family.reader_support !== 'metadata_only')) throw new TypeError('Invalid retained family metadata')
+        tables.add(family.table_name)
+        return { kind: family.kind, table_name: family.table_name, membership_count: family.membership_count, reader_support: family.reader_support }
+      })
+    }
+    return { reference: row.reference, name: row.name, reason: row.reason, reader_kinds, ...(families === undefined ? {} : { families }) }
   })
   return { items, unresolved: retained }
 }

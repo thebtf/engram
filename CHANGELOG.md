@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Add explicit bounded retained-record discovery on `/api/projects` for historical memories, document versions and issues without changing the full no-view catalog. Verify unresolved witnesses through the shared fail-closed validator, preserve native payloads/privacy and role provenance, and seal consumed-prefix continuations with retained-specific Vault AES-GCM bound to the effective caller and normalized query. Keep valid witnesses across the 200-work boundary, exact selected native-ID body/history reads, full document version history and safe private/no-store failures. No stored ownership rewrite, schema/index change or installed-consumer acceptance is implied.
+- Add explicit saved historical memory/document/issue discovery to the existing unresolved page, using the separate native record projection and exact historical reader/history binding. Keep literal search/work-cursor/results on return; continue empty or short work pages without inventing totals. Preserve both catalog parsers' family occurrence/support metadata, metadata-only groups and separate group/code/Vault readers; disclose provenance and place object/history/return actions before full text. This is source behavior, not live-corpus or installed acceptance.
+
+
+- Regenerate the API through the maintained worker target using canonical local Go package directories and Swag 1.16.6, with real producer errors stopping the build. Correct existing context search/inject/session-start annotations without changing handlers; document the shared GET/POST conditional-query limitation. The actual producer and server build pass, with 40 named schema checks and all 76 references resolved; that producer checkpoint established compile-only retained-reader oracle provenance, with later native query proof recorded separately, and installed/release acceptance remains separate.
+
+- Add retained catalog `families` metadata with kind, technical table, saved membership-occurrence count and declared/separate/metadata-only reader boundary. Preserve every group, opaque reference, safe label and reason without payload previews, readable-record totals, availability or historical ownership assignment. This descriptor change does not provide cross-group record discovery or installed-consumer acceptance.
+
 - Bind issue-role lookups as one PostgreSQL ID array instead of expanding one parameter per issue. Preserve complete large selections, independent nullable canonical roles and retained-membership privacy without changing public limits.
 
 - Preserve seven fixed partition-repair refusal codes in private CLI diagnostics; retain generic output for untyped or unknown errors. Require both PostgreSQL fixture DSNs before public-consumer setup, and navigate the explicit metadata-only view in the retained-reader browser regression without changing reader-first discovery.

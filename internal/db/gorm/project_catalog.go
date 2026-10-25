@@ -7,11 +7,21 @@ import (
 	"strings"
 )
 
+type UnresolvedProjectFamily struct {
+	Kind      string `json:"kind" enums:"memory,document,issue,code,credential,native"`
+	TableName string `json:"table_name"`
+	// MembershipCount counts saved occurrences, not distinct or authorized records.
+	MembershipCount int64 `json:"membership_count"`
+	// ReaderSupport declares a reader boundary, not payload availability or access.
+	ReaderSupport string `json:"reader_support" enums:"declared,separate,metadata_only"`
+}
+
 type UnresolvedProject struct {
-	Reference   string   `json:"reference"`
-	Name        string   `json:"name"`
-	Reason      string   `json:"reason"`
-	ReaderKinds []string `json:"reader_kinds" enums:"memory,document,issue,code"`
+	Reference   string                    `json:"reference"`
+	Name        string                    `json:"name"`
+	Reason      string                    `json:"reason"`
+	ReaderKinds []string                  `json:"reader_kinds" enums:"memory,document,issue,code"`
+	Families    []UnresolvedProjectFamily `json:"families"`
 }
 
 func (s *ProjectConsolidationStore) ListUnresolved(ctx context.Context) ([]UnresolvedProject, error) {
@@ -89,7 +99,7 @@ func (s *ProjectConsolidationStore) ListUnresolved(ctx context.Context) ([]Unres
 			name = "Unresolved data owner"
 		}
 		if len(result) == 0 || result[len(result)-1].Reference != row.UnresolvedReference {
-			result = append(result, UnresolvedProject{Reference: row.UnresolvedReference, Name: name, ReaderKinds: []string{}})
+			result = append(result, UnresolvedProject{Reference: row.UnresolvedReference, Name: name, ReaderKinds: []string{}, Families: []UnresolvedProjectFamily{}})
 		}
 		item := &result[len(result)-1]
 		if item.Reason == "" {
@@ -108,7 +118,26 @@ func (s *ProjectConsolidationStore) ListUnresolved(ctx context.Context) ([]Unres
 		case "sources":
 			kind = "code"
 		}
-		if kind != "" {
+		support := "declared"
+		if kind == "" {
+			kind, support = "native", "metadata_only"
+			if row.Table == "credentials" {
+				kind, support = "credential", "separate"
+			}
+		}
+		familyIndex := -1
+		for i := range item.Families {
+			if item.Families[i].TableName == row.Table {
+				familyIndex = i
+				break
+			}
+		}
+		if familyIndex < 0 {
+			item.Families = append(item.Families, UnresolvedProjectFamily{Kind: kind, TableName: row.Table, MembershipCount: 1, ReaderSupport: support})
+		} else {
+			item.Families[familyIndex].MembershipCount++
+		}
+		if support == "declared" {
 			found := false
 			for _, existing := range item.ReaderKinds {
 				if existing == kind {
@@ -123,6 +152,11 @@ func (s *ProjectConsolidationStore) ListUnresolved(ctx context.Context) ([]Unres
 	}
 	for i := range result {
 		sort.Strings(result[i].ReaderKinds)
+		if len(result[i].Families) > 1 {
+			sort.Slice(result[i].Families, func(a, b int) bool {
+				return result[i].Families[a].TableName < result[i].Families[b].TableName
+			})
+		}
 	}
 	return result, nil
 }
