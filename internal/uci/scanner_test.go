@@ -277,6 +277,8 @@ func TestUCIScannerExcludesRealGitUntrackedNestedDirectory(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			fixture := newScannerRealFixture(t)
+			// The injected read spy must use the real fixture's already-resolved physical root.
+			fixture.root = fixture.expectedRoot
 			files := &scannerFixtureFiles{readCalls: make(map[string]int)}
 			fixture.scanner = NewScanner(fixture.runner, files, ScannerPolicy{IncludeUntracked: true})
 			if warm {
