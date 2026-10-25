@@ -57,7 +57,7 @@ Prepare one corrective slice over released 7.0.5: retained-record discovery, ind
 
 ### Changed
 
-- Align maintained server/daemon, Claude/Codex/OMP package/marketplace and OpenClaw package/descriptor/runtime versions on 7.0.6. The committed 7.0.5 bootstrap/parser policies remain unchanged until canonical producer regeneration; their historical hashes do not prove 7.0.6 artifacts. Publication, applicable release gates and ordinary installed acceptance remain separate. Ordinary installed OpenClaw is NOT_PROVEN; no OpenClaw host upgrade is included.
+- Align maintained server/daemon, Claude/Codex/OMP package/marketplace and OpenClaw package/descriptor/runtime versions on 7.0.6. Regenerate and check the 7.0.6 bootstrap/parser policies from canonical Git-blob inputs with Go 1.26.10 Linux amd64 and the pinned release image's MinGW GCC 13-win32, preserving release flags. The freshly generated parser retains the historical raw size/SHA-256; this is not 7.0.6 asset publication. Publication, applicable release gates and ordinary installed acceptance remain separate. Ordinary installed OpenClaw is NOT_PROVEN; no OpenClaw host upgrade is included.
 
 ## [7.0.5] - 2026-10-25
 

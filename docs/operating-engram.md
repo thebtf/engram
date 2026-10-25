@@ -10,9 +10,11 @@ server configuration, retained readers, Code Workspace, and restart procedures.
 Этот кандидат готовит `7.0.6`: поиск сохранённых исторических записей,
 независимый запуск Vault и исправление индексации Git directory records.
 Серверный daemon, package/marketplace manifests и OpenClaw runtime metadata
-объявляют `7.0.6`. Generated bootstrap/parser policies пока сохраняют `7.0.5`;
-до выпуска их должен пересоздать канонический producer по
-[release-протоколу](RELEASE-PROTOCOL.md). Это не готовый комплект для установки.
+объявляют `7.0.6`. Bootstrap/parser policies пересозданы для `7.0.6` из канонических
+Git blobs и прошли `prepare-bootstrap-policy.sh --version 7.0.6 --check` с Go 1.26.10
+Linux amd64 и MinGW GCC 13-win32 из закреплённого release image по
+[release-протоколу](RELEASE-PROTOCOL.md). Это не готовый комплект для установки:
+сборка финальных raw assets и архивов, публикация и установленная приёмка остаются отдельными шагами.
 
 По сохранённой приёмке от 2026-10-25 опубликован `7.0.5`; установленный сервер
 и обычные клиентские чтения приняты только для исправления запуска/context admission.
@@ -757,7 +759,7 @@ Repeat all 10 checks with `ENGRAM_GRAPH_ENABLED=true` and `ENGRAM_BOOKS_ENABLED=
 
 The linked DA03 source receipt records **NOT_PROVEN** for full source acceptance because its bookmark browser test selectors failed. Repeat the two bookmark checks with scoped selectors on the exact installed UI; do not convert its HTTP/MCP fixture results into a release PASS.
 
-The Windows amd64 (`win32-x64`) parser is published in [v7.0.5](https://github.com/thebtf/engram/releases/tag/v7.0.5): the retained release readback matches the package policy's raw asset, 7,946,240 bytes and SHA-256 `114ae44ea81c20d4ce4452b12331abe2b2094bae4cb4cb49aeae43bac03209ad`. This proves publication, not an ordinary installed Windows parser or JS/TS/TSX search/graph journey. The 7.0.6 candidate still carries that 7.0.5 policy pending canonical regeneration; do not relabel historical bytes as successor proof. Linux amd64 and macOS arm64 have no parser targets in this generated policy, although launcher clients exist. At release, compare the published asset with the matching package's generated `plugin/engram/parser-targets.json` (`asset`, `size`, executable `sha256`); separately verify the installed parser's `--bundle-digest`, daemon diagnostics and actual language behavior. The source manifest `tools/uci-parser/manifest.json` describes facts/v9 over the v2 parser protocol; its platform evidence remains `not_claimed` / `not_reverified`, with macOS blocked. Neither that historical manifest nor package publication certifies installed platform coverage. Full C#, Python, Vue SFC, communities, and the old manual graph or Book workflows are not promised.
+The Windows amd64 (`win32-x64`) parser is published in [v7.0.5](https://github.com/thebtf/engram/releases/tag/v7.0.5): the retained release readback matches the package policy's raw asset, 7,946,240 bytes and SHA-256 `114ae44ea81c20d4ce4452b12331abe2b2094bae4cb4cb49aeae43bac03209ad`. This proves publication, not an ordinary installed Windows parser or JS/TS/TSX search/graph journey. The 7.0.6 policy has now been regenerated and checked with the canonical producer; its fresh raw parser size/SHA-256 matches that historical tuple. The declared parser dependency closure includes the changed Git scanner source, so this is fresh generation evidence, not unchanged-input reuse or 7.0.6 publication. Linux amd64 and macOS arm64 have no parser targets in this generated policy, although launcher clients exist. At release, compare the published asset with the matching package's generated `plugin/engram/parser-targets.json` (`asset`, `size`, executable `sha256`); separately verify the installed parser's `--bundle-digest`, daemon diagnostics and actual language behavior. The source manifest `tools/uci-parser/manifest.json` describes facts/v9 over the v2 parser protocol; its platform evidence remains `not_claimed` / `not_reverified`, with macOS blocked. Neither that historical manifest nor package publication certifies installed platform coverage. Full C#, Python, Vue SFC, communities, and the old manual graph or Book workflows are not promised.
 
 ### Diagnose by symptom
 
