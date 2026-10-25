@@ -25,6 +25,12 @@ Workspace/search/graph/two-worktree путь или версию загруже�
 Кандидат `7.0.6` объявляет существующие tools через `contracts.tools` и переносит
 статический контекст с игнорируемого `before_agent_start` на `before_prompt_build`.
 Контекст каждого запуска заново использует текущий проект; session cache нет.
+Static context передаёт настоящий необязательный `ctx.sessionId` как `session_id`
+в `/api/context/inject`; сервер этого endpoint владеет учётом static exposure.
+Hook не ожидает вымышленный `response.sessionId` и не вызывает отдельный static
+`mark-injected`. Если host не выдал session ID, hook не отправляет это поле и
+не инициализирует session tracking; `agentId` не подставляется вместо session ID.
+Эта проверка контракта не подтверждает сохранение exposure в БД.
 Для автоматического контекста внешний плагин требует разрешение host:
 `plugins.entries.engram.hooks.allowConversationAccess: true`.
 Это не поле `plugins.entries.engram.config`: разрешение открывает prompt hooks
@@ -110,6 +116,12 @@ R1 — обычный установленный агент и WebUI выбир�
    Metadata-only группа остаётся метаинформацией без content/history запроса;
    это не доказательство отсутствия исходных данных. Unsupported или недоступный
    reader остаётся явным отказом, без подстановки другого вида или проекта.
+   Уже выданная страница historical records сохраняется при открытии body,
+   переходах по истории и возврате через **Назад**: эти действия не повторяют
+   discovery. Изменение discovery-фильтров или явный retry запускает новый запрос.
+   `/api/projects` отклоняет malformed query encoding и повторный `view` с HTTP 400
+   `INVALID_QUERY` до чтения catalog, membership или native storage. Корректный запрос
+   без `view` сохраняет обычный catalog-путь.
 7. После штатного обновления проверь то же решение в свежей обычной сессии агента
    и WebUI. При неверной identity останови scoped-чтение и сохрани данные:
    не угадывай UUID/label, не удаляй marker/cache/client-data, не создавай новую БД
