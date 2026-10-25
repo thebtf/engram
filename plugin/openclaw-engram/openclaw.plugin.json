@@ -34,12 +34,12 @@
       },
       "sessionContextLimit": {
         "type": "number",
-        "description": "Maximum observations to inject at session start",
+        "description": "Maximum ordinary static memories per prompt build",
         "default": 20
       },
       "tokenBudget": {
         "type": "number",
-        "description": "Maximum token budget for context injection (approx 4 chars per token)",
+        "description": "Combined prompt enrichment budget including rendered rules, instructions and wrappers (approx 4 chars per token)",
         "default": 2000
       },
       "timeoutMs": {
@@ -49,7 +49,7 @@
       },
       "autoExtract": {
         "type": "boolean",
-        "description": "Enable automatic observation extraction on compaction/session-end",
+        "description": "Automatic extraction on agent_end/compaction/tool events with explicit conversation access",
         "default": true
       },
       "logLevel": {
@@ -74,7 +74,7 @@
     "before_prompt_build",
     "after_tool_call",
     "before_compaction",
-    "session_end"
+    "agent_end"
   ],
   "contracts": {
     "tools": [

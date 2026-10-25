@@ -1,41 +1,14 @@
-/**
- * before_prompt_build hook — per-turn dynamic context search.
- *
- * Queries engram with the current user prompt and injects the top matching
- * observations as prependContext so they appear immediately before the user's
- * message in each turn.
- */
+/** before_prompt_build: resolve current identity, then compose static and turn context once. */
 
 import { resolveProject } from '../client.js';
-import type { EngramRestClient } from '../client.js';
+import type { EngramRestClient, ContextSearchResponse } from '../client.js';
 import type { PluginConfig } from '../config.js';
-import {
-  formatContext,
-  formatAlwaysInject,
-  formatRuleRouter,
-  isRouterPayloadEnabled,
-} from '../context/formatter.js';
-import { TurnTracker } from '../context/tiers.js';
-import type { TierResult } from '../context/tiers.js';
+import { formatPromptContext } from '../context/formatter.js';
+import { classifyTurn } from '../context/tiers.js';
 import { classifyMessage } from './message-classifier.js';
-import type {
-  BeforePromptBuildEvent,
-  PromptBuildResult,
-  PluginHookContext,
-  PluginLogger,
-} from '../types/openclaw.js';
+import { buildStaticInstructions } from './session-context.js';
+import type { BeforePromptBuildEvent, PromptBuildResult, PluginHookContext, PluginLogger } from '../types/openclaw.js';
 
-const turnTracker = new TurnTracker();
-
-/**
- * Handle the before_prompt_build hook.
- *
- * @param event  - The before_prompt_build event from OpenClaw.
- * @param ctx    - The hook context containing agent identity fields.
- * @param client - Shared engram REST client.
- * @param config - Resolved plugin config.
- * @returns      Context to prepend, or void if nothing to inject.
- */
 export async function handleBeforePromptBuild(
   event: BeforePromptBuildEvent,
   ctx: PluginHookContext,
@@ -45,17 +18,6 @@ export async function handleBeforePromptBuild(
 ): Promise<PromptBuildResult | void> {
   try {
     if (!client.isAvailable()) return;
-    if (!event.prompt || event.prompt.trim() === '') return;
-
-    // Skip non-user messages — heartbeats and SDK metadata are not real queries
-    const category = classifyMessage(event.prompt);
-    if (category !== 'user_prompt') return;
-
-    const tier: TierResult = turnTracker.classify(event.prompt ?? '', event.messages);
-    logger?.debug(`[engram] before-prompt-build: tier=${tier.tier} budget=${tier.tokenBudget} reason=${tier.reason}`);
-
-    if (tier.tier === 'NONE') return;
-
     const agentId = ctx.agentId ?? '';
     const registration = await resolveProject(client, agentId, ctx.workspaceDir, config.project);
     if (!registration.ok) {
@@ -63,80 +25,39 @@ export async function handleBeforePromptBuild(
       return;
     }
     const project = registration.canonicalProject;
-
-    let response;
-    try {
-      response = await client.searchContext({
-        project,
-        query: event.prompt,
-        cwd: ctx.workspaceDir,
-        agent_id: agentId,
-        source: 'openclaw',
+    const sessionId = ctx.sessionId?.trim() ? ctx.sessionId : undefined;
+    const session = await client.getContextInject(agentId, ctx.workspaceDir, project, sessionId);
+    const query = event.currentUserMessage ?? event.prompt;
+    const tier = classifyTurn(query, event.messages);
+    let turn: ContextSearchResponse | null = null;
+    if (query?.trim() && classifyMessage(query) === 'user_prompt' && tier.tier !== 'NONE') {
+      turn = await client.searchContext({
+        project, query, cwd: ctx.workspaceDir, agent_id: agentId,
+        ...(sessionId ? { session_id: sessionId } : {}), source: 'openclaw',
       });
-    } catch (err) {
-      (logger ?? console).warn('[engram] before-prompt-build: searchContext failed', err);
+      if (turn && (turn.observations ?? []).length === 0 && query.trim().length > 10) {
+        void client.trackSearchMiss({ project, query: query.trim().replace(/\s+/g, ' ').slice(0, 512) }).catch(() => { });
+      }
+    }
+    const result = formatPromptContext(session, turn, {
+      tokenBudget: config.tokenBudget ?? 2000,
+      contextLimit: config.contextLimit ?? 10,
+      sessionContextLimit: config.sessionContextLimit ?? 20,
+      turnBudget: tier.tokenBudget,
+      instructions: buildStaticInstructions(project),
+    });
+    if (result.budgetExceeded) {
+      (logger ?? console).warn('[engram] prompt budget cannot fit complete required guidance; skipping enrichment');
       return;
     }
-
-    if (!response) return;
-
-    const observations = Array.isArray(response.observations) ? response.observations : [];
-    const routerBlock = isRouterPayloadEnabled(response.rule_router)
-      ? formatRuleRouter(response.rule_router)
-      : '';
-    const alwaysInjectObs = Array.isArray(response.always_inject) ? response.always_inject : [];
-    const alwaysInjectBlock = !routerBlock && alwaysInjectObs.length > 0
-      ? formatAlwaysInject(alwaysInjectObs)
-      : '';
-
-    if (observations.length === 0) {
-      // Track search miss for self-tuning analytics (fire-and-forget).
-      // Normalize and truncate prompt to avoid sending raw PII or very long strings.
-      const normalizedPrompt = event.prompt?.trim() ?? '';
-      if (normalizedPrompt.length > 10) {
-        const query = normalizedPrompt.replace(/\s+/g, ' ').slice(0, 512);
-        void client.trackSearchMiss({ project, query }).catch(() => {});
-      }
-      if (!routerBlock && !alwaysInjectBlock) return;
-    }
-
-    const { context, injectedIds, trimmedCount } = formatContext(
-      observations,
-      { tokenBudget: tier.tokenBudget },
-    );
-
-    if (trimmedCount > 0) {
-      (logger ?? console).warn(
-        `[engram] before-prompt-build: trimmed ${trimmedCount} observations to fit token budget`,
-      );
-    }
-
-    if (!context && !alwaysInjectBlock && !routerBlock) return;
-
-    (logger ?? console).warn(
-      `[engram] before-prompt-build: injecting ${injectedIds.length} observations + ${routerBlock ? 'router packets' : `${alwaysInjectObs.length} always_inject rules`} for project ${project}`,
-    );
-
-    // Mark injected observations (fire-and-forget)
-    if (injectedIds.length > 0) {
-      try {
-        const sessionResp = await client.initSession({
-          claudeSessionId: ctx.sessionId ?? agentId,
-          project,
-          prompt: event.prompt,
-        });
-        if (sessionResp && !sessionResp.skipped && sessionResp.sessionDbId) {
-          void client.markInjected(sessionResp.sessionDbId, injectedIds)
-            .catch(() => { /* swallow — fire-and-forget */ });
-        }
-      } catch {
-        // Non-critical — context was already injected
+    if (!result.appendSystemContext && !result.prependContext) return;
+    if (sessionId) {
+      const initialized = await client.initSession({ claudeSessionId: sessionId, project, ...(query?.trim() ? { prompt: query } : {}) });
+      if (result.injectedIds.length > 0 && initialized && !initialized.skipped && initialized.sessionDbId) {
+        void client.markInjected(initialized.sessionDbId, result.injectedIds).catch(() => { });
       }
     }
-
-    // Combine: router/always-inject guidance first, then query-matched context.
-    const combined = [routerBlock, alwaysInjectBlock, context].filter(Boolean).join('\n');
-    return { prependContext: combined };
+    return { appendSystemContext: result.appendSystemContext, prependContext: result.prependContext };
   } catch (err) {
     (logger ?? console).error('[engram] hook error:', err);
   }

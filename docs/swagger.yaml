@@ -1008,9 +1008,10 @@ paths:
             additionalProperties: true
             type: object
         "401":
-          description: unauthorized
+          description: Unauthorized
           schema:
-            type: string
+            additionalProperties: true
+            type: object
       security:
       - ApiKeyAuth: []
       summary: Check authentication status
@@ -1439,6 +1440,11 @@ paths:
         in: query
         name: agent_id
         type: string
+      - description: Optional source-session audit attribution; does not change project-scoped
+          search visibility
+        in: query
+        name: session_id
+        type: string
       - collectionFormat: multi
         description: File paths; repeat the query parameter or supply a POST JSON
           array
@@ -1451,8 +1457,9 @@ paths:
         in: query
         name: limit
         type: integer
-      - description: 'POST body: {project, query, agent_id, cwd, obs_type, files_being_edited};
-          nonempty fields override query params; obs_type is body-only, limit is query-only'
+      - description: 'POST body: {project, query, agent_id, session_id, cwd, obs_type,
+          files_being_edited}; nonempty fields override query params; session_id overrides
+          even when empty; obs_type is body-only, limit is query-only'
         in: body
         name: body
         schema:
@@ -1500,6 +1507,11 @@ paths:
         in: query
         name: agent_id
         type: string
+      - description: Optional source-session audit attribution; does not change project-scoped
+          search visibility
+        in: query
+        name: session_id
+        type: string
       - collectionFormat: multi
         description: File paths; repeat the query parameter or supply a POST JSON
           array
@@ -1512,8 +1524,9 @@ paths:
         in: query
         name: limit
         type: integer
-      - description: 'POST body: {project, query, agent_id, cwd, obs_type, files_being_edited};
-          nonempty fields override query params; obs_type is body-only, limit is query-only'
+      - description: 'POST body: {project, query, agent_id, session_id, cwd, obs_type,
+          files_being_edited}; nonempty fields override query params; session_id overrides
+          even when empty; obs_type is body-only, limit is query-only'
         in: body
         name: body
         schema:

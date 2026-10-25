@@ -27,12 +27,10 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { handleSessionStart } from './hooks/session-start.js';
-import { handleSessionContext } from './hooks/session-context.js';
 import { handleBeforePromptBuild } from './hooks/before-prompt-build.js';
 import { handleAfterToolCall } from './hooks/after-tool-call.js';
 import { handleBeforeCompaction } from './hooks/before-compaction.js';
-import { handleSessionEnd } from './hooks/session-end.js';
-import { handleBeforeToolCall } from './hooks/before-tool-call.js';
+import { handleAgentEnd } from './hooks/agent-end.js';
 
 import { createEngramSearchTool, createMemorySearchTool } from './tools/engram-search.js';
 import { createEngramRememberTool, createMemoryStoreTool } from './tools/engram-remember.js';
@@ -67,6 +65,11 @@ const plugin: OpenClawPluginDefinition = {
  register(api: OpenClawPluginApi): void {
   const config = parseConfig(api.pluginConfig ?? {});
   const client = new EngramRestClient(config);
+  const plugins = api.config.plugins;
+  const entries = plugins && typeof plugins === 'object' && 'entries' in plugins ? plugins.entries : undefined;
+  const entry = entries && typeof entries === 'object' && 'engram' in entries ? entries.engram : undefined;
+  const hooks = entry && typeof entry === 'object' && 'hooks' in entry ? entry.hooks : undefined;
+  const conversationAccess = hooks && typeof hooks === 'object' && 'allowConversationAccess' in hooks && hooks.allowConversationAccess === true;
 
   api.logger.info(`[engram] initializing — server: ${config.url}`);
 
@@ -79,27 +82,21 @@ const plugin: OpenClawPluginDefinition = {
   );
 
   api.on('before_prompt_build', (event, ctx: PluginHookContext) =>
-   handleSessionContext(event, ctx, client, config, api.logger),
-  );
-
-  api.on('before_prompt_build', (event, ctx: PluginHookContext) =>
    handleBeforePromptBuild(event, ctx, client, config, api.logger),
   );
 
-  api.on('after_tool_call', (event, ctx: PluginHookContext) =>
-   handleAfterToolCall(event, ctx, client, config),
-  );
+  // These hooks are not conversation-gated by every host runner; never use them as a bypass.
+  if (conversationAccess) {
+   api.on('after_tool_call', (event, ctx: PluginHookContext) =>
+    handleAfterToolCall(event, ctx, client, config),
+   );
+   api.on('before_compaction', (event, ctx: PluginHookContext) =>
+    handleBeforeCompaction(event, ctx, client, config, api.logger),
+   );
+  }
 
-  api.on('before_compaction', (event, ctx: PluginHookContext) =>
-   handleBeforeCompaction(event, ctx, client, config, api.logger),
-  );
-
-  api.on('before_tool_call', (event, ctx: PluginHookContext) =>
-   handleBeforeToolCall(event, ctx, client, config),
-  );
-
-  api.on('session_end', (event, ctx: PluginHookContext) =>
-   handleSessionEnd(event, ctx, client, config, api.logger),
+  api.on('agent_end', (event, ctx: PluginHookContext) =>
+   handleAgentEnd(event, ctx, client, config, api.logger),
   );
 
   // ------------------------------------------------------------------

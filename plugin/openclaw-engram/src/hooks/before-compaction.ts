@@ -9,11 +9,8 @@
 import { resolveProject } from '../client.js';
 import type { EngramRestClient } from '../client.js';
 import type { PluginConfig } from '../config.js';
-import { normalizeEngramContent } from './content.js';
-import type { BeforeCompactionEvent, ConversationMessage, PluginHookContext, PluginLogger } from '../types/openclaw.js';
-
-/** Maximum recent messages to include in the backfill payload. */
-const MAX_MESSAGES = 20;
+import { serializeConversation } from './content.js';
+import type { BeforeCompactionEvent, PluginHookContext, PluginLogger } from '../types/openclaw.js';
 
 /**
  * Handle the before_compaction hook.
@@ -35,7 +32,7 @@ export async function handleBeforeCompaction(
     if (!config.autoExtract) return;
 
     const agentId = ctx.agentId ?? '';
-    const sessionId = ctx.sessionId ?? ctx.sessionKey ?? agentId;
+    const sessionId = ctx.sessionId;
     if (!sessionId?.trim()) return; // no session identity available — skip
     const registration = await resolveProject(client, agentId, ctx.workspaceDir, config.project);
     if (!registration.ok) {
@@ -45,34 +42,20 @@ export async function handleBeforeCompaction(
     const project = registration.canonicalProject;
 
     const messages = Array.isArray(event.messages) ? event.messages : [];
-    const recent = messages.slice(-MAX_MESSAGES);
-    const content = serializeMessages(recent);
+    const content = serializeConversation(messages);
     if (!content) return;
-
-    const truncated = normalizeEngramContent(content);
 
     // Registration is awaited above; the data write may now be fire-and-forget.
     void client.backfillSession({
       session_id: sessionId,
       project,
-      content: truncated,
+      content,
     });
 
     (logger ?? console).warn(
-      `[engram] before-compaction: submitting ${recent.length} messages for backfill (project ${project})`,
+      `[engram] transcript: submitting bounded visible conversation for project ${project}`,
     );
   } catch (err) {
     (logger ?? console).error('[engram] hook error:', err);
   }
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function serializeMessages(messages: ConversationMessage[]): string {
-  return messages
-    .map((m) => `[${m.role}]: ${m.content}`)
-    .join('\n\n');
-}
-

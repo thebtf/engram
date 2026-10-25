@@ -101,9 +101,10 @@ func memoriesToObservations(mems []*models.Memory) []*models.Observation {
 // @Param query query string false "GET requires a nonempty query parameter; POST requires query here or in the JSON body"
 // @Param cwd query string false "Working directory (ignored server-side)"
 // @Param agent_id query string false "Agent attribution; never project identity"
+// @Param session_id query string false "Optional source-session audit attribution; does not change project-scoped search visibility"
 // @Param files_being_edited query []string false "File paths; repeat the query parameter or supply a POST JSON array" collectionFormat(multi)
 // @Param limit query int false "Query-only number of results (default 50, max 200)"
-// @Param body body object false "POST body: {project, query, agent_id, cwd, obs_type, files_being_edited}; nonempty fields override query params; obs_type is body-only, limit is query-only"
+// @Param body body object false "POST body: {project, query, agent_id, session_id, cwd, obs_type, files_being_edited}; nonempty fields override query params; session_id overrides even when empty; obs_type is body-only, limit is query-only"
 // @Success 200 {object} map[string]interface{}
 // @Failure 400 {string} string "project and query required"
 // @Router /api/context/search [get]
@@ -113,6 +114,7 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query().Get("query")
 	cwd := r.URL.Query().Get("cwd")
 	agentID := r.URL.Query().Get("agent_id")
+	sessionID := r.URL.Query().Get("session_id")
 	filesBeingEdited := r.URL.Query()["files_being_edited"]
 
 	// POST body overrides query params — allows large payloads that would exceed URL limits.
@@ -123,6 +125,7 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 			Query            string   `json:"query"`
 			Cwd              string   `json:"cwd"`
 			AgentID          string   `json:"agent_id"`
+			SessionID        *string  `json:"session_id"`
 			ObsType          string   `json:"obs_type"`
 			FilesBeingEdited []string `json:"files_being_edited"`
 		}
@@ -139,6 +142,9 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 			if body.AgentID != "" {
 				agentID = body.AgentID
 			}
+			if body.SessionID != nil {
+				sessionID = *body.SessionID
+			}
 			if body.ObsType != "" {
 				obsTypeFilter = body.ObsType
 			}
@@ -148,6 +154,7 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 		}
 
 	}
+	r = r.WithContext(auditcontext.WithSourceSession(r.Context(), sessionID))
 
 	if project == "" || query == "" {
 		http.Error(w, "project and query required", http.StatusBadRequest)

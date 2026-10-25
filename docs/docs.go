@@ -153,9 +153,10 @@ const docTemplate = `{
                         }
                     },
                     "401": {
-                        "description": "unauthorized",
+                        "description": "Unauthorized",
                         "schema": {
-                            "type": "string"
+                            "type": "object",
+                            "additionalProperties": true
                         }
                     }
                 }
@@ -806,6 +807,12 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
+                        "type": "string",
+                        "description": "Optional source-session audit attribution; does not change project-scoped search visibility",
+                        "name": "session_id",
+                        "in": "query"
+                    },
+                    {
                         "type": "array",
                         "items": {
                             "type": "string"
@@ -822,7 +829,7 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
-                        "description": "POST body: {project, query, agent_id, cwd, obs_type, files_being_edited}; nonempty fields override query params; obs_type is body-only, limit is query-only",
+                        "description": "POST body: {project, query, agent_id, session_id, cwd, obs_type, files_being_edited}; nonempty fields override query params; session_id overrides even when empty; obs_type is body-only, limit is query-only",
                         "name": "body",
                         "in": "body",
                         "schema": {
@@ -890,6 +897,12 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
+                        "type": "string",
+                        "description": "Optional source-session audit attribution; does not change project-scoped search visibility",
+                        "name": "session_id",
+                        "in": "query"
+                    },
+                    {
                         "type": "array",
                         "items": {
                             "type": "string"
@@ -906,7 +919,7 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
-                        "description": "POST body: {project, query, agent_id, cwd, obs_type, files_being_edited}; nonempty fields override query params; obs_type is body-only, limit is query-only",
+                        "description": "POST body: {project, query, agent_id, session_id, cwd, obs_type, files_being_edited}; nonempty fields override query params; session_id overrides even when empty; obs_type is body-only, limit is query-only",
                         "name": "body",
                         "in": "body",
                         "schema": {

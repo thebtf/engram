@@ -1,6 +1,6 @@
 /**
  * Local adapter subset of the OpenClaw Plugin SDK.
- * Runtime compatibility is checked against the official 2026.10.7 fixture.
+ * Runtime compatibility is checked against pinned official 2026.9.2 and 2026.10.7 fixtures.
  */
 
 // ---------------------------------------------------------------------------
@@ -156,44 +156,49 @@ export interface BaseHookEvent {
   timestamp?: string;
 }
 
-export interface SessionStartEvent extends BaseHookEvent {
-  initialPrompt?: string;
+export interface SessionStartEvent {
+  sessionId: string;
+  sessionKey?: string;
+  resumedFrom?: string;
 }
 
-export interface BeforePromptBuildEvent extends BaseHookEvent {
-  prompt?: string;
+export interface BeforePromptBuildEvent {
+  prompt: string;
+  /** Added in 2026.10.7; 2026.9.2 supplies prompt and messages. */
   currentUserMessage?: string;
-  turnIndex?: number;
-  /** Session messages prepared for this run (from OpenClaw). */
-  messages?: unknown[];
+  messages: unknown[];
 }
 
-export interface BeforeToolCallEvent extends BaseHookEvent {
-  toolName?: string;
-  toolInput?: unknown;
-}
-
-export interface AfterToolCallEvent extends BaseHookEvent {
-  toolName?: string;
-  toolInput?: unknown;
-  toolResult?: unknown;
-  success?: boolean;
+export interface AfterToolCallEvent {
+  toolName: string;
+  params: Record<string, unknown>;
+  result?: unknown;
   error?: string;
+  durationMs?: number;
 }
 
-export interface BeforeCompactionEvent extends BaseHookEvent {
-  messages?: ConversationMessage[];
+export interface BeforeCompactionEvent {
+  messageCount: number;
+  compactingCount?: number;
+  tokenCount?: number;
+  messages?: unknown[];
+  sessionFile?: string;
+}
+
+export interface AgentEndEvent {
+  messages: unknown[];
+  success: boolean;
+  error?: string;
+  durationMs?: number;
+}
+
+export interface SessionEndEvent {
+  sessionId: string;
+  sessionKey?: string;
+  messageCount: number;
+  durationMs?: number;
   reason?: string;
-}
-
-export interface SessionEndEvent extends BaseHookEvent {
-  messages?: ConversationMessage[];
-  reason?: string;
-}
-
-export interface ConversationMessage {
-  role: 'user' | 'assistant' | 'system' | 'tool';
-  content: string;
+  sessionFile?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -209,18 +214,14 @@ export interface SessionStartResult {
   appendSystemContext?: string;
 }
 
-export interface BeforeToolCallResult {
-  appendSystemContext?: string;
-}
-
-export type HookResult = void | PromptBuildResult | SessionStartResult | BeforeToolCallResult | undefined;
+export type HookResult = void | PromptBuildResult | SessionStartResult | undefined;
 
 /** Map hook names to their event types (for hooks we use). */
 export interface HookEventMap {
   session_start: SessionStartEvent;
   before_prompt_build: BeforePromptBuildEvent;
-  before_tool_call: BeforeToolCallEvent;
   after_tool_call: AfterToolCallEvent;
+  agent_end: AgentEndEvent;
   before_compaction: BeforeCompactionEvent;
   session_end: SessionEndEvent;
 }

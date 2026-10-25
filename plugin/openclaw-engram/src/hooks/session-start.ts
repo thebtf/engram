@@ -33,6 +33,8 @@ export async function handleSessionStart(
 ): Promise<void> {
   try {
     if (!client.isAvailable()) return;
+    const claudeSessionId = event.sessionId;
+    if (!claudeSessionId?.trim() || (ctx.sessionId && ctx.sessionId !== claudeSessionId)) return;
 
     const agentId = ctx.agentId ?? '';
     const registration = await resolveProject(client, agentId, ctx.workspaceDir, config.project);
@@ -42,19 +44,11 @@ export async function handleSessionStart(
     }
     const project = registration.canonicalProject;
 
-    const claudeSessionId = ctx.sessionId ?? agentId;
-    if (!claudeSessionId) {
-      (logger ?? console).warn(
-        '[engram] session-start: no sessionId or agentId available — skipping session init',
-      );
-      return;
-    }
 
     // Registration is awaited above; the data write may now be fire-and-forget.
     void client.initSession({
       claudeSessionId,
       project,
-      prompt: event.initialPrompt,
     });
   } catch (err) {
     (logger ?? console).error('[engram] hook error:', err);
