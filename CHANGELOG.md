@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Parse Git untracked directory records in both status and candidate censuses before applying existing nested-repository and reparse exclusions; retain strict file-path validation and avoid reading nested repository contents.
+
 - Initialize the shared Vault before publishing reader readiness even when CodeIntel is disabled; reuse the same singleton for optional UCI and fail startup on an invalid required Vault key instead of serving catalog/history discovery as unavailable.
 
 - Add explicit bounded retained-record discovery on `/api/projects` for historical memories, document versions and issues without changing the full no-view catalog. Verify unresolved witnesses through the shared fail-closed validator, preserve native payloads/privacy and role provenance, and seal consumed-prefix continuations with retained-specific Vault AES-GCM bound to the effective caller and normalized query. Keep valid witnesses across the 200-work boundary, exact selected native-ID body/history reads, full document version history and safe private/no-store failures. No stored ownership rewrite, schema/index change or installed-consumer acceptance is implied.

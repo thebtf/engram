@@ -636,7 +636,7 @@ func (scanner *Scanner) scanCandidate(ctx context.Context, root string, candidat
 		return ScannerFile{}, false, 0, err
 	}
 
-	location, err := scanner.checkCandidateLocation(root, candidate.path)
+	location, err := scanner.checkCandidateLocation(root, candidate.path, candidate.directory)
 	if err != nil {
 		return scannerUnreadableFile(candidate.path), true, 0, nil
 	}
@@ -652,10 +652,14 @@ func (scanner *Scanner) scanCandidate(ctx context.Context, root string, candidat
 	return scanner.readStableFile(ctx, fullPath, candidate.path)
 }
 
-func (scanner *Scanner) checkCandidateLocation(root, relativePath string) (scannerLocation, error) {
+func (scanner *Scanner) checkCandidateLocation(root, relativePath string, directory bool) (scannerLocation, error) {
 	components := strings.Split(relativePath, "/")
 	parent := root
-	for index := range len(components) - 1 {
+	count := len(components) - 1
+	if directory {
+		count++
+	}
+	for index := range count {
 		parent = filepath.Join(parent, components[index])
 		info, err := scanner.files.Lstat(parent)
 		if err != nil {
@@ -676,6 +680,9 @@ func (scanner *Scanner) checkCandidateLocation(root, relativePath string) (scann
 		if !errors.Is(markerErr, fs.ErrNotExist) {
 			return scannerLocationSafe, markerErr
 		}
+	}
+	if directory {
+		return scannerLocationUnsupported, nil
 	}
 	return scannerLocationSafe, nil
 }
@@ -833,10 +840,11 @@ func (scanner *Scanner) finish(result *ScannerResult, started time.Time, outcome
 }
 
 type scannerCandidate struct {
-	path    string
-	mode    string
-	tracked bool
-	removed bool
+	path      string
+	mode      string
+	tracked   bool
+	removed   bool
+	directory bool
 }
 
 func scannerStagedCandidates(output []byte, objectFormat string) ([]scannerCandidate, error) {
@@ -876,8 +884,8 @@ func scannerCombinedCandidates(output []byte, objectFormat string) ([]scannerCan
 			}
 			staged = append(staged, candidate)
 		case '?':
-			candidate := scannerCandidate{path: record[2:]}
-			if err := scannerValidateGitPath(candidate.path); err != nil {
+			candidate, err := scannerUntrackedCandidate(record[2:])
+			if err != nil {
 				return nil, nil, err
 			}
 			untracked = append(untracked, candidate)
@@ -912,8 +920,8 @@ func scannerStatusUntrackedCandidate(records []string, index int) (scannerCandid
 	}
 	switch record[0] {
 	case '?':
-		candidate := scannerCandidate{path: record[2:]}
-		if err := scannerValidateGitPath(candidate.path); err != nil {
+		candidate, err := scannerUntrackedCandidate(record[2:])
+		if err != nil {
 			return scannerCandidate{}, false, false, err
 		}
 		return candidate, true, false, nil
@@ -1021,6 +1029,17 @@ func scannerStagedCandidate(record, objectFormat string) (scannerCandidate, erro
 	return candidate, nil
 }
 
+func scannerUntrackedCandidate(record string) (scannerCandidate, error) {
+	directory := strings.HasSuffix(record, "/")
+	if directory {
+		record = record[:len(record)-1]
+	}
+	if err := scannerValidateGitPath(record); err != nil {
+		return scannerCandidate{}, err
+	}
+	return scannerCandidate{path: record, directory: directory}, nil
+}
+
 func scannerUntrackedCandidates(output []byte) ([]scannerCandidate, error) {
 	records, err := scannerNULRecords(output)
 	if err != nil {
@@ -1029,10 +1048,11 @@ func scannerUntrackedCandidates(output []byte) ([]scannerCandidate, error) {
 
 	candidates := make([]scannerCandidate, 0, len(records))
 	for _, record := range records {
-		if err := scannerValidateGitPath(record); err != nil {
+		candidate, err := scannerUntrackedCandidate(record)
+		if err != nil {
 			return nil, err
 		}
-		candidates = append(candidates, scannerCandidate{path: record})
+		candidates = append(candidates, candidate)
 	}
 	return candidates, nil
 }
