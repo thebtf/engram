@@ -48,6 +48,7 @@ export async function handleSessionContext(
    agentId,
    ctx.workspaceDir,
    project,
+   ctx.sessionId,
   );
 
   if (!response) return;
@@ -71,16 +72,11 @@ export async function handleSessionContext(
 
   if (!context && !routerBlock) return;
 
-  // Mark observations as injected (fire-and-forget)
-  if (injectedIds.length > 0 && response.sessionId) {
-   void client.markInjected(response.sessionId, injectedIds);
-  }
-
   // Initialize session tracking (fire-and-forget)
-  const claudeSessionId = ctx.sessionId ?? agentId;
+  const claudeSessionId = ctx.sessionId;
   if (!claudeSessionId) {
    (logger ?? console).warn(
-    '[engram] session-context: no sessionId or agentId available — skipping session init',
+    '[engram] session-context: no sessionId available — skipping session init',
    );
   } else {
    void client.initSession({

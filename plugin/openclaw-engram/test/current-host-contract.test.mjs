@@ -31,13 +31,13 @@ async function fixture(t, allowConversationAccess = true, configuredProject = pr
     requests.push({ route: target.pathname, body });
     let payload;
     if (target.pathname === '/api/sessions/123/mark-injected') {
-      assert.ok(Array.isArray(body.ids) && body.ids.length > 0 && body.ids.every(id => [observation.id, sessionObservation.id].includes(id)));
+      assert.deepEqual(body.ids, [observation.id], 'Only per-turn search uses mark-injected; static exposure belongs to context/inject');
       payload = {};
     } else {
       assert.ok([project, '22222222-2222-4222-8222-222222222222'].includes(body.project));
       assert.ok(['/api/context/search', '/api/context/inject', '/api/sessions/init'].includes(target.pathname), `Unexpected REST operation: ${target.pathname}`);
       payload = target.pathname === '/api/context/search' ? { observations: [observation] }
-        : target.pathname === '/api/context/inject' ? { observations: [{ ...sessionObservation, narrative: `${sessionObservation.narrative} Project ${body.project}.` }], sessionId: 123 }
+        : target.pathname === '/api/context/inject' ? { project: body.project, strategy: 'legacy', observations: [{ ...sessionObservation, narrative: `${sessionObservation.narrative} Project ${body.project}.` }] }
           : { sessionDbId: 123, promptNumber: 1 };
     }
     return new Response(JSON.stringify(payload), { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -93,6 +93,37 @@ test('automatic context includes session-level memory through a supported curren
   assert.ok(requests.some(request => request.route === '/api/sessions/init'), 'Session tracking must remain functional');
   const delivered = [result?.prependContext, result?.appendContext, result?.prependSystemContext, result?.appendSystemContext].filter(Boolean).join('\n');
   assert.match(delivered, /synthetic session-only safety decision/, 'Session-level memory is lost when before_agent_start is ignored');
+  const inject = requests.find(request => request.route === '/api/context/inject');
+  assert.deepEqual(inject.body, { agent_id: ctx.agentId, cwd: ctx.workspaceDir, project, session_id: ctx.sessionId });
+  assert.ok(requests.filter(request => request.route === '/api/sessions/init').every(request => request.body.claudeSessionId === ctx.sessionId));
+});
+
+test('static context without a host session does not invent conversation attribution', options, async t => {
+  const { runner, ctx, requests } = await fixture(t);
+  delete ctx.sessionId;
+  const result = await runner.runBeforePromptBuild({ prompt: '', messages: [] }, ctx);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(result.appendSystemContext, /synthetic session-only safety decision/);
+  assert.deepEqual(requests.map(request => request.route), ['/api/context/inject']);
+  assert.deepEqual(requests[0].body, { agent_id: ctx.agentId, cwd: ctx.workspaceDir, project });
+});
+
+test('failed static context request stays nonblocking and retries with the actual host session', options, async t => {
+  const { runner, ctx, requests } = await fixture(t);
+  const fetch = globalThis.fetch;
+  let failedBody;
+  t.mock.method(globalThis, 'fetch', async (url, init) => {
+    assert.equal(new URL(String(url)).pathname, '/api/context/inject');
+    failedBody = JSON.parse(init.body);
+    return new Response('synthetic unavailable', { status: 503 });
+  });
+  const event = { prompt: '', messages: [] };
+  assert.equal(await runner.runBeforePromptBuild(event, ctx), undefined);
+  assert.deepEqual(failedBody, { agent_id: ctx.agentId, cwd: ctx.workspaceDir, project, session_id: ctx.sessionId });
+  assert.deepEqual(requests, [], 'A failed static request must not initialize or mark a session');
+  t.mock.method(globalThis, 'fetch', fetch);
+  const retried = await runner.runBeforePromptBuild(event, ctx);
+  assert.match(retried.appendSystemContext, /synthetic session-only safety decision/);
 });
 
 test('current host exposes the registered memory search tool and its useful result', options, async t => {

@@ -28,7 +28,6 @@ export interface Observation {
 
 export interface ContextInjectResponse {
  observations: Observation[];
- sessionId?: number;
  rule_router?: RuleRouterPayload;
 }
 
@@ -290,9 +289,11 @@ export class EngramRestClient {
   agentId: string,
   cwd: string | undefined,
   project: string,
+  sessionId?: string,
  ): Promise<ContextInjectResponse | null> {
   return this.post<ContextInjectResponse>('/api/context/inject', {
    agent_id: agentId, ...(cwd ? { cwd } : {}), project,
+   ...(sessionId ? { session_id: sessionId } : {}),
   }, 15_000);
  }
 

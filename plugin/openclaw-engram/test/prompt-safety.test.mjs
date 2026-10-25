@@ -227,21 +227,18 @@ test('session context limits observations without changing the response', async 
     { id: 301, type: 'decision', title: 'Keep this decision', narrative: 'Bounded session guidance.' },
     { id: 302, type: 'decision', title: 'Omit this decision', narrative: 'Outside the configured count.' },
   ];
-  let marked;
   const result = await handleSessionContext(
     { prompt: 'Continue safely.' },
     { agentId: 'bounded-agent', sessionId: 'bounded-session' },
     {
       isAvailable: () => true,
-      getContextInject: async () => ({ observations, sessionId: 7 }),
-      markInjected: async (_session, ids) => { marked = ids; },
+      getContextInject: async () => ({ observations }),
       initSession: async () => ({}),
     },
     { project: '11111111-1111-4111-8111-111111111111', tokenBudget: 1000, sessionContextLimit: 1 },
   );
   assert.match(result.appendSystemContext, /Keep this decision/);
   assert.doesNotMatch(result.appendSystemContext, /Omit this decision/);
-  assert.deepEqual(marked, [301]);
   assert.equal(observations.length, 2);
 });
 
