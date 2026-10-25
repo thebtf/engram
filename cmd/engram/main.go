@@ -164,7 +164,7 @@ func decodeStrictJSON(raw []byte, target any) error {
 }
 
 func readMuxcoreDaemonVersionMarker(path string) (muxcoreDaemonVersionMarker, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := readMuxcoreMarkerFile(path)
 	if err != nil {
 		return muxcoreDaemonVersionMarker{}, err
 	}
@@ -196,7 +196,7 @@ func decodeLegacyMuxcoreDaemonVersionMarker(raw []byte) (legacyMuxcoreDaemonVers
 }
 
 func readLegacyMuxcoreDaemonVersionMarker(path string) (legacyMuxcoreDaemonVersionMarker, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := readMuxcoreMarkerFile(path)
 	if err != nil {
 		return legacyMuxcoreDaemonVersionMarker{}, err
 	}
@@ -1020,7 +1020,7 @@ func writeMuxcoreDaemonVersionMarkerAtWithContext(ctx context.Context, markerPat
 		return err
 	}
 	legacyPath := muxcoreLegacyDaemonVersionPathForMarker(markerPath)
-	priorLegacy, priorLegacyErr := os.ReadFile(legacyPath)
+	priorLegacy, priorLegacyErr := readMuxcoreMarkerFile(legacyPath)
 	legacyExisted := priorLegacyErr == nil
 	if priorLegacyErr != nil && !errors.Is(priorLegacyErr, os.ErrNotExist) {
 		return fmt.Errorf("read prior muxcore legacy marker: %w", priorLegacyErr)
