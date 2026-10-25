@@ -351,11 +351,33 @@ func (fixtureProcessExitProof) Close() error                  { return nil }
 func stubMuxcorePredecessorProof(t *testing.T) {
 	t.Helper()
 	oldOpen, oldWait := openMuxcorePredecessorProcess, waitForRestartedMuxcoreDaemon
+	oldStatus, oldAction := readMuxcoreDaemonStatusIdentity, readLiveMuxcoreDaemonAction
 	openMuxcorePredecessorProcess = func(int) (muxcoreProcessExitProof, error) { return fixtureProcessExitProof{}, nil }
 	waitForRestartedMuxcoreDaemon = func(ctx context.Context, _ muxcoreProcessExitProof, _ muxcoreDaemonStatusIdentity) error {
-		return waitForCurrentMuxcoreDaemonReady(ctx)
+		if err := waitForCurrentMuxcoreDaemonReady(ctx); err != nil {
+			return err
+		}
+		// A successful stubbed restart still supplies a real current peer for final admission.
+		current := muxcoreDaemonStatusIdentity{PID: os.Getpid(), DaemonGeneration: "review-stub-current"}
+		control, _ := startReviewAdmissionNamespace(t, &reviewAdmissionNamespace{owner: current})
+		executable, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		marker := control + ".marker.json"
+		if err := writeReviewAdmissionMarker(marker, executable, current, daemonVersion, muxcoreDaemonCompatEpoch); err != nil {
+			return err
+		}
+		readMuxcoreDaemonStatusIdentity = func(string) (muxcoreDaemonStatusIdentity, bool) { return muxcoreDaemonStatus(control) }
+		readLiveMuxcoreDaemonAction = func(status muxcoreDaemonStatusIdentity, client daemonConvergenceIdentity) (daemonConvergenceAction, error) {
+			return muxcoreDaemonConvergenceAction(marker, status, client)
+		}
+		return nil
 	}
-	t.Cleanup(func() { openMuxcorePredecessorProcess, waitForRestartedMuxcoreDaemon = oldOpen, oldWait })
+	t.Cleanup(func() {
+		openMuxcorePredecessorProcess, waitForRestartedMuxcoreDaemon = oldOpen, oldWait
+		readMuxcoreDaemonStatusIdentity, readLiveMuxcoreDaemonAction = oldStatus, oldAction
+	})
 }
 
 func stubReconciliation(t *testing.T, status muxcoreDaemonStatusIdentity, action daemonConvergenceAction, actionErr error) {
@@ -1767,6 +1789,137 @@ func TestReconcileMuxcoreDaemonVersionPostAckReentryRetainsNamespaceAdmission(t 
 				t.Fatalf("POST_ACK_REENTRY_ADMISSION_RED: %s status %s yielded engine handback while peer-bound B remained live and non-current: owner=%+v action=%v error=%v", test.point, test.fault, live, action, actionErr)
 			}
 			t.Logf("POST_ACK_OWNER_PRESERVED: %s/%s rejected unverified handback: %v", test.point, test.fault, admission)
+		})
+	}
+}
+
+func TestReconcileMuxcoreDaemonVersionPostAckCurrentRequiresPeerBinding(t *testing.T) {
+	for _, path := range []string{"outer-join", "marker-wait"} {
+		t.Run(path, func(t *testing.T) {
+			ownerA := muxcoreDaemonStatusIdentity{PID: os.Getpid(), DaemonGeneration: "review-owner-A"}
+			ownerB := muxcoreDaemonStatusIdentity{PID: os.Getpid(), DaemonGeneration: "review-owner-B"}
+			claimed := muxcoreDaemonStatusIdentity{PID: os.Getpid() + 1000000, DaemonGeneration: "review-claimed-current"}
+			namespace := &reviewAdmissionNamespace{owner: ownerA, phase: "initial"}
+			control, _ := startReviewAdmissionNamespace(t, namespace)
+			executable, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			marker := control + ".marker.json"
+			if err := writeReviewAdmissionMarker(marker, executable, ownerA, "v7.0.3", muxcoreDaemonCompatEpoch); err != nil {
+				t.Fatal(err)
+			}
+			namespace.Lock()
+			namespace.restart = func(options muxcontrol.GracefulRestartOptions) (string, func(), error) {
+				namespace.Lock()
+				defer namespace.Unlock()
+				if namespace.owner != ownerA || options.SuccessorExe != executable {
+					return "", nil, errors.New("fixture refuses replacement outside the admitted A restart")
+				}
+				namespace.owner = muxcoreDaemonStatusIdentity{}
+				return "", func() {
+					namespace.Lock()
+					namespace.acknowledged, namespace.predecessorExited, namespace.phase = true, true, "acked"
+					namespace.Unlock()
+				}, nil
+			}
+			namespace.Unlock()
+			oldOpen, oldAction, oldLock, oldExecutable, oldStatus, oldDial := openMuxcorePredecessorProcess, readLiveMuxcoreDaemonAction, acquireRestartLock, currentExecutable, readMuxcoreDaemonStatusIdentity, dialMuxcoreControl
+			t.Cleanup(func() {
+				openMuxcorePredecessorProcess, readLiveMuxcoreDaemonAction, acquireRestartLock, currentExecutable, readMuxcoreDaemonStatusIdentity, dialMuxcoreControl = oldOpen, oldAction, oldLock, oldExecutable, oldStatus, oldDial
+			})
+			// A exit and one fenced absent transport are injected; ACK and final peer PID are native.
+			openMuxcorePredecessorProcess = func(int) (muxcoreProcessExitProof, error) { return reviewAdmissionExitProof{namespace}, nil }
+			readLiveMuxcoreDaemonAction = func(status muxcoreDaemonStatusIdentity, client daemonConvergenceIdentity) (daemonConvergenceAction, error) {
+				return muxcoreDaemonConvergenceAction(marker, status, client)
+			}
+			currentExecutable = func() (string, error) { return executable, nil }
+			acquireRestartLock = func() (io.Closer, error) {
+				namespace.Lock()
+				namespace.fenced = true
+				switch namespace.phase {
+				case "acked":
+					if path == "marker-wait" {
+						namespace.owner, namespace.phase = ownerB, "B-fenced"
+						if err := writeReviewAdmissionMarker(marker, executable, ownerB, "v7.0.3", muxcoreDaemonCompatEpoch); err != nil {
+							namespace.Unlock()
+							return nil, err
+						}
+					} else {
+						namespace.phase = "unowned-fenced"
+					}
+				case "retry-failed":
+					namespace.owner, namespace.phase = muxcoreDaemonStatusIdentity{}, "unowned-fenced"
+				}
+				namespace.Unlock()
+				return closerFunc(func() error {
+					namespace.Lock()
+					defer namespace.Unlock()
+					namespace.fenced = false
+					switch namespace.phase {
+					case "B-fenced":
+						namespace.phase = "retry"
+					case "unowned-fenced":
+						namespace.owner, namespace.phase = claimed, "claimed"
+						return writeReviewAdmissionMarker(marker, executable, claimed, daemonVersion, muxcoreDaemonCompatEpoch)
+					}
+					return nil
+				}), nil
+			}
+			absenceObserved := false
+			dialMuxcoreControl = func(target string, timeout time.Duration) (net.Conn, error) {
+				namespace.Lock()
+				absent := namespace.fenced && namespace.phase == "unowned-fenced"
+				namespace.Unlock()
+				if absent {
+					absenceObserved = true
+					return nil, os.ErrNotExist
+				}
+				return oldDial(target, timeout)
+			}
+			statusFault := false
+			readMuxcoreDaemonStatusIdentity = func(string) (muxcoreDaemonStatusIdentity, bool) {
+				namespace.Lock()
+				inject := namespace.phase == "retry" && !statusFault
+				if inject {
+					statusFault, namespace.phase = true, "retry-failed"
+				}
+				namespace.Unlock()
+				if inject {
+					return muxcoreDaemonStatus(control + ".unreachable")
+				}
+				return muxcoreDaemonStatus(control)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			admission := reconcileMuxcoreDaemonVersion(ctx)
+			namespace.Lock()
+			acked, exited, phase, stopped := namespace.acknowledged, namespace.predecessorExited, namespace.phase, namespace.stopped
+			boundB := namespace.revalidated
+			namespace.Unlock()
+			if !acked || !exited || !absenceObserved || phase != "claimed" || (path == "marker-wait" && (!statusFault || !boundB)) {
+				t.Fatalf("fixture did not reach post-ACK current admission: ack=%v modeledExit=%v absent=%v phase=%s statusFault=%v boundB=%v result=%v", acked, exited, absenceObserved, phase, statusFault, boundB, admission)
+			}
+			connection, err := oldDial(control, time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			peer, peerErr := readMuxcoreControlPeerPID(connection)
+			closeErr := connection.Close()
+			live, found := muxcoreDaemonStatus(control)
+			client, clientErr := clientDaemonIdentity()
+			action, actionErr := muxcoreDaemonConvergenceAction(marker, live, client)
+			if peerErr != nil || closeErr != nil || peer != os.Getpid() || peer == claimed.PID || !found || live != claimed || clientErr != nil || actionErr != nil || action != daemonConvergenceJoin || stopped {
+				t.Fatalf("current-claim/peer-mismatch fixture invalid or owner lost: peer=%d claim=%+v peerErr=%v closeErr=%v found=%v clientErr=%v action=%v actionErr=%v stopped=%v", peer, live, peerErr, closeErr, found, clientErr, action, actionErr, stopped)
+			}
+			t.Logf("POST_ACK_CURRENT_PEER_STATE: path=%s realACK=%v modeledExit=%v injectedFencedAbsence=%v actualPeer=%d claimedPID=%d fullGeneration=%s markerAndStatusJoin=true ownerPreserved=true", path, acked, exited, absenceObserved, peer, live.PID, live.DaemonGeneration)
+			if admission == nil {
+				t.Fatalf("POST_ACK_CURRENT_PEER_ADMISSION_RED: %s accepted a matching current marker/status after actual ACK although native peer %d != claimed PID %d", path, peer, live.PID)
+			}
+			if !strings.Contains(admission.Error(), "muxcore namespace status does not identify its live peer") {
+				t.Fatalf("post-ACK current admission failed for an unrelated reason: %v", admission)
+			}
+			t.Logf("POST_ACK_CURRENT_PEER_REJECTED: %s preserved mismatched peer and refused admission: %v", path, admission)
 		})
 	}
 }

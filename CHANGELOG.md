@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Recover ordinary native-client startup after an acknowledged restart leaves no successor: require a bound predecessor exit proof and fresh fenced namespace validation before returning cold start to the existing shim engine. Keep exit-proof support supplemental for ordinary strict restart-to-current convergence, including the still-visible lower interval after ACK; unavailable pidfd support never authorizes cold start. Preserve namespace admission across retry/status failures, current-version/epoch/generation/peer checks, cancellation and no-steal behavior without another launcher, snapshot replay or longer deadline.
+- Recover ordinary native-client startup after an acknowledged restart leaves no successor: require a bound predecessor exit proof and fresh fenced namespace validation before returning cold start to the existing shim engine. Keep exit-proof support supplemental for ordinary strict restart-to-current convergence, including the still-visible lower interval after ACK; unavailable pidfd support never authorizes cold start. Revalidate fresh OS peer/PID/full-generation and current marker/version/epoch at one final admission boundary for every post-ACK current handback, including readiness and concurrent convergence. Preserve cancellation and no-steal behavior without another launcher, snapshot replay or longer deadline.
 
 - Bind issue-role lookups as one PostgreSQL ID array instead of expanding one parameter per issue. Preserve complete large selections, independent nullable canonical roles and retained-membership privacy without changing public limits.
 

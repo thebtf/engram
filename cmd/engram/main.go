@@ -759,7 +759,7 @@ func isExpectedContextShutdown(ctx context.Context, err error) bool {
 	return ctx.Err() != nil && errors.Is(err, context.Canceled)
 }
 
-func reconcileMuxcoreDaemonVersion(parent context.Context) error {
+func reconcileMuxcoreDaemonVersion(parent context.Context) (result error) {
 	if isMuxcoreDaemonMode() || isMuxcoreProxyMode() {
 		return nil
 	}
@@ -771,6 +771,36 @@ func reconcileMuxcoreDaemonVersion(parent context.Context) error {
 	defer cancel()
 
 	postRestart, coldStartAuthorized := false, false
+	coldStartHandback := false
+	defer func() {
+		if result != nil || !postRestart || coldStartHandback {
+			return
+		}
+		// Every post-ACK current handback must pass the same final admission.
+		status, ok := readMuxcoreDaemonStatusIdentity(serverid.DaemonControlPath("", muxcoreNamespace))
+		if !ok {
+			result = errors.New("read muxcore daemon status before post-restart admission")
+			return
+		}
+		action, err := readLiveMuxcoreDaemonAction(status, client)
+		if err != nil || action != daemonConvergenceJoin {
+			if err == nil {
+				err = errors.New("muxcore daemon is not compatible current")
+			}
+			result = fmt.Errorf("authenticate post-restart muxcore daemon PID %d: %w", status.PID, err)
+			return
+		}
+		unowned, err := probeMuxcoreDaemonNamespace(ctx, &status)
+		if err != nil {
+			result = fmt.Errorf("bind post-restart muxcore daemon PID %d: %w", status.PID, err)
+			return
+		}
+		if unowned {
+			result = errors.New("post-restart muxcore daemon disappeared before admission")
+			return
+		}
+		fmt.Fprintf(os.Stderr, "[engram] authenticated post-restart muxcore daemon PID %d with %s\n", status.PID, daemonVersion)
+	}()
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -797,6 +827,7 @@ func reconcileMuxcoreDaemonVersion(parent context.Context) error {
 				continue
 			}
 			if coldStartAuthorized {
+				coldStartHandback = true // Only this exit-proven, freshly fenced absence admits cold start.
 				return nil
 			}
 			// Without exit proof, only authenticated current convergence can admit.
@@ -839,7 +870,9 @@ func reconcileMuxcoreDaemonVersion(parent context.Context) error {
 			waitErr := waitForMuxcoreDaemonChangeOrConvergence(ctx, status, client)
 			if waitErr == nil || errors.Is(waitErr, errMuxcoreDaemonStillLower) || errors.Is(waitErr, errMuxcoreDaemonLockAvailable) {
 				if waitErr == nil {
-					fmt.Fprintf(os.Stderr, "[engram] joined concurrent muxcore daemon replacement for %s\n", daemonVersion)
+					if !postRestart {
+						fmt.Fprintf(os.Stderr, "[engram] joined concurrent muxcore daemon replacement for %s\n", daemonVersion)
+					}
 					return nil
 				}
 				continue
@@ -921,7 +954,6 @@ func reconcileMuxcoreDaemonVersion(parent context.Context) error {
 			}
 		}
 		if waitErr == nil {
-			fmt.Fprintf(os.Stderr, "[engram] replaced lower muxcore daemon PID %d with %s\n", current.PID, daemonVersion)
 			return nil
 		}
 		if errors.Is(waitErr, errMuxcoreDaemonStillLower) || errors.Is(waitErr, errMuxcoreDaemonLockAvailable) {
