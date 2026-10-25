@@ -1286,6 +1286,17 @@ func (s *Service) initializeAsync() {
 	s.queueCandidateSelectionHandler = queueCandidateSelectionHandler
 	s.initMu.Unlock()
 
+	// Catalog and retained readers need the shared Vault even when CodeIntel is disabled.
+	vault, vaultErr := s.getVault()
+	if vaultErr != nil {
+		s.setInitError(fmt.Errorf("shared reader vault key unavailable: %w", vaultErr))
+		return
+	}
+	if vault == nil {
+		s.setInitError(errors.New("shared reader vault key unavailable"))
+		return
+	}
+
 	// Compose UCI after settings resolution and shared embedding initialization,
 	// before MCP or gRPC transports can expose its application.
 	var uciContext *uciContextComposition
@@ -1301,15 +1312,6 @@ func (s *Service) initializeAsync() {
 			return
 		}
 		s.startUCIEmbeddingWorker(uciContext.embeddingWorker)
-		vault, vaultErr := s.getVault()
-		if vaultErr != nil {
-			s.setInitError(fmt.Errorf("operator code chooser vault key unavailable: %w", vaultErr))
-			return
-		}
-		if vault == nil {
-			s.setInitError(errors.New("operator code chooser vault key unavailable"))
-			return
-		}
 		operatorCodeAdapter, composeErr := composeOperatorCodeHTTPAdapter(store.GetDB(), uciContext, vault)
 		if composeErr != nil {
 			s.setInitError(fmt.Errorf("compose operator code HTTP adapter: %w", composeErr))
