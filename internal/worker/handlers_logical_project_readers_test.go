@@ -220,7 +220,7 @@ func TestLogicalProjectReadersPostgresHTTP(t *testing.T) {
 	router.Get("/api/documents", service.handleListDocuments)
 	router.Get("/api/issues", service.handleListIssues)
 	router.Post("/api/context/inject", service.handleContextInject)
-	router.Get("/api/context/inject", service.handleContextInject)
+	router.Get("/api/context/inject", service.handleContextInjectGET)
 	router.Post("/api/code/tabs/handshake", adapter.HandleHandshake)
 	router.Post("/api/code/contexts", adapter.HandleContexts)
 	server := httptest.NewServer(router)
@@ -338,6 +338,9 @@ func TestLogicalProjectReadersPostgresHTTP(t *testing.T) {
 	require.Nil(t, codeReview["items"].([]any)[0].(map[string]any)["project_id"])
 	require.NotContains(t, codeReview["items"].([]any)[0].(map[string]any), "selection_ref")
 	call("POST", "/api/code/contexts?project=mixed-selector", proof, 400)
+	t.Run("retained-record-query", func(t *testing.T) {
+		testRetainedRecordQueryPostgresHTTP(t, ctx, db, service)
+	})
 	require.NoError(t, db.Model(&gormdb.Memory{}).Where("id=?", memoryIDs[0]).Update("project", a).Error)
 	call("GET", prefix+"/content?kind=memory", nil, 404)
 	var count int64

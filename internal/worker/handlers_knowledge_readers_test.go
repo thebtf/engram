@@ -46,8 +46,8 @@ func decodeKnowledgeItems[T any](t *testing.T, response *httptest.ResponseRecord
 	return page.Items
 }
 
-// SQLite executes the real handlers and row queries. Only PostgreSQL array/JSON
-// containment syntax is lowered here; PostgreSQL operator behavior is NOT_PROVEN.
+// SQLite executes the real handlers and row queries. PostgreSQL array/JSON
+// syntax is lowered here; PostgreSQL operator behavior is NOT_PROVEN.
 type (
 	knowledgeSQLiteDriver struct{ driver.Driver }
 	knowledgeSQLiteConn   struct{ driver.Conn }
@@ -71,6 +71,12 @@ func (c knowledgeSQLiteConn) Prepare(query string) (driver.Stmt, error) {
 	query = knowledgeAliasContainment.ReplaceAllString(query, `knowledge_has_alias(legacy_ids, $1)`)
 	query = knowledgeJSONContainment.ReplaceAllString(query, `knowledge_has_tag(m.tags, $1)`)
 	query = knowledgeSessionMembership.ReplaceAllString(query, `knowledge_has_alias(m.source_sessions, $1)`)
+	// Preserve the real source-label join and ordinal lookup, not fixture answers.
+	if strings.HasPrefix(query, "SELECT r.ordinality AS ordinal, s.display_name FROM jsonb_array_elements(") {
+		query = strings.ReplaceAll(query, "r.ordinality", "(CAST(r.key AS INTEGER) + 1)")
+		query = strings.Replace(query, "jsonb_array_elements($1::jsonb) WITH ORDINALITY AS r(value, ordinality)", "json_each($1) AS r", 1)
+		query = strings.Replace(query, "s.source_id::text", "s.source_id", 1)
+	}
 	return c.Conn.Prepare(query)
 }
 
@@ -364,17 +370,15 @@ func runKnowledgeReadersHTTP(t *testing.T, db *gorm.DB, sqliteFixture bool) {
 	router.Get("/api/documents", service.handleListDocuments)
 	router.Get("/api/documents/read", service.handleReadDocument)
 	router.Get("/api/documents/history", service.handleDocumentHistory)
-	server := httptest.NewServer(router)
-	t.Cleanup(server.Close)
 	get := func(path, token string, status int, result any) string {
 		t.Helper()
-		req, err := http.NewRequest(http.MethodGet, server.URL+path, nil)
-		require.NoError(t, err)
+		req := httptest.NewRequest(http.MethodGet, path, nil)
 		if token != "" {
 			req.Header.Set("Authorization", "Bearer "+token)
 		}
-		response, err := server.Client().Do(req)
-		require.NoError(t, err)
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, req)
+		response := recorder.Result()
 		defer response.Body.Close()
 		body, err := io.ReadAll(response.Body)
 		require.NoError(t, err)

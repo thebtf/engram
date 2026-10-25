@@ -27,12 +27,10 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { handleSessionStart } from './hooks/session-start.js';
-import { handleBeforeAgentStart } from './hooks/before-agent-start.js';
 import { handleBeforePromptBuild } from './hooks/before-prompt-build.js';
 import { handleAfterToolCall } from './hooks/after-tool-call.js';
 import { handleBeforeCompaction } from './hooks/before-compaction.js';
-import { handleSessionEnd } from './hooks/session-end.js';
-import { handleBeforeToolCall } from './hooks/before-tool-call.js';
+import { handleAgentEnd } from './hooks/agent-end.js';
 
 import { createEngramSearchTool, createMemorySearchTool } from './tools/engram-search.js';
 import { createEngramRememberTool, createMemoryStoreTool } from './tools/engram-remember.js';
@@ -60,13 +58,18 @@ const plugin: OpenClawPluginDefinition = {
  id: 'engram',
  name: 'Engram Memory',
  description: 'Persistent shared memory via engram server',
- version: '7.0.4',
+ version: '7.0.6',
  kind: 'memory',
  configSchema: getJsonSchema(),
 
  register(api: OpenClawPluginApi): void {
   const config = parseConfig(api.pluginConfig ?? {});
   const client = new EngramRestClient(config);
+  const plugins = api.config.plugins;
+  const entries = plugins && typeof plugins === 'object' && 'entries' in plugins ? plugins.entries : undefined;
+  const entry = entries && typeof entries === 'object' && 'engram' in entries ? entries.engram : undefined;
+  const hooks = entry && typeof entry === 'object' && 'hooks' in entry ? entry.hooks : undefined;
+  const conversationAccess = hooks && typeof hooks === 'object' && 'allowConversationAccess' in hooks && hooks.allowConversationAccess === true;
 
   api.logger.info(`[engram] initializing — server: ${config.url}`);
 
@@ -78,28 +81,22 @@ const plugin: OpenClawPluginDefinition = {
    handleSessionStart(event, ctx, client, config, api.logger),
   );
 
-  api.on('before_agent_start', (event, ctx: PluginHookContext) =>
-   handleBeforeAgentStart(event, ctx, client, config, api.logger),
-  );
-
   api.on('before_prompt_build', (event, ctx: PluginHookContext) =>
    handleBeforePromptBuild(event, ctx, client, config, api.logger),
   );
 
-  api.on('after_tool_call', (event, ctx: PluginHookContext) =>
-   handleAfterToolCall(event, ctx, client, config),
-  );
+  // These hooks are not conversation-gated by every host runner; never use them as a bypass.
+  if (conversationAccess) {
+   api.on('after_tool_call', (event, ctx: PluginHookContext) =>
+    handleAfterToolCall(event, ctx, client, config),
+   );
+   api.on('before_compaction', (event, ctx: PluginHookContext) =>
+    handleBeforeCompaction(event, ctx, client, config, api.logger),
+   );
+  }
 
-  api.on('before_compaction', (event, ctx: PluginHookContext) =>
-   handleBeforeCompaction(event, ctx, client, config, api.logger),
-  );
-
-  api.on('before_tool_call', (event, ctx: PluginHookContext) =>
-   handleBeforeToolCall(event, ctx, client, config),
-  );
-
-  api.on('session_end', (event, ctx: PluginHookContext) =>
-   handleSessionEnd(event, ctx, client, config, api.logger),
+  api.on('agent_end', (event, ctx: PluginHookContext) =>
+   handleAgentEnd(event, ctx, client, config, api.logger),
   );
 
   // ------------------------------------------------------------------
@@ -134,6 +131,9 @@ const plugin: OpenClawPluginDefinition = {
     'memory_forget',
     'memory_get',
     'memory_migrate',
+    'engram_rate', 'engram_suppress', 'engram_outcome', 'engram_timeline',
+    'engram_changes', 'engram_how_it_works',
+    'engram_vault_store', 'engram_vault_get', 'engram_issues',
    ],
   });
 

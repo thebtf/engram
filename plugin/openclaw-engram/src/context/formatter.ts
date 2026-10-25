@@ -5,7 +5,7 @@
  * Faithfully ported from plugin/engram/hooks/user-prompt.js with TypeScript types.
  */
 
-import type { Observation, RuleRouterPacket, RuleRouterPayload } from '../client.js';
+import type { ContextInjectResponse, ContextSearchResponse, Observation, RuleRouterPacket, RuleRouterPayload } from '../client.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -208,6 +208,62 @@ export function formatContext(
   return { context, injectedIds, trimmedCount };
 }
 
+/** One run owns one budget, including quoted wrappers, instructions and both response modes. */
+export function formatPromptContext(
+  session: ContextInjectResponse | null,
+  turn: ContextSearchResponse | null,
+  options: { tokenBudget: number; sessionContextLimit: number; contextLimit: number; turnBudget: number; instructions: string },
+): { appendSystemContext?: string; prependContext?: string; injectedIds: number[]; budgetExceeded: boolean } {
+  const unique = (rows?: Observation[], excludedIds?: number[]): Observation[] => {
+    const ids = new Set(excludedIds);
+    return (Array.isArray(rows) ? rows : []).filter(row => {
+      if (!row || asString(row.type).toLowerCase() === 'credential' || ids.has(row.id)) return false;
+      ids.add(row.id);
+      return true;
+    });
+  };
+  const routers = [session?.rule_router, turn?.rule_router].filter(isRouterPayloadEnabled);
+  let rules = '';
+  if (routers.length > 0) {
+    const versions = new Set<number>();
+    const select = (rows?: RuleRouterPacket[]): RuleRouterPacket[] => (Array.isArray(rows) ? rows : []).filter(packet => {
+      if (packet.rule_version_id && versions.has(packet.rule_version_id)) return false;
+      if (packet.rule_version_id) versions.add(packet.rule_version_id);
+      return true;
+    });
+    rules = routers.map(router => formatRuleRouter({
+      ...router,
+      suppressed: select(router?.suppressed),
+      kernel: select(router?.kernel),
+      contextual: select(router?.contextual),
+    })).filter(Boolean).join('\n');
+  } else {
+    const standing = unique([
+      ...(session?.guidance ?? []), ...(session?.always_inject ?? []),
+      ...(turn?.guidance ?? []), ...(turn?.always_inject ?? []),
+    ]);
+    rules = formatAlwaysInject(standing);
+  }
+  const charBudget = Math.max(0, Math.floor(options.tokenBudget * 4));
+  const instructions = options.instructions;
+  const required = [instructions, rules].filter(Boolean).join('\n\n');
+  // Never silently omit required rules or cut a quoted/security wrapper in half.
+  if (required.length > charBudget) return { injectedIds: [], budgetExceeded: true };
+  const staticRows = unique(session?.observations).slice(0, options.sessionContextLimit);
+  const staticResult = formatContext(staticRows, { tokenBudget: Math.max(0, charBudget - required.length - 2) / 4 });
+  const append = [required, staticResult.context].filter(Boolean).join('\n\n');
+  const dynamicRows = unique(turn?.observations, staticResult.injectedIds).slice(0, options.contextLimit);
+  const dynamicResult = formatContext(dynamicRows, { tokenBudget: Math.max(0, Math.min(charBudget - append.length - 1, options.turnBudget * 4)) / 4 });
+  // Empty DTOs must remain retryable and must not emit instructions alone.
+  const hasContext = Boolean(rules || staticResult.context || dynamicResult.context);
+  return {
+    ...(hasContext ? { appendSystemContext: append } : {}),
+    ...(dynamicResult.context ? { prependContext: dynamicResult.context } : {}),
+    injectedIds: dynamicResult.injectedIds,
+    budgetExceeded: false,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
@@ -346,20 +402,10 @@ function applyTokenBudget(
   observations: Observation[],
   tokenBudget: number,
 ): { budgeted: Observation[]; trimmedCount: number } {
-  let tokenCount = 0;
   const budgeted: Observation[] = [];
-
   for (const obs of observations) {
-    const title = asString(obs.title);
-    const narrative = asString(obs.narrative);
-    const facts = Array.isArray(obs.facts) ? obs.facts : [];
-    let chars = title.length + narrative.length + 50;
-    for (const f of facts) {
-      if (typeof f === 'string') chars += f.length;
-    }
-    const tokens = Math.ceil(chars / 4);
-    if (tokenCount + tokens > tokenBudget) continue;
-    tokenCount += tokens;
+    const candidate = renderXml(groupByType([...budgeted, obs]));
+    if (candidate.length > tokenBudget * 4) continue;
     budgeted.push(obs);
   }
 

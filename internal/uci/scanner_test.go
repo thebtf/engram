@@ -269,6 +269,89 @@ func TestUCIScannerExcludesNestedRepositoriesAndDeclaredSubmodules(t *testing.T)
 	scannerAssertGitPlumbing(t, fixture.git, fixture.root)
 }
 
+func TestUCIScannerExcludesRealGitUntrackedNestedDirectory(t *testing.T) {
+	for _, warm := range []bool{false, true} {
+		name := "cold"
+		if warm {
+			name = "cached"
+		}
+		t.Run(name, func(t *testing.T) {
+			fixture := newScannerRealFixture(t)
+			// The injected read spy must use the real fixture's already-resolved physical root.
+			fixture.root = fixture.expectedRoot
+			files := &scannerFixtureFiles{readCalls: make(map[string]int)}
+			fixture.scanner = NewScanner(fixture.runner, files, ScannerPolicy{IncludeUntracked: true})
+			if warm {
+				fixture.warm(t)
+			}
+			scannerRealWrite(t, fixture.root, "outer.go", []byte("package outer\n"))
+			scannerRealWrite(t, fixture.root, "nested/private.go", []byte("package private\n"))
+			scannerRealGit(t, filepath.Join(fixture.root, "nested"), "init", "-b", "main")
+			for _, command := range [][]string{
+				{"status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"},
+				{"ls-files", "--stage", "--others", "--exclude-standard", "-t", "-z"},
+			} {
+				output, err := (ExecGitRunner{}).Run(t.Context(), GitInvocation{Args: scannerGitArgs(fixture.root, command...), Env: scannerGitEnvironment()})
+				if err != nil || output.ExitCode != 0 {
+					t.Fatalf("Git directory fixture %q: exit=%d err=%v", command, output.ExitCode, err)
+				}
+				if !bytes.Contains(output.Stdout, []byte("? nested/\x00")) {
+					t.Fatalf("Git %q omitted genuine directory-form record: %q", command, output.Stdout)
+				}
+			}
+
+			result, _ := fixture.scanAndCompare(t)
+			scannerAssertCensus(t, result, IndexScanComplete, true, true)
+			scannerAssertFile(t, result, "tracked.go", IndexFilePresent, ScannerExclusionNone, []byte("package fixture\nconst Version = 1\n"))
+			scannerAssertFile(t, result, "outer.go", IndexFilePresent, ScannerExclusionNone, []byte("package outer\n"))
+			scannerAssertFile(t, result, "nested", IndexFileExcluded, ScannerExclusionNestedRepository, nil)
+			scannerAssertFileAbsent(t, result, "nested/private.go")
+			for path, count := range files.readCalls {
+				if strings.HasPrefix(path, filepath.Join(fixture.root, "nested")+string(filepath.Separator)) && count != 0 {
+					t.Fatalf("nested repository body %q read %d times", path, count)
+				}
+			}
+		})
+	}
+}
+
+func TestUCIScannerRejectsAdversarialUntrackedDirectoryRecords(t *testing.T) {
+	for _, path := range []string{"/absolute", "../outside", "C:/outside", "C:outside", "safe:stream", "safe/../outside", "safe//child", "./safe", `safe\child`} {
+		for _, suffix := range []string{"", "/"} {
+			t.Run(path+suffix, func(t *testing.T) {
+				record := "? " + path + suffix
+				if _, err := scannerStatusUntrackedCandidates([]string{record}); !errors.Is(err, ErrScannerMalformed) {
+					t.Fatalf("status accepted unsafe candidate %q: %v", record, err)
+				}
+				if _, _, err := scannerCombinedCandidates([]byte(record+"\x00"), "sha1"); !errors.Is(err, ErrScannerMalformed) {
+					t.Fatalf("combined census accepted unsafe candidate %q: %v", record, err)
+				}
+			})
+		}
+	}
+}
+
+func TestUCIScannerExcludesUntrackedReparseDirectory(t *testing.T) {
+	fixture := newScannerFixture(t, false)
+	fixture.write(t, "safe.go", []byte("package safe\n"))
+	fixture.write(t, "escape/private.go", []byte("package private\n"))
+	fixture.files.markReparse(fixture.path("escape"))
+	fixture.git.tracked = []scannerGitPath{{Mode: "100644", Path: "safe.go"}}
+	fixture.git.untracked = []string{"escape/"}
+
+	result, err := scannerScan(fixture, ScannerPolicy{IncludeUntracked: true})
+	if err != nil {
+		t.Fatalf("Scan() error = %v", err)
+	}
+	scannerAssertCensus(t, result, IndexScanComplete, true, true)
+	scannerAssertFile(t, result, "safe.go", IndexFilePresent, ScannerExclusionNone, []byte("package safe\n"))
+	scannerAssertFile(t, result, "escape", IndexFileExcluded, ScannerExclusionReparseEscape, nil)
+	scannerAssertFileAbsent(t, result, "escape/private.go")
+	if got := fixture.files.readCount(fixture.path("escape/private.go")); got != 0 {
+		t.Fatalf("reparse directory body reads = %d, want 0", got)
+	}
+}
+
 func TestUCIScannerRefusesReparseEscapesAndUnsupportedTypes(t *testing.T) {
 	fixture := newScannerFixture(t, false)
 	fixture.write(t, "safe.go", []byte("package safe\n"))

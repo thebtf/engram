@@ -102,6 +102,41 @@ a tool error.
 
 `engram-server` serves HTTP via chi router on :37777 (cmux multiplexed with gRPC).
 
+`make worker` regenerates `docs/docs.go`, `docs/swagger.json`, and
+`docs/swagger.yaml` with Swag 1.16.6 before building the server. The producer
+derives local Go package directories from the server dependency graph, puts
+`cmd/engram-server` first, and parses `main.go` with internal-package parsing
+enabled and dependency parsing disabled. Package discovery and generation
+errors stop the build; generated files must not be patched by hand.
+
+Context GET and POST operations have separate annotations on real routed handlers;
+the GET entry points delegate to the same implementation without changing request
+semantics. GET requires `project` in the query string, and context search also
+requires a nonempty `query`. GET ignores JSON bodies. POST `/api/context/inject`
+requires JSON with a canonical `project` UUID; query `project`, `agent_id`,
+`session_id`, `cwd`, and `files_being_edited` are not fallbacks. Its `format`
+selector remains query-only. The request schema uses the same DTO as the decoder;
+the `project` requirement describes the existing canonical-UUID validation.
+
+POST context search and session-start preserve their query/JSON alternatives:
+query `project` and JSON `project` are individually optional, but a canonical
+project UUID must be supplied through one of them. Search also requires a nonempty
+`query` through either location. Nonempty body fields override query values;
+search `session_id` overrides even when empty, while session-start trims project
+and session ID and only overrides with nonempty values. Search tolerates an
+invalid/absent body and retains query values; session-start requires a JSON body
+and rejects invalid or empty JSON (use `{}` to retain query values). Search
+`limit` remains query-only (default 50, maximum 200), `obs_type` body-only;
+session-start limits remain body-only, with zero
+delegating to the existing server defaults. Source session IDs remain attribution,
+not authentication or a new visibility boundary; client `cwd` is ignored.
+
+Swagger 2 cannot encode the cross-location project/query alternatives for those
+two POST operations. Their descriptions and existing HTTP fixtures remain the
+contract for that condition; generic search/session-start body and response
+schemas are not complete conditional schemas. Separate inject GET/POST schemas
+remove the false required query field, not every existing schema limitation.
+
 ### Authentication (v6)
 
 Two-tier token model:
@@ -148,6 +183,79 @@ policy. The catalog response is `private, no-store`, never publicly cached.
 Each entry has an opaque `reference`, display `name`, `reason`, and `reader_kinds`
 identifying retained `memory`, `document`, `issue` or `code` data. This metadata
 neither verifies retained content nor grants reader access.
+
+#### Bounded retained-record discovery
+
+`GET /api/projects?view=retained_records&attribution_scope=unresolved_history&kind=memory&q=retained&limit=50`
+explicitly selects a separate historical projection. Without `view`, the full
+catalog above is unchanged. New-mode parameters are closed and scalar: exactly
+one `view=retained_records`, `attribution_scope=unresolved_history` and
+`kind=memory|document|issue`; optional `q`, `limit`, `cursor`. Unknown, duplicate
+or foreign project/reference/offset selectors are `400 INVALID_QUERY`.
+`q` is valid UTF-8, at most 1024 bytes, trimmed at its edges and searched as an
+escaped case-insensitive literal. `%`, `_` and backslashes are not a language.
+Memory searches content; documents search path/content; issues search title/body.
+`limit` defaults to 50 and accepts 1..200.
+
+The response is `{view:"retained_records",attribution_scope:"unresolved_history",kind,items:[{reference,id,record}],next_cursor:string|null}`.
+`items` is always an array. `record` retains the genuine native family payload,
+adds `attribution_scope:"unresolved_history"` and omits `project_key`. The outer
+positive ID equals the native record ID. Results are unique by family/native ID
+and ordered by native ID DESC, not creation time or group. Document versions
+remain separate IDs. The first valid unresolved witness supplies the association;
+duplicate roles/groups do not duplicate a record. A separate canonical role does
+not disqualify a valid unresolved role. Historical `project`, source/target and
+origin fields are provenance, not a canonical owner or automatic-context grant.
+
+There is no `total` or `has_more`. Saved membership-occurrence counts are not
+visible-record counts. A cursor means remaining search **work**, not promised
+visible results: short/empty pages with a cursor are intermediate. Null means
+observed traversal exhaustion. No cross-request snapshot is promised.
+
+Each request selects at most 200 native IDs plus one lookahead in keyset order,
+then applies query/privacy within that window without materializing bodies.
+One fixed-family membership set proposes at most 200 witnesses plus lookahead.
+The shared native validator checks full typed keys, source-key/path/plan and
+Vault HMAC references, native liveness, selector and exactly-one-match evidence.
+Invalid witnesses are skipped; operational errors abort the entire page.
+Validation uses bounded set batches, not per-record/group reads. Only the
+consumed prefix advances: an unconfirmed ID and last witness resume before lower
+IDs, so the valid witness after a 200-witness boundary is not lost. The sealed
+cursor has constant-size prefix/pending-ID/last-witness state. Bodies for at most
+the public limit of confirmed IDs are fetched once and restored to ID DESC.
+These application bounds do not promise bounded PostgreSQL physical I/O or bytes.
+
+Cursors use retained-specific Vault-derived AES-GCM, binding the normalized query,
+limit and actual effective identity/visibility context, including the no-auth
+realm. Tampered, different-caller or different-query cursors are refused with
+`400 INVALID_CURSOR` before data work. There is no public-checksum, fallback-key,
+code-feature or browser-only identity dependency. Vault, randomness and storage
+failures return safe `503 RETAINED_RECORDS_UNAVAILABLE`, without partial items or
+a false terminal cursor. Success and handler errors are `private, no-store`.
+Existing TokenAuth/DB-ready/HAP route restrictions remain; memory read/history
+privacy and manage checks remain. Document/issue authority is the existing
+authenticated route plus exact validated membership, not a new per-row ACL.
+
+Open the exact issued selection with
+`GET /api/projects/unresolved/{reference}/content?attribution_scope=unresolved_history&kind=memory&id=123`;
+use `/history` with the same reference/kind/positive ID. These closed readers
+accept only the optional historical attribution value. Omitting scope preserves
+their old unresolved meaning; omitting content ID preserves whole-group paging.
+Responses identify `unresolved_history`; historical records/history omit
+`project_key`. The full selected group still fails closed on a stale neighbor,
+and a stale/foreign binding is never repaired through another group. Document
+history keeps all validated group IDs and the selected historical path/project,
+not just one selected version or another group's same path. Keep the search,
+cursor, results and selection on return; clear open payload on stale/foreign/
+denied/error responses. This HTTP contract is not installed-client/UI acceptance.
+
+Swagger 2 cannot express two conditional 200 schemas on one route. Its ordinary
+catalog schema remains intact; the generated `x-retained-records-response`
+extension describes the explicitly selected alternate envelope. Conditional
+required parameters and native payload variants are stated in route descriptions.
+
+
+#### Canonical memory and document readers
 
 `GET /api/memories` and `GET /api/documents` require one exact existing live
 canonical `project` ID and return `{items,total,offset,limit,has_more}`. No legacy

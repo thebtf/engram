@@ -28,12 +28,12 @@ export const PluginConfigSchema = z.object({
  /** Maximum observations to inject per prompt turn. */
  contextLimit: z.number().int().positive().default(10),
 
- /** Maximum observations to inject at session start. */
+ /** Maximum ordinary static memories per prompt build. */
  sessionContextLimit: z.number().int().positive().default(20),
 
  /**
-  * Token budget for context injection. Approximately 4 chars per token.
-  * Observations are trimmed to fit within this budget.
+  * Combined prompt-enrichment budget, including rules and rendered wrappers (~4 chars/token).
+  * Required guidance is never partially rendered to make memories fit.
   */
  tokenBudget: z.number().int().positive().default(2000),
 
@@ -41,7 +41,7 @@ export const PluginConfigSchema = z.object({
  timeoutMs: z.number().int().positive().default(5000),
 
  /**
-  * Enable automatic observation extraction on compaction and session end.
+  * Enable automatic extraction on agent_end/compaction and tool events with conversation access.
   * When false, only explicit tool calls store memories.
   */
  autoExtract: z.boolean().default(true),
@@ -88,10 +88,10 @@ export function getJsonSchema(): Record<string, unknown> {
    token: { type: 'string', description: 'Bearer token for API authentication', uiHints: { sensitive: true } },
    project: { type: 'string', format: 'uuid', description: 'Explicit logical project UUID; otherwise resolve the current workspace with the Go client' },
    contextLimit: { type: 'number', description: 'Max observations per prompt', default: 10 },
-   sessionContextLimit: { type: 'number', description: 'Max observations at session start', default: 20 },
-   tokenBudget: { type: 'number', description: 'Token budget for context injection', default: 2000 },
+   sessionContextLimit: { type: 'number', description: 'Max ordinary static memories per prompt build', default: 20 },
+   tokenBudget: { type: 'number', description: 'Combined prompt enrichment budget (~4 rendered chars/token)', default: 2000 },
    timeoutMs: { type: 'number', description: 'Per-request timeout (ms)', default: 5000 },
-   autoExtract: { type: 'boolean', description: 'Auto-extract on compaction/session-end', default: true },
+   autoExtract: { type: 'boolean', description: 'Auto-extract on agent_end/compaction/tool events with conversation access', default: true },
    workspaceDir: { type: 'string', description: 'Workspace dir for /migrate (default: ~/.openclaw/workspace/)' },
    heartbeat: {
     type: 'object',

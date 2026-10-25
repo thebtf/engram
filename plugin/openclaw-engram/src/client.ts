@@ -28,17 +28,18 @@ export interface Observation {
 
 export interface ContextInjectResponse {
  observations: Observation[];
- sessionId?: number;
+ guidance?: Observation[];
+ always_inject?: Observation[];
+ /** Section views, not additional memory pools to append to observations. */
+ recent?: Observation[];
+ relevant?: Observation[];
+ strategy?: string;
  rule_router?: RuleRouterPayload;
 }
 
 export interface ContextSearchResponse {
  observations: Observation[];
- /**
-  * Observations flagged always_inject=true in the server config.
-  * These are behavioral rules that must be rendered in every context injection
-  * regardless of query relevance.
-  */
+ guidance?: Observation[];
  always_inject?: Observation[];
  rule_router?: RuleRouterPayload;
 }
@@ -290,9 +291,11 @@ export class EngramRestClient {
   agentId: string,
   cwd: string | undefined,
   project: string,
+  sessionId?: string,
  ): Promise<ContextInjectResponse | null> {
   return this.post<ContextInjectResponse>('/api/context/inject', {
    agent_id: agentId, ...(cwd ? { cwd } : {}), project,
+   ...(sessionId ? { session_id: sessionId } : {}),
   }, 15_000);
  }
 
@@ -305,6 +308,8 @@ export class EngramRestClient {
   query: string;
   cwd?: string;
   agent_id?: string;
+  /** Audit attribution only; search visibility remains project-scoped. */
+  session_id?: string;
   /** Source identifier passed through to the server for analytics/routing. */
   source?: string;
   /** Search preset: decisions, changes, how_it_works. */

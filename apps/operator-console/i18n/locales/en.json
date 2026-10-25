@@ -38,7 +38,28 @@
     "groupPages": "Retained group pages",
     "noGroupMatches": "No groups match this search in the selected view.",
     "noReaderGroups": "No groups advertise a reader kind. Review metadata-only groups; this does not mean the original data is absent.",
-    "noMetadataGroups": "There are no metadata-only groups in this catalog."
+    "noMetadataGroups": "There are no metadata-only groups in this catalog.",
+    "savedRecords": "Saved historical records",
+    "historicalViews": "Historical data views",
+    "findRecords": "Find saved records",
+    "searchSaved": "Find text or a document path",
+    "historicalNote": "Historical attribution only. Reading does not assign a canonical project.",
+    "queryError": "Saved-record search failed or was refused. Retry; this is not an empty result.",
+    "moreWork": "More search work remains. Continue even when this page has no records.",
+    "exhausted": "No accessible records on this final search page. Change the kind or search to try again.",
+    "traversalEnd": "Search traversal is complete for this request. Results can change between reads.",
+    "recordPages": "Saved-record search pages",
+    "readRecord": "Read and inspect history",
+    "returnResults": "Return to search results",
+    "provenance": "Historical attribution and details",
+    "familiesUnknown": "Family metadata was not provided. Saved membership counts are unknown.",
+    "membershipOccurrences": "{count} saved membership occurrences",
+    "familyHelp": "Counts describe saved membership occurrences, not distinct or readable records. Reader support is a declaration, not access or project ownership. Credentials use their separate Vault reader.",
+    "familySupport": {
+      "declared": "Reader declared; checked when reading",
+      "separate": "Separate reader; not opened here",
+      "metadata_only": "Metadata only; no reader declared here"
+    }
   },
   "knowledge": {
     "project": "Project",

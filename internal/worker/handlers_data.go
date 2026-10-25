@@ -4,6 +4,7 @@ package worker
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"os"
 	"runtime"
 	"strings"
@@ -213,15 +214,35 @@ type projectListResponse struct {
 }
 
 // handleGetProjects godoc
-// @Summary List projects
-// @Description Returns the live canonical project catalog with authoritative display labels. Requires the existing ordinary authenticated reader scope.
+// @Summary List projects or retained historical records
+// @Description Without view, returns the unchanged full canonical catalog and unresolved metadata. Only view=retained_records selects bounded historical discovery: attribution_scope=unresolved_history and kind are required, q is trimmed literal UTF-8 (1024 bytes), limit defaults to 50 (1..200). That mode returns retainedRecordResponse, not projectListResponse. Its authenticated cursor binds the effective caller and normalized query; empty/short pages with a cursor are intermediate search WORK, not exhaustion. No total, has_more, canonical owner or snapshot is promised. All retained responses/errors are private,no-store. Memory privacy remains enforced; documents/issues retain ordinary authenticated route plus exact membership authority, not a new per-row ACL.
 // @Tags Observations
 // @Produce json
 // @Security ApiKeyAuth
+// @Param view query string false "Explicit retained-record mode; omitted preserves the full catalog" Enums(retained_records)
+// @Param attribution_scope query string false "Required only with view=retained_records" Enums(unresolved_history)
+// @Param kind query string false "Required only with view=retained_records" Enums(memory,document,issue)
+// @Param q query string false "Retained-mode trimmed literal search, at most 1024 UTF-8 bytes"
+// @Param limit query int false "Retained-mode page limit 1..200, default 50"
+// @Param cursor query string false "Retained-mode server-issued authenticated continuation of remaining work"
+// @x-retained-records-response {"type":"object","required":["view","attribution_scope","kind","items","next_cursor"],"properties":{"view":{"type":"string","enum":["retained_records"]},"attribution_scope":{"type":"string","enum":["unresolved_history"]},"kind":{"type":"string","enum":["memory","document","issue"]},"items":{"type":"array","items":{"type":"object","required":["reference","id","record"],"properties":{"reference":{"type":"string"},"id":{"type":"integer","format":"int64","minimum":1},"record":{"type":"object","description":"Genuine native family payload, attribution_scope=unresolved_history, no project_key; historical fields are provenance, not canonical ownership","additionalProperties":true}}}},"next_cursor":{"type":"string","x-nullable":true,"description":"Remaining search work, including intermediate empty/short pages; null only on observed exhaustion"}}}
+// @Failure 400 {object} documentErrorResponse "Retained mode: INVALID_QUERY or INVALID_CURSOR, before data work"
+// @Failure 403 {object} documentErrorResponse "project read forbidden"
+// @Failure 503 {object} documentErrorResponse "Retained mode: RETAINED_RECORDS_UNAVAILABLE, never a partial or terminal-empty page"
 // @Success 200 {object} projectListResponse
 // @Failure 500 {string} string "internal error"
 // @Router /api/projects [get]
 func (s *Service) handleGetProjects(w http.ResponseWriter, r *http.Request) {
+	params, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		w.Header().Set("Cache-Control", "private, no-store")
+		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"error": "INVALID_QUERY"})
+		return
+	}
+	if params.Has("view") {
+		s.handleRetainedRecordQuery(w, r)
+		return
+	}
 	if identity, ok := auth.IdentityFrom(r.Context()); ok && !hapHTTPRouteAllowed(identity, r.Method, r.URL.Path) {
 		writeDocumentError(w, http.StatusForbidden, "project read forbidden")
 		return

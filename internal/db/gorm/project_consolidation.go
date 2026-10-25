@@ -12,6 +12,7 @@ import (
 	"errors"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -908,6 +909,11 @@ func (s *ProjectConsolidationStore) unresolvedMembershipMetadata(row *Consolidat
 // References select retained membership only; data readers still enforce their
 // ordinary record privacy and code authorization independently.
 func (s *ProjectConsolidationStore) validateUnresolvedMembership(ctx context.Context, rows []ConsolidationMembership) error {
+	return s.validateUnresolvedWitnesses(ctx, rows, func(_ *ConsolidationMembership, err error) error { return err })
+}
+
+// Discovery may discard an invalid witness; selected readers retain whole-group refusal.
+func (s *ProjectConsolidationStore) validateUnresolvedWitnesses(ctx context.Context, rows []ConsolidationMembership, reject func(*ConsolidationMembership, error) error) error {
 	if s == nil || s.db == nil || s.vault == nil {
 		return consolidationHold("UNKNOWN_REFERENCE")
 	}
@@ -941,7 +947,10 @@ func (s *ProjectConsolidationStore) validateUnresolvedMembership(ctx context.Con
 			row := &rows[i]
 			path, key, err := s.unresolvedMembershipMetadata(row)
 			if err != nil {
-				return err
+				if err := reject(row, err); err != nil {
+					return err
+				}
+				continue
 			}
 			var predicate string
 			if row.Table == "sources" {
@@ -950,7 +959,10 @@ func (s *ProjectConsolidationStore) validateUnresolvedMembership(ctx context.Con
 				var err error
 				predicate, _, err = consolidationNativePredicate(row.RowKey, "t")
 				if err != nil {
-					return consolidationHold("STALE_REFERENCE")
+					if err := reject(row, consolidationHold("STALE_REFERENCE")); err != nil {
+						return err
+					}
+					continue
 				}
 			}
 			pathJSON, _ := json.Marshal(path)
@@ -979,6 +991,9 @@ func (s *ProjectConsolidationStore) validateUnresolvedMembership(ctx context.Con
 			batches[index].keys = append(batches[index].keys, json.RawMessage(row.RowKey))
 			batches[index].members = append(batches[index].members, row)
 		}
+		var queries []string
+		var queryArgs []any
+		var members []*ConsolidationMembership
 		for _, b := range batches {
 			keys, err := json.Marshal(b.keys)
 			if err != nil {
@@ -1023,24 +1038,33 @@ func (s *ProjectConsolidationStore) validateUnresolvedMembership(ctx context.Con
 				}
 			}
 			args = append(args, string(keys), gormlib.Expr(b.predicate, b.args...))
+			// Each shape remains a set join; one transport query covers the entire batch.
+			query := "SELECT r.ordinality + " + strconv.Itoa(len(members)) + " AS ordinal, COUNT(t.tableoid) AS matches, " + expression + " AS selector FROM jsonb_array_elements(?::jsonb) WITH ORDINALITY AS r(value, ordinality) LEFT JOIN " + quoted(b.table) + " t ON ? GROUP BY r.ordinality"
+			queries = append(queries, query)
+			queryArgs = append(queryArgs, args...)
+			members = append(members, b.members...)
+		}
+		if len(queries) > 0 {
 			var values []struct {
 				Ordinal  int
 				Matches  int64
 				Selector string
 			}
-			// Keep the native predicate's JSONB equality and physical tuple casts;
-			// only its bound values now come from the requested key relation.
-			query := "SELECT r.ordinality AS ordinal, COUNT(t.tableoid) AS matches, " + expression + " AS selector FROM jsonb_array_elements(?::jsonb) WITH ORDINALITY AS r(value, ordinality) LEFT JOIN " + quoted(b.table) + " t ON ? GROUP BY r.ordinality ORDER BY r.ordinality"
-			if err := s.db.WithContext(ctx).Raw(query, args...).Scan(&values).Error; err != nil {
+			query := "SELECT * FROM (" + strings.Join(queries, " UNION ALL ") + ") AS witnesses ORDER BY ordinal"
+			if err := s.db.WithContext(ctx).Raw(query, queryArgs...).Scan(&values).Error; err != nil {
 				return err
 			}
-			if len(values) != len(b.members) {
+			if len(values) != len(members) {
 				return consolidationHold("STALE_REFERENCE")
 			}
 			for i, value := range values {
-				row := b.members[i]
-				if value.Ordinal != i+1 || value.Matches != 1 || (row.SelectorReference != "" && s.opaque("selector", value.Selector) != row.SelectorReference) || (row.Reason == "unproven_historical_scope" && value.Selector != "") || (b.table == "sources" && b.pathValues[0] == "project_id" && row.SelectorReference == "" && value.Selector != "") {
-					return consolidationHold("STALE_REFERENCE")
+				row := members[i]
+				var path []string
+				_ = json.Unmarshal(row.FieldPath, &path)
+				if value.Ordinal != i+1 || value.Matches != 1 || (row.SelectorReference != "" && s.opaque("selector", value.Selector) != row.SelectorReference) || (row.Reason == "unproven_historical_scope" && value.Selector != "") || (row.Table == "sources" && path[0] == "project_id" && row.SelectorReference == "" && value.Selector != "") {
+					if err := reject(row, consolidationHold("STALE_REFERENCE")); err != nil {
+						return err
+					}
 				}
 			}
 		}

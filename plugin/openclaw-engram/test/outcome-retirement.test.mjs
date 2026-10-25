@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { EngramRestClient } from '../dist/client.js';
-import { handleSessionEnd } from '../dist/hooks/session-end.js';
+import { handleAgentEnd } from '../dist/hooks/agent-end.js';
 import { createEngramOutcomeTool } from '../dist/tools/engram-outcome.js';
 
 const retirement = {
@@ -40,7 +40,7 @@ test('versioned outcome retirement is surfaced without poisoning availability', 
   }
 });
 
-test('automatic and explicit outcome callers report retirement rather than recording success', async () => {
+test('automatic capture does not invent task outcome; explicit caller reports retirement', async () => {
   const warnings = [];
   const client = {
     isAvailable: () => true,
@@ -54,8 +54,8 @@ test('automatic and explicit outcome callers report retirement rather than recor
     error() { },
   };
 
-  await handleSessionEnd(
-    { messages: [{ role: 'assistant', content: 'completed' }] },
+  await handleAgentEnd(
+    { messages: [{ role: 'assistant', content: 'completed' }], success: true },
     { agentId: 'agent-a', sessionId: 'openclaw-session' },
     client,
     { autoExtract: false },
@@ -64,10 +64,7 @@ test('automatic and explicit outcome callers report retirement rather than recor
   await new Promise((resolve) => setImmediate(resolve));
 
   const automatic = warnings.join('\n');
-  assert.match(automatic, /contract_version=engram\.outcome-retirement\.v1/);
-  assert.match(automatic, /code=OUTCOME_CALLBACK_RETIRED/);
-  assert.match(automatic, /action=upgrade_outcome_adapter/);
-  assert.doesNotMatch(automatic, /outcome=partial/);
+  assert.equal(automatic, '', 'Agent execution success does not prove task acceptance');
 
   const tool = createEngramOutcomeTool(
     { sessionId: 'openclaw-session' },

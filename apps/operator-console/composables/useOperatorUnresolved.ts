@@ -24,6 +24,41 @@ export interface UnresolvedHistoryPage {
   nextCursor: string | null
 }
 
+type RetainedRecordItem = UnresolvedKnowledgeItem & { reference: string }
+interface RetainedRecordPage { kind: UnresolvedKnowledgeKind; items: RetainedRecordItem[]; nextCursor: string | null }
+const historicalScope = 'unresolved_history'
+const historicalKinds: UnresolvedKnowledgeKind[] = ['memory', 'document', 'issue']
+function positiveID(value: unknown): string {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) throw new TypeError('Invalid historical native identity')
+  return String(value)
+}
+function historicalRecord(value: unknown): asserts value is Record<string, unknown> {
+  if (!object(value) || value.attribution_scope !== historicalScope || Object.hasOwn(value, 'project_key')) throw new TypeError('Historical attribution mismatch')
+}
+export function parseRetainedRecordQuery(payload: unknown, kind: UnresolvedKnowledgeKind, limit: number): RetainedRecordPage {
+  parseUnresolvedKind(kind)
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200 || !object(payload) || payload.view !== 'retained_records' || payload.attribution_scope !== historicalScope || payload.kind !== kind || !Array.isArray(payload.items) || payload.items.length > limit || Object.hasOwn(payload, 'total') || Object.hasOwn(payload, 'has_more')) throw new TypeError('Historical query envelope mismatch')
+  const ids = new Set<string>()
+  const items = payload.items.map((item: unknown): RetainedRecordItem => {
+    if (!object(item) || typeof item.reference !== 'string' || !/^urn:engram:migration:unresolved:[0-9a-f]{64}$/.test(item.reference)) throw new TypeError('Invalid historical reference')
+    const id = positiveID(item.id)
+    historicalRecord(item.record)
+    if (positiveID(item.record.id) !== id || ids.has(id)) throw new TypeError('Historical record identity mismatch')
+    ids.add(id)
+    return { ...retainedItem(item.record, kind, false), reference: item.reference }
+  })
+  return { kind, items, nextCursor: continuation(payload.next_cursor) }
+}
+
+function historicalSelection(payload: unknown, id: string, history: boolean) {
+  historicalRecord(payload)
+  if (!/^[1-9]\d*$/.test(id) || !Number.isSafeInteger(Number(id)) || !Array.isArray(payload.items) || (payload.id !== undefined && positiveID(payload.id) !== id)) throw new TypeError('Historical selection mismatch')
+  for (const item of payload.items) {
+    historicalRecord(item)
+    if (!history && positiveID(item.id) !== id) throw new TypeError('Historical content identity mismatch')
+  }
+}
+
 function object(value: unknown): value is Record<string, unknown> { return typeof value === 'object' && value !== null && !Array.isArray(value) }
 export function parseUnresolvedKind(value: unknown): UnresolvedKnowledgeKind {
   if (value === 'memory' || value === 'document' || value === 'issue') return value
@@ -97,12 +132,13 @@ export function parseUnresolvedCode(payload: unknown, reference: string, limit: 
 export function useOperatorUnresolved(catalog: { unresolved: Ref<OperatorUnresolvedProject[]>; pending: Ref<boolean>; error: Ref<OperatorSourceError | null> }) {
   const route = useRoute()
   const router = useRouter()
+  const recordMode = computed(() => route.query.view !== undefined)
   const reference = computed(() => typeof route.query.reference === 'string' ? route.query.reference : '')
   const retained = computed(() => catalog.unresolved.value.find((row) => row.reference === reference.value))
-  const availableKinds = computed(() => retained.value?.reader_kinds || [])
+  const availableKinds = computed(() => recordMode.value ? historicalKinds : retained.value?.reader_kinds || [])
   const kind = computed(() => typeof route.query.kind === 'string' ? route.query.kind : availableKinds.value.includes('memory') ? 'memory' : availableKinds.value[0] || '')
-  const metadataOnly = computed(() => Boolean(retained.value && !availableKinds.value.length))
-  const unsupportedKind = computed(() => Boolean(retained.value && kind.value && !availableKinds.value.some((value) => value === kind.value)))
+  const metadataOnly = computed(() => !recordMode.value && Boolean(retained.value && !availableKinds.value.length))
+  const unsupportedKind = computed(() => Boolean(kind.value && (recordMode.value || retained.value) && !availableKinds.value.some((value) => value === kind.value)))
   const q = computed(() => typeof route.query.q === 'string' ? route.query.q : '')
   const id = computed(() => typeof route.query.id === 'string' ? route.query.id : kind.value === 'memory' && typeof route.query.memory === 'string' ? route.query.memory : '')
   const content = ref<UnresolvedContentPage | null>(null)
@@ -125,8 +161,41 @@ export function useOperatorUnresolved(catalog: { unresolved: Ref<OperatorUnresol
   let historyGeneration = 0
   let contentRequest: AbortController | undefined
   let historyRequest: AbortController | undefined
+  const records = ref<RetainedRecordPage | null>(null)
+  const recordsPending = ref(false)
+  const recordsError = ref<OperatorSourceError | null>(null)
+  let recordsGeneration = 0
+  let recordsRequest: AbortController | undefined
+  watch([() => route.query.view, () => route.query.attribution_scope, () => route.query.kind, () => route.query.q, () => route.query.limit, () => route.query.cursor, retryRevision], async () => {
+    const generation = ++recordsGeneration
+    recordsRequest?.abort()
+    recordsRequest = new AbortController()
+    const signal = recordsRequest.signal
+    records.value = null
+    recordsError.value = null
+    recordsPending.value = false
+    if (!recordMode.value) return
+    recordsPending.value = true
+    try {
+      if (route.query.view !== 'retained_records' || route.query.attribution_scope !== historicalScope || (route.query.q !== undefined && typeof route.query.q !== 'string') || (route.query.cursor !== undefined && (typeof route.query.cursor !== 'string' || !route.query.cursor)) || (route.query.limit !== undefined && (typeof route.query.limit !== 'string' || !/^[1-9]\d*$/.test(route.query.limit)))) throw new TypeError('Invalid historical query')
+      const queryKind = parseUnresolvedKind(route.query.kind)
+      const size = route.query.limit === undefined ? limit : Number(route.query.limit)
+      if (!Number.isSafeInteger(size) || size < 1 || size > 200 || new TextEncoder().encode(q.value).length > 1024) throw new TypeError('Invalid historical query bounds')
+      const params = new URLSearchParams({ view: 'retained_records', attribution_scope: historicalScope, kind: queryKind, q: q.value, limit: String(size) })
+      if (typeof route.query.cursor === 'string') params.set('cursor', route.query.cursor)
+      const payload = await operatorFetchJson<unknown>(`/api/projects?${params}`, { signal }, 'unresolved-records')
+      if (generation !== recordsGeneration || signal.aborted) return
+      const page = parseRetainedRecordQuery(payload, queryKind, size)
+      if (page.nextCursor && page.nextCursor === params.get('cursor')) throw new TypeError('Historical continuation did not advance')
+      records.value = page
+    } catch (cause) {
+      if (generation !== recordsGeneration || signal.aborted) return
+      recordsError.value = toOperatorSourceError(cause, { source: 'unresolved-records', path: '/api/projects', method: 'GET' })
+      if (cause instanceof TypeError) recordsError.value.category = 'invalid-response'
+    } finally { if (generation === recordsGeneration) recordsPending.value = false }
+  }, { immediate: true, flush: 'sync' })
 
-  watch(() => [route.query.reference, route.query.kind, kind.value, retained.value, catalog.pending.value, catalog.error.value, route.query.q, route.query.cursor, retryRevision.value], async () => {
+  watch(() => [route.query.reference, route.query.kind, kind.value, recordMode.value ? undefined : retained.value, recordMode.value ? false : catalog.pending.value, recordMode.value ? null : catalog.error.value, route.query.q, route.query.cursor, recordMode.value, route.query.attribution_scope, recordMode.value ? route.query.id : undefined, recordsError.value, retryRevision.value], async () => {
     const generation = ++contentGeneration
     contentRequest?.abort()
     contentRequest = new AbortController()
@@ -135,7 +204,7 @@ export function useOperatorUnresolved(catalog: { unresolved: Ref<OperatorUnresol
     error.value = null
     pending.value = false
     if (route.query.reference === undefined) return
-    if (catalog.pending.value || catalog.error.value || metadataOnly.value || unsupportedKind.value || !kind.value) return
+    if ((!recordMode.value && (catalog.pending.value || catalog.error.value)) || metadataOnly.value || unsupportedKind.value || !kind.value || (recordMode.value && recordsError.value)) return
     const target = reference.value
     const endpoint = `/api/projects/unresolved/${encodeURIComponent(target)}/${kind.value === 'code' ? 'code' : 'content'}`
     pending.value = true
@@ -146,10 +215,21 @@ export function useOperatorUnresolved(catalog: { unresolved: Ref<OperatorUnresol
       if (route.query.cursor !== undefined && typeof route.query.cursor !== 'string') throw new TypeError('Invalid retained continuation')
       const targetKind = kind.value === 'code' ? 'code' : parseUnresolvedKind(kind.value)
       const params = new URLSearchParams({ limit: String(limit) })
-      if (targetKind !== 'code') { params.set('kind', targetKind); params.set('q', q.value) }
-      if (typeof route.query.cursor === 'string') params.set('cursor', route.query.cursor)
+      if (recordMode.value) {
+        if (route.query.attribution_scope !== historicalScope || targetKind === 'code' || typeof route.query.id !== 'string' || !/^[1-9]\d*$/.test(route.query.id) || !Number.isSafeInteger(Number(route.query.id))) throw new TypeError('Invalid historical selection')
+        params.set('kind', targetKind)
+        params.set('id', route.query.id)
+        params.set('attribution_scope', historicalScope)
+      } else {
+        if (targetKind !== 'code') { params.set('kind', targetKind); params.set('q', q.value) }
+        if (typeof route.query.cursor === 'string') params.set('cursor', route.query.cursor)
+      }
       const payload = await operatorFetchJson<unknown>(`${endpoint}?${params}`, { signal }, 'unresolved-content')
       if (generation !== contentGeneration || signal.aborted) return
+      if (recordMode.value) {
+        historicalSelection(payload, id.value, false)
+        if (historyError.value) return
+      }
       const page = targetKind === 'code' ? parseUnresolvedCode(payload, target, limit) : parseUnresolvedContent(payload, target, targetKind, limit)
       if (page.nextCursor && page.nextCursor === params.get('cursor')) throw new TypeError('Unresolved continuation did not advance')
       content.value = page
@@ -157,10 +237,11 @@ export function useOperatorUnresolved(catalog: { unresolved: Ref<OperatorUnresol
       if (generation !== contentGeneration || signal.aborted) return
       error.value = toOperatorSourceError(cause, { source: 'unresolved-content', path: endpoint, method: 'GET' })
       if (cause instanceof TypeError) error.value.category = 'invalid-response'
+      if (recordMode.value) history.value = null
     } finally { if (generation === contentGeneration) pending.value = false }
   }, { immediate: true, flush: 'sync' })
 
-  watch(() => [route.query.reference, route.query.kind, kind.value, retained.value, catalog.pending.value, catalog.error.value, route.query.id, route.query.memory, historyID.value, route.query.historyCursor, retryRevision.value], async () => {
+  watch(() => [route.query.reference, route.query.kind, kind.value, recordMode.value ? undefined : retained.value, recordMode.value ? false : catalog.pending.value, recordMode.value ? null : catalog.error.value, route.query.id, route.query.memory, historyID.value, route.query.historyCursor, recordMode.value, route.query.attribution_scope, recordsError.value, retryRevision.value], async () => {
     const generation = ++historyGeneration
     historyRequest?.abort()
     historyRequest = new AbortController()
@@ -168,7 +249,7 @@ export function useOperatorUnresolved(catalog: { unresolved: Ref<OperatorUnresol
     history.value = null
     historyError.value = null
     historyPending.value = false
-    if (catalog.pending.value || catalog.error.value || !reference.value || kind.value === 'code' || !kind.value || metadataOnly.value || unsupportedKind.value) return
+    if ((!recordMode.value && (catalog.pending.value || catalog.error.value)) || !reference.value || kind.value === 'code' || !kind.value || metadataOnly.value || unsupportedKind.value || (recordMode.value && recordsError.value)) return
     const target = reference.value
     const endpoint = `/api/projects/unresolved/${encodeURIComponent(target)}/history`
     try {
@@ -180,9 +261,17 @@ export function useOperatorUnresolved(catalog: { unresolved: Ref<OperatorUnresol
       if (!targetID) return
       historyPending.value = true
       const params = new URLSearchParams({ kind: targetKind, id: targetID, limit: String(limit) })
+      if (recordMode.value) {
+        if (route.query.attribution_scope !== historicalScope || !/^[1-9]\d*$/.test(targetID) || !Number.isSafeInteger(Number(targetID))) throw new TypeError('Invalid historical history selection')
+        params.set('attribution_scope', historicalScope)
+      }
       if (typeof route.query.historyCursor === 'string') params.set('cursor', route.query.historyCursor)
       const payload = await operatorFetchJson<unknown>(`${endpoint}?${params}`, { signal }, 'unresolved-history')
       if (generation !== historyGeneration || signal.aborted) return
+      if (recordMode.value) {
+        historicalSelection(payload, targetID, true)
+        if (error.value) return
+      }
       const page = parseUnresolvedHistory(payload, target, targetKind, targetID, limit)
       if (page.nextCursor && page.nextCursor === params.get('cursor')) throw new TypeError('History continuation did not advance')
       history.value = page
@@ -190,12 +279,20 @@ export function useOperatorUnresolved(catalog: { unresolved: Ref<OperatorUnresol
       if (generation !== historyGeneration || signal.aborted) return
       historyError.value = toOperatorSourceError(cause, { source: 'unresolved-history', path: endpoint, method: 'GET' })
       if (cause instanceof TypeError) historyError.value.category = 'invalid-response'
+      if (recordMode.value) content.value = null
     } finally { if (generation === historyGeneration) historyPending.value = false }
   }, { immediate: true, flush: 'sync' })
-  onBeforeUnmount(() => { contentGeneration += 1; historyGeneration += 1; contentRequest?.abort(); historyRequest?.abort() })
+  onBeforeUnmount(() => { contentGeneration += 1; historyGeneration += 1; recordsGeneration += 1; contentRequest?.abort(); historyRequest?.abort(); recordsRequest?.abort() })
   function update(query: Record<string, string | undefined>) { return router.push({ path: route.path, query: { ...route.query, ...query }, hash: route.hash }) }
-  function open(item: UnresolvedKnowledgeItem) { return update({ id: item.id, historyCursor: undefined }) }
+  function open(item: UnresolvedKnowledgeItem) {
+    if (recordMode.value) {
+      const issued = records.value?.items.find(row => row === item)
+      if (!issued) return
+      return update({ reference: issued.reference, id: issued.id, historyCursor: undefined })
+    }
+    return update({ id: item.id, historyCursor: undefined })
+  }
   const originalLocation = computed(() => typeof route.query.originalLocation === 'string' ? route.query.originalLocation : typeof route.query.returnTo === 'string' ? route.query.returnTo : '')
   const returnTo = computed(() => operatorProjectReturnTo(route.query.returnTo, router, typeof route.query.originalLocation === 'string' ? route.query.originalLocation : ''))
-  return { reference, retained, availableKinds, kind, metadataOnly, unsupportedKind, q, id, selected, historyID, content, history, pending, historyPending, error, historyError, originalLocation, returnTo, open, update, retry: () => { retryRevision.value += 1 } }
+  return { recordMode, records, recordsPending, recordsError, reference, retained, availableKinds, kind, metadataOnly, unsupportedKind, q, id, selected, historyID, content, history, pending, historyPending, error, historyError, originalLocation, returnTo, open, update, retry: () => { retryRevision.value += 1 } }
 }

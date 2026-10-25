@@ -40,11 +40,36 @@ Navigation groups project entry, knowledge, Workspace, attention, and administra
 The shared project selector uses the server's canonical IDs; equal display names stay
 distinct. The knowledge project is not a code Source/Checkout/View selection or a grant.
 
+Historical records have an explicit **Find saved records** view on the existing
+unresolved page: `view=retained_records&attribution_scope=unresolved_history`
+with a selected memory/document/issue kind. It queries native saved content rather
+than group labels. Results show actual body excerpts or document paths/versions;
+opening one uses its exact issued reference, kind and positive native ID for body
+and history. Historical provenance never assigns a canonical owner. Document
+versions and another group's same path remain distinct. Return keeps the literal
+search, kind, work cursor and results, including normal browser Back.
+
+Search uses the separate bounded `/api/projects` projection, not group fan-out or
+the normal catalog envelope. Short and empty pages with a cursor still offer
+continuation: the cursor means remaining search work, not promised visible rows.
+Only a null cursor reports observed exhaustion; no readable total is inferred.
+Failures/refusals stay errors and clear open payloads without a canonical fallback.
+The group view, every metadata-only group and existing group/code/Vault readers
+remain separate. Family counts are saved membership occurrences, not distinct
+records, readability or access; absent family metadata stays unknown, not zero.
+Reader declarations are not grants. Technical attribution is in native disclosures;
+read/history/return controls precede full bodies. This is source/compiled behavior,
+not proof that the new projection is served by a live installation or that all
+historical groups are readable. Coherent runtime/corpus and ordinary browser,
+role/zoom, material-cycle and installed-delivery acceptance remain separate.
+
+
+
 ### Обычный вход R1: существующее решение
 
 Установка, обновление и сохранность client-data/Vault описаны в
 [operating guide](../../docs/operating-engram.md#версия-установка-и-обновление).
-Manifest `7.0.1` в этом source-выпуске
+Версия manifest в этом source-кандидате (см. operating guide)
 не доказывает публикацию или установленную версию. Не меняй сервер, auth mode,
 профиль, `.engram-project` или Vault key ради успешного входа.
 

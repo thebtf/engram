@@ -7,12 +7,42 @@ server configuration, retained readers, Code Workspace, and restart procedures.
 
 ## Версия, установка и обновление
 
-Для этого source-выпуска серверный daemon и plugin/client/parser manifests
-объявляют `7.0.1`.
-Это версия исходников, а не доказательство опубликованного релиза, обновлённого
-каталога marketplace или установленного комплекта. Установленные версии и байты
-проверяются отдельно. Локальная synthetic/no-auth проверка не подтверждает
-production, principal, обычную свежую сессию или установку.
+Этот кандидат готовит `7.0.6`: поиск сохранённых исторических записей,
+независимый запуск Vault и исправление индексации Git directory records.
+Серверный daemon, package/marketplace manifests и OpenClaw runtime metadata
+объявляют `7.0.6`. Bootstrap/parser policies пересозданы для `7.0.6` из канонических
+Git blobs и прошли `prepare-bootstrap-policy.sh --version 7.0.6 --check` с Go 1.26.10
+Linux amd64 и MinGW GCC 13-win32 из закреплённого release image по
+[release-протоколу](RELEASE-PROTOCOL.md). Это не готовый комплект для установки:
+сборка финальных raw assets и архивов, публикация и установленная приёмка остаются отдельными шагами.
+
+По сохранённой приёмке от 2026-10-25 опубликован `7.0.5`; установленный сервер
+и обычные клиентские чтения приняты только для исправления запуска/context admission.
+Это не подтверждает поиск исторических записей из нового кандидата, полный
+Workspace/search/graph/two-worktree путь или версию загруженного OMP extension.
+Консолидация канонических проектов остаётся OPEN; этот выпуск её не выполняет.
+Последняя отдельно подтверждённая npm-версия плагина openclaw-engram — `7.0.4`.
+Кандидат `7.0.6` объявляет существующие tools через `contracts.tools` и переносит
+статический контекст с игнорируемого `before_agent_start` на `before_prompt_build`.
+Контекст каждого запуска заново использует текущий проект; session cache нет.
+Static context передаёт настоящий необязательный `ctx.sessionId` как `session_id`
+в `/api/context/inject`; сервер этого endpoint владеет учётом static exposure.
+Hook не ожидает вымышленный `response.sessionId` и не вызывает отдельный static
+`mark-injected`. Если host не выдал session ID, hook не отправляет это поле и
+не инициализирует session tracking; `agentId` не подставляется вместо session ID.
+Эта проверка контракта не подтверждает сохранение exposure в БД.
+Для автоматического контекста внешний плагин требует разрешение host:
+`plugins.entries.engram.hooks.allowConversationAccess: true`.
+Это не поле `plugins.entries.engram.config`: разрешение открывает prompt hooks
+доступ к запросу и подготовленной истории. Без него, а также при
+`hooks.allowPromptInjection: false`, host блокирует автоматический контекст.
+Плагин не меняет эти настройки. Проверка официального `openclaw@2026.10.7`
+охватывает manifest parser, регистрацию, hook runner и преобразование tool result;
+она не подтверждает полный loader, discovery/trust/config validation или установленный
+store→recall/context. Обычный установленный OpenClaw runtime остаётся NOT_PROVEN.
+Обновление host не входит в scope.
+Версии исходников и локальная synthetic/no-auth проверка не подтверждают
+публикацию `7.0.6`, marketplace, production, principal или свежую установленную сессию.
 
 R1 — обычный установленный агент и WebUI выбирают один логический проект,
 находят и открывают существующее полезное решение с источником, историей и
@@ -86,6 +116,12 @@ R1 — обычный установленный агент и WebUI выбир�
    Metadata-only группа остаётся метаинформацией без content/history запроса;
    это не доказательство отсутствия исходных данных. Unsupported или недоступный
    reader остаётся явным отказом, без подстановки другого вида или проекта.
+   Уже выданная страница historical records сохраняется при открытии body,
+   переходах по истории и возврате через **Назад**: эти действия не повторяют
+   discovery. Изменение discovery-фильтров или явный retry запускает новый запрос.
+   `/api/projects` отклоняет malformed query encoding и повторный `view` с HTTP 400
+   `INVALID_QUERY` до чтения catalog, membership или native storage. Корректный запрос
+   без `view` сохраняет обычный catalog-путь.
 7. После штатного обновления проверь то же решение в свежей обычной сессии агента
    и WebUI. При неверной identity останови scoped-чтение и сохрани данные:
    не угадывай UUID/label, не удаляй marker/cache/client-data, не создавай новую БД
@@ -593,6 +629,10 @@ Focused synthetic PostgreSQL proof: 3 новых проекта, 10 membership t
    Native FK memberships для `content_chunks`, `knowledge_edges`, `citation_log`, `promotion_log` и `rule_arbiter_evaluations` входят в census. Их IDs, embeddings и исторические поля не переписываются. Принадлежность наследуется только от согласованных FK parents; отсутствие доказательства остаётся unresolved.
    `ListUnresolved(ctx)` возвращает полный набор сохранённых `reference`, `name` и `reason`, проверяя форму membership envelope и его opaque-привязку. Каталог не выполняет полный аудит native targets и не утверждает, что каждый payload существует, доступен или проверен. Отсутствующий либо изменившийся native target не скрывает его unresolved metadata и остальные корректные проекты. Повреждённый envelope или подменённый opaque reference по-прежнему отклоняет каталог, а не превращается в успешный неполный список.
    Обязательный `reader_kinds` содержит только виды существующего обзора, подтверждённые таблицами retained membership: `memory` для `memories`, `document` для `versioned_documents`, `issue` для `issues`, `code` для `sources`. В смешанной группе сохраняются все такие виды без повторов. Это metadata, не проверка payload, доступности или прав. Пустой массив `[]` означает, что для memberships этой группы нет reader в обзоре; в частности, группа только из `projects` остаётся видимой как метаинформация. UI не отправляет для неё запрос памяти или истории и не объявляет успешный пустой content. Это не доказательство отсутствия исходных данных и не разрешение на native/Vault чтение. При переходе к другой группе UI выбирает только объявленный вид, предпочитая память, если она указана. Явно запрошенный, но не объявленный вид остаётся видимо недоступным; подстановка другого вида не скрывает исходную ссылку.
+   Каждый unresolved descriptor в `GET /api/projects` также содержит `families`: массив `{kind, table_name, membership_count, reader_support}`. `kind` различает `memory`, `document`, `issue`, `code`, `credential` и `native`; `table_name` — техническое имя сохранённой inventory family, не заголовок для оператора, locator, доказательство владельца или вход для dynamic SQL. Все группы, opaque references, безопасные registry/source labels и reasons сохраняются; каталог не добавляет body/title/path/credential previews.
+   `membership_count` считает сохранённые occurrences этой family в группе, не уникальные записи и не доступные результаты. Например, две роли одного issue дают две occurrences; версии документа не равны числу paths. Не складывай эти числа с количеством проектов, групп, видимых документов, версий или code checkouts и не называй их `record_count` или `readable_count`.
+   `reader_support=declared` означает только объявленный review reader для memory/document/issue/code. `separate` у credentials означает отдельный Vault reader с его точным выбором и авторизацией. `metadata_only` у остальных native families означает отсутствие объявленного review reader, а не отсутствие исходной записи. Ни одно значение не обещает доступность или право чтения. Реальные items/totals, privacy, staleness и ошибки определяет выбранный reader; metadata не назначает canonical `project_id` и не меняет историческую принадлежность.
+   `families` не добавляет поиск узнаваемых записей между группами и не заменяет чтение body/history по уже выбранной ссылке. Наличие поля в API не доказывает его отображение текущим UI, установку или обычный путь агент/WebUI → запись → история → возврат с контекстом.
    При выбранном обращении `UnresolvedMembership(reference, kind)` сохраняет полную проверку native key, единственного совпадения и selector перед обычными privacy/access checks. Отсутствующий либо изменившийся target получает отказ, не успешный пустой content. `LegacyUnresolved(ctx, selector)` также сохраняет полную native-проверку и переводит только сохранённую unresolved принадлежность; он не заменяет session-aware `ResolveLegacy`. Для `kind=code` reader возвращает только точный native `sources.source_id`. Неизвестная, чужая или устаревшая выбранная ссылка получает отказ. Полная migration/conservation проверка остаётся на существующем boundary миграции.
    Изолированный real-PostgreSQL `TestProjectConsolidationUnresolvedMembershipBatch` прошёл без skip: полный metadata catalog при missing/changed native target, отказ выбранного reader, metadata/opaque tampering, foreign Vault и прежние native-key cases. Это не доказательство полного HTTP каталога на owner corpus за 10 секунд, установленного клиента или завершённой owner streaming миграции.
    Полные native строки `documents`, `content` и `project_identity_comparisons` входят в census и unresolved membership. Для unresolved fixture `SourceRowKey` задаётся точным исходным ключом, включая encoded-link fixture; пустой metadata default не заменяет доказательство происхождения и не используется как fallback. Пустые `{}` в `ci_profiles.build_context_json` и `versioned_documents.metadata` не создают выдуманной неизвестной роли. Непустой object сохраняется с selective hold; ключи `scope`, `topic` и `readonly_review` сами по себе не доказывают Project ID. Обычные состояния, digests, audit labels и legacy alias namespaces сохраняются без переписывания.
@@ -731,7 +771,7 @@ Repeat all 10 checks with `ENGRAM_GRAPH_ENABLED=true` and `ENGRAM_BOOKS_ENABLED=
 
 The linked DA03 source receipt records **NOT_PROVEN** for full source acceptance because its bookmark browser test selectors failed. Repeat the two bookmark checks with scoped selectors on the exact installed UI; do not convert its HTTP/MCP fixture results into a release PASS.
 
-The Windows amd64 (`win32-x64`) parser has been built and smoke-tested as a source candidate, but its release asset is not published and the ordinary installed Windows parser is not yet certified. Linux amd64 and macOS arm64 have no parser targets in the generated package policy, even though launcher clients exist for those platforms; do not infer JS, TS, or TSX facts or graph coverage from a source build. On Windows, Go and structured text remain in the first scope; JS, TS, and TSX require a published parser bundle installed by the supported plugin path. At release, check the published asset against the `win32-x64` `asset`, `size`, and executable `sha256` in the matching package's generated `plugin/engram/parser-targets.json`, then check the installed parser's `--bundle-digest` output and daemon diagnostics for the separate compatible bundle digest. A candidate policy entry alone is not installation evidence. Full C#, Python, Vue SFC, communities, and the old manual graph or Book workflows are not promised. The source evidence manifest `tools/uci-parser/manifest.json` still marks Windows and Linux amd64 `not_claimed` and `not_reverified` for the v2 facts contract, with macOS targets blocked; do not turn candidate smoke evidence into a manifest or installed-release PASS.
+The Windows amd64 (`win32-x64`) parser is published in [v7.0.5](https://github.com/thebtf/engram/releases/tag/v7.0.5): the retained release readback matches the package policy's raw asset, 7,946,240 bytes and SHA-256 `114ae44ea81c20d4ce4452b12331abe2b2094bae4cb4cb49aeae43bac03209ad`. This proves publication, not an ordinary installed Windows parser or JS/TS/TSX search/graph journey. The 7.0.6 policy has now been regenerated and checked with the canonical producer; its fresh raw parser size/SHA-256 matches that historical tuple. The declared parser dependency closure includes the changed Git scanner source, so this is fresh generation evidence, not unchanged-input reuse or 7.0.6 publication. Linux amd64 and macOS arm64 have no parser targets in this generated policy, although launcher clients exist. At release, compare the published asset with the matching package's generated `plugin/engram/parser-targets.json` (`asset`, `size`, executable `sha256`); separately verify the installed parser's `--bundle-digest`, daemon diagnostics and actual language behavior. The source manifest `tools/uci-parser/manifest.json` describes facts/v9 over the v2 parser protocol; its platform evidence remains `not_claimed` / `not_reverified`, with macOS blocked. Neither that historical manifest nor package publication certifies installed platform coverage. Full C#, Python, Vue SFC, communities, and the old manual graph or Book workflows are not promised.
 
 ### Diagnose by symptom
 

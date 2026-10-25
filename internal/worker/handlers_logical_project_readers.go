@@ -18,12 +18,13 @@ import (
 )
 
 type retainedProjectResponse struct {
-	Reference  string  `json:"reference"`
-	Kind       string  `json:"kind,omitempty"`
-	ID         int64   `json:"id,omitempty"`
-	Items      any     `json:"items"`
-	Total      int64   `json:"total"`
-	NextCursor *string `json:"next_cursor"`
+	AttributionScope string  `json:"attribution_scope,omitempty"`
+	Reference        string  `json:"reference"`
+	Kind             string  `json:"kind,omitempty"`
+	ID               int64   `json:"id,omitempty"`
+	Items            any     `json:"items"`
+	Total            int64   `json:"total"`
+	NextCursor       *string `json:"next_cursor"`
 }
 
 type retainedProjectCursor struct {
@@ -42,10 +43,14 @@ func retainedProjectPage(r *http.Request, reference, revision string) (limit, of
 			err = errors.New("duplicate reader parameter")
 			return
 		}
-		if key != "kind" && key != "id" && key != "limit" && key != "cursor" && key != "q" {
+		if key != "kind" && key != "id" && key != "limit" && key != "cursor" && key != "q" && key != "attribution_scope" {
 			err = errors.New("unknown reader parameter")
 			return
 		}
+	}
+	if params.Has("attribution_scope") && (params.Get("attribution_scope") != retainedHistoryScope || strings.HasSuffix(r.URL.Path, "/code")) {
+		err = errors.New("invalid retained attribution scope")
+		return
 	}
 	if params.Has("limit") {
 		limit, err = strconv.Atoi(params.Get("limit"))
@@ -90,6 +95,7 @@ func retainedProjectNext(binding string, offset, limit int, total int64) *string
 }
 
 func (s *Service) logicalMembershipStore(w http.ResponseWriter, r *http.Request) *gormdb.ProjectConsolidationStore {
+	w.Header().Set("Cache-Control", "private, no-store")
 	identity, ok := auth.IdentityFrom(r.Context())
 	if !ok || !hapHTTPRouteAllowed(identity, r.Method, r.URL.Path) {
 		writeDocumentError(w, http.StatusForbidden, "project read forbidden")
@@ -99,7 +105,6 @@ func (s *Service) logicalMembershipStore(w http.ResponseWriter, r *http.Request)
 		writeDocumentError(w, http.StatusServiceUnavailable, "project membership unavailable")
 		return nil
 	}
-	w.Header().Set("Cache-Control", "private, no-store")
 	return gormdb.NewProjectConsolidationStore(s.store.GetDB(), s.vault, nil)
 }
 
@@ -161,10 +166,47 @@ func (s *Service) handleResolveLogicalProject(w http.ResponseWriter, r *http.Req
 	writeJSON(w, map[string]any{"status": "unresolved", "reference": unresolved, "reason": "Historical membership remains unresolved"})
 }
 
+// handleRetainedProjectContent godoc
+// @Summary Read an exact retained association
+// @Description Validates the complete selected reference/kind group, then reads its visible historical native payloads. Optional positive id selects only that exact member; without id the old whole-group behavior remains. Optional attribution_scope accepts only unresolved_history; omitted scope has the same historical meaning. Responses and record projections identify unresolved_history and omit project_key. A stale group is refused, never repaired through another group. Memory privacy remains enforced; documents/issues have ordinary authenticated route and exact-membership authority. private,no-store on success and errors.
+// @Tags Observations
+// @Produce json
+// @Security ApiKeyAuth
+// @Param reference path string true "Exact issued unresolved reference"
+// @Param kind query string true "Native family" Enums(memory,document,issue)
+// @Param attribution_scope query string false "Historical attribution only" Enums(unresolved_history)
+// @Param id query int false "Exact positive native ID within this reference and kind"
+// @Param q query string false "Literal retained-reader search"
+// @Param limit query int false "Page size 1..200, default 50"
+// @Param cursor query string false "Continuation bound to reference, group revision, reader, kind, id, query and limit"
+// @Success 200 {object} retainedProjectResponse
+// @Failure 400 {object} documentErrorResponse "invalid retained reader parameters"
+// @Failure 403 {object} documentErrorResponse "project read forbidden"
+// @Failure 404 {object} documentErrorResponse "unknown/stale association or foreign native ID"
+// @Failure 503 {object} documentErrorResponse "retained content unavailable"
+// @Router /api/projects/unresolved/{reference}/content [get]
 func (s *Service) handleRetainedProjectContent(w http.ResponseWriter, r *http.Request) {
 	s.readRetainedProject(w, r, false)
 }
 
+// handleRetainedProjectHistory godoc
+// @Summary Read history for an exact retained native record
+// @Description Requires the exact issued reference/kind/positive id and complete current group validation. Optional attribution_scope accepts only unresolved_history; old omitted scope keeps that meaning. Document history preserves validated group IDs plus the selected path and historical project, including other versions, never one-ID truncation. Memory history keeps visibility and manage checks. Historical projections omit project_key. Stale/foreign selections are refused without reassociation. private,no-store on success and errors.
+// @Tags Observations
+// @Produce json
+// @Security ApiKeyAuth
+// @Param reference path string true "Exact issued unresolved reference"
+// @Param kind query string true "Native family" Enums(memory,document,issue)
+// @Param id query int true "Exact positive native ID within this reference and kind"
+// @Param attribution_scope query string false "Historical attribution only" Enums(unresolved_history)
+// @Param limit query int false "Page size 1..200, default 50"
+// @Param cursor query string false "Continuation bound to the exact selection and group revision"
+// @Success 200 {object} retainedProjectResponse
+// @Failure 400 {object} documentErrorResponse "invalid retained reader parameters"
+// @Failure 403 {object} documentErrorResponse "project read forbidden"
+// @Failure 404 {object} documentErrorResponse "unknown/stale/foreign/hidden association or denied memory history"
+// @Failure 503 {object} documentErrorResponse "retained history unavailable"
+// @Router /api/projects/unresolved/{reference}/history [get]
 func (s *Service) handleRetainedProjectHistory(w http.ResponseWriter, r *http.Request) {
 	s.readRetainedProject(w, r, true)
 }
@@ -208,9 +250,9 @@ func (s *Service) readRetainedProject(w http.ResponseWriter, r *http.Request, hi
 		writeDocumentError(w, 400, "invalid retained reader page")
 		return
 	}
-	response := retainedProjectResponse{Reference: reference, Kind: kind}
+	response := retainedProjectResponse{Reference: reference, Kind: kind, AttributionScope: retainedHistoryScope}
 	var id int64
-	if history {
+	if history || r.URL.Query().Has("id") {
 		id, err = strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
 		found := false
 		for _, member := range ids {
@@ -230,9 +272,15 @@ func (s *Service) readRetainedProject(w http.ResponseWriter, r *http.Request, hi
 		response.ID = id
 	}
 	caller, opts := memoryVisibilityCaller(r.Context(), ""), memoryVisibilityOptions()
-	switch kind {
-	case "memory":
-		if history {
+	if !history {
+		bodyIDs := ids
+		if id > 0 {
+			bodyIDs = []int64{id}
+		}
+		response.Items, response.Total, err = s.readRetainedBodies(r.Context(), kind, bodyIDs, r.URL.Query().Get("q"), caller, opts, limit, offset)
+	} else {
+		switch kind {
+		case "memory":
 			memories, _, readErr := s.sessionStore.RetainedMemories(r.Context(), []int64{id}, "", caller, opts, 1, 0)
 			if readErr != nil {
 				err = readErr
@@ -244,12 +292,7 @@ func (s *Service) readRetainedProject(w http.ResponseWriter, r *http.Request, hi
 			}
 			entries, total, readErr := s.sessionStore.RetainedMemoryAudit(r.Context(), id, limit, offset)
 			response.Items, response.Total, err = mapMemoryAuditResponse(id, entries).Entries, total, readErr
-		} else {
-			items, total, readErr := s.sessionStore.RetainedMemories(r.Context(), ids, r.URL.Query().Get("q"), caller, opts, limit, offset)
-			response.Items, response.Total, err = jsonSafeMemories(items), total, readErr
-		}
-	case "document":
-		if history {
+		case "document":
 			selected, _, readErr := s.sessionStore.RetainedDocuments(r.Context(), []int64{id}, "", 1, 0)
 			if readErr != nil {
 				err = readErr
@@ -261,43 +304,19 @@ func (s *Service) readRetainedProject(w http.ResponseWriter, r *http.Request, hi
 			}
 			versions, total, readErr := s.sessionStore.RetainedDocumentHistory(r.Context(), ids, selected[0], limit, offset)
 			response.Items, response.Total, err = documentHistoryItems(versions), total, readErr
-		} else {
-			docs, total, readErr := s.sessionStore.RetainedDocuments(r.Context(), ids, r.URL.Query().Get("q"), limit, offset)
-			items := make([]documentReadResponse, len(docs))
-			for i := range docs {
-				items[i] = documentReadItem(&docs[i])
-			}
-			response.Items, response.Total, err = items, total, readErr
-		}
-	case "issue":
-		if history {
+		case "issue":
 			items, total, readErr := s.sessionStore.RetainedIssueHistory(r.Context(), id, limit, offset)
 			response.Items, response.Total, err = items, total, readErr
-		} else {
-			items, total, readErr := s.sessionStore.RetainedIssues(r.Context(), ids, r.URL.Query().Get("q"), limit, offset)
-			if readErr != nil {
-				err = readErr
-				break
-			}
-			issueIDs := make([]int64, len(items))
-			for i := range items {
-				issueIDs[i] = items[i].ID
-			}
-			roles, readErr := s.issueStore.ProjectRoles(r.Context(), issueIDs)
-			if readErr != nil {
-				err = readErr
-				break
-			}
-			projected := make([]issueReadItem, len(items))
-			for i := range items {
-				projected[i] = issueReadProjection(items[i], roles[items[i].ID])
-			}
-			response.Items, response.Total = projected, total
+		default:
+			writeDocumentError(w, 400, "invalid content kind")
+			return
 		}
-	default:
-		writeDocumentError(w, 400, "invalid content kind")
+	}
+	if err != nil {
+		writeRetainedProjectError(w, err)
 		return
 	}
+	response.Items, err = retainedHistoricalItems(response.Items)
 	if err != nil {
 		writeRetainedProjectError(w, err)
 		return

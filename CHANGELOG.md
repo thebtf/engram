@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+
+- Regenerate the API through the maintained worker target using canonical local Go package directories and Swag 1.16.6, with real producer errors stopping the build. Correct existing context search/inject/session-start annotations without changing handlers; document the shared GET/POST conditional-query limitation. The actual producer and server build pass, with 40 named schema checks and all 76 references resolved; that producer checkpoint established compile-only retained-reader oracle provenance, with later native query proof recorded separately, and installed/release acceptance remains separate.
+
+- Add retained catalog `families` metadata with kind, technical table, saved membership-occurrence count and declared/separate/metadata-only reader boundary. Preserve every group, opaque reference, safe label and reason without payload previews, readable-record totals, availability or historical ownership assignment. This descriptor change does not provide cross-group record discovery or installed-consumer acceptance.
+
 - Bind issue-role lookups as one PostgreSQL ID array instead of expanding one parameter per issue. Preserve complete large selections, independent nullable canonical roles and retained-membership privacy without changing public limits.
 
 - Preserve seven fixed partition-repair refusal codes in private CLI diagnostics; retain generic output for untyped or unknown errors. Require both PostgreSQL fixture DSNs before public-consumer setup, and navigate the explicit metadata-only view in the retained-reader browser regression without changing reader-first discovery.
@@ -39,6 +44,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Isolate canonical GORM/gRPC fixtures, bound their pools and await caller-owned audit writes before schema cleanup; retain restore guards and public data. Reuse focused retention/audit/gRPC proofs; the earlier 37-PASS run remains preservation FAIL (audit rows 37→40), followed by seven focused PASS with 40→40 preservation. Canonical continuity fixtures now migrate once per isolated parent (17→6), preserving every assertion and the unchanged 12m budget; reuse 22 focused lifecycle PASS plus three hash-bound slot CRUD/migration PASS from the earlier incomplete timeout run, not a full-suite or installed-acceptance claim.
 - Use registered canonical UUIDs and authenticated caller project context in MCP fixtures without weakening default-deny, privacy or pre-mutation rejection guards. Reuse 119 prior PASS plus one exact retry PASS after the context fix, not 120 fresh PASS or installed acceptance.
 - Seed the isolated operator-code fixture with a registered canonical project UUID while preserving five queue candidates, published/no-view checks and redacted provisioning errors.
+
+## [7.0.6] - 2026-10-25
+
+Prepare one corrective slice over released 7.0.5: retained-record discovery, independent Vault startup, and Git directory indexing. Canonical project consolidation remains OPEN; this slice performs no stored ownership rewrite, schema/index migration, consolidation cutover or consumer-host update. Focused source/runtime evidence is not ordinary retained-corpus or installed acceptance.
+
+Release PR: [#583](https://github.com/thebtf/engram/pull/583).
+
+### Fixed
+
+- Add explicit bounded historical memory/document/issue discovery to `/api/projects` and the existing unresolved page. Preserve fail-closed membership/privacy checks, native IDs and payloads, role provenance, document version history, caller/query-bound Vault continuations and the 200-work boundary. Keep metadata-only families separate, preserve literal search/cursor/results on return, and offer exact body/history/Back without invented totals or group fan-out. Keep the issued result page through body/history/Back navigation without rediscovery; genuine discovery-selector changes and explicit retry still refresh. Reject malformed query encoding and duplicate `view` values with HTTP 400 `INVALID_QUERY` before catalog, membership or native storage reads, preserving well-formed no-view catalog behavior.
+- Initialize the shared Vault before publishing reader readiness even when CodeIntel is disabled; reuse the singleton for optional UCI and fail startup on an invalid required Vault key rather than advertising unavailable catalog/history discovery.
+- Parse Git untracked directory records in both status and candidate censuses before applying existing nested-repository and reparse exclusions. Keep strict file-path validation and do not read nested repository contents.
+- Restore explicit extended-length prefixes for long Windows daemon-marker paths while preserving DELETE sharing and PID/generation validation. This does not claim legacy-Windows runtime or installed 7.0.6 acceptance.
+- Document context requests per HTTP method: GET retains required query fields; POST inject requires `project` in JSON, while POST search/session-start preserve query/JSON project alternatives. Regenerate Swagger through the maintained producer without changing runtime decoding, defaults, session attribution, authorization or privacy behavior.
+- Restore OpenClaw memory tools through the current host's `contracts.tools` declaration and move static context from ignored `before_agent_start` to supported `before_prompt_build`, preserving per-turn search and fail-closed current-project resolution without a session cache. Pass the actual optional `ctx.sessionId` as `session_id` to `/api/context/inject`, whose server owns static exposure tracking; remove the nonexistent response `sessionId` dependency and redundant static mark-injected call, and never substitute `agentId` for a missing host session. This contract repair does not prove persisted DB exposure. Official `openclaw@2026.10.7` manifest parsing, registration, hook execution and downstream tool-result adaptation are covered; non-bundled prompt enrichment requires the host-owned `plugins.entries.engram.hooks.allowConversationAccess` opt-in and remains blocked when prompt injection is disabled. This is not full-loader or ordinary installed OpenClaw acceptance.
+- Repair OpenClaw's genuine lifecycle/response contracts: capture final visible messages from supported `agent_end`/compaction events, never invent session IDs or task outcomes, and require the conversation grant for automatic capture. Compose distinct rules and selected memories once per prompt with ID deduplication, configured memory counts and a combined escaped-render budget. Carry optional search session provenance through the existing audit context without changing project-scoped retrieval or visibility. Official SDK fixture checks are not installed-host, build3928bad, live-backend or session-private-isolation acceptance.
+- Keep OpenClaw rule IDs separate from ordinary memory IDs during deduplication, and emit the already-budgeted project/tool instructions for dynamic-only enrichment without changing genuinely empty results.
+
+### Changed
+
+- Align maintained server/daemon, Claude/Codex/OMP package/marketplace and OpenClaw package/descriptor/runtime versions on 7.0.6. Regenerate and check the 7.0.6 bootstrap/parser policies from canonical Git-blob inputs with Go 1.26.10 Linux amd64 and the pinned release image's MinGW GCC 13-win32, preserving release flags. The freshly generated parser retains the historical raw size/SHA-256; this is not 7.0.6 asset publication. Publication, applicable release gates and ordinary installed acceptance remain separate. Ordinary installed OpenClaw is NOT_PROVEN; no OpenClaw host upgrade is included.
 
 ## [7.0.5] - 2026-10-25
 
@@ -2368,7 +2394,9 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v7.0.4...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v7.0.6...HEAD
+[7.0.6]: https://github.com/thebtf/engram/compare/v7.0.5...v7.0.6
+[7.0.5]: https://github.com/thebtf/engram/compare/v7.0.4...v7.0.5
 [7.0.4]: https://github.com/thebtf/engram/compare/v7.0.3...v7.0.4
 [7.0.3]: https://github.com/thebtf/engram/compare/v7.0.2...v7.0.3
 [7.0.2]: https://github.com/thebtf/engram/compare/v7.0.1...v7.0.2

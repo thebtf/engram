@@ -60,7 +60,7 @@ export async function handleAfterToolCall(
     // Build a probe string from tool name + serialized input for content classification
     let inputProbe: string;
     try {
-      inputProbe = JSON.stringify(event.toolInput ?? '');
+      inputProbe = JSON.stringify(event.params ?? '');
     } catch {
       inputProbe = '';
     }
@@ -69,7 +69,7 @@ export async function handleAfterToolCall(
   }
 
   const agentId = ctx.agentId ?? '';
-  const sessionId = ctx.sessionId ?? ctx.sessionKey ?? agentId;
+  const sessionId = ctx.sessionId;
   if (!sessionId?.trim()) return; // no session identity available — skip
   const registration = await resolveProject(client, agentId, ctx.workspaceDir, config.project);
   if (!registration.ok) {
@@ -81,8 +81,8 @@ export async function handleAfterToolCall(
   let toolInput: string;
   let toolResult: string;
   try {
-    toolInput = truncate(JSON.stringify(event.toolInput ?? ''), TOOL_INPUT_MAX_CHARS);
-    toolResult = truncate(JSON.stringify(event.toolResult ?? ''), TOOL_RESULT_MAX_CHARS);
+    toolInput = truncate(JSON.stringify(event.params ?? ''), TOOL_INPUT_MAX_CHARS);
+    toolResult = truncate(JSON.stringify(event.result ?? ''), TOOL_RESULT_MAX_CHARS);
   } catch {
     toolInput = '[unserializable]';
     toolResult = '[unserializable]';
@@ -100,7 +100,7 @@ export async function handleAfterToolCall(
 
   // Contradiction detection: check Write/Edit results against stored decisions
   if (isWriteOrEdit(event.toolName)) {
-    void checkContradictions(client, project, event.toolResult, logger).catch(() => {});
+    void checkContradictions(client, project, event.result, logger).catch(() => { });
   }
 }
 

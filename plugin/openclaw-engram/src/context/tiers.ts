@@ -1,3 +1,5 @@
+import { conversationText } from '../hooks/content.js';
+
 export type ContextTier = 'FULL' | 'TARGETED' | 'MINIMAL' | 'NONE';
 
 export interface TierConfig {
@@ -128,72 +130,22 @@ function makeTier(tier: ContextTier, reason: string, fillMultiplier = 1.0): Tier
   };
 }
 
-export class TurnTracker {
-  private turnCount = 0;
-  private lastPrompt = '';
-  private readonly config: TierConfig;
-
-  constructor(config?: Partial<TierConfig>) {
-    this.config = { ...DEFAULT_TIER_CONFIG, ...config };
-  }
-
-  /** Classify the current turn and return the appropriate tier.
-   *  When messages are provided, the token budget is scaled by context fill level. */
-  classify(prompt: string, messages?: unknown[]): TierResult {
-    this.turnCount++;
-
-    const fill = estimateContextFill(messages);
-    const mult = FILL_MULTIPLIERS[fill];
-
-    const lowerPrompt = prompt.toLowerCase();
-    const hasRecallPhrase = RECALL_PHRASES.some((phrase) => lowerPrompt.includes(phrase));
-
-    const suffix = mult < 1.0 ? ` [fill:${fill}]` : '';
-
-    // Rule 1: First turn always gets full context.
-    if (this.turnCount === 1) {
-      this.lastPrompt = prompt;
-      return makeTier('FULL', 'first turn' + suffix, mult);
-    }
-
-    // Rule 2: Explicit recall phrases trigger FULL.
-    if (hasRecallPhrase) {
-      this.lastPrompt = prompt;
-      return makeTier('FULL', 'explicit recall' + suffix, mult);
-    }
-
-    // Rule 3: Short prompts without a question mark → NONE.
-    if (prompt.length <= this.config.shortPromptMaxChars && !prompt.includes('?')) {
-      this.lastPrompt = prompt;
-      return makeTier('NONE', 'short response', mult);
-    }
-
-    // Rule 4: Periodic FULL.
-    if (this.turnCount % this.config.fullSearchInterval === 0) {
-      this.lastPrompt = prompt;
-      return makeTier('FULL', 'periodic full' + suffix, mult);
-    }
-
-    // Rule 5: Periodic MINIMAL.
-    if (this.turnCount % this.config.minimalInterval === 0) {
-      this.lastPrompt = prompt;
-      return makeTier('MINIMAL', 'periodic minimal' + suffix, mult);
-    }
-
-    // Rule 6: Topic shift → TARGETED.
-    if (isTopicShift(prompt, this.lastPrompt)) {
-      this.lastPrompt = prompt;
-      return makeTier('TARGETED', 'topic shift' + suffix, mult);
-    }
-
-    // Default: no trigger.
-    this.lastPrompt = prompt;
-    return makeTier('NONE', 'no trigger', mult);
-  }
-
-  /** Reset tracker (e.g., on new session). */
-  reset(): void {
-    this.turnCount = 0;
-    this.lastPrompt = '';
-  }
+/** Host history is run-local; no plugin-global counter may couple different conversations. */
+export function classifyTurn(prompt: string, messages: unknown[] = []): TierResult {
+  const users = messages.filter(message => message && typeof message === 'object' && 'role' in message && message.role === 'user');
+  const last = conversationText(users[users.length - 1]);
+  const includesCurrent = last === prompt;
+  const turnCount = users.length + (includesCurrent ? 0 : 1);
+  const previous = conversationText(users[users.length - (includesCurrent ? 2 : 1)]);
+  const fill = estimateContextFill(messages);
+  const mult = FILL_MULTIPLIERS[fill];
+  const suffix = mult < 1 ? ` [fill:${fill}]` : '';
+  const tier = (value: ContextTier, reason: string) => makeTier(value, reason + suffix, mult);
+  if (turnCount <= 1) return tier('FULL', 'first turn');
+  if (RECALL_PHRASES.some(phrase => prompt.toLowerCase().includes(phrase))) return tier('FULL', 'explicit recall');
+  if (prompt.length <= DEFAULT_TIER_CONFIG.shortPromptMaxChars && !prompt.includes('?')) return tier('NONE', 'short response');
+  if (turnCount % DEFAULT_TIER_CONFIG.fullSearchInterval === 0) return tier('FULL', 'periodic full');
+  if (turnCount % DEFAULT_TIER_CONFIG.minimalInterval === 0) return tier('MINIMAL', 'periodic minimal');
+  if (isTopicShift(prompt, previous)) return tier('TARGETED', 'topic shift');
+  return tier('NONE', 'no trigger');
 }

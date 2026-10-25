@@ -87,10 +87,18 @@ dashboard:
 	@cp -r ui/dist/* internal/worker/static/
 
 # Server binary — exposes HTTP REST + gRPC + embedded dashboard on :37777.
+# Swag needs package leaf directories to resolve explicit import aliases.
 worker:
 	@echo "Building worker..."
 	@mkdir -p $(BUILD_DIR)
-	swag init -g cmd/engram-server/main.go -o docs --parseDependency --parseInternal 2>/dev/null || true
+	@packages=$$(go list -deps -f '{{if and .Module .Module.Main (or .GoFiles .CgoFiles)}}.{{slice .ImportPath (len .Module.Path)}}{{end}}' ./cmd/engram-server) || exit $$?; \
+	packages=$$(printf '%s\n' "$$packages" | LC_ALL=C sort -u) || exit $$?; \
+	dirs=cmd/engram-server; \
+	for package in $$packages; do \
+		dir=$${package#./}; \
+		if [ "$$dir" != cmd/engram-server ]; then dirs="$$dirs,$$dir"; fi; \
+	done; \
+	swag init -d "$$dirs" -g main.go --parseInternal --parseGoList=false --packageName docs -o docs
 	go build $(BUILD_TAGS) $(SERVER_LDFLAGS) -o $(SERVER_BINARY) ./cmd/engram-server
 
 # MCP stdio client — the binary Claude Code launches as a subprocess.
