@@ -7,8 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Repair OpenClaw's genuine lifecycle/response contracts: capture final visible messages from supported `agent_end`/compaction events, never invent session IDs or task outcomes, and require the conversation grant for automatic capture. Compose distinct rules and selected memories once per prompt with ID deduplication, configured memory counts and a combined escaped-render budget. Carry optional search session provenance through the existing audit context without changing project-scoped retrieval or visibility. Official SDK fixture checks are not installed-host, build3928bad, live-backend or session-private-isolation acceptance.
-- Keep OpenClaw rule IDs separate from ordinary memory IDs during deduplication, and emit the already-budgeted project/tool instructions for dynamic-only enrichment without changing genuinely empty results.
 
 - Regenerate the API through the maintained worker target using canonical local Go package directories and Swag 1.16.6, with real producer errors stopping the build. Correct existing context search/inject/session-start annotations without changing handlers; document the shared GET/POST conditional-query limitation. The actual producer and server build pass, with 40 named schema checks and all 76 references resolved; that producer checkpoint established compile-only retained-reader oracle provenance, with later native query proof recorded separately, and installed/release acceptance remains separate.
 
@@ -51,6 +49,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Prepare one corrective slice over released 7.0.5: retained-record discovery, independent Vault startup, and Git directory indexing. Canonical project consolidation remains OPEN; this slice performs no stored ownership rewrite, schema/index migration, consolidation cutover or consumer-host update. Focused source/runtime evidence is not ordinary retained-corpus or installed acceptance.
 
+Release PR: [#583](https://github.com/thebtf/engram/pull/583).
+
 ### Fixed
 
 - Add explicit bounded historical memory/document/issue discovery to `/api/projects` and the existing unresolved page. Preserve fail-closed membership/privacy checks, native IDs and payloads, role provenance, document version history, caller/query-bound Vault continuations and the 200-work boundary. Keep metadata-only families separate, preserve literal search/cursor/results on return, and offer exact body/history/Back without invented totals or group fan-out. Keep the issued result page through body/history/Back navigation without rediscovery; genuine discovery-selector changes and explicit retry still refresh. Reject malformed query encoding and duplicate `view` values with HTTP 400 `INVALID_QUERY` before catalog, membership or native storage reads, preserving well-formed no-view catalog behavior.
@@ -58,6 +58,8 @@ Prepare one corrective slice over released 7.0.5: retained-record discovery, ind
 - Parse Git untracked directory records in both status and candidate censuses before applying existing nested-repository and reparse exclusions. Keep strict file-path validation and do not read nested repository contents.
 - Allow Windows daemon-marker reads to share DELETE access during atomic replacement while preserving PID and generation validation.
 - Restore OpenClaw memory tools through the current host's `contracts.tools` declaration and move static context from ignored `before_agent_start` to supported `before_prompt_build`, preserving per-turn search and fail-closed current-project resolution without a session cache. Pass the actual optional `ctx.sessionId` as `session_id` to `/api/context/inject`, whose server owns static exposure tracking; remove the nonexistent response `sessionId` dependency and redundant static mark-injected call, and never substitute `agentId` for a missing host session. This contract repair does not prove persisted DB exposure. Official `openclaw@2026.10.7` manifest parsing, registration, hook execution and downstream tool-result adaptation are covered; non-bundled prompt enrichment requires the host-owned `plugins.entries.engram.hooks.allowConversationAccess` opt-in and remains blocked when prompt injection is disabled. This is not full-loader or ordinary installed OpenClaw acceptance.
+- Repair OpenClaw's genuine lifecycle/response contracts: capture final visible messages from supported `agent_end`/compaction events, never invent session IDs or task outcomes, and require the conversation grant for automatic capture. Compose distinct rules and selected memories once per prompt with ID deduplication, configured memory counts and a combined escaped-render budget. Carry optional search session provenance through the existing audit context without changing project-scoped retrieval or visibility. Official SDK fixture checks are not installed-host, build3928bad, live-backend or session-private-isolation acceptance.
+- Keep OpenClaw rule IDs separate from ordinary memory IDs during deduplication, and emit the already-budgeted project/tool instructions for dynamic-only enrichment without changing genuinely empty results.
 
 ### Changed
 
