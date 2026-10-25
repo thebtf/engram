@@ -233,7 +233,13 @@ type projectListResponse struct {
 // @Failure 500 {string} string "internal error"
 // @Router /api/projects [get]
 func (s *Service) handleGetProjects(w http.ResponseWriter, r *http.Request) {
-	if params, _ := url.ParseQuery(r.URL.RawQuery); params.Has("view") {
+	params, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		w.Header().Set("Cache-Control", "private, no-store")
+		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"error": "INVALID_QUERY"})
+		return
+	}
+	if params.Has("view") {
 		s.handleRetainedRecordQuery(w, r)
 		return
 	}

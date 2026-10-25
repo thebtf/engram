@@ -189,6 +189,54 @@ func TestRetainedDiscoveryCatalogHTTP(t *testing.T) {
 	})
 }
 
+func TestRetainedDiscoveryQueryDispatchHTTP(t *testing.T) {
+	service, db, _ := retainedDiscoveryFixture(t)
+	observer := &retainedRecordQueryObserver{Interface: logger.Default.LogMode(logger.Silent)}
+	backing := &gormdb.Store{DB: db.Session(&gorm.Session{Logger: observer})}
+	service.store = backing
+	service.sessionStore = gormdb.NewSessionStore(backing)
+	router := retainedDiscoveryRouter(service)
+
+	catalog := retainedDiscoveryGET(t, router, "/api/projects", true, http.StatusOK)
+	require.NotEmpty(t, observer.drain(), "the healthy catalog control must exercise observed storage")
+	unchanged := retainedDiscoveryGET(t, router, "/api/projects?unknown=ignored", true, http.StatusOK)
+	require.JSONEq(t, catalog.Body.String(), unchanged.Body.String(), "well-formed no-view queries retain ordinary catalog behavior")
+	require.NotEmpty(t, observer.drain())
+
+	for _, authenticated := range []bool{true, false} {
+		for _, query := range []string{
+			"view=retained_records%ZZ",
+			"vi%ZZew=retained_records",
+			"view=retained_records;kind=memory",
+			"view=retained_records&attribution_scope=unresolved_history&kind=memory&q=%ZZ",
+			"view=retained_records&view=retained_records%ZZ",
+			"view=retained_records&view=retained_records&attribution_scope=unresolved_history&kind=memory",
+		} {
+			t.Run(fmt.Sprintf("authenticated=%t/%s", authenticated, query), func(t *testing.T) {
+				request := httptest.NewRequest(http.MethodGet, "/api/projects?"+query, nil)
+				if authenticated {
+					request = request.WithContext(auth.WithIdentity(request.Context(), auth.Admin()))
+				}
+				response := httptest.NewRecorder()
+				router.ServeHTTP(response, request)
+				queries := observer.drain()
+				t.Logf("status=%d storage_queries=%d body=%s", response.Code, len(queries), response.Body.String())
+				require.Empty(t, queries, "invalid query parsing must precede catalog, membership and native data work")
+				require.Equal(t, http.StatusBadRequest, response.Code)
+				require.Equal(t, "private, no-store", response.Header().Get("Cache-Control"))
+				require.JSONEq(t, `{"error":"INVALID_QUERY"}`, response.Body.String(), "parse errors precede retained authorization and disclose no catalog or payload")
+			})
+		}
+	}
+
+	observer.drain()
+	forbidden := retainedDiscoveryGET(t, router, "/api/projects?view=retained_records&attribution_scope=unresolved_history&kind=memory", false, http.StatusForbidden)
+	require.Equal(t, "private, no-store", forbidden.Header().Get("Cache-Control"))
+	require.NotContains(t, forbidden.Body.String(), "sentinel")
+	require.Empty(t, observer.drain(), "valid retained queries still authorize before storage")
+	retainedDiscoveryGET(t, router, "/api/projects", false, http.StatusForbidden)
+}
+
 func TestRetainedDiscoveryReadRefusalsHTTP(t *testing.T) {
 	service, db, refs := retainedDiscoveryFixture(t)
 	router := retainedDiscoveryRouter(service)
