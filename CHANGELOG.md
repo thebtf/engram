@@ -48,6 +48,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Corrective source release preparation; canonical 7.0.9 assets, publication and ordinary installed-host acceptance remain pending.
 
+Release PR: [#587](https://github.com/thebtf/engram/pull/587).
+
 ### Fixed
 
 - Use Node20-compatible asynchronous module registration in the OMP default-entry startup test. Preserve all five trusted, warm, rejected, corrupt and cancelled scenarios, guaranteed-root host singleton cleanup and process/network fences without changing runtime code or release engines.
