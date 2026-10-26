@@ -7,23 +7,32 @@ server configuration, retained readers, Code Workspace, and restart procedures.
 
 ## Версия, установка и обновление
 
-Этот кандидат готовит `7.0.7`: готовность доверенного client до коротких OMP callbacks.
-Source, package/marketplace manifests и OpenClaw runtime metadata объявляют `7.0.7`;
-это не подтверждение публикации или установки. Установленный baseline остаётся `7.0.5`.
-Сохранённые проверки `7.0.6` относятся только к своим исходным source/artifact identities.
-Каноническая подготовка bootstrap/parser policies и raw assets `7.0.7` использует Go 1.26.10
-Linux amd64 и MinGW GCC 13-win32 из закреплённого release image по
-[release-протоколу](RELEASE-PROTOCOL.md). Это не готовый комплект для установки:
-сборка финальных raw assets и архивов, публикация и установленная приёмка остаются отдельными шагами.
+Этот кандидат готовит `7.0.8`: неблокирующую фоновую подготовку доверенного client
+в OMP и исправление OpenClaw adapter на Zod `4.6.7`. Source, package/marketplace
+manifests и OpenClaw runtime metadata объявляют `7.0.8`; это не подтверждение
+публикации или установки кандидата. Callbacks регистрируются без ожидания холодной
+загрузки; до готовности нет исполнения client или enrichment, а пропущенные события
+не повторяются после подготовки.
 
-По сохранённой приёмке от 2026-10-25 опубликован `7.0.5`; установленный сервер
-и обычные клиентские чтения приняты только для исправления запуска/context admission.
-Это не подтверждает поиск исторических записей из нового кандидата, полный
-Workspace/search/graph/two-worktree путь или версию загруженного OMP extension.
-Консолидация канонических проектов остаётся OPEN; этот выпуск её не выполняет.
-Последняя отдельно подтверждённая npm-версия плагина openclaw-engram — `7.0.4`.
-Кандидат `7.0.6` объявляет существующие tools через `contracts.tools` и переносит
-статический контекст с игнорируемого `before_agent_start` на `before_prompt_build`.
+Каноническую подготовку bootstrap/parser policies и raw assets по финальному
+кандидату определяет [release-протокол](RELEASE-PROTOCOL.md): Go 1.26.10 Linux amd64
+и MinGW GCC 13-win32 из закреплённого release image. Подготовка артефактов,
+публикация и установленная приёмка остаются отдельными шагами.
+
+По сохранённой приёмке от 2026-10-26 сервер `7.0.7` работоспособен; квалифицированы
+обычные native/browser-сценарии на представителях сохранённых данных. Это не
+подтверждает полный Workspace/search/graph/two-worktree путь или версию фактически
+загруженного OMP extension. Запуск свежего OMP с `7.0.8` за ≤30 s при холодном и
+тёплом cache ещё не доказан. Консолидация канонических проектов остаётся OPEN;
+этот выпуск её не выполняет.
+
+В npm опубликован `openclaw-engram@7.0.7`, но установка этого adapter удерживается
+из-за security issue `#506` до выпуска исправленного `7.0.8`. Приёмка на фактическом
+OpenClaw host по `#503` остаётся NOT_PROVEN; публикация в npm её не заменяет.
+Сохранённые проверки `7.0.6` — исторические: они относятся только к своим
+source/artifact identities. Исторический кандидат `7.0.6` объявлял существующие
+tools через `contracts.tools` и переносил статический контекст с игнорируемого
+`before_agent_start` на `before_prompt_build`.
 Контекст каждого запуска заново использует текущий проект; session cache нет.
 Static context передаёт настоящий необязательный `ctx.sessionId` как `session_id`
 в `/api/context/inject`; сервер этого endpoint владеет учётом static exposure.
@@ -36,13 +45,14 @@ Hook не ожидает вымышленный `response.sessionId` и не в�
 Это не поле `plugins.entries.engram.config`: разрешение открывает prompt hooks
 доступ к запросу и подготовленной истории. Без него, а также при
 `hooks.allowPromptInjection: false`, host блокирует автоматический контекст.
-Плагин не меняет эти настройки. Проверка официального `openclaw@2026.10.7`
-охватывает manifest parser, регистрацию, hook runner и преобразование tool result;
-она не подтверждает полный loader, discovery/trust/config validation или установленный
-store→recall/context. Обычный установленный OpenClaw runtime остаётся NOT_PROVEN.
+Плагин не меняет эти настройки. Сохранённая fixture-проверка линии `7.0.6` на
+официальном `openclaw@2026.10.7` охватывает manifest parser, регистрацию, hook runner
+и преобразование tool result; она не подтверждает полный loader,
+discovery/trust/config validation или установленный store→recall/context.
+Обычный установленный OpenClaw runtime остаётся NOT_PROVEN.
 Обновление host не входит в scope.
-Версии исходников и локальная synthetic/no-auth проверка не подтверждают
-публикацию `7.0.6`, marketplace, production, principal или свежую установленную сессию.
+Версии исходников и локальная synthetic/no-auth проверка сами по себе не подтверждают
+публикацию или установку `7.0.8`, marketplace, production, principal или свежую сессию.
 
 R1 — обычный установленный агент и WebUI выбирают один логический проект,
 находят и открывают существующее полезное решение с источником, историей и
