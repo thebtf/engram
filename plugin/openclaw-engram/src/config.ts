@@ -22,7 +22,7 @@ export const PluginConfigSchema = z.object({
   * Project scope override. When set, all observations are stored under this
   * project regardless of workspace identity.
   */
- project: z.string().uuid().optional(),
+ project: z.guid().optional(),
 
 
  /** Maximum observations to inject per prompt turn. */

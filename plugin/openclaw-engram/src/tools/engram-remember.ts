@@ -8,6 +8,7 @@ import { resolveProject } from '../client.js';
 import type { EngramRestClient, BulkImportRequest } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import { quotedPromptScalar } from '../context/formatter.js';
+import { StringArraySchema } from '../validation.js';
 import type { AnyAgentTool, OpenClawPluginToolContext } from '../types/openclaw.js';
 
 const CONTENT_MAX_CHARS = 900;
@@ -17,7 +18,7 @@ const RememberParamsSchema = z.object({
   content: z.string().min(1),
   type: z.enum(['decision', 'feature', 'change', 'refactor', 'discovery', 'bugfix']).default('change'),
   scope: z.enum(['project', 'global', 'agent']).default('project'),
-  tags: z.array(z.string()).optional(),
+  tags: StringArraySchema.optional(),
 });
 
 const StoreParamsSchema = z.object({
@@ -25,7 +26,7 @@ const StoreParamsSchema = z.object({
   content: z.string().min(1).optional(),
   title: z.string().optional(),
   category: z.enum(['preference', 'decision', 'entity', 'fact', 'other']).optional(),
-  tags: z.array(z.string()).optional(),
+  tags: StringArraySchema.optional(),
 }).refine((d) => Boolean(d.text || d.content), { message: 'Either text or content is required' });
 
 const rememberParameters = Type.Object({

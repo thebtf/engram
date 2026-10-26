@@ -95,6 +95,27 @@ for (const scenario of cases) {
     assert.equal(followingReads, 0, 'validation must stop before reading the element after the first invalid type');
   });
 
+  for (const [name, values] of [
+    ['null container', null],
+    ['string container', 'alpha'],
+    ['array-like object', { 0: 'alpha', length: 1 }],
+    ['invalid first element', [false, 'alpha']],
+    ['invalid last element', ['alpha', false]],
+    ['sparse array', new Array(2)],
+  ]) {
+    test(`${scenario.name}.${scenario.field} rejects ${name} before backend access`, async () => {
+      const { client, calls } = createClient();
+      const tool = scenario.create(ctx, client, {});
+      const result = await tool.execute('invalid-collection-shape', { ...scenario.params, [scenario.field]: values });
+
+      assert.match(result, /^Invalid parameters:/);
+      const issues = JSON.parse(result.slice('Invalid parameters: '.length));
+      assert.equal(issues.length, 1, 'invalid array must produce one field error, not an error per element');
+      assert.deepEqual(issues[0].path, [scenario.field]);
+      assert.deepEqual(calls, []);
+    });
+  }
+
   for (const [name, values] of [['omitted', undefined], ['empty', []], ['ordinary', ['alpha', '', 'alpha']]]) {
     test(`${scenario.name}.${scenario.field} preserves ${name} values and default payload`, async () => {
       const { client, calls } = createClient();

@@ -15,6 +15,7 @@ import { resolveProject } from '../client.js';
 import type { EngramRestClient } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import { quotedPromptPayload, quotedPromptScalar } from '../context/formatter.js';
+import { StringArraySchema } from '../validation.js';
 import type { AnyAgentTool, OpenClawPluginToolContext } from '../types/openclaw.js';
 
 // ---------------------------------------------------------------------------
@@ -27,7 +28,7 @@ const CreateSchema = z.object({
   body: z.string().optional(),
   priority: z.enum(['critical', 'high', 'medium', 'low']).default('medium'),
   target_project: z.string().optional(),
-  labels: z.array(z.string()).optional(),
+  labels: StringArraySchema.optional(),
 });
 
 const ListSchema = z.object({
