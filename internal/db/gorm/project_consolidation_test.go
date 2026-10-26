@@ -63,6 +63,9 @@ func TestProjectConsolidationMixedBucketAndEvidenceConflict(t *testing.T) {
 
 func consolidationFixtureStore(t *testing.T) *streamIntegrityFixture {
 	t.Helper()
+	if os.Getenv("ENGRAM_UCI_RESTORE_FIXTURE") != "" {
+		return openUCIBackupRestoreStoreFixture(t)
+	}
 	return openStreamIntegrityFixture(t, streamIntegrityOracle, "stream_workflow_"+strings.ReplaceAll(uuid.NewString(), "-", ""), true)
 }
 
