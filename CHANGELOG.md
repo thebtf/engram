@@ -52,6 +52,7 @@ Corrective source release preparation; canonical 7.0.7 asset generation, publica
 
 - Await client-only trusted readiness in the OMP async extension factory before admitting context callbacks. Keep a separate absolute 360000 ms preparation budget and unchanged 5000/500 ms context budgets; use verify-only desired CAS afterward so missing or tampered bytes cannot start a hook download, execute or replay stale context. Preserve normal MCP/Claude/Codex acquisition, expose safe load failures and document fresh-session recovery and graceful-versus-hard-exit cleanup limits. This source repair is not published or installed 7.0.7 acceptance.
 - Preserve the original absolute OMP context deadline across asynchronous configuration and project-resolver handoff, even when wall-clock expiry precedes abort-timer delivery; reject late project execution without extending the 5000/500 ms budgets.
+- Resolve the host's existing postmortem singleton through the guaranteed `@oh-my-pi/pi-utils` root namespace instead of an unregistered compiled-host subpath, retaining owned readiness cleanup without a dependency or optional fallback. Controlled default-entry loader proof is not installed OMP acceptance.
 
 ## [7.0.6] - 2026-10-25
 

@@ -7,11 +7,11 @@ server configuration, retained readers, Code Workspace, and restart procedures.
 
 ## Версия, установка и обновление
 
-Этот кандидат готовит `7.0.6`: поиск сохранённых исторических записей,
-независимый запуск Vault и исправление индексации Git directory records.
-Серверный daemon, package/marketplace manifests и OpenClaw runtime metadata
-объявляют `7.0.6`. Bootstrap/parser policies пересозданы для `7.0.6` из канонических
-Git blobs и прошли `prepare-bootstrap-policy.sh --version 7.0.6 --check` с Go 1.26.10
+Этот кандидат готовит `7.0.7`: готовность доверенного client до коротких OMP callbacks.
+Source, package/marketplace manifests и OpenClaw runtime metadata объявляют `7.0.7`;
+это не подтверждение публикации или установки. Установленный baseline остаётся `7.0.5`.
+Сохранённые проверки `7.0.6` относятся только к своим исходным source/artifact identities.
+Каноническая подготовка bootstrap/parser policies и raw assets `7.0.7` использует Go 1.26.10
 Linux amd64 и MinGW GCC 13-win32 из закреплённого release image по
 [release-протоколу](RELEASE-PROTOCOL.md). Это не готовый комплект для установки:
 сборка финальных raw assets и архивов, публикация и установленная приёмка остаются отдельными шагами.

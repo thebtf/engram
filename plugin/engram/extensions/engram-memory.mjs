@@ -115,8 +115,8 @@ export function createEngramMemoryExtension(options = {}) {
 }
 
 export default async function engramMemory(pi) {
-  const { register } = await import('@oh-my-pi/pi-utils/postmortem');
-  await createEngramMemoryExtension({ registerCleanup: register }).install(pi);
+  const { postmortem } = await import('@oh-my-pi/pi-utils');
+  await createEngramMemoryExtension({ registerCleanup: postmortem.register }).install(pi);
 }
 export const sessionStartMessage = (...args) => createEngramMemoryExtension().sessionStartMessage(...args);
 export const ambientMessage = (...args) => createEngramMemoryExtension().ambientMessage(...args);
