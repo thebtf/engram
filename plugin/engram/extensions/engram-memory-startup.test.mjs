@@ -3,7 +3,7 @@ import test from 'node:test';
 import cp from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { createRequire, registerHooks } from 'node:module';
+import { createRequire, register } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,7 +18,7 @@ async function exerciseDefaultFactory(mode) {
   assert.ok(root, 'worker requires its isolated fixture root');
   const effects = { projectResolutions: 0, projectExecutions: 0, backendRequests: 0, nativeProcesses: 0, network: 0, downloads: 0 };
   const registrations = new Map(), handlers = new Map(), sent = [], requests = [], executions = [], unhandled = [];
-  let cleanupRegisters = 0, cleanupUnregisters = 0, hostRootImports = 0, readiness = 'pending', factoryState = 'pending';
+  let cleanupRegisters = 0, cleanupUnregisters = 0, readiness = 'pending', factoryState = 'pending';
   let preparation, installing, preparedSignal, failure, held, afterPreparation, settled, afterTamper;
   const gate = deferred(), entered = deferred();
   const onUnhandled = error => unhandled.push(String(error));
@@ -113,14 +113,14 @@ async function exerciseDefaultFactory(mode) {
   const key = 'engram.startup.fixture.postmortem';
   globalThis[Symbol.for(key)] = singleton;
   const hostURL = `data:text/javascript,${encodeURIComponent(`export const postmortem = globalThis[Symbol.for(${JSON.stringify(key)})];`)}`;
-  // Same guaranteed-root-only host surface as the retained 7.0.7 default-entry harness.
-  const hooks = registerHooks({
-    resolve(specifier, context, nextResolve) {
-      if (specifier === '@oh-my-pi/pi-utils') { hostRootImports++; return { url: hostURL, shortCircuit: true }; }
+  // Node20-compatible root-only host loader lives only for this isolated worker.
+  register(`data:text/javascript,${encodeURIComponent(`
+    export function resolve(specifier, context, nextResolve) {
+      if (specifier === '@oh-my-pi/pi-utils') return { url: ${JSON.stringify(hostURL)}, shortCircuit: true };
       if (specifier.startsWith('@oh-my-pi/pi-utils/')) throw new Error('unregistered host subpath; no filesystem fallback');
       return nextResolve(specifier, context);
     }
-  });
+  `)}`);
   const snapshot = () => ({ factoryState, readiness, callbacks: [...handlers.keys()], trustedCAS: hashFile(object, policy.target.desired, roots.objects), effects: { ...effects }, sent: sent.length });
   const callbacks = async sessionId => {
     await handlers.get('session_start')?.({ cwd: root, sessionId }, {});
@@ -173,7 +173,9 @@ async function exerciseDefaultFactory(mode) {
       assert.equal(result, undefined);
       assert.equal(sent.length, 0);
     }
-    assert.equal(hostRootImports, 2, 'actual default factory must import the guaranteed host root');
+    assert.equal(cleanupRegisters, 1, 'actual default factory must register with the guaranteed-root host singleton');
+    assert.equal(cleanupUnregisters, 1, 'settled readiness must unregister its owned cleanup');
+    assert.equal(registrations.size, 0, 'settled readiness must leave no owned cleanup');
     assert.equal(unhandled.length, 0, 'background rejection must be handled');
     // 7.0.8 replaces callback-admission blocking, never the trusted-execution guard.
     assert.equal(held.factoryState, 'fulfilled', 'default factory must finish while cold preparation is held');
@@ -185,13 +187,12 @@ async function exerciseDefaultFactory(mode) {
     await installing;
     for (const cleanup of [...registrations.values()]) await cleanup();
     await turn();
-    hooks.deregister();
     delete globalThis[Symbol.for(key)];
     process.removeListener('unhandledRejection', onUnhandled);
     console.log(`STARTUP_CAUSAL_RESULT ${JSON.stringify({
       mode, entry: fileURLToPath(entry), entrySHA256: crypto.createHash('sha256').update(fs.readFileSync(entry)).digest('hex'),
       held, afterPreparation, settled, afterTamper, executions, requests, effects, cleanupRegisters, cleanupUnregisters,
-      cleanupActive: registrations.size, loaderHookDeregistered: true, preparationSettled: readiness !== 'pending',
+      cleanupActive: registrations.size, loaderLifetime: 'isolated-worker', preparationSettled: readiness !== 'pending',
       preparedSignalAborted: preparedSignal?.aborted ?? null, unhandled,
       failure: failure ? { name: failure.name, message: failure.message, code: failure.code ?? null } : null,
     })}`);

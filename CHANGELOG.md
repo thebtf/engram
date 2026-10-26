@@ -44,6 +44,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Use registered canonical UUIDs and authenticated caller project context in MCP fixtures without weakening default-deny, privacy or pre-mutation rejection guards. Reuse 119 prior PASS plus one exact retry PASS after the context fix, not 120 fresh PASS or installed acceptance.
 - Seed the isolated operator-code fixture with a registered canonical project UUID while preserving five queue candidates, published/no-view checks and redacted provisioning errors.
 
+## [7.0.9] - 2026-10-26
+
+Corrective source release preparation; canonical 7.0.9 assets, publication and ordinary installed-host acceptance remain pending.
+
+Release PR: [#587](https://github.com/thebtf/engram/pull/587).
+
+### Fixed
+
+- Use Node20-compatible asynchronous module registration in the OMP default-entry startup test. Preserve all five trusted, warm, rejected, corrupt and cancelled scenarios, guaranteed-root host singleton cleanup and process/network fences without changing runtime code or release engines.
+
+- Unblock official publication after the Node20 startup-test loader failure; retain existing startup trust and cleanup guards. This does not claim an installed latency improvement.
+
 ## [7.0.8] - 2026-10-26
 
 Corrective source release preparation; canonical 7.0.8 assets, publication and ordinary installed-host acceptance remain pending.
