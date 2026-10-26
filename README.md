@@ -253,18 +253,25 @@ Restart the agent host after configuration.
 
 ### OMP first-start client readiness
 
-On OMP 18.12.6, a configured, non-quiet Engram extension awaits the trusted
-client before registering its context callbacks. Cold preparation has a separate
-360000 ms budget for configuration, acquisition and integrity checks; it does not
-start a daemon, resolve a project or request memory. Session context still has
-5000 ms and ambient context 500 ms after readiness. These are not promises that
-a release download or the whole host startup completes within those budgets.
+On OMP 18.12.6, Engram registers its context callbacks without waiting for
+asynchronous configuration or cold client acquisition. Each binding prepares and
+verifies the client once in the background, with a separate absolute 360000 ms
+budget including configuration and integrity checks. Preparation does not start
+a daemon, resolve a project or request memory.
 
-Missing or corrupted client bytes after readiness stop that context request
-without a new download or stale memory. A preparation failure appears as an
-extension load error; correct the network/cache cause and open a fresh ordinary
-session. Quiet or unconfigured startup skips preparation; enabling it later also
-requires a fresh session. Normal MCP and Claude/Codex acquisition are unchanged.
+While readiness is pending, failed or cancelled, callbacks produce no enrichment
+and do not execute the client or request backend context. An early event may be
+skipped; finishing preparation never replays it or injects hidden context. A later
+ordinary callback can use the verified cache without another download, retaining
+the 5000 ms session and 500 ms ambient budgets. These are not measurements or
+guarantees for the whole host's startup time.
+
+Missing or corrupted client bytes stop that context request without a new
+download or stale memory. A preparation failure emits a readiness diagnostic but
+does not fail extension registration; correct the network/cache cause and open a
+fresh ordinary session. Quiet or unconfigured startup skips preparation; enabling
+it later also requires a fresh session. Normal MCP and Claude/Codex acquisition
+are unchanged.
 
 Graceful host cleanup cancels only Engram's pending preparation. The factory has
 no turn-cancellation signal; hard exit can leave an untrusted staging `.part`

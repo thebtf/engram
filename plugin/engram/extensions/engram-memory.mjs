@@ -32,10 +32,12 @@ export function createEngramMemoryExtension(options = {}) {
   const prepare = options.prepareHookClient ?? prepareHookClient;
   const diagnostic = options.onDiagnostic ?? (message => process.stderr.write(`[engram] ${message}\n`));
   const unavailable = () => diagnostic('Trusted hook client readiness unavailable; check the plugin cache and start a fresh ordinary session.');
-  let readinessSkipped = false;
+  let readiness;
 
   async function message(event, ctx, timeoutMs, ambient) {
     if (isQuiet()) return null;
+    if (readiness === 'pending') return null;
+    if (readiness && readiness !== 'ready' && readiness !== 'skipped') { unavailable(); return null; }
     const facts = callbackFacts(event, ctx);
     if (!facts) return null;
     const prompt = ambient ? stringField(event?.prompt, event?.userMessage, event?.user_message, ctx?.prompt) : '';
@@ -46,7 +48,7 @@ export function createEngramMemoryExtension(options = {}) {
     try {
       const config = await runtimeConfig({ signal: controller.signal });
       if (!config.serverURL || config.quiet || controller.signal.aborted || Date.now() >= deadline) return null;
-      if (readinessSkipped) { unavailable(); return null; }
+      if (readiness && readiness !== 'ready') { unavailable(); return null; }
       const context = await resolveContext(facts.cwd, {
         signal: controller.signal, deadlineAt: deadline, timeoutMs: Math.max(1, deadline - Date.now()), acquire: false,
         env: { ...process.env, ENGRAM_URL: config.serverURL, ENGRAM_TOKEN: config.token },
@@ -70,6 +72,16 @@ export function createEngramMemoryExtension(options = {}) {
   const sessionStartMessage = (event, ctx, timeoutMs = 5000) => message(event, ctx, timeoutMs, false);
   const ambientMessage = (event, ctx) => message(event, ctx, 500, true);
   async function install(pi) {
+    if (readiness) return;
+    readiness = 'pending';
+    pi.on('session_start', async (event, ctx) => {
+      const result = await sessionStartMessage(event, ctx);
+      if (result) pi.sendMessage(result, { deliverAs: 'nextTurn' });
+    });
+    pi.on('before_agent_start', async (event, ctx) => {
+      const result = await ambientMessage(event, ctx);
+      return result ? { message: result } : undefined;
+    });
     const controller = new AbortController();
     const deadlineAt = Date.now() + DOWNLOAD_DEADLINE_MS;
     let onAbort, preparation, unregister;
@@ -85,31 +97,32 @@ export function createEngramMemoryExtension(options = {}) {
       });
       preparation = (async () => {
         if (controller.signal.aborted) throw new Error('client readiness cancelled');
-        if (isQuiet()) { readinessSkipped = true; return; }
+        if (isQuiet()) { readiness = 'skipped'; return; }
         const config = await runtimeConfig({ signal: controller.signal });
         if (controller.signal.aborted || Date.now() >= deadlineAt) throw new Error('client readiness expired');
-        readinessSkipped = !config.serverURL || config.quiet;
-        if (!readinessSkipped) {
-          await prepare({ signal: controller.signal, deadlineAt, timeoutMs: deadlineAt - Date.now() });
-        }
+        if (!config.serverURL || config.quiet) { readiness = 'skipped'; return; }
+        await prepare({ signal: controller.signal, deadlineAt, timeoutMs: deadlineAt - Date.now() });
         if (controller.signal.aborted || Date.now() >= deadlineAt) throw new Error('client readiness expired');
       })();
-      await Promise.race([preparation, cancelled]);
+      // Callback admission is immediate; only this binding's trusted readiness admits execution.
+      void Promise.race([preparation, cancelled]).then(() => {
+        if (readiness === 'pending') readiness = 'ready';
+      }, () => {
+        readiness = 'failed';
+        unavailable();
+      }).finally(() => {
+        clearTimeout(timer);
+        controller.signal.removeEventListener('abort', onAbort);
+        unregister?.();
+      }).catch(() => { readiness = 'failed'; });
     } catch {
-      throw new Error('[engram] Trusted client readiness failed or was cancelled. Check release connectivity and the plugin cache, then start a fresh ordinary session.');
-    } finally {
+      readiness = 'failed';
+      controller.abort();
       clearTimeout(timer);
       controller.signal.removeEventListener('abort', onAbort);
-      unregister?.();
+      void cancelled.catch(() => { });
+      unavailable();
     }
-    pi.on('session_start', async (event, ctx) => {
-      const result = await sessionStartMessage(event, ctx);
-      if (result) pi.sendMessage(result, { deliverAs: 'nextTurn' });
-    });
-    pi.on('before_agent_start', async (event, ctx) => {
-      const result = await ambientMessage(event, ctx);
-      return result ? { message: result } : undefined;
-    });
   }
   return Object.freeze({ install, sessionStartMessage, ambientMessage });
 }

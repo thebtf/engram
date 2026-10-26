@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { IntegerSchema } from './validation.js';
 
 // ---------------------------------------------------------------------------
 // Config schema
@@ -22,23 +23,23 @@ export const PluginConfigSchema = z.object({
   * Project scope override. When set, all observations are stored under this
   * project regardless of workspace identity.
   */
- project: z.string().uuid().optional(),
+ project: z.guid().optional(),
 
 
  /** Maximum observations to inject per prompt turn. */
- contextLimit: z.number().int().positive().default(10),
+ contextLimit: IntegerSchema.positive().default(10),
 
  /** Maximum ordinary static memories per prompt build. */
- sessionContextLimit: z.number().int().positive().default(20),
+ sessionContextLimit: IntegerSchema.positive().default(20),
 
  /**
   * Combined prompt-enrichment budget, including rules and rendered wrappers (~4 chars/token).
   * Required guidance is never partially rendered to make memories fit.
   */
- tokenBudget: z.number().int().positive().default(2000),
+ tokenBudget: IntegerSchema.positive().default(2000),
 
  /** Per-request HTTP timeout in milliseconds. */
- timeoutMs: z.number().int().positive().default(5000),
+ timeoutMs: IntegerSchema.positive().default(5000),
 
  /**
   * Enable automatic extraction on agent_end/compaction and tool events with conversation access.

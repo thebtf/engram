@@ -7,12 +7,13 @@
 
 import { z } from 'zod';
 import { Type } from '@sinclair/typebox';
+import { IntegerSchema } from '../validation.js';
 import type { EngramRestClient } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import type { AnyAgentTool, OpenClawPluginToolContext } from '../types/openclaw.js';
 
 const RateParamsSchema = z.object({
-  id: z.number().int().positive(),
+  id: IntegerSchema.positive(),
   rating: z.enum(['useful', 'not_useful']),
 });
 

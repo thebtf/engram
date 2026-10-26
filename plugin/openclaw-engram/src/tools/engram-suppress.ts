@@ -6,13 +6,14 @@
  */
 
 import { z } from 'zod';
+import { IntegerSchema } from '../validation.js';
 import { Type } from '@sinclair/typebox';
 import type { EngramRestClient } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import type { AnyAgentTool, OpenClawPluginToolContext } from '../types/openclaw.js';
 
 const SuppressParamsSchema = z.object({
-  id: z.number().int().positive(),
+  id: IntegerSchema.positive(),
 });
 
 const suppressParameters = Type.Object({

@@ -7,6 +7,7 @@
 
 import { z } from 'zod';
 import { Type } from '@sinclair/typebox';
+import { IntegerSchema } from '../validation.js';
 import { resolveProject } from '../client.js';
 import type { EngramRestClient, Observation } from '../client.js';
 import type { PluginConfig } from '../config.js';
@@ -16,7 +17,7 @@ import type { AnyAgentTool, OpenClawPluginToolContext } from '../types/openclaw.
 const TimelineParamsSchema = z.object({
   mode: z.enum(['recent', 'anchor', 'query']).optional().default('recent'),
   query: z.string().optional(),
-  anchor_id: z.number().int().positive().optional(),
+  anchor_id: IntegerSchema.positive().optional(),
   limit: z.number().int().min(1).max(50).optional().default(20),
 });
 

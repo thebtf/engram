@@ -1,6 +1,6 @@
 {
   "name": "openclaw-engram",
-  "version": "7.0.7",
+  "version": "7.0.8",
   "description": "OpenClaw plugin that connects to engram persistent memory server",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -30,7 +30,7 @@
   "dependencies": {
     "@sinclair/typebox": "^0.34.0",
     "chokidar": "^4.0.3",
-    "zod": "^3.25.76"
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@types/node": "^18.19.0",
