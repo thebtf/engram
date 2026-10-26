@@ -48,6 +48,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Corrective source release preparation; canonical 7.0.7 asset generation, publication and ordinary installed-host acceptance remain pending.
 
+Release PR: [#584](https://github.com/thebtf/engram/pull/584).
+
 ### Fixed
 
 - Await client-only trusted readiness in the OMP async extension factory before admitting context callbacks. Keep a separate absolute 360000 ms preparation budget and unchanged 5000/500 ms context budgets; use verify-only desired CAS afterward so missing or tampered bytes cannot start a hook download, execute or replay stale context. Preserve normal MCP/Claude/Codex acquisition, expose safe load failures and document fresh-session recovery and graceful-versus-hard-exit cleanup limits. This source repair is not published or installed 7.0.7 acceptance.
