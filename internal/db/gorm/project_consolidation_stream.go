@@ -440,7 +440,7 @@ func (walk *consolidationFrameWalk) accept(frame consolidationFrame, ciphertext 
 	return nil
 }
 
-func (s *ProjectConsolidationStore) consumeRow(tx *gormlib.DB, frame consolidationFrame, columns []consolidationColumn, edits map[string][]consolidationRowEdit, restore, changed bool) error {
+func (s *ProjectConsolidationStore) consumeRow(tx *gormlib.DB, frame consolidationFrame, columns []consolidationColumn, edits map[string][]consolidationRowEdit, restore, changed, finalize bool) error {
 	if err := tx.Exec(`INSERT INTO pg_temp.engram_owner_row_chunks(part,payload) VALUES(?,?)`, frame.Chunk, frame.Payload).Error; err != nil {
 		return err
 	}
@@ -482,6 +482,9 @@ func (s *ProjectConsolidationStore) consumeRow(tx *gormlib.DB, frame consolidati
 		restore = !present
 	}
 	if restore && frame.Table != "migrations" {
+		if err := consolidationStageDeferredRow(tx, frame, columns); err != nil {
+			return err
+		}
 		var fields []string
 		for _, column := range columns {
 			if column.TableName == frame.Table && column.IsGenerated == "NEVER" {
@@ -524,6 +527,23 @@ func (s *ProjectConsolidationStore) consumeRow(tx *gormlib.DB, frame consolidati
 	predicate, args, err := consolidationNativePredicate(key, "t")
 	if err != nil {
 		return err
+	}
+	if finalize {
+		var fields []string
+		for _, field := range consolidationDeferredFields(frame.Table, columns) {
+			fields = append(fields, quoted(field)+"=r."+quoted(field))
+		}
+		if len(fields) == 0 {
+			return consolidationHold("SCHEMA_MISMATCH")
+		}
+		query := "UPDATE " + quoted(frame.Table) + " t SET " + strings.Join(fields, ",") + " FROM pg_temp.engram_owner_row o CROSS JOIN LATERAL jsonb_populate_record(NULL::" + quoted(frame.Table) + ",o.object) r WHERE " + predicate
+		result := tx.Exec(query, args...)
+		if result.Error != nil {
+			return consolidationHold("RESTORE_CONSTRAINT_FAILED")
+		}
+		if result.RowsAffected != 1 {
+			return consolidationHold("CONSERVATION_FAILED")
+		}
 	}
 	var native map[string]json.RawMessage
 	_ = json.Unmarshal(key, &native)
@@ -620,7 +640,7 @@ func (s *ProjectConsolidationStore) walkStored(tx *gormlib.DB, backupID string, 
 				return consolidationHold("BACKUP_NATIVE_KEY_REPLAY")
 			}
 		}
-		if err := s.consumeRow(tx, frame, columns, byObject, restore, edits != nil); err != nil {
+		if err := s.consumeRow(tx, frame, columns, byObject, restore, edits != nil, false); err != nil {
 			return err
 		}
 	}
@@ -890,7 +910,13 @@ func (s *ProjectConsolidationStore) restoreStored(tx *gormlib.DB, id string, sta
 	if err != nil {
 		return err
 	}
+	if err := tx.Exec(`CREATE TEMP TABLE engram_owner_deferred_rows(table_name TEXT NOT NULL,ordinal BIGINT NOT NULL,PRIMARY KEY(table_name,ordinal)) ON COMMIT DROP`).Error; err != nil {
+		return err
+	}
 	if err := s.walkStored(tx, id, state, nil, true); err != nil {
+		return err
+	}
+	if err := s.restoreDeferredRows(tx, id); err != nil {
 		return err
 	}
 	if err := tx.Exec(`SET CONSTRAINTS ALL IMMEDIATE`).Error; err != nil {
