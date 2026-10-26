@@ -8,3 +8,6 @@ export const StringArraySchema = z.custom<string[]>(
   (value) => stringArray.validate(value),
   { error: 'Expected an array of strings' },
 );
+
+// Preserve the v3 finite Number.isInteger contract without v4 .int()'s additional safe-integer range.
+export const IntegerSchema = z.number().refine(Number.isInteger, { error: 'Expected an integer' });

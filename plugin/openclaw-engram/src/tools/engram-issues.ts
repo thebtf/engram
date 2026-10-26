@@ -15,7 +15,7 @@ import { resolveProject } from '../client.js';
 import type { EngramRestClient } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import { quotedPromptPayload, quotedPromptScalar } from '../context/formatter.js';
-import { StringArraySchema } from '../validation.js';
+import { IntegerSchema, StringArraySchema } from '../validation.js';
 import type { AnyAgentTool, OpenClawPluginToolContext } from '../types/openclaw.js';
 
 // ---------------------------------------------------------------------------
@@ -36,30 +36,30 @@ const ListSchema = z.object({
   target_project: z.string().optional(),
   source_project: z.string().optional(),
   status: z.string().optional(),
-  limit: z.number().int().positive().optional(),
+  limit: IntegerSchema.positive().optional(),
 });
 
 const GetSchema = z.object({
   action: z.literal('get'),
-  id: z.number().int().positive(),
+  id: IntegerSchema.positive(),
 });
 
 const UpdateSchema = z.object({
   action: z.literal('update'),
-  id: z.number().int().positive(),
+  id: IntegerSchema.positive(),
   status: z.enum(['resolved']),
   comment: z.string().optional(),
 });
 
 const CommentSchema = z.object({
   action: z.literal('comment'),
-  id: z.number().int().positive(),
+  id: IntegerSchema.positive(),
   body: z.string().min(1),
 });
 
 const ReopenSchema = z.object({
   action: z.literal('reopen'),
-  id: z.number().int().positive(),
+  id: IntegerSchema.positive(),
   body: z.string().optional(),
 });
 

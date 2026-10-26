@@ -52,9 +52,9 @@ test('config and the actual plugin register API reject invalid URL, token, enum 
 });
 
 for (const field of ['contextLimit', 'sessionContextLimit', 'tokenBudget', 'timeoutMs']) {
-  test(`config.${field} accepts positive safe integers and rejects unsafe or noninteger numbers`, () => {
-    for (const value of [1, Number.MAX_SAFE_INTEGER]) assert.equal(parseConfig({ token, [field]: value })[field], value);
-    for (const value of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, Infinity, NaN, '2']) {
+  test(`config.${field} preserves positive finite integers, including representable values above MAX_SAFE_INTEGER`, () => {
+    for (const value of [1, Number.MAX_SAFE_INTEGER, 2 ** 53, 2 ** 54, Number.MAX_VALUE]) assert.equal(parseConfig({ token, [field]: value })[field], value);
+    for (const value of [0, -1, 1.5, Infinity, NaN, '2']) {
       assert.throws(() => parseConfig({ token, [field]: value }));
     }
   });
@@ -95,17 +95,18 @@ const numericTools = [
 ];
 
 for (const [create, params, field, maximum] of numericTools) {
-  test(`${create.name} ${params.action ?? params.mode ?? ''}.${field} preserves safe numbers and refuses rounded IDs or limits`, async () => {
+  test(`${create.name} ${params.action ?? params.mode ?? ''}.${field} preserves finite integer semantics and existing limits`, async () => {
     let availabilityReads = 0;
     const client = { isAvailable() { availabilityReads++; return false; } };
     const tool = create({}, client, {});
-    for (const value of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, Infinity, NaN, '2', ...(maximum ? [maximum + 1] : [])]) {
+    for (const value of [0, -1, 1.5, Infinity, NaN, '2', ...(maximum ? [maximum + 1, 2 ** 53] : [])]) {
       assert.match(await tool.execute('invalid-number', { ...params, [field]: value }), /^Invalid parameters:/);
       assert.equal(availabilityReads, 0);
     }
-    for (const value of [1, maximum ?? Number.MAX_SAFE_INTEGER]) {
+    const valid = maximum ? [1, maximum] : [1, Number.MAX_SAFE_INTEGER, 2 ** 53, 2 ** 54, Number.MAX_VALUE];
+    for (const value of valid) {
       assert.match(await tool.execute('valid-number', { ...params, [field]: value }), /^engram is currently unreachable/);
     }
-    assert.equal(availabilityReads, 2);
+    assert.equal(availabilityReads, valid.length);
   });
 }
