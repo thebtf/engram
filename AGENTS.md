@@ -46,3 +46,11 @@ Preserve Go/PostgreSQL/pgvector, the stdio-daemon/gRPC boundary, typed Source/Ch
 Verify current paths and consumers; do not infer readiness or obsolescence from names. Retire rejected workflows in UI and executable entry points while preserving required data/readers and rollback. One complete change-level consumer map and its tests can cover related removals; no per-symbol paperwork is required. Never reset/clean/stage/overwrite unrelated work, alter another session's authority, expose secrets or force-move published tags.
 
 During a requested session save, finish or hand off owned jobs without starting a new wave; record active writers and uncommitted work. Keep one continuation: candidate, installed state, owners, causal blockers and next delivery action. Update at meaningful transitions, not each poll. Report what the operator can use and what remains; estimate only from evidence with uncertainty. Replace contradictory policy at its source through normal adoption, without new incident ledgers or modifying a running frozen checkout.
+
+## Temporary storage
+
+`.agent/tmp/` is disposable at any time: keep unique source, inputs, datasets, evidence, required secrets and active operation state outside it; recreate missing caches. Resolve historical paths through `.agent/housekeeping/tmp-reorganization-2026-10-11/durable-map.json`. Historical deletion safety remains unproven until every mapped row and retained Git borrower is resolved. Agents do not delete or rename the originals in this reorganization; the operator deletes them.
+
+After each owned build, experiment, model, artifact, or worktree reaches its final consumer—including failure or cancellation—retire only its exact spent outputs using `skill://session/references/task-resource-cycle.md`; preserve unique source, data, evidence and actual consumers.
+
+Before Engram handoff, retain the exact pending-cleanup owners and last consumers, then compare the latest measured whole-directory residual footprint with the user's approximate 20 GB target. Historical deleted bytes are not residual footprint; report physical size as UNKNOWN when unmeasured. Do not add a blanket census, background prune, new manager, skill, scheduler or process.
