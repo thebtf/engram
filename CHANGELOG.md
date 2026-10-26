@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Await client-only trusted readiness in the OMP async extension factory before admitting context callbacks. Keep a separate absolute 360000 ms preparation budget and unchanged 5000/500 ms context budgets; use verify-only desired CAS afterward so missing or tampered bytes cannot start a hook download, execute or replay stale context. Preserve normal MCP/Claude/Codex acquisition, expose safe load failures and document fresh-session recovery and graceful-versus-hard-exit cleanup limits. This source repair is not published or installed 7.0.7 acceptance.
+
 
 - Regenerate the API through the maintained worker target using canonical local Go package directories and Swag 1.16.6, with real producer errors stopping the build. Correct existing context search/inject/session-start annotations without changing handlers; document the shared GET/POST conditional-query limitation. The actual producer and server build pass, with 40 named schema checks and all 76 references resolved; that producer checkpoint established compile-only retained-reader oracle provenance, with later native query proof recorded separately, and installed/release acceptance remains separate.
 

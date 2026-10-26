@@ -251,6 +251,27 @@ omp plugin upgrade engram@engram
 
 Restart the agent host after configuration.
 
+### OMP first-start client readiness
+
+On OMP 18.12.6, a configured, non-quiet Engram extension awaits the trusted
+client before registering its context callbacks. Cold preparation has a separate
+360000 ms budget for configuration, acquisition and integrity checks; it does not
+start a daemon, resolve a project or request memory. Session context still has
+5000 ms and ambient context 500 ms after readiness. These are not promises that
+a release download or the whole host startup completes within those budgets.
+
+Missing or corrupted client bytes after readiness stop that context request
+without a new download or stale memory. A preparation failure appears as an
+extension load error; correct the network/cache cause and open a fresh ordinary
+session. Quiet or unconfigured startup skips preparation; enabling it later also
+requires a fresh session. Normal MCP and Claude/Codex acquisition are unchanged.
+
+Graceful host cleanup cancels only Engram's pending preparation. The factory has
+no turn-cancellation signal; hard exit can leave an untrusted staging `.part`
+file and cannot guarantee awaited cleanup. No manual prefetch or cache copy is
+required by this startup path.
+
+
 
 ### Docker Compose
 

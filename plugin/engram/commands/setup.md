@@ -84,6 +84,22 @@ An OMP marketplace update refreshes only the catalog. Upgrade the installed
 plugin with `omp plugin upgrade engram@engram`, then run `/reload-plugins` or
 restart OMP / start a new session before expecting updated MCP discovery.
 
+### OMP cold client preparation
+
+For a configured, non-quiet OMP 18.12.6 binding, the awaited extension factory
+prepares and verifies the client before context callbacks are registered. Its
+separate 360000 ms preparation budget includes configuration and integrity
+checks; the subsequent session/ambient budgets remain 5000/500 ms. It does not
+start a daemon, register a project or fetch memory during preparation.
+
+A preparation failure is an extension load error, not successful empty context.
+Correct release connectivity or cache problems, then open a fresh ordinary
+session. If bytes disappear or fail verification later, callbacks do not download
+a replacement or replay old memory. Quiet/unconfigured bindings skip preparation
+and require a fresh session after enabling. Graceful cleanup can cancel this
+owned operation; turn cancellation and hard exit do not guarantee its cleanup.
+
+
 ### Legacy path (Codex < 0.139 only)
 
 For Codex versions that still forward `shell_environment_policy.set`:
@@ -231,14 +247,12 @@ mis-scoped server-side rule set, focused development, or any session where
 "zero hints" beats "wrong hints".
 
 **Scope — what quiet mode does and does NOT silence.** Quiet mode silences
-context injection only. It deliberately does NOT disable the MCP daemon: the
-`store`/`recall`/`vault`/`issues`/... tools keep working, and SessionStart binary
-bootstrap (`ensure-binary.js`, which downloads/updates the daemon binary only
-when it is missing or version-stale) still runs. That is by design — muting
-injection must not break the tools. The bootstrap is rare (only on first install
-or a version bump), best-effort, and non-fatal; it makes no context injection.
-If you want zero MCP activity too, disable the engram plugin rather than using
-quiet mode.
+context injection only; MCP tools such as `store`/`recall`/`vault`/`issues` remain
+available. Claude/Codex SessionStart binary prefetch (`ensure-binary.js`) remains
+best-effort and non-fatal. OMP instead skips its awaited context-client
+preparation while quiet; enabling context later requires a fresh ordinary
+session. Neither choice disables ordinary MCP acquisition. Disable the plugin
+if you also want to stop its MCP activity.
 
 Set it the same way you set the server URL for your harness:
 

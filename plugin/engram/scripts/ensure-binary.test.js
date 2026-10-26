@@ -295,34 +295,16 @@ test("plugin lifecycle: supplied deadline closes trusted acquisition before resp
   await observeCancelledAcquisition(t, "deadline", resolveForLaunch);
 });
 
-test("plugin lifecycle: actual OMP callback cancels acquisition through the public hook resolver without late context", async (t) => {
-  const { createEngramMemoryExtension } = await import("../extensions/engram-memory.mjs");
+test("public hook resolver cancels cold acquisition without late project execution", async (t) => {
   const { resolveHookProjectContext } = require("../hooks/lib.js");
   let executions = 0;
-  let scopedRequests = 0;
-  t.after(() => {
-    assert.equal(executions, 0);
-    assert.equal(scopedRequests, 0);
-  });
-  await observeCancelledAcquisition(t, "callback", (fixtureOptions) => {
-    const adapter = createEngramMemoryExtension({
-      isQuiet: () => false,
-      resolveEngramRuntimeConfig: async () => ({ serverURL: "http://fixture.invalid", token: "", quiet: false }),
-      resolveHookProjectContext: (cwd, options) => resolveHookProjectContext(cwd, {
-        ...options, pluginRoot: fixtureOptions.pluginRoot, pluginData: fixtureOptions.pluginData,
-        resolve: (forwarded) => resolveForLaunch({
-          ...fixtureOptions, ...forwarded,
-          policy: fixtureOptions.policy, parserTarget: null,
-          signal: forwarded.signal, timeoutMs: forwarded.timeoutMs
-        }),
-        execFile() { executions++; throw new Error("cancelled callback must not execute a client"); },
-      }),
-      requestPost() { scopedRequests++; throw new Error("cancelled callback must not fetch context"); },
-    });
-    return adapter.sessionStartMessage({ cwd: fixtureOptions.pluginRoot, sessionId: "lifecycle-owned" }, {}, 50);
-  });
+  await observeCancelledAcquisition(t, "callback", (fixtureOptions) =>
+    resolveHookProjectContext(fixtureOptions.pluginRoot, {
+      ...fixtureOptions,
+      resolve: (forwarded) => resolveForLaunch({ ...fixtureOptions, ...forwarded, policy: fixtureOptions.policy, parserTarget: null }),
+      execFile() { executions++; throw new Error("cancelled resolver must not execute a client"); },
+    }).catch(() => null));
   assert.equal(executions, 0);
-  assert.equal(scopedRequests, 0);
 });
 
 test("plugin lifecycle: cache hits retain hashing and already-aborted acquisition starts no request", async (t) => {
@@ -350,4 +332,35 @@ test("plugin lifecycle: cache hits retain hashing and already-aborted acquisitio
     assert.deepEqual({ cached, poisoned, requests }, { cached: "rejected", poisoned: "rejected", requests: 0 });
     assert.deepEqual(fs.readdirSync(roots.staging), []);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("verify-only resolution accepts exact desired CAS but never imports or downloads missing or tampered bytes", async () => {
+  for (const mode of ["missing", "tampered", "trusted"]) {
+    const root = tempRoot();
+    const roots = objectRoots(root), policy = selected(), target = policy.target.desired;
+    const object = objectPath(roots, target);
+    let requests = 0;
+    try {
+      fs.writeFileSync(path.join(roots.bin, process.platform === "win32" ? "engram.exe" : "engram"), fixture().bytes);
+      if (mode !== "missing") {
+        const bytes = Buffer.from(fixture().bytes);
+        if (mode === "tampered") bytes[0] ^= 1;
+        fs.writeFileSync(object, bytes);
+      }
+      const pending = resolveForLaunch({
+        pluginRoot: root, pluginData: root, policy, parserTarget: null, acquire: false,
+        request() { requests++; throw new Error("verify-only must not open a release request"); },
+      });
+      if (mode === "trusted") {
+        assert.equal((await pending).path, object);
+        assert.equal(hashFile(object, target, roots.objects), true);
+      } else {
+        await assert.rejects(pending, /HOOK_CLIENT_UNAVAILABLE/);
+        assert.equal(hashFile(object, target, roots.objects), false);
+      }
+      assert.equal(requests, 0, mode);
+      assert.deepEqual(fs.readdirSync(roots.staging), []);
+      assert.deepEqual(fs.readdirSync(roots.quarantine), [], "short verify-only callbacks leave invalid bytes for readiness diagnosis");
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  }
 });
