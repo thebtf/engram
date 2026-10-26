@@ -7,8 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Fix OpenClaw tags/labels validation error amplification (GHSA-mrhx-c7xc-m3w5) with exact Zod 4.6.7 and public early-abort validation. Preserve unbounded valid string arrays, defaults, GUID project IDs and existing finite-integer numeric caller semantics. Early stopping covers synchronous invalid element types, not constant-memory handling of arbitrarily large inputs.
-
 - Regenerate the API through the maintained worker target using canonical local Go package directories and Swag 1.16.6, with real producer errors stopping the build. Correct existing context search/inject/session-start annotations without changing handlers; document the shared GET/POST conditional-query limitation. The actual producer and server build pass, with 40 named schema checks and all 76 references resolved; that producer checkpoint established compile-only retained-reader oracle provenance, with later native query proof recorded separately, and installed/release acceptance remains separate.
 
 - Add retained catalog `families` metadata with kind, technical table, saved membership-occurrence count and declared/separate/metadata-only reader boundary. Preserve every group, opaque reference, safe label and reason without payload previews, readable-record totals, availability or historical ownership assignment. This descriptor change does not provide cross-group record discovery or installed-consumer acceptance.
@@ -45,6 +43,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Isolate canonical GORM/gRPC fixtures, bound their pools and await caller-owned audit writes before schema cleanup; retain restore guards and public data. Reuse focused retention/audit/gRPC proofs; the earlier 37-PASS run remains preservation FAIL (audit rows 37→40), followed by seven focused PASS with 40→40 preservation. Canonical continuity fixtures now migrate once per isolated parent (17→6), preserving every assertion and the unchanged 12m budget; reuse 22 focused lifecycle PASS plus three hash-bound slot CRUD/migration PASS from the earlier incomplete timeout run, not a full-suite or installed-acceptance claim.
 - Use registered canonical UUIDs and authenticated caller project context in MCP fixtures without weakening default-deny, privacy or pre-mutation rejection guards. Reuse 119 prior PASS plus one exact retry PASS after the context fix, not 120 fresh PASS or installed acceptance.
 - Seed the isolated operator-code fixture with a registered canonical project UUID while preserving five queue candidates, published/no-view checks and redacted provisioning errors.
+
+## [7.0.8] - 2026-10-26
+
+Corrective source release preparation; canonical 7.0.8 assets, publication and ordinary installed-host acceptance remain pending.
+
+### Fixed
+
+- Fix OpenClaw tags/labels validation error amplification (GHSA-mrhx-c7xc-m3w5) with exact Zod 4.6.7 and public early-abort validation. Preserve unbounded valid string arrays, defaults, GUID project IDs and existing finite-integer numeric caller semantics. Early stopping covers synchronous invalid element types, not constant-memory handling of arbitrarily large inputs.
+
+- Register OMP context callbacks without waiting for trusted client preparation. Keep one background readiness operation under the existing absolute 360000 ms preparation budget; return no enrichment until trusted, without replaying early callbacks. Preserve verify-only per-callback integrity checks, unchanged 5000/500 ms context deadlines and owned postmortem cleanup. Controlled default-entry proof is not an installed startup-latency or Node18 execution claim.
 
 ## [7.0.7] - 2026-10-26
 
