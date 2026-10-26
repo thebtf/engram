@@ -48,6 +48,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Corrective source release preparation; canonical 7.0.8 assets, publication and ordinary installed-host acceptance remain pending.
 
+Release PR: [#586](https://github.com/thebtf/engram/pull/586).
+
 ### Fixed
 
 - Fix OpenClaw tags/labels validation error amplification (GHSA-mrhx-c7xc-m3w5) with exact Zod 4.6.7 and public early-abort validation. Preserve unbounded valid string arrays, defaults, GUID project IDs and existing finite-integer numeric caller semantics. Early stopping covers synchronous invalid element types, not constant-memory handling of arbitrarily large inputs.
