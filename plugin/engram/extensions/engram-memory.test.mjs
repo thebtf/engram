@@ -257,6 +257,7 @@ test('OMP background readiness handles offline, hash and cooperative abort failu
       assert.deepEqual([...handlers.keys()], ['session_start', 'before_agent_start']);
       await handlers.get('session_start')({ cwd: '/session/a', sessionId: mode }, {});
       assert.equal(await handlers.get('before_agent_start')({ cwd: '/session/a', sessionId: mode, prompt: 'fixture' }, {}), undefined);
+      assert.match(diagnostics.join('\n'), /readiness unavailable/, 'genuine failed/corrupt/cancelled readiness must remain visible');
       assert.doesNotMatch(diagnostics.join('\n'), /query_fixture_secret|signed=/);
       assert.equal(calls.length, 0, mode);
       assert.equal(sent.length, 0, mode);
@@ -267,6 +268,41 @@ test('OMP background readiness handles offline, hash and cooperative abort failu
     } finally { response?.destroy(); await installing; fs.rmSync(root, { recursive: true, force: true }); }
   }
 });
+
+for (const mode of ['unconfigured', 'config-quiet']) {
+  test(`OMP skipped ${mode} callbacks stay silent until eligibility is enabled later`, async t => {
+    let enabled = false, finishSettlement, acquisitions = 0, resolutions = 0, backendRequests = 0, messages = 0, unregistered = false;
+    const settled = new Promise(resolve => { finishSettlement = resolve; });
+    const handlers = new Map(), diagnostics = [];
+    const { adapter } = extension({
+      resolveEngramRuntimeConfig: async () => ({ serverURL: !enabled && mode === 'unconfigured' ? '' : 'http://fixture', quiet: !enabled && mode === 'config-quiet', token: '' }),
+      prepareHookClient: async () => { acquisitions++; throw new Error('skipped binding must not acquire'); },
+      resolveHookProjectContext: async () => { resolutions++; throw new Error('skipped binding must not resolve a project'); },
+      requestPost: async () => { backendRequests++; throw new Error('skipped binding must not request backend context'); },
+      registerCleanup: () => () => { unregistered = true; finishSettlement(); },
+      onDiagnostic: message => diagnostics.push(message),
+    });
+    await adapter.install({ on: (name, callback) => handlers.set(name, callback), sendMessage() { messages++; } });
+    await settled;
+    assert.deepEqual([...handlers.keys()], ['session_start', 'before_agent_start']);
+    assert.equal(await handlers.get('session_start')({ cwd: '/session/a', sessionId: mode }, {}), undefined);
+    assert.equal(await handlers.get('before_agent_start')({ cwd: '/session/a', sessionId: mode, prompt: 'fixture' }, {}), undefined);
+    const ineligibleDiagnostics = [...diagnostics];
+    enabled = true;
+    assert.equal(await handlers.get('session_start')({ cwd: '/session/a', sessionId: `${mode}-enabled` }, {}), undefined);
+    assert.equal(await handlers.get('before_agent_start')({ cwd: '/session/a', sessionId: `${mode}-enabled`, prompt: 'fixture' }, {}), undefined);
+    const enabledDiagnostics = diagnostics.slice(ineligibleDiagnostics.length);
+    t.diagnostic(JSON.stringify({ mode, ineligibleDiagnostics, enabledDiagnostics, acquisitions, resolutions, backendRequests, messages, unregistered }));
+    assert.equal(acquisitions, 0);
+    assert.equal(resolutions, 0);
+    assert.equal(backendRequests, 0);
+    assert.equal(messages, 0);
+    assert.equal(unregistered, true, 'background readiness has settled and released its cleanup registration');
+    assert.equal(enabledDiagnostics.length, 2, 'each later eligible callback must explain the fresh-binding requirement');
+    assert.ok(enabledDiagnostics.every(message => /fresh ordinary session/.test(message)));
+    assert.deepEqual(ineligibleDiagnostics, [], 'deliberately skipped callbacks must not report a trusted-client failure');
+  });
+}
 
 test('OMP quiet or unconfigured installation skips acquisition and requires a fresh session when enabled later', async () => {
   for (const mode of ['environment-quiet', 'config-quiet', 'unconfigured']) {
