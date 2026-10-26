@@ -45,10 +45,10 @@ export function createEngramMemoryExtension(options = {}) {
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const config = await runtimeConfig({ signal: controller.signal });
-      if (!config.serverURL || config.quiet || controller.signal.aborted) return null;
+      if (!config.serverURL || config.quiet || controller.signal.aborted || Date.now() >= deadline) return null;
       if (readinessSkipped) { unavailable(); return null; }
       const context = await resolveContext(facts.cwd, {
-        signal: controller.signal, timeoutMs: Math.max(1, deadline - Date.now()), acquire: false,
+        signal: controller.signal, deadlineAt: deadline, timeoutMs: Math.max(1, deadline - Date.now()), acquire: false,
         env: { ...process.env, ENGRAM_URL: config.serverURL, ENGRAM_TOKEN: config.token },
       });
       if (controller.signal.aborted || Date.now() >= deadline) return null;

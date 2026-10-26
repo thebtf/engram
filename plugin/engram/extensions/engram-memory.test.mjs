@@ -269,3 +269,48 @@ test('OMP readiness budget includes config and never admits late preparation res
   assert.equal(handlers.size, 0);
   assert.equal(calls.length, 0);
 });
+
+test('OMP context keeps its absolute deadline when wall clock advances without timer delivery', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
+  const bytes = Buffer.from('trusted deadline edge client'), version = '7.0.6';
+  const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
+  const targets = Object.fromEntries(Object.entries(TARGET_ASSETS).map(([key, asset]) => [key, { version, asset, size: bytes.length, sha256 }]));
+  const policy = parsePolicy(JSON.stringify(createPolicy(version, targets)), version);
+  for (const [eventName, budget] of [['session_start', 5000], ['before_agent_start', 500]]) {
+    for (const edge of ['config-return', 'resolver-entry']) {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-deadline-edge-'));
+      const roots = objectRoots(root), object = objectPath(roots, policy.target.desired);
+      fs.writeFileSync(object, bytes);
+      const handlers = new Map(), sent = [], resolutions = [], executions = [];
+      let callbackPhase = false, deadline;
+      const { adapter, calls } = extension({
+        resolveEngramRuntimeConfig: async () => {
+          if (callbackPhase && edge === 'config-return') t.mock.timers.setTime(deadline + 1);
+          return { serverURL: 'http://fixture', quiet: false, token: '' };
+        },
+        resolveHookProjectContext: (cwd, options) => {
+          resolutions.push({ timeoutMs: options.timeoutMs, deadlineAt: options.deadlineAt ?? null, signalAborted: options.signal.aborted });
+          if (edge === 'resolver-entry') t.mock.timers.setTime(deadline + 1);
+          return resolveHookProjectContext(cwd, {
+            ...options, pluginRoot: root, pluginData: root,
+            resolve: forwarded => resolveForLaunch({ ...forwarded, policy, request() { throw new Error('deadline fixture must not download'); } }),
+            execFile(_file, _args, options, callback) {
+              executions.push({ at: Date.now(), timeout: options.timeout, signalAborted: options.signal.aborted });
+              callback(null, JSON.stringify({ project_id: projects[cwd] }));
+            },
+          });
+        },
+      });
+      try {
+        await adapter.install({ on: (name, handler) => handlers.set(name, handler), sendMessage: message => sent.push(message) });
+        callbackPhase = true;
+        deadline = Date.now() + budget;
+        await handlers.get(eventName)({ cwd: '/session/a', sessionId: 'wall-clock-edge', prompt: 'current prompt' }, {});
+        t.diagnostic(JSON.stringify({ eventName, edge, deadline, now: Date.now(), resolutions, executions, contextRequests: calls.length }));
+        assert.equal(executions.length, 0, 'expired context must not enter native project exec even before the abort timer is delivered');
+        assert.equal(calls.length, 0);
+        assert.equal(sent.length, 0);
+      } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    }
+  }
+});
