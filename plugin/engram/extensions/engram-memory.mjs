@@ -3,6 +3,8 @@ const require = createRequire(import.meta.url);
 const lib = require('../hooks/lib.js');
 const { buildSessionStartContext } = require('../hooks/session-start.js');
 const { buildAmbientRequest, formatAmbientAdditionalContext } = require('../hooks/user-prompt.js');
+const { DOWNLOAD_DEADLINE_MS } = require('../scripts/ensure-binary.js');
+const { prepareHookClient } = require('../scripts/run-engram.js');
 const hiddenContextLimit = 12000;
 
 function stringField(...values) {
@@ -27,6 +29,10 @@ export function createEngramMemoryExtension(options = {}) {
   const requestPost = options.requestPost ?? lib.requestPost;
   const runtimeConfig = options.resolveEngramRuntimeConfig ?? lib.resolveEngramRuntimeConfig;
   const isQuiet = options.isQuiet ?? lib.isQuietMode;
+  const prepare = options.prepareHookClient ?? prepareHookClient;
+  const diagnostic = options.onDiagnostic ?? (message => process.stderr.write(`[engram] ${message}\n`));
+  const unavailable = () => diagnostic('Trusted hook client readiness unavailable; check the plugin cache and start a fresh ordinary session.');
+  let readinessSkipped = false;
 
   async function message(event, ctx, timeoutMs, ambient) {
     if (isQuiet()) return null;
@@ -39,9 +45,10 @@ export function createEngramMemoryExtension(options = {}) {
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const config = await runtimeConfig({ signal: controller.signal });
-      if (!config.serverURL || config.quiet || controller.signal.aborted) return null;
+      if (!config.serverURL || config.quiet || controller.signal.aborted || Date.now() >= deadline) return null;
+      if (readinessSkipped) { unavailable(); return null; }
       const context = await resolveContext(facts.cwd, {
-        signal: controller.signal, timeoutMs: Math.max(1, deadline - Date.now()),
+        signal: controller.signal, deadlineAt: deadline, timeoutMs: Math.max(1, deadline - Date.now()), acquire: false,
         env: { ...process.env, ENGRAM_URL: config.serverURL, ENGRAM_TOKEN: config.token },
       });
       if (controller.signal.aborted || Date.now() >= deadline) return null;
@@ -54,12 +61,47 @@ export function createEngramMemoryExtension(options = {}) {
       const content = ambient ? formatAmbientAdditionalContext(payload) : buildSessionStartContext(payload, context.Project, { maxLength: hiddenContextLimit });
       if (controller.signal.aborted || Date.now() >= deadline || typeof content !== 'string' || !content || Buffer.byteLength(content) > hiddenContextLimit) return null;
       return hiddenMessage(content);
-    } catch { return null; } finally { clearTimeout(timer); }
+    } catch (error) {
+      if (/HOOK_CLIENT_UNAVAILABLE|resolved client failed final integrity verification/.test(error?.message ?? '')) unavailable();
+      return null;
+    } finally { clearTimeout(timer); }
   }
 
   const sessionStartMessage = (event, ctx, timeoutMs = 5000) => message(event, ctx, timeoutMs, false);
   const ambientMessage = (event, ctx) => message(event, ctx, 500, true);
-  function install(pi) {
+  async function install(pi) {
+    const controller = new AbortController();
+    const deadlineAt = Date.now() + DOWNLOAD_DEADLINE_MS;
+    let onAbort, preparation, unregister;
+    const cancelled = new Promise((_, reject) => {
+      onAbort = () => reject(new Error('client readiness cancelled'));
+      controller.signal.addEventListener('abort', onAbort, { once: true });
+    });
+    const timer = setTimeout(() => controller.abort(), DOWNLOAD_DEADLINE_MS);
+    try {
+      unregister = options.registerCleanup?.('engram-client-readiness', async () => {
+        controller.abort();
+        await preparation?.catch(() => { });
+      });
+      preparation = (async () => {
+        if (controller.signal.aborted) throw new Error('client readiness cancelled');
+        if (isQuiet()) { readinessSkipped = true; return; }
+        const config = await runtimeConfig({ signal: controller.signal });
+        if (controller.signal.aborted || Date.now() >= deadlineAt) throw new Error('client readiness expired');
+        readinessSkipped = !config.serverURL || config.quiet;
+        if (!readinessSkipped) {
+          await prepare({ signal: controller.signal, deadlineAt, timeoutMs: deadlineAt - Date.now() });
+        }
+        if (controller.signal.aborted || Date.now() >= deadlineAt) throw new Error('client readiness expired');
+      })();
+      await Promise.race([preparation, cancelled]);
+    } catch {
+      throw new Error('[engram] Trusted client readiness failed or was cancelled. Check release connectivity and the plugin cache, then start a fresh ordinary session.');
+    } finally {
+      clearTimeout(timer);
+      controller.signal.removeEventListener('abort', onAbort);
+      unregister?.();
+    }
     pi.on('session_start', async (event, ctx) => {
       const result = await sessionStartMessage(event, ctx);
       if (result) pi.sendMessage(result, { deliverAs: 'nextTurn' });
@@ -72,7 +114,9 @@ export function createEngramMemoryExtension(options = {}) {
   return Object.freeze({ install, sessionStartMessage, ambientMessage });
 }
 
-const liveExtension = createEngramMemoryExtension();
-export default function engramMemory(pi) { liveExtension.install(pi); }
-export const sessionStartMessage = (...args) => liveExtension.sessionStartMessage(...args);
-export const ambientMessage = (...args) => liveExtension.ambientMessage(...args);
+export default async function engramMemory(pi) {
+  const { postmortem } = await import('@oh-my-pi/pi-utils');
+  await createEngramMemoryExtension({ registerCleanup: postmortem.register }).install(pi);
+}
+export const sessionStartMessage = (...args) => createEngramMemoryExtension().sessionStartMessage(...args);
+export const ambientMessage = (...args) => createEngramMemoryExtension().ambientMessage(...args);

@@ -327,7 +327,10 @@ function importLegacy(roots, target, options = {}) {
 
 async function acquire(roots, target, options) {
   checkAcquisition(options);
-  return verifyObject(roots, target, true, options) || importLegacy(roots, target, options) || await downloadObject(roots, target, options);
+  const cached = verifyObject(roots, target, options.acquire !== false, options);
+  if (cached) return cached;
+  if (options.acquire === false) fail("HOOK_CLIENT_UNAVAILABLE");
+  return importLegacy(roots, target, options) || await downloadObject(roots, target, options);
 }
 
 async function resolveForLaunch(options = {}) {
@@ -338,7 +341,7 @@ async function resolveForLaunch(options = {}) {
   if (!pluginRoot || !pluginData) fail("plugin root and plugin data are required");
   const policy = options.policy || loadPolicy(pluginRoot, options);
   const roots = objectRoots(pluginData);
-  const candidates = [policy.target.desired, policy.target.predecessor].filter(Boolean);
+  const candidates = [policy.target.desired, ...(options.acquire === false ? [] : [policy.target.predecessor])].filter(Boolean);
   let lastError;
   for (const target of candidates) {
     try {
@@ -350,7 +353,11 @@ async function resolveForLaunch(options = {}) {
       const parserPath = parserTarget ? await installParser(roots, object, parserTarget, options) : "";
       checkAcquisition(options);
       return Object.freeze({ path: object, target, parserPath, parserTarget });
-    } catch (error) { checkAcquisition(options); lastError = error; }
+    } catch (error) {
+      checkAcquisition(options);
+      if (options.acquire === false) fail("HOOK_CLIENT_UNAVAILABLE");
+      lastError = error;
+    }
   }
   throw new BootstrapError(`no authorized client object is available: ${lastError ? lastError.message : "none"}`);
 }
@@ -373,7 +380,7 @@ async function main() {
 if (require.main === module) main().catch((error) => process.stderr.write(`[engram] bootstrap error: ${error.message}\n`));
 
 module.exports = {
-  BootstrapError, MAX_OBJECT_BYTES, MAX_REDIRECTS, TARGET_ASSETS,
+  BootstrapError, DOWNLOAD_DEADLINE_MS, MAX_OBJECT_BYTES, MAX_REDIRECTS, TARGET_ASSETS,
   assertSafeDirectory, hashFile, importLegacy, loadPolicy, objectPath, objectRoots, parsePolicy,
   platformKey, prefetch, publishStage, requestStream, resolveForLaunch, verifyObject,
   downloadObject, loadParserTarget, installParser,
