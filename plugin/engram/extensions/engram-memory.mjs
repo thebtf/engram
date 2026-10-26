@@ -37,7 +37,7 @@ export function createEngramMemoryExtension(options = {}) {
   async function message(event, ctx, timeoutMs, ambient) {
     if (isQuiet()) return null;
     if (readiness === 'pending') return null;
-    if (readiness && readiness !== 'ready') { unavailable(); return null; }
+    if (readiness && readiness !== 'ready' && readiness !== 'skipped') { unavailable(); return null; }
     const facts = callbackFacts(event, ctx);
     if (!facts) return null;
     const prompt = ambient ? stringField(event?.prompt, event?.userMessage, event?.user_message, ctx?.prompt) : '';
