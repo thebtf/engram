@@ -86,18 +86,24 @@ restart OMP / start a new session before expecting updated MCP discovery.
 
 ### OMP cold client preparation
 
-For a configured, non-quiet OMP 18.12.6 binding, the awaited extension factory
-prepares and verifies the client before context callbacks are registered. Its
-separate 360000 ms preparation budget includes configuration and integrity
-checks; the subsequent session/ambient budgets remain 5000/500 ms. It does not
-start a daemon, register a project or fetch memory during preparation.
+For OMP 18.12.6, Engram registers context callbacks without waiting for asynchronous
+configuration or cold client acquisition. A configured, non-quiet binding prepares
+and verifies its client once in the background. Its separate absolute 360000 ms
+budget includes configuration and integrity checks; preparation does not start a
+daemon, resolve a project or fetch memory.
 
-A preparation failure is an extension load error, not successful empty context.
-Correct release connectivity or cache problems, then open a fresh ordinary
-session. If bytes disappear or fail verification later, callbacks do not download
-a replacement or replay old memory. Quiet/unconfigured bindings skip preparation
-and require a fresh session after enabling. Graceful cleanup can cancel this
-owned operation; turn cancellation and hard exit do not guarantee its cleanup.
+Pending, failed or cancelled readiness admits no client execution, project/backend
+work or enrichment. Early events may be skipped and are never replayed when
+preparation finishes. Later ordinary callbacks use the verified cache without a
+new download, retaining the 5000/500 ms session/ambient budgets. This does not prove
+or guarantee the whole host's startup time.
+
+A preparation failure emits a readiness diagnostic without failing extension
+registration. Correct release connectivity or cache problems, then open a fresh
+ordinary session. If bytes disappear or fail verification later, callbacks do not
+download a replacement or replay old memory. Quiet/unconfigured bindings skip
+preparation and require a fresh session after enabling. Graceful cleanup cancels
+this owned operation; turn cancellation and hard exit do not guarantee its cleanup.
 
 
 ### Legacy path (Codex < 0.139 only)

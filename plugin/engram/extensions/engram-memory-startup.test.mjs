@@ -40,6 +40,7 @@ async function exerciseDefaultFactory(mode) {
   const targets = Object.fromEntries(Object.entries(TARGET_ASSETS).map(([key, asset]) => [key, { version, asset, size: bytes.length, sha256 }]));
   const policy = parsePolicy(JSON.stringify(createPolicy(version, targets)), version);
   const roots = objectRoots(root), object = objectPath(roots, policy.target.desired);
+  if (mode === 'warm') fs.writeFileSync(object, bytes);
   const project = '11111111-1111-4111-8111-111111111111';
   const verify = options => resolveForLaunch({
     ...options, pluginRoot: root, pluginData: root, policy, parserTarget: null, acquire: false,
@@ -60,7 +61,7 @@ async function exerciseDefaultFactory(mode) {
           await gate.promise;
           if (mode === 'rejected') throw new Error('controlled offline readiness failure');
           if (forwarded.signal.aborted) throw new Error('controlled readiness abort');
-          fs.writeFileSync(object, mode === 'corrupt' ? Buffer.alloc(bytes.length) : bytes);
+          if (mode !== 'warm') fs.writeFileSync(object, mode === 'corrupt' ? Buffer.alloc(bytes.length) : bytes);
           return await verify(forwarded);
         } finally { forwarded.signal.removeEventListener('abort', abort); }
       },
@@ -135,12 +136,13 @@ async function exerciseDefaultFactory(mode) {
     }).then(() => { factoryState = 'fulfilled'; }, error => { factoryState = 'rejected'; return error; });
     await entered.promise;
     await turn();
-    assert.equal(fs.existsSync(object), false, 'readiness is causally held with a cold isolated CAS');
+    assert.equal(fs.existsSync(object), mode === 'warm', 'only the warm fixture starts with cached client bytes');
     assert.equal(await callbacks('while-held'), undefined);
     held = snapshot();
     assert.deepEqual(held.effects, { projectResolutions: 0, projectExecutions: 0, backendRequests: 0, nativeProcesses: 0, network: 0, downloads: 0 });
     assert.equal(held.sent, 0);
-    gate.resolve();
+    if (mode === 'cancelled') await registrations.get('engram-client-readiness')();
+    else gate.resolve();
     await preparation.catch(() => { });
     await installing;
     await turn();
@@ -149,7 +151,7 @@ async function exerciseDefaultFactory(mode) {
     assert.equal(afterPreparation.sent, 0, 'preparation completion must not inject hidden context');
     const result = await callbacks('after-settlement');
     settled = snapshot();
-    if (mode === 'trusted') {
+    if (mode === 'trusted' || mode === 'warm') {
       assert.equal(settled.readiness, 'trusted');
       assert.equal(settled.effects.projectResolutions, 2);
       assert.equal(settled.effects.projectExecutions, 2);
@@ -201,8 +203,8 @@ if (process.argv[2] === '--startup-worker') {
   try { await exerciseDefaultFactory(process.argv[3]); }
   catch (error) { console.error(error.stack); process.exitCode = 1; }
 } else {
-  for (const mode of ['trusted', 'rejected', 'corrupt']) {
-    test(`OMP default factory registers during held cold readiness and preserves ${mode} execution guards`, t => {
+  for (const mode of ['trusted', 'warm', 'rejected', 'corrupt', 'cancelled']) {
+    test(`OMP default factory registers during held ${mode === 'warm' ? 'warm' : 'cold'} readiness and preserves ${mode} execution guards`, t => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-default-startup-'));
       const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => ['SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATH', 'PATHEXT', 'SYSTEMDRIVE'].includes(key.toUpperCase())));
       for (const key of ['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TMP', 'TEMP']) env[key] = root;

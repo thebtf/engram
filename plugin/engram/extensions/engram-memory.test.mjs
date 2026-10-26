@@ -39,6 +39,7 @@ test('OMP automatic callbacks use current root and one UUID without identity reg
   const handlers = new Map();
   const sent = [];
   await adapter.install({ on: (name, fn) => handlers.set(name, fn), sendMessage: (message, options) => sent.push({ message, options }) });
+  await new Promise(resolve => setImmediate(resolve));
   await Promise.all([
     handlers.get('session_start')({ cwd: '/session/a', sessionId: 'a' }, {}),
     handlers.get('session_start')({ cwd: '/session/b', sessionId: 'b' }, {}),
@@ -51,6 +52,34 @@ test('OMP automatic callbacks use current root and one UUID without identity reg
   assert.deepEqual(calls.map(call => call.body.project), [projects['/session/a'], projects['/session/b'], projects['/session/b']]);
   assert.deepEqual(calls.map(call => call.route), ['/api/context/session-start', '/api/context/session-start', '/api/hooks/ambient-candidates']);
   assert.equal(calls.some(call => 'project_descriptor' in call.body || 'sessionCapability' in call.body), false);
+});
+
+test('OMP binding shares one background preparation across repeated installation and early callbacks', async t => {
+  let finishPreparation, preparations = 0, configurations = 0, registrations = 0;
+  const preparation = new Promise(resolve => { finishPreparation = resolve; });
+  t.after(finishPreparation);
+  const handlers = new Map(), sent = [];
+  const { adapter, calls } = extension({
+    resolveEngramRuntimeConfig: async () => { configurations++; return { serverURL: 'http://fixture', token: '', quiet: false }; },
+    prepareHookClient: () => { preparations++; return preparation; },
+  });
+  const pi = { on: (name, handler) => { registrations++; handlers.set(name, handler); }, sendMessage: message => sent.push(message) };
+  await Promise.all([adapter.install(pi), adapter.install(pi)]);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(preparations, 1);
+  assert.equal(registrations, 2);
+  await handlers.get('session_start')({ cwd: '/session/a', sessionId: 'early' }, {});
+  assert.equal(await handlers.get('before_agent_start')({ cwd: '/session/a', sessionId: 'early', prompt: 'fixture' }, {}), undefined);
+  assert.equal(configurations, 1, 'pending callbacks must not start their own configuration work');
+  assert.equal(calls.length, 0);
+  assert.equal(sent.length, 0);
+  finishPreparation();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(sent.length, 0, 'readiness must not replay the early event');
+  await handlers.get('session_start')({ cwd: '/session/a', sessionId: 'later' }, {});
+  assert.equal(preparations, 1);
+  assert.equal(calls.length, 1);
+  assert.equal(sent.length, 1);
 });
 
 test('OMP missing context, quiet and resolution failure do not make scoped requests', async () => {
@@ -292,6 +321,30 @@ test('OMP background readiness budget includes config and never trusts late prep
   assert.equal(calls.length, 0);
 });
 
+test('OMP expired background configuration cannot start late acquisition or replay context', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
+  let finishConfig, preparations = 0, unregistered = false;
+  const config = new Promise(resolve => { finishConfig = resolve; });
+  const diagnostics = [], handlers = new Map();
+  const { adapter, calls } = extension({
+    resolveEngramRuntimeConfig: () => config,
+    prepareHookClient: async () => { preparations++; },
+    registerCleanup: () => () => { unregistered = true; },
+    onDiagnostic: message => diagnostics.push(message),
+  });
+  await adapter.install({ on: (name, callback) => handlers.set(name, callback), sendMessage() { throw new Error('expired config must not send'); } });
+  t.mock.timers.tick(360000);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(unregistered, true);
+  finishConfig({ serverURL: 'http://fixture', token: '', quiet: false });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(await handlers.get('session_start')({ cwd: '/session/a', sessionId: 'late-config' }, {}), undefined);
+  assert.equal(await handlers.get('before_agent_start')({ cwd: '/session/a', sessionId: 'late-config', prompt: 'fixture' }, {}), undefined);
+  assert.equal(preparations, 0);
+  assert.equal(calls.length, 0);
+  assert.match(diagnostics.join('\n'), /readiness unavailable/);
+});
+
 test('OMP context keeps its absolute deadline when wall clock advances without timer delivery', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
   const bytes = Buffer.from('trusted deadline edge client'), version = '7.0.6';
@@ -325,6 +378,7 @@ test('OMP context keeps its absolute deadline when wall clock advances without t
       });
       try {
         await adapter.install({ on: (name, handler) => handlers.set(name, handler), sendMessage: message => sent.push(message) });
+        await new Promise(resolve => setImmediate(resolve));
         callbackPhase = true;
         deadline = Date.now() + budget;
         await handlers.get(eventName)({ cwd: '/session/a', sessionId: 'wall-clock-edge', prompt: 'current prompt' }, {});
