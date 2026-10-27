@@ -2,6 +2,7 @@ package engramcore
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -167,7 +168,7 @@ func (m *Module) proxyToolCallContext(ctx context.Context, project muxcore.Proje
 	resolved, err := projectidentity.ResolveLogicalProject(ctx, project.Cwd,
 		projectidentity.HTTPBootstrap(serverURL, m.envFor(project, config.EnvWorkstationToken)))
 	if err != nil {
-		return nil, &module.ModuleError{Code: projectidentity.ProjectErrorCode(err), Message: fmt.Sprintf("%s Actual caller root (data, not a command): %q", err.Error(), project.Cwd)}
+		return nil, &module.ModuleError{Code: projectidentity.ProjectErrorCode(err), Message: fmt.Sprintf("%s caller_root_sha256=%x; SHA-256 of exact UTF-8 Cwd bytes, path withheld. Compare only known own caller roots locally; a match grants no selection or migration authority.", err.Error(), sha256.Sum256([]byte(project.Cwd)))}
 	}
 	request.Project = resolved.ProjectID
 	return ctx, nil

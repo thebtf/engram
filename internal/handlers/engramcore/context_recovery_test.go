@@ -1,9 +1,14 @@
 package engramcore
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +17,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/auditcontext"
 	"github.com/thebtf/engram/internal/module"
@@ -88,39 +94,50 @@ func TestContextRecoveryNativePreflightNeverBootstrapsOrPublishesIdentity(t *tes
 	}
 }
 
-func TestContextRecoveryIdentityRefusalAttributesActualCallerRoot(t *testing.T) {
+func TestContextRecoveryIdentityRefusalFingerprintsCallerWithoutDisclosure(t *testing.T) {
 	var messages []string
-	var calls atomic.Int32
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls.Add(1)
-		http.Error(w, "invalid local identity must not bootstrap", http.StatusInternalServerError)
-	}))
-	defer backend.Close()
-	for range 2 {
-		_, mod, project := buildContractDispatcher(t, "")
-		project.Env["ENGRAM_URL"] = backend.URL
+	for index := range 2 {
+		srv := &mockEngramServer{}
+		_, mod, project := buildContractDispatcher(t, startMockGRPC(t, srv))
+		if index == 1 {
+			project.Cwd = filepath.ToSlash(project.Cwd)
+		}
 		command := exec.CommandContext(t.Context(), "git", "-C", project.Cwd, "init", "--quiet", "--template=")
 		command.Env = projectidentity.RepositoryGitEnvironmentV3()
 		raw, err := command.CombinedOutput()
 		require.NoError(t, err, "synthetic Git fixture: %s", raw)
 		marker := filepath.Join(project.Cwd, ".engram-project")
-		original := []byte(`{"unknown":"untrusted marker body must not be exposed"}`)
+		original := []byte(`{"unknown":"private-display-name","credential":"private-credential"}`)
 		require.NoError(t, os.WriteFile(marker, original, 0o600))
-		request := &pb.CallToolRequest{ToolName: "issues", ArgumentsJson: json.RawMessage(`{"action":"create","title":"held"}`)}
-		_, err = mod.proxyToolCallContext(t.Context(), project, request, false)
+		_, err = mod.ProxyHandleTool(t.Context(), project, "recall", json.RawMessage(`{}`))
 		var refusal *module.ModuleError
 		require.ErrorAs(t, err, &refusal)
 		require.Equal(t, "PROJECT_IDENTITY_INVALID", refusal.Code)
 		messages = append(messages, refusal.Message)
-		if !strings.Contains(refusal.Message, strconv.Quote(project.Cwd)) {
-			t.Errorf("identity refusal omitted its actual escaped caller root: root=%q message=%q", project.Cwd, refusal.Message)
+		want := fmt.Sprintf("caller_root_sha256=%x", sha256.Sum256([]byte(project.Cwd)))
+		assert.Contains(t, refusal.Message, want, "identify the selected caller only by the exact UTF-8 Cwd fingerprint")
+		assert.Contains(t, refusal.Message, "path withheld")
+		assert.Contains(t, refusal.Message, "no selection or migration authority")
+		assert.Contains(t, refusal.Message, "Preserve")
+		assert.Contains(t, refusal.Message, "4096")
+		assert.Less(t, len(refusal.Message), 2048, "refusal stays bounded and carries no path-sized payload")
+		for _, private := range []string{project.Cwd, project.ID, contractProjectID, "private-display-name", "private-credential"} {
+			for _, exposed := range []string{private, strconv.Quote(private), url.QueryEscape(private), base64.StdEncoding.EncodeToString([]byte(private)), hex.EncodeToString([]byte(private))} {
+				assert.NotContains(t, refusal.Message, exposed, "raw, quoted or reversible encoding is still a disclosure")
+			}
 		}
-		require.NotContains(t, refusal.Message, "untrusted marker body")
-		require.Empty(t, request.Project)
+		_, suffix, found := strings.Cut(refusal.Message, "caller_root_sha256=")
+		if assert.True(t, found) {
+			digest, _, _ := strings.Cut(suffix, ";")
+			assert.Len(t, digest, 64)
+		}
+		srv.mu.Lock()
+		called := srv.callReq != nil
+		srv.mu.Unlock()
+		require.False(t, called, "private refusal must not reach scoped server dispatch")
 		preserved, readErr := os.ReadFile(marker)
 		require.NoError(t, readErr)
 		require.Equal(t, original, preserved)
 	}
-	require.NotEqual(t, messages[0], messages[1], "separate native application calls must identify their own selected root, not a global/canned path")
-	require.Zero(t, calls.Load())
+	require.NotEqual(t, messages[0], messages[1], "distinct caller roots produce distinct non-authoritative fingerprints")
 }
