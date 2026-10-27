@@ -52,6 +52,7 @@ Source fix: [#589](https://github.com/thebtf/engram/pull/589).
 
 ### Fixed
 
+- Reuse completed UCI vectors across distinct analysis-profile IDs when the effective provider/model/dimension/preprocessing/path policy, canonical input digest, Source and protection domain match. Preserve target-profile artifacts, selected-View guards and immutable links without a schema migration or another provider call for unchanged input.
 - Restore published UCI backups into an empty isolated target in two phases: load facts before restoring exact artifact seals and published current-View pointers. Keep UCI guards enabled, authenticated frames, row/FK/Vault checks and transactional rollback intact; cover published/sealed roundtrip, replay and independent-trigger rollback with synthetic PostgreSQL fixtures. This does not claim installed or production-corpus recovery.
 
 - Correct English singular/plural labels for saved membership occurrences without changing stored counts or implying readable records.

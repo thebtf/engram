@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pgvector/pgvector-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	ucidomain "github.com/thebtf/engram/internal/uci"
@@ -156,4 +157,119 @@ func uciEmbeddingReuseComplete(t *testing.T, fixture *uciEmbeddingJobsFixture, r
 		require.NoError(t, err)
 		return status.Embedding.JobState != nil && *status.Embedding.JobState == ucidomain.IndexStatusJobSucceeded && status.Embedding.Coverage == ucidomain.IndexCoverageComplete && status.Embedding.TotalCandidates == 1 && status.Embedding.ReadyCandidates == 1
 	}, 10*time.Second, 20*time.Millisecond, "the real leased worker must complete and persist the exact View embedding")
+}
+
+func TestUCIEmbeddingCrossProfileFallbackKeepsOriginBoundaries(t *testing.T) {
+	for _, boundary := range []string{"compatible", "provider", "model", "preprocessing", "path-policy", "source", "protection-domain", "pending", "failed"} {
+		t.Run(boundary, func(t *testing.T) {
+			fixture := openUCIEmbeddingJobsFixture(t)
+			publication := fixture.publication
+			ctx := context.Background()
+			artifact := publication.admitArtifact(t, publication.source.SourceID, "fallback-boundary", "func FallbackBoundary() {}\n", UCIParseArtifactComplete)
+			memberships := []ucidomain.IndexMembership{uciPublicationPresentMembership("boundary.go", artifact)}
+			draft := uciEmbeddingJobsDraft([]uciPublicationArtifact{artifact}, memberships)
+			_, originView := publication.publish(t, publication.publisher, publication.caller("fallback-origin"), publication.publishInput("fallback-origin", publication.checkout, publication.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial, draft))
+			original := publication.profile
+			targetProfile, err := publication.context.CreateProfile(ctx, CreateProfileInput{
+				ParserBundleDigest:   original.ParserBundleDigest,
+				ResolverRevision:     original.ResolverRevision,
+				ChunkerRevision:      original.ChunkerRevision,
+				IgnorePolicyDigest:   original.IgnorePolicyDigest,
+				BuildContextJSON:     original.BuildContextJSON,
+				SecretPolicyRevision: original.SecretPolicyRevision,
+			})
+			require.NoError(t, err)
+			require.NotEqual(t, original.ProfileID, targetProfile.ProfileID)
+			publication.profile = targetProfile
+			target := fixture.publish(t, "fallback-target", publication.sibling, nil, ucidomain.IndexJobInitial, []uciPublicationArtifact{artifact}, memberships)
+			authorized := uciEmbeddingJobsAuthorize(t, publication, target.Context)
+			candidates, exhausted, err := loadUCIEmbeddingCandidatePage(ctx, publication.db, target.Context, nil, 16, fixture.profile)
+			require.NoError(t, err)
+			require.True(t, exhausted)
+			require.Len(t, candidates, 1)
+			candidate := candidates[0]
+			originProfile := fixture.profile
+			vector := pgvector.NewVector(uciEmbeddingJobsVector(7))
+			originInput := UpsertUCIEmbeddingInput{
+				EmbeddingInputDigest: string(candidate.InputDigest),
+				Vector:               &vector,
+				SourceID:             target.Context.SourceID,
+				ProtectionDomain:     candidate.ProtectionDomain,
+				CompletionSeq:        target.Context.Generation,
+				Status:               UCIEmbeddingReady,
+			}
+			// Keep the target digest even for incompatible origins, so each guard must reject before copying.
+			switch boundary {
+			case "provider":
+				originProfile.ProviderRef += "/other"
+			case "model":
+				originProfile.Model += "-other"
+			case "preprocessing":
+				originProfile.PreprocessingRevision += "-other"
+			case "path-policy":
+				originProfile.IncludeRelativePath = false
+			case "source":
+				originInput.SourceID = publication.foreign.SourceID
+			case "protection-domain":
+				originInput.ProtectionDomain += "-restricted"
+			case "pending":
+				originInput.Status, originInput.Vector = UCIEmbeddingPending, nil
+			case "failed":
+				originInput.Status, originInput.Vector = UCIEmbeddingFailed, nil
+			}
+			originBinding, err := fixture.store.UpsertEmbeddingProfile(ctx, UpsertUCIEmbeddingProfileInput{
+				AnalysisProfileID:     original.ProfileID,
+				ProviderRef:           originProfile.ProviderRef,
+				Model:                 originProfile.Model,
+				Dimension:             originProfile.Dimension,
+				PreprocessingRevision: originProfile.PreprocessingRevision,
+				IncludeRelativePath:   originProfile.IncludeRelativePath,
+			})
+			require.NoError(t, err)
+			originInput.EmbeddingProfileID = originBinding.EmbeddingProfileID
+			origin, err := fixture.store.UpsertEmbedding(ctx, originInput)
+			require.NoError(t, err)
+			originBefore := uciEmbeddingJobsEmbeddings(t, publication, originBinding.EmbeddingProfileID)
+			require.Len(t, originBefore, 1)
+			claim, claimed, err := fixture.store.ClaimEmbeddingJob(ctx, fixture.profile, "fallback-worker-"+publication.token, time.Minute)
+			require.NoError(t, err)
+			require.True(t, claimed)
+			require.Equal(t, target.Context, claim.Ref.Context)
+			require.NotEqual(t, origin.EmbeddingProfileID, claim.Ref.EmbeddingProfileID)
+
+			borrowed := uciEmbeddingJobsAuthorize(t, publication, originView.Context)
+			_, err = fixture.store.PrepareEmbeddingBatch(ctx, claim, borrowed, 16)
+			require.Error(t, err, "a different authorized View must not materialize even a compatible cached vector")
+			require.Empty(t, uciEmbeddingJobsEmbeddings(t, publication, claim.Ref.EmbeddingProfileID))
+			require.Empty(t, uciEmbeddingJobsLinks(t, publication, claim.Ref.EmbeddingProfileID))
+
+			batch, err := fixture.store.PrepareEmbeddingBatch(ctx, claim, authorized, 16)
+			require.NoError(t, err)
+			require.Len(t, batch.Candidates, 1)
+			require.Equal(t, originBefore, uciEmbeddingJobsEmbeddings(t, publication, originBinding.EmbeddingProfileID), "reuse must not rewrite the immutable origin artifact")
+			if boundary != "compatible" {
+				require.Equal(t, []int{0}, batch.MissingInputIndexes, "an incompatible origin must still require the provider")
+				require.Empty(t, uciEmbeddingJobsEmbeddings(t, publication, claim.Ref.EmbeddingProfileID), "refuse before target-profile materialization")
+				require.Empty(t, uciEmbeddingJobsLinks(t, publication, claim.Ref.EmbeddingProfileID))
+				return
+			}
+			require.Empty(t, batch.MissingInputIndexes)
+			materialized := uciEmbeddingJobsEmbeddings(t, publication, claim.Ref.EmbeddingProfileID)
+			require.Len(t, materialized, 1)
+			require.NotEqual(t, origin.EmbeddingID, materialized[0].EmbeddingID, "the existing composite FK requires a target-profile artifact")
+			require.Equal(t, origin.Vector.Slice(), materialized[0].Vector.Slice())
+			links := uciEmbeddingJobsLinks(t, publication, claim.Ref.EmbeddingProfileID)
+			require.Len(t, links, 1)
+			require.Equal(t, materialized[0].EmbeddingID, links[0].EmbeddingID)
+			_, err = fixture.store.PrepareEmbeddingBatch(ctx, claim, authorized, 16)
+			require.NoError(t, err)
+			require.Equal(t, materialized, uciEmbeddingJobsEmbeddings(t, publication, claim.Ref.EmbeddingProfileID))
+			require.Equal(t, links, uciEmbeddingJobsLinks(t, publication, claim.Ref.EmbeddingProfileID))
+			require.NoError(t, fixture.store.CompleteEmbeddingJob(ctx, claim, authorized))
+			cached, found, err := fixture.store.LookupCandidateEmbedding(ctx, authorized, fixture.profile, candidate.Candidate)
+			require.NoError(t, err)
+			require.True(t, found)
+			require.Equal(t, origin.Vector.Slice(), cached)
+		})
+	}
 }
