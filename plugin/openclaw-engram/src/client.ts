@@ -176,7 +176,9 @@ export async function resolveProject(
  } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
   const code = /^PROJECT_[A-Z_]+$/.test(message) ? message : 'PROJECT_RESOLUTION_UNAVAILABLE';
-  return projectResolutionFailure(code, code, 'resolve_current_project_with_go_client', code === 'PROJECT_RESOLUTION_UNAVAILABLE' ? 503 : 400);
+  const supplied = error instanceof Error && 'guidance' in error && typeof error.guidance === 'string' && error.guidance.length <= 3072 ? error.guidance : '';
+  const guidance = supplied || 'Use the host-reported installed Engram launcher: node <installed-plugin-path>/scripts/run-engram.js project resolve --root <actual-caller-root> --json --check (or the same installed native client). --check only reads local identity and the exact repository binding; no bootstrap, marker/cache writes or migration. Preserve marker/cache/data. For migration_required/conflict obtain the owner-confirmed existing-project mapping and authorized conservation plan: admin GET /api/projects/consolidation/census?source_version=<exact-source>, then POST /api/projects/consolidation/preflight with structural evidence; backup, isolated rehearsal and explicit apply authority are separate. Do not init/reset/create a replacement UUID or change permissions. Project-free issues get/explicit-filter list can continue. Retry the held operation only after verified canonical identity. Guide: https://github.com/thebtf/engram/blob/main/docs/operating-engram.md#context-recovery';
+  return projectResolutionFailure(code, guidance, guidance, code === 'PROJECT_RESOLUTION_UNAVAILABLE' ? 503 : 400);
  }
 }
 

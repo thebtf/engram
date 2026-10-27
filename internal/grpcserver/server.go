@@ -254,7 +254,7 @@ func (s *Server) CallTool(ctx context.Context, req *pb.CallToolRequest) (*pb.Cal
 		return nil, withDetails.Err()
 	}
 	if canonicalProject == "" && projectidentity.ToolRequiresProject(req.ToolName, req.ArgumentsJson) {
-		st := status.New(codes.FailedPrecondition, "project context is required")
+		st := status.New(codes.FailedPrecondition, "project context is required: "+projectidentity.RecoveryGuidance("PROJECT_CONTEXT_REQUIRED"))
 		withDetails, err := st.WithDetails(&errdetails.ErrorInfo{Reason: "PROJECT_CONTEXT_REQUIRED", Domain: "engram.project"})
 		if err != nil {
 			return nil, st.Err()

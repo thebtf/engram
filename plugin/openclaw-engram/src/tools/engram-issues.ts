@@ -175,7 +175,7 @@ export function createEngramIssuesTool(
       'Issues are automatically shown to agents working on the target project. ' +
       'acknowledged and reopened are still active backlog, not done states. ' +
       'Use to report bugs, request features, or leave tasks for agents in other projects. ' +
-      'Do NOT use store or docs for issues — use this tool instead.',
+      'Do NOT use store or docs for issues — use this tool instead. get and list with an explicit target_project/source_project filter are project-free reads; the default inbox still requires verified current-workspace identity. Mutations use resolved canonical actor identity, never a supplied project argument. On PROJECT_MIGRATION_REQUIRED use the host-reported installed Engram launcher: node <installed-plugin-path>/scripts/run-engram.js project resolve --root <actual-caller-root> --json --check. This is read-only inspection, not bootstrap, marker/cache pinning or migration; preserve identity/data and obtain the owner mapping/conservation decision before retrying a held write. Never init a replacement project. Details: https://github.com/thebtf/engram/blob/main/docs/operating-engram.md#context-recovery',
     parameters: issueParameters,
 
     async execute(_toolCallId: string, params: Record<string, unknown>): Promise<string> {
@@ -189,11 +189,16 @@ export function createEngramIssuesTool(
       }
 
       const sourceAgent = ctx.agentId || 'openclaw';
-      const registration = await resolveProject(client, ctx.agentId ?? '', ctx.workspaceDir, config.project);
-      if (!registration.ok) {
-        return `Project identity unavailable: ${registration.error.code} (${registration.error.upgradeAction})`;
+      const projectFreeRead = parsed.data.action === 'get' ||
+        (parsed.data.action === 'list' && Boolean(parsed.data.target_project || parsed.data.source_project));
+      let project = '';
+      if (!projectFreeRead) {
+        const registration = await resolveProject(client, ctx.agentId ?? '', ctx.workspaceDir, config.project);
+        if (!registration.ok) {
+          return `Project identity unavailable: ${registration.error.code} (${registration.error.upgradeAction})`;
+        }
+        project = registration.canonicalProject;
       }
-      const project = registration.canonicalProject;
 
       switch (parsed.data.action) {
         case 'create': {

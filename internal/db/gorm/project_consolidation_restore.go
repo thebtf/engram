@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	gormlib "gorm.io/gorm"
 )
 
@@ -90,6 +91,88 @@ func (s *ProjectConsolidationStore) verifyCredentials(ctx context.Context, tx *g
 		}
 		if _, err := s.vault.Decrypt(read.EncryptedSecret); err != nil {
 			return consolidationHold("SECRET_UNREADABLE")
+		}
+	}
+	return nil
+}
+
+func consolidationDeferredFields(table string, columns []consolidationColumn) []string {
+	if table != "ci_checkouts" && table != "ci_parse_artifacts" {
+		return nil
+	}
+	var fields []string
+	for _, column := range columns {
+		if column.TableName != table {
+			continue
+		}
+		if (table == "ci_checkouts" && column.ColumnName == "current_view_id") ||
+			(table == "ci_parse_artifacts" && (column.ColumnName == "facts_digest" || column.ColumnName == "sealed_at")) {
+			fields = append(fields, column.ColumnName)
+		}
+	}
+	return fields
+}
+
+func consolidationStageDeferredRow(tx *gormlib.DB, frame consolidationFrame, columns []consolidationColumn) error {
+	fields := consolidationDeferredFields(frame.Table, columns)
+	if len(fields) == 0 {
+		return nil
+	}
+	var pending bool
+	if err := tx.Raw(`SELECT EXISTS(SELECT 1 FROM pg_temp.engram_owner_row o CROSS JOIN LATERAL jsonb_each(o.object) f WHERE f.key=ANY(?::text[]) AND f.value<>'null'::jsonb)`, pq.Array(fields)).Scan(&pending).Error; err != nil {
+		return err
+	}
+	if !pending {
+		return nil
+	}
+	// Retain only the encrypted row's address, not another materialized corpus.
+	if err := tx.Exec(`INSERT INTO pg_temp.engram_owner_deferred_rows(table_name,ordinal) VALUES(?,?)`, frame.Table, frame.Ordinal-uint64(frame.Chunk)).Error; err != nil {
+		return err
+	}
+	for _, field := range fields {
+		if err := tx.Exec(`UPDATE pg_temp.engram_owner_row SET object=jsonb_set(object,?::text[],'null'::jsonb,false)`, pq.Array([]string{field})).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *ProjectConsolidationStore) restoreDeferredRows(tx *gormlib.DB, backupID string) error {
+	columns, err := consolidationColumns(tx)
+	if err != nil {
+		return err
+	}
+	// Restore every fact before sealing artifacts, then reapply published View pointers.
+	for _, table := range []string{"ci_parse_artifacts", "ci_checkouts"} {
+		var last uint64
+		for {
+			var ordinal uint64
+			if err := tx.Raw(`SELECT COALESCE(min(ordinal),0) FROM pg_temp.engram_owner_deferred_rows WHERE table_name=? AND ordinal>?`, table, last).Scan(&ordinal).Error; err != nil {
+				return err
+			}
+			if ordinal == 0 {
+				break
+			}
+			last = ordinal
+			for chunk := uint32(0); ; chunk++ {
+				var stored consolidationStoredFrame
+				if err := tx.Where("backup_id=? AND ordinal=?", backupID, ordinal+uint64(chunk)).First(&stored).Error; err != nil {
+					return consolidationHold("BACKUP_TRUNCATED")
+				}
+				frame, err := s.decodeFrame(stored.Ciphertext)
+				if err != nil {
+					return err
+				}
+				if frame.Kind != "row" || frame.Table != table || frame.Ordinal != ordinal+uint64(chunk) || frame.Chunk != chunk {
+					return consolidationHold("BACKUP_CHAIN_MISMATCH")
+				}
+				if err := s.consumeRow(tx, frame, columns, nil, false, false, true); err != nil {
+					return err
+				}
+				if frame.Last {
+					break
+				}
+			}
 		}
 	}
 	return nil

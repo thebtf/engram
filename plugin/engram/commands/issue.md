@@ -33,9 +33,7 @@ will actually see injected issues at session start.
 
 ## Workflow
 
-Determine your current working project slug first. If the current directory
-is a tracked engram project, use that slug. Otherwise the command may still
-run in read-only mode, but creating issues is disabled.
+Use the verified native caller project for mutation attribution; it is not established by a `project` argument. That argument remains optional compatibility input for writes, and a target filter for list. Do not invent a dummy project. If caller identity is unavailable, get/by-ID and explicitly scoped list remain usable; keep writes pending and inspect via the installed launcher's `project resolve --root <actual-directory> --json --check`. Preserve marker/cache/data and follow the owner mapping/conservation boundary from the error. Never init a replacement UUID. Guide: https://github.com/thebtf/engram/blob/main/docs/operating-engram.md#context-recovery .
 
 ### Step 1 — Live issues targeting your project (you as TARGET)
 

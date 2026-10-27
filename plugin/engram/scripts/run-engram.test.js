@@ -747,3 +747,20 @@ function expandMcpArgsForTest(args, pluginRoot) {
   return args.map((arg) => arg.replaceAll("${CLAUDE_PLUGIN_ROOT}", pluginRoot.replaceAll("\\", "/")).replaceAll("${OMP_PLUGIN_ROOT}", pluginRoot.replaceAll("\\", "/")));
 }
 
+
+test("context recovery preserves native project code and fixed guidance through the installed launcher", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "engram-recovery-forward-"));
+  const guidance = "Use project resolve --root <actual-root> --json --check; preserve marker/cache";
+  try {
+    await assert.rejects(resolveLogicalProject(root, {
+      pluginRoot: path.resolve(__dirname, ".."), pluginData: root,
+      resolve: async () => ({ path: "trusted-fixture-client", target: {} }),
+      roots: () => ({ objects: root }), hash: () => true,
+      execFile(file, args, options, callback) {
+        assert.equal(file, "trusted-fixture-client");
+        assert.deepEqual(args, ["project", "resolve", "--root", root, "--json"]);
+        callback(new Error("native held operation"), JSON.stringify({ code: "PROJECT_MIGRATION_REQUIRED", guidance }));
+      },
+    }), error => error.code === "PROJECT_MIGRATION_REQUIRED" && error.guidance === guidance && error.message.includes(guidance));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

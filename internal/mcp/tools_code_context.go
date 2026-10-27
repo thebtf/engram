@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/thebtf/engram/internal/auth"
+	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/internal/uci"
 )
 
@@ -245,7 +246,7 @@ type codebaseContextSelection struct {
 func codebaseContextTool() Tool {
 	return Tool{
 		Name:        "codebase_context",
-		Description: "Register, resolve, list, or select an authorized codebase context. In the native client, register with source_label and no locator to use the current Git worktree; omit source selectors or pass an owned context_handle to add a worktree to the selected Source. Then use codebase_index and codebase_status. Handles are client-scoped and opaque.",
+		Description: "Register, resolve, list, or select an authorized codebase context. In the native client, register with source_label and no locator to use the actual owned Git worktree; omit source selectors or pass an owned context_handle only to reuse its intended authorized Source. Then use codebase_index and codebase_status. Handles are client-scoped and opaque. CONTEXT_REQUIRED/CONTEXT_MISMATCH: " + projectidentity.RecoveryGuidance("CONTEXT_REQUIRED") + " PROJECT_MIGRATION_REQUIRED: " + projectidentity.RecoveryGuidance("PROJECT_MIGRATION_REQUIRED"),
 		tier:        tierUseful,
 		InputSchema: map[string]any{
 			"type":                 "object",
@@ -910,7 +911,7 @@ func codebaseContextApplicationError(err error) error {
 }
 
 func codebaseContextClosedError(code uci.ContextErrorCode) error {
-	return errors.New(string(code))
+	return uci.NewContextError(code, nil)
 }
 
 func (s *Server) hasCodebaseContextApplication() bool {

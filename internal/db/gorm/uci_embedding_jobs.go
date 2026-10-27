@@ -970,7 +970,27 @@ func attachUCIEmbeddingCacheHit(ctx context.Context, tx *gorm.DB, scope uciEmbed
 		return false, fmt.Errorf("uci embedding cache lookup: %w", result.Error)
 	}
 	if result.RowsAffected == 0 {
-		return false, nil
+		result = tx.WithContext(ctx).Table("ci_embeddings AS embedding").Select("embedding.*").
+			Joins("JOIN ci_embedding_profiles AS profile ON profile.embedding_profile_id = embedding.embedding_profile_id").
+			Where("profile.provider_ref = ? AND profile.model = ? AND profile.dimension = ? AND profile.preprocessing_revision = ? AND profile.include_relative_path = ?", scope.Profile.ProviderRef, scope.Profile.Model, scope.Profile.Dimension, scope.Profile.PreprocessingRevision, scope.Profile.IncludeRelativePath).
+			Where("embedding.embedding_input_digest = ? AND embedding.source_id = ? AND embedding.protection_domain = ? AND embedding.status = ? AND embedding.vector IS NOT NULL", string(candidate.InputDigest), scope.View.SourceID, candidate.ProtectionDomain, UCIEmbeddingReady).
+			Order("embedding.embedding_id ASC").Limit(1).Find(&embedding)
+		if result.Error != nil {
+			return false, fmt.Errorf("uci embedding compatible cache lookup: %w", result.Error)
+		}
+		if result.RowsAffected == 0 {
+			return false, nil
+		}
+		vector := embedding.Vector.Slice()
+		if err := validateUCISemanticVector(vector, scope.Profile.Dimension); err != nil {
+			return false, fmt.Errorf("uci embedding compatible cache vector: %w", err)
+		}
+		// The composite FK and selected-View readers require a target-profile artifact.
+		var err error
+		embedding, err = upsertUCIReadyEmbedding(ctx, tx, scope, candidate, vector, time.Now().UTC())
+		if err != nil {
+			return false, err
+		}
 	}
 	if err := linkUCIEmbeddingCandidate(ctx, tx, scope, candidate, embedding.EmbeddingID); err != nil {
 		return false, err

@@ -59,6 +59,16 @@ make bench
 
 Tests require CGO (`CGO_ENABLED=1`). Some integration tests need a running PostgreSQL instance configured via `DATABASE_DSN`.
 
+### Plugin-script tests
+
+For plugin-script development and tests, use the patched Node.js 20.x toolchain selected by [release CI](.github/workflows/release.yaml), not an arbitrary early 20.x patch. This is separate from the published plugin's [Node.js runtime requirement of `>=18`](plugin/engram/package.json); it does not promise that development tests support Node.js 18. This guidance applies to the plugin-script suite, not the operator console or OpenClaw toolchain.
+
+Run the maintained CI command from the repository root. `release-test-keycard` is CI's public test-only fixture token, not a production credential.
+
+```bash
+ENGRAM_TOKEN=release-test-keycard node --test --test-concurrency=1 plugin/engram/hooks/*.test.js plugin/engram/scripts/*.test.js plugin/engram/extensions/*.test.mjs scripts/*.test.js
+```
+
 ## Code Style
 
 - **Formatting**: `gofmt` / `go fmt ./...`

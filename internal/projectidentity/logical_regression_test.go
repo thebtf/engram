@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -266,4 +269,32 @@ func readLogicalProjectFile(t *testing.T, path string) Project {
 		t.Fatalf("invalid published project at %s: %+v, %v", path, project, err)
 	}
 	return project
+}
+
+func TestLogicalProjectCheckPreservesCallerCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	inspection, err := CheckLogicalProject(ctx, t.TempDir(), "http://127.0.0.1:9", "")
+	if !errors.Is(err, context.Canceled) || inspection != (ProjectInspection{}) {
+		t.Fatalf("cancelled check returned usable evidence: %+v, %v", inspection, err)
+	}
+	root := t.TempDir()
+	gitLogical(t, root, "init", "--quiet", "--template=")
+	gitLogical(t, root, "remote", "add", "origin", "https://example.test/Recovery/Cancelled.git")
+	ctx, cancel = context.WithCancel(t.Context())
+	defer cancel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cancel()
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+	inspection, err = CheckLogicalProject(ctx, root, server.URL, "")
+	if !errors.Is(err, context.Canceled) || inspection != (ProjectInspection{}) {
+		t.Fatalf("cancelled HTTP inspection became an empty success: %+v, %v", inspection, err)
+	}
+	for _, path := range []string{filepath.Join(root, ".engram-project"), filepath.Join(root, ".git", "engram-project.json")} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("cancelled check published identity: %s, %v", path, err)
+		}
+	}
 }

@@ -31,8 +31,13 @@ type BootstrapRequest struct {
 
 type LogicalError struct{ Code string }
 
-func (e *LogicalError) Error() string { return e.Code }
-func logicalError(code string) error  { return &LogicalError{Code: code} }
+func (e *LogicalError) Error() string {
+	if guidance := RecoveryGuidance(e.Code); guidance != "" {
+		return e.Code + ": " + guidance
+	}
+	return e.Code
+}
+func logicalError(code string) error { return &LogicalError{Code: code} }
 
 func ValidProjectID(value string) bool {
 	id, err := uuid.Parse(value)

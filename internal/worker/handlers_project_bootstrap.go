@@ -32,7 +32,7 @@ func (s *Service) handleProjectBootstrap(w http.ResponseWriter, r *http.Request)
 		if code == "PROJECT_IDENTITY_CONFLICT" || code == "PROJECT_MIGRATION_REQUIRED" {
 			status = http.StatusConflict
 		}
-		writeJSONStatus(w, status, map[string]string{"code": code})
+		writeJSONStatus(w, status, map[string]string{"code": code, "guidance": projectidentity.RecoveryGuidance(code)})
 		return
 	}
 	writeJSON(w, project)

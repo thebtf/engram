@@ -44,6 +44,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Use registered canonical UUIDs and authenticated caller project context in MCP fixtures without weakening default-deny, privacy or pre-mutation rejection guards. Reuse 119 prior PASS plus one exact retry PASS after the context fix, not 120 fresh PASS or installed acceptance.
 - Seed the isolated operator-code fixture with a registered canonical project UUID while preserving five queue candidates, published/no-view checks and redacted provisioning errors.
 
+## [7.0.10] - 2026-10-27
+
+Corrective source release preparation; canonical 7.0.10 client and parser policies, assets, publication and ordinary installed-host acceptance remain pending.
+
+Source fix: [#589](https://github.com/thebtf/engram/pull/589).
+
+### Fixed
+
+- Provide executable context recovery in shipped errors/tool descriptions: authorized list, exact context selection and original-operation retry, with wrong-repository/permission guards intact. Add read-only `project resolve --check` and an exact repository-locator branch on the existing resolve endpoint, sharing bootstrap matching without UUID/marker/cache writes. Preserve legacy migration holds and nullable metadata; keep explicit-filter/by-ID OpenClaw issue reads project-free and derive mutation actors only from canonical caller context.
+- Keep read-only project checks consistent with ordinary common-cache conflict protection, including valid historical name-only caches, without changing, deleting or adopting marker/cache identity.
+- Reuse completed UCI vectors across distinct analysis-profile IDs when the effective provider/model/dimension/preprocessing/path policy, canonical input digest, Source and protection domain match. Preserve target-profile artifacts, selected-View guards and immutable links without a schema migration or another provider call for unchanged input.
+- Restore published UCI backups into an empty isolated target in two phases: load facts before restoring exact artifact seals and published current-View pointers. Keep UCI guards enabled, authenticated frames, row/FK/Vault checks and transactional rollback intact; cover published/sealed roundtrip, replay and independent-trigger rollback with synthetic PostgreSQL fixtures. This does not claim installed or production-corpus recovery.
+
+- Correct English singular/plural labels for saved membership occurrences without changing stored counts or implying readable records.
+
 ## [7.0.9] - 2026-10-26
 
 Corrective source release preparation; canonical 7.0.9 assets, publication and ordinary installed-host acceptance remain pending.

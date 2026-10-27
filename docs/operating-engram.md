@@ -462,6 +462,27 @@ The exact Git index is streamed through a fixed 32 KiB buffer under the existing
 
 Git environment names are compared case-insensitively only on Windows; Unix keeps its native case-sensitive names. Config-file symlinks are supported only for identified Git config dependencies, not as a general relaxation for index, HEAD or repository markers. Their fingerprints bind each followed link and its target text, the resolved target's file identity, metadata and bounded contents, including an absent target's later creation. Link traversal is limited to 40 followed links and config reads remain limited to 1 MiB. Replacement, retargeting, loops, unsupported targets or changes during inspection refuse stale scope; the selected marker and directory guards are unchanged.
 
+<a id="context-recovery"></a>
+### Восстановление контекста без замены проекта
+
+`CONTEXT_REQUIRED` означает отсутствие выбранного code context, а не разрешение создать проект. Выполни `codebase_context(action="list")`. Это project-free просмотр: он не вызывает bootstrap и не выбирает context. Из свежего ответа выбери **только точный разрешённый Source/Checkout нужного репозитория** через `action="select"` и возвращённый `context_handle`; проверь `action="resolve"`, затем повтори исходный запрос. Названия — данные, не identity authority. Не выбирай first/latest, чужой handle или посторонний единственный Source. При пустом списке, несовпадении или неоднозначности сохрани binding: уточни нужный repository/checkout. Регистрация — отдельное разрешённое действие для собственного worktree и canonical project, не автоматический `init`.
+
+При `PROJECT_MIGRATION_REQUIRED` или конфликте сначала проверь точную существующую привязку. Используй путь установленного plugin, который сообщил host, а не случайный PATH binary:
+
+```text
+node <installed-plugin-path>/scripts/run-engram.js project resolve --root <actual-caller-root> --json --check
+```
+
+`--check` только читает marker/common cache и, если локальная identity ещё не закреплена, вызывает существующий `GET /api/projects/resolve?repository_locator=...`. Он не вызывает bootstrap, не создаёт UUID/project/alias, не закрепляет marker/cache и не запускает Census/Preflight или migration. Explicit nested marker сохраняет свою границу; outer remote не подменяет его. Ответы: `resolved` с одной привязкой; `migration_required` с исходными `id`, nullable `project_key`/`identity_status` и видом совпадения; `conflict` без выбранной привязки; `unbound` без автоматического создания. `null` означает неизвестное историческое значение, не «active». Diagnostic evidence не выдаёт права и не назначает проект.
+
+HTTP selector `repository_locator` исключает одновременный `legacy_id`; старый `legacy_id` сохраняет прежнюю семантику. Сервер применяет те же правила, что bootstrap: active/redirected manual alias раньше remote fallback, точная нормализация primary remote, исключение historical subdirectory binding. Labels, legacy IDs и remote metadata не вставляй в shell-команды и не считай основанием adoption.
+
+Если результат `migration_required`/`conflict`, сохрани marker/cache/data и передай владельцу точную диагностическую привязку. Нужны его доказательства существующего проекта и разрешённый conservation plan, а не новый UUID. Существующий admin-путь: `GET /api/projects/consolidation/census?source_version=<exact-source>`, затем `POST /api/projects/consolidation/preflight` со свежими census bindings и структурными evidence. Эти права не возникают из ошибки. Backup, физически отдельный restored target, rehearsal и explicit apply authority описаны ниже в разделе миграции. Default dry-run выполняет target transaction с откатом: это не бесплатный read-only запрос. После принятого восстановления проверь canonical identity обычным resolver и повтори исходное действие. Не выполняй `init`, reset marker/cache, locator spoofing или замену permissions ради обхода hold.
+
+Native `issues list/get` остаются project-free разрешёнными чтениями. В OpenClaw без caller resolution доступны get и list с явным target/source filter; default inbox сохраняет смысл текущего workspace и при неизвестной identity не превращается в all-project list. Ошибка чтения не означает пустой inbox. Для mutations acting project поступает из проверенного native context; optional compatibility `project` не задаёт actor, а `target_project` остаётся отдельным назначением.
+
+Агент в чужом checkout получает обязательные следующие действия из shipped tool descriptions/errors. Для подробностей доступна эта стабильная upstream-ссылка: https://github.com/thebtf/engram/blob/main/docs/operating-engram.md#context-recovery . Локальная копия Engram guide, mutable cache wiki или project-scoped `docs` для восстановления не требуются.
+
 ### Переносимый UUID проекта
 
 Обычные MCP-вызовы и hooks используют Go resolver и один `project_id` UUID.

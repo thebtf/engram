@@ -73,6 +73,7 @@ its `.engram-project` containing `project_id` and optional `name` into a clone.
 used by MCP and hooks. Names, paths and remote hashes are not project IDs.
 Unknown or conflicting scope fails only that scoped request; it must not hide
 the MCP tool catalog. A shell `cd` alone is not a host context update.
+For an existing project's identity hold, inspect with the host-reported installed launcher: `node <installed-plugin-path>/scripts/run-engram.js project resolve --root <actual-directory> --json --check`. This mode never bootstraps or writes marker/cache; ordinary resolve may do both. Preserve existing identity/data, never init a replacement. CONTEXT_REQUIRED first uses project-free codebase_context list, then only exact intended authorized selection and original-operation retry. Essential recovery is in the tool/error; depth: https://github.com/thebtf/engram/blob/main/docs/operating-engram.md#context-recovery .
 The launcher ignores retired `hap_01b` configuration and strips inherited
 `ENGRAM_HAP_01B_*` variables. It never provisions project registration tokens or
 re-enables the retired memory relay. The ordinary server URL/keycard remains the

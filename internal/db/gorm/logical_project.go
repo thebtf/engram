@@ -26,44 +26,17 @@ func BootstrapLogicalProject(ctx context.Context, db *gormlib.DB, input projecti
 		if err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtextextended(?, 0))`, "logical-project:"+input.RepositoryLocator).Error; err != nil {
 			return err
 		}
-		// Ops publishes proven locator aliases in the existing identifier catalog.
-		var aliases []Project
-		if err := tx.Raw(`SELECT p.* FROM projects p JOIN project_identifiers i ON i.project_key = p.project_key
-			WHERE i.scheme = 'manual_alias' AND i.normalized_value = ? AND i.status IN ('active', 'redirected')`, input.RepositoryLocator).Scan(&aliases).Error; err != nil {
+		candidates, _, err := matchLogicalProjects(tx, input.RepositoryLocator)
+		if err != nil {
 			return err
 		}
-		candidates := aliases
-		if len(candidates) == 0 {
-			var repositories []Project
-			if err := tx.Where("git_remote IS NOT NULL AND git_remote <> ''").Find(&repositories).Error; err != nil {
-				return err
-			}
-			for _, project := range repositories {
-				locator := project.GitRemote.String
-				if locator != input.RepositoryLocator {
-					normalized, err := projectidentity.NormalizeRepositoryLocator(locator)
-					if err != nil || normalized != input.RepositoryLocator {
-						continue
-					}
-				}
-				// A historical subdirectory binding is not a repository identity.
-				if project.RelativePath.Valid && project.RelativePath.String != "" {
-					continue
-				}
-				candidates = append(candidates, project)
-			}
-		}
-		if len(candidates) > 1 {
+		switch logicalProjectMatchStatus(candidates) {
+		case "conflict":
 			return &projectidentity.LogicalError{Code: "PROJECT_IDENTITY_CONFLICT"}
-		}
-		if len(candidates) == 1 {
+		case "migration_required":
+			return &projectidentity.LogicalError{Code: "PROJECT_MIGRATION_REQUIRED"}
+		case "resolved":
 			project := candidates[0]
-			if project.RemovedAt != nil || project.IdentityStatus.Valid && project.IdentityStatus.String != "active" {
-				return &projectidentity.LogicalError{Code: "PROJECT_IDENTITY_CONFLICT"}
-			}
-			if !projectidentity.ValidProjectID(project.ID) || project.ProjectKey.Valid && project.ProjectKey.String != project.ID {
-				return &projectidentity.LogicalError{Code: "PROJECT_MIGRATION_REQUIRED"}
-			}
 			result = projectidentity.Project{ProjectID: project.ID, Name: project.DisplayName.String}
 			return nil
 		}
@@ -95,6 +68,91 @@ func BootstrapLogicalProject(ctx context.Context, db *gormlib.DB, input projecti
 			return projectidentity.Project{}, &projectidentity.LogicalError{Code: "PROJECT_IDENTITY_CONFLICT"}
 		}
 		return projectidentity.Project{}, &projectidentity.LogicalError{Code: "PROJECT_RESOLUTION_UNAVAILABLE"}
+	}
+	return result, nil
+}
+
+// matchLogicalProjects is shared by bootstrap and read-only inspection. Two
+// matches suffice to prove conflict; labels and historical subdirectories do not.
+func matchLogicalProjects(tx *gormlib.DB, locator string) ([]Project, string, error) {
+	var candidates []Project
+	if err := tx.Raw(`SELECT p.* FROM projects p JOIN project_identifiers i ON i.project_key = p.project_key
+		WHERE i.scheme = 'manual_alias' AND i.normalized_value = ? AND i.status IN ('active', 'redirected') LIMIT 2`, locator).Scan(&candidates).Error; err != nil {
+		return nil, "", err
+	}
+	if len(candidates) != 0 {
+		return candidates, "manual_alias", nil
+	}
+	var repositories []Project
+	if err := tx.Where("git_remote IS NOT NULL AND git_remote <> ''").Find(&repositories).Error; err != nil {
+		return nil, "", err
+	}
+	for _, project := range repositories {
+		if project.RelativePath.Valid && project.RelativePath.String != "" {
+			continue
+		}
+		remote := project.GitRemote.String
+		if remote != locator {
+			normalized, err := projectidentity.NormalizeRepositoryLocator(remote)
+			if err != nil || normalized != locator {
+				continue
+			}
+		}
+		candidates = append(candidates, project)
+		if len(candidates) == 2 {
+			break
+		}
+	}
+	return candidates, "git_remote", nil
+}
+
+func logicalProjectMatchStatus(candidates []Project) string {
+	if len(candidates) == 0 {
+		return "unbound"
+	}
+	if len(candidates) != 1 {
+		return "conflict"
+	}
+	project := candidates[0]
+	if project.RemovedAt != nil || project.IdentityStatus.Valid && project.IdentityStatus.String != "active" {
+		return "conflict"
+	}
+	if !projectidentity.ValidProjectID(project.ID) || project.ProjectKey.Valid && project.ProjectKey.String != project.ID {
+		return "migration_required"
+	}
+	return "resolved"
+}
+
+// InspectLogicalProject reads one exact repository binding without registering
+// or adopting it. Nullable historical metadata is returned as actual nulls.
+func InspectLogicalProject(ctx context.Context, db *gormlib.DB, locator string) (projectidentity.ProjectInspection, error) {
+	var result projectidentity.ProjectInspection
+	if err := projectidentity.ValidateRepositoryLocator(locator); err != nil {
+		return result, err
+	}
+	if db == nil {
+		return result, &projectidentity.LogicalError{Code: "PROJECT_RESOLUTION_UNAVAILABLE"}
+	}
+	err := db.WithContext(ctx).Transaction(func(tx *gormlib.DB) error {
+		candidates, match, err := matchLogicalProjects(tx, locator)
+		if err != nil {
+			return err
+		}
+		result.Status = logicalProjectMatchStatus(candidates)
+		if len(candidates) == 1 {
+			project := candidates[0]
+			result.Binding = &projectidentity.ProjectBinding{ID: project.ID, Match: match, Removed: project.RemovedAt != nil}
+			if project.ProjectKey.Valid {
+				result.Binding.ProjectKey = &project.ProjectKey.String
+			}
+			if project.IdentityStatus.Valid {
+				result.Binding.IdentityStatus = &project.IdentityStatus.String
+			}
+		}
+		return result.Validate()
+	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return projectidentity.ProjectInspection{}, &projectidentity.LogicalError{Code: "PROJECT_RESOLUTION_UNAVAILABLE"}
 	}
 	return result, nil
 }
