@@ -54,6 +54,8 @@ Source fix: [#589](https://github.com/thebtf/engram/pull/589).
 
 - Restore published UCI backups into an empty isolated target in two phases: load facts before restoring exact artifact seals and published current-View pointers. Keep UCI guards enabled, authenticated frames, row/FK/Vault checks and transactional rollback intact; cover published/sealed roundtrip, replay and independent-trigger rollback with synthetic PostgreSQL fixtures. This does not claim installed or production-corpus recovery.
 
+- Correct English singular/plural labels for saved membership occurrences without changing stored counts or implying readable records.
+
 ## [7.0.9] - 2026-10-26
 
 Corrective source release preparation; canonical 7.0.9 assets, publication and ordinary installed-host acceptance remain pending.

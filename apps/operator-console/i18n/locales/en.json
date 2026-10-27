@@ -53,7 +53,7 @@
     "returnResults": "Return to search results",
     "provenance": "Historical attribution and details",
     "familiesUnknown": "Family metadata was not provided. Saved membership counts are unknown.",
-    "membershipOccurrences": "{count} saved membership occurrences",
+    "membershipOccurrences": "{count} saved membership occurrence | {count} saved membership occurrences",
     "familyHelp": "Counts describe saved membership occurrences, not distinct or readable records. Reader support is a declaration, not access or project ownership. Credentials use their separate Vault reader.",
     "familySupport": {
       "declared": "Reader declared; checked when reading",
