@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/projectidentity"
 )
 
@@ -94,7 +95,7 @@ func TestContextRecoveryLegacyBindingHoldsWithoutReplacingIdentity(t *testing.T)
 func TestContextRecoveryRepositoryLocatorInspectionIsBoundedAndReadOnly(t *testing.T) {
 	store := openWorkerUCIContextCompositionStore(t)
 	service := &Service{store: store, vault: newTestVault(t), sessionStore: gormdb.NewSessionStore(store)}
-	for _, scenario := range []string{"resolved", "migration_required", "conflict", "unbound", "active-alias-precedence", "redirected-alias-precedence", "historical-subdirectory"} {
+	for _, scenario := range []string{"resolved", "migration_required", "historical-null", "canonical-null", "conflict", "unbound", "active-alias-precedence", "redirected-alias-precedence", "historical-subdirectory"} {
 		t.Run(scenario, func(t *testing.T) {
 			locator := "example.test/Diagnostic/" + scenario
 			id, key := uuid.NewString(), ""
@@ -105,6 +106,14 @@ func TestContextRecoveryRepositoryLocatorInspectionIsBoundedAndReadOnly(t *testi
 			var ids []string
 			if scenario != "unbound" {
 				row := gormdb.Project{ID: id, ProjectKey: sql.NullString{String: key, Valid: true}, IdentityStatus: sql.NullString{String: "active", Valid: true}, GitRemote: sql.NullString{String: "https://" + locator + ".git", Valid: true}}
+				if scenario == "historical-null" || scenario == "canonical-null" {
+					row.ProjectKey = sql.NullString{}
+					row.IdentityStatus = sql.NullString{}
+					if scenario == "historical-null" {
+						id = "legacy-null-project"
+						row.ID = id
+					}
+				}
 				if scenario == "historical-subdirectory" {
 					row.RelativePath = sql.NullString{String: "historical/", Valid: true}
 				}
@@ -144,12 +153,28 @@ func TestContextRecoveryRepositoryLocatorInspectionIsBoundedAndReadOnly(t *testi
 				want = "resolved"
 			} else if scenario == "historical-subdirectory" {
 				want = "unbound"
+			} else if scenario == "historical-null" {
+				want = "migration_required"
+			} else if scenario == "canonical-null" {
+				want = "resolved"
 			}
 			assert.Equal(t, want, payload["status"])
 			if want == "resolved" || want == "migration_required" {
 				assert.Contains(t, response.Body.String(), id, "one exact binding needs its original ID")
-				assert.Contains(t, response.Body.String(), key, "inspect the actual project_key, never a replacement UUID")
-				assert.Contains(t, response.Body.String(), "active", "inspection must expose the identity state")
+				if scenario == "historical-null" || scenario == "canonical-null" {
+					binding, ok := payload["binding"].(map[string]any)
+					if assert.True(t, ok) {
+						value, present := binding["project_key"]
+						assert.True(t, present)
+						assert.Nil(t, value)
+						value, present = binding["identity_status"]
+						assert.True(t, present)
+						assert.Nil(t, value, "unknown state must not become invented active")
+					}
+				} else {
+					assert.Contains(t, response.Body.String(), key, "inspect the actual project_key, never a replacement UUID")
+					assert.Contains(t, response.Body.String(), "active", "inspection must expose the identity state")
+				}
 			}
 			if want == "conflict" || scenario == "active-alias-precedence" || scenario == "redirected-alias-precedence" {
 				assert.NotContains(t, response.Body.String(), ids[1], "conflicts and lower-precedence fallback rows must not be adopted or exposed as selected authority")
@@ -189,5 +214,81 @@ func TestContextRecoveryRepositoryLocatorInspectionIsBoundedAndReadOnly(t *testi
 			assert.Equal(t, denied.want, response.Code)
 			assert.NotContains(t, response.Body.String(), "legacy-diagnostic-project")
 		})
+	}
+}
+
+func TestContextRecoveryPublicCLIHTTPInspection(t *testing.T) {
+	cli := os.Getenv("ENGRAM_LOGICAL_CLI")
+	if cli == "" {
+		t.Skip("requires the current built native client for public CLI/HTTP proof")
+	}
+	store := openWorkerUCIContextCompositionStore(t)
+	service := &Service{store: store, vault: newTestVault(t), sessionStore: gormdb.NewSessionStore(store)}
+	require.NoError(t, store.DB.Create(&gormdb.Project{ID: "public-retained-project", GitRemote: sql.NullString{String: "https://example.test/Public/Recovery.git", Valid: true}}).Error)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodGet, r.Method)
+		require.Equal(t, "/api/projects/resolve", r.URL.Path)
+		service.handleResolveLogicalProject(w, r.WithContext(auth.WithIdentity(r.Context(), auth.AuthDisabled())))
+	}))
+	defer server.Close()
+	root := t.TempDir()
+	for _, args := range [][]string{{"init", "--quiet", "--template="}, {"remote", "add", "origin", "https://example.test/Public/Recovery.git"}} {
+		command := exec.CommandContext(t.Context(), "git", append([]string{"-C", root}, args...)...)
+		command.Env = projectidentity.RepositoryGitEnvironmentV3()
+		raw, err := command.CombinedOutput()
+		require.NoError(t, err, "%s", raw)
+	}
+	marker := filepath.Join(root, ".engram-project")
+	before := []byte("{ \"name\": \"Public legacy fixture\" }\n")
+	require.NoError(t, os.WriteFile(marker, before, 0o600))
+	command := exec.CommandContext(t.Context(), cli, "project", "resolve", "--root", root, "--json", "--check")
+	command.Env = append(os.Environ(), "ENGRAM_URL="+server.URL, "ENGRAM_SERVER_URL=", "ENGRAM_TOKEN=")
+	raw, err := command.Output()
+	require.NoError(t, err, "actual public client inspection: %s", raw)
+	var inspection projectidentity.ProjectInspection
+	require.NoError(t, json.Unmarshal(raw, &inspection))
+	require.NoError(t, inspection.Validate())
+	require.Equal(t, "migration_required", inspection.Status)
+	require.Equal(t, "public-retained-project", inspection.Binding.ID)
+	require.Nil(t, inspection.Binding.ProjectKey)
+	require.Nil(t, inspection.Binding.IdentityStatus)
+	after, err := os.ReadFile(marker)
+	require.NoError(t, err)
+	require.Equal(t, before, after)
+	_, err = os.Stat(filepath.Join(root, ".git", "engram-project.json"))
+	require.True(t, os.IsNotExist(err))
+	var count int64
+	require.NoError(t, store.DB.Table("projects").Count(&count).Error)
+	require.EqualValues(t, 1, count)
+	require.NoError(t, store.DB.Table("project_identifiers").Count(&count).Error)
+	require.Zero(t, count)
+	t.Logf("PUBLIC CLI -> actual GET handler -> PostgreSQL: %s; marker unchanged, cache absent, projects=1 aliases=0", raw)
+}
+
+func TestContextRecoveryIssueActorIgnoresOptionalArgument(t *testing.T) {
+	store := openWorkerUCIContextCompositionStore(t)
+	actor, target := uuid.NewString(), uuid.NewString()
+	for _, id := range []string{actor, target} {
+		require.NoError(t, store.DB.Create(&gormdb.Project{ID: id}).Error)
+	}
+	server := mcp.NewServer(mcp.ServerOptions{})
+	server.SetIssueStore(gormdb.NewIssueStore(store.DB))
+	identity := auth.WithIdentity(t.Context(), auth.ClientWithPrincipal(string(auth.RoleReadWrite), "recovery-client-keycard", "recovery-agent", auth.PrincipalKindAgent))
+	for _, argument := range []string{"", "forged-source-project"} {
+		args := map[string]any{"action": "create", "title": "actor-proof-" + uuid.NewString(), "target_project": target}
+		if argument != "" {
+			args["project"] = argument
+		}
+		params, err := json.Marshal(map[string]any{"name": "issues", "arguments": args})
+		require.NoError(t, err)
+		denied := server.HandleRequest(identity, &mcp.Request{JSONRPC: "2.0", ID: 1, Method: "tools/call", Params: params})
+		require.NotNil(t, denied.Error, "missing canonical context cannot be replaced by an argument")
+		accepted := server.HandleRequest(mcp.ContextWithProject(identity, actor), &mcp.Request{JSONRPC: "2.0", ID: 2, Method: "tools/call", Params: params})
+		require.Nil(t, accepted.Error)
+		var created gormdb.Issue
+		require.NoError(t, store.DB.Where("title = ?", args["title"]).Take(&created).Error)
+		require.Equal(t, actor, created.SourceProject)
+		require.Equal(t, target, created.TargetProject)
+		require.Equal(t, "recovery-client-keycard", created.CreatorKeycardID)
 	}
 }

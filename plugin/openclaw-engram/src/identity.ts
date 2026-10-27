@@ -28,11 +28,13 @@ export async function resolveIdentity(
     }, (error, stdout) => {
       if (error) {
         let code = 'PROJECT_RESOLUTION_UNAVAILABLE';
+        let guidance = '';
         try {
           const result: unknown = JSON.parse(stdout);
           if (result && typeof result === 'object' && 'code' in result && typeof result.code === 'string' && /^PROJECT_[A-Z_]+$/.test(result.code)) code = result.code;
+          if (result && typeof result === 'object' && 'guidance' in result && typeof result.guidance === 'string' && result.guidance.length <= 3072) guidance = result.guidance;
         } catch { /* No valid structured error from the required CLI interface. */ }
-        reject(new Error(code));
+        reject(Object.assign(new Error(code), { guidance }));
       } else resolve(stdout);
     });
   });

@@ -129,18 +129,18 @@ test('Vault tools isolate same-name credentials and store globally without proje
 
     {
       for (const scope of [undefined, 'project']) {
-        assert.equal(await store.execute('missing-project', { name: 'same/name', value: 'synthetic', scope }),
-          'Project identity unavailable: PROJECT_CONTEXT_REQUIRED (resolve_current_project_with_go_client)');
-        assert.equal(await get.execute('missing-project-read', { name: 'same/name', scope }),
-          'Project identity unavailable: PROJECT_CONTEXT_REQUIRED (resolve_current_project_with_go_client)');
+        assert.match(await store.execute('missing-project', { name: 'same/name', value: 'synthetic', scope }),
+          /^Project identity unavailable: PROJECT_CONTEXT_REQUIRED \(.*--check/);
+        assert.match(await get.execute('missing-project-read', { name: 'same/name', scope }),
+          /^Project identity unavailable: PROJECT_CONTEXT_REQUIRED \(.*--check/);
       }
       for (const project of ['legacy-slug', '00000000-0000-0000-0000-000000000000']) {
         const invalid = toolModule.createEngramVaultStoreTool({}, client, { ...config, project });
-        assert.equal(await invalid.execute('invalid-project', { name: 'same/name', value: 'synthetic' }),
-          'Project identity unavailable: PROJECT_IDENTITY_INVALID (resolve_current_project_with_go_client)');
+        assert.match(await invalid.execute('invalid-project', { name: 'same/name', value: 'synthetic' }),
+          /^Project identity unavailable: PROJECT_IDENTITY_INVALID \(.*--check/);
         const invalidGet = toolModule.createEngramVaultGetTool({}, client, { ...config, project });
-        assert.equal(await invalidGet.execute('invalid-project-read', { name: 'same/name' }),
-          'Project identity unavailable: PROJECT_IDENTITY_INVALID (resolve_current_project_with_go_client)');
+        assert.match(await invalidGet.execute('invalid-project-read', { name: 'same/name' }),
+          /^Project identity unavailable: PROJECT_IDENTITY_INVALID \(.*--check/);
       }
       assert.equal(requests.length, 0);
       for (const [index, project] of projects.entries()) {

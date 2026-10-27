@@ -9,6 +9,7 @@ import (
 
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/projectidentity"
 )
 
 // issuesToolSchema returns the flat JSON Schema for the issues tool.
@@ -24,11 +25,11 @@ func issuesToolSchema() map[string]any {
 			"action": map[string]any{
 				"type":        "string",
 				"enum":        []string{"create", "list", "get", "update", "comment", "reopen", "close"},
-				"description": "Action to perform.",
+				"description": "Action to perform. list/get are project-free authorized reads and remain available during a project migration hold. Mutations require the native caller's canonical identity; changing a project argument cannot establish it. PROJECT_MIGRATION_REQUIRED: " + projectidentity.RecoveryGuidance("PROJECT_MIGRATION_REQUIRED"),
 			},
 			"project": map[string]any{
 				"type":        "string",
-				"description": "REQUIRED_FOR: create|update|comment|reopen|close. YOUR current project slug (identifies who is acting — audit trail). For list: optional filter by target_project.",
+				"description": "Optional compatibility argument on mutations; it never establishes actor identity, which comes from the native caller's verified canonical project. For list: optional target-project filter; get needs only id. Never change this argument to bypass an identity hold.",
 			},
 			"title": map[string]any{
 				"type":        "string",
@@ -98,13 +99,13 @@ var actionRequirements = map[string]struct {
 	required []string
 	full     string
 }{
-	"create":  {required: []string{"project", "title", "target_project"}, full: "action, project, title, target_project"},
+	"create":  {required: []string{"title", "target_project"}, full: "action, title, target_project"},
 	"list":    {required: []string{}, full: "action  [optional: project, source_project, source_agent, status, resolved_since, limit]"},
 	"get":     {required: []string{"id"}, full: "action, id"},
-	"update":  {required: []string{"project", "id", "status"}, full: "action, project, id, status=resolved"},
-	"comment": {required: []string{"project", "id", "body"}, full: "action, project, id, body"},
-	"reopen":  {required: []string{"project", "id"}, full: "action, project, id"},
-	"close":   {required: []string{"project", "id"}, full: "action, project, id"},
+	"update":  {required: []string{"id", "status"}, full: "action, id, status=resolved"},
+	"comment": {required: []string{"id", "body"}, full: "action, id, body"},
+	"reopen":  {required: []string{"id"}, full: "action, id"},
+	"close":   {required: []string{"id"}, full: "action, id"},
 }
 
 // validateIssueActionParams checks that all required params for the given action are present.
@@ -114,6 +115,11 @@ func validateIssueActionParams(action string, m map[string]any) error {
 	spec, ok := actionRequirements[action]
 	if !ok {
 		return fmt.Errorf("unknown issues action: %q (valid: create, list, get, update, comment, reopen, close)", action)
+	}
+	if action != "list" && action != "get" {
+		if _, _, err := optionalStringArg(m, "project"); err != nil {
+			return fmt.Errorf("issues %q: %w", action, err)
+		}
 	}
 
 	var missing []string
@@ -190,6 +196,9 @@ func (s *Server) handleIssues(ctx context.Context, args json.RawMessage) (string
 // issueSourceProject returns transport-derived attribution only. It is never
 // used to authorize an issue mutation.
 func (s *Server) issueSourceProject(ctx context.Context) (string, error) {
+	if ProjectFromContext(ctx) == "" {
+		return "", &projectidentity.LogicalError{Code: "PROJECT_CONTEXT_REQUIRED"}
+	}
 	return s.issueStore.ResolveProject(ctx, ProjectFromContext(ctx))
 }
 

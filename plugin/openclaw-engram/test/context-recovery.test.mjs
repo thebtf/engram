@@ -24,7 +24,9 @@ test('context recovery: explicit issue list preflight does not resolve or replac
   const { tool, calls } = fixture();
   const result = await tool.execute('recovery-list', { action: 'list', target_project: target });
   t.diagnostic(result);
-  assert.deepEqual(calls, [['list', { project: target, status: 'open,acknowledged,reopened', limit: 20 }]], 'Project-free authorized inspection must not hit the failing canonical resolver');
+  assert.equal(calls.length, 1, 'Project-free inspection must not invoke canonical resolution');
+  assert.equal(calls[0][0], 'list');
+  assert.equal(calls[0][1].project, target, 'Preserve the explicit target filter');
   assert.match(result, /No issues found/);
 });
 
@@ -53,4 +55,13 @@ test('context recovery: migration blocks issue writes and supplies the real owne
   assert.match(result, /PROJECT_MIGRATION_REQUIRED/);
   assert.match(result, /\/api\/projects\/consolidation\/census/, 'Essential supported inspection cannot depend on a relative guide in the foreign repository');
   assert.match(tool.description, /list.*get|get.*list/, 'Shipped tool description must expose the project-free preflight actions');
+});
+
+test('context recovery: default workspace inbox remains scoped and held on unknown identity', async () => {
+  const { tool, calls } = fixture();
+  const result = await tool.execute('recovery-default-inbox', { action: 'list' });
+  assert.deepEqual(calls, ['resolve']);
+  assert.match(result, /PROJECT_MIGRATION_REQUIRED/);
+  assert.match(result, /--check/);
+  assert.doesNotMatch(result, /No issues found/);
 });

@@ -8,6 +8,8 @@ These instructions apply inside Engram; a parent workspace janitor role is not t
 
 Deliver one useful installable slice. Restore any broken shipped Engram plugin/memory path before feature expansion. Then deliver code search, automatic graph, independent worktrees, operator Workspace and operating documentation. Book Context and new cognitive-memory development follow; this does not defer regressions in existing memory or OpenClaw-plugin compatibility. Updating the OpenClaw host is outside this task. New capabilities and contract changes use the applicable Spec Kit pipeline. A repair within an accepted contract needs focused implementation and verification, not a fresh product specification.
 
+For `CONTEXT_REQUIRED`/`CONTEXT_MISMATCH` or canonical-project migration/conflict errors, load [Context recovery](docs/operating-engram.md#context-recovery). Use project-free authorized inspection and explicit read-only `project resolve --check`; preserve marker/cache/data, never select an unrelated Source or initialize a replacement project. Shipped tool descriptions/errors carry the essential next calls for agents outside this checkout.
+
 ## Ownership and decisions
 
 Root Solo decides, delegates, accepts results and advances delivery. Subagents author architecture, code, technical documents/tests, integrate changes and execute checks, including local Sonar. Root may read status and maintain continuation; it does not become the implementer or test operator. No peer PM/Developer hierarchy.

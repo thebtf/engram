@@ -167,7 +167,7 @@ func (m *Module) proxyToolCallContext(ctx context.Context, project muxcore.Proje
 	resolved, err := projectidentity.ResolveLogicalProject(ctx, project.Cwd,
 		projectidentity.HTTPBootstrap(serverURL, m.envFor(project, config.EnvWorkstationToken)))
 	if err != nil {
-		return nil, &module.ModuleError{Code: projectidentity.ProjectErrorCode(err), Message: "project context unavailable"}
+		return nil, &module.ModuleError{Code: projectidentity.ProjectErrorCode(err), Message: err.Error()}
 	}
 	request.Project = resolved.ProjectID
 	return ctx, nil

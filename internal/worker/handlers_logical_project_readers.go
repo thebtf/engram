@@ -123,6 +123,31 @@ func (s *Service) handleResolveLogicalProject(w http.ResponseWriter, r *http.Req
 		return
 	}
 	params, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil || params.Has("repository_locator") && params.Has("legacy_id") {
+		writeDocumentError(w, http.StatusBadRequest, "choose exactly one project selector")
+		return
+	}
+	if params.Has("repository_locator") {
+		if len(params) != 1 || len(params["repository_locator"]) != 1 {
+			writeDocumentError(w, http.StatusBadRequest, "one repository_locator is required")
+			return
+		}
+		locator := params.Get("repository_locator")
+		if projectidentity.ValidateRepositoryLocator(locator) != nil {
+			locator, err = projectidentity.NormalizeRepositoryLocator(locator)
+			if err != nil {
+				writeJSONStatus(w, http.StatusBadRequest, map[string]string{"code": "PROJECT_LOCATOR_INVALID"})
+				return
+			}
+		}
+		inspection, err := gormdb.InspectLogicalProject(r.Context(), s.store.DB, locator)
+		if err != nil {
+			writeJSONStatus(w, http.StatusServiceUnavailable, map[string]string{"code": projectidentity.ProjectErrorCode(err)})
+			return
+		}
+		writeJSON(w, inspection)
+		return
+	}
 	if err != nil || len(params["legacy_id"]) != 1 || !boundedKnowledgeText(params.Get("legacy_id"), 1024) || params.Get("legacy_id") == "" {
 		writeDocumentError(w, 400, "legacy_id is required")
 		return

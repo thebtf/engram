@@ -133,11 +133,13 @@ async function resolveLogicalProject(root, options = {}) {
   }, (error, stdout) => {
    if (error) {
     let code = 'PROJECT_RESOLUTION_UNAVAILABLE';
+    let guidance = '';
     try {
      const result = JSON.parse(stdout);
      if (typeof result.code === 'string' && /^PROJECT_[A-Z_]+$/.test(result.code)) code = result.code;
+     if (typeof result.guidance === 'string' && result.guidance.length <= 3072) guidance = result.guidance;
     } catch { }
-    reject(new Error(code));
+    reject(Object.assign(new Error(guidance ? `${code}: ${guidance}` : code), { code, guidance }));
    } else resolve(stdout);
   });
  });

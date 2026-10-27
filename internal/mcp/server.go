@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -23,6 +24,7 @@ import (
 	gorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/internal/graph"
+	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/internal/redaction"
 	"github.com/thebtf/engram/internal/reranking"
 	"github.com/thebtf/engram/internal/uci"
@@ -636,16 +638,15 @@ When you see ` + "`<resolved-issues from-you>`" + ` in your session context:
 3. If fix works: ` + "`issues(action=\"close\", id=N)`" + ` — confirms fix, removes from all injections
 4. If fix doesn't work: ` + "`issues(action=\"reopen\", id=N, body=\"Still broken because...\")`" + `
 
-### Actions (ALWAYS pass your current project via ` + "`project`" + ` param for audit trail)
-**Create:** ` + "`issues(action=\"create\", title=\"...\", body=\"...\", priority=\"high\", target_project=\"other-project\", project=\"my-project\")`" + `
-**List yours:** ` + "`issues(action=\"list\", source_project=\"my-project\", status=\"resolved\")`" + ` — issues you created
-**List assigned:** ` + "`issues(action=\"list\", project=\"my-project\")`" + ` — issues targeting your project
-**Comment:** ` + "`issues(action=\"comment\", id=N, body=\"...\", project=\"my-project\")`" + `
-**Resolve:** ` + "`issues(action=\"update\", id=N, status=\"resolved\", comment=\"Fixed in...\", project=\"my-project\")`" + `
-**Close:** ` + "`issues(action=\"close\", id=N, project=\"my-project\")`" + ` — source confirms fix (only source project can close)
-**Reopen:** ` + "`issues(action=\"reopen\", id=N, body=\"Still broken...\", project=\"my-project\")`" + `
+### Actions (mutations use the native caller's verified canonical project)
+The optional compatibility ` + "`project`" + ` argument does not establish actor identity. Mutations use the canonical project injected from the native caller context; omit the compatibility argument rather than invent a dummy value. Do not change an argument, marker or UUID to escape a hold. ` + "`target_project`" + ` is a separate destination; ` + "`project/source_project`" + ` on reads are filters.
+**Create:** ` + "`issues(action=\"create\", title=\"...\", target_project=\"<target-project>\")`" + `
+**List assigned:** ` + "`issues(action=\"list\", project=\"<target-project>\")`" + ` — project-free authorized read.
+**Read one:** ` + "`issues(action=\"get\", id=N)`" + ` — project-free; remains available during a caller identity hold.
+**List filed:** ` + "`issues(action=\"list\", source_project=\"<source-project>\", status=\"resolved\")`" + `
+**Comment/resolve/close/reopen:** keep the existing action fields; the native caller supplies acting identity. Authorization and source-owner closure rules still apply.
 
-**CRITICAL:** The ` + "`project`" + ` parameter identifies WHO is acting. Without it, comments show as anonymous in audit trails. Always pass your current working project name.
+For CONTEXT_REQUIRED, use codebase_context list, select only the exact intended authorized context from that fresh response, verify resolve and retry the original operation. Never select an unrelated lone Source. For PROJECT_MIGRATION_REQUIRED, inspect through the host-reported installed launcher with ` + "`project resolve --root <actual-caller-root> --json --check`" + `; it does not bootstrap or pin. Preserve identity/data and follow the owner conservation boundary in the error/tool description, not project init. Guide: https://github.com/thebtf/engram/blob/main/docs/operating-engram.md#context-recovery
 
 ### DO NOT
 - Close issues you didn't create (only source/operator can close)
@@ -968,7 +969,7 @@ func (s *Server) primaryTools() []Tool {
 		{
 			Name: "issues",
 			Description: "Cross-project issue tracker between agents. Do NOT use store/docs for issues.\n\n" +
-				"`project` = YOUR current working project slug (identifies who is acting — audit trail).\n" +
+				"Mutations act as the native caller's verified canonical project; the compatibility project argument cannot establish or replace that identity. For list, project/source_project are read filters; get needs only id. These reads are project-free and remain usable during an identity hold.\n" +
 				"`target_project` = project the issue is FOR (where it will be injected).\n" +
 				"Lifecycle: open → acknowledged (auto) → resolved → closed ⟲ reopened.\n" +
 				"Target agent resolves, source agent closes. Only source or dashboard operator can close.\n\n" +
@@ -978,7 +979,7 @@ func (s *Server) primaryTools() []Tool {
 				"- Wrap diffs: ```diff\\n-old line\\n+new line\\n```\n" +
 				"- Use **bold**, *italic*, `inline code` for emphasis\n" +
 				"- Use - bullet lists for steps/findings\n" +
-				"- Do NOT paste raw unformatted code/output — always fence it.",
+				"- Do NOT paste raw unformatted code/output — always fence it.\nPROJECT_MIGRATION_REQUIRED: " + projectidentity.RecoveryGuidance("PROJECT_MIGRATION_REQUIRED"),
 			tier:        tierCore,
 			InputSchema: issuesToolSchema(),
 		},
@@ -1264,10 +1265,21 @@ func (s *Server) handleToolsCall(ctx context.Context, req *Request) *Response {
 			event = event.Str("auth_source", string(identity.Source)).Str("auth_role", string(identity.Role))
 		}
 		event.Msg("Tool call failed")
+		message, data := "Tool error: "+err.Error(), err.Error()
+		var contextError *uci.ContextError
+		var projectError *projectidentity.LogicalError
+		if errors.As(err, &contextError) {
+			data = string(contextError.Code())
+			if guidance := projectidentity.RecoveryGuidance(data); guidance != "" {
+				message += ": " + guidance
+			}
+		} else if errors.As(err, &projectError) {
+			data = projectError.Code
+		}
 		return &Response{
 			JSONRPC: "2.0",
 			ID:      req.ID,
-			Error:   &Error{Code: -32000, Message: "Tool error: " + err.Error(), Data: err.Error()},
+			Error:   &Error{Code: -32000, Message: message, Data: data},
 		}
 	}
 
