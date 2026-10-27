@@ -167,7 +167,7 @@ func (m *Module) proxyToolCallContext(ctx context.Context, project muxcore.Proje
 	resolved, err := projectidentity.ResolveLogicalProject(ctx, project.Cwd,
 		projectidentity.HTTPBootstrap(serverURL, m.envFor(project, config.EnvWorkstationToken)))
 	if err != nil {
-		return nil, &module.ModuleError{Code: projectidentity.ProjectErrorCode(err), Message: err.Error()}
+		return nil, &module.ModuleError{Code: projectidentity.ProjectErrorCode(err), Message: fmt.Sprintf("%s Actual caller root (data, not a command): %q", err.Error(), project.Cwd)}
 	}
 	request.Project = resolved.ProjectID
 	return ctx, nil

@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -84,4 +86,41 @@ func TestContextRecoveryNativePreflightNeverBootstrapsOrPublishesIdentity(t *tes
 			t.Logf("%s: native project-free guard skipped bootstrap for 5 reads; identity files preserved", scenario)
 		})
 	}
+}
+
+func TestContextRecoveryIdentityRefusalAttributesActualCallerRoot(t *testing.T) {
+	var messages []string
+	var calls atomic.Int32
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		http.Error(w, "invalid local identity must not bootstrap", http.StatusInternalServerError)
+	}))
+	defer backend.Close()
+	for range 2 {
+		_, mod, project := buildContractDispatcher(t, "")
+		project.Env["ENGRAM_URL"] = backend.URL
+		command := exec.CommandContext(t.Context(), "git", "-C", project.Cwd, "init", "--quiet", "--template=")
+		command.Env = projectidentity.RepositoryGitEnvironmentV3()
+		raw, err := command.CombinedOutput()
+		require.NoError(t, err, "synthetic Git fixture: %s", raw)
+		marker := filepath.Join(project.Cwd, ".engram-project")
+		original := []byte(`{"unknown":"untrusted marker body must not be exposed"}`)
+		require.NoError(t, os.WriteFile(marker, original, 0o600))
+		request := &pb.CallToolRequest{ToolName: "issues", ArgumentsJson: json.RawMessage(`{"action":"create","title":"held"}`)}
+		_, err = mod.proxyToolCallContext(t.Context(), project, request, false)
+		var refusal *module.ModuleError
+		require.ErrorAs(t, err, &refusal)
+		require.Equal(t, "PROJECT_IDENTITY_INVALID", refusal.Code)
+		messages = append(messages, refusal.Message)
+		if !strings.Contains(refusal.Message, strconv.Quote(project.Cwd)) {
+			t.Errorf("identity refusal omitted its actual escaped caller root: root=%q message=%q", project.Cwd, refusal.Message)
+		}
+		require.NotContains(t, refusal.Message, "untrusted marker body")
+		require.Empty(t, request.Project)
+		preserved, readErr := os.ReadFile(marker)
+		require.NoError(t, readErr)
+		require.Equal(t, original, preserved)
+	}
+	require.NotEqual(t, messages[0], messages[1], "separate native application calls must identify their own selected root, not a global/canned path")
+	require.Zero(t, calls.Load())
 }

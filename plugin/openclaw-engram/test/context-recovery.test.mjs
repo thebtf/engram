@@ -65,3 +65,29 @@ test('context recovery: default workspace inbox remains scoped and held on unkno
   assert.match(result, /--check/);
   assert.doesNotMatch(result, /No issues found/);
 });
+
+test('context recovery: historical migration names the existing encoded legacy reader', async () => {
+  const { tool } = fixture();
+  const result = await tool.execute('legacy-held', { action: 'create', title: 'Held', target_project: target });
+  assert.match(result, /GET \/api\/projects\/resolve\?legacy_id=/);
+  assert.match(result, /URI-encoded/);
+  assert.match(result, /not a verified server binding/);
+  assert.match(result, /unresolved is not a mapping/);
+  assert.match(tool.description, /legacy_marker/);
+  assert.match(tool.description, /legacy_id=/);
+});
+
+for (const code of ['PROJECT_IDENTITY_INVALID', 'PROJECT_FUTURE_REFUSAL']) {
+  test(`context recovery: ${code} protects invalid input without a repeated check loop`, async () => {
+    const { tool, client, calls } = fixture();
+    client.resolveWorkspaceProject = async () => { calls.push('resolve'); throw new Error(code); };
+    const result = await tool.execute('invalid-held', { action: 'create', title: 'Held', target_project: target });
+    assert.deepEqual(calls, ['resolve']);
+    assert.match(result, new RegExp(code));
+    assert.match(result, /Preserve/);
+    assert.match(result, /4096/);
+    assert.match(result, /owner/);
+    assert.doesNotMatch(result, /--check/);
+    assert.doesNotMatch(result, /No issues found/);
+  });
+}

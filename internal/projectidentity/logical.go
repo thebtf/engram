@@ -29,7 +29,10 @@ type BootstrapRequest struct {
 	Name              string `json:"name,omitempty"`
 }
 
-type LogicalError struct{ Code string }
+type LogicalError struct {
+	Code     string
+	legacyID string
+}
 
 func (e *LogicalError) Error() string {
 	if guidance := RecoveryGuidance(e.Code); guidance != "" {
@@ -201,7 +204,7 @@ func ResolveLogicalProject(ctx context.Context, cwd string, bootstrap func(conte
 	}
 	// A nested portable marker is an explicit boundary. A subdirectory alone is not.
 	for candidate := selected; ; candidate = filepath.Dir(candidate) {
-		marker, present, err := readLogicalMarker(filepath.Join(candidate, anchorFilenameV3))
+		marker, present, err := readLogicalMarker(filepath.Join(candidate, anchorFilenameV3), true)
 		if err != nil {
 			return Project{}, err
 		}
@@ -219,7 +222,7 @@ func ResolveLogicalProject(ctx context.Context, cwd string, bootstrap func(conte
 		return Project{}, logicalError("PROJECT_CONTEXT_REQUIRED")
 	}
 	cachePath := filepath.Join(common, "engram-project.json")
-	cached, present, err := readLogicalMarker(cachePath)
+	cached, present, err := readLogicalMarker(cachePath, false)
 	if err != nil {
 		return Project{}, err
 	}
@@ -237,7 +240,7 @@ func ResolveLogicalProject(ctx context.Context, cwd string, bootstrap func(conte
 	if err != nil {
 		return Project{}, err
 	}
-	legacy, _, err := readLogicalMarker(filepath.Join(root, anchorFilenameV3))
+	legacy, _, err := readLogicalMarker(filepath.Join(root, anchorFilenameV3), true)
 	if err != nil {
 		return Project{}, err
 	}
@@ -287,7 +290,7 @@ func logicalProjectDirectories(ctx context.Context, selected string) (string, st
 	return root, common, nil
 }
 
-func readLogicalMarker(path string) (Project, bool, error) {
+func readLogicalMarker(path string, allowLegacyMarker bool) (Project, bool, error) {
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return Project{}, false, nil
@@ -314,7 +317,7 @@ func readLogicalMarker(path string) (Project, bool, error) {
 		if _, duplicate := fields[field]; duplicate {
 			return Project{}, true, logicalError("PROJECT_IDENTITY_INVALID")
 		}
-		if field != "project_id" && field != "name" && field != "version" && field != "scope" {
+		if field != "project_id" && field != "name" && field != "version" && field != "scope" && !(allowLegacyMarker && field == "id") {
 			return Project{}, true, logicalError("PROJECT_IDENTITY_INVALID")
 		}
 		var value json.RawMessage
@@ -336,6 +339,14 @@ func readLogicalMarker(path string) (Project, bool, error) {
 	if utf8.RuneCountInString(project.Name) > 256 || strings.IndexFunc(project.Name, unicode.IsControl) >= 0 {
 		return Project{}, true, logicalError("PROJECT_IDENTITY_INVALID")
 	}
+	if fields["id"] != nil {
+		var id string
+		name := fields["name"]
+		if len(fields) != 2 || len(name) == 0 || name[0] != '"' || !utf8.Valid(raw) || json.Unmarshal(fields["id"], &id) != nil || !validLegacyMarkerID(id) {
+			return Project{}, true, logicalError("PROJECT_IDENTITY_INVALID")
+		}
+		return Project{}, true, &LogicalError{Code: "PROJECT_MIGRATION_REQUIRED", legacyID: id}
+	}
 	if fields["version"] != nil || fields["scope"] != nil {
 		if _, err := ParseAnchorV3(raw); err != nil {
 			return Project{}, true, logicalError("PROJECT_IDENTITY_INVALID")
@@ -350,9 +361,21 @@ func readLogicalMarker(path string) (Project, bool, error) {
 	return project, true, ValidateProject(project)
 }
 
+func validLegacyMarkerID(id string) bool {
+	if len(id) != 6 {
+		return false
+	}
+	for _, c := range id {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 func pinLogicalCache(common string, project Project) (Project, error) {
 	path := filepath.Join(common, "engram-project.json")
-	cached, present, err := readLogicalMarker(path)
+	cached, present, err := readLogicalMarker(path, false)
 	if err != nil {
 		return Project{}, err
 	}
@@ -376,7 +399,7 @@ func publishLogicalMarker(path string, project Project) error {
 	}
 	lock.Close()
 	defer os.Remove(path + ".lock")
-	current, present, err := readLogicalMarker(path)
+	current, present, err := readLogicalMarker(path, filepath.Base(path) == anchorFilenameV3)
 	if err != nil {
 		return err
 	}
@@ -419,7 +442,7 @@ func publishLogicalMarker(path string, project Project) error {
 	if err = os.Link(temp, path); err == nil {
 		return nil
 	}
-	current, present, readErr := readLogicalMarker(path)
+	current, present, readErr := readLogicalMarker(path, filepath.Base(path) == anchorFilenameV3)
 	if readErr == nil && present && current.ProjectID == project.ProjectID {
 		return nil
 	}
@@ -443,7 +466,7 @@ func InitLogicalProject(ctx context.Context, root, name string) (Project, error)
 	if err != nil || !info.IsDir() {
 		return Project{}, logicalError("PROJECT_CONTEXT_REQUIRED")
 	}
-	legacy, _, err := readLogicalMarker(filepath.Join(root, anchorFilenameV3))
+	legacy, _, err := readLogicalMarker(filepath.Join(root, anchorFilenameV3), true)
 	if err != nil {
 		return Project{}, err
 	}

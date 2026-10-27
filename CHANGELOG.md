@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Recognize strictly validated historical six-hex `id`/`name` markers as migration inputs, never canonical authority. Hold ordinary resolution/init before bootstrap or identity publication and expose read-only local `legacy_marker` diagnostics without a remote or HTTP. Ship the existing encoded legacy-reader next step, non-looping invalid-input preservation guidance and escaped actual-caller-root attribution in native refusals; retain strict cache/marker boundaries and the code-only query wire contract.
+
 - Regenerate the API through the maintained worker target using canonical local Go package directories and Swag 1.16.6, with real producer errors stopping the build. Correct existing context search/inject/session-start annotations without changing handlers; document the shared GET/POST conditional-query limitation. The actual producer and server build pass, with 40 named schema checks and all 76 references resolved; that producer checkpoint established compile-only retained-reader oracle provenance, with later native query proof recorded separately, and installed/release acceptance remains separate.
 
 - Add retained catalog `families` metadata with kind, technical table, saved membership-occurrence count and declared/separate/metadata-only reader boundary. Preserve every group, opaque reference, safe label and reason without payload previews, readable-record totals, availability or historical ownership assignment. This descriptor change does not provide cross-group record discovery or installed-consumer acceptance.
