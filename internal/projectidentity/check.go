@@ -91,11 +91,11 @@ func CheckLogicalProject(ctx context.Context, cwd, serverURL, token string) (Pro
 		}
 		if present && marker.ProjectID != "" {
 			if common != "" && samePath(candidate, root) {
-				cached, _, err := readLogicalMarker(filepath.Join(common, "engram-project.json"))
+				cached, cachePresent, err := readLogicalMarker(filepath.Join(common, "engram-project.json"))
 				if err != nil {
 					return ProjectInspection{}, err
 				}
-				if cached.ProjectID != "" && cached.ProjectID != marker.ProjectID {
+				if cachePresent && cached.ProjectID != marker.ProjectID {
 					return ProjectInspection{Status: "conflict"}, nil
 				}
 			}
@@ -166,5 +166,18 @@ func CheckLogicalProject(ctx context.Context, cwd, serverURL, token string) (Pro
 	if err := ctx.Err(); err != nil {
 		return ProjectInspection{}, err
 	}
-	return inspection, inspection.Validate()
+	if err := inspection.Validate(); err != nil {
+		return inspection, err
+	}
+	if inspection.Status == "resolved" {
+		// Ordinary resolution re-reads the cache when pinning after bootstrap.
+		current, present, err := readLogicalMarker(filepath.Join(common, "engram-project.json"))
+		if err != nil {
+			return ProjectInspection{}, err
+		}
+		if present && current.ProjectID != inspection.Binding.ID {
+			return ProjectInspection{Status: "conflict"}, nil
+		}
+	}
+	return inspection, nil
 }

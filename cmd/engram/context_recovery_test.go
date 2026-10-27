@@ -25,7 +25,9 @@ func TestContextRecoveryProjectResolveCheckInspectsWithoutBootstrapOrPinning(t *
 			markerBytes := []byte("{ \"name\": \"Retained legacy marker\" }\n")
 			cacheBytes := []byte("{ \"name\": \"Retained cache label\" }\n")
 			require.NoError(t, os.WriteFile(marker, markerBytes, 0o600))
-			require.NoError(t, os.WriteFile(cache, cacheBytes, 0o600))
+			if diagnostic != "resolved" {
+				require.NoError(t, os.WriteFile(cache, cacheBytes, 0o600))
+			}
 			var reads, writes atomic.Int32
 			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method != http.MethodGet {
@@ -58,7 +60,14 @@ func TestContextRecoveryProjectResolveCheckInspectsWithoutBootstrapOrPinning(t *
 			assert.Equal(t, diagnostic, payload["status"])
 			assert.EqualValues(t, 1, reads.Load(), "check must inspect exactly the repository locator")
 			require.Zero(t, writes.Load(), "check must never call bootstrap, Census/Preflight, migration or another mutation")
-			for path, expected := range map[string][]byte{marker: markerBytes, cache: cacheBytes} {
+			preserved := map[string][]byte{marker: markerBytes}
+			if diagnostic != "resolved" {
+				preserved[cache] = cacheBytes
+			} else {
+				_, err := os.Lstat(cache)
+				require.True(t, os.IsNotExist(err), "resolved inspection without a cache must not pin it")
+			}
+			for path, expected := range preserved {
 				actual, readErr := os.ReadFile(path)
 				require.NoError(t, readErr)
 				require.Equal(t, expected, actual, "diagnostic must not publish or overwrite identity")
@@ -126,5 +135,75 @@ func TestContextRecoveryProjectInitRejectsCheckBeforeEffects(t *testing.T) {
 	for _, file := range []string{filepath.Join(root, ".engram-project"), filepath.Join(root, ".git", "engram-project.json")} {
 		_, err := os.Lstat(file)
 		require.True(t, os.IsNotExist(err), "init --check must reject before any identity publication")
+	}
+}
+
+func TestContextRecoveryProjectResolveCheckMatchesPinnedCacheConflicts(t *testing.T) {
+	const id = "11111111-1111-4111-8111-111111111111"
+	for _, source := range []string{"portable-marker", "http-resolved"} {
+		t.Run(source, func(t *testing.T) {
+			root := t.TempDir()
+			gitProjectInit(t, root, "init", "--quiet", "--template=")
+			gitProjectInit(t, root, "remote", "add", "origin", "https://example.test/Recovery/CacheParity.git")
+			marker := filepath.Join(root, ".engram-project")
+			cache := filepath.Join(root, ".git", "engram-project.json")
+			markerBytes := []byte("{ \"name\": \"Retained legacy project\" }\n")
+			if source == "portable-marker" {
+				markerBytes = []byte("{ \"project_id\": \"" + id + "\", \"name\": \"Portable project\" }\n")
+			}
+			cacheBytes := []byte("{ \"name\": \"Existing name-only common cache\" }\n")
+			require.NoError(t, os.WriteFile(marker, markerBytes, 0o600))
+			require.NoError(t, os.WriteFile(cache, cacheBytes, 0o600))
+			var gets, posts atomic.Int32
+			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch r.Method {
+				case http.MethodGet:
+					gets.Add(1)
+					assert.Equal(t, "/api/projects/resolve", r.URL.Path)
+					assert.Equal(t, "example.test/Recovery/CacheParity", r.URL.Query().Get("repository_locator"))
+					_ = json.NewEncoder(w).Encode(map[string]any{"status": "resolved", "binding": map[string]any{"id": id, "project_key": id, "identity_status": "active", "match": "git_remote"}})
+				case http.MethodPost:
+					posts.Add(1)
+					assert.Equal(t, "/api/projects/bootstrap", r.URL.Path)
+					_ = json.NewEncoder(w).Encode(map[string]string{"project_id": id, "name": "Existing remote project"})
+				default:
+					http.Error(w, "unsupported fixture operation", http.StatusMethodNotAllowed)
+				}
+			}))
+			defer backend.Close()
+			t.Setenv("ENGRAM_URL", backend.URL)
+			t.Setenv("ENGRAM_SERVER_URL", "")
+			t.Setenv("ENGRAM_TOKEN", "")
+			preserved := func() {
+				t.Helper()
+				for path, expected := range map[string][]byte{marker: markerBytes, cache: cacheBytes} {
+					actual, err := os.ReadFile(path)
+					require.NoError(t, err)
+					require.Equal(t, expected, actual, "neither ordinary conflict nor check may overwrite identity bytes")
+				}
+			}
+			var ordinary bytes.Buffer
+			err := runProjectCommand([]string{"resolve", "--root", root, "--json"}, &ordinary)
+			require.Error(t, err)
+			var refusal map[string]any
+			require.NoError(t, json.Unmarshal(ordinary.Bytes(), &refusal))
+			require.Equal(t, "PROJECT_IDENTITY_CONFLICT", refusal["code"], "retain the existing protective resolver")
+			preserved()
+			var checked bytes.Buffer
+			require.NoError(t, runProjectCommand([]string{"resolve", "--root", root, "--json", "--check"}, &checked))
+			var inspection map[string]any
+			require.NoError(t, json.Unmarshal(checked.Bytes(), &inspection))
+			assert.Equal(t, "conflict", inspection["status"], "read-only check must not promise a resolved identity that ordinary pinning rejects")
+			assert.NotContains(t, inspection, "binding", "a conflicting local cache must not become usable authority")
+			preserved()
+			want := int32(0)
+			if source == "http-resolved" {
+				want = 1
+			}
+			require.Equal(t, want, gets.Load())
+			require.Equal(t, want, posts.Load(), "only ordinary resolution may bootstrap; --check performs GET only")
+			t.Logf("%s: ordinary=%v check=%s GET=%d POST=%d; marker/cache byte-identical", source, refusal["code"], inspection["status"], gets.Load(), posts.Load())
+		})
 	}
 }
