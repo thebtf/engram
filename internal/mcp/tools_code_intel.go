@@ -26,6 +26,7 @@ import (
 
 	"github.com/thebtf/engram/internal/config"
 	gorm "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/internal/retrieval"
 	"github.com/thebtf/engram/internal/uci"
 )
@@ -92,7 +93,7 @@ func (s *Server) SetLegacyUnscopedCodeChunkStore(cs *gorm.CodeChunkStore) {
 func codebaseSearchTool() Tool {
 	return Tool{
 		Name:        "codebase_search",
-		Description: "Search the codebase within an authorized UCI context. The optional project is compatibility evidence only and never selection authority.",
+		Description: "Search the codebase within an authorized UCI context. The optional project is compatibility evidence only and never selection authority. CONTEXT_REQUIRED/CONTEXT_MISMATCH: " + projectidentity.RecoveryGuidance("CONTEXT_REQUIRED"),
 		tier:        tierCore,
 		InputSchema: map[string]any{
 			"type":                 "object",

@@ -115,3 +115,16 @@ func TestContextRecoveryProjectResolveCheckRejectsMalformedSuccess(t *testing.T)
 		require.True(t, os.IsNotExist(err))
 	}
 }
+
+func TestContextRecoveryProjectInitRejectsCheckBeforeEffects(t *testing.T) {
+	root := t.TempDir()
+	gitProjectInit(t, root, "init", "--quiet", "--template=")
+	var output bytes.Buffer
+	err := runProjectInit([]string{"--check"}, root, &output)
+	require.ErrorContains(t, err, "flag provided but not defined")
+	require.Empty(t, output.String())
+	for _, file := range []string{filepath.Join(root, ".engram-project"), filepath.Join(root, ".git", "engram-project.json")} {
+		_, err := os.Lstat(file)
+		require.True(t, os.IsNotExist(err), "init --check must reject before any identity publication")
+	}
+}

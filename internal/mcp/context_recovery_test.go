@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -80,8 +81,21 @@ func TestContextRecoveryQueryRetainsGuidanceAndResumesExactSearch(t *testing.T) 
 	failed := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_search", arguments)
 	requireUCICodeIntelSuppressedQueryError(t, failed, "CONTEXT_REQUIRED", fixture)
 	text := uciCodeIntelToolText(t, failed)
-	assert.Contains(t, text, "codebase_context", "a query refusal must expose the supported next call without requiring Engram checkout docs")
-	assert.Contains(t, text, "list")
+	assert.JSONEq(t, `{"schema":"engram.code-query/1","status":"context_required","exposure":null,"error":{"code":"CONTEXT_REQUIRED"}}`, text, "old/unknown query consumers retain the exact suppressed code-only envelope")
+	discovery := fixture.server.HandleRequest(fixture.clientA, &Request{JSONRPC: "2.0", ID: 20, Method: "tools/list", Params: json.RawMessage(`{"include_all":true}`)})
+	require.Nil(t, discovery.Error)
+	raw, err := json.Marshal(discovery.Result)
+	require.NoError(t, err)
+	var catalog struct { Tools []Tool `json:"tools"` }
+	require.NoError(t, json.Unmarshal(raw, &catalog))
+	var description string
+	for _, tool := range catalog.Tools {
+		if tool.Name == "codebase_search" { description = tool.Description }
+	}
+	assert.Contains(t, description, "CONTEXT_REQUIRED")
+	assert.Contains(t, description, "codebase_context")
+	assert.Contains(t, description, "list")
+	assert.Contains(t, description, "select")
 	require.Empty(t, fixture.application.searchCalls, "missing binding must not run a query")
 	listed := decodeUCICodebaseContextResponse(t, callUCICodebaseContext(t, fixture.server, fixture.clientA, map[string]any{"action": "list"}))
 	contexts := requireUCICodebaseContextList(t, listed, 1)
@@ -108,4 +122,12 @@ func TestContextRecoveryIssuesDescriptorDoesNotAdvertiseActorSpoofing(t *testing
 	assert.NotContains(t, description, "current project slug", "a caller argument cannot establish mutation actor identity")
 	assert.Contains(t, description, "canonical", "write identity is injected from the native caller context")
 	assert.Contains(t, description, "filter", "read filters remain separate from acting identity")
+}
+
+func TestContextRecoveryQueryErrorKeepsStrictOldSchema(t *testing.T) {
+	var response uci.QueryResponse
+	require.NoError(t, json.Unmarshal([]byte(`{"schema":"engram.code-query/1","status":"context_required","exposure":null,"error":{"code":"CONTEXT_REQUIRED"}}`), &response))
+	require.NoError(t, response.Validate())
+	var queryError uci.QueryError
+	require.Error(t, json.Unmarshal([]byte(`{"code":"CONTEXT_REQUIRED","guidance":"must not extend the strict business DTO"}`), &queryError), "unknown fields stay rejected; guidance belongs in shipped descriptions and existing message channels")
 }
