@@ -2,6 +2,7 @@ package engramcore
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -167,10 +168,19 @@ func (m *Module) proxyToolCallContext(ctx context.Context, project muxcore.Proje
 	resolved, err := projectidentity.ResolveLogicalProject(ctx, project.Cwd,
 		projectidentity.HTTPBootstrap(serverURL, m.envFor(project, config.EnvWorkstationToken)))
 	if err != nil {
-		return nil, &module.ModuleError{Code: projectidentity.ProjectErrorCode(err), Message: err.Error()}
+		return nil, projectIdentityRefusal(err, project.Cwd)
 	}
 	request.Project = resolved.ProjectID
 	return ctx, nil
+}
+
+func projectIdentityRefusal(err error, cwd string) *module.ModuleError {
+	code := projectidentity.ProjectErrorCode(err)
+	guidance := projectidentity.RecoveryGuidance(code)
+	if guidance == "" {
+		guidance = projectidentity.RecoveryGuidance("PROJECT_RESOLUTION_UNAVAILABLE")
+	}
+	return &module.ModuleError{Code: code, Message: fmt.Sprintf("%s: %s caller_root_sha256=%x; SHA-256 of exact UTF-8 Cwd bytes, path withheld. Compare only known own caller roots locally; a match grants no selection or migration authority.", code, guidance, sha256.Sum256([]byte(cwd)))}
 }
 
 func isUCIProxyTool(name string) bool {

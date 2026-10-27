@@ -44,6 +44,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Use registered canonical UUIDs and authenticated caller project context in MCP fixtures without weakening default-deny, privacy or pre-mutation rejection guards. Reuse 119 prior PASS plus one exact retry PASS after the context fix, not 120 fresh PASS or installed acceptance.
 - Seed the isolated operator-code fixture with a registered canonical project UUID while preserving five queue candidates, published/no-view checks and redacted provisioning errors.
 
+## [7.0.11] - 2026-10-27
+
+Corrective source release preparation; canonical 7.0.11 client and parser policies, assets, publication and ordinary recipient acceptance remain pending.
+
+### Fixed
+
+- Recognize strictly validated historical six-hex `id`/`name` markers as migration inputs, never canonical authority. Hold ordinary resolution/init before bootstrap or identity publication and expose read-only local `legacy_marker` diagnostics without a remote or HTTP. Ship the existing encoded legacy-reader next step, non-looping invalid-input preservation guidance and bounded SHA-256 fingerprints of exact UTF-8 caller Cwd bytes with paths withheld. Render native project refusals from fixed code/guidance, never raw I/O or wrapped-cause messages; retain private-context nondisclosure, strict cache/marker boundaries and the code-only query wire contract.
+
 ## [7.0.10] - 2026-10-27
 
 Corrective source release preparation; canonical 7.0.10 client and parser policies, assets, publication and ordinary installed-host acceptance remain pending.

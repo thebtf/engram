@@ -3,6 +3,7 @@ package projectidentity
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -41,6 +42,12 @@ func (inspection ProjectInspection) Validate() error {
 		}
 		binding := inspection.Binding
 		if binding == nil || binding.ID == "" || len(binding.ID) > 1024 || !utf8.ValidString(binding.ID) || strings.IndexFunc(binding.ID, unicode.IsControl) >= 0 {
+			return invalid
+		}
+		if binding.Match == "legacy_marker" {
+			if inspection.Status == "migration_required" && validLegacyMarkerID(binding.ID) && binding.ProjectKey == nil && binding.IdentityStatus == nil && !binding.Removed {
+				return nil
+			}
 			return invalid
 		}
 		if binding.Match != "manual_alias" && binding.Match != "git_remote" && binding.Match != "portable_marker" && binding.Match != "common_dir_cache" {
@@ -85,13 +92,17 @@ func CheckLogicalProject(ctx context.Context, cwd, serverURL, token string) (Pro
 		return ProjectInspection{Status: "resolved", Binding: &ProjectBinding{ID: project.ProjectID, Match: match}}
 	}
 	for candidate := selected; ; candidate = filepath.Dir(candidate) {
-		marker, present, err := readLogicalMarker(filepath.Join(candidate, anchorFilenameV3))
+		marker, present, err := readLogicalMarker(filepath.Join(candidate, anchorFilenameV3), true)
 		if err != nil {
+			var historical *LogicalError
+			if errors.As(err, &historical) && historical.Code == "PROJECT_MIGRATION_REQUIRED" && historical.legacyID != "" {
+				return ProjectInspection{Status: "migration_required", Binding: &ProjectBinding{ID: historical.legacyID, Match: "legacy_marker"}}, nil
+			}
 			return ProjectInspection{}, err
 		}
 		if present && marker.ProjectID != "" {
 			if common != "" && samePath(candidate, root) {
-				cached, cachePresent, err := readLogicalMarker(filepath.Join(common, "engram-project.json"))
+				cached, cachePresent, err := readLogicalMarker(filepath.Join(common, "engram-project.json"), false)
 				if err != nil {
 					return ProjectInspection{}, err
 				}
@@ -111,7 +122,7 @@ func CheckLogicalProject(ctx context.Context, cwd, serverURL, token string) (Pro
 	if common == "" {
 		return ProjectInspection{}, logicalError("PROJECT_CONTEXT_REQUIRED")
 	}
-	cached, _, err := readLogicalMarker(filepath.Join(common, "engram-project.json"))
+	cached, _, err := readLogicalMarker(filepath.Join(common, "engram-project.json"), false)
 	if err != nil {
 		return ProjectInspection{}, err
 	}
@@ -166,12 +177,15 @@ func CheckLogicalProject(ctx context.Context, cwd, serverURL, token string) (Pro
 	if err := ctx.Err(); err != nil {
 		return ProjectInspection{}, err
 	}
+	if inspection.Binding != nil && inspection.Binding.Match == "legacy_marker" {
+		return ProjectInspection{}, logicalError("PROJECT_IDENTITY_INVALID")
+	}
 	if err := inspection.Validate(); err != nil {
 		return inspection, err
 	}
 	if inspection.Status == "resolved" {
 		// Ordinary resolution re-reads the cache when pinning after bootstrap.
-		current, present, err := readLogicalMarker(filepath.Join(common, "engram-project.json"))
+		current, present, err := readLogicalMarker(filepath.Join(common, "engram-project.json"), false)
 		if err != nil {
 			return ProjectInspection{}, err
 		}

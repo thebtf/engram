@@ -136,11 +136,17 @@ test('Vault tools isolate same-name credentials and store globally without proje
       }
       for (const project of ['legacy-slug', '00000000-0000-0000-0000-000000000000']) {
         const invalid = toolModule.createEngramVaultStoreTool({}, client, { ...config, project });
-        assert.match(await invalid.execute('invalid-project', { name: 'same/name', value: 'synthetic' }),
-          /^Project identity unavailable: PROJECT_IDENTITY_INVALID \(.*--check/);
+        const storeRefusal = await invalid.execute('invalid-project', { name: 'same/name', value: 'synthetic' });
+        assert.match(storeRefusal, /^Project identity unavailable: PROJECT_IDENTITY_INVALID \(/);
+        assert.match(storeRefusal, /Preserve .*marker/);
+        assert.match(storeRefusal, /Inspect .*bounded regular-file reads \(4096 bytes maximum\)/);
+        assert.doesNotMatch(storeRefusal, /--check/);
         const invalidGet = toolModule.createEngramVaultGetTool({}, client, { ...config, project });
-        assert.match(await invalidGet.execute('invalid-project-read', { name: 'same/name' }),
-          /^Project identity unavailable: PROJECT_IDENTITY_INVALID \(.*--check/);
+        const getRefusal = await invalidGet.execute('invalid-project-read', { name: 'same/name' });
+        assert.match(getRefusal, /^Project identity unavailable: PROJECT_IDENTITY_INVALID \(/);
+        assert.match(getRefusal, /Preserve .*marker/);
+        assert.match(getRefusal, /Inspect .*bounded regular-file reads \(4096 bytes maximum\)/);
+        assert.doesNotMatch(getRefusal, /--check/);
       }
       assert.equal(requests.length, 0);
       for (const [index, project] of projects.entries()) {
