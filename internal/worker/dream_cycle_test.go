@@ -284,6 +284,64 @@ func TestDreamCycle_RetentionFollowsInferenceOutcome(t *testing.T) {
 	}
 }
 
+func TestDreamCycle_FailedQueueSurvivesSkippedTickAndRestart(t *testing.T) {
+	for _, days := range []int{0, 7} {
+		for _, restart := range []bool{false, true} {
+			t.Run(fmt.Sprintf("retention_%d_restart_%t", days, restart), func(t *testing.T) {
+				now := time.Now().UTC()
+				project := uuid.NewString()
+				db := knowledgeSQLiteDB(t)
+				for id := int64(1); id <= sleepCycleMemoryCountThreshold; id++ {
+					require.NoError(t, db.Create(&gorm.Memory{ID: id, Project: project, Content: "existing durable memory", Status: "active", Tier: "episodic", EpistemicType: "fact", Stability: 30, Retrievability: 1, Confidence: 0.5, CreatedAt: now, UpdatedAt: now}).Error)
+				}
+				ts := &retentionTranscriptStore{now: now, fakeTranscriptStore: fakeTranscriptStore{rows: []gorm.SessionTranscript{
+					{ID: 1, SessionID: "failed-queue", Project: project, Content: "failed transcript survives the next tick", CreatedAt: now.AddDate(0, 0, -8)},
+				}}}
+				cfg := config.Default()
+				cfg.TranscriptRetentionDays = days
+				calls := 0
+				recovered := false
+				extract := func(_ context.Context, digest string) ([]crystallization.ExtractedDecision, error) {
+					calls++
+					require.Contains(t, digest, "failed transcript survives the next tick")
+					if !recovered {
+						return nil, errors.New("synthetic temporary provider failure")
+					}
+					return nil, nil
+				}
+				newService := func() *Service {
+					return &Service{config: cfg, memoryStore: gorm.NewMemoryStore(&gorm.Store{DB: db}), dreamTranscriptStoreOverride: ts, dreamCandidateStoreOverride: &fakeCandidateStore{}, dreamExtractorFunc: extract}
+				}
+				svc := newService()
+				svc.maybeSleepCycle(context.Background())
+				require.Equal(t, 1, calls)
+				require.Len(t, ts.rows, 1, "failed inference must keep the durable pending queue")
+				require.EqualValues(t, sleepCycleMemoryCountThreshold, svc.sleepCycleWatermarkID.Load())
+				if restart {
+					svc = newService() // Queue/store survives; no volatile failure flag or watermark is carried over.
+					svc.lastRequestAt.Store(time.Now().UnixNano())
+				}
+				svc.maybeSleepCycle(context.Background())
+				require.Len(t, ts.rows, 1, "the following count/idle-gated tick must not expire failed pending work")
+				require.Empty(t, ts.marked)
+				if restart {
+					require.Equal(t, 1, calls, "the existing idle gate must still withhold inference")
+				} else {
+					require.Equal(t, 2, calls, "queued transcripts retry without requiring new durable memories")
+				}
+				recovered = true
+				svc.lastRequestAt.Store(0)
+				svc.maybeSleepCycle(context.Background())
+				require.Empty(t, ts.rows, "only successful analysis may consume the pending queue")
+				require.Equal(t, []int64{1}, ts.marked)
+				var memories int64
+				require.NoError(t, db.Model(&gorm.Memory{}).Count(&memories).Error)
+				require.EqualValues(t, sleepCycleMemoryCountThreshold, memories)
+			})
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // TC2: No-op when transcript store is nil (production: store not yet initialised).
 // ---------------------------------------------------------------------------

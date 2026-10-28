@@ -91,14 +91,17 @@ func (t *trackingMemoryStore) UpdateLifecycleFields(ctx context.Context, id int6
 
 // maybeSleepCycle checks the trigger conditions and runs RunSleepCycle when met.
 func (s *Service) maybeSleepCycle(ctx context.Context) {
-	pruneUnprocessed := true
-	defer func() { s.pruneDreamTranscripts(ctx, pruneUnprocessed) }()
-
 	s.initMu.RLock()
 	ms := s.memoryStore
 	ps := s.promotionStore
 	as := s.auditStore
+	dreamConfigured := s.llmClient != nil || s.dreamExtractorFunc != nil
 	s.initMu.RUnlock()
+
+	// A configured consumer owns pending work until successful analysis, even
+	// across skipped ticks or restarts; the durable queue is the retry state.
+	pruneUnprocessed := !dreamConfigured
+	defer func() { s.pruneDreamTranscripts(ctx, pruneUnprocessed) }()
 
 	if ms == nil {
 		log.Debug().Msg("sleep cycle: memory store not ready, skipping")
@@ -138,6 +141,9 @@ func (s *Service) maybeSleepCycle(ctx context.Context) {
 			Int64("watermark_id", watermark).
 			Int64("threshold", sleepCycleMemoryCountThreshold).
 			Msg("sleep cycle: count threshold not met, skipping")
+		if dreamConfigured {
+			pruneUnprocessed = s.runQueuedCrystallization(ctx)
+		}
 		return
 	}
 
@@ -195,21 +201,10 @@ func (s *Service) maybeSleepCycle(ctx context.Context) {
 		}
 	}
 
-	// Inference follows the sleep-cycle admission gates. Retention runs after
-	// every existing tick, including skipped/no-LLM runs, without changing the
-	// configured zero-retention policy or processing before pruning.
-	//
-	// Runs SYNCHRONOUSLY inside this (s.wg-tracked) sleep-cycle goroutine. The LLM
-	// client has a 30s per-attempt timeout with 3 attempts + 2s/4s backoff, so an
-	// unreachable endpoint could block this goroutine for ~36s. Bound that blast
-	// radius with an explicit sub-context deadline so a slow/hung LLM cannot stall
-	// the sleep goroutine beyond a known ceiling; the 4h tick interval means this
-	// is well within budget.
-	{ // LLM worst-case budget: 30s/attempt × 3 attempts + 2s + 4s backoff = 96s.
-		// Use 120s to cover that budget with margin; 60s was insufficient.
-		dreamCtx, dreamCancel := context.WithTimeout(ctx, 120*time.Second)
-		pruneUnprocessed = s.runDreamCrystallization(dreamCtx)
-		dreamCancel()
+	// Memory maintenance retains its count gate. Pending transcript analysis
+	// uses the same idle tick but does not depend on new memory production.
+	if dreamConfigured {
+		pruneUnprocessed = s.runQueuedCrystallization(ctx)
 	}
 
 	// Advance watermark only when the run completed without errors and the

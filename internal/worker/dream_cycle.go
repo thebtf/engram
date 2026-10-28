@@ -60,7 +60,7 @@ type dreamCandidateWriter interface {
 // direct-memory fallback: consuming a transcript without a created-or-duplicate
 // candidate would lose work and would resurrect the demolished v5 path.
 // The existing sleep-cycle tick owns retention after inference or a skipped run.
-// False preserves unprocessed transcripts for retry after an inference failure.
+// False preserves pending work when inference or persistence is unavailable or fails.
 func (s *Service) runDreamCrystallization(ctx context.Context) bool {
 	ts := s.dreamTranscripts()
 	if ts == nil {
@@ -80,7 +80,7 @@ func (s *Service) runDreamCrystallization(ctx context.Context) bool {
 	}
 	if candidateWriter == nil {
 		log.Debug().Msg("dream-cycle: candidate store not ready, no-op")
-		return true
+		return false
 	}
 
 	s.initMu.RLock()
@@ -98,7 +98,7 @@ func (s *Service) runDreamCrystallization(ctx context.Context) bool {
 	} else {
 		if client == nil {
 			log.Debug().Msg("dream-cycle: LLM disabled, no-op")
-			return true
+			return false
 		}
 		extractor := crystallization.NewLLMExtractor(client)
 		extractFn = extractor.Extract
@@ -220,6 +220,13 @@ func (s *Service) runDreamCrystallization(ctx context.Context) bool {
 		Time("new_watermark", time.Unix(0, s.dreamWatermark.Load())).
 		Msg("dream-cycle: crystallization complete")
 	return allSucceeded
+}
+
+func (s *Service) runQueuedCrystallization(ctx context.Context) bool {
+	// Preserve the existing per-tick inference budget, including all retries.
+	dreamCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+	return s.runDreamCrystallization(dreamCtx)
 }
 
 func (s *Service) dreamTranscripts() dreamTranscriptStore {

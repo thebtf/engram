@@ -195,6 +195,9 @@ trusted-proxy/origin guards remain. Historical V7 flags no longer activate runti
 The four-input default does not bound unprocessed transcript storage. Selecting
 a finite retention value is an explicit owner data policy. Admitted inference
 runs before pruning; extraction failures retain pending transcripts for retry.
+With a configured consumer, pending transcripts stay in the durable queue across
+busy ticks and restarts. Idle ticks retry that queue independently of the new-memory
+count threshold; unavailable or failed analysis cannot authorize its expiry.
 
 ### Removed in v5/v6
 
