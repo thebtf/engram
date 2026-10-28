@@ -2,9 +2,7 @@ package mcp
 
 // wiring_assertion_test.go — optional-tool startup wiring regression guard.
 //
-// These tests verify that lifecycle remains flag-gated while historical graph
-// readers are present whenever their store is wired, independently of the
-// retired ENGRAM_GRAPH_ENABLED flag.
+// Lifecycle and historical graph readers are present whenever their stores are wired.
 
 import (
 	"encoding/json"
@@ -73,20 +71,6 @@ func TestWiring_LifecycleTool_AppearsWhenStoresSetAndFlagOn(t *testing.T) {
 		"graph tool must not appear when graphStore is nil")
 }
 
-// TestWiring_LifecycleTool_AbsentWhenFlagOff verifies "lifecycle" is absent
-// when ENGRAM_LIFECYCLE_ENABLED is not set (or false), even with stores wired.
-func TestWiring_LifecycleTool_AbsentWhenFlagOff(t *testing.T) {
-	t.Setenv("ENGRAM_LIFECYCLE_ENABLED", "false")
-
-	srv := NewServer(ServerOptions{Version: "test"})
-	srv.SetMemoryStore(&gorm.MemoryStore{})
-	srv.SetPromotionStore(&gorm.PromotionStore{})
-
-	names := buildToolsList(srv)
-	assert.NotContains(t, names, "lifecycle",
-		"lifecycle tool must NOT appear when ENGRAM_LIFECYCLE_ENABLED=false")
-}
-
 // TestWiring_LifecycleTool_AbsentWhenStoresNil verifies "lifecycle" is absent
 // when the flag is on but stores are nil (partial wiring state).
 func TestWiring_LifecycleTool_AbsentWhenStoresNil(t *testing.T) {
@@ -126,6 +110,6 @@ func TestWiring_FlaglessLifecycleAndHistoricalGraphReaders(t *testing.T) {
 	srv.SetGraphStore(&graph.Store{})
 
 	names := buildToolsList(srv)
-	assert.NotContains(t, names, "lifecycle")
+	assert.Contains(t, names, "lifecycle")
 	assert.Contains(t, names, "graph")
 }

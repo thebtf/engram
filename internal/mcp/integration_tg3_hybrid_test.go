@@ -114,7 +114,7 @@ func TestHybridTG3_ConfidenceMin_FloorEnforced_T022(t *testing.T) {
 //
 // Design rationale: silent no-op was the pre-fix bug (params acknowledged
 // in filterDescs but never applied). Explicit rejection is honest and guides
-// the caller to either disable ENGRAM_VNEXT_ENABLED or omit include_superseded.
+// the caller to omit the unsupported include_superseded parameter.
 // See handleRecallMemoryHybrid for the structured-error comment.
 func TestHybridTG3_IncludeSuperseded_StructuredError_T022b(t *testing.T) {
 	t.Setenv("ENGRAM_VNEXT_ENABLED", "true")
@@ -135,8 +135,6 @@ func TestHybridTG3_IncludeSuperseded_StructuredError_T022b(t *testing.T) {
 
 	assert.Contains(t, err.Error(), "include_superseded",
 		"error must name the unsupported parameter")
-	assert.Contains(t, err.Error(), "ENGRAM_VNEXT_ENABLED",
-		"error must name the conflicting flag so the caller knows how to resolve")
 }
 
 // TestHybridTG3_IncludeSuperseded_False_NoError_T022c verifies that

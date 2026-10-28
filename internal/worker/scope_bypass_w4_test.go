@@ -124,32 +124,11 @@ func principalPrivateMemory(id int64, content, owner string) *models.Memory {
 
 // --- P3: searchFallbackObservations scope filter ---
 
-// TestEC_F1_P3_SearchFallback_FlagOff_ByteIdentity verifies that with
-// ENGRAM_VNEXT_F_ENABLED unset, searchFallbackObservations returns all memories
-// including private-scope rows from other workstations (flag-OFF byte identity).
-func TestEC_F1_P3_SearchFallback_FlagOff_ByteIdentity(t *testing.T) {
-	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
-
-	privateCrossWs := scopeW4Memory(1, "private cross-ws", "private", "ws-writer-B")
-	projectMem := scopeW4Memory(2, "project visible", "project", "")
-	fake := &fakeMemoryListStore{rows: []*models.Memory{privateCrossWs, projectMem}}
-	svc := buildScopeTestService(fake)
-
-	// Caller from workstation-A.
-	ctx := auth.WithIdentity(context.Background(), auth.Client("read-write", "ws-caller-A"))
-
-	obs, err := svc.searchFallbackObservations(ctx, "", retrievalScope{Project: "test-project"}, 50)
-	require.NoError(t, err)
-
-	// Flag OFF: both memories returned unchanged.
-	assert.Len(t, obs, 2, "flag-OFF: all memories must be returned without scope filtering")
-}
-
 func TestPIM_SearchFallback_FlagOff_PrincipalPrivateCrossPrincipalInvisible(t *testing.T) {
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
 
 	privateOther := principalPrivateMemory(30, "private bob", "agent/bob")
-	visible := scopeW4Memory(31, "visible legacy", "private", "ws-bob")
+	visible := scopeW4Memory(31, "visible own workstation", "private", "ws-alice")
 	fake := &fakeMemoryListStore{rows: []*models.Memory{privateOther, visible}}
 	svc := buildScopeTestService(fake)
 
@@ -160,8 +139,8 @@ func TestPIM_SearchFallback_FlagOff_PrincipalPrivateCrossPrincipalInvisible(t *t
 	require.NoError(t, err)
 
 	require.Len(t, obs, 1)
-	assert.Equal(t, "visible legacy", obs[0].Title.String,
-		"legacy privacy_scope remains flag-off visible, but principal-private row must be filtered")
+	assert.Equal(t, "visible own workstation", obs[0].Title.String,
+		"workstation and principal privacy both apply without historical startup flags")
 }
 
 func TestPIM_ListVisibleForInjection_PrincipalPrivateCrossPrincipalInvisible(t *testing.T) {
@@ -253,50 +232,6 @@ func TestEC_F1_P3_SearchFallback_FlagOn_LegacyEmptyScopeVisible(t *testing.T) {
 }
 
 // --- P2: handleContextInject legacy fallback ---
-
-// TestEC_F1_P2_ContextInjectFallback_FlagOff_ByteIdentity verifies that the
-// allRecentRaw fallback in the context-inject handler returns all memories when
-// ENGRAM_VNEXT_F_ENABLED is unset.
-func TestEC_F1_P2_ContextInjectFallback_FlagOff_ByteIdentity(t *testing.T) {
-	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
-
-	// The P2 fix is in handlers_context.go at the allRecentRaw block. The fix
-	// applies scope.FilterMemories to the memoryStore.List result when the flag is
-	// ON. When the flag is OFF, memoriesToObservations(mems) is called without any
-	// filtering — same as before the fix.
-	//
-	// We test the flag-OFF contract by exercising searchFallbackObservations
-	// (the same code path that feeds allRecentRaw in the non-fallback case).
-	// The P2 fallback itself only fires when searchFallbackObservations returns nil,
-	// which requires no hooks and no behavioralRulesStore. Both are tested indirectly
-	// via the P3 tests above (same code path, same filter); the P2 test here
-	// validates the flag gate behavior on the in-handler branch.
-	//
-	// Direct unit test of the fallback branch: build a service with no hooks and
-	// inject a fakeMemoryListStore, then call searchFallbackObservations. When both
-	// hooks are nil AND no behavioral rules store, it falls into the raw list path
-	// (retrieval.go:203-208) which is exactly where P3's filter runs.
-
-	privateCrossWs := scopeW4Memory(10, "private cross-ws", "private", "ws-writer-B")
-	projectMem := scopeW4Memory(11, "project visible", "project", "")
-	fake := &fakeMemoryListStore{rows: []*models.Memory{privateCrossWs, projectMem}}
-
-	cfg := config.Default()
-	svc := &Service{
-		config:          cfg,
-		retrievalHooks:  &retrievalHooks{}, // no hooks — forces raw list path
-		retrievalStats:  map[string]*RetrievalStats{},
-		memoryStoreSeam: fake,
-	}
-
-	ctx := auth.WithIdentity(context.Background(), auth.Client("read-write", "ws-caller-A"))
-
-	obs, err := svc.searchFallbackObservations(ctx, "", retrievalScope{Project: "test-project"}, 50)
-	require.NoError(t, err)
-
-	// Flag OFF: both memories returned.
-	assert.Len(t, obs, 2, "flag-OFF: all memories returned without filter (P2 byte-identity)")
-}
 
 // TestEC_F1_P2_ContextInjectFallback_FlagOn_PrivateCrossWorkstationInvisible
 // verifies that when the context-inject handler's allRecentRaw block calls

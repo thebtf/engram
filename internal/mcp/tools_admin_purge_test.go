@@ -14,7 +14,6 @@ package mcp
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -165,55 +164,6 @@ func TestAdminPurge_AdminAllowed(t *testing.T) {
 	assert.Panics(t, func() {
 		_, _ = srv.handleAdmin(adminCtx(), args)
 	}, "admin identity must pass the authz gate and reach PurgeProject (nil DB panics)")
-}
-
-// ---------------------------------------------------------------------------
-// Finding 6: vnext flag gate
-// ---------------------------------------------------------------------------
-
-// TestAdminPurge_FlagOff_RejectsAsUnknown verifies that purge_project returns
-// "unknown admin action" when ENGRAM_VNEXT_ENABLED != "true", byte-identical to
-// the pre-branch behaviour for truly unknown actions.
-func TestAdminPurge_FlagOff_RejectsAsUnknown(t *testing.T) {
-	os.Unsetenv("ENGRAM_VNEXT_ENABLED")
-	srv := NewServer(ServerOptions{Version: "test"})
-
-	args := mustMarshalAdmin(map[string]any{
-		"action":  "purge_project",
-		"project": "my-proj",
-		"confirm": "my-proj",
-	})
-	_, err := srv.handleAdmin(adminCtx(), args)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unknown admin action",
-		"flag-off: purge_project must be rejected as unknown action")
-	assert.Contains(t, err.Error(), `"purge_project"`,
-		"unknown action error must include the action name")
-}
-
-// TestAdminPurge_FlagOff_SchemaLacksConfirm verifies that when ENGRAM_VNEXT_ENABLED
-// is not "true", the admin tool schema does not contain purge_project or confirm.
-func TestAdminPurge_FlagOff_SchemaLacksConfirm(t *testing.T) {
-	os.Unsetenv("ENGRAM_VNEXT_ENABLED")
-	tool := buildAdminTool()
-
-	// Description must not mention purge_project.
-	assert.NotContains(t, tool.Description, "purge_project",
-		"flag-off: admin tool description must not mention purge_project")
-
-	// Schema properties must not contain confirm field.
-	props, _ := tool.InputSchema["properties"].(map[string]any)
-	require.NotNil(t, props, "InputSchema must have properties")
-	_, hasConfirm := props["confirm"]
-	assert.False(t, hasConfirm,
-		"flag-off: admin tool schema must not have confirm field")
-
-	// project description must not mention purge_project.
-	if projectProp, ok := props["project"].(map[string]any); ok {
-		desc, _ := projectProp["description"].(string)
-		assert.NotContains(t, desc, "purge_project",
-			"flag-off: project field description must not mention purge_project")
-	}
 }
 
 // TestAdminPurge_FlagOn_SchemaHasConfirm verifies that when ENGRAM_VNEXT_ENABLED=true,

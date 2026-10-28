@@ -14,9 +14,6 @@ package worker
 //     is bypassed and execution reaches s.purgeStore.PurgeProject — which panics
 //     on the nil *gorm.DB. The panic proves the guard was passed; assert.Panics
 //     is the observable.
-//  3. Flag-off: purge_project returns "unknown admin action" when
-//     ENGRAM_VNEXT_ENABLED != "true", and tools/list admin schema is byte-identical
-//     to the pre-branch (no purge_project, no confirm field).
 //
 // NOTE: DB tests require live Postgres (DATABASE_DSN). CI has no Postgres; those
 // tests skip automatically. See docs/PRODUCTION-TESTING-PLAYBOOK.md for the
@@ -29,8 +26,6 @@ package worker
 import (
 	"context"
 	"encoding/json"
-	"os"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -128,47 +123,4 @@ func TestWiring_PurgeStore_NilGuardBypassedAfterSetPurgeStore(t *testing.T) {
 		srv.HandleRequest(adminCtxW(), req)
 	}, "execution must reach PurgeProject (nil-guard bypassed), then panic on nil DB — "+
 		"if this fails with no panic, the nil-guard fired instead (SetPurgeStore not wired)")
-}
-
-// TestWiring_FlagOff_PurgeProjectUnknown verifies that when ENGRAM_VNEXT_ENABLED
-// is not "true", purge_project is rejected as "unknown admin action" through the
-// full HandleRequest path.
-func TestWiring_FlagOff_PurgeProjectUnknown(t *testing.T) {
-	os.Unsetenv("ENGRAM_VNEXT_ENABLED")
-	srv := mcp.NewServer(mcp.ServerOptions{Version: "wiring-test"})
-	srv.SetPurgeStore(&gormdb.PurgeStore{}) // wired — but flag-off gate fires first
-
-	req := makePurgeRequest(t, "test-project", "test-project")
-	resp := srv.HandleRequest(adminCtxW(), req)
-	text := responseText(resp)
-	assert.Contains(t, text, "unknown admin action",
-		"flag-off: purge_project must be rejected as unknown action")
-}
-
-// TestWiring_FlagOff_ToolsListAdminSchemaByteIdentical verifies that when
-// ENGRAM_VNEXT_ENABLED is not "true", the tools/list response for the admin tool
-// does not contain purge_project or confirm — byte-identical to the pre-branch surface.
-func TestWiring_FlagOff_ToolsListAdminSchemaByteIdentical(t *testing.T) {
-	os.Unsetenv("ENGRAM_VNEXT_ENABLED")
-	srv := mcp.NewServer(mcp.ServerOptions{Version: "wiring-test"})
-
-	// Use the HandleRequest tools/list path.
-	req := &mcp.Request{
-		JSONRPC: "2.0",
-		ID:      float64(1),
-		Method:  "tools/list",
-	}
-	resp := srv.HandleRequest(context.Background(), req)
-	require.NotNil(t, resp, "tools/list must return a response")
-	require.Nil(t, resp.Error, "tools/list must not return an error")
-
-	// Serialize the result and check for absent fields.
-	resultJSON, err := json.Marshal(resp.Result)
-	require.NoError(t, err)
-	resultStr := string(resultJSON)
-
-	assert.False(t, strings.Contains(resultStr, "purge_project"),
-		"flag-off: tools/list admin entry must not mention purge_project")
-	assert.False(t, strings.Contains(resultStr, `"confirm"`),
-		"flag-off: tools/list admin entry must not contain confirm field")
 }

@@ -327,33 +327,10 @@ func TestWriteLint_DomainOwnedTargetHiddenWithOrchestratorStoreFallback(t *testi
 	require.Contains(t, err.Error(), "target memory 22 not found")
 }
 
-// TestWriteLint_T035_FlagOff_LegacyPath verifies that when ENGRAM_VNEXT_F_ENABLED
-// is not set, the handler follows the legacy path even if writeLint is wired.
-// With no memoryStore wired (nil), it should fail at the nil-store check, not
-// at the write-lint gate — proving the gate is skipped.
-func TestWriteLint_T035_FlagOff_LegacyPath(t *testing.T) {
-	// Do NOT set ENGRAM_VNEXT_F_ENABLED
-	orch, _, closer := buildWLOrchestrator()
-	defer closer()
-
-	srv := NewServer(ServerOptions{Version: "test-t035"})
-	srv.SetWriteLintOrchestrator(orch)
-	// No memoryStore wired — legacy path hits nil store check
-
-	args, _ := json.Marshal(map[string]any{
-		"content": t035DupContent,
-		"project": "testproj",
-	})
-	_, err := srv.handleStoreMemory(context.Background(), args)
-	// Must fail at nil memory-store check, not write-lint gate
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "memory store not available")
-}
-
-// TestWriteLint_T035_Phase1_SignalsReturned verifies that when ENGRAM_VNEXT_F_ENABLED=true
+// TestWriteLint_T035_Phase1_SignalsReturned verifies that even with the retired flag false
 // and a near-duplicate exists, Phase1 returns stored=false with lint signals.
 func TestWriteLint_T035_Phase1_SignalsReturned(t *testing.T) {
-	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "false")
 
 	orch, _, closer := buildWLOrchestrator(nearDupMemory())
 	defer closer()

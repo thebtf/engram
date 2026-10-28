@@ -26,39 +26,6 @@ import (
 // flag-OFF is "text format → plain string", and the schema-unconditional
 // TG3 params must still be present with correct descriptions.
 func TestRecallMemory_CompatV3_VnextFEnabled_ZeroTG3Params_T021b(t *testing.T) {
-	t.Run("schema_with_vnext_f_on_and_vnext_off_zero_tg3_params", func(t *testing.T) {
-		// ENGRAM_VNEXT_F_ENABLED=true but ENGRAM_VNEXT_ENABLED=false.
-		t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
-		t.Setenv("ENGRAM_VNEXT_ENABLED", "")
-
-		s := NewServer(ServerOptions{Version: "test"})
-		s.memoryStore = nonNilMemoryStore()
-
-		props := findToolProperties(t, s.ListTools(), "recall_memory")
-
-		// TG3 params must be present in schema (unconditional, flag-gated at runtime).
-		for _, paramName := range []string{"confidence_min", "include_superseded", "include_rationale"} {
-			p, ok := props[paramName].(map[string]any)
-			require.True(t, ok,
-				"recall_memory schema must expose %q when ENGRAM_VNEXT_F_ENABLED=true (T019 unconditional)", paramName)
-			desc, _ := p["description"].(string)
-			assert.Contains(t, desc, "ENGRAM_VNEXT_F_ENABLED",
-				"%q description must mention the flag gate", paramName)
-		}
-
-		// Vnext hybrid params must NOT be in schema (ENGRAM_VNEXT_ENABLED is off).
-		for _, p := range []string{"expand_graph", "min_confidence", "tier_filter", "explain"} {
-			_, ok := props[p].(map[string]any)
-			assert.False(t, ok,
-				"schema must not include vnext hybrid param %q when ENGRAM_VNEXT_ENABLED=false", p)
-		}
-
-		// Legacy params intact (NFR-F1 byte-identity of schema surface).
-		for _, legacyParam := range []string{"query", "tags", "type", "limit", "format", "project"} {
-			_, ok := props[legacyParam].(map[string]any)
-			require.True(t, ok, "legacy param %q must still be present in schema (NFR-F1)", legacyParam)
-		}
-	})
 
 	// Part B: runtime check — with flag-OFF path (ENGRAM_VNEXT_ENABLED=false),
 	// calling recall_memory with zero TG3 params must produce a result identical
@@ -137,34 +104,6 @@ func TestRecallMemory_CompatV3_VnextFEnabled_ZeroTG3Params_T021b(t *testing.T) {
 // (ignoring the tg3Active gate), the per-memory assertion fails because
 // "ranking_rationale" would appear in the output.
 func TestRecallMemory_CompatV3_ZeroFlagsShape_T021(t *testing.T) {
-	// Part A: schema-level check — no DB needed.
-	// Verify that the recall_memory tool schema still carries the three TG3
-	// params unconditionally but that their descriptions clearly state the
-	// flag gate ("Honored only when ENGRAM_VNEXT_F_ENABLED=true").
-	t.Run("schema_unconditional_tg3_params_present", func(t *testing.T) {
-		// Use env-unset state to confirm schema is unconditional.
-		t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
-		t.Setenv("ENGRAM_VNEXT_ENABLED", "")
-
-		s := NewServer(ServerOptions{Version: "test"})
-		s.memoryStore = nonNilMemoryStore() // nonNilMemoryStore from tools_memory_t005_test.go
-
-		props := findToolProperties(t, s.ListTools(), "recall_memory")
-
-		for _, paramName := range []string{"confidence_min", "include_superseded", "include_rationale"} {
-			p, ok := props[paramName].(map[string]any)
-			require.True(t, ok, "recall_memory schema must expose %q unconditionally (T019)", paramName)
-			desc, _ := p["description"].(string)
-			assert.Contains(t, desc, "ENGRAM_VNEXT_F_ENABLED",
-				"%q description must mention the flag gate", paramName)
-		}
-
-		// Legacy params must still be present (byte-identity of schema surface).
-		for _, legacyParam := range []string{"query", "tags", "type", "limit", "format", "project"} {
-			_, ok := props[legacyParam].(map[string]any)
-			require.True(t, ok, "legacy param %q must still be present in schema (NFR-F1)", legacyParam)
-		}
-	})
 
 	// Part B: runtime behavior — requires live PostgreSQL.
 	// Verify that the response JSON contains no "ranking_rationale" when all

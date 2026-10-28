@@ -4,7 +4,6 @@ package mcp
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
 
@@ -73,19 +72,17 @@ func TestHandleListCandidates_EmptyProjectReturnsError(t *testing.T) {
 		"error must mention 'project is required', got: %v", callErr)
 }
 
-// TestHandleListCandidates_FlagOffReturnsError verifies that list_candidates is unavailable
-// when ENGRAM_VNEXT_F_ENABLED is not set.
-func TestHandleListCandidates_FlagOffReturnsError(t *testing.T) {
-	os.Unsetenv("ENGRAM_VNEXT_F_ENABLED")
+// TestHandleListCandidates_MissingStoreReturnsError verifies that list_candidates is unavailable
+// when the candidate store is unavailable.
+func TestHandleListCandidates_MissingStoreReturnsError(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
 
 	s := NewServer(ServerOptions{Version: "test"})
-	// candidateStore is nil (flag is off)
+	// candidateStore is deliberately not wired.
 
 	args, _ := json.Marshal(map[string]any{"project": "some-project"})
 	_, err := s.handleListCandidates(context.Background(), args)
-	require.Error(t, err, "must error when flag is off")
-	require.True(t, strings.Contains(err.Error(), "ENGRAM_VNEXT_F_ENABLED"),
-		"error must mention the feature flag, got: %v", err)
+	require.ErrorContains(t, err, "candidate store not available")
 }
 
 func TestHandleGetCandidate_EmptyIDReturnsError(t *testing.T) {
