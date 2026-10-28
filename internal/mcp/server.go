@@ -921,8 +921,8 @@ func (s *Server) primaryTools() []Tool {
 		},
 		{
 			Name: "settings",
-			Description: "Manage server-global model settings (reranker/embedder URL, model, API key) read by the " +
-				"server on the recall path (#259). Env vars still override stored settings. Actions: set, get, list, " +
+			Description: "Manage server-global provider settings (reranker/embedder/LLM URL, model, API key, embedding request dimensions) read at startup. " +
+				"Nonempty env vars still override stored settings. Actions: set, get, list, " +
 				"delete. set/delete require admin (operator) auth — they change behavior for every consumer. Secret " +
 				"keys (ending .api_key) are vault-encrypted and never returned in plaintext by get/list. Action required.",
 			tier: tierUseful,
@@ -931,7 +931,7 @@ func (s *Server) primaryTools() []Tool {
 				"required": []string{"action"},
 				"properties": map[string]any{
 					"action":      map[string]any{"type": "string", "enum": []string{"set", "get", "list", "delete"}, "description": "Action to perform (required)"},
-					"key":         map[string]any{"type": "string", "description": "Setting key, e.g. reranker.url, reranker.model, reranker.api_key, embedder.url, embedder.model, embedder.api_key (for set, get, delete)"},
+					"key":         map[string]any{"type": "string", "description": "Setting key: reranker.url/model/api_key, embedder.url/model/api_key/dimensions, llm.url/model/api_key (for set, get, delete). embedder.dimensions accepts 0 to omit the request parameter or the schema-bound 1536."},
 					"value":       map[string]any{"type": "string", "description": "Setting value (for set)"},
 					"encrypt":     map[string]any{"type": "boolean", "description": "Force vault encryption even if the key name does not end in .api_key (for set). Keys ending .api_key are always encrypted."},
 					"description": map[string]any{"type": "string", "description": "Optional human description of the setting (for set)"},

@@ -62,12 +62,12 @@ func TestMigrateEnvToSettings_WritesAbsentSkipsPresent(t *testing.T) {
 	w := newRecordingWriter()
 	w.rows["reranker.url"] = &models.ModelSetting{Key: "reranker.url", Value: "https://operator-set.example"}
 
-	t.Setenv("ENGRAM_RERANK_URL", "https://from-env.example")    // present in store → skip
-	t.Setenv("ENGRAM_RERANK_MODEL", "env-model")                 // absent → write
+	t.Setenv("ENGRAM_RERANK_URL", "https://from-env.example")     // present in store → skip
+	t.Setenv("ENGRAM_RERANK_MODEL", "env-model")                  // absent → write
 	t.Setenv("ENGRAM_EMBEDDING_URL", "https://embed-env.example") // absent → write
-	t.Setenv("ENGRAM_EMBEDDING_MODEL", "")                       // unset → no-op
-	t.Setenv("ENGRAM_RERANK_API_KEY", "")                        // unset → no-op
-	t.Setenv("ENGRAM_EMBEDDING_API_KEY", "")                     // unset → no-op
+	t.Setenv("ENGRAM_EMBEDDING_MODEL", "")                        // unset → no-op
+	t.Setenv("ENGRAM_RERANK_API_KEY", "")                         // unset → no-op
+	t.Setenv("ENGRAM_EMBEDDING_API_KEY", "")                      // unset → no-op
 
 	migrateEnvToSettings(ctx, w, nil) // nil vault: no secret env set, so never needed
 
@@ -86,6 +86,40 @@ func TestMigrateEnvToSettings_WritesAbsentSkipsPresent(t *testing.T) {
 	}
 	if len(w.setCalls) != 2 {
 		t.Errorf("got %d Set calls, want 2 (reranker.model + embedder.url)", len(w.setCalls))
+	}
+}
+
+func TestMigrateEnvToSettings_LLMAndDimensionsOnlyMissing(t *testing.T) {
+	for _, pair := range envSettingMigrations {
+		t.Setenv(pair.envVar, "")
+	}
+	t.Setenv("ENGRAM_LLM_URL", "https://synthetic-provider.invalid")
+	t.Setenv("ENGRAM_LLM_MODEL", "env-model-must-not-overwrite")
+	t.Setenv("ENGRAM_LLM_API_KEY", "synthetic-llm-key")
+	t.Setenv("ENGRAM_EMBEDDING_DIMENSIONS", "0")
+	writer := newRecordingWriter()
+	writer.rows["llm.model"] = &models.ModelSetting{Key: "llm.model", Value: "operator-model"}
+	vault := newTestVault(t)
+	migrateEnvToSettings(context.Background(), writer, func() (*crypto.Vault, error) { return vault, nil })
+	if len(writer.setCalls) != 3 {
+		t.Fatalf("wrote %d settings, want URL, encrypted key and dimensions only", len(writer.setCalls))
+	}
+	if writer.rows["llm.model"].Value != "operator-model" {
+		t.Fatal("existing operator configuration was overwritten")
+	}
+	if row := writer.rows["llm.url"]; row == nil || row.Value != "https://synthetic-provider.invalid" {
+		t.Fatal("LLM URL was not persisted")
+	}
+	if row := writer.rows["embedder.dimensions"]; row == nil || row.Value != "0" {
+		t.Fatal("explicit zero dimensions was not preserved")
+	}
+	row := writer.rows["llm.api_key"]
+	if row == nil || !row.Encrypted || row.Value != "" || row.EncryptionKeyFingerprint != vault.Fingerprint() {
+		t.Fatal("LLM key was not stored with existing Vault encryption")
+	}
+	plain, err := vault.Decrypt(row.EncryptedValue)
+	if err != nil || plain != "synthetic-llm-key" {
+		t.Fatal("stored synthetic key did not decrypt with the original Vault")
 	}
 }
 

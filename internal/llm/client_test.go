@@ -161,3 +161,72 @@ func TestComplete_RetrySucceeds(t *testing.T) {
 		t.Fatalf("expected 3 server hits, got %d", attempts)
 	}
 }
+
+type llmSettingsSnapshot struct {
+	values map[string]string
+	reads  int
+}
+
+func (settings *llmSettingsSnapshot) Get(_ context.Context, key string) (string, bool) {
+	settings.reads++
+	value, ok := settings.values[key]
+	return value, ok
+}
+
+func TestNewClientWithSettings_PrecedenceAndStartupSnapshot(t *testing.T) {
+	for _, tc := range []struct {
+		name, envModel, envKey, storedModel, wantModel, wantAuth, wantPath string
+		envURL, absentURL                                                  bool
+	}{
+		{name: "stored provider", storedModel: "stored-model", wantModel: "stored-model", wantAuth: "Bearer " + "synthetic-stored-key", wantPath: "/stored/v1/chat/completions"},
+		{name: "environment overrides stored provider", envURL: true, envModel: "env-model", envKey: "synthetic-env-key", storedModel: "stored-model", wantModel: "env-model", wantAuth: "Bearer synthetic-env-key", wantPath: "/env/v1/chat/completions"},
+		{name: "existing default model", wantModel: "chat-default", wantAuth: "Bearer " + "synthetic-stored-key", wantPath: "/stored/v1/chat/completions"},
+		{name: "absent provider stays disabled", absentURL: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			type observedRequest struct{ path, model, auth string }
+			requests := make(chan observedRequest, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body chatRequest
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					http.Error(w, "invalid synthetic request", http.StatusBadRequest)
+					return
+				}
+				requests <- observedRequest{r.URL.Path, body.Model, r.Header.Get("Authorization")}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"synthetic completion"}}]}`))
+			}))
+			defer server.Close()
+			t.Setenv("ENGRAM_LLM_URL", "")
+			if tc.envURL {
+				t.Setenv("ENGRAM_LLM_URL", server.URL+"/env/v1")
+			}
+			t.Setenv("ENGRAM_LLM_MODEL", tc.envModel)
+			t.Setenv("ENGRAM_LLM_API_KEY", tc.envKey)
+			settings := &llmSettingsSnapshot{values: map[string]string{"llm.model": tc.storedModel, "llm.api_key": "synthetic-stored-key"}}
+			if !tc.absentURL {
+				settings.values["llm.url"] = server.URL + "/stored/v1"
+			}
+			client, err := NewClientWithSettings(context.Background(), settings)
+			if tc.absentURL {
+				if err != ErrLLMDisabled || client != nil || len(requests) != 0 {
+					t.Fatal("absent provider must remain disabled without HTTP requests")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			reads := settings.reads
+			settings.values["llm.url"], settings.values["llm.model"], settings.values["llm.api_key"] = "changed-after-startup", "changed-model", "changed-key"
+			result, err := client.Complete(context.Background(), "synthetic system", "synthetic user")
+			if err != nil || result != "synthetic completion" {
+				t.Fatalf("completion failed: %v", err)
+			}
+			observed := <-requests
+			if observed.path != tc.wantPath || observed.model != tc.wantModel || observed.auth != tc.wantAuth || settings.reads != reads {
+				t.Fatal("provider request did not preserve env/store/default precedence and startup snapshot")
+			}
+		})
+	}
+}

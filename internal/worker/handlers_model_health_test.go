@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/thebtf/engram/internal/llm"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -33,7 +35,7 @@ func TestBuildModelHealthResponse_UsesSettingsAndRedactsSecrets(t *testing.T) {
 		{Key: "embedder.url", Value: "https://embedder.example"},
 		{Key: "embedder.model", Value: "text-embedding-test"},
 		{Key: "embedder.api_key", Encrypted: true, EncryptedValue: []byte{1, 2, 3}},
-	}, fakeModelClient{model: "runtime-embedding"}, nil)
+	}, fakeModelClient{model: "runtime-embedding"}, nil, nil)
 
 	require.Len(t, response.Rows, 3)
 	assert.Equal(t, 0, response.Summary.OK)
@@ -61,7 +63,7 @@ func TestBuildModelHealthResponse_EnvConfiguredButClientMissingIsDegraded(t *tes
 	t.Setenv("ENGRAM_RERANK_URL", "")
 	t.Setenv("ENGRAM_LLM_URL", "")
 
-	response := buildModelHealthResponse(nil, nil, nil)
+	response := buildModelHealthResponse(nil, nil, nil, nil)
 
 	require.Len(t, response.Rows, 3)
 	embedding := response.Rows[0]
@@ -79,7 +81,7 @@ func TestBuildModelHealthResponse_TypedNilClientIsNotActive(t *testing.T) {
 	t.Setenv("ENGRAM_LLM_URL", "")
 
 	var embeddingClient *fakeModelClient
-	response := buildModelHealthResponse(nil, embeddingClient, nil)
+	response := buildModelHealthResponse(nil, embeddingClient, nil, nil)
 
 	require.Len(t, response.Rows, 3)
 	embedding := response.Rows[0]
@@ -98,4 +100,28 @@ func TestHandleModelHealth_StoreUnavailable(t *testing.T) {
 
 	require.Equal(t, http.StatusServiceUnavailable, w.Code)
 	assert.Contains(t, w.Body.String(), "store not initialized")
+}
+
+func TestBuildModelHealthResponse_LLMUsesStoredConfigurationAndStartupModel(t *testing.T) {
+	t.Setenv("ENGRAM_LLM_URL", "")
+	t.Setenv("ENGRAM_LLM_MODEL", "actual-startup-model")
+	t.Setenv("ENGRAM_LLM_API_KEY", "synthetic-health-key")
+	client, err := llm.NewClientWithSettings(context.Background(), &settingsResolver{reader: fakeSettingsReader{rows: map[string]*models.ModelSetting{
+		"llm.url": {Key: "llm.url", Value: "https://synthetic-provider.invalid"},
+	}}})
+	require.NoError(t, err)
+	response := buildModelHealthResponse([]*models.ModelSetting{
+		{Key: "llm.url", Value: "https://synthetic-provider.invalid"},
+		{Key: "llm.model", Value: "changed-for-next-startup"},
+		{Key: "llm.api_key", Encrypted: true, EncryptedValue: []byte{1, 2, 3}},
+	}, nil, nil, client)
+	row := response.Rows[2]
+	assert.Equal(t, "settings", row.Source)
+	assert.Equal(t, "actual-startup-model", row.Model)
+	assert.True(t, row.Configured)
+	assert.True(t, row.SecretSet)
+	assert.Equal(t, "standby", row.Health, "configuration is not a provider probe")
+	payload, err := json.Marshal(response)
+	require.NoError(t, err)
+	assert.NotContains(t, string(payload), "https://synthetic-provider.invalid")
 }

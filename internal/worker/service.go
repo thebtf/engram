@@ -50,6 +50,7 @@ import (
 	"github.com/thebtf/engram/internal/graph"
 	"github.com/thebtf/engram/internal/grpcserver"
 	"github.com/thebtf/engram/internal/injection"
+	"github.com/thebtf/engram/internal/llm"
 	"github.com/thebtf/engram/internal/logbuf"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/principalmemory"
@@ -217,6 +218,7 @@ type Service struct {
 	feedbackUpdater                *feedback.Updater
 	segmentStore                   *gorm.SegmentStore
 	embeddingClient                *embedding.Client
+	llmClient                      *llm.Client
 	embeddingStore                 *embedding.Store
 	embeddingRecorder              *embedding.BackfillRecorder
 	rerankClient                   *reranking.Client
@@ -1199,7 +1201,7 @@ func (s *Service) initializeAsync() {
 		mcpServer.SetBulkFacade(bulkFacade)
 	}
 
-	// CR-2/CR-3 (#259): the embedder and reranker resolve their config with env-first
+	// Provider clients resolve their config once at startup with env-first
 	// precedence backed by the settings-store. Env wins when set; otherwise the store value;
 	// otherwise the client's default. Non-secret config (URL, model) is read as plaintext;
 	// secret config (API keys) is stored encrypted and decrypted in-process via the vault
@@ -1218,6 +1220,14 @@ func (s *Service) initializeAsync() {
 	// never clobbers an operator-set value. Lets an operator migrate off env vars at leisure.
 	// Runs before the clients init below so a freshly-seeded value is available this boot.
 	migrateEnvToSettingsStore(s.ctx, settingsStore, s.getVault)
+
+	llmClient, llmErr := llm.NewClientWithSettings(s.ctx, settingsRes)
+	if llmErr != nil && !errors.Is(llmErr, llm.ErrLLMDisabled) {
+		log.Warn().Err(llmErr).Msg("LLM client configuration unavailable")
+	}
+	s.initMu.Lock()
+	s.llmClient = llmClient
+	s.initMu.Unlock()
 
 	// Initialize embedding client and store (optional — disabled if ENGRAM_EMBEDDING_URL unset).
 	var uciEmbeddingClient *embedding.Client

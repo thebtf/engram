@@ -134,6 +134,45 @@ func TestEmbed_ClampsIncompatibleDimensionsOverride(t *testing.T) {
 	}
 }
 
+func TestNewClientWithSettings_DimensionsPrecedence(t *testing.T) {
+	for _, tc := range []struct {
+		name, env, stored string
+		omit              bool
+	}{
+		{name: "stored zero omits dimensions", stored: "0", omit: true},
+		{name: "env zero wins over stored size", env: "0", stored: "1536", omit: true},
+		{name: "env size wins over stored zero", env: "1536", stored: "0"},
+		{name: "invalid env retains existing safe default", env: "4096", stored: "0"},
+		{name: "absent dimension keeps existing default"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bodyChan := make(chan map[string]any, 1)
+			srv := bodyCaptureServer(t, bodyChan)
+			defer srv.Close()
+			t.Setenv("ENGRAM_EMBEDDING_URL", srv.URL)
+			t.Setenv("ENGRAM_EMBEDDING_DIMENSIONS", tc.env)
+			settings := fakeResolver{"embedder.dimensions": tc.stored}
+			client, err := NewClientWithSettings(context.Background(), settings)
+			if err != nil {
+				t.Fatal(err)
+			}
+			settings["embedder.dimensions"] = "1536"
+			if _, err := client.Embed(context.Background(), []string{"dimension boundary"}); err != nil {
+				t.Fatal(err)
+			}
+			body := <-bodyChan
+			value, present := body["dimensions"]
+			if tc.omit {
+				if present {
+					t.Fatalf("dimensions must be omitted; got %v", value)
+				}
+			} else if !present || value != float64(EmbeddingDim) {
+				t.Fatalf("dimensions=%v, want safe default %d", value, EmbeddingDim)
+			}
+		})
+	}
+}
+
 // fakeResolver is an in-memory SettingsResolver for precedence tests (no DB).
 type fakeResolver map[string]string
 

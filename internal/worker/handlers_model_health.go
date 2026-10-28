@@ -8,6 +8,7 @@ import (
 	"time"
 
 	dbgorm "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/llm"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -65,12 +66,13 @@ func (s *Service) handleModelHealth(w http.ResponseWriter, r *http.Request) {
 	s.initMu.RLock()
 	embeddingClient := s.embeddingClient
 	rerankClient := s.rerankClient
+	llmClient := s.llmClient
 	s.initMu.RUnlock()
 
-	writeJSON(w, buildModelHealthResponse(settings, embeddingClient, rerankClient))
+	writeJSON(w, buildModelHealthResponse(settings, embeddingClient, rerankClient, llmClient))
 }
 
-func buildModelHealthResponse(settings []*models.ModelSetting, embeddingClient, rerankClient modelNameProvider) modelHealthResponse {
+func buildModelHealthResponse(settings []*models.ModelSetting, embeddingClient, rerankClient modelNameProvider, llmClient *llm.Client) modelHealthResponse {
 	rowsByKey := modelSettingsByKey(settings)
 
 	rows := []modelHealthRow{
@@ -108,7 +110,7 @@ func buildModelHealthResponse(settings []*models.ModelSetting, embeddingClient, 
 			DisabledMsg:   "Reranker URL is not configured; recall keeps fusion order.",
 			DegradedMsg:   "Reranker URL is configured, but the client is not initialized.",
 		}, rowsByKey),
-		buildOnDemandLLMRow(),
+		buildLLMModelRow(llmClient),
 	}
 
 	return modelHealthResponse{
@@ -188,33 +190,22 @@ func activeModelName(client modelNameProvider) (string, bool) {
 	return strings.TrimSpace(client.Model()), true
 }
 
-func buildOnDemandLLMRow() modelHealthRow {
-	url := resolveEnvOnlySignal("ENGRAM_LLM_URL")
-	secret := resolveEnvOnlySignal("ENGRAM_LLM_API_KEY")
-	model := strings.TrimSpace(os.Getenv("ENGRAM_LLM_MODEL"))
-	if model == "" {
-		model = "chat-default"
+func buildLLMModelRow(client *llm.Client) modelHealthRow {
+	row := modelHealthRow{
+		ID: "ops/llm", Role: "llm", Provider: "OpenAI-compatible chat",
+		Model: "chat-default", Health: "standby", Source: "absent",
+		Endpoint: "/v1/chat/completions",
+		Message:  "LLM was not configured at startup; configuration changes require restart.",
+		Evidence: []string{"startup client snapshot"},
 	}
-
-	health := "standby"
-	message := "LLM URL is not configured; crystallization and on-demand LLM flows stay disabled."
-	if url.Set {
-		message = "LLM URL is configured; chat-completion client is created on demand and is not probed by this endpoint."
+	if client != nil {
+		row.Model = client.Model()
+		row.Source = client.ConfigurationSource()
+		row.Configured = true
+		row.SecretSet = client.HasAPIKey()
+		row.Message = "LLM client is initialized from startup configuration; this snapshot does not probe the endpoint."
 	}
-
-	return modelHealthRow{
-		ID:         "ops/llm",
-		Role:       "llm",
-		Provider:   "OpenAI-compatible chat",
-		Model:      model,
-		Health:     health,
-		Source:     url.Source,
-		Endpoint:   "/v1/chat/completions",
-		Message:    message,
-		Evidence:   compactEvidence(append(url.Evidence, secret.Evidence...)),
-		Configured: url.Set,
-		SecretSet:  secret.Set,
-	}
+	return row
 }
 
 func modelSettingsByKey(rows []*models.ModelSetting) map[string]*models.ModelSetting {
@@ -252,13 +243,6 @@ func resolveModelConfigSignal(envKey, settingKey string, rowsByKey map[string]*m
 	}
 
 	return modelConfigSignal{Source: "absent", Evidence: []string{envKey, "model_settings." + settingKey}, Set: false}
-}
-
-func resolveEnvOnlySignal(envKey string) modelConfigSignal {
-	if strings.TrimSpace(os.Getenv(envKey)) != "" {
-		return modelConfigSignal{Source: "env", Evidence: []string{envKey}, Set: true}
-	}
-	return modelConfigSignal{Source: "absent", Evidence: []string{envKey}, Set: false}
 }
 
 func resolveModelName(envKey, settingKey, fallback string, rowsByKey map[string]*models.ModelSetting) (string, modelConfigSignal) {

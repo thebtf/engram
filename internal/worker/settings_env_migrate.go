@@ -24,7 +24,7 @@ type envSettingPair struct {
 
 // envSettingMigrations is the set of model-config env vars that migrate into the settings-store.
 // Secret pairs (isSecret) are vault-encrypted on write; the rest are plaintext config.
-// The embedding DIMENSION is deliberately absent — it is schema-bound, never a runtime setting.
+// Dimensions preserve the existing schema-bound size or explicit request-omission value 0.
 var envSettingMigrations = []envSettingPair{
 	{envVar: "ENGRAM_RERANK_URL", settingKey: "reranker.url"},
 	{envVar: "ENGRAM_RERANK_MODEL", settingKey: "reranker.model"},
@@ -32,6 +32,10 @@ var envSettingMigrations = []envSettingPair{
 	{envVar: "ENGRAM_EMBEDDING_URL", settingKey: "embedder.url"},
 	{envVar: "ENGRAM_EMBEDDING_MODEL", settingKey: "embedder.model"},
 	{envVar: "ENGRAM_EMBEDDING_API_KEY", settingKey: "embedder.api_key", isSecret: true},
+	{envVar: "ENGRAM_EMBEDDING_DIMENSIONS", settingKey: "embedder.dimensions"},
+	{envVar: "ENGRAM_LLM_URL", settingKey: "llm.url"},
+	{envVar: "ENGRAM_LLM_MODEL", settingKey: "llm.model"},
+	{envVar: "ENGRAM_LLM_API_KEY", settingKey: "llm.api_key", isSecret: true},
 }
 
 // settingsWriter is the minimal write seam migrateEnvToSettings needs from the settings-store

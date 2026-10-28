@@ -10,7 +10,6 @@ import (
 
 	"github.com/thebtf/engram/internal/crystallization"
 	gorm "github.com/thebtf/engram/internal/db/gorm"
-	"github.com/thebtf/engram/internal/llm"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -51,8 +50,8 @@ type dreamCandidateWriter interface {
 // marks transcripts processed, and advances an in-process time watermark.
 //
 // Safe defaults:
-//   - crystallization flag off, candidate flag off, or candidate store unavailable → return before reading transcripts.
-//   - No LLM configured (ErrLLMDisabled) → debug log, return; zero side-effects.
+//   - Candidate store unavailable → return before reading transcripts.
+//   - No startup-configured LLM client → debug log, return; zero side-effects.
 //   - transcriptStore nil → debug log, return.
 //   - Zero transcripts since watermark → debug log, return.
 //   - LLM extraction error → warn log, return WITHOUT advancing watermark (retry next tick).
@@ -61,7 +60,6 @@ type dreamCandidateWriter interface {
 // direct-memory fallback: consuming a transcript without a created-or-duplicate
 // candidate would lose work and would resurrect the demolished v5 path.
 func (s *Service) runDreamCrystallization(ctx context.Context) {
-
 	var ts dreamTranscriptStore
 	if s.dreamTranscriptStoreOverride != nil {
 		ts = s.dreamTranscriptStoreOverride
@@ -93,6 +91,7 @@ func (s *Service) runDreamCrystallization(ctx context.Context) {
 
 	s.initMu.RLock()
 	rawMemStore := s.memoryStore
+	client := s.llmClient
 	s.initMu.RUnlock()
 	var memChecker crystallization.MemoryFingerprintChecker
 	if rawMemStore != nil {
@@ -103,13 +102,8 @@ func (s *Service) runDreamCrystallization(ctx context.Context) {
 	if s.dreamExtractorFunc != nil {
 		extractFn = s.dreamExtractorFunc
 	} else {
-		client, err := llm.NewClient()
-		if err != nil {
-			if errors.Is(err, llm.ErrLLMDisabled) {
-				log.Debug().Msg("dream-cycle: LLM disabled, no-op")
-				return
-			}
-			log.Warn().Err(err).Msg("dream-cycle: failed to create LLM client, skipping")
+		if client == nil {
+			log.Debug().Msg("dream-cycle: LLM disabled, no-op")
 			return
 		}
 		extractor := crystallization.NewLLMExtractor(client)
