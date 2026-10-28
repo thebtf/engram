@@ -53,7 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Remove the unreachable raw-index client, legacy slug cache and project-slug producer that could create and stage historical markers. Preserve typed UCI registration/indexing, canonical marker non-mutation, shared gRPC pool lifecycle, stored data and the server/protobuf compatibility boundary.
 - Fix bundled Compose password selection in `.env.example` while preserving explicit external PostgreSQL connection strings.
 - Run transcript retention on the existing four-hour maintenance tick even without an LLM or an admitted memory sleep cycle. Preserve `0` as no automatic unprocessed expiry, positive retention values, inference-before-pruning order and failed-extraction retry data.
-- Keep hidden principal, domain and workstation memories out of ingestion duplicate flags through the shared visibility boundary. Correct candidate descriptions and remove the unused retired proxy helper while retaining transport peer capture.
+- Keep hidden principal, domain and workstation memories out of ingestion duplicate flags through the shared visibility boundary. Correct candidate descriptions and remove the unused retired proxy helper while retaining transport peer capture ([#593](https://github.com/thebtf/engram/pull/593)).
 
 ## [7.0.11] - 2026-10-27
 
