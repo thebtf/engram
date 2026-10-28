@@ -190,7 +190,11 @@ trusted-proxy/origin guards remain. Historical V7 flags no longer activate runti
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ENGRAM_TRANSCRIPT_RETENTION_DAYS` | `0` | Unprocessed transcript retention; `0` means no pruning during provider outages. Processed rows are pruned by the ordinary dream cycle. |
+| `ENGRAM_TRANSCRIPT_RETENTION_DAYS` | `0` | `0` retains unprocessed transcripts indefinitely; positive days expire old unprocessed rows on the existing four-hour tick even without an LLM. Processed rows are pruned on the same tick. |
+
+The four-input default does not bound unprocessed transcript storage. Selecting
+a finite retention value is an explicit owner data policy. Admitted inference
+runs before pruning; extraction failures retain pending transcripts for retry.
 
 ### Removed in v5/v6
 

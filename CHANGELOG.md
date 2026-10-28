@@ -51,6 +51,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Make hybrid memory, privacy/write-lint, audit, continuity, lifecycle, adaptive retrieval and crystallization ordinary v7 behavior without historical startup gates. Remove the empty unified-injection fallback and its mutable API/UI setting; retire dormant V7 startup activation and Authentik header login without deleting retained owner data or weakening ordinary authentication and privacy guards.
 - Resolve LLM configuration and embedding request dimensions through the existing encrypted `model_settings` store with ENV-first overrides, explicit dimensions `0` and startup snapshots. Health uses the same effective LLM client. Reduce normal single-owner startup to four inputs only after private selected-provider equality verification with the same Vault key; retain conditional auth-on and emergency controls, one port, three mounts and Repository `latest`.
 - Remove the unreachable raw-index client, legacy slug cache and project-slug producer that could create and stage historical markers. Preserve typed UCI registration/indexing, canonical marker non-mutation, shared gRPC pool lifecycle, stored data and the server/protobuf compatibility boundary.
+- Fix bundled Compose password selection in `.env.example` while preserving explicit external PostgreSQL connection strings.
+- Run transcript retention on the existing four-hour maintenance tick even without an LLM or an admitted memory sleep cycle. Preserve `0` as no automatic unprocessed expiry, positive retention values, inference-before-pruning order and failed-extraction retry data.
+- Keep hidden principal, domain and workstation memories out of ingestion duplicate flags through the shared visibility boundary. Correct candidate descriptions and remove the unused retired proxy helper while retaining transport peer capture.
 
 ## [7.0.11] - 2026-10-27
 

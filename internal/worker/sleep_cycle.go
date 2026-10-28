@@ -91,6 +91,9 @@ func (t *trackingMemoryStore) UpdateLifecycleFields(ctx context.Context, id int6
 
 // maybeSleepCycle checks the trigger conditions and runs RunSleepCycle when met.
 func (s *Service) maybeSleepCycle(ctx context.Context) {
+	pruneUnprocessed := true
+	defer func() { s.pruneDreamTranscripts(ctx, pruneUnprocessed) }()
+
 	s.initMu.RLock()
 	ms := s.memoryStore
 	ps := s.promotionStore
@@ -192,11 +195,9 @@ func (s *Service) maybeSleepCycle(ctx context.Context) {
 		}
 	}
 
-	// Dream-cycle crystallization extracts decisions from session transcripts and
-	// routes them to candidates on the memory sleep-cycle tick. The call is gated
-	// here by ENGRAM_CRYSTALLIZATION_ENABLED; runDreamCrystallization then fails
-	// closed on the candidate flag and candidate-writer availability before reads
-	// or extraction.
+	// Inference follows the sleep-cycle admission gates. Retention runs after
+	// every existing tick, including skipped/no-LLM runs, without changing the
+	// configured zero-retention policy or processing before pruning.
 	//
 	// Runs SYNCHRONOUSLY inside this (s.wg-tracked) sleep-cycle goroutine. The LLM
 	// client has a 30s per-attempt timeout with 3 attempts + 2s/4s backoff, so an
@@ -207,7 +208,7 @@ func (s *Service) maybeSleepCycle(ctx context.Context) {
 	{ // LLM worst-case budget: 30s/attempt × 3 attempts + 2s + 4s backoff = 96s.
 		// Use 120s to cover that budget with margin; 60s was insufficient.
 		dreamCtx, dreamCancel := context.WithTimeout(ctx, 120*time.Second)
-		s.runDreamCrystallization(dreamCtx)
+		pruneUnprocessed = s.runDreamCrystallization(dreamCtx)
 		dreamCancel()
 	}
 

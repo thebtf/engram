@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"mime"
 	"net/http"
-	"net/netip"
 	"os"
 	"regexp"
 	"slices"
@@ -434,34 +433,6 @@ func (ta *TokenAuth) SetAuthStores(userStore *gormdb.UserStore, authSessionStore
 	defer ta.mu.Unlock()
 	ta.userStore = userStore
 	ta.authSessionStore = authSessionStore
-}
-
-// isTrustedProxy checks whether the request originated from a trusted proxy IP.
-// Returns false if no trusted proxies are configured (deny-by-default).
-func isTrustedProxy(r *http.Request, trustedProxies []string) bool {
-	if len(trustedProxies) == 0 {
-		return false
-	}
-	peer, captured := r.Context().Value(transportPeerKey{}).(string)
-	if !captured {
-		// Direct middleware consumers have no preceding RealIP rewrite.
-		peer = r.RemoteAddr
-	}
-	remoteIP, err := netip.ParseAddr(peer)
-	if err != nil {
-		addrPort, err := netip.ParseAddrPort(peer)
-		if err != nil {
-			return false
-		}
-		remoteIP = addrPort.Addr()
-	}
-	for _, trusted := range trustedProxies {
-		trustedIP, err := netip.ParseAddr(trusted)
-		if err == nil && remoteIP.Unmap() == trustedIP.Unmap() {
-			return true
-		}
-	}
-	return false
 }
 
 // StatsCh returns the buffered channel for async token stats increment.

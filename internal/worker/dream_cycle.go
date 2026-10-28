@@ -59,19 +59,13 @@ type dreamCandidateWriter interface {
 // The candidate path is the only durable output. There is intentionally no
 // direct-memory fallback: consuming a transcript without a created-or-duplicate
 // candidate would lose work and would resurrect the demolished v5 path.
-func (s *Service) runDreamCrystallization(ctx context.Context) {
-	var ts dreamTranscriptStore
-	if s.dreamTranscriptStoreOverride != nil {
-		ts = s.dreamTranscriptStoreOverride
-	} else {
-		s.initMu.RLock()
-		realTS := s.transcriptStore
-		s.initMu.RUnlock()
-		if realTS == nil {
-			log.Debug().Msg("dream-cycle: transcript store not ready, skipping")
-			return
-		}
-		ts = realTS
+// The existing sleep-cycle tick owns retention after inference or a skipped run.
+// False preserves unprocessed transcripts for retry after an inference failure.
+func (s *Service) runDreamCrystallization(ctx context.Context) bool {
+	ts := s.dreamTranscripts()
+	if ts == nil {
+		log.Debug().Msg("dream-cycle: transcript store not ready, skipping")
+		return true
 	}
 
 	var candidateWriter dreamCandidateWriter
@@ -86,7 +80,7 @@ func (s *Service) runDreamCrystallization(ctx context.Context) {
 	}
 	if candidateWriter == nil {
 		log.Debug().Msg("dream-cycle: candidate store not ready, no-op")
-		return
+		return true
 	}
 
 	s.initMu.RLock()
@@ -104,7 +98,7 @@ func (s *Service) runDreamCrystallization(ctx context.Context) {
 	} else {
 		if client == nil {
 			log.Debug().Msg("dream-cycle: LLM disabled, no-op")
-			return
+			return true
 		}
 		extractor := crystallization.NewLLMExtractor(client)
 		extractFn = extractor.Extract
@@ -115,11 +109,11 @@ func (s *Service) runDreamCrystallization(ctx context.Context) {
 	transcripts, err := ts.ListUnprocessedSince(ctx, watermark)
 	if err != nil {
 		log.Warn().Err(err).Msg("dream-cycle: failed to list unprocessed transcripts, skipping")
-		return
+		return false
 	}
 	if len(transcripts) == 0 {
 		log.Debug().Time("watermark", watermark).Msg("dream-cycle: no unprocessed transcripts since watermark")
-		return
+		return true
 	}
 
 	type groupKey struct {
@@ -211,22 +205,7 @@ func (s *Service) runDreamCrystallization(ctx context.Context) {
 		processedTranscripts += len(batch)
 	}
 
-	pruned, pruneErr := ts.PruneProcessed(ctx)
-	if pruneErr != nil {
-		log.Warn().Err(pruneErr).Msg("dream-cycle: failed to prune processed transcripts")
-	}
-
-	var pruneOldCount int64
 	if allSucceeded {
-		retentionDays := 0
-		if s.config != nil {
-			retentionDays = s.config.TranscriptRetentionDays
-		}
-		var pruneOldErr error
-		pruneOldCount, pruneOldErr = ts.PruneUnprocessedOlderThan(ctx, retentionDays)
-		if pruneOldErr != nil {
-			log.Warn().Err(pruneOldErr).Msg("dream-cycle: failed to prune old unprocessed transcripts")
-		}
 		s.dreamWatermark.Store(maxCreated.UnixNano())
 	}
 
@@ -235,13 +214,44 @@ func (s *Service) runDreamCrystallization(ctx context.Context) {
 		Int("transcripts_processed", processedTranscripts).
 		Int("decisions_extracted", decisionsExtracted).
 		Int("candidates_created", candidatesCreated).
-		Int64("transcripts_pruned", pruned).
-		Int64("old_unprocessed_pruned", pruneOldCount).
 		Str("digest_mode", digestMode).
 		Bool("all_groups_succeeded", allSucceeded).
 		Int("provenance_groups", len(keys)).
 		Time("new_watermark", time.Unix(0, s.dreamWatermark.Load())).
 		Msg("dream-cycle: crystallization complete")
+	return allSucceeded
+}
+
+func (s *Service) dreamTranscripts() dreamTranscriptStore {
+	if s.dreamTranscriptStoreOverride != nil {
+		return s.dreamTranscriptStoreOverride
+	}
+	s.initMu.RLock()
+	ts := s.transcriptStore
+	s.initMu.RUnlock()
+	if ts == nil {
+		return nil
+	}
+	return ts
+}
+
+func (s *Service) pruneDreamTranscripts(ctx context.Context, pruneUnprocessed bool) {
+	ts := s.dreamTranscripts()
+	if ts == nil {
+		return
+	}
+	if _, err := ts.PruneProcessed(ctx); err != nil {
+		log.Warn().Err(err).Msg("dream-cycle: failed to prune processed transcripts")
+	}
+	if pruneUnprocessed {
+		retentionDays := 0
+		if s.config != nil {
+			retentionDays = s.config.TranscriptRetentionDays
+		}
+		if _, err := ts.PruneUnprocessedOlderThan(ctx, retentionDays); err != nil {
+			log.Warn().Err(err).Msg("dream-cycle: failed to prune old unprocessed transcripts")
+		}
+	}
 }
 
 // dreamTruncate returns the first n bytes of text, appending "…" when truncated.

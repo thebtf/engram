@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -27,6 +28,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/crystallization"
 	gorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
@@ -167,6 +169,119 @@ func TestDreamCycle_NoOpWhenLLMDisabled(t *testing.T) {
 	assert.Len(t, cs.created, 0, "no candidates must be created when LLM is disabled")
 	// Watermark must not be advanced (still 0 == epoch).
 	assert.EqualValues(t, 0, svc.dreamWatermark.Load(), "watermark must not advance on LLM-disabled no-op")
+}
+
+type retentionTranscriptStore struct {
+	fakeTranscriptStore
+	now       time.Time
+	listCalls int
+}
+
+func (s *retentionTranscriptStore) ListUnprocessedSince(ctx context.Context, watermark time.Time) ([]gorm.SessionTranscript, error) {
+	s.listCalls++
+	rows, err := s.fakeTranscriptStore.ListUnprocessedSince(ctx, watermark)
+	return slices.DeleteFunc(rows, func(row gorm.SessionTranscript) bool { return row.ProcessedAt != nil }), err
+}
+
+func (s *retentionTranscriptStore) PruneProcessed(context.Context) (int64, error) {
+	before := len(s.rows)
+	s.rows = slices.DeleteFunc(s.rows, func(row gorm.SessionTranscript) bool { return row.ProcessedAt != nil || s.processed[row.ID] })
+	return int64(before - len(s.rows)), nil
+}
+
+func (s *retentionTranscriptStore) PruneUnprocessedOlderThan(_ context.Context, days int) (int64, error) {
+	if days <= 0 {
+		return 0, nil
+	}
+	before := len(s.rows)
+	cutoff := s.now.AddDate(0, 0, -days)
+	s.rows = slices.DeleteFunc(s.rows, func(row gorm.SessionTranscript) bool {
+		return row.ProcessedAt == nil && row.CreatedAt.Before(cutoff)
+	})
+	return int64(before - len(s.rows)), nil
+}
+
+func TestDreamCycle_RetentionRunsWithoutLLMBeforeSleepGates(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		days int
+		busy bool
+	}{
+		{name: "positive retention while active", days: 7, busy: true},
+		{name: "positive retention below new memory threshold", days: 7},
+		{name: "zero preserves unprocessed while active", busy: true},
+		{name: "zero preserves unprocessed below threshold"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Now().UTC()
+			processed := now.Add(-time.Hour)
+			ts := &retentionTranscriptStore{now: now, fakeTranscriptStore: fakeTranscriptStore{rows: []gorm.SessionTranscript{
+				{ID: 1, CreatedAt: now.AddDate(0, 0, -8), Content: "expired pending transcript"},
+				{ID: 2, CreatedAt: now.Add(-time.Hour), Content: "nonexpired pending transcript"},
+				{ID: 3, CreatedAt: now.Add(-time.Hour), Content: "already processed transcript", ProcessedAt: &processed},
+			}}}
+			db := knowledgeSQLiteDB(t)
+			require.NoError(t, db.Create(&gorm.Memory{ID: 100, Project: uuid.NewString(), Content: "durable memory stays", Status: "active", CreatedAt: now, UpdatedAt: now}).Error)
+			cfg := config.Default()
+			cfg.TranscriptRetentionDays = tc.days
+			svc := &Service{config: cfg, memoryStore: gorm.NewMemoryStore(&gorm.Store{DB: db}), dreamTranscriptStoreOverride: ts}
+			if tc.busy {
+				svc.lastRequestAt.Store(now.UnixNano())
+			}
+			svc.maybeSleepCycle(context.Background())
+			ids := make([]int64, 0, len(ts.rows))
+			for _, row := range ts.rows {
+				ids = append(ids, row.ID)
+			}
+			if tc.days > 0 {
+				require.Equal(t, []int64{2}, ids, "only expired unprocessed and already processed transcripts may be removed")
+			} else {
+				require.Equal(t, []int64{1, 2}, ids, "explicit zero must preserve all unprocessed transcripts")
+			}
+			require.Zero(t, ts.listCalls, "maintenance must not read pending content for inference")
+			require.Empty(t, ts.marked)
+			require.Zero(t, svc.dreamWatermark.Load())
+			var memory gorm.Memory
+			require.NoError(t, db.First(&memory, 100).Error)
+			require.Equal(t, "durable memory stays", memory.Content)
+		})
+	}
+}
+
+func TestDreamCycle_RetentionFollowsInferenceOutcome(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprintf("extraction_failure_%t", fail), func(t *testing.T) {
+			now := time.Now().UTC()
+			processed := now.Add(-time.Hour)
+			ts := &retentionTranscriptStore{now: now, fakeTranscriptStore: fakeTranscriptStore{rows: []gorm.SessionTranscript{
+				{ID: 1, Project: "project", SessionID: "session", CreatedAt: now.AddDate(0, 0, -8), Content: "expired retry transcript"},
+				{ID: 2, Project: "project", SessionID: "session", CreatedAt: now.Add(-time.Hour), Content: "fresh pending transcript"},
+				{ID: 3, Project: "project", SessionID: "session", CreatedAt: now.Add(-time.Hour), ProcessedAt: &processed},
+			}}}
+			cfg := config.Default()
+			cfg.TranscriptRetentionDays = 7
+			svc := &Service{config: cfg, dreamTranscriptStoreOverride: ts, dreamCandidateStoreOverride: &fakeCandidateStore{}}
+			svc.dreamExtractorFunc = func(_ context.Context, digest string) ([]crystallization.ExtractedDecision, error) {
+				require.Len(t, ts.rows, 3, "admitted inference must run before retention")
+				require.Contains(t, digest, "expired retry transcript")
+				if fail {
+					return nil, errors.New("synthetic inference failure")
+				}
+				return nil, nil
+			}
+			pruneUnprocessed := svc.runDreamCrystallization(context.Background())
+			svc.pruneDreamTranscripts(context.Background(), pruneUnprocessed)
+			if fail {
+				require.False(t, pruneUnprocessed)
+				require.Len(t, ts.rows, 2, "failed inference retains both expired and fresh pending work for retry")
+				require.Equal(t, int64(1), ts.rows[0].ID)
+				require.Equal(t, int64(2), ts.rows[1].ID)
+			} else {
+				require.True(t, pruneUnprocessed)
+				require.Empty(t, ts.rows, "successful inference marks work before processed-row pruning")
+			}
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------

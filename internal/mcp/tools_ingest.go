@@ -90,6 +90,8 @@ func (s *Server) ingestDocument(ctx context.Context, a ingestArgs) (string, erro
 		existing, listErr = s.memoryStore.List(ctx, a.Project, 100)
 		if listErr != nil {
 			log.Warn().Err(listErr).Msg("ingest: write gate could not load existing memories, skipping gate")
+		} else {
+			existing = filterVisibleWriteGateCandidates(ctx, "", existing)
 		}
 	}
 
@@ -125,8 +127,7 @@ func (s *Server) ingestDocument(ctx context.Context, a ingestArgs) (string, erro
 			memory.Status = "flagged"
 		}
 
-		// Ingest supplies lifecycle fields, but the default-off path must leave
-		// DB defaults authoritative for ordinary callers.
+		// Ingest supplies ordinary v7 lifecycle fields.
 		var created *models.Memory
 		var err error
 		{
