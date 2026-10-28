@@ -44,7 +44,17 @@ declare -A values=()
 
 RUNTIME_COMPOSE_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/docker-compose.runtime.yml"
 declare -A interpolation_keys=()
+environment_indent=-1
 while IFS= read -r line || [[ -n "${line}" ]]; do
+    if [[ "${line}" =~ ^([[:space:]]*)environment:[[:space:]]*$ ]]; then
+        environment_indent=${#BASH_REMATCH[1]}
+    elif (( environment_indent >= 0 )) && [[ "${line}" =~ ^([[:space:]]*)([^[:space:]#]) ]]; then
+        if (( ${#BASH_REMATCH[1]} <= environment_indent )); then
+            environment_indent=-1
+        elif [[ "${line}" =~ ^[[:space:]]+([[:alpha:]_][[:alnum:]_]*):[[:space:]]*(#.*)?$ ]]; then
+            interpolation_keys["${BASH_REMATCH[1]}"]=1
+        fi
+    fi
     remainder="${line}"
     while [[ "${remainder}" =~ \$\{([[:alpha:]_][[:alnum:]_]*) ]]; do
         interpolation_keys["${BASH_REMATCH[1]}"]=1

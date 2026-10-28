@@ -107,11 +107,12 @@ comments that mention a managed image key. Every non-comment occurrence of a
 managed image key must still be one unique bare digest assignment.
 
 It copies the selected dotenv file to a mode-`0600` snapshot and treats that
-snapshot as the entire Compose interpolation boundary. Before any Docker call it
-finds every `${VAR}` reference in `deploy/docker-compose.runtime.yml`, rejects a
-different inherited value for a snapshot-defined key, and unsets every referenced
-key—including keys absent from the snapshot—so the parent process cannot inject
-configuration. It also rejects `COMPOSE_FILE`, `COMPOSE_PATH_SEPARATOR`,
+snapshot as the entire Compose environment boundary. Before any Docker call it
+finds every `${VAR}` reference and valueless `environment:` mapping entry in
+`deploy/docker-compose.runtime.yml`, rejects a different inherited value for a
+snapshot-defined key, and unsets every consumed key—including keys absent from
+the snapshot—so the parent process cannot inject configuration. It also rejects
+`COMPOSE_FILE`, `COMPOSE_PATH_SEPARATOR`,
 `COMPOSE_PROJECT_NAME`, `COMPOSE_PROFILES`, `COMPOSE_ENV_FILES`,
 `COMPOSE_DISABLE_ENV_FILE`, and `COMPOSE_PROJECT_DIRECTORY`; these can select a
 different Compose source, project, profile, or dotenv source. Docker client

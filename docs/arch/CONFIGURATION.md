@@ -24,8 +24,11 @@ Normal single-owner startup uses exactly four Unraid **Variable** rows:
 `TZ`, `DATABASE_DSN`, `ENGRAM_VAULT_KEY`, `ENGRAM_AUTH_DISABLED`.
 Keep their existing values. `ENGRAM_AUTH_DISABLED=true` is the owner's explicit
 trusted single-user LAN choice, not multi-user isolation or a permanent no-auth default.
-For auth-on, select `false` and supply the existing `ENGRAM_AUTH_ADMIN_TOKEN` via
-`.env` or the shell; Compose forwards it automatically. Preserve its old value in the private rollback template.
+For auth-on, select `false` and add an optional Unraid **Variable** row named
+`ENGRAM_AUTH_ADMIN_TOKEN` with the existing private token value. This is not a
+fifth normal single-owner input. With Compose, supply that token via `.env` or
+the shell; Compose forwards it automatically. Preserve its old value in the
+private rollback template.
 Code intelligence and telemetry still default to true. Their optional
 `ENGRAM_CODE_INTEL_ENABLED=false` and `ENGRAM_TELEMETRY_ENABLED=false` emergency
 overrides remain supported but are not normal startup rows.

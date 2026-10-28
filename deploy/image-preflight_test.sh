@@ -45,10 +45,11 @@ run_wrapper() {
     mkdir "${mock_bin}"
     cat >"${mock_bin}/docker" <<EOF
 #!/usr/bin/env bash
-snapshot="" action="" quiet=0 present=""
+snapshot="" compose_file="" action="" quiet=0 present=""
 for ((i = 1; i <= \$#; i++)); do
     case "\${!i}" in
         --env-file) next=\$((i + 1)); snapshot="\${!next}" ;;
+        -f) next=\$((i + 1)); compose_file="\${!next}" ;;
         config|pull|up) action="\${!i}" ;;
         --quiet) quiet=1 ;;
     esac
@@ -57,11 +58,15 @@ server=""
 while IFS= read -r line || [[ -n "\${line}" ]]; do
     case "\${line}" in ENGRAM_SERVER_IMAGE=*) server="\${line#*=}";; esac
 done < "\${snapshot}"
-for key in ENGRAM_SERVER_IMAGE ENGRAM_OPERATOR_IMAGE ENGRAM_POSTGRES_IMAGE POSTGRES_PASSWORD ENGRAM_AUTH_ADMIN_TOKEN ENGRAM_AUTH_DISABLED ENGRAM_VAULT_KEY ENGRAM_EMBEDDING_API_KEY; do
+for key in ENGRAM_SERVER_IMAGE ENGRAM_OPERATOR_IMAGE ENGRAM_POSTGRES_IMAGE POSTGRES_PASSWORD ENGRAM_AUTH_ADMIN_TOKEN ENGRAM_AUTH_DISABLED ENGRAM_VAULT_KEY ENGRAM_EMBEDDING_URL ENGRAM_EMBEDDING_API_KEY ENGRAM_EMBEDDING_MODEL ENGRAM_EMBEDDING_DIMENSIONS ENGRAM_LLM_URL ENGRAM_LLM_API_KEY ENGRAM_LLM_MODEL ENGRAM_CODE_INTEL_ENABLED ENGRAM_TELEMETRY_ENABLED; do
     [[ -z "\${!key+x}" ]] || present+="\${key},"
 done
 mode="\$(stat -c '%a' "\${snapshot}")"
 printf '%s|%s|%s|%s|%s|%s\n' "\${action}" "\${snapshot}" "\${mode}" "\${server}" "\${quiet}" "\${present}" >> "${marker}"
+if [[ "\${action}" == config && -n "\${PREFLIGHT_TEST_REAL_DOCKER-}" ]]; then
+    "\${PREFLIGHT_TEST_REAL_DOCKER}" "\$@" || exit \$?
+    "\${PREFLIGHT_TEST_REAL_DOCKER}" compose --env-file "\${snapshot}" -f "\${compose_file}" config --format json > "${marker}.config.json" || exit \$?
+fi
 case "\${action}" in
     config) [[ "${after_config}" == "${source}" ]] || cp "${after_config}" "${source}" ;;
     pull) [[ "${after_pull}" == "${source}" ]] || cp "${after_pull}" "${source}" ;;
@@ -152,6 +157,20 @@ assert_no_secret_output() {
     for secret in database-sentinel admin-sentinel vault-sentinel provider-sentinel; do
         [[ "$(<"${output}")" != *"${secret}"* ]] || return 1
     done
+}
+
+assert_real_compose_value() {
+    local config="$1" key="$2" mode="$3" expected="${4-}"
+    python3 - "${config}" "${key}" "${mode}" "${expected}" <<'PY'
+import json
+import sys
+
+path, key, mode, expected = sys.argv[1:]
+with open(path, encoding='utf-8') as source:
+    value = json.load(source)['services']['server']['environment'].get(key)
+if (mode == 'absent' and value is not None) or (mode == 'value' and value != expected):
+    raise SystemExit('unexpected effective Compose value for ' + key)
+PY
 }
 
 main() {
@@ -250,6 +269,52 @@ main() {
         pass 'absent snapshot keys cannot be injected from the parent environment'
     else
         fail 'absent snapshot keys cannot be injected from the parent environment'
+    fi
+
+    for key in ENGRAM_AUTH_ADMIN_TOKEN ENGRAM_CODE_INTEL_ENABLED ENGRAM_TELEMETRY_ENABLED ENGRAM_EMBEDDING_URL ENGRAM_EMBEDDING_API_KEY ENGRAM_EMBEDDING_MODEL ENGRAM_EMBEDDING_DIMENSIONS ENGRAM_LLM_URL ENGRAM_LLM_API_KEY ENGRAM_LLM_MODEL; do
+        local absent="${tmp}/absent-${key}.env"
+        while IFS= read -r line || [[ -n "${line}" ]]; do
+            [[ "${line}" == "${key}="* ]] || printf '%s\n' "${line}"
+        done <"${tmp}/valid.env" >"${absent}"
+        marker="${absent}.compose"; rc=0; WRAPPER_OUTPUT="${absent}.output"
+        run_wrapper "${absent}" "${marker}" "${absent}" "${absent}" env "${key}=inherited-optional-sentinel" || rc=$?
+        if [[ ${rc} -eq 0 ]] && assert_frozen_compose_input "${marker}" "${server}" "${absent}" && assert_no_secret_output "${WRAPPER_OUTPUT}"; then
+            pass "absent valueless ${key} cannot be injected by the parent"
+        else
+            fail "absent valueless ${key} cannot be injected by the parent"
+        fi
+    done
+
+    make_env "${tmp}/frozen-url.env" "${server}" "${operator}" "${postgres}"
+    printf 'ENGRAM_LLM_URL=https://frozen-provider.example.invalid/v1\n' >>"${tmp}/frozen-url.env"
+    assert_rejected_before_compose 'different inherited valueless URL rejected before Compose' "${tmp}/frozen-url.env" env ENGRAM_LLM_URL=https://inherited-provider.example.invalid/v1
+    assert_rejected_before_compose 'different inherited interpolation value rejected before Compose' "${tmp}/override.env" env POSTGRES_PASSWORD=conflicting-database-sentinel
+
+    local real_docker
+    real_docker="$(command -v docker 2>/dev/null || true)"
+    if [[ -n "${real_docker}" ]] && "${real_docker}" compose version >/dev/null 2>&1; then
+        while IFS= read -r line || [[ -n "${line}" ]]; do
+            [[ "${line}" == UNRELATED_VALUE=* ]] || printf '%s\n' "${line}"
+        done <"${tmp}/valid.env" >"${tmp}/native-absent.env"
+        marker="${tmp}/native-absent.compose"; rc=0; WRAPPER_OUTPUT="${tmp}/native-absent.output"
+        run_wrapper "${tmp}/native-absent.env" "${marker}" "${tmp}/native-absent.env" "${tmp}/native-absent.env" env "PREFLIGHT_TEST_REAL_DOCKER=${real_docker}" ENGRAM_LLM_URL=https://inherited-provider.example.invalid/v1 || rc=$?
+        if [[ ${rc} -eq 0 ]] && assert_frozen_compose_input "${marker}" "${server}" "${tmp}/native-absent.env" && assert_real_compose_value "${marker}.config.json" ENGRAM_LLM_URL absent && assert_real_compose_value "${marker}.config.json" ENGRAM_LLM_API_KEY absent && assert_no_secret_output "${WRAPPER_OUTPUT}"; then
+            pass 'real Compose sees no inherited URL or key outside frozen dotenv'
+        else
+            fail 'real Compose sees no inherited URL or key outside frozen dotenv'
+        fi
+
+        cp "${tmp}/native-absent.env" "${tmp}/native-frozen.env"
+        printf 'ENGRAM_LLM_URL=https://frozen-provider.example.invalid/v1\n' >>"${tmp}/native-frozen.env"
+        marker="${tmp}/native-frozen.compose"; rc=0; WRAPPER_OUTPUT="${tmp}/native-frozen.output"
+        run_wrapper "${tmp}/native-frozen.env" "${marker}" "${tmp}/native-frozen.env" "${tmp}/native-frozen.env" env "PREFLIGHT_TEST_REAL_DOCKER=${real_docker}" ENGRAM_LLM_URL=https://frozen-provider.example.invalid/v1 || rc=$?
+        if [[ ${rc} -eq 0 ]] && assert_frozen_compose_input "${marker}" "${server}" "${tmp}/native-frozen.env" && assert_real_compose_value "${marker}.config.json" ENGRAM_LLM_URL value https://frozen-provider.example.invalid/v1 && assert_no_secret_output "${WRAPPER_OUTPUT}"; then
+            pass 'real Compose consumes the frozen URL after matching inherited value is cleared'
+        else
+            fail 'real Compose consumes the frozen URL after matching inherited value is cleared'
+        fi
+    else
+        printf 'SKIP: real Compose boundary requires an installed Compose CLI; mock boundary checks still run\n'
     fi
 
     for key in COMPOSE_FILE COMPOSE_PATH_SEPARATOR COMPOSE_PROJECT_NAME COMPOSE_PROFILES COMPOSE_ENV_FILES COMPOSE_DISABLE_ENV_FILE COMPOSE_PROJECT_DIRECTORY COMPOSE_CONVERT_WINDOWS_PATHS COMPOSE_REMOVE_ORPHANS COMPOSE_IGNORE_ORPHANS; do
