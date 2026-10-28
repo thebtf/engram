@@ -7,12 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Resolve LLM configuration and embedding request dimensions through the existing encrypted `model_settings` store, preserving ENV-first overrides, explicit dimensions `0`, absent-provider behavior and startup snapshots. Reduce normal single-owner startup to four inputs only after private selected-value equality verification; keep auth-on and emergency overrides optional.
-
-- Delete the unreachable raw-index client, legacy slug cache and project-slug producer that could create and stage old `.engram-project` markers. Retain typed UCI registration/indexing, canonical marker non-mutation checks, shared gRPC pool lifecycle, stored data and the existing server/protobuf compatibility boundary.
-
-- Make hybrid memory, privacy/write-lint, audit, continuity, lifecycle, adaptive retrieval and crystallization ordinary v7 behavior without historical startup flags. Remove the empty unified-injection rollback and its mutable settings/API/UI control. Retire dormant V7 startup activation and Authentik header login without deleting retained owner data; preserve authentication choice, code-intelligence and telemetry stops. Document the four-input single-owner template and value-preserving update/rollback boundary.
-
 - Regenerate the API through the maintained worker target using canonical local Go package directories and Swag 1.16.6, with real producer errors stopping the build. Correct existing context search/inject/session-start annotations without changing handlers; document the shared GET/POST conditional-query limitation. The actual producer and server build pass, with 40 named schema checks and all 76 references resolved; that producer checkpoint established compile-only retained-reader oracle provenance, with later native query proof recorded separately, and installed/release acceptance remains separate.
 
 - Add retained catalog `families` metadata with kind, technical table, saved membership-occurrence count and declared/separate/metadata-only reader boundary. Preserve every group, opaque reference, safe label and reason without payload previews, readable-record totals, availability or historical ownership assignment. This descriptor change does not provide cross-group record discovery or installed-consumer acceptance.
@@ -49,6 +43,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Isolate canonical GORM/gRPC fixtures, bound their pools and await caller-owned audit writes before schema cleanup; retain restore guards and public data. Reuse focused retention/audit/gRPC proofs; the earlier 37-PASS run remains preservation FAIL (audit rows 37→40), followed by seven focused PASS with 40→40 preservation. Canonical continuity fixtures now migrate once per isolated parent (17→6), preserving every assertion and the unchanged 12m budget; reuse 22 focused lifecycle PASS plus three hash-bound slot CRUD/migration PASS from the earlier incomplete timeout run, not a full-suite or installed-acceptance claim.
 - Use registered canonical UUIDs and authenticated caller project context in MCP fixtures without weakening default-deny, privacy or pre-mutation rejection guards. Reuse 119 prior PASS plus one exact retry PASS after the context fix, not 120 fresh PASS or installed acceptance.
 - Seed the isolated operator-code fixture with a registered canonical project UUID while preserving five queue candidates, published/no-view checks and redacted provisioning errors.
+
+## [7.0.12] - 2026-10-28
+
+### Fixed
+
+- Make hybrid memory, privacy/write-lint, audit, continuity, lifecycle, adaptive retrieval and crystallization ordinary v7 behavior without historical startup gates. Remove the empty unified-injection fallback and its mutable API/UI setting; retire dormant V7 startup activation and Authentik header login without deleting retained owner data or weakening ordinary authentication and privacy guards.
+- Resolve LLM configuration and embedding request dimensions through the existing encrypted `model_settings` store with ENV-first overrides, explicit dimensions `0` and startup snapshots. Health uses the same effective LLM client. Reduce normal single-owner startup to four inputs only after private selected-provider equality verification with the same Vault key; retain conditional auth-on and emergency controls, one port, three mounts and Repository `latest`.
+- Remove the unreachable raw-index client, legacy slug cache and project-slug producer that could create and stage historical markers. Preserve typed UCI registration/indexing, canonical marker non-mutation, shared gRPC pool lifecycle, stored data and the server/protobuf compatibility boundary.
 
 ## [7.0.11] - 2026-10-27
 
