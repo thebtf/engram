@@ -230,9 +230,6 @@ func TestOperatorConsoleRuntimeTargetContract(t *testing.T) {
 		"operator-console:",
 		"${ENGRAM_OPERATOR_IMAGE:?set ENGRAM_OPERATOR_IMAGE from the immutable release manifest}",
 		"ENGRAM_OPERATOR_API_TARGET: \"http://server:37777\"",
-		"ENGRAM_LLM_URL: \"${ENGRAM_LLM_URL:-}\"",
-		"ENGRAM_LLM_MODEL: \"${ENGRAM_LLM_MODEL:-chat-default}\"",
-		"ENGRAM_LLM_API_KEY: \"${ENGRAM_LLM_API_KEY:-}\"",
 	)
 	requireFileNotContains(t, filepath.Join(repo, "deploy", "docker-compose.runtime.yml"),
 		"operator-web:", "NUXT_ENGRAM_API_TARGET")
@@ -466,9 +463,6 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 		compose := readFile(t, composePath)
 		for _, required := range []string{
 			"${ENGRAM_SERVER_IMAGE:?", "${ENGRAM_OPERATOR_IMAGE:?", "${ENGRAM_POSTGRES_IMAGE:?",
-			"ENGRAM_LLM_URL: \"${ENGRAM_LLM_URL:-}\"",
-			"ENGRAM_LLM_MODEL: \"${ENGRAM_LLM_MODEL:-chat-default}\"",
-			"ENGRAM_LLM_API_KEY: \"${ENGRAM_LLM_API_KEY:-}\"",
 		} {
 			if !strings.Contains(compose, required) {
 				t.Fatalf("%s does not require immutable release-manifest identity %q", composePath, required)

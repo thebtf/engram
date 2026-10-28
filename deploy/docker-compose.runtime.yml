@@ -37,20 +37,20 @@ services:
       DATABASE_DSN: "${DATABASE_DSN:-postgres://engram:${POSTGRES_PASSWORD}@postgres:5432/engram?sslmode=disable}"
       ENGRAM_AUTH_DISABLED: "${ENGRAM_AUTH_DISABLED:?select the explicit authentication mode}"
       # Auth-on only; preserve the existing private token when enabling.
-      # ENGRAM_AUTH_ADMIN_TOKEN: "${ENGRAM_AUTH_ADMIN_TOKEN:-}"
+      ENGRAM_AUTH_ADMIN_TOKEN:
       # ENGRAM_AUTH_TRUSTED_PROXY: "${OPERATOR_CONSOLE_TRUSTED_PROXY_IP:-10.240.250.10}"
       ENGRAM_VAULT_KEY: "${ENGRAM_VAULT_KEY:-}"
       # Optional emergency stops; omitted normal values remain true.
-      # ENGRAM_CODE_INTEL_ENABLED: "${ENGRAM_CODE_INTEL_ENABLED:-true}"
-      # ENGRAM_TELEMETRY_ENABLED: "${ENGRAM_TELEMETRY_ENABLED:-true}"
-      # Optional provider overrides; normal values live in model_settings.
-      # ENGRAM_EMBEDDING_URL: "${ENGRAM_EMBEDDING_URL:-}"
-      # ENGRAM_EMBEDDING_API_KEY: "${ENGRAM_EMBEDDING_API_KEY:-}"
-      # ENGRAM_EMBEDDING_MODEL: "${ENGRAM_EMBEDDING_MODEL:-text-embedding}"
-      # ENGRAM_EMBEDDING_DIMENSIONS: "${ENGRAM_EMBEDDING_DIMENSIONS:-1536}"
-      # ENGRAM_LLM_URL: "${ENGRAM_LLM_URL:-}"
-      # ENGRAM_LLM_API_KEY: "${ENGRAM_LLM_API_KEY:-}"
-      # ENGRAM_LLM_MODEL: "${ENGRAM_LLM_MODEL:-chat-default}"
+      ENGRAM_CODE_INTEL_ENABLED:
+      ENGRAM_TELEMETRY_ENABLED:
+      # Pass through supplied overrides only; keep model_settings defaults intact.
+      ENGRAM_EMBEDDING_URL:
+      ENGRAM_EMBEDDING_API_KEY:
+      ENGRAM_EMBEDDING_MODEL:
+      ENGRAM_EMBEDDING_DIMENSIONS:
+      ENGRAM_LLM_URL:
+      ENGRAM_LLM_API_KEY:
+      ENGRAM_LLM_MODEL:
     volumes:
       - engramdata:/var/lib/engram
     networks:

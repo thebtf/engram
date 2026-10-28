@@ -24,8 +24,8 @@ Normal single-owner startup uses exactly four Unraid **Variable** rows:
 `TZ`, `DATABASE_DSN`, `ENGRAM_VAULT_KEY`, `ENGRAM_AUTH_DISABLED`.
 Keep their existing values. `ENGRAM_AUTH_DISABLED=true` is the owner's explicit
 trusted single-user LAN choice, not multi-user isolation or a permanent no-auth default.
-For auth-on, select `false` and supply the existing `ENGRAM_AUTH_ADMIN_TOKEN` using
-the commented conditional row; preserve its old value in the private rollback template.
+For auth-on, select `false` and supply the existing `ENGRAM_AUTH_ADMIN_TOKEN` via
+`.env` or the shell; Compose forwards it automatically. Preserve its old value in the private rollback template.
 Code intelligence and telemetry still default to true. Their optional
 `ENGRAM_CODE_INTEL_ENABLED=false` and `ENGRAM_TELEMETRY_ENABLED=false` emergency
 overrides remain supported but are not normal startup rows.
@@ -47,6 +47,11 @@ Clients resolve nonempty optional ENV overrides first, then these settings,
 then their existing defaults. Configuration is captured at startup; setting
 changes take effect after the normal restart, not on each provider request.
 An absent URL in both sources leaves that provider disabled.
+
+Compose's optional bindings have no values or defaults. Supplied `.env` or shell
+values are forwarded; unset bindings remain unset to Go. Docker JSON can retain
+bare unset markers, so **four configured inputs** is not a raw `Config.Env` entry
+count. Absent model, key and dimensions values keep the existing DB fallback.
 
 Before removing provider ENV rows, privately transfer the **current effective**
 values through the existing admin MCP `settings` tool: actions `set`, `get`, `list`,
