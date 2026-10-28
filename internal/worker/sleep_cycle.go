@@ -2,7 +2,6 @@ package worker
 
 import (
 	"context"
-	"os"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -147,7 +146,7 @@ func (s *Service) maybeSleepCycle(ctx context.Context) {
 	// Pass auditStore as AuditLogger only when ENGRAM_VNEXT_ENABLED=true (T004).
 	// AuditStore satisfies lifecycle.AuditLogger via its LogAudit method.
 	var auditLog lifecycle.AuditLogger
-	if os.Getenv("ENGRAM_VNEXT_ENABLED") == "true" && as != nil {
+	if as != nil {
 		auditLog = as
 	}
 
@@ -166,7 +165,7 @@ func (s *Service) maybeSleepCycle(ctx context.Context) {
 
 	// Milestone-F TG4 T028 + TG6 T049: when the Milestone-F flag is on, run
 	// candidate decay AND snapshot auto-pruning alongside the memory sleep cycle.
-	if os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true" {
+	{
 		s.initMu.RLock()
 		cs := s.candidateStore
 		ss := s.snapshotStore
@@ -205,8 +204,7 @@ func (s *Service) maybeSleepCycle(ctx context.Context) {
 	// radius with an explicit sub-context deadline so a slow/hung LLM cannot stall
 	// the sleep goroutine beyond a known ceiling; the 4h tick interval means this
 	// is well within budget.
-	if isCrystallizationEnabled() {
-		// LLM worst-case budget: 30s/attempt × 3 attempts + 2s + 4s backoff = 96s.
+	{ // LLM worst-case budget: 30s/attempt × 3 attempts + 2s + 4s backoff = 96s.
 		// Use 120s to cover that budget with margin; 60s was insufficient.
 		dreamCtx, dreamCancel := context.WithTimeout(ctx, 120*time.Second)
 		s.runDreamCrystallization(dreamCtx)

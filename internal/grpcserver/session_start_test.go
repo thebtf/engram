@@ -350,95 +350,6 @@ func TestGetSessionStartContext_PrincipalPrivateCrossPrincipalInvisible_FlagOff(
 	assert.Equal(t, "shared bob startup memory", resp.GetMemories()[0].GetContent())
 }
 
-func TestGetSessionStartContext_MetaSummaryFlagOnDescribesMemoryLandscape(t *testing.T) {
-	db, cleanup := openSessionStartTestDB(t)
-	defer cleanup()
-
-	project := uuid.NewString()
-	otherProject := uuid.NewString()
-	defer db.Exec(`DELETE FROM memories WHERE project IN (?, ?)`, project, otherProject)
-	t.Setenv("ENGRAM_V7_PLUG_ENABLED", "true")
-	t.Setenv("ENGRAM_V7_S2_METAMEM", "true")
-
-	ctx := context.Background()
-	memoryStore := localgorm.NewMemoryStore(&localgorm.Store{DB: db})
-	oldest := time.Date(2026, 7, 1, 8, 0, 0, 0, time.UTC)
-	newest := oldest.Add(7 * time.Hour)
-	fixtures := []struct {
-		content   string
-		tags      []string
-		createdAt time.Time
-	}{
-		{"raw alpha beta gamma delta epsilon zeta eta body must not leak", []string{"alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta"}, oldest},
-		{"raw alpha beta gamma delta epsilon zeta body must not leak", []string{"alpha", "beta", "gamma", "delta", "epsilon", "zeta"}, oldest.Add(1 * time.Hour)},
-		{"raw alpha beta gamma delta epsilon body must not leak", []string{"alpha", "beta", "gamma", "delta", "epsilon"}, oldest.Add(2 * time.Hour)},
-		{"raw alpha beta gamma delta body must not leak", []string{"alpha", "beta", "gamma", "delta"}, oldest.Add(3 * time.Hour)},
-		{"raw alpha beta gamma body must not leak", []string{"alpha", "beta", "gamma"}, oldest.Add(4 * time.Hour)},
-		{"raw alpha beta body must not leak", []string{"alpha", "beta"}, oldest.Add(5 * time.Hour)},
-		{"raw alpha body must not leak", []string{"alpha"}, oldest.Add(6 * time.Hour)},
-		{"raw theta newest body must not leak", []string{"theta"}, newest},
-	}
-	for _, fixture := range fixtures {
-		insertSessionStartMetaSummaryMemory(t, db, memoryStore, project, fixture.content, fixture.tags, fixture.createdAt)
-	}
-	insertSessionStartMetaSummaryMemory(t, db, memoryStore, otherProject, "other project raw body must not leak", []string{"other"}, newest.Add(24*time.Hour))
-
-	srv := &Server{db: db}
-	resp, err := srv.GetSessionStartContext(ctx, &pb.GetSessionStartContextRequest{Project: project, MemoriesLimit: 1})
-	require.NoError(t, err)
-	require.Len(t, resp.GetMemories(), 1, "memory list remains independently bounded while meta_summary describes the wider project landscape")
-
-	summary := requireSessionStartMetaSummary(t, resp)
-	assert.Equal(t, int64(len(fixtures)), requireMetaInt(t, summary, "total_count"), "total_count must derive from all visible project memories, not the bounded memories response")
-	assert.Equal(t, []metaTagCount{
-		{Tag: "alpha", Count: 7},
-		{Tag: "beta", Count: 6},
-		{Tag: "gamma", Count: 5},
-		{Tag: "delta", Count: 4},
-		{Tag: "epsilon", Count: 3},
-		{Tag: "zeta", Count: 2},
-	}, requireMetaTopTags(t, summary), "top_tags must be the top six project tag counts and must exclude lower-ranked tags")
-	assert.Equal(t, oldest, requireMetaTimestamp(t, summary, "oldest_created_at"))
-	assert.Equal(t, newest, requireMetaTimestamp(t, summary, "newest_created_at"))
-	assertMetaSummaryContentFree(t, summary, "raw alpha", "raw theta", "other project raw body", "must not leak")
-}
-
-func TestGetSessionStartContext_MetaSummaryCountsBeyondResponseCap(t *testing.T) {
-	db, cleanup := openSessionStartTestDB(t)
-	defer cleanup()
-
-	project := uuid.NewString()
-	otherProject := uuid.NewString()
-	defer db.Exec(`DELETE FROM memories WHERE project IN (?, ?)`, project, otherProject)
-	t.Setenv("ENGRAM_V7_PLUG_ENABLED", "true")
-	t.Setenv("ENGRAM_V7_S2_METAMEM", "true")
-
-	ctx := context.Background()
-	memoryStore := localgorm.NewMemoryStore(&localgorm.Store{DB: db})
-	oldest := time.Date(2026, 7, 2, 8, 0, 0, 0, time.UTC)
-	newest := oldest.Add(204 * time.Minute)
-	for i := range 205 {
-		tags := []string{"alpha"}
-		if i < 3 {
-			tags = append(tags, "beta")
-		}
-		insertSessionStartMetaSummaryMemory(t, db, memoryStore, project, fmt.Sprintf("visible summary row %03d body must not leak", i), tags, oldest.Add(time.Duration(i)*time.Minute))
-	}
-	insertSessionStartMetaSummaryMemory(t, db, memoryStore, otherProject, "other project body must not leak", []string{"other"}, newest.Add(time.Hour))
-
-	srv := &Server{db: db}
-	resp, err := srv.GetSessionStartContext(ctx, &pb.GetSessionStartContextRequest{Project: project, MemoriesLimit: 1})
-	require.NoError(t, err)
-	require.Len(t, resp.GetMemories(), 1, "response memories remain bounded while meta_summary scans the full visible project set")
-
-	summary := requireSessionStartMetaSummary(t, resp)
-	assert.Equal(t, int64(205), requireMetaInt(t, summary, "total_count"), "total_count must stay truthful beyond the 200-memory response cap")
-	assert.Equal(t, []metaTagCount{{Tag: "alpha", Count: 205}, {Tag: "beta", Count: 3}}, requireMetaTopTags(t, summary))
-	assert.Equal(t, oldest, requireMetaTimestamp(t, summary, "oldest_created_at"))
-	assert.Equal(t, newest, requireMetaTimestamp(t, summary, "newest_created_at"))
-	assertMetaSummaryContentFree(t, summary, "visible summary row", "other project body", "must not leak")
-}
-
 func TestGetSessionStartContext_MetaSummaryFlagOffOmitted(t *testing.T) {
 	db, cleanup := openSessionStartTestDB(t)
 	defer cleanup()
@@ -459,28 +370,6 @@ func TestGetSessionStartContext_MetaSummaryFlagOffOmitted(t *testing.T) {
 	assertSessionStartMetaSummaryAbsent(t, resp)
 }
 
-func TestGetSessionStartContext_MetaSummaryFlagOnEmptyProjectIsBoundedAndContentFree(t *testing.T) {
-	db, cleanup := openSessionStartTestDB(t)
-	defer cleanup()
-
-	project := uuid.NewString()
-	defer db.Exec(`DELETE FROM memories WHERE project = ?`, project)
-	t.Setenv("ENGRAM_V7_PLUG_ENABLED", "true")
-	t.Setenv("ENGRAM_V7_S2_METAMEM", "true")
-
-	srv := &Server{db: db}
-	resp, err := srv.GetSessionStartContext(context.Background(), &pb.GetSessionStartContextRequest{Project: project, MemoriesLimit: 10})
-	require.NoError(t, err)
-	require.Empty(t, resp.GetMemories())
-
-	summary := requireSessionStartMetaSummary(t, resp)
-	assert.Equal(t, int64(0), requireMetaInt(t, summary, "total_count"))
-	assert.Empty(t, requireMetaTopTags(t, summary))
-	assertMetaTimestampAbsent(t, summary, "oldest_created_at")
-	assertMetaTimestampAbsent(t, summary, "newest_created_at")
-	assertMetaSummaryContentFree(t, summary, "content", "snippet")
-}
-
 func TestGetSessionStartContext_T014_MetaSummaryRequiresMasterAndS2Flags(t *testing.T) {
 	db, cleanup := openSessionStartTestDB(t)
 	defer cleanup()
@@ -493,7 +382,7 @@ func TestGetSessionStartContext_T014_MetaSummaryRequiresMasterAndS2Flags(t *test
 		s2Flag      string
 		wantSummary bool
 	}{
-		{name: "master and s2 enabled includes meta_summary", masterFlag: "true", s2Flag: "true", wantSummary: true},
+		{name: "retired flags cannot activate meta_summary", masterFlag: "true", s2Flag: "true", wantSummary: false},
 		{name: "master disabled omits meta_summary even when s2 flag is set", masterFlag: "false", s2Flag: "true", wantSummary: false},
 		{name: "s2 disabled omits meta_summary even when master is set", masterFlag: "true", s2Flag: "false", wantSummary: false},
 	}

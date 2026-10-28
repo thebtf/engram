@@ -232,10 +232,10 @@ func TestGetSessionStartContext_ContinuitySlotInvalidTargetsFailOpen(t *testing.
 	})
 }
 
-func TestGetSessionStartContext_ContinuitySlotFlagOffPreservesOrdinarySelection(t *testing.T) {
-	t.Setenv("ENGRAM_VNEXT_ENABLED", "true")
+func TestGetSessionStartContext_ContinuitySlotWithoutStartupFlags(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_ENABLED", "")
 	t.Setenv("ENGRAM_CONTINUITY_SLOT_ENABLED", "")
-	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
 	fixture := newSessionStartContinuityFixture(t)
 	target := fixture.createMemory(t, fixture.project, "reserved target while flag off", nil)
 	for i := range maxSessionStartMemoriesLimit {
@@ -245,21 +245,7 @@ func TestGetSessionStartContext_ContinuitySlotFlagOffPreservesOrdinarySelection(
 
 	response := fixture.sessionStart(t, context.Background(), 1)
 	require.Len(t, response.GetMemories(), 1)
-	assert.NotEqual(t, target.ID, response.GetMemories()[0].GetId())
-}
-
-func TestGetSessionStartContext_ContinuitySlotDoesNotChangeNonVNextSelection(t *testing.T) {
-	t.Setenv("ENGRAM_VNEXT_ENABLED", "")
-	t.Setenv("ENGRAM_CONTINUITY_SLOT_ENABLED", "true")
-	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
-	fixture := newSessionStartContinuityFixture(t)
-	target := fixture.createMemory(t, fixture.project, "reserved target outside vnext", nil)
-	ordinary := fixture.createMemory(t, fixture.project, "newer ordinary candidate", nil)
-	fixture.reserve(t, target, time.Now().UTC().Add(time.Hour))
-
-	response := fixture.sessionStart(t, context.Background(), 1)
-	require.Len(t, response.GetMemories(), 1)
-	assert.Equal(t, ordinary.ID, response.GetMemories()[0].GetId())
+	assert.Equal(t, target.ID, response.GetMemories()[0].GetId())
 }
 
 func countSessionStartMemoryID(ids []int64, targetID int64) int {

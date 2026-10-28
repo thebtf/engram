@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -295,10 +296,10 @@ func TestDreamCycle_RUAndZHCandidatesCreated(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TC6: F-flag OFF fails closed before extraction, marking, or watermark advance.
+// TC6: retired startup overrides cannot discard ordinary candidate work.
 // ---------------------------------------------------------------------------
 
-func TestDreamCycle_FlagOffNoCandidates(t *testing.T) {
+func TestDreamCycle_RetiredFlagCannotDisableCandidates(t *testing.T) {
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "false")
 
 	base := time.Now()
@@ -319,12 +320,10 @@ func TestDreamCycle_FlagOffNoCandidates(t *testing.T) {
 
 	svc.runDreamCrystallization(context.Background())
 
-	// Candidate persistence is disabled; no transcript consumption is allowed.
-	assert.Len(t, cs.created, 0, "no candidates expected when ENGRAM_VNEXT_F_ENABLED=false")
-	assert.False(t, extractCalled, "F-flag off must fail before extraction")
-	assert.Empty(t, svc.dreamTranscriptStoreOverride.(*fakeTranscriptStore).marked)
-	assert.EqualValues(t, 0, svc.dreamWatermark.Load(),
-		"watermark must not advance while candidate persistence is disabled")
+	assert.Len(t, cs.created, 1)
+	assert.True(t, extractCalled)
+	assert.NotEmpty(t, svc.dreamTranscriptStoreOverride.(*fakeTranscriptStore).marked)
+	assert.Equal(t, base.UnixNano(), svc.dreamWatermark.Load())
 }
 
 // ---------------------------------------------------------------------------
@@ -433,7 +432,7 @@ func TestDreamCycle_RouteFailurePreservesUnprocessedBatch(t *testing.T) {
 	assert.Zero(t, svc.dreamWatermark.Load())
 }
 
-func TestDreamCycle_CandidateFlagFlipDuringExtractionPreservesBatch(t *testing.T) {
+func TestDreamCycle_RetiredFlagMutationCannotInterruptBatch(t *testing.T) {
 	t.Setenv("ENGRAM_CRYSTALLIZATION_ENABLED", "true")
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
 	base := time.Now()
@@ -452,9 +451,9 @@ func TestDreamCycle_CandidateFlagFlipDuringExtractionPreservesBatch(t *testing.T
 
 	svc.runDreamCrystallization(context.Background())
 
-	require.Empty(t, cs.created)
-	require.Empty(t, ts.marked)
-	require.Zero(t, svc.dreamWatermark.Load())
+	require.Len(t, cs.created, 1)
+	require.Equal(t, []int64{96}, ts.marked)
+	require.Equal(t, base.UnixNano(), svc.dreamWatermark.Load())
 }
 
 func TestDreamCycle_GroupsExactProjectAndSessionProvenance(t *testing.T) {
@@ -543,6 +542,7 @@ func TestDreamCycle_RealDBRestartRetryPersistsExactlyOneCandidate(t *testing.T) 
 	t.Setenv("ENGRAM_CRYSTALLIZATION_ENABLED", "true")
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
 	marker := fmt.Sprintf("dream-restart-%d", time.Now().UnixNano())
+	project := uuid.NewString()
 	decisionText := "decision " + marker
 	createdAt := time.Now().UTC().Truncate(time.Microsecond)
 
@@ -554,6 +554,7 @@ func TestDreamCycle_RealDBRestartRetryPersistsExactlyOneCandidate(t *testing.T) 
 		_ = store.DB.Exec("DELETE FROM audit_log WHERE source_session_id = ? OR actor = ?", marker, marker).Error
 		_ = store.DB.Exec("DELETE FROM crystallization_candidates WHERE source_session_id = ?", marker).Error
 		_ = store.DB.Exec("DELETE FROM session_transcripts WHERE session_id = ?", marker).Error
+		_ = store.DB.Where("id = ?", project).Delete(&gorm.Project{}).Error
 		_ = store.Close()
 	}
 	cleanup()
@@ -567,8 +568,9 @@ func TestDreamCycle_RealDBRestartRetryPersistsExactlyOneCandidate(t *testing.T) 
 
 	store1, err := gorm.NewStore(gorm.Config{DSN: dsn, MaxConns: 2})
 	require.NoError(t, err)
+	require.NoError(t, store1.DB.Create(&gorm.Project{ID: project}).Error)
 	ts1 := gorm.NewTranscriptStore(store1.DB)
-	require.NoError(t, ts1.Create(context.Background(), &gorm.SessionTranscript{SessionID: marker, Project: marker, Content: decisionText, CreatedAt: createdAt}))
+	require.NoError(t, ts1.Create(context.Background(), &gorm.SessionTranscript{SessionID: marker, Project: project, Content: decisionText, CreatedAt: createdAt}))
 	cs1 := gorm.NewCandidateStore(store1.DB, gorm.NewAuditStore(store1.DB))
 	first := &Service{dreamTranscriptStoreOverride: &markFailOnceTranscriptStore{dreamTranscriptStore: ts1}, dreamCandidateStoreOverride: cs1, dreamExtractorFunc: extractFn}
 	first.runDreamCrystallization(context.Background())
@@ -605,31 +607,6 @@ func TestDreamCycle_RealDBRestartRetryPersistsExactlyOneCandidate(t *testing.T) 
 // ---------------------------------------------------------------------------
 // US4 Degrade scenario tests (STEP 3 — T012).
 // ---------------------------------------------------------------------------
-
-// TestDreamCycle_FlagOff_NoWork verifies US4(b): when ENGRAM_CRYSTALLIZATION_ENABLED
-// is unset (off), maybeSleepCycle must NOT invoke runDreamCrystallization. The
-// direct call below confirms runDreamCrystallization returns on that flag before
-// reading the transcript store or considering candidate persistence.
-func TestDreamCycle_FlagOff_NoWork(t *testing.T) {
-	t.Setenv("ENGRAM_CRYSTALLIZATION_ENABLED", "")
-
-	// Gate check: the crystallization flag must report false.
-	assert.False(t, isCrystallizationEnabled(),
-		"isCrystallizationEnabled() must be false when ENGRAM_CRYSTALLIZATION_ENABLED is unset")
-
-	// Even if runDreamCrystallization is called directly, the disabled flag returns
-	// before transcript-store access, candidate creation, or watermark advance.
-	svc := &Service{}
-	svc.ctx = context.Background()
-	cs := &fakeCandidateStore{}
-	svc.dreamCandidateStoreOverride = cs
-	// The nil transcript override must remain unobserved because the flag gate fires first.
-
-	svc.runDreamCrystallization(context.Background())
-
-	assert.Len(t, cs.created, 0, "no candidates must be created when crystallization is disabled")
-	assert.EqualValues(t, 0, svc.dreamWatermark.Load(), "watermark must not advance")
-}
 
 // TestDreamCycle_LLMDisabledDoesNotMark verifies that the active candidate path
 // still leaves transcripts untouched when no LLM client can be configured.

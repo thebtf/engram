@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -29,9 +28,7 @@ type memoryBriefArgs struct {
 
 // handleGetMemoryBrief returns a compact memory context for sub-agent delegation briefs.
 func (s *Server) handleGetMemoryBrief(ctx context.Context, args json.RawMessage) (string, error) {
-	if os.Getenv("ENGRAM_ADAPTIVE_ENABLED") != "true" {
-		return marshalJSON(map[string]string{"status": "disabled", "message": "set ENGRAM_ADAPTIVE_ENABLED=true to enable"})
-	}
+
 	if s.memoryStore == nil {
 		return "", fmt.Errorf("memory store not available")
 	}
@@ -275,7 +272,7 @@ func filterInjectionByScope(ctx context.Context, mems []*models.Memory) []*model
 		caller.PrincipalKind = string(id.PrincipalKind)
 	}
 	opts := scope.MemoryVisibilityOptions{
-		ApplyPrivacyScope: os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true",
+		ApplyPrivacyScope: true,
 	}
 	visible := make([]*models.Memory, 0, len(mems))
 	for _, mem := range mems {

@@ -761,8 +761,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 	// name when no prompt history exists. Uses the same pipeline as prompt-search.
 	// When InjectUnified=false (ENGRAM_INJECT_UNIFIED=false), the legacy path is used instead.
 	var relevantObservations []*models.Observation
-	if s.config == nil || s.config.InjectUnified {
-		// Unified path: derive query from the last user prompt for this session.
+	{ // Unified path: derive query from the last user prompt for this session.
 		injectQuery := project
 		if prompt, pErr := s.loadLastUserPromptBySession(ctx, project, sessionID, 20); pErr == nil && prompt != nil {
 			if prompt.PromptText != "" {
@@ -780,10 +779,6 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-	} else {
-		// Legacy path (ENGRAM_INJECT_UNIFIED=false): observation-era fallback removed in PR-B.
-		// Keep HTTP contract stable by returning an empty relevant section instead of erroring.
-		relevantObservations = []*models.Observation{}
 	}
 
 	// --- Guidance section: top behavioral rules in v5 ---
@@ -851,7 +846,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		// private-scope rows from other workstations are not included in the
 		// backward-compat fallback. Flag-OFF: path is byte-identical to pre-fix
 		// behavior (scope.FilterMemories is not called).
-		if os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true" {
+		{
 			var callerCtx scope.KeycardContext
 			if id, ok := auth.IdentityFrom(ctx); ok {
 				callerCtx.WorkstationID = id.WorkstationID()
@@ -959,15 +954,13 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 	injLogStore := s.injectionLogStore
 	s.initMu.RUnlock()
 
-	vnextEnabled := os.Getenv("ENGRAM_VNEXT_ENABLED") == "true"
-
 	// --- vNext Thompson Sampling path (ENGRAM_VNEXT_ENABLED=true) ---
 	// When enabled AND scoring succeeds, replaces the response with a Thompson-sampled
 	// memory selection and records the scored set to injection_log, then returns. When
 	// scoring fails it falls through to the legacy clustering response below, which
 	// records its OWN injection set after this block (so a fallback session is never
 	// left without injection_log rows — PR #272 review).
-	if vnextEnabled && vnextMemStore != nil {
+	if vnextMemStore != nil {
 		topK := 15
 		const maxTopK = 100
 		if v := os.Getenv("ENGRAM_INJECTION_TOP_K"); v != "" {

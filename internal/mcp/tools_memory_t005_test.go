@@ -173,11 +173,6 @@ func TestStoreToolSchema_FlagOff_HasNewProperties_ButRuntimeIgnores(t *testing.T
 		"schema must advertise agent_visibility unconditionally; runtime decides owner derivation")
 	require.Contains(t, props, "domain",
 		"schema must advertise domain unconditionally; runtime decides owner derivation")
-
-	// Sanity: vnextFEnabled() is the runtime gate; the schema test cannot
-	// observe it but the helper must report false here.
-	require.False(t, vnextFEnabled(),
-		"flag must be off; runtime store handler must skip new-field population per RI-F1")
 }
 
 // ---- helpers -----------------------------------------------------------------

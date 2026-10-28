@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Make hybrid memory, privacy/write-lint, audit, continuity, lifecycle, adaptive retrieval and crystallization ordinary v7 behavior without historical startup flags. Remove the empty unified-injection rollback and its mutable settings/API/UI control. Retire dormant V7 startup activation and Authentik header login without deleting retained owner data; preserve authentication choice, code-intelligence and telemetry stops. Document the exact 14-variable single-owner template and value-preserving update/rollback boundary.
+
 - Regenerate the API through the maintained worker target using canonical local Go package directories and Swag 1.16.6, with real producer errors stopping the build. Correct existing context search/inject/session-start annotations without changing handlers; document the shared GET/POST conditional-query limitation. The actual producer and server build pass, with 40 named schema checks and all 76 references resolved; that producer checkpoint established compile-only retained-reader oracle provenance, with later native query proof recorded separately, and installed/release acceptance remains separate.
 
 - Add retained catalog `families` metadata with kind, technical table, saved membership-occurrence count and declared/separate/metadata-only reader boundary. Preserve every group, opaque reference, safe label and reason without payload previews, readable-record totals, availability or historical ownership assignment. This descriptor change does not provide cross-group record discovery or installed-consumer acceptance.

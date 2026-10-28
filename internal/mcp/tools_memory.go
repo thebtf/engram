@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"os"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -30,13 +29,6 @@ import (
 	"github.com/thebtf/engram/internal/writelint"
 	"github.com/thebtf/engram/pkg/models"
 )
-
-// vnextFEnabled reports whether the engram vNext Milestone F flag is on per
-// spec FR-F1 / RI-F1. Centralised so all flag-gated branches share the exact
-// truthy check ("true" — string equality with the env var).
-func vnextFEnabled() bool {
-	return os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true"
-}
 
 // isValidPrivacyScope validates the 4-tier privacy_scope enum added by
 // migration 125 (T001) and consumed by scope.Resolve (T003/T003b). Mirrors
@@ -187,7 +179,7 @@ func writeLintVisibilityCaller(ctx context.Context, sessionID string) scope.Keyc
 
 func writeLintVisibilityOptions() scope.MemoryVisibilityOptions {
 	return scope.MemoryVisibilityOptions{
-		ApplyPrivacyScope: vnextFEnabled(),
+		ApplyPrivacyScope: true,
 	}
 }
 
@@ -367,7 +359,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	// is only fatal on the legacy create path. writeLintEnabled and dry_run are both
 	// exemptions; the nil-store guard is deferred until after params are parsed so both
 	// exemptions can be evaluated together.
-	writeLintEnabled := s.writeLint != nil && vnextFEnabled()
+	writeLintEnabled := s.writeLint != nil
 
 	m, err := parseArgs(args)
 	if err != nil {
@@ -467,7 +459,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		params.Project = coerceString(m["project"], "")
 		if params.Project == "" {
 			defaultScope := params.Scope
-			if vnextFEnabled() && params.PrivacyScope != "" {
+			if params.PrivacyScope != "" {
 				defaultScope = deriveLegacyScopeFromPrivacy(params.PrivacyScope)
 			}
 			if !alwaysInject || defaultScope != string(models.ScopeGlobal) {
@@ -589,7 +581,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	//   3. force=true → bypass write-lint, proceed to legacy create path + audit.
 	//   4. resolution_token non-empty → Phase2 delegation; return result directly.
 	//   5. Otherwise → Phase1; if not stored, return Phase1 JSON; if stored, format as success.
-	if s.writeLint != nil && vnextFEnabled() {
+	if s.writeLint != nil {
 		// finding 12 fix: declare write-lint locals inside the gate block so they
 		// are not allocated on the common non-writelint path.
 		wlForce := coerceBool(m["force"], false)
@@ -755,7 +747,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	// fall back to deriving from the legacy 2-tier scope (RI-F2 bridge).
 	// Validate against the migration 125 CHECK constraint enum.
 	var resolvedPrivacyScope string
-	if vnextFEnabled() {
+	{
 		resolvedPrivacyScope = params.PrivacyScope
 		if resolvedPrivacyScope == "" {
 			resolvedPrivacyScope = derivePrivacyScopeFromLegacy(resolvedScope)
@@ -933,7 +925,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	// session via the param. When absent, SourceSessions stays empty and
 	// scope.Resolve falls back to the workstation-only-suffices branch per
 	// spec FR-F1 AMEND 2026-05-25.
-	if vnextFEnabled() {
+	{
 		memory.PrivacyScope = resolvedPrivacyScope
 		if id, ok := auth.IdentityFrom(ctx); ok {
 			memory.SourceWorkstationID = id.WorkstationID()
@@ -1009,8 +1001,8 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	// Low-novelty memories are stored with Status="flagged" so callers can
 	// detect duplicates; the quality_signals key is added to the response.
 	var gateResult writegate.GateResult
-	vnextEnabled := os.Getenv("ENGRAM_VNEXT_ENABLED") == "true"
-	if vnextEnabled && params.Project != "" {
+
+	if params.Project != "" {
 		existing, listErr := s.memoryStore.List(ctx, params.Project, 100)
 		if listErr != nil {
 			log.Warn().Err(listErr).Msg("store: write gate could not load existing memories, skipping gate")
@@ -1021,7 +1013,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	}
 
 	// Lifecycle fields (Milestone B): only set when lifecycle is enabled
-	if os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true" {
+	{
 		if tier := coerceString(m["tier"], ""); tier != "" {
 			if lifecycle.ValidTier(tier) {
 				memory.Tier = tier
@@ -1051,7 +1043,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		memory.Confidence = lifecycle.ComputeConfidence(lifecycle.ConfidenceInputs{})
 		memory.Retrievability = 1.0
 	}
-	if vnextEnabled && gateResult.Decision == "flag" {
+	if gateResult.Decision == "flag" {
 		memory.Status = "flagged"
 	}
 
@@ -1059,10 +1051,8 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	// path sets Tier/EpistemicType/Defeasibility on the memory struct above).
 	var created *models.Memory
 	var createErr error
-	if os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true" {
+	{
 		created, createErr = s.memoryStore.CreateWithLifecycle(ctx, memory)
-	} else {
-		created, createErr = s.memoryStore.Create(ctx, memory)
 	}
 	if createErr != nil {
 		return "", fmt.Errorf("store memory: %w", createErr)
@@ -1076,7 +1066,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	// T035: when write-lint is wired AND force=true was set, emit an additional
 	// "legacy_force_write" audit entry to record that the lint gate was bypassed.
 	// finding 12 fix: wlForce is now scoped inside the gate block; re-derive here.
-	if s.writeLint != nil && vnextFEnabled() && coerceBool(m["force"], false) {
+	if s.writeLint != nil && coerceBool(m["force"], false) {
 		logAuditGeneric(ctx, s, created, actor, "legacy_force_write")
 	}
 
@@ -1125,7 +1115,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	// T004 — vNext F TG1: dual-field response per RI-F2. Legacy `scope`
 	// (2-tier) continues to appear above for backward compat; add new
 	// `privacy_scope` (4-tier) alongside when flag is ON.
-	if vnextFEnabled() {
+	{
 		result["privacy_scope"] = resolvedPrivacyScope
 		if created.SourceWorkstationID != "" {
 			result["source_workstation_id"] = created.SourceWorkstationID
@@ -1136,7 +1126,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	}
 	addPrincipalMemoryFields(result, created)
 	addDomainWriteDecisionFields(result, domainDecision)
-	if vnextEnabled {
+	{
 		result["quality_signals"] = map[string]any{
 			"gate_result":      gateResult.Decision,
 			"novelty_score":    gateResult.NoveltyScore,
@@ -1415,23 +1405,14 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 
 	// Hybrid tier_filter selects retrieval legs, not lifecycle memory tiers.
 	// Preserve the lifecycle-only filter when hybrid retrieval is disabled.
-	vnextEnabled := os.Getenv("ENGRAM_VNEXT_ENABLED") == "true"
+
 	var tierFilterSet map[string]bool
-	if vnextEnabled {
+	{
 		for _, tf := range coerceStringSlice(m["tier_filter"]) {
 			switch tf {
 			case "tier0_exact", "tier1_fts", "tier1_vector", "tier2_graph":
 			default:
 				return "", fmt.Errorf("invalid_tier_filter: %q must be one of tier0_exact, tier1_fts, tier1_vector, tier2_graph", tf)
-			}
-		}
-	} else if os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true" {
-		tierFilterSet = make(map[string]bool)
-		for _, tf := range coerceStringSlice(m["tier_filter"]) {
-			if lifecycle.ValidTier(tf) {
-				tierFilterSet[tf] = true
-			} else {
-				return "", fmt.Errorf("invalid_tier_filter: %q must be one of working, episodic, semantic, procedural", tf)
 			}
 		}
 	}
@@ -1460,9 +1441,9 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 	// gates legacy privacy_scope only; CR-004 principal-private rows are always
 	// filtered fail-safe.
 	callerSessionID := strings.TrimSpace(coerceString(m["session_id"], ""))
-	scopeEnabled := os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true"
+
 	includeScopes := make(map[string]bool)
-	if scopeEnabled {
+	{
 		for _, sc := range coerceStringSlice(m["include_scopes"]) {
 			switch sc {
 			case "private", "project", "shared", "global":
@@ -1479,7 +1460,7 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 		caller.PrincipalKind = string(id.PrincipalKind)
 	}
 	visibilityOpts := scope.MemoryVisibilityOptions{
-		ApplyPrivacyScope: scopeEnabled,
+		ApplyPrivacyScope: true,
 		IncludeScopes:     includeScopes,
 	}
 	includePrincipals, includePrincipalsSet, err := parseRecallIncludedPrincipals(m["include_principals"])
@@ -1500,13 +1481,13 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 	// vNext-F flag is on.  Flag-OFF callers that accidentally pass the new params
 	// still get the legacy path — a defensive gate that mirrors the include_scopes
 	// flag-gate pattern in T005.
-	tg3Active := vnextFEnabled() && (tg3ConfidenceMin > 0 || tg3IncludeSuperseded || tg3IncludeRationale)
+	tg3Active := (tg3ConfidenceMin > 0 || tg3IncludeSuperseded || tg3IncludeRationale)
 
 	// ── vnext hybrid path ───────────────────────────────────────────────────
 	// Caller identity + visibility context are fully built above; pass them into
 	// handleRecallMemoryHybrid so hybrid results are subject to the same
 	// predicate as the legacy List path below.
-	if vnextEnabled && !includePrincipalsSet {
+	if !includePrincipalsSet {
 		return s.handleRecallMemoryHybrid(ctx, m, query, project, format, limit, obsType, tags, caller, visibilityOpts, tg3Active, tg3ConfidenceMin, tg3IncludeSuperseded, tg3IncludeRationale)
 	}
 	// ── legacy List-based path with shared visibility filtering ─
@@ -1597,7 +1578,7 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 
 	// Reconsolidation: every retrieval updates access_count, last_retrieved_at,
 	// and recalculates stability (Nader 2000). Fire-and-forget to avoid blocking.
-	if os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true" && len(filtered) > 0 {
+	if len(filtered) > 0 {
 		go func() {
 			for _, mem := range filtered {
 				fields := map[string]any{
@@ -1898,7 +1879,7 @@ func (s *Server) handleRecallMemoryHybrid(
 	// inconsistent result set with no indication of the gap. An error tells the
 	// caller to use the legacy path (ENGRAM_VNEXT_ENABLED=false) or omit the flag.
 	if tg3Active && tg3IncludeSuperseded {
-		return "", fmt.Errorf("include_superseded is not supported with ENGRAM_VNEXT_ENABLED hybrid retrieval; disable ENGRAM_VNEXT_ENABLED or omit include_superseded")
+		return "", fmt.Errorf("include_superseded is not supported by hybrid retrieval; omit include_superseded")
 	}
 
 	opts := retrieval.HybridOptions{
@@ -2182,7 +2163,7 @@ func (s *Server) handleRecallMemoryHybrid(
 
 	// Reconsolidation: fire-and-forget lifecycle updates on the FINAL response set only
 	// (not the wider candidate pool). This ensures access_count reflects actual retrieval.
-	if os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true" && len(items) > 0 {
+	if len(items) > 0 {
 		// Snapshot item IDs before the goroutine runs to avoid data races.
 		type reconItem struct {
 			id             int64

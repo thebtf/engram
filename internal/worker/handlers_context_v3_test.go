@@ -13,7 +13,7 @@ import (
 )
 
 func TestSearchByPrompt_PreservesCanonicalProjectAndAgentAttribution(t *testing.T) {
-	service := newInjectTestService(true)
+	service := newInjectTestService()
 	var retrievedProject, retrievedAgent string
 	service.retrievalHooks.retrieveRelevant = func(ctx context.Context, project, _ string, _ RetrievalOptions) ([]*models.Observation, map[int64]float64, error) {
 		retrievedProject = project
@@ -40,7 +40,7 @@ func TestSearchByPrompt_SourceSessionIsAuditOnly(t *testing.T) {
 	for _, method := range []string{http.MethodGet, http.MethodPost} {
 		for _, session := range []string{"conversation-one", "conversation-two", ""} {
 			t.Run(method+"/"+session, func(t *testing.T) {
-				service := newInjectTestService(true)
+				service := newInjectTestService()
 				called := false
 				service.retrievalHooks.retrieveRelevant = func(ctx context.Context, project, query string, opts RetrievalOptions) ([]*models.Observation, map[int64]float64, error) {
 					called = true

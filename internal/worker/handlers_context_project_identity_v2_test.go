@@ -18,7 +18,7 @@ import (
 
 func TestContextInject_PinnedUUIDDoesNotRegister(t *testing.T) {
 	project := "11111111-1111-4111-8111-111111111111"
-	service := newInjectTestService(true)
+	service := newInjectTestService()
 	service.retrievalHooks.searchObservationsFTSFiltered = func(_ context.Context, _ string, scope retrievalScope, _ int) ([]*models.Observation, error) {
 		if scope.Project != project {
 			t.Fatalf("retrieval project=%q", scope.Project)
@@ -177,7 +177,7 @@ func TestContextRequests_POSTProjectFallback(t *testing.T) {
 	const project = "11111111-1111-4111-8111-111111111111"
 	for _, body := range []string{`{}`, `{"project":"` + project + `","query":"prompt"}`} {
 		t.Run(body, func(t *testing.T) {
-			service := newInjectTestService(true)
+			service := newInjectTestService()
 			service.retrievalHooks.retrieveRelevant = func(_ context.Context, selected, query string, _ RetrievalOptions) ([]*models.Observation, map[int64]float64, error) {
 				if selected != project || query != "prompt" {
 					t.Fatalf("search project=%q query=%q", selected, query)
@@ -212,7 +212,7 @@ func TestContextRequests_POSTProjectFallback(t *testing.T) {
 func TestContextRequests_POSTInvalidBodyFallback(t *testing.T) {
 	const query = "?project=11111111-1111-4111-8111-111111111111&query=prompt"
 	for _, body := range []string{"", "{"} {
-		service := newInjectTestService(true)
+		service := newInjectTestService()
 		service.retrievalHooks.retrieveRelevant = func(context.Context, string, string, RetrievalOptions) ([]*models.Observation, map[int64]float64, error) {
 			return []*models.Observation{{ID: 1}}, nil, nil
 		}

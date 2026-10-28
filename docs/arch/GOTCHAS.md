@@ -74,9 +74,9 @@ different filesystems, summary generation works without transcript context.
 
 **Severity: BEHAVIORAL CHANGE**
 
-`ENGRAM_INJECT_UNIFIED` defaults to `true` — inject uses the same retrieval path
-as search. Score thresholds, freshness filtering, and ranking changes affect both
-simultaneously. Set `ENGRAM_INJECT_UNIFIED=false` only as an emergency rollback.
+Context injection uses the same retrieval path as search. Score thresholds,
+freshness filtering, and ranking changes affect both. The old `ENGRAM_INJECT_UNIFIED`
+empty rollback branch and mutable control have been removed.
 
 ---
 

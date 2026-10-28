@@ -74,57 +74,40 @@ const config = {
   },
 }
 
-const desiredConfig = {
-  memory: {
-    inject_unified: config.memory.inject_unified,
-  },
-}
 
 const flags = {
   flags: {
-    ENGRAM_VNEXT_ENABLED: false,
-    ENGRAM_LIFECYCLE_ENABLED: false,
+    ENGRAM_VNEXT_ENABLED: true,
+    ENGRAM_LIFECYCLE_ENABLED: true,
     ENGRAM_VNEXT_F_ENABLED: true,
-    ENGRAM_GRAPH_ENABLED: true,
-    ENGRAM_ADAPTIVE_ENABLED: false,
-    ENGRAM_CRYSTALLIZATION_ENABLED: false,
+    ENGRAM_TEMPORAL_TRUTH_ENABLED: false,
+    ENGRAM_ADAPTIVE_ENABLED: true,
+    ENGRAM_CRYSTALLIZATION_ENABLED: true,
     ENGRAM_CODE_INTEL_ENABLED: true,
-    ENGRAM_V7_PLUG_ENABLED: true,
-    ENGRAM_V7_S1_STATE: false,
-    ENGRAM_V7_S2_METAMEM: true,
-    ENGRAM_V7_S3_AMBIENT: false,
-    ENGRAM_V7_S4A_DIRECTIVES_CAPTURE: false,
-    ENGRAM_V7_S4B_DIRECTIVES_SURFACING: false,
-    ENGRAM_V7_S5_TELEMETRY: false,
-    ENGRAM_V7_S6_OUTCOME: false,
     ENGRAM_ENFORCE_SOURCE_PROJECT: true,
-    ENGRAM_INJECT_UNIFIED: true,
+    ENGRAM_RULE_GOVERNANCE_ENABLED: false,
+    ENGRAM_RULE_ARBITER_ENABLED: false,
+    ENGRAM_RULE_ROUTER_ENABLED: false,
   },
   items: [
-    { name: 'ENGRAM_VNEXT_ENABLED', enabled: false, source: 'env', category: 'vnext', restart_required_to_change: true },
-    { name: 'ENGRAM_LIFECYCLE_ENABLED', enabled: false, source: 'env', category: 'vnext', restart_required_to_change: true },
-    { name: 'ENGRAM_VNEXT_F_ENABLED', enabled: true, source: 'env', category: 'vnext', restart_required_to_change: true },
-    { name: 'ENGRAM_GRAPH_ENABLED', enabled: true, source: 'env', category: 'vnext', restart_required_to_change: true },
-    { name: 'ENGRAM_ADAPTIVE_ENABLED', enabled: false, source: 'env', category: 'vnext', restart_required_to_change: true },
-    { name: 'ENGRAM_CRYSTALLIZATION_ENABLED', enabled: false, source: 'env', category: 'vnext', restart_required_to_change: true },
-    { name: 'ENGRAM_CODE_INTEL_ENABLED', enabled: true, source: 'env', category: 'code-intel', restart_required_to_change: true },
-    { name: 'ENGRAM_V7_PLUG_ENABLED', enabled: true, source: 'runtime', category: 'v7', restart_required_to_change: true },
-    { name: 'ENGRAM_V7_S1_STATE', enabled: false, source: 'runtime', category: 'v7', restart_required_to_change: true },
-    { name: 'ENGRAM_V7_S2_METAMEM', enabled: true, source: 'runtime', category: 'v7', restart_required_to_change: true },
-    { name: 'ENGRAM_V7_S3_AMBIENT', enabled: false, source: 'runtime', category: 'v7', restart_required_to_change: true },
-    { name: 'ENGRAM_V7_S4A_DIRECTIVES_CAPTURE', enabled: false, source: 'runtime', category: 'v7', restart_required_to_change: true },
-    { name: 'ENGRAM_V7_S4B_DIRECTIVES_SURFACING', enabled: false, source: 'runtime', category: 'v7', restart_required_to_change: true },
-    { name: 'ENGRAM_V7_S5_TELEMETRY', enabled: false, source: 'runtime', category: 'v7', restart_required_to_change: true },
-    { name: 'ENGRAM_V7_S6_OUTCOME', enabled: false, source: 'runtime', category: 'v7', restart_required_to_change: true },
+    { name: 'ENGRAM_VNEXT_ENABLED', enabled: true, source: 'runtime', category: 'memory', restart_required_to_change: false },
+    { name: 'ENGRAM_LIFECYCLE_ENABLED', enabled: true, source: 'runtime', category: 'memory', restart_required_to_change: false },
+    { name: 'ENGRAM_VNEXT_F_ENABLED', enabled: true, source: 'runtime', category: 'memory', restart_required_to_change: false },
+    { name: 'ENGRAM_TEMPORAL_TRUTH_ENABLED', enabled: false, source: 'env', category: 'vnext', restart_required_to_change: true },
+    { name: 'ENGRAM_ADAPTIVE_ENABLED', enabled: true, source: 'runtime', category: 'memory', restart_required_to_change: false },
+    { name: 'ENGRAM_CRYSTALLIZATION_ENABLED', enabled: true, source: 'runtime', category: 'memory', restart_required_to_change: false },
+    { name: 'ENGRAM_CODE_INTEL_ENABLED', enabled: true, source: 'runtime', category: 'code-intel', restart_required_to_change: true },
     { name: 'ENGRAM_ENFORCE_SOURCE_PROJECT', enabled: true, source: 'config', category: 'operations', restart_required_to_change: false },
-    { name: 'ENGRAM_INJECT_UNIFIED', enabled: true, source: 'config', category: 'memory', restart_required_to_change: true },
+    { name: 'ENGRAM_RULE_GOVERNANCE_ENABLED', enabled: false, source: 'config', category: 'rules', restart_required_to_change: false },
+    { name: 'ENGRAM_RULE_ARBITER_ENABLED', enabled: false, source: 'config', category: 'rules', restart_required_to_change: false },
+    { name: 'ENGRAM_RULE_ROUTER_ENABLED', enabled: false, source: 'config', category: 'rules', restart_required_to_change: false },
   ],
-  summary: { total: 17, enabled: 7, disabled: 10 },
+  summary: { total: 11, enabled: 7, disabled: 4 },
   read_only: true,
   apply: {
     supported: true,
     endpoint: 'PATCH /api/config',
-    fields: ['features.enforce_source_project', 'memory.inject_unified'],
+    fields: ['features.enforce_source_project'],
     reason: 'only allowlisted config-backed fields are writable; env-controlled flags remain read-only',
   },
 }
@@ -989,26 +972,11 @@ function syncConfigFlags() {
   const sourceProject = flags.items.find((item) => item.name === 'ENGRAM_ENFORCE_SOURCE_PROJECT')
   if (sourceProject) sourceProject.enabled = flags.flags.ENGRAM_ENFORCE_SOURCE_PROJECT
 
-  flags.flags.ENGRAM_INJECT_UNIFIED = Boolean(config.memory.inject_unified)
-  const injectUnified = flags.items.find((item) => item.name === 'ENGRAM_INJECT_UNIFIED')
-  if (injectUnified) injectUnified.enabled = flags.flags.ENGRAM_INJECT_UNIFIED
 }
 
-function pendingRestartItems() {
-  const pending = []
-  if (config.memory.inject_unified !== desiredConfig.memory.inject_unified) {
-    pending.push({
-      field: 'memory.inject_unified',
-      effective: config.memory.inject_unified,
-      desired: desiredConfig.memory.inject_unified,
-      reason: 'requires_restart',
-    })
-  }
-  return pending
-}
 
 function configResponse() {
-  const pending_restart = pendingRestartItems()
+  const pending_restart = []
   return {
     context: {
       ...config.context,
@@ -1126,14 +1094,14 @@ const server = createServer(async (req, res) => {
   if (req.method === 'PATCH' && path === '/api/config') {
     try {
       const patch = await readRequestJson(req)
+      if (patch.memory) {
+        json(res, 400, { error: 'unsupported config field: memory' })
+        return
+      }
       const changed = []
       if (patch.features && Object.hasOwn(patch.features, 'enforce_source_project')) {
         config.features.enforce_source_project = Boolean(patch.features.enforce_source_project)
         changed.push('enforce_source_project')
-      }
-      if (patch.memory && Object.hasOwn(patch.memory, 'inject_unified')) {
-        desiredConfig.memory.inject_unified = Boolean(patch.memory.inject_unified)
-        changed.push('inject_unified (requires restart)')
       }
       syncConfigFlags()
       const responseConfig = configResponse()

@@ -3,7 +3,6 @@ package worker
 import (
 	"context"
 	"errors"
-	"os"
 	"sort"
 	"time"
 
@@ -62,14 +61,6 @@ type dreamCandidateWriter interface {
 // direct-memory fallback: consuming a transcript without a created-or-duplicate
 // candidate would lose work and would resurrect the demolished v5 path.
 func (s *Service) runDreamCrystallization(ctx context.Context) {
-	if !isCrystallizationEnabled() {
-		log.Debug().Msg("dream-cycle: crystallization disabled, no-op")
-		return
-	}
-	if os.Getenv("ENGRAM_VNEXT_F_ENABLED") != "true" {
-		log.Debug().Msg("dream-cycle: candidate path disabled, no-op")
-		return
-	}
 
 	var ts dreamTranscriptStore
 	if s.dreamTranscriptStoreOverride != nil {

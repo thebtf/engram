@@ -4,7 +4,6 @@ package crystallization
 import (
 	"context"
 	"fmt"
-	"os"
 
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/pkg/models"
@@ -29,12 +28,6 @@ type MemoryFingerprintChecker interface {
 	// ListBySourceAgentAndTag returns memories for the given project/source_agent/tag tuple.
 	// Returns an empty slice (not an error) when none match.
 	ListBySourceAgentAndTag(ctx context.Context, project, sourceAgent, tag string) ([]*models.Memory, error)
-}
-
-// VnextFEnabled reports whether the Milestone-F candidate routing is active.
-// Centralised check: ENGRAM_VNEXT_F_ENABLED="true".
-func VnextFEnabled() bool {
-	return os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true"
 }
 
 // RouteDecisionResult is returned by RouteDecision.
@@ -80,7 +73,7 @@ func RouteDecision(
 	candidateWriter CandidateWriter,
 	memChecker MemoryFingerprintChecker,
 ) (*RouteDecisionResult, error) {
-	if !VnextFEnabled() || candidateWriter == nil {
+	if candidateWriter == nil {
 		// Flag OFF: caller should use legacy memory path unchanged.
 		return nil, nil
 	}

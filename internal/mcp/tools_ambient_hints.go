@@ -25,7 +25,7 @@ type ambientHintsOutput struct {
 }
 
 func ambientHintsEnabledFromEnv() bool {
-	cfg := cognitivecore.LoadFlagConfigFromEnv()
+	cfg := cognitivecore.FlagConfig{}
 	return cfg.IsPlugEnabled() && cfg.IsSubsystemEnabled("s3")
 }
 

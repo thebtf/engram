@@ -89,9 +89,7 @@ func reviewPacketIDSchema(includeAction bool) map[string]any {
 }
 
 func (s *Server) handleReviewMetricsRead(ctx context.Context, args json.RawMessage) (string, error) {
-	if !vnextFEnabled() {
-		return "", fmt.Errorf("review_metrics.read requires ENGRAM_VNEXT_F_ENABLED=true")
-	}
+
 	store := s.currentReviewLoopCandidateLister()
 	if store == nil {
 		return "", fmt.Errorf("review_metrics.read requires candidateStore to be wired")
@@ -108,9 +106,7 @@ func (s *Server) handleReviewMetricsRead(ctx context.Context, args json.RawMessa
 }
 
 func (s *Server) handleReviewQueueRead(ctx context.Context, args json.RawMessage) (string, error) {
-	if !vnextFEnabled() {
-		return "", fmt.Errorf("review_queue.read requires ENGRAM_VNEXT_F_ENABLED=true")
-	}
+
 	store := s.currentReviewLoopCandidateLister()
 	if store == nil {
 		return "", fmt.Errorf("review_queue.read requires candidateStore to be wired")
@@ -231,8 +227,8 @@ func reviewLoopReasonFromArgs(args json.RawMessage) string {
 }
 
 func (s *Server) loadReviewPacketCandidate(ctx context.Context, args json.RawMessage) (*models.CrystallizationCandidate, string, error) {
-	if !vnextFEnabled() || s.candidateStore == nil {
-		return nil, "", fmt.Errorf("review_packet requires ENGRAM_VNEXT_F_ENABLED=true")
+	if s.candidateStore == nil {
+		return nil, "", fmt.Errorf("candidate store not available")
 	}
 	m, err := parseArgs(args)
 	if err != nil {

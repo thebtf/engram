@@ -231,8 +231,8 @@ gRPC-соединения закрываются перед выходом. Пе
 В режиме `ENGRAM_AUTH_DISABLED=true` обычный вызов `store` не должен передавать
 `agent_visibility`. Для уже подтверждённого канонического проекта используй,
 например, `{"action":"create","content":"Решение по проекту","project":"<подтверждённый project_id>","privacy_scope":"project"}`.
-`privacy_scope` управляет видимостью проекта/рабочей станции, когда включён
-`ENGRAM_VNEXT_F_ENABLED`; его существующие ограничения сохраняются.
+`privacy_scope` управляет видимостью проекта и рабочей станции в обычном v7 runtime;
+его существующие ограничения сохраняются без исторического startup-флага.
 
 Оба явных значения `agent_visibility`, `private` и `shared`, требуют principal
 из аутентифицированной серверной identity. `shared` — значение по умолчанию только
@@ -832,7 +832,7 @@ The source-candidate denominator is **5 HTTP methods + 3 MCP actions + 2 old boo
 | Old `/graph` bookmark | No manual graph editor. |
 | Old `/books` bookmark | No plaintext Book uploader. |
 
-Repeat all 10 checks with `ENGRAM_GRAPH_ENABLED=true` and `ENGRAM_BOOKS_ENABLED=true` after restart. Record the component identities and each refusal. Retained reads include `GET /api/graph/nodes`, `/api/graph/edges`, `/api/graph/traverse`, `/api/graph/find-path`, `GET /api/books/{id}/status`, authorized `/api/documents`, `/api/documents/history`, `/api/documents/comments`, `/api/rules`, `/api/issues`, `/api/context/search`, MCP `graph` actions `get_edges`, `traverse`, `find_path`, `synonyms`, Tier2 `Traverse` in `internal/retrieval/hybrid.go`, and the separate UCI `codebase_graph`. Verify their existing ACLs, not just availability. Before transitioning residual Book jobs to `failed: interrupted by retirement`, ensure no old Book writer is live; preserve document versions, `source_book_job_id`, and partial documents. The source matrix follows `internal/worker/service.go`, `internal/mcp/tools_graph.go`, `internal/worker/handlers_graph_test.go`, `internal/worker/handlers_books_retirement_test.go`, `internal/mcp/tools_graph_t014_test.go`, and the [DA03 source receipt](../specs/011-operator-code-console/acceptance/da03-retirement-receipt.json). It is not installed acceptance evidence.
+Repeat all 10 checks after restart without historical graph or Book startup flags. Record the component identities and each refusal. Retained reads include `GET /api/graph/nodes`, `/api/graph/edges`, `/api/graph/traverse`, `/api/graph/find-path`, `GET /api/books/{id}/status`, authorized `/api/documents`, `/api/documents/history`, `/api/documents/comments`, `/api/rules`, `/api/issues`, `/api/context/search`, MCP `graph` actions `get_edges`, `traverse`, `find_path`, `synonyms`, Tier2 `Traverse` in `internal/retrieval/hybrid.go`, and the separate UCI `codebase_graph`. Verify their existing ACLs, not just availability. Before transitioning residual Book jobs to `failed: interrupted by retirement`, ensure no old Book writer is live; preserve document versions, `source_book_job_id`, and partial documents. The source matrix follows `internal/worker/service.go`, `internal/mcp/tools_graph.go`, `internal/worker/handlers_graph_test.go`, `internal/worker/handlers_books_retirement_test.go`, `internal/mcp/tools_graph_t014_test.go`, and the [DA03 source receipt](../specs/011-operator-code-console/acceptance/da03-retirement-receipt.json). It is not installed acceptance evidence.
 
 The linked DA03 source receipt records **NOT_PROVEN** for full source acceptance because its bookmark browser test selectors failed. Repeat the two bookmark checks with scoped selectors on the exact installed UI; do not convert its HTTP/MCP fixture results into a release PASS.
 

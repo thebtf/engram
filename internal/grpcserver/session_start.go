@@ -3,7 +3,6 @@ package grpcserver
 import (
 	"context"
 	"errors"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -90,11 +89,10 @@ func (s *Server) GetSessionStartContext(ctx context.Context, req *pb.GetSessionS
 
 	memoryStore := dbgorm.NewMemoryStore(&dbgorm.Store{DB: s.db})
 	var memoryRows []*models.Memory
-	metaSummaryEnabled := os.Getenv("ENGRAM_V7_PLUG_ENABLED") == "true" && os.Getenv("ENGRAM_V7_S2_METAMEM") == "true"
+	// The deferred meta-summary reader is retained without startup activation.
+	metaSummaryEnabled := false
 
-	// Build scope.KeycardContext once for both branches. ENGRAM_VNEXT_F_ENABLED
-	// gates only legacy privacy_scope; principal-private rows are filtered
-	// fail-safe before startup memory scoring or serialization.
+	// Filter principal and workstation privacy before scoring or serialization.
 	var callerCtx scope.KeycardContext
 	if id, ok := auth.IdentityFrom(ctx); ok {
 		callerCtx.WorkstationID = id.WorkstationID()
@@ -106,16 +104,16 @@ func (s *Server) GetSessionStartContext(ctx context.Context, req *pb.GetSessionS
 		}
 	}
 	visibilityOpts := scope.MemoryVisibilityOptions{
-		ApplyPrivacyScope: os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true",
+		ApplyPrivacyScope: true,
 	}
 
-	if os.Getenv("ENGRAM_VNEXT_ENABLED") == "true" {
+	{
 		allMemories, listErr := listVisibleSessionStartMemories(ctx, memoryStore, project, maxSessionStartMemoriesLimit, callerCtx, visibilityOpts, sessionStartVisibilityScanBudget)
 		if listErr != nil {
 			return nil, status.Error(codes.Internal, "failed to list session-start memories")
 		}
 		candidateRows := allMemories
-		if os.Getenv(config.EnvContinuitySlotEnabled) == "true" {
+		{
 			slot, slotErr := dbgorm.NewContinuitySlotStore(s.db).Get(ctx, project)
 			if slotErr != nil && !errors.Is(slotErr, gorm.ErrRecordNotFound) {
 				return nil, status.Error(codes.Internal, "failed to get session-start continuity slot")
@@ -143,15 +141,6 @@ func (s *Server) GetSessionStartContext(ctx context.Context, req *pb.GetSessionS
 				}
 				memoryRows = append(memoryRows, scoredMemory.Memory)
 			}
-		}
-	} else {
-		var listErr error
-		memoryRows, listErr = listVisibleSessionStartMemories(ctx, memoryStore, project, memoriesLimit, callerCtx, visibilityOpts, sessionStartVisibilityScanBudget)
-		if listErr != nil {
-			return nil, status.Error(codes.Internal, "failed to list session-start memories")
-		}
-		if metaSummaryEnabled {
-			// Meta summary is built from a full visibility-aware scan after the main response rows are selected.
 		}
 	}
 

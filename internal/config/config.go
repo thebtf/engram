@@ -73,7 +73,6 @@ type Config struct {
 	EncryptionKey             string   `json:"-"`                            // env-only: ENGRAM_ENCRYPTION_KEY (hex-encoded 256-bit key)
 	AlwaysInjectLimit         int      `json:"always_inject_limit"`          // ENGRAM_ALWAYS_INJECT_LIMIT (default: 20)
 	ProjectInjectLimit        int      `json:"project_inject_limit"`         // ENGRAM_PROJECT_INJECT_LIMIT (default: 15)
-	InjectUnified             bool     `json:"inject_unified"`               // ENGRAM_INJECT_UNIFIED (default: true) — emergency rollback flag; removed after two release cycles
 	EnforceSourceProject      bool     `json:"enforce_source_project"`       // ENGRAM_ENFORCE_SOURCE_PROJECT (default: true)
 	AuthSkipLocal             bool     `json:"auth_skip_local"`
 	AuthTrustedProxy          string   `json:"auth_trusted_proxy"`
@@ -86,14 +85,6 @@ type Config struct {
 	// It records outcomes for sessions that have injection records but no outcome yet.
 	// Env: ENGRAM_OUTCOME_RECORDER_INTERVAL_MINUTES (default: 15)
 	OutcomeRecorderIntervalMinutes int `json:"outcome_recorder_interval_minutes"`
-
-	// Authentik SSO forward-auth integration
-	// ENGRAM_AUTHENTIK_ENABLED: enable Authentik header detection (default: false)
-	// ENGRAM_AUTHENTIK_AUTO_PROVISION: auto-create users from Authentik headers (default: false)
-	// ENGRAM_AUTHENTIK_TRUSTED_PROXIES: comma-separated list of trusted proxy IPs (default: empty)
-	AuthentikEnabled        bool     `json:"authentik_enabled"`
-	AuthentikAutoProvision  bool     `json:"authentik_auto_provision"`
-	AuthentikTrustedProxies []string `json:"authentik_trusted_proxies"`
 
 	// TranscriptRetentionDays controls how many days of unprocessed session
 	// transcripts are retained. 0 (the default) means no automatic pruning of
@@ -305,7 +296,6 @@ func Default() *Config {
 		StoreMemoryDedupThreshold:      0.92,
 		AlwaysInjectLimit:              20,   // Inject up to 20 always-inject observations per session
 		ProjectInjectLimit:             15,   // Inject up to 15 project-scoped observations per session
-		InjectUnified:                  true, // Use unified RetrieveRelevant path for inject (FR-3). Set ENGRAM_INJECT_UNIFIED=false for emergency rollback.
 		EnforceSourceProject:           true, // Enforce source/project scoping on store/recall (T010)
 		OutcomeRecorderIntervalMinutes: 15,
 		RuleArbiterBatchLimit:          20,
@@ -380,9 +370,6 @@ func Load() (*Config, error) {
 			if v, ok := settings["ENGRAM_ENFORCE_SOURCE_PROJECT"].(bool); ok {
 				cfg.EnforceSourceProject = v
 			}
-			if v, ok := settings["ENGRAM_INJECT_UNIFIED"].(bool); ok {
-				cfg.InjectUnified = v
-			}
 		}
 	}
 
@@ -442,11 +429,6 @@ func Load() (*Config, error) {
 			cfg.ProjectInjectLimit = n
 		}
 	}
-	if v := strings.TrimSpace(os.Getenv("ENGRAM_INJECT_UNIFIED")); v != "" {
-		if b, err := strconv.ParseBool(v); err == nil {
-			cfg.InjectUnified = b
-		}
-	}
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_ENFORCE_SOURCE_PROJECT")); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {
 			cfg.EnforceSourceProject = b
@@ -458,16 +440,6 @@ func Load() (*Config, error) {
 		}
 	}
 
-	// Authentik SSO forward-auth integration
-	if v := strings.TrimSpace(os.Getenv("ENGRAM_AUTHENTIK_ENABLED")); v == "true" || v == "1" {
-		cfg.AuthentikEnabled = true
-	}
-	if v := strings.TrimSpace(os.Getenv("ENGRAM_AUTHENTIK_AUTO_PROVISION")); v == "true" || v == "1" {
-		cfg.AuthentikAutoProvision = true
-	}
-	if v := strings.TrimSpace(os.Getenv("ENGRAM_AUTHENTIK_TRUSTED_PROXIES")); v != "" {
-		cfg.AuthentikTrustedProxies = splitTrim(v)
-	}
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_AUTH_SKIP_LOCAL")); v == "true" || v == "1" {
 		cfg.AuthSkipLocal = true
 	}
@@ -615,10 +587,6 @@ func Reload() (*Config, []string, error) {
 		}
 		if old.EnforceSourceProject != newCfg.EnforceSourceProject {
 			changed = append(changed, "enforce_source_project")
-		}
-		if old.InjectUnified != newCfg.InjectUnified {
-			changed = append(changed, "inject_unified (requires restart)")
-			newCfg.InjectUnified = old.InjectUnified
 		}
 		if old.WorkerPort != newCfg.WorkerPort {
 			changed = append(changed, "worker_port (requires restart)")

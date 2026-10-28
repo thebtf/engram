@@ -18,6 +18,40 @@ compiled defaults  <  ~/.engram/settings.json  <  environment variables
 The settings file is created on first run with minimal defaults. Parsing errors
 are silently ignored (compiled defaults used).
 
+## Single-owner installation
+
+The maintained `.env.example` lists exactly 14 Unraid **Variable** rows:
+`TZ`, `DATABASE_DSN`, `ENGRAM_VAULT_KEY`, `ENGRAM_EMBEDDING_URL`,
+`ENGRAM_EMBEDDING_API_KEY`, `ENGRAM_EMBEDDING_MODEL`, `ENGRAM_EMBEDDING_DIMENSIONS`,
+`ENGRAM_LLM_URL`, `ENGRAM_LLM_API_KEY`, `ENGRAM_LLM_MODEL`, `ENGRAM_AUTH_DISABLED`,
+`ENGRAM_AUTH_ADMIN_TOKEN`, `ENGRAM_CODE_INTEL_ENABLED`, `ENGRAM_TELEMETRY_ENABLED`.
+Keep the owner's existing values, including the selected embedding dimensions and Vault key.
+`ENGRAM_AUTH_DISABLED=true` is a deliberate trusted single-user LAN mode, not multi-user isolation.
+Authentication can still be enabled; `ENGRAM_CODE_INTEL_ENABLED=false` and
+`ENGRAM_TELEMETRY_ENABLED=false` remain explicit stops.
+
+For the owner's existing Unraid template, the precise cut is **51 → 14 Variable rows**:
+remove the 20 empty and 17 redundant/retired nonempty rows, not their backing data.
+Keep `Repository=ghcr.io/thebtf/engram:latest`, the existing single port mapping,
+and all three existing mounts (`/data`, `/unraid`, `/var/lib/engram`) byte-for-byte.
+Do not rename `RERANK_URL` to `ENGRAM_RERANK_URL`: the former is ignored;
+renaming it would activate a provider that was not selected.
+
+Before the later host update, preserve an access-restricted exact original template.
+Filter only Variable rows outside the allowlist, compare every retained name/value,
+Repository, port and mount against the original, then use the normal Unraid updater.
+Do not print secrets or overwrite the Vault key with an example value.
+If rollback is needed, restore the exact private original template and the prior approved
+`latest` promotion through the normal updater. This template-only step changes no database
+or owner records; a data conversion requires its separate backup/restore admission.
+
+The Compose examples also require their existing image-manifest, database-password and
+reverse-proxy/network inputs. Those are orchestration inputs for the separate three-artifact
+stack, not extra owner-template variables. Image-provided HOME/bind/port values are not
+Unraid Variable rows. The reference below includes advanced supported controls; it is not
+an instruction to populate empty template rows.
+
+
 ## Environment Variables
 
 ### Required
@@ -34,9 +68,6 @@ are silently ignored (compiled defaults used).
 | `ENGRAM_AUTH_SKIP_LOCAL` | `false` | Skip auth for RFC 1918 (private) IP addresses. Useful for local dev. |
 | `ENGRAM_AUTH_TRUSTED_PROXY` | (none) | Trusted reverse proxy address for X-Forwarded-For parsing. |
 | `ENGRAM_AUTH_ALLOWED_ORIGINS` | (empty) | Comma-separated exact public HTTP(S) browser origins admitted for logout in split console/backend deployments, e.g. `https://console.example.test`. No wildcard, trailing slash/path, userinfo, query or fragment; malformed entries fail worker configuration. This does not trust forwarded headers or grant authentication. |
-| `ENGRAM_AUTHENTIK_ENABLED` | `false` | Enable Authentik SSO forward-auth integration. |
-| `ENGRAM_AUTHENTIK_AUTO_PROVISION` | `false` | Auto-create users from Authentik headers. |
-| `ENGRAM_AUTHENTIK_TRUSTED_PROXIES` | (none) | Comma-separated trusted proxy IPs for Authentik headers. |
 
 ### Server
 
@@ -54,8 +85,7 @@ are silently ignored (compiled defaults used).
 | `ENGRAM_CONTEXT_MAX_TOKENS` | (compiled) | Max tokens for context injection. |
 | `ENGRAM_ALWAYS_INJECT_LIMIT` | (compiled) | Max always-inject memories per session start. |
 | `ENGRAM_PROJECT_INJECT_LIMIT` | (compiled) | Max project-scoped memories per injection. |
-| `ENGRAM_INJECT_UNIFIED` | `true` | Unified injection mode (same retrieval as search). Set `false` as emergency rollback. |
-| `ENGRAM_ENFORCE_SOURCE_PROJECT` | `false` | Strict project isolation for memory retrieval. |
+| `ENGRAM_ENFORCE_SOURCE_PROJECT` | `true` | Enforce source/project isolation; keep its authorization checks. |
 
 ### Embedding
 
@@ -69,6 +99,7 @@ gracefully to FTS-only (no vector tier).
 | `ENGRAM_EMBEDDING_URL` | (none) | Base URL of the embeddings endpoint. Empty = embedding disabled. |
 | `ENGRAM_EMBEDDING_MODEL` | `text-embedding` | Model name sent in the request body. |
 | `ENGRAM_EMBEDDING_API_KEY` | (none) | When set, sent as `Authorization: Bearer <key>`. Empty = no auth header (key-less LAN endpoint). |
+| `ENGRAM_EMBEDDING_DIMENSIONS` | `1536` | Preserve the selected value. `0` omits a dimensions request; `1536` requests the schema-bound vector size. |
 
 ### LLM
 
@@ -108,21 +139,29 @@ crystallization features that require inference become a no-op.
 | `ENGRAM_OUTCOME_RECORDER_INTERVAL_MINUTES` | (compiled) | Interval for periodic session outcome recording. |
 | `COLLECTION_CONFIG` | (none) | Path to collections YAML config file. |
 
-### vNext Feature Flags
+### Ordinary v7 runtime
 
-These flags gate optional vNext subsystems. All default to `false` (disabled).
-Enable them once the corresponding subsystem is wired and the schema migrations
-have been applied.
+Hybrid recall, audit/retention, privacy scopes, write-lint, candidate review/governance,
+continuity reservation, lifecycle, adaptive segmentation/briefs, and crystallization are
+built-in behavior. They do not require `ENGRAM_VNEXT_ENABLED`, `ENGRAM_VNEXT_F_ENABLED`,
+`ENGRAM_LIFECYCLE_ENABLED`, `ENGRAM_CONTINUITY_SLOT_ENABLED`, `ENGRAM_ADAPTIVE_ENABLED`,
+`ENGRAM_CRYSTALLIZATION_ENABLED` or `ENGRAM_GRAPH_ENABLED`; old values are ignored.
+Graph readers remain available through their wired stores. Inference still requires its
+configured provider, and all authorization, privacy, validation and availability checks remain.
+
+Unified context retrieval has no empty rollback branch or mutable `ENGRAM_INJECT_UNIFIED`
+setting. `/api/config` retains `memory.inject_unified=true` as a read-only compatibility
+observation for current readers; PATCH rejects that retired control. `/api/flags` retains
+the built-in capability names used by the current console, not mutable startup gates.
+
+The dormant V7 plug/S1–S6 activation and Authentik header-login entry are retired.
+Their retained historical state, protobufs and lower-level readers are not deleted.
+Local login, operator/keycard authentication, the explicit auth-disabled mode and general
+trusted-proxy/origin guards remain. Historical V7 flags no longer activate runtime work.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ENGRAM_VNEXT_ENABLED` | `false` | Master vNext gate. Enables retention cron, hybrid retrieval (`recall_memory` / `recall similar` / `recall explain`), `purge_project`, and the audit trail. |
-| `ENGRAM_LIFECYCLE_ENABLED` | `false` | Enables the sleep cycle (tier promotion/demotion) and the `tier_filter` recall parameter. |
-| `ENGRAM_VNEXT_F_ENABLED` | `false` | Milestone F gate (requires `ENGRAM_VNEXT_ENABLED=true` for the full feature set). Enables privacy-scope enforcement, knowledge node taxonomy, TG3 rationale/filters, crystallization candidates + tools, write-lint two-phase protocol, governance + bulk-op tools, snapshot rollback, and the redaction layer. |
-| `ENGRAM_GRAPH_ENABLED` | `false` | Enables the knowledge graph subsystem and `graph` MCP tool (Milestone C). |
-| `ENGRAM_ADAPTIVE_ENABLED` | `false` | Enables adaptive memory segmentation and adaptive brief retrieval (`get_memory_brief`). |
-| `ENGRAM_CRYSTALLIZATION_ENABLED` | `false` | Enables crystallization (Milestone D, LLM pipeline). On session-end the redacted transcript is persisted to `session_transcripts`; an async dream-cycle (rides the sleep tick) reads unprocessed transcripts, extracts decisions/lessons via the LLM (`ENGRAM_LLM_URL`), and routes them to crystallization candidates. **Language-independent** — decisions are extracted and stored in their original language with a `lang:<code>` tag (the legacy English-only regex extractor was removed). When `ENGRAM_LLM_URL` is unset the dream-cycle is a no-op. Requires `ENGRAM_VNEXT_ENABLED=true` for the audit trail and `ENGRAM_VNEXT_F_ENABLED=true` for the candidate routing path. |
-| `ENGRAM_TRANSCRIPT_RETENTION_DAYS` | `0` | Max age (days) before an **unprocessed** `session_transcripts` row is pruned. `0` = no prune of unprocessed rows (unbounded growth accepted during a prolonged LLM outage in exchange for zero silent data loss; operator opts into a safety cap). Processed rows are always pruned on the dream-cycle tick regardless of this value. |
+| `ENGRAM_TRANSCRIPT_RETENTION_DAYS` | `0` | Unprocessed transcript retention; `0` means no pruning during provider outages. Processed rows are pruned by the ordinary dream cycle. |
 
 ### Removed in v5/v6
 
@@ -131,8 +170,8 @@ v5 removals fall into two categories. **Permanent architectural shifts** (auth m
 These variables are no longer read by the **server runtime** — do not set them for the server:
 
 - `ENGRAM_API_TOKEN` / `API_TOKEN` → the server reads `ENGRAM_AUTH_ADMIN_TOKEN` (v5 — permanent architectural shift). **Exception:** the `engram-import` CLI tool still reads `ENGRAM_API_TOKEN` for its own Bearer auth (`cmd/engram-import/main.go`); set it only when running that tool, not for the server.
-- `EMBEDDING_PROVIDER`, `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL_NAME`, `EMBEDDING_DIMENSIONS`, `EMBEDDING_TRUNCATE` (and the `ENGRAM_EMBEDDING_PROVIDER` / `ENGRAM_EMBEDDING_BASE_URL` / `ENGRAM_EMBEDDING_MODEL_NAME` / `ENGRAM_EMBEDDING_DIMENSIONS` / `ENGRAM_EMBEDDING_TRUNCATE` compose aliases) → the rebuilt embedding client reads `ENGRAM_EMBEDDING_URL`, `ENGRAM_EMBEDDING_MODEL`, and `ENGRAM_EMBEDDING_API_KEY` (see the Embedding section above). The old names are ignored.
-- `GRAPH_PROVIDER`, `FALKORDB_*` (and the `ENGRAM_GRAPH_PROVIDER` / `ENGRAM_FALKORDB_*` compose aliases) → no FalkorDB backend exists in the code. The knowledge graph is PostgreSQL-backed (`ENGRAM_GRAPH_ENABLED`). The old names are ignored.
+- Historical embedding provider/base/model aliases are ignored. The current client reads `ENGRAM_EMBEDDING_URL`, `ENGRAM_EMBEDDING_MODEL`, `ENGRAM_EMBEDDING_API_KEY`, and the request-dimensions control above.
+- `GRAPH_PROVIDER`, `FALKORDB_*` and their compose aliases are ignored; the retained knowledge graph is PostgreSQL-backed and has no startup feature gate.
 - `ENGRAM_MODEL`, `ENGRAM_CONTEXT_OBSERVATIONS`, `ENGRAM_CONTEXT_FULL_COUNT`, `ENGRAM_CONTEXT_SESSION_COUNT` → removed or renamed
 
 ## settings.json Keys

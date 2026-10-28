@@ -12,7 +12,6 @@ import (
 	"math"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -181,7 +180,7 @@ func (s *Service) handleStoreMemoryExplicit(w http.ResponseWriter, r *http.Reque
 	// source_workstation_id='', source_sessions=ARRAY[]::TEXT[]) and the
 	// response shape stays v6.4.x-identical via the omitempty JSON tags
 	// already on Memory.
-	if os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true" {
+	{
 		if req.PrivacyScope != "" {
 			if !isValidPrivacyScopeREST(req.PrivacyScope) {
 				http.Error(w, "invalid privacy_scope: must be one of private, project, shared, global", http.StatusBadRequest)
@@ -414,7 +413,7 @@ func memoryVisibilityCaller(ctx context.Context, sessionID string) scope.Keycard
 
 func memoryVisibilityOptions() scope.MemoryVisibilityOptions {
 	return scope.MemoryVisibilityOptions{
-		ApplyPrivacyScope: os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true",
+		ApplyPrivacyScope: true,
 	}
 }
 

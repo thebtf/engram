@@ -167,8 +167,8 @@ func candidateTools() []Tool {
 
 // handleListCandidates implements the list_candidates MCP tool.
 func (s *Server) handleListCandidates(ctx context.Context, args json.RawMessage) (string, error) {
-	if !vnextFEnabled() || s.candidateStore == nil {
-		return "", fmt.Errorf("list_candidates requires ENGRAM_VNEXT_F_ENABLED=true")
+	if s.candidateStore == nil {
+		return "", fmt.Errorf("candidate store not available")
 	}
 	m, err := parseArgs(args)
 	if err != nil {
@@ -210,8 +210,8 @@ func (s *Server) handleListCandidates(ctx context.Context, args json.RawMessage)
 
 // handleGetCandidate implements the get_candidate MCP tool.
 func (s *Server) handleGetCandidate(ctx context.Context, args json.RawMessage) (string, error) {
-	if !vnextFEnabled() || s.candidateStore == nil {
-		return "", fmt.Errorf("get_candidate requires ENGRAM_VNEXT_F_ENABLED=true")
+	if s.candidateStore == nil {
+		return "", fmt.Errorf("candidate store not available")
 	}
 	m, err := parseArgs(args)
 	if err != nil {
@@ -244,9 +244,7 @@ func (s *Server) handleGetCandidate(ctx context.Context, args json.RawMessage) (
 // It creates a memory with epistemic_type=decision from the candidate content,
 // then transitions the candidate to status='promoted' with a back-reference to the new memory.
 func (s *Server) handlePromoteCandidate(ctx context.Context, args json.RawMessage) (string, error) {
-	if !vnextFEnabled() {
-		return "", fmt.Errorf("promote_candidate requires ENGRAM_VNEXT_F_ENABLED=true")
-	}
+
 	m, err := parseArgs(args)
 	if err != nil {
 		return "", err
@@ -359,8 +357,8 @@ func (s *Server) handlePromoteCandidate(ctx context.Context, args json.RawMessag
 
 // handleRejectCandidate implements the reject_candidate MCP tool.
 func (s *Server) handleRejectCandidate(ctx context.Context, args json.RawMessage) (string, error) {
-	if !vnextFEnabled() || s.candidateStore == nil {
-		return "", fmt.Errorf("reject_candidate requires ENGRAM_VNEXT_F_ENABLED=true")
+	if s.candidateStore == nil {
+		return "", fmt.Errorf("candidate store not available")
 	}
 	m, err := parseArgs(args)
 	if err != nil {
@@ -419,8 +417,8 @@ func (s *Server) handleRejectCandidate(ctx context.Context, args json.RawMessage
 
 // handleSupersedeCandidate implements the supersede_candidate MCP tool.
 func (s *Server) handleSupersedeCandidate(ctx context.Context, args json.RawMessage) (string, error) {
-	if !vnextFEnabled() || s.candidateStore == nil {
-		return "", fmt.Errorf("supersede_candidate requires ENGRAM_VNEXT_F_ENABLED=true")
+	if s.candidateStore == nil {
+		return "", fmt.Errorf("candidate store not available")
 	}
 	m, err := parseArgs(args)
 	if err != nil {

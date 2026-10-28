@@ -38,8 +38,8 @@ is accepted for public documentation.
 
 | Surface | Classification | Activation | Evidence |
 | --- | --- | --- |
-| Graph | flag-gated | `ENGRAM_GRAPH_ENABLED` | `internal/worker/handlers_graph.go` |
-| Candidate queue | flag-gated | `ENGRAM_VNEXT_F_ENABLED` | `internal/worker/handlers_candidates.go` |
+| Graph | ordinary retained reader | wired graph store | `internal/worker/handlers_graph.go` |
+| Candidate queue | ordinary v7 runtime | initialized candidate store | `internal/worker/handlers_candidates.go` |
 | Code intelligence | flag-gated | `ENGRAM_CODE_INTEL_ENABLED` | `cmd/engram/wiring.go`, `internal/mcp/tools_code_intel.go` |
 | Reranking | optional-runtime | `ENGRAM_RERANK_URL` | `internal/worker/service.go`, `internal/mcp/tools_memory.go` |
 

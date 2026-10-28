@@ -431,13 +431,11 @@ func startServer(ctx context.Context, binary, dsn, token, root string) (*liveSer
 	command.Dir = root
 	command.Stdout = io.Discard
 	command.Stderr = io.Discard
-	command.Env = append(cleanEnvironment(os.Environ(), "DATABASE_DSN", "ENGRAM_AUTH_ADMIN_TOKEN", "ENGRAM_AUTH_DISABLED", "ENGRAM_WORKER_PORT", "ENGRAM_WORKER_HOST", "ENGRAM_GRAPH_ENABLED", "ENGRAM_BOOKS_ENABLED", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA"),
+	command.Env = append(cleanEnvironment(os.Environ(), "WORKSTATION_ID", "COLLECTION_CONFIG", "RERANK_URL", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA"),
 		"DATABASE_DSN="+dsn,
 		"ENGRAM_AUTH_ADMIN_TOKEN="+token,
 		"ENGRAM_WORKER_HOST=127.0.0.1",
 		"ENGRAM_WORKER_PORT="+strconv.Itoa(port),
-		"ENGRAM_GRAPH_ENABLED=true",
-		"ENGRAM_BOOKS_ENABLED=true",
 		"ENGRAM_TELEMETRY_ENABLED=false",
 		"HOME="+root,
 		"USERPROFILE="+root,
@@ -459,7 +457,11 @@ func cleanEnvironment(values []string, names ...string) []string {
 	for _, value := range values {
 		name, _, found := strings.Cut(value, "=")
 		if found {
-			if _, blocked := blocked[strings.ToUpper(name)]; blocked {
+			name = strings.ToUpper(name)
+			if strings.HasPrefix(name, "ENGRAM_") || strings.HasPrefix(name, "DATABASE_") {
+				continue
+			}
+			if _, blocked := blocked[name]; blocked {
 				continue
 			}
 		}

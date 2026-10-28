@@ -2,14 +2,12 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"runtime"
 	"sort"
-	"strings"
 	"testing"
 	"time"
 
@@ -22,7 +20,6 @@ import (
 	"github.com/thebtf/engram/internal/cognitive/s3ambient"
 	"github.com/thebtf/engram/internal/cognitive/s4bsurfacing"
 	"github.com/thebtf/engram/internal/cognitive/s4directives"
-	"github.com/thebtf/engram/internal/cognitive/s5"
 	"github.com/thebtf/engram/internal/cognitive/s6"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/mcp"
@@ -949,51 +946,6 @@ func TestPlatformWiring_FlagOff_S5ProductMetricsProviderStaysAbsentAndEndpoint40
 	require.Contains(t, w.Body.String(), "s5-telemetry not enabled")
 }
 
-func TestPlatformWiring_FlagOn_S5RealProductMetricsProviderRegistersWithSiblingsOff(t *testing.T) {
-	svc := newServiceWithV7FlagEnv(t, map[string]string{
-		"ENGRAM_V7_PLUG_ENABLED":             "true",
-		"ENGRAM_V7_S1_STATE":                 "false",
-		"ENGRAM_V7_S2_METAMEM":               "false",
-		"ENGRAM_V7_S3_AMBIENT":               "false",
-		"ENGRAM_V7_S4A_DIRECTIVES_CAPTURE":   "false",
-		"ENGRAM_V7_S4B_DIRECTIVES_SURFACING": "false",
-		"ENGRAM_V7_S5_TELEMETRY":             "true",
-		"ENGRAM_V7_S6_OUTCOME":               "false",
-	})
-
-	impls := resolvedProductMetricProviders(t, svc.cognitiveRegistry)
-	require.Len(t, impls, 1, "master+S5 flags must register exactly one real ProductMetricsProvider without sibling subsystem flags")
-	require.Equal(t, []string{"engram.s5.product_metrics"}, namesOfSubsystems(impls))
-	_, ok := impls[0].(core.ProductMetricsProvider)
-	require.True(t, ok, "registered S5 subsystem must satisfy core.ProductMetricsProvider")
-}
-
-func TestProductStats_S5OnlyFlagsReturnProductSnapshotWithoutSiblingSubsystems(t *testing.T) {
-	svc := newServiceWithV7FlagEnv(t, map[string]string{
-		"ENGRAM_V7_PLUG_ENABLED":             "true",
-		"ENGRAM_V7_S1_STATE":                 "false",
-		"ENGRAM_V7_S2_METAMEM":               "false",
-		"ENGRAM_V7_S3_AMBIENT":               "false",
-		"ENGRAM_V7_S4A_DIRECTIVES_CAPTURE":   "false",
-		"ENGRAM_V7_S4B_DIRECTIVES_SURFACING": "false",
-		"ENGRAM_V7_S5_TELEMETRY":             "true",
-		"ENGRAM_V7_S6_OUTCOME":               "false",
-	})
-
-	w := httptest.NewRecorder()
-	r := newRequestWithSource(http.MethodGet, "/api/stats/v7/product", auth.SourceClient)
-	svc.handleStatsV7Product(w, r)
-	require.Equal(t, http.StatusOK, w.Code, "S5-only enablement must not require S1/S2/S3/S4/S6 flags; body=%s", w.Body.String())
-
-	var snap core.ProductMetricsSnapshot
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&snap))
-	require.NotNil(t, snap.Metrics, "real S5 provider must return an explicit metrics map, even before product samples exist")
-	require.NotNil(t, snap.Readiness, "real S5 provider must return explicit readiness evidence even before product samples exist")
-	require.Len(t, snap.Readiness, len(s5.CanonicalMetricKeys()), "S5-only route must expose readiness for every canonical metric")
-	require.Equal(t, uint64(30), snap.Readiness[s5.MetricHintPrecision].ThresholdN, "production path must apply S5-owned hint_precision default threshold")
-	require.Equal(t, uint64(20), snap.Readiness[s5.MetricAcceptedHintAction].ThresholdN, "production path must apply S5-owned accepted_hint_action default threshold")
-}
-
 type fakeS6OutcomeStore struct {
 	queries  []fakeS6OutcomeQuery
 	memories []*models.Memory
@@ -1162,104 +1114,6 @@ func TestPlatformWiring_T005_S6FlagMatrixControlsOutcomeProposerAndSiblings(t *t
 			}
 		})
 	}
-}
-
-func TestPlatformWiring_T011_S3FlagMatrixControlsEmitterRouteAndSiblings(t *testing.T) {
-	tests := []struct {
-		name               string
-		masterFlag         string
-		s2Flag             string
-		s3Flag             string
-		wantCandidateNames []string
-		wantEmitterNames   []string
-		wantRouteStatus    int
-	}{
-		{
-			name:               "master disabled suppresses s3 even when s3 flag is set",
-			masterFlag:         "false",
-			s2Flag:             "false",
-			wantRouteStatus:    http.StatusMethodNotAllowed,
-			wantCandidateNames: []string{},
-			wantEmitterNames:   []string{},
-		},
-		{
-			name:               "s3 disabled keeps candidate noop fallback and hides route",
-			masterFlag:         "true",
-			wantRouteStatus:    http.StatusMethodNotAllowed,
-			s3Flag:             "false",
-			wantCandidateNames: []string{"core.noop.candidate_proposer"},
-			wantEmitterNames:   []string{},
-		},
-		{
-			name:               "master and s3 enabled register exactly one real emitter with s2 noop fallback",
-			masterFlag:         "true",
-			s2Flag:             "false",
-			s3Flag:             "true",
-			wantCandidateNames: []string{"core.noop.candidate_proposer"},
-			wantEmitterNames:   []string{"engram.s3.ambient"},
-			wantRouteStatus:    http.StatusServiceUnavailable,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			svc := newServiceWithV7FlagEnv(t, map[string]string{
-				"ENGRAM_V7_PLUG_ENABLED":             tt.masterFlag,
-				"ENGRAM_V7_S1_STATE":                 "false",
-				"ENGRAM_V7_S2_METAMEM":               tt.s2Flag,
-				"ENGRAM_V7_S3_AMBIENT":               tt.s3Flag,
-				"ENGRAM_V7_S4A_DIRECTIVES_CAPTURE":   "false",
-				"ENGRAM_V7_S4B_DIRECTIVES_SURFACING": "false",
-				"ENGRAM_V7_S5_TELEMETRY":             "false",
-				"ENGRAM_V7_S6_OUTCOME":               "false",
-			})
-
-			resolver, ok := svc.cognitiveRegistry.(interface {
-				ResolveImpls(interfaceName string) []core.Subsystem
-			})
-			if !ok {
-				t.Fatalf("registry does not expose ResolveImpls")
-			}
-
-			if got := namesOfSubsystems(resolver.ResolveImpls("CandidateProposer")); !reflect.DeepEqual(got, tt.wantCandidateNames) {
-				t.Fatalf("ResolveImpls(CandidateProposer) = %v, want %v", got, tt.wantCandidateNames)
-			}
-			if got := namesOfSubsystems(resolver.ResolveImpls("HintEmitter")); !reflect.DeepEqual(got, tt.wantEmitterNames) {
-				t.Fatalf("ResolveImpls(HintEmitter) = %v, want %v", got, tt.wantEmitterNames)
-			}
-			for _, iface := range []string{"StateWriter", "AttentionEventWriter", "DirectiveDistiller", "ProductMetricsProvider"} {
-				if got := resolver.ResolveImpls(iface); len(got) != 0 {
-					t.Fatalf("ResolveImpls(%s) = %v, want no sibling milestone activation from S3 flags", iface, namesOfSubsystems(got))
-				}
-			}
-
-			w := httptest.NewRecorder()
-			r := httptest.NewRequest(http.MethodPost, "/api/hooks/ambient-candidates", strings.NewReader(`{}`))
-			r.Header.Set("Content-Type", "application/json")
-			svc.router.ServeHTTP(w, r)
-			require.Equal(t, tt.wantRouteStatus, w.Code, "ambient route exposure must track the S3 flag boundary")
-		})
-	}
-}
-
-func TestPlatformWiring_T014_AmbientRouteDoesNotRequireAdaptiveSegmentSupport(t *testing.T) {
-	t.Setenv("ENGRAM_ADAPTIVE_ENABLED", "false")
-	svc := newServiceWithV7FlagEnv(t, map[string]string{
-		"ENGRAM_V7_PLUG_ENABLED":             "true",
-		"ENGRAM_V7_S1_STATE":                 "false",
-		"ENGRAM_V7_S2_METAMEM":               "false",
-		"ENGRAM_V7_S3_AMBIENT":               "true",
-		"ENGRAM_V7_S4A_DIRECTIVES_CAPTURE":   "false",
-		"ENGRAM_V7_S4B_DIRECTIVES_SURFACING": "false",
-		"ENGRAM_V7_S5_TELEMETRY":             "false",
-		"ENGRAM_V7_S6_OUTCOME":               "false",
-	})
-
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/hooks/ambient-candidates", strings.NewReader(`{}`))
-	r.Header.Set("Content-Type", "application/json")
-	svc.router.ServeHTTP(w, r)
-	require.Equal(t, http.StatusServiceUnavailable, w.Code, "ambient route must still be registered even when adaptive segment support is disabled")
 }
 
 func TestRegisterS3AmbientSubsystemRejectsTypedNilEmitter(t *testing.T) {

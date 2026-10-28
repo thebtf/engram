@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -21,9 +20,11 @@ import (
 	gormlib "gorm.io/gorm"
 )
 
-const candidateQueueFlag = "ENGRAM_VNEXT_F_ENABLED"
-const candidateQueueAllProjects = "all"
-const statusClientClosedRequest = 499
+const (
+	candidateQueueUnavailable = "candidate queue is not initialized"
+	candidateQueueAllProjects = "all"
+	statusClientClosedRequest = 499
+)
 
 type candidateReviewStore interface {
 	ListByStatus(ctx context.Context, project string, status models.CandidateStatus, limit int) ([]*models.CrystallizationCandidate, error)
@@ -87,12 +88,8 @@ type rejectCandidateRequest struct {
 	Reason string `json:"reason,omitempty"`
 }
 
-func candidateQueueEnabledFromEnv() bool {
-	return os.Getenv(candidateQueueFlag) == "true"
-}
-
 func (s *Service) candidateQueueActive() bool {
-	return s != nil && s.candidateQueueEnabled
+	return s != nil && s.candidateQueueReady
 }
 
 func (s *Service) currentCandidateReviewStore() candidateReviewStore {
@@ -291,7 +288,7 @@ func memoryFromCandidate(candidate *models.CrystallizationCandidate) (*models.Me
 // @Router /api/memory/candidates [get]
 func (s *Service) handleListMemoryCandidates(w http.ResponseWriter, r *http.Request) {
 	if !s.candidateQueueActive() {
-		http.Error(w, "candidate queue requires ENGRAM_VNEXT_F_ENABLED=true", http.StatusForbidden)
+		http.Error(w, candidateQueueUnavailable, http.StatusForbidden)
 		return
 	}
 
@@ -374,7 +371,7 @@ func (s *Service) handleListMemoryCandidates(w http.ResponseWriter, r *http.Requ
 // @Router /api/memory/candidates/{id} [get]
 func (s *Service) handleGetMemoryCandidate(w http.ResponseWriter, r *http.Request) {
 	if !s.candidateQueueActive() {
-		http.Error(w, "candidate queue requires ENGRAM_VNEXT_F_ENABLED=true", http.StatusForbidden)
+		http.Error(w, candidateQueueUnavailable, http.StatusForbidden)
 		return
 	}
 	store := s.currentCandidateReviewStore()
@@ -403,7 +400,7 @@ func (s *Service) handleGetMemoryCandidate(w http.ResponseWriter, r *http.Reques
 
 func (s *Service) handlePromoteMemoryCandidate(w http.ResponseWriter, r *http.Request) {
 	if !s.candidateQueueActive() {
-		http.Error(w, "candidate queue requires ENGRAM_VNEXT_F_ENABLED=true", http.StatusForbidden)
+		http.Error(w, candidateQueueUnavailable, http.StatusForbidden)
 		return
 	}
 	store := s.currentCandidateReviewStore()
@@ -511,7 +508,7 @@ func (s *Service) handlePromoteMemoryCandidate(w http.ResponseWriter, r *http.Re
 
 func (s *Service) handleRejectMemoryCandidate(w http.ResponseWriter, r *http.Request) {
 	if !s.candidateQueueActive() {
-		http.Error(w, "candidate queue requires ENGRAM_VNEXT_F_ENABLED=true", http.StatusForbidden)
+		http.Error(w, candidateQueueUnavailable, http.StatusForbidden)
 		return
 	}
 	store := s.currentCandidateReviewStore()
@@ -603,7 +600,7 @@ func (s *Service) handleRejectMemoryCandidate(w http.ResponseWriter, r *http.Req
 
 func (s *Service) handleSupersedeMemoryCandidate(w http.ResponseWriter, r *http.Request) {
 	if !s.candidateQueueActive() {
-		http.Error(w, "candidate queue requires ENGRAM_VNEXT_F_ENABLED=true", http.StatusForbidden)
+		http.Error(w, candidateQueueUnavailable, http.StatusForbidden)
 		return
 	}
 	store := s.currentCandidateReviewStore()

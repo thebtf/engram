@@ -14,13 +14,13 @@ type directiveCaptureService interface {
 }
 
 func directivesCaptureEnabledFromEnv() bool {
-	return cognitivecore.LoadFlagConfigFromEnv().IsSubsystemEnabled("s4a")
+	return cognitivecore.FlagConfig{}.IsSubsystemEnabled("s4a")
 }
 
 func rememberDirectiveTool() Tool {
 	return Tool{
 		Name:        "remember_directive",
-		Description: "CR-001: capture a distilled creator directive without storing raw prompt text. Only available when master v7 and S4a flags are enabled.",
+		Description: "Deferred creator-directive capture; startup activation is retired.",
 		tier:        tierCore,
 		InputSchema: map[string]any{
 			"type":     "object",
@@ -37,7 +37,7 @@ func rememberDirectiveTool() Tool {
 
 func (s *Server) currentDirectiveCaptureService() (directiveCaptureService, error) {
 	if !directivesCaptureEnabledFromEnv() {
-		return nil, fmt.Errorf("remember_directive feature flag required")
+		return nil, fmt.Errorf("remember_directive is deferred; startup activation is retired")
 	}
 	if s == nil || s.directiveCaptureService == nil {
 		return nil, fmt.Errorf("remember_directive service not configured")

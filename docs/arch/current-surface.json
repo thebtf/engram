@@ -105,22 +105,22 @@
     {
       "surface": "Graph",
       "route_presence": "present — apps/operator-console/pages/graph.vue",
-      "flag_activation": "ENGRAM_GRAPH_ENABLED (default false; Compose sets it explicitly in docker-compose.yml:59)",
-      "backend_readiness": "handlers registered and functional when the flag is true; return 403/disabled behavior when the flag is false",
-      "accepted_workflow": "not accepted — no browser replay in this batch confirmed the flag-on graph CRUD/traverse flow end-to-end",
-      "classification": "flag-gated",
-      "activation": "ENGRAM_GRAPH_ENABLED",
-      "evidence": "internal/worker/handlers_graph.go:20-24,122-124; docker-compose.yml:59"
+      "flag_activation": "none — retained graph readers use their wired stores",
+      "backend_readiness": "ordinary retained reads; readiness, authorization and graph ACL checks remain",
+      "accepted_workflow": "not accepted — no new browser acceptance claimed by configuration contraction",
+      "classification": "live",
+      "activation": "wired graph store",
+      "evidence": "internal/worker/handlers_graph.go; internal/mcp/server.go"
     },
     {
       "surface": "Candidate queue",
       "route_presence": "present — apps/operator-console/pages/queue.vue",
-      "flag_activation": "ENGRAM_VNEXT_F_ENABLED (default false; Compose sets it explicitly in docker-compose.yml:58)",
-      "backend_readiness": "list/promote/reject/supersede handlers return 403 with an explicit message when the flag is off",
-      "accepted_workflow": "not accepted — no browser replay in this batch confirmed the flag-on promote/reject/supersede flow end-to-end",
-      "classification": "flag-gated",
-      "activation": "ENGRAM_VNEXT_F_ENABLED",
-      "evidence": "internal/worker/handlers_candidates.go:24,90-92,294; docker-compose.yml:58"
+      "flag_activation": "none — ordinary v7 candidate review",
+      "backend_readiness": "initialized candidate store; existing authorization, validation and availability checks remain",
+      "accepted_workflow": "not accepted — no new browser acceptance claimed by configuration contraction",
+      "classification": "live",
+      "activation": "initialized candidate store",
+      "evidence": "internal/worker/handlers_candidates.go; internal/worker/service.go"
     },
     {
       "surface": "Code intelligence",
@@ -244,18 +244,18 @@
         },
         "embedded-server": {
           "direct_load_status": "ok",
-          "note": "No competing server route at \"/graph\"; the page loads regardless of flag state, but its data calls will be rejected until the flag is enabled."
+          "note": "No competing server route at /graph; underlying retained reads use wired stores and existing ACL checks."
         },
         "proxied-external": {
           "direct_load_status": "untested-locally"
         }
       },
-      "capability_status": "flag-gated",
-      "activation": "ENGRAM_GRAPH_ENABLED",
-      "journey_status": "blocked",
-      "auth": "requireReady group, global auth middleware, plus the graph flag gate on each handler",
-      "limitations": "The page renders at direct load in every deployment form; its underlying node/edge/traverse calls return disabled behavior until ENGRAM_GRAPH_ENABLED=true. journey_status=blocked until a flag-on browser replay is recorded.",
-      "evidence": "apps/operator-console/pages/graph.vue; internal/worker/handlers_graph.go:20-24,146-149"
+      "capability_status": "live",
+      "activation": "wired graph store",
+      "journey_status": "partial",
+      "auth": "requireReady group, global auth middleware and graph ACL checks",
+      "limitations": "No new browser acceptance claimed by configuration contraction; historical writers remain retired.",
+      "evidence": "apps/operator-console/pages/graph.vue; internal/worker/handlers_graph.go"
     },
     {
       "path": "/health",
@@ -377,18 +377,18 @@
         },
         "embedded-server": {
           "direct_load_status": "ok",
-          "note": "No competing server route at \"/queue\"; the page loads regardless of flag state, but its data calls will be rejected until the flag is enabled."
+          "note": "No competing server route at /queue; ordinary candidate review requires initialized stores and existing authorization."
         },
         "proxied-external": {
           "direct_load_status": "untested-locally"
         }
       },
-      "capability_status": "flag-gated",
-      "activation": "ENGRAM_VNEXT_F_ENABLED",
-      "journey_status": "blocked",
-      "auth": "requireReady group, global auth middleware, plus the candidateQueueActive() flag gate on each list/promote/reject/supersede handler (internal/worker/handlers_candidates.go:293-294)",
-      "limitations": "journey_status=blocked until a flag-on browser replay confirms promote/reject/supersede end-to-end.",
-      "evidence": "apps/operator-console/pages/queue.vue; internal/worker/handlers_candidates.go:24,90-92,294"
+      "capability_status": "live",
+      "activation": "initialized candidate store",
+      "journey_status": "partial",
+      "auth": "requireReady group, global auth middleware and existing candidate action guards",
+      "limitations": "No new browser acceptance claimed by configuration contraction.",
+      "evidence": "apps/operator-console/pages/queue.vue; internal/worker/handlers_candidates.go"
     },
     {
       "path": "/rules",

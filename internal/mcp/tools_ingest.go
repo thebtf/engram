@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/ingestion"
@@ -85,8 +84,8 @@ func (s *Server) ingestDocument(ctx context.Context, a ingestArgs) (string, erro
 	}
 
 	var existing []*models.Memory
-	vnextEnabled := os.Getenv("ENGRAM_VNEXT_ENABLED") == "true"
-	if vnextEnabled && a.Project != "" {
+
+	if a.Project != "" {
 		var listErr error
 		existing, listErr = s.memoryStore.List(ctx, a.Project, 100)
 		if listErr != nil {
@@ -96,10 +95,10 @@ func (s *Server) ingestDocument(ctx context.Context, a ingestArgs) (string, erro
 
 	stored := 0
 	flagged := 0
-	lifecycleEnabled := os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true"
+
 	for _, chunk := range chunks {
 		var chunkFlagged bool
-		if vnextEnabled && existing != nil {
+		if existing != nil {
 			gateResult := writegate.Check(ctx, chunk.Text, existing)
 			if gateResult.Decision == "flag" {
 				chunkFlagged = true
@@ -130,10 +129,8 @@ func (s *Server) ingestDocument(ctx context.Context, a ingestArgs) (string, erro
 		// DB defaults authoritative for ordinary callers.
 		var created *models.Memory
 		var err error
-		if vnextEnabled || lifecycleEnabled {
+		{
 			created, err = s.memoryStore.CreateWithLifecycle(ctx, memory)
-		} else {
-			created, err = s.memoryStore.Create(ctx, memory)
 		}
 		if err != nil {
 			log.Error().Err(err).Int("chunk_index", chunk.Index).Msg("ingest: store chunk failed")

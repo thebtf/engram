@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -16,7 +15,7 @@ import (
 const knowAboutMaxLimit = 25
 
 func s2MetaMemoryEnabled() bool {
-	return os.Getenv("ENGRAM_V7_PLUG_ENABLED") == "true" && os.Getenv("ENGRAM_V7_S2_METAMEM") == "true"
+	return false // Deferred subsystem: retained readers do not create a startup activation path.
 }
 
 func knowAboutTool() Tool {
@@ -41,7 +40,7 @@ func (s *Server) handleKnowAbout(ctx context.Context, args json.RawMessage) (str
 		return "", fmt.Errorf("meta memory index not available")
 	}
 	if !s2MetaMemoryEnabled() {
-		return "", fmt.Errorf("know_about unavailable unless ENGRAM_V7_PLUG_ENABLED=true and ENGRAM_V7_S2_METAMEM=true")
+		return "", fmt.Errorf("know_about is deferred; startup activation is retired")
 	}
 	m, err := parseArgs(args)
 	if err != nil {

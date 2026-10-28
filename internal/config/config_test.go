@@ -91,12 +91,6 @@ func (s *ConfigSuite) TestDefault_SignalWeights() {
 	s.InDelta(-0.5, cfg.SignalWeights["error_streak"], 1e-9)
 }
 
-// TestDefault_InjectUnifiedTrue verifies that InjectUnified defaults to true (FR-3).
-func (s *ConfigSuite) TestDefault_InjectUnifiedTrue() {
-	cfg := Default()
-	s.True(cfg.InjectUnified, "InjectUnified must default to true so the unified inject path is active")
-}
-
 // TestDefault_EnforceSourceProjectTrue verifies that EnforceSourceProject defaults to true (T010).
 func (s *ConfigSuite) TestDefault_EnforceSourceProjectTrue() {
 	cfg := Default()
@@ -126,29 +120,6 @@ func (s *ConfigSuite) TestDefault_TelemetryEnabled() {
 func (s *ConfigSuite) TestDefault_ContextMaxTokens() {
 	cfg := Default()
 	s.Equal(8000, cfg.ContextMaxTokens)
-}
-
-// TestInjectUnifiedDefaultTrue verifies that ENGRAM_INJECT_UNIFIED defaults to true (FR-3).
-func (s *ConfigSuite) TestInjectUnifiedDefaultTrue() {
-	cfg, err := Load()
-	s.Require().NoError(err)
-	s.True(cfg.InjectUnified, "InjectUnified must default to true so the unified inject path is active")
-}
-
-// TestInjectUnifiedEnvOverride verifies that ENGRAM_INJECT_UNIFIED=false enables the emergency rollback path.
-func (s *ConfigSuite) TestInjectUnifiedEnvOverride() {
-	s.T().Setenv("ENGRAM_INJECT_UNIFIED", "false")
-	cfg, err := Load()
-	s.Require().NoError(err)
-	s.False(cfg.InjectUnified, "ENGRAM_INJECT_UNIFIED=false must activate the legacy inject path")
-}
-
-// TestInjectUnifiedEnvOverrideTrue verifies that ENGRAM_INJECT_UNIFIED=true is accepted.
-func (s *ConfigSuite) TestInjectUnifiedEnvOverrideTrue() {
-	s.T().Setenv("ENGRAM_INJECT_UNIFIED", "true")
-	cfg, err := Load()
-	s.Require().NoError(err)
-	s.True(cfg.InjectUnified)
 }
 
 // TestDataDir verifies data directory path contains .engram.
@@ -421,7 +392,6 @@ func (s *ConfigSuite) TestSaveSettings_MergesOperatorUpdates() {
 
 	err = SaveSettings(map[string]any{
 		"ENGRAM_ENFORCE_SOURCE_PROJECT": false,
-		"ENGRAM_INJECT_UNIFIED":         false,
 	})
 	s.Require().NoError(err)
 
@@ -429,7 +399,6 @@ func (s *ConfigSuite) TestSaveSettings_MergesOperatorUpdates() {
 	s.Require().NoError(err)
 	s.Equal("haiku", cfg.Model)
 	s.False(cfg.EnforceSourceProject)
-	s.False(cfg.InjectUnified)
 }
 
 func (s *ConfigSuite) TestSaveSettings_SerializesConcurrentUpdates() {
@@ -446,7 +415,7 @@ func (s *ConfigSuite) TestSaveSettings_SerializesConcurrentUpdates() {
 	errs := make(chan error, 2)
 	for _, updates := range []map[string]any{
 		{"ENGRAM_ENFORCE_SOURCE_PROJECT": false},
-		{"ENGRAM_INJECT_UNIFIED": false},
+		{"ENGRAM_CONTEXT_OBSERVATIONS": 75},
 	} {
 		wg.Add(1)
 		go func(updates map[string]any) {
@@ -466,12 +435,12 @@ func (s *ConfigSuite) TestSaveSettings_SerializesConcurrentUpdates() {
 	settings := map[string]any{}
 	s.Require().NoError(json.Unmarshal(data, &settings))
 	s.Equal(false, settings["ENGRAM_ENFORCE_SOURCE_PROJECT"])
-	s.Equal(false, settings["ENGRAM_INJECT_UNIFIED"])
+	s.Equal(float64(75), settings["ENGRAM_CONTEXT_OBSERVATIONS"])
 
 	cfg, err := Load()
 	s.Require().NoError(err)
 	s.False(cfg.EnforceSourceProject)
-	s.False(cfg.InjectUnified)
+	s.Equal(75, cfg.ContextObservations)
 }
 
 func (s *ConfigSuite) TestReload_DetectsOperatorSettingsChanges() {
@@ -489,20 +458,13 @@ func (s *ConfigSuite) TestReload_DetectsOperatorSettingsChanges() {
 
 	err = SaveSettings(map[string]any{
 		"ENGRAM_ENFORCE_SOURCE_PROJECT": false,
-		"ENGRAM_INJECT_UNIFIED":         false,
 	})
 	s.Require().NoError(err)
 
 	cfg, changed, err := Reload()
 	s.Require().NoError(err)
 	s.False(cfg.EnforceSourceProject)
-	s.True(cfg.InjectUnified)
 	s.Contains(changed, "enforce_source_project")
-	s.Contains(changed, "inject_unified (requires restart)")
-
-	persisted, err := Load()
-	s.Require().NoError(err)
-	s.False(persisted.InjectUnified)
 }
 
 // TestLoad_DBPathFromJSON verifies ENGRAM_DB_PATH in JSON settings is applied.
@@ -645,28 +607,6 @@ func (s *ConfigSuite) TestLoad_EncryptionKeyFile() {
 	cfg, err := Load()
 	s.Require().NoError(err)
 	s.Equal("/vault/key.hex", cfg.EncryptionKeyFile)
-}
-
-// TestLoad_AuthentikSSO verifies Authentik SSO env overrides.
-func (s *ConfigSuite) TestLoad_AuthentikSSO() {
-	tempDir, err := os.MkdirTemp("", "config-authentik-*")
-	s.Require().NoError(err)
-	defer os.RemoveAll(tempDir)
-
-	os.Setenv("HOME", tempDir)
-	os.Setenv("USERPROFILE", tempDir)
-	err = os.MkdirAll(filepath.Join(tempDir, ".engram"), 0o750)
-	s.Require().NoError(err)
-
-	s.T().Setenv("ENGRAM_AUTHENTIK_ENABLED", "true")
-	s.T().Setenv("ENGRAM_AUTHENTIK_AUTO_PROVISION", "1")
-	s.T().Setenv("ENGRAM_AUTHENTIK_TRUSTED_PROXIES", "192.168.1.1,10.0.0.1")
-
-	cfg, err := Load()
-	s.Require().NoError(err)
-	s.True(cfg.AuthentikEnabled)
-	s.True(cfg.AuthentikAutoProvision)
-	s.Equal([]string{"192.168.1.1", "10.0.0.1"}, cfg.AuthentikTrustedProxies)
 }
 
 // TestLoad_AuthSkipLocal verifies ENGRAM_AUTH_SKIP_LOCAL and ENGRAM_AUTH_TRUSTED_PROXY.

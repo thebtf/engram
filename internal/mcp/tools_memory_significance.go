@@ -31,7 +31,7 @@ func newMemoryStoreSignificanceUpdater(store memorySignificanceStore) memorySign
 }
 
 func s6OutcomeEnabledFromEnv() bool {
-	return cognitivecore.LoadFlagConfigFromEnv().IsSubsystemEnabled("s6")
+	return cognitivecore.FlagConfig{}.IsSubsystemEnabled("s6")
 }
 
 func (s *Server) effectiveMemorySignificanceUpdater() memorySignificanceUpdater {
@@ -46,7 +46,7 @@ func (s *Server) effectiveMemorySignificanceUpdater() memorySignificanceUpdater 
 
 func (s *Server) currentMemorySignificanceUpdater() (memorySignificanceUpdater, error) {
 	if !s6OutcomeEnabledFromEnv() {
-		return nil, fmt.Errorf("rate_memory_significance feature flag required")
+		return nil, fmt.Errorf("rate_memory_significance is deferred; startup activation is retired")
 	}
 	updater := s.effectiveMemorySignificanceUpdater()
 	if updater == nil {

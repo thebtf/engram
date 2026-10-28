@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -83,7 +82,7 @@ func (s *Service) handleSessionEnd(w http.ResponseWriter, r *http.Request) {
 	// Transcript persistence: redact secrets then write to session_transcripts.
 	// Gated by isCrystallizationEnabled() — reuses the existing flag so no new
 	// env var is required (NFR-4: raw secrets must never reach the table).
-	if isCrystallizationEnabled() && transcriptCr != nil && capturedOutput != "" {
+	if transcriptCr != nil && capturedOutput != "" {
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
@@ -241,7 +240,7 @@ func (s *Service) processCitationsAsync(
 		}
 	}
 	// Step 7: Close open segments and evict cached embeddings for this session.
-	if os.Getenv("ENGRAM_ADAPTIVE_ENABLED") == "true" {
+	{
 		if s.segmentStore != nil {
 			if err := s.segmentStore.CloseAllSegments(ctx, sessionID); err != nil {
 				log.Warn().Err(err).Str("session_id", sessionID).Msg("session_end: close segments failed")
@@ -260,4 +259,3 @@ func (s *Service) processCitationsAsync(
 		Int("total_count", len(results)).
 		Msg("session-end citation detection complete")
 }
-

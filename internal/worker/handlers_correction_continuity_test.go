@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
@@ -19,13 +20,15 @@ func TestProcessCorrectionAsyncClearsContinuitySlotWithSupersession(t *testing.T
 
 	store := openIntegrationStore(t)
 	ctx := context.Background()
-	project := fmt.Sprintf("test-correction-continuity-%d", time.Now().UnixNano())
+	project := uuid.NewString()
+	require.NoError(t, store.DB.Create(&gormdb.Project{ID: project}).Error)
 	memoryStore := gormdb.NewMemoryStore(store)
 	slotStore := gormdb.NewContinuitySlotStore(store.DB)
 	t.Cleanup(func() {
 		require.NoError(t, store.DB.Where("action = ? AND reason LIKE ?", "continuity_slot_lifecycle_clear", "%"+project+"%").Delete(&gormdb.AuditLogEntry{}).Error)
 		require.NoError(t, store.DB.Exec("DELETE FROM project_continuity_slots WHERE project = ?", project).Error)
 		require.NoError(t, store.DB.Unscoped().Where("project = ?", project).Delete(&gormdb.Memory{}).Error)
+		require.NoError(t, store.DB.Where("id = ?", project).Delete(&gormdb.Project{}).Error)
 	})
 
 	old, err := memoryStore.Create(ctx, &models.Memory{

@@ -10,9 +10,8 @@ import (
 
 // newInjectTestService builds a minimal Service suitable for testing the inject relevant section.
 // retrievalHooks is initialised so tests can override individual hooks without nil-pointer panics.
-func newInjectTestService(injectUnified bool) *Service {
+func newInjectTestService() *Service {
 	cfg := config.Default()
-	cfg.InjectUnified = injectUnified
 	return &Service{
 		config:         cfg,
 		retrievalHooks: &retrievalHooks{},
@@ -24,7 +23,7 @@ func newInjectTestService(injectUnified bool) *Service {
 // session has a recent user prompt, the relevant section is populated using that session's prompt
 // as the retrieval query — not a prompt from another session.
 func TestInjectRelevant_UnifiedPath_UsesLastUserPrompt(t *testing.T) {
-	svc := newInjectTestService(true)
+	svc := newInjectTestService()
 
 	// Wire the session-scoped hook: returns "auth bug fix" only when the correct sessionID is supplied.
 	const wantSessionID = "session-abc"
@@ -77,7 +76,7 @@ func TestInjectRelevant_UnifiedPath_UsesLastUserPrompt(t *testing.T) {
 // TestInjectRelevant_UnifiedPath_FallsBackToProjectName verifies that when no user prompt is found
 // for the session (or session_id is empty), the inject query falls back to the project name.
 func TestInjectRelevant_UnifiedPath_FallsBackToProjectName(t *testing.T) {
-	svc := newInjectTestService(true)
+	svc := newInjectTestService()
 
 	// No session-scoped prompt — getLastPromptBySession returns nil.
 	svc.retrievalHooks.getLastPromptBySession = func(_ context.Context, _ string, _ string) (*models.UserPromptWithSession, error) {
@@ -123,7 +122,7 @@ func TestInjectRelevant_UnifiedPath_FallsBackToProjectName(t *testing.T) {
 // recent project-wide entry), causing q1 == q2 and THIS test to fail.
 func TestInjectRelevant_TwoSessionsDifferentPrompts(t *testing.T) {
 	runSession := func(sessionID, lastPrompt string) (string, error) {
-		svc := newInjectTestService(true)
+		svc := newInjectTestService()
 		// Session-scoped hook: returns different prompts for different session IDs.
 		svc.retrievalHooks.getLastPromptBySession = func(_ context.Context, _ string, sid string) (*models.UserPromptWithSession, error) {
 			if sid == sessionID {
@@ -161,7 +160,7 @@ func TestInjectRelevant_TwoSessionsDifferentPrompts(t *testing.T) {
 // TestInjectRelevant_SessionScoped_IgnoresOtherSessionPrompts verifies that the session-scoped
 // lookup returns the correct prompt for each session ID and does not bleed prompts across sessions.
 func TestInjectRelevant_SessionScoped_IgnoresOtherSessionPrompts(t *testing.T) {
-	svc := newInjectTestService(true)
+	svc := newInjectTestService()
 
 	// Wire a hook that returns different prompts for different session IDs.
 	svc.retrievalHooks.getLastPromptBySession = func(_ context.Context, _ string, sessionID string) (*models.UserPromptWithSession, error) {
@@ -206,36 +205,8 @@ func TestInjectRelevant_SessionScoped_IgnoresOtherSessionPrompts(t *testing.T) {
 	}
 }
 
-// TestInjectRelevant_LegacyPath_WhenFlagFalse verifies that when InjectUnified=false the legacy
-// vector-client path is taken (RetrieveRelevant hook must NOT be called).
-func TestInjectRelevant_LegacyPath_WhenFlagFalse(t *testing.T) {
-	svc := newInjectTestService(false) // InjectUnified=false
-
-	retrieveRelevantCalled := false
-	svc.retrievalHooks.retrieveRelevant = func(_ context.Context, _ string, _ string, _ RetrievalOptions) ([]*models.Observation, map[int64]float64, error) {
-		retrieveRelevantCalled = true
-		return nil, nil, nil
-	}
-
-	// Verify the flag is honoured — when false, unified path must NOT execute.
-	if svc.config == nil || svc.config.InjectUnified {
-		t.Fatal("test setup error: InjectUnified should be false")
-	}
-
-	// Simulate the branch decision from the handler.
-	if svc.config.InjectUnified {
-		// unified path would call RetrieveRelevant
-		_, _, _ = svc.RetrieveRelevant(context.Background(), "proj", "query", RetrievalOptions{MaxResults: 10})
-	}
-	// else: legacy path (we do NOT call RetrieveRelevant)
-
-	if retrieveRelevantCalled {
-		t.Error("InjectUnified=false: RetrieveRelevant must NOT be called; legacy path should be used instead")
-	}
-}
-
 func TestInjectRelevant_PassesFilePathsIntoRetrievalOptions(t *testing.T) {
-	svc := newInjectTestService(true)
+	svc := newInjectTestService()
 	const wantSessionID = "session-files"
 	const project = "engram"
 	wantFiles := []string{"foo.go", "bar.go"}

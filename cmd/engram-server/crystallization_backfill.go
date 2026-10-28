@@ -46,9 +46,6 @@ func runBackfillCandidates(args []string) {
 	if cfg.DatabaseDSN == "" {
 		log.Fatal().Msg("backfill-candidates: DATABASE_DSN is not set")
 	}
-	if os.Getenv("ENGRAM_VNEXT_F_ENABLED") != "true" {
-		log.Fatal().Msg("backfill-candidates: requires ENGRAM_VNEXT_F_ENABLED=true")
-	}
 
 	store, err := gormdb.NewStore(gormdb.Config{
 		DSN:      cfg.DatabaseDSN,
