@@ -74,10 +74,12 @@ reads stdin, parses it, derives a context object, and calls the handler with
 | `ctx.RelativePath` | `git rev-parse --show-prefix` | Path within the repo |
 | `ctx.RawInput` | stdin string | Original JSON stdin payload (for debugging or custom parsing) |
 
-**Project identity algorithm** (mirrors `internal/proxy/identity.go:ResolveProjectSlug`):
-
-- Git repo with remote: `SHA-256(remoteURL + "/" + relativePath)`, first 8 hex chars.
-- Non-git fallback: `SHA-256(absolutePath)`, first 6 hex chars.
+The hash-based project fields above describe a historical adapter shape, not
+current project authority. The obsolete daemon raw-index/slug producer has been
+removed; normal operations use server-resolved canonical UUID identity through
+the V3 contract and never create or stage a hash-based `.engram-project` marker.
+Use [Context recovery](../operating-engram.md#context-recovery) for the current
+supported identity and existing-memory recovery procedure.
 
 ---
 

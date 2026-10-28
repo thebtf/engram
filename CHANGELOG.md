@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Delete the unreachable raw-index client, legacy slug cache and project-slug producer that could create and stage old `.engram-project` markers. Retain typed UCI registration/indexing, canonical marker non-mutation checks, shared gRPC pool lifecycle, stored data and the existing server/protobuf compatibility boundary.
+
 - Make hybrid memory, privacy/write-lint, audit, continuity, lifecycle, adaptive retrieval and crystallization ordinary v7 behavior without historical startup flags. Remove the empty unified-injection rollback and its mutable settings/API/UI control. Retire dormant V7 startup activation and Authentik header login without deleting retained owner data; preserve authentication choice, code-intelligence and telemetry stops. Document the exact 14-variable single-owner template and value-preserving update/rollback boundary.
 
 - Regenerate the API through the maintained worker target using canonical local Go package directories and Swag 1.16.6, with real producer errors stopping the build. Correct existing context search/inject/session-start annotations without changing handlers; document the shared GET/POST conditional-query limitation. The actual producer and server build pass, with 40 named schema checks and all 76 references resolved; that producer checkpoint established compile-only retained-reader oracle provenance, with later native query proof recorded separately, and installed/release acceptance remains separate.

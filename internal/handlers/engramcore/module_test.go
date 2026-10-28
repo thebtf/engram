@@ -2,20 +2,14 @@ package engramcore
 
 // module_test.go — unit tests for engramcore.Module lifecycle behaviour.
 // Uses the same package as the module (not engramcore_test) to access internal
-// pool and cache helpers.
+// pool helpers.
 
 import (
 	"context"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"testing"
-	"time"
 
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/moduletest"
-	"github.com/thebtf/engram/internal/proxy"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
 )
 
@@ -35,164 +29,6 @@ func TestRequireServerURL_SessionAliasOverridesHostCanonical(t *testing.T) {
 	}
 	if want := "https://session-alias.example"; got != want {
 		t.Fatalf("requireServerURL=%q, want session alias %q", got, want)
-	}
-}
-
-// TestOnProjectRemoved_ClearsSlugCache verifies that OnProjectRemoved deletes
-// the slug cache entry for the removed project, so a subsequent session does not
-// reuse stale identity metadata.
-func TestOnProjectRemoved_ClearsSlugCache(t *testing.T) {
-	t.Parallel()
-
-	mod := NewModule()
-	h := moduletest.New(t)
-	if err := h.Register(mod); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-	h.Freeze()
-
-	const projectID = "proj-remove-me"
-
-	// Pre-populate the slug cache with a synthetic entry bypassing git I/O.
-	mod.cache.ForceCacheEntry(muxcore.ProjectContext{ID: projectID, Cwd: t.TempDir()}, "some-slug-value")
-	if !mod.cache.HasEntry(projectID) {
-		t.Fatal("pre-condition: cache entry not set")
-	}
-
-	h.SimulateProjectRemoved(projectID)
-
-	if mod.cache.HasEntry(projectID) {
-		t.Error("slug cache entry MUST be cleared after OnProjectRemoved")
-	}
-}
-
-func TestSlugCacheResolutionAndForgetSerialize(t *testing.T) {
-	cache := &slugCache{}
-	project := muxcore.ProjectContext{ID: "serialized-project", Cwd: t.TempDir()}
-	key := cacheKey(project)
-	cache.entries.Store(key, resolvedSlug{id: "cached"})
-
-	cache.mu.Lock()
-	slugStarted, slugDone := make(chan struct{}), make(chan struct{})
-	go func() {
-		close(slugStarted)
-		_ = cache.Resolve(context.Background(), project)
-		close(slugDone)
-	}()
-	<-slugStarted
-	assertBlocked := func(name string, done <-chan struct{}) {
-		t.Helper()
-		select {
-		case <-done:
-			t.Fatalf("%s bypassed cache lifecycle lock", name)
-		case <-time.After(50 * time.Millisecond):
-		}
-	}
-	assertBlocked("Resolve", slugDone)
-	cache.mu.Unlock()
-
-	for name, done := range map[string]<-chan struct{}{"Resolve": slugDone} {
-		select {
-		case <-done:
-		case <-time.After(time.Second):
-			t.Fatalf("%s did not resume after cache lifecycle unlock", name)
-		}
-	}
-
-	cache.mu.RLock()
-	forgetStarted, forgetDone := make(chan struct{}), make(chan struct{})
-	go func() {
-		close(forgetStarted)
-		cache.Forget(project.ID)
-		close(forgetDone)
-	}()
-	<-forgetStarted
-	assertBlocked("Forget", forgetDone)
-	cache.mu.RUnlock()
-	select {
-	case <-forgetDone:
-	case <-time.After(time.Second):
-		t.Fatal("Forget did not resume after active resolutions completed")
-	}
-	if cache.HasEntry(project.ID) {
-		t.Fatal("Forget left a compatibility slug entry")
-	}
-}
-
-func TestSlugCacheResolve_DoesNotCacheCancelledFallback(t *testing.T) {
-	dir := t.TempDir()
-	for _, args := range [][]string{
-		{"init", "-q", "-b", "main"},
-		{"remote", "add", "origin", "https://example.invalid/test/engram-slug-cache-fixture.git"},
-	} {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		if output, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, output)
-		}
-	}
-
-	project := muxcore.ProjectContext{ID: "cancelled-project", Cwd: dir}
-	want, _, _, err := proxy.ResolveProjectSlug(context.Background(), dir)
-	if err != nil {
-		t.Fatalf("resolve expected slug: %v", err)
-	}
-
-	cache := &slugCache{}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if got := cache.Resolve(ctx, project); got != project.ID {
-		t.Fatalf("cancelled Resolve=%q, want fallback %q", got, project.ID)
-	}
-	if _, ok := cache.entries.Load(cacheKey(project)); ok {
-		t.Fatal("cancelled Resolve cached fallback")
-	}
-	if got := cache.Resolve(context.Background(), project); got != want {
-		t.Fatalf("fresh Resolve=%q, want git-derived slug %q", got, want)
-	}
-
-	cache = &slugCache{}
-	binDir := t.TempDir()
-	gitPath := filepath.Join(binDir, "git")
-	if runtime.GOOS == "windows" {
-		gitPath += ".exe"
-		sourcePath := filepath.Join(binDir, "delayed-git.go")
-		source := []byte("package main\n\nimport \"time\"\n\nfunc main() { time.Sleep(10 * time.Second) }\n")
-		if err := os.WriteFile(sourcePath, source, 0o600); err != nil {
-			t.Fatalf("write delayed git source: %v", err)
-		}
-		cmd := exec.Command("go", "build", "-o", gitPath, sourcePath)
-		if output, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("build delayed git: %v\n%s", err, output)
-		}
-	} else if err := os.WriteFile(gitPath, []byte("#!/bin/sh\nexec /bin/sleep 10\n"), 0o755); err != nil {
-		t.Fatalf("write delayed git: %v", err)
-	}
-
-	oldPath := os.Getenv("PATH")
-	t.Setenv("PATH", binDir)
-	if got := cache.Resolve(context.Background(), project); got != project.ID {
-		t.Fatalf("derived deadline Resolve=%q, want fallback %q", got, project.ID)
-	}
-	if _, ok := cache.entries.Load(cacheKey(project)); ok {
-		t.Fatal("derived deadline Resolve cached fallback")
-	}
-	t.Setenv("PATH", oldPath)
-	if got := cache.Resolve(context.Background(), project); got != want {
-		t.Fatalf("fresh Resolve after deadline=%q, want git-derived slug %q", got, want)
-	}
-}
-
-func TestSlugCacheResolve_CachesFallbackAfterGitFailure(t *testing.T) {
-	t.Setenv("PATH", t.TempDir())
-
-	cache := &slugCache{}
-	project := muxcore.ProjectContext{ID: "git-failure-project", Cwd: t.TempDir()}
-	if got := cache.Resolve(context.Background(), project); got != project.ID {
-		t.Fatalf("Resolve=%q, want fallback %q", got, project.ID)
-	}
-	if cached, ok := cache.entries.Load(cacheKey(project)); !ok || cached.(resolvedSlug).id != project.ID {
-		t.Fatalf("git failure fallback was not cached: %v", cached)
 	}
 }
 
@@ -267,11 +103,10 @@ func TestModule_OnSessionConnectDisconnect_Noops(t *testing.T) {
 	p := muxcore.ProjectContext{
 		ID:  "noop-project",
 		Cwd: t.TempDir(),
-		Env: nil, // no ENGRAM_URL — slug resolution will fall back to p.ID
+		Env: nil,
 	}
 
-	// Must not panic. Any error from ResolveProjectSlug is handled internally
-	// with a fallback to p.ID, so the noop behaviour is safe even without git.
+	// Lifecycle logging must not require a server or inspect project files.
 	defer func() {
 		if r := recover(); r != nil {
 			t.Errorf("OnSessionConnect panicked: %v", r)

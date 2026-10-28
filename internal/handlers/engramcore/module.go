@@ -37,11 +37,10 @@ const moduleName = "engramcore"
 //
 //   - module.EngramModule       — core lifecycle (Name/Init/Shutdown)
 //   - module.ProjectLifecycle   — session connect/disconnect logging
-//   - module.ProjectRemovalAware — clear slug cache on project removal
+//   - module.ProjectRemovalAware — project removal lifecycle logging
 //   - module.ProxyToolProvider  — dynamic tool set fetched from engram-server
 type Module struct {
 	pool                        *grpcPool
-	cache                       *slugCache
 	advisorProofs               *advisorProofCache
 	v3ClientInstanceID          string
 	registrationParserAvailable bool
@@ -83,7 +82,6 @@ func NewModuleWithPreparedIndexCollaborator(clientInstanceID string, collaborato
 func newModule(clientInstanceID string, collaborator PreparedIndexCollaborator) *Module {
 	return &Module{
 		pool:               &grpcPool{},
-		cache:              &slugCache{},
 		advisorProofs:      newAdvisorProofCache(),
 		v3ClientInstanceID: clientInstanceID,
 		preparedIndex:      collaborator,
@@ -135,7 +133,6 @@ func (m *Module) Shutdown(_ context.Context) error {
 // OnSessionConnect logs the first session for a project. Implements
 // module.ProjectLifecycle. Behaviour ported from engramHandler.OnProjectConnect.
 func (m *Module) OnSessionConnect(p muxcore.ProjectContext) {
-	m.cache.Forget(p.ID)
 	if m.deps.Logger != nil {
 		m.deps.Logger.Info("session connected",
 			"project_id", p.ID,
@@ -157,16 +154,11 @@ func (m *Module) OnSessionDisconnect(projectID string) {
 // ProjectRemovalAware
 // -----------------------------------------------------------------------
 
-// OnProjectRemoved clears the slug cache for the removed project. In Phase B
-// this callback is driven by the serverevents bridge subscribing to the
-// engram-server ProjectEvents stream; in v4.3.0 the bridge is a stub per P003
-// outcome (b) but the handler is implemented so unit tests can exercise it
-// via moduletest.Harness.SimulateProjectRemoved. Implements
-// module.ProjectRemovalAware.
+// OnProjectRemoved records project removal without closing the shared connection
+// pool. Implements module.ProjectRemovalAware.
 func (m *Module) OnProjectRemoved(projectID string) {
-	m.cache.Forget(projectID)
 	if m.deps.Logger != nil {
-		m.deps.Logger.Info("project removed — cleared slug cache",
+		m.deps.Logger.Info("project removed",
 			"project_id", projectID,
 		)
 	}

@@ -83,7 +83,7 @@ type ProjectRemovalAware interface {
 	// caches, and free on-disk storage allocated for the project.
 	//
 	// For loom-module (Phase B): invoke engine.CancelAllForProject(id).
-	// For engramcore: drop slugCache entry, close per-project gRPC conns.
+	// For engramcore: record removal; preserve the shared address-keyed gRPC pool.
 	// For vectorindex (Phase D1): delete $storage/modules/vectorindex/<id>/.
 	OnProjectRemoved(projectID string)
 }

@@ -48,7 +48,6 @@ func TestProxyHandleTool_ReReadsMarkerInsteadOfSessionOrLegacyCache(t *testing.T
 	srv := &mockEngramServer{callResp: &pb.CallToolResponse{ContentJson: []byte(`[]`)}}
 	_, mod, project := buildContractDispatcher(t, startMockGRPC(t, srv))
 	project.Env[config.EnvClaudeSessionID] = "same-host-session"
-	mod.cache.ForceCacheEntry(project, "obsolete-selector-is-not-authority")
 
 	for _, projectID := range []string{contractProjectID, otherContractProjectID} {
 		writeContractProjectMarker(t, project.Cwd, projectID)

@@ -765,7 +765,6 @@ func TestProxyHandleToolUsesTransportTagForUCITools(t *testing.T) {
 	mod.v3ClientInstanceID = "fixture-daemon-install"
 	project.Env[config.EnvClaudeSessionID] = "host-session-must-not-be-used"
 	project.Cwd = "untrusted-cwd-must-not-be-inspected"
-	mod.cache.Forget(project.ID)
 	originalPath := os.Getenv("PATH")
 	t.Setenv("PATH", t.TempDir())
 	ctx := auditcontext.WithUCITransportSession(context.Background(), "transport-tag-a")
