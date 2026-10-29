@@ -1953,6 +1953,14 @@ func testArtifactBridgeMatrix(t *testing.T, repo string) {
 			writeJSONAt(t, filepath.Join(root, "final-image-set.json"), manifest)
 			updatePayloadManifestHash(t, root)
 		}},
+		{name: "historical PostgreSQL runtime proof", mutate: func(root string) {
+			manifest := readJSONMap(t, filepath.Join(root, "final-image-set.json"))
+			proof := manifest["runtime_proof"].(map[string]any)
+			delete(proof, "postgres_17_11")
+			proof["postgres_17_10"] = true
+			writeJSONAt(t, filepath.Join(root, "final-image-set.json"), manifest)
+			updatePayloadManifestHash(t, root)
+		}},
 		{name: "retained cleanup resource", mutate: func(root string) {
 			manifest := readJSONMap(t, filepath.Join(root, "final-image-set.json"))
 			manifest["cleanup"].(map[string]any)["containers"] = []any{"leaked-container"}
@@ -2120,7 +2128,7 @@ func writeReleasePayloadFixture(t *testing.T, commit, version string) string {
 			"server_home_persistence": true, "legacy_postgres_uid_migration": true,
 			"compose_all_healthy": true, "server_liveness": true,
 			"server_readiness": true, "operator_readiness": true,
-			"postgres_17_10": true, "pgvector_0_8_1": true,
+			"postgres_17_11": true, "pgvector_0_8_1": true,
 			"migrations_present": true, "migration_table_count": 40,
 			"core_schema_table_count": 6, "restart_recovery": true,
 			"postgres_recreation_retained_marker": true,

@@ -44,6 +44,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Use registered canonical UUIDs and authenticated caller project context in MCP fixtures without weakening default-deny, privacy or pre-mutation rejection guards. Reuse 119 prior PASS plus one exact retry PASS after the context fix, not 120 fresh PASS or installed acceptance.
 - Seed the isolated operator-code fixture with a registered canonical project UUID while preserving five queue candidates, published/no-view checks and redacted provisioning errors.
 
+## [7.0.13] - 2026-10-29
+
+### Fixed
+
+- Move the canonical PostgreSQL image to the fixed 17.11 upstream Alpine runtime, addressing CVE-2026-14668, CVE-2026-14679, CVE-2026-15741 and CVE-2026-6464. Build pgvector 0.8.1 against that exact base and rebuild unchanged gosu 1.19 with Go 1.26.10 to remove vulnerable Go standard-library bytes, retaining source and licence provenance.
+- Preserve UID/GID 70, persistent PGDATA, upstream initialization, locale defaults and legacy-UID/data recovery. Version the current PostgreSQL runtime proof separately from historical 17.10 evidence; no application or database schema change.
+
 ## [7.0.12] - 2026-10-28
 
 ### Fixed

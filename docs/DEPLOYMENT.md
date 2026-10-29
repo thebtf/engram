@@ -202,7 +202,7 @@ must be restricted by organization policy.
 
 ## Runtime contract
 
-- PostgreSQL: version 17.10, pgvector 0.8.1, UID/GID 70, persistent
+- PostgreSQL: version 17.11, pgvector 0.8.1, UID/GID 70, persistent
   `/var/lib/postgresql/data`.
 - Server: UID/GID 65532, read-only root filesystem, persistent
   `HOME=/var/lib/engram`, semantic health probe on `/api/ready`.
@@ -211,12 +211,22 @@ must be restricted by organization policy.
 - Every service drops all capabilities and enables `no-new-privileges`;
   bounded tmpfs mounts cover runtime-only writable paths.
 
-The PostgreSQL build pulls the Wolfi base from Chainguard's [public Docker Hub
-repository](https://hub.docker.com/r/chainguard/wolfi-base), pinned to
-`docker.io/chainguard/wolfi-base@sha256:02dab76bd852a70556b5b2002195c8a5fdab77d323c433bf6642aab080489795`.
-This is the same upstream image index for Linux amd64 and arm64, not a different
-distribution or database image. The fixed packages, entrypoint and runtime
-ownership contract remain unchanged; no registry fallback runs at build time.
+The PostgreSQL runtime uses the immutable Linux amd64 official
+`postgres:17.11-alpine3.24` image pinned in `deploy/postgres/Dockerfile`.
+pgvector 0.8.1 is built from its verified upstream commit/archive with the same
+base's PGXS and LLVM toolchain, using portable flags. gosu 1.19 is rebuilt from
+its unchanged upstream source with Go 1.26.10 and CGO disabled. Only extension,
+helper and licence outputs enter the final image; no build dependencies remain.
+The upstream initializer and `C.UTF-8` defaults remain, without a wrapper that
+rejects other valid locales. The negative fixture uses a genuinely invalid
+builtin-provider locale, not a locale merely absent from a previous distro.
+
+Current acceptance requires `runtime_proof.postgres_17_11`, derived from
+`server_version_num=170011`. Historical `postgres_17_10` receipts retain their
+original meaning and do not satisfy this new image contract. A PostgreSQL
+minor update does not require dump/reload, but release image, recovery and
+ordinary installed-consumer proofs remain required; this is not authority to
+change a shared or production database.
 
 The focused `TestPostgresImageContract` uses `docker exec` with networking
 disabled; it does not allocate a bridge subnet. Database proof containers are
