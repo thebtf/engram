@@ -100,7 +100,7 @@ export function createEngramMemoryExtension(options = {}) {
     });
     const controller = new AbortController();
     const deadlineAt = Date.now() + DOWNLOAD_DEADLINE_MS;
-    let onAbort, preparation, unregister, stage = 'config';
+    let onAbort, preparation, stage = 'config';
     const checkReadinessDeadline = () => {
       if (!controller.signal.aborted && Date.now() < deadlineAt) return;
       if (!controller.signal.aborted) stage = 'deadline';
@@ -115,7 +115,7 @@ export function createEngramMemoryExtension(options = {}) {
     });
     const timer = setTimeout(() => { stage = 'deadline'; controller.abort(); }, DOWNLOAD_DEADLINE_MS);
     try {
-      unregister = options.registerCleanup?.('engram-client-readiness', async () => {
+      options.registerCleanup?.('engram-client-readiness', async () => {
         disposed = true;
         stage = 'cancelled';
         controller.abort();
@@ -140,7 +140,6 @@ export function createEngramMemoryExtension(options = {}) {
       }).finally(() => {
         clearTimeout(timer);
         controller.signal.removeEventListener('abort', onAbort);
-        unregister?.();
       }).catch(() => { readiness = 'failed'; });
     } catch (error) {
       const failedStage = stage;
