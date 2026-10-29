@@ -244,6 +244,11 @@ test('OMP background readiness handles offline, hash and cooperative abort failu
         preparation.then(finishReadiness, finishReadiness);
         return preparation;
       },
+      resolveHookProjectContext: (cwd, options) => resolveHookProjectContext(cwd, {
+        ...options, pluginRoot: root, pluginData: root,
+        resolve: forwarded => resolveForLaunch({ ...forwarded, policy, parserTarget: null, request }),
+        execFile() { assert.fail('unavailable or corrupt readiness fixture must never execute a client'); },
+      }),
     });
     const installing = adapter.install({ on: (name, callback) => handlers.set(name, callback), sendMessage: message => sent.push(message) })
       .catch(error => { installError = error; });
@@ -384,6 +389,76 @@ test('OMP first readiness failure diagnostic retains safe stage code and plugin 
     assert.ok(message.includes(version), 'diagnostic must identify the loaded plugin package version');
     assert.doesNotMatch(message, /private_path_fixture|private-fixture|token_fixture|secret_fixture|later_resolver_error_fixture|https?:\/\//);
   }
+  assert.equal(calls.length, 0);
+  for (let i = 0; i < 20; i++) {
+    await handlers.get('session_start')({ cwd: '/session/a', sessionId: `diagnostic-repeat-${i}` }, {});
+  }
+  assert.ok(diagnostics.length <= 3, 'retained failure must not produce an unbounded callback warning stream');
+});
+
+test('OMP configuration failure is diagnosed safely and can recover without preparation', async () => {
+  let failConfig = true, preparations = 0, finishSettlement;
+  const settled = new Promise(resolve => { finishSettlement = resolve; });
+  const handlers = new Map(), diagnostics = [], sent = [];
+  const { adapter, calls } = extension({
+    resolveEngramRuntimeConfig: async () => {
+      if (failConfig) throw Object.assign(new Error('config_private_fixture https://config-fixture.invalid/?token=secret_fixture'), { code: 'https://untrusted-code.invalid' });
+      return { serverURL: 'http://fixture', token: '', quiet: false };
+    },
+    prepareHookClient: async () => { preparations++; },
+    registerCleanup: () => () => finishSettlement(),
+    onDiagnostic: message => diagnostics.push(message),
+  });
+  await adapter.install({ on: (name, handler) => handlers.set(name, handler), sendMessage: message => sent.push(message) });
+  await settled;
+  assert.match(diagnostics.join('\n'), /stage[=: ]+config/);
+  assert.match(diagnostics.join('\n'), /code[=: ]+UNKNOWN/);
+  assert.doesNotMatch(diagnostics.join('\n'), /config_private_fixture|config-fixture|secret_fixture|untrusted-code|https?:\/\//);
+  failConfig = false;
+  await handlers.get('session_start')({ cwd: '/session/a', sessionId: 'config-recovered' }, {});
+  assert.equal(sent.length, 1, 'a recovered configuration must reach the existing trusted read-only resolver');
+  assert.equal(calls.length, 1);
+  assert.equal(preparations, 0, 'callback recovery must not invoke prepare even when startup config failed');
+});
+
+test('OMP disposed background readiness cannot recover through a later resolvable context', async () => {
+  let cleanup, finishSettlement, resolutions = 0;
+  const settled = new Promise(resolve => { finishSettlement = resolve; });
+  const handlers = new Map(), sent = [];
+  const { adapter, calls } = extension({
+    prepareHookClient: options => new Promise((_, reject) => {
+      options.signal.addEventListener('abort', () => reject(Object.assign(new Error('fixture cancelled'), { code: 'ABORT_ERR' })), { once: true });
+    }),
+    registerCleanup: (_name, callback) => { cleanup = callback; return () => finishSettlement(); },
+    resolveHookProjectContext: async () => { resolutions++; return { Project: projects['/session/a'] }; },
+    onDiagnostic() { },
+  });
+  await adapter.install({ on: (name, handler) => handlers.set(name, handler), sendMessage: message => sent.push(message) });
+  await new Promise(resolve => setImmediate(resolve));
+  await cleanup();
+  await settled;
+  await handlers.get('session_start')({ cwd: '/session/a', sessionId: 'disposed-later' }, {});
+  assert.equal(await handlers.get('before_agent_start')({ cwd: '/session/a', sessionId: 'disposed-later', prompt: 'fixture' }, {}), undefined);
+  assert.equal(resolutions, 0, 'cancellation/disposal is not a recoverable acquisition failure');
+  assert.equal(calls.length, 0);
+  assert.equal(sent.length, 0);
+});
+
+test('OMP cleanup captured before settlement still closes failed readiness when invoked late', async () => {
+  let cleanup, finishSettlement, resolutions = 0;
+  const settled = new Promise(resolve => { finishSettlement = resolve; });
+  const handlers = new Map();
+  const { adapter, calls } = extension({
+    prepareHookClient: async () => { throw new Error('synthetic startup failure'); },
+    registerCleanup: (_name, callback) => { cleanup = callback; return () => finishSettlement(); },
+    resolveHookProjectContext: async () => { resolutions++; return { Project: projects['/session/a'] }; },
+    onDiagnostic() { },
+  });
+  await adapter.install({ on: (name, handler) => handlers.set(name, handler), sendMessage() { } });
+  await settled;
+  await cleanup();
+  await handlers.get('session_start')({ cwd: '/session/a', sessionId: 'late-cleanup' }, {});
+  assert.equal(resolutions, 0, 'late cleanup must close admission even after the preparation abort listener was removed');
   assert.equal(calls.length, 0);
 });
 
