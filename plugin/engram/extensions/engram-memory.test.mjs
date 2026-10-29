@@ -462,6 +462,50 @@ test('OMP cleanup captured before settlement still closes failed readiness when 
   assert.equal(calls.length, 0);
 });
 
+test('OMP settled readiness remains registered for actual cleanup registry teardown', async t => {
+  for (const preparationOutcome of ['success', 'failure']) {
+    await t.test(preparationOutcome, async t => {
+      const registry = new Map(), handlers = new Map(), sent = [];
+      let preparations = 0, registrations = 0, cancellations = 0, cleanups = 0, resolutions = 0;
+      const { adapter, calls } = extension({
+        prepareHookClient: async () => {
+          preparations++;
+          if (preparationOutcome === 'failure') throw new Error('synthetic preparation failure');
+        },
+        registerCleanup: (name, callback) => {
+          registrations++;
+          const key = Symbol(name);
+          registry.set(key, async () => { cleanups++; await callback(); registry.delete(key); });
+          return () => { cancellations++; registry.delete(key); };
+        },
+        resolveHookProjectContext: async () => { resolutions++; return { Project: projects['/session/a'] }; },
+        onDiagnostic() { },
+      });
+      await adapter.install({ on: (name, handler) => handlers.set(name, handler), sendMessage: message => sent.push(message) });
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(preparations, 1);
+      await handlers.get('session_start')({ cwd: '/session/a', sessionId: 'settled-before-registry-cleanup' }, {});
+      assert.equal(sent.length, 1, 'settled preparation must admit a trusted callback before disposal');
+      const beforeCleanup = { resolutions, requests: calls.length, messages: sent.length };
+      for (const callback of [...registry.values()]) await callback();
+      await handlers.get('session_start')({ cwd: '/session/a', sessionId: 'after-registry-cleanup' }, {});
+      const ambient = await handlers.get('before_agent_start')({ cwd: '/session/a', sessionId: 'after-registry-cleanup', prompt: 'fixture' }, {});
+      const afterCleanup = {
+        resolutions: resolutions - beforeCleanup.resolutions,
+        requests: calls.length - beforeCleanup.requests,
+        messages: sent.length - beforeCleanup.messages,
+        ambientDelivered: Boolean(ambient?.message),
+      };
+      t.diagnostic(JSON.stringify({ preparationOutcome, registrations, cancellations, cleanups, registrySize: registry.size, afterCleanup }));
+      assert.deepEqual(afterCleanup, { resolutions: 0, requests: 0, messages: 0, ambientDelivered: false },
+        'actual registry teardown must dispose settled bindings before later callbacks, not rely on an already-unregistered captured function');
+      assert.equal(cleanups, 1, 'settled readiness cleanup must still be present when actual teardown starts');
+      assert.equal(registry.size, 0);
+      assert.equal(preparations, 1);
+    });
+  }
+});
+
 for (const mode of ['unconfigured', 'config-quiet']) {
   test(`OMP skipped ${mode} callbacks stay silent until eligibility is enabled later`, async t => {
     let enabled = false, finishSettlement, acquisitions = 0, resolutions = 0, backendRequests = 0, messages = 0, unregistered = false;
