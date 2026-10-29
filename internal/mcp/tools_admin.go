@@ -4,17 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/thebtf/engram/internal/auth"
 )
 
-// buildAdminTool constructs the admin tool definition, gating purge_project
-// schema fields behind ENGRAM_VNEXT_ENABLED. When the flag is off, the
-// description and schema are byte-identical to the pre-branch (no purge_project
-// mention, no confirm field). This ensures flag-off tool/list output is
-// indistinguishable from the pre-branch surface.
+// buildAdminTool advertises ordinary admin operations; mutations remain admin-authorized.
 func buildAdminTool() Tool {
 	actions := adminActionsForEnv()
 	desc := "Administrative operations. Actions: " +
@@ -24,7 +19,7 @@ func buildAdminTool() Tool {
 		"action": map[string]any{"type": "string", "enum": actions, "description": "Action to perform (required)."},
 	}
 
-	if vnextEnabled() {
+	{
 		props["project"] = map[string]any{"type": "string", "description": "Project name (required for purge_project)"}
 		props["confirm"] = map[string]any{"type": "string", "description": "Double-entry confirmation: must equal project name (for purge_project)"}
 	}
@@ -44,29 +39,16 @@ func buildAdminTool() Tool {
 // adminActionsBase lists the always-on admin actions.
 var adminActionsBase = []string{"stats"}
 
-// adminActionsVnext lists admin actions that require ENGRAM_VNEXT_ENABLED=true.
+// adminActionsVnext retains the existing purge action.
 var adminActionsVnext = []string{
 	"purge_project",
 }
 
-// adminActionsForEnv returns the current set of valid admin actions based on
-// ENGRAM_VNEXT_ENABLED. When the flag is "true", vnext actions (purge_project)
-// are appended to the base list. Callers that need the flag-off list explicitly
-// should use adminActionsBase directly.
 func adminActionsForEnv() []string {
-	if os.Getenv("ENGRAM_VNEXT_ENABLED") == "true" {
-		all := make([]string, len(adminActionsBase)+len(adminActionsVnext))
-		copy(all, adminActionsBase)
-		copy(all[len(adminActionsBase):], adminActionsVnext)
-		return all
-	}
-	return adminActionsBase
-}
-
-// vnextEnabled reports whether the vnext feature flag is active.
-// Mirroring the check used elsewhere in service.go.
-func vnextEnabled() bool {
-	return os.Getenv("ENGRAM_VNEXT_ENABLED") == "true"
+	all := make([]string, len(adminActionsBase)+len(adminActionsVnext))
+	copy(all, adminActionsBase)
+	copy(all[len(adminActionsBase):], adminActionsVnext)
+	return all
 }
 
 func (s *Server) handleAdmin(ctx context.Context, args json.RawMessage) (string, error) {
@@ -83,12 +65,6 @@ func (s *Server) handleAdmin(ctx context.Context, args json.RawMessage) (string,
 	case "stats":
 		return s.handleAdminStats(ctx)
 	case "purge_project":
-		// purge_project is a vnext-gated action (Milestone D).
-		// When flag is off, respond byte-identically to an unknown action so
-		// the flag-off surface is indistinguishable from pre-branch behaviour.
-		if !vnextEnabled() {
-			return "", fmt.Errorf("unknown admin action: %q (valid: %s)", action, strings.Join(adminActionsBase, ", "))
-		}
 		return s.handlePurgeProject(ctx, m)
 	default:
 		return "", fmt.Errorf("unknown admin action: %q (valid: %s)", action, strings.Join(adminActionsForEnv(), ", "))

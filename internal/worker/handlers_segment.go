@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"math"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -25,10 +24,6 @@ const topicShiftThreshold = 0.5
 // similarity of the current prompt against the segment's running topic.
 // Creates a new segment when cosine similarity drops below threshold.
 func (s *Service) handleSegmentCheck(w http.ResponseWriter, r *http.Request) {
-	if os.Getenv("ENGRAM_ADAPTIVE_ENABLED") != "true" {
-		writeJSON(w, map[string]string{"status": "disabled"})
-		return
-	}
 
 	var req segmentCheckRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

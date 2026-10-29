@@ -200,7 +200,7 @@ Compose stack. Important defaults and boundaries:
   available through full-text search rather than a vector tier.
 - `ENGRAM_RERANK_URL` is an optional source-wired recall path, not a default or
   advertised core capability. See the source classification in the ledger.
-- `ENGRAM_GRAPH_ENABLED` and `ENGRAM_VNEXT_F_ENABLED` enable distinct non-default surfaces. Current source enables code intelligence by default; `ENGRAM_CODE_INTEL_ENABLED=false` is its explicit stop.
+- Hybrid memory, privacy, lifecycle, continuity and graph readers are ordinary v7 behavior, not startup feature switches. `ENGRAM_CODE_INTEL_ENABLED=false` remains the explicit code-intelligence stop. See the [four-input single-owner setup](docs/arch/CONFIGURATION.md#single-owner-installation).
 - `ENGRAM_AUTH_DISABLED=true` selects the deliberate trusted single-user HTTP LAN path. It is not a multi-user security boundary; auth-enabled installations retain their own credentials and grants.
 
 For a separate console host, set `ENGRAM_OPERATOR_CONSOLE_URL` on the server to

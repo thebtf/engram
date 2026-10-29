@@ -36,15 +36,11 @@ These are the stable entry points. Action enums list only routes that have live 
 
 The expanded surface contains only provider-backed tools whose handler is currently usable. Retired compatibility names are neither advertised nor dispatched. Clients should inspect `tools/list` with `include_all: true` rather than assuming a historical alias exists.
 
-For hybrid `recall_memory` (`ENGRAM_VNEXT_ENABLED=true`), the advertised
-`tier_filter` selects retrieval layers: `tier0_exact`, `tier1_fts`,
-`tier1_vector`, or `tier2_graph`. Omitted or empty means all retrieval layers.
-Validate this enum independently of `ENGRAM_LIFECYCLE_ENABLED`; unknown values
-and lifecycle memory tiers return `invalid_tier_filter:` rather than silently
-selecting no retrieval layer. Privacy, ranking, limits and graph opt-in remain
-unchanged. When `ENGRAM_VNEXT_ENABLED=false`, preserve the existing unadvertised
-lifecycle-only filter under `ENGRAM_LIFECYCLE_ENABLED=true`; it is not an alias
-for the public hybrid enum.
+For ordinary hybrid `recall_memory`, the advertised `tier_filter` selects retrieval
+layers: `tier0_exact`, `tier1_fts`, `tier1_vector`, or `tier2_graph`. Omitted or
+empty means all retrieval layers. Unknown values and lifecycle memory tiers return
+`invalid_tier_filter:`. Privacy, ranking, limits and graph opt-in remain unchanged.
+There is no historical startup-flag alternative to this public hybrid enum.
 
 ### Conditional Tool Families
 
@@ -52,23 +48,23 @@ for the public hybrid enum.
 |--------|-------|-----------------|-------|
 | Behavioral rules | `store_rule`, `list_rules` | behavioral-rules store wired | v5 |
 | Expanded memory retrieval | `recall_memory` | memory store wired | v5 |
-| Adaptive memory brief | `get_memory_brief` | memory store wired AND `ENGRAM_ADAPTIVE_ENABLED=true` | v6 |
-| S6 significance | `rate_memory_significance` | S6 outcome flags enabled AND significance updater wired | v6.41 |
-| Ambient hints | `get_ambient_hints` | ambient-hints flag enabled AND hint queue wired | v6.42 |
+| Adaptive memory brief | `get_memory_brief` | memory store wired | v6 |
+| S6 significance | `rate_memory_significance` | deferred; startup activation retired | v6.41 |
+| Ambient hints | `get_ambient_hints` | deferred; startup activation retired | v6.42 |
 | Ingest | `ingest` | memory store wired | v6 |
-| Lifecycle | `lifecycle` | memory + promotion store AND `ENGRAM_LIFECYCLE_ENABLED=true` | v6 |
-| Graph | `graph` | graph store AND `ENGRAM_GRAPH_ENABLED=true` | v6 |
+| Lifecycle | `lifecycle` | memory + promotion store wired | v6 |
+| Graph | `graph` | retained graph store wired | v6 |
 | Native state plane | `get_state`, `set_state` | state store wired | v6.30 (CR-006) |
 | Principal memory | `query_principal_memory` | principal-memory query service wired | v6.30 (CR-007) |
 | Experience history | `experience_history.read`, `experience_history.detail` | experience provider wired | v6.35 (CR-009) |
 | Temporal truth | `temporal_truth`, `temporal_truth_refresh` | temporal provider wired AND temporal-truth flag enabled | v6.36 (CR-011) |
-| Directive capture | `remember_directive` | directive service wired AND directive-capture flag enabled | v6.39 (ENG-V7-S4A) |
-| Review-loop candidates | `list_candidates`, `get_candidate`, `promote_candidate`, `reject_candidate`, `supersede_candidate` | `ENGRAM_VNEXT_F_ENABLED=true` AND candidate store wired | v6.32 (CR-008) |
-| Governance snapshots | `list_snapshots`, `rollback_snapshot`, `pin_snapshot`, `redaction_rules_status` | `ENGRAM_VNEXT_F_ENABLED=true` AND snapshot store wired | v6 (Milestone-F) |
+| Directive capture | `remember_directive` | deferred; startup activation retired | v6.39 (ENG-V7-S4A) |
+| Review-loop candidates | `list_candidates`, `get_candidate`, `promote_candidate`, `reject_candidate`, `supersede_candidate` | candidate store wired | v6.32 (CR-008) |
+| Governance snapshots | `list_snapshots`, `rollback_snapshot`, `pin_snapshot`, `redaction_rules_status` | snapshot store wired | v6 (Milestone-F) |
 | Rule governance | `rule_governance_health`, `rule_governance_queue`, `rule_governance_snapshots`, `rule_governance_transition`, `rule_governance_pin_snapshot`, `rule_governance_rollback`, `rule_governance_usefulness` | rule-governance read store wired (`usefulness` also needs injection telemetry) | v6.29 (RG-3) |
-| Bulk ops | `bulk_promote`, `bulk_delete`, `bulk_supersede` | `ENGRAM_VNEXT_F_ENABLED=true` | v6 (Milestone-F) |
+| Bulk ops | `bulk_promote`, `bulk_delete`, `bulk_supersede` | ordinary v7 runtime; admin authorization still required | v6 (Milestone-F) |
 | Code intelligence | `codebase_search` | `ENGRAM_CODE_INTEL_ENABLED=true` AND code chunk store wired | v6.13 (CR-006 code-intel) |
-| V7 meta-memory discovery | `know_about` plus session-start `meta_summary` | `ENGRAM_V7_PLUG_ENABLED=true` AND `ENGRAM_V7_S2_METAMEM=true` AND meta-memory index wired | v6.38 (ENG-V7-S2) |
+| V7 meta-memory discovery | `know_about` plus session-start `meta_summary` | deferred; startup activation retired, historical data retained | v6.38 (ENG-V7-S2) |
 
 Admin-gated families (candidates, governance, bulk ops) are additionally enforced at the handler level regardless of advertisement.
 

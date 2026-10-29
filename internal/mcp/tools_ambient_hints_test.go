@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	cognitivecore "github.com/thebtf/engram/internal/cognitive/core"
 )
@@ -63,7 +62,7 @@ func TestGetAmbientHintsToolAdvertisedOnlyWhenS3FlagAndQueuePresent(t *testing.T
 		{name: "master off hides tool", masterEnabled: false, s3Enabled: true, withQueue: true, wantTool: false},
 		{name: "s3 off hides tool", masterEnabled: true, s3Enabled: false, withQueue: true, wantTool: false},
 		{name: "missing queue hides tool", masterEnabled: true, s3Enabled: true, withQueue: false, wantTool: false},
-		{name: "master+s3+queue advertises tool", masterEnabled: true, s3Enabled: true, withQueue: true, wantTool: true},
+		{name: "retired flags cannot activate tool", masterEnabled: true, s3Enabled: true, withQueue: true, wantTool: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			setS3AmbientFlags(t, tc.masterEnabled, tc.s3Enabled)
@@ -76,39 +75,6 @@ func TestGetAmbientHintsToolAdvertisedOnlyWhenS3FlagAndQueuePresent(t *testing.T
 			require.Equal(t, tc.wantTool, names["get_ambient_hints"])
 		})
 	}
-}
-
-func TestGetAmbientHintsDrainsBoundedSafeHints(t *testing.T) {
-	setS3AmbientFlags(t, true, true)
-	queue := cognitivecore.NewHintQueue()
-	seedAmbientHintQueue(t, queue, "session-s3-poll",
-		cognitivecore.HintProposalPayload{ID: "1", Title: "Release handoff checklist", Reason: "tag:handoff", Score: 0.92, Source: "s2.meta_index", CreatedAt: time.Now().UTC()},
-		cognitivecore.HintProposalPayload{ID: "2", Title: "Retry failed command", Reason: "outcome:repair", Score: 0.87, Source: "s6.outcome_policy", CreatedAt: time.Now().UTC().Add(1 * time.Second)},
-		cognitivecore.HintProposalPayload{ID: "3", Title: "Review PM oracle drift", Reason: "tag:oracle", Score: 0.83, Source: "s2.meta_index", CreatedAt: time.Now().UTC().Add(2 * time.Second)},
-		cognitivecore.HintProposalPayload{ID: "4", Title: "Should be trimmed", Reason: "RAW_MEMORY_BODY_SHOULD_NOT_LEAK", Score: 0.79, Source: "s2.meta_index", CreatedAt: time.Now().UTC().Add(3 * time.Second)},
-	)
-
-	srv := NewServer(ServerOptions{Version: "s3-red-test"})
-	srv.SetHintQueue(queue)
-
-	out, err := srv.callTool(context.Background(), "get_ambient_hints", mustJSON(t, map[string]any{
-		"session_id": "session-s3-poll",
-		"limit":      99,
-	}))
-	require.NoError(t, err)
-	payload := decodeAmbientHintsToolResponse(t, out)
-	require.Len(t, payload.Hints, 3, "fallback polling must return at most 3 hints")
-	assert.Equal(t, []string{"1", "2", "3"}, []string{payload.Hints[0].ID, payload.Hints[1].ID, payload.Hints[2].ID})
-	assert.NotContains(t, out, "RAW_MEMORY_BODY_SHOULD_NOT_LEAK", "tool output must stay content-free")
-	assert.NotContains(t, out, "\"content\"", "tool output must not expose raw memory content fields")
-
-	outAgain, err := srv.callTool(context.Background(), "get_ambient_hints", mustJSON(t, map[string]any{
-		"session_id": "session-s3-poll",
-		"limit":      3,
-	}))
-	require.NoError(t, err)
-	payloadAgain := decodeAmbientHintsToolResponse(t, outAgain)
-	require.Empty(t, payloadAgain.Hints, "drain-once fallback must not replay already-delivered hints")
 }
 
 func TestGetAmbientHintsReturnsEmptyForDisabledStaleAndEmptyQueue(t *testing.T) {

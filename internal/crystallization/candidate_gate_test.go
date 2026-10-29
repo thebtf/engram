@@ -189,10 +189,9 @@ func TestFingerprintUnification_CandidateMatchesLegacyFormat(t *testing.T) {
 		"RouteDecision must pass fp:<fingerprint> to the memory checker")
 }
 
-// TestRouteDecision_FlagOff_ReturnsNil verifies that flag OFF returns nil (legacy path signal).
-func TestRouteDecision_FlagOff_ReturnsNil(t *testing.T) {
+// A retired false override must not silently discard extracted decisions.
+func TestRouteDecision_RetiredFlagCannotDisableCandidates(t *testing.T) {
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "false")
-
 	writer := &mockCandidateWriter{}
 	result, err := RouteDecision(
 		context.Background(),
@@ -202,7 +201,8 @@ func TestRouteDecision_FlagOff_ReturnsNil(t *testing.T) {
 		writer,
 		nil,
 	)
-	assert.NoError(t, err)
-	assert.Nil(t, result, "flag-OFF must return nil to signal legacy path")
-	assert.Equal(t, 0, writer.createCalls)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.True(t, result.UsedCandidatePath)
+	assert.Equal(t, 1, writer.createCalls)
 }

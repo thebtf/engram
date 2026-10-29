@@ -89,7 +89,7 @@ func queueCandidateSelectionFixture(id int64, status models.CandidateStatus) *mo
 func newQueueCandidateSelectionTestHandler(store *fakeCandidateReviewStore, selections *queueCandidateSelectionStoreFake) *QueueCandidateSelectionHandler {
 	scope := queueCandidateSelectionTestScope(41, "queue-browser-session")
 	return NewQueueCandidateSelectionHandler(
-		&Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store, snapshotStore: gormdb.NewSnapshotStore(nil)},
+		&Service{candidateQueueReady: true, candidateReviewStoreSeam: store, snapshotStore: gormdb.NewSnapshotStore(nil)},
 		selections,
 		queueCandidateScopeResolverFunc(func(_ context.Context, _ auth.Identity, sessionID, domain string) (gormdb.CollectionSelectionScope, error) {
 			if sessionID != scope.SessionID || domain != scope.Domain {

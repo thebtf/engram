@@ -720,11 +720,11 @@ func storeTool() Tool {
 		"rejected":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Alternatives considered and dismissed (for decision observations)"},
 		"type":       map[string]any{"type": "string", "enum": []string{"decision", "bugfix", "feature", "refactor", "discovery", "change", "guidance", "credential", "entity", "wiki", "pitfall", "operational", "timeline"}, "description": "Observation type (for create)"},
 		"importance": map[string]any{"type": "number", "minimum": 0, "maximum": 1, "description": "Importance score (0-1)"},
-		"scope":      map[string]any{"type": "string", "enum": []string{"project", "global"}, "description": "Legacy 2-tier visibility scope. Preserved for backward compatibility (RI-F2); prefer privacy_scope when ENGRAM_VNEXT_F_ENABLED is on."},
+		"scope":      map[string]any{"type": "string", "enum": []string{"project", "global"}, "description": "Legacy 2-tier visibility scope. Preserved for backward compatibility (RI-F2); prefer privacy_scope."},
 		// privacy_scope and session_id are unconditional in schema (clients discover them at all
 		// times); the runtime handler ignores them when ENGRAM_VNEXT_F_ENABLED=false (RI-F1).
-		"privacy_scope":    map[string]any{"type": "string", "enum": []string{"private", "project", "shared", "global"}, "description": "4-tier visibility scope (engram vNext Milestone F). Honored when ENGRAM_VNEXT_F_ENABLED=true. Empty defaults to project (or to the 4-tier mapping of legacy `scope` when both omitted). Invalid values return 'invalid_privacy_scope:' structured error."},
-		"session_id":       map[string]any{"type": "string", "description": "Caller's session identifier. Populates Memory.SourceSessions for private-scope filtering. Honored only when ENGRAM_VNEXT_F_ENABLED=true. Empty means workstation-only-suffices branch is used on subsequent recalls (per spec FR-F1 AMEND 2026-05-25)."},
+		"privacy_scope":    map[string]any{"type": "string", "enum": []string{"private", "project", "shared", "global"}, "description": "4-tier visibility scope (engram vNext Milestone F). Empty defaults to project (or to the 4-tier mapping of legacy `scope` when both omitted). Invalid values return 'invalid_privacy_scope:' structured error."},
+		"session_id":       map[string]any{"type": "string", "description": "Caller's session identifier. Populates Memory.SourceSessions for private-scope filtering. Empty means workstation-only-suffices branch is used on subsequent recalls (per spec FR-F1 AMEND 2026-05-25)."},
 		"agent_visibility": map[string]any{"type": "string", "enum": []string{"private", "shared"}, "description": "Principal-memory visibility. Both private and shared require an authenticated principal; shared is the default for owned writes. Without a principal (including auth-disabled mode), omit agent_visibility for ordinary project/workstation visibility and use privacy_scope instead. Principal-private visibility still requires authenticated ownership. Ownership is server-derived from auth.Identity; principal, owner_principal, and session_id arguments cannot supply it."},
 		"domain":           map[string]any{"type": "string", "description": "Optional memory domain for later ownership policy and operator filtering. Does not grant ownership by itself."},
 		"project":          map[string]any{"type": "string", "description": "Project ID (defaults to current)"},
@@ -750,9 +750,9 @@ func storeTool() Tool {
 	}
 	// dry_run and write-lint phase fields are only advertised when the flag is on.
 	// Advertising them unconditionally would imply they work on flag-off servers.
-	if vnextFEnabled() {
+	{
 		props["dry_run"] = map[string]any{"type": "boolean", "description": "T044 FR-F6.b: when true, returns a preview of what would be stored (after redaction) without writing to DB. write_lint field in response indicates whether Phase1 would run on a live call."}
-		props["force"] = map[string]any{"type": "boolean", "description": "T035: when true, bypasses write-lint Phase1/Phase2 and writes directly (legacy path). Logged as legacy_force_write in audit. Honored only when ENGRAM_VNEXT_F_ENABLED=true."}
+		props["force"] = map[string]any{"type": "boolean", "description": "T035: when true, bypasses write-lint Phase1/Phase2 and writes directly (legacy path). Logged as legacy_force_write in audit."}
 		props["resolution_token"] = map[string]any{"type": "string", "description": "T035 Phase2: resolution token minted by a prior Phase1 response. When set, commits the write using the chosen option. Cannot combine with force=true."}
 		props["option"] = map[string]any{"type": "string", "description": "T035 Phase2: resolution option chosen by the caller (e.g. merge_with, supersede, link_contradiction, ignore_signals). Required when resolution_token is set."}
 		props["target_memory_id"] = map[string]any{"type": "integer", "description": "T035 Phase2: target memory ID for merge_with / supersede options. Required for those options."}
@@ -792,12 +792,12 @@ func recallMemoryTool() Tool {
 		"project": map[string]any{"type": "string", "description": "Project ID to scope results (includes project-scoped and global observations)"},
 		"session_id": map[string]any{
 			"type":        "string",
-			"description": "Caller's session identifier. Used by scope.Resolve to admit private-scope rows that name this session in source_sessions. Honored only when ENGRAM_VNEXT_F_ENABLED=true. Empty means workstation-only-suffices branch is used (per spec FR-F1 AMEND 2026-05-25).",
+			"description": "Caller's session identifier. Used by scope.Resolve to admit private-scope rows that name this session in source_sessions. Empty means workstation-only-suffices branch is used (per spec FR-F1 AMEND 2026-05-25).",
 		},
 		"include_scopes": map[string]any{
 			"type":        "array",
 			"items":       map[string]any{"type": "string", "enum": []string{"private", "project", "shared", "global"}},
-			"description": "Restrict returned memories to the named privacy_scope tiers. Empty/omitted means all 4 tiers are returned (subject to scope.Resolve visibility). Honored only when ENGRAM_VNEXT_F_ENABLED=true. Unknown enum values return 'invalid_include_scopes:' structured error.",
+			"description": "Restrict returned memories to the named privacy_scope tiers. Empty/omitted means all 4 tiers are returned (subject to scope.Resolve visibility). Unknown enum values return 'invalid_include_scopes:' structured error.",
 		},
 		"include_principals": map[string]any{
 			"type": "array",
@@ -819,20 +819,19 @@ func recallMemoryTool() Tool {
 			"type":        "number",
 			"minimum":     0,
 			"maximum":     1,
-			"description": "Only return memories whose confidence score is ≥ this value [0,1]. Applied at SQL layer via ListWithFilters. Honored only when ENGRAM_VNEXT_F_ENABLED=true.",
+			"description": "Only return memories whose confidence score is ≥ this value [0,1]. Applied at SQL layer via ListWithFilters.",
 		},
 		"include_superseded": map[string]any{
 			"type":        "boolean",
-			"description": "When true, include memories with status='superseded' in addition to status='active'. Honored only when ENGRAM_VNEXT_F_ENABLED=true.",
+			"description": "When true, include memories with status='superseded' in addition to status='active'.",
 		},
 		"include_rationale": map[string]any{
 			"type":        "boolean",
-			"description": "When true, attach a per-result ranking_rationale object with v5-surface fields: recency_days, confidence, citation_count, tier, substring_match, filters_applied. Honored only when ENGRAM_VNEXT_F_ENABLED=true.",
+			"description": "When true, attach a per-result ranking_rationale object with v5-surface fields: recency_days, confidence, citation_count, tier, substring_match, filters_applied.",
 		},
 	}
 	desc := "Recall memories/observations by semantic search. Use to retrieve previously stored knowledge."
-	if os.Getenv("ENGRAM_VNEXT_ENABLED") == "true" {
-		// Vnext-gated additional parameters (FR-C4 hybrid retrieval, W3).
+	{ // Vnext-gated additional parameters (FR-C4 hybrid retrieval, W3).
 		// Independent of ENGRAM_VNEXT_F_ENABLED; both flags may be active simultaneously
 		// (ON/ON = hybrid retrieval + scope filtering enforced per d9eea82 contract).
 		props["expand_graph"] = map[string]any{
@@ -922,8 +921,8 @@ func (s *Server) primaryTools() []Tool {
 		},
 		{
 			Name: "settings",
-			Description: "Manage server-global model settings (reranker/embedder URL, model, API key) read by the " +
-				"server on the recall path (#259). Env vars still override stored settings. Actions: set, get, list, " +
+			Description: "Manage server-global provider settings (reranker/embedder/LLM URL, model, API key, embedding request dimensions) read at startup. " +
+				"Nonempty env vars still override stored settings. Actions: set, get, list, " +
 				"delete. set/delete require admin (operator) auth — they change behavior for every consumer. Secret " +
 				"keys (ending .api_key) are vault-encrypted and never returned in plaintext by get/list. Action required.",
 			tier: tierUseful,
@@ -932,7 +931,7 @@ func (s *Server) primaryTools() []Tool {
 				"required": []string{"action"},
 				"properties": map[string]any{
 					"action":      map[string]any{"type": "string", "enum": []string{"set", "get", "list", "delete"}, "description": "Action to perform (required)"},
-					"key":         map[string]any{"type": "string", "description": "Setting key, e.g. reranker.url, reranker.model, reranker.api_key, embedder.url, embedder.model, embedder.api_key (for set, get, delete)"},
+					"key":         map[string]any{"type": "string", "description": "Setting key: reranker.url/model/api_key, embedder.url/model/api_key/dimensions, llm.url/model/api_key (for set, get, delete). embedder.dimensions accepts 0 to omit the request parameter or the schema-bound 1536."},
 					"value":       map[string]any{"type": "string", "description": "Setting value (for set)"},
 					"encrypt":     map[string]any{"type": "boolean", "description": "Force vault encryption even if the key name does not end in .api_key (for set). Keys ending .api_key are always encrypted."},
 					"description": map[string]any{"type": "string", "description": "Optional human description of the setting (for set)"},
@@ -1032,7 +1031,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	if s.memoryStore != nil {
 		tools = append(tools, recallMemoryTool())
 	}
-	if continuitySlotEnabled() && s.memoryStore != nil && s.continuitySlotStore != nil && s.auditStore != nil {
+	if s.memoryStore != nil && s.continuitySlotStore != nil && s.auditStore != nil {
 		tools = append(tools, continuitySlotTool())
 	}
 	if s6OutcomeEnabledFromEnv() && s.effectiveMemorySignificanceUpdater() != nil {
@@ -1060,7 +1059,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	}
 
 	// Adaptive memory tools — advertise only when memory store is available AND adaptive features are enabled.
-	if s.memoryStore != nil && os.Getenv("ENGRAM_ADAPTIVE_ENABLED") == "true" {
+	if s.memoryStore != nil {
 		tools = append(tools,
 			Tool{
 				Name:        "get_memory_brief",
@@ -1087,13 +1086,13 @@ func (s *Server) handleToolsList(req *Request) *Response {
 
 	// Crystallization candidate tools — advertised only when ENGRAM_VNEXT_F_ENABLED=true
 	// and the candidate store is wired (Milestone-F TG4 T026).
-	if vnextFEnabled() && s.candidateStore != nil {
+	if s.candidateStore != nil {
 		tools = append(tools, candidateTools()...)
 	}
 
 	// Governance tools (Milestone-F TG6 T043): snapshot list/rollback/pin + redaction status.
 	// Admin-gated at handler level; advertised only when snapshotStore is wired.
-	if vnextFEnabled() && s.snapshotStore != nil {
+	if s.snapshotStore != nil {
 		tools = append(tools, governanceTools()...)
 	}
 
@@ -1104,7 +1103,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	// Bulk-op tools (Milestone-F TG6 T044): bulk_promote/delete/supersede with dry-run.
 	// Admin-gated at handler level. Advertised whenever ENGRAM_VNEXT_F_ENABLED=true
 	// (facade may be nil — dry_run still works with nil facade via seam).
-	if vnextFEnabled() {
+	{
 		tools = append(tools, bulkOpsTools()...)
 	}
 
@@ -1131,7 +1130,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 
 	// Lifecycle tool — advertise when memory store + promotion store are available
 	// and ENGRAM_LIFECYCLE_ENABLED is true.
-	if s.memoryStore != nil && s.promotionStore != nil && os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true" {
+	if s.memoryStore != nil && s.promotionStore != nil {
 		tools = append(tools, Tool{
 			Name:        "lifecycle",
 			Description: "[Lifecycle] Manage memory lifecycle: view tier/decay info, promote/demote, set confidence, preview decay, check sleep cycle status.",
@@ -1592,7 +1591,7 @@ func (s *Server) handleAdminStats(ctx context.Context) (string, error) {
 	}
 
 	// --- vnext section: injection / citation counts (gated on ENGRAM_VNEXT_ENABLED) ---
-	if vnextEnabled() {
+	{
 		var injectionCount int64
 		injErr := db.WithContext(ctx).Raw(`SELECT count(*) FROM injection_log`).Scan(&injectionCount).Error
 
@@ -1759,10 +1758,8 @@ func (s *Server) handleCheckSystemHealth(ctx context.Context) (string, error) {
 	// content_chunks table and pgvector are present in v5+ (re-added in feat/embedding-hardening).
 	// Removed=false: the subsystem exists; the feature flag gates active retrieval use.
 	var vectorMessage string
-	if os.Getenv("ENGRAM_VNEXT_ENABLED") == "true" {
+	{
 		vectorMessage = "pgvector hybrid retrieval active"
-	} else {
-		vectorMessage = "pgvector available; vNext retrieval gated by ENGRAM_VNEXT_ENABLED"
 	}
 	vectorHealth := &SubsystemHealth{
 		Status:  "healthy",

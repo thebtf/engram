@@ -537,7 +537,7 @@ func TestPrimaryToolActionEnumsContainOnlyWorkingActions(t *testing.T) {
 		"feedback": {"suppress", "outcome"},
 		"vault":    {"store", "get", "list", "delete", "status"},
 		"docs":     {"create", "read", "list", "history", "comment", "collections", "documents", "get_doc", "remove", "ingest"},
-		"admin":    {"stats"},
+		"admin":    {"stats", "purge_project"},
 	}
 	for name, wantActions := range want {
 		props := findToolProperties(t, s.primaryTools(), name)
@@ -559,7 +559,7 @@ func TestPrimaryToolActionEnumsContainOnlyWorkingActions(t *testing.T) {
 	assert.ElementsMatch(t, []string{"project", "global"}, toStringSlice(vaultProps["scope"].(map[string]any)["enum"]))
 	assert.NotContains(t, vaultProps["scope"].(map[string]any), "default")
 	adminProps := findToolProperties(t, s.primaryTools(), "admin")
-	assert.NotContains(t, adminProps, "project")
+	assert.Contains(t, adminProps, "project")
 }
 
 // ---------------------------------------------------------------------------
@@ -1041,7 +1041,7 @@ func TestCallTool_CheckSystemHealth_NilStores(t *testing.T) {
 // TestCheckSystemHealth_VectorSubsystem asserts that the vectors subsystem in
 // the health report:
 //   - is NOT marked as removed (Removed=false after feat/embedding-hardening)
-//   - carries the ENGRAM_VNEXT_ENABLED-aware message (not the old "permanently removed" text)
+//   - never reports the historical removed-vector message.
 //
 // Note: no t.Parallel() here — subtests use t.Setenv which requires a serial parent.
 func TestCheckSystemHealth_VectorSubsystem(t *testing.T) {
@@ -1069,9 +1069,6 @@ func TestCheckSystemHealth_VectorSubsystem(t *testing.T) {
 		msg, _ := vectors["message"].(string)
 		assert.NotContains(t, msg, "permanently removed",
 			"vectors message must not say 'permanently removed'")
-		// Message must reference ENGRAM_VNEXT_ENABLED.
-		assert.Contains(t, msg, "ENGRAM_VNEXT_ENABLED",
-			"vectors message must reference ENGRAM_VNEXT_ENABLED when disabled")
 	})
 
 	t.Run("vnext_enabled", func(t *testing.T) {

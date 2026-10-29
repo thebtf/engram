@@ -82,7 +82,6 @@ func TestAuthBoundaryMeCredentialParity(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.Model(revoked).Update("revoked_at", time.Now().UTC()).Error)
 	s := authBoundaryRouter(t, NewAuthHandlers(users, nil, sessions, nil))
-	s.tokenAuth.SetAuthentikConfig(true, false, []string{"192.0.2.1"})
 	validHMAC := authBoundaryCookie(t, s.tokenAuth, time.Now().Add(time.Hour))
 	expiredHMAC := authBoundaryCookie(t, s.tokenAuth, time.Now().Add(-time.Hour))
 	for _, tc := range []struct {
@@ -92,7 +91,7 @@ func TestAuthBoundaryMeCredentialParity(t *testing.T) {
 	}{
 		{name: "master bearer", header: "Authorization", value: "Bearer " + "auth-boundary-test-only", role: "admin", want: http.StatusOK},
 		{name: "master header", header: "X-Auth-Token", value: "auth-boundary-test-only", role: "admin", want: http.StatusOK},
-		{name: "trusted Authentik", header: "X-Authentik-Email", value: user.Email, role: user.Role, want: http.StatusOK},
+		{name: "retired Authentik header", header: "X-Authentik-Email", value: user.Email, want: http.StatusUnauthorized},
 		{name: "valid HMAC", cookie: validHMAC, role: "admin", want: http.StatusOK},
 		{name: "expired HMAC", cookie: expiredHMAC, want: http.StatusUnauthorized},
 		{name: "valid DB session", session: active.ID, role: user.Role, want: http.StatusOK},
@@ -136,43 +135,19 @@ func TestAuthBoundaryMeCredentialParity(t *testing.T) {
 	}
 }
 
-func TestAuthBoundaryAuthentikTransportPeer(t *testing.T) {
+func TestAuthBoundaryRetiredAuthentikHeadersCannotAuthenticate(t *testing.T) {
 	t.Setenv("ENGRAM_AUTH_DISABLED", "false")
-	db, _ := openAuthBoundaryReads(t)
-	users := gormdb.NewUserStore(db)
-	user, err := users.CreateUser("proxy-boundary@example.test", "", gormdb.DashboardRoleOperator)
-	require.NoError(t, err)
-	s := authBoundaryRouter(t, NewAuthHandlers(users, nil, gormdb.NewAuthSessionStore(db), nil))
-	for _, tc := range []struct {
-		name, peer, header, value string
-		trusted                   []string
-		enabled                   bool
-		want                      int
-	}{
-		{name: "untrusted plain peer", peer: "198.51.100.2:443", trusted: []string{"192.0.2.1"}, enabled: true, want: http.StatusUnauthorized},
-		{name: "spoofed real IP", peer: "198.51.100.2:443", header: "X-Real-IP", value: "192.0.2.1", trusted: []string{"192.0.2.1"}, enabled: true, want: http.StatusUnauthorized},
-		{name: "spoofed forwarded for", peer: "198.51.100.2:443", header: "X-Forwarded-For", value: "192.0.2.1", trusted: []string{"192.0.2.1"}, enabled: true, want: http.StatusUnauthorized},
-		{name: "trusted plain peer", peer: "192.0.2.1:443", trusted: []string{"192.0.2.1"}, enabled: true, want: http.StatusOK},
-		{name: "trusted proxy real client IP", peer: "192.0.2.1:443", header: "X-Real-IP", value: "198.51.100.2", trusted: []string{"192.0.2.1"}, enabled: true, want: http.StatusOK},
-		{name: "trusted proxy forwarded client IP", peer: "192.0.2.1:443", header: "X-Forwarded-For", value: "198.51.100.2, 192.0.2.1", trusted: []string{"192.0.2.1"}, enabled: true, want: http.StatusOK},
-		{name: "trusted IPv6 proxy", peer: "[2001:db8::1]:443", header: "X-Real-IP", value: "198.51.100.2", trusted: []string{"2001:db8::1"}, enabled: true, want: http.StatusOK},
-		{name: "untrusted IPv6 proxy spoof", peer: "[2001:db8::2]:443", header: "X-Forwarded-For", value: "2001:db8::1", trusted: []string{"2001:db8::1"}, enabled: true, want: http.StatusUnauthorized},
-		{name: "mapped IPv4 proxy", peer: "[::ffff:192.0.2.1]:443", trusted: []string{"192.0.2.1"}, enabled: true, want: http.StatusOK},
-		{name: "malformed peer", peer: "not-an-address", header: "X-Real-IP", value: "192.0.2.1", trusted: []string{"192.0.2.1"}, enabled: true, want: http.StatusUnauthorized},
-		{name: "empty trust list", peer: "192.0.2.1:443", enabled: true, want: http.StatusUnauthorized},
-		{name: "Authentik disabled", peer: "192.0.2.1:443", trusted: []string{"192.0.2.1"}, want: http.StatusUnauthorized},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			s.tokenAuth.SetAuthentikConfig(tc.enabled, false, tc.trusted)
+	s := authBoundaryRouter(t, nil)
+	for _, peer := range []string{"192.0.2.1:443", "[2001:db8::1]:443", "198.51.100.2:443", "malformed"} {
+		t.Run(peer, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/api/flags", nil)
-			req.RemoteAddr = tc.peer
-			req.Header.Set("X-Authentik-Email", user.Email)
-			if tc.header != "" {
-				req.Header.Set(tc.header, tc.value)
-			}
+			req.RemoteAddr = peer
+			req.Header.Set("X-Authentik-Email", "operator@example.test")
+			req.Header.Set("X-Real-IP", "192.0.2.1")
+			req.Header.Set("X-Forwarded-For", "192.0.2.1")
 			rec := httptest.NewRecorder()
 			s.router.ServeHTTP(rec, req)
-			assert.Equal(t, tc.want, rec.Code, "trust must use the transport peer, not client headers; body=%s", rec.Body.String())
+			require.Equal(t, http.StatusUnauthorized, rec.Code, rec.Body.String())
 		})
 	}
 }
@@ -256,37 +231,6 @@ func TestAuthBoundaryDisabledIdentity(t *testing.T) {
 			assert.Equal(t, true, body["synthetic"])
 			assert.Equal(t, "admin", body["role"])
 		}
-	}
-}
-
-func TestAuthBoundaryDirectAuthentikMiddleware(t *testing.T) {
-	t.Setenv("ENGRAM_AUTH_DISABLED", "false")
-	db, _ := openAuthBoundaryReads(t)
-	users := gormdb.NewUserStore(db)
-	user, err := users.CreateUser("direct-proxy@example.test", "", gormdb.DashboardRoleOperator)
-	require.NoError(t, err)
-	s := authBoundaryRouter(t, NewAuthHandlers(users, nil, gormdb.NewAuthSessionStore(db), nil))
-	s.tokenAuth.SetAuthentikConfig(true, false, []string{"192.0.2.1", "2001:db8::1"})
-	handler := s.tokenAuth.Middleware(http.HandlerFunc(s.handleGetFlags))
-	for _, tc := range []struct {
-		peer string
-		want int
-	}{
-		{peer: "192.0.2.1:443", want: http.StatusOK},
-		{peer: "[2001:db8::1]:443", want: http.StatusOK},
-		{peer: "2001:db8::1", want: http.StatusOK},
-		{peer: "198.51.100.2:443", want: http.StatusUnauthorized},
-		{peer: "malformed", want: http.StatusUnauthorized},
-	} {
-		t.Run(tc.peer, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "/api/flags", nil)
-			req.RemoteAddr = tc.peer
-			req.Header.Set("X-Authentik-Email", user.Email)
-			req.Header.Set("X-Real-IP", "192.0.2.1")
-			rec := httptest.NewRecorder()
-			handler.ServeHTTP(rec, req)
-			require.Equal(t, tc.want, rec.Code, rec.Body.String())
-		})
 	}
 }
 

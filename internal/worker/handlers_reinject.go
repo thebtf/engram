@@ -3,7 +3,6 @@ package worker
 import (
 	"encoding/json"
 	"net/http"
-	"os"
 	"strconv"
 
 	"github.com/rs/zerolog/log"
@@ -20,10 +19,6 @@ type reinjectRequest struct {
 // handleReinject returns topic-relevant memories scored by Thompson Sampling,
 // formatted for mid-session re-injection. Called by the PreCompact hook.
 func (s *Service) handleReinject(w http.ResponseWriter, r *http.Request) {
-	if os.Getenv("ENGRAM_ADAPTIVE_ENABLED") != "true" {
-		writeJSON(w, map[string]string{"status": "disabled"})
-		return
-	}
 
 	var req reinjectRequest
 	if r.Method == http.MethodPost {
@@ -108,4 +103,3 @@ func truncate(s string, maxRunes int) string {
 	}
 	return string(runes[:maxRunes]) + "..."
 }
-

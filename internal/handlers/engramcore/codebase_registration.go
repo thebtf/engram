@@ -17,6 +17,11 @@ import (
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
 )
 
+const (
+	gitRevParse     = "rev-parse"
+	gitShowTopLevel = "--show-toplevel"
+)
+
 type nativeCodebaseRegistrationArgs struct {
 	Action        string  `json:"action"`
 	SourceLabel   *string `json:"source_label,omitempty"`

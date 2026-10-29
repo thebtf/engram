@@ -237,28 +237,8 @@ func (h *AuthHandlers) currentAccessSessionAdminUser(w http.ResponseWriter, r *h
 		}
 		return sess, user, true
 	}
-	if !h.requireStores(w, true, false, false, false) {
-		return nil, nil, false
-	}
-	email := strings.TrimSpace(r.Header.Get("X-Authentik-Email"))
-	if email == "" {
-		writeAuthJSONError(w, http.StatusUnauthorized, "not authenticated")
-		return nil, nil, false
-	}
-	user, err := h.users.GetUserByEmail(email)
-	if err != nil {
-		if errors.Is(err, gormlib.ErrRecordNotFound) {
-			writeAuthJSONError(w, http.StatusUnauthorized, "not authenticated")
-		} else {
-			writeAuthJSONError(w, http.StatusInternalServerError, "failed to load session user")
-		}
-		return nil, nil, false
-	}
-	if user.Disabled {
-		writeAuthJSONError(w, http.StatusForbidden, "account disabled")
-		return nil, nil, false
-	}
-	return nil, user, true
+	writeAuthJSONError(w, http.StatusUnauthorized, "not authenticated")
+	return nil, nil, false
 }
 
 func (h *AuthHandlers) requireAccessSessionAdmin(w http.ResponseWriter, r *http.Request) (*gormdb.AuthSession, *gormdb.User, bool) {
@@ -789,23 +769,12 @@ func (h *AuthHandlers) handleAccessProviders(w http.ResponseWriter, r *http.Requ
 			Evidence:    "/api/auth/user-login",
 			Description: "Local dashboard login backed by the users/sessions tables.",
 		},
-		{
-			ID:          "authentik-forward-auth",
-			Label:       "Authentik / OIDC proxy",
-			Kind:        "oidc-proxy",
-			Enabled:     cfg.AuthentikEnabled,
-			Configured:  cfg.AuthentikEnabled,
-			Operable:    cfg.AuthentikEnabled,
-			Honesty:     map[bool]string{true: "live", false: "mustbuild"}[cfg.AuthentikEnabled],
-			Evidence:    "ENGRAM_AUTHENTIK_ENABLED",
-			Description: "Trusted-proxy header login via X-Authentik-Email with optional auto-provisioning.",
-		},
 	}
 	writeJSON(w, accessProvidersResponse{
 		Providers:                  providers,
 		AuthDisabled:               isAuthDisabled(),
 		LocalLoginEnabled:          !cfg.AuthSkipLocal,
-		AuthentikTrustedProxyCount: len(cfg.AuthentikTrustedProxies),
+		AuthentikTrustedProxyCount: 0,
 	})
 }
 

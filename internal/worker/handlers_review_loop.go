@@ -98,7 +98,7 @@ func writeReviewActionError(w http.ResponseWriter, err error) {
 
 func (s *Service) handleReadMemoryReviewMetrics(w http.ResponseWriter, r *http.Request) {
 	if !s.candidateQueueActive() {
-		writeJSONStatus(w, http.StatusForbidden, reviewpacket.GatedReviewMetrics("candidate queue requires "+candidateQueueFlag+"=true", time.Now().UTC()))
+		writeJSONStatus(w, http.StatusForbidden, reviewpacket.GatedReviewMetrics(candidateQueueUnavailable, time.Now().UTC()))
 		return
 	}
 	store := s.currentCandidateReviewStore()
@@ -125,7 +125,7 @@ func (s *Service) handleReadMemoryReviewMetrics(w http.ResponseWriter, r *http.R
 
 func (s *Service) handleReadMemoryReviewQueue(w http.ResponseWriter, r *http.Request) {
 	if !s.candidateQueueActive() {
-		writeJSONStatus(w, http.StatusForbidden, reviewpacket.GatedReviewQueue("candidate queue requires "+candidateQueueFlag+"=true", 0, time.Now().UTC()))
+		writeJSONStatus(w, http.StatusForbidden, reviewpacket.GatedReviewQueue(candidateQueueUnavailable, 0, time.Now().UTC()))
 		return
 	}
 	status, limit, ok := reviewLoopStatusAndLimit(r)
@@ -232,7 +232,7 @@ func (s *Service) handleApplyMemoryReviewPacketAction(w http.ResponseWriter, r *
 
 func (s *Service) loadReviewPacketCandidate(w http.ResponseWriter, r *http.Request) (*models.CrystallizationCandidate, string, bool) {
 	if !s.candidateQueueActive() {
-		http.Error(w, "candidate queue requires "+candidateQueueFlag+"=true", http.StatusForbidden)
+		http.Error(w, candidateQueueUnavailable, http.StatusForbidden)
 		return nil, "", false
 	}
 	store := s.currentCandidateReviewStore()

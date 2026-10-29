@@ -902,9 +902,9 @@ func TestHandleGetMemoryByID_ReadVisibility(t *testing.T) {
 			identity: alice, wantStatus: http.StatusNotFound,
 		},
 		{
-			name:     "private scope remains legacy-visible when disabled",
+			name:     "private scope hides another workstation without startup flags",
 			memory:   &models.Memory{ID: 42, Project: project, Content: "private scope", PrivacyScope: "private", SourceWorkstationID: "ws-bob"},
-			identity: alice, wantStatus: http.StatusOK,
+			identity: alice, wantStatus: http.StatusNotFound,
 		},
 	}
 

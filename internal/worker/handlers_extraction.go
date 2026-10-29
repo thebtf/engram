@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -31,10 +30,6 @@ const maxExtractedPerRequest = 5
 
 // handleCodeExtraction processes coding decision extractions from the stop hook.
 func (s *Service) handleCodeExtraction(w http.ResponseWriter, r *http.Request) {
-	if os.Getenv("ENGRAM_ADAPTIVE_ENABLED") != "true" {
-		writeJSON(w, map[string]string{"status": "disabled"})
-		return
-	}
 
 	var req codeExtractionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

@@ -90,9 +90,6 @@ interface ApiConfigPendingRestart {
 }
 
 interface ApiConfigPatch {
-  memory?: {
-    inject_unified?: boolean
-  }
   features?: {
     enforce_source_project?: boolean
   }

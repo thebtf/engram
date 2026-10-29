@@ -85,7 +85,6 @@ const domainDeleteResult = ref<Awaited<ReturnType<typeof deleteDomain>> | null>(
 const restartResult = ref<Awaited<ReturnType<typeof restartServer>> | null>(null)
 const updateRestartResult = ref<Awaited<ReturnType<typeof restartAfterUpdate>> | null>(null)
 const configDraftTouched = ref(false)
-const draftInjectUnified = ref(false)
 const draftSourceProject = ref(false)
 const domainDraft = ref<DomainRegistryDraft>({
   domain: '',
@@ -125,10 +124,8 @@ const selectedTab = computed(() => tabs.value.find((tab) => tab.id === activeTab
 const config = computed(() => configState.value.kind === 'live' ? configState.value.data : {})
 const configAvailable = computed(() => configState.value.kind === 'live')
 const domainDraftValid = computed(() => Boolean(domainDraft.value.domain.trim() && domainDraft.value.ownerPrincipal.trim()))
-const currentInjectUnified = computed(() => Boolean(config.value?.memory?.inject_unified))
 const currentSourceProject = computed(() => Boolean(config.value?.features?.enforce_source_project))
 const configDraftDirty = computed(() => configAvailable.value && (
-  draftInjectUnified.value !== currentInjectUnified.value ||
   draftSourceProject.value !== currentSourceProject.value
 ))
 const modelRows = computed(() => modelHealthState.rows.value)
@@ -138,19 +135,6 @@ const modelSecretCount = computed(() => modelRows.value.filter((row) => row.secr
 const modelHealthPending = computed(() => modelHealthState.pending.value && modelRows.value.length === 0)
 const modelRegistryPending = computed(() => modelRegistryState.pending.value && modelRegistry.value.models.length === 0)
 const switches = computed(() => [
-  {
-    key: 'injectUnified',
-    title: t('settings.switches.injectUnified.title'),
-    desc: t('settings.switches.injectUnified.desc'),
-    value: draftInjectUnified.value,
-    set: (value: boolean) => {
-      configDraftTouched.value = true
-      draftInjectUnified.value = value
-    },
-    evidence: 'memory.inject_unified',
-    reload: true,
-    disabled: !configAvailable.value,
-  },
   {
     key: 'telemetry',
     title: t('settings.switches.telemetry.title'),
@@ -177,7 +161,6 @@ const switches = computed(() => [
 ])
 
 function resetConfigDraft() {
-  draftInjectUnified.value = currentInjectUnified.value
   draftSourceProject.value = currentSourceProject.value
   configDraftTouched.value = false
   configSaveResult.value = null
@@ -185,12 +168,8 @@ function resetConfigDraft() {
 
 function buildConfigPatch() {
   const patch: {
-    memory?: { inject_unified?: boolean }
     features?: { enforce_source_project?: boolean }
   } = {}
-  if (draftInjectUnified.value !== currentInjectUnified.value) {
-    patch.memory = { inject_unified: draftInjectUnified.value }
-  }
   if (draftSourceProject.value !== currentSourceProject.value) {
     patch.features = { enforce_source_project: draftSourceProject.value }
   }

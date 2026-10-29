@@ -2,7 +2,6 @@ package worker
 
 import (
 	"context"
-	"os"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -96,7 +95,13 @@ func (s *Service) maybeSleepCycle(ctx context.Context) {
 	ms := s.memoryStore
 	ps := s.promotionStore
 	as := s.auditStore
+	dreamConfigured := s.llmClient != nil || s.dreamExtractorFunc != nil
 	s.initMu.RUnlock()
+
+	// A configured consumer owns pending work until successful analysis, even
+	// across skipped ticks or restarts; the durable queue is the retry state.
+	pruneUnprocessed := !dreamConfigured
+	defer func() { s.pruneDreamTranscripts(ctx, pruneUnprocessed) }()
 
 	if ms == nil {
 		log.Debug().Msg("sleep cycle: memory store not ready, skipping")
@@ -136,6 +141,9 @@ func (s *Service) maybeSleepCycle(ctx context.Context) {
 			Int64("watermark_id", watermark).
 			Int64("threshold", sleepCycleMemoryCountThreshold).
 			Msg("sleep cycle: count threshold not met, skipping")
+		if dreamConfigured {
+			pruneUnprocessed = s.runQueuedCrystallization(ctx)
+		}
 		return
 	}
 
@@ -147,7 +155,7 @@ func (s *Service) maybeSleepCycle(ctx context.Context) {
 	// Pass auditStore as AuditLogger only when ENGRAM_VNEXT_ENABLED=true (T004).
 	// AuditStore satisfies lifecycle.AuditLogger via its LogAudit method.
 	var auditLog lifecycle.AuditLogger
-	if os.Getenv("ENGRAM_VNEXT_ENABLED") == "true" && as != nil {
+	if as != nil {
 		auditLog = as
 	}
 
@@ -166,7 +174,7 @@ func (s *Service) maybeSleepCycle(ctx context.Context) {
 
 	// Milestone-F TG4 T028 + TG6 T049: when the Milestone-F flag is on, run
 	// candidate decay AND snapshot auto-pruning alongside the memory sleep cycle.
-	if os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true" {
+	{
 		s.initMu.RLock()
 		cs := s.candidateStore
 		ss := s.snapshotStore
@@ -193,24 +201,10 @@ func (s *Service) maybeSleepCycle(ctx context.Context) {
 		}
 	}
 
-	// Dream-cycle crystallization extracts decisions from session transcripts and
-	// routes them to candidates on the memory sleep-cycle tick. The call is gated
-	// here by ENGRAM_CRYSTALLIZATION_ENABLED; runDreamCrystallization then fails
-	// closed on the candidate flag and candidate-writer availability before reads
-	// or extraction.
-	//
-	// Runs SYNCHRONOUSLY inside this (s.wg-tracked) sleep-cycle goroutine. The LLM
-	// client has a 30s per-attempt timeout with 3 attempts + 2s/4s backoff, so an
-	// unreachable endpoint could block this goroutine for ~36s. Bound that blast
-	// radius with an explicit sub-context deadline so a slow/hung LLM cannot stall
-	// the sleep goroutine beyond a known ceiling; the 4h tick interval means this
-	// is well within budget.
-	if isCrystallizationEnabled() {
-		// LLM worst-case budget: 30s/attempt × 3 attempts + 2s + 4s backoff = 96s.
-		// Use 120s to cover that budget with margin; 60s was insufficient.
-		dreamCtx, dreamCancel := context.WithTimeout(ctx, 120*time.Second)
-		s.runDreamCrystallization(dreamCtx)
-		dreamCancel()
+	// Memory maintenance retains its count gate. Pending transcript analysis
+	// uses the same idle tick but does not depend on new memory production.
+	if dreamConfigured {
+		pruneUnprocessed = s.runQueuedCrystallization(ctx)
 	}
 
 	// Advance watermark only when the run completed without errors and the

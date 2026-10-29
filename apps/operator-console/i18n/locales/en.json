@@ -2083,10 +2083,6 @@
       "restartRequired": "A change is waiting for restart: it is not applied yet."
     },
     "switches": {
-      "injectUnified": {
-        "title": "Unified memory injection",
-        "desc": "Saved through PATCH /api/config; effective only after a restart receipt."
-      },
       "telemetry": {
         "title": "Telemetry",
         "desc": "Current telemetry_enabled value from runtime config; writable seam is not open yet."

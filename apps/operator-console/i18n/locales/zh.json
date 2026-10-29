@@ -2052,10 +2052,6 @@
       "restartRequired": "有更改等待 restart：它尚未 applied。"
     },
     "switches": {
-      "injectUnified": {
-        "title": "统一记忆注入",
-        "desc": "通过 PATCH /api/config 保存；只有拿到 restart receipt 后才算 effective。"
-      },
       "telemetry": {
         "title": "Telemetry",
         "desc": "runtime config 中 telemetry_enabled 的当前值；writable seam 尚未开放。"

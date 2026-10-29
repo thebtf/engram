@@ -178,19 +178,6 @@ func TestBulkPromote_NonAdmin_ReturnsAdminRequired(t *testing.T) {
 	assert.Contains(t, err.Error(), "admin_required")
 }
 
-// TestBulkOps_FlagOff_NotAdvertised verifies bulk_promote/delete/supersede
-// are not in ListTools when ENGRAM_VNEXT_F_ENABLED=false.
-func TestBulkOps_FlagOff_NotAdvertised(t *testing.T) {
-	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "false")
-	s := NewServer(ServerOptions{Version: "test"})
-	tools := s.ListTools()
-	for _, tool := range tools {
-		assert.NotEqual(t, "bulk_promote", tool.Name)
-		assert.NotEqual(t, "bulk_delete", tool.Name)
-		assert.NotEqual(t, "bulk_supersede", tool.Name)
-	}
-}
-
 func TestBulkMutationsUseLosslessSelectors(t *testing.T) {
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
 	ctx := auth.WithIdentity(context.Background(), auth.Admin())

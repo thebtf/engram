@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -26,10 +25,6 @@ type correctionRequest struct {
 // handleCorrection processes user correction signals from the UserPromptSubmit hook.
 // Finds similar memories via Jaccard and auto-supersedes the stale one.
 func (s *Service) handleCorrection(w http.ResponseWriter, r *http.Request) {
-	if os.Getenv("ENGRAM_ADAPTIVE_ENABLED") != "true" {
-		writeJSON(w, map[string]string{"status": "disabled"})
-		return
-	}
 
 	var req correctionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

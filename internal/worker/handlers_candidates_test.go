@@ -195,7 +195,7 @@ func TestHandleListMemoryCandidates_GatedBeforeStore(t *testing.T) {
 	service.handleListMemoryCandidates(w, req)
 
 	require.Equal(t, http.StatusForbidden, w.Code)
-	assert.Contains(t, w.Body.String(), candidateQueueFlag)
+	assert.Contains(t, w.Body.String(), candidateQueueUnavailable)
 	assert.Equal(t, 0, store.listCalls, "flag-off page must gate before touching the candidate store")
 }
 
@@ -221,7 +221,7 @@ func TestHandleListMemoryCandidates_ReturnsProjectScopedPayload(t *testing.T) {
 			PrivacyScope:            "project",
 		}},
 	}
-	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store}
+	service := &Service{candidateQueueReady: true, candidateReviewStoreSeam: store}
 	req := httptest.NewRequest(http.MethodGet, "/api/memory/candidates?project=engram&status=pending&limit=7", nil)
 	w := httptest.NewRecorder()
 
@@ -271,7 +271,7 @@ func TestHandleListMemoryCandidates_AllProjectListsUnscopedQueue(t *testing.T) {
 			UpdatedAt:       time.Date(2026, time.June, 23, 11, 0, 0, 0, time.UTC),
 		}},
 	}
-	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store}
+	service := &Service{candidateQueueReady: true, candidateReviewStoreSeam: store}
 	req := httptest.NewRequest(http.MethodGet, "/api/memory/candidates?project=all&status=pending", nil)
 	w := httptest.NewRecorder()
 
@@ -307,7 +307,7 @@ func TestHandleGetMemoryCandidate_ReturnsReviewPacket(t *testing.T) {
 			},
 		},
 	}
-	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store}
+	service := &Service{candidateQueueReady: true, candidateReviewStoreSeam: store}
 	req := httptest.NewRequest(http.MethodGet, "/api/memory/candidates/42", nil)
 	w := httptest.NewRecorder()
 	router := chi.NewRouter()
@@ -348,7 +348,7 @@ func TestHandlePromoteMemoryCandidate_BuildsDecisionMemory(t *testing.T) {
 		promotedMemory: &models.Memory{ID: promotedMemoryID},
 	}
 	snapshotStore := gormdb.NewSnapshotStore(nil)
-	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store, snapshotStore: snapshotStore}
+	service := &Service{candidateQueueReady: true, candidateReviewStoreSeam: store, snapshotStore: snapshotStore}
 	w, req, router := candidateActionRequest(http.MethodPost, "/api/memory/candidates/42/promote", nil)
 	router.Post("/api/memory/candidates/{id}/promote", service.handlePromoteMemoryCandidate)
 
@@ -393,7 +393,7 @@ func TestHandleRejectMemoryCandidate_UsesContextPrincipalForSnapshotActor(t *tes
 		},
 	}
 	snapshotStore := gormdb.NewSnapshotStore(nil)
-	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store, snapshotStore: snapshotStore}
+	service := &Service{candidateQueueReady: true, candidateReviewStoreSeam: store, snapshotStore: snapshotStore}
 	body := []byte(`{"reason":"not durable enough"}`)
 	w, req, router := candidateActionRequest(http.MethodPost, "/api/memory/candidates/42/reject", body)
 	req = req.WithContext(authpkg.WithIdentity(req.Context(), authpkg.ClientWithPrincipal("read-write", "key-1", "agent/codex", authpkg.PrincipalKindAgent)))
@@ -427,7 +427,7 @@ func TestHandleSupersedeMemoryCandidate_UsesAtomicSnapshotTransition(t *testing.
 		},
 	}
 	snapshotStore := gormdb.NewSnapshotStore(nil)
-	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store, snapshotStore: snapshotStore}
+	service := &Service{candidateQueueReady: true, candidateReviewStoreSeam: store, snapshotStore: snapshotStore}
 	w, req, router := candidateActionRequest(http.MethodPost, "/api/memory/candidates/42/supersede", nil)
 	router.Post("/api/memory/candidates/{id}/supersede", service.handleSupersedeMemoryCandidate)
 
@@ -454,7 +454,7 @@ func TestHandlePromoteMemoryCandidate_RejectsUnscopedPromotion(t *testing.T) {
 			},
 		},
 	}
-	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store}
+	service := &Service{candidateQueueReady: true, candidateReviewStoreSeam: store}
 	w, req, router := candidateActionRequest(http.MethodPost, "/api/memory/candidates/42/promote", nil)
 	router.Post("/api/memory/candidates/{id}/promote", service.handlePromoteMemoryCandidate)
 
@@ -477,7 +477,7 @@ func TestHandlePromoteMemoryCandidate_RejectsMissingPrivacyScopeBeforeMutation(t
 			},
 		},
 	}
-	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store}
+	service := &Service{candidateQueueReady: true, candidateReviewStoreSeam: store}
 	w, req, router := candidateActionRequest(http.MethodPost, "/api/memory/candidates/42/promote", nil)
 	router.Post("/api/memory/candidates/{id}/promote", service.handlePromoteMemoryCandidate)
 
@@ -496,7 +496,7 @@ func TestHandleRejectMemoryCandidate_RejectsInvalidTransitionAsConflict(t *testi
 		rejectErr: fmt.Errorf("%w: promoted -> rejected", gormdb.ErrInvalidTransition),
 	}
 	snapshotStore := gormdb.NewSnapshotStore(nil)
-	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store, snapshotStore: snapshotStore}
+	service := &Service{candidateQueueReady: true, candidateReviewStoreSeam: store, snapshotStore: snapshotStore}
 	body := []byte(`{"reason":"not durable enough"}`)
 	w, req, router := candidateActionRequest(http.MethodPost, "/api/memory/candidates/42/reject", body)
 	router.Post("/api/memory/candidates/{id}/reject", service.handleRejectMemoryCandidate)
@@ -516,7 +516,7 @@ func TestHandleRejectMemoryCandidate_ContextCanceledAsClientClosed(t *testing.T)
 		rejectErr: context.Canceled,
 	}
 	snapshotStore := gormdb.NewSnapshotStore(nil)
-	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store, snapshotStore: snapshotStore}
+	service := &Service{candidateQueueReady: true, candidateReviewStoreSeam: store, snapshotStore: snapshotStore}
 	w, req, router := candidateActionRequest(http.MethodPost, "/api/memory/candidates/42/reject", nil)
 	router.Post("/api/memory/candidates/{id}/reject", service.handleRejectMemoryCandidate)
 
@@ -534,7 +534,7 @@ func TestHandleRejectMemoryCandidate_DeadlineExceededAsGatewayTimeout(t *testing
 		rejectErr: context.DeadlineExceeded,
 	}
 	snapshotStore := gormdb.NewSnapshotStore(nil)
-	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store, snapshotStore: snapshotStore}
+	service := &Service{candidateQueueReady: true, candidateReviewStoreSeam: store, snapshotStore: snapshotStore}
 	w, req, router := candidateActionRequest(http.MethodPost, "/api/memory/candidates/42/reject", nil)
 	router.Post("/api/memory/candidates/{id}/reject", service.handleRejectMemoryCandidate)
 
@@ -556,7 +556,7 @@ func TestHandleReadMemoryReviewQueue_ReturnsPacketCentricQueueAndSparseMetrics(t
 			Fingerprint:      "abc123",
 		}},
 	}
-	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store}
+	service := &Service{candidateQueueReady: true, candidateReviewStoreSeam: store}
 	req := httptest.NewRequest(http.MethodGet, "/api/memory/review-queue?project=engram&status=pending&limit=5", nil)
 	w := httptest.NewRecorder()
 
@@ -588,7 +588,7 @@ func TestHandleReadMemoryReviewQueue_RiskyOnlyKeepsUnfilteredMetricsAndBacklog(t
 			{ID: 43, Status: models.CandidateStatusPending, SourceSessionID: "sess-43", AffectedProjects: []string{"engram"}, PrivacyScope: "project", Fingerprint: "def456", Confidence: 0.8},
 		},
 	}
-	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store}
+	service := &Service{candidateQueueReady: true, candidateReviewStoreSeam: store}
 	req := httptest.NewRequest(http.MethodGet, "/api/memory/review-queue?project=engram&status=pending&limit=5&risky_only=true", nil)
 	w := httptest.NewRecorder()
 
@@ -613,7 +613,7 @@ func TestHandlePreviewMemoryReviewPacketAction_DoesNotMutate(t *testing.T) {
 			42: {ID: 42, Status: models.CandidateStatusPending, PrivacyScope: "project", AffectedProjects: []string{"engram"}, Fingerprint: "abc123"},
 		},
 	}
-	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store}
+	service := &Service{candidateQueueReady: true, candidateReviewStoreSeam: store}
 	body := []byte(`{"action_type":"suppress"}`)
 	w, req, router := candidateActionRequest(http.MethodPost, "/api/memory/review-packets/candidate:42:abc123/preview", body)
 	router.Post("/api/memory/review-packets/{packetID}/preview", service.handlePreviewMemoryReviewPacketAction)
@@ -643,7 +643,7 @@ func TestHandleApplyMemoryReviewPacketAction_PreserveAndSuppressUseSnapshotBacke
 			promotedMemory: &models.Memory{ID: promotedMemoryID},
 		}
 		snapshotStore := gormdb.NewSnapshotStore(nil)
-		service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store, snapshotStore: snapshotStore}
+		service := &Service{candidateQueueReady: true, candidateReviewStoreSeam: store, snapshotStore: snapshotStore}
 		body := []byte(`{"action_type":" preserve "}`)
 		w, req, router := candidateActionRequest(http.MethodPost, "/api/memory/review-packets/candidate:42:abc123/apply", body)
 		router.Post("/api/memory/review-packets/{packetID}/apply", service.handleApplyMemoryReviewPacketAction)
@@ -674,7 +674,7 @@ func TestHandleApplyMemoryReviewPacketAction_PreserveAndSuppressUseSnapshotBacke
 			},
 		}
 		snapshotStore := gormdb.NewSnapshotStore(nil)
-		service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store, snapshotStore: snapshotStore}
+		service := &Service{candidateQueueReady: true, candidateReviewStoreSeam: store, snapshotStore: snapshotStore}
 		body := []byte(`{"action_type":"suppress","reason":"noise"}`)
 		w, req, router := candidateActionRequest(http.MethodPost, "/api/memory/review-packets/candidate:43:def456/apply", body)
 		router.Post("/api/memory/review-packets/{packetID}/apply", service.handleApplyMemoryReviewPacketAction)
@@ -703,7 +703,7 @@ func TestHandleApplyMemoryReviewPacketAction_RejectsUnsupportedAndStalePackets(t
 				42: {ID: 42, Status: models.CandidateStatusPending, PrivacyScope: "project", AffectedProjects: []string{"engram"}, Fingerprint: "abc123"},
 			},
 		}
-		service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store}
+		service := &Service{candidateQueueReady: true, candidateReviewStoreSeam: store}
 		body := []byte(`{"action_type":"destroy"}`)
 		w, req, router := candidateActionRequest(http.MethodPost, "/api/memory/review-packets/candidate:42:abc123/apply", body)
 		router.Post("/api/memory/review-packets/{packetID}/apply", service.handleApplyMemoryReviewPacketAction)
@@ -722,7 +722,7 @@ func TestHandleApplyMemoryReviewPacketAction_RejectsUnsupportedAndStalePackets(t
 				42: {ID: 42, Status: models.CandidateStatusPending, PrivacyScope: "project", AffectedProjects: []string{"engram"}, Fingerprint: "new456"},
 			},
 		}
-		service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store}
+		service := &Service{candidateQueueReady: true, candidateReviewStoreSeam: store}
 		body := []byte(`{"action_type":"suppress"}`)
 		w, req, router := candidateActionRequest(http.MethodPost, "/api/memory/review-packets/candidate:42:old123/apply", body)
 		router.Post("/api/memory/review-packets/{packetID}/apply", service.handleApplyMemoryReviewPacketAction)
@@ -747,11 +747,11 @@ func TestHandleReadMemoryReviewMetrics_ReturnsGatedAndErrorStatesHonestly(t *tes
 		var metrics reviewpacket.ReviewMetrics
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &metrics))
 		assert.Equal(t, reviewpacket.ReviewStateGated, metrics.State)
-		assert.Contains(t, metrics.SparseReason, candidateQueueFlag)
+		assert.Contains(t, metrics.SparseReason, candidateQueueUnavailable)
 	})
 
 	t.Run("error", func(t *testing.T) {
-		service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: &fakeCandidateReviewStore{listErr: fmt.Errorf("db unavailable")}}
+		service := &Service{candidateQueueReady: true, candidateReviewStoreSeam: &fakeCandidateReviewStore{listErr: fmt.Errorf("db unavailable")}}
 		req := httptest.NewRequest(http.MethodGet, "/api/memory/review-metrics", nil)
 		w := httptest.NewRecorder()
 

@@ -687,8 +687,9 @@ func runKnowledgeReadersHTTP(t *testing.T, db *gorm.DB, sqliteFixture bool) {
 	get("/api/projects", tokenHAP, 403, nil)
 	get("/api/projects", "", 401, nil)
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
-	get(memoryURL+"&limit=500", tokenA, 200, &memoryPage)
-	require.EqualValues(t, 502, memoryPage.Total, "flag-off never disables principal/domain privacy")
+	body = get(memoryURL+"&limit=500", tokenA, 200, &memoryPage)
+	require.EqualValues(t, len(memories), memoryPage.Total, "retired flag cannot expose the extra foreign-workstation private row")
+	require.NotContains(t, body, "decision hidden", "ordinary privacy must hide workstation, principal and domain-owned rows")
 	if sqliteFixture {
 		require.NoError(t, db.Exec("ALTER TABLE memories RENAME TO reader_unavailable_memories").Error)
 		require.NotContains(t, get(memoryURL, tokenA, 500, nil), "SQL")

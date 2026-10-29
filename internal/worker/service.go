@@ -50,6 +50,7 @@ import (
 	"github.com/thebtf/engram/internal/graph"
 	"github.com/thebtf/engram/internal/grpcserver"
 	"github.com/thebtf/engram/internal/injection"
+	"github.com/thebtf/engram/internal/llm"
 	"github.com/thebtf/engram/internal/logbuf"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/principalmemory"
@@ -152,7 +153,7 @@ type Service struct {
 	injectionTracker                    *injection.Tracker
 	injectionLogStore                   *gorm.InjectionLogStore
 	candidateStore                      *gorm.CandidateStore                          // Milestone-F TG4: non-nil when ENGRAM_VNEXT_F_ENABLED=true
-	candidateQueueEnabled               bool                                          // cached at startup; handlers must not read env per request
+	candidateQueueReady                 bool                                          // initialized for the ordinary v7 runtime
 	temporalTruthEnabled                bool                                          // cached at startup; temporal truth REST handlers must not read env per request
 	candidateReviewStoreSeam            candidateReviewStore                          // test seam for REST candidate queue handlers
 	candidateReviewSnapshotStoreSeam    candidateReviewSnapshotStore                  // test seam for candidate pre-action snapshots
@@ -217,6 +218,7 @@ type Service struct {
 	feedbackUpdater                *feedback.Updater
 	segmentStore                   *gorm.SegmentStore
 	embeddingClient                *embedding.Client
+	llmClient                      *llm.Client
 	embeddingStore                 *embedding.Store
 	embeddingRecorder              *embedding.BackfillRecorder
 	rerankClient                   *reranking.Client
@@ -694,7 +696,7 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 	// Cognitive v7 platform: assemble the four CORE primitives and register the
 	// NoOps subsystem set before the Service struct is materialised so the
 	// fields can be assigned in the struct literal below (no nil-window).
-	flagCfg := cognitivecore.LoadFlagConfigFromEnv()
+	flagCfg := cognitivecore.FlagConfig{}
 	cMeter := cognitivecore.NewLocalMeter()
 	cBus := cognitivecore.NewAttentionEventBus(cMeter)
 	cQueue := cognitivecore.NewHintQueue()
@@ -775,27 +777,27 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 	// Assemble the service struct. Fields that require database access are left
 	// nil here and populated by initializeAsync under initMu before ready is set.
 	svc := &Service{
-		version:               version,
-		config:                cfg,
-		sseBroadcaster:        sseBroadcaster,
-		router:                router,
-		ctx:                   ctx,
-		cancel:                cancel,
-		startTime:             time.Now(),
-		updater:               update.New(version, installDir),
-		retrievalStats:        make(map[string]*RetrievalStats),
-		rateLimiter:           rateLimiter,
-		tokenAuth:             tokenAuth,
-		expensiveOpLimiter:    NewExpensiveOperationLimiter(),
-		logBuffer:             logBuffer,
-		backfillTracker:       newBackfillTracker(),
-		cachedObsCounts:       make(map[string]cachedCount),
-		candidateQueueEnabled: candidateQueueEnabledFromEnv(),
-		temporalTruthEnabled:  temporalTruthEnabledFromEnv(),
-		statsCacheTTL:         time.Minute,
-		mcpHealth:             mcp.NewMCPHealth(),
-		eventBus:              &projectevents.Bus{},
-		projectReaperFactory:  defaultProjectReaperFactory,
+		version:              version,
+		config:               cfg,
+		sseBroadcaster:       sseBroadcaster,
+		router:               router,
+		ctx:                  ctx,
+		cancel:               cancel,
+		startTime:            time.Now(),
+		updater:              update.New(version, installDir),
+		retrievalStats:       make(map[string]*RetrievalStats),
+		rateLimiter:          rateLimiter,
+		tokenAuth:            tokenAuth,
+		expensiveOpLimiter:   NewExpensiveOperationLimiter(),
+		logBuffer:            logBuffer,
+		backfillTracker:      newBackfillTracker(),
+		cachedObsCounts:      make(map[string]cachedCount),
+		candidateQueueReady:  true,
+		temporalTruthEnabled: temporalTruthEnabledFromEnv(),
+		statsCacheTTL:        time.Minute,
+		mcpHealth:            mcp.NewMCPHealth(),
+		eventBus:             &projectevents.Bus{},
+		projectReaperFactory: defaultProjectReaperFactory,
 
 		cognitiveRegistry:       cRegistry,
 		cognitiveMeter:          cMeter,
@@ -957,7 +959,7 @@ func (s *Service) initializeAsync() {
 	// Create purge store for Milestone D project-level hard deletion (T008).
 	// Gated behind ENGRAM_VNEXT_ENABLED: purge_project is a vnext action (Milestone D).
 	var purgeStore *gorm.PurgeStore
-	if os.Getenv("ENGRAM_VNEXT_ENABLED") == "true" {
+	{
 		purgeStore = gorm.NewPurgeStore(store)
 	}
 
@@ -1008,7 +1010,7 @@ func (s *Service) initializeAsync() {
 	// Wire crystallization candidate storage only when the candidate flag is enabled.
 	// The dream cycle additionally checks both flags and writer availability before
 	// it reads transcripts or constructs an extractor.
-	if os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true" {
+	{
 		candidateStore := gorm.NewCandidateStore(store.GetDB(), auditStore)
 		s.SetCandidateStore(candidateStore)
 
@@ -1048,8 +1050,6 @@ func (s *Service) initializeAsync() {
 	s.initMu.Unlock()
 	if s.tokenAuth != nil {
 		s.tokenAuth.SetAuthStores(userStore, authSessionStore)
-		cfg := config.Get()
-		s.tokenAuth.SetAuthentikConfig(cfg.AuthentikEnabled, cfg.AuthentikAutoProvision, cfg.AuthentikTrustedProxies)
 	}
 
 	// Start buffered token stats flusher (batches DB writes every 5s)
@@ -1150,7 +1150,7 @@ func (s *Service) initializeAsync() {
 
 	// Wire purge store for the purge_project admin action (Milestone D T008).
 	// Gated behind ENGRAM_VNEXT_ENABLED: mirrors wireVnextStores pattern.
-	if os.Getenv("ENGRAM_VNEXT_ENABLED") == "true" {
+	{
 		mcpServer.SetPurgeStore(purgeStore)
 	}
 
@@ -1201,7 +1201,7 @@ func (s *Service) initializeAsync() {
 		mcpServer.SetBulkFacade(bulkFacade)
 	}
 
-	// CR-2/CR-3 (#259): the embedder and reranker resolve their config with env-first
+	// Provider clients resolve their config once at startup with env-first
 	// precedence backed by the settings-store. Env wins when set; otherwise the store value;
 	// otherwise the client's default. Non-secret config (URL, model) is read as plaintext;
 	// secret config (API keys) is stored encrypted and decrypted in-process via the vault
@@ -1220,6 +1220,14 @@ func (s *Service) initializeAsync() {
 	// never clobbers an operator-set value. Lets an operator migrate off env vars at leisure.
 	// Runs before the clients init below so a freshly-seeded value is available this boot.
 	migrateEnvToSettingsStore(s.ctx, settingsStore, s.getVault)
+
+	llmClient, llmErr := llm.NewClientWithSettings(s.ctx, settingsRes)
+	if llmErr != nil && !errors.Is(llmErr, llm.ErrLLMDisabled) {
+		log.Warn().Err(llmErr).Msg("LLM client configuration unavailable")
+	}
+	s.initMu.Lock()
+	s.llmClient = llmClient
+	s.initMu.Unlock()
 
 	// Initialize embedding client and store (optional — disabled if ENGRAM_EMBEDDING_URL unset).
 	var uciEmbeddingClient *embedding.Client
@@ -1408,7 +1416,7 @@ func (s *Service) initializeAsync() {
 	// Trigger conditions per T014 AC: >=10 new memories since last cycle (tracked
 	// via watermark with CountActiveSince) AND >=4h idle (no HTTP/MCP requests).
 	// See sleep_cycle.go for implementation details.
-	if os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true" {
+	{
 		s.startSleepCycle(s.ctx)
 	}
 
@@ -1527,13 +1535,6 @@ func (s *Service) applyConfigReload() (*config.Config, []string, error) {
 	s.initMu.Unlock()
 
 	return newCfg, changed, nil
-}
-
-// isCrystallizationEnabled reports whether the crystallization pipeline is
-// active for this process. Reads ENGRAM_CRYSTALLIZATION_ENABLED at call time
-// so that test code can override it via t.Setenv without restart.
-func isCrystallizationEnabled() bool {
-	return os.Getenv("ENGRAM_CRYSTALLIZATION_ENABLED") == "true"
 }
 
 // setInitError stores a fatal startup error and logs it. Once set, the error

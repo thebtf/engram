@@ -2083,10 +2083,6 @@
       "restartRequired": "Изменение ожидает restart: это ещё не applied."
     },
     "switches": {
-      "injectUnified": {
-        "title": "Единая инъекция памяти",
-        "desc": "Сохраняется через PATCH /api/config; effective только после restart receipt."
-      },
       "telemetry": {
         "title": "Telemetry",
         "desc": "Текущее состояние telemetry_enabled из runtime config; writable seam пока не открыт."

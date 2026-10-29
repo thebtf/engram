@@ -107,11 +107,12 @@ comments that mention a managed image key. Every non-comment occurrence of a
 managed image key must still be one unique bare digest assignment.
 
 It copies the selected dotenv file to a mode-`0600` snapshot and treats that
-snapshot as the entire Compose interpolation boundary. Before any Docker call it
-finds every `${VAR}` reference in `deploy/docker-compose.runtime.yml`, rejects a
-different inherited value for a snapshot-defined key, and unsets every referenced
-key—including keys absent from the snapshot—so the parent process cannot inject
-configuration. It also rejects `COMPOSE_FILE`, `COMPOSE_PATH_SEPARATOR`,
+snapshot as the entire Compose environment boundary. Before any Docker call it
+finds every `${VAR}` reference and valueless `environment:` mapping entry in
+`deploy/docker-compose.runtime.yml`, rejects a different inherited value for a
+snapshot-defined key, and unsets every consumed key—including keys absent from
+the snapshot—so the parent process cannot inject configuration. It also rejects
+`COMPOSE_FILE`, `COMPOSE_PATH_SEPARATOR`,
 `COMPOSE_PROJECT_NAME`, `COMPOSE_PROFILES`, `COMPOSE_ENV_FILES`,
 `COMPOSE_DISABLE_ENV_FILE`, and `COMPOSE_PROJECT_DIRECTORY`; these can select a
 different Compose source, project, profile, or dotenv source. Docker client
@@ -125,6 +126,16 @@ lock directory, and retry. While it owns the lock, the wrapper runs
 `docker compose config --quiet` to fully interpolate, resolve, and validate
 without printing resolved configuration, then runs `pull` and `up` with the same
 sanitized environment and frozen snapshot.
+
+Protected dotenv entries must use one canonical `KEY=value` assignment: no
+leading whitespace, spaces around `=`, `export` prefix, colon separator or
+duplicate definitions. Values may be plain single-line literals without
+whitespace, quotes, backslashes or `$`, or single-quoted single-line literals
+without quote/backslash escapes. For example, `ENGRAM_LLM_API_KEY='literal$key'`
+preserves the dollar byte without expansion. Double-quoted, interpolated,
+multiline and inline-comment forms are unsupported for these entries and fail
+before Compose. Inherited-value comparisons use the effective unquoted literal;
+the snapshot itself is never rewritten or evaluated as shell code.
 
 The root `docker-compose.yml` uses the same required image variables and also
 contains local build definitions. The image acceptance gate sets them to exact

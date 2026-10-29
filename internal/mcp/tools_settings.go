@@ -15,8 +15,8 @@ import (
 )
 
 // handleSettingsConsolidated routes settings tool actions. The settings-store holds
-// server-global model configuration (reranker/embedder URL, model, API key) read by the
-// server on the recall/init path (#259). Writes (set, delete) are admin-gated and change
+// server-global provider configuration (reranker/embedder/LLM and embedding request
+// dimensions) captured at startup. Writes (set, delete) are admin-gated and change
 // behavior for every consumer; reads (get, list) are open to any authenticated identity but
 // secret values are NEVER returned in plaintext — the server decrypts them in-process.
 func (s *Server) handleSettingsConsolidated(ctx context.Context, args json.RawMessage) (string, error) {
@@ -159,7 +159,7 @@ func (s *Server) handleSetSetting(ctx context.Context, m map[string]any) (string
 
 // handleGetSetting returns one setting. A plain setting returns its value; a secret setting
 // is REDACTED — value is never returned, only {key, encrypted, value_set}. Secrets reach the
-// server's reranker/embedder via in-process decryption, not through this management tool.
+// server's provider clients via in-process decryption, not through this management tool.
 func (s *Server) handleGetSetting(ctx context.Context, m map[string]any) (string, error) {
 	key := strings.TrimSpace(coerceString(m["key"], ""))
 	if key == "" {

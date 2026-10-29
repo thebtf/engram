@@ -76,7 +76,7 @@ func TestWireVnextStores_GraphAdvertisedAfterWiring(t *testing.T) {
 }
 
 // TestWireVnextStores_HistoricalGraphReadersSurviveLifecycleFlagOff verifies
-// that graph readers do not inherit lifecycle's unrelated startup flag.
+// that retired startup flags cannot disable either wired reader.
 func TestWireVnextStores_HistoricalGraphReadersSurviveLifecycleFlagOff(t *testing.T) {
 	t.Setenv("ENGRAM_LIFECYCLE_ENABLED", "false")
 
@@ -86,8 +86,8 @@ func TestWireVnextStores_HistoricalGraphReadersSurviveLifecycleFlagOff(t *testin
 	wireVnextStores(srv, &gormdb.PromotionStore{}, &graph.Store{}, nil, nil)
 
 	names := buildMCPToolNames(srv)
-	assert.NotContains(t, names, "lifecycle",
-		"lifecycle must not appear when ENGRAM_LIFECYCLE_ENABLED=false")
+	assert.Contains(t, names, "lifecycle",
+		"lifecycle remains available when its stores are wired")
 	assert.Contains(t, names, "graph",
 		"historical graph readers must remain advertised when their store is wired")
 }

@@ -4,7 +4,7 @@ package mcp
 //
 // Design decisions (Milestone D T002/T003):
 //   - Audit calls happen at the handler layer (not the store layer) per the task contract.
-//   - All helpers are gated on ENGRAM_VNEXT_ENABLED and nil-guarded.
+//   - All helpers preserve nil-writer guards.
 //   - All writes are fire-and-forget via runAuditAsync, which adds a 10s timeout,
 //     panic recovery, and structured error logging so a slow/panicking DB write never
 //     crashes the process or leaks goroutines (Finding 4).
@@ -14,7 +14,6 @@ package mcp
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -38,11 +37,6 @@ func (s *Server) effectiveAuditWriter() auditWriter {
 		return s.auditStore
 	}
 	return nil
-}
-
-// isAuditEnabled returns true when ENGRAM_VNEXT_ENABLED="true".
-func isAuditEnabled() bool {
-	return os.Getenv("ENGRAM_VNEXT_ENABLED") == "true"
 }
 
 // runAuditAsync runs fn in a goroutine with a 10-second detached context,
@@ -90,9 +84,6 @@ func marshalState(m *models.Memory) *json.RawMessage {
 // logAuditCreate emits a create audit event after a successful memory creation.
 // Fire-and-forget via runAuditAsync (timeout + panic recovery).
 func logAuditCreate(ctx context.Context, s *Server, created *models.Memory, actor string) {
-	if !isAuditEnabled() {
-		return
-	}
 	aw := s.effectiveAuditWriter()
 	if aw == nil {
 		return
@@ -115,9 +106,6 @@ func logAuditCreate(ctx context.Context, s *Server, created *models.Memory, acto
 
 // logAuditEdit emits an update audit event after a successful memory edit.
 func logAuditEdit(ctx context.Context, s *Server, before, after *models.Memory, actor string) {
-	if !isAuditEnabled() {
-		return
-	}
 	aw := s.effectiveAuditWriter()
 	if aw == nil {
 		return
@@ -140,9 +128,6 @@ func logAuditEdit(ctx context.Context, s *Server, before, after *models.Memory, 
 
 // logAuditDelete emits a delete audit event after a successful memory deletion.
 func logAuditDelete(ctx context.Context, s *Server, mem *models.Memory, actor string) {
-	if !isAuditEnabled() {
-		return
-	}
 	aw := s.effectiveAuditWriter()
 	if aw == nil {
 		return
@@ -164,9 +149,6 @@ func logAuditDelete(ctx context.Context, s *Server, mem *models.Memory, actor st
 // logAuditGeneric emits an audit event with a caller-supplied action string.
 // Used for write-lint-specific actions such as "legacy_force_write" (T035).
 func logAuditGeneric(ctx context.Context, s *Server, mem *models.Memory, actor, action string) {
-	if !isAuditEnabled() {
-		return
-	}
 	aw := s.effectiveAuditWriter()
 	if aw == nil {
 		return
@@ -187,9 +169,6 @@ func logAuditGeneric(ctx context.Context, s *Server, mem *models.Memory, actor, 
 
 // logAuditSupersede emits a supersede audit event when a memory is superseded.
 func logAuditSupersede(ctx context.Context, s *Server, superseded *models.Memory, actor string) {
-	if !isAuditEnabled() {
-		return
-	}
 	aw := s.effectiveAuditWriter()
 	if aw == nil {
 		return

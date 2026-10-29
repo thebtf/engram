@@ -20,7 +20,7 @@ import (
 )
 
 func TestHandleGetFlagsReturnsReadOnlyRuntimeSnapshot(t *testing.T) {
-	t.Setenv("ENGRAM_VNEXT_ENABLED", "true")
+	t.Setenv("ENGRAM_VNEXT_ENABLED", "false") // Retired overrides cannot disable built-in capabilities.
 	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
 	t.Setenv("ENGRAM_V7_PLUG_ENABLED", "true")
 	t.Setenv("ENGRAM_V7_S2_METAMEM", "true")
@@ -45,13 +45,12 @@ func TestHandleGetFlagsReturnsReadOnlyRuntimeSnapshot(t *testing.T) {
 	assert.True(t, response.Apply["supported"].(bool))
 	assert.Equal(t, "PATCH /api/config", response.Apply["endpoint"])
 	assert.Contains(t, response.Apply["fields"], "features.enforce_source_project")
-	assert.Contains(t, response.Apply["fields"], "memory.inject_unified")
+	assert.NotContains(t, response.Apply["fields"], "memory.inject_unified")
 	assert.True(t, response.Flags["ENGRAM_VNEXT_ENABLED"])
 	assert.NotContains(t, response.Flags, "ENGRAM_GRAPH_ENABLED")
 	assert.True(t, response.Flags["ENGRAM_CODE_INTEL_ENABLED"])
-	assert.True(t, response.Flags["ENGRAM_V7_PLUG_ENABLED"])
-	assert.False(t, response.Flags["ENGRAM_V7_S1_STATE"])
-	assert.True(t, response.Flags["ENGRAM_V7_S2_METAMEM"])
+	assert.NotContains(t, response.Flags, "ENGRAM_V7_PLUG_ENABLED")
+	assert.NotContains(t, response.Flags, "ENGRAM_V7_S2_METAMEM")
 	assert.NotContains(t, response.Flags, "ENGRAM_AUTH_SKIP_LOCAL")
 	assert.NotContains(t, response.Flags, "ENGRAM_TELEMETRY_ENABLED")
 	assert.True(t, response.Flags["ENGRAM_ENFORCE_SOURCE_PROJECT"])
@@ -67,9 +66,9 @@ func TestHandleGetFlagsReturnsReadOnlyRuntimeSnapshot(t *testing.T) {
 			break
 		}
 	}
-	assert.Equal(t, "env", vnextItem.Source)
-	assert.Equal(t, "vnext", vnextItem.Category)
-	assert.True(t, vnextItem.RestartRequiredToChange)
+	assert.Equal(t, "runtime", vnextItem.Source)
+	assert.Equal(t, "memory", vnextItem.Category)
+	assert.False(t, vnextItem.RestartRequiredToChange)
 }
 
 func TestHandleGetFlags_ConfigUnavailable(t *testing.T) {
@@ -130,15 +129,13 @@ func TestHandlePatchConfig_AdminAppliesAllowlistedSettings(t *testing.T) {
 	t.Setenv("USERPROFILE", tempDir)
 	require.NoError(t, config.SaveSettings(map[string]any{
 		"ENGRAM_ENFORCE_SOURCE_PROJECT": true,
-		"ENGRAM_INJECT_UNIFIED":         true,
 	}))
 	cfg, _, err := config.Reload()
 	require.NoError(t, err)
 
 	svc := &Service{config: cfg}
 	body := bytes.NewBufferString(`{
-		"features": {"enforce_source_project": false},
-		"memory": {"inject_unified": false}
+		"features": {"enforce_source_project": false}
 	}`)
 	req := httptest.NewRequest(http.MethodPatch, "/api/config", body).
 		WithContext(auth.WithIdentity(context.Background(), auth.Admin()))
@@ -152,29 +149,21 @@ func TestHandlePatchConfig_AdminAppliesAllowlistedSettings(t *testing.T) {
 	assert.Equal(t, true, response["success"])
 	assert.Equal(t, true, response["applied"])
 	assert.Equal(t, false, response["audit_logged"])
-	assert.Equal(t, true, response["restart_required"])
+	assert.Equal(t, false, response["restart_required"])
 	assert.Contains(t, response["changed"], "enforce_source_project")
-	assert.Contains(t, response["changed"], "inject_unified (requires restart)")
-	assert.Contains(t, response["restart_required_fields"], "memory.inject_unified")
 	responseConfig := response["config"].(map[string]any)
 	lifecycle := responseConfig["lifecycle"].(map[string]any)
-	assert.Equal(t, true, lifecycle["restart_required"])
-	pendingRestart := lifecycle["pending_restart"].([]any)
-	require.Len(t, pendingRestart, 1)
-	pendingInject := pendingRestart[0].(map[string]any)
-	assert.Equal(t, "memory.inject_unified", pendingInject["field"])
-	assert.Equal(t, true, pendingInject["effective"])
-	assert.Equal(t, false, pendingInject["desired"])
+	assert.Equal(t, false, lifecycle["restart_required"])
+	assert.Empty(t, lifecycle["pending_restart"])
 
 	svc.initMu.RLock()
 	require.NotNil(t, svc.config)
 	assert.False(t, svc.config.EnforceSourceProject)
-	assert.True(t, svc.config.InjectUnified)
 	svc.initMu.RUnlock()
 
 	persisted, err := config.Load()
 	require.NoError(t, err)
-	assert.False(t, persisted.InjectUnified)
+	assert.False(t, persisted.EnforceSourceProject)
 
 	getReq := httptest.NewRequest(http.MethodGet, "/api/config", nil)
 	getW := httptest.NewRecorder()
@@ -184,13 +173,8 @@ func TestHandlePatchConfig_AdminAppliesAllowlistedSettings(t *testing.T) {
 	var getResponse map[string]any
 	require.NoError(t, json.Unmarshal(getW.Body.Bytes(), &getResponse))
 	getLifecycle := getResponse["lifecycle"].(map[string]any)
-	assert.Equal(t, true, getLifecycle["restart_required"])
-	getPendingRestart := getLifecycle["pending_restart"].([]any)
-	require.Len(t, getPendingRestart, 1)
-	getPendingInject := getPendingRestart[0].(map[string]any)
-	assert.Equal(t, "memory.inject_unified", getPendingInject["field"])
-	assert.Equal(t, true, getPendingInject["effective"])
-	assert.Equal(t, false, getPendingInject["desired"])
+	assert.Equal(t, false, getLifecycle["restart_required"])
+	assert.Empty(t, getLifecycle["pending_restart"])
 }
 
 func TestHandlePatchConfig_AuditLogsWhenStoreAvailable(t *testing.T) {
@@ -294,4 +278,14 @@ func TestHandlePatchConfig_AdminRequired(t *testing.T) {
 	svc.handlePatchConfig(w, req)
 
 	require.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+func TestHandlePatchConfig_RejectsRetiredInjectionControlWithoutApplyingSibling(t *testing.T) {
+	svc := &Service{config: config.Default()}
+	req := httptest.NewRequest(http.MethodPatch, "/api/config", bytes.NewBufferString(`{"features":{"enforce_source_project":false},"memory":{"inject_unified":false}}`)).WithContext(auth.WithIdentity(context.Background(), auth.Admin()))
+	w := httptest.NewRecorder()
+	svc.handlePatchConfig(w, req)
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	assert.True(t, svc.config.EnforceSourceProject, "unknown retired control must reject the whole request before mutation")
+	assert.Equal(t, true, buildConfigResponse(svc.config)["memory"].(map[string]any)["inject_unified"])
 }

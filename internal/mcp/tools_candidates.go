@@ -64,12 +64,12 @@ func requireCandidateReviewSnapshot(operation string, snapshot *models.BulkOpSna
 }
 
 // candidateTools returns crystallization candidate and CR-008 review-loop MCP tool definitions.
-// Only registered when ENGRAM_VNEXT_F_ENABLED=true.
+// Registered when the candidate store is available.
 func candidateTools() []Tool {
 	tools := []Tool{
 		{
 			Name:        "list_candidates",
-			Description: "List crystallization candidates. Requires ENGRAM_VNEXT_F_ENABLED=true. Returns candidates filtered by project and optional status. Use promote_candidate / reject_candidate to act on results.",
+			Description: "List crystallization candidates. Returns candidates filtered by project and optional status. Use promote_candidate / reject_candidate to act on results.",
 			tier:        tierCore,
 			InputSchema: map[string]any{
 				"type":     "object",
@@ -95,7 +95,7 @@ func candidateTools() []Tool {
 		},
 		{
 			Name:        "get_candidate",
-			Description: "Read one crystallization candidate review packet by id. Requires ENGRAM_VNEXT_F_ENABLED=true. Returns the same packet-centric payload shape used by list_candidates.",
+			Description: "Read one crystallization candidate review packet by id. Returns the same packet-centric payload shape used by list_candidates.",
 			tier:        tierCore,
 			InputSchema: map[string]any{
 				"type":     "object",
@@ -110,7 +110,7 @@ func candidateTools() []Tool {
 		},
 		{
 			Name:        "promote_candidate",
-			Description: "Promote a crystallization candidate to a full memory (epistemic_type=decision). Requires ENGRAM_VNEXT_F_ENABLED=true. Transitions the candidate to status='promoted' and creates a new memory row with a back-reference to the candidate.",
+			Description: "Promote a crystallization candidate to a full memory (epistemic_type=decision). Transitions the candidate to status='promoted' and creates a new memory row with a back-reference to the candidate.",
 			tier:        tierCore,
 			InputSchema: map[string]any{
 				"type":     "object",
@@ -129,7 +129,7 @@ func candidateTools() []Tool {
 		},
 		{
 			Name:        "reject_candidate",
-			Description: "Reject a crystallization candidate, marking it as not suitable for promotion. Requires ENGRAM_VNEXT_F_ENABLED=true. Transitions the candidate to status='rejected'.",
+			Description: "Reject a crystallization candidate, marking it as not suitable for promotion. Transitions the candidate to status='rejected'.",
 			tier:        tierCore,
 			InputSchema: map[string]any{
 				"type":     "object",
@@ -148,7 +148,7 @@ func candidateTools() []Tool {
 		},
 		{
 			Name:        "supersede_candidate",
-			Description: "Mark a crystallization candidate as superseded by a newer candidate. Requires ENGRAM_VNEXT_F_ENABLED=true. Transitions the candidate to status='superseded'.",
+			Description: "Mark a crystallization candidate as superseded by a newer candidate. Transitions the candidate to status='superseded'.",
 			tier:        tierCore,
 			InputSchema: map[string]any{
 				"type":     "object",
@@ -167,8 +167,8 @@ func candidateTools() []Tool {
 
 // handleListCandidates implements the list_candidates MCP tool.
 func (s *Server) handleListCandidates(ctx context.Context, args json.RawMessage) (string, error) {
-	if !vnextFEnabled() || s.candidateStore == nil {
-		return "", fmt.Errorf("list_candidates requires ENGRAM_VNEXT_F_ENABLED=true")
+	if s.candidateStore == nil {
+		return "", fmt.Errorf("candidate store not available")
 	}
 	m, err := parseArgs(args)
 	if err != nil {
@@ -210,8 +210,8 @@ func (s *Server) handleListCandidates(ctx context.Context, args json.RawMessage)
 
 // handleGetCandidate implements the get_candidate MCP tool.
 func (s *Server) handleGetCandidate(ctx context.Context, args json.RawMessage) (string, error) {
-	if !vnextFEnabled() || s.candidateStore == nil {
-		return "", fmt.Errorf("get_candidate requires ENGRAM_VNEXT_F_ENABLED=true")
+	if s.candidateStore == nil {
+		return "", fmt.Errorf("candidate store not available")
 	}
 	m, err := parseArgs(args)
 	if err != nil {
@@ -244,9 +244,6 @@ func (s *Server) handleGetCandidate(ctx context.Context, args json.RawMessage) (
 // It creates a memory with epistemic_type=decision from the candidate content,
 // then transitions the candidate to status='promoted' with a back-reference to the new memory.
 func (s *Server) handlePromoteCandidate(ctx context.Context, args json.RawMessage) (string, error) {
-	if !vnextFEnabled() {
-		return "", fmt.Errorf("promote_candidate requires ENGRAM_VNEXT_F_ENABLED=true")
-	}
 	m, err := parseArgs(args)
 	if err != nil {
 		return "", err
@@ -359,8 +356,8 @@ func (s *Server) handlePromoteCandidate(ctx context.Context, args json.RawMessag
 
 // handleRejectCandidate implements the reject_candidate MCP tool.
 func (s *Server) handleRejectCandidate(ctx context.Context, args json.RawMessage) (string, error) {
-	if !vnextFEnabled() || s.candidateStore == nil {
-		return "", fmt.Errorf("reject_candidate requires ENGRAM_VNEXT_F_ENABLED=true")
+	if s.candidateStore == nil {
+		return "", fmt.Errorf("candidate store not available")
 	}
 	m, err := parseArgs(args)
 	if err != nil {
@@ -419,8 +416,8 @@ func (s *Server) handleRejectCandidate(ctx context.Context, args json.RawMessage
 
 // handleSupersedeCandidate implements the supersede_candidate MCP tool.
 func (s *Server) handleSupersedeCandidate(ctx context.Context, args json.RawMessage) (string, error) {
-	if !vnextFEnabled() || s.candidateStore == nil {
-		return "", fmt.Errorf("supersede_candidate requires ENGRAM_VNEXT_F_ENABLED=true")
+	if s.candidateStore == nil {
+		return "", fmt.Errorf("candidate store not available")
 	}
 	m, err := parseArgs(args)
 	if err != nil {

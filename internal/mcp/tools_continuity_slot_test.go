@@ -443,34 +443,19 @@ func TestContinuitySlot_ClearUsesLockedReplacementAuthority(t *testing.T) {
 	assert.Equal(t, bob.ID, slot.MemoryID)
 }
 
-func TestContinuitySlot_HandlerFlagsAndDiscovery(t *testing.T) {
+func TestContinuitySlot_DiscoveryWithoutStartupFlagsRetainsAuthorization(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_ENABLED", "false")
+	t.Setenv("ENGRAM_CONTINUITY_SLOT_ENABLED", "false")
 	ctx := ContextWithProject(context.Background(), "canonical-project")
 	args := json.RawMessage(`{"action":"clear","project":"canonical-project"}`)
-
-	t.Run("continuity flag off", func(t *testing.T) {
-		t.Setenv("ENGRAM_VNEXT_ENABLED", "true")
-		t.Setenv("ENGRAM_CONTINUITY_SLOT_ENABLED", "false")
-		_, err := NewServer(ServerOptions{Version: "test"}).handleContinuitySlot(ctx, args)
-		require.ErrorContains(t, err, "ENGRAM_CONTINUITY_SLOT_ENABLED=true")
-	})
-	t.Run("vnext flag off", func(t *testing.T) {
-		t.Setenv("ENGRAM_VNEXT_ENABLED", "false")
-		t.Setenv("ENGRAM_CONTINUITY_SLOT_ENABLED", "true")
-		_, err := NewServer(ServerOptions{Version: "test"}).handleContinuitySlot(ctx, args)
-		require.ErrorContains(t, err, "ENGRAM_VNEXT_ENABLED=true")
-	})
-	t.Run("discovery requires flags and stores", func(t *testing.T) {
-		t.Setenv("ENGRAM_VNEXT_ENABLED", "true")
-		t.Setenv("ENGRAM_CONTINUITY_SLOT_ENABLED", "true")
-		srv := NewServer(ServerOptions{Version: "test"})
-		srv.SetMemoryStore(&dbgorm.MemoryStore{})
-		srv.SetContinuitySlotStore(&dbgorm.ContinuitySlotStore{})
-		srv.SetAuditStore(&dbgorm.AuditStore{})
-		assert.True(t, hasContinuitySlotTool(srv.ListTools()))
-
-		t.Setenv("ENGRAM_CONTINUITY_SLOT_ENABLED", "false")
-		assert.False(t, hasContinuitySlotTool(srv.ListTools()))
-	})
+	srv := NewServer(ServerOptions{Version: "test"})
+	_, err := srv.handleContinuitySlot(ctx, args)
+	require.EqualError(t, err, continuitySlotAuthorizationError)
+	assert.False(t, hasContinuitySlotTool(srv.ListTools()), "unwired stores must not advertise a usable tool")
+	srv.SetMemoryStore(&dbgorm.MemoryStore{})
+	srv.SetContinuitySlotStore(&dbgorm.ContinuitySlotStore{})
+	srv.SetAuditStore(&dbgorm.AuditStore{})
+	assert.True(t, hasContinuitySlotTool(srv.ListTools()))
 }
 
 // TestContinuitySlot_SetWaitsForPurgeLateCreatedTarget proves that a set

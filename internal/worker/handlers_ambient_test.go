@@ -310,7 +310,7 @@ func TestS3AmbientCandidates_DrainsQueuedFallbackHintsAfterSuccessfulHookDeliver
 	require.Empty(t, svc.cognitiveQueue.Drain("session-s3-queue-drain", 3))
 }
 
-func TestS3AmbientCandidates_EmptyHookDeliveryPreservesQueuedFallbackHintsForMCPPoll(t *testing.T) {
+func TestS3AmbientCandidates_EmptyHookAndDeferredPollPreserveQueuedHints(t *testing.T) {
 	t.Setenv("ENGRAM_V7_PLUG_ENABLED", "true")
 	t.Setenv("ENGRAM_V7_S3_AMBIENT", "true")
 
@@ -337,7 +337,9 @@ func TestS3AmbientCandidates_EmptyHookDeliveryPreservesQueuedFallbackHintsForMCP
 	require.Empty(t, payload.AdditionalContext, "empty same-turn hook delivery must not synthesize prompt context")
 
 	fallback := pollAmbientHintsViaMCP(t, svc.cognitiveQueue, "session-s3-empty-hook")
-	require.Len(t, fallback.Hints, 1, "empty same-turn hook delivery must not drain queued fallback hints before MCP polling can read them")
-	require.Equal(t, "queued-after-empty-hook", fallback.Hints[0].ID)
-	require.Equal(t, "Queued fallback survives empty hook", fallback.Hints[0].Title)
+	require.Empty(t, fallback.Hints, "deferred MCP polling must remain unavailable")
+	queued := svc.cognitiveQueue.Drain("session-s3-empty-hook", 3)
+	require.Len(t, queued, 1, "empty hook delivery and deferred polling must not consume queued owner data")
+	require.Equal(t, "queued-after-empty-hook", queued[0].ID)
+	require.Equal(t, "Queued fallback survives empty hook", queued[0].Title)
 }

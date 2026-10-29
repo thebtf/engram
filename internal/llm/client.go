@@ -14,7 +14,7 @@ import (
 )
 
 // ErrLLMDisabled is returned when no LLM URL is configured.
-var ErrLLMDisabled = fmt.Errorf("llm: disabled (ENGRAM_LLM_URL not set)")
+var ErrLLMDisabled = fmt.Errorf("llm: disabled (LLM URL not configured)")
 
 // Completer is the interface satisfied by *Client. It allows callers to depend
 // on an interface rather than the concrete type, enabling straightforward test
@@ -51,37 +51,75 @@ func normalizeBaseURL(raw string) string {
 
 // Client communicates with an OpenAI-compatible /v1/chat/completions endpoint.
 type Client struct {
-	baseURL    string
-	model      string
-	apiKey     string
-	httpClient *http.Client
+	baseURL             string
+	model               string
+	apiKey              string
+	configurationSource string
+	httpClient          *http.Client
 }
 
-// NewClient creates a Client from environment variables.
-// Returns ErrLLMDisabled if ENGRAM_LLM_URL is empty.
-//
-// When ENGRAM_LLM_API_KEY is set, requests carry an
-// "Authorization: Bearer <key>" header. When it is empty, no Authorization
-// header is sent — supporting key-less endpoints such as a LAN LiteLLM or
-// Ollama proxy on a trusted network.
+// SettingsResolver provides the existing server-global model settings.
+type SettingsResolver interface {
+	Get(context.Context, string) (string, bool)
+}
+
+const (
+	SettingKeyURL    = "llm.url"
+	SettingKeyModel  = "llm.model"
+	SettingKeyAPIKey = "llm.api_key"
+)
+
+// NewClient retains the environment-only constructor for existing callers.
 func NewClient() (*Client, error) {
-	rawURL := os.Getenv("ENGRAM_LLM_URL")
+	return NewClientWithSettings(context.Background(), nil)
+}
+
+// NewClientWithSettings snapshots ENV, then stored settings, then existing defaults.
+// Constructing a client does not contact the provider.
+func NewClientWithSettings(ctx context.Context, resolver SettingsResolver) (*Client, error) {
+	rawURL := resolveSetting(ctx, resolver, "ENGRAM_LLM_URL", SettingKeyURL)
 	if rawURL == "" {
 		return nil, ErrLLMDisabled
 	}
 	baseURL := normalizeBaseURL(rawURL)
-	model := os.Getenv("ENGRAM_LLM_MODEL")
+	model := resolveSetting(ctx, resolver, "ENGRAM_LLM_MODEL", SettingKeyModel)
 	if model == "" {
 		model = "chat-default"
 	}
+	source := "settings"
+	if os.Getenv("ENGRAM_LLM_URL") != "" {
+		source = "env"
+	}
 	return &Client{
-		baseURL: baseURL,
-		model:   model,
-		apiKey:  os.Getenv("ENGRAM_LLM_API_KEY"),
+		baseURL:             baseURL,
+		model:               model,
+		apiKey:              resolveSetting(ctx, resolver, "ENGRAM_LLM_API_KEY", SettingKeyAPIKey),
+		configurationSource: source,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
 	}, nil
+}
+
+// Model returns the model captured when the client was constructed.
+func (c *Client) Model() string { return c.model }
+
+// ConfigurationSource reports the URL selection layer captured at startup.
+func (c *Client) ConfigurationSource() string { return c.configurationSource }
+
+// HasAPIKey reports effective key presence without exposing its value.
+func (c *Client) HasAPIKey() bool { return c.apiKey != "" }
+
+func resolveSetting(ctx context.Context, resolver SettingsResolver, envKey, settingKey string) string {
+	if value := os.Getenv(envKey); value != "" {
+		return value
+	}
+	if resolver != nil {
+		if value, ok := resolver.Get(ctx, settingKey); ok {
+			return value
+		}
+	}
+	return ""
 }
 
 // chatRequest is the OpenAI-compatible request body for chat completions.

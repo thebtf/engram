@@ -10,7 +10,7 @@ import (
 	cognitivecore "github.com/thebtf/engram/internal/cognitive/core"
 )
 
-func TestHandleRequest_GetAmbientHintsDispatchesThroughToolsCall(t *testing.T) {
+func TestHandleRequest_GetAmbientHintsDeferredPreservesQueue(t *testing.T) {
 	setS3AmbientFlags(t, true, true)
 	queue := cognitivecore.NewHintQueue()
 	seedAmbientHintQueue(t, queue, "session-s3-dispatch",
@@ -44,9 +44,11 @@ func TestHandleRequest_GetAmbientHintsDispatchesThroughToolsCall(t *testing.T) {
 	require.True(t, ok)
 
 	payload := decodeAmbientHintsToolResponse(t, text)
-	require.Len(t, payload.Hints, 1)
-	require.Equal(t, "dispatch-1", payload.Hints[0].ID)
-	require.Equal(t, "Dispatch should reach get_ambient_hints", payload.Hints[0].Title)
+	require.Empty(t, payload.Hints, "retired startup flags must not enable deferred S3 delivery")
+	queued := queue.Drain("session-s3-dispatch", 3)
+	require.Len(t, queued, 1, "unavailable delivery must not consume queued owner data")
+	require.Equal(t, "dispatch-1", queued[0].ID)
+	require.Equal(t, "Dispatch should reach get_ambient_hints", queued[0].Title)
 }
 
 func TestHandleRequest_GetAmbientHintsUnknownToolRegressionGuard(t *testing.T) {

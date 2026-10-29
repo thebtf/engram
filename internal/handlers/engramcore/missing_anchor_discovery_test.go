@@ -89,7 +89,7 @@ func TestToolsList_ProjectStateDoesNotFilterAuthenticatedCatalog(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			dispatcher, mod, project := buildV3ContractDispatcher(t, listener.Addr().String())
+			dispatcher, _, project := buildV3ContractDispatcher(t, listener.Addr().String())
 			project.Cwd = root
 			project.Env[config.EnvWorkstationToken] = token
 			if state == "unauthenticated" {
@@ -103,7 +103,7 @@ func TestToolsList_ProjectStateDoesNotFilterAuthenticatedCatalog(t *testing.T) {
 				assertToolsListServiceUnavailable(t, response)
 			} else {
 				var got struct {
-					Error any `json:"error"`
+					Error  any `json:"error"`
 					Result struct {
 						Tools []struct {
 							Name        string          `json:"name"`
@@ -136,9 +136,6 @@ func TestToolsList_ProjectStateDoesNotFilterAuthenticatedCatalog(t *testing.T) {
 				if strings.Contains(string(response), private) {
 					t.Fatal("discovery leaked private project context or credentials")
 				}
-			}
-			if mod.cache.HasEntry(project.ID) {
-				t.Fatal("catalog discovery created legacy project authority")
 			}
 			if beforeMarker != nil {
 				after, err := os.ReadFile(marker)

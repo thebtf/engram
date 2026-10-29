@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"mime"
 	"net/http"
-	"net/netip"
 	"os"
 	"regexp"
 	"slices"
@@ -25,7 +24,6 @@ import (
 	"github.com/rs/zerolog/log"
 	authpkg "github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
-	gormlib "gorm.io/gorm"
 )
 
 const comparisonAdapterHeaderV3 = "X-Engram-Project-Identity-Adapter"
@@ -311,32 +309,28 @@ func authDisabledFromEnv() bool {
 }
 
 // TokenAuth provides token-based authentication for the worker HTTP API.
-// Supports five auth methods:
+// Supports four auth methods:
 //  1. Master operator key (ENGRAM_AUTH_ADMIN_TOKEN env var) via X-Auth-Token or Authorization: Bearer header -> admin (Source=master)
 //  2. Client API tokens / worker keycards (engram_* prefix, bcrypt-hashed in DB) via same headers -> scoped access (Source=client)
 //  3. HMAC-signed session cookie (engram_session) -> admin (Source=session)
 //  4. DB-backed auth session cookie (engram_auth) -> role from users table (Source=session)
-//  5. Authentik forward-auth header (X-Authentik-Email) from trusted proxy -> role from users table (Source=session)
 //
 // Methods 1 + 2 delegate to the shared *auth.Validator (FR-2 / Plan ADR-002),
-// the same validator that backs gRPC. Methods 3-5 are HTTP-specific and
+// the same validator that backs gRPC. Methods 3-4 are HTTP-specific and
 // remain inline. Issuance endpoints (handlers_auth.handleCreateToken et al.)
 // gate on Source == "session" via auth.Identity.IsSessionAdmin (FR-6 / C4).
 type TokenAuth struct {
-	ExemptPaths             map[string]bool
-	token                   string // master operator key (still cached for legacy session-cookie paths)
-	cookieKey               []byte
-	validator               *authpkg.Validator // delegate for methods 1 + 2
-	tokenStore              *gormdb.TokenStore
-	authSessionStore        *gormdb.AuthSessionStore
-	userStore               *gormdb.UserStore
-	statsCh                 chan string // buffered channel for async token stats increment
-	mu                      sync.RWMutex
-	enabled                 bool
-	authDisabled            bool
-	authentikEnabled        bool
-	authentikAutoProvision  bool
-	authentikTrustedProxies []string
+	ExemptPaths      map[string]bool
+	token            string // master operator key (still cached for legacy session-cookie paths)
+	cookieKey        []byte
+	validator        *authpkg.Validator // delegate for methods 1 + 2
+	tokenStore       *gormdb.TokenStore
+	authSessionStore *gormdb.AuthSessionStore
+	userStore        *gormdb.UserStore
+	statsCh          chan string // buffered channel for async token stats increment
+	mu               sync.RWMutex
+	enabled          bool
+	authDisabled     bool
 }
 
 // NewTokenAuth creates a new TokenAuth using a provided token.
@@ -441,45 +435,6 @@ func (ta *TokenAuth) SetAuthStores(userStore *gormdb.UserStore, authSessionStore
 	ta.authSessionStore = authSessionStore
 }
 
-// SetAuthentikConfig configures Authentik forward-auth integration.
-// When enabled, requests with X-Authentik-Email header from a trusted proxy
-// are automatically authenticated (and optionally provisioned).
-func (ta *TokenAuth) SetAuthentikConfig(enabled, autoProvision bool, trustedProxies []string) {
-	ta.mu.Lock()
-	defer ta.mu.Unlock()
-	ta.authentikEnabled = enabled
-	ta.authentikAutoProvision = autoProvision
-	ta.authentikTrustedProxies = trustedProxies
-}
-
-// isTrustedProxy checks whether the request originated from a trusted proxy IP.
-// Returns false if no trusted proxies are configured (deny-by-default).
-func isTrustedProxy(r *http.Request, trustedProxies []string) bool {
-	if len(trustedProxies) == 0 {
-		return false
-	}
-	peer, captured := r.Context().Value(transportPeerKey{}).(string)
-	if !captured {
-		// Direct middleware consumers have no preceding RealIP rewrite.
-		peer = r.RemoteAddr
-	}
-	remoteIP, err := netip.ParseAddr(peer)
-	if err != nil {
-		addrPort, err := netip.ParseAddrPort(peer)
-		if err != nil {
-			return false
-		}
-		remoteIP = addrPort.Addr()
-	}
-	for _, trusted := range trustedProxies {
-		trustedIP, err := netip.ParseAddr(trusted)
-		if err == nil && remoteIP.Unmap() == trustedIP.Unmap() {
-			return true
-		}
-	}
-	return false
-}
-
 // StatsCh returns the buffered channel for async token stats increment.
 func (ta *TokenAuth) StatsCh() chan string {
 	return ta.statsCh
@@ -487,7 +442,7 @@ func (ta *TokenAuth) StatsCh() chan string {
 
 // Middleware returns HTTP middleware that enforces token authentication.
 // Auth priority: header bearer (validator: master OR client keycard) >
-// HMAC session cookie > DB auth session cookie > Authentik forward-auth > 401.
+// HMAC session cookie > DB auth session cookie > 401.
 func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ta.mu.RLock()
@@ -498,9 +453,6 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 		validator := ta.validator
 		authSessStore := ta.authSessionStore
 		uStore := ta.userStore
-		authentikEnabled := ta.authentikEnabled
-		authentikAutoProvision := ta.authentikAutoProvision
-		authentikTrustedProxies := ta.authentikTrustedProxies
 		ta.mu.RUnlock()
 
 		// Explicit disabled-auth mode retains ordinary admin access without
@@ -621,33 +573,7 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 			}
 		}
 
-		// 4. Authentik forward-auth header.
-		if authentikEnabled && uStore != nil {
-			authentikEmail := r.Header.Get("X-Authentik-Email")
-			if authentikEmail != "" && isTrustedProxy(r, authentikTrustedProxies) {
-				user, err := uStore.GetUserByEmail(authentikEmail)
-				if errors.Is(err, gormlib.ErrRecordNotFound) && authentikAutoProvision {
-					// Provisioning serializes with initial setup and refuses to make
-					// Authentik the unaudited first dashboard identity.
-					user, err = uStore.ProvisionAuthentikOperator(r.Context(), authentikEmail)
-					if errors.Is(err, gormdb.ErrInitialAdminSetupRequired) {
-						writeAuthUnauthorized(w, r, authDisabled)
-						return
-					}
-				}
-				if err == nil && user != nil && !user.Disabled {
-					id := authpkg.SessionForBrowserUser(user.Role, user.ID)
-					ctx := withAuthenticatedBrowserSession(r.Context(), authentikBrowserSessionID(user.ID))
-					if r.URL.Path == "/api/auth/me" {
-						ctx = context.WithValue(ctx, authenticatedBrowserUserKey{}, user)
-					}
-					next.ServeHTTP(w, r.WithContext(buildAuthCtx(ctx, id)))
-					return
-				}
-			}
-		}
-
-		// 5. No valid auth.
+		// 4. No valid auth.
 		log.Warn().Str("path", r.URL.Path).Str("remote_addr", r.RemoteAddr).Msg("auth: rejected unauthenticated request")
 		writeAuthUnauthorized(w, r, authDisabled)
 	})

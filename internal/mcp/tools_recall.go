@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/thebtf/engram/internal/auth"
@@ -192,7 +191,7 @@ func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (stri
 	// values must not surface a structured error to clients still on the
 	// v6.4.x contract who may send experimental fields.
 	includeScopes := make(map[string]bool)
-	if os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true" {
+	{
 		includeScopesRaw := coerceStringSlice(m["include_scopes"])
 		for _, s := range includeScopesRaw {
 			switch s {
@@ -210,7 +209,7 @@ func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (stri
 	tg3ConfidenceMin := coerceFloat64(m["confidence_min"], 0.0)
 	tg3IncludeSuperseded := coerceBool(m["include_superseded"], false)
 	tg3IncludeRationale := coerceBool(m["include_rationale"], false)
-	tg3Active := vnextFEnabled() && (tg3ConfidenceMin > 0 || tg3IncludeSuperseded || tg3IncludeRationale)
+	tg3Active := (tg3ConfidenceMin > 0 || tg3IncludeSuperseded || tg3IncludeRationale)
 
 	if s.memoryStore == nil {
 		return "", fmt.Errorf("recall: memory store not configured")
@@ -229,7 +228,7 @@ func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (stri
 	// T004 — build the caller KeycardContext once outside the loop. The
 	// ENGRAM_VNEXT_F_ENABLED flag gates only legacy privacy_scope; CR-004
 	// principal-private visibility is always enforced.
-	scopeEnabled := os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true"
+
 	caller := scope.KeycardContext{SessionID: callerSessionID}
 	if id, ok := auth.IdentityFrom(ctx); ok {
 		caller.WorkstationID = id.WorkstationID()
@@ -237,7 +236,7 @@ func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (stri
 		caller.PrincipalKind = string(id.PrincipalKind)
 	}
 	visibilityOpts := scope.MemoryVisibilityOptions{
-		ApplyPrivacyScope: scopeEnabled,
+		ApplyPrivacyScope: true,
 		IncludeScopes:     includeScopes,
 	}
 
@@ -280,7 +279,7 @@ func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (stri
 		mr.OwnerPrincipalKind = mem.OwnerPrincipalKind
 		mr.AgentVisibility = mem.AgentVisibility
 		mr.Domain = mem.Domain
-		if scopeEnabled {
+		{
 			mr.PrivacyScope = mem.PrivacyScope
 			mr.SourceWorkstationID = mem.SourceWorkstationID
 			mr.SourceSessions = mem.SourceSessions

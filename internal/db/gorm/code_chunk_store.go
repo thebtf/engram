@@ -18,9 +18,9 @@ const staleKeyDelimiter = "\x1f"
 // Stores AST-chunked source code with optional embeddings for hybrid code search.
 //
 // Design notes:
-//   - project_id is a git-remote-derived TEXT slug (proxy.ResolveProjectSlug),
-//     intentionally FK-free — it is not a row reference to the projects table.
-//     Two worktrees of the same repo share one index via identical project_id.
+//   - project_id retains historical TEXT slugs, intentionally FK-free rather
+//     than references to the projects table. The former raw-index slug producer
+//     is removed; retained rows do not supply current typed UCI authority.
 //     See ADR-001 §3.3.
 //   - embedding is nullable: rows may be inserted before the server-side embedding
 //     pipeline (CR-004) has computed the vector. Matches content_chunks convention.

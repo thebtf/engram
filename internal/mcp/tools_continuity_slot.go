@@ -5,12 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/thebtf/engram/internal/auth"
-	"github.com/thebtf/engram/internal/config"
 	gormstore "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/pkg/models"
@@ -20,10 +18,6 @@ import (
 const continuitySlotAuthorizationError = "continuity_slot: authorization denied"
 
 var errContinuitySlotTransactionAuthorization = errors.New(continuitySlotAuthorizationError)
-
-func continuitySlotEnabled() bool {
-	return os.Getenv(config.EnvContinuitySlotEnabled) == "true" && vnextEnabled()
-}
 
 func continuitySlotTool() Tool {
 	return Tool{
@@ -36,9 +30,6 @@ func continuitySlotTool() Tool {
 }
 
 func (s *Server) handleContinuitySlot(ctx context.Context, args json.RawMessage) (string, error) {
-	if !continuitySlotEnabled() {
-		return "", fmt.Errorf("continuity_slot requires ENGRAM_CONTINUITY_SLOT_ENABLED=true and ENGRAM_VNEXT_ENABLED=true")
-	}
 	values, err := parseArgs(args)
 	if err != nil {
 		return "", err
@@ -144,7 +135,7 @@ func continuitySlotTargetAllowed(memory *models.Memory, project string, caller s
 	if memory == nil || memory.Project != project || memory.Status != "active" || strings.TrimSpace(memory.Domain) == "" {
 		return false
 	}
-	opts := scope.MemoryVisibilityOptions{ApplyPrivacyScope: os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true"}
+	opts := scope.MemoryVisibilityOptions{ApplyPrivacyScope: true}
 	return scope.ResolveMemory(caller, memory, opts) && scope.ResolveMemoryManage(caller, memory)
 }
 

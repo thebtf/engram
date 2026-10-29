@@ -95,15 +95,14 @@ type SettingsResolver interface {
 	Get(ctx context.Context, key string) (string, bool)
 }
 
-// Settings keys read by the embedder. URL and model are plaintext config; api_key is a
-// secret resolved through the same env-first path but backed by an encrypted settings row
-// that the resolver decrypts in-process (CR-3). The embedding DIMENSION is deliberately NOT
-// a settings key: it is pinned to EmbeddingDim and the vector(EmbeddingDim) columns, so
-// changing it needs a schema migration + full re-embed, never a runtime setting.
+// Settings keys read once at client construction. API keys are decrypted by the
+// worker resolver. Dimensions only select the existing schema-bound size or 0
+// (omit the request parameter); they do not change the stored vector schema.
 const (
-	SettingKeyEmbedURL    = "embedder.url"
-	SettingKeyEmbedModel  = "embedder.model"
-	SettingKeyEmbedAPIKey = "embedder.api_key"
+	SettingKeyEmbedURL        = "embedder.url"
+	SettingKeyEmbedModel      = "embedder.model"
+	SettingKeyEmbedAPIKey     = "embedder.api_key"
+	SettingKeyEmbedDimensions = "embedder.dimensions"
 )
 
 // NewClientWithSettings creates an embedding Client with ENV-FIRST precedence: env vars win
@@ -115,7 +114,7 @@ const (
 //   - model:   ENGRAM_EMBEDDING_MODEL   → else settings "embedder.model"   → else "text-embedding"
 //   - API key: ENGRAM_EMBEDDING_API_KEY → else settings "embedder.api_key" (secret; the resolver
 //     decrypts the encrypted settings row in-process — CR-3). Empty → no Authorization header.
-//   - dimensions: env only (schema-bound to vector(EmbeddingDim))
+//   - dimensions: ENGRAM_EMBEDDING_DIMENSIONS → settings "embedder.dimensions" → EmbeddingDim
 func NewClientWithSettings(ctx context.Context, resolver SettingsResolver) (*Client, error) {
 	rawURL := resolveSetting(ctx, resolver, "ENGRAM_EMBEDDING_URL", SettingKeyEmbedURL)
 	if rawURL == "" {
@@ -141,7 +140,7 @@ func NewClientWithSettings(ctx context.Context, resolver SettingsResolver) (*Cli
 	// non-zero, non-EmbeddingDim override is rejected: clamp to EmbeddingDim and warn
 	// loudly rather than honor a column-incompatible dimension.
 	dimensions := EmbeddingDim
-	if raw := os.Getenv("ENGRAM_EMBEDDING_DIMENSIONS"); raw != "" {
+	if raw := resolveSetting(ctx, resolver, "ENGRAM_EMBEDDING_DIMENSIONS", SettingKeyEmbedDimensions); raw != "" {
 		if d, err := strconv.Atoi(raw); err != nil {
 			log.Warn().Str("value", raw).Int("using", EmbeddingDim).
 				Msg("embedding: ENGRAM_EMBEDDING_DIMENSIONS is not an integer, using EmbeddingDim")

@@ -64,9 +64,9 @@ func (m *mockAuditWriter) snapshot() []gorm.AuditLogEntry {
 // ---------------------------------------------------------------------------
 
 // TestAuditCreate_LogCalledOnSuccess verifies that logAuditCreate emits one
-// audit_log entry with action="create" when ENGRAM_VNEXT_ENABLED=true.
+// audit_log entry with action="create" even when the retired flag is false.
 func TestAuditCreate_LogCalledOnSuccess(t *testing.T) {
-	t.Setenv("ENGRAM_VNEXT_ENABLED", "true")
+	t.Setenv("ENGRAM_VNEXT_ENABLED", "false")
 
 	maw := &mockAuditWriter{}
 	srv := NewServer(ServerOptions{Version: "audit-test"})
@@ -82,22 +82,6 @@ func TestAuditCreate_LogCalledOnSuccess(t *testing.T) {
 	assert.Equal(t, "agent-session", entries[0].Actor)
 	assert.NotNil(t, entries[0].AfterState)
 	assert.Nil(t, entries[0].BeforeState)
-}
-
-// TestAuditCreate_SkippedWhenFlagOff verifies no audit write when flag is off.
-func TestAuditCreate_SkippedWhenFlagOff(t *testing.T) {
-	t.Setenv("ENGRAM_VNEXT_ENABLED", "false")
-
-	maw := &mockAuditWriter{}
-	srv := NewServer(ServerOptions{Version: "audit-test"})
-	srv.setTestAuditWriter(maw)
-
-	created := &models.Memory{ID: 99, Project: "proj", Content: "content"}
-	logAuditCreate(context.Background(), srv, created, "agent")
-
-	// Give goroutine time to run if it were to fire
-	time.Sleep(30 * time.Millisecond)
-	assert.Empty(t, maw.snapshot(), "no audit write when ENGRAM_VNEXT_ENABLED != true")
 }
 
 // TestAuditCreate_SkippedWhenAuditStoreNil verifies no panic when auditStore is nil.
@@ -119,7 +103,7 @@ func TestAuditCreate_SkippedWhenAuditStoreNil(t *testing.T) {
 // TestAuditEdit_LogCalledWithBeforeAndAfterState asserts action="update" and
 // both before_state and after_state are populated.
 func TestAuditEdit_LogCalledWithBeforeAndAfterState(t *testing.T) {
-	t.Setenv("ENGRAM_VNEXT_ENABLED", "true")
+	t.Setenv("ENGRAM_VNEXT_ENABLED", "false")
 
 	maw := &mockAuditWriter{}
 	srv := NewServer(ServerOptions{Version: "audit-test"})
@@ -145,7 +129,7 @@ func TestAuditEdit_LogCalledWithBeforeAndAfterState(t *testing.T) {
 
 // TestAuditDelete_LogCalledWithBeforeState asserts action="delete" and before_state set.
 func TestAuditDelete_LogCalledWithBeforeState(t *testing.T) {
-	t.Setenv("ENGRAM_VNEXT_ENABLED", "true")
+	t.Setenv("ENGRAM_VNEXT_ENABLED", "false")
 
 	maw := &mockAuditWriter{}
 	srv := NewServer(ServerOptions{Version: "audit-test"})
@@ -164,7 +148,7 @@ func TestAuditDelete_LogCalledWithBeforeState(t *testing.T) {
 
 // TestAuditSupersede_LogCalledWithSupersededID asserts action="supersede".
 func TestAuditSupersede_LogCalledWithSupersededID(t *testing.T) {
-	t.Setenv("ENGRAM_VNEXT_ENABLED", "true")
+	t.Setenv("ENGRAM_VNEXT_ENABLED", "false")
 
 	maw := &mockAuditWriter{}
 	srv := NewServer(ServerOptions{Version: "audit-test"})
@@ -178,43 +162,4 @@ func TestAuditSupersede_LogCalledWithSupersededID(t *testing.T) {
 	assert.Equal(t, "supersede", entries[0].Action)
 	assert.Equal(t, int64(55), *entries[0].MemoryID)
 	assert.NotNil(t, entries[0].BeforeState)
-}
-
-// TestAuditEdit_SkippedWhenFlagOff verifies no write when VNEXT disabled.
-func TestAuditEdit_SkippedWhenFlagOff(t *testing.T) {
-	t.Setenv("ENGRAM_VNEXT_ENABLED", "false")
-
-	maw := &mockAuditWriter{}
-	srv := NewServer(ServerOptions{Version: "audit-test"})
-	srv.setTestAuditWriter(maw)
-
-	logAuditEdit(context.Background(), srv, &models.Memory{ID: 1}, &models.Memory{ID: 1}, "a")
-	time.Sleep(30 * time.Millisecond)
-	assert.Empty(t, maw.snapshot())
-}
-
-// TestAuditDelete_SkippedWhenFlagOff mirrors the flag-off check for delete.
-func TestAuditDelete_SkippedWhenFlagOff(t *testing.T) {
-	t.Setenv("ENGRAM_VNEXT_ENABLED", "false")
-
-	maw := &mockAuditWriter{}
-	srv := NewServer(ServerOptions{Version: "audit-test"})
-	srv.setTestAuditWriter(maw)
-
-	logAuditDelete(context.Background(), srv, &models.Memory{ID: 2}, "a")
-	time.Sleep(30 * time.Millisecond)
-	assert.Empty(t, maw.snapshot())
-}
-
-// TestAuditSupersede_SkippedWhenFlagOff mirrors the flag-off check for supersede.
-func TestAuditSupersede_SkippedWhenFlagOff(t *testing.T) {
-	t.Setenv("ENGRAM_VNEXT_ENABLED", "false")
-
-	maw := &mockAuditWriter{}
-	srv := NewServer(ServerOptions{Version: "audit-test"})
-	srv.setTestAuditWriter(maw)
-
-	logAuditSupersede(context.Background(), srv, &models.Memory{ID: 3}, "a")
-	time.Sleep(30 * time.Millisecond)
-	assert.Empty(t, maw.snapshot())
 }

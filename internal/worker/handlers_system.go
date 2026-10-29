@@ -11,7 +11,6 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/thebtf/engram/internal/auth"
-	cognitivecore "github.com/thebtf/engram/internal/cognitive/core"
 	"github.com/thebtf/engram/internal/config"
 	dbgorm "github.com/thebtf/engram/internal/db/gorm"
 )
@@ -36,16 +35,11 @@ type runtimeFlagsResponse struct {
 
 type patchConfigRequest struct {
 	Features *patchConfigFeatures `json:"features,omitempty"`
-	Memory   *patchConfigMemory   `json:"memory,omitempty"`
 }
 
 type patchConfigFeatures struct {
 	EnforceSourceProject *bool `json:"enforce_source_project,omitempty"`
 	TelemetryEnabled     *bool `json:"telemetry_enabled,omitempty"`
-}
-
-type patchConfigMemory struct {
-	InjectUnified *bool `json:"inject_unified,omitempty"`
 }
 
 // handleGetConfig returns the current runtime configuration, grouped by category.
@@ -207,7 +201,7 @@ func buildConfigResponse(cfg *config.Config) map[string]any {
 			"obs_concepts":        cfg.ContextObsConcepts,
 		},
 		"memory": map[string]any{
-			"inject_unified":       cfg.InjectUnified,
+			"inject_unified":       true,
 			"always_inject_limit":  cfg.AlwaysInjectLimit,
 			"project_inject_limit": cfg.ProjectInjectLimit,
 		},
@@ -248,14 +242,6 @@ func buildConfigResponseWithLifecycle(effective *config.Config) map[string]any {
 
 func configPendingRestart(effective *config.Config, desired *config.Config) []map[string]any {
 	pending := make([]map[string]any, 0, 3)
-	if effective.InjectUnified != desired.InjectUnified {
-		pending = append(pending, map[string]any{
-			"field":     "memory.inject_unified",
-			"effective": effective.InjectUnified,
-			"desired":   desired.InjectUnified,
-			"reason":    "requires_restart",
-		})
-	}
 	if effective.WorkerPort != desired.WorkerPort {
 		pending = append(pending, map[string]any{
 			"field":     "server.worker_port",
@@ -287,9 +273,6 @@ func configSettingsUpdates(req patchConfigRequest) (map[string]any, []string, []
 			unsupported = append(unsupported, "features.telemetry_enabled")
 		}
 	}
-	if req.Memory != nil {
-		addBoolSettingUpdate(updates, &blocked, "memory.inject_unified", "ENGRAM_INJECT_UNIFIED", req.Memory.InjectUnified)
-	}
 
 	return updates, unsupported, blocked
 }
@@ -311,12 +294,7 @@ func configRestartRequiredFields(changed []string) []string {
 		if !strings.Contains(field, "requires restart") {
 			continue
 		}
-		switch {
-		case strings.Contains(field, "inject_unified"):
-			fields = append(fields, "memory.inject_unified")
-		default:
-			fields = append(fields, field)
-		}
+		fields = append(fields, field)
 	}
 	return fields
 }
@@ -335,7 +313,7 @@ func (s *Service) handleGetFlags(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 
-	writeJSON(w, buildRuntimeFlagsResponse(cfg, s.flagConfig))
+	writeJSON(w, buildRuntimeFlagsResponse(cfg))
 }
 
 // handleGetMigrations returns the applied database migration state from the
@@ -359,22 +337,18 @@ func (s *Service) handleGetMigrations(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, state)
 }
 
-func buildRuntimeFlagsResponse(cfg *config.Config, flagCfg cognitivecore.FlagConfig) runtimeFlagsResponse {
+func buildRuntimeFlagsResponse(cfg *config.Config) runtimeFlagsResponse {
 	items := []runtimeFlagItem{
-		envRuntimeFlag("ENGRAM_VNEXT_ENABLED", "vnext", "Master vNext gate for hybrid retrieval, purge, audit, and retention paths."),
-		envRuntimeFlag("ENGRAM_LIFECYCLE_ENABLED", "vnext", "Enables lifecycle tier promotion/demotion and tier_filter runtime behavior."),
-		envRuntimeFlag("ENGRAM_VNEXT_F_ENABLED", "vnext", "Milestone F gate for privacy scope, taxonomy, candidates, governance, and redaction paths."),
+		resolvedRuntimeFlag("ENGRAM_VNEXT_ENABLED", "memory", true, false, "Built-in hybrid retrieval, purge, audit, and retention."),
+		resolvedRuntimeFlag("ENGRAM_LIFECYCLE_ENABLED", "memory", true, false, "Built-in lifecycle promotion, demotion, and tier filtering."),
+		resolvedRuntimeFlag("ENGRAM_VNEXT_F_ENABLED", "memory", true, false, "Built-in privacy, candidates, write-lint, governance, and redaction."),
 		envRuntimeFlag("ENGRAM_TEMPORAL_TRUTH_ENABLED", "vnext", "Enables the bounded CR-011 temporal truth read surface."),
-		envRuntimeFlag("ENGRAM_ADAPTIVE_ENABLED", "vnext", "Enables adaptive memory segmentation and adaptive brief retrieval."),
-		envRuntimeFlag("ENGRAM_CRYSTALLIZATION_ENABLED", "vnext", "Enables the LLM-backed crystallization dream cycle."),
+		resolvedRuntimeFlag("ENGRAM_ADAPTIVE_ENABLED", "memory", true, false, "Built-in adaptive segmentation and brief retrieval."),
+		resolvedRuntimeFlag("ENGRAM_CRYSTALLIZATION_ENABLED", "memory", true, false, "Built-in crystallization; inference requires a configured LLM provider."),
 		resolvedRuntimeFlag("ENGRAM_CODE_INTEL_ENABLED", "code-intel", config.CodeIntelEnabled(), true, "Codebase tools are enabled by default; explicit false stops them."),
 	}
-	items = append(items, v7RuntimeFlags(flagCfg)...)
 	items = append(items,
-		configRuntimeFlag("ENGRAM_AUTHENTIK_ENABLED", "auth", cfg.AuthentikEnabled, true, "Enables Authentik forward-auth header integration."),
-		configRuntimeFlag("ENGRAM_AUTHENTIK_AUTO_PROVISION", "auth", cfg.AuthentikAutoProvision, true, "Auto-provisions users from trusted Authentik headers."),
 		configRuntimeFlag("ENGRAM_ENFORCE_SOURCE_PROJECT", "operations", cfg.EnforceSourceProject, false, "Enforces source/project scoping on store and recall paths."),
-		configRuntimeFlag("ENGRAM_INJECT_UNIFIED", "memory", cfg.InjectUnified, true, "Routes session injection through the unified retrieval path."),
 		configRuntimeFlag("ENGRAM_RULE_GOVERNANCE_ENABLED", "rules", cfg.RuleGovernanceEnabled, false, "Routes explicit active-rule intents into rule candidates."),
 		configRuntimeFlag("ENGRAM_RULE_ARBITER_ENABLED", "rules", cfg.RuleArbiterEnabled, false, "Starts the bounded proposal-only rule arbiter when governance is enabled."),
 		configRuntimeFlag("ENGRAM_RULE_ROUTER_ENABLED", "rules", cfg.RuleRouterEnabled, false, "Switches session-start/context reads to the bounded rule injection router."),
@@ -401,7 +375,7 @@ func buildRuntimeFlagsResponse(cfg *config.Config, flagCfg cognitivecore.FlagCon
 		Apply: map[string]any{
 			"supported": true,
 			"endpoint":  "PATCH /api/config",
-			"fields":    []string{"features.enforce_source_project", "memory.inject_unified"},
+			"fields":    []string{"features.enforce_source_project"},
 			"reason":    "only allowlisted config-backed fields are writable; env-controlled flags remain read-only",
 		},
 		Config: map[string]any{
@@ -418,19 +392,6 @@ func envRuntimeFlag(name, category, description string) runtimeFlagItem {
 		Category:                category,
 		RestartRequiredToChange: true,
 		Description:             description,
-	}
-}
-
-func v7RuntimeFlags(flagCfg cognitivecore.FlagConfig) []runtimeFlagItem {
-	return []runtimeFlagItem{
-		resolvedRuntimeFlag("ENGRAM_V7_PLUG_ENABLED", "v7", flagCfg.IsPlugEnabled(), true, "Master v7 cognitive substrate gate resolved during service startup."),
-		resolvedRuntimeFlag("ENGRAM_V7_S1_STATE", "v7", flagCfg.IsSubsystemEnabled("s1"), true, "Effective state for the v7 S1 state subsystem."),
-		resolvedRuntimeFlag("ENGRAM_V7_S2_METAMEM", "v7", flagCfg.IsSubsystemEnabled("s2"), true, "Effective state for the v7 S2 metamemory subsystem."),
-		resolvedRuntimeFlag("ENGRAM_V7_S3_AMBIENT", "v7", flagCfg.IsSubsystemEnabled("s3"), true, "Effective state for the v7 S3 ambient subsystem."),
-		resolvedRuntimeFlag("ENGRAM_V7_S4A_DIRECTIVES_CAPTURE", "v7", flagCfg.IsSubsystemEnabled("s4a"), true, "Effective state for the v7 S4a directive capture subsystem."),
-		resolvedRuntimeFlag("ENGRAM_V7_S4B_DIRECTIVES_SURFACING", "v7", flagCfg.IsSubsystemEnabled("s4b"), true, "Effective state for the v7 S4b directive surfacing subsystem."),
-		resolvedRuntimeFlag("ENGRAM_V7_S5_TELEMETRY", "v7", flagCfg.IsSubsystemEnabled("s5"), true, "Effective state for the v7 S5 product telemetry subsystem."),
-		resolvedRuntimeFlag("ENGRAM_V7_S6_OUTCOME", "v7", flagCfg.IsSubsystemEnabled("s6"), true, "Effective state for the v7 S6 outcome subsystem."),
 	}
 }
 

@@ -44,6 +44,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Use registered canonical UUIDs and authenticated caller project context in MCP fixtures without weakening default-deny, privacy or pre-mutation rejection guards. Reuse 119 prior PASS plus one exact retry PASS after the context fix, not 120 fresh PASS or installed acceptance.
 - Seed the isolated operator-code fixture with a registered canonical project UUID while preserving five queue candidates, published/no-view checks and redacted provisioning errors.
 
+## [7.0.12] - 2026-10-28
+
+### Fixed
+
+- Make hybrid memory, privacy/write-lint, audit, continuity, lifecycle, adaptive retrieval and crystallization ordinary v7 behavior without historical startup gates. Remove the empty unified-injection fallback and its mutable API/UI setting; retire dormant V7 startup activation and Authentik header login without deleting retained owner data or weakening ordinary authentication and privacy guards.
+- Resolve LLM configuration and embedding request dimensions through the existing encrypted `model_settings` store with ENV-first overrides, explicit dimensions `0` and startup snapshots. Health uses the same effective LLM client. Reduce normal single-owner startup to four inputs only after private selected-provider equality verification with the same Vault key; retain conditional auth-on and emergency controls, one port, three mounts and Repository `latest`.
+- Remove the unreachable raw-index client, legacy slug cache and project-slug producer that could create and stage historical markers. Preserve typed UCI registration/indexing, canonical marker non-mutation, shared gRPC pool lifecycle, stored data and the server/protobuf compatibility boundary.
+- Fix bundled Compose password selection in `.env.example` while preserving explicit external PostgreSQL connection strings.
+- Forward supplied provider, conditional auth-token and emergency-stop overrides in both Compose templates without injecting defaults. Unset optional bindings remain unset to Go; normal startup still has four configured inputs and retains stored model/key/dimensions defaults.
+- Keep valueless Compose environment bindings inside the deployment wrapper's frozen dotenv boundary, preventing inherited provider URLs or other optional overrides from reaching deployment. Reject noncanonical protected assignments before Compose, preserve single-quoted literal dollars and compare effective literal values. Document the optional Unraid admin-token row for auth-on installations.
+- Pin Vue I18n and its locked Intlify dependencies to 11.4.16, fixing CVE-2026-118257 (GHSA-83rm-6c8r-g728) without changing the Vue framework or console translations.
+- Run transcript retention on the existing four-hour maintenance tick even without an LLM or an admitted memory sleep cycle. Retry the durable transcript queue independently of the new-memory threshold while preserving the idle gate, failed work across skipped ticks/restarts, `0` as no automatic unprocessed expiry, and inference-before-pruning order.
+- Keep hidden principal, domain, workstation and session-private memories out of ingestion duplicate flags through the shared visibility boundary. Preserve workstation-only visibility for callers without a session. Correct candidate descriptions and remove the unused retired proxy helper while retaining transport peer capture ([#593](https://github.com/thebtf/engram/pull/593)).
+
 ## [7.0.11] - 2026-10-27
 
 Corrective source release preparation; canonical 7.0.11 client and parser policies, assets, publication and ordinary recipient acceptance remain pending.

@@ -102,3 +102,10 @@ func mustGetwd(t *testing.T) string {
 	}
 	return workingDirectory
 }
+
+func TestCleanEnvironmentRemovesInheritedServerConfiguration(t *testing.T) {
+	env := cleanEnvironment([]string{"PATH=tools", "ENGRAM_VNEXT_ENABLED=false", "ENGRAM_VNEXT_F_ENABLED=false", "ENGRAM_LIFECYCLE_ENABLED=false", "ENGRAM_CONTINUITY_SLOT_ENABLED=false", "ENGRAM_ADAPTIVE_ENABLED=false", "ENGRAM_CRYSTALLIZATION_ENABLED=false", "ENGRAM_GRAPH_ENABLED=true", "ENGRAM_EMBEDDING_URL=foreign-provider", "DATABASE_DSN=foreign", "WORKSTATION_ID=foreign"}, "WORKSTATION_ID")
+	if len(env) != 1 || env[0] != "PATH=tools" {
+		t.Fatalf("inherited server configuration was not removed")
+	}
+}

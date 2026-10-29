@@ -5,7 +5,6 @@ import (
 	"context"
 	"net/http"
 	"net/url"
-	"os"
 	"runtime"
 	"strings"
 	"time"
@@ -511,7 +510,7 @@ func (s *Service) handleGetSearchAnalytics(w http.ResponseWriter, r *http.Reques
 // @Router /api/vectors/health [get]
 func (s *Service) handleVectorHealth(w http.ResponseWriter, _ *http.Request) {
 	msg := "pgvector available; vNext retrieval gated by ENGRAM_VNEXT_ENABLED"
-	if os.Getenv("ENGRAM_VNEXT_ENABLED") == "true" {
+	{
 		msg = "pgvector hybrid retrieval active"
 	}
 	writeJSON(w, map[string]any{

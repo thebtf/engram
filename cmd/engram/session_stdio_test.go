@@ -590,9 +590,6 @@ func TestSessionMemoryTransport(t *testing.T) {
 			memoryTestInitialize(t, a)
 			memoryTestInitialize(t, b)
 			wantA := []int64{91001, 91002}
-			if flag == "false" {
-				wantA = append(wantA, 91003)
-			}
 			memoryTestRecall(t, a, memoryTestProjectA, memoryTestProjectA, wantA)
 			// Actual CLI consumer immediately reuses the just-observed recall ID.
 			memoryTestRecall(t, a, memoryTestProjectA, memoryTestProjectA, wantA)

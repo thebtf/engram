@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -978,14 +977,14 @@ func (s *MemoryStore) ListForInjection(ctx context.Context, project string, limi
 	if limit <= 0 {
 		limit = 50
 	}
-	lifecycleEnabled := os.Getenv("ENGRAM_LIFECYCLE_ENABLED") == "true"
+
 	var rows []Memory
 	q := s.db.WithContext(ctx).
 		Where("project = ? AND status = 'active' AND deleted_at IS NULL", project).
 		Where("valid_from IS NULL OR valid_from <= NOW()").
 		Where("valid_until IS NULL OR valid_until >= NOW()")
 
-	if lifecycleEnabled {
+	{
 		q = q.Where("tier != 'working'").
 			Where("retrievability > ?", 0.3)
 	}
@@ -1339,7 +1338,7 @@ func memoryRowToModel(row *Memory) *models.Memory {
 	// responses (RI-F1). Codex P1 cycle-3 fix-forward on 4cb71be: without the
 	// flag gate the field always reads back as 'project' (migration-125 DB
 	// DEFAULT) and leaks into every flag-OFF response.
-	if os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true" {
+	{
 		m.PrivacyScope = row.PrivacyScope
 		m.SourceWorkstationID = row.SourceWorkstationID
 		m.SourceSessions = []string(row.SourceSessions)
