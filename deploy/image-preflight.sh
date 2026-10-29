@@ -76,11 +76,17 @@ while IFS= read -r line || [[ -n "${line}" ]]; do
             values["${key}"]="${BASH_REMATCH[1]}"
         fi
     done
-    if [[ "${line}" =~ ^([[:alpha:]_][[:alnum:]_]*)=(.*)$ ]] && [[ -n "${interpolation_keys[${BASH_REMATCH[1]}]+x}" ]]; then
-        key="${BASH_REMATCH[1]}"
-        value="${BASH_REMATCH[2]}"
+    if [[ "${line}" =~ ^[[:space:]]*(export[[:space:]]+)?([[:alpha:]_][[:alnum:]_]*)[[:space:]]*([=:]|$) ]] && [[ -n "${interpolation_keys[${BASH_REMATCH[2]}]+x}" ]]; then
+        key="${BASH_REMATCH[2]}"
+        [[ "${line}" == "${key}="* ]] || die "${key} must use one canonical KEY=value assignment"
+        value="${line#*=}"
         [[ -z "${snapshot_values[${key}]+x}" ]] || die "duplicate ${key} definition"
-        [[ "${value}" != *'$'* ]] || die "${key} must use a literal dotenv value"
+        if [[ "${value}" == \'*\' ]]; then
+            value="${value:1:${#value}-2}"
+            [[ "${value}" != *"'"* && "${value}" != *'\'* ]] || die "${key} must use an unescaped single-line literal"
+        else
+            [[ "${value}" != *'$'* && "${value}" != *"'"* && "${value}" != *'"'* && "${value}" != *'\'* && ! "${value}" =~ [[:space:]] ]] || die "${key} must use a plain or single-quoted literal dotenv value"
+        fi
         snapshot_values["${key}"]="${value}"
     fi
 done < "${SNAPSHOT}"

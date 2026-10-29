@@ -168,6 +168,8 @@ import sys
 path, key, mode, expected = sys.argv[1:]
 with open(path, encoding='utf-8') as source:
     value = json.load(source)['services']['server']['environment'].get(key)
+# Compose config escapes literal dollars for reuse as another Compose input.
+expected = expected.replace('$', '$$')
 if (mode == 'absent' and value is not None) or (mode == 'value' and value != expected):
     raise SystemExit('unexpected effective Compose value for ' + key)
 PY
@@ -290,6 +292,19 @@ main() {
     assert_rejected_before_compose 'different inherited valueless URL rejected before Compose' "${tmp}/frozen-url.env" env ENGRAM_LLM_URL=https://inherited-provider.example.invalid/v1
     assert_rejected_before_compose 'different inherited interpolation value rejected before Compose' "${tmp}/override.env" env POSTGRES_PASSWORD=conflicting-database-sentinel
 
+    local form=0 definition
+    for definition in ' ENGRAM_LLM_URL=https://other-provider.example.invalid/v1' 'ENGRAM_LLM_URL =https://other-provider.example.invalid/v1' 'export ENGRAM_LLM_URL=https://other-provider.example.invalid/v1' 'ENGRAM_LLM_URL: https://other-provider.example.invalid/v1'; do
+        form=$((form + 1))
+        cp "${tmp}/frozen-url.env" "${tmp}/noncanonical-${form}.env"
+        printf '%s\n' "${definition}" >>"${tmp}/noncanonical-${form}.env"
+        assert_rejected_before_compose "noncanonical protected assignment ${form} rejected before Compose" "${tmp}/noncanonical-${form}.env" env ENGRAM_LLM_URL=https://frozen-provider.example.invalid/v1
+    done
+    for definition in 'ENGRAM_LLM_API_KEY=$INTERPOLATED' 'ENGRAM_LLM_API_KEY="$INTERPOLATED"' 'ENGRAM_LLM_API_KEY=provider sentinel' 'ENGRAM_LLM_API_KEY="provider-sentinel"' "ENGRAM_LLM_API_KEY='provider\sentinel'" "ENGRAM_LLM_API_KEY='provider-sentinel' # comment"; do
+        make_env "${tmp}/interpolated-key.env" "${server}" "${operator}" "${postgres}"
+        printf '%s\n' "${definition}" >>"${tmp}/interpolated-key.env"
+        assert_rejected_before_compose 'unsupported protected dotenv value rejected before Compose' "${tmp}/interpolated-key.env" env INTERPOLATED=provider-sentinel
+    done
+
     local real_docker
     real_docker="$(command -v docker 2>/dev/null || true)"
     if [[ -n "${real_docker}" ]] && "${real_docker}" compose version >/dev/null 2>&1; then
@@ -313,6 +328,31 @@ main() {
         else
             fail 'real Compose consumes the frozen URL after matching inherited value is cleared'
         fi
+
+        for form in 1 2 3 4; do
+            if "${real_docker}" compose --env-file "${tmp}/noncanonical-${form}.env" -f "${ROOT}/deploy/docker-compose.runtime.yml" config --format json >"${tmp}/noncanonical-${form}.config.json" 2>"${tmp}/noncanonical-${form}.error" && assert_real_compose_value "${tmp}/noncanonical-${form}.config.json" ENGRAM_LLM_URL value https://other-provider.example.invalid/v1; then
+                pass "real Compose accepts shadowing noncanonical protected assignment ${form}"
+            else
+                fail "real Compose accepts shadowing noncanonical protected assignment ${form}"
+            fi
+        done
+
+        local literal_key='provider-$LITERAL-${BRACED}'
+        cp "${tmp}/native-absent.env" "${tmp}/native-literal.env"
+        printf "ENGRAM_LLM_API_KEY='%s'\n" "${literal_key}" >>"${tmp}/native-literal.env"
+        if "${real_docker}" compose --env-file "${tmp}/native-literal.env" -f "${ROOT}/deploy/docker-compose.runtime.yml" config --format json >"${tmp}/native-literal.config.json" 2>"${tmp}/native-literal.error" && assert_real_compose_value "${tmp}/native-literal.config.json" ENGRAM_LLM_API_KEY value "${literal_key}"; then
+            pass 'real Compose preserves single-quoted literal dollar API-key bytes'
+        else
+            fail 'real Compose preserves single-quoted literal dollar API-key bytes'
+        fi
+        marker="${tmp}/native-literal.compose"; rc=0; WRAPPER_OUTPUT="${tmp}/native-literal.output"
+        run_wrapper "${tmp}/native-literal.env" "${marker}" "${tmp}/native-literal.env" "${tmp}/native-literal.env" env "PREFLIGHT_TEST_REAL_DOCKER=${real_docker}" "ENGRAM_LLM_API_KEY=${literal_key}" LITERAL=must-not-expand BRACED=must-not-expand || rc=$?
+        if [[ ${rc} -eq 0 ]] && assert_frozen_compose_input "${marker}" "${server}" "${tmp}/native-literal.env" && assert_real_compose_value "${marker}.config.json" ENGRAM_LLM_API_KEY value "${literal_key}" && assert_no_values_output "${WRAPPER_OUTPUT}" "${literal_key}"; then
+            pass 'wrapper accepts matching effective literal dollars without interpolation or output'
+        else
+            fail 'wrapper accepts matching effective literal dollars without interpolation or output'
+        fi
+        assert_rejected_before_compose 'different inherited single-quoted API key rejected before Compose' "${tmp}/native-literal.env" env ENGRAM_LLM_API_KEY=conflicting-provider-sentinel
     else
         printf 'SKIP: real Compose boundary requires an installed Compose CLI; mock boundary checks still run\n'
     fi

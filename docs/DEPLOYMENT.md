@@ -127,6 +127,16 @@ lock directory, and retry. While it owns the lock, the wrapper runs
 without printing resolved configuration, then runs `pull` and `up` with the same
 sanitized environment and frozen snapshot.
 
+Protected dotenv entries must use one canonical `KEY=value` assignment: no
+leading whitespace, spaces around `=`, `export` prefix, colon separator or
+duplicate definitions. Values may be plain single-line literals without
+whitespace, quotes, backslashes or `$`, or single-quoted single-line literals
+without quote/backslash escapes. For example, `ENGRAM_LLM_API_KEY='literal$key'`
+preserves the dollar byte without expansion. Double-quoted, interpolated,
+multiline and inline-comment forms are unsupported for these entries and fail
+before Compose. Inherited-value comparisons use the effective unquoted literal;
+the snapshot itself is never rewritten or evaluated as shell code.
+
 The root `docker-compose.yml` uses the same required image variables and also
 contains local build definitions. The image acceptance gate sets them to exact
 local image IDs before exercising the stack. A direct source build also sets
