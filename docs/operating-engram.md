@@ -7,52 +7,64 @@ server configuration, retained readers, Code Workspace, and restart procedures.
 
 ## Версия, установка и обновление
 
-Этот кандидат готовит `7.0.8`: неблокирующую фоновую подготовку доверенного client
-в OMP и исправление OpenClaw adapter на Zod `4.6.7`. Source, package/marketplace
-manifests и OpenClaw runtime metadata объявляют `7.0.8`; это не подтверждение
-публикации или установки кандидата. Callbacks регистрируются без ожидания холодной
-загрузки; до готовности нет исполнения client или enrichment, а пропущенные события
-не повторяются после подготовки.
+Доступную версию смотри в [GitHub Releases](https://github.com/thebtf/engram/releases)
+и [marketplace](https://github.com/thebtf/engram-marketplace) выбранного host.
+Для OpenClaw проверь опубликованный пакет
+[`openclaw-engram`](https://www.npmjs.com/package/openclaw-engram).
+Версия в исходниках или manifest сама по себе не подтверждает публикацию.
 
-Каноническую подготовку bootstrap/parser policies и raw assets по финальному
-кандидату определяет [release-протокол](RELEASE-PROTOCOL.md): Go 1.26.10 Linux amd64
-и MinGW GCC 13-win32 из закреплённого release image. Подготовка артефактов,
-публикация и установленная приёмка остаются отдельными шагами.
+Установленные версии проверяй отдельно: сервер — через `/api/version` на его
+фактическом origin; client — по executable, который выбрал установленный launcher;
+plugin — по фактически загруженному пути и версии в host. Запись в marketplace
+не подтверждает обновление установленного plugin, а установка не доказывает,
+что действующая сессия загрузила новые bytes. Подготовку артефактов и публикацию
+определяет [release-протокол](RELEASE-PROTOCOL.md).
 
-По сохранённой приёмке от 2026-10-26 сервер `7.0.7` работоспособен; квалифицированы
-обычные native/browser-сценарии на представителях сохранённых данных. Это не
-подтверждает полный Workspace/search/graph/two-worktree путь или версию фактически
-загруженного OMP extension. Запуск свежего OMP с `7.0.8` за ≤30 s при холодном и
-тёплом cache ещё не доказан. Консолидация канонических проектов остаётся OPEN;
-этот выпуск её не выполняет.
+Публикация, здоровье сервера, обычный native/browser-сценарий и активация plugin
+в свежем OMP — разные проверки. Не переноси приёмку старой версии на новую.
+Локальная synthetic/no-auth проверка не доказывает production или principal.
+Проверку запуска OMP за ≤30 s с холодным и тёплым cache не считай выполненной
+по одной регистрации extension. Callbacks регистрируются без ожидания холодной
+загрузки; доверенный client готовится в фоне. До готовности нет исполнения client
+или enrichment, а пропущенные события не повторяются. Подробности — в разделе
+[первой подготовки клиента](#первая-подготовка-клиента-в-omp).
 
-В npm опубликован `openclaw-engram@7.0.7`, но установка этого adapter удерживается
-из-за security issue `#506` до выпуска исправленного `7.0.8`. Приёмка на фактическом
-OpenClaw host по `#503` остаётся NOT_PROVEN; публикация в npm её не заменяет.
-Сохранённые проверки `7.0.6` — исторические: они относятся только к своим
-source/artifact identities. Исторический кандидат `7.0.6` объявлял существующие
-tools через `contracts.tools` и переносил статический контекст с игнорируемого
-`before_agent_start` на `before_prompt_build`.
+Для OpenClaw нужны работающий gateway, доступный Engram server и соответствующий
+релизу Go client в PATH либо по абсолютному пути `ENGRAM_EXECUTABLE`.
+Установку и параметры подключения смотри в
+[OpenClaw guide](../plugin/openclaw-engram/README.md#prerequisites).
+Автоматический контекст использует `before_prompt_build`.
 Контекст каждого запуска заново использует текущий проект; session cache нет.
 Static context передаёт настоящий необязательный `ctx.sessionId` как `session_id`
 в `/api/context/inject`; сервер этого endpoint владеет учётом static exposure.
 Hook не ожидает вымышленный `response.sessionId` и не вызывает отдельный static
 `mark-injected`. Если host не выдал session ID, hook не отправляет это поле и
 не инициализирует session tracking; `agentId` не подставляется вместо session ID.
-Эта проверка контракта не подтверждает сохранение exposure в БД.
+Описание контракта не подтверждает сохранение exposure в БД.
 Для автоматического контекста внешний плагин требует разрешение host:
 `plugins.entries.engram.hooks.allowConversationAccess: true`.
 Это не поле `plugins.entries.engram.config`: разрешение открывает prompt hooks
 доступ к запросу и подготовленной истории. Без него, а также при
 `hooks.allowPromptInjection: false`, host блокирует автоматический контекст.
-Плагин не меняет эти настройки. Сохранённая fixture-проверка линии `7.0.6` на
-официальном `openclaw@2026.10.7` охватывает manifest parser, регистрацию, hook runner
-и преобразование tool result; она не подтверждает полный loader,
-discovery/trust/config validation или установленный store→recall/context.
-Обычный установленный OpenClaw runtime остаётся NOT_PROVEN.
-Обновление host не входит в scope.
-Версии исходников и локальная synthetic/no-auth проверка сами по себе не подтверждают
-публикацию или установку `7.0.8`, marketplace, production, principal или свежую сессию.
+Плагин не меняет эти настройки. Границы fixture-проверок описаны в
+[OpenClaw guide](../plugin/openclaw-engram/README.md#tested-compatibility-boundary):
+они не заменяют discovery/trust/config validation и установленный
+store→recall/context на фактическом host. Публикация в npm тоже не доказывает
+установленную приёмку OpenClaw: проверь этот путь в обычном host.
+Обновление OpenClaw host не входит в эту процедуру.
+
+Для обычной однопользовательской установки Unraid нужны четыре Variable rows:
+`TZ`, `DATABASE_DSN`, `ENGRAM_VAULT_KEY`, `ENGRAM_AUTH_DISABLED`.
+Сохрани прежние значения и явный выбор auth mode. Настройки providers хранятся
+в PostgreSQL `model_settings`; API-ключи зашифрованы прежним ключом Vault.
+Непустой provider ENV имеет приоритет над БД, затем используются defaults.
+До удаления provider ENV сохрани закрытую копию прежнего шаблона и тот же ключ
+Vault. Сначала обнови сервер с прежним ENV. До перехода на четыре строки проверь
+точное совпадение всех семи настроек providers, включая расшифрованные API-ключи;
+заполнение только отсутствующих значений при старте не доказывает совпадение.
+Секреты не выводи. Порядок переноса, auth-on и отдельные Compose inputs описаны
+в [конфигурации](arch/CONFIGURATION.md#single-owner-installation), развёртывание
+и rollback — в [deployment guide](DEPLOYMENT.md).
 
 R1 — обычный установленный агент и WebUI выбирают один логический проект,
 находят и открывают существующее полезное решение с источником, историей и
