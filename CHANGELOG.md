@@ -44,6 +44,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Use registered canonical UUIDs and authenticated caller project context in MCP fixtures without weakening default-deny, privacy or pre-mutation rejection guards. Reuse 119 prior PASS plus one exact retry PASS after the context fix, not 120 fresh PASS or installed acceptance.
 - Seed the isolated operator-code fixture with a registered canonical project UUID while preserving five queue candidates, published/no-view checks and redacted provisioning errors.
 
+## [7.0.14] - 2026-10-29
+
+### Fixed
+
+- Keep the selected project, search query and memory results in place when opening or closing Settings from the sidebar. Direct `/settings` links still open the modal over Home, preserve only supported project/search parameters and remain visible after normalization.
+- Allow publication retries to retain their own success or failure receipts alongside the single immutable artifact bridge. Keep receipts separate from the payload bridge and preserve exact source, artifact identity and digest checks.
+
 ## [7.0.13] - 2026-10-29
 
 ### Fixed
