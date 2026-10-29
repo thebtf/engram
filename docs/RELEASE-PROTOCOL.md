@@ -49,7 +49,7 @@ obligations remain binding.
 | Go vet | `go vet ./...` | non-zero exit |
 | Vulnerability scan | `govulncheck ./...` | reachable vulnerability reported |
 | Build | `go build ./cmd/engram ./cmd/engram-server` | non-zero exit |
-| Plugin hooks | `node --test plugin/engram/hooks/*.test.js` | non-zero exit when hook/plugin code changed |
+| Plugin scripts | `node --test --test-concurrency=1 plugin/engram/hooks/*.test.js plugin/engram/scripts/*.test.js plugin/engram/extensions/*.test.mjs scripts/*.test.js` | non-zero exit |
 | OpenClaw plugin | `npm test --prefix plugin/openclaw-engram` | non-zero exit when OpenClaw plugin code changed |
 | OpenClaw publish version | `node plugin/openclaw-engram/scripts/check-publish-version.mjs <local> <npm>` | local version is malformed, equal to, or older than the registry version |
 | Docker image acceptance | `final-image-set.json` retained from the release workflow | manifest is missing, not `status: PASS`, does not cover `server`, `operator-console`, and `postgres`, or lacks exact IDs, zero HIGH/CRITICAL findings in the three canonical-image SARIF files, runtime proof, or cleanup PASS |

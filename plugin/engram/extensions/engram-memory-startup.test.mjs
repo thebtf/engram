@@ -18,8 +18,8 @@ async function exerciseDefaultFactory(mode) {
   assert.ok(root, 'worker requires its isolated fixture root');
   const effects = { projectResolutions: 0, projectExecutions: 0, backendRequests: 0, nativeProcesses: 0, network: 0, downloads: 0 };
   const registrations = new Map(), handlers = new Map(), sent = [], requests = [], executions = [], unhandled = [];
-  let cleanupRegisters = 0, cleanupUnregisters = 0, readiness = 'pending', factoryState = 'pending';
-  let preparation, installing, preparedSignal, failure, held, afterPreparation, settled, afterTamper;
+  let cleanupRegisters = 0, cleanupUnregisters = 0, cleanupInvocations = 0, readiness = 'pending', factoryState = 'pending';
+  let preparation, installing, preparedSignal, failure, held, afterPreparation, settled, afterTamper, afterRecovery, afterDisposal;
   const gate = deferred(), entered = deferred();
   const onUnhandled = error => unhandled.push(String(error));
   process.on('unhandledRejection', onUnhandled);
@@ -71,7 +71,7 @@ async function exerciseDefaultFactory(mode) {
   };
   lib.resolveHookProjectContext = (cwd, options) => {
     effects.projectResolutions++;
-    assert.equal(readiness, 'trusted', 'pending or failed preparation must not resolve a project');
+    assert.notEqual(readiness, 'pending', 'pending preparation must not resolve a project');
     assert.equal(options.acquire, false, 'short callbacks must remain verify-only');
     return realResolve(cwd, {
       ...options, pluginRoot: root, pluginData: root, resolve: verify,
@@ -83,7 +83,7 @@ async function exerciseDefaultFactory(mode) {
         executions.push({ args, timeout: execOptions.timeout });
         callback(null, JSON.stringify({ project_id: project }));
       },
-    });
+    }).then(context => { readiness = 'trusted'; return context; });
   };
   globalThis.fetch = async (url, options) => {
     url = new URL(url);
@@ -126,6 +126,13 @@ async function exerciseDefaultFactory(mode) {
     await handlers.get('session_start')?.({ cwd: root, sessionId }, {});
     return handlers.get('before_agent_start')?.({ cwd: root, sessionId, prompt: 'fixture prompt' }, {});
   };
+  const disposeRegistered = async () => {
+    for (const [name, cleanup] of [...registrations]) {
+      await cleanup();
+      registrations.delete(name);
+      cleanupInvocations++;
+    }
+  };
   try {
     const host = await import('@oh-my-pi/pi-utils');
     assert.equal(host.postmortem, singleton);
@@ -141,7 +148,7 @@ async function exerciseDefaultFactory(mode) {
     held = snapshot();
     assert.deepEqual(held.effects, { projectResolutions: 0, projectExecutions: 0, backendRequests: 0, nativeProcesses: 0, network: 0, downloads: 0 });
     assert.equal(held.sent, 0);
-    if (mode === 'cancelled') await registrations.get('engram-client-readiness')();
+    if (mode === 'cancelled') await disposeRegistered();
     else gate.resolve();
     await preparation.catch(() => { });
     await installing;
@@ -169,13 +176,35 @@ async function exerciseDefaultFactory(mode) {
       assert.equal(afterTamper.sent, 1, 'tampering must not replay enrichment');
     } else {
       assert.equal(settled.readiness, 'failed');
-      assert.deepEqual(settled.effects, held.effects, 'failed/corrupt readiness must not enter the consumer path');
+      assert.deepEqual(settled.effects, { ...held.effects, projectResolutions: mode === 'cancelled' ? 0 : 2 },
+        'failed/corrupt cache may be checked read-only but must not execute, fetch or deliver; disposal must not even resolve');
       assert.equal(result, undefined);
       assert.equal(sent.length, 0);
+      if (mode !== 'cancelled') {
+        fs.writeFileSync(object, bytes);
+        const recovered = await callbacks('after-verified-cache');
+        afterRecovery = snapshot();
+        assert.equal(afterRecovery.readiness, 'trusted', 'only successful real trusted resolution may admit enrichment');
+        assert.deepEqual(afterRecovery.effects, { ...held.effects, projectResolutions: 4, projectExecutions: 2, backendRequests: 2 });
+        assert.equal(sent.length, 1);
+        assert.match(sent[0].message.content, /trusted startup fixture memory/);
+        assert.deepEqual(sent[0].options, { deliverAs: 'nextTurn' });
+        assert.equal(recovered.message.content, 'trusted startup fixture ambient');
+        assert.deepEqual(executions.map((item, index) => item.timeout > 0 && item.timeout <= (index === 0 ? 5000 : 500)), [true, true]);
+      }
     }
     assert.equal(cleanupRegisters, 1, 'actual default factory must register with the guaranteed-root host singleton');
-    assert.equal(cleanupUnregisters, 1, 'settled readiness must unregister its owned cleanup');
-    assert.equal(registrations.size, 0, 'settled readiness must leave no owned cleanup');
+    assert.equal(cleanupUnregisters, 0, 'settled readiness must not cancel its actual teardown registration');
+    assert.equal(registrations.size, mode === 'cancelled' ? 0 : 1, 'retain cleanup until actual host teardown consumes it');
+    const beforeDisposal = snapshot();
+    await disposeRegistered();
+    assert.equal(await callbacks('after-disposal'), undefined);
+    afterDisposal = snapshot();
+    assert.deepEqual(afterDisposal.effects, beforeDisposal.effects, 'actual teardown must block every later resolve/exec/backend request');
+    assert.equal(afterDisposal.sent, beforeDisposal.sent, 'actual teardown must not deliver context');
+    assert.equal(registrations.size, 0, 'actual host teardown must consume its registration');
+    assert.equal(cleanupInvocations, 1);
+    assert.equal(preparedSignal.aborted, true);
     assert.equal(unhandled.length, 0, 'background rejection must be handled');
     // 7.0.8 replaces callback-admission blocking, never the trusted-execution guard.
     assert.equal(held.factoryState, 'fulfilled', 'default factory must finish while cold preparation is held');
@@ -185,13 +214,13 @@ async function exerciseDefaultFactory(mode) {
     gate.resolve();
     await preparation?.catch(() => { });
     await installing;
-    for (const cleanup of [...registrations.values()]) await cleanup();
+    await disposeRegistered();
     await turn();
     delete globalThis[Symbol.for(key)];
     process.removeListener('unhandledRejection', onUnhandled);
     console.log(`STARTUP_CAUSAL_RESULT ${JSON.stringify({
       mode, entry: fileURLToPath(entry), entrySHA256: crypto.createHash('sha256').update(fs.readFileSync(entry)).digest('hex'),
-      held, afterPreparation, settled, afterTamper, executions, requests, effects, cleanupRegisters, cleanupUnregisters,
+      held, afterPreparation, settled, afterTamper, afterRecovery, afterDisposal, executions, requests, effects, cleanupRegisters, cleanupUnregisters, cleanupInvocations,
       cleanupActive: registrations.size, loaderLifetime: 'isolated-worker', preparationSettled: readiness !== 'pending',
       preparedSignalAborted: preparedSignal?.aborted ?? null, unhandled,
       failure: failure ? { name: failure.name, message: failure.message, code: failure.code ?? null } : null,
