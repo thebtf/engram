@@ -691,7 +691,7 @@ function Assert-AcceptanceManifest {
     $runtimeBooleanFields = @(
         'critical_tests', 'volume_ownership_contract', 'server_home_persistence',
         'legacy_postgres_uid_migration', 'compose_all_healthy', 'server_liveness',
-        'server_readiness', 'operator_readiness', 'postgres_17_10', 'pgvector_0_8_1',
+        'server_readiness', 'operator_readiness', 'postgres_17_11', 'pgvector_0_8_1',
         'migrations_present', 'restart_recovery', 'postgres_recreation_retained_marker',
         'local_tags_promoted_from_exact_ids'
     )
@@ -1684,7 +1684,7 @@ $runtimeProof = [ordered]@{
     server_liveness = $false
     server_readiness = $false
     operator_readiness = $false
-    postgres_17_10 = $false
+    postgres_17_11 = $false
     pgvector_0_8_1 = $false
     migrations_present = $false
     migration_table_count = 0
@@ -2139,10 +2139,10 @@ try {
     Wait-ReadyJson -Url "$operatorUrl/api/ready"
     $runtimeProof.operator_readiness = $true
 
-    if ((Invoke-ComposePsql -Sql 'SHOW server_version;').Trim() -cne '17.10') {
-        throw 'Canonical compose PostgreSQL is not 17.10.'
+    if ((Invoke-ComposePsql -Sql 'SHOW server_version_num;').Trim() -cne '170011') {
+        throw 'Canonical compose PostgreSQL is not 17.11.'
     }
-    $runtimeProof.postgres_17_10 = $true
+    $runtimeProof.postgres_17_11 = $true
     Invoke-ComposePsql -Sql 'CREATE EXTENSION IF NOT EXISTS vector;' | Out-Null
     if ((Invoke-ComposePsql -Sql "SELECT extversion FROM pg_extension WHERE extname='vector';").Trim() -cne '0.8.1') {
         throw 'Canonical compose pgvector is not 0.8.1.'
@@ -2285,19 +2285,22 @@ try {
             dockerfile_frontend = 'docker/dockerfile:1@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89'
             server = 'gcr.io/distroless/base-debian13@sha256:0ebad3510af52aefe45045cc01b07564570be4feecf8d9f93d3a05d1b5f2f93b'
             operator_console = 'gcr.io/distroless/nodejs22-debian13@sha256:412a5f8fce490bcff01fc2a73ec43bb62071e1b71dd847eeacaae7b8ecef1dc1'
-            postgres = 'docker.io/chainguard/wolfi-base@sha256:02dab76bd852a70556b5b2002195c8a5fdab77d323c433bf6642aab080489795'
+            postgres = 'docker.io/library/postgres:17.11-alpine3.24@sha256:e4cb93687b062cd25a0e8f672d85a7708235009d70d31f8a7698d9370092a9c4'
+            pgvector_source = 'https://codeload.github.com/pgvector/pgvector/tar.gz/778dacf20c07caf904557a88705142631818d8cb'
+            pgvector_source_sha256 = '4c33cf053329784ba6d992d05c9588b93789e907a7511f20ff5a5a5b8a0703c1'
+            gosu_source = 'https://github.com/tianon/gosu.git#6456aaa0f3c854d199d0f037f068eb97515b7513'
             go_builder = 'golang:1.26.10-bookworm@sha256:5b1f78db1f54cc8cb46e652c51d3f854441c4310a449161b6fe9fb553edab505'
             node_builder = 'node:22-bookworm-slim@sha256:53ada149d435c38b14476cb57e4a7da73c15595aba79bd6971b547ceb6d018bf'
         }
         pinned_packages = [ordered]@{
             libssl3t64 = '3.5.7-1~deb13u3'
-            bash = '5.3-r12'
-            busybox = '1.38.0-r2'
-            gosu = '1.19-r13'
-            libcrypto3 = '3.6.4-r5'
-            libssl3 = '3.6.4-r5'
-            postgresql = '17.10-r1'
-            pgvector = '0.8.1-r0'
+            bash = '5.3.9-r1'
+            busybox = '1.37.0-r31'
+            gosu = '1.19'
+            libcrypto3 = '3.5.9-r0'
+            libssl3 = '3.5.9-r0'
+            postgresql = '17.11'
+            pgvector = '0.8.1'
         }
         image_ids = $imageIds
         local_runtime_image_ids = $localImageIds
