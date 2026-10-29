@@ -49,9 +49,9 @@ Hook не ожидает вымышленный `response.sessionId` и не в�
 Плагин не меняет эти настройки. Границы fixture-проверок описаны в
 [OpenClaw guide](../plugin/openclaw-engram/README.md#tested-compatibility-boundary):
 они не заменяют discovery/trust/config validation и установленный
-store→recall/context на фактическом host. Обычный установленный OpenClaw runtime
-по [#503](https://github.com/thebtf/engram/issues/503) остаётся NOT_PROVEN;
-публикация в npm его не доказывает. Обновление OpenClaw host не входит в эту процедуру.
+store→recall/context на фактическом host. Публикация в npm тоже не доказывает
+установленную приёмку OpenClaw: проверь этот путь в обычном host.
+Обновление OpenClaw host не входит в эту процедуру.
 
 Для обычной однопользовательской установки Unraid нужны четыре Variable rows:
 `TZ`, `DATABASE_DSN`, `ENGRAM_VAULT_KEY`, `ENGRAM_AUTH_DISABLED`.
