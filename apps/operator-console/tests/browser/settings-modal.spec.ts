@@ -86,9 +86,13 @@ test('settings defers its traffic until an actual open and restores the shell af
   await expect(dialog).toBeHidden()
   await expectModalEnvironmentRestored(page, trigger)
 
-  await page.goto('/settings')
-  await expect(dialog).toBeVisible()
+  const project = '11111111-1111-4111-8111-111111111111'
+  await page.goto(`/settings?project=${project}&q=operator&page=1&filter=active&filter=chain&redirect=ignored`)
   await expect.poll(() => new URL(page.url()).pathname).toBe('/')
+  await expect(dialog).toBeVisible()
+  expect(Object.fromEntries(new URL(page.url()).searchParams)).toEqual({ project, q: 'operator', page: '1', filter: 'chain' })
+  expect(new URL(page.url()).searchParams.getAll('filter')).toEqual(['active', 'chain'])
+  await expect(page.getByTestId('project-context-select')).toHaveValue(project)
   const directRouteRequestCounts = Object.fromEntries(deferredSettingsPaths.map((path) => [path, 2]))
   await expect.poll(() => settingsRequestCounts(settingsRequests)).toEqual(directRouteRequestCounts)
   await page.keyboard.press('Escape')
@@ -121,3 +125,44 @@ test('settings defers its traffic until an actual open and restores the shell af
   expect(unexpectedBadResponses).toEqual([])
   expect(pageErrors).toEqual([])
 })
+
+for (const mobile of [false, true]) {
+  test(`sidebar settings preserves memory context (${mobile ? 'mobile' : 'desktop keyboard'})`, async ({ page }) => {
+    if (mobile) await page.setViewportSize({ width: 390, height: 844 })
+    const project = '11111111-1111-4111-8111-111111111111'
+    const location = `/memory?project=${project}&q=operator&page=1&memory=101`
+    await page.goto(location)
+    const content = page.getByTestId('memory-content')
+    await expect(content).toHaveText('operator console = data plane: manage memory PRODUCT, config one Settings tab')
+    const rows = await page.locator('[data-testid^="memory-row-"]').allTextContents()
+    const navigations: string[] = []
+    page.on('framenavigated', (frame) => { if (frame === page.mainFrame()) navigations.push(frame.url()) })
+    if (mobile) await page.locator('.mobile-menu-button').click()
+    const trigger = page.locator('.nav-item[href^="/settings"]')
+    if (mobile) await trigger.click()
+    else {
+      await trigger.focus()
+      await page.keyboard.press('Enter')
+    }
+    const dialog = page.getByRole('dialog', { name: 'Настройки сервера' })
+    await expect(dialog).toBeVisible()
+    await dialog.getByRole('button', { name: 'Модели', exact: true }).click()
+    await expect(dialog.getByRole('heading', { name: 'Модели', exact: true })).toBeVisible()
+    await expect(page).toHaveURL(new RegExp(`${location.replace('?', '\\?')}$`))
+    await expect(page.getByTestId('project-context-select')).toHaveValue(project)
+    expect(navigations).toEqual([])
+    await dialog.getByRole('button', { name: 'Закрыть настройки' }).click()
+    await expect(dialog).toBeHidden()
+    await expectModalEnvironmentRestored(page, mobile ? undefined : trigger)
+    expect(new URL(page.url()).pathname + new URL(page.url()).search).toBe(location)
+    await expect(content).toHaveText('operator console = data plane: manage memory PRODUCT, config one Settings tab')
+    expect(await page.locator('[data-testid^="memory-row-"]').allTextContents()).toEqual(rows)
+    if (mobile) {
+      await expect(page.locator('.mobile-menu-button')).toHaveAttribute('aria-expanded', 'false')
+      await page.locator('.mobile-menu-button').click()
+    }
+    await page.locator('.nav-item[href^="/health"]').click()
+    await expect.poll(() => new URL(page.url()).pathname).toBe('/health')
+    await expect(page.getByTestId('project-context-select')).toHaveValue(project)
+  })
+}

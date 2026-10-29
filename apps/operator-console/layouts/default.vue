@@ -353,7 +353,7 @@ function onDocumentKeydown(event: KeyboardEvent) {
             :class="{ tomb: item.cls === 'stale' }"
             exact-active-class="on"
             :title="t(`nav.items.${item.labelKey}`)"
-            @click="handleNavItemClick($event, item)"
+            @click.capture="handleNavItemClick($event, item)"
           >
             <span class="ndot" :data-s="dotState(item.cls)" />
             <span v-html="navIcon(item.id)" />
