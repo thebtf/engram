@@ -183,6 +183,7 @@ func TestIngestWriteGateRespectsExistingMemoryVisibility(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		memory  *models.Memory
+		session string
 		flagged int
 	}{
 		{name: "no existing row"},
@@ -191,6 +192,9 @@ func TestIngestWriteGateRespectsExistingMemoryVisibility(t *testing.T) {
 		{name: "foreign workstation hidden", memory: &models.Memory{PrivacyScope: "private", SourceWorkstationID: "keycard-bob"}},
 		{name: "visible project duplicate", memory: &models.Memory{PrivacyScope: "project"}, flagged: 1},
 		{name: "owner private duplicate", memory: &models.Memory{OwnerPrincipal: "agent/alice", OwnerPrincipalKind: "agent", AgentVisibility: models.AgentVisibilityPrivate}, flagged: 1},
+		{name: "same workstation other session hidden", memory: &models.Memory{PrivacyScope: "private", SourceWorkstationID: "keycard-alice", SourceSessions: []string{"session-other"}}, session: "session-alice"},
+		{name: "same workstation same session duplicate", memory: &models.Memory{PrivacyScope: "private", SourceWorkstationID: "keycard-alice", SourceSessions: []string{"session-alice"}}, session: "session-alice", flagged: 1},
+		{name: "no session workstation fallback duplicate", memory: &models.Memory{PrivacyScope: "private", SourceWorkstationID: "keycard-alice", SourceSessions: []string{"session-other"}}, flagged: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			project := uuid.NewString()
@@ -209,13 +213,30 @@ func TestIngestWriteGateRespectsExistingMemoryVisibility(t *testing.T) {
 			srv := NewServer(ServerOptions{Version: "ingest-privacy-test"})
 			srv.SetMemoryStore(memoryStore)
 			ctx := auth.WithIdentity(context.Background(), auth.ClientWithPrincipal("read-write", "keycard-alice", "agent/alice", auth.PrincipalKindAgent))
-			result, err := srv.handleIngest(ctx, mustJSON(t, map[string]any{"action": "ingest", "project": project, "content": content, "source_title": "synthetic-fixture"}))
-			require.NoError(t, err)
+			ctx = ContextWithProject(ctx, project)
+			if tc.session != "" {
+				ctx = ContextWithSession(ctx, tc.session)
+			}
+			result := srv.HandleRequest(ctx, &Request{
+				JSONRPC: "2.0",
+				ID:      1,
+				Method:  "tools/call",
+				Params:  mustJSON(t, map[string]any{"name": "ingest", "arguments": map[string]any{"action": "ingest", "project": project, "content": content, "source_title": "synthetic-fixture"}}),
+			})
+			require.NotNil(t, result)
+			require.Nil(t, result.Error)
+			var toolResult struct {
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+			}
+			require.NoError(t, json.Unmarshal(mustJSON(t, result.Result), &toolResult))
+			require.Len(t, toolResult.Content, 1)
 			var response struct {
 				Stored  int `json:"stored"`
 				Flagged int `json:"flagged"`
 			}
-			require.NoError(t, json.Unmarshal([]byte(result), &response))
+			require.NoError(t, json.Unmarshal([]byte(toolResult.Content[0].Text), &response))
 			require.Equal(t, 1, response.Stored)
 			require.Equal(t, tc.flagged, response.Flagged, "a hidden matching row must not change the caller-visible write-gate result")
 			var created gormdb.Memory

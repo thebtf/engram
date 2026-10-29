@@ -56,7 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Keep valueless Compose environment bindings inside the deployment wrapper's frozen dotenv boundary, preventing inherited provider URLs or other optional overrides from reaching deployment. Reject noncanonical protected assignments before Compose, preserve single-quoted literal dollars and compare effective literal values. Document the optional Unraid admin-token row for auth-on installations.
 - Pin Vue I18n and its locked Intlify dependencies to 11.4.16, fixing CVE-2026-118257 (GHSA-83rm-6c8r-g728) without changing the Vue framework or console translations.
 - Run transcript retention on the existing four-hour maintenance tick even without an LLM or an admitted memory sleep cycle. Retry the durable transcript queue independently of the new-memory threshold while preserving the idle gate, failed work across skipped ticks/restarts, `0` as no automatic unprocessed expiry, and inference-before-pruning order.
-- Keep hidden principal, domain and workstation memories out of ingestion duplicate flags through the shared visibility boundary. Correct candidate descriptions and remove the unused retired proxy helper while retaining transport peer capture ([#593](https://github.com/thebtf/engram/pull/593)).
+- Keep hidden principal, domain, workstation and session-private memories out of ingestion duplicate flags through the shared visibility boundary. Preserve workstation-only visibility for callers without a session. Correct candidate descriptions and remove the unused retired proxy helper while retaining transport peer capture ([#593](https://github.com/thebtf/engram/pull/593)).
 
 ## [7.0.11] - 2026-10-27
 

@@ -91,7 +91,7 @@ func (s *Server) ingestDocument(ctx context.Context, a ingestArgs) (string, erro
 		if listErr != nil {
 			log.Warn().Err(listErr).Msg("ingest: write gate could not load existing memories, skipping gate")
 		} else {
-			existing = filterVisibleWriteGateCandidates(ctx, "", existing)
+			existing = filterVisibleWriteGateCandidates(ctx, sessionFromContext(ctx), existing)
 		}
 	}
 
