@@ -18,12 +18,9 @@ func TestPostgresImageContract(t *testing.T) {
 	repo := repositoryRoot(t)
 	dockerfile := filepath.Join(repo, "deploy", "postgres", "Dockerfile")
 	requireFileContains(t, dockerfile,
-		"docker.io/chainguard/wolfi-base@sha256:02dab76bd852a70556b5b2002195c8a5fdab77d323c433bf6642aab080489795",
-		"apk --repositories-file /dev/null --repository https://packages.wolfi.dev/os --no-cache add",
-		"bash=5.3-r12",
-		"gosu=1.19-r13",
-		"postgresql-17=17.10-r1",
-		"pgvector-17=0.8.1-r0",
+		"docker.io/library/postgres:17.11-alpine3.24@sha256:e4cb93687b062cd25a0e8f672d85a7708235009d70d31f8a7698d9370092a9c4",
+		"docker.io/library/golang:1.26.10-bookworm@sha256:5b1f78db1f54cc8cb46e652c51d3f854441c4310a449161b6fe9fb553edab505",
+		"COPY --from=pgvector-build /out/usr/local/lib/postgresql/",
 		"LANG=C.UTF-8",
 		"LC_ALL=C.UTF-8",
 		"USER 70:70",
@@ -39,6 +36,17 @@ func TestPostgresImageContract(t *testing.T) {
 	requireEnv(t, config.Config.Env, "LC_ALL", "C.UTF-8")
 	requireProvenanceLabels(t, config.Config.Labels)
 	requireHealthCommand(t, config.Config.Healthcheck, "pg_isready")
+
+	t.Run("gosu retains identity switching", func(t *testing.T) {
+		for _, flag := range []string{"-u", "-g"} {
+			got := runDocker(t, nil, "run", "--rm", "--network", "none", "--read-only",
+				"--user", "0:0", "--cap-drop", "ALL", "--cap-add", "SETUID", "--cap-add", "SETGID",
+				"--entrypoint", "/usr/local/bin/gosu", image, "postgres", "id", flag)
+			if strings.TrimSpace(string(got)) != "70" {
+				t.Fatalf("gosu did not switch postgres identity (%s): %q", flag, got)
+			}
+		}
+	})
 
 	prefix := uniqueResource("engram-prc-postgres-test")
 	network := "none"
@@ -98,8 +106,8 @@ func TestPostgresImageContract(t *testing.T) {
 		t.Fatalf("persistent marker lost across legacy UID ownership migration: %q", got)
 	}
 
-	t.Run("wrong locale never becomes ready", func(t *testing.T) {
-		name := prefix + "-wrong-locale"
+	t.Run("invalid builtin locale never becomes ready", func(t *testing.T) {
+		name := prefix + "-invalid-locale"
 		t.Cleanup(func() { removeContainer(name) })
 		runDocker(t, nil,
 			"run", "-d", "--name", name,
@@ -109,11 +117,15 @@ func TestPostgresImageContract(t *testing.T) {
 			"--tmpfs", "/tmp:rw,noexec,nosuid,nodev,uid=70,gid=70,mode=0700,size=64m",
 			"--tmpfs", "/var/run/postgresql:rw,noexec,nosuid,nodev,uid=70,gid=70,mode=0700,size=16m",
 			"--tmpfs", "/var/lib/postgresql/data:rw,noexec,nosuid,nodev,uid=70,gid=70,mode=0700,size=256m",
-			"-e", "LANG=en_US.UTF-8", "-e", "LC_ALL=en_US.UTF-8",
+			"-e", "POSTGRES_INITDB_ARGS=--locale-provider=builtin --builtin-locale=invalid_locale_713",
 			"-e", "POSTGRES_DB=engram", "-e", "POSTGRES_USER=engram", "-e", "POSTGRES_PASSWORD=engram",
 			image,
 		)
 		waitNotHealthy(t, name, 45*time.Second)
+		logs := string(runDocker(t, nil, "logs", name))
+		if !strings.Contains(logs, `invalid locale name "invalid_locale_713" for builtin provider`) {
+			t.Fatalf("invalid locale failed for an unexpected reason: %s", logs)
+		}
 	})
 
 	t.Run("tmpfs-only data is not durable", func(t *testing.T) {
@@ -174,7 +186,7 @@ func startPostgresTmpfs(t *testing.T, name, image string) {
 
 func requirePostgresVersions(t *testing.T, container string) {
 	t.Helper()
-	if got := psql(t, container, "SHOW server_version"); got != "17.10" {
+	if got := psql(t, container, "SHOW server_version_num"); got != "170011" {
 		t.Fatalf("PostgreSQL version mismatch: %q", got)
 	}
 	psql(t, container, "CREATE EXTENSION IF NOT EXISTS vector")
