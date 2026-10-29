@@ -1,12 +1,15 @@
 <script setup lang="ts">
+import { safeNavigation } from '../composables/useOperatorProjectContext'
+
 const { openSettingsModal } = useSettingsModal()
 const router = useRouter()
 
-onMounted(() => {
-  openSettingsModal('general')
-  if (router.currentRoute.value.path === '/settings') {
-    void router.replace('/')
+onMounted(async () => {
+  const route = router.currentRoute.value
+  if (route.path === '/settings') {
+    await router.replace({ path: '/', query: safeNavigation(route.query, route.fullPath) })
   }
+  openSettingsModal('general')
 })
 </script>
 
