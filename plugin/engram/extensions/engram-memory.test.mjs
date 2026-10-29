@@ -519,15 +519,45 @@ test('OMP quiet or unconfigured installation skips acquisition and requires a fr
 
 test('OMP background readiness budget includes config and never trusts late preparation', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
-  let finishConfig, finishPreparation, preparedSignal;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-readiness-expired-recovery-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const bytes = Buffer.from('verified client appearing after startup readiness deadline');
+  const version = require('../package.json').version;
+  const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
+  const targets = Object.fromEntries(Object.entries(TARGET_ASSETS).map(([key, asset]) => [key, { version, asset, size: bytes.length, sha256 }]));
+  const policy = parsePolicy(JSON.stringify(createPolicy(version, targets)), version);
+  const roots = objectRoots(root), object = objectPath(roots, policy.target.desired);
+  let finishConfig, finishPreparation, preparedSignal, cleanup, preparations = 0, acquisitions = 0;
   const config = new Promise(resolve => { finishConfig = resolve; });
   const preparation = new Promise(resolve => { finishPreparation = resolve; });
-  const handlers = new Map();
+  const handlers = new Map(), sent = [], resolutions = [], executions = [];
   const { adapter, calls } = extension({
     resolveEngramRuntimeConfig: () => config,
-    prepareHookClient: options => { preparedSignal = options.signal; return preparation; },
+    prepareHookClient: options => { preparations++; preparedSignal = options.signal; return preparation; },
+    registerCleanup: (_name, callback) => { cleanup = callback; return () => { }; },
+    resolveHookProjectContext: (cwd, options) => {
+      resolutions.push({ timeoutMs: options.timeoutMs, deadlineAt: options.deadlineAt });
+      assert.equal(options.acquire, false);
+      assert.notEqual(options.signal, preparedSignal, 'new callbacks must not inherit the expired preparation signal');
+      assert.equal(options.signal.aborted, false);
+      assert.equal(options.deadlineAt, Date.now() + options.timeoutMs, 'new callbacks receive fresh absolute budgets');
+      return resolveHookProjectContext(cwd, {
+        ...options, pluginRoot: root, pluginData: root,
+        resolve: forwarded => resolveForLaunch({
+          ...forwarded, policy, parserTarget: null,
+          request() { acquisitions++; assert.fail('future callbacks must never acquire a client'); },
+        }),
+        execFile(file, _args, nativeOptions, callback) {
+          assert.equal(file, object);
+          assert.equal(hashFile(file, policy.target.desired, roots.objects), true);
+          assert.equal(nativeOptions.signal.aborted, false);
+          executions.push({ timeout: nativeOptions.timeout });
+          callback(null, JSON.stringify({ project_id: projects[cwd] }));
+        },
+      });
+    },
   });
-  const installing = adapter.install({ on: (name, callback) => handlers.set(name, callback), sendMessage() { throw new Error('late readiness must not send'); } });
+  const installing = adapter.install({ on: (name, callback) => handlers.set(name, callback), sendMessage: message => sent.push(message) });
   let installState = 'pending';
   const installed = installing.then(() => { installState = 'ready'; }, () => { installState = 'rejected'; });
   await new Promise(resolve => setImmediate(resolve));
@@ -544,14 +574,41 @@ test('OMP background readiness budget includes config and never trusts late prep
   assert.equal(preparedSignal.aborted, true);
   finishPreparation();
   await new Promise(resolve => setImmediate(resolve));
+  assert.equal(executions.length, 0, 'late completion of the expired preparation must not execute a client');
+  assert.equal(calls.length, 0, 'late preparation completion must not replay any context request');
+  assert.equal(sent.length, 0);
   assert.deepEqual([...handlers.keys()], ['session_start', 'before_agent_start']);
   assert.equal(await handlers.get('session_start')({ cwd: '/session/a', sessionId: 'expired' }, {}), undefined);
   assert.equal(await handlers.get('before_agent_start')({ cwd: '/session/a', sessionId: 'expired', prompt: 'fixture' }, {}), undefined);
   assert.equal(calls.length, 0);
+  fs.writeFileSync(object, bytes);
+  await handlers.get('session_start')({ cwd: '/session/a', sessionId: 'fresh-after-deadline' }, {});
+  const ambient = await handlers.get('before_agent_start')({ cwd: '/session/a', sessionId: 'fresh-after-deadline', prompt: 'fixture' }, {});
+  assert.deepEqual({
+    session: sent[0]?.content.includes(projects['/session/a']) ?? false,
+    ambient: ambient?.message?.content.includes(projects['/session/a']) ?? false,
+  }, { session: true, ambient: true }, 'new qualified callbacks must recover after the startup timer expires once local cache verifies');
+  assert.deepEqual(resolutions.slice(-2).map(result => result.timeoutMs), [5000, 500]);
+  assert.deepEqual(executions.map(result => result.timeout), [5000, 500]);
+  assert.equal(calls.length, 2);
+  assert.equal(preparations, 1, 'recovery must not restart preparation');
+  assert.equal(acquisitions, 0, 'recovery must only verify existing local bytes');
+  await cleanup();
+  await handlers.get('session_start')({ cwd: '/session/a', sessionId: 'disposed-after-timeout-recovery' }, {});
+  assert.equal(await handlers.get('before_agent_start')({ cwd: '/session/a', sessionId: 'disposed-after-timeout-recovery', prompt: 'fixture' }, {}), undefined);
+  assert.equal(executions.length, 2, 'captured explicit disposal must still permanently close future native execution');
+  assert.equal(calls.length, 2);
+  assert.equal(sent.length, 1);
 });
 
 test('OMP expired background configuration cannot start late acquisition or replay context', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-config-expired-no-cache-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const version = require('../package.json').version, bytes = Buffer.from('missing expired-config client');
+  const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
+  const targets = Object.fromEntries(Object.entries(TARGET_ASSETS).map(([key, asset]) => [key, { version, asset, size: bytes.length, sha256 }]));
+  const policy = parsePolicy(JSON.stringify(createPolicy(version, targets)), version);
   let finishConfig, preparations = 0, unregistered = false;
   const config = new Promise(resolve => { finishConfig = resolve; });
   const diagnostics = [], handlers = new Map();
@@ -560,6 +617,11 @@ test('OMP expired background configuration cannot start late acquisition or repl
     prepareHookClient: async () => { preparations++; },
     registerCleanup: () => () => { unregistered = true; },
     onDiagnostic: message => diagnostics.push(message),
+    resolveHookProjectContext: (cwd, options) => resolveHookProjectContext(cwd, {
+      ...options, pluginRoot: root, pluginData: root,
+      resolve: forwarded => resolveForLaunch({ ...forwarded, policy, parserTarget: null, request() { assert.fail('expired callbacks must not acquire'); } }),
+      execFile() { assert.fail('missing cache must not execute after background configuration expiry'); },
+    }),
   });
   await adapter.install({ on: (name, callback) => handlers.set(name, callback), sendMessage() { throw new Error('expired config must not send'); } });
   t.mock.timers.tick(360000);
