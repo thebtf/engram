@@ -269,6 +269,124 @@ test('OMP background readiness handles offline, hash and cooperative abort failu
   }
 });
 
+test('OMP failed startup readiness recovers through verified local cache without another acquisition', async t => {
+  for (const [eventName, budget] of [['session_start', 5000], ['before_agent_start', 500]]) {
+    await t.test(eventName, async t => {
+      t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-readiness-recovery-'));
+      t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+      const bytes = Buffer.from('verified local client after failed preparation');
+      const version = require('../package.json').version;
+      const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
+      const targets = Object.fromEntries(Object.entries(TARGET_ASSETS).map(([key, asset]) => [key, { version, asset, size: bytes.length, sha256 }]));
+      const policy = parsePolicy(JSON.stringify(createPolicy(version, targets)), version);
+      const roots = objectRoots(root), object = objectPath(roots, policy.target.desired);
+      const handlers = new Map(), sent = [], resolutions = [], executions = [], contextRequests = [];
+      let preparations = 0, acquisitions = 0, quiet = false, finishSettlement;
+      const settled = new Promise(resolve => { finishSettlement = resolve; });
+      const resolve = options => resolveForLaunch({
+        ...options, pluginRoot: root, pluginData: root, policy, parserTarget: null,
+        request() { acquisitions++; throw new Error('synthetic acquisition unavailable'); },
+      });
+      const { adapter } = extension({
+        isQuiet: () => quiet,
+        onDiagnostic() { },
+        registerCleanup: () => () => finishSettlement(),
+        prepareHookClient: options => {
+          preparations++;
+          return prepareHookClient({ ...options, pluginRoot: root, pluginData: root, resolve });
+        },
+        resolveHookProjectContext: (cwd, options) => {
+          resolutions.push({ cwd, acquire: options.acquire, timeoutMs: options.timeoutMs, deadlineAt: options.deadlineAt });
+          assert.equal(options.acquire, false, 'callback recovery must remain read-only and never acquire');
+          assert.equal(options.timeoutMs, budget);
+          assert.equal(options.deadlineAt, Date.now() + budget);
+          return resolveHookProjectContext(cwd, {
+            ...options, pluginRoot: root, pluginData: root, resolve,
+            execFile(file, args, options, callback) {
+              executions.push({ file, args, timeout: options.timeout });
+              assert.equal(file, object);
+              assert.equal(hashFile(file, policy.target.desired, roots.objects), true);
+              assert.equal(options.timeout, budget);
+              callback(null, JSON.stringify({ project_id: projects[cwd] }));
+            },
+          });
+        },
+        requestPost: async (route, body, timeout, options) => {
+          contextRequests.push({ route, body, timeout });
+          assert.equal(timeout, budget);
+          assert.equal(options.signal.aborted, false);
+          return route === '/api/context/session-start'
+            ? { memories: [{ content: `recovered memory for ${body.project}` }] }
+            : { additional_context: `recovered memory for ${body.project}` };
+        },
+      });
+      await adapter.install({ on: (name, handler) => handlers.set(name, handler), sendMessage: (message, options) => sent.push({ message, options }) });
+      await settled;
+      assert.equal(preparations, 1);
+      assert.equal(acquisitions, 1, 'one failed startup acquisition is the baseline');
+      const fire = (sessionId, cwd = '/session/a') => handlers.get(eventName)({ cwd, sessionId, prompt: 'restore backups' }, {});
+      await fire('cache-missing');
+      fs.writeFileSync(object, Buffer.alloc(bytes.length));
+      await fire('cache-hash-invalid');
+      assert.equal(executions.length, 0, 'missing or hash-invalid objects must not execute');
+      assert.equal(contextRequests.length, 0, 'missing or hash-invalid cache must not reach backend HTTP');
+      assert.equal(sent.length, 0, 'untrusted cache must not deliver hidden context');
+      fs.writeFileSync(object, bytes);
+      quiet = true;
+      const resolutionsBeforeQuiet = resolutions.length;
+      await fire('quiet-valid-cache');
+      assert.equal(resolutions.length, resolutionsBeforeQuiet, 'quiet callbacks must not attempt recovery');
+      assert.equal(contextRequests.length, 0);
+      quiet = false;
+      const result = await fire('verified-cache-now-present');
+      const delivered = eventName === 'session_start' ? sent.at(-1)?.message : result?.message;
+      assert.ok(delivered, 'same failed binding must deliver on the next qualified callback once the local cache verifies');
+      assert.equal(delivered.customType, 'engram-memory');
+      assert.equal(delivered.display, false);
+      assert.ok(delivered.content.includes(`recovered memory for ${projects['/session/a']}`));
+      assert.equal(executions.length, 1);
+      assert.ok(resolutions.length >= 3, 'missing, invalid and valid callbacks must each use the trusted resolver');
+      assert.equal(contextRequests.length, 1);
+      if (eventName === 'session_start') assert.deepEqual(sent[0].options, { deliverAs: 'nextTurn' });
+      fs.writeFileSync(object, Buffer.alloc(bytes.length));
+      const afterTamper = await fire('invalid-after-recovery', '/session/b');
+      assert.equal(afterTamper, undefined);
+      assert.equal(executions.length, 1, 'recovery must not bypass later final integrity verification');
+      assert.equal(contextRequests.length, 1, 'tampered cache must not fetch another project context');
+      assert.equal(preparations, 1, 'no new background readiness job or foreground prepare is allowed');
+      assert.equal(acquisitions, 1, 'callback recovery must not initiate a network download');
+    });
+  }
+});
+
+test('OMP first readiness failure diagnostic retains safe stage code and plugin version', async () => {
+  const version = require('../package.json').version;
+  const diagnostics = [], handlers = new Map();
+  let finishSettlement;
+  const settled = new Promise(resolve => { finishSettlement = resolve; });
+  const rawFailure = Object.assign(new Error('private_path_fixture https://private-fixture.invalid/?token=token_fixture secret_fixture'), { code: 'HOOK_CLIENT_UNAVAILABLE' });
+  const { adapter, calls } = extension({
+    onDiagnostic: message => diagnostics.push(message),
+    registerCleanup: () => () => finishSettlement(),
+    prepareHookClient: async () => { throw rawFailure; },
+    resolveHookProjectContext: async () => { throw new Error('later_resolver_error_fixture'); },
+  });
+  await adapter.install({ on: (name, handler) => handlers.set(name, handler), sendMessage() { throw new Error('failed readiness must not send'); } });
+  await settled;
+  assert.ok(diagnostics.length > 0, 'the first startup failure must remain diagnosable');
+  const first = diagnostics.join('\n');
+  await handlers.get('session_start')({ cwd: '/session/a', sessionId: 'diagnostic-later' }, {});
+  const later = diagnostics.join('\n');
+  for (const message of [first, later]) {
+    assert.match(message, /(?:stage[=: ]+prepare|prepareHookClient)/, 'diagnostic must identify the failed preparation stage');
+    assert.ok(message.includes('HOOK_CLIENT_UNAVAILABLE'), 'retain a stable safe code, not the discarded exception text');
+    assert.ok(message.includes(version), 'diagnostic must identify the loaded plugin package version');
+    assert.doesNotMatch(message, /private_path_fixture|private-fixture|token_fixture|secret_fixture|later_resolver_error_fixture|https?:\/\//);
+  }
+  assert.equal(calls.length, 0);
+});
+
 for (const mode of ['unconfigured', 'config-quiet']) {
   test(`OMP skipped ${mode} callbacks stay silent until eligibility is enabled later`, async t => {
     let enabled = false, finishSettlement, acquisitions = 0, resolutions = 0, backendRequests = 0, messages = 0, unregistered = false;
