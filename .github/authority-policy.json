@@ -18,12 +18,12 @@
     "type": "User"
   },
   "transition": {
-    "consumed_epoch": "authority-0078",
-    "event_base_sha": "7d720640b1c2fbf8e3ba11dd8d5ef8105541424c"
+    "consumed_epoch": "authority-0080",
+    "event_base_sha": "e3ea787e7e5b2072e9c846b27b72b97176349a11"
   },
   "active_epoch": {
-    "id": "authority-0079",
-    "label": "authority-maintenance:authority-0079",
+    "id": "authority-0081",
+    "label": "authority-maintenance:authority-0081",
     "exact_changes": [
       {
         "status": "M",
