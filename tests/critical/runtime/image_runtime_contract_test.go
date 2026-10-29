@@ -1834,13 +1834,70 @@ func testArtifactBridgeMatrix(t *testing.T, repo string) {
 		artifactName = "engram-release-payload-12345-1"
 	)
 	digest := "sha256:" + strings.Repeat("d", 64)
+	provenance := func() map[string]any {
+		return map[string]any{"id": workflowRun, "repository_id": 42, "head_repository_id": 42, "head_branch": "main", "head_sha": strings.Repeat("c", 40)}
+	}
+	receipt := func(f map[string]any) map[string]any { return f["artifacts"].([]map[string]any)[1] }
 	type metadataMutation func(map[string]any)
 	metadataCases := []struct {
-		name   string
-		pass   bool
-		mutate metadataMutation
+		name         string
+		pass         bool
+		withEvidence bool
+		mutate       metadataMutation
 	}{
 		{name: "one exact same-run immutable artifact", pass: true},
+		{name: "bridge plus own failed-attempt evidence", pass: true, withEvidence: true},
+		{name: "receipt before bridge", pass: true, withEvidence: true, mutate: func(f map[string]any) {
+			artifacts := f["artifacts"].([]map[string]any)
+			artifacts[0], artifacts[1] = artifacts[1], artifacts[0]
+		}},
+		{name: "multiple own attempt receipts", pass: true, withEvidence: true, mutate: func(f map[string]any) {
+			f["total_count"] = 3
+			f["artifacts"] = append(f["artifacts"].([]map[string]any), map[string]any{
+				"id": 779, "name": "engram-publication-evidence-12345-2", "digest": digest, "expired": false,
+				"url": "https://api.github.com/repos/thebtf/engram/actions/artifacts/779", "workflow_run": provenance(),
+			})
+		}},
+		{name: "duplicate evidence ID", withEvidence: true, mutate: func(f map[string]any) {
+			f["total_count"] = 3
+			f["artifacts"] = append(f["artifacts"].([]map[string]any), map[string]any{
+				"id": 778, "name": "engram-publication-evidence-12345-2", "digest": digest, "expired": false,
+				"url": "https://api.github.com/repos/thebtf/engram/actions/artifacts/778", "workflow_run": provenance(),
+			})
+		}},
+		{name: "duplicate evidence name", withEvidence: true, mutate: func(f map[string]any) {
+			f["total_count"] = 3
+			f["artifacts"] = append(f["artifacts"].([]map[string]any), map[string]any{
+				"id": 779, "name": "engram-publication-evidence-12345-1", "digest": digest, "expired": false,
+				"url": "https://api.github.com/repos/thebtf/engram/actions/artifacts/779", "workflow_run": provenance(),
+			})
+		}},
+		{name: "incomplete census with evidence", withEvidence: true, mutate: func(f map[string]any) { f["total_count"] = 3 }},
+		{name: "underreported census with evidence", withEvidence: true, mutate: func(f map[string]any) { f["total_count"] = 1 }},
+		{name: "foreign evidence run name", withEvidence: true, mutate: func(f map[string]any) { receipt(f)["name"] = "engram-publication-evidence-99999-1" }},
+		{name: "malformed evidence attempt", withEvidence: true, mutate: func(f map[string]any) { receipt(f)["name"] = "engram-publication-evidence-12345-0" }},
+		{name: "malformed evidence name suffix", withEvidence: true, mutate: func(f map[string]any) { receipt(f)["name"] = "engram-publication-evidence-12345-1\n" }},
+		{name: "foreign evidence run provenance", withEvidence: true, mutate: func(f map[string]any) { receipt(f)["workflow_run"].(map[string]any)["id"] = 99999 }},
+		{name: "foreign evidence repository", withEvidence: true, mutate: func(f map[string]any) { receipt(f)["workflow_run"].(map[string]any)["repository_id"] = 43 }},
+		{name: "foreign evidence head repository", withEvidence: true, mutate: func(f map[string]any) { receipt(f)["workflow_run"].(map[string]any)["head_repository_id"] = 43 }},
+		{name: "foreign evidence source", withEvidence: true, mutate: func(f map[string]any) {
+			receipt(f)["workflow_run"].(map[string]any)["head_sha"] = strings.Repeat("e", 40)
+		}},
+		{name: "foreign evidence branch", withEvidence: true, mutate: func(f map[string]any) { receipt(f)["workflow_run"].(map[string]any)["head_branch"] = "foreign" }},
+		{name: "foreign evidence URL", withEvidence: true, mutate: func(f map[string]any) {
+			receipt(f)["url"] = "https://api.github.com/repos/foreign/engram/actions/artifacts/778"
+		}},
+		{name: "malformed evidence digest", withEvidence: true, mutate: func(f map[string]any) { receipt(f)["digest"] = "not-a-digest" }},
+		{name: "expired evidence", withEvidence: true, mutate: func(f map[string]any) { receipt(f)["expired"] = true }},
+		{name: "evidence reuses bridge ID", withEvidence: true, mutate: func(f map[string]any) { receipt(f)["id"] = artifactID }},
+		{name: "evidence substitutes for bridge", withEvidence: true, mutate: func(f map[string]any) {
+			f["total_count"] = 1
+			f["artifacts"] = []map[string]any{receipt(f)}
+		}},
+		{name: "conflicting second bridge with evidence", withEvidence: true, mutate: func(f map[string]any) {
+			f["total_count"] = 3
+			f["artifacts"] = append(f["artifacts"].([]map[string]any), map[string]any{"id": 779, "name": "engram-release-payload-12345-2", "digest": digest, "expired": false, "workflow_run": provenance()})
+		}},
 		{name: "missing artifact", mutate: func(f map[string]any) { f["total_count"] = 0; f["artifacts"] = []any{} }},
 		{name: "extra artifact", mutate: func(f map[string]any) {
 			f["total_count"] = 2
@@ -1851,6 +1908,9 @@ func testArtifactBridgeMatrix(t *testing.T, repo string) {
 			f["artifacts"] = append(f["artifacts"].([]map[string]any), map[string]any{"id": 778, "name": artifactName, "digest": digest, "expired": false, "workflow_run": map[string]any{"id": workflowRun}})
 		}},
 		{name: "artifact id mismatch", mutate: func(f map[string]any) { f["artifacts"].([]map[string]any)[0]["id"] = 778 }},
+		{name: "artifact name mismatch", mutate: func(f map[string]any) {
+			f["artifacts"].([]map[string]any)[0]["name"] = "engram-release-payload-12345-2"
+		}},
 		{name: "artifact digest mismatch", mutate: func(f map[string]any) {
 			f["artifacts"].([]map[string]any)[0]["digest"] = "sha256:" + strings.Repeat("e", 64)
 		}},
@@ -1866,14 +1926,21 @@ func testArtifactBridgeMatrix(t *testing.T, repo string) {
 				"total_count": 1,
 				"artifacts": []map[string]any{{
 					"id": artifactID, "name": artifactName, "digest": digest, "expired": false,
-					"workflow_run": map[string]any{"id": workflowRun},
+					"workflow_run": provenance(),
 				}},
+			}
+			if test.withEvidence {
+				fixtureValue["total_count"] = 2
+				fixtureValue["artifacts"] = append(fixtureValue["artifacts"].([]map[string]any), map[string]any{
+					"id": 778, "name": "engram-publication-evidence-12345-1", "digest": "sha256:" + strings.Repeat("f", 64), "expired": false,
+					"url": "https://api.github.com/repos/thebtf/engram/actions/artifacts/778", "workflow_run": provenance(),
+				})
 			}
 			if test.mutate != nil {
 				test.mutate(fixtureValue)
 			}
 			fixture := writeJSONFixture(t, fixtureValue)
-			runImageGate(t, repo, test.pass,
+			output := runImageGate(t, repo, test.pass,
 				"-Mode", "ValidateArtifactMetadata",
 				"-ArtifactListFixturePath", fixture,
 				"-ExpectedArtifactID", strconv.Itoa(artifactID),
@@ -1881,6 +1948,15 @@ func testArtifactBridgeMatrix(t *testing.T, repo string) {
 				"-ExpectedArtifactDigest", digest,
 				"-CurrentRunID", strconv.Itoa(workflowRun),
 				"-Repository", "thebtf/engram")
+			if test.pass {
+				var result map[string]any
+				if err := json.Unmarshal([]byte(output), &result); err != nil {
+					t.Fatal(err)
+				}
+				if len(result) != 6 || result["schema_version"] != float64(1) || result["artifact_count"] != float64(1) || result["artifact_id"] != float64(artifactID) || result["artifact_name"] != artifactName || result["artifact_digest"] != digest || result["workflow_run_id"] != float64(workflowRun) {
+					t.Fatalf("metadata result no longer identifies only the expected bridge: %s", output)
+				}
+			}
 		})
 	}
 
