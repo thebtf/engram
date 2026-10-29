@@ -5,6 +5,8 @@ const { buildSessionStartContext } = require('../hooks/session-start.js');
 const { buildAmbientRequest, formatAmbientAdditionalContext } = require('../hooks/user-prompt.js');
 const { DOWNLOAD_DEADLINE_MS } = require('../scripts/ensure-binary.js');
 const { prepareHookClient } = require('../scripts/run-engram.js');
+const { version: pluginVersion } = require('../package.json');
+const readinessCodes = new Set(['HOOK_CLIENT_UNAVAILABLE', 'ABORT_ERR', 'PROJECT_RESOLUTION_ABORTED', 'PROJECT_RESOLUTION_DEADLINE_EXCEEDED']);
 const hiddenContextLimit = 12000;
 
 function stringField(...values) {
@@ -31,13 +33,26 @@ export function createEngramMemoryExtension(options = {}) {
   const isQuiet = options.isQuiet ?? lib.isQuietMode;
   const prepare = options.prepareHookClient ?? prepareHookClient;
   const diagnostic = options.onDiagnostic ?? (message => process.stderr.write(`[engram] ${message}\n`));
-  const unavailable = () => diagnostic('Trusted hook client readiness unavailable; check the plugin cache and start a fresh ordinary session.');
-  let readiness;
+  let readiness, firstFailure, disposed = false;
+  const warned = new Set();
+  const unavailable = (stage = 'prepare', error, kind = 'readiness') => {
+    if (!firstFailure) {
+      const code = readinessCodes.has(error?.code) ? error.code : readinessCodes.has(error?.message) ? error.message : 'UNKNOWN';
+      firstFailure = { stage, code };
+    }
+    const warningKind = disposed ? 'disposed' : kind;
+    if (warned.has(warningKind)) return;
+    warned.add(warningKind);
+    const hint = disposed || readiness === 'skipped'
+      ? 'Start a fresh ordinary session.'
+      : 'The next qualified callback will automatically recheck the verified local cache.';
+    diagnostic(`Trusted hook client readiness unavailable (stage=${firstFailure.stage} code=${firstFailure.code} plugin=${pluginVersion}); ${hint}`);
+  };
 
   async function message(event, ctx, timeoutMs, ambient) {
     if (isQuiet()) return null;
     if (readiness === 'pending') return null;
-    if (readiness && readiness !== 'ready' && readiness !== 'skipped') { unavailable(); return null; }
+    if (disposed) { unavailable(); return null; }
     const facts = callbackFacts(event, ctx);
     if (!facts) return null;
     const prompt = ambient ? stringField(event?.prompt, event?.userMessage, event?.user_message, ctx?.prompt) : '';
@@ -48,12 +63,13 @@ export function createEngramMemoryExtension(options = {}) {
     try {
       const config = await runtimeConfig({ signal: controller.signal });
       if (!config.serverURL || config.quiet || controller.signal.aborted || Date.now() >= deadline) return null;
-      if (readiness && readiness !== 'ready') { unavailable(); return null; }
+      if (disposed || readiness === 'skipped') { unavailable('config', undefined, ambient ? 'ambient' : 'session'); return null; }
       const context = await resolveContext(facts.cwd, {
         signal: controller.signal, deadlineAt: deadline, timeoutMs: Math.max(1, deadline - Date.now()), acquire: false,
         env: { ...process.env, ENGRAM_URL: config.serverURL, ENGRAM_TOKEN: config.token },
       });
-      if (controller.signal.aborted || Date.now() >= deadline) return null;
+      if (disposed || controller.signal.aborted || Date.now() >= deadline) return null;
+      if (readiness === 'failed') readiness = 'ready';
       const payload = await requestPost(
         ambient ? '/api/hooks/ambient-candidates' : '/api/context/session-start',
         ambient ? buildAmbientRequest(context.Project, facts.session, prompt) : { project: context.Project, session_id: facts.session },
@@ -64,7 +80,7 @@ export function createEngramMemoryExtension(options = {}) {
       if (controller.signal.aborted || Date.now() >= deadline || typeof content !== 'string' || !content || Buffer.byteLength(content) > hiddenContextLimit) return null;
       return hiddenMessage(content);
     } catch (error) {
-      if (/HOOK_CLIENT_UNAVAILABLE|resolved client failed final integrity verification/.test(error?.message ?? '')) unavailable();
+      if (/HOOK_CLIENT_UNAVAILABLE|resolved client failed final integrity verification/.test(error?.message ?? '')) unavailable('prepare', error);
       return null;
     } finally { clearTimeout(timer); }
   }
@@ -84,44 +100,55 @@ export function createEngramMemoryExtension(options = {}) {
     });
     const controller = new AbortController();
     const deadlineAt = Date.now() + DOWNLOAD_DEADLINE_MS;
-    let onAbort, preparation, unregister;
+    let onAbort, preparation, stage = 'config';
+    const checkReadinessDeadline = () => {
+      if (!controller.signal.aborted && Date.now() < deadlineAt) return;
+      if (!controller.signal.aborted) stage = 'deadline';
+      throw Object.assign(new Error('client readiness stopped'), { code: 'ABORT_ERR' });
+    };
     const cancelled = new Promise((_, reject) => {
-      onAbort = () => reject(new Error('client readiness cancelled'));
+      onAbort = () => {
+        if (stage !== 'deadline') stage = 'cancelled';
+        reject(Object.assign(new Error('client readiness cancelled'), { code: 'ABORT_ERR' }));
+      };
       controller.signal.addEventListener('abort', onAbort, { once: true });
     });
-    const timer = setTimeout(() => controller.abort(), DOWNLOAD_DEADLINE_MS);
+    const timer = setTimeout(() => { stage = 'deadline'; controller.abort(); }, DOWNLOAD_DEADLINE_MS);
     try {
-      unregister = options.registerCleanup?.('engram-client-readiness', async () => {
+      options.registerCleanup?.('engram-client-readiness', async () => {
+        disposed = true;
+        stage = 'cancelled';
         controller.abort();
         await preparation?.catch(() => { });
       });
       preparation = (async () => {
-        if (controller.signal.aborted) throw new Error('client readiness cancelled');
+        checkReadinessDeadline();
         if (isQuiet()) { readiness = 'skipped'; return; }
         const config = await runtimeConfig({ signal: controller.signal });
-        if (controller.signal.aborted || Date.now() >= deadlineAt) throw new Error('client readiness expired');
+        checkReadinessDeadline();
         if (!config.serverURL || config.quiet) { readiness = 'skipped'; return; }
+        stage = 'prepare';
         await prepare({ signal: controller.signal, deadlineAt, timeoutMs: deadlineAt - Date.now() });
-        if (controller.signal.aborted || Date.now() >= deadlineAt) throw new Error('client readiness expired');
+        checkReadinessDeadline();
       })();
       // Callback admission is immediate; only this binding's trusted readiness admits execution.
       void Promise.race([preparation, cancelled]).then(() => {
         if (readiness === 'pending') readiness = 'ready';
-      }, () => {
+      }, error => {
         readiness = 'failed';
-        unavailable();
+        unavailable(stage, error);
       }).finally(() => {
         clearTimeout(timer);
         controller.signal.removeEventListener('abort', onAbort);
-        unregister?.();
       }).catch(() => { readiness = 'failed'; });
-    } catch {
+    } catch (error) {
+      const failedStage = stage;
       readiness = 'failed';
       controller.abort();
       clearTimeout(timer);
       controller.signal.removeEventListener('abort', onAbort);
       void cancelled.catch(() => { });
-      unavailable();
+      unavailable(failedStage, error);
     }
   }
   return Object.freeze({ install, sessionStartMessage, ambientMessage });

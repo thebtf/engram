@@ -44,6 +44,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Use registered canonical UUIDs and authenticated caller project context in MCP fixtures without weakening default-deny, privacy or pre-mutation rejection guards. Reuse 119 prior PASS plus one exact retry PASS after the context fix, not 120 fresh PASS or installed acceptance.
 - Seed the isolated operator-code fixture with a registered canonical project UUID while preserving five queue candidates, published/no-view checks and redacted provisioning errors.
 
+## [7.0.15] - 2026-10-29
+
+### Fixed
+
+- Let an OMP binding recover from failed or timed-out background hook-client preparation through the existing read-only, integrity-verified local resolver on a later qualified callback, without a foreground download, another acquisition or session reload (Engram issue 512). Cancel expired preparation and ignore its late completion; only explicit disposal closes future callbacks. Retain the real postmortem cleanup registration after preparation settles so actual teardown still disposes the binding; release preparation timers and abort listeners separately. Preserve quiet/pending behavior and each new callback's own budget. Retain the first safe readiness stage/code and module package version with bounded diagnostics and distinguish automatic cache rechecks from disposed bindings requiring a fresh session. Never include raw exception details. This repairs the persistent failed-readiness latch, not an identified cause of the initial failure or proof that an already-running host loaded the change.
+- Correct the shipped memory skill's Claude/OMP integration framing and replace mandatory per-task recall/store/outcome calls with selective capture of accepted useful corrections through existing create/edit tools (Engram issue 511). Preserve project/privacy scope, provenance, literal recall lookup for deduplication and readback; distinguish persisted knowledge from instruction authority and future retrieval. This guidance change does not change runtime hooks, schemas or policies; publication, installed loading and native persistence/retrieval proof remain separate.
+
 ## [7.0.14] - 2026-10-29
 
 ### Fixed

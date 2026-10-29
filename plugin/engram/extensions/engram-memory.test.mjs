@@ -244,6 +244,11 @@ test('OMP background readiness handles offline, hash and cooperative abort failu
         preparation.then(finishReadiness, finishReadiness);
         return preparation;
       },
+      resolveHookProjectContext: (cwd, options) => resolveHookProjectContext(cwd, {
+        ...options, pluginRoot: root, pluginData: root,
+        resolve: forwarded => resolveForLaunch({ ...forwarded, policy, parserTarget: null, request }),
+        execFile() { assert.fail('unavailable or corrupt readiness fixture must never execute a client'); },
+      }),
     });
     const installing = adapter.install({ on: (name, callback) => handlers.set(name, callback), sendMessage: message => sent.push(message) })
       .catch(error => { installError = error; });
@@ -261,7 +266,7 @@ test('OMP background readiness handles offline, hash and cooperative abort failu
       assert.doesNotMatch(diagnostics.join('\n'), /query_fixture_secret|signed=/);
       assert.equal(calls.length, 0, mode);
       assert.equal(sent.length, 0, mode);
-      assert.equal(unregistered, true, mode);
+      assert.equal(unregistered, false, 'settled preparation must retain its actual cleanup registration');
       if (mode.startsWith('abort-')) assert.equal(requestClosed, true, mode);
       assert.equal(fs.existsSync(objectPath(roots, policy.target.desired)), false);
       assert.deepEqual(fs.readdirSync(roots.staging), []);
@@ -269,21 +274,243 @@ test('OMP background readiness handles offline, hash and cooperative abort failu
   }
 });
 
+test('OMP failed startup readiness recovers through verified local cache without another acquisition', async t => {
+  for (const [eventName, budget] of [['session_start', 5000], ['before_agent_start', 500]]) {
+    await t.test(eventName, async t => {
+      t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-readiness-recovery-'));
+      t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+      const bytes = Buffer.from('verified local client after failed preparation');
+      const version = require('../package.json').version;
+      const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
+      const targets = Object.fromEntries(Object.entries(TARGET_ASSETS).map(([key, asset]) => [key, { version, asset, size: bytes.length, sha256 }]));
+      const policy = parsePolicy(JSON.stringify(createPolicy(version, targets)), version);
+      const roots = objectRoots(root), object = objectPath(roots, policy.target.desired);
+      const handlers = new Map(), sent = [], resolutions = [], executions = [], contextRequests = [];
+      let preparations = 0, acquisitions = 0, quiet = false;
+      const resolve = options => resolveForLaunch({
+        ...options, pluginRoot: root, pluginData: root, policy, parserTarget: null,
+        request() { acquisitions++; throw new Error('synthetic acquisition unavailable'); },
+      });
+      const { adapter } = extension({
+        isQuiet: () => quiet,
+        onDiagnostic() { },
+        prepareHookClient: options => {
+          preparations++;
+          return prepareHookClient({ ...options, pluginRoot: root, pluginData: root, resolve });
+        },
+        resolveHookProjectContext: (cwd, options) => {
+          resolutions.push({ cwd, acquire: options.acquire, timeoutMs: options.timeoutMs, deadlineAt: options.deadlineAt });
+          assert.equal(options.acquire, false, 'callback recovery must remain read-only and never acquire');
+          assert.equal(options.timeoutMs, budget);
+          assert.equal(options.deadlineAt, Date.now() + budget);
+          return resolveHookProjectContext(cwd, {
+            ...options, pluginRoot: root, pluginData: root, resolve,
+            execFile(file, args, options, callback) {
+              executions.push({ file, args, timeout: options.timeout });
+              assert.equal(file, object);
+              assert.equal(hashFile(file, policy.target.desired, roots.objects), true);
+              assert.equal(options.timeout, budget);
+              callback(null, JSON.stringify({ project_id: projects[cwd] }));
+            },
+          });
+        },
+        requestPost: async (route, body, timeout, options) => {
+          contextRequests.push({ route, body, timeout });
+          assert.equal(timeout, budget);
+          assert.equal(options.signal.aborted, false);
+          return route === '/api/context/session-start'
+            ? { memories: [{ content: `recovered memory for ${body.project}` }] }
+            : { additional_context: `recovered memory for ${body.project}` };
+        },
+      });
+      await adapter.install({ on: (name, handler) => handlers.set(name, handler), sendMessage: (message, options) => sent.push({ message, options }) });
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(preparations, 1);
+      assert.equal(acquisitions, 1, 'one failed startup acquisition is the baseline');
+      const fire = (sessionId, cwd = '/session/a') => handlers.get(eventName)({ cwd, sessionId, prompt: 'restore backups' }, {});
+      await fire('cache-missing');
+      fs.writeFileSync(object, Buffer.alloc(bytes.length));
+      await fire('cache-hash-invalid');
+      assert.equal(executions.length, 0, 'missing or hash-invalid objects must not execute');
+      assert.equal(contextRequests.length, 0, 'missing or hash-invalid cache must not reach backend HTTP');
+      assert.equal(sent.length, 0, 'untrusted cache must not deliver hidden context');
+      fs.writeFileSync(object, bytes);
+      quiet = true;
+      const resolutionsBeforeQuiet = resolutions.length;
+      await fire('quiet-valid-cache');
+      assert.equal(resolutions.length, resolutionsBeforeQuiet, 'quiet callbacks must not attempt recovery');
+      assert.equal(contextRequests.length, 0);
+      quiet = false;
+      const result = await fire('verified-cache-now-present');
+      const delivered = eventName === 'session_start' ? sent.at(-1)?.message : result?.message;
+      assert.ok(delivered, 'same failed binding must deliver on the next qualified callback once the local cache verifies');
+      assert.equal(delivered.customType, 'engram-memory');
+      assert.equal(delivered.display, false);
+      assert.ok(delivered.content.includes(`recovered memory for ${projects['/session/a']}`));
+      assert.equal(executions.length, 1);
+      assert.ok(resolutions.length >= 3, 'missing, invalid and valid callbacks must each use the trusted resolver');
+      assert.equal(contextRequests.length, 1);
+      if (eventName === 'session_start') assert.deepEqual(sent[0].options, { deliverAs: 'nextTurn' });
+      fs.writeFileSync(object, Buffer.alloc(bytes.length));
+      const afterTamper = await fire('invalid-after-recovery', '/session/b');
+      assert.equal(afterTamper, undefined);
+      assert.equal(executions.length, 1, 'recovery must not bypass later final integrity verification');
+      assert.equal(contextRequests.length, 1, 'tampered cache must not fetch another project context');
+      assert.equal(preparations, 1, 'no new background readiness job or foreground prepare is allowed');
+      assert.equal(acquisitions, 1, 'callback recovery must not initiate a network download');
+    });
+  }
+});
+
+test('OMP first readiness failure diagnostic retains safe stage code and plugin version', async () => {
+  const version = require('../package.json').version;
+  const diagnostics = [], handlers = new Map();
+  const rawFailure = Object.assign(new Error('private_path_fixture https://private-fixture.invalid/?token=token_fixture secret_fixture'), { code: 'HOOK_CLIENT_UNAVAILABLE' });
+  const { adapter, calls } = extension({
+    onDiagnostic: message => diagnostics.push(message),
+    prepareHookClient: async () => { throw rawFailure; },
+    resolveHookProjectContext: async () => { throw new Error('later_resolver_error_fixture'); },
+  });
+  await adapter.install({ on: (name, handler) => handlers.set(name, handler), sendMessage() { throw new Error('failed readiness must not send'); } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.ok(diagnostics.length > 0, 'the first startup failure must remain diagnosable');
+  const first = diagnostics.join('\n');
+  await handlers.get('session_start')({ cwd: '/session/a', sessionId: 'diagnostic-later' }, {});
+  const later = diagnostics.join('\n');
+  for (const message of [first, later]) {
+    assert.match(message, /(?:stage[=: ]+prepare|prepareHookClient)/, 'diagnostic must identify the failed preparation stage');
+    assert.ok(message.includes('HOOK_CLIENT_UNAVAILABLE'), 'retain a stable safe code, not the discarded exception text');
+    assert.ok(message.includes(version), 'diagnostic must identify the loaded plugin package version');
+    assert.doesNotMatch(message, /private_path_fixture|private-fixture|token_fixture|secret_fixture|later_resolver_error_fixture|https?:\/\//);
+  }
+  assert.equal(calls.length, 0);
+  for (let i = 0; i < 20; i++) {
+    await handlers.get('session_start')({ cwd: '/session/a', sessionId: `diagnostic-repeat-${i}` }, {});
+  }
+  assert.ok(diagnostics.length <= 3, 'retained failure must not produce an unbounded callback warning stream');
+});
+
+test('OMP configuration failure is diagnosed safely and can recover without preparation', async () => {
+  let failConfig = true, preparations = 0;
+  const handlers = new Map(), diagnostics = [], sent = [];
+  const { adapter, calls } = extension({
+    resolveEngramRuntimeConfig: async () => {
+      if (failConfig) throw Object.assign(new Error('config_private_fixture https://config-fixture.invalid/?token=secret_fixture'), { code: 'https://untrusted-code.invalid' });
+      return { serverURL: 'http://fixture', token: '', quiet: false };
+    },
+    prepareHookClient: async () => { preparations++; },
+    onDiagnostic: message => diagnostics.push(message),
+  });
+  await adapter.install({ on: (name, handler) => handlers.set(name, handler), sendMessage: message => sent.push(message) });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(diagnostics.join('\n'), /stage[=: ]+config/);
+  assert.match(diagnostics.join('\n'), /code[=: ]+UNKNOWN/);
+  assert.doesNotMatch(diagnostics.join('\n'), /config_private_fixture|config-fixture|secret_fixture|untrusted-code|https?:\/\//);
+  failConfig = false;
+  await handlers.get('session_start')({ cwd: '/session/a', sessionId: 'config-recovered' }, {});
+  assert.equal(sent.length, 1, 'a recovered configuration must reach the existing trusted read-only resolver');
+  assert.equal(calls.length, 1);
+  assert.equal(preparations, 0, 'callback recovery must not invoke prepare even when startup config failed');
+});
+
+test('OMP disposed background readiness cannot recover through a later resolvable context', async () => {
+  let cleanup, resolutions = 0;
+  const handlers = new Map(), sent = [];
+  const { adapter, calls } = extension({
+    prepareHookClient: options => new Promise((_, reject) => {
+      options.signal.addEventListener('abort', () => reject(Object.assign(new Error('fixture cancelled'), { code: 'ABORT_ERR' })), { once: true });
+    }),
+    registerCleanup: (_name, callback) => { cleanup = callback; return () => { }; },
+    resolveHookProjectContext: async () => { resolutions++; return { Project: projects['/session/a'] }; },
+    onDiagnostic() { },
+  });
+  await adapter.install({ on: (name, handler) => handlers.set(name, handler), sendMessage: message => sent.push(message) });
+  await new Promise(resolve => setImmediate(resolve));
+  await cleanup();
+  await new Promise(resolve => setImmediate(resolve));
+  await handlers.get('session_start')({ cwd: '/session/a', sessionId: 'disposed-later' }, {});
+  assert.equal(await handlers.get('before_agent_start')({ cwd: '/session/a', sessionId: 'disposed-later', prompt: 'fixture' }, {}), undefined);
+  assert.equal(resolutions, 0, 'cancellation/disposal is not a recoverable acquisition failure');
+  assert.equal(calls.length, 0);
+  assert.equal(sent.length, 0);
+});
+
+test('OMP cleanup captured before settlement still closes failed readiness when invoked late', async () => {
+  let cleanup, resolutions = 0;
+  const handlers = new Map();
+  const { adapter, calls } = extension({
+    prepareHookClient: async () => { throw new Error('synthetic startup failure'); },
+    registerCleanup: (_name, callback) => { cleanup = callback; return () => { }; },
+    resolveHookProjectContext: async () => { resolutions++; return { Project: projects['/session/a'] }; },
+    onDiagnostic() { },
+  });
+  await adapter.install({ on: (name, handler) => handlers.set(name, handler), sendMessage() { } });
+  await new Promise(resolve => setImmediate(resolve));
+  await cleanup();
+  await handlers.get('session_start')({ cwd: '/session/a', sessionId: 'late-cleanup' }, {});
+  assert.equal(resolutions, 0, 'late cleanup must close admission even after the preparation abort listener was removed');
+  assert.equal(calls.length, 0);
+});
+
+test('OMP settled readiness remains registered for actual cleanup registry teardown', async t => {
+  for (const preparationOutcome of ['success', 'failure']) {
+    await t.test(preparationOutcome, async t => {
+      const registry = new Map(), handlers = new Map(), sent = [];
+      let preparations = 0, registrations = 0, cancellations = 0, cleanups = 0, resolutions = 0;
+      const { adapter, calls } = extension({
+        prepareHookClient: async () => {
+          preparations++;
+          if (preparationOutcome === 'failure') throw new Error('synthetic preparation failure');
+        },
+        registerCleanup: (name, callback) => {
+          registrations++;
+          const key = Symbol(name);
+          registry.set(key, async () => { cleanups++; await callback(); registry.delete(key); });
+          return () => { cancellations++; registry.delete(key); };
+        },
+        resolveHookProjectContext: async () => { resolutions++; return { Project: projects['/session/a'] }; },
+        onDiagnostic() { },
+      });
+      await adapter.install({ on: (name, handler) => handlers.set(name, handler), sendMessage: message => sent.push(message) });
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(preparations, 1);
+      await handlers.get('session_start')({ cwd: '/session/a', sessionId: 'settled-before-registry-cleanup' }, {});
+      assert.equal(sent.length, 1, 'settled preparation must admit a trusted callback before disposal');
+      const beforeCleanup = { resolutions, requests: calls.length, messages: sent.length };
+      for (const callback of [...registry.values()]) await callback();
+      await handlers.get('session_start')({ cwd: '/session/a', sessionId: 'after-registry-cleanup' }, {});
+      const ambient = await handlers.get('before_agent_start')({ cwd: '/session/a', sessionId: 'after-registry-cleanup', prompt: 'fixture' }, {});
+      const afterCleanup = {
+        resolutions: resolutions - beforeCleanup.resolutions,
+        requests: calls.length - beforeCleanup.requests,
+        messages: sent.length - beforeCleanup.messages,
+        ambientDelivered: Boolean(ambient?.message),
+      };
+      t.diagnostic(JSON.stringify({ preparationOutcome, registrations, cancellations, cleanups, registrySize: registry.size, afterCleanup }));
+      assert.deepEqual(afterCleanup, { resolutions: 0, requests: 0, messages: 0, ambientDelivered: false },
+        'actual registry teardown must dispose settled bindings before later callbacks, not rely on an already-unregistered captured function');
+      assert.equal(cleanups, 1, 'settled readiness cleanup must still be present when actual teardown starts');
+      assert.equal(registry.size, 0);
+      assert.equal(preparations, 1);
+    });
+  }
+});
+
 for (const mode of ['unconfigured', 'config-quiet']) {
   test(`OMP skipped ${mode} callbacks stay silent until eligibility is enabled later`, async t => {
-    let enabled = false, finishSettlement, acquisitions = 0, resolutions = 0, backendRequests = 0, messages = 0, unregistered = false;
-    const settled = new Promise(resolve => { finishSettlement = resolve; });
+    let enabled = false, acquisitions = 0, resolutions = 0, backendRequests = 0, messages = 0, unregistered = false;
     const handlers = new Map(), diagnostics = [];
     const { adapter } = extension({
       resolveEngramRuntimeConfig: async () => ({ serverURL: !enabled && mode === 'unconfigured' ? '' : 'http://fixture', quiet: !enabled && mode === 'config-quiet', token: '' }),
       prepareHookClient: async () => { acquisitions++; throw new Error('skipped binding must not acquire'); },
       resolveHookProjectContext: async () => { resolutions++; throw new Error('skipped binding must not resolve a project'); },
       requestPost: async () => { backendRequests++; throw new Error('skipped binding must not request backend context'); },
-      registerCleanup: () => () => { unregistered = true; finishSettlement(); },
+      registerCleanup: () => () => { unregistered = true; },
       onDiagnostic: message => diagnostics.push(message),
     });
     await adapter.install({ on: (name, callback) => handlers.set(name, callback), sendMessage() { messages++; } });
-    await settled;
+    await new Promise(resolve => setImmediate(resolve));
     assert.deepEqual([...handlers.keys()], ['session_start', 'before_agent_start']);
     assert.equal(await handlers.get('session_start')({ cwd: '/session/a', sessionId: mode }, {}), undefined);
     assert.equal(await handlers.get('before_agent_start')({ cwd: '/session/a', sessionId: mode, prompt: 'fixture' }, {}), undefined);
@@ -297,7 +524,7 @@ for (const mode of ['unconfigured', 'config-quiet']) {
     assert.equal(resolutions, 0);
     assert.equal(backendRequests, 0);
     assert.equal(messages, 0);
-    assert.equal(unregistered, true, 'background readiness has settled and released its cleanup registration');
+    assert.equal(unregistered, false, 'settled skipped binding must retain its actual cleanup registration');
     assert.equal(enabledDiagnostics.length, 2, 'each later eligible callback must explain the fresh-binding requirement');
     assert.ok(enabledDiagnostics.every(message => /fresh ordinary session/.test(message)));
     assert.deepEqual(ineligibleDiagnostics, [], 'deliberately skipped callbacks must not report a trusted-client failure');
@@ -326,15 +553,45 @@ test('OMP quiet or unconfigured installation skips acquisition and requires a fr
 
 test('OMP background readiness budget includes config and never trusts late preparation', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
-  let finishConfig, finishPreparation, preparedSignal;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-readiness-expired-recovery-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const bytes = Buffer.from('verified client appearing after startup readiness deadline');
+  const version = require('../package.json').version;
+  const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
+  const targets = Object.fromEntries(Object.entries(TARGET_ASSETS).map(([key, asset]) => [key, { version, asset, size: bytes.length, sha256 }]));
+  const policy = parsePolicy(JSON.stringify(createPolicy(version, targets)), version);
+  const roots = objectRoots(root), object = objectPath(roots, policy.target.desired);
+  let finishConfig, finishPreparation, preparedSignal, cleanup, preparations = 0, acquisitions = 0;
   const config = new Promise(resolve => { finishConfig = resolve; });
   const preparation = new Promise(resolve => { finishPreparation = resolve; });
-  const handlers = new Map();
+  const handlers = new Map(), sent = [], resolutions = [], executions = [];
   const { adapter, calls } = extension({
     resolveEngramRuntimeConfig: () => config,
-    prepareHookClient: options => { preparedSignal = options.signal; return preparation; },
+    prepareHookClient: options => { preparations++; preparedSignal = options.signal; return preparation; },
+    registerCleanup: (_name, callback) => { cleanup = callback; return () => { }; },
+    resolveHookProjectContext: (cwd, options) => {
+      resolutions.push({ timeoutMs: options.timeoutMs, deadlineAt: options.deadlineAt });
+      assert.equal(options.acquire, false);
+      assert.notEqual(options.signal, preparedSignal, 'new callbacks must not inherit the expired preparation signal');
+      assert.equal(options.signal.aborted, false);
+      assert.equal(options.deadlineAt, Date.now() + options.timeoutMs, 'new callbacks receive fresh absolute budgets');
+      return resolveHookProjectContext(cwd, {
+        ...options, pluginRoot: root, pluginData: root,
+        resolve: forwarded => resolveForLaunch({
+          ...forwarded, policy, parserTarget: null,
+          request() { acquisitions++; assert.fail('future callbacks must never acquire a client'); },
+        }),
+        execFile(file, _args, nativeOptions, callback) {
+          assert.equal(file, object);
+          assert.equal(hashFile(file, policy.target.desired, roots.objects), true);
+          assert.equal(nativeOptions.signal.aborted, false);
+          executions.push({ timeout: nativeOptions.timeout });
+          callback(null, JSON.stringify({ project_id: projects[cwd] }));
+        },
+      });
+    },
   });
-  const installing = adapter.install({ on: (name, callback) => handlers.set(name, callback), sendMessage() { throw new Error('late readiness must not send'); } });
+  const installing = adapter.install({ on: (name, callback) => handlers.set(name, callback), sendMessage: message => sent.push(message) });
   let installState = 'pending';
   const installed = installing.then(() => { installState = 'ready'; }, () => { installState = 'rejected'; });
   await new Promise(resolve => setImmediate(resolve));
@@ -351,14 +608,41 @@ test('OMP background readiness budget includes config and never trusts late prep
   assert.equal(preparedSignal.aborted, true);
   finishPreparation();
   await new Promise(resolve => setImmediate(resolve));
+  assert.equal(executions.length, 0, 'late completion of the expired preparation must not execute a client');
+  assert.equal(calls.length, 0, 'late preparation completion must not replay any context request');
+  assert.equal(sent.length, 0);
   assert.deepEqual([...handlers.keys()], ['session_start', 'before_agent_start']);
   assert.equal(await handlers.get('session_start')({ cwd: '/session/a', sessionId: 'expired' }, {}), undefined);
   assert.equal(await handlers.get('before_agent_start')({ cwd: '/session/a', sessionId: 'expired', prompt: 'fixture' }, {}), undefined);
   assert.equal(calls.length, 0);
+  fs.writeFileSync(object, bytes);
+  await handlers.get('session_start')({ cwd: '/session/a', sessionId: 'fresh-after-deadline' }, {});
+  const ambient = await handlers.get('before_agent_start')({ cwd: '/session/a', sessionId: 'fresh-after-deadline', prompt: 'fixture' }, {});
+  assert.deepEqual({
+    session: sent[0]?.content.includes(projects['/session/a']) ?? false,
+    ambient: ambient?.message?.content.includes(projects['/session/a']) ?? false,
+  }, { session: true, ambient: true }, 'new qualified callbacks must recover after the startup timer expires once local cache verifies');
+  assert.deepEqual(resolutions.slice(-2).map(result => result.timeoutMs), [5000, 500]);
+  assert.deepEqual(executions.map(result => result.timeout), [5000, 500]);
+  assert.equal(calls.length, 2);
+  assert.equal(preparations, 1, 'recovery must not restart preparation');
+  assert.equal(acquisitions, 0, 'recovery must only verify existing local bytes');
+  await cleanup();
+  await handlers.get('session_start')({ cwd: '/session/a', sessionId: 'disposed-after-timeout-recovery' }, {});
+  assert.equal(await handlers.get('before_agent_start')({ cwd: '/session/a', sessionId: 'disposed-after-timeout-recovery', prompt: 'fixture' }, {}), undefined);
+  assert.equal(executions.length, 2, 'captured explicit disposal must still permanently close future native execution');
+  assert.equal(calls.length, 2);
+  assert.equal(sent.length, 1);
 });
 
 test('OMP expired background configuration cannot start late acquisition or replay context', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-config-expired-no-cache-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const version = require('../package.json').version, bytes = Buffer.from('missing expired-config client');
+  const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
+  const targets = Object.fromEntries(Object.entries(TARGET_ASSETS).map(([key, asset]) => [key, { version, asset, size: bytes.length, sha256 }]));
+  const policy = parsePolicy(JSON.stringify(createPolicy(version, targets)), version);
   let finishConfig, preparations = 0, unregistered = false;
   const config = new Promise(resolve => { finishConfig = resolve; });
   const diagnostics = [], handlers = new Map();
@@ -367,11 +651,16 @@ test('OMP expired background configuration cannot start late acquisition or repl
     prepareHookClient: async () => { preparations++; },
     registerCleanup: () => () => { unregistered = true; },
     onDiagnostic: message => diagnostics.push(message),
+    resolveHookProjectContext: (cwd, options) => resolveHookProjectContext(cwd, {
+      ...options, pluginRoot: root, pluginData: root,
+      resolve: forwarded => resolveForLaunch({ ...forwarded, policy, parserTarget: null, request() { assert.fail('expired callbacks must not acquire'); } }),
+      execFile() { assert.fail('missing cache must not execute after background configuration expiry'); },
+    }),
   });
   await adapter.install({ on: (name, callback) => handlers.set(name, callback), sendMessage() { throw new Error('expired config must not send'); } });
   t.mock.timers.tick(360000);
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(unregistered, true);
+  assert.equal(unregistered, false, 'expired preparation must retain its actual cleanup registration');
   finishConfig({ serverURL: 'http://fixture', token: '', quiet: false });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(await handlers.get('session_start')({ cwd: '/session/a', sessionId: 'late-config' }, {}), undefined);
