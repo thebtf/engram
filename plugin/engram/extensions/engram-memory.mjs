@@ -33,22 +33,26 @@ export function createEngramMemoryExtension(options = {}) {
   const isQuiet = options.isQuiet ?? lib.isQuietMode;
   const prepare = options.prepareHookClient ?? prepareHookClient;
   const diagnostic = options.onDiagnostic ?? (message => process.stderr.write(`[engram] ${message}\n`));
-  let readiness, firstFailure, stopped = false;
+  let readiness, firstFailure, disposed = false;
   const warned = new Set();
   const unavailable = (stage = 'prepare', error, kind = 'readiness') => {
     if (!firstFailure) {
       const code = readinessCodes.has(error?.code) ? error.code : readinessCodes.has(error?.message) ? error.message : 'UNKNOWN';
       firstFailure = { stage, code };
     }
-    if (warned.has(kind)) return;
-    warned.add(kind);
-    diagnostic(`Trusted hook client readiness unavailable (stage=${firstFailure.stage} code=${firstFailure.code} plugin=${pluginVersion}); check the verified local cache or start a fresh ordinary session.`);
+    const warningKind = disposed ? 'disposed' : kind;
+    if (warned.has(warningKind)) return;
+    warned.add(warningKind);
+    const hint = disposed || readiness === 'skipped'
+      ? 'Start a fresh ordinary session.'
+      : 'The next qualified callback will automatically recheck the verified local cache.';
+    diagnostic(`Trusted hook client readiness unavailable (stage=${firstFailure.stage} code=${firstFailure.code} plugin=${pluginVersion}); ${hint}`);
   };
 
   async function message(event, ctx, timeoutMs, ambient) {
     if (isQuiet()) return null;
     if (readiness === 'pending') return null;
-    if (stopped) { unavailable(); return null; }
+    if (disposed) { unavailable(); return null; }
     const facts = callbackFacts(event, ctx);
     if (!facts) return null;
     const prompt = ambient ? stringField(event?.prompt, event?.userMessage, event?.user_message, ctx?.prompt) : '';
@@ -59,12 +63,12 @@ export function createEngramMemoryExtension(options = {}) {
     try {
       const config = await runtimeConfig({ signal: controller.signal });
       if (!config.serverURL || config.quiet || controller.signal.aborted || Date.now() >= deadline) return null;
-      if (stopped || readiness === 'skipped') { unavailable('config', undefined, ambient ? 'ambient' : 'session'); return null; }
+      if (disposed || readiness === 'skipped') { unavailable('config', undefined, ambient ? 'ambient' : 'session'); return null; }
       const context = await resolveContext(facts.cwd, {
         signal: controller.signal, deadlineAt: deadline, timeoutMs: Math.max(1, deadline - Date.now()), acquire: false,
         env: { ...process.env, ENGRAM_URL: config.serverURL, ENGRAM_TOKEN: config.token },
       });
-      if (stopped || controller.signal.aborted || Date.now() >= deadline) return null;
+      if (disposed || controller.signal.aborted || Date.now() >= deadline) return null;
       if (readiness === 'failed') readiness = 'ready';
       const payload = await requestPost(
         ambient ? '/api/hooks/ambient-candidates' : '/api/context/session-start',
@@ -99,13 +103,11 @@ export function createEngramMemoryExtension(options = {}) {
     let onAbort, preparation, unregister, stage = 'config';
     const checkReadinessDeadline = () => {
       if (!controller.signal.aborted && Date.now() < deadlineAt) return;
-      stopped = true;
       if (!controller.signal.aborted) stage = 'deadline';
       throw Object.assign(new Error('client readiness stopped'), { code: 'ABORT_ERR' });
     };
     const cancelled = new Promise((_, reject) => {
       onAbort = () => {
-        stopped = true;
         if (stage !== 'deadline') stage = 'cancelled';
         reject(Object.assign(new Error('client readiness cancelled'), { code: 'ABORT_ERR' }));
       };
@@ -114,7 +116,7 @@ export function createEngramMemoryExtension(options = {}) {
     const timer = setTimeout(() => { stage = 'deadline'; controller.abort(); }, DOWNLOAD_DEADLINE_MS);
     try {
       unregister = options.registerCleanup?.('engram-client-readiness', async () => {
-        stopped = true;
+        disposed = true;
         stage = 'cancelled';
         controller.abort();
         await preparation?.catch(() => { });
@@ -143,7 +145,6 @@ export function createEngramMemoryExtension(options = {}) {
     } catch (error) {
       const failedStage = stage;
       readiness = 'failed';
-      stopped = true;
       controller.abort();
       clearTimeout(timer);
       controller.signal.removeEventListener('abort', onAbort);
