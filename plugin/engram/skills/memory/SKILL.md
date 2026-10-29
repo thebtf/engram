@@ -71,9 +71,14 @@ skill loading depend on the installed host/plugin; a source edit proves neither.
    credential work, not lesson capture.
 4. **Bind scope and check duplication.** Use the current authorized canonical project,
    never a guessed name or another project's memory. Check already available records
-   or make a focused `recall` for the same meaning. An equivalent correct memory needs
-   no write. Default to `privacy_scope="project"`; broader visibility requires explicit
-   applicable intent. Project scope is not principal-private: omit sensitive detail or
+   or make a focused `recall` using a short literal substring likely to occur in the
+   stored content; `recall` is substring search, not semantic matching. Compare actual
+   returned records by meaning, project and applicability. An equivalent correct memory
+   needs no write. If lookup fails, is ambiguous or returns an incomplete bounded set,
+   narrow or broaden the query within the same project before deciding; do not infer
+   novelty or create from an unresolved lookup. Default to `privacy_scope="project"`;
+   broader visibility requires explicit applicable intent. Project scope is not
+   principal-private: omit sensitive detail or
    use a supported narrower scope when it cannot safely be shared. Never invent identity.
 5. **Create or correct.** Create only if the lesson is new. For a known incorrect memory,
    confirm its actual ID, project and relevant content, then use `store(action="edit",
@@ -95,8 +100,8 @@ Examples (use real project identity, source reference and returned IDs):
 
 ```
 Use: "We were wrong: for this project's restore flow, preserve the backup until readback verifies the restored data. Remember that for later restores."
-Tool: recall(query="restore backup readback", project="my-project")
-If no equivalent record exists:
+Tool: recall(query="restore", project="my-project")
+Compare the returned restore records by meaning and applicability; create only when the lookup is resolved and no equivalent record exists:
 Tool: store(action="create", project="my-project", privacy_scope="project", content="For this project's restore flow, retain the backup until restored-data readback is verified. Source: user's explicit restore correction, 2026-10-29.", title="Restore backup retention", type="pitfall", tags=["restore"])
 
 If that same lesson corrects an identified memory 42 in this project:
