@@ -534,10 +534,17 @@ function Invoke-ValidateArtifactMetadata {
     $expectedDigest = Normalize-Sha256Digest -Value $ExpectedArtifactDigest -Name 'ExpectedArtifactDigest'
     $census = Get-ArtifactCensus
     $artifacts = @($census.artifacts)
-    if ([int64]$census.total_count -ne $artifacts.Count -or $artifacts.Count -ne 1) {
-        throw "Publisher workflow run must contain exactly one bridge artifact before download; API reported $($census.total_count), enumerated $($artifacts.Count)."
+    if ([int64]$census.total_count -ne $artifacts.Count) {
+        throw "Publisher artifact census is incomplete; API reported $($census.total_count), enumerated $($artifacts.Count)."
     }
-    $artifact = $artifacts[0]
+    # Failed attempts retain evidence in the same run; only the immutable bridge is payload.
+    $evidenceNamePattern = "\Aengram-publication-evidence-$CurrentRunID-[1-9][0-9]*\z"
+    $bridges = @($artifacts | Where-Object { [string]$_.name -cnotmatch $evidenceNamePattern })
+    if ($bridges.Count -ne 1) { throw 'Publisher workflow run must contain exactly one bridge artifact before download.' }
+    if (@($artifacts.id | Sort-Object -Unique).Count -ne $artifacts.Count -or @($artifacts.name | Sort-Object -Unique).Count -ne $artifacts.Count) {
+        throw 'Publisher artifact census contains duplicate IDs or names.'
+    }
+    $artifact = $bridges[0]
     if ([int64]$artifact.id -ne $ExpectedArtifactID -or [string]$artifact.name -cne $ExpectedArtifactName) {
         throw 'Artifact ID/name does not match the immutable prepare-release job output.'
     }
@@ -546,6 +553,20 @@ function Invoke-ValidateArtifactMetadata {
     if ($apiDigest -cne $expectedDigest) { throw 'Artifact API digest does not match the immutable upload-artifact job output.' }
     if ($null -eq $artifact.workflow_run -or [int64]$artifact.workflow_run.id -ne $CurrentRunID) {
         throw 'Artifact provenance does not bind to the current publisher workflow run.'
+    }
+    foreach ($receipt in @($artifacts | Where-Object { [string]$_.name -cmatch $evidenceNamePattern })) {
+        if ([int64]$receipt.id -le 0 -or [bool]$receipt.expired -or [string]$receipt.url -cne "$($GitHubApiUrl.TrimEnd('/'))/repos/$Repository/actions/artifacts/$($receipt.id)") {
+            throw 'Publication evidence metadata does not identify a live artifact in the expected repository.'
+        }
+        Normalize-Sha256Digest -Value ([string]$receipt.digest) -Name 'publication evidence API digest' | Out-Null
+        if ($null -eq $receipt.workflow_run -or [int64]$receipt.workflow_run.id -ne $CurrentRunID) {
+            throw 'Publication evidence does not bind to the current publisher workflow run.'
+        }
+        foreach ($field in @('repository_id', 'head_repository_id', 'head_branch', 'head_sha')) {
+            if ([string]::IsNullOrWhiteSpace([string]$artifact.workflow_run.$field) -or [string]$receipt.workflow_run.$field -cne [string]$artifact.workflow_run.$field) {
+                throw "Publication evidence $field does not match the immutable bridge provenance."
+            }
+        }
     }
     $result = [ordered]@{
         schema_version = 1
