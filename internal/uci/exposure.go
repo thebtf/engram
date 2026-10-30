@@ -28,6 +28,8 @@ var (
 	// ErrCompletionEvidenceUnavailable is returned only to an explicit
 	// supported-host callback whose evidence append cannot complete.
 	ErrCompletionEvidenceUnavailable = errors.New("COMPLETION_EVIDENCE_UNAVAILABLE")
+	// ErrCompletionPermissionDenied never discloses whether a parent exists.
+	ErrCompletionPermissionDenied = errors.New("COMPLETION_PERMISSION_DENIED")
 	// ErrExposureNotFound is a store-local completion parent lookup failure.
 	// ExposureRecorder maps it to the closed callback outcome.
 	ErrExposureNotFound = errors.New("UCI_EXPOSURE_NOT_FOUND")
@@ -182,6 +184,30 @@ type VerifiedSupportedHostCallback struct {
 	OccurredAt       time.Time
 }
 
+// CompletionCaller is transport-authenticated, process-local authority, not
+// callback payload or durable evidence. The store rechecks its live keycard.
+type CompletionCaller struct {
+	AuthRealm string
+	Principal string
+	KeycardID string
+}
+
+type completionCallerContextKey struct{}
+
+// WithCompletionCaller is used only after transport authentication; request
+// fields and exposure metadata must never supply these identity values.
+func WithCompletionCaller(ctx context.Context, caller CompletionCaller) context.Context {
+	return context.WithValue(ctx, completionCallerContextKey{}, caller)
+}
+
+func CompletionCallerFromContext(ctx context.Context) (CompletionCaller, bool) {
+	if ctx == nil {
+		return CompletionCaller{}, false
+	}
+	caller, ok := ctx.Value(completionCallerContextKey{}).(CompletionCaller)
+	return caller, ok
+}
+
 // ExposureStore is the narrow persistence port owned by the exposure domain.
 // An exact retry returns the original record; a changed binding returns only
 // ErrIdempotencyMismatch.
@@ -263,6 +289,9 @@ func (recorder *ExposureRecorder) RecordCompletion(ctx context.Context, callback
 
 	stored, err := recorder.store.AppendCompletion(ctx, evidence)
 	if err != nil {
+		if errors.Is(err, ErrCompletionPermissionDenied) {
+			return CompletionEvidence{}, ErrCompletionPermissionDenied
+		}
 		if errors.Is(err, ErrIdempotencyMismatch) {
 			return CompletionEvidence{}, ErrIdempotencyMismatch
 		}

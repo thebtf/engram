@@ -7,8 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Prevent stale Access user responses from replacing a newer selection or reopening a closed panel, while preserving same-user refresh and retry.
-
 - Regenerate the API through the maintained worker target using canonical local Go package directories and Swag 1.16.6, with real producer errors stopping the build. Correct existing context search/inject/session-start annotations without changing handlers; document the shared GET/POST conditional-query limitation. The actual producer and server build pass, with 40 named schema checks and all 76 references resolved; that producer checkpoint established compile-only retained-reader oracle provenance, with later native query proof recorded separately, and installed/release acceptance remains separate.
 
 - Add retained catalog `families` metadata with kind, technical table, saved membership-occurrence count and declared/separate/metadata-only reader boundary. Preserve every group, opaque reference, safe label and reason without payload previews, readable-record totals, availability or historical ownership assignment. This descriptor change does not provide cross-group record discovery or installed-consumer acceptance.
@@ -45,6 +43,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Isolate canonical GORM/gRPC fixtures, bound their pools and await caller-owned audit writes before schema cleanup; retain restore guards and public data. Reuse focused retention/audit/gRPC proofs; the earlier 37-PASS run remains preservation FAIL (audit rows 37→40), followed by seven focused PASS with 40→40 preservation. Canonical continuity fixtures now migrate once per isolated parent (17→6), preserving every assertion and the unchanged 12m budget; reuse 22 focused lifecycle PASS plus three hash-bound slot CRUD/migration PASS from the earlier incomplete timeout run, not a full-suite or installed-acceptance claim.
 - Use registered canonical UUIDs and authenticated caller project context in MCP fixtures without weakening default-deny, privacy or pre-mutation rejection guards. Reuse 119 prior PASS plus one exact retry PASS after the context fix, not 120 fresh PASS or installed acceptance.
 - Seed the isolated operator-code fixture with a registered canonical project UUID while preserving five queue candidates, published/no-view checks and redacted provisioning errors.
+
+## [7.0.16] - 2026-10-30
+
+### Fixed
+
+- Open oversized indexed citations through MCP `codebase_read` with the original `indexed_span` and a contained byte window, retaining pinned context, membership and digest checks, UTF-8 boundaries and the 8192-byte cap. Describe the executable recovery and report source omissions only for returned bytes, not empty misses (Engram issue 514).
+- Reauthorize supported-host completion against the live keycard and exact owner of the parent Source/Checkout/View in the child-write transaction before idempotency lookup or append. Project membership and Source project association do not grant access. Hold non-waiting shared row locks against revocation, owner transfer and View retirement; deny without parent details while preserving authorized retries and shared-source handoff. Atomically record the real service actor in one `uci_completion_accepted` audit per new child; exact retry and denial add neither child nor audit (Engram issue 515).
+- Reject inaccessible completion parents with a nonlocking exact-owner/context check before acquiring parent or context row locks, then repeat live authorization under the existing write locks. Locked foreign and missing parents have the same closed denial; genuinely authorized contention and infrastructure failures remain transient unavailable outcomes. Preserve concurrent exact-retry atomicity, one child/real-actor audit and rollback recovery (Engram issue 515).
+- Prevent stale Access user responses from replacing a newer selection or reopening a closed panel, while preserving same-user refresh and retry.
 
 ## [7.0.15] - 2026-10-29
 

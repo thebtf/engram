@@ -8,6 +8,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/internal/uci"
 	pb "github.com/thebtf/engram/proto/engram/v1"
@@ -59,6 +60,10 @@ func (s *Server) RecordUCICompletion(ctx context.Context, request *pb.RecordUCIC
 	if err := requireProjectServiceMatch(ctx, string(values.canonicalProject)); err != nil {
 		return nil, err
 	}
+	identity, _ := auth.IdentityFrom(ctx) // requireProjectServiceClass already authenticated this identity.
+	ctx = uci.WithCompletionCaller(ctx, uci.CompletionCaller{
+		AuthRealm: string(identity.Source), Principal: identity.Principal, KeycardID: identity.KeycardID,
+	})
 
 	if s == nil {
 		return nil, uciCompletionUnavailable()
@@ -142,6 +147,9 @@ func validUCICompletionText(value string, maxBytes int) bool {
 }
 
 func uciCompletionRecorderError(ctx context.Context, err error) error {
+	if errors.Is(err, uci.ErrCompletionPermissionDenied) {
+		return status.Error(codes.PermissionDenied, uci.ErrCompletionPermissionDenied.Error())
+	}
 	if errors.Is(err, uci.ErrIdempotencyMismatch) {
 		return status.Error(codes.FailedPrecondition, uci.ErrIdempotencyMismatch.Error())
 	}

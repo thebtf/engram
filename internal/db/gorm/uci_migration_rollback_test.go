@@ -233,14 +233,15 @@ func openUCIMigrationRollbackFixture(t *testing.T) *uciMigrationRollbackFixture 
 	}
 	require.NoError(t, NewCodeChunkStore(db).Upsert(ctx, &legacyChunk))
 
+	sourceProject, targetProject := sessionTestProject(t, db), sessionTestProject(t, db)
 	issue := Issue{
 		Title:            "migration rollback product sentinel " + token,
 		Body:             "product-domain fixture",
 		Status:           "open",
 		Priority:         "high",
 		Type:             "feature",
-		SourceProject:    "source-product-" + token,
-		TargetProject:    "target-product-" + token,
+		SourceProject:    sourceProject,
+		TargetProject:    targetProject,
 		SourceAgent:      "migration-rollback-fixture",
 		CreatedBySession: "migration-rollback-session-" + token,
 		CreatorKeycardID: "migration-rollback-keycard-" + token,
@@ -248,7 +249,7 @@ func openUCIMigrationRollbackFixture(t *testing.T) *uciMigrationRollbackFixture 
 	require.NoError(t, db.Create(&issue).Error)
 
 	credential := Credential{
-		Project:                  "crypto-product-" + token,
+		Project:                  sessionTestProject(t, db),
 		Key:                      "migration-rollback-sentinel",
 		EncryptedSecret:          []byte{0x00, 0x01, 0x02, 0xff, 0x10, 0x20},
 		EncryptionKeyFingerprint: uciPublicationDigest("migration-rollback-crypto-" + token),
@@ -304,7 +305,7 @@ func openUCIMigrationRollbackFixture(t *testing.T) *uciMigrationRollbackFixture 
 	evidenceStore := NewUCIExposureStore(db)
 	exposure, err := evidenceStore.AppendExposure(ctx, uciProjectionExposureRecord(t, evidenceFixture, time.Now().UTC().Truncate(time.Microsecond)))
 	require.NoError(t, err)
-	_, err = evidenceStore.AppendCompletion(ctx, uciProjectionCompletionEvidence(t, exposure.ExposureRef, time.Now().UTC().Truncate(time.Microsecond)))
+	_, err = evidenceStore.AppendCompletion(uciCompletionFixtureContext(t, ctx, db, publication.realm, publication.checkout.OwnerPrincipal), uciProjectionCompletionEvidence(t, exposure.ExposureRef, time.Now().UTC().Truncate(time.Microsecond)))
 	require.NoError(t, err)
 	require.NoError(t, evidenceStore.VerifyIntegrity(ctx))
 

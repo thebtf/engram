@@ -1280,7 +1280,7 @@ func workerUCIApplicationAddArtifact(t *testing.T, projection *gormstore.UCIProj
 		ByteStart:          definitionStart,
 		ByteEnd:            int64(len(body) - 1),
 		LineStart:          2,
-		LineEnd:            2,
+		LineEnd:            strings.Count(string(body[:len(body)-1]), "\n") + 1,
 	})
 	require.NoError(t, err)
 	chunk, err := projection.UpsertChunk(context.Background(), gormstore.UpsertUCIChunkInput{

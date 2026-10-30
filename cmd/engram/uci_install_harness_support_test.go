@@ -361,10 +361,16 @@ func uciPrepareInstallHarnessComponents(request uciInstallHarnessRequest) ([]uci
 		if !info.Mode().IsRegular() {
 			return nil, fmt.Errorf("UCI %s executable %q is not a regular file", component.role, component.command.Executable)
 		}
+		installedPath := filepath.Join(request.InstallRoot, component.role, component.role+filepath.Ext(component.command.Executable))
+		if component.role == "parser" {
+			// Match plugin/engram/scripts/ensure-binary.js installParser: the
+			// parser belongs beside the installed client, with its extension.
+			installedPath = filepath.Join(request.InstallRoot, "daemon", "parser", "parser"+filepath.Ext(request.Daemon.Executable))
+		}
 		components = append(components, uciInstallHarnessComponent{
 			role:                component.role,
 			command:             component.command,
-			installedExecutable: filepath.Join(request.InstallRoot, component.role, component.role+filepath.Ext(component.command.Executable)),
+			installedExecutable: installedPath,
 		})
 	}
 	return components, nil

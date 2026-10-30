@@ -392,7 +392,7 @@ func TestUCIProjectionMigration172EvidenceSchemaIsAppendOnlyAndNonContent(t *tes
 func TestUCIProjectionMigration172EvidenceStoreCanonicalRetryIntegrityAndRetention(t *testing.T) {
 	fixture := openUCIProjectionMigrationFixture(t)
 	store := NewUCIExposureStore(fixture.db)
-	ctx := context.Background()
+	ctx := uciCompletionFixtureContext(t, context.Background(), fixture.db, fixture.authRealm, fixture.checkout.OwnerPrincipal)
 	recordedAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
 
 	input := uciProjectionExposureRecord(t, fixture, recordedAt)
