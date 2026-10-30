@@ -44,6 +44,13 @@ formula and source paths. Refresh remains the only data action and preserves the
 existing credentialed GET contract. Compiled display checks do not establish
 current geometry, browser behavior or installed acceptance.
 
+The search response reports `avg_latency_ms` as a positive-sample mean with
+`avg_latency_ms_result_status: computed`, or `null / not_computable` when no
+positive latency samples exist. The current collector does not instrument errors,
+so `search_errors` remains `null` with `search_errors_result_status: not_computable`.
+Neither unknown value is a measured zero; existing nil-store compatibility counters
+and HTTP 200 behavior remain unchanged.
+
 ## Project knowledge journey (2026-10-11)
 
 The accepted operator-knowledge change refines the inherited Vue/Vite Operate world.

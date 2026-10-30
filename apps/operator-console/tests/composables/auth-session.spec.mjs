@@ -1436,3 +1436,67 @@ for (const scenario of [
   assert.ok(consumer.calls.every(call => call.method === 'GET' && call.credentials === 'include'), 'Analytics reads must keep the existing credentialed GET contract')
   assert.equal(rendered, scenario.expected, 'Primary citation share must use converted percent units, not a decimal or a fabricated zero')
 })
+
+for (const scenario of [
+  { label: 'unmeasured canonical values', latency: null, latencyStatus: 'not_computable', errors: null, errorsStatus: 'not_computable', expectedLatency: '—', expectedErrors: '—' },
+  { label: 'computed zero UI-only control', latency: 0, latencyStatus: 'computed', errors: 0, errorsStatus: 'computed', expectedLatency: '0', expectedErrors: '0' },
+  { label: 'positive latency with uninstrumented errors', latency: 12.5, latencyStatus: 'computed', errors: null, errorsStatus: 'not_computable', expectedLatency: '12.5', expectedErrors: '—' },
+  { label: 'unavailable analytics response', latency: 12.5, latencyStatus: 'computed', errors: null, errorsStatus: 'not_computable', status: 503, expectedLatency: '—', expectedErrors: '—' },
+]) test(`Analytics metric truth: ${scenario.label}`, async (t) => {
+  const consumer = session(t, () => Response.json(verifiedUser), (url) => {
+    if (url.pathname === '/api/search/recent') return Response.json({ queries: [] })
+    if (url.pathname === '/api/search/analytics') return Response.json({
+      total_searches: 8,
+      searches_today: 2,
+      avg_latency_ms: scenario.latency,
+      avg_latency_ms_result_status: scenario.latencyStatus,
+      search_errors: scenario.errors,
+      search_errors_result_status: scenario.errorsStatus,
+    }, { status: scenario.status || 200 })
+    if (url.pathname === '/api/stats/retrieval') return Response.json({ total_requests: 21, observations_served: 200, stale_excluded: 4, duplicates_removed: 2, search_requests: 7 })
+  }, (path) => path === '/api/stats/vnext' ? Response.json({
+    noise_ratio: 0.25,
+    noise_ratio_result_status: 'computed',
+    citation_count: 3,
+    uncited_count: 1,
+    injection_count: 99,
+    outcomes: { unrecorded_fraction: 0.4 },
+  }) : undefined)
+  await consumer.shell.refresh()
+  const mounted = await mountRecovery(t, consumer, `/noise?project=${projectID}`, 'noise')
+  await mounted.reader().refresh()
+  await tick()
+  assert.equal(mounted.reader().analyticsState.kind, scenario.status ? 'error' : 'live')
+  const expectedMetrics = {
+    'noisePage.citations.cited': '3',
+    'noisePage.citations.uncited': '1',
+    'noisePage.analytics.total': scenario.status ? '—' : '8',
+    'noisePage.analytics.today': scenario.status ? '—' : '2',
+    'noisePage.analytics.latency': scenario.expectedLatency,
+    'noisePage.analytics.errors': scenario.expectedErrors,
+    'noisePage.retrieval.requests': '21',
+    'noisePage.retrieval.served': '200',
+    'noisePage.retrieval.stale': '4',
+    'noisePage.retrieval.duplicates': '2',
+    'noisePage.retrieval.searchRequests': '7',
+  }
+  const actualMetrics = {}
+  for (const label of Object.keys(expectedMetrics)) {
+    const row = walk(mounted.host).find(item => item.children.some(child => child.tag === 'dt' && text(child).trim() === label))
+    assert.ok(row, `The compiled Analytics page must render the actual metric label ${label}`)
+    const value = row.children.find(child => child.tag === 'dd')
+    assert.ok(value, `Metric ${label} must have its own rendered value`)
+    actualMetrics[label] = text(value).trim()
+  }
+  assert.deepEqual(actualMetrics, expectedMetrics, 'Metric values must remain attached to their real labels, with unknown distinct from computed zero')
+  const primary = walk(mounted.host).find(item => item.props.class === 'gv')
+  assert.ok(primary, 'The existing citation percentage must remain present')
+  assert.equal(text(primary).trim(), '25%')
+  const outcome = walk(mounted.host).find(item => item.props.class === 'big')
+  assert.ok(outcome, 'The separate session outcome figure must remain present')
+  assert.equal(text(outcome).trim(), '40%')
+  assert.equal(walk(mounted.host).some(item => item.props.class === 'state error'), Boolean(scenario.status), 'The actual page must retain the analytics failure notice without hiding independent metrics')
+  assert.ok(consumer.calls.some(call => call.path === '/api/search/analytics'), 'The compiled reader must consume the real analytics path')
+  assert.ok(consumer.calls.every(call => call.method === 'GET' && call.credentials === 'include'), 'Analytics must preserve credentialed GET-only reads')
+  t.diagnostic(JSON.stringify({ scenario: scenario.label, state: mounted.reader().analyticsState.kind, metrics: actualMetrics, citationShare: text(primary).trim(), unrecordedSessions: text(outcome).trim() }))
+})

@@ -18,6 +18,10 @@ import (
 
 type searchAnalyticsResponse struct {
 	*gorm.SearchAnalytics
+	AvgLatencyMs               *float64                 `json:"avg_latency_ms"`
+	AvgLatencyMsResultStatus   operability.ResultStatus `json:"avg_latency_ms_result_status"`
+	SearchErrors               *int64                   `json:"search_errors"`
+	SearchErrorsResultStatus   operability.ResultStatus `json:"search_errors_result_status"`
 	ZeroResultRate             *float64                 `json:"zero_result_rate"`
 	ZeroResultRateResultStatus operability.ResultStatus `json:"zero_result_rate_result_status"`
 }
@@ -29,6 +33,12 @@ func newSearchAnalyticsResponse(analytics *gorm.SearchAnalytics) searchAnalytics
 	response := searchAnalyticsResponse{
 		SearchAnalytics:            analytics,
 		ZeroResultRateResultStatus: operability.NotComputable,
+		AvgLatencyMsResultStatus:   operability.NotComputable,
+		SearchErrorsResultStatus:   operability.NotComputable,
+	}
+	if analytics.AvgLatencyMs > 0 {
+		response.AvgLatencyMs = &analytics.AvgLatencyMs
+		response.AvgLatencyMsResultStatus = operability.Computed
 	}
 	if analytics.TotalSearches == 0 {
 		return response
@@ -476,7 +486,7 @@ func (s *Service) handleGetSearchAnalytics(w http.ResponseWriter, r *http.Reques
 
 	if store == nil {
 		// The observation source is unavailable while the store initializes. Keep
-		// compatibility counters, but make the rate explicitly not computable.
+		// compatibility counters, but mark unavailable measurements as not computable.
 		writeJSON(w, newSearchAnalyticsResponse(nil))
 		return
 	}
