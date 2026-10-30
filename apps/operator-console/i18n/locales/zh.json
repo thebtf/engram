@@ -400,7 +400,7 @@
       "search": "搜索",
       "memory": "记忆",
       "queue": "待审核",
-      "noise": "噪声与价值",
+      "noise": "搜索与记忆统计",
       "graph": "知识关联",
       "books": "旧版导入",
       "rules": "行为规则",
@@ -2219,45 +2219,42 @@
     }
   },
   "noisePage": {
-    "title": "噪声与有效性",
-    "subtitle": "实时 retrieval/search telemetry：展示给 agent 的内容、实际使用的内容，以及 sparse 或未记录的数据。",
+    "title": "搜索与记忆统计",
     "refresh": "刷新",
     "state": {
-      "pending": "正在加载 retrieval telemetry…",
-      "error": "无法加载 telemetry：{message}"
+      "pending": "正在加载统计…",
+      "error": "无法加载统计：{message}"
     },
     "gauge": {
-      "label": "噪声比例"
+      "label": "日志中未引用条目的占比"
     },
-    "metrics": {
-      "noiseRatio": "噪声",
-      "shown": "已展示",
-      "used": "已使用",
-      "unused": "未使用",
-      "searchRequests": "Search",
-      "unrecorded": "无 outcome"
+    "citations": {
+      "cited": "已引用日志条目",
+      "uncited": "未引用日志条目"
     },
     "analytics": {
-      "title": "搜索分析",
-      "total": "总计",
-      "today": "今日",
-      "latency": "Latency ms",
-      "errors": "错误"
+      "title": "搜索",
+      "total": "搜索总数",
+      "today": "今日（UTC）",
+      "latency": "平均延迟（毫秒）",
+      "errors": "搜索错误"
     },
     "retrieval": {
-      "title": "Retrieval stats",
-      "requests": "请求",
-      "served": "已提供",
-      "stale": "已排除 stale",
-      "duplicates": "重复项"
+      "title": "记忆检索",
+      "requests": "请求总数",
+      "served": "已提供记忆条目",
+      "stale": "已排除过期条目",
+      "duplicates": "已移除重复项",
+      "searchRequests": "搜索请求"
     },
     "unrecorded": {
-      "title": "Sparse outcome state",
-      "body": "unrecorded outcome 比例较高表示 outcome weighting 大多处于中性运行。"
+      "title": "未记录结果的会话",
+      "body": "缺少结果记录不能说明会话成功或失败。"
     },
-    "trend": {
-      "title": "趋势",
-      "body": "服务器目前只暴露 snapshot，尚无噪声趋势图所需的 time-series endpoint。"
+    "sources": {
+      "title": "定义与数据来源",
+      "citations": "引用计数是日志事件数，并非不同记忆的数量。未引用不代表记忆无用。占比计算方式：",
+      "unknown": "— 表示未知值，也包括没有条目的日志。搜索和检索计数不是该占比的分母。"
     }
   },
   "booksPage": {

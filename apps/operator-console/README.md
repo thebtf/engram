@@ -32,6 +32,18 @@ The reviewed 2026.09.17 snapshot is already promoted. `PROMOTION-MANIFEST.json` 
 
 The [responsive-layout receipt](../../specs/011-operator-code-console/acceptance/da-workspace-responsive-layout-receipt.json) proves Workspace shell layout and drawer behavior only. It does not reassert semantic-provider explorer evidence (`embedded_chunks=0 of 64`) or substitute for the installed exact-head normal-homepage DA01–DA04 release proof, which remains pending.
 
+## Analytics citation summary
+
+Analytics (`/noise`) is a server-wide snapshot, not a selected-project or provider
+quality report. Its primary percentage converts the server's citation-journal
+ratio; the adjacent cited/uncited event counts are not unique memory totals.
+Uncited does not mean useless, and null/non-live values remain unknown rather
+than measured zero. Search, retrieval and missing session outcomes remain
+separate groups. The native Definitions and data sources disclosure contains the
+formula and source paths. Refresh remains the only data action and preserves the
+existing credentialed GET contract. Compiled display checks do not establish
+current geometry, browser behavior or installed acceptance.
+
 ## Project knowledge journey (2026-10-11)
 
 The accepted operator-knowledge change refines the inherited Vue/Vite Operate world.

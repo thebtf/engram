@@ -351,6 +351,7 @@ async function mountRecovery(t, consumer, location, pageName, actualLogin = fals
     useRoute: routing.useRoute, useRouter: routing.useRouter,
     computed: vue.computed, ref: vue.ref, watch: vue.watch, nextTick: vue.nextTick, onBeforeUnmount: vue.onBeforeUnmount,
     useI18n: () => ({ t: (key) => key, locale: vue.ref('en') }),
+    useOperatorSearchNoise: () => consumer.dependency('./useOperatorSearchNoise').useOperatorSearchNoise(),
     useSettingsModal: () => ({ settingsModalOpen: vue.ref(false), settingsModalTab: vue.ref('general'), openSettingsModal() { } }),
     window: { innerWidth: 1200, localStorage: { getItem: () => null }, addEventListener() { }, removeEventListener() { }, location: { assign: (href) => navigation.push(href) } },
     document: { activeElement: null, body: { style: { overflow: '' } }, querySelector: () => null, querySelectorAll: () => [] },
@@ -1404,4 +1405,34 @@ test('canonical issue roles: compiled detail clears unrelated body/comments and 
   assert.equal(mounted.reader().comments.length, 0)
   assert.ok(walk(mounted.host).every(row => !String(row.props.innerHTML || '').includes(issue.body)))
   assert.ok(walk(mounted.host).every(row => !String(row.props.innerHTML || '').includes('Scope-bound discussion')))
+})
+
+for (const scenario of [
+  { label: 'quarter share', ratio: 0.25, expected: '25%' },
+  { label: 'measured zero', ratio: 0, expected: '0%' },
+  { label: 'null not-computable', ratio: null, resultStatus: 'not_computable', expected: '—' },
+  { label: 'unavailable response', ratio: 0.25, status: 503, expected: '—' },
+]) test(`Analytics primary citation share units: ${scenario.label}`, async (t) => {
+  const consumer = session(t, () => Response.json(verifiedUser), (url) => {
+    if (url.pathname === '/api/search/recent') return Response.json({ queries: [] })
+    if (url.pathname === '/api/search/analytics') return Response.json({ total_searches: 8 })
+    if (url.pathname === '/api/stats/retrieval') return Response.json({ observations_served: 200, search_requests: 7 })
+  }, (path) => path === '/api/stats/vnext' ? Response.json({
+    noise_ratio: scenario.ratio,
+    noise_ratio_result_status: scenario.resultStatus || 'computed',
+    citation_count: scenario.ratio === null ? 0 : 3,
+    uncited_count: scenario.ratio === null || scenario.ratio === 0 ? 0 : 1,
+    injection_count: 99,
+  }, { status: scenario.status || 200 }) : undefined)
+  await consumer.shell.refresh()
+  const mounted = await mountRecovery(t, consumer, `/noise?project=${projectID}`, 'noise')
+  await mounted.reader().refresh()
+  await tick()
+  assert.equal(mounted.reader().vnextState.kind, scenario.status ? 'error' : 'live')
+  const primary = walk(mounted.host).find(item => item.props.class === 'gv')
+  assert.ok(primary, 'The actual compiled Analytics page must render its primary share')
+  const rendered = text(primary).trim()
+  t.diagnostic(JSON.stringify({ scenario: scenario.label, primary: rendered, expected: scenario.expected, state: mounted.reader().vnextState.kind }))
+  assert.ok(consumer.calls.every(call => call.method === 'GET' && call.credentials === 'include'), 'Analytics reads must keep the existing credentialed GET contract')
+  assert.equal(rendered, scenario.expected, 'Primary citation share must use converted percent units, not a decimal or a fabricated zero')
 })

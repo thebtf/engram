@@ -2250,45 +2250,42 @@
     }
   },
   "noisePage": {
-    "title": "Шум и польза",
-    "subtitle": "Живой срез retrieval/search telemetry: что показывали агентам, что реально использовали, где данные sparse или не записаны.",
+    "title": "Статистика поиска и памяти",
     "refresh": "Обновить",
     "state": {
-      "pending": "Загружаем retrieval telemetry…",
-      "error": "Не удалось загрузить telemetry: {message}"
+      "pending": "Загружаем статистику…",
+      "error": "Не удалось загрузить статистику: {message}"
     },
     "gauge": {
-      "label": "доля шума"
+      "label": "Доля записей журнала без цитирования"
     },
-    "metrics": {
-      "noiseRatio": "Шум",
-      "shown": "Показали",
-      "used": "Использовали",
-      "unused": "Без пользы",
-      "searchRequests": "Search",
-      "unrecorded": "Без outcome"
+    "citations": {
+      "cited": "Записи с цитированием",
+      "uncited": "Записи без цитирования"
     },
     "analytics": {
-      "title": "Search analytics",
-      "total": "Всего",
-      "today": "Сегодня",
-      "latency": "Latency ms",
-      "errors": "Ошибки"
+      "title": "Поиск",
+      "total": "Всего поисков",
+      "today": "Сегодня (UTC)",
+      "latency": "Средняя задержка (мс)",
+      "errors": "Ошибки поиска"
     },
     "retrieval": {
-      "title": "Retrieval stats",
-      "requests": "Запросы",
-      "served": "Показано",
-      "stale": "Stale excluded",
-      "duplicates": "Дубликаты"
+      "title": "Выдача памяти",
+      "requests": "Всего запросов",
+      "served": "Выдано элементов памяти",
+      "stale": "Устаревших исключено",
+      "duplicates": "Дубликатов удалено",
+      "searchRequests": "Поисковые запросы"
     },
     "unrecorded": {
-      "title": "Sparse outcome state",
-      "body": "Высокая доля unrecorded outcome означает, что outcome-weighting в основном работает нейтрально."
+      "title": "Сеансы без записанного итога",
+      "body": "Отсутствие итога не означает успех или неудачу сеанса."
     },
-    "trend": {
-      "title": "Trend",
-      "body": "Сейчас сервер отдаёт snapshot, но не отдаёт time-series для графика тренда шума."
+    "sources": {
+      "title": "Определения и источники данных",
+      "citations": "Счётчики цитирования — события журнала, а не уникальные записи памяти. Отсутствие цитирования не означает бесполезность. Доля рассчитывается так:",
+      "unknown": "— означает неизвестное значение, в том числе при пустом журнале. Счётчики поиска и выдачи не входят в знаменатель этой доли."
     }
   },
   "booksPage": {
