@@ -156,6 +156,49 @@ for (const consumer of ['Health', 'Settings']) {
   })
 }
 
+for (const boundary of ['pending', 'unavailable', 'live-empty', 'live-components']) {
+  test(`Health components: ${boundary} preserves neighboring evidence`, async (t) => {
+    const selfcheck = boundary === 'unavailable' ? Response.json({ error: 'synthetic selfcheck unavailable' }, { status: 503 })
+      : { overall: 'healthy', components: boundary === 'live-components' ? [{ name: 'synthetic-database', status: 'healthy' }] : [] }
+    const f = fixture(t, { available: false }, selfcheck)
+    if (boundary !== 'pending') await f.state.refresh()
+    else {
+      // First load is genuinely pending, not an invented API response or mapped component array.
+      assert.equal(f.state.selfcheckState.value.kind, 'pending')
+    }
+    const host = f.mount('pages/health.vue')
+    await vue.nextTick()
+    const rendered = text(host)
+    const empty = rendered.includes('health.emptyComponents')
+    t.diagnostic(JSON.stringify({ boundary, stateKind: f.state.selfcheckState.value.kind, componentCount: f.state.components.value.length, renderedEmpty: empty }))
+    if (boundary !== 'pending') {
+      assert.ok(rendered.includes('73'), 'live embedding neighbor remains readable')
+      assert.ok(rendered.includes('synthetic-vector-neighbor'), 'live vector neighbor remains readable')
+      assert.ok(rendered.includes('synthetic-engine'), 'migration evidence remains readable')
+      t.diagnostic('PASS: embedding/vector/migration neighbors retained')
+    }
+    if (boundary === 'pending' || boundary === 'unavailable') {
+      const heading = descendants(host).find(item => item.tag === 'h2' && text(item).trim() === 'health.components')
+      assert.ok(heading, 'the actual compiled components heading must render')
+      let card = heading.parent
+      while (card && card.tag !== 'article') card = card.parent
+      assert.ok(card, 'the rendered components heading must belong to its card')
+      const status = descendants(card).find(item => item.props.role === 'status' || item.props.role === 'alert')
+      t.diagnostic(JSON.stringify({ boundary, inCardStatusRole: status?.props.role ?? null, inCardStatusContent: status ? text(status).trim() : null }))
+      assert.ok(status, `${boundary} components card must expose an accessible status or alert`)
+      const message = text(status).trim()
+      assert.ok(message.length > 0, `${boundary} components status must contain readable content`)
+      assert.match(message, boundary === 'pending' ? /\bhealth\.state\.pending\b/ : /\bhealth\.state\.(?:error|notLoaded)\b/,
+        `${boundary} components status must communicate its state through localized content`)
+    }
+    if (boundary === 'live-empty') assert.equal(empty, true, 'a real live empty list remains empty')
+    else if (boundary === 'live-components') {
+      assert.equal(empty, false)
+      assert.ok(rendered.includes('synthetic-database'))
+    } else assert.equal(empty, false, `${boundary} selfcheck is not a live empty component list`)
+  })
+}
+
 function deferred() {
   let resolve
   const promise = new Promise((settle) => { resolve = settle })
@@ -378,3 +421,32 @@ test('Settings config overlap: an older config response cannot replace a complet
     afterOlderCompletion: { label, value: 'true', pendingVisible: false },
   }, 'the actual runtime snapshot must retain the completed newer config after the older response arrives')
 })
+
+for (const [boundary, selfcheck] of [
+  ['missing', { overall: 'healthy' }],
+  ['null', { overall: 'healthy', components: null }],
+]) {
+  test(`Health components: live ${boundary} list is unknown, not server-returned empty`, async (t) => {
+    const f = fixture(t, { available: false }, selfcheck)
+    await f.state.refresh()
+    assert.equal(f.calls.filter(path => path === '/api/selfcheck').length, 1)
+    assert.equal(f.state.selfcheckState.value.kind, 'live', 'the successful selfcheck must reach the actual live state')
+    assert.equal(Object.hasOwn(f.state.selfcheckState.value.data, 'components'), boundary === 'null', 'the transport must preserve missing versus explicit null')
+    if (boundary === 'null') assert.equal(f.state.selfcheckState.value.data.components, null)
+    const host = f.mount('pages/health.vue')
+    await vue.nextTick()
+    const heading = descendants(host).find(item => item.tag === 'h2' && text(item).trim() === 'health.components')
+    assert.ok(heading, 'the actual compiled components heading must render')
+    let card = heading.parent
+    while (card && card.tag !== 'article') card = card.parent
+    assert.ok(card, 'the rendered components heading must belong to its card')
+    const empty = text(card).includes('health.emptyComponents')
+    const status = descendants(card).find(item => item.props.role === 'status' || item.props.role === 'alert')
+    const message = status ? text(status).trim() : ''
+    t.diagnostic(JSON.stringify({ boundary, transportStatus: 200, stateKind: f.state.selfcheckState.value.kind, componentCount: f.state.components.value.length, renderedEmpty: empty, inCardStatusRole: status?.props.role ?? null, inCardStatusContent: message }))
+    assert.equal(empty, false, `a live selfcheck with components ${boundary} is not a server-returned empty component list`)
+    assert.ok(status, `live ${boundary} components card must expose an accessible status or alert`)
+    assert.ok(message.length > 0, `live ${boundary} components status must contain readable content`)
+    assert.match(message, /\bhealth\.state\.(?:unknown|notLoaded)\b/, `live ${boundary} components status must communicate unknown or not-loaded state through localized content`)
+  })
+}

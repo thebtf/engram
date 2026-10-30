@@ -1876,7 +1876,7 @@
     "idle": "ожидание",
     "vectorUnavailable": "векторный слой недоступен",
     "noise": "Шум",
-    "emptyComponents": "Компоненты selfcheck пока не загружены.",
+    "emptyComponents": "Сервер не вернул компоненты selfcheck.",
     "migration": {
       "engine": "Движок",
       "table": "Таблица",

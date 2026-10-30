@@ -1845,7 +1845,7 @@
     "idle": "空闲",
     "vectorUnavailable": "向量层不可用",
     "noise": "噪声",
-    "emptyComponents": "selfcheck 组件尚未加载。",
+    "emptyComponents": "服务器未返回任何 selfcheck 组件。",
     "migration": {
       "engine": "引擎",
       "table": "表",

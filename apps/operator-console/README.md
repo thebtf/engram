@@ -51,7 +51,7 @@ so `search_errors` remains `null` with `search_errors_result_status: not_computa
 Neither unknown value is a measured zero; existing nil-store compatibility counters
 and HTTP 200 behavior remain unchanged.
 
-## Health update-check currentness
+## Health update-check currentness and component states
 
 Health and Settings treat update availability as live only when the domain check
 returns an explicit boolean without an error. HTTP 200 with an error, missing or
@@ -60,12 +60,19 @@ Refresh hides the prior availability answer while its new check is pending,
 preserves useful neighboring values, and keeps both Refresh controls busy through
 the final migrations read. A programmatic post-save recheck starts its own reads;
 only the latest intent may publish results or clear busy controls.
-`health-update-refresh.spec.mjs` independently covers the 24 update/refresh cases
-through both actual compiled consumers, including delayed responses and overlap.
-Full Health C1, the four component-state cases retained in its full WIP, and
-Settings explanatory error-copy presentation remain open under #477. This slice
-does not resolve Vue #493 or establish exact-target browser, installed or release
-acceptance.
+The Components card distinguishes pending, failed or otherwise non-live selfcheck
+from a successful live empty array. A live selfcheck with missing, null or other
+non-array component data shows localized not-loaded text with an accessible status,
+not the empty-list message. Pending and unavailable states have localized in-card
+status or alert text; errors use only the typed diagnosis, not raw server or provider
+payload. Only an explicit live empty components array says the server returned no
+components (EN/RU/ZH). Live rows, neighboring evidence and refresh/retry guards stay
+unchanged. `health-update-refresh.spec.mjs` covers 30 cases through the actual
+compiled consumers: the original 24 update/refresh cases, including delayed
+responses and overlap, four component-state cases and two missing/null cases.
+Full Health C1 and Settings explanatory error-copy presentation remain open under
+#477. This slice does not resolve Vue #493 or establish populated local-Docker
+browser, installed or release acceptance.
 
 ## Project knowledge journey (2026-10-11)
 

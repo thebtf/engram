@@ -1876,7 +1876,7 @@
     "idle": "idle",
     "vectorUnavailable": "vector unavailable",
     "noise": "Noise",
-    "emptyComponents": "Selfcheck components are not loaded yet.",
+    "emptyComponents": "The server returned no selfcheck components.",
     "migration": {
       "engine": "Engine",
       "table": "Table",
