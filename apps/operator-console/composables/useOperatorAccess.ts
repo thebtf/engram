@@ -13,6 +13,7 @@ let sharedAccessDrilldown: SharedRef<OperatorAccessDrilldown> | undefined
 let sharedAccessState: SharedRef<OperatorLoadState<OperatorAccessSnapshot>> | undefined
 let sharedAccessHasProvenSnapshot: SharedRef<boolean> | undefined
 let sharedAccessDrilldownState: SharedRef<OperatorLoadState<OperatorAccessDrilldown>> | undefined
+let sharedAccessDrilldownRevision = 0
 
 import type { ComputedRef, Ref } from 'vue'
 import { computed } from 'vue'
@@ -529,14 +530,18 @@ export function useOperatorAccess(): OperatorAccessComposable {
   }
 
   async function openUser(userID: number) {
+    const revision = ++sharedAccessDrilldownRevision
+    if (selectedUserID.value !== userID) drilldownData.value = emptyDrilldown()
     selectedUserID.value = userID
     const path = `${ACCESS_BASE}/users/${encodeURIComponent(String(userID))}`
     drilldownStateValue.value = pendingState(drilldownEvidence, currentDrilldown())
     try {
       const payload = await operatorFetchJson<ApiAccessDrilldown>(path, undefined, 'access-user-drilldown')
+      if (revision !== sharedAccessDrilldownRevision) return
       drilldownData.value = mapDrilldown(payload)
       drilldownStateValue.value = liveState(drilldownEvidence, currentDrilldown())
     } catch (nextError) {
+      if (revision !== sharedAccessDrilldownRevision) return
       const mapped = toOperatorSourceError(nextError, {
         source: 'access-user-drilldown',
         path,
@@ -555,6 +560,7 @@ export function useOperatorAccess(): OperatorAccessComposable {
   }
 
   function closeUser() {
+    sharedAccessDrilldownRevision++
     selectedUserID.value = null
     drilldownData.value = emptyDrilldown()
     drilldownStateValue.value = liveState(drilldownEvidence, currentDrilldown())
