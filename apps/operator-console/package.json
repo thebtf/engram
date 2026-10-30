@@ -12,7 +12,7 @@
     "generate": "npm run build",
     "preview": "node .output/server/index.mjs",
     "parity": "node scripts/parity-check.repo.mjs",
-    "test:seam": "node --test scripts/copy-static-i18n.test.mjs scripts/static-host.test.mjs tests/composables/document-export.spec.mjs tests/composables/memory-filters.spec.mjs tests/composables/auth-session.spec.mjs tests/composables/issue-actions.spec.mjs tests/composables/issue-discovery.spec.mjs tests/composables/project-catalog.spec.mjs tests/composables/rules-selection-context.spec.mjs tests/composables/retained-vault.test.mjs tests/composables/useApi.spec.ts",
+    "test:seam": "node --test scripts/copy-static-i18n.test.mjs scripts/static-host.test.mjs tests/composables/document-export.spec.mjs tests/composables/memory-filters.spec.mjs tests/composables/auth-session.spec.mjs tests/composables/access-drilldown-lifetime.spec.mjs tests/composables/issue-actions.spec.mjs tests/composables/issue-discovery.spec.mjs tests/composables/project-catalog.spec.mjs tests/composables/rules-selection-context.spec.mjs tests/composables/retained-vault.test.mjs tests/composables/useApi.spec.ts",
     "test:parity": "node --test scripts/parity-promotion.test.mjs",
     "test:browser": "playwright test",
     "test:browser:live": "npm run build && playwright test --config playwright.live.config.ts"
