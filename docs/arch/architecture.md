@@ -22,6 +22,29 @@ database-backed client tokens, while token creation/revocation routes require
 administrative authorization. This lets an operator revoke a workstation without
 putting the operator secret in a local agent configuration.
 
+## Assistant identity and record context
+
+[Decision 21](../DECISIONS.md) separates a durable Assistant's canonical agent
+principal from replaceable keycards and record affiliation. The design uses a
+small Assistant registry keyed by that same principal, not a second ID. Each
+memory or versioned note has one assistant, project, or global context; global
+needs no project UUID. Authenticated authorship, existing memory privacy
+ownership, and visibility remain independent. Notes keep their existing access
+rules; no document-private policy is added. Affiliation neither impersonates an
+author nor changes visibility defaults.
+
+A trusted registered assistant can supply default self when no explicit context
+or real project is selected. Explicit context wins; explicit project remains
+project; failed project resolution never silently falls back. No mandatory
+assistant-mode startup setting is added.
+
+This is a design contract, not current project-free runtime support. Its private
+record is `specs/assistant-memory-context/architecture.md` in agent-state.
+Execution enters the existing Spec Kit feature path and extends current
+memory/document owners and shared retrieval. Preserve project behavior,
+historical privacy, and the stdio/gRPC versus REST boundary; do not add fake
+projects or a new IAM/ACL layer.
+
 ## Feature state must be explicit
 
 Graph, candidate queue, and code intelligence have distinct enablement flags.
