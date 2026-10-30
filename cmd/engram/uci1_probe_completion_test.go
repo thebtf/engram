@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -12,6 +14,7 @@ import (
 	"github.com/lib/pq"
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/uci"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/grpc/codes"
@@ -25,8 +28,10 @@ type uci1CompletionProbeState struct {
 	secondBefore   uci1CompletionParent
 }
 
-// uci1ProbeCompletionInstalled exercises the supported-host callback strictly
-// through the installed gRPC transport. It leaves only redacted U42/U45 proof.
+// uci1ProbeCompletionInstalled denies a distinct service callback in the real
+// MCP parent's portable-marker project. Positive loopback-gRPC callbacks use a
+// separate synthetic service-owned parent bound to the fixture catalog project;
+// they do not prove public MCP service registration or retrieval.
 func uci1ProbeCompletionInstalled(ctx context.Context, runtime uciInstalledAcceptanceScenarioRuntime) (_ map[string]uciInstalledAcceptanceScenarioEvidence, retErr error) {
 	if ctx == nil {
 		return nil, errors.New("installed completion scenario context is nil")
@@ -34,7 +39,7 @@ func uci1ProbeCompletionInstalled(ctx context.Context, runtime uciInstalledAccep
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if runtime.Recorder == nil || !runtime.Recorder.Transcript().UsedStdio || runtime.Authority == nil || runtime.Authority.store == nil || runtime.Authority.projectKey == "" {
+	if runtime.Recorder == nil || !runtime.Recorder.Transcript().UsedStdio || runtime.Authority == nil || runtime.Authority.store == nil || runtime.Authority.projectKey == "" || runtime.Authority.anchorProjectID == "" {
 		return nil, errors.New("installed completion scenario runtime is incomplete")
 	}
 	selection, found := runtime.Selections[uciInstalledAcceptanceClientRecorder]
@@ -42,6 +47,8 @@ func uci1ProbeCompletionInstalled(ctx context.Context, runtime uciInstalledAccep
 		return nil, errors.New("installed completion recorder selection is unavailable")
 	}
 
+	// This credential belongs only to the synthetic store-owned positive
+	// fixture. Its Source is registered under this same catalog project below.
 	rawKeycard, err := uciInstalledAcceptanceKeycard()
 	if err != nil {
 		return nil, err
@@ -75,51 +82,71 @@ func uci1ProbeCompletionInstalled(ctx context.Context, runtime uciInstalledAccep
 		retErr = errors.Join(retErr, cleanupErr)
 	}()
 
-	state, err := uci1CompletionPrepareProbeState(ctx, runtime, selection)
+	unauthorizedParent, err := uci1CompletionCreateExposure(ctx, runtime, selection)
 	if err != nil {
 		return nil, err
 	}
-
+	// Native public registration uses the already-pinned portable marker UUID,
+	// not the separate catalog-project seed used by the positive storage fixture.
+	publicRaw, err := uciInstalledAcceptanceKeycard()
+	if err != nil {
+		return nil, err
+	}
+	publicHash, err := bcrypt.GenerateFromPassword([]byte(publicRaw), bcrypt.DefaultCost)
+	if err != nil {
+		return nil, errors.New("hash public-parent same-project service keycard")
+	}
+	publicService, err := keycards.CreateWithPrincipal(ctx, gormdb.TokenCreatePrincipalInput{
+		Name: "uci1-public-parent-service-" + uuid.NewString(), TokenHash: string(publicHash),
+		TokenPrefix: publicRaw[len(auth.TokenRawPrefix) : len(auth.TokenRawPrefix)+auth.TokenPrefixLen],
+		Scope:       "read-write", Principal: auth.ProjectServicePrincipal(runtime.Authority.anchorProjectID),
+		PrincipalKind: string(auth.PrincipalKindService), ExpiresAt: &expiresAt,
+	})
+	if err != nil {
+		return nil, errors.New("create public-parent same-project service keycard")
+	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		cleanupErr := keycards.Revoke(cleanupCtx, publicService.ID)
+		if err := runtime.Authority.store.GetDB().WithContext(cleanupCtx).Delete(&gormdb.APIToken{}, "id = ?", publicService.ID).Error; err != nil {
+			cleanupErr = errors.Join(cleanupErr, errors.New("delete public-parent same-project service keycard"))
+		}
+		publicRaw = ""
+		retErr = errors.Join(retErr, cleanupErr)
+	}()
+	denied := uci1InstalledCompletionCallback{
+		CanonicalProject: runtime.Authority.anchorProjectID, ExposureRef: unauthorizedParent,
+		SupportedHostRef: "uci1-denied-host-" + uuid.NewString(), CallbackRef: "uci1-denied-callback-" + uuid.NewString(),
+		Outcome: pb.UCICompletionOutcome_UCI_COMPLETION_OUTCOME_PARTIAL, IdempotencyKey: "uci1-denied-key-" + uuid.NewString(),
+	}
+	if err := uci1CompletionRequireDenied(ctx, runtime, publicRaw, denied); err != nil {
+		return nil, err
+	}
+	state, ownerCheckoutID, err := uci1CompletionPrepareServiceOwnerState(ctx, runtime, keycard, rawKeycard)
+	if err != nil {
+		return nil, err
+	}
 	u42Digest, firstAfterMismatch, err := uci1CompletionObserveU42(ctx, runtime, state, rawKeycard)
 	if err != nil {
 		return nil, err
 	}
-
+	if err := uci1CompletionRequireForeignDenied(ctx, runtime, state.firstExposure); err != nil {
+		return nil, err
+	}
 	u45Digest, err := uci1CompletionObserveU45(ctx, runtime, state, rawKeycard, firstAfterMismatch)
 	if err != nil {
 		return nil, err
+	}
+	ownerAfter, err := gormdb.NewUCIContextStore(runtime.Authority.store.GetDB()).GetCheckout(ctx, ownerCheckoutID)
+	if err != nil || ownerAfter.OwnerPrincipal != keycard.Principal {
+		return nil, errors.New("installed completion changed the genuinely stored service owner")
 	}
 
 	return map[string]uciInstalledAcceptanceScenarioEvidence{
 		"U42": {Code: uciInstalledAcceptanceScenarioCodeObserved, Digest: u42Digest},
 		"U45": {Code: uciInstalledAcceptanceScenarioCodeObserved, Digest: u45Digest},
 	}, nil
-}
-
-func uci1CompletionPrepareProbeState(ctx context.Context, runtime uciInstalledAcceptanceScenarioRuntime, selection uciInstalledAcceptanceSelection) (uci1CompletionProbeState, error) {
-	firstExposure, err := uci1CompletionCreateExposure(ctx, runtime, selection)
-	if err != nil {
-		return uci1CompletionProbeState{}, err
-	}
-	secondExposure, err := uci1CompletionCreateExposure(ctx, runtime, selection)
-	if err != nil {
-		return uci1CompletionProbeState{}, err
-	}
-	if firstExposure == secondExposure {
-		return uci1CompletionProbeState{}, errors.New("installed completion probe did not create fresh exposure parents")
-	}
-	firstBefore, err := uci1CompletionReadParent(ctx, runtime.Authority, firstExposure)
-	if err != nil {
-		return uci1CompletionProbeState{}, err
-	}
-	secondBefore, err := uci1CompletionReadParent(ctx, runtime.Authority, secondExposure)
-	if err != nil {
-		return uci1CompletionProbeState{}, err
-	}
-	if firstBefore.CompletionCount != 0 || firstBefore.CompletionOutcome != "" || secondBefore.CompletionCount != 0 || secondBefore.CompletionOutcome != "" {
-		return uci1CompletionProbeState{}, errors.New("fresh installed completion parent already has child evidence")
-	}
-	return uci1CompletionProbeState{firstExposure: firstExposure, secondExposure: secondExposure, firstBefore: firstBefore, secondBefore: secondBefore}, nil
 }
 
 func uci1CompletionObserveU42(ctx context.Context, runtime uciInstalledAcceptanceScenarioRuntime, state uci1CompletionProbeState, rawKeycard string) (string, uci1CompletionParent, error) {
@@ -130,6 +157,14 @@ func uci1CompletionObserveU42(ctx context.Context, runtime uciInstalledAcceptanc
 		CallbackRef:      "uci1-completion-" + uuid.NewString(),
 		Outcome:          pb.UCICompletionOutcome_UCI_COMPLETION_OUTCOME_PARTIAL,
 		IdempotencyKey:   "uci1-completion-" + uuid.NewString(),
+	}
+	auditBefore, err := uci1CompletionAcceptedAuditCount(ctx, runtime.Authority, "")
+	if err != nil {
+		return "", uci1CompletionParent{}, err
+	}
+	actorBefore, err := uci1CompletionAcceptedAuditCount(ctx, runtime.Authority, auth.ProjectServicePrincipal(runtime.Authority.projectKey))
+	if err != nil {
+		return "", uci1CompletionParent{}, err
 	}
 	accepted, err := uci1RecordInstalledCompletion(ctx, runtime, rawKeycard, callback)
 	if err != nil || !accepted {
@@ -151,7 +186,18 @@ func uci1CompletionObserveU42(ctx context.Context, runtime uciInstalledAcceptanc
 		!uci1CompletionRetrievalUnchanged(state.firstBefore, firstAfterRetry) || !uci1CompletionRetrievalUnchanged(state.secondBefore, secondAfterU42) {
 		return "", uci1CompletionParent{}, errors.New("installed completion U42 parent state is not durable and unchanged")
 	}
-	digest := uci1CompletionEvidenceDigest("U42", state.firstExposure, state.secondExposure, firstAfterRetry, secondAfterU42, "partial_exact_retry")
+	auditAfter, err := uci1CompletionAcceptedAuditCount(ctx, runtime.Authority, "")
+	if err != nil {
+		return "", uci1CompletionParent{}, err
+	}
+	actorAfter, err := uci1CompletionAcceptedAuditCount(ctx, runtime.Authority, auth.ProjectServicePrincipal(runtime.Authority.projectKey))
+	if err != nil {
+		return "", uci1CompletionParent{}, err
+	}
+	if auditAfter != auditBefore+1 || actorAfter != actorBefore+1 {
+		return "", uci1CompletionParent{}, errors.New("installed completion callback and exact retry did not retain exactly one audit attributed to the actual service actor")
+	}
+	digest := uci1CompletionEvidenceDigest("U42", state.firstExposure, state.secondExposure, firstAfterRetry, secondAfterU42, "synthetic_service_owned_parent", "not_public_mcp_retrieval", "partial_exact_retry_single_actor_audit")
 
 	mismatchCallback := callback
 	mismatchCallback.CallbackRef = "uci1-completion-mismatch-" + uuid.NewString()
@@ -168,10 +214,18 @@ func uci1CompletionObserveU42(ctx context.Context, runtime uciInstalledAcceptanc
 	if !uci1CompletionParentEqual(firstAfterRetry, firstAfterMismatch) {
 		return "", uci1CompletionParent{}, errors.New("installed completion mismatch changed retained parent state")
 	}
+	auditAfterMismatch, err := uci1CompletionAcceptedAuditCount(ctx, runtime.Authority, "")
+	if err != nil || auditAfterMismatch != auditAfter {
+		return "", uci1CompletionParent{}, errors.New("installed completion mismatch added an accepted audit")
+	}
 	return digest, firstAfterMismatch, nil
 }
 
 func uci1CompletionObserveU45(ctx context.Context, runtime uciInstalledAcceptanceScenarioRuntime, state uci1CompletionProbeState, rawKeycard string, firstAfterMismatch uci1CompletionParent) (digest string, retErr error) {
+	auditBefore, err := uci1CompletionAcceptedAuditCount(ctx, runtime.Authority, "")
+	if err != nil {
+		return "", err
+	}
 	fault, err := uci1InstallCompletionInsertFault(ctx, runtime.Authority)
 	if err != nil {
 		return "", err
@@ -201,6 +255,10 @@ func uci1CompletionObserveU45(ctx context.Context, runtime uciInstalledAcceptanc
 	}
 	if secondAfterFault.CompletionCount != 0 || secondAfterFault.CompletionOutcome != "" || !uci1CompletionRetrievalUnchanged(state.secondBefore, secondAfterFault) {
 		return "", errors.New("installed completion fault did not preserve unknown parent without child evidence")
+	}
+	auditAfter, err := uci1CompletionAcceptedAuditCount(ctx, runtime.Authority, "")
+	if err != nil || auditAfter != auditBefore {
+		return "", errors.New("installed completion append failure added an accepted audit")
 	}
 	return uci1CompletionEvidenceDigest("U45", state.firstExposure, state.secondExposure, firstAfterMismatch, secondAfterFault, "idempotency_mismatch", "completion_insert_unavailable"), nil
 }
@@ -362,4 +420,201 @@ func (fault *uci1CompletionInsertFault) Close() error {
 		return errors.New("remove installed completion insert fault")
 	}
 	return nil
+}
+
+func uci1CompletionAcceptedAuditCount(ctx context.Context, authority *uciInstalledAcceptanceAuthority, actor string) (int64, error) {
+	query := authority.store.GetDB().WithContext(ctx).Model(&gormdb.AuditLogEntry{}).Where("action = ?", "uci_completion_accepted")
+	if actor != "" {
+		query = query.Where("actor = ?", actor)
+	}
+	var count int64
+	if err := query.Count(&count).Error; err != nil {
+		return 0, errors.New("read installed completion accepted audit count")
+	}
+	return count, nil
+}
+
+func uci1CompletionRequireDenied(ctx context.Context, runtime uciInstalledAcceptanceScenarioRuntime, rawKeycard string, callback uci1InstalledCompletionCallback) error {
+	before, err := uci1CompletionReadParent(ctx, runtime.Authority, callback.ExposureRef)
+	if err != nil {
+		return err
+	}
+	auditBefore, err := uci1CompletionAcceptedAuditCount(ctx, runtime.Authority, "")
+	if err != nil {
+		return err
+	}
+	malformed := callback
+	malformed.CallbackRef = ""
+	accepted, callErr := uci1RecordInstalledCompletion(ctx, runtime, rawKeycard, malformed)
+	code, _ := uci1CompletionGRPCStatus(callErr)
+	if accepted || code != codes.InvalidArgument {
+		return errors.New("completion denial control did not first authenticate its actual project-service keycard")
+	}
+	for attempt := range 3 {
+		if attempt == 2 {
+			callback.CallbackRef += "-changed-binding"
+			callback.Outcome = pb.UCICompletionOutcome_UCI_COMPLETION_OUTCOME_FAILED
+		}
+		accepted, callErr := uci1RecordInstalledCompletion(ctx, runtime, rawKeycard, callback)
+		code, message := uci1CompletionGRPCStatus(callErr)
+		if accepted || callErr == nil || code != codes.PermissionDenied ||
+			strings.Contains(message, callback.ExposureRef) || strings.Contains(message, before.ExposureID) || strings.Contains(message, "IDEMPOTENCY_MISMATCH") {
+			return errors.New("unauthorized completion append, replay, or rebound retry disclosed or bypassed parent authority")
+		}
+		after, err := uci1CompletionReadParent(ctx, runtime.Authority, callback.ExposureRef)
+		if err != nil {
+			return err
+		}
+		auditAfter, err := uci1CompletionAcceptedAuditCount(ctx, runtime.Authority, "")
+		if err != nil || auditAfter != auditBefore || !uci1CompletionParentEqual(before, after) {
+			return errors.New("unauthorized completion changed parent, child, or accepted audit evidence")
+		}
+	}
+	return nil
+}
+
+func uci1CompletionRequireForeignDenied(ctx context.Context, runtime uciInstalledAcceptanceScenarioRuntime, parent string) (retErr error) {
+	raw, err := uciInstalledAcceptanceKeycard()
+	if err != nil {
+		return err
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(raw), bcrypt.DefaultCost)
+	if err != nil {
+		return errors.New("hash foreign completion fixture keycard")
+	}
+	foreignProject := uuid.NewString()
+	expiresAt := uciInstalledAcceptanceTokenExpiry(ctx, time.Now())
+	tokens := gormdb.NewTokenStore(runtime.Authority.store)
+	token, err := tokens.CreateWithPrincipal(ctx, gormdb.TokenCreatePrincipalInput{
+		Name: "uci1-completion-foreign-" + uuid.NewString(), TokenHash: string(hash),
+		TokenPrefix: raw[len(auth.TokenRawPrefix) : len(auth.TokenRawPrefix)+auth.TokenPrefixLen],
+		Scope:       "read-write", Principal: auth.ProjectServicePrincipal(foreignProject),
+		PrincipalKind: string(auth.PrincipalKindService), ExpiresAt: &expiresAt,
+	})
+	if err != nil {
+		return errors.New("create foreign completion fixture keycard")
+	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		retErr = errors.Join(retErr, tokens.Revoke(cleanupCtx, token.ID))
+		if err := runtime.Authority.store.GetDB().WithContext(cleanupCtx).Delete(&gormdb.APIToken{}, "id = ?", token.ID).Error; err != nil {
+			retErr = errors.Join(retErr, errors.New("delete foreign completion fixture keycard"))
+		}
+	}()
+	parentState, err := uci1CompletionReadParent(ctx, runtime.Authority, parent)
+	if err != nil {
+		return err
+	}
+	var acceptedChild gormdb.UCICompletionEvidence
+	if err := runtime.Authority.store.GetDB().WithContext(ctx).Where("exposure_id = ?", parentState.ExposureID).First(&acceptedChild).Error; err != nil {
+		return errors.New("read accepted completion binding for unauthorized exact-replay control")
+	}
+	return uci1CompletionRequireDenied(ctx, runtime, raw, uci1InstalledCompletionCallback{
+		CanonicalProject: foreignProject, ExposureRef: parent,
+		SupportedHostRef: acceptedChild.SupportedHostRef, CallbackRef: acceptedChild.CallbackRef,
+		Outcome: pb.UCICompletionOutcome_UCI_COMPLETION_OUTCOME_PARTIAL, IdempotencyKey: acceptedChild.IdempotencyKey,
+	})
+}
+
+// HAP project-service keycards cannot Initialize/CallTool on the normal MCP
+// route. These parents are therefore labelled storage fixtures, not fabricated
+// public searches. Existing admission/publisher/recorder owners create every
+// row; no Source.ProjectID, checkout owner, or View state is rewritten by SQL.
+func uci1CompletionPrepareServiceOwnerState(ctx context.Context, runtime uciInstalledAcceptanceScenarioRuntime, keycard *gormdb.APIToken, raw string) (uci1CompletionProbeState, string, error) {
+	identity, err := auth.NewValidator("", gormdb.NewTokenStore(runtime.Authority.store)).Validate(ctx, raw)
+	if err != nil || !identity.IsHAPProjectServiceFor(runtime.Authority.projectKey) || identity.Role != auth.RoleReadWrite || identity.Principal != keycard.Principal {
+		return uci1CompletionProbeState{}, "", errors.New("authenticate actual synthetic service-owner fixture credential")
+	}
+	root := filepath.Join(runtime.Request.FixtureRoot, "completion-empty-service-owner-"+uuid.NewString())
+	if err := os.Mkdir(root, 0o700); err != nil {
+		return uci1CompletionProbeState{}, "", errors.New("create disposable empty service-owner Git fixture")
+	}
+	if err := uciRunInstalledAcceptanceGit(ctx, root, "init"); err != nil {
+		return uci1CompletionProbeState{}, "", err
+	}
+	locator, err := uciInstalledAcceptanceFileURI(root)
+	if err != nil {
+		return uci1CompletionProbeState{}, "", err
+	}
+	contexts := gormdb.NewUCIContextStore(runtime.Authority.store.GetDB())
+	parserBundle := false
+	registered, err := contexts.RegisterLocalGit(ctx, gormdb.RegisterLocalGitInput{
+		AuthRealm: string(identity.Source), Principal: identity.Principal, WorkstationID: identity.WorkstationID(),
+		ProjectID: runtime.Authority.projectKey, SourceLabel: "synthetic-service-completion-" + uuid.NewString(),
+		Locator: locator, ParserBundle: &parserBundle,
+	})
+	if err != nil {
+		return uci1CompletionProbeState{}, "", errors.New("admit synthetic service-owned checkout through existing store owner")
+	}
+	publisher, err := gormdb.NewUCIProjectionStore(runtime.Authority.store.GetDB()).Publisher(gormdb.NewUCIContextAuthorizer(contexts), uci.IndexPublicationConfig{Limits: uci.DefaultIndexPublicationLimits()})
+	if err != nil {
+		return uci1CompletionProbeState{}, "", err
+	}
+	caller := uci.IndexCaller{AuthRealm: string(identity.Source), Principal: identity.Principal, OwnerInstance: "synthetic-completion-" + uuid.NewString()}
+	build, err := publisher.Begin(ctx, caller, uci.IndexBeginInput{
+		BuildKey:  "synthetic-empty-" + uuid.NewString(),
+		Scope:     uci.IndexScope{SourceID: registered.SourceID, CheckoutID: registered.CheckoutID, IncarnationID: registered.IncarnationID},
+		ProfileID: registered.ProfileID, Mode: uci.IndexManifestFull, JobKind: uci.IndexJobInitial,
+	})
+	if err != nil {
+		return uci1CompletionProbeState{}, "", err
+	}
+	partsDigest, err := uci.DigestIndexParts(nil)
+	if err != nil {
+		return uci1CompletionProbeState{}, "", err
+	}
+	manifestDigest, err := uci.DigestIndexManifest(nil)
+	if err != nil {
+		return uci1CompletionProbeState{}, "", err
+	}
+	edgesDigest, err := uci.DigestIndexEdges(nil)
+	if err != nil {
+		return uci1CompletionProbeState{}, "", err
+	}
+	now := time.Now().UTC()
+	published, err := publisher.Finalize(ctx, caller, uci.IndexFinalizeInput{Build: build.Build, Manifest: uci.IndexManifestCompletion{
+		PartsDigest: partsDigest, ManifestDigest: manifestDigest, EdgesDigest: edgesDigest,
+		ScanOutcome: uci.IndexScanComplete, CensusComplete: true,
+		Observation: uci.IndexObservation{ObservedFSSeq: 1, ScanStart: now, ScanEnd: now},
+		Coverage:    uci.IndexCoverage{Structural: uci.IndexCoverageComplete, Lexical: uci.IndexCoverageComplete, Vector: uci.IndexCoverageUnavailable},
+	}})
+	if err != nil {
+		return uci1CompletionProbeState{}, "", err
+	}
+	store := gormdb.NewUCIExposureStore(runtime.Authority.store.GetDB())
+	parents := make([]string, 0, 2)
+	for range 2 {
+		suffix := uuid.NewString()
+		record := uci.ExposureRecord{
+			AuthRealm: string(identity.Source), SourceID: registered.SourceID, CheckoutID: registered.CheckoutID, ViewID: published.Context.ViewID,
+			ClientRef:        uciInstalledAcceptanceSHA256Prefix + uciInstalledAcceptanceStringDigest(identity.WorkstationID()),
+			ClientSessionRef: uciInstalledAcceptanceSHA256Prefix + uciInstalledAcceptanceStringDigest("synthetic-session-"+suffix),
+			RequestRef:       uciInstalledAcceptanceSHA256Prefix + uciInstalledAcceptanceStringDigest("synthetic-empty-request-"+suffix),
+			IdempotencyKey:   uciInstalledAcceptanceSHA256Prefix + uciInstalledAcceptanceStringDigest("synthetic-empty-key-"+suffix),
+			Operation:        uci.ExposureOperationCodeSearch, Result: uci.ExposureResultEmpty, Retrieval: uci.ExposureRetrievalExact,
+			Coverage: uci.ExposureCoverageComplete, Evidence: uci.ExposureEvidenceExact, Certainty: uci.ExposureCertaintyEstablished, RecordedAt: now,
+		}
+		record.BindingDigest, err = uci.CanonicalExposureBindingDigest(record)
+		if err != nil {
+			return uci1CompletionProbeState{}, "", err
+		}
+		parent, err := store.AppendExposure(ctx, record)
+		if err != nil {
+			return uci1CompletionProbeState{}, "", err
+		}
+		parents = append(parents, parent.ExposureRef)
+	}
+	first, err := uci1CompletionReadParent(ctx, runtime.Authority, parents[0])
+	if err != nil {
+		return uci1CompletionProbeState{}, "", err
+	}
+	second, err := uci1CompletionReadParent(ctx, runtime.Authority, parents[1])
+	if err != nil {
+		return uci1CompletionProbeState{}, "", err
+	}
+	if first.CompletionCount != 0 || second.CompletionCount != 0 || parents[0] == parents[1] {
+		return uci1CompletionProbeState{}, "", errors.New("synthetic service-owned parents are not fresh and distinct")
+	}
+	return uci1CompletionProbeState{firstExposure: parents[0], secondExposure: parents[1], firstBefore: first, secondBefore: second}, registered.CheckoutID, nil
 }

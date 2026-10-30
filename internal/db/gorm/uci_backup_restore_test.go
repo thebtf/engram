@@ -100,7 +100,7 @@ func TestUCIBackupRestoresPublishedSealedCorpus(t *testing.T) {
 	evidenceStore := NewUCIExposureStore(source)
 	exposure, err := evidenceStore.AppendExposure(ctx, uciProjectionExposureRecord(t, evidenceFixture, time.Now().UTC().Truncate(time.Microsecond)))
 	require.NoError(t, err)
-	_, err = evidenceStore.AppendCompletion(ctx, uciProjectionCompletionEvidence(t, exposure.ExposureRef, time.Now().UTC().Truncate(time.Microsecond)))
+	_, err = evidenceStore.AppendCompletion(uciCompletionFixtureContext(t, ctx, source, fixture.realm, fixture.checkout.OwnerPrincipal), uciProjectionCompletionEvidence(t, exposure.ExposureRef, time.Now().UTC().Truncate(time.Microsecond)))
 	require.NoError(t, err)
 	vault, err := vaultcrypto.OpenExistingVault(&config.Config{EncryptionKeyFile: binding.KeyPath})
 	require.NoError(t, err)

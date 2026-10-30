@@ -18,7 +18,7 @@ import (
 func TestUCIExposureStore(t *testing.T) {
 	t.Run("append exact retry mismatch and verified completion", func(t *testing.T) {
 		fixture := newUCIExposureStoreFixture(t)
-		ctx := context.Background()
+		ctx := fixture.ctx
 		recordedAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
 		record := fixture.exposureRecord(t, "parent", recordedAt)
 
@@ -42,6 +42,12 @@ func TestUCIExposureStore(t *testing.T) {
 		require.Empty(t, stale.ExposureRef, "a mismatched retry must not disclose the original receipt")
 
 		completionInput := newUCIExposureStoreCompletion(t, first.ExposureRef, "completion", recordedAt)
+		denied, err := fixture.store.AppendCompletion(context.Background(), completionInput)
+		require.ErrorIs(t, err, uci.ErrCompletionPermissionDenied, "the durable owner must fail closed without authenticated caller authority")
+		require.Empty(t, denied.ExposureRef)
+		state, err = fixture.store.CompletionState(ctx, first.ExposureRef)
+		require.NoError(t, err)
+		require.Equal(t, uci.QueryCompletionUnknown, state)
 		completion, err := fixture.store.AppendCompletion(ctx, completionInput)
 		require.NoError(t, err)
 		completionRetry, err := fixture.store.AppendCompletion(ctx, completionInput)
@@ -109,7 +115,7 @@ func TestUCIExposureStore(t *testing.T) {
 
 	t.Run("append-only retention and integrity are database-enforced", func(t *testing.T) {
 		fixture := newUCIExposureStoreFixture(t)
-		ctx := context.Background()
+		ctx := fixture.ctx
 		recordedAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
 		record := fixture.exposureRecord(t, "retained", recordedAt)
 		parent, err := fixture.store.AppendExposure(ctx, record)
@@ -139,6 +145,7 @@ func TestUCIExposureStore(t *testing.T) {
 
 type uciExposureStoreFixture struct {
 	db         *gormlib.DB
+	ctx        context.Context
 	store      *UCIExposureStore
 	authRealm  string
 	sourceID   string
@@ -200,9 +207,14 @@ func newUCIExposureStoreFixture(t *testing.T) *uciExposureStoreFixture {
 		State:          UCIViewStaging,
 	})
 	require.NoError(t, err)
+	require.NoError(t, db.Model(&UCIView{}).Where("view_id = ?", view.ViewID).Updates(map[string]any{
+		"state": UCIViewPublished, "published_at": time.Now().UTC(),
+	}).Error)
+	ctx = uciCompletionFixtureContext(t, ctx, db, authRealm, checkout.OwnerPrincipal)
 
 	return &uciExposureStoreFixture{
 		db:         db,
+		ctx:        ctx,
 		store:      NewUCIExposureStore(db),
 		authRealm:  authRealm,
 		sourceID:   source.SourceID,
@@ -272,4 +284,17 @@ func completionEvidenceID(t *testing.T, db *gormlib.DB, evidence uci.CompletionE
 func uciExposureStoreHash(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// Store-only tests need a live authority row, not a network-usable credential.
+// The authenticated gRPC regressions separately exercise real bcrypt bearers.
+func uciCompletionFixtureContext(t *testing.T, ctx context.Context, db *gormlib.DB, realm, principal string) context.Context {
+	t.Helper()
+	keycard := APIToken{
+		ID: uuid.NewString(), Name: "completion-fixture-" + uuid.NewString(),
+		TokenHash: "unusable-store-fixture-hash", TokenPrefix: "fixture0", Scope: "read-write",
+		Principal: principal, PrincipalKind: "service",
+	}
+	require.NoError(t, db.Create(&keycard).Error)
+	return uci.WithCompletionCaller(ctx, uci.CompletionCaller{AuthRealm: realm, Principal: principal, KeycardID: keycard.ID})
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/thebtf/engram/internal/uci"
@@ -30,9 +31,8 @@ type CodebaseReadCompatibilityApplication interface {
 	ResolveLegacyProject(context.Context, uci.AuthorizedContext, string) (uci.AliasTarget, error)
 }
 
-// CodebaseReadInput is the source selector forwarded to UCI. IndexedSpan is
-// optional for browser reads of a bounded part of an exact indexed chunk;
-// MCP callers continue to request exact spans. No working-copy bytes are read.
+// CodebaseReadInput selects exact stored bytes, optionally within the original
+// indexed citation. No working-copy bytes are read.
 type CodebaseReadInput struct {
 	Ref               uci.QueryEntityRef
 	MembershipID      string
@@ -63,6 +63,7 @@ type codebaseReadArgs struct {
 	Ref               *codebaseReadEntityRefArgs `json:"ref"`
 	MembershipID      *string                    `json:"membership_id"`
 	Span              *codebaseReadSpanArgs      `json:"span"`
+	IndexedSpan       *codebaseReadSpanArgs      `json:"indexed_span"`
 	ContentDigest     *string                    `json:"content_digest"`
 	VerifyWorkingCopy *bool                      `json:"verify_working_copy"`
 	MaxBytes          *int                       `json:"max_bytes"`
@@ -74,7 +75,7 @@ type codebaseReadArgs struct {
 func codebaseReadTool() Tool {
 	return Tool{
 		Name:        "codebase_read",
-		Description: "Read one bounded, versioned source span from an authorized UCI View. verify_working_copy reports application-owned metadata only and never substitutes local-disk bytes.",
+		Description: "Read stored source bytes from the same authorized UCI View as a search citation. Copy ref, membership_id and content_digest unchanged. For a citation larger than 8192 bytes, pass its original span as indexed_span and use span for a contained byte window of at most max_bytes (8192); keep the original line_start/line_end. Use the returned byte_end to continue on a UTF-8 boundary. verify_working_copy returns metadata only, never local-disk bytes.",
 		tier:        tierCore,
 		InputSchema: map[string]any{
 			"type":                 "object",
@@ -116,6 +117,18 @@ func codebaseReadTool() Tool {
 						"line_end":   map[string]any{"type": "integer", "minimum": 1},
 					},
 				},
+				"indexed_span": map[string]any{
+					"type":                 "object",
+					"additionalProperties": false,
+					"required":             []string{"byte_start", "byte_end", "line_start", "line_end"},
+					"description":          "Optional original indexed citation span, unchanged; span selects a contained byte window while retaining these line coordinates",
+					"properties": map[string]any{
+						"byte_start": map[string]any{"type": "integer", "minimum": 0},
+						"byte_end":   map[string]any{"type": "integer", "minimum": 1},
+						"line_start": map[string]any{"type": "integer", "minimum": 1},
+						"line_end":   map[string]any{"type": "integer", "minimum": 1},
+					},
+				},
 				"content_digest": map[string]any{
 					"type":        "string",
 					"pattern":     "^[0-9a-f]{64}$",
@@ -130,7 +143,7 @@ func codebaseReadTool() Tool {
 					"minimum":     1,
 					"maximum":     codebaseReadMaxBytes,
 					"default":     codebaseReadDefaultMaxBytes,
-					"description": "Maximum exact stored span size in bytes",
+					"description": "Maximum requested byte window; the indexed citation may be larger, but this limit cannot exceed 8192",
 				},
 			},
 		},
@@ -210,6 +223,9 @@ func decodeCodebaseReadArgs(raw json.RawMessage) (codebaseReadArgs, error) {
 	if args.Span == nil || args.Span.ByteStart == nil || args.Span.ByteEnd == nil || args.Span.LineStart == nil || args.Span.LineEnd == nil {
 		return codebaseReadArgs{}, errors.New("span is required")
 	}
+	if _, present := fields["indexed_span"]; present && (args.IndexedSpan == nil || args.IndexedSpan.ByteStart == nil || args.IndexedSpan.ByteEnd == nil || args.IndexedSpan.LineStart == nil || args.IndexedSpan.LineEnd == nil) {
+		return codebaseReadArgs{}, errors.New("indexed_span must contain the original byte and line bounds")
+	}
 	if args.ContentDigest == nil || !validCodebaseReadContentDigest(*args.ContentDigest) {
 		return codebaseReadArgs{}, errors.New("invalid content_digest")
 	}
@@ -225,7 +241,12 @@ func decodeCodebaseReadArgs(raw json.RawMessage) (codebaseReadArgs, error) {
 		return codebaseReadArgs{}, errors.New("invalid span")
 	}
 	if input.Span.ByteEnd-input.Span.ByteStart > int64(input.MaxBytes) {
-		return codebaseReadArgs{}, fmt.Errorf("span exceeds max_bytes %d", input.MaxBytes)
+		return codebaseReadArgs{}, fmt.Errorf("span exceeds max_bytes %d; copy the citation's original span to indexed_span, then request a contained span byte window of at most %d bytes with the original line bounds", input.MaxBytes, input.MaxBytes)
+	}
+	if indexed := input.IndexedSpan; indexed != nil {
+		if indexed.Validate() != nil || input.Span.ByteStart < indexed.ByteStart || input.Span.ByteEnd > indexed.ByteEnd || input.Span.LineStart != indexed.LineStart || input.Span.LineEnd != indexed.LineEnd {
+			return codebaseReadArgs{}, errors.New("span must be contained in indexed_span and retain its original line bounds")
+		}
 	}
 	return args, nil
 }
@@ -236,7 +257,7 @@ func (args codebaseReadArgs) readInput() CodebaseReadInput {
 		maxBytes = *args.MaxBytes
 	}
 	verifyWorkingCopy := args.VerifyWorkingCopy != nil && *args.VerifyWorkingCopy
-	return CodebaseReadInput{
+	input := CodebaseReadInput{
 		Ref: uci.QueryEntityRef{
 			SourceID:  *args.Ref.SourceID,
 			ViewID:    *args.Ref.ViewID,
@@ -253,6 +274,15 @@ func (args codebaseReadArgs) readInput() CodebaseReadInput {
 		VerifyWorkingCopy: verifyWorkingCopy,
 		MaxBytes:          maxBytes,
 	}
+	if args.IndexedSpan != nil {
+		input.IndexedSpan = &uci.QuerySpan{
+			ByteStart: *args.IndexedSpan.ByteStart,
+			ByteEnd:   *args.IndexedSpan.ByteEnd,
+			LineStart: *args.IndexedSpan.LineStart,
+			LineEnd:   *args.IndexedSpan.LineEnd,
+		}
+	}
+	return input
 }
 
 func validCodebaseReadContentDigest(value string) bool {
@@ -326,13 +356,17 @@ func validCodebaseReadPreExposureResponse(response uci.QueryResponse, authorized
 			return response.Status == uci.QueryStatusPartial
 		}
 		item := (*response.Items)[0]
-		return item.Ref == input.Ref &&
-			item.MembershipID == input.MembershipID &&
-			item.Span == input.Span &&
-			item.ContentDigest == input.ContentDigest &&
-			len(item.Excerpt) == int(input.Span.ByteEnd-input.Span.ByteStart) &&
-			len(item.Excerpt) <= input.MaxBytes &&
-			codebaseReadRelativePath(item.Path)
+		if item.Ref != input.Ref || item.MembershipID != input.MembershipID || item.ContentDigest != input.ContentDigest ||
+			len(item.Excerpt) != int(item.Span.ByteEnd-item.Span.ByteStart) || len(item.Excerpt) > input.MaxBytes ||
+			!utf8.ValidString(item.Excerpt) || !codebaseReadRelativePath(item.Path) {
+			return false
+		}
+		if input.IndexedSpan == nil {
+			return item.Span == input.Span
+		}
+		return item.Span.ByteStart == input.Span.ByteStart && item.Span.ByteEnd > item.Span.ByteStart &&
+			item.Span.ByteEnd <= input.Span.ByteEnd && input.Span.ByteEnd-item.Span.ByteEnd < utf8.UTFMax &&
+			item.Span.LineStart >= input.IndexedSpan.LineStart && item.Span.LineEnd <= input.IndexedSpan.LineEnd
 	case uci.QueryStatusEmpty:
 		return response.Retrieval != nil && response.Retrieval.Mode == uci.QueryRetrievalExact
 	case uci.QueryStatusUnavailable:

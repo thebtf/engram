@@ -208,6 +208,9 @@ func versionedReadAvailableResponse(ref ContextRef, spec VersionedReadSpec, resu
 	zero := int64(0)
 	truncated := false
 	warnings := versionedReadWarnings(spec)
+	if hit := result.Hit; hit != nil && spec.IndexedSpan != nil && (hit.Span.ByteStart > spec.IndexedSpan.ByteStart || hit.Span.ByteEnd < spec.IndexedSpan.ByteEnd) {
+		warnings = append(warnings, "source_partial_indexed_chunk")
+	}
 	response := QueryResponse{
 		Schema:    QueryResponseSchema,
 		Status:    QueryStatusOK,
@@ -239,9 +242,6 @@ func versionedReadWarnings(spec VersionedReadSpec) QueryWarnings {
 	warnings := QueryWarnings{}
 	if spec.VerifyWorkingCopy {
 		warnings = append(warnings, VersionedReadWorkingCopyNotVerifiedWarning)
-	}
-	if spec.IndexedSpan != nil && (spec.Span.ByteStart > spec.IndexedSpan.ByteStart || spec.Span.ByteEnd < spec.IndexedSpan.ByteEnd) {
-		warnings = append(warnings, "source_partial_indexed_chunk")
 	}
 	return warnings
 }

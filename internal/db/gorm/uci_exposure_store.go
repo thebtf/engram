@@ -2,6 +2,7 @@ package gorm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/thebtf/engram/internal/uci"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 var (
@@ -81,8 +83,8 @@ func (s *UCIExposureStore) AppendExposure(ctx context.Context, record uci.Exposu
 	}
 }
 
-// AppendCompletion persists one child supplied only through the domain's
-// VerifiedSupportedHostCallback path.
+// AppendCompletion reauthorizes the live keycard and exact parent context in
+// the same transaction as every idempotency lookup and child append.
 func (s *UCIExposureStore) AppendCompletion(ctx context.Context, evidence uci.CompletionEvidence) (uci.CompletionEvidence, error) {
 	if err := s.requireDB("append completion"); err != nil {
 		return uci.CompletionEvidence{}, err
@@ -90,53 +92,131 @@ func (s *UCIExposureStore) AppendCompletion(ctx context.Context, evidence uci.Co
 	if err := evidence.Validate(); err != nil {
 		return uci.CompletionEvidence{}, err
 	}
-
-	var exposure UCIExposure
-	if err := s.db.WithContext(ctx).Where("exposure_ref = ?", evidence.ExposureRef).First(&exposure).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return uci.CompletionEvidence{}, uci.ErrExposureNotFound
-		}
-		return uci.CompletionEvidence{}, fmt.Errorf("uci completion resolve exposure: %w", err)
+	caller, ok := uci.CompletionCallerFromContext(ctx)
+	if !ok || validateUCIUUID("keycard_id", caller.KeycardID) != nil || validateUCIContextOwner(caller.AuthRealm, caller.Principal) != nil {
+		return uci.CompletionEvidence{}, uci.ErrCompletionPermissionDenied
 	}
 
-	existing, found, err := s.findCompletionByIdempotency(ctx, exposure.ExposureID, evidence.SupportedHostRef, evidence.IdempotencyKey)
+	var stored uci.CompletionEvidence
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// SHARE conflicts with non-key revocation/state/owner updates, unlike
+		// KEY SHARE. NOWAIT avoids lock-order cycles with registration's
+		// source-first and publication/embedding's checkout-first writers.
+		lock := clause.Locking{Strength: "SHARE", Options: "NOWAIT"}
+		var keycard APIToken
+		if err := tx.Select("id", "principal", "principal_kind", "scope", "revoked", "expires_at").Clauses(lock).Where("id = ?", caller.KeycardID).First(&keycard).Error; err != nil {
+			return uciCompletionLookupError(err)
+		}
+		if keycard.Revoked || keycard.Principal != caller.Principal || keycard.PrincipalKind != "service" || keycard.Scope != "read-write" {
+			return uci.ErrCompletionPermissionDenied
+		}
+		var exposure UCIExposure
+		if err := tx.Select("exposure_id", "auth_realm", "source_id", "checkout_id", "view_id").Clauses(lock).Where("exposure_ref = ?", evidence.ExposureRef).First(&exposure).Error; err != nil {
+			return uciCompletionLookupError(err)
+		}
+		if exposure.AuthRealm != caller.AuthRealm {
+			return uci.ErrCompletionPermissionDenied
+		}
+		var checkout UCICheckout
+		if err := tx.Select("checkout_id").Clauses(lock).Where("checkout_id = ? AND source_id = ?", exposure.CheckoutID, exposure.SourceID).First(&checkout).Error; err != nil {
+			return uciCompletionLookupError(err)
+		}
+		var source UCISource
+		if err := tx.Select("source_id").Clauses(lock).Where("source_id = ?", exposure.SourceID).First(&source).Error; err != nil {
+			return uciCompletionLookupError(err)
+		}
+		var view UCIView
+		if err := tx.Select("view_id", "profile_id", "generation").Clauses(lock).Where("view_id = ? AND source_id = ? AND checkout_id = ?", exposure.ViewID, exposure.SourceID, exposure.CheckoutID).First(&view).Error; err != nil {
+			return uciCompletionLookupError(err)
+		}
+		contexts := NewUCIContextStore(tx)
+		ref := uci.ContextRef{SourceID: exposure.SourceID, CheckoutID: exposure.CheckoutID, ViewID: exposure.ViewID, AnalysisProfileID: view.ProfileID, Generation: view.Generation}
+		record, err := contexts.LoadContext(ctx, ref)
+		if err != nil {
+			return uciCompletionLookupError(err)
+		}
+		if record.AuthRealm != caller.AuthRealm {
+			return uci.ErrCompletionPermissionDenied
+		}
+		if err := NewUCIContextAuthorizer(contexts).AuthorizeContext(ctx, uci.ContextAccess{
+			AuthRealm: caller.AuthRealm, Principal: caller.Principal, SourceID: ref.SourceID, CheckoutID: ref.CheckoutID,
+		}); err != nil {
+			return uciCompletionLookupError(err)
+		}
+		if keycard.ExpiresAt != nil && !keycard.ExpiresAt.After(time.Now().UTC()) {
+			return uci.ErrCompletionPermissionDenied
+		}
+
+		store := NewUCIExposureStore(tx)
+		existing, found, err := store.findCompletionByIdempotency(ctx, exposure.ExposureID, evidence.SupportedHostRef, evidence.IdempotencyKey)
+		if err != nil {
+			return err
+		}
+		if found {
+			matched, err := sameUCICompletionDigest(existing, evidence.BindingDigest)
+			if err != nil {
+				return err
+			}
+			stored = completionEvidenceFromModel(*matched, evidence.ExposureRef)
+			return nil
+		}
+		row := UCICompletionEvidence{
+			CompletionEvidenceID: uuid.NewString(), ExposureID: exposure.ExposureID,
+			SupportedHostRef: evidence.SupportedHostRef, CallbackRef: evidence.CallbackRef,
+			Outcome: UCICompletionOutcome(evidence.Outcome), IdempotencyKey: evidence.IdempotencyKey,
+			IdempotencyBindingDigest: evidence.BindingDigest, OccurredAt: evidence.OccurredAt,
+		}
+		result := tx.Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "exposure_id"}, {Name: "supported_host_ref"}, {Name: "idempotency_key"}}, DoNothing: true,
+		}).Create(&row)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 0 {
+			stored = completionEvidenceFromModel(row, evidence.ExposureRef)
+			return recordUCICompletionAcceptance(ctx, tx, caller.Principal, evidence.ExposureRef, row)
+		}
+		// ON CONFLICT keeps the transaction usable after a concurrent retry.
+		existing, found, err = store.findCompletionByIdempotency(ctx, exposure.ExposureID, evidence.SupportedHostRef, evidence.IdempotencyKey)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return uci.ErrCompletionEvidenceUnavailable
+		}
+		matched, err := sameUCICompletionDigest(existing, evidence.BindingDigest)
+		if err != nil {
+			return err
+		}
+		stored = completionEvidenceFromModel(*matched, evidence.ExposureRef)
+		return nil
+	})
 	if err != nil {
 		return uci.CompletionEvidence{}, err
 	}
-	if found {
-		matched, err := sameUCICompletionDigest(existing, evidence.BindingDigest)
-		if err != nil {
-			return uci.CompletionEvidence{}, err
-		}
-		return completionEvidenceFromModel(*matched, evidence.ExposureRef), nil
-	}
+	return stored, nil
+}
 
-	row := UCICompletionEvidence{
-		CompletionEvidenceID:     uuid.NewString(),
-		ExposureID:               exposure.ExposureID,
-		SupportedHostRef:         evidence.SupportedHostRef,
-		CallbackRef:              evidence.CallbackRef,
-		Outcome:                  UCICompletionOutcome(evidence.Outcome),
-		IdempotencyKey:           evidence.IdempotencyKey,
-		IdempotencyBindingDigest: evidence.BindingDigest,
-		OccurredAt:               evidence.OccurredAt,
+func recordUCICompletionAcceptance(ctx context.Context, tx *gorm.DB, actor, exposureRef string, child UCICompletionEvidence) error {
+	after, err := json.Marshal(struct {
+		ExposureRef          string               `json:"exposure_ref"`
+		CompletionEvidenceID string               `json:"completion_evidence_id"`
+		Outcome              UCICompletionOutcome `json:"outcome"`
+	}{ExposureRef: exposureRef, CompletionEvidenceID: child.CompletionEvidenceID, Outcome: child.Outcome})
+	if err != nil {
+		return err
 	}
-	if err := s.db.WithContext(ctx).Create(&row).Error; err == nil {
-		return completionEvidenceFromModel(row, evidence.ExposureRef), nil
-	} else {
-		existing, found, lookupErr := s.findCompletionByIdempotency(ctx, exposure.ExposureID, evidence.SupportedHostRef, evidence.IdempotencyKey)
-		if lookupErr != nil {
-			return uci.CompletionEvidence{}, lookupErr
-		}
-		if found {
-			matched, matchErr := sameUCICompletionDigest(existing, evidence.BindingDigest)
-			if matchErr != nil {
-				return uci.CompletionEvidence{}, matchErr
-			}
-			return completionEvidenceFromModel(*matched, evidence.ExposureRef), nil
-		}
-		return uci.CompletionEvidence{}, fmt.Errorf("uci completion append: %w", err)
+	state := json.RawMessage(after)
+	return NewAuditStore(tx).LogTx(ctx, tx, AuditLogEntry{
+		Action: "uci_completion_accepted", Actor: actor, AfterState: &state,
+	})
+}
+
+func uciCompletionLookupError(err error) error {
+	if errors.Is(err, gorm.ErrRecordNotFound) || errors.Is(err, errUCIContextCatalogNotFound) || errors.Is(err, errUCIContextAuthorizationDenied) {
+		return uci.ErrCompletionPermissionDenied
 	}
+	return err
 }
 
 // CompletionState returns unknown when no verified completion child exists.

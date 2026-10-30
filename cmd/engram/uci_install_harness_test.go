@@ -37,6 +37,59 @@ var (
 	_ uciStandardMCPDriver                                                             = uciInstallHarnessMCPProbe{}
 )
 
+func TestUCIInstallHarnessParserMatchesInstalledClientLayout(t *testing.T) {
+	for _, platform := range []struct {
+		name, extension string
+	}{{"Windows", ".exe"}, {"extensionless", ""}} {
+		t.Run(platform.name, func(t *testing.T) {
+			root := t.TempDir()
+			inputs := map[string]string{
+				"server": filepath.Join(root, "candidate-server"+platform.extension),
+				"daemon": filepath.Join(root, "candidate-client"+platform.extension),
+				"parser": filepath.Join(root, "candidate-parser.artifact"),
+			}
+			for role, source := range inputs {
+				if err := os.WriteFile(source, []byte("synthetic "+role+" candidate bytes"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			installRoot := filepath.Join(root, "installed UCI Кириллица")
+			if err := os.Mkdir(installRoot, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			components, err := uciPrepareInstallHarnessComponents(uciInstallHarnessRequest{
+				InstallRoot: installRoot,
+				Server:      uciInstallHarnessCommand{Executable: inputs["server"]},
+				Daemon:      uciInstallHarnessCommand{Executable: inputs["daemon"]},
+				Parser:      uciInstallHarnessCommand{Executable: inputs["parser"]},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			expected := map[string]string{
+				"server": filepath.Join(installRoot, "server", "server"+platform.extension),
+				"daemon": filepath.Join(installRoot, "daemon", "daemon"+platform.extension),
+				"parser": filepath.Join(installRoot, "daemon", "parser", "parser"+platform.extension),
+			}
+			if len(components) != len(expected) {
+				t.Fatal("installation did not retain all three candidate components")
+			}
+			for _, component := range components {
+				if component.installedExecutable != expected[component.role] {
+					t.Fatalf("%s installed path = %q, want maintained plugin layout %q", component.role, component.installedExecutable, expected[component.role])
+				}
+				if err := uciMaterializeInstallHarnessComponent(component); err != nil {
+					t.Fatal(err)
+				}
+				materialized, err := os.ReadFile(component.installedExecutable)
+				if err != nil || string(materialized) != "synthetic "+component.role+" candidate bytes" {
+					t.Fatalf("%s materialization changed candidate bytes", component.role)
+				}
+			}
+		})
+	}
+}
+
 // The harness is Windows-native proof. Keeping these tests compiled elsewhere
 // preserves the RED API contract while avoiding a claim that another OS proves
 // the Windows installation path.
