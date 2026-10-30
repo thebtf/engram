@@ -100,9 +100,8 @@ func ResolveMemory(caller KeycardContext, mem *models.Memory, opts MemoryVisibil
 	}).Allowed
 }
 
-// ResolveMemoryManage returns whether caller may mutate an existing memory by
-// ID under the domain ownership policy. Empty-domain legacy rows remain
-// mutable by the caller's existing adapter/project checks.
+// ResolveMemoryManage checks domain management authority. Caller-facing
+// mutations must also enforce project and ordinary read visibility.
 func ResolveMemoryManage(caller KeycardContext, mem *models.Memory) bool {
 	if mem == nil {
 		return false

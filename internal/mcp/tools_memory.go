@@ -19,6 +19,7 @@ import (
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/internal/lifecycle"
+	"github.com/thebtf/engram/internal/principalmemory"
 	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/internal/redaction"
 	"github.com/thebtf/engram/internal/reranking"
@@ -146,17 +147,22 @@ type writeLintOffsetLister interface {
 }
 
 type scopedWriteLintMemoryStore struct {
-	base   writelint.MemoryStoreInterface
-	pager  writeLintOffsetLister
-	caller scope.KeycardContext
-	opts   scope.MemoryVisibilityOptions
+	base                 writelint.MemoryStoreInterface
+	pager                writeLintOffsetLister
+	caller               scope.KeycardContext
+	opts                 scope.MemoryVisibilityOptions
+	access               gormdb.MemoryMutationAccess
+	mutationErr          error
+	tx                   *gormlib.DB
+	target               *models.Memory
+	beforeTargetMutation func(*gormlib.DB) error
 }
 
 func newScopedWriteLintMemoryStore(base writelint.MemoryStoreInterface, caller scope.KeycardContext, opts scope.MemoryVisibilityOptions) writelint.MemoryStoreInterface {
 	if base == nil {
 		return nil
 	}
-	scoped := &scopedWriteLintMemoryStore{base: base, caller: caller, opts: opts}
+	scoped := &scopedWriteLintMemoryStore{base: base, caller: caller, opts: opts, access: gormdb.MemoryMutationAccess{Caller: caller}}
 	if pager, ok := base.(writeLintOffsetLister); ok {
 		scoped.pager = pager
 	}
@@ -183,14 +189,23 @@ func writeLintVisibilityOptions() scope.MemoryVisibilityOptions {
 	}
 }
 
-func (s *Server) scopedWriteLintMemoryStore(ctx context.Context, sessionID string) writelint.MemoryStoreInterface {
+func (s *Server) scopedWriteLintMemoryStore(ctx context.Context, sessionID, project string) writelint.MemoryStoreInterface {
 	var base writelint.MemoryStoreInterface
 	if s.memoryStore != nil {
 		base = s.memoryStore
 	} else if s.writeLint != nil {
 		base = s.writeLint.MemoryStore()
 	}
-	return newScopedWriteLintMemoryStore(base, writeLintVisibilityCaller(ctx, sessionID), writeLintVisibilityOptions())
+	access, mutationErr := memoryMutationAccessMCP(ctx, sessionID)
+	if access.Project == "" {
+		access.Project = project
+	}
+	store := newScopedWriteLintMemoryStore(base, access.Caller, writeLintVisibilityOptions())
+	if scoped, ok := store.(*scopedWriteLintMemoryStore); ok {
+		scoped.access = access
+		scoped.mutationErr = mutationErr
+	}
+	return store
 }
 
 func filterVisibleWriteGateCandidates(ctx context.Context, sessionID string, existing []*models.Memory) []*models.Memory {
@@ -215,7 +230,20 @@ func memoryManageAllowed(ctx context.Context, mem *models.Memory) bool {
 			return false
 		}
 	}
-	return scope.ResolveMemoryManage(writeLintVisibilityCaller(ctx, ""), mem)
+	caller := writeLintVisibilityCaller(ctx, sessionFromContext(ctx))
+	return scope.ResolveMemory(caller, mem, writeLintVisibilityOptions()) && scope.ResolveMemoryManage(caller, mem)
+}
+
+func memoryMutationAccessMCP(ctx context.Context, sessionID string) (gormdb.MemoryMutationAccess, error) {
+	access := gormdb.MemoryMutationAccess{Caller: writeLintVisibilityCaller(ctx, sessionID)}
+	if config.Get().EnforceSourceProject {
+		access.Project = ProjectFromContext(ctx)
+		if access.Project == "" {
+			return access, gormlib.ErrRecordNotFound
+		}
+		access.RequireCanonicalProject = true
+	}
+	return access, nil
 }
 
 func (s *scopedWriteLintMemoryStore) List(ctx context.Context, project string, limit int) ([]*models.Memory, error) {
@@ -287,26 +315,133 @@ func writeLintVisibilityFetchLimit(limit int) int {
 }
 
 func (s *scopedWriteLintMemoryStore) Get(ctx context.Context, id int64) (*models.Memory, error) {
+	if s.mutationErr != nil {
+		return nil, nil
+	}
+	if s.tx != nil {
+		if s.target == nil || s.target.ID != id {
+			return nil, gormlib.ErrRecordNotFound
+		}
+		memory := *s.target
+		return &memory, nil
+	}
 	mem, err := s.base.Get(ctx, id)
 	if err != nil || mem == nil {
 		return mem, err
 	}
-	if !scope.ResolveMemory(s.caller, mem, s.opts) {
+	if (s.access.Project != "" && mem.Project != s.access.Project) || !scope.ResolveMemory(s.caller, mem, s.opts) {
 		return nil, nil
 	}
 	return mem, nil
 }
 
 func (s *scopedWriteLintMemoryStore) Create(ctx context.Context, m *models.Memory) (*models.Memory, error) {
+	if store, ok := s.base.(*gormdb.MemoryStore); ok && s.tx != nil {
+		return store.CreateTx(ctx, s.tx, m)
+	}
 	return s.base.Create(ctx, m)
 }
 
 func (s *scopedWriteLintMemoryStore) Update(ctx context.Context, m *models.Memory) (*models.Memory, error) {
+	if m == nil {
+		return nil, fmt.Errorf("memory must not be nil")
+	}
+	if s.mutationErr != nil {
+		return nil, s.mutationErr
+	}
+	access := s.access
+	if store, ok := s.base.(*gormdb.MemoryStore); ok {
+		if s.tx != nil {
+			if s.target == nil || s.target.ID != m.ID {
+				return nil, gormlib.ErrRecordNotFound
+			}
+			return store.Update(ctx, m)
+		}
+		if access.Project == "" {
+			access.Project = m.Project
+		}
+		_, after, err := store.UpdateAuthorized(ctx, m.ID, access, func(current *models.Memory) error {
+			current.Content, current.Tags = m.Content, m.Tags
+			current.SourceAgent, current.EditedBy = m.SourceAgent, m.EditedBy
+			return nil
+		})
+		return after, err
+	}
+	before, err := s.Get(ctx, m.ID)
+	if err != nil {
+		return nil, err
+	}
+	if !scope.ResolveMemory(s.caller, before, writeLintVisibilityOptions()) || !scope.ResolveMemoryManage(s.caller, before) {
+		return nil, gormlib.ErrRecordNotFound
+	}
 	return s.base.Update(ctx, m)
 }
 
 func (s *scopedWriteLintMemoryStore) MarkSuperseded(ctx context.Context, olderID, newID int64) error {
+	if s.mutationErr != nil {
+		return s.mutationErr
+	}
+	access := s.access
+	if store, ok := s.base.(*gormdb.MemoryStore); ok {
+		if s.tx != nil {
+			if s.target == nil || s.target.ID != olderID {
+				return gormlib.ErrRecordNotFound
+			}
+			return store.MarkSupersededTx(ctx, s.tx, olderID, newID)
+		}
+		return store.WithAuthorizedMemories(ctx, []int64{olderID}, access, func(tx *gormlib.DB, _ map[int64]*models.Memory) error {
+			return store.MarkSupersededTx(ctx, tx, olderID, newID)
+		})
+	}
+	before, err := s.Get(ctx, olderID)
+	if err != nil {
+		return err
+	}
+	if !scope.ResolveMemory(s.caller, before, writeLintVisibilityOptions()) || !scope.ResolveMemoryManage(s.caller, before) {
+		return gormlib.ErrRecordNotFound
+	}
 	return s.base.MarkSuperseded(ctx, olderID, newID)
+}
+
+func (s *scopedWriteLintMemoryStore) WithTargetMutation(ctx context.Context, id int64, project string, mutate func(writelint.MemoryStoreInterface, writelint.AuditLoggerInterface) error) error {
+	if s.mutationErr != nil {
+		return s.mutationErr
+	}
+	access := s.access
+	if access.Project != "" && access.Project != project {
+		return gormlib.ErrRecordNotFound
+	}
+	access.Project = project
+	store, ok := s.base.(*gormdb.MemoryStore)
+	if !ok {
+		// Non-database stores are injected test seams, not the shipped path.
+		if s.beforeTargetMutation != nil {
+			if err := s.beforeTargetMutation(nil); err != nil {
+				return err
+			}
+		}
+		return mutate(s, nil)
+	}
+	var domainErr error
+	err := store.WithAuthorizedMemories(ctx, []int64{id}, access, func(tx *gormlib.DB, memories map[int64]*models.Memory) error {
+		if s.beforeTargetMutation != nil {
+			domainErr = s.beforeTargetMutation(tx)
+			if errors.Is(domainErr, principalmemory.ErrDomainWriteRejected) {
+				return nil // Commit only the established rejection audit.
+			}
+			if domainErr != nil {
+				return domainErr
+			}
+		}
+		bound := *s
+		bound.base = gormdb.NewMemoryStore(&gormdb.Store{DB: tx})
+		bound.tx, bound.target = tx, memories[id]
+		return mutate(&bound, gormdb.NewAuditStore(tx))
+	})
+	if err != nil {
+		return err
+	}
+	return domainErr
 }
 
 // memoryEditor is the minimal interface over *gorm.MemoryStore that
@@ -327,6 +462,30 @@ func (s *Server) effectiveMemoryEditor() memoryEditor {
 		return s.memoryStore
 	}
 	return nil
+}
+
+func (s *Server) updateMemoryAsCaller(ctx context.Context, id int64, update gormdb.MemoryUpdate) (before, after *models.Memory, err error) {
+	access, err := memoryMutationAccessMCP(ctx, sessionFromContext(ctx))
+	if err != nil {
+		return nil, nil, err
+	}
+	if s.testMemoryEditor == nil {
+		return s.memoryStore.UpdateAuthorized(ctx, id, access, update)
+	}
+	// The nontransactional editor exists only for injected unit-test stores.
+	before, err = s.testMemoryEditor.Get(ctx, id)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !memoryManageAllowed(ctx, before) {
+		return nil, nil, gormlib.ErrRecordNotFound
+	}
+	updated := *before
+	if err := update(&updated); err != nil {
+		return nil, nil, err
+	}
+	after, err = s.testMemoryEditor.Update(ctx, &updated)
+	return before, after, err
 }
 
 func isValidStoreObservationType(obsType models.ObservationType) bool {
@@ -637,14 +796,27 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 			if wlMem.PrivacyScope == "private" && wlMem.SourceWorkstationID == "" {
 				return "", fmt.Errorf("invalid_privacy_scope: private requires a non-empty workstation identity from a SourceClient keycard (master/session sources cannot write private-scope memories)")
 			}
-			domainDecision, err := s.checkDomainWriteMCP(ctx, wlMem, params.SessionID)
-			if err != nil {
-				return "", fmt.Errorf("domain registry check failed: %w", err)
-			}
+			var domainDecision *principalmemory.DomainWriteDecision
 
-			scopedWLStore := s.scopedWriteLintMemoryStore(ctx, params.SessionID)
+			scopedWLStore := s.scopedWriteLintMemoryStore(ctx, params.SessionID, params.Project)
 			if scopedWLStore == nil {
 				return "", fmt.Errorf("write_lint memory store not available")
+			}
+			if wlResolutionToken != "" && (wlOption == "supersede" || wlOption == "merge_with") {
+				scoped := scopedWLStore.(*scopedWriteLintMemoryStore)
+				scoped.beforeTargetMutation = func(tx *gormlib.DB) error {
+					var err error
+					domainDecision, err = s.checkDomainWriteMCPTx(ctx, wlMem, params.SessionID, tx)
+					if err != nil {
+						return fmt.Errorf("domain registry check failed: %w", err)
+					}
+					return nil
+				}
+			} else {
+				domainDecision, err = s.checkDomainWriteMCP(ctx, wlMem, params.SessionID)
+				if err != nil {
+					return "", fmt.Errorf("domain registry check failed: %w", err)
+				}
 			}
 
 			if wlResolutionToken != "" {
@@ -949,52 +1121,9 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	if err := applyPrincipalMemoryMetadata(ctx, memory, params.AgentVisibility, params.Domain); err != nil {
 		return "", err
 	}
-	supersedeTargets := make([]*models.Memory, 0, len(params.Supersedes))
-	for _, sid := range params.Supersedes {
-		if sid <= 0 {
-			continue
-		}
-		beforeMem, getErr := s.memoryStore.Get(ctx, sid)
-		if getErr != nil {
-			log.Warn().Err(getErr).Int64("superseded_id", sid).Msg("store: supersede target not found")
-			continue
-		}
-		if !memoryManageAllowed(ctx, beforeMem) {
-			return "", fmt.Errorf("store: memory %d not found", sid)
-		}
-		supersedeTargets = append(supersedeTargets, beforeMem)
-	}
-	domainDecision, err := s.checkDomainWriteMCP(ctx, memory, params.SessionID)
-	if err != nil {
-		return "", fmt.Errorf("domain registry check failed: %w", err)
-	}
-
-	// --- Supersession: mark old memories and compute inherited importance ---
-	// importanceBase starts at 0.5. When superseding, it is raised to
-	// max(0.5, oldImportance * 0.7) based on the first superseded memory.
-	inheritedImportance := memory.ImportanceBase
-	var primarySupersededID *int64
+	var domainDecision *principalmemory.DomainWriteDecision
 	var supersededIDs []int64
-	for _, beforeMem := range supersedeTargets {
-		sid := beforeMem.ID
-		oldImportance, supErr := s.memoryStore.Supersede(ctx, sid)
-		if supErr != nil {
-			log.Warn().Err(supErr).Int64("superseded_id", sid).Msg("store: supersede failed")
-			continue
-		}
-		// Audit: fire-and-forget supersede event.
-		logAuditSupersede(ctx, s, beforeMem, actorFromContext(ctx))
-		supersededIDs = append(supersededIDs, sid)
-		if primarySupersededID == nil {
-			primarySupersededID = &sid
-			inherited := oldImportance * 0.7
-			if inherited > inheritedImportance {
-				inheritedImportance = inherited
-			}
-		}
-	}
-	memory.ImportanceBase = inheritedImportance
-	memory.SupersedesID = primarySupersededID
+	var supersedeTargets []*models.Memory
 
 	// --- Write gate (vNext Phase A) ---
 	// When ENGRAM_VNEXT_ENABLED=true, evaluate novelty before creation.
@@ -1002,13 +1131,18 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	// detect duplicates; the quality_signals key is added to the response.
 	var gateResult writegate.GateResult
 
-	if params.Project != "" {
-		existing, listErr := s.memoryStore.List(ctx, params.Project, 100)
-		if listErr != nil {
-			log.Warn().Err(listErr).Msg("store: write gate could not load existing memories, skipping gate")
-		} else {
-			existing = filterVisibleWriteGateCandidates(ctx, params.SessionID, existing)
-			gateResult = writegate.Check(ctx, params.Content, existing)
+	checkWriteGate := func(store *gormdb.MemoryStore) {
+		if params.Project != "" {
+			existing, listErr := store.List(ctx, params.Project, 100)
+			if listErr != nil {
+				log.Warn().Err(listErr).Msg("store: write gate could not load existing memories, skipping gate")
+			} else {
+				existing = filterVisibleWriteGateCandidates(ctx, params.SessionID, existing)
+				gateResult = writegate.Check(ctx, params.Content, existing)
+			}
+		}
+		if gateResult.Decision == "flag" {
+			memory.Status = "flagged"
 		}
 	}
 
@@ -1043,19 +1177,72 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		memory.Confidence = lifecycle.ComputeConfidence(lifecycle.ConfidenceInputs{})
 		memory.Retrievability = 1.0
 	}
-	if gateResult.Decision == "flag" {
-		memory.Status = "flagged"
-	}
 
-	// Use CreateWithLifecycle when lifecycle fields are present (ENGRAM_LIFECYCLE_ENABLED
-	// path sets Tier/EpistemicType/Defeasibility on the memory struct above).
 	var created *models.Memory
-	var createErr error
-	{
-		created, createErr = s.memoryStore.CreateWithLifecycle(ctx, memory)
+	if len(params.Supersedes) == 0 {
+		domainDecision, err = s.checkDomainWriteMCP(ctx, memory, params.SessionID)
+		if err != nil {
+			return "", fmt.Errorf("domain registry check failed: %w", err)
+		}
+		checkWriteGate(s.memoryStore)
+		created, err = s.memoryStore.CreateWithLifecycle(ctx, memory)
+	} else {
+		access, accessErr := memoryMutationAccessMCP(ctx, params.SessionID)
+		if accessErr != nil {
+			return "", fmt.Errorf("store: supersede target not found")
+		}
+		var checkErr error
+		err = s.memoryStore.WithAuthorizedMemories(ctx, params.Supersedes, access, func(tx *gormlib.DB, memories map[int64]*models.Memory) error {
+			// Target authorization precedes even domain-warning audit effects.
+			domainDecision, checkErr = s.checkDomainWriteMCPTx(ctx, memory, params.SessionID, tx)
+			if errors.Is(checkErr, principalmemory.ErrDomainWriteRejected) {
+				// Preserve the existing rejection audit without changing targets.
+				return nil
+			}
+			if checkErr != nil {
+				return fmt.Errorf("domain registry check failed: %w", checkErr)
+			}
+			seen := make(map[int64]bool, len(params.Supersedes))
+			for _, sid := range params.Supersedes {
+				if seen[sid] {
+					continue
+				}
+				seen[sid] = true
+				before := memories[sid]
+				if before.Status != "active" {
+					continue
+				}
+				oldImportance, supersedeErr := s.memoryStore.SupersedeTx(ctx, tx, sid)
+				if supersedeErr != nil {
+					return supersedeErr
+				}
+				if memory.SupersedesID == nil {
+					primaryID := sid
+					memory.SupersedesID = &primaryID
+					memory.ImportanceBase = math.Max(memory.ImportanceBase, oldImportance*0.7)
+				}
+				supersededIDs = append(supersededIDs, sid)
+				supersedeTargets = append(supersedeTargets, before)
+			}
+			// The novelty corpus must observe supersession before its LIMIT,
+			// just as the original create path did, now within this transaction.
+			checkWriteGate(gormdb.NewMemoryStore(&gormdb.Store{DB: tx}))
+			var createErr error
+			created, createErr = s.memoryStore.CreateWithLifecycleTx(ctx, tx, memory)
+			return createErr
+		})
+		if err == nil && checkErr != nil {
+			err = fmt.Errorf("domain registry check failed: %w", checkErr)
+		}
 	}
-	if createErr != nil {
-		return "", fmt.Errorf("store memory: %w", createErr)
+	if err != nil {
+		if errors.Is(err, gormlib.ErrRecordNotFound) {
+			return "", fmt.Errorf("store: supersede target not found")
+		}
+		return "", fmt.Errorf("store memory: %w", err)
+	}
+	for _, before := range supersedeTargets {
+		logAuditSupersede(ctx, s, before, actorFromContext(ctx))
 	}
 
 	// Audit: fire-and-forget create event (FR-D2 / NFR-D4). Actor derived from
@@ -1187,21 +1374,6 @@ func (s *Server) handleEditMemory(ctx context.Context, args json.RawMessage) (st
 		return "", fmt.Errorf("edit_memory: %w", err)
 	}
 
-	// Read before-state.
-	before, err := ms.Get(ctx, id)
-	if err != nil {
-		return "", fmt.Errorf("edit_memory: memory %d not found: %w", id, err)
-	}
-	if before == nil {
-		return "", fmt.Errorf("edit_memory: memory %d not found", id)
-	}
-
-	if !memoryManageAllowed(ctx, before) {
-		return "", fmt.Errorf("edit_memory: memory %d not found", id)
-	}
-
-	// Build updated memory (preserve all existing fields, override only provided ones).
-	updated := *before
 	if narrative != "" {
 		// Finding 1: apply the same hard-limit, soft-truncation, and secret-redaction
 		// as the create path (tools_memory.go:104-126) before assigning content.
@@ -1227,20 +1399,24 @@ func (s *Server) handleEditMemory(ctx context.Context, args json.RawMessage) (st
 			log.Warn().Msg("edit_memory: content contains secrets — redacting before storage")
 			narrative = privacy.RedactSecrets(narrative)
 		}
-		updated.Content = narrative
 	}
-	// Finding 6: distinguish absent "tags" key from explicit empty [].
-	// absent → keep existing tags; explicit [] → clear all tags.
-	// coerceStringSlice returns nil for both cases, so we use the raw map.
-	if _, tagsPresent := m["tags"]; tagsPresent {
-		updated.Tags = tags // tags is nil when [] was passed — clears the field
-	}
-	if updated.Content == "" {
-		return "", fmt.Errorf("edit_memory: content must not be empty after edit")
-	}
-
-	after, err := ms.Update(ctx, &updated)
+	before, after, err := s.updateMemoryAsCaller(ctx, id, func(updated *models.Memory) error {
+		if narrative != "" {
+			updated.Content = narrative
+		}
+		// An absent tags key preserves tags; an explicit empty array clears them.
+		if _, tagsPresent := m["tags"]; tagsPresent {
+			updated.Tags = tags
+		}
+		if updated.Content == "" {
+			return fmt.Errorf("content must not be empty after edit")
+		}
+		return nil
+	})
 	if err != nil {
+		if errors.Is(err, gormlib.ErrRecordNotFound) {
+			return "", fmt.Errorf("edit_memory: memory %d not found", id)
+		}
 		return "", fmt.Errorf("edit_memory: %w", err)
 	}
 
@@ -2358,19 +2534,16 @@ func (s *Server) handleSuppressMemory(ctx context.Context, args json.RawMessage)
 		return "", fmt.Errorf("suppress_memory: id must be a positive integer")
 	}
 
-	// Read before-state for audit and authorization before deletion.
-	beforeMem, getErr := s.memoryStore.Get(ctx, id)
-	if getErr != nil {
-		if errors.Is(getErr, gormlib.ErrRecordNotFound) {
-			return "", fmt.Errorf("feedback suppress: memory %d not found", id)
-		}
-		return "", fmt.Errorf("feedback suppress: %w", getErr)
-	}
-	if !memoryManageAllowed(ctx, beforeMem) {
+	access, err := memoryMutationAccessMCP(ctx, sessionFromContext(ctx))
+	if err != nil {
 		return "", fmt.Errorf("feedback suppress: memory %d not found", id)
 	}
-
-	if err := s.memoryStore.Delete(ctx, id); err != nil {
+	var beforeMem *models.Memory
+	err = s.memoryStore.WithAuthorizedMemories(ctx, []int64{id}, access, func(tx *gormlib.DB, memories map[int64]*models.Memory) error {
+		beforeMem = memories[id]
+		return s.memoryStore.DeleteTx(ctx, tx, id)
+	})
+	if err != nil {
 		if errors.Is(err, gormlib.ErrRecordNotFound) {
 			return "", fmt.Errorf("feedback suppress: memory %d not found", id)
 		}

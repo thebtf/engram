@@ -461,6 +461,23 @@ func memoryDomainManageAllowedREST(ctx context.Context, mem *models.Memory) bool
 	return scope.ResolveMemoryManage(memoryVisibilityCaller(ctx, ""), mem)
 }
 
+func (s *Service) deleteVisibleMemoriesREST(r *http.Request, ids []int64) error {
+	ctx := r.Context()
+	access := gormdb.MemoryMutationAccess{
+		Project:                 r.URL.Query().Get("project"),
+		Caller:                  memoryVisibilityCaller(ctx, ""),
+		RequireCanonicalProject: true,
+	}
+	return s.memoryStore.WithAuthorizedMemories(ctx, ids, access, func(tx *gormlib.DB, _ map[int64]*models.Memory) error {
+		for _, id := range ids {
+			if err := s.memoryStore.DeleteTx(ctx, tx, id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func parseMemoryAuditLimit(raw string) (int, error) {
 	const (
 		defaultLimit = 50
@@ -735,26 +752,7 @@ func (s *Service) handleDeleteMemoryByID(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	before, err := s.memoryStore.Get(r.Context(), id)
-	if err != nil {
-		if errors.Is(err, gormlib.ErrRecordNotFound) {
-			http.Error(w, "memory not found", http.StatusNotFound)
-			return
-		}
-		log.Error().Err(err).Int64("id", id).Msg("get memory before delete failed")
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return
-	}
-	if before == nil {
-		http.Error(w, "memory not found", http.StatusNotFound)
-		return
-	}
-	if !memoryDomainManageAllowedREST(r.Context(), before) {
-		http.Error(w, "memory not found", http.StatusNotFound)
-		return
-	}
-
-	if err := s.memoryStore.Delete(r.Context(), id); err != nil {
+	if err := s.deleteVisibleMemoriesREST(r, []int64{id}); err != nil {
 		if errors.Is(err, gormlib.ErrRecordNotFound) {
 			http.Error(w, "memory not found", http.StatusNotFound)
 			return
@@ -804,26 +802,7 @@ func (s *Service) handleSuppressMemoryByID(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
-	before, err := s.memoryStore.Get(r.Context(), id)
-	if err != nil {
-		if errors.Is(err, gormlib.ErrRecordNotFound) {
-			http.Error(w, "memory not found", http.StatusNotFound)
-			return
-		}
-		log.Error().Err(err).Int64("id", id).Msg("get memory before suppress failed")
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return
-	}
-	if before == nil {
-		http.Error(w, "memory not found", http.StatusNotFound)
-		return
-	}
-	if !memoryDomainManageAllowedREST(r.Context(), before) {
-		http.Error(w, "memory not found", http.StatusNotFound)
-		return
-	}
-
-	if err := s.memoryStore.Delete(r.Context(), id); err != nil {
+	if err := s.deleteVisibleMemoriesREST(r, []int64{id}); err != nil {
 		if errors.Is(err, gormlib.ErrRecordNotFound) {
 			http.Error(w, "memory not found", http.StatusNotFound)
 			return
@@ -887,41 +866,22 @@ func (s *Service) handleSuppressMemories(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	before := make([]*models.Memory, 0, len(ids))
-	for _, id := range ids {
-		memory, err := s.memoryStore.Get(r.Context(), id)
-		if err != nil {
-			if errors.Is(err, gormlib.ErrRecordNotFound) {
-				http.Error(w, "memory not found", http.StatusNotFound)
-				return
-			}
-			log.Error().Err(err).Int64("id", id).Msg("get memory before bulk suppress failed")
-			http.Error(w, "internal server error", http.StatusInternalServerError)
-			return
-		}
-		if memory == nil || !memoryDomainManageAllowedREST(r.Context(), memory) {
+	if err := s.deleteVisibleMemoriesREST(r, ids); err != nil {
+		if errors.Is(err, gormlib.ErrRecordNotFound) {
 			http.Error(w, "memory not found", http.StatusNotFound)
 			return
 		}
-		before = append(before, memory)
+		log.Error().Err(err).Msg("bulk suppress memory failed")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
 	}
-
 	reason := strings.TrimSpace(req.Reason)
-	receipts := make([]memoryActionReceipt, 0, len(before))
-	for _, memory := range before {
-		if err := s.memoryStore.Delete(r.Context(), memory.ID); err != nil {
-			if errors.Is(err, gormlib.ErrRecordNotFound) {
-				http.Error(w, "memory not found", http.StatusNotFound)
-				return
-			}
-			log.Error().Err(err).Int64("id", memory.ID).Msg("bulk suppress memory failed")
-			http.Error(w, "internal server error", http.StatusInternalServerError)
-			return
-		}
+	receipts := make([]memoryActionReceipt, 0, len(ids))
+	for _, id := range ids {
 		receipts = append(receipts, memoryActionReceipt{
 			Status: "ok",
 			Action: "suppress",
-			ID:     memory.ID,
+			ID:     id,
 			Reason: reason,
 		})
 	}
@@ -1451,26 +1411,40 @@ func (s *Service) applyMemoryCollectionSelectionTarget(target gormdb.CollectionS
 		state.partial = true
 		return
 	}
-	nextStatus, validTransition := memoryCollectionNextStatus(state.action, memory.Status)
-	if !validTransition {
-		state.append("redacted", "conflict", nil)
+	access := gormdb.MemoryMutationAccess{Caller: memoryVisibilityCaller(state.ctx, ""), RequireCanonicalProject: true}
+	observedVersion := 0
+	err := s.memoryStore.WithAuthorizedMemories(state.ctx, []int64{memory.ID}, access, func(tx *gormlib.DB, memories map[int64]*models.Memory) error {
+		current := memories[memory.ID]
+		if uint64(current.Version) != target.ExpectedVersion {
+			return errMemorySelectionConflict
+		}
+		nextStatus, validTransition := memoryCollectionNextStatus(state.action, current.Status)
+		if !validTransition {
+			return errMemorySelectionConflict
+		}
+		update := tx.WithContext(state.ctx).Model(&dbgorm.Memory{}).
+			Where("id = ? AND deleted_at IS NULL AND version = ? AND status = ?", current.ID, current.Version, current.Status).
+			Updates(map[string]any{"status": nextStatus, "updated_at": time.Now().UTC(), "version": gormlib.Expr("version + 1")})
+		if update.Error != nil {
+			return update.Error
+		}
+		if update.RowsAffected != 1 {
+			return errMemorySelectionConflict
+		}
+		observedVersion = current.Version + 1
+		return nil
+	})
+	if err != nil {
+		outcome := "failed"
+		if errors.Is(err, gormlib.ErrRecordNotFound) {
+			outcome = "denied"
+		} else if errors.Is(err, errMemorySelectionConflict) {
+			outcome = "conflict"
+		}
+		state.append("redacted", outcome, nil)
 		state.partial = true
 		return
 	}
-	update := s.memoryStore.GetDB().WithContext(state.ctx).Model(&dbgorm.Memory{}).
-		Where("id = ? AND deleted_at IS NULL AND version = ? AND status = ?", memory.ID, memory.Version, memory.Status).
-		Updates(map[string]any{"status": nextStatus, "updated_at": time.Now().UTC(), "version": gormlib.Expr("version + 1")})
-	if update.Error != nil {
-		state.append("redacted", "failed", nil)
-		state.partial = true
-		return
-	}
-	if update.RowsAffected != 1 {
-		state.append("redacted", "conflict", nil)
-		state.partial = true
-		return
-	}
-	observedVersion := memory.Version + 1
 	state.append(target.ID, "committed", &observedVersion)
 	after, afterErr := s.memoryStore.Get(state.ctx, memory.ID)
 	if afterErr != nil || after == nil {

@@ -1,7 +1,9 @@
 // Package writelint — T034 (engram vNext Milestone F TG5).
 // orchestrator.go: two-phase write coordinator.
 // Phase1: detect_similar (Jaccard), detect_conflict (conflict_adapter),
-//         detect_supersession_candidate → assemble LintSignals → mint token.
+//
+//	detect_supersession_candidate → assemble LintSignals → mint token.
+//
 // Phase2: validate token → apply chosen option → audit.
 // No-signal path: commit immediately, tokenless.
 //
@@ -17,18 +19,23 @@
 //
 // Token payload contract (finding 2 — cross-project replay fix):
 // The payload stored in the TokenStore is a JSON object:
-//   {"content_hash":"<hex-sha256>","project":"<project>","actor":"<actor>"}
+//
+//	{"content_hash":"<hex-sha256>","project":"<project>","actor":"<actor>"}
+//
 // JSON encoding avoids pipe-delimiter collision when project or actor contain '|'.
 // Phase2 parses the stored payload and asserts:
-//   payload.Project == req.Project  → resolution_token_project_mismatch
-//   payload.ContentHash == hash(req.Content) → resolution_token_content_mismatch
+//
+//	payload.Project == req.Project  → resolution_token_project_mismatch
+//	payload.ContentHash == hash(req.Content) → resolution_token_content_mismatch
+//
 // This prevents cross-project replay and content substitution attacks.
 //
 // Token expiry contract (finding 9):
-// - First call after TTL expires: Consume returns ok=true, expired=true →
-//   error "resolution_token_expired".
-// - After the janitor purges an expired entry (or after Consume deletes it),
-//   subsequent calls return ok=false → error "resolution_token_not_found".
+//   - First call after TTL expires: Consume returns ok=true, expired=true →
+//     error "resolution_token_expired".
+//   - After the janitor purges an expired entry (or after Consume deletes it),
+//     subsequent calls return ok=false → error "resolution_token_not_found".
+//
 // The two errors are intentionally distinct: expired means the token existed
 // but timed out; not_found means it never existed or was already consumed.
 package writelint
@@ -55,6 +62,12 @@ type MemoryStoreInterface interface {
 	// MarkSuperseded marks memory olderID as superseded by newID.
 	// Sets status="superseded" and superseded_by=newID atomically.
 	MarkSuperseded(ctx context.Context, olderID, newID int64) error
+}
+
+// TargetMutationStore keeps a caller-facing target mutation's authority,
+// memory changes and audit effects in one transaction.
+type TargetMutationStore interface {
+	WithTargetMutation(context.Context, int64, string, func(MemoryStoreInterface, AuditLoggerInterface) error) error
 }
 
 // AuditLoggerInterface defines the minimal audit surface.
@@ -502,6 +515,24 @@ func (o *Orchestrator) phase2(ctx context.Context, req Phase2Request, memoryStor
 		return nil, fmt.Errorf("resolution_token_content_mismatch: content does not match the content hash bound to this token")
 	}
 
+	if (req.Option == "supersede" || req.Option == "merge_with") && req.TargetMemoryID != nil {
+		if store, ok := memoryStore.(TargetMutationStore); ok {
+			var response *Phase2Response
+			err := store.WithTargetMutation(ctx, *req.TargetMemoryID, req.Project, func(bound MemoryStoreInterface, audit AuditLoggerInterface) error {
+				var err error
+				response, err = o.applyPhase2Action(ctx, req, bound, audit)
+				return err
+			})
+			return response, err
+		}
+	}
+	return o.applyPhase2Action(ctx, req, memoryStore, o.cfg.AuditLogger)
+}
+
+func (o *Orchestrator) applyPhase2Action(ctx context.Context, req Phase2Request, memoryStore MemoryStoreInterface, audit AuditLoggerInterface) (*Phase2Response, error) {
+	if audit == nil {
+		audit = o.cfg.AuditLogger
+	}
 	switch req.Option {
 	case "abort":
 		if err := o.cfg.AuditLogger.LogAudit(ctx, 0, "write_lint_aborted", req.Actor); err != nil {
@@ -554,7 +585,7 @@ func (o *Orchestrator) phase2(ctx context.Context, req Phase2Request, memoryStor
 		if err != nil {
 			return nil, fmt.Errorf("writelint Phase2 merge_with update: %w", err)
 		}
-		if err := o.cfg.AuditLogger.LogAudit(ctx, updated.ID, "merge", req.Actor); err != nil {
+		if err := audit.LogAudit(ctx, updated.ID, "merge", req.Actor); err != nil {
 			_ = err
 		}
 		return &Phase2Response{
@@ -597,7 +628,7 @@ func (o *Orchestrator) phase2(ctx context.Context, req Phase2Request, memoryStor
 		if msErr := memoryStore.MarkSuperseded(ctx, *req.TargetMemoryID, created.ID); msErr != nil {
 			return nil, fmt.Errorf("writelint Phase2 supersede mark-older %d: %w", *req.TargetMemoryID, msErr)
 		}
-		if err := o.cfg.AuditLogger.LogAudit(ctx, created.ID, "supersede_with_candidate", req.Actor); err != nil {
+		if err := audit.LogAudit(ctx, created.ID, "supersede_with_candidate", req.Actor); err != nil {
 			_ = err
 		}
 		return &Phase2Response{

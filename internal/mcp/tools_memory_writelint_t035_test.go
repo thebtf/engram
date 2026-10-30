@@ -381,17 +381,20 @@ func TestWriteLint_T035_Phase1_NoSignal_Stored(t *testing.T) {
 func TestWriteLint_T035_Phase2_MergeWith(t *testing.T) {
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
 
-	orch, _, closer := buildWLOrchestrator(nearDupMemory())
+	const project = "2ee2911f-3764-488b-b9f3-ce06808e55a6"
+	memory := nearDupMemory()
+	memory.Project = project
+	orch, _, closer := buildWLOrchestrator(memory)
 	defer closer()
 
 	srv := NewServer(ServerOptions{Version: "test-t035"})
 	srv.SetWriteLintOrchestrator(orch)
-	ctx := context.Background()
+	ctx := ContextWithProject(context.Background(), project)
 
 	// Phase1 first — get a token
 	p1args, _ := json.Marshal(map[string]any{
 		"content": t035DupContent,
-		"project": "testproj",
+		"project": project,
 	})
 	p1result, err := srv.handleStoreMemory(ctx, p1args)
 	require.NoError(t, err)
@@ -405,7 +408,7 @@ func TestWriteLint_T035_Phase2_MergeWith(t *testing.T) {
 	// Phase2 with the token
 	p2args, _ := json.Marshal(map[string]any{
 		"content":          t035DupContent,
-		"project":          "testproj",
+		"project":          project,
 		"resolution_token": token,
 		"option":           "merge_with",
 		"target_memory_id": 1,

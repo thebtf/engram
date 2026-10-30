@@ -312,6 +312,28 @@ gRPC-соединения закрываются перед выходом. Пе
 `privacy_scope="private"` требует непустой workstation identity от SourceClient
 keycard; no-auth режим её не создаёт.
 
+Изменение существующей памяти требует одновременно доступа к её проекту,
+обычной read visibility (`privacy_scope`, workstation/session и principal)
+и права `domain-manage`. Эти условия проверяются по текущей записи в транзакции
+изменения. Канонический каталог и membership закрепляются блокировками до commit;
+одного повторного чтения недостаточно. Для REST by-ID отсутствие параметра
+`project` не отменяет проверку:
+сервер использует единственную действующую каноническую принадлежность записи;
+явный `project` только сужает выбор. При `ENGRAM_ENFORCE_SOURCE_PROJECT=true`
+MCP использует подтверждённый проект вызывающей сессии. Пакетное изменение
+проверяет все target ID до первой записи. Отказ не меняет память или связанный
+continuity slot. Привилегированные admin bulkops и rollback сохраняют отдельный
+контракт обслуживания. Это правило доступа не меняет существующие переходы
+состояния suppress/delete и не добавляет обратимый suppress к by-ID API.
+Write-lint Phase2 `supersede` и `merge_with` авторизуют и блокируют текущий target
+до первого эффекта. `supersede` фиксирует replacement, supersession, continuity
+slot и применимый warning audit в одной транзакции. `merge_with` добавляет текст
+к актуальному locked content и фиксирует update, применимый warning и merge audit в той же
+транзакции. Domain rejection сохраняет только предусмотренный rejection audit.
+Очистка `continuity_slot` сохраняет проверку stored authority, в том числе для
+истёкшего slot. Она блокирует memory до slot и повторно проверяет текущие
+target ID и authority; старый snapshot не разрешает очищать заменённый slot.
+
 
 ## Redaction Rules (EC-F5, EC-F9)
 

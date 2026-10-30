@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -397,6 +398,20 @@ func (s *MemoryStore) Create(ctx context.Context, mem *models.Memory) (*models.M
 	return memoryRowToModel(row), nil
 }
 
+// CreateTx preserves Create's field/default contract in a caller transaction.
+func (s *MemoryStore) CreateTx(ctx context.Context, tx *gorm.DB, mem *models.Memory) (*models.Memory, error) {
+	if err := validateMemoryForCreate(mem); err != nil {
+		return nil, err
+	}
+	row := memoryRowForCreate(mem, time.Now().UTC(), false)
+	copyPrivacyFields(row, mem)
+	copyPrincipalMemoryFields(row, mem)
+	if err := createMemoryRowForProjectTx(ctx, tx, row); err != nil {
+		return nil, err
+	}
+	return memoryRowToModel(row), nil
+}
+
 // CreateWithLifecycle inserts a new memory row including Tier, EpistemicType, and
 // Defeasibility fields. It MUST only be called from flag-gated paths:
 //   - crystallization bridge (ENGRAM_CRYSTALLIZATION_ENABLED)
@@ -644,6 +659,188 @@ func (s *MemoryStore) GetVisible(ctx context.Context, id int64, project string, 
 	memory := memoryRowToModel(&row)
 	memory.Project = project
 	return memory, nil
+}
+
+// MemoryMutationAccess carries the adapter's existing caller and project policy.
+// Project is an optional narrowing selector, never a grant. Browser mutations
+// require a live canonical membership; legacy MCP retains its project policy.
+type MemoryMutationAccess struct {
+	Project                 string
+	Caller                  scope.KeycardContext
+	RequireCanonicalProject bool
+}
+
+type MemoryUpdate func(*models.Memory) error
+
+func memoryMutationVisibleQuery(ctx context.Context, tx *gorm.DB, caller scope.KeycardContext) *gorm.DB {
+	return memoryReaderPrivacy(tx.WithContext(ctx).Model(&Memory{}).Table("memories AS m").Where("m.deleted_at IS NULL"), caller, scope.MemoryVisibilityOptions{ApplyPrivacyScope: true})
+}
+
+func (s *MemoryStore) mutationVisibleQuery(ctx context.Context, tx *gorm.DB, access MemoryMutationAccess) (*gorm.DB, error) {
+	if access.Project == "" {
+		return nil, gorm.ErrRecordNotFound
+	}
+	if !access.RequireCanonicalProject {
+		return memoryMutationVisibleQuery(ctx, tx, access.Caller).Where("m.project = ?", access.Project), nil
+	}
+	// Resolve the catalog using a clean transaction query, before adding the
+	// memory alias and privacy predicates to the content query.
+	query, err := canonicalProjectRows(ctx, tx.Model(&Memory{}), access.Project, "memories", "m")
+	if err != nil {
+		if errors.Is(err, ErrKnowledgeProjectForbidden) {
+			return nil, gorm.ErrRecordNotFound
+		}
+		return nil, err
+	}
+	return memoryReaderPrivacy(query.Where("m.deleted_at IS NULL"), access.Caller, scope.MemoryVisibilityOptions{ApplyPrivacyScope: true}), nil
+}
+
+func memoryMutationCanonicalProject(ctx context.Context, tx *gorm.DB, id int64) (string, error) {
+	member := tx.WithContext(ctx).Table("memories AS m").Select("1").Where("m.id = ?", id).
+		Where(canonicalProjectMembershipPredicate("m", "project"), clause.Column{Table: "p", Name: "id"}, "memories", "memories", clause.Column{Table: "p", Name: "id"})
+	var projects []string
+	if err := tx.WithContext(ctx).Table("projects AS p").Where("p.removed_at IS NULL AND (p.identity_status IS NULL OR p.identity_status = 'active')").
+		Where("EXISTS (?)", member).Limit(2).Pluck("p.id", &projects).Error; err != nil {
+		return "", err
+	}
+	if len(projects) != 1 {
+		return "", gorm.ErrRecordNotFound
+	}
+	exists, err := (&SessionStore{db: tx}).CanonicalProjectExists(ctx, projects[0])
+	if err != nil {
+		return "", err
+	}
+	if !exists {
+		return "", gorm.ErrRecordNotFound
+	}
+	return projects[0], nil
+}
+
+// lockMemoryMutationAuthority follows consolidationLock's ascending relation
+// order before any target row lock. The early audit/memory relation locks keep
+// its all-table EXCLUSIVE writer from holding a later dependency while waiting
+// on membership. SHARE on membership also covers absent rows and insertions;
+// project row SHARE locks retain live catalog authority through commit.
+func lockMemoryMutationAuthority(ctx context.Context, tx *gorm.DB, projects map[int64]string) error {
+	if len(projects) == 0 {
+		return nil
+	}
+	if err := tx.WithContext(ctx).Exec(`LOCK TABLE "audit_log" IN ROW EXCLUSIVE MODE`).Error; err != nil {
+		return err
+	}
+	if err := tx.WithContext(ctx).Exec(`LOCK TABLE "memories" IN ROW SHARE MODE`).Error; err != nil {
+		return err
+	}
+	if err := tx.WithContext(ctx).Exec(`LOCK TABLE "project_consolidation_memberships" IN SHARE MODE`).Error; err != nil {
+		return err
+	}
+	names := make([]string, 0, len(projects))
+	for _, project := range projects {
+		names = append(names, project)
+	}
+	slices.Sort(names)
+	for _, project := range slices.Compact(names) {
+		var row Project
+		if err := liveKnowledgeProjects(tx.WithContext(ctx)).Select("id").Where("id = ?", project).
+			Clauses(clause.Locking{Strength: "SHARE"}).Take(&row).Error; err != nil {
+			return err
+		}
+	}
+	for id, expected := range projects {
+		project, err := memoryMutationCanonicalProject(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if project != expected {
+			return gorm.ErrRecordNotFound
+		}
+	}
+	return nil
+}
+
+// WithAuthorizedMemories preflights every target without locks or content, then
+// repeats the complete SQL visibility policy while locking memories in ID order
+// in the mutation transaction. Domain read and manage have the same row predicate;
+// the model check below keeps that policy explicit. Callbacks lock slots only
+// after all target memories, preserving the memory-before-slot order.
+func (s *MemoryStore) WithAuthorizedMemories(ctx context.Context, ids []int64, access MemoryMutationAccess, mutate func(*gorm.DB, map[int64]*models.Memory) error) error {
+	ordered := append([]int64(nil), ids...)
+	slices.Sort(ordered)
+	ordered = slices.Compact(ordered)
+	if len(ordered) > 0 && ordered[0] <= 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		projects := make(map[int64]string, len(ordered))
+		for _, id := range ordered {
+			var row Memory
+			query := memoryMutationVisibleQuery(ctx, tx, access.Caller)
+			if err := query.Select("m.id, m.project").Where("m.id = ?", id).Take(&row).Error; err != nil {
+				return err
+			}
+			targetAccess := access
+			if targetAccess.Project == "" {
+				targetAccess.Project = row.Project
+				if access.RequireCanonicalProject {
+					var err error
+					targetAccess.Project, err = memoryMutationCanonicalProject(ctx, tx, id)
+					if err != nil {
+						return err
+					}
+				}
+			}
+			query, err := s.mutationVisibleQuery(ctx, tx, targetAccess)
+			if err != nil {
+				return err
+			}
+			var eligible Memory
+			if err := query.Select("m.id").Where("m.id = ?", id).Take(&eligible).Error; err != nil {
+				return err
+			}
+			projects[id] = targetAccess.Project
+		}
+		if access.RequireCanonicalProject {
+			if err := lockMemoryMutationAuthority(ctx, tx, projects); err != nil {
+				return err
+			}
+		}
+		locked := make(map[int64]*models.Memory, len(ordered))
+		for _, id := range ordered {
+			targetAccess := access
+			targetAccess.Project = projects[id]
+			query, err := s.mutationVisibleQuery(ctx, tx, targetAccess)
+			if err != nil {
+				return err
+			}
+			var row Memory
+			if err := query.Where("m.id = ?", id).Clauses(clause.Locking{Strength: "UPDATE"}).Take(&row).Error; err != nil {
+				return err
+			}
+			memory := memoryRowToModel(&row)
+			if !scope.ResolveMemory(access.Caller, memory, scope.MemoryVisibilityOptions{ApplyPrivacyScope: true}) || !scope.ResolveMemoryManage(access.Caller, memory) {
+				return gorm.ErrRecordNotFound
+			}
+			if access.RequireCanonicalProject {
+				memory.Project = targetAccess.Project
+			}
+			locked[id] = memory
+		}
+		return mutate(tx, locked)
+	})
+}
+
+func (s *MemoryStore) UpdateAuthorized(ctx context.Context, id int64, access MemoryMutationAccess, update MemoryUpdate) (before, after *models.Memory, err error) {
+	err = s.WithAuthorizedMemories(ctx, []int64{id}, access, func(tx *gorm.DB, memories map[int64]*models.Memory) error {
+		before = memories[id]
+		updated := *before
+		if err := update(&updated); err != nil {
+			return err
+		}
+		var err error
+		after, err = s.updateMemoryTx(ctx, tx, &updated)
+		return err
+	})
+	return before, after, err
 }
 
 // ListVisiblePage applies the shared read policy before both count and page.
@@ -1006,6 +1203,10 @@ func (s *MemoryStore) ListForInjection(ctx context.Context, project string, limi
 // Bumps version and sets updated_at. Returns a NEW populated model.
 // The caller's input struct is never mutated.
 func (s *MemoryStore) Update(ctx context.Context, mem *models.Memory) (*models.Memory, error) {
+	return s.updateMemoryTx(ctx, s.db, mem)
+}
+
+func (s *MemoryStore) updateMemoryTx(ctx context.Context, tx *gorm.DB, mem *models.Memory) (*models.Memory, error) {
 	if mem == nil {
 		return nil, fmt.Errorf("memory must not be nil")
 	}
@@ -1028,7 +1229,7 @@ func (s *MemoryStore) Update(ctx context.Context, mem *models.Memory) (*models.M
 		"version":      gorm.Expr("version + 1"),
 	}
 
-	result := s.db.WithContext(ctx).
+	result := tx.WithContext(ctx).
 		Model(&Memory{}).
 		Where("id = ? AND deleted_at IS NULL", mem.ID).
 		Updates(updates)
@@ -1040,7 +1241,11 @@ func (s *MemoryStore) Update(ctx context.Context, mem *models.Memory) (*models.M
 	}
 
 	// Re-fetch to return the fully-populated model.
-	return s.Get(ctx, mem.ID)
+	var row Memory
+	if err := tx.WithContext(ctx).Where("id = ? AND deleted_at IS NULL", mem.ID).First(&row).Error; err != nil {
+		return nil, fmt.Errorf("get memory id=%d: %w", mem.ID, err)
+	}
+	return memoryRowToModel(&row), nil
 }
 
 const continuitySlotLifecycleAuditAction = "continuity_slot_lifecycle_clear"
