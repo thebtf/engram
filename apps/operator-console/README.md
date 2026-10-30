@@ -51,6 +51,22 @@ so `search_errors` remains `null` with `search_errors_result_status: not_computa
 Neither unknown value is a measured zero; existing nil-store compatibility counters
 and HTTP 200 behavior remain unchanged.
 
+## Health update-check currentness
+
+Health and Settings treat update availability as live only when the domain check
+returns an explicit boolean without an error. HTTP 200 with an error, missing or
+invalid availability remains unknown rather than a successful no-update answer.
+Refresh hides the prior availability answer while its new check is pending,
+preserves useful neighboring values, and keeps both Refresh controls busy through
+the final migrations read. A programmatic post-save recheck starts its own reads;
+only the latest intent may publish results or clear busy controls.
+`health-update-refresh.spec.mjs` independently covers the 24 update/refresh cases
+through both actual compiled consumers, including delayed responses and overlap.
+Full Health C1, the four component-state cases retained in its full WIP, and
+Settings explanatory error-copy presentation remain open under #477. This slice
+does not resolve Vue #493 or establish exact-target browser, installed or release
+acceptance.
+
 ## Project knowledge journey (2026-10-11)
 
 The accepted operator-knowledge change refines the inherited Vue/Vite Operate world.
