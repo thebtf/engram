@@ -82,6 +82,23 @@ Navigation groups project entry, knowledge, Workspace, attention, and administra
 The shared project selector uses the server's canonical IDs; equal display names stay
 distinct. The knowledge project is not a code Source/Checkout/View selection or a grant.
 
+Projects and Home each keep one contextual `/projects/unresolved` entry, labelled
+with the existing EN/RU/ZH retained-groups wording. Its count is the number of
+groups, not saved records or membership occurrences. The global selector avoids
+duplicating that entry on Home and Projects and hides its self-link on
+`/projects/unresolved`, including equivalent trailing-slash routes. Other pages
+retain the direct `/projects/unresolved` shortcut when groups exist, with the
+same localized group count. One shared choice-label helper always exposes an existing
+repository qualifier and adds a stable UUID hint when a qualifier is absent or
+primary names are equal: the first eight UUID characters when that prefix is
+unique across the entire catalog (case-insensitive), otherwise the full UUID.
+Global and page choices and selected Projects/Home headings use that same label.
+They keep every catalog row, including version/hash-like names, exact full-UUID
+option values and selection state. Project search still matches names and full
+UUIDs and now includes displayed repository qualifiers. Full selected-identity
+disclosures, retained-reader links and `projectName` semantics outside these
+display contexts remain unchanged.
+
 Historical records have an explicit **Find saved records** view on the existing
 unresolved page: `view=retained_records&attribution_scope=unresolved_history`
 with a selected memory/document/issue kind. It queries native saved content rather
@@ -206,8 +223,9 @@ type ReaderPage<T> = { items: T[]; total: number; offset: number; limit: number;
 ```
 
 Only validated catalog UUIDs are normal project values. Names are mutable labels,
-not identity or authority. Equal names retain distinct IDs and use repository
-qualifiers when supplied; missing qualifiers remain visibly ambiguous. Workspace
+not identity or authority. Equal names retain distinct IDs; project choices and
+selected Projects/Home headings use repository qualifiers when supplied and the
+catalog-unique UUID hints described above. Workspace
 Repository/Working copy/Indexed snapshot selection remains independent.
 
 The shared context retains `project`, `projects`, `descriptors`, `pending`, `error`,
