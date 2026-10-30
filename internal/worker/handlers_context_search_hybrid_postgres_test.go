@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -35,12 +36,13 @@ import (
 const issue520Paraphrase = "renew dialogue upon reaching budget ceiling"
 
 type issue520Observation struct {
-	ID        int64    `json:"id"`
-	Type      string   `json:"type"`
-	Project   string   `json:"project"`
-	Title     string   `json:"title"`
-	Narrative string   `json:"narrative"`
-	Concepts  []string `json:"concepts"`
+	ID         int64           `json:"id"`
+	Type       string          `json:"type"`
+	Project    string          `json:"project"`
+	Title      string          `json:"title"`
+	Narrative  string          `json:"narrative"`
+	Concepts   []string        `json:"concepts"`
+	Similarity json.RawMessage `json:"similarity"`
 }
 
 type issue520SearchResponse struct {
@@ -135,7 +137,7 @@ func TestContextSearchHybridPostgres(t *testing.T) {
 		embeddingRequests.Add(1)
 		queryVector := unrelatedVector
 		switch request.Input[0] {
-		case "ClaudeReset", "Claude Reset", issue520Paraphrase:
+		case "ClaudeReset", "Claude Reset", issue520Paraphrase, "ClaudeReset principalonly confidential synthetic notes.":
 			queryVector = vector(1, 0)
 		case "ownerworkstation":
 			queryVector = workstationVector
@@ -288,6 +290,308 @@ func TestContextSearchHybridPostgres(t *testing.T) {
 		return
 	}
 
+	compatibilityProject := func(t *testing.T) string {
+		t.Helper()
+		project := uuid.NewString()
+		require.NoError(t, store.DB.Create(&gormdb.Project{ID: project}).Error)
+		return project
+	}
+	compatibilityMemory := func(t *testing.T, project, content string, tags []string) *models.Memory {
+		t.Helper()
+		memory, err := memoryStore.Create(t.Context(), &models.Memory{
+			Project: project, Content: content, Tags: tags, PrivacyScope: "project",
+			OwnerPrincipal: alice.Principal, OwnerPrincipalKind: "agent", AgentVisibility: "private",
+		})
+		require.NoError(t, err)
+		require.NoError(t, embeddingStore.StoreChunks(t.Context(), []embedding.Chunk{{
+			MemoryID: memory.ID, Text: memory.Content, Model: embedder.Model(), Embedding: pgvector.NewVector(unrelatedVector),
+		}}))
+		return memory
+	}
+	compatibilitySearch := func(t *testing.T, project, method, query string, limit int) issue520SearchResponse {
+		t.Helper()
+		values := url.Values{"project": {project}, "query": {query}, "limit": {strconv.Itoa(limit)}}
+		var body any
+		if method == http.MethodPost {
+			body = map[string]any{"project": project, "query": query, "session_id": "audit-only-compatibility-session"}
+		}
+		before := memoryState(t)
+		var response issue520SearchResponse
+		call(t, aliceToken, method, "/api/context/search?"+values.Encode(), body, http.StatusOK, &response)
+		require.True(t, before == memoryState(t), "REST compatibility search must not mutate memory rows")
+		require.Equal(t, project, response.Project)
+		require.Equal(t, query, response.Query)
+		return response
+	}
+
+	t.Run("rest_memory_store_failure_preserves_server_error", func(t *testing.T) {
+		service.embeddingClient = nil
+		defer func() {
+			service.embeddingClient = embedder
+			service.memoryStoreSeam = nil
+		}()
+		requestsBefore := embeddingRequests.Load()
+		project := compatibilityProject(t)
+		const query = "storagefailureprobe520"
+		memory := compatibilityMemory(t, project, query+" synthetic cedar archive", []string{"type:fact", "storage-error-only-memory"})
+		var schema string
+		require.NoError(t, store.DB.Raw("SELECT current_schema()").Scan(&schema).Error)
+		require.True(t, strings.HasPrefix(schema, "worker_uci_context_"), "rename must target only this fixture's UUID schema")
+		quotedSchema := `"` + strings.ReplaceAll(schema, `"`, `""`) + `"`
+		originalTable := quotedSchema + `."memories"`
+		renamedTable := quotedSchema + `."issue520_unreadable_memories"`
+		var originalOID int64
+		require.NoError(t, store.DB.Raw("SELECT to_regclass(?)::oid::bigint", originalTable).Scan(&originalOID).Error)
+		require.NotZero(t, originalOID)
+		t.Logf("test_owned_schema=%s original_memories_oid=%d", schema, originalOID)
+		renamed := false
+		restore := func() error {
+			if !renamed {
+				return nil
+			}
+			err := store.DB.Exec("ALTER TABLE " + renamedTable + ` RENAME TO "memories"`).Error
+			if err == nil {
+				renamed = false
+			}
+			return err
+		}
+		defer func() {
+			if err := restore(); err != nil {
+				t.Errorf("restore test-owned memory table: %v", err)
+			}
+		}()
+		setPath := func(path string) {
+			service.memoryStoreSeam = nil
+			if path == "fallback" {
+				// Select the retained fallback implementation, not a fake failing store.
+				service.memoryStoreSeam = memoryStore
+			}
+		}
+		healthy := func(phase string) {
+			for _, path := range []string{"fallback", "hybrid"} {
+				setPath(path)
+				for _, method := range []string{http.MethodGet, http.MethodPost} {
+					t.Run(phase+"_"+path+"_"+method, func(t *testing.T) {
+						response := compatibilitySearch(t, project, method, query, 1)
+						require.Equal(t, []int64{memory.ID}, ids(response.Observations), "the same authenticated synthetic memory must remain visible")
+					})
+				}
+			}
+		}
+		healthy("healthy_before")
+		require.NoError(t, store.DB.Exec("ALTER TABLE "+originalTable+` RENAME TO "issue520_unreadable_memories"`).Error)
+		renamed = true
+		if !t.Run("real_memory_store_is_unreadable", func(t *testing.T) {
+			var memoryTableAbsent bool
+			require.NoError(t, store.DB.Raw("SELECT to_regclass('memories') IS NULL").Scan(&memoryTableAbsent).Error)
+			require.True(t, memoryTableAbsent, "no other schema may rescue the renamed test-owned memory table")
+			_, err := memoryStore.ListWithOffset(t.Context(), project, 1, 0)
+			require.Error(t, err, "the actual PostgreSQL memory store must be unreadable")
+		}) {
+			return
+		}
+		for _, path := range []string{"fallback", "hybrid"} {
+			setPath(path)
+			for _, method := range []string{http.MethodGet, http.MethodPost} {
+				t.Run("unreadable_"+path+"_"+method, func(t *testing.T) {
+					values := url.Values{"project": {project}, "query": {query}, "limit": {"1"}}
+					var body any
+					if method == http.MethodPost {
+						body = map[string]any{"project": project, "query": query}
+					}
+					call(t, aliceToken, method, "/api/context/search?"+values.Encode(), body, http.StatusInternalServerError, nil)
+				})
+			}
+		}
+		require.NoError(t, restore())
+		t.Run("original_table_restored", func(t *testing.T) {
+			var restoredOID int64
+			require.NoError(t, store.DB.Raw("SELECT to_regclass(?)::oid::bigint", originalTable).Scan(&restoredOID).Error)
+			require.Equal(t, originalOID, restoredOID, "restore must preserve the original table identity")
+			var renamedAbsent bool
+			require.NoError(t, store.DB.Raw("SELECT to_regclass(?) IS NULL", renamedTable).Scan(&renamedAbsent).Error)
+			require.True(t, renamedAbsent)
+			t.Log("original memory table restored; temporary renamed object absent")
+		})
+		healthy("healthy_after")
+		require.Equal(t, requestsBefore, embeddingRequests.Load(), "embedding fallback must not mask the memory-store failure")
+	})
+
+	t.Run("rest_review_rule_score_identity", func(t *testing.T) {
+		service.embeddingClient = nil
+		defer func() { service.embeddingClient = embedder }()
+		requestsBefore := embeddingRequests.Load()
+		project := compatibilityProject(t)
+		const query = "collisionprobe520"
+		memory := compatibilityMemory(t, project, query+" cedar memory archive", []string{"type:fact", "collision-only-memory"})
+		rule, err := rules.Create(t.Context(), &models.BehavioralRule{
+			Project: &project, Content: query + " lunar guidance instruction", Priority: 10,
+		})
+		require.NoError(t, err)
+		require.Equal(t, memory.ID, rule.ID, "the independent private-schema sequences must produce the intended numeric ID collision")
+		for _, method := range []string{http.MethodGet, http.MethodPost} {
+			t.Run(method, func(t *testing.T) {
+				response := compatibilitySearch(t, project, method, query, 10)
+				require.Len(t, response.Observations, 2, "both stored records must be returned in untyped observations")
+				byType := make(map[string]issue520Observation)
+				for _, observation := range response.Observations {
+					byType[observation.Type] = observation
+				}
+				require.Contains(t, byType, string(models.ObsTypeDiscovery))
+				require.Contains(t, byType, string(models.ObsTypeGuidance))
+				memoryObservation := byType[string(models.ObsTypeDiscovery)]
+				ruleObservation := byType[string(models.ObsTypeGuidance)]
+				require.Equal(t, memory.ID, memoryObservation.ID)
+				require.Equal(t, memory.Content, memoryObservation.Narrative)
+				require.NotEmpty(t, memoryObservation.Similarity, "the memory must have its own real retrieval score")
+				require.Equal(t, rule.ID, ruleObservation.ID)
+				require.Equal(t, rule.Content, ruleObservation.Narrative)
+				require.Empty(t, ruleObservation.Similarity, "guidance must not inherit a memory score from the same numeric ID")
+			})
+		}
+		require.Equal(t, requestsBefore, embeddingRequests.Load(), "the unavailable embedder must not supply results")
+	})
+	t.Run("rest_review_guidance_recency_before_limit", func(t *testing.T) {
+		service.embeddingClient = nil
+		defer func() { service.embeddingClient = embedder }()
+		project := compatibilityProject(t)
+		const query = "recencymergeprobe520"
+		memory := compatibilityMemory(t, project, query+" older cedar memory", []string{"type:fact", "recency-only-memory"})
+		older := time.Now().UTC().Add(-2 * time.Hour)
+		require.NoError(t, store.DB.Model(&gormdb.Memory{}).Where("id = ?", memory.ID).Update("created_at", older).Error)
+		rule, err := rules.Create(t.Context(), &models.BehavioralRule{
+			Project: &project, Content: query + " newer lunar guidance", Priority: 10,
+		})
+		require.NoError(t, err)
+		storedMemory, err := memoryStore.Get(t.Context(), memory.ID)
+		require.NoError(t, err)
+		require.True(t, rule.CreatedAt.After(storedMemory.CreatedAt), "stored guidance must be newer than the matching stored memory")
+		for _, method := range []string{http.MethodGet, http.MethodPost} {
+			t.Run(method, func(t *testing.T) {
+				control := compatibilitySearch(t, project, method, query, 10)
+				require.Len(t, control.Observations, 2, "both records must match before the visible cap")
+				response := compatibilitySearch(t, project, method, query, 1)
+				require.Len(t, response.Observations, 1)
+				require.Equal(t, string(models.ObsTypeGuidance), response.Observations[0].Type,
+					"the newer matching rule must survive the untyped observations limit")
+				require.Equal(t, rule.ID, response.Observations[0].ID)
+				require.Equal(t, rule.Content, response.Observations[0].Narrative)
+			})
+		}
+	})
+	t.Run("rest_review_literal_compatibility_without_embedder", func(t *testing.T) {
+		service.embeddingClient = nil
+		defer func() { service.embeddingClient = embedder }()
+		requestsBefore := embeddingRequests.Load()
+		project := compatibilityProject(t)
+		substringMemory := compatibilityMemory(t, project,
+			"The VaporLedgerBridge adapter retains local journal checkpoints.", []string{"type:fact", "substring-only-memory"})
+		tagMemory := compatibilityMemory(t, project,
+			"Cedar navigation archive stores ordinary bearings.", []string{"type:fact", "tagonlyneedle520"})
+		require.NotContains(t, strings.ToLower(tagMemory.Content), "tagonlyneedle520")
+		require.Contains(t, tagMemory.Tags, "tagonlyneedle520")
+		for _, testcase := range []struct {
+			name, query, control string
+			memory               *models.Memory
+		}{
+			{name: "content_substring", query: "LedgerBridge", control: "VaporLedgerBridge", memory: substringMemory},
+			{name: "tag_only", query: "tagonlyneedle520", control: "navigation", memory: tagMemory},
+		} {
+			fts, err := memoryStore.SearchFTS(t.Context(), project, testcase.query, 10)
+			require.NoError(t, err)
+			require.Empty(t, fts, "the compatibility case must not be rescued by content FTS")
+			for _, method := range []string{http.MethodGet, http.MethodPost} {
+				t.Run(testcase.name+"_"+method, func(t *testing.T) {
+					control := compatibilitySearch(t, project, method, testcase.control, 1)
+					require.Equal(t, []int64{testcase.memory.ID}, ids(control.Observations), "authenticated lexical owner control")
+					response := compatibilitySearch(t, project, method, testcase.query, 1)
+					require.Equal(t, []int64{testcase.memory.ID}, ids(response.Observations),
+						"existing literal content-substring and concept/tag matches must remain available without embeddings")
+				})
+			}
+		}
+		require.Equal(t, requestsBefore, embeddingRequests.Load(), "the unavailable embedder must not supply results")
+	})
+	t.Run("rest_review_literal_visibility_before_candidate_cap", func(t *testing.T) {
+		service.embeddingClient = nil
+		defer func() { service.embeddingClient = embedder }()
+		requestsBefore := embeddingRequests.Load()
+		project := compatibilityProject(t)
+		const query = "privatecrowdingtag520"
+		visible := compatibilityMemory(t, project, "Older authorized cedar archive.", []string{"type:fact", query})
+		require.NoError(t, store.DB.Model(&gormdb.Memory{}).Where("id = ?", visible.ID).
+			Update("created_at", time.Now().UTC().Add(-2*time.Hour)).Error)
+		hiddenIDs := make(map[int64]bool)
+		for i := range 64 {
+			memory, err := memoryStore.Create(t.Context(), &models.Memory{
+				Project: project, Content: "Newer private archive " + strconv.Itoa(i),
+				Tags: []string{"type:fact", query}, PrivacyScope: "project",
+				OwnerPrincipal: bob.Principal, OwnerPrincipalKind: "agent", AgentVisibility: "private",
+			})
+			require.NoError(t, err)
+			hiddenIDs[memory.ID] = true
+		}
+		require.Greater(t, len(hiddenIDs), 50, "invisible matches must exceed the hybrid text candidate cap")
+		stored, err := memoryStore.List(t.Context(), project, 100)
+		require.NoError(t, err)
+		require.Len(t, stored, 65)
+		require.Equal(t, visible.ID, stored[len(stored)-1].ID, "the visible match must be older than every private match")
+		fts, err := memoryStore.SearchFTS(t.Context(), project, query, 100)
+		require.NoError(t, err)
+		require.Empty(t, fts, "only tag/literal discovery can satisfy this request")
+		for _, method := range []string{http.MethodGet, http.MethodPost} {
+			t.Run(method, func(t *testing.T) {
+				response := compatibilitySearch(t, project, method, query, 1)
+				for _, observation := range response.Observations {
+					require.False(t, hiddenIDs[observation.ID], "a private row must never leak")
+				}
+				require.Equal(t, []int64{visible.ID}, ids(response.Observations),
+					"literal candidates must be authorized before invisible rows consume the candidate cap")
+			})
+		}
+		require.Equal(t, requestsBefore, embeddingRequests.Load(), "the unavailable embedder must not rescue literal discovery")
+	})
+	t.Run("rest_review_guidance_keeps_hybrid_memory_order", func(t *testing.T) {
+		project := compatibilityProject(t)
+		create := func(content string, embeddingVector []float32) *models.Memory {
+			t.Helper()
+			memory, err := memoryStore.Create(t.Context(), &models.Memory{
+				Project: project, Content: content, Tags: []string{"type:fact", "ordering-synthetic"}, PrivacyScope: "project",
+				OwnerPrincipal: alice.Principal, OwnerPrincipalKind: "agent", AgentVisibility: "private",
+			})
+			require.NoError(t, err)
+			require.NoError(t, embeddingStore.StoreChunks(t.Context(), []embedding.Chunk{{
+				MemoryID: memory.ID, Text: memory.Content, Model: embedder.Model(), Embedding: pgvector.NewVector(embeddingVector),
+			}}))
+			return memory
+		}
+		olderRelevant := create("Older atlas route archive.", vector(1, 0))
+		newerLessRelevant := create("Newer birch cluster guide.", vector(0.8, 0.6))
+		require.NoError(t, store.DB.Model(&gormdb.Memory{}).Where("id = ?", olderRelevant.ID).
+			Update("created_at", time.Now().UTC().Add(-2*time.Hour)).Error)
+		const query = "Claude Reset"
+		rule, err := rules.Create(t.Context(), &models.BehavioralRule{
+			Project: &project, Content: query + " ordering instruction.", Priority: 10,
+		})
+		require.NoError(t, err)
+		for _, method := range []string{http.MethodGet, http.MethodPost} {
+			t.Run(method, func(t *testing.T) {
+				response := compatibilitySearch(t, project, method, query, 10)
+				require.Len(t, response.Observations, 3)
+				require.Equal(t, string(models.ObsTypeGuidance), response.Observations[0].Type)
+				require.Equal(t, rule.ID, response.Observations[0].ID)
+				var memoryIDs []int64
+				for _, observation := range response.Observations {
+					if observation.Type == string(models.ObsTypeDiscovery) {
+						memoryIDs = append(memoryIDs, observation.ID)
+					}
+				}
+				require.Equal(t, []int64{olderRelevant.ID, newerLessRelevant.ID}, memoryIDs,
+					"matching guidance must not replace the hybrid relevance order with memory recency order")
+			})
+		}
+	})
+
 	t.Run("authenticated_owner_and_get_post_parity", func(t *testing.T) {
 		for _, method := range []string{http.MethodGet, http.MethodPost} {
 			result := search(t, aliceToken, method, "ClaudeReset", "", 1)
@@ -323,6 +627,28 @@ func TestContextSearchHybridPostgres(t *testing.T) {
 			result := search(t, aliceToken, http.MethodPost, "ownerworkstation", session, 1)
 			require.Equal(t, []int64{workstationPrivate.ID}, ids(result.Observations))
 		}
+	})
+	t.Run("rest_fts_degradation_preserves_visible_result", func(t *testing.T) {
+		service.embeddingClient = nil
+		defer func() { service.embeddingClient = embedder }()
+		result := search(t, aliceToken, http.MethodPost, "ClaudeReset", "unrelated-session", 1)
+		require.Equal(t, []int64{visible.ID}, ids(result.Observations))
+	})
+	t.Run("rest_invisible_tier0_falls_through_to_visible_vector_match", func(t *testing.T) {
+		result := search(t, aliceToken, http.MethodPost, hidden.Content, "unrelated-session", 1)
+		require.Equal(t, []int64{visible.ID}, ids(result.Observations))
+	})
+	t.Run("rest_guidance_filter_precedes_visible_limit", func(t *testing.T) {
+		before := memoryState(t)
+		var result issue520SearchResponse
+		call(t, aliceToken, http.MethodPost, "/api/context/search?limit=1", map[string]any{
+			"project": project, "query": "synthetic", "obs_type": "guidance",
+		}, http.StatusOK, &result)
+		require.True(t, before == memoryState(t), "guidance search must remain read-only")
+		require.Len(t, result.Observations, 1)
+		require.Equal(t, string(models.ObsTypeGuidance), result.Observations[0].Type)
+		require.Equal(t, globalRule.ID, result.Observations[0].ID)
+		require.Len(t, result.AlwaysInject, 2)
 	})
 	t.Run("missing_auth_and_noncanonical_project_are_rejected", func(t *testing.T) {
 		body := map[string]any{"project": project, "query": "ClaudeReset"}
@@ -442,5 +768,4 @@ func TestContextSearchHybridPostgres(t *testing.T) {
 		require.ElementsMatch(t, []int64{globalRule.ID, projectRule.ID}, ids(result.Guidance))
 		require.Empty(t, result.AlwaysInject, "guidance rules must not be repeated in always_inject")
 	})
-
 }
