@@ -1,0 +1,63 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+// Run only as a child of TestOpenClawRegisteredMemoryStoreRealRouter.
+const input = JSON.parse(fs.readFileSync(0, 'utf8'));
+const host = process.env.ENGRAM_OPENCLAW_HOST_FIXTURE;
+const compiled = process.env.ENGRAM_OPENCLAW_TEST_COMPILED;
+assert.ok(host && compiled, 'Provide the pinned official host and freshly compiled candidate adapter');
+assert.equal(JSON.parse(fs.readFileSync(path.join(host, 'package.json'), 'utf8')).version, '2026.10.7');
+const target = new URL(input.url);
+assert.equal(target.protocol, 'http:');
+assert.equal(target.hostname, '127.0.0.1');
+assert.notEqual(target.port, '', 'The Go httptest server must own an ephemeral loopback port');
+
+// Do not fake responses or rewrite routes. Every plugin HTTP request reaches Go.
+const networkFetch = globalThis.fetch;
+globalThis.fetch = (url, options) => {
+  assert.equal(new URL(String(url)).origin, target.origin, 'Only the isolated Go router may receive traffic');
+  return networkFetch(url, { ...options, redirect: 'error' });
+};
+
+const { t: createPluginRegistry } = await import(pathToFileURL(path.join(host, 'dist/registry-BwDJiK-z.mjs')));
+const { r: loadPluginManifest } = await import(pathToFileURL(path.join(host, 'dist/manifest-D9tOzTAf.mjs')));
+const { a: toToolDefinitions } = await import(pathToFileURL(path.join(host, 'dist/agent-tool-definition-adapter-CNc5GutA.mjs')));
+const imported = await import(pathToFileURL(path.join(compiled, 'index.js')));
+const plugin = imported.default.default ?? imported.default;
+const loaded = loadPluginManifest(fileURLToPath(new URL('../', import.meta.url)));
+assert.equal(loaded.ok, true, loaded.error);
+const manifest = loaded.manifest;
+const logger = Object.fromEntries(['info', 'warn', 'error', 'debug'].map(level => [level, message => console.error(`[host:${level}] ${message}`)]));
+const pluginConfig = {
+  url: input.url, token: input.token, project: input.project,
+  autoExtract: false, workspaceDir: process.env.HOME,
+};
+const config = { plugins: { enabled: true, allow: ['engram'], slots: { memory: 'engram' }, entries: { engram: { enabled: true, hooks: { allowConversationAccess: false }, config: pluginConfig } } } };
+const registration = createPluginRegistry({ runtime: { config: { current: () => config } }, logger, activateGlobalSideEffects: false, coreGatewayMethodNames: [] });
+const record = {
+  id: manifest.id, name: manifest.displayName, version: manifest.version, kind: manifest.kind,
+  source: path.join(compiled, 'index.js'), rootDir: path.dirname(compiled), origin: 'global',
+  enabled: true, explicitlyEnabled: true, status: 'loaded', configSchema: true,
+  contracts: manifest.contracts, memorySlotSelected: true, httpRoutes: 0, hookCount: 0,
+};
+for (const field of ['toolNames', 'hookNames', 'channelIds', 'cliBackendIds', 'providerIds', 'embeddingProviderIds', 'speechProviderIds', 'realtimeTranscriptionProviderIds', 'realtimeVoiceProviderIds', 'mediaUnderstandingProviderIds', 'transcriptSourceProviderIds', 'imageGenerationProviderIds', 'videoGenerationProviderIds', 'musicGenerationProviderIds', 'webFetchProviderIds', 'webSearchProviderIds', 'migrationProviderIds', 'agentHarnessIds', 'cliCommands', 'services', 'gatewayDiscoveryServiceIds', 'commands']) record[field] = [];
+registration.registry.plugins.push(record);
+plugin.register(registration.createApi(record, { config, pluginConfig, hookPolicy: { allowConversationAccess: false } }));
+
+// No service, watcher, CLI callback, gateway, provider or lifecycle hook starts.
+const ctx = { agentId: input.agentId, sessionId: input.sessionId, sessionKey: `agent:${input.agentId}:${input.sessionId}`, workspaceDir: process.env.HOME };
+const tools = (await Promise.all(registration.registry.tools.map(entry => entry.factory(ctx)))).flat().filter(Boolean);
+for (const name of ['memory_store', 'engram_remember']) {
+  assert.ok(manifest.contracts.tools.includes(name), `Manifest must expose ${name}`);
+  assert.ok(registration.registry.tools.some(entry => entry.names.includes(name)), `Official registrar must expose ${name}`);
+}
+const tool = tools.find(entry => entry.name === input.tool);
+assert.ok(tool, `Registered tool unavailable: ${input.tool}; ${JSON.stringify(registration.registry.diagnostics)}`);
+const [definition] = toToolDefinitions([tool]);
+const result = await definition.execute('synthetic-memory-store-call', input.params);
+assert.ok(Array.isArray(result.content), 'The official host adapter must return AgentToolResult');
+const text = result.content.filter(item => item.type === 'text').map(item => item.text).join('\n');
+console.log(JSON.stringify({ tool: input.tool, text }));
+assert.match(text, /^Stored:/, `Registered ${input.tool} did not persist the memory: ${text}`);
