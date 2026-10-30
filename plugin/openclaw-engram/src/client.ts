@@ -117,9 +117,20 @@ export interface MemoryWriteFailure {
 
 export type MemoryWriteResult = { ok: true; memory: StoredMemory } | MemoryWriteFailure;
 
-export interface BulkDeleteResponse {
- deleted: number;
-}
+const MemoryTransitionActionSchema = z.enum(['suppress', 'unsuppress', 'archive']);
+export type MemoryTransitionAction = z.infer<typeof MemoryTransitionActionSchema>;
+
+const MemoryTransitionReceiptSchema = z.object({
+ id: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+ action: MemoryTransitionActionSchema,
+ status: z.enum(['active', 'flagged', 'archived']),
+ version: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+ project: z.guid().refine(project => project !== '00000000-0000-0000-0000-000000000000' && project === project.toLowerCase()),
+});
+
+export type MemoryTransitionResult =
+ | { ok: true; memory: z.infer<typeof MemoryTransitionReceiptSchema> }
+ | MemoryWriteFailure;
 
 export interface ProjectResolutionSuccess {
  ok: true;
@@ -470,35 +481,34 @@ export class EngramRestClient {
   return results;
  }
 
- /**
-  * Bulk-delete (archive) observations by ID.
-  * POST /api/observations/bulk-status  { action: "archive", ids, reason }
-  *
-  * The server has no dedicated bulk-delete endpoint. Archiving is the closest
-  * equivalent — it removes observations from search results and context injection.
-  */
- /**
-  * Suppress an observation (reversible soft-hide from search results).
-  * POST /api/observations/bulk-status { action: "suppress", ids: [id] }
-  */
- async suppressObservation(id: number): Promise<boolean> {
-  const resp = await this.post<{ updated: number }>('/api/observations/bulk-status', {
-   action: 'suppress',
-   ids: [id],
+ /** One retained-memory transition, with no workspace resolution or automatic retry. */
+ async transitionMemory(id: number, action: MemoryTransitionAction, project?: string): Promise<MemoryTransitionResult> {
+  if (!Number.isSafeInteger(id) || id <= 0 || !MemoryTransitionActionSchema.safeParse(action).success) {
+   return { ok: false, outcome: 'not_sent', error: 'Invalid memory transition' };
+  }
+  let selector = '';
+  if (project !== undefined) {
+   try {
+    selector = `?project=${encodeURIComponent(validateProjectID(project))}`;
+   } catch (error) {
+    return { ok: false, outcome: 'not_sent', error: error instanceof Error ? error.message : String(error) };
+   }
+  }
+  let failure: MemoryWriteFailure = { ok: false, outcome: 'unknown', error: 'Memory transition returned no confirmation; outcome is unknown, do not blindly retry' };
+  const response = await this.request<unknown>('POST', `/api/memories/${id}/transition${selector}`, { action }, undefined, (result, status) => {
+   // This endpoint guarantees HTTP 409 means rollback with no mutation.
+   if (status === 409) {
+    failure = { ...result, outcome: 'rejected' };
+    return;
+   }
+   failure = result.outcome === 'unknown' ? { ...result, error: `${result.error}; outcome is unknown, inspect the memory before retrying` } : result;
   });
-  return resp != null && resp.updated > 0;
- }
-
- async bulkDelete(ids: string[]): Promise<BulkDeleteResponse | null> {
-  const numericIds = ids.map((id) => Number(id)).filter((n) => !Number.isNaN(n));
-  if (numericIds.length === 0) return { deleted: 0 };
-
-  const resp = await this.post<{ updated: number; failed: number }>(
-   '/api/observations/bulk-status',
-   { action: 'archive', ids: numericIds, reason: 'Deleted via memory_forget' },
-  );
-  if (!resp) return null;
-  return { deleted: resp.updated };
+  const parsed = MemoryTransitionReceiptSchema.safeParse(response);
+  const expectedStatus = action === 'suppress' ? 'flagged' : action === 'unsuppress' ? 'active' : 'archived';
+  if (!parsed.success || parsed.data.id !== id || parsed.data.action !== action || parsed.data.status !== expectedStatus || (project !== undefined && parsed.data.project !== project)) {
+   return response === null ? failure : { ok: false, outcome: 'unknown', error: 'Invalid memory transition confirmation; outcome is unknown, do not blindly retry' };
+  }
+  return { ok: true, memory: parsed.data };
  }
 
  /**
@@ -732,7 +742,7 @@ export class EngramRestClient {
   path: string,
   body: unknown,
   timeoutMs?: number,
-  onFailure?: (failure: MemoryWriteFailure) => void,
+  onFailure?: (failure: MemoryWriteFailure, status?: number) => void,
  ): Promise<T | null> {
   if (!this.availability.isAvailable()) {
    onFailure?.({ ok: false, outcome: 'not_sent', error: 'engram is currently unreachable — memory was not sent' });
@@ -745,6 +755,7 @@ export class EngramRestClient {
   const timer = setTimeout(() => controller.abort(), timeout);
   const startMs = Date.now();
   let outcome: MemoryWriteFailure['outcome'] = 'unknown';
+  let responseStatus: number | undefined;
 
   try {
    const headers: Record<string, string> = {
@@ -762,6 +773,7 @@ export class EngramRestClient {
     body: body !== undefined ? JSON.stringify(body) : undefined,
     signal: controller.signal,
    });
+   responseStatus = response.status;
    if (!response.ok && [400, 401, 403, 404, 405, 413, 415, 422].includes(response.status)) outcome = 'rejected';
 
    const text = await response.text();
@@ -779,7 +791,7 @@ export class EngramRestClient {
    const elapsedMs = Date.now() - startMs;
    this.availability.recordFailure();
    const msg = err instanceof Error ? err.message : String(err);
-   onFailure?.({ ok: false, outcome, error: msg });
+   onFailure?.({ ok: false, outcome, error: msg }, responseStatus);
    const isAbort = err instanceof Error && err.name === 'AbortError';
    console.error(
     `[engram] ${method} ${path} failed after ${elapsedMs}ms` +

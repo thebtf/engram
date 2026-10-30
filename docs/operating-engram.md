@@ -323,8 +323,8 @@ keycard; no-auth режим её не создаёт.
 MCP использует подтверждённый проект вызывающей сессии. Пакетное изменение
 проверяет все target ID до первой записи. Отказ не меняет память или связанный
 continuity slot. Привилегированные admin bulkops и rollback сохраняют отдельный
-контракт обслуживания. Это правило доступа не меняет существующие переходы
-состояния suppress/delete и не добавляет обратимый suppress к by-ID API.
+контракт обслуживания. Существующие `/{id}/suppress` и delete сохраняют прежний
+`DeleteTx`-контракт; обратимые переходы используют отдельный endpoint ниже.
 Write-lint Phase2 `supersede` и `merge_with` авторизуют и блокируют текущий target
 до первого эффекта. `supersede` фиксирует replacement, supersession, continuity
 slot и применимый warning audit в одной транзакции. `merge_with` добавляет текст
@@ -333,6 +333,35 @@ slot и применимый warning audit в одной транзакции. `
 Очистка `continuity_slot` сохраняет проверку stored authority, в том числе для
 истёкшего slot. Она блокирует memory до slot и повторно проверяет текущие
 target ID и authority; старый snapshot не разрешает очищать заменённый slot.
+
+### Переходы состояния существующей памяти по ID
+
+Аутентифицированный `POST /api/memories/{id}/transition` принимает JSON
+`{"action":"suppress"}`, `{"action":"unsuppress"}` или `{"action":"archive"}`.
+Допустимы только переходы active → flagged, flagged → active и active/flagged →
+archived. Каждый успешный переход увеличивает version на один и сохраняет строку,
+content, `deleted_at` и continuity slot. Недопустимый переход возвращает HTTP 409
+без изменения записи. Отсутствующая и недоступная запись получают одинаковый
+HTTP 404 без private content.
+
+Параметр query `project` необязателен. Без него сервер проверяет единственную
+действующую каноническую принадлежность ID. Явно переданный UUID только сужает
+выбор; пустое, некорректное или повторённое значение отклоняется, а не заменяется
+на global/self или другой проект. Read visibility и domain-manage повторно
+проверяются под блокировкой в той же транзакции, что status/version CAS.
+Browser selection сохраняет отдельную проверку expected version.
+
+В OpenClaw `engram_suppress` по умолчанию выполняет suppress. Для восстановления
+передай тому же tool `action: "unsuppress"`. `memory_forget` по умолчанию тоже
+выполняет suppress; `permanent: true` архивирует запись, но не стирает данные.
+Эти by-ID tools не требуют workspace resolution; заданный canonical `project`
+остаётся сужающим selector. Flagged/archived запись отсутствует в active list и
+`/api/context/search`, но её nondeleted detail остаётся доступным владельцу.
+
+При потере ответа или некорректной квитанции клиент сообщает unknown outcome.
+Сначала проверь фактическое состояние памяти; не повторяй изменение автоматически.
+Исходники и локальные fixture-проверки не доказывают поставку или установленный
+путь OpenClaw.
 
 
 ## Redaction Rules (EC-F5, EC-F9)

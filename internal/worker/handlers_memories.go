@@ -24,6 +24,7 @@ import (
 	dbgorm "github.com/thebtf/engram/internal/db/gorm"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/principalmemory"
+	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/pkg/models"
 )
@@ -820,6 +821,91 @@ func (s *Service) handleSuppressMemoryByID(w http.ResponseWriter, r *http.Reques
 		ID:     id,
 		Reason: reason,
 	})
+}
+
+type memoryTransitionRequest struct {
+	Action string `json:"action"`
+}
+
+type memoryTransitionResponse struct {
+	ID      int64  `json:"id"`
+	Action  string `json:"action"`
+	Status  string `json:"status"`
+	Version int    `json:"version"`
+	Project string `json:"project"`
+}
+
+// handleTransitionMemoryByID changes retained lifecycle status, not deletion or
+// browser selection state. An omitted project resolves the ID's live canonical
+// membership; an explicit project can only narrow that existing authority.
+func (s *Service) handleTransitionMemoryByID(w http.ResponseWriter, r *http.Request) {
+	if s.memoryStore == nil {
+		http.Error(w, "memory store not available", http.StatusServiceUnavailable)
+		return
+	}
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil || id <= 0 {
+		http.Error(w, "invalid memory id", http.StatusBadRequest)
+		return
+	}
+	query, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		http.Error(w, "invalid project selector", http.StatusBadRequest)
+		return
+	}
+	project := ""
+	if selectors, supplied := query["project"]; supplied {
+		if len(selectors) != 1 || !projectidentity.ValidProjectID(selectors[0]) {
+			http.Error(w, "invalid project selector", http.StatusBadRequest)
+			return
+		}
+		project = selectors[0]
+	}
+	var request memoryTransitionRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "invalid memory transition", http.StatusBadRequest)
+		return
+	}
+	if _, allowed := memoryCollectionNextStatus(request.Action, "active"); !allowed && request.Action != "unsuppress" {
+		http.Error(w, "invalid memory transition", http.StatusBadRequest)
+		return
+	}
+	ctx := r.Context()
+	access := gormdb.MemoryMutationAccess{
+		Project: project, Caller: memoryVisibilityCaller(ctx, ""), RequireCanonicalProject: true,
+	}
+	var response memoryTransitionResponse
+	err = s.memoryStore.WithAuthorizedMemories(ctx, []int64{id}, access, func(tx *gormlib.DB, memories map[int64]*models.Memory) error {
+		current := memories[id]
+		nextStatus, allowed := memoryCollectionNextStatus(request.Action, current.Status)
+		if !allowed {
+			return errMemorySelectionConflict
+		}
+		update := tx.WithContext(ctx).Model(&gormdb.Memory{}).
+			Where("id = ? AND deleted_at IS NULL AND version = ? AND status = ?", id, current.Version, current.Status).
+			Updates(map[string]any{"status": nextStatus, "updated_at": time.Now().UTC(), "version": gormlib.Expr("version + 1")})
+		if update.Error != nil {
+			return update.Error
+		}
+		if update.RowsAffected != 1 {
+			return errMemorySelectionConflict
+		}
+		response = memoryTransitionResponse{ID: id, Action: request.Action, Status: nextStatus, Version: current.Version + 1, Project: current.Project}
+		return nil
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, gormlib.ErrRecordNotFound):
+			http.Error(w, "memory not found", http.StatusNotFound)
+		case errors.Is(err, errMemorySelectionConflict):
+			http.Error(w, "memory transition conflicts with current state", http.StatusConflict)
+		default:
+			log.Error().Err(err).Msg("memory transition failed")
+			http.Error(w, "memory transition failed", http.StatusInternalServerError)
+		}
+		return
+	}
+	writeJSON(w, response)
 }
 
 // handleSuppressMemories godoc

@@ -200,7 +200,8 @@ Available to the agent during a session:
 | `memory_store` | Store a project-scoped memory (memory-core compatible parameters) |
 | `engram_decisions` | Retrieve past architectural decisions by query |
 | `memory_get` | Read a local workspace Markdown file, optionally store it, or search by query |
-| `memory_forget` | Delete an observation by ID |
+| `engram_suppress` | Suppress a retained memory by ID; `action: "unsuppress"` restores a flagged memory |
+| `memory_forget` | Suppress by default; `permanent: true` archives without erasing the memory |
 | `memory_migrate` | Import local `MEMORY.md` / `memory/**/*.md` files into engram |
 
 All explicit writers, file migration and file synchronization use the canonical
@@ -222,6 +223,29 @@ Writer tools preserve the host `sessionId` and fall back to its `sessionKey` whe
 the ID is absent. These are source-session identifiers, not authentication; a
 project UUID is never substituted. Commands, CLI and the watcher have source
 labels but do not invent host session metadata.
+
+Lifecycle tools use authenticated `POST /api/memories/{id}/transition` with
+`action: "suppress"`, `"unsuppress"` or `"archive"`. Suppress changes active to
+flagged; unsuppress changes flagged to active; archive accepts active or flagged.
+Each successful transition increments the version once and preserves the row,
+content and `deleted_at`. Flagged/archived memories leave active lists and context
+search; nondeleted owner detail reads remain available. Archive is not data erasure
+and cannot be undone through these tools.
+
+These by-ID calls do not require workspace resolution. A configured canonical
+`project` UUID is sent as an optional narrowing selector, never as an access grant.
+When absent, the server resolves the memory's unique live canonical membership
+and applies current caller visibility and domain-manage policy. An explicitly
+empty, invalid, global/self or different-project selector does not fall back to
+another project. Revoked keys are rejected by the normal bearer middleware.
+The legacy `/{id}/suppress` delete path and browser selection/version protocol
+are unchanged.
+
+Success requires a matching action, memory ID, resulting status, version and
+canonical project in the server receipt. A lost or invalid acknowledgement is
+reported as an unknown outcome, not success or proof of failure. Inspect the
+memory before deciding whether another action is appropriate; no automatic retry
+or retired observation endpoint fallback is used.
 
 File migration and synchronization retain `.engram-migrated.json` file hashes and
 confirmed per-chunk IDs. Before each POST, an atomic checkpoint records a `pending`

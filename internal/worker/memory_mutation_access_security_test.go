@@ -70,6 +70,9 @@ func (c memoryMutationSQLiteConn) Prepare(query string) (driver.Stmt, error) {
 	query = memoryMutationSessionSQL.ReplaceAllString(query, `memory_mutation_has_session(m.source_sessions, $1)`)
 	query = strings.ReplaceAll(query, "btrim(", "memory_mutation_btrim(")
 	query = strings.ReplaceAll(query, "now()", "memory_mutation_now()")
+	// Current-validity readers use uppercase NOW(); preserve the same clock
+	// semantics as the lowercase PostgreSQL function already adapted above.
+	query = strings.ReplaceAll(query, "NOW()", "memory_mutation_now()")
 	return c.Conn.Prepare(query)
 }
 
