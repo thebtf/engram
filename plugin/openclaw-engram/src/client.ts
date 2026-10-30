@@ -1,11 +1,12 @@
 /**
  * EngramRestClient — typed REST client for the engram HTTP API.
  *
- * All methods return null on error and update the availability tracker.
+ * Read methods return null on error; memory writes return explicit per-input outcomes.
  * No method ever throws to its caller — engram failures must not block agent operation.
  */
 
 import { randomUUID } from 'node:crypto';
+import { z } from 'zod';
 import { AvailabilityTracker } from './availability.js';
 import type { PluginConfig } from './config.js';
 import { resolveIdentity, validateProjectID, type ProjectIdentity } from './identity.js';
@@ -87,23 +88,34 @@ export interface SelfCheckResponse {
  components: Record<string, { status: string; message?: string }>;
 }
 
-export interface BulkObservationInput {
+export interface MemoryInput {
  title: string;
  content: string;
  type: string;
  project: string;
- scope?: string;
+ scope?: 'project' | 'global' | 'agent';
  tags?: string[];
 }
 
-/** @deprecated Use BulkObservationInput instead. */
-export type BulkImportRequest = BulkObservationInput;
-
-export interface BulkImportResponse {
- imported: number;
- skipped_duplicates: number;
- errors?: string[];
+export interface MemoryAttribution {
+ sourceAgent?: string;
+ sessionId?: string;
 }
+
+const StoredMemorySchema = z.object({
+ id: z.number().int().positive(),
+ project: z.string(),
+ content: z.string(),
+});
+
+export type StoredMemory = z.infer<typeof StoredMemorySchema>;
+export interface MemoryWriteFailure {
+ ok: false;
+ outcome: 'not_sent' | 'rejected' | 'unknown';
+ error: string;
+}
+
+export type MemoryWriteResult = { ok: true; memory: StoredMemory } | MemoryWriteFailure;
 
 export interface BulkDeleteResponse {
  deleted: number;
@@ -414,38 +426,48 @@ export class EngramRestClient {
   return this.get<SelfCheckResponse>('/api/selfcheck', 5000);
  }
 
- /**
-  * Bulk-import observations.
-  * POST /api/observations/bulk-import
-  *
-  * Server expects: { project, session_id?, observations: [{ type, title, narrative, scope, concepts }] }
-  * Client uses:    { content → narrative, tags → concepts }
-  *
-  * Passing sessionId reuses the caller's existing session instead of creating a new
-  * synthetic one per call, preventing phantom session proliferation.
-  */
- async bulkImport(
-  observations: BulkObservationInput[],
-  sessionId?: string,
- ): Promise<BulkImportResponse | null> {
-  if (observations.length === 0) return { imported: 0, skipped_duplicates: 0 };
-
-  // All observations in a batch must share the same project.
-  const project = observations[0].project;
-
-  const mapped = observations.map((o) => ({
-   type: o.type,
-   title: o.title,
-   narrative: o.content,
-   scope: o.scope,
-   concepts: o.tags,
-  }));
-
-  return this.post<BulkImportResponse>('/api/observations/bulk-import', {
-   project,
-   ...(sessionId ? { session_id: sessionId } : {}),
-   observations: mapped,
-  });
+ /** Each input produces one confirmed memory or an explicit failure; no retry or deduplication is implied. */
+ async storeMemories(
+  memories: MemoryInput[],
+  attribution: MemoryAttribution = {},
+ ): Promise<MemoryWriteResult[]> {
+  const results: MemoryWriteResult[] = [];
+  for (const memory of memories) {
+   let project: string;
+   try {
+    project = validateProjectID(memory.project);
+   } catch (error) {
+    results.push({ ok: false, outcome: 'not_sent', error: error instanceof Error ? error.message : String(error) });
+    continue;
+   }
+   const scope = memory.scope ?? 'project';
+   if (!['project', 'global', 'agent'].includes(scope)) {
+    results.push({ ok: false, outcome: 'not_sent', error: 'Unsupported memory scope' });
+    continue;
+   }
+   // The canonical handler has no observation title/type columns. Preserve
+   // them as ordinary content and a tag, not as native classification fields.
+   const body = {
+    project,
+    content: memory.title === memory.content ? memory.content : `${memory.title}\n\n${memory.content}`,
+    tags: [...(memory.tags ?? []), `type:${memory.type}`],
+    privacy_scope: scope === 'global' ? 'global' : 'project',
+    ...(scope === 'agent' ? { agent_visibility: 'private' } : {}),
+    ...(attribution.sourceAgent ? { source_agent: attribution.sourceAgent } : {}),
+    ...(attribution.sessionId ? { session_id: attribution.sessionId } : {}),
+   };
+   let failure: MemoryWriteFailure = { ok: false, outcome: 'unknown', error: 'Memory write returned no confirmation; outcome is unknown, do not blindly retry' };
+   const response = await this.request<unknown>('POST', '/api/memories', body, undefined, result => {
+    failure = result.outcome === 'unknown' ? { ...result, error: `${result.error}; inspect the outcome before retrying` } : result;
+   });
+   const parsed = StoredMemorySchema.safeParse(response);
+   if (!parsed.success || parsed.data.project !== project || parsed.data.content !== body.content) {
+    results.push(response === null ? failure : { ok: false, outcome: 'unknown', error: 'Invalid memory write confirmation; outcome is unknown, do not blindly retry' });
+   } else {
+    results.push({ ok: true, memory: parsed.data });
+   }
+  }
+  return results;
  }
 
  /**
@@ -710,14 +732,19 @@ export class EngramRestClient {
   path: string,
   body: unknown,
   timeoutMs?: number,
+  onFailure?: (failure: MemoryWriteFailure) => void,
  ): Promise<T | null> {
-  if (!this.availability.isAvailable()) return null;
+  if (!this.availability.isAvailable()) {
+   onFailure?.({ ok: false, outcome: 'not_sent', error: 'engram is currently unreachable — memory was not sent' });
+   return null;
+  }
 
   const url = this.baseUrl + path;
   const timeout = timeoutMs ?? this.defaultTimeoutMs;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   const startMs = Date.now();
+  let outcome: MemoryWriteFailure['outcome'] = 'unknown';
 
   try {
    const headers: Record<string, string> = {
@@ -735,6 +762,7 @@ export class EngramRestClient {
     body: body !== undefined ? JSON.stringify(body) : undefined,
     signal: controller.signal,
    });
+   if (!response.ok && [400, 401, 403, 404, 405, 413, 415, 422].includes(response.status)) outcome = 'rejected';
 
    const text = await response.text();
    const elapsedMs = Date.now() - startMs;
@@ -751,6 +779,7 @@ export class EngramRestClient {
    const elapsedMs = Date.now() - startMs;
    this.availability.recordFailure();
    const msg = err instanceof Error ? err.message : String(err);
+   onFailure?.({ ok: false, outcome, error: msg });
    const isAbort = err instanceof Error && err.name === 'AbortError';
    console.error(
     `[engram] ${method} ${path} failed after ${elapsedMs}ms` +

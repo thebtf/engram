@@ -60,4 +60,9 @@ const result = await definition.execute('synthetic-memory-store-call', input.par
 assert.ok(Array.isArray(result.content), 'The official host adapter must return AgentToolResult');
 const text = result.content.filter(item => item.type === 'text').map(item => item.text).join('\n');
 console.log(JSON.stringify({ tool: input.tool, text }));
-assert.match(text, /^Stored:/, `Registered ${input.tool} did not persist the memory: ${text}`);
+if (input.expectRefusal) {
+  assert.match(text, /^Failed to store memory:/, 'Agent-private write without a principal must refuse');
+  assert.doesNotMatch(text, /^Stored:/);
+} else {
+  assert.match(text, /^Stored:/, `Registered ${input.tool} did not persist the memory: ${text}`);
+}

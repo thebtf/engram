@@ -23,9 +23,9 @@ function createClient() {
         calls.push({ method: 'resolveWorkspaceProject', agentId, workspaceDir });
         return { projectId: project };
       },
-      async bulkImport(observations, sessionId) {
-        calls.push({ method: 'bulkImport', observations, sessionId });
-        return { imported: 1, skipped_duplicates: 0 };
+      async storeMemories(memories, attribution) {
+        calls.push({ method: 'storeMemories', memories, attribution });
+        return memories.map(memory => ({ ok: true, memory: { id: 1, project: memory.project, content: memory.content } }));
       },
       async createIssue(issue) {
         calls.push({ method: 'createIssue', issue });
@@ -43,9 +43,9 @@ const cases = [
     params: { title: 'Collection title', content: 'Collection content' },
     success: /^Stored:/,
     expected: (tags) => ({
-      method: 'bulkImport',
-      observations: [{ title: 'Collection title', content: 'Collection content', type: 'change', scope: 'project', project, tags }],
-      sessionId: ctx.sessionId,
+      method: 'storeMemories',
+      memories: [{ title: 'Collection title', content: 'Collection content', type: 'change', scope: 'project', project, tags }],
+      attribution: { sourceAgent: ctx.agentId, sessionId: ctx.sessionId },
     }),
   },
   {
@@ -55,9 +55,9 @@ const cases = [
     params: { text: 'Collection content' },
     success: /^Stored:/,
     expected: (tags) => ({
-      method: 'bulkImport',
-      observations: [{ title: 'Collection content', content: 'Collection content', type: 'change', scope: 'project', project, tags }],
-      sessionId: ctx.sessionId,
+      method: 'storeMemories',
+      memories: [{ title: 'Collection content', content: 'Collection content', type: 'change', scope: 'project', project, tags }],
+      attribution: { sourceAgent: ctx.agentId, sessionId: ctx.sessionId },
     }),
   },
   {

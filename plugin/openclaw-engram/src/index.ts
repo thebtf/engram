@@ -221,17 +221,17 @@ const plugin: OpenClawPluginDefinition = {
       console.error(`Project identity unavailable: ${registration.error.code} (${registration.error.upgradeAction})`);
       return;
      }
-     const response = await client.bulkImport([{
+     const [result] = await client.storeMemories([{
       title,
       content: textStr.slice(0, 900),
       type: 'change',
       project: registration.canonicalProject,
       scope: 'project',
-     }]);
-     if (response && response.imported > 0) {
+     }], { sourceAgent: 'openclaw-cli' });
+     if (result?.ok) {
       console.log(`Stored: "${title}"`);
      } else {
-      console.log('Failed to store memory.');
+      console.error(`Failed to store memory: ${result?.error ?? 'No memory write confirmation'}`);
      }
     });
 
@@ -245,7 +245,7 @@ const plugin: OpenClawPluginDefinition = {
     .command('migrate')
     .description('Import local memory files into engram')
     .option('--dry-run', 'Preview without importing')
-    .option('--force', 'Re-import already migrated files')
+    .option('--force', 'Deliberately re-import all chunks; unknown earlier writes may already exist and duplicates are possible')
     .action(async (...args: unknown[]) => {
      const opts = (args[args.length - 1] ?? {}) as Record<string, unknown>;
      const dryRun = Boolean(opts['dryRun'] ?? opts['dry-run']);

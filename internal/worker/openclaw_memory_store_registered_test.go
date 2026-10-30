@@ -79,6 +79,7 @@ func TestOpenClawRegisteredMemoryStoreRealRouter(t *testing.T) {
 	tokenA := newToken(workstation, principal)
 	tokenSameAgent := newToken("synthetic-openclaw-card-a-second", principal)
 	tokenB := newToken("synthetic-openclaw-card-b", "agent/synthetic-openclaw-agent-b")
+	tokenNoPrincipal := newToken("synthetic-openclaw-card-no-principal", "")
 	tokenAuth, err := NewTokenAuth(rand.Text())
 	require.NoError(t, err)
 	require.True(t, tokenAuth.IsEnabled())
@@ -164,23 +165,42 @@ func TestOpenClawRegisteredMemoryStoreRealRouter(t *testing.T) {
 		content string
 		params  map[string]any
 		private bool
+		refuse  bool
 	}{
 		{
 			tool: "memory_store", content: "Synthetic project memory from registered memory_store",
 			params: map[string]any{"text": "Synthetic project memory from registered memory_store", "title": "Synthetic project note", "category": "decision", "tags": []string{"registered-store"}},
 		},
 		{
+			tool: "memory_store", content: "Synthetic short memory without a supplied title",
+			params: map[string]any{"text": "Synthetic short memory without a supplied title", "category": "decision", "tags": []string{"registered-store"}},
+		},
+		{
 			tool: "engram_remember", content: "Synthetic agent-private memory from registered engram_remember", private: true,
 			params: map[string]any{"content": "Synthetic agent-private memory from registered engram_remember", "title": "Synthetic private note", "type": "decision", "scope": "agent", "tags": []string{"registered-store"}},
 		},
+		{
+			tool: "engram_remember", content: "Synthetic private memory without authenticated principal", private: true, refuse: true,
+			params: map[string]any{"content": "Synthetic private memory without authenticated principal", "title": "Synthetic refused note", "type": "decision", "scope": "agent", "tags": []string{"registered-store"}},
+		},
 	} {
-		t.Run(scenario.tool, func(t *testing.T) {
+		name := scenario.tool
+		if scenario.refuse {
+			name += "_without_principal"
+		}
+		t.Run(name, func(t *testing.T) {
+			var before int64
+			require.NoError(t, db.Model(&gormdb.Memory{}).Count(&before).Error)
+			callerToken := tokenA
+			if scenario.refuse {
+				callerToken = tokenNoPrincipal
+			}
 			home, err := os.MkdirTemp(filepath.Dir(compiled), ".registered-memory-store-home-")
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, os.RemoveAll(home)) })
 			input, err := json.Marshal(map[string]any{
-				"url": server.URL, "token": tokenA, "project": project, "agentId": agentID,
-				"sessionId": sessionID, "tool": scenario.tool, "params": scenario.params,
+				"url": server.URL, "token": callerToken, "project": project, "agentId": agentID,
+				"sessionId": sessionID, "tool": scenario.tool, "params": scenario.params, "expectRefusal": scenario.refuse,
 			})
 			require.NoError(t, err)
 			ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
@@ -211,6 +231,15 @@ func TestOpenClawRegisteredMemoryStoreRealRouter(t *testing.T) {
 			requests := strings.Join(trace[traceStart:], "\n")
 			traceMu.Unlock()
 			require.NoError(t, runErr, "registered tool result:\n%s\nreal Go router requests:\n%s", output, requests)
+			if scenario.refuse {
+				var after int64
+				require.NoError(t, db.Model(&gormdb.Memory{}).Count(&after).Error)
+				require.Equal(t, before, after, "refused agent-private writes must not persist any row")
+				require.Contains(t, requests, "POST /api/memories -> HTTP 400", "the actual handler must reject the missing principal")
+				body := request(t, http.MethodGet, "/api/memories?project="+project, tokenB, nil, http.StatusOK, nil)
+				require.NotContains(t, body, scenario.content)
+				return
+			}
 
 			var rows []gormdb.Memory
 			require.NoError(t, db.Where("project = ? AND content LIKE ?", project, "%"+scenario.content+"%").Find(&rows).Error)
@@ -218,6 +247,12 @@ func TestOpenClawRegisteredMemoryStoreRealRouter(t *testing.T) {
 			memory := rows[0]
 			require.Equal(t, "active", memory.Status)
 			require.Contains(t, []string(memory.Tags), "registered-store")
+			require.Contains(t, []string(memory.Tags), "type:decision")
+			if title, supplied := scenario.params["title"]; supplied {
+				require.Contains(t, memory.Content, title)
+			} else {
+				require.Equal(t, scenario.content, memory.Content, "an automatic title must not duplicate the body")
+			}
 			require.Equal(t, principal, memory.OwnerPrincipal, "effective caller must own the memory")
 			require.Equal(t, "agent", memory.OwnerPrincipalKind)
 			require.Equal(t, workstation, memory.SourceWorkstationID, "keycard attribution must survive the registered tool")
