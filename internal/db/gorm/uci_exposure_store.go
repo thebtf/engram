@@ -83,8 +83,9 @@ func (s *UCIExposureStore) AppendExposure(ctx context.Context, record uci.Exposu
 	}
 }
 
-// AppendCompletion reauthorizes the live keycard and exact parent context in
-// the same transaction as every idempotency lookup and child append.
+// AppendCompletion rejects inaccessible parents without row locks, then
+// reauthorizes the live keycard and exact context under the write transaction's
+// locks before every idempotency lookup and child append.
 func (s *UCIExposureStore) AppendCompletion(ctx context.Context, evidence uci.CompletionEvidence) (uci.CompletionEvidence, error) {
 	if err := s.requireDB("append completion"); err != nil {
 		return uci.CompletionEvidence{}, err
@@ -95,6 +96,9 @@ func (s *UCIExposureStore) AppendCompletion(ctx context.Context, evidence uci.Co
 	caller, ok := uci.CompletionCallerFromContext(ctx)
 	if !ok || validateUCIUUID("keycard_id", caller.KeycardID) != nil || validateUCIContextOwner(caller.AuthRealm, caller.Principal) != nil {
 		return uci.CompletionEvidence{}, uci.ErrCompletionPermissionDenied
+	}
+	if err := s.preauthorizeCompletionParent(ctx, caller, evidence.ExposureRef); err != nil {
+		return uci.CompletionEvidence{}, err
 	}
 
 	var stored uci.CompletionEvidence
@@ -195,6 +199,46 @@ func (s *UCIExposureStore) AppendCompletion(ctx context.Context, evidence uci.Co
 		return uci.CompletionEvidence{}, err
 	}
 	return stored, nil
+}
+
+// Plain MVCC reads prevent foreign parent/context locks from becoming an
+// existence oracle. Success is not a grant: AppendCompletion rechecks all
+// authority and state after acquiring the existing transaction locks.
+func (s *UCIExposureStore) preauthorizeCompletionParent(ctx context.Context, caller uci.CompletionCaller, exposureRef string) error {
+	var parent struct {
+		AuthRealm  string
+		SourceID   string
+		CheckoutID string
+		ViewID     string
+		ProfileID  string
+		Generation int64
+	}
+	if err := s.db.WithContext(ctx).Table("uci_exposures AS exposure").
+		Select("exposure.auth_realm, exposure.source_id, exposure.checkout_id, exposure.view_id, view_row.profile_id, view_row.generation").
+		Joins("JOIN ci_views AS view_row ON view_row.view_id = exposure.view_id AND view_row.source_id = exposure.source_id AND view_row.checkout_id = exposure.checkout_id").
+		Where("exposure.exposure_ref = ?", exposureRef).Take(&parent).Error; err != nil {
+		return uciCompletionLookupError(err)
+	}
+	if parent.AuthRealm != caller.AuthRealm {
+		return uci.ErrCompletionPermissionDenied
+	}
+	contexts := NewUCIContextStore(s.db)
+	if err := NewUCIContextAuthorizer(contexts).AuthorizeContext(ctx, uci.ContextAccess{
+		AuthRealm: caller.AuthRealm, Principal: caller.Principal, SourceID: parent.SourceID, CheckoutID: parent.CheckoutID,
+	}); err != nil {
+		return uciCompletionLookupError(err)
+	}
+	record, err := contexts.LoadContext(ctx, uci.ContextRef{
+		SourceID: parent.SourceID, CheckoutID: parent.CheckoutID, ViewID: parent.ViewID,
+		AnalysisProfileID: parent.ProfileID, Generation: parent.Generation,
+	})
+	if err != nil {
+		return uciCompletionLookupError(err)
+	}
+	if record.AuthRealm != caller.AuthRealm {
+		return uci.ErrCompletionPermissionDenied
+	}
+	return nil
 }
 
 func recordUCICompletionAcceptance(ctx context.Context, tx *gorm.DB, actor, exposureRef string, child UCICompletionEvidence) error {
