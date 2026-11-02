@@ -135,6 +135,8 @@ func ValidateRepositoryLocator(locator string) error {
 // ToolRequiresProject exempts only recognized project-free operations, not whole tools.
 func ToolRequiresProject(name string, arguments []byte) bool {
 	switch name {
+	case "codebase_task_context":
+		return true
 	case "codebase_context":
 		var values struct {
 			Action string `json:"action"`
@@ -266,6 +268,9 @@ func ResolveLogicalProject(ctx context.Context, cwd string, bootstrap func(conte
 }
 
 func logicalProjectDirectories(ctx context.Context, selected string) (string, string, error) {
+	if root, common, ok := nativeGitDirectoriesFor(ctx, selected); ok {
+		return root, common, nil
+	}
 	root, common := selected, ""
 	output, gitErr := anchorGitCommandV3(ctx, selected, "rev-parse", "--path-format=absolute", "--git-common-dir", "--is-bare-repository").Output()
 	if err := ctx.Err(); err != nil {

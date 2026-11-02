@@ -5,15 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"net/url"
-	"os"
-	"path/filepath"
-	"runtime"
-	"strings"
 
 	"github.com/thebtf/engram/internal/auditcontext"
 	"github.com/thebtf/engram/internal/module"
-	"github.com/thebtf/engram/internal/uci"
+	"github.com/thebtf/engram/internal/projectidentity"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
 )
 
@@ -104,54 +99,17 @@ func nativeCodebaseRegistrationMismatch() error {
 }
 
 func nativeCodebaseGitLocator(ctx context.Context, selected string) (string, error) {
-	unavailable := func() (string, error) {
-		if err := ctx.Err(); err != nil {
-			return "", err
-		}
-		return "", &module.ModuleError{Code: "SOURCE_UNAVAILABLE", Message: "the current local Git worktree is unavailable"}
-	}
-	if !validUCIClientIdentifier(selected, 4096) || !filepath.IsAbs(selected) {
-		return unavailable()
-	}
-	selected, err := filepath.EvalSymlinks(filepath.Clean(selected))
+	_, locator, err := nativeCodebaseGitContext(ctx, selected)
+	return locator, err
+}
+
+func nativeCodebaseGitContext(ctx context.Context, selected string) (context.Context, string, error) {
+	discovered, locator, err := projectidentity.NativeGitContext(ctx, selected)
 	if err != nil {
-		return unavailable()
-	}
-	// No inherited Git variables may redirect discovery to another worktree.
-	environment := make([]string, 0, 9)
-	for _, entry := range os.Environ() {
-		name, _, _ := strings.Cut(entry, "=")
-		switch strings.ToUpper(name) {
-		case "PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP":
-			environment = append(environment, entry)
+		if ctx.Err() != nil {
+			return nil, "", ctx.Err()
 		}
+		return nil, "", &module.ModuleError{Code: "SOURCE_UNAVAILABLE", Message: "the current local Git worktree is unavailable"}
 	}
-	environment = append(environment, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0")
-	result, err := (uci.ExecGitRunner{}).Run(ctx, uci.GitInvocation{
-		Args: []string{"-C", selected, "-c", "core.fsmonitor=false", gitRevParse, gitShowTopLevel},
-		Env:  environment,
-	})
-	if err != nil || result.ExitCode != 0 {
-		return unavailable()
-	}
-	root := strings.TrimSuffix(strings.TrimSuffix(string(result.Stdout), "\n"), "\r")
-	if !validUCIClientIdentifier(root, 4096) || !filepath.IsAbs(root) {
-		return unavailable()
-	}
-	root, err = filepath.EvalSymlinks(filepath.Clean(root))
-	if err != nil {
-		return unavailable()
-	}
-	relative, err := filepath.Rel(root, selected)
-	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
-		return unavailable()
-	}
-	path := filepath.ToSlash(root)
-	if strings.HasPrefix(path, "//") {
-		return unavailable()
-	}
-	if runtime.GOOS == "windows" {
-		path = "/" + path
-	}
-	return (&url.URL{Scheme: "file", Path: path}).String(), nil
+	return discovered, locator, nil
 }

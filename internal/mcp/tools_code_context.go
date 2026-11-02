@@ -62,6 +62,7 @@ type UCIContextApplication struct {
 	resolver         *uci.ContextResolver
 	directory        uci.ContextDirectory
 	registerLocalGit LocalGitRegistration
+	lookupNativeGit  NativeGitLookup
 }
 
 // NewUCIContextApplication creates the production MCP context application.

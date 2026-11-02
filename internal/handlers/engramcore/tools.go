@@ -95,6 +95,9 @@ func (m *Module) ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]mo
 //	    sentinel and wraps with isError:true. End result is byte-identical
 //	    to v4.2.0 both in content and in the isError boolean.
 func (m *Module) ProxyHandleTool(ctx context.Context, p muxcore.ProjectContext, name string, args json.RawMessage) (json.RawMessage, error) {
+	if name == "codebase_task_context" {
+		return m.proxyNativeTaskContext(ctx, p, args)
+	}
 	sessionID, uciTool, err := m.proxyToolSession(ctx, p, name)
 	if err != nil {
 		return nil, err
@@ -185,7 +188,7 @@ func projectIdentityRefusal(err error, cwd string) *module.ModuleError {
 
 func isUCIProxyTool(name string) bool {
 	switch name {
-	case "codebase_context", "codebase_index", "codebase_status", "codebase_search", "codebase_read", "codebase_graph":
+	case "codebase_context", "codebase_index", "codebase_status", "codebase_search", "codebase_read", "codebase_graph", "codebase_task_context":
 		return true
 	default:
 		return false

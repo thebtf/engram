@@ -1188,6 +1188,20 @@ func configureMuxcoreInstallation() error {
 }
 
 func main() {
+	started := time.Now()
+	if len(os.Args) > 1 && os.Args[1] == "task-context" {
+		if len(os.Args) != 3 || os.Args[2] != "--json" {
+			fmt.Fprintln(os.Stderr, "usage: engram task-context --json")
+			os.Exit(1)
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		if err := runTaskContext(ctx, started, os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "[engram] task context output unavailable")
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && (os.Args[1] == "--help" || os.Args[1] == "-h" || os.Args[1] == "--version" || os.Args[1] == "-v") {
 		fmt.Printf("engram %s — stdio MCP daemon for Claude Code\n", daemonVersion)
 		fmt.Println()

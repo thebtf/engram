@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
@@ -22,6 +23,7 @@ import (
 	"github.com/thebtf/engram/internal/intervention"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/projectidentity"
+	"github.com/thebtf/engram/internal/taskcontext"
 	"github.com/thebtf/engram/internal/worker/projectevents"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 )
@@ -225,6 +227,21 @@ func (s *Server) CallTool(ctx context.Context, req *pb.CallToolRequest) (*pb.Cal
 	if err := rejectHAPCredentialWithoutProject(ctx); err != nil {
 		return nil, err
 	}
+	if req.GetToolName() == "codebase_task_context" {
+		var request taskcontext.Request
+		if taskcontext.Decode(bytes.NewReader(req.ArgumentsJson), &request) != nil || request.Validate() != nil {
+			return nil, status.Error(codes.InvalidArgument, "invalid task context request")
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = request.Context(ctx, time.Now())
+		defer cancel()
+		incoming, _ := metadata.FromIncomingContext(ctx)
+		locators := incoming.Get(taskcontext.LocatorMetadataKey)
+		if len(locators) != 1 || locators[0] == "" || len(locators[0]) > 4096 {
+			return nil, status.Error(codes.FailedPrecondition, "native task context locator is required")
+		}
+		ctx = taskcontext.WithNativeLocator(ctx, locators[0])
+	}
 	requiresCorrelation := requiresUCIRequestCorrelation(req)
 	var metadataValues []string
 	if incoming, found := metadata.FromIncomingContext(ctx); found {
@@ -299,6 +316,9 @@ func (s *Server) CallTool(ctx context.Context, req *pb.CallToolRequest) (*pb.Cal
 }
 
 func requiresUCIRequestCorrelation(req *pb.CallToolRequest) bool {
+	if req != nil && req.GetToolName() == "codebase_task_context" {
+		return true
+	}
 	if req == nil || req.GetProject() != "" {
 		return false
 	}
