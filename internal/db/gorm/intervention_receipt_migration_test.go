@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -24,6 +23,8 @@ const (
 	interventionReceiptMigrationID                 = "168_task_memory_intervention_receipts"
 	interventionReceiptContextReferenceMigrationID = "170_task_memory_context_reference_receipts"
 )
+
+const migratedTestAdminApplicationName = "engram_fixture_admin"
 
 // openInterventionReceiptMigrationTestDB creates a schema that is private to one
 // test. Immutable receipt rows are never deleted individually: the test pool is
@@ -78,22 +79,31 @@ func waitForMigratedTestSessions(ctx context.Context, adminDB *gormlib.DB, fixtu
 func openMigratedTestDBInSchema(t *testing.T, dsn, schema, applicationName string) *gormlib.DB {
 	t.Helper()
 
-	adminDB, err := gormlib.Open(postgres.Open(dsn), &gormlib.Config{Logger: logger.Default.LogMode(logger.Silent)})
-	require.NoError(t, err, "open dedicated admin connection")
-	adminSQL, err := adminDB.DB()
-	require.NoError(t, err, "resolve dedicated admin pool")
+	adminConfig, err := pgx.ParseConfig(dsn)
+	require.NoError(t, err, "parse test database DSN")
+	if adminConfig.RuntimeParams == nil {
+		adminConfig.RuntimeParams = make(map[string]string)
+	}
+	adminApplicationName := scopedTestApplicationName(migratedTestAdminApplicationName, schema)
+	adminConfig.RuntimeParams["application_name"] = adminApplicationName
+	adminSQL := stdlib.OpenDB(*adminConfig)
 	adminSQL.SetMaxOpenConns(2)
 	adminSQL.SetMaxIdleConns(1)
+	t.Cleanup(func() {
+		if err := adminSQL.Close(); err != nil {
+			t.Errorf("close receipt admin pool: %v", err)
+		}
+	})
+	adminDB, err := gormlib.Open(postgres.New(postgres.Config{Conn: adminSQL}), &gormlib.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	require.NoError(t, err, "open dedicated admin connection")
+	var actualAdminApplicationName string
+	require.NoError(t, adminDB.Raw(`SELECT current_setting('application_name')`).Scan(&actualAdminApplicationName).Error)
+	require.Equal(t, adminApplicationName, actualAdminApplicationName, "the driver must apply the exact fixture admin identity")
 	require.NoError(t, adminDB.Exec(`CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public`).Error, "install pgvector in stable public schema")
 
 	require.NoError(t, adminDB.Exec("CREATE SCHEMA "+schema).Error, "create isolated receipt schema")
 	drained := true
 	t.Cleanup(func() {
-		defer func() {
-			if err := adminSQL.Close(); err != nil {
-				t.Errorf("close receipt admin pool: %v", err)
-			}
-		}()
 		if !drained {
 			t.Errorf("retain isolated receipt schema %s: fixture sessions did not drain", schema)
 			return
@@ -103,11 +113,7 @@ func openMigratedTestDBInSchema(t *testing.T, dsn, schema, applicationName strin
 		}
 	})
 
-	config, err := pgx.ParseConfig(dsn)
-	require.NoError(t, err, "parse test database DSN")
-	if config.RuntimeParams == nil {
-		config.RuntimeParams = make(map[string]string)
-	}
+	config := adminConfig.Copy()
 	fixtureApplicationName := scopedTestApplicationName(applicationName, schema)
 	config.RuntimeParams["application_name"] = fixtureApplicationName
 	config.RuntimeParams["search_path"] = schema + ", public"
@@ -246,18 +252,13 @@ func TestMigratedSchemaDrainRetainsSchemaOnDeadline(t *testing.T) {
 	held.SetMaxIdleConns(1)
 	t.Cleanup(func() { require.NoError(t, held.Close()) })
 	require.NoError(t, held.PingContext(t.Context()))
-	parsedDSN, err := url.Parse(dsn)
-	require.NoError(t, err)
-	query := parsedDSN.Query()
-	adminApplicationName := "drain_admin_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-	query.Set("application_name", adminApplicationName)
-	parsedDSN.RawQuery = query.Encode()
+	adminApplicationName := scopedTestApplicationName(migratedTestAdminApplicationName, schema)
 	executable, err := os.Executable()
 	require.NoError(t, err)
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	command := exec.CommandContext(ctx, executable, "-test.run=^TestMigratedSchemaDrainRetainsSchemaOnDeadline$", "-test.count=1", "-test.v")
-	command.Env = append(os.Environ(), childSchemaEnv+"="+schema, "DATABASE_DSN="+parsedDSN.String())
+	command.Env = append(os.Environ(), childSchemaEnv+"="+schema, "DATABASE_DSN="+dsn)
 	output, childErr := command.CombinedOutput()
 	require.NoError(t, ctx.Err(), "the child must return its own bounded drain failure")
 	require.Error(t, childErr, "the child fixture must fail rather than drop a live schema")
