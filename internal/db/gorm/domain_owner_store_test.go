@@ -27,7 +27,7 @@ func TestMigration150_DomainOwnerRegistry(t *testing.T) {
 		require.NoError(t, db.Raw(`
 			SELECT COUNT(*)
 			FROM information_schema.columns
-			WHERE table_schema = 'public'
+			WHERE table_schema = current_schema()
 			  AND table_name = 'memory_domain_owners'
 			  AND column_name = ?
 		`, column).Scan(&count).Error)
@@ -67,7 +67,8 @@ func TestMigration150_DomainOwnerRegistry(t *testing.T) {
 	require.NoError(t, db.Raw(`
 		SELECT COUNT(*)
 		FROM pg_indexes
-		WHERE tablename = 'memory_domain_owners'
+		WHERE schemaname = current_schema()
+		  AND tablename = 'memory_domain_owners'
 		  AND indexname = 'idx_memory_domain_owners_owner'
 	`).Scan(&idxCount).Error)
 	require.Equal(t, 1, idxCount, "owner lookup index must exist")
