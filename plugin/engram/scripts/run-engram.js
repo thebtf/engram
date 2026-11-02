@@ -10,6 +10,15 @@ const { DOWNLOAD_DEADLINE_MS, hashFile, loadPolicy, objectRoots, resolveForLaunc
 const { installationClientInstanceID } = require("./client-instance.js");
 
 const STARTUP_DIAGNOSTIC_LOG_MAX_BYTES = 128 * 1024;
+const TASK_CONTEXT_COMPLETION_RESERVE_MS = 30;
+const TASK_CONTEXT_STATUSES = new Set(['ok', 'empty', 'not_ready', 'stale', 'context_required', 'forbidden', 'unavailable', 'deadline_exceeded']);
+const TASK_CONTEXT_REASONS = new Set([
+ 'OK', 'NO_MATCH', 'INSTALLATION_NOT_READY', 'DAEMON_NOT_READY', 'OPERATION_NOT_READY',
+ 'CONTEXT_REQUIRED', 'CONTEXT_MISMATCH', 'PROJECT_CONTEXT_REQUIRED', 'PROJECT_CONTEXT_MISMATCH',
+ 'PERMISSION_DENIED', 'SOURCE_UNAVAILABLE', 'VIEW_RETIRED', 'CHECKOUT_OFFLINE', 'INDEX_CATCHING_UP',
+ 'REGISTRATION_PROFILE_UNBOUND', 'SERVER_UNAVAILABLE', 'TRANSPORT_UNAVAILABLE', 'EXPOSURE_UNAVAILABLE',
+ 'BUDGET_EXCEEDED', 'INVALID_REQUEST', 'INVALID_RESPONSE', 'DEADLINE_EXCEEDED',
+]);
 
 async function main() {
  if (process.argv[2] === 'codex-config') {
@@ -94,10 +103,10 @@ async function resolveClient(options, projectOnly = false) {
  const resolved = await (options.resolve || resolveForLaunch)({
   pluginRoot: options.pluginRoot, pluginData: options.pluginData, policy,
   signal: options.signal, timeoutMs: options.timeoutMs, deadlineAt: options.deadlineAt,
-  acquire: options.acquire,
+  acquire: options.acquire, check: options.check,
   ...(projectOnly ? { parserTarget: null } : {}),
  });
- if (!(options.hash || hashFile)(resolved.path, resolved.target, (options.roots || objectRoots)(options.pluginData).objects, options)) {
+ if (!(options.hash || hashFile)(resolved.path, resolved.target, (options.roots || objectRoots)(options.pluginData, options).objects, options)) {
   throw new Error("resolved client failed final integrity verification");
  }
  return resolved;
@@ -127,7 +136,7 @@ async function resolveLogicalProject(root, options = {}) {
  if (options.signal?.aborted) throw new Error('PROJECT_RESOLUTION_ABORTED');
  if (remaining <= 0) throw new Error('PROJECT_RESOLUTION_DEADLINE_EXCEEDED');
  const raw = await new Promise((resolve, reject) => {
-  (options.execFile || execFile)(resolved.path, ['project', 'resolve', '--root', root, '--json'], {
+  (options.execFile || execFile)(resolved.path, ['project', 'resolve', '--root', root, '--json', ...(options.check === true ? ['--check'] : [])], {
    env: childEnvForEngram(options.env || process.env), encoding: 'utf8', windowsHide: true,
    timeout: remaining, maxBuffer: 4096, signal: options.signal,
   }, (error, stdout) => {
@@ -147,10 +156,87 @@ async function resolveLogicalProject(root, options = {}) {
  if (options.deadlineAt !== undefined && Date.now() >= options.deadlineAt) throw new Error('PROJECT_RESOLUTION_DEADLINE_EXCEEDED');
  let project;
  try { project = JSON.parse(raw); } catch { throw new Error('PROJECT_CLIENT_UPGRADE_REQUIRED'); }
+ if (options.check === true) {
+  project = { project_id: projectFromInspection(project) };
+ }
  if (!project || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(project.project_id) ||
   project.project_id === '00000000-0000-0000-0000-000000000000' ||
   (project.name !== undefined && typeof project.name !== 'string')) throw new Error('PROJECT_IDENTITY_INVALID');
  return { project_id: project.project_id, ...(project.name !== undefined ? { name: project.name } : {}) };
+}
+
+function projectFromInspection(inspection) {
+ if (inspection?.status !== 'resolved') throw new Error(inspection?.status === 'migration_required' ? 'PROJECT_MIGRATION_REQUIRED' : 'PROJECT_CONTEXT_REQUIRED');
+ const binding = inspection.binding;
+ if (!binding || binding.removed === true ||
+  !['manual_alias', 'git_remote', 'portable_marker', 'common_dir_cache'].includes(binding.match) ||
+  (binding.identity_status != null && binding.identity_status !== 'active') ||
+  (binding.project_key != null && binding.project_key !== binding.id) ||
+  !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(binding.id ?? '') ||
+  binding.id === '00000000-0000-0000-0000-000000000000') throw new Error('PROJECT_IDENTITY_INVALID');
+ return binding.id;
+}
+
+async function requestTaskContext(facts = {}, options = {}) {
+ const closed = (status, reason_code) => ({ schema: 1, status, reason_code });
+ const now = Date.now();
+ const deadlineAt = Math.min(Number.isSafeInteger(options.deadlineAt) ? options.deadlineAt : now + 500, now + 500) - TASK_CONTEXT_COMPLETION_RESERVE_MS;
+ if (deadlineAt <= now) return closed('deadline_exceeded', 'DEADLINE_EXCEEDED');
+ if (typeof facts.cwd !== 'string' || !facts.cwd || typeof facts.prompt !== 'string' || !facts.prompt.trim() ||
+  Buffer.byteLength(facts.prompt) > 16384 || Buffer.from(facts.prompt).toString('utf8') !== facts.prompt ||
+  typeof facts.session !== 'string' || !/^[^\s\p{Cc}/\\@]{1,256}$/u.test(facts.session)) return closed('unavailable', 'INVALID_REQUEST');
+ const maxBytes = Math.max(1024, Math.min(32768, Number.isSafeInteger(options.maxBytes) ? options.maxBytes : 16384));
+ const input = JSON.stringify({ schema: 1, host_session_id: facts.session, query: facts.prompt, deadline_unix_ms: deadlineAt, max_bytes: maxBytes }) + '\n';
+ if (Buffer.byteLength(input) > 20480) return closed('unavailable', 'BUDGET_EXCEEDED');
+ const controller = new AbortController();
+ const abort = () => controller.abort();
+ let onAbort, deadlineExpired = false;
+ const stopped = new Promise(resolve => {
+  onAbort = () => resolve(closed(deadlineExpired || Date.now() >= deadlineAt ? 'deadline_exceeded' : 'unavailable', deadlineExpired || Date.now() >= deadlineAt ? 'DEADLINE_EXCEEDED' : 'CANCELLED'));
+  controller.signal.addEventListener('abort', onAbort, { once: true });
+ });
+ const timer = setTimeout(() => { deadlineExpired = true; abort(); }, Math.max(1, deadlineAt - Date.now()));
+ options.signal?.addEventListener('abort', abort, { once: true });
+ if (options.signal?.aborted) abort();
+ const remaining = () => {
+  if (controller.signal.aborted || Date.now() >= deadlineAt) throw new Error('TASK_CONTEXT_STOPPED');
+  return Math.max(1, deadlineAt - Date.now());
+ };
+ const operation = (async () => {
+  const pluginRoot = options.pluginRoot || resolvePluginRoot();
+  const pluginData = options.pluginData || resolvePluginData(pluginRoot);
+  remaining();
+  const resolved = await resolveClient({ ...options, pluginRoot, pluginData, signal: controller.signal, deadlineAt, timeoutMs: remaining(), acquire: false, check: true }, true);
+  remaining();
+  const stdout = await new Promise((resolve, reject) => {
+   const child = (options.execFile || execFile)(resolved.path, ['task-context', '--json'], {
+    cwd: facts.cwd, env: childEnvForEngram(options.env || process.env), windowsHide: true,
+    timeout: remaining(), maxBuffer: maxBytes, signal: controller.signal, encoding: 'buffer',
+   }, (error, stdout) => error ? reject(error) : resolve(stdout));
+   child.stdin.once('error', () => { });
+   child.stdin.end(input);
+  });
+  remaining();
+  if (Buffer.byteLength(stdout) > maxBytes) return closed('unavailable', 'BUDGET_EXCEEDED');
+  const text = new TextDecoder('utf-8', { fatal: true }).decode(stdout);
+  const response = JSON.parse(text);
+  if (!text.endsWith('\n') || response?.schema !== 1 ||
+   !TASK_CONTEXT_STATUSES.has(response.status) || !TASK_CONTEXT_REASONS.has(response.reason_code) ||
+   Object.keys(response).some(key => !['schema', 'status', 'reason_code', 'project', 'packet'].includes(key))) return closed('unavailable', 'INVALID_RESPONSE');
+  if (response.project?.status === 'resolved') projectFromInspection(response.project);
+  remaining();
+  return response;
+ })().catch(error => {
+  const timedOut = deadlineExpired || Date.now() >= deadlineAt || (error?.killed === true && error.code === null && error.signal === 'SIGTERM');
+  return closed(timedOut ? 'deadline_exceeded' : 'unavailable', timedOut ? 'DEADLINE_EXCEEDED' : 'CLIENT_UNAVAILABLE');
+ });
+ try { return await Promise.race([operation, stopped]); }
+ finally {
+  clearTimeout(timer);
+  options.signal?.removeEventListener('abort', abort);
+  controller.signal.removeEventListener('abort', onAbort);
+  controller.abort();
+ }
 }
 
 async function resolveAndSpawn(options) {
@@ -460,6 +546,8 @@ module.exports = {
  resolvePluginRoot,
  resolveAndSpawn,
  resolveLogicalProject,
+ projectFromInspection,
+ requestTaskContext,
  prepareHookClient,
  resolveHostRoot,
  codexMcpConfig,

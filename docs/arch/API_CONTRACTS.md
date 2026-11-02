@@ -64,6 +64,7 @@ There is no historical startup-flag alternative to this public hybrid enum.
 | Rule governance | `rule_governance_health`, `rule_governance_queue`, `rule_governance_snapshots`, `rule_governance_transition`, `rule_governance_pin_snapshot`, `rule_governance_rollback`, `rule_governance_usefulness` | rule-governance read store wired (`usefulness` also needs injection telemetry) | v6.29 (RG-3) |
 | Bulk ops | `bulk_promote`, `bulk_delete`, `bulk_supersede` | ordinary v7 runtime; admin authorization still required | v6 (Milestone-F) |
 | Code intelligence | `codebase_search` | `ENGRAM_CODE_INTEL_ENABLED=true` AND code chunk store wired | v6.13 (CR-006 code-intel) |
+| Native same-turn code context | `codebase_task_context` | `ENGRAM_CODE_INTEL_ENABLED=true` AND native task application wired | Feature009 A |
 | V7 meta-memory discovery | `know_about` plus session-start `meta_summary` | deferred; startup activation retired, historical data retained | v6.38 (ENG-V7-S2) |
 
 Admin-gated families (candidates, governance, bulk ops) are additionally enforced at the handler level regardless of advertisement.
@@ -91,6 +92,120 @@ timestamps, score, source, and reason. It must not include memory body text or
 content-bearing aliases such as `content`, `body`, `raw_content`, `narrative`,
 or `snippet`. A valid topic with no matches returns the empty packet above, not
 a tool error.
+
+### Native same-turn task context
+
+The native client provides `engram task-context --json`. The verified executable
+is launched with the actual host callback cwd. It reads one bounded JSON stdin
+request and emits one JSON response plus LF. Prompt text, credentials, locators
+and IPC tokens are never command-line arguments. The command is registered before
+installation creation, daemon reconciliation, stale-binary cleanup or daemon startup.
+
+Request fields are closed:
+
+| Field | Contract |
+| --- | --- |
+| `schema` | Integer `1`. |
+| `host_session_id` | Nonempty actual host session string, at most 256 UTF-8 bytes; correlation input, never a UCI transport session or access grant. |
+| `query` | Nonempty task query, at most 16 KiB UTF-8. |
+| `deadline_unix_ms` | Positive integer absolute work deadline, at most JavaScript's maximum safe integer. |
+| `max_bytes` | Nonnegative integer final-frame budget; zero selects 16 KiB. Internal clamp: 1–32 KiB. |
+
+The entire stdin frame is at most 20 KiB. Duplicate/unknown fields, null fields,
+invalid UTF-8, extra JSON values and malformed values fail closed without echoing
+input. No locator, borrowed context handle, project selector or arbitrary tool
+name is accepted in this request.
+
+The callback keeps its original absolute 500 ms deadline. Its one native-work
+deadline is `min(originalOuterDeadline, callbackEntry + 500 ms) - 30 ms`. That
+exact work deadline is sent on stdin and is not extended at any later stage.
+Native CLI, daemon proxy, authenticated CallTool, UCI/SQL and exposure stages
+share the remaining context. Native additionally clamps its allocation to
+400 ms from its own entry. The 400 ms partition was selected after measured
+300 ms failures; it is not a new startup variable, an extension of the 500 ms
+callback limit, or a latency guarantee. The consumer reserves final
+framing/termination/presentation time and suppresses every late response.
+
+Response fields are `schema: 1`, `status`, `reason_code`, optional `project`, and
+optional `packet`. All valid closed responses exit zero. Nonzero exit is argv
+misuse or inability to emit the response, not an empty relevance result.
+
+`project` is the existing read-only `ProjectInspection`: `status` and optional
+`binding` containing `id`, nullable `project_key`, nullable `identity_status`,
+`match`, and optional `removed`. A canonical project is usable only when inspection
+is resolved and `binding.id` is a valid canonical UUID. A code failure retains
+independently obtained inspection metadata. Missing/incompatible daemon can omit
+project; it does not trigger a second resolver process or reuse another request's identity.
+
+Closed statuses are `ok`, `empty`, `not_ready`, `stale`, `context_required`,
+`forbidden`, `unavailable`, and `deadline_exceeded`. Closed uppercase reasons
+include `OK`, `NO_MATCH`, `DAEMON_NOT_READY`, `OPERATION_NOT_READY`,
+`INSTALLATION_NOT_READY`, `CONTEXT_REQUIRED`, `CONTEXT_MISMATCH`,
+`PROJECT_CONTEXT_REQUIRED`, `PROJECT_CONTEXT_MISMATCH`,
+`REGISTRATION_PROFILE_UNBOUND`, `CHECKOUT_OFFLINE`, `INDEX_CATCHING_UP`,
+`VIEW_RETIRED`, `PERMISSION_DENIED`, `SOURCE_UNAVAILABLE`, `SERVER_UNAVAILABLE`,
+`TRANSPORT_UNAVAILABLE`, `EXPOSURE_UNAVAILABLE`, `BUDGET_EXCEEDED`,
+`INVALID_REQUEST`, `INVALID_RESPONSE`, and `DEADLINE_EXCEEDED`. Correct empty
+relevance is not a context, transport or provider error.
+
+`packet.search`, optional `packet.source`, and optional `packet.calls` are existing
+closed `engram.code-query/1` responses. They preserve typed Source/Checkout/View/
+profile/generation, membership/entity/content-digest/span citations, coverage and
+freshness, and real exposure refs. Successful useful packets contain exact
+materialized source; call relations are static index evidence, not claims of
+runtime execution. Every component belongs to the same pinned View. Oversized
+complete frames are suppressed with `unavailable/BUDGET_EXCEEDED`; unchecked
+source ranges or raw JSON are never byte-truncated into a false success.
+
+#### Narrow application operation and authority
+
+`codebase_task_context` is one typed MCP/application operation over existing
+authenticated gRPC CallTool. It is not an arbitrary tool runner, a new RPC service,
+HTTP MCP, session-memory expansion, daemon engine or resident shim.
+
+A sanitized actual Git discovery obtains root/common-dir/bare evidence once.
+Its sealed request-owned context is reused by the existing read-only
+CheckLogicalProject and canonical Git locator preparation. These facts cannot be
+supplied by stdin/tool/browser arguments, cached across requests, or turned into
+a code grant. Ordinary project init/resolve consumers remain supported. The task
+path never bootstraps or writes project markers/common caches.
+
+The ready native daemon supplies the canonical locator through its private
+authenticated transport metadata. The server performs SELECT-only lookup by
+authenticated realm, principal, workstation and that actual canonical locator.
+Logical project is an additional Source-agreement check, not Source selection or
+authorization. Existing incarnation, registration profile, normal UCI authorizer
+and published View are reused. Zero matches returns context_required; ambiguity
+refuses closed; missing profile/View is not_ready; offline/catching-up/retired
+state is explicit. No registration, profile/catalog update, indexing, parser
+acquisition, default binding or per-prompt context-handle registry entry is created.
+
+The application directly composes deterministic exact-name/path or lexical
+QueryService, exact VersionedReadService and bounded callers/callees GraphService.
+It deliberately does not enter general SearchCodebase's semantic-provider
+selection or any embedding/LLM provider. Richer semantic work remains explicit.
+
+Each actual search, versioned source read and graph sub-result uses its existing
+exposure category and the existing UCI release gate. These are genuine
+sub-operations, not tool-name aliases. Explicit pinned refs are reauthorized before
+release; existing durable non-content receipts must succeed before any result body
+is emitted. No second receipt writer or pre-exposure response bypass exists.
+Ordinary admission/auth/exposure audit writes remain allowed and observable; this
+contract never promises literally zero PostgreSQL writes. Domain, identity,
+Source/Checkout/profile/catalog/index data do not mutate on the task path.
+
+Only an already-ready compatible exact daemon can be joined. The existing
+installation namespace/owner-sharing identity, peer PID and generation fencing,
+control admission, token-first IPC and MCP initialization are retained.
+SessionHandler dispatch is in-process; the operation does not launch an upstream
+subprocess. Missing installation state is not_ready, never create-on-missing.
+Unsupported/old daemon or operation is not_ready and is not upgraded, restarted,
+reconciled or retried by this feature.
+
+Parent abort closes only request-owned stdin/IPC/process resources. Muxcore
+Session.Done propagates cancellation through the native handler to RPC/SQL; the
+server also enforces the absolute deadline. notifications/cancelled alone is not
+relied upon. The shared daemon and pool survive cancellation.
 
 ---
 

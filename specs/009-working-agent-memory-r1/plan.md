@@ -50,6 +50,33 @@ Use deterministic symbol/lexical/graph work for named code. Precompute or increm
 
 The existing OMP callback has a 500 ms total limit. Measure actual warm useful-result delivery inside that envelope; do not infer latency from empty queries. A provider that cannot meet the fast path must not silently consume the entire callback. Richer retrieval remains available through an explicit bounded follow-up.
 
+The selected A code bridge replaces the callback's project-resolve subprocess
+with one ready-daemon-only typed task-context invocation. It obtains one read-only
+ProjectInspection and a same-View deterministic code/source/call packet, preserving
+the original callback's absolute 500 ms limit and explicit closed outcomes. The
+wire and authority contract is [Native same-turn task context](../../docs/arch/API_CONTRACTS.md#native-same-turn-task-context).
+Knowledge REST consumes only that same response's validated project and remaining
+budget; a known slow knowledge producer cannot delay useful code delivery. No
+second resolver or resident process is introduced.
+
+Native/backend fixture proof is not ordinary loaded-host acceptance. Preserve all
+measured negative samples, including initial 300 ms failures and cold useful
+delivery at 503.906 ms. Under the selected internal 400 ms cap and supplied
+outer-minus-30 deadline, the controlled native fixture observed one cold useful
+packet at 176.612 ms and one warm useful packet per actual main/linked worktree at
+137.076/149.284 ms, each 4625 bytes. These are bounded samples, not tail guarantees.
+The real loaded callback, executable verification/config cost, final JS
+framing/termination, populated-data usefulness and A3 notes producer remain
+integration obligations, not conclusions of that native fixture.
+
+The controlled PostgreSQL test observed a request-owned SELECT pg_sleep(30),
+killed only its native child, observed SQL cease in 9.500 ms, and proved the next
+request worked on the same shared daemon/pool. Catalog/index snapshots stayed
+equal; owner count remained one and upstream PID zero. A separate real Git
+named-pipe fixture proved request cancellation terminated the actual Git process
+and a subsequent Git request worked. No production, populated mirror or active
+profile was used for these probes.
+
 ### Execute real work and deliver
 
 Run A1–A6 as applicable through the real loaded host, including a Russian task and distinct worktrees. Fix causes within the same assignment. Preserve comparison evidence and report separately which query classes gained useful context.

@@ -18,16 +18,21 @@ const { createPolicy } = require('../scripts/bootstrap-policy.js');
 const projects = { '/session/a': '11111111-1111-4111-8111-111111111111', '/session/b': '22222222-2222-4222-8222-222222222222' };
 function extension(overrides = {}) {
   const calls = [];
+  const inspect = overrides.resolveHookProjectContext ?? (async cwd => ({ Project: projects[cwd] }));
   const adapter = createEngramMemoryExtension({
     isQuiet: () => false,
     prepareHookClient: async () => { },
     resolveEngramRuntimeConfig: async () => ({ serverURL: 'http://fixture', token: '', quiet: false }),
     resolveHookProjectContext: async cwd => ({ Project: projects[cwd] }),
+    requestTaskContext: async (facts, options) => {
+      const context = await inspect(facts.cwd, { ...options, timeoutMs: Math.max(1, options.deadlineAt - Date.now()), acquire: false, check: true });
+      return { schema: 1, status: 'empty', reason_code: 'NO_MATCH', project: { status: 'resolved', binding: { id: context.Project, match: 'portable_marker' } } };
+    },
     requestPost: async (route, body) => {
       calls.push({ route, body });
       return route === '/api/context/session-start'
         ? { memories: [{ content: `known memory for ${body.project}` }] }
-        : { additional_context: `ambient for ${body.project}` };
+        : { project: body.project, query: body.query, observations: [{ id: 42, project: body.project, narrative: 'Do not remove the recovery backup.', revision: 3, source_type: 'manual' }] };
     },
     ...overrides,
   });
@@ -48,9 +53,9 @@ test('OMP automatic callbacks use current root and one UUID without identity reg
   assert.match(sent[0].message.content, /known memory for 11111111/);
   assert.deepEqual(sent[0].options, { deliverAs: 'nextTurn' });
   const result = await handlers.get('before_agent_start')({ cwd: '/session/b', sessionId: 'a', prompt: 'new root' }, {});
-  assert.equal(result.message.content, `ambient for ${projects['/session/b']}`);
+  assert.match(result.message.content, /Do not remove the recovery backup\./);
   assert.deepEqual(calls.map(call => call.body.project), [projects['/session/a'], projects['/session/b'], projects['/session/b']]);
-  assert.deepEqual(calls.map(call => call.route), ['/api/context/session-start', '/api/context/session-start', '/api/hooks/ambient-candidates']);
+  assert.deepEqual(calls.map(call => call.route), ['/api/context/session-start', '/api/context/session-start', '/api/context/search?limit=3']);
   assert.equal(calls.some(call => 'project_descriptor' in call.body || 'sessionCapability' in call.body), false);
 });
 
@@ -311,7 +316,7 @@ test('OMP failed startup readiness recovers through verified local cache without
               assert.equal(file, object);
               assert.equal(hashFile(file, policy.target.desired, roots.objects), true);
               assert.equal(options.timeout, budget);
-              callback(null, JSON.stringify({ project_id: projects[cwd] }));
+              callback(null, JSON.stringify(args.includes('--check') ? { status: 'resolved', binding: { id: projects[cwd], match: 'portable_marker' } } : { project_id: projects[cwd] }));
             },
           });
         },
@@ -321,7 +326,7 @@ test('OMP failed startup readiness recovers through verified local cache without
           assert.equal(options.signal.aborted, false);
           return route === '/api/context/session-start'
             ? { memories: [{ content: `recovered memory for ${body.project}` }] }
-            : { additional_context: `recovered memory for ${body.project}` };
+            : { project: body.project, query: body.query, observations: [{ id: 42, project: body.project, narrative: 'Do not remove the recovery backup.', revision: 3 }] };
         },
       });
       await adapter.install({ on: (name, handler) => handlers.set(name, handler), sendMessage: (message, options) => sent.push({ message, options }) });
@@ -347,7 +352,7 @@ test('OMP failed startup readiness recovers through verified local cache without
       assert.ok(delivered, 'same failed binding must deliver on the next qualified callback once the local cache verifies');
       assert.equal(delivered.customType, 'engram-memory');
       assert.equal(delivered.display, false);
-      assert.ok(delivered.content.includes(`recovered memory for ${projects['/session/a']}`));
+      assert.ok(delivered.content.includes(eventName === 'session_start' ? `recovered memory for ${projects['/session/a']}` : 'Do not remove the recovery backup.'));
       assert.equal(executions.length, 1);
       assert.ok(resolutions.length >= 3, 'missing, invalid and valid callbacks must each use the trusted resolver');
       assert.equal(contextRequests.length, 1);
@@ -586,7 +591,7 @@ test('OMP background readiness budget includes config and never trusts late prep
           assert.equal(hashFile(file, policy.target.desired, roots.objects), true);
           assert.equal(nativeOptions.signal.aborted, false);
           executions.push({ timeout: nativeOptions.timeout });
-          callback(null, JSON.stringify({ project_id: projects[cwd] }));
+          callback(null, JSON.stringify(_args.includes('--check') ? { status: 'resolved', binding: { id: projects[cwd], match: 'portable_marker' } } : { project_id: projects[cwd] }));
         },
       });
     },
@@ -714,4 +719,29 @@ test('OMP context keeps its absolute deadline when wall clock advances without t
       } finally { fs.rmSync(root, { recursive: true, force: true }); }
     }
   }
+});
+
+test('OMP prompt callback presents evidence once per current topic and cancels superseded work', async () => {
+  let finish, signal;
+  const { adapter, calls } = extension({
+    requestPost: async (route, body, _budget, options) => {
+      calls.push({ route, body });
+      assert.equal(route, '/api/context/search?limit=3');
+      const value = { project: body.project, query: body.query, observations: [{ id: 7, project: body.project, narrative: 'Do not delete the backup 😀', revision: 4, source: 'notes/restore.md' }] };
+      if (body.query === 'slow old topic') { signal = options.signal; return new Promise(resolve => { finish = () => resolve(value); }); }
+      return value;
+    }
+  });
+  const event = { cwd: '/session/a', sessionId: 'dedup', prompt: 'restore backups' };
+  assert.match((await adapter.ambientMessage(event, {})).content, /revision=4/);
+  assert.equal(await adapter.ambientMessage(event, {}), null);
+  assert.ok(await adapter.ambientMessage({ ...event, prompt: 'different topic' }, {}));
+  assert.ok(await adapter.ambientMessage(event, {}));
+  const old = adapter.ambientMessage({ ...event, prompt: 'slow old topic' }, {});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.ok(await adapter.ambientMessage({ ...event, prompt: 'current new topic' }, {}));
+  assert.equal(await old, null);
+  assert.equal(signal.aborted, true);
+  finish();
+  await new Promise(resolve => setImmediate(resolve));
 });
