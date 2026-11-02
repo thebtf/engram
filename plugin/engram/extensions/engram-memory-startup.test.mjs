@@ -85,6 +85,31 @@ async function exerciseDefaultFactory(mode) {
       },
     }).then(context => { readiness = 'trusted'; return context; });
   };
+  const realTaskContext = launcher.requestTaskContext;
+  launcher.requestTaskContext = (facts, options) => {
+    effects.projectResolutions++;
+    assert.notEqual(readiness, 'pending');
+    return realTaskContext(facts, {
+      ...options, pluginRoot: root, pluginData: root, resolve: verify,
+      execFile(file, args, execOptions, callback) {
+        effects.projectExecutions++;
+        assert.equal(file, object);
+        assert.deepEqual(args, ['task-context', '--json']);
+        assert.equal(execOptions.cwd, root);
+        executions.push({ args, timeout: execOptions.timeout });
+        return {
+          stdin: {
+            once() { }, end(input) {
+              const request = JSON.parse(input);
+              assert.equal(request.schema, 1);
+              assert.equal(request.max_bytes, 8000);
+              callback(null, Buffer.from(JSON.stringify({ schema: 1, status: 'empty', reason_code: 'NO_MATCH', project: { status: 'resolved', binding: { id: project, match: 'portable_marker' } } }) + '\n'));
+            }
+          }
+        };
+      },
+    }).then(response => { if (response.project?.status === 'resolved') readiness = 'trusted'; return response; });
+  };
   globalThis.fetch = async (url, options) => {
     url = new URL(url);
     effects.backendRequests++;

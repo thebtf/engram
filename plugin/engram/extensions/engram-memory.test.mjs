@@ -18,11 +18,16 @@ const { createPolicy } = require('../scripts/bootstrap-policy.js');
 const projects = { '/session/a': '11111111-1111-4111-8111-111111111111', '/session/b': '22222222-2222-4222-8222-222222222222' };
 function extension(overrides = {}) {
   const calls = [];
+  const inspect = overrides.resolveHookProjectContext ?? (async cwd => ({ Project: projects[cwd] }));
   const adapter = createEngramMemoryExtension({
     isQuiet: () => false,
     prepareHookClient: async () => { },
     resolveEngramRuntimeConfig: async () => ({ serverURL: 'http://fixture', token: '', quiet: false }),
     resolveHookProjectContext: async cwd => ({ Project: projects[cwd] }),
+    requestTaskContext: async (facts, options) => {
+      const context = await inspect(facts.cwd, { ...options, timeoutMs: Math.max(1, options.deadlineAt - Date.now()), acquire: false, check: true });
+      return { schema: 1, status: 'empty', reason_code: 'NO_MATCH', project: { status: 'resolved', binding: { id: context.Project, match: 'portable_marker' } } };
+    },
     requestPost: async (route, body) => {
       calls.push({ route, body });
       return route === '/api/context/session-start'

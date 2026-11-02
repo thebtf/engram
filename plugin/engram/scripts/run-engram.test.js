@@ -764,3 +764,61 @@ test("context recovery preserves native project code and fixed guidance through 
     }), error => error.code === "PROJECT_MIGRATION_REQUIRED" && error.guidance === guidance && error.message.includes(guidance));
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test('task context launcher uses one ready-only stdin process and closed UTF-8 responses', async () => {
+ const { requestTaskContext } = require('./run-engram.js');
+ const realExec = require('node:child_process').execFile;
+ const responses = {
+  ok: 'process.stdout.write(JSON.stringify({schema:1,status:"not_ready",reason_code:"DAEMON_NOT_READY"})+"\\n")',
+  unknownReason: 'process.stdout.write(JSON.stringify({schema:1,status:"not_ready",reason_code:"UNRECOGNIZED"})+"\\n")',
+  missingLF: 'process.stdout.write(JSON.stringify({schema:1,status:"not_ready",reason_code:"DAEMON_NOT_READY"}))',
+  malformed: 'process.stdout.write("not JSON\\n")',
+  oversized: 'process.stdout.write("x".repeat(9000))',
+  invalidUtf8: 'process.stdout.write(Buffer.from([255]))',
+  failed: 'process.stderr.write("private fixture diagnostic");process.exit(2)',
+ };
+ for (const [mode, output] of Object.entries(responses)) {
+  let executions = 0;
+  const outcome = await requestTaskContext({ cwd: __dirname, session: 'fixture-session', prompt: 'Find the bounded callback implementation' }, {
+   deadlineAt: Date.now() + 500, maxBytes: 8000,
+   resolve: async options => { assert.equal(options.acquire, false); assert.equal(options.check, true); assert.equal(options.parserTarget, null); return { path: process.execPath, target: {} }; },
+   roots: () => ({ objects: __dirname }), hash: () => true,
+   execFile(file, args, options, callback) {
+    executions++;
+    assert.equal(file, process.execPath);
+    assert.deepEqual(args, ['task-context', '--json']);
+    assert.equal(options.cwd, __dirname);
+    const program = `let input='';process.stdin.on('data',b=>input+=b);process.stdin.on('end',()=>{const r=JSON.parse(input);if(!input.endsWith('\\n')||r.schema!==1||r.host_session_id!=='fixture-session'||r.query!=='Find the bounded callback implementation'||r.max_bytes!==8000||!Number.isSafeInteger(r.deadline_unix_ms))process.exit(3);${output}});`;
+    return realExec(file, ['-e', program], options, callback);
+   },
+  });
+  assert.equal(executions, 1, mode);
+  assert.equal(outcome.status, mode === 'ok' ? 'not_ready' : 'unavailable', mode);
+  assert.doesNotMatch(JSON.stringify(outcome), /private fixture diagnostic/);
+ }
+});
+
+test('task context cancellation closes its only process and expired admission cannot execute', async () => {
+ const { requestTaskContext } = require('./run-engram.js');
+ const realExec = require('node:child_process').execFile;
+ const controller = new AbortController();
+ let executions = 0, closed;
+ const processClosed = new Promise(resolve => { closed = resolve; });
+ const options = {
+  signal: controller.signal, deadlineAt: Date.now() + 500,
+  resolve: async () => ({ path: process.execPath, target: {} }), roots: () => ({ objects: __dirname }), hash: () => true,
+  execFile(file, args, options, callback) {
+   executions++;
+   assert.deepEqual(args, ['task-context', '--json']);
+   const child = realExec(file, ['-e', "process.stdin.resume();setInterval(()=>{},1000)"], options, callback);
+   child.once('close', closed);
+   setImmediate(() => controller.abort());
+   return child;
+  },
+ };
+ assert.equal((await requestTaskContext({ cwd: __dirname, session: 'fixture-session', prompt: 'Inspect callback code' }, options)).status, 'unavailable');
+ await processClosed;
+ assert.equal(executions, 1);
+ assert.equal((await requestTaskContext({ cwd: __dirname, session: 'fixture-session', prompt: 'Inspect callback code' }, { ...options, deadlineAt: Date.now() - 1 })).status, 'deadline_exceeded');
+ assert.equal(executions, 1);
+});

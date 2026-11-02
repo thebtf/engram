@@ -42,19 +42,30 @@ not an automatic durable-correction writer. OMP does not execute Claude's hook t
 or thereby gain Stop/SessionEnd transcript and outcome processing. Availability and
 skill loading depend on the installed host/plugin; a source edit proves neither.
 
-Prompt retrieval has one 500 ms total budget, including configuration, read-only
-`project resolve --check` and `POST /api/context/search`. It never downloads,
-bootstraps, migrates, registers or indexes in the foreground. Oversize records are
-omitted whole rather than truncating a negation. Source/revision fields are evidence;
-missing revisions remain unknown. No-match, deadline, identity refusal, stale and
-unavailable results are not useful-delivery proof. Duplicate suppression keeps only
-a delivery digest, never reusable context/body authority, and rechecks each task.
-The OMP callback has no arbitrary connected-MCP API; code/notes retrieval remains
-explicit when no supported native provider has delivered it. Source changes alone
-do not fix or prove loaded-host readiness.
-Inspect-only project resolution consumes `ProjectInspection`: only `status=resolved`
-with a valid, nonremoved canonical `binding.id` is usable. Unbound, conflicting or
-migration-required inspection is a context refusal, not an ordinary resolver record.
+Prompt retrieval has one 500 ms total budget, including configuration and exactly
+one ready-daemon-only `task-context --json` process with newline JSON on stdin.
+That bridge performs the one read-only project inspection and returns typed UCI
+search/source/call evidence with its original View and exposure references. No
+second project-resolve process or connected-MCP host API is used. The native
+operation caps itself at 300 ms within the caller's unchanged absolute deadline.
+
+A useful native code packet is delivered immediately without waiting for the
+slow knowledge provider. This code-only path is not useful-note acceptance. If
+code is unavailable or empty but the same response has a valid resolved project,
+supported `POST /api/context/search` can use only the remaining callback budget.
+Missing/old daemon output without that inspection cannot authorize a knowledge
+fallback. No callback downloads, bootstraps, migrates, registers or indexes.
+
+Oversize records are omitted whole rather than truncating a negation. Source and
+revision fields remain evidence; missing revisions stay unknown. No-match,
+deadline, identity refusal, stale and unavailable are not useful-delivery proof.
+Duplicate suppression retains only the current delivery digest, not body/context
+authority. Only a valid, nonremoved canonical `binding.id` from a fresh
+`ProjectInspection` with `status=resolved` is usable. Explicit inspect-only
+`project resolve --check` consumes that shape too, not ordinary resolver output.
+The OMP callback has no arbitrary connected-MCP API; notes/capabilities not supplied
+by this real provider remain explicit. Source changes alone prove neither loaded
+readiness nor ordinary useful application.
 
 ## Deliberate Memory Workflow
 

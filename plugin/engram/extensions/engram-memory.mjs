@@ -2,7 +2,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const lib = require('../hooks/lib.js');
 const { buildSessionStartContext } = require('../hooks/session-start.js');
-const { requestPromptKnowledge } = require('../hooks/user-prompt.js');
+const { requestPromptContext } = require('../hooks/user-prompt.js');
 const { DOWNLOAD_DEADLINE_MS } = require('../scripts/ensure-binary.js');
 const { prepareHookClient } = require('../scripts/run-engram.js');
 const { version: pluginVersion } = require('../package.json');
@@ -64,7 +64,7 @@ export function createEngramMemoryExtension(options = {}) {
       const controller = new AbortController();
       activePrompt = controller;
       try {
-        const outcome = await requestPromptKnowledge({ ...facts, prompt }, {
+        const outcome = await requestPromptContext({ ...facts, prompt }, {
           signal: controller.signal, delivered,
           runtimeConfig: async options => {
             const config = await runtimeConfig(options);
@@ -74,11 +74,7 @@ export function createEngramMemoryExtension(options = {}) {
             }
             return config;
           },
-          resolveContext: async (...args) => {
-            const context = await resolveContext(...args);
-            if (readiness === 'failed') readiness = 'ready';
-            return context;
-          },
+          requestTaskContext: options.requestTaskContext,
           requestPost,
         });
         if (outcome.code === 'HOOK_CLIENT_UNAVAILABLE') unavailable('prepare', { code: outcome.code });
