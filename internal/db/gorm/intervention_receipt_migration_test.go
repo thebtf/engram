@@ -2,7 +2,11 @@ package gorm
 
 import (
 	"bytes"
+	"context"
+	"database/sql"
+	"net/url"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -39,6 +43,36 @@ func scopedTestApplicationName(applicationName, schema string) string {
 	// PostgreSQL limits application_name to 63 bytes. Preserve the unique schema
 	// suffix so cleanup observes only sessions belonging to this fixture.
 	return applicationName[:min(len(applicationName), 30)] + ":" + schema[max(0, len(schema)-32):]
+}
+
+func waitForMigratedTestSessions(ctx context.Context, adminDB *gormlib.DB, fixtureApplicationName string) error {
+	var ticker *time.Ticker
+	defer func() {
+		if ticker != nil {
+			ticker.Stop()
+		}
+	}()
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		var count int64
+		if err := adminDB.WithContext(ctx).Raw(`SELECT count(*) FROM pg_stat_activity
+			WHERE datname = current_database() AND application_name = ?`, fixtureApplicationName).Scan(&count).Error; err != nil {
+			return err
+		}
+		if count == 0 {
+			return nil
+		}
+		if ticker == nil {
+			ticker = time.NewTicker(10 * time.Millisecond)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func openMigratedTestDBInSchema(t *testing.T, dsn, schema, applicationName string) *gormlib.DB {
@@ -91,13 +125,11 @@ func openMigratedTestDBInSchema(t *testing.T, dsn, schema, applicationName strin
 		// Close can return while a driver call is still using a connection. An
 		// async audit INSERT can hold its sequence while acquiring the memories FK
 		// lock, in the opposite order to DROP SCHEMA CASCADE.
-		require.Eventually(t, func() bool {
-			var count int64
-			err := adminDB.Raw(`SELECT count(*) FROM pg_stat_activity
-				WHERE datname = current_database() AND application_name = ?`, fixtureApplicationName).Scan(&count).Error
-			drained = err == nil && count == 0
-			return drained
-		}, 10*time.Second, 10*time.Millisecond, "closed fixture sessions must finish before schema cleanup")
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		err := waitForMigratedTestSessions(ctx, adminDB, fixtureApplicationName)
+		drained = err == nil
+		require.NoError(t, err, "closed fixture sessions must finish before schema cleanup")
 	})
 
 	db, err := gormlib.Open(postgres.New(postgres.Config{Conn: testSQL}), &gormlib.Config{Logger: logger.Default.LogMode(logger.Silent)})
@@ -109,6 +141,136 @@ func openMigratedTestDBInSchema(t *testing.T, dsn, schema, applicationName strin
 	require.NoError(t, db.Raw(`SELECT current_schema()`).Scan(&actualSchema).Error)
 	require.Equal(t, schema, actualSchema, "test pool must resolve its isolated schema before public")
 	return db
+}
+
+func TestMigratedTestSessionPollCancellationAndErrors(t *testing.T) {
+	dsn := os.Getenv("DATABASE_DSN")
+	if dsn == "" {
+		t.Skip("DATABASE_DSN not set; session-drain proof requires PostgreSQL")
+	}
+	adminDB, err := gormlib.Open(postgres.Open(dsn), &gormlib.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	require.NoError(t, err)
+	adminSQL, err := adminDB.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, adminSQL.Close()) })
+	adminSQL.SetMaxOpenConns(1)
+	adminSQL.SetMaxIdleConns(1)
+	scope := "drain_poll_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	openSession := func(t *testing.T, applicationName string) *sql.DB {
+		t.Helper()
+		config, err := pgx.ParseConfig(dsn)
+		require.NoError(t, err)
+		if config.RuntimeParams == nil {
+			config.RuntimeParams = make(map[string]string)
+		}
+		config.RuntimeParams["application_name"] = applicationName
+		pool := stdlib.OpenDB(*config)
+		pool.SetMaxOpenConns(1)
+		pool.SetMaxIdleConns(1)
+		t.Cleanup(func() { require.NoError(t, pool.Close()) })
+		require.NoError(t, pool.PingContext(t.Context()))
+		return pool
+	}
+	t.Run("exact application name excludes another own fixture", func(t *testing.T) {
+		other := openSession(t, scope+"-other")
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		defer cancel()
+		require.NoError(t, waitForMigratedTestSessions(ctx, adminDB, scope))
+		require.NoError(t, other.PingContext(t.Context()), "polling must not terminate another fixture's session")
+	})
+	t.Run("live own session remains intact on deadline", func(t *testing.T) {
+		own := openSession(t, scope)
+		ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+		defer cancel()
+		require.ErrorIs(t, waitForMigratedTestSessions(ctx, adminDB, scope), context.DeadlineExceeded)
+		require.NoError(t, own.PingContext(t.Context()), "a drain deadline must not kill the retained session")
+	})
+	t.Run("actual query acquisition obeys cancellation", func(t *testing.T) {
+		held, err := adminSQL.Conn(t.Context())
+		require.NoError(t, err)
+		waitsBefore := adminSQL.Stats().WaitCount
+		ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+		defer cancel()
+		released := make(chan error, 1)
+		stop := context.AfterFunc(ctx, func() { released <- held.Close() })
+		defer func() {
+			if stop() {
+				require.NoError(t, held.Close())
+			} else {
+				require.NoError(t, <-released)
+			}
+		}()
+		require.ErrorIs(t, waitForMigratedTestSessions(ctx, adminDB, scope), context.DeadlineExceeded)
+		require.Greater(t, adminSQL.Stats().WaitCount, waitsBefore, "the real metadata query must have waited for its held connection")
+	})
+	t.Run("actual query error returns instead of polling", func(t *testing.T) {
+		require.NoError(t, adminSQL.Close())
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		defer cancel()
+		require.ErrorContains(t, waitForMigratedTestSessions(ctx, adminDB, scope), "database is closed")
+		require.NoError(t, ctx.Err(), "the query error must return before its deadline")
+	})
+}
+
+func TestMigratedSchemaDrainRetainsSchemaOnDeadline(t *testing.T) {
+	const childSchemaEnv = "ENGRAM_TEST_DRAIN_RETENTION_SCHEMA"
+	const applicationName = "drain_retention_test"
+	dsn := os.Getenv("DATABASE_DSN")
+	if dsn == "" {
+		t.Skip("DATABASE_DSN not set; retained-schema proof requires PostgreSQL")
+	}
+	if schema := os.Getenv(childSchemaEnv); schema != "" {
+		id, err := uuid.Parse(strings.TrimPrefix(schema, "drain_retention_"))
+		require.NoError(t, err)
+		require.Equal(t, "drain_retention_"+strings.ReplaceAll(id.String(), "-", ""), schema)
+		db := openMigratedTestDBInSchema(t, dsn, schema, applicationName)
+		require.NoError(t, db.Exec(`CREATE TABLE drain_retention_marker (value TEXT NOT NULL)`).Error)
+		require.NoError(t, db.Exec(`INSERT INTO drain_retention_marker VALUES ('retained')`).Error)
+		return
+	}
+	schema := "drain_retention_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	adminDB, err := gormlib.Open(postgres.Open(dsn), &gormlib.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	require.NoError(t, err)
+	adminSQL, err := adminDB.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, adminSQL.Close()) })
+	t.Cleanup(func() { require.NoError(t, adminDB.Exec("DROP SCHEMA IF EXISTS "+schema+" CASCADE").Error) })
+	config, err := pgx.ParseConfig(dsn)
+	require.NoError(t, err)
+	if config.RuntimeParams == nil {
+		config.RuntimeParams = make(map[string]string)
+	}
+	config.RuntimeParams["application_name"] = scopedTestApplicationName(applicationName, schema)
+	held := stdlib.OpenDB(*config)
+	held.SetMaxOpenConns(1)
+	held.SetMaxIdleConns(1)
+	t.Cleanup(func() { require.NoError(t, held.Close()) })
+	require.NoError(t, held.PingContext(t.Context()))
+	parsedDSN, err := url.Parse(dsn)
+	require.NoError(t, err)
+	query := parsedDSN.Query()
+	adminApplicationName := "drain_admin_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	query.Set("application_name", adminApplicationName)
+	parsedDSN.RawQuery = query.Encode()
+	executable, err := os.Executable()
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, executable, "-test.run=^TestMigratedSchemaDrainRetainsSchemaOnDeadline$", "-test.count=1", "-test.v")
+	command.Env = append(os.Environ(), childSchemaEnv+"="+schema, "DATABASE_DSN="+parsedDSN.String())
+	output, childErr := command.CombinedOutput()
+	require.NoError(t, ctx.Err(), "the child must return its own bounded drain failure")
+	require.Error(t, childErr, "the child fixture must fail rather than drop a live schema")
+	require.Contains(t, string(output), "context deadline exceeded")
+	require.Contains(t, string(output), "retain isolated receipt schema "+schema)
+	var retained int64
+	require.NoError(t, adminDB.Raw("SELECT count(*) FROM "+schema+".drain_retention_marker WHERE value = 'retained'").Scan(&retained).Error)
+	require.EqualValues(t, 1, retained, "the failed child must preserve its schema and durable marker")
+	require.NoError(t, held.PingContext(t.Context()), "the child must not kill a retained fixture session")
+	var adminSessions int64
+	require.NoError(t, adminDB.Raw(`SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND application_name = ?`, adminApplicationName).Scan(&adminSessions).Error)
+	require.Zero(t, adminSessions, "the child must join its poll and close its admin pool before returning")
+	t.Log("expected child drain deadline preserved the schema and marker; live fixture session survived; child admin sessions=0")
 }
 
 type interventionReceiptColumn struct {
