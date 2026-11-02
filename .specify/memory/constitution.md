@@ -1,13 +1,15 @@
 <!--
 Sync Impact Report
-- Current amendment: 4.0.0 -> 5.0.0 (MAJOR release-gate availability relaxation), effective 2026-09-26 by operator directive. Attempt Sonar when available; record `SKIPPED_UNAVAILABLE / NOT_PROVEN` with a concrete diagnostic for unavailable service/tool/runtime, continue other gates and delivery without Sonar repair unless separately requested. Actual analyzed findings and all other gates retain their requirements. The 2026-09-25 v6.49.4 receipt below remains historical evidence, not the current availability limit.
+- Current amendment: 6.0.0 -> 7.0.0 (MAJOR change to governing delivery ordering), effective 2026-11-02 by explicit product direction. Ordinary task-context usefulness and generic external clients' own linked knowledge follow their real provider dependencies; full Feature 011 and Book Context are not blanket predecessors. Clarify canonical external-client context and authored knowledge relations without a hosted assistant, new IAM, second content authority, or restored graph editor. Revalidate Feature 009 spec/plan/acceptance, Feature 010 ordering, architecture rationale, Decisions 18–22, and the affected current task/checklist pointers. Preserve all current data/authorization/release boundaries, including the 6.0.0 post-release Sonar timing policy. Documentation adoption does not claim any runtime, migration, private isolation, or installed acceptance.
+- Historical amendment: 5.0.0 -> 6.0.0, documentation alignment required by the operator's 2026-10-09 Sonar-post-release decision and 2026-10-10 AGENTS correction mandate. Deliver the working release after applicable functional/security/integrity proof; analyze the exact released candidate afterward without a Sonar merge/tag/publication veto. Confirmed substantial defects route to a corrective patch. AGENTS.md and docs/RELEASE-PROTOCOL.md are aligned; older Sonar timing predicates in recovery specs/tasks/checklists are superseded, not proof of a current campaign or waiver of their other obligations. No implementation, runtime, release, CI or scanner effects are part of this amendment.
+- Historical amendment: 4.0.0 -> 5.0.0 (MAJOR release-gate availability relaxation), effective 2026-09-26 by operator directive. It allowed unavailable Sonar to be recorded as `SKIPPED_UNAVAILABLE / NOT_PROVEN` without blocking other delivery; actual results and remaining obligations stayed intact. Its availability-only timing rule is superseded by the post-release amendment above.
 - Adopted version change: 3.0.0 -> 4.0.0 (MAJOR relaxation of one governing release gate), effective 2026-09-25. The existing candidate was already 3.0.0; 1.0.0 -> 2.0.0 would downgrade it.
 - Prior amendment: 2.0.0 -> 3.0.0 effective 2026-09-15, approved in OMP session 01a08c71-d2b8-7638-a45f-ef4b606fd786; its finding-disposition rule and XI/XIII scope clarification remain in force.
-- Historical 2026-09-25 operator decision: proceed without Sonar for the v6.49.4 PR #531 OMP plugin hotfix only. Sonar was NOT_PROVEN; prior findings remained unresolved, not accepted or cleared. That decision did not apply to PR #508, another version, or wider scope; the current availability rule is the separate amendment above.
+- Historical 2026-09-25 operator decision: proceed without Sonar for the v6.49.4 PR #531 OMP plugin hotfix only. Sonar was NOT_PROVEN; prior findings remained unresolved, not accepted or cleared. That candidate-only decision and the 2026-09-26 availability rule do not govern the post-release amendment above.
 - Unchanged: all core principles and other release, security, review, image, migration, and rollout gates under docs/RELEASE-PROTOCOL.md.
-- Revalidated active recovery scope: specs/001-engram-architectural-recovery/spec.md (unchanged outcome); plan.md, tasks.md (AR-7 T085/T086), quickstart.md, IMPLEMENTATION-HANDOFF.md, IMPLEMENTATION-SESSION-PROMPT.txt, checklists/operability.md, and analysis/fr-sc-task-traceability.md (AR-7 exact-head Sonar obligations retained; PR #531 is not AR-7 closure).
-- Revalidated other feature scope: specs/010-unified-code-intelligence/spec.md, plan.md, quickstart.md, tasks.md (UCI-1 release gate retained); specs/009-working-agent-memory-r1/spec.md and plan.md (future M6 gate retained); specs/011-operator-code-console/checklists/implementation-readiness.md (non-release Sonar boundary retained). None supplies a PR #531 release task or needs an edit.
-- Synchronized consumers: AGENTS.md already names the one-time exception; docs/RELEASE-PROTOCOL.md defines its bounded prerequisites and corrects the incomplete-campaign history. No executable gate changed.
+- Historical 2026-09-26 recovery revalidation snapshot: specs/001-engram-architectural-recovery/spec.md; plan.md, tasks.md (AR-7 T085/T086), quickstart.md, IMPLEMENTATION-HANDOFF.md, IMPLEMENTATION-SESSION-PROMPT.txt, checklists/operability.md, and analysis/fr-sc-task-traceability.md. The then-recorded exact-head Sonar obligations are superseded only in timing/veto semantics; PR #531 was not AR-7 closure.
+- Historical feature revalidation snapshot: specs/010-unified-code-intelligence/, specs/009-working-agent-memory-r1/ and specs/011-operator-code-console/. Their accepted product, integrity and evidence requirements remain; old release-blocking Sonar predicates read under the current post-release policy. This correction does not claim new feature acceptance or an executed revalidation campaign.
+- Historical consumer synchronization: AGENTS.md and docs/RELEASE-PROTOCOL.md retained the v6.49.4 exception and incomplete-campaign diagnostics. Current post-release synchronization is recorded in the amendment above; no executable gate changed.
 - Historical 2026-09-25 revalidation status: scoped constitutional exception recorded; actual release evidence and all remaining prerequisites were pending.
 -->
 
@@ -27,7 +29,10 @@ time-bounded emergency stop, but MUST NOT hide incomplete architecture behind a 
 
 ### III. Stable Typed Context Precedes Scoped Access
 Every scoped read, write, event, job, cache, and audit record MUST carry the server-resolved
-typed context required by its domain. Product knowledge MAY retain a canonical project or Space;
+typed context required by its domain. Product knowledge MAY use an authenticated external-client
+self context, a canonical project or Space, or explicit global context under its accepted owner.
+Self denotes a durable client principal, not a hosted assistant runtime. Explicit invalid context
+MUST NOT silently fall back. Affiliation MUST NOT imply visibility or a new grant;
 code intelligence MUST use an authorized Source, Checkout, and pinned View, with Space only as
 optional grouping. Paths, labels, remotes, branches, hashes, and legacy slugs are evidence,
 locators, or typed aliases, never tenant keys or checkout authority. Ambiguity MUST fail closed
@@ -38,7 +43,9 @@ working tree or View by itself.
 State, evidence, knowledge, and projections MUST have separate owners and lifecycles. Current
 session or project state is not historical knowledge; evidence is not a belief; a graph, summary,
 index, cluster, or meta-memory is a rebuildable projection and MUST NOT become a second write
-authority.
+authority. Explicit user-authored links between knowledge records are authoritative assertions
+owned by that knowledge use case; their graph indexes and views remain projections. Such links
+MUST NOT be confused with automatically derived code relations or grant access to an endpoint.
 
 ### V. Durable Work Has Durable State
 Every asynchronous product workflow MUST use persisted work records with idempotency keys,
@@ -89,7 +96,7 @@ work is permitted; an external release dependency must retain an owner and a res
 ### XII. Surface Work Follows Core Truth
 This recovery MUST NOT redesign the operator working surface as core recovery work. Existing surfaces MAY be removed or made honestly unavailable when their backing capability is removed. New working-surface design requires a separate accepted Spec Kit feature.
 
-The separately accepted Operator Code Console and basic collection feature MAY proceed after UCI technical acceptance without waiting for Working Agent Memory R1. It MUST preserve UCI authority, evidence, and release boundaries. This exception does not place working-surface implementation in the recovery feature. Book Context is the next separate feature. Working Agent Memory R1 remains retained after Book Context.
+The separately accepted Operator Code Console and basic collection feature MAY proceed after its UCI dependencies without waiting for Working Agent Memory R1. Ordinary task-context delivery and generic external clients' own linked knowledge MUST follow their actual accepted provider dependencies; they MUST NOT wait for full Feature 011, Book Context, all Assistant work, or unrelated task-field features as blanket prerequisites. Feature 010 retains UCI authority and same-View correctness; Feature 011 retains operator-surface ownership. An available deterministic code path MAY serve a named-symbol task without claiming semantic acceptance. This amendment does not move a UI redesign into core recovery, restore retired graph products, waive current release/data/access boundaries, or equate design/source readiness with installed useful behavior.
 
 ### XIII. Evidence Proves Behavior, Not Ceremony
 Tests and receipts MUST prove cross-session evidence acquisition, identity convergence,
@@ -134,18 +141,16 @@ contracts.
   terminal failure, and degraded-provider semantics.
 - Any new projection requires a named authority, consumer, rebuild procedure, health contract,
   and no write authority.
-- Before a release tag or publication, the exact candidate MUST receive a fresh SonarQube analysis
-  and Quality Gate `OK` when the service, tool and runtime are available. If unavailable, record
-  `SKIPPED_UNAVAILABLE / NOT_PROVEN` with a concrete diagnostic and continue other checks and
-  delivery; Sonar repair is not required unless separately requested. Unavailability MUST NOT
-  be reported as a PASS, zero findings, or an exemption for actual analyzed code/security findings.
-  Every reported finding MUST have an evidenced disposition under the release protocol.
-  Findings that violate required checks or the accepted safety, integrity, compatibility, or
-  user-behavior contract MUST be fixed before release. Nonblocking findings may be deferred only
-  by the authorized maintainer; deferral does not bypass an available failing Quality Gate,
-  required approval, or unresolved mandatory review. Policy thresholds, analysis scope, and
-  scanner/security exceptions MUST NOT be changed merely to make a candidate pass.
-  All other pre-release and rollout gates in the release protocol remain mandatory.
+- After working release delivery, run exact-released-candidate SonarQube analysis when the
+  service, tool and runtime are available. Retain actual results and evidenced finding
+  dispositions; unavailable or incomplete analysis is `NOT_PROVEN`, never PASS or zero findings.
+  Availability, numeric Quality Gate and issue count MUST NOT veto merge/tag/publication
+  or create a release Ask. Confirmed substantial defects MUST route to a corrective patch.
+  Concrete known security, data-integrity or accepted-behavior defects retain their independent
+  safety boundary; this policy does not authorize shipping a known unsafe change.
+  Do not alter thresholds, scope or scanner exceptions, suppress findings or relabel historical
+  failures to manufacture green. All other functional, Docker/image, supported-platform,
+  migration, recovery and rollout obligations in the release protocol remain in force.
 - A destructive contraction occurs only after backup or export, migration receipts, zero-drift
   observation, compatibility sunset, and rollback boundary evidence exist.
 
@@ -162,4 +167,4 @@ or removes a governing principle; a MINOR version adds or materially expands one
 clarifies without changing meaning. Every release and implementation review MUST check conformance
 to this constitution, preserve evidence of any exception, and reject scope expansion by workaround.
 
-**Version**: 5.0.0 (effective 2026-09-26) | **Ratified**: 2026-08-21 | **Last Amended**: 2026-09-26
+**Version**: 7.0.0 (effective 2026-11-02; product contract amendment) | **Ratified**: 2026-08-21 | **Last Amended**: 2026-11-02
