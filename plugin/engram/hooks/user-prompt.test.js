@@ -18,6 +18,8 @@ function dependencies(extra = {}) {
       assert.ok(budget > 0 && budget <= 500);
       assert.equal(options.token, 'private-auth');
       assert.equal(options.maxResponseBytes, 65536);
+      assert.equal(options.processingBudgetMs, budget);
+      assert.ok(Number.isSafeInteger(options.deadlineAt));
       return payload();
     },
     ...extra,
@@ -210,12 +212,13 @@ test('useful native code uses one process result and never waits for the slow kn
 
 test('native no-match preserves fresh project metadata for independent remaining-budget knowledge', async t => {
   let now = Date.now(), calls = 0;
+  const expectedWorkDeadline = now + 470;
   t.mock.method(Date, 'now', () => now);
   const outcome = await prompt.requestPromptContext(facts, {
     runtimeConfig: dependencies().runtimeConfig,
     requestTaskContext: async () => { calls++; now += 150; return nativeResponse('empty'); },
     resolveContext: async () => { assert.fail('no additional project resolver'); },
-    requestPost: async (route, body, budget) => { assert.equal(route, '/api/context/search?limit=3'); assert.equal(body.project, project); assert.ok(budget <= 350); return payload(body.query); },
+    requestPost: async (route, body, budget, options) => { assert.equal(route, '/api/context/search?limit=3'); assert.equal(body.project, project); assert.ok(budget <= 320); assert.equal(options.processingBudgetMs, budget); assert.equal(options.deadlineAt, expectedWorkDeadline); return payload(body.query); },
   });
   assert.equal(outcome.status, 'delivered');
   assert.equal(outcome.native_status, 'empty');
@@ -324,4 +327,47 @@ test('reserved native timeout closes its real hung process within the original f
   t.diagnostic(JSON.stringify({ elapsedMs: elapsed, outerBudgetMs: 500, processClosed: true, timings }));
   assert.equal(outcome.status, 'deadline_exceeded');
   assert.ok(elapsed < 500, `actual completion ${elapsed}ms`);
+});
+
+test('knowledge transport sends only the remaining optional processing budget without changing attribution', async t => {
+  const requests = [];
+  const server = http.createServer(async (req, res) => {
+    let raw = ''; for await (const chunk of req) raw += chunk;
+    requests.push({ budget: req.headers['x-engram-budget-ms'], authorization: req.headers.authorization, adapter: req.headers['x-engram-project-identity-adapter'], body: JSON.parse(raw) });
+    res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(payload()));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
+  const options = { serverURL: `http://127.0.0.1:${server.address().port}`, token: 'private-auth', maxResponseBytes: 65536 };
+  const body = { project, session_id: facts.session, query: facts.prompt };
+  await lib.requestPost('/api/context/search?limit=3', body, 500, options);
+  assert.equal(requests[0].budget, undefined, 'absence must preserve server defaults');
+  await lib.requestPost('/api/context/search?limit=3', body, 500, { ...options, processingBudgetMs: 500, deadlineAt: Date.now() + 150 });
+  assert.match(requests[1].budget ?? '', /^[1-9][0-9]*$/);
+  assert.ok(Number(requests[1].budget) <= 150);
+  assert.equal(requests[1].authorization, 'Bearer private-auth');
+  assert.equal(requests[1].adapter, 'hook');
+  assert.deepEqual(requests[1].body, body);
+  for (const processingBudgetMs of [0, -1, 1.5]) await assert.rejects(lib.requestPost('/api/context/search?limit=3', body, 500, { ...options, processingBudgetMs }), /budget/i);
+  await assert.rejects(lib.requestPost('/api/context/search?limit=3', body, 500, { ...options, processingBudgetMs: 100, deadlineAt: Date.now() - 1 }), error => error.name === 'AbortError');
+  assert.equal(requests.length, 2, 'invalid or expired budgets must not send a request');
+});
+
+test('source_ref preserves actual row provenance without inventing immutable body revision', () => {
+  const source_ref = { kind: 'memory', id: 42, record_version: 7, content_sha256: 'a'.repeat(64) };
+  const response = prompt.formatKnowledgeResult(payload(facts.prompt, [{ id: 42, project, narrative: 'Do not delete backup 😀', version: 21, source_ref }]), { project, query: facts.prompt });
+  assert.equal(response.status, 'delivered');
+  assert.match(response.content, /memory:42 revision=unknown/);
+  assert.match(response.content, /"kind":"memory","id":42,"record_version":7,"content_sha256":"a{64}"/);
+  assert.match(response.content, /record_version is mutable/);
+  assert.doesNotMatch(response.content, /revision=(7|21)\b/);
+  const rule = prompt.formatKnowledgeResult(payload(facts.prompt, [{ id: 42, project, narrative: 'НЕ удалять backup', source_ref: { kind: 'behavioral_rule', id: 42 } }]), { project, query: facts.prompt });
+  assert.match(rule.content, /behavioral_rule:42 revision=unknown/);
+  assert.doesNotMatch(rule.content, /"record_version":|"content_sha256":/);
+  const legacy = prompt.formatKnowledgeResult(payload(facts.prompt, [{ id: 42, project, narrative: 'literal evidence', version: 99 }]), { project, query: facts.prompt });
+  assert.match(legacy.content, /observation:42 revision=unknown/);
+  assert.doesNotMatch(legacy.content, /source_ref=/);
+  for (const invalid of [{ kind: 'memory', id: 99 }, { kind: 'foreign', id: 42 }, { kind: 'memory', id: 42, record_version: '7' }, { kind: 'memory', id: 42, content_sha256: 'not a digest' }]) {
+    assert.equal(prompt.formatKnowledgeResult(payload(facts.prompt, [{ id: 42, project, narrative: 'must not escape', source_ref: invalid }]), { project, query: facts.prompt }).status, 'filtered');
+  }
 });
