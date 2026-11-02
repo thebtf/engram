@@ -17,7 +17,6 @@ const {
   revealSecret: fetchSecretValue,
   createSecret: runCreateSecret,
   deleteSecret,
-  cleanupOrphans: runCleanupOrphans,
   rotationGap,
 } = useOperatorSecrets()
 
@@ -145,11 +144,6 @@ async function requestDelete(cred: OperatorCredential) {
   await deleteOpened()
 }
 
-async function cleanupOrphans() {
-  const result = await runCleanupOrphans()
-  mutationResult.value = result
-  if (result.kind === 'committed_verified') await refresh()
-}
 </script>
 
 <template>
@@ -235,7 +229,6 @@ async function cleanupOrphans() {
         <code>{{ rotationGap.evidence.endpoint }}</code>
       </div>
       <button class="secondary" disabled>{{ t('secrets.rotation.action') }} <span>{{ t('overview.badges.mustBuild') }}</span></button>
-      <button class="secondary" :disabled="pending" @click="cleanupOrphans">{{ t('secrets.rotation.cleanup') }}</button>
     </section>
 
     <table class="vault-tbl">

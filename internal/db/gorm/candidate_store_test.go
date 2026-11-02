@@ -45,7 +45,7 @@ func openCandidateTestDBInScope(t *testing.T, scope *gorm.DB) *gorm.DB {
 	if config.RuntimeParams == nil {
 		config.RuntimeParams = make(map[string]string)
 	}
-	config.RuntimeParams["application_name"] = candidateTestDBApplicationName
+	config.RuntimeParams["application_name"] = scopedTestApplicationName(candidateTestDBApplicationName, schema)
 	config.RuntimeParams["search_path"] = schema + ",public"
 	sqlDB := stdlib.OpenDB(*config)
 	sqlDB.SetMaxOpenConns(2)
@@ -103,7 +103,7 @@ func candidateTestDBOtherSessionCount(t *testing.T, observer *gorm.DB) int64 {
 		FROM pg_stat_activity
 		WHERE datname = current_database()
 		  AND pid <> pg_backend_pid()
-		  AND application_name = ?
+		  AND split_part(application_name, ':', 1) = ?
 	`, candidateTestDBApplicationName).Scan(&count).Error)
 	return count
 }
@@ -309,6 +309,9 @@ func TestCandidateStore_StateMachine_ConcurrentRace(t *testing.T) {
 	got, err := cs.Get(ctx, created.ID)
 	require.NoError(t, err)
 	require.Equal(t, models.CandidateStatusRejected, got.Status)
+	require.Eventually(t, func() bool {
+		return countAuditRows(t, db, "reject_candidate") == 1
+	}, 2*time.Second, 25*time.Millisecond, "the winning transition audit must finish before its schema is released")
 }
 
 // TestCandidateStore_FingerprintIdempotency verifies that duplicate pending candidates
@@ -468,6 +471,10 @@ func TestCandidateStore_PromoteWithMemory_AtomicRollback(t *testing.T) {
 
 	_, err = cs.TransitionToRejected(ctx, created.ID, "pre-rejected for rollback test")
 	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		var count int64
+		return db.Model(&AuditLogEntry{}).Where("source_session_id = ? AND action = ?", created.SourceSessionID, "reject_candidate").Count(&count).Error == nil && count == 1
+	}, 2*time.Second, 25*time.Millisecond, "pre-rejection audit must finish before rollback testing and schema cleanup")
 
 	// Count memory rows before the attempted promote.
 	var memCountBefore int64

@@ -4,7 +4,6 @@ const {
   analyticsState,
   retrievalState,
   vnextState,
-  noiseMetrics,
   pending,
   error,
   refresh,
@@ -25,25 +24,28 @@ const {
     <div v-if="pending" class="state pending">{{ t('noisePage.state.pending') }}</div>
     <div v-if="error" class="state error">{{ t('noisePage.state.error', { message: error }) }}</div>
 
-    <section class="hero">
+    <section class="citation-summary" aria-labelledby="citation-share-title">
       <div class="snapshot-value">
-        <div class="gv">{{ vnextState.kind === 'live' && typeof vnextState.data.noise_ratio === 'number' ? vnextState.data.noise_ratio.toFixed(2) : '—' }}</div>
-        <div class="gl">{{ t('noisePage.gauge.label') }}</div>
+        <h2 id="citation-share-title">{{ t('noisePage.gauge.label') }}</h2>
+        <div class="gv">{{ vnextState.kind === 'live' && typeof vnextState.data.noise_ratio === 'number' ?
+          `${Math.round(vnextState.data.noise_ratio * 100)}%` : '—' }}</div>
       </div>
-      <div class="metrics">
-        <article v-for="metric in noiseMetrics" :key="metric.label" class="metric">
-          <span>{{ t(`noisePage.metrics.${metric.label}`) }}</span>
-          <strong>{{ metric.value }}</strong>
-          <code>{{ metric.endpoint }}</code>
-        </article>
-      </div>
+      <dl class="stats citation-counts">
+        <div>
+          <dt>{{ t('noisePage.citations.cited') }}</dt>
+          <dd>{{ vnextState.kind === 'live' ? vnextState.data.citation_count ?? '—' : '—' }}</dd>
+        </div>
+        <div>
+          <dt>{{ t('noisePage.citations.uncited') }}</dt>
+          <dd>{{ vnextState.kind === 'live' ? vnextState.data.uncited_count ?? '—' : '—' }}</dd>
+        </div>
+      </dl>
     </section>
 
     <section class="grid">
       <article class="card">
         <div class="card-head">
           <h2>{{ t('noisePage.analytics.title') }}</h2>
-          <code>{{ analyticsState.evidence.endpoint }}</code>
         </div>
         <dl class="stats">
           <div>
@@ -68,7 +70,6 @@ const {
       <article class="card">
         <div class="card-head">
           <h2>{{ t('noisePage.retrieval.title') }}</h2>
-          <code>{{ retrievalState.evidence.endpoint }}</code>
         </div>
         <dl class="stats">
           <div>
@@ -87,52 +88,216 @@ const {
             <dt>{{ t('noisePage.retrieval.duplicates') }}</dt>
             <dd>{{ retrievalState.kind === 'live' ? retrievalState.data.duplicates_removed ?? '—' : '—' }}</dd>
           </div>
+          <div>
+            <dt>{{ t('noisePage.retrieval.searchRequests') }}</dt>
+            <dd>{{ retrievalState.kind === 'live' ? retrievalState.data.search_requests ?? '—' : '—' }}</dd>
+          </div>
         </dl>
       </article>
 
       <article class="card">
         <div class="card-head">
           <h2>{{ t('noisePage.unrecorded.title') }}</h2>
-          <code>{{ vnextState.evidence.endpoint }}</code>
         </div>
         <p>{{ t('noisePage.unrecorded.body') }}</p>
-        <strong class="big">{{ vnextState.kind === 'live' && typeof vnextState.data.outcomes?.unrecorded_fraction === 'number' ? `${Math.round(vnextState.data.outcomes.unrecorded_fraction * 100)}%` : '—' }}</strong>
+        <strong class="big">{{ vnextState.kind === 'live' && typeof vnextState.data.outcomes?.unrecorded_fraction ===
+          'number' ? `${Math.round(vnextState.data.outcomes.unrecorded_fraction * 100)}%` : '—' }}</strong>
       </article>
 
     </section>
+    <details class="sources">
+      <summary>{{ t('noisePage.sources.title') }}</summary>
+      <p>{{ t('noisePage.sources.citations') }}</p>
+      <code>uncited_count / (citation_count + uncited_count)</code>
+      <p>{{ t('noisePage.sources.unknown') }}</p>
+      <ul>
+        <li><code>{{ vnextState.evidence.endpoint }}</code></li>
+        <li><code>{{ analyticsState.evidence.endpoint }}</code></li>
+        <li><code>{{ retrievalState.evidence.endpoint }}</code></li>
+      </ul>
+    </details>
   </div>
 </template>
 
 <style scoped>
-.noise-page { display:grid; gap:16px; }
-.head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
-.head h1 { margin:0 0 4px; font-size:var(--text-xl); font-weight:700; }
-.head p { margin:0; font-size:var(--text-sm); color:var(--muted); }
-.btn { border:1px solid var(--border); border-radius:var(--r-sm); background:var(--surface); color:var(--fg); padding:9px 14px; font:inherit; font-weight:700; cursor:pointer; }
-.btn:disabled { opacity:.55; cursor:wait; }
-.state { border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); padding:10px 12px; color:var(--fg-2); font-size:var(--text-sm); }
-.state.pending { border-color:color-mix(in oklab,var(--accent),transparent 55%); }
-.state.error { color:var(--state-warn); border-color:color-mix(in oklab,var(--state-warn),transparent 45%); }
-.hero { border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); padding:22px; display:grid; grid-template-columns:170px 1fr; gap:24px; align-items:center; }
-.gauge { --p:0; width:150px; height:150px; border-radius:50%; flex:none; position:relative; display:grid; place-items:center; background:conic-gradient(var(--state-warn) calc(var(--p)*1%), color-mix(in oklab,var(--class-live),transparent 60%) 0); }
-.gauge::after { content:""; position:absolute; inset:14px; border-radius:50%; background:var(--surface); }
-.gv { position:relative; font-family:var(--font-mono); font-weight:800; font-size:var(--text-2xl); }
-.gl { position:relative; font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); }
-.metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; }
-.metric { border:1px solid var(--border-soft); border-radius:var(--r-sm); padding:11px; }
-.metric span, .stats dt { display:block; color:var(--muted); font-size:var(--text-xs); text-transform:uppercase; letter-spacing:.04em; }
-.metric strong, .stats dd, .big { display:block; margin:6px 0 0; font-family:var(--font-mono); font-size:var(--text-xl); font-weight:800; color:var(--fg); }
-.metric code, .card-head code, .gap code { display:block; margin-top:8px; font-family:var(--font-mono); font-size:10px; color:var(--muted); }
-.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:14px; }
-.card { border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); padding:16px; }
-.card-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }
-.card-head h2 { margin:0; font-size:var(--text-sm); font-weight:800; }
-.stats { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin:0; }
-.stats dd { margin-bottom:0; }
-.card p { color:var(--muted); font-size:var(--text-sm); margin:0 0 10px; }
-.gap { border-color:color-mix(in oklab,var(--class-mustbuild),transparent 50%); }
-@media (max-width: 820px) {
-  .head, .hero { display:grid; grid-template-columns:1fr; }
-  .gauge { margin:auto; }
+.noise-page {
+  display: grid;
+  gap: 16px;
+}
+
+.head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.head h1 {
+  margin: 0 0 4px;
+  font-size: var(--text-xl);
+  font-weight: 700;
+}
+
+.head p {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+.btn {
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--fg);
+  padding: 9px 14px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.btn:disabled {
+  opacity: .55;
+  cursor: wait;
+}
+
+.state {
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  padding: 10px 12px;
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+}
+
+.state.pending {
+  border-color: color-mix(in oklab, var(--accent), transparent 55%);
+}
+
+.state.error {
+  color: var(--state-warn);
+  border-color: color-mix(in oklab, var(--state-warn), transparent 45%);
+}
+
+.citation-summary {
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  padding: 16px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: center;
+}
+
+.snapshot-value h2 {
+  margin: 0 0 8px;
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+
+.gv {
+  font-weight: 800;
+  font-size: var(--text-2xl);
+  font-variant-numeric: tabular-nums;
+}
+
+.stats dt {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.stats dd,
+.big {
+  display: block;
+  margin: 6px 0 0;
+  font-size: var(--text-xl);
+  font-weight: 800;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 14px;
+}
+
+.card {
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  padding: 16px;
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.card-head h2 {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 800;
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.stats dd {
+  margin-bottom: 0;
+}
+
+.card p {
+  color: var(--muted);
+  font-size: var(--text-sm);
+  margin: 0 0 10px;
+}
+
+.sources {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+}
+
+.sources summary {
+  cursor: pointer;
+  min-height: 44px;
+  display: list-item;
+  padding: 10px 0;
+  box-sizing: border-box;
+  color: var(--fg);
+  font-weight: 700;
+}
+
+.sources p {
+  max-width: 72ch;
+  line-height: 1.5;
+}
+
+.sources code {
+  overflow-wrap: anywhere;
+}
+
+.btn:focus-visible,
+.sources summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+@media (max-width:820px) {
+
+  .head,
+  .citation-summary {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
 }
 </style>

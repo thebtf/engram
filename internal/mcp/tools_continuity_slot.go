@@ -141,6 +141,36 @@ func continuitySlotTargetAllowed(memory *models.Memory, project string, caller s
 
 func (s *Server) clearContinuitySlot(ctx context.Context, project string, caller scope.KeycardContext, actor string) (string, error) {
 	err := s.memoryStore.GetDB().WithContext(ctx).Transaction(func(tx *gormlib.DB) error {
+		// Match consolidationLock's relation order before accessing memories
+		// or slots; otherwise its audit_log lock can invert this audit write.
+		if err := tx.WithContext(ctx).Exec(`LOCK TABLE "audit_log" IN ROW EXCLUSIVE MODE`).Error; err != nil {
+			return err
+		}
+		// The clear audit's memory FK also locks the target. Acquire that
+		// memory before the slot, just like set and lifecycle invalidation.
+		// Stored authority permits cleanup even after expiry or invalidation;
+		// it must not impose current read/status visibility on the target.
+		var lockedMemoryID int64
+		lock := tx.WithContext(ctx).Raw(`SELECT m.id FROM memories m
+			WHERE m.id = (SELECT memory_id FROM project_continuity_slots
+			 WHERE project = ? AND btrim(authority_domain) <> ''
+			 AND btrim(authority_owner_principal) = ? AND btrim(authority_owner_principal_kind) = ?)
+			FOR UPDATE`, project, strings.TrimSpace(caller.Principal), strings.TrimSpace(caller.PrincipalKind)).Scan(&lockedMemoryID)
+		if lock.Error != nil {
+			return lock.Error
+		}
+		if lock.RowsAffected == 0 {
+			// An unlocked absence is only an idempotent no-op, never authority
+			// to delete a slot that appears or is replaced concurrently.
+			_, err := gormstore.NewContinuitySlotStore(tx).Get(ctx, project)
+			if errors.Is(err, gormlib.ErrRecordNotFound) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			return errContinuitySlotTransactionAuthorization
+		}
 		slot, err := s.continuitySlotStore.GetTx(ctx, tx, project)
 		if errors.Is(err, gormlib.ErrRecordNotFound) {
 			return nil
@@ -148,7 +178,7 @@ func (s *Server) clearContinuitySlot(ctx context.Context, project string, caller
 		if err != nil {
 			return err
 		}
-		if !continuitySlotStoredAuthorityAllowed(caller, slot) {
+		if slot.MemoryID != lockedMemoryID || !continuitySlotStoredAuthorityAllowed(caller, slot) {
 			return errContinuitySlotTransactionAuthorization
 		}
 		memoryID := slot.MemoryID

@@ -302,14 +302,18 @@ func TestAuthHandlersLifecycle_SessionRevokeWinsInFlightRequest(t *testing.T) {
 	require.Contains(t, rec.Body.String(), "session revoked")
 }
 
-func TestAuthHandlersLifecycle_AccessCreateInvitationAcceptsAuthentikAdminWithoutDashboardCookie(t *testing.T) {
+func TestAuthHandlersLifecycle_AccessCreateInvitationAcceptsDashboardAdminCookie(t *testing.T) {
+	t.Setenv("ENGRAM_AUTH_DISABLED", "false")
 	env := openAuthLifecycleEnv(t)
-	adminEmail := fmt.Sprintf("zz-access-authentik-admin-%d@example.com", time.Now().UnixNano())
-	inviteEmail := fmt.Sprintf("zz-access-authentik-invite-%d@example.com", time.Now().UnixNano())
+	adminEmail := fmt.Sprintf("zz-access-cookie-admin-%d@example.com", time.Now().UnixNano())
+	inviteEmail := fmt.Sprintf("zz-access-cookie-invite-%d@example.com", time.Now().UnixNano())
 	admin, err := env.users.CreateUser(adminEmail, "hash", gormdb.DashboardRoleAdmin)
 	require.NoError(t, err)
+	session, err := env.sessions.CreateSession(admin.ID, time.Hour, "test-agent", "127.0.0.1")
+	require.NoError(t, err)
 	req := requestWithRoute(http.MethodPost, "/api/access/invitations", []byte(fmt.Sprintf(`{"email":%q,"role":"operator"}`, inviteEmail)), authpkg.Session("admin"), nil)
-	req.Header.Set("X-Authentik-Email", adminEmail)
+	req.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: session.ID})
+	req.Header.Set("X-Authentik-Email", "untrusted-header@example.com")
 	rec := httptest.NewRecorder()
 	env.handlers.handleAccessCreateInvitation(rec, req)
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
@@ -321,6 +325,26 @@ func TestAuthHandlersLifecycle_AccessCreateInvitationAcceptsAuthentikAdminWithou
 	require.Equal(t, adminEmail, payload.Invitation.CreatedByEmail)
 	require.Equal(t, inviteEmail, payload.Invitation.Email)
 	require.NotEmpty(t, payload.Invitation.Code, "create is the only bounded code reveal")
+}
+
+func TestAuthHandlersLifecycle_AccessCreateInvitationRejectsRetiredAuthentikHeaderWithoutCookie(t *testing.T) {
+	t.Setenv("ENGRAM_AUTH_DISABLED", "false")
+	env := openAuthLifecycleEnv(t)
+	adminEmail := fmt.Sprintf("zz-access-retired-admin-%d@example.com", time.Now().UnixNano())
+	inviteEmail := fmt.Sprintf("zz-access-retired-invite-%d@example.com", time.Now().UnixNano())
+	_, err := env.users.CreateUser(adminEmail, "hash", gormdb.DashboardRoleAdmin)
+	require.NoError(t, err)
+	req := requestWithRoute(http.MethodPost, "/api/access/invitations", []byte(fmt.Sprintf(`{"email":%q,"role":"operator"}`, inviteEmail)), authpkg.Session("admin"), nil)
+	req.Header.Set("X-Authentik-Email", adminEmail)
+	rec := httptest.NewRecorder()
+	env.handlers.handleAccessCreateInvitation(rec, req)
+	require.Equal(t, http.StatusUnauthorized, rec.Code, rec.Body.String())
+	require.NotContains(t, rec.Body.String(), `"code"`)
+	var invitations, audits int64
+	require.NoError(t, env.store.DB.Model(&gormdb.Invitation{}).Count(&invitations).Error)
+	require.NoError(t, env.store.DB.Model(&gormdb.AuditLogEntry{}).Where("action = ?", "auth_invitation_created").Count(&audits).Error)
+	require.Zero(t, invitations, "retired headers must not issue invitation credentials")
+	require.Zero(t, audits, "a rejected request must not record an invitation creation")
 }
 
 func TestAccessInvitationReadShapesOmitCodes(t *testing.T) {

@@ -26,6 +26,7 @@ func memoryDomainOwnersMigration150() *gormigrate.Migration {
 						SELECT 1
 						FROM pg_constraint
 						WHERE conname = 'memory_domain_owners_domain_nonempty_chk'
+						  AND conrelid = 'memory_domain_owners'::regclass
 					) THEN
 						ALTER TABLE memory_domain_owners
 							ADD CONSTRAINT memory_domain_owners_domain_nonempty_chk
@@ -38,6 +39,7 @@ func memoryDomainOwnersMigration150() *gormigrate.Migration {
 						SELECT 1
 						FROM pg_constraint
 						WHERE conname = 'memory_domain_owners_owner_nonempty_chk'
+						  AND conrelid = 'memory_domain_owners'::regclass
 					) THEN
 						ALTER TABLE memory_domain_owners
 							ADD CONSTRAINT memory_domain_owners_owner_nonempty_chk
@@ -50,6 +52,7 @@ func memoryDomainOwnersMigration150() *gormigrate.Migration {
 						SELECT 1
 						FROM pg_constraint
 						WHERE conname = 'memory_domain_owners_kind_chk'
+						  AND conrelid = 'memory_domain_owners'::regclass
 					) THEN
 						ALTER TABLE memory_domain_owners
 							ADD CONSTRAINT memory_domain_owners_kind_chk
@@ -62,6 +65,7 @@ func memoryDomainOwnersMigration150() *gormigrate.Migration {
 						SELECT 1
 						FROM pg_constraint
 						WHERE conname = 'memory_domain_owners_mode_chk'
+						  AND conrelid = 'memory_domain_owners'::regclass
 					) THEN
 						ALTER TABLE memory_domain_owners
 							ADD CONSTRAINT memory_domain_owners_mode_chk

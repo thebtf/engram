@@ -5,7 +5,7 @@
 import { z } from 'zod';
 import { Type } from '@sinclair/typebox';
 import { resolveProject } from '../client.js';
-import type { EngramRestClient, BulkImportRequest } from '../client.js';
+import type { EngramRestClient, MemoryInput } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import { quotedPromptScalar } from '../context/formatter.js';
 import { StringArraySchema } from '../validation.js';
@@ -14,153 +14,140 @@ import type { AnyAgentTool, OpenClawPluginToolContext } from '../types/openclaw.
 const CONTENT_MAX_CHARS = 900;
 
 const RememberParamsSchema = z.object({
-  title: z.string().min(1),
-  content: z.string().min(1),
-  type: z.enum(['decision', 'feature', 'change', 'refactor', 'discovery', 'bugfix']).default('change'),
-  scope: z.enum(['project', 'global', 'agent']).default('project'),
-  tags: StringArraySchema.optional(),
+ title: z.string().min(1),
+ content: z.string().min(1),
+ type: z.enum(['decision', 'feature', 'change', 'refactor', 'discovery', 'bugfix']).default('change'),
+ scope: z.enum(['project', 'global', 'agent']).default('project'),
+ tags: StringArraySchema.optional(),
 });
 
 const StoreParamsSchema = z.object({
-  text: z.string().min(1).optional(),
-  content: z.string().min(1).optional(),
-  title: z.string().optional(),
-  category: z.enum(['preference', 'decision', 'entity', 'fact', 'other']).optional(),
-  tags: StringArraySchema.optional(),
+ text: z.string().min(1).optional(),
+ content: z.string().min(1).optional(),
+ title: z.string().optional(),
+ category: z.enum(['preference', 'decision', 'entity', 'fact', 'other']).optional(),
+ tags: StringArraySchema.optional(),
 }).refine((d) => Boolean(d.text || d.content), { message: 'Either text or content is required' });
 
 const rememberParameters = Type.Object({
-  title: Type.String({ description: 'Short descriptive title for the observation' }),
-  content: Type.String({ description: 'Content/narrative to remember (max 900 chars)' }),
-  type: Type.Optional(Type.Union([
-    Type.Literal('decision'), Type.Literal('feature'), Type.Literal('change'),
-    Type.Literal('refactor'), Type.Literal('discovery'), Type.Literal('bugfix'),
-  ], { description: 'Observation type', default: 'change' })),
-  scope: Type.Optional(Type.Union([
-    Type.Literal('project'), Type.Literal('global'), Type.Literal('agent'),
-  ], { description: 'Scope: project-local, global, or agent-private', default: 'project' })),
-  tags: Type.Optional(Type.Array(Type.String(), { description: 'Optional tags' })),
+ title: Type.String({ description: 'Short descriptive title for the observation' }),
+ content: Type.String({ description: 'Content/narrative to remember (max 900 chars)' }),
+ type: Type.Optional(Type.Union([
+  Type.Literal('decision'), Type.Literal('feature'), Type.Literal('change'),
+  Type.Literal('refactor'), Type.Literal('discovery'), Type.Literal('bugfix'),
+ ], { description: 'Observation type', default: 'change' })),
+ scope: Type.Optional(Type.Union([
+  Type.Literal('project'), Type.Literal('global'), Type.Literal('agent'),
+ ], { description: 'Scope: project-local, global, or agent-private', default: 'project' })),
+ tags: Type.Optional(Type.Array(Type.String(), { description: 'Optional tags' })),
 });
 
 const storeParameters = Type.Object({
-  text: Type.Optional(Type.String({ description: 'Text to remember (compat alias for content)' })),
-  content: Type.Optional(Type.String({ description: 'Content to remember' })),
-  title: Type.Optional(Type.String({ description: 'Short title (auto-generated if omitted)' })),
-  category: Type.Optional(Type.Union([
-    Type.Literal('preference'), Type.Literal('decision'), Type.Literal('entity'),
-    Type.Literal('fact'), Type.Literal('other'),
-  ], { description: 'Memory category' })),
-  tags: Type.Optional(Type.Array(Type.String(), { description: 'Optional tags' })),
+ text: Type.Optional(Type.String({ description: 'Text to remember (compat alias for content)' })),
+ content: Type.Optional(Type.String({ description: 'Content to remember' })),
+ title: Type.Optional(Type.String({ description: 'Short title (auto-generated if omitted)' })),
+ category: Type.Optional(Type.Union([
+  Type.Literal('preference'), Type.Literal('decision'), Type.Literal('entity'),
+  Type.Literal('fact'), Type.Literal('other'),
+ ], { description: 'Memory category' })),
+ tags: Type.Optional(Type.Array(Type.String(), { description: 'Optional tags' })),
 });
 
 const CATEGORY_TO_TYPE: Record<string, string> = {
-  preference: 'change',
-  decision: 'decision',
-  entity: 'change',
-  fact: 'discovery',
-  other: 'change',
+ preference: 'change',
+ decision: 'decision',
+ entity: 'change',
+ fact: 'discovery',
+ other: 'change',
 };
 
 async function storeObservation(
-  title: string,
-  content: string,
-  type: string,
-  scope: string,
-  tags: string[] | undefined,
-  ctx: OpenClawPluginToolContext,
-  client: EngramRestClient,
-  config: PluginConfig,
+ title: string,
+ content: string,
+ type: string,
+ scope: NonNullable<MemoryInput['scope']>,
+ tags: string[] | undefined,
+ ctx: OpenClawPluginToolContext,
+ client: EngramRestClient,
+ config: PluginConfig,
 ): Promise<string> {
-  if (!client.isAvailable()) {
-    return 'engram is currently unreachable — memory store unavailable';
-  }
+ if (!client.isAvailable()) {
+  return 'engram is currently unreachable — memory store unavailable';
+ }
 
-  const registration = await resolveProject(client, ctx.agentId ?? '', ctx.workspaceDir, config.project);
-  if (!registration.ok) {
-    return `Project identity unavailable: ${registration.error.code} (${registration.error.upgradeAction})`;
-  }
-  const project = registration.canonicalProject;
+ const registration = await resolveProject(client, ctx.agentId ?? '', ctx.workspaceDir, config.project);
+ if (!registration.ok) {
+  return `Project identity unavailable: ${registration.error.code} (${registration.error.upgradeAction})`;
+ }
+ const project = registration.canonicalProject;
 
-  const trimmedContent = content.length > CONTENT_MAX_CHARS ? content.slice(0, CONTENT_MAX_CHARS) : content;
+ const trimmedContent = content.length > CONTENT_MAX_CHARS ? content.slice(0, CONTENT_MAX_CHARS) : content;
 
-  const observation: BulkImportRequest = {
-    title,
-    content: trimmedContent,
-    type,
-    project,
-    scope,
-    tags,
-  };
+ const observation: MemoryInput = {
+  title,
+  content: trimmedContent,
+  type,
+  project,
+  scope,
+  tags,
+ };
 
-  // Pass the agent's session ID so the server reuses the existing session
-  // instead of creating a new synthetic one for every store call.
-  const sessionId = ctx.sessionId ?? ctx.sessionKey;
-
-  const response = await client.bulkImport([observation], sessionId);
-  if (!response) {
-    return 'engram store failed — server returned no response';
-  }
-
-  if (response.imported > 0) {
-    return `Stored: ${quotedPromptScalar(title)} (type: ${quotedPromptScalar(type)}, scope: ${quotedPromptScalar(scope)})`;
-  }
-  if (response.skipped_duplicates > 0) {
-    return `Observation skipped (likely a near-duplicate): ${quotedPromptScalar(title)}`;
-  }
-
-  const errMsg = response.errors?.join(', ') ?? 'unknown error';
-  return `Failed to store observation: ${quotedPromptScalar(errMsg)}`;
+ const [result] = await client.storeMemories([observation], { sourceAgent: ctx.agentId, sessionId: ctx.sessionId ?? ctx.sessionKey });
+ if (result?.ok) {
+  return `Stored: ${quotedPromptScalar(title)} (type: ${quotedPromptScalar(type)}, scope: ${quotedPromptScalar(scope)})`;
+ }
+ return `Failed to store memory: ${quotedPromptScalar(result?.error ?? 'No memory write confirmation')}`;
 }
 
 export function createEngramRememberTool(
-  ctx: OpenClawPluginToolContext,
-  client: EngramRestClient,
-  config: PluginConfig,
+ ctx: OpenClawPluginToolContext,
+ client: EngramRestClient,
+ config: PluginConfig,
 ): AnyAgentTool {
-  return {
-    name: 'engram_remember',
-    description:
-      'Store an observation in engram persistent memory. ' +
-      'Use this to record decisions, discoveries, patterns, or important context for future sessions. ' +
-      'Use scope "agent" for private agent-specific memories.',
-    parameters: rememberParameters,
+ return {
+  name: 'engram_remember',
+  description:
+   'Store an observation in engram persistent memory. ' +
+   'Use this to record decisions, discoveries, patterns, or important context for future sessions. ' +
+   'Use scope "agent" for private agent-specific memories.',
+  parameters: rememberParameters,
 
-    async execute(_toolCallId: string, params: Record<string, unknown>): Promise<string> {
-      const parsed = RememberParamsSchema.safeParse(params);
-      if (!parsed.success) {
-        return `Invalid parameters: ${parsed.error.message}`;
-      }
-      return storeObservation(
-        parsed.data.title, parsed.data.content, parsed.data.type, parsed.data.scope,
-        parsed.data.tags, ctx, client, config,
-      );
-    },
-  };
+  async execute(_toolCallId: string, params: Record<string, unknown>): Promise<string> {
+   const parsed = RememberParamsSchema.safeParse(params);
+   if (!parsed.success) {
+    return `Invalid parameters: ${parsed.error.message}`;
+   }
+   return storeObservation(
+    parsed.data.title, parsed.data.content, parsed.data.type, parsed.data.scope,
+    parsed.data.tags, ctx, client, config,
+   );
+  },
+ };
 }
 
 export function createMemoryStoreTool(
-  ctx: OpenClawPluginToolContext,
-  client: EngramRestClient,
-  config: PluginConfig,
+ ctx: OpenClawPluginToolContext,
+ client: EngramRestClient,
+ config: PluginConfig,
 ): AnyAgentTool {
-  return {
-    name: 'memory_store',
-    label: 'Store Memory',
-    description:
-      'Store a memory for future sessions. Accepts text or content parameter.',
-    parameters: storeParameters,
+ return {
+  name: 'memory_store',
+  label: 'Store Memory',
+  description:
+   'Store a memory for future sessions. Accepts text or content parameter.',
+  parameters: storeParameters,
 
-    async execute(_toolCallId: string, params: Record<string, unknown>): Promise<string> {
-      const parsed = StoreParamsSchema.safeParse(params);
-      if (!parsed.success) {
-        return `Invalid parameters: ${parsed.error.message}`;
-      }
+  async execute(_toolCallId: string, params: Record<string, unknown>): Promise<string> {
+   const parsed = StoreParamsSchema.safeParse(params);
+   if (!parsed.success) {
+    return `Invalid parameters: ${parsed.error.message}`;
+   }
 
-      const content = parsed.data.text ?? parsed.data.content ?? '';
-      const title = parsed.data.title ?? (content.length > 80 ? content.slice(0, 77) + '...' : content);
-      const type = parsed.data.category ? (CATEGORY_TO_TYPE[parsed.data.category] ?? 'change') : 'change';
+   const content = parsed.data.text ?? parsed.data.content ?? '';
+   const title = parsed.data.title ?? (content.length > 80 ? content.slice(0, 77) + '...' : content);
+   const type = parsed.data.category ? (CATEGORY_TO_TYPE[parsed.data.category] ?? 'change') : 'change';
 
-      return storeObservation(title, content, type, 'project', parsed.data.tags, ctx, client, config);
-    },
-  };
+   return storeObservation(title, content, type, 'project', parsed.data.tags, ctx, client, config);
+  },
+ };
 }

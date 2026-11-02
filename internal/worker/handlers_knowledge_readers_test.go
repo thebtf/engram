@@ -71,6 +71,11 @@ func (c knowledgeSQLiteConn) Prepare(query string) (driver.Stmt, error) {
 	query = knowledgeAliasContainment.ReplaceAllString(query, `knowledge_has_alias(legacy_ids, $1)`)
 	query = knowledgeJSONContainment.ReplaceAllString(query, `knowledge_has_tag(m.tags, $1)`)
 	query = knowledgeSessionMembership.ReplaceAllString(query, `knowledge_has_alias(m.source_sessions, $1)`)
+	// The single-connection creation fixture executes the real project guard;
+	// PostgreSQL row-lock behavior remains outside this SQLite proof.
+	if strings.HasPrefix(query, `SELECT * FROM "projects" `) {
+		query = strings.TrimSuffix(query, " FOR SHARE")
+	}
 	// Preserve the real source-label join and ordinal lookup, not fixture answers.
 	if strings.HasPrefix(query, "SELECT r.ordinality AS ordinal, s.display_name FROM jsonb_array_elements(") {
 		query = strings.ReplaceAll(query, "r.ordinality", "(CAST(r.key AS INTEGER) + 1)")

@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { useOperatorProjectContext, projectName, loadKnowledgePage } from '../composables/useOperatorProjectContext'
+import { useOperatorProjectContext, projectChoiceLabel, loadKnowledgePage } from '../composables/useOperatorProjectContext'
 import { operatorDiagnosisKey, toOperatorSourceError, type OperatorSourceError } from '../composables/useOperatorApi'
 const { t } = useI18n()
 const context = useOperatorProjectContext()
-const { project, projects, descriptors, unresolved, pending, error, selectionPending, selectionError, label } = context
+const { project, projects, unresolved, pending, error, selectionPending, selectionError } = context
 const projectQuery = ref('')
-const visibleProjects = computed(() => projects.value.filter((id) => `${projectName(id)} ${id}`.toLocaleLowerCase().includes(projectQuery.value.toLocaleLowerCase())))
+const visibleProjects = computed(() => projects.value.filter((id) => `${projectChoiceLabel(id)} ${id}`.toLocaleLowerCase().includes(projectQuery.value.toLocaleLowerCase())))
 const recentMemories = ref<Array<{ id: number; project: string; content: string }>>([])
 const recentDocuments = ref<Array<{ path: string; project: string; version: number; author: string }>>([])
 const memoryTotal = ref<number | null>(null)
@@ -49,10 +49,10 @@ onBeforeUnmount(() => { generation += 1; request?.abort() })
 
 <template>
   <div class="home-page">
-    <header><h1>{{ project ? t('knowledge.homeProject', { project: project === 'all' ? t('knowledge.allProjects') : label }) : t('knowledge.homeTitle') }}</h1><p>{{ t(project ? 'knowledge.homeLead' : 'knowledge.entryLead') }}</p></header>
+    <header><h1>{{ project ? t('knowledge.homeProject', { project: project === 'all' ? t('knowledge.allProjects') : projectChoiceLabel(project) }) : t('knowledge.homeTitle') }}</h1><p>{{ t(project ? 'knowledge.homeLead' : 'knowledge.entryLead') }}</p></header>
     <p v-if="selectionPending" role="status">{{ t('projectCatalog.loading') }}</p>
     <div v-if="selectionError" role="alert"><p>{{ t('projectCatalog.unknownProject') }} {{ t(operatorDiagnosisKey(selectionError)) }}</p><button class="btn" @click="context.refresh">{{ t('knowledge.retry') }}</button></div>
-    <RouterLink v-if="unresolved.length" to="/projects/unresolved">{{ t('projectCatalog.review') }} ({{ unresolved.length }})</RouterLink>
+    <RouterLink v-if="unresolved.length" to="/projects/unresolved">{{ t('projectCatalog.groupDiscovery') }} ({{ unresolved.length }})</RouterLink>
     <section v-if="!project" class="project-entry">
       <label class="field"><span>{{ t('knowledge.findProject') }}</span><input v-model="projectQuery" type="search" /></label>
       <p v-if="pending" role="status">{{ t('knowledge.loading') }}</p>
@@ -60,7 +60,7 @@ onBeforeUnmount(() => { generation += 1; request?.abort() })
       <p v-else-if="!projects.length">{{ t('knowledge.noProjects') }}</p>
       <p v-else-if="!visibleProjects.length">{{ t('knowledge.noProjectMatch') }}</p>
       <ul v-else class="project-list">
-        <li v-for="id in visibleProjects" :key="id"><button @click="context.select(id)"><strong>{{ projectName(id) }}</strong><span v-if="descriptors.filter(row => projectName(row.project_id) === projectName(id)).length > 1">{{ t('projectCatalog.ambiguousName') }} · {{ id }}</span></button></li>
+        <li v-for="id in visibleProjects" :key="id"><button @click="context.select(id)"><strong>{{ projectChoiceLabel(id) }}</strong></button></li>
       </ul>
       <button class="btn" @click="context.select('all')">{{ t('knowledge.browseAll') }}</button>
       <RouterLink :to="context.to('/code')" data-testid="overview-workspace-entry">{{ t('nav.items.code') }}</RouterLink><p>{{ t('knowledge.codeScope') }}</p>
@@ -101,7 +101,7 @@ input { padding:10px 12px; background:var(--surface); color:var(--fg); border:1p
 .project-list { margin:0; padding:0; list-style:none; max-height:50vh; overflow:auto; }
 .project-list button { width:100%; padding:14px; display:grid; gap:4px; text-align:left; background:var(--surface); color:var(--fg); border:0; border-bottom:1px solid var(--border); cursor:pointer; }
 .project-list button:hover { background:var(--surface-warm); }
-.project-list span { color:var(--muted); font-size:var(--text-xs); overflow-wrap:anywhere; }
+.project-list strong { overflow-wrap:anywhere; }
 .destinations { display:grid; }
 .destinations > a { display:grid; grid-template-columns:160px minmax(0,1fr) 24px; align-items:center; gap:16px; padding:20px 0; color:var(--fg); border-bottom:1px solid var(--border); }
 .destinations > a:hover { color:var(--accent); }

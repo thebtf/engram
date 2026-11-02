@@ -1746,8 +1746,7 @@
     "rotation": {
       "title": "Vault key rotation",
       "body": "The current server has no endpoint for safe rotation, so no operable modal is shown.",
-      "action": "Rotate key",
-      "cleanup": "Delete orphaned"
+      "action": "Rotate key"
     },
     "rotationModal": {
       "title": "Vault key rotation",
@@ -1876,7 +1875,7 @@
     "idle": "idle",
     "vectorUnavailable": "vector unavailable",
     "noise": "Noise",
-    "emptyComponents": "Selfcheck components are not loaded yet.",
+    "emptyComponents": "The server returned no selfcheck components.",
     "migration": {
       "engine": "Engine",
       "table": "Table",
@@ -2250,45 +2249,42 @@
     }
   },
   "noisePage": {
-    "title": "Noise & usefulness",
-    "subtitle": "Live retrieval/search telemetry: what agents saw, what they used, and where data is sparse or unrecorded.",
+    "title": "Search and memory statistics",
     "refresh": "Refresh",
     "state": {
-      "pending": "Loading retrieval telemetry…",
-      "error": "Could not load telemetry: {message}"
+      "pending": "Loading statistics…",
+      "error": "Could not load statistics: {message}"
     },
     "gauge": {
-      "label": "noise ratio"
+      "label": "Share of journal entries without a citation"
     },
-    "metrics": {
-      "noiseRatio": "Noise",
-      "shown": "Shown",
-      "used": "Used",
-      "unused": "Unused",
-      "searchRequests": "Search",
-      "unrecorded": "No outcome"
+    "citations": {
+      "cited": "Cited journal entries",
+      "uncited": "Uncited journal entries"
     },
     "analytics": {
-      "title": "Search analytics",
-      "total": "Total",
-      "today": "Today",
-      "latency": "Latency ms",
-      "errors": "Errors"
+      "title": "Search",
+      "total": "Total searches",
+      "today": "Today (UTC)",
+      "latency": "Average latency (ms)",
+      "errors": "Search errors"
     },
     "retrieval": {
-      "title": "Retrieval stats",
-      "requests": "Requests",
-      "served": "Served",
-      "stale": "Stale excluded",
-      "duplicates": "Duplicates"
+      "title": "Memory retrieval",
+      "requests": "Total requests",
+      "served": "Memory items served",
+      "stale": "Stale items excluded",
+      "duplicates": "Duplicates removed",
+      "searchRequests": "Search requests"
     },
     "unrecorded": {
-      "title": "Sparse outcome state",
-      "body": "A high unrecorded outcome share means outcome weighting is mostly running neutral."
+      "title": "Sessions without a recorded outcome",
+      "body": "Missing outcomes do not establish whether sessions succeeded or failed."
     },
-    "trend": {
-      "title": "Trend",
-      "body": "The server exposes a snapshot today, but no time-series endpoint for the noise trend chart yet."
+    "sources": {
+      "title": "Definitions and data sources",
+      "citations": "Citation counts are journal events, not unique memories. No citation does not mean a memory was useless. The share is calculated as:",
+      "unknown": "— means unknown, including a journal with no entries. Search and retrieval counts are not the denominator of this share."
     }
   },
   "booksPage": {

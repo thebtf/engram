@@ -216,28 +216,14 @@ func TestCodeChunkStore_CountByProject(t *testing.T) {
 // Anti-stub: replacing the Migrate body with `return nil` causes the
 // table-existence assertion to fail.
 func TestMigration139_CodeChunksTable(t *testing.T) {
-	dsn := os.Getenv("DATABASE_DSN")
-	if dsn == "" {
-		t.Skip("DATABASE_DSN not set, skipping migration 139 integration test")
-	}
-
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Warn),
-	})
-	require.NoError(t, err)
-
-	sqlDB, err := db.DB()
-	require.NoError(t, err)
-	defer sqlDB.Close()
-	require.NoError(t, sqlDB.Ping())
-
-	require.NoError(t, runMigrations(db), "full migration chain must include 139")
+	db, cleanup := openTestDB(t)
+	defer cleanup()
 
 	// Assert table exists.
 	var tableCount int
 	require.NoError(t, db.Raw(`
 		SELECT COUNT(*) FROM information_schema.tables
-		WHERE table_schema = 'public' AND table_name = 'code_chunks'
+		WHERE table_schema = current_schema() AND table_name = 'code_chunks'
 	`).Scan(&tableCount).Error)
 	require.Equal(t, 1, tableCount, "code_chunks table must exist after migration 139")
 
@@ -251,7 +237,7 @@ func TestMigration139_CodeChunksTable(t *testing.T) {
 		var count int
 		require.NoError(t, db.Raw(`
 			SELECT COUNT(*) FROM information_schema.columns
-			WHERE table_schema = 'public' AND table_name = 'code_chunks' AND column_name = ?
+			WHERE table_schema = current_schema() AND table_name = 'code_chunks' AND column_name = ?
 		`, col).Scan(&count).Error)
 		require.Equal(t, 1, count, "column %q must exist in code_chunks", col)
 	}
@@ -260,7 +246,7 @@ func TestMigration139_CodeChunksTable(t *testing.T) {
 	var embeddingNullable string
 	require.NoError(t, db.Raw(`
 		SELECT is_nullable FROM information_schema.columns
-		WHERE table_schema = 'public' AND table_name = 'code_chunks' AND column_name = 'embedding'
+		WHERE table_schema = current_schema() AND table_name = 'code_chunks' AND column_name = 'embedding'
 	`).Row().Scan(&embeddingNullable))
 	require.Equal(t, "YES", embeddingNullable, "embedding must be nullable (computed async by CR-004)")
 
@@ -268,7 +254,7 @@ func TestMigration139_CodeChunksTable(t *testing.T) {
 	var uniqueCount int
 	require.NoError(t, db.Raw(`
 		SELECT COUNT(*) FROM information_schema.table_constraints
-		WHERE table_schema = 'public'
+		WHERE table_schema = current_schema()
 		  AND table_name   = 'code_chunks'
 		  AND constraint_type = 'UNIQUE'
 	`).Scan(&uniqueCount).Error)
@@ -299,7 +285,8 @@ func TestMigration139_CodeChunksTable(t *testing.T) {
 	var ginCount int
 	require.NoError(t, db.Raw(`
 		SELECT COUNT(*) FROM pg_indexes
-		WHERE tablename = 'code_chunks' AND indexname = 'idx_code_chunks_tsv'
+		WHERE schemaname = current_schema()
+		  AND tablename = 'code_chunks' AND indexname = 'idx_code_chunks_tsv'
 	`).Scan(&ginCount).Error)
 	require.Equal(t, 1, ginCount, "idx_code_chunks_tsv GIN index must exist")
 
@@ -307,7 +294,8 @@ func TestMigration139_CodeChunksTable(t *testing.T) {
 	var hnswCount int
 	require.NoError(t, db.Raw(`
 		SELECT COUNT(*) FROM pg_indexes
-		WHERE tablename = 'code_chunks' AND indexname = 'idx_code_chunks_hnsw'
+		WHERE schemaname = current_schema()
+		  AND tablename = 'code_chunks' AND indexname = 'idx_code_chunks_hnsw'
 	`).Scan(&hnswCount).Error)
 	require.Equal(t, 1, hnswCount, "idx_code_chunks_hnsw HNSW index must exist")
 }

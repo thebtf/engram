@@ -32,6 +32,48 @@ The reviewed 2026.09.17 snapshot is already promoted. `PROMOTION-MANIFEST.json` 
 
 The [responsive-layout receipt](../../specs/011-operator-code-console/acceptance/da-workspace-responsive-layout-receipt.json) proves Workspace shell layout and drawer behavior only. It does not reassert semantic-provider explorer evidence (`embedded_chunks=0 of 64`) or substitute for the installed exact-head normal-homepage DA01–DA04 release proof, which remains pending.
 
+## Analytics citation summary
+
+Analytics (`/noise`) is a server-wide snapshot, not a selected-project or provider
+quality report. Its primary percentage converts the server's citation-journal
+ratio; the adjacent cited/uncited event counts are not unique memory totals.
+Uncited does not mean useless, and null/non-live values remain unknown rather
+than measured zero. Search, retrieval and missing session outcomes remain
+separate groups. The native Definitions and data sources disclosure contains the
+formula and source paths. Refresh remains the only data action and preserves the
+existing credentialed GET contract. Compiled display checks do not establish
+current geometry, browser behavior or installed acceptance.
+
+The search response reports `avg_latency_ms` as a positive-sample mean with
+`avg_latency_ms_result_status: computed`, or `null / not_computable` when no
+positive latency samples exist. The current collector does not instrument errors,
+so `search_errors` remains `null` with `search_errors_result_status: not_computable`.
+Neither unknown value is a measured zero; existing nil-store compatibility counters
+and HTTP 200 behavior remain unchanged.
+
+## Health update-check currentness and component states
+
+Health and Settings treat update availability as live only when the domain check
+returns an explicit boolean without an error. HTTP 200 with an error, missing or
+invalid availability remains unknown rather than a successful no-update answer.
+Refresh hides the prior availability answer while its new check is pending,
+preserves useful neighboring values, and keeps both Refresh controls busy through
+the final migrations read. A programmatic post-save recheck starts its own reads;
+only the latest intent may publish results or clear busy controls.
+The Components card distinguishes pending, failed or otherwise non-live selfcheck
+from a successful live empty array. A live selfcheck with missing, null or other
+non-array component data shows localized not-loaded text with an accessible status,
+not the empty-list message. Pending and unavailable states have localized in-card
+status or alert text; errors use only the typed diagnosis, not raw server or provider
+payload. Only an explicit live empty components array says the server returned no
+components (EN/RU/ZH). Live rows, neighboring evidence and refresh/retry guards stay
+unchanged. `health-update-refresh.spec.mjs` covers 30 cases through the actual
+compiled consumers: the original 24 update/refresh cases, including delayed
+responses and overlap, four component-state cases and two missing/null cases.
+Full Health C1 and Settings explanatory error-copy presentation remain open under
+#477. This slice does not resolve Vue #493 or establish populated local-Docker
+browser, installed or release acceptance.
+
 ## Project knowledge journey (2026-10-11)
 
 The accepted operator-knowledge change refines the inherited Vue/Vite Operate world.
@@ -39,6 +81,23 @@ It does not promote a new visual system or change the historical snapshot hashes
 Navigation groups project entry, knowledge, Workspace, attention, and administration.
 The shared project selector uses the server's canonical IDs; equal display names stay
 distinct. The knowledge project is not a code Source/Checkout/View selection or a grant.
+
+Projects and Home each keep one contextual `/projects/unresolved` entry, labelled
+with the existing EN/RU/ZH retained-groups wording. Its count is the number of
+groups, not saved records or membership occurrences. The global selector avoids
+duplicating that entry on Home and Projects and hides its self-link on
+`/projects/unresolved`, including equivalent trailing-slash routes. Other pages
+retain the direct `/projects/unresolved` shortcut when groups exist, with the
+same localized group count. One shared choice-label helper always exposes an existing
+repository qualifier and adds a stable UUID hint when a qualifier is absent or
+primary names are equal: the first eight UUID characters when that prefix is
+unique across the entire catalog (case-insensitive), otherwise the full UUID.
+Global and page choices and selected Projects/Home headings use that same label.
+They keep every catalog row, including version/hash-like names, exact full-UUID
+option values and selection state. Project search still matches names and full
+UUIDs and now includes displayed repository qualifiers. Full selected-identity
+disclosures, retained-reader links and `projectName` semantics outside these
+display contexts remain unchanged.
 
 Historical records have an explicit **Find saved records** view on the existing
 unresolved page: `view=retained_records&attribution_scope=unresolved_history`
@@ -164,8 +223,9 @@ type ReaderPage<T> = { items: T[]; total: number; offset: number; limit: number;
 ```
 
 Only validated catalog UUIDs are normal project values. Names are mutable labels,
-not identity or authority. Equal names retain distinct IDs and use repository
-qualifiers when supplied; missing qualifiers remain visibly ambiguous. Workspace
+not identity or authority. Equal names retain distinct IDs; project choices and
+selected Projects/Home headings use repository qualifiers when supplied and the
+catalog-unique UUID hints described above. Workspace
 Repository/Working copy/Indexed snapshot selection remains independent.
 
 The shared context retains `project`, `projects`, `descriptors`, `pending`, `error`,

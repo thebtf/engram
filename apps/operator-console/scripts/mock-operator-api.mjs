@@ -588,7 +588,6 @@ const initialVaultCredentials = [
     scope: 'project',
     created_at: '2026-06-20T10:00:00Z',
     value: 'orphaned-secret-value',
-    orphaned: true,
   },
   {
     id: 4,
@@ -1439,15 +1438,6 @@ const server = createServer(async (req, res) => {
     return
   }
 
-  if (req.method === 'DELETE' && path === '/api/vault/orphaned-credentials') {
-    const vaultCredentials = vaultCredentialsFor(req)
-    const deleted = vaultCredentials.filter((credential) => credential.orphaned).length
-    for (let index = vaultCredentials.length - 1; index >= 0; index -= 1) {
-      if (vaultCredentials[index].orphaned) vaultCredentials.splice(index, 1)
-    }
-    json(res, 200, { status: 'ok', deleted })
-    return
-  }
 
   if (req.method === 'POST' && path === '/api/vault/credentials') {
     try {
@@ -2071,7 +2061,7 @@ const server = createServer(async (req, res) => {
       }
       return
     case '/api/vault/credentials':
-      json(res, 200, vaultCredentialsFor(req).map(({ value: _value, orphaned: _orphaned, ...item }) => item))
+      json(res, 200, vaultCredentialsFor(req).map(({ value: _value, ...item }) => item))
       return
     case '/api/vault/status':
       json(res, 200, { key_configured: true, fingerprint: 'abcddcba11223344', key_source: 'mock', credential_count: vaultCredentialsFor(req).length })

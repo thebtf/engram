@@ -24,6 +24,7 @@ import (
 	dbgorm "github.com/thebtf/engram/internal/db/gorm"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/principalmemory"
+	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/pkg/models"
 )
@@ -461,6 +462,23 @@ func memoryDomainManageAllowedREST(ctx context.Context, mem *models.Memory) bool
 	return scope.ResolveMemoryManage(memoryVisibilityCaller(ctx, ""), mem)
 }
 
+func (s *Service) deleteVisibleMemoriesREST(r *http.Request, ids []int64) error {
+	ctx := r.Context()
+	access := gormdb.MemoryMutationAccess{
+		Project:                 r.URL.Query().Get("project"),
+		Caller:                  memoryVisibilityCaller(ctx, ""),
+		RequireCanonicalProject: true,
+	}
+	return s.memoryStore.WithAuthorizedMemories(ctx, ids, access, func(tx *gormlib.DB, _ map[int64]*models.Memory) error {
+		for _, id := range ids {
+			if err := s.memoryStore.DeleteTx(ctx, tx, id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func parseMemoryAuditLimit(raw string) (int, error) {
 	const (
 		defaultLimit = 50
@@ -735,26 +753,7 @@ func (s *Service) handleDeleteMemoryByID(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	before, err := s.memoryStore.Get(r.Context(), id)
-	if err != nil {
-		if errors.Is(err, gormlib.ErrRecordNotFound) {
-			http.Error(w, "memory not found", http.StatusNotFound)
-			return
-		}
-		log.Error().Err(err).Int64("id", id).Msg("get memory before delete failed")
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return
-	}
-	if before == nil {
-		http.Error(w, "memory not found", http.StatusNotFound)
-		return
-	}
-	if !memoryDomainManageAllowedREST(r.Context(), before) {
-		http.Error(w, "memory not found", http.StatusNotFound)
-		return
-	}
-
-	if err := s.memoryStore.Delete(r.Context(), id); err != nil {
+	if err := s.deleteVisibleMemoriesREST(r, []int64{id}); err != nil {
 		if errors.Is(err, gormlib.ErrRecordNotFound) {
 			http.Error(w, "memory not found", http.StatusNotFound)
 			return
@@ -804,26 +803,7 @@ func (s *Service) handleSuppressMemoryByID(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
-	before, err := s.memoryStore.Get(r.Context(), id)
-	if err != nil {
-		if errors.Is(err, gormlib.ErrRecordNotFound) {
-			http.Error(w, "memory not found", http.StatusNotFound)
-			return
-		}
-		log.Error().Err(err).Int64("id", id).Msg("get memory before suppress failed")
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return
-	}
-	if before == nil {
-		http.Error(w, "memory not found", http.StatusNotFound)
-		return
-	}
-	if !memoryDomainManageAllowedREST(r.Context(), before) {
-		http.Error(w, "memory not found", http.StatusNotFound)
-		return
-	}
-
-	if err := s.memoryStore.Delete(r.Context(), id); err != nil {
+	if err := s.deleteVisibleMemoriesREST(r, []int64{id}); err != nil {
 		if errors.Is(err, gormlib.ErrRecordNotFound) {
 			http.Error(w, "memory not found", http.StatusNotFound)
 			return
@@ -841,6 +821,108 @@ func (s *Service) handleSuppressMemoryByID(w http.ResponseWriter, r *http.Reques
 		ID:     id,
 		Reason: reason,
 	})
+}
+
+type memoryTransitionRequest struct {
+	Action string `json:"action" validate:"required" enums:"suppress,unsuppress,archive"`
+}
+
+type memoryTransitionResponse struct {
+	ID      int64  `json:"id"`
+	Action  string `json:"action"`
+	Status  string `json:"status"`
+	Version int    `json:"version"`
+	Project string `json:"project"`
+}
+
+// handleTransitionMemoryByID changes retained lifecycle status, not deletion or
+// browser selection state. An omitted project resolves the ID's live canonical
+// membership; an explicit project can only narrow that existing authority.
+// @Summary Transition a retained memory by ID
+// @Description Requires a JSON action: suppress changes active to flagged, unsuppress changes flagged to active, and archive changes active or flagged to archived without erasure. The optional project query parameter must occur once with a canonical UUID and only narrows the memory's existing live canonical membership; omission does not bypass caller visibility or domain-manage authorization. Missing or denied memories return 404. State/version conflicts return 409 and roll back the transaction. The receipt contains id, action, resulting status, incremented version and canonical project. An ambiguous transport failure leaves the outcome unknown; do not automatically retry.
+// @Tags Memories
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path int64 true "Positive memory ID"
+// @Param project query string false "Optional single canonical project UUID; narrows existing membership only"
+// @Param body body memoryTransitionRequest true "Required lifecycle action"
+// @Success 200 {object} memoryTransitionResponse
+// @Failure 400 {string} string "invalid memory id, project selector, JSON or action"
+// @Failure 401 {string} string "authentication required"
+// @Failure 404 {string} string "memory not found or access denied"
+// @Failure 409 {string} string "memory state/version conflict; transaction rolled back"
+// @Failure 500 {string} string "memory transition failed"
+// @Failure 503 {string} string "memory store not available"
+// @Router /api/memories/{id}/transition [post]
+func (s *Service) handleTransitionMemoryByID(w http.ResponseWriter, r *http.Request) {
+	if s.memoryStore == nil {
+		http.Error(w, "memory store not available", http.StatusServiceUnavailable)
+		return
+	}
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil || id <= 0 {
+		http.Error(w, "invalid memory id", http.StatusBadRequest)
+		return
+	}
+	query, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		http.Error(w, "invalid project selector", http.StatusBadRequest)
+		return
+	}
+	project := ""
+	if selectors, supplied := query["project"]; supplied {
+		if len(selectors) != 1 || !projectidentity.ValidProjectID(selectors[0]) {
+			http.Error(w, "invalid project selector", http.StatusBadRequest)
+			return
+		}
+		project = selectors[0]
+	}
+	var request memoryTransitionRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "invalid memory transition", http.StatusBadRequest)
+		return
+	}
+	if _, allowed := memoryCollectionNextStatus(request.Action, "active"); !allowed && request.Action != "unsuppress" {
+		http.Error(w, "invalid memory transition", http.StatusBadRequest)
+		return
+	}
+	ctx := r.Context()
+	access := gormdb.MemoryMutationAccess{
+		Project: project, Caller: memoryVisibilityCaller(ctx, ""), RequireCanonicalProject: true,
+	}
+	var response memoryTransitionResponse
+	err = s.memoryStore.WithAuthorizedMemories(ctx, []int64{id}, access, func(tx *gormlib.DB, memories map[int64]*models.Memory) error {
+		current := memories[id]
+		nextStatus, allowed := memoryCollectionNextStatus(request.Action, current.Status)
+		if !allowed {
+			return errMemorySelectionConflict
+		}
+		update := tx.WithContext(ctx).Model(&gormdb.Memory{}).
+			Where("id = ? AND deleted_at IS NULL AND version = ? AND status = ?", id, current.Version, current.Status).
+			Updates(map[string]any{"status": nextStatus, "updated_at": time.Now().UTC(), "version": gormlib.Expr("version + 1")})
+		if update.Error != nil {
+			return update.Error
+		}
+		if update.RowsAffected != 1 {
+			return errMemorySelectionConflict
+		}
+		response = memoryTransitionResponse{ID: id, Action: request.Action, Status: nextStatus, Version: current.Version + 1, Project: current.Project}
+		return nil
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, gormlib.ErrRecordNotFound):
+			http.Error(w, "memory not found", http.StatusNotFound)
+		case errors.Is(err, errMemorySelectionConflict):
+			http.Error(w, "memory transition conflicts with current state", http.StatusConflict)
+		default:
+			log.Error().Err(err).Msg("memory transition failed")
+			http.Error(w, "memory transition failed", http.StatusInternalServerError)
+		}
+		return
+	}
+	writeJSON(w, response)
 }
 
 // handleSuppressMemories godoc
@@ -887,41 +969,22 @@ func (s *Service) handleSuppressMemories(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	before := make([]*models.Memory, 0, len(ids))
-	for _, id := range ids {
-		memory, err := s.memoryStore.Get(r.Context(), id)
-		if err != nil {
-			if errors.Is(err, gormlib.ErrRecordNotFound) {
-				http.Error(w, "memory not found", http.StatusNotFound)
-				return
-			}
-			log.Error().Err(err).Int64("id", id).Msg("get memory before bulk suppress failed")
-			http.Error(w, "internal server error", http.StatusInternalServerError)
-			return
-		}
-		if memory == nil || !memoryDomainManageAllowedREST(r.Context(), memory) {
+	if err := s.deleteVisibleMemoriesREST(r, ids); err != nil {
+		if errors.Is(err, gormlib.ErrRecordNotFound) {
 			http.Error(w, "memory not found", http.StatusNotFound)
 			return
 		}
-		before = append(before, memory)
+		log.Error().Err(err).Msg("bulk suppress memory failed")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
 	}
-
 	reason := strings.TrimSpace(req.Reason)
-	receipts := make([]memoryActionReceipt, 0, len(before))
-	for _, memory := range before {
-		if err := s.memoryStore.Delete(r.Context(), memory.ID); err != nil {
-			if errors.Is(err, gormlib.ErrRecordNotFound) {
-				http.Error(w, "memory not found", http.StatusNotFound)
-				return
-			}
-			log.Error().Err(err).Int64("id", memory.ID).Msg("bulk suppress memory failed")
-			http.Error(w, "internal server error", http.StatusInternalServerError)
-			return
-		}
+	receipts := make([]memoryActionReceipt, 0, len(ids))
+	for _, id := range ids {
 		receipts = append(receipts, memoryActionReceipt{
 			Status: "ok",
 			Action: "suppress",
-			ID:     memory.ID,
+			ID:     id,
 			Reason: reason,
 		})
 	}
@@ -1451,26 +1514,40 @@ func (s *Service) applyMemoryCollectionSelectionTarget(target gormdb.CollectionS
 		state.partial = true
 		return
 	}
-	nextStatus, validTransition := memoryCollectionNextStatus(state.action, memory.Status)
-	if !validTransition {
-		state.append("redacted", "conflict", nil)
+	access := gormdb.MemoryMutationAccess{Caller: memoryVisibilityCaller(state.ctx, ""), RequireCanonicalProject: true}
+	observedVersion := 0
+	err := s.memoryStore.WithAuthorizedMemories(state.ctx, []int64{memory.ID}, access, func(tx *gormlib.DB, memories map[int64]*models.Memory) error {
+		current := memories[memory.ID]
+		if uint64(current.Version) != target.ExpectedVersion {
+			return errMemorySelectionConflict
+		}
+		nextStatus, validTransition := memoryCollectionNextStatus(state.action, current.Status)
+		if !validTransition {
+			return errMemorySelectionConflict
+		}
+		update := tx.WithContext(state.ctx).Model(&dbgorm.Memory{}).
+			Where("id = ? AND deleted_at IS NULL AND version = ? AND status = ?", current.ID, current.Version, current.Status).
+			Updates(map[string]any{"status": nextStatus, "updated_at": time.Now().UTC(), "version": gormlib.Expr("version + 1")})
+		if update.Error != nil {
+			return update.Error
+		}
+		if update.RowsAffected != 1 {
+			return errMemorySelectionConflict
+		}
+		observedVersion = current.Version + 1
+		return nil
+	})
+	if err != nil {
+		outcome := "failed"
+		if errors.Is(err, gormlib.ErrRecordNotFound) {
+			outcome = "denied"
+		} else if errors.Is(err, errMemorySelectionConflict) {
+			outcome = "conflict"
+		}
+		state.append("redacted", outcome, nil)
 		state.partial = true
 		return
 	}
-	update := s.memoryStore.GetDB().WithContext(state.ctx).Model(&dbgorm.Memory{}).
-		Where("id = ? AND deleted_at IS NULL AND version = ? AND status = ?", memory.ID, memory.Version, memory.Status).
-		Updates(map[string]any{"status": nextStatus, "updated_at": time.Now().UTC(), "version": gormlib.Expr("version + 1")})
-	if update.Error != nil {
-		state.append("redacted", "failed", nil)
-		state.partial = true
-		return
-	}
-	if update.RowsAffected != 1 {
-		state.append("redacted", "conflict", nil)
-		state.partial = true
-		return
-	}
-	observedVersion := memory.Version + 1
 	state.append(target.ID, "committed", &observedVersion)
 	after, afterErr := s.memoryStore.Get(state.ctx, memory.ID)
 	if afterErr != nil || after == nil {

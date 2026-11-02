@@ -10,12 +10,15 @@ let sharedHealthSettingsVector: SharedRef<OperatorLoadState<ApiVectorMetrics>> |
 let sharedHealthSettingsUpdateStatus: SharedRef<OperatorLoadState<ApiUpdateStatus>> | undefined
 let sharedHealthSettingsUpdateCheck: SharedRef<OperatorLoadState<ApiUpdateCheck>> | undefined
 let sharedHealthSettingsMigrations: SharedRef<OperatorLoadState<ApiMigrationState>> | undefined
+let sharedHealthSettingsRefreshing: SharedRef<boolean> | undefined
+let sharedHealthSettingsRefreshRevision = 0
 
 import type { ComputedRef } from 'vue'
 import type { OperatorLoadState } from './useOperatorApi'
 import { executeMutation, type MutationResult } from './useApi'
 import {
   endpointEvidence,
+  errorState,
   loadOperatorJson,
   operatorFetchResponse,
   pendingState,
@@ -164,6 +167,8 @@ interface ApiUpdateCheck {
   version?: string
   available?: boolean
   message?: string
+  error?: string
+  rate_limited?: boolean
 }
 
 interface ApiMigrationState {
@@ -258,6 +263,7 @@ export function useOperatorHealthSettings(): {
   const updateStatus = (sharedHealthSettingsUpdateStatus ??= sharedRef<OperatorLoadState<ApiUpdateStatus>>((() => pendingState(updateStatusEvidence))()))
   const updateCheck = (sharedHealthSettingsUpdateCheck ??= sharedRef<OperatorLoadState<ApiUpdateCheck>>((() => pendingState(updateCheckEvidence))()))
   const migrations = (sharedHealthSettingsMigrations ??= sharedRef<OperatorLoadState<ApiMigrationState>>((() => pendingState(migrationsEvidence))()))
+  const refreshing = (sharedHealthSettingsRefreshing ??= sharedRef(false))
 
   const selfcheckState = computed(() => selfcheck.value)
   const readyState = computed(() => ready.value)
@@ -333,7 +339,7 @@ export function useOperatorHealthSettings(): {
     (config.value.kind === 'live' && Boolean(config.value.data.lifecycle?.restart_required)) ||
     (updateStatus.value.kind === 'live' && updateStatus.value.data.state === 'done')
   ))
-  const pending = computed(() => [
+  const pending = computed(() => refreshing.value || [
     selfcheck.value,
     ready.value,
     config.value,
@@ -351,16 +357,58 @@ export function useOperatorHealthSettings(): {
     return null
   })
 
+  async function loadUpdateCheck(): Promise<OperatorLoadState<ApiUpdateCheck>> {
+    const state = await loadOperatorJson<ApiUpdateCheck>('/api/update/check', { source: 'update-check' })
+    if (state.kind !== 'live') return state
+    const data = state.data
+    if (data && typeof data === 'object' && !('error' in data) && typeof data.available === 'boolean') return state
+    // This endpoint returns HTTP 200 even when its release lookup fails.
+    return errorState(state.evidence, {
+      message: 'Update availability could not be determined',
+      category: 'invalid-response',
+      source: state.evidence.source,
+      path: state.evidence.endpoint,
+      method: 'GET',
+      status: state.evidence.status,
+      retryable: true,
+    }, { source: state.evidence.source, run: loadUpdateCheck }, data)
+  }
+
   async function refresh() {
-    selfcheck.value = await loadOperatorJson<ApiSelfcheck>('/api/selfcheck', { source: 'selfcheck' })
-    ready.value = await loadOperatorJson<ApiReady>('/api/ready', { source: 'ready' })
-    config.value = await loadOperatorJson<ApiConfig>('/api/config', { source: 'config' })
-    flags.value = await loadOperatorJson<ApiFlags>('/api/flags', { source: 'flags' })
-    vnext.value = await loadOperatorJson<ApiStatsVNext>('/api/stats/vnext', { source: 'stats-vnext' })
-    vector.value = await loadOperatorJson<ApiVectorMetrics>('/api/vector/metrics', { source: 'vector-metrics' })
-    updateStatus.value = await loadOperatorJson<ApiUpdateStatus>('/api/update/status', { source: 'update-status' })
-    updateCheck.value = await loadOperatorJson<ApiUpdateCheck>('/api/update/check', { source: 'update-check' })
-    migrations.value = await loadOperatorJson<ApiMigrationState>('/api/migrations', { source: 'migrations' })
+    const revision = ++sharedHealthSettingsRefreshRevision
+    refreshing.value = true
+    updateCheck.value = pendingState(updateCheckEvidence)
+    try {
+      const nextSelfcheck = await loadOperatorJson<ApiSelfcheck>('/api/selfcheck', { source: 'selfcheck' })
+      if (revision !== sharedHealthSettingsRefreshRevision) return
+      selfcheck.value = nextSelfcheck
+      const nextReady = await loadOperatorJson<ApiReady>('/api/ready', { source: 'ready' })
+      if (revision !== sharedHealthSettingsRefreshRevision) return
+      ready.value = nextReady
+      const nextConfig = await loadOperatorJson<ApiConfig>('/api/config', { source: 'config' })
+      if (revision !== sharedHealthSettingsRefreshRevision) return
+      config.value = nextConfig
+      const nextFlags = await loadOperatorJson<ApiFlags>('/api/flags', { source: 'flags' })
+      if (revision !== sharedHealthSettingsRefreshRevision) return
+      flags.value = nextFlags
+      const nextVnext = await loadOperatorJson<ApiStatsVNext>('/api/stats/vnext', { source: 'stats-vnext' })
+      if (revision !== sharedHealthSettingsRefreshRevision) return
+      vnext.value = nextVnext
+      const nextVector = await loadOperatorJson<ApiVectorMetrics>('/api/vector/metrics', { source: 'vector-metrics' })
+      if (revision !== sharedHealthSettingsRefreshRevision) return
+      vector.value = nextVector
+      const nextUpdateStatus = await loadOperatorJson<ApiUpdateStatus>('/api/update/status', { source: 'update-status' })
+      if (revision !== sharedHealthSettingsRefreshRevision) return
+      updateStatus.value = nextUpdateStatus
+      const nextUpdateCheck = await loadUpdateCheck()
+      if (revision !== sharedHealthSettingsRefreshRevision) return
+      updateCheck.value = nextUpdateCheck
+      const nextMigrations = await loadOperatorJson<ApiMigrationState>('/api/migrations', { source: 'migrations' })
+      if (revision !== sharedHealthSettingsRefreshRevision) return
+      migrations.value = nextMigrations
+    } finally {
+      if (revision === sharedHealthSettingsRefreshRevision) refreshing.value = false
+    }
   }
 
   async function saveConfig(patch: ApiConfigPatch) {

@@ -1,8 +1,6 @@
 /**
- * memory_forget — suppress or permanently delete observations from engram by ID.
- *
- * Default: suppress (reversible soft-hide from search results).
- * With permanent=true: archive (permanent removal).
+ * memory_forget — suppress or archive a retained memory by ID.
+ * Default: reversible suppression. With permanent=true: archive, not erasure.
  */
 
 import { z } from 'zod';
@@ -20,7 +18,7 @@ const forgetParameters = Type.Object({
   id: Type.String({ description: 'Observation ID (positive integer)' }),
   permanent: Type.Optional(
     Type.Boolean({
-      description: 'If true, permanently archives the observation. Default: false (reversible suppress).',
+      description: 'If true, archives the retained memory without erasing it. Default: false (reversible suppress).',
     }),
   ),
 });
@@ -28,14 +26,14 @@ const forgetParameters = Type.Object({
 export function createMemoryForgetTool(
   _ctx: OpenClawPluginToolContext,
   client: EngramRestClient,
-  _config: PluginConfig,
+  config: PluginConfig,
 ): AnyAgentTool {
   return {
     name: 'memory_forget',
     label: 'Forget Memory',
     description:
       'Suppress an observation from future search results (reversible). ' +
-      'Use permanent=true to permanently archive it instead.',
+      'Use permanent=true to archive it instead; the memory is retained, not erased.',
     parameters: forgetParameters,
 
     async execute(_toolCallId: string, params: Record<string, unknown>): Promise<string> {
@@ -53,20 +51,16 @@ export function createMemoryForgetTool(
         return `Invalid observation ID: ${parsed.data.id}`;
       }
 
-      if (parsed.data.permanent) {
-        const response = await client.bulkDelete([String(numericId)]);
-        if (!response) {
-          return 'engram archive failed — server returned no response';
-        }
-        return response.deleted > 0
-          ? `Permanently archived observation: ${parsed.data.id}`
-          : `Observation not found or already archived: ${parsed.data.id}`;
+      const action = parsed.data.permanent ? 'archive' : 'suppress';
+      const result = await client.transitionMemory(numericId, action, config.project);
+      if (!result.ok) {
+        return result.outcome === 'unknown'
+          ? `Memory ${action} outcome unknown: ${result.error}`
+          : `Failed to ${action} memory ${parsed.data.id}: ${result.error}`;
       }
-
-      const suppressed = await client.suppressObservation(numericId);
-      return suppressed
-        ? `Suppressed observation: ${parsed.data.id} (reversible — will no longer appear in search)`
-        : `Failed to suppress observation: ${parsed.data.id}`;
+      return parsed.data.permanent
+        ? `Permanently archived memory: ${parsed.data.id} (retained, not erased)`
+        : `Suppressed memory: ${parsed.data.id} (restore with engram_suppress action=unsuppress)`;
     },
   };
 }

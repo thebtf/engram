@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { operatorDiagnosisKey } from '../composables/useOperatorApi'
+
 const { t } = useI18n()
 const {
   selfcheckState,
@@ -68,7 +70,10 @@ const migrationMessage = computed(() => {
           <h2>{{ t('health.components') }}</h2>
           <code>/api/selfcheck</code>
         </div>
-        <div v-if="!components.length" class="empty">{{ t('health.emptyComponents') }}</div>
+        <p v-if="selfcheckState.kind === 'pending'" class="message" role="status">{{ t('health.state.pending') }}</p>
+        <p v-else-if="selfcheckState.kind === 'error'" class="message" role="alert">{{ t('health.state.error', { message: t(operatorDiagnosisKey(selfcheckState.error)) }) }}</p>
+        <p v-else-if="selfcheckState.kind !== 'live' || !Array.isArray(selfcheckState.data.components)" class="message" role="status">{{ t('health.state.notLoaded') }}</p>
+        <div v-else-if="!components.length" class="empty">{{ t('health.emptyComponents') }}</div>
         <div v-else class="rows">
           <div v-for="component in components" :key="component.name" class="row">
             <span>{{ component.name }}</span>

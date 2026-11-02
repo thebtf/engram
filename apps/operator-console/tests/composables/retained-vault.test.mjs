@@ -39,7 +39,7 @@ async function mount(t, initial = rows, options = {}) {
     const method = init.method || 'GET'
     calls.push({ url, method })
     if (url.pathname === '/api/projects') return Response.json({ items: [first, second].map(project_id => ({ project_id, name: 'Same label' })), unresolved: [] })
-    if (url.pathname === '/api/vault/status') return Response.json({ key_configured: true, credential_count: metadata.length })
+    if (url.pathname === '/api/vault/status') return Response.json({ key_configured: true, credential_count: metadata.length, mismatch_warning: options.mismatchWarning })
     if (url.pathname === '/api/vault/credentials') return Response.json(metadata)
     assert.equal(url.pathname, '/api/vault/credentials/same%2Fname')
     const index = selectors.indexOf([...url.searchParams].map(([key, value]) => `${key}=${value}`).join('&'))
@@ -178,4 +178,13 @@ test('console rejects a retained binding that becomes unavailable during metadat
   calls.length = 0
   await assert.rejects(() => secrets.revealSecret(selected))
   assert.deepEqual(calls.map(call => call.url.pathname), ['/api/vault/credentials/same%2Fname', '/api/vault/credentials'])
+})
+
+test('a key mismatch stays diagnostic without exposing aggregate credential cleanup', async t => {
+  const warning = '3 credentials were encrypted with a different key; retain their recoverable ciphertext'
+  const { secrets, calls } = await mount(t, rows, { mismatchWarning: warning })
+  assert.equal(secrets.vault.value.mismatchWarning, warning)
+  assert.deepEqual(secrets.creds.map(row => row.id), ['1', '2', '3', '4', '5'])
+  assert.equal('cleanupOrphans' in secrets, false, 'no convenience aggregate destructive action may be exposed')
+  assert.equal(calls.every(call => call.method === 'GET'), true, 'diagnostic reads must never dispatch a mutation')
 })

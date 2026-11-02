@@ -7,6 +7,7 @@ import (
 
 	"github.com/thebtf/engram/internal/principalmemory"
 	"github.com/thebtf/engram/pkg/models"
+	gormlib "gorm.io/gorm"
 )
 
 type domainRegistryService interface {
@@ -19,18 +20,31 @@ func (s *Server) SetDomainRegistryService(registryService domainRegistryService)
 }
 
 func (s *Server) checkDomainWriteMCP(ctx context.Context, mem *models.Memory, sourceSessionID string) (*principalmemory.DomainWriteDecision, error) {
+	return s.checkDomainWriteMCPTx(ctx, mem, sourceSessionID, nil)
+}
+
+func (s *Server) checkDomainWriteMCPTx(ctx context.Context, mem *models.Memory, sourceSessionID string, tx *gormlib.DB) (*principalmemory.DomainWriteDecision, error) {
 	if mem == nil || strings.TrimSpace(mem.Domain) == "" {
 		return nil, nil
 	}
 	if s.domainRegistryService == nil {
 		return nil, nil
 	}
-	decision, err := s.domainRegistryService.CheckWrite(ctx, principalmemory.DomainWriteCheckRequest{
+	req := principalmemory.DomainWriteCheckRequest{
 		Project:         mem.Project,
 		Domain:          mem.Domain,
 		Writer:          principalmemory.PrincipalRef{Principal: mem.OwnerPrincipal, PrincipalKind: mem.OwnerPrincipalKind},
 		SourceSessionID: strings.TrimSpace(sourceSessionID),
-	})
+	}
+	var decision *principalmemory.DomainWriteDecision
+	var err error
+	if registry, ok := s.domainRegistryService.(interface {
+		CheckWriteTx(context.Context, *gormlib.DB, principalmemory.DomainWriteCheckRequest) (*principalmemory.DomainWriteDecision, error)
+	}); ok && tx != nil {
+		decision, err = registry.CheckWriteTx(ctx, tx, req)
+	} else {
+		decision, err = s.domainRegistryService.CheckWrite(ctx, req)
+	}
 	if err != nil {
 		return decision, err
 	}

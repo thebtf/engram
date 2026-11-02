@@ -1,16 +1,16 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { useOperatorProjectContext, projectName } from '../composables/useOperatorProjectContext'
+import { useOperatorProjectContext, projectName, projectChoiceLabel } from '../composables/useOperatorProjectContext'
 import { useOperatorProjects } from '../composables/useOperatorProjects'
 import { operatorDiagnosisKey } from '../composables/useOperatorApi'
 const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const context = useOperatorProjectContext()
-const { project, projects, descriptors, unresolved, pending: catalogPending, error: projectError, selectionPending, selectionError } = context
+const { project, projects, unresolved, pending: catalogPending, error: projectError, selectionPending, selectionError } = context
 const { sessions, selectedSession, sessionsState, detailState, pending, refresh, openProject, openSession, openSessionByID, deleteProject } = useOperatorProjects(project)
 const search = ref('')
-const visibleProjects = computed(() => projects.value.filter((id) => `${projectName(id)} ${id}`.toLocaleLowerCase().includes(search.value.toLocaleLowerCase())))
+const visibleProjects = computed(() => projects.value.filter((id) => `${projectChoiceLabel(id)} ${id}`.toLocaleLowerCase().includes(search.value.toLocaleLowerCase())))
 const archiveInput = ref('')
 const archiveBusy = ref(false)
 const mutationResult = ref<Awaited<ReturnType<typeof deleteProject>> | null>(null)
@@ -45,11 +45,11 @@ async function archive() {
     <div v-if="projectError" class="state error"><span>{{ t(operatorDiagnosisKey(projectError)) }}</span><button class="btn" @click="context.refresh">{{ t('knowledge.retry') }}</button></div>
     <p v-if="selectionPending" role="status">{{ t('projectCatalog.loading') }}</p>
     <div v-if="selectionError" role="alert"><p>{{ t('projectCatalog.unknownProject') }} {{ t(operatorDiagnosisKey(selectionError)) }}</p><button class="btn" @click="context.refresh">{{ t('knowledge.retry') }}</button></div>
-    <RouterLink v-if="unresolved.length" to="/projects/unresolved">{{ t('projectCatalog.review') }} ({{ unresolved.length }})</RouterLink>
+    <RouterLink v-if="unresolved.length" to="/projects/unresolved">{{ t('projectCatalog.groupDiscovery') }} ({{ unresolved.length }})</RouterLink>
     <div class="project-workspace">
-      <section class="project-list"><label><span>{{ t('knowledge.findProject') }}</span><input v-model="search" type="search" /></label><p v-if="catalogPending" role="status">{{ t('knowledge.loading') }}</p><p v-else-if="!projectError && !projects.length">{{ t('knowledge.noProjects') }}</p><p v-else-if="!projectError && !visibleProjects.length">{{ t('knowledge.noProjectMatch') }}</p><button v-for="id in visibleProjects" :key="id" class="project-row" :aria-pressed="project === id" :data-testid="`project-row-${id}`" @click="context.select(id)"><strong>{{ projectName(id) }}</strong><span v-if="descriptors.filter(row => projectName(row.project_id) === projectName(id)).length > 1">{{ t('projectCatalog.ambiguousName') }} · {{ id }}</span></button><button class="btn" @click="context.select('all')">{{ t('knowledge.browseAll') }}</button></section>
+      <section class="project-list"><label><span>{{ t('knowledge.findProject') }}</span><input v-model="search" type="search" /></label><p v-if="catalogPending" role="status">{{ t('knowledge.loading') }}</p><p v-else-if="!projectError && !projects.length">{{ t('knowledge.noProjects') }}</p><p v-else-if="!projectError && !visibleProjects.length">{{ t('knowledge.noProjectMatch') }}</p><button v-for="id in visibleProjects" :key="id" class="project-row" :aria-pressed="project === id" :data-testid="`project-row-${id}`" @click="context.select(id)"><strong>{{ projectChoiceLabel(id) }}</strong></button><button class="btn" @click="context.select('all')">{{ t('knowledge.browseAll') }}</button></section>
       <section v-if="project" class="project-content">
-        <h2>{{ project === 'all' ? t('knowledge.allProjects') : projectName(project) }}</h2>
+        <h2>{{ project === 'all' ? t('knowledge.allProjects') : projectChoiceLabel(project) }}</h2>
         <nav class="project-links"><RouterLink :to="context.to('/memory')">{{ t('nav.items.memory') }}</RouterLink><RouterLink :to="context.to('/documents')">{{ t('nav.items.documents') }}</RouterLink><RouterLink :to="context.to('/code')">{{ t('nav.items.code') }}</RouterLink><RouterLink :to="context.to('/')">{{ t('nav.items.overview') }}</RouterLink></nav>
         <section class="sessions">
           <div class="section-head"><h3>{{ t('knowledge.recentSessions') }}</h3><button class="btn" :disabled="pending" @click="refresh">{{ t('knowledge.refresh') }}</button></div>
@@ -82,7 +82,7 @@ async function archive() {
 .project-workspace { display:grid; grid-template-columns:minmax(230px,.7fr) minmax(0,1.5fr); gap:28px; align-items:start; }
 .project-list, .project-content { min-width:0; } .project-list { max-height:75vh; overflow:auto; } .project-list > label { margin-bottom:12px; }
 .project-row, .session-row { width:100%; display:grid; text-align:left; gap:8px; padding:16px 12px; background:transparent; color:var(--fg); border:0; border-bottom:1px solid var(--border); cursor:pointer; }
-.project-row:hover, .session-row:hover, [aria-pressed=true] { background:var(--surface-warm); } .project-row span { color:var(--muted); font-size:var(--text-xs); overflow-wrap:anywhere; } .session-row strong { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; font-weight:500; white-space:pre-wrap; overflow-wrap:anywhere; } .session-row span { color:var(--muted); font-size:var(--text-sm); }
+.project-row:hover, .session-row:hover, [aria-pressed=true] { background:var(--surface-warm); } .project-row strong { overflow-wrap:anywhere; } .session-row strong { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; font-weight:500; white-space:pre-wrap; overflow-wrap:anywhere; } .session-row span { color:var(--muted); font-size:var(--text-sm); }
 .project-links, .section-head { display:flex; flex-wrap:wrap; gap:16px; align-items:center; } .section-head { justify-content:space-between; margin-bottom:8px; } .project-content > section, .project-content > details { margin-top:28px; border-top:1px solid var(--border); padding-top:18px; }
 .btn { min-height:40px; padding:8px 12px; color:var(--fg); background:var(--surface); border:1px solid var(--border); border-radius:var(--r-sm); cursor:pointer; } .btn:disabled { opacity:.5; cursor:not-allowed; } .danger { color:var(--state-danger); }
 label { display:grid; gap:6px; color:var(--muted); } input { width:100%; min-height:40px; padding:8px 10px; color:var(--fg); background:var(--surface); border:1px solid var(--border); border-radius:var(--r-sm); }

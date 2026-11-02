@@ -190,56 +190,35 @@ func TestCredentialStore_GlobalAndProjectSameNameCoexist(t *testing.T) {
 	assert.Equal(t, projectCreated.ID, projectFetched.ID)
 }
 
-// TestCredentialStore_DeleteOrphanedByFingerprint verifies that orphaned rows
-// (wrong fingerprint) are hard-deleted and matching rows survive.
-func TestCredentialStore_DeleteOrphanedByFingerprint(t *testing.T) {
+// Fingerprint mismatch is diagnostic, not proof that credential bytes may be erased.
+func TestCredentialStore_FingerprintMismatchIsReadOnly(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
-
-	store := &Store{DB: db}
-	cs := NewCredentialStore(store)
+	cs := NewCredentialStore(&Store{DB: db})
 	ctx := context.Background()
-
-	testProject := uuid.NewString()
-	const goodFP = "goodfingerprint01"
-	const badFP = "badfingerprint099"
-
-	// Insert one matching and one orphaned credential.
-	good := &models.Credential{
-		Project:                  testProject,
-		Key:                      "smoke-good-fp",
-		EncryptedSecret:          []byte("enc-good"),
-		EncryptionKeyFingerprint: goodFP,
+	project := uuid.NewString()
+	for _, fingerprint := range []string{"current-fingerprint", "recoverable-old-fingerprint"} {
+		_, err := cs.Create(ctx, &models.Credential{
+			Project: project, Key: fingerprint, Scope: "project",
+			EncryptedSecret: []byte("synthetic-ciphertext"), EncryptionKeyFingerprint: fingerprint,
+		})
+		require.NoError(t, err)
 	}
-	bad := &models.Credential{
-		Project:                  testProject,
-		Key:                      "smoke-bad-fp",
-		EncryptedSecret:          []byte("enc-bad"),
-		EncryptionKeyFingerprint: badFP,
+	var before, after []Credential
+	require.NoError(t, db.Unscoped().Order("id").Find(&before).Error)
+	mismatch, err := cs.CountWithDifferentFingerprint(ctx, "current-fingerprint")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), mismatch)
+	count, err := cs.CountCredentials(ctx)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), count)
+	require.NoError(t, db.Unscoped().Order("id").Find(&after).Error)
+	require.Len(t, after, len(before))
+	for i := range before {
+		require.Equal(t, before[i].ID, after[i].ID)
+		require.True(t, string(before[i].EncryptedSecret) == string(after[i].EncryptedSecret), "diagnostic counters must preserve ciphertext bytes")
+		require.Equal(t, before[i].EncryptionKeyFingerprint, after[i].EncryptionKeyFingerprint)
 	}
-	_, err := cs.Create(ctx, good)
-	require.NoError(t, err)
-	_, err = cs.Create(ctx, bad)
-	require.NoError(t, err)
-
-	// Count mismatched before deletion.
-	mismatch, err := cs.CountWithDifferentFingerprint(ctx, goodFP)
-	require.NoError(t, err)
-	assert.GreaterOrEqual(t, mismatch, int64(1), "bad-fp row must be counted as mismatched")
-
-	// Hard-delete orphaned rows.
-	deleted, err := cs.DeleteOrphanedByFingerprint(ctx, goodFP)
-	require.NoError(t, err, "DeleteOrphanedByFingerprint should succeed")
-	assert.GreaterOrEqual(t, deleted, int64(1), "at least our bad-fp row must be deleted")
-
-	// Good row must still be retrievable.
-	fetched, err := cs.Get(ctx, testProject, "smoke-good-fp")
-	require.NoError(t, err, "good-fp credential must survive DeleteOrphanedByFingerprint")
-	assert.Equal(t, goodFP, fetched.EncryptionKeyFingerprint)
-
-	// Bad row must be gone.
-	_, err = cs.Get(ctx, testProject, "smoke-bad-fp")
-	require.Error(t, err, "bad-fp credential must be gone after DeleteOrphanedByFingerprint")
 }
 
 // TestCredentialStore_Create_ValidationErrors verifies that Create rejects invalid input.

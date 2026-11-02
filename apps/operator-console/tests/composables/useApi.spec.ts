@@ -48,7 +48,7 @@ const { createInvitationCurrentStateParser } = dependency<typeof AccessModule>('
 const { createKeycardCurrentStateParser } = dependency<typeof KeycardsModule>('./useOperatorKeycards')
 const { upsertDomainCurrentStateParser, deleteDomainCurrentStateParser } = dependency<typeof DomainRegistryModule>('./useOperatorDomainRegistry')
 const { projectArchiveCurrentStateParser } = dependency<typeof ProjectsModule>('./useOperatorProjects')
-const { cleanupOrphansCurrentStateParser, createSecretCurrentStateParser, deleteSecretCurrentStateParser } = dependency<typeof SecretsModule>('./useOperatorSecrets')
+const { createSecretCurrentStateParser, deleteSecretCurrentStateParser } = dependency<typeof SecretsModule>('./useOperatorSecrets')
 
 const request: MutationRequest<{ enabled: boolean; version: number }> = {
  requestId: 'request-42',
@@ -375,7 +375,6 @@ test('project, vault, and domain receipts require validated synchronous evidence
   parseMutationResponse({ requestId: 'vault-delete', action: 'vault-delete', intent: { credentialID: '9' } }, jsonResponse(200, { deleted: true, name: secret.name }), deleteSecretCurrentStateParser(secret.name, secret.project)),
   parseMutationResponse({ requestId: 'vault-project-bound', action: 'vault-delete', intent: { credentialID: '9' } }, jsonResponse(200, { deleted: true, name: secret.name, project_id: secret.project }), deleteSecretCurrentStateParser(secret.name, secret.project)),
   parseMutationResponse({ requestId: 'vault-global-bound', action: 'vault-delete', intent: { credentialID: '10' } }, jsonResponse(200, { deleted: true, name: secret.name, project_id: null }), deleteSecretCurrentStateParser(secret.name, '')),
-  parseMutationResponse({ requestId: 'vault-cleanup', action: 'vault-orphan-cleanup', intent: undefined }, jsonResponse(200, { status: 'ok', deleted: 1 }), cleanupOrphansCurrentStateParser),
   parseMutationResponse({ requestId: 'domain-upsert', action: 'memory-domain-upsert', intent: domain }, jsonResponse(200, validDomain), upsertDomainCurrentStateParser(domain)),
   parseMutationResponse({ requestId: 'domain-delete', action: 'memory-domain-delete', intent: { domain: domain.domain } }, jsonResponse(200, { deleted: true, domain: domain.domain }), deleteDomainCurrentStateParser(domain.domain)),
  ])

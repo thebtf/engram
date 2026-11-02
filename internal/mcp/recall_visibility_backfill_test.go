@@ -1,13 +1,16 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/thebtf/engram/internal/auth"
@@ -146,9 +149,9 @@ func TestRecall_PrincipalPrivateInvisibleNewestDoNotTruncate_FlagOff(t *testing.
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
 
 	require.NoError(t, db.Exec(
-		`INSERT INTO memories (project, content, tags, privacy_scope, created_at)
-			VALUES (?, ?, ?::jsonb, ?, now() - interval '5 minutes')`,
-		project, "older visible row A", `[]`, "private",
+		`INSERT INTO memories (project, content, tags, privacy_scope, source_workstation_id, created_at)
+			VALUES (?, ?, ?::jsonb, ?, ?, now() - interval '5 minutes')`,
+		project, "older visible row A", `[]`, "private", "keycard-alice",
 	).Error)
 	require.NoError(t, db.Exec(
 		`INSERT INTO memories (project, content, tags, privacy_scope, created_at)
@@ -294,69 +297,136 @@ func TestRecallMemory_DomainOwnedInvisibleNewestDoNotTruncate_FlagOff(t *testing
 	require.True(t, contents["older alice domain memory B"])
 }
 
-func TestRecallMemory_TG3IncludeSupersededLegacyPath(t *testing.T) {
+func TestRecallMemory_IncludeSupersededRecoveryPreservesHistoryPrivacy(t *testing.T) {
 	project := uuid.NewString()
 	env := newMemoryServerForT007(t, project)
 	db := env.store.DB
 	require.NoError(t, db.Create(&dbgorm.Project{ID: project}).Error)
+	queryMarker := "GO17_PRIVATE_QUERY_" + uuid.NewString()
+	sessionID := "GO17_PRIVATE_SESSION_" + uuid.NewString()
+	query := "contract memory " + queryMarker
 
-	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
-	t.Setenv("ENGRAM_VNEXT_ENABLED", "")
+	for _, row := range []struct {
+		content, status, privacy, workstation, owner, ownerKind, visibility string
+		confidence                                                          float64
+		age                                                                 int
+	}{
+		{"active contract memory", "active", "project", "", "", "", "", 0.9, 6},
+		{"superseded contract memory", "superseded", "private", "keycard-alice", "", "", "", 0.8, 5},
+		{"low confidence contract memory", "superseded", "project", "", "", "", "", 0.2, 4},
+		{"foreign principal private contract memory", "superseded", "project", "", "agent/bob", "agent", "private", 0.9, 3},
+		{"foreign workstation contract memory", "superseded", "private", "keycard-bob", "", "", "", 0.9, 2},
+		{"unknown workstation contract memory", "superseded", "private", "", "", "", "", 0.9, 1},
+	} {
+		require.NoError(t, db.Exec(
+			`INSERT INTO memories (project, content, tags, status, confidence, privacy_scope,
+			 source_workstation_id, source_sessions, owner_principal, owner_principal_kind, agent_visibility, created_at)
+			 VALUES (?, ?, '["type:fact"]'::jsonb, ?, ?, ?, ?, ARRAY[?]::text[], ?, ?, ?, now() - (?::int * interval '1 minute'))`,
+			project, row.content+" "+queryMarker, row.status, row.confidence, row.privacy, row.workstation, sessionID,
+			row.owner, row.ownerKind, row.visibility, row.age,
+		).Error)
+	}
+	var before, after []string
+	require.NoError(t, db.Raw(`SELECT to_jsonb(m)::text FROM memories m WHERE project = ? ORDER BY id`, project).Scan(&before).Error)
 
-	require.NoError(t, db.Exec(
-		`INSERT INTO memories (project, content, tags, status, confidence, privacy_scope, created_at)
-			VALUES (?, ?, ?::jsonb, ?, ?, ?, now() - interval '2 minutes')`,
-		project, "active contract memory", `["type:fact"]`, "active", 0.9, "project",
-	).Error)
-	require.NoError(t, db.Exec(
-		`INSERT INTO memories (project, content, tags, status, confidence, privacy_scope, created_at)
-			VALUES (?, ?, ?::jsonb, ?, ?, ?, now() - interval '1 minute')`,
-		project, "superseded contract memory", `["type:fact"]`, "superseded", 0.8, "project",
-	).Error)
-
-	args, err := json.Marshal(map[string]any{
-		"query":              "contract memory",
+	ctx := auth.WithIdentity(context.Background(),
+		auth.ClientWithPrincipal("read-only", "keycard-alice", "agent/alice", auth.PrincipalKindAgent))
+	request := map[string]any{
+		"query":              query,
 		"project":            project,
 		"format":             "items",
-		"limit":              5,
+		"limit":              2,
 		"include_superseded": true,
 		"confidence_min":     0.7,
-	})
-	require.NoError(t, err)
-
-	out, err := env.srv.handleRecallMemory(context.Background(), args)
-	require.NoError(t, err)
-
-	var rows []map[string]any
-	require.NoError(t, json.Unmarshal([]byte(out), &rows))
-	require.Len(t, rows, 2)
-	contents := map[string]bool{}
-	for _, row := range rows {
-		contents[row["content"].(string)] = true
+		"session_id":         sessionID,
+		"include_scopes":     []string{"project", "private"},
 	}
-	require.True(t, contents["active contract memory"])
-	require.True(t, contents["superseded contract memory"])
+	var logs bytes.Buffer
+	originalLogger := log.Logger
+	log.Logger = zerolog.New(&logs)
+	t.Cleanup(func() { log.Logger = originalLogger })
+	_, err := env.srv.callTool(ctx, "recall_memory", mustJSON(t, request))
+	require.ErrorContains(t, err, "include_superseded")
+	for _, payload := range []string{queryMarker, sessionID, project} {
+		assert.NotContains(t, err.Error(), payload, "logged Go error must be payload-free")
+	}
+	failed := env.srv.HandleRequest(ctx, &Request{
+		JSONRPC: "2.0", ID: 17, Method: "tools/call",
+		Params: mustJSON(t, map[string]any{"name": "recall_memory", "arguments": request}),
+	})
+	require.NotNil(t, failed.Error, "unsupported historical hybrid filter must remain an error")
+	require.Equal(t, -32000, failed.Error.Code)
+	require.Nil(t, failed.Result, "recovery must not turn rejection into a successful tool response")
+	require.Contains(t, failed.Error.Message, `recall(action="search")`)
+	for _, payload := range []string{queryMarker, sessionID, project} {
+		assert.NotContains(t, failed.Error.Message, payload)
+		assert.NotContains(t, logs.String(), payload, "public MCP handler must not log private recovery arguments")
+	}
+	require.Contains(t, logs.String(), `"tool":"recall_memory"`)
+	require.Contains(t, logs.String(), `"message":"Tool call failed"`)
+	var recoveryData struct {
+		Code     string `json:"code"`
+		Recovery struct {
+			Tool      string         `json:"tool"`
+			Arguments map[string]any `json:"arguments"`
+		} `json:"recovery"`
+	}
+	wireData, err := json.Marshal(failed.Error.Data)
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(wireData, &recoveryData))
+	require.Equal(t, "INCLUDE_SUPERSEDED_UNSUPPORTED", recoveryData.Code)
+	require.Equal(t, "recall", recoveryData.Recovery.Tool)
+	recovery := recoveryData.Recovery.Arguments
+	recoveryJSON := mustJSON(t, recovery)
+	want := make(map[string]any, len(request))
+	for key, value := range request {
+		if key != "format" {
+			want[key] = value
+		}
+	}
+	want["action"] = "search"
+	require.JSONEq(t, string(mustJSON(t, want)), string(recoveryJSON))
+	props := findToolProperties(t, env.srv.ListTools(), "recall")
+	for key := range recovery {
+		require.Contains(t, props, key, "every recovery argument must be in the advertised public schema")
+	}
+
+	out, err := projectContextToolCall(t, env.srv, ctx, recoveryData.Recovery.Tool, recovery)
+	require.NoError(t, err)
+	var response struct {
+		Memories []struct {
+			ID      int64  `json:"id"`
+			Project string `json:"project"`
+			Content string `json:"content"`
+		} `json:"memories"`
+		Count int `json:"count"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &response))
+	require.Equal(t, 2, response.Count)
+	require.Len(t, response.Memories, 2)
+	contents := make([]string, 0, 2)
+	for _, row := range response.Memories {
+		require.Equal(t, project, row.Project)
+		require.Positive(t, row.ID)
+		contents = append(contents, row.Content)
+	}
+	require.ElementsMatch(t, []string{"active contract memory " + queryMarker, "superseded contract memory " + queryMarker}, contents)
+	require.NoError(t, db.Raw(`SELECT to_jsonb(m)::text FROM memories m WHERE project = ? ORDER BY id`, project).Scan(&after).Error)
+	require.Equal(t, before, after, "hybrid rejection and read-only historical recovery must not mutate stored memories")
 }
 
-func TestRecallMemory_IncludeSupersededFlagOffIgnoredInHybrid(t *testing.T) {
-	if os.Getenv("DATABASE_DSN") == "" {
-		t.Skip("DATABASE_DSN not set, skipping hybrid DB-backed compatibility test")
+func TestRecallHistoryRecoverySchema(t *testing.T) {
+	srv := NewServer(ServerOptions{Version: "test"})
+	for _, expected := range []struct{ property, typeName string }{
+		{"include_superseded", "boolean"},
+		{"confidence_min", "number"},
+		{"session_id", "string"},
+		{"include_scopes", "array"},
+		{"include_rationale", "boolean"},
+	} {
+		requireMutationSchemaType(t, srv.ListTools(), "recall", expected.property, expected.typeName)
 	}
-
-	project := uuid.NewString()
-	env := newMemoryServerForT007(t, project)
-
-	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
-	t.Setenv("ENGRAM_VNEXT_ENABLED", "true")
-
-	args, err := json.Marshal(map[string]any{
-		"query":              "missing",
-		"project":            project,
-		"format":             "items",
-		"include_superseded": true,
-	})
-	require.NoError(t, err)
-
-	_, err = env.srv.handleRecallMemory(context.Background(), args)
-	require.NoError(t, err, "flag-off TG3 params must be ignored even when hybrid retrieval is enabled")
+	props := recallMemoryTool().InputSchema["properties"].(map[string]any)
+	description := props["include_superseded"].(map[string]any)["description"].(string)
+	require.Contains(t, description, `recall(action="search")`)
 }

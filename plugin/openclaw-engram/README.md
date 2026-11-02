@@ -196,12 +196,92 @@ Available to the agent during a session:
 |---|---|
 | `engram_search` | Semantic search across all stored observations |
 | `memory_search` | Alias for `engram_search` (memory-core compatible name) |
-| `engram_remember` | Store a new observation with structured metadata |
-| `memory_store` | Alias for `engram_remember` |
+| `engram_remember` | Store a memory with title, type tag and project/global/agent-private scope |
+| `memory_store` | Store a project-scoped memory (memory-core compatible parameters) |
 | `engram_decisions` | Retrieve past architectural decisions by query |
-| `memory_get` | Retrieve a specific observation by ID |
-| `memory_forget` | Delete an observation by ID |
+| `memory_get` | Read a local workspace Markdown file, optionally store it, or search by query |
+| `engram_suppress` | Suppress a retained memory by ID; `action: "unsuppress"` restores a flagged memory |
+| `memory_forget` | Suppress by default; `permanent: true` archives without erasing the memory |
 | `memory_migrate` | Import local `MEMORY.md` / `memory/**/*.md` files into engram |
+
+All explicit writers, file migration and file synchronization use the canonical
+`POST /api/memories`. The retired observations import endpoint is not retried or
+used as a fallback. A successful result requires a returned memory ID and matching
+project/content. A distinct title is retained before the body in `content`; a title
+identical to the body is not duplicated. Observation type
+uses the existing `type:<type>` tag convention, not `epistemic_type`. Supplied tags
+are retained. This does not restore the retired observation table or its native
+title/type fields, near-duplicate detection or transaction-wide bulk import.
+
+`memory_store` is project-scoped. `engram_remember` with `scope: "agent"` requests
+principal-private visibility within the project; the server derives the owner
+from the configured bearer keycard and refuses a write without a principal.
+Host `agentId` is source attribution, not authentication. Use an agent-bound
+keycard for that agent; sharing one principal across agents shares its private
+memory. Workstation-private scope is not substituted for agent privacy.
+Writer tools preserve the host `sessionId` and fall back to its `sessionKey` when
+the ID is absent. These are source-session identifiers, not authentication; a
+project UUID is never substituted. Commands, CLI and the watcher have source
+labels but do not invent host session metadata.
+
+Lifecycle tools use authenticated `POST /api/memories/{id}/transition` with
+`action: "suppress"`, `"unsuppress"` or `"archive"`. Suppress changes active to
+flagged; unsuppress changes flagged to active; archive accepts active or flagged.
+Each successful transition increments the version once and preserves the row,
+content and `deleted_at`. Flagged/archived memories leave active lists and context
+search; nondeleted owner detail reads remain available. Archive is not data erasure
+and cannot be undone through these tools.
+
+These by-ID calls do not require workspace resolution. A configured canonical
+`project` UUID is sent as an optional narrowing selector, never as an access grant.
+When absent, the server resolves the memory's unique live canonical membership
+and applies current caller visibility and domain-manage policy. An explicitly
+empty, invalid, global/self or different-project selector does not fall back to
+another project. Revoked keys are rejected by the normal bearer middleware.
+The legacy `/{id}/suppress` delete path and browser selection/version protocol
+are unchanged.
+
+Success requires a matching action, memory ID, resulting status, version and
+canonical project in the server receipt. A lost or invalid acknowledgement is
+reported as an unknown outcome, not success or proof of failure. Inspect the
+memory before deciding whether another action is appropriate; no automatic retry
+or retired observation endpoint fallback is used.
+
+File migration and synchronization retain `.engram-migrated.json` file hashes and
+confirmed per-chunk IDs. Before each POST, an atomic checkpoint records a `pending`
+attempt. A valid response changes it to a confirmed ID; a definitive refusal is
+recorded as `rejected`, an unsent request as `not_sent`, and an ambiguous response
+as `unknown`. A process interrupted between the POST and confirmation leaves
+`pending`, so a later watcher event cannot automatically resend it. Incomplete
+files are not marked done. Existing in-process marker operations are serialized;
+there is no persistent lock, PID/TTL reclaim or new background retry. As before,
+independent processes sharing a marker are not a supported coordinated writer.
+
+To recover an unresolved file through the existing user surface:
+
+1. Inspect the reported project, source file and server outcome before deciding
+   whether another write is appropriate. A lost response does not prove absence.
+2. If you deliberately want to reimport all chunks despite possible duplicates,
+   invoke `memory_migrate` with `force: true`, `/migrate --force [path]`, or
+   `openclaw memory migrate --force`. This is an explicit new write, not a safe
+   retry or proof that the earlier attempt failed.
+3. Read the result: confirmed replacement IDs and earlier unknown attempts are
+   reported separately. Only after every chunk in that forced file has a matching
+   confirmed response does an atomic `force-reimport-with-duplicate-risk`
+   acknowledgement permit normal future file updates. It covers only earlier
+   attempts whose exact chunk fingerprint received a confirmed replacement in
+   that force. Forcing different content B never acknowledges unknown content A;
+   returning to A remains blocked. The original unknown history stays unchanged;
+   no prior write is declared absent or confirmed. A failed or partial force does
+   not acknowledge the risk. Exactly-once delivery is not claimed.
+
+An unchanged legacy file checkpoint without project attribution is preserved but
+not accepted as proof of completion for a selected project. Inspect it, or use the
+same explicit force reimport with its duplicate risk. Dry-run stays offline and
+does not invoke native project resolution or write progress. It can compare a
+checkpoint with a locally validated configured project UUID; without that UUID it
+shows candidates and marks checkpoint project attribution unverified, rather than
+treating any file as completed.
 
 ### Slash commands
 

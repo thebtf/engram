@@ -1,9 +1,12 @@
 <script setup lang="ts">
-import { useOperatorProjectContext, projectName } from '../composables/useOperatorProjectContext'
+import { computed } from 'vue'
+import { useOperatorProjectContext, projectName, projectChoiceLabel } from '../composables/useOperatorProjectContext'
 import { operatorDiagnosisKey } from '../composables/useOperatorApi'
 const { t } = useI18n()
+const route = useRoute()
 const context = useOperatorProjectContext()
 const { project, projects, descriptors, unresolved, pending, error, selectionPending, selectionError } = context
+const showRetainedGroups = computed(() => !['/', '/projects', '/projects/unresolved'].includes(route.path.replace(/\/+$/, '').toLowerCase() || '/'))
 function select(event: Event) { if (event.target instanceof HTMLSelectElement) void context.select(event.target.value) }
 </script>
 
@@ -13,7 +16,7 @@ function select(event: Event) { if (event.target instanceof HTMLSelectElement) v
       <span>{{ t('knowledge.contextProject') }}</span>
       <select :value="project" :aria-label="t('knowledge.contextProject')" :disabled="pending && !projects.length" @change="select" data-testid="project-context-select">
         <option value="" disabled>{{ t('knowledge.chooseProject') }}</option>
-        <option v-for="id in projects" :key="id" :value="id">{{ projectName(id) }}{{ descriptors.filter(row => projectName(row.project_id) === projectName(id)).length > 1 ? ` · ${id}` : '' }}</option>
+        <option v-for="id in projects" :key="id" :value="id">{{ projectChoiceLabel(id) }}</option>
         <option value="all">{{ t('knowledge.allProjects') }}</option>
       </select>
     </label>
@@ -22,7 +25,7 @@ function select(event: Event) { if (event.target instanceof HTMLSelectElement) v
     <div v-if="error || selectionError" class="context-error" role="alert">
       {{ t('projectCatalog.unknownProject') }} {{ t(operatorDiagnosisKey(error || selectionError)) }} <button type="button" @click="context.refresh">{{ t('knowledge.retry') }}</button>
     </div>
-    <RouterLink v-if="unresolved.length" to="/projects/unresolved">{{ t('projectCatalog.review') }} ({{ unresolved.length }})</RouterLink>
+    <RouterLink v-if="unresolved.length && showRetainedGroups" to="/projects/unresolved">{{ t('projectCatalog.groupDiscovery') }} ({{ unresolved.length }})</RouterLink>
   </div>
 </template>
 

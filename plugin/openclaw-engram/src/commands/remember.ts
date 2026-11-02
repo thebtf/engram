@@ -7,7 +7,7 @@
  */
 
 import { resolveProject } from '../client.js';
-import type { EngramRestClient, BulkImportRequest } from '../client.js';
+import type { EngramRestClient, MemoryInput } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import type { OpenClawPluginCommandDefinition, PluginCommandContext } from '../types/openclaw.js';
 
@@ -51,7 +51,7 @@ export function buildRememberCommand(
     ? text.slice(0, CONTENT_MAX_CHARS)
     : text;
 
-   const observation: BulkImportRequest = {
+   const observation: MemoryInput = {
     title,
     content,
     type: 'change',
@@ -59,21 +59,11 @@ export function buildRememberCommand(
     scope: 'project',
    };
 
-   const response = await client.bulkImport([observation]);
-   if (!response) {
-    return { text: 'Failed to store memory — engram returned no response' };
-   }
-
-   if (response.imported > 0) {
+   const [result] = await client.storeMemories([observation], { sourceAgent: 'openclaw-command' });
+   if (result?.ok) {
     return { text: `Stored: "${title}"` };
    }
-
-   if (response.skipped_duplicates > 0) {
-    return { text: `Skipped (likely a near-duplicate): "${title}"` };
-   }
-
-   const errMsg = response.errors?.join(', ') ?? 'unknown error';
-   return { text: `Failed to store memory: ${errMsg}` };
+   return { text: `Failed to store memory: ${result?.error ?? 'No memory write confirmation'}` };
   },
  };
 }

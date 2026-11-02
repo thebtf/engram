@@ -959,6 +959,13 @@ func TestUCIScannerCandidateCacheMatchesUncachedRealGit(t *testing.T) {
 		indexPath := scannerRealGitPath(t, fixture.root, "index")
 		scannerRealWrite(t, fixture.root, "tracked.go", []byte("package fixture\nconst Version = 2\n"))
 		scannerRealGit(t, fixture.root, "add", "--", "tracked.go")
+		// Container bind mounts may not round-trip a nanosecond timestamp through
+		// Chtimes. Establish the cached baseline at a whole second, then restore
+		// that same representable timestamp after the real Git index replacement.
+		indexTime := time.Now().Add(-time.Minute).Truncate(time.Second)
+		if err := os.Chtimes(indexPath, indexTime, indexTime); err != nil {
+			t.Fatalf("normalize index modification time: %v", err)
+		}
 		_, refreshCalls := fixture.scanAndCompare(t)
 		scannerAssertRecordedGitOperations(t, refreshCalls, fixture.expectedRoot,
 			"status --porcelain=v2 --branch -z --untracked-files=all",

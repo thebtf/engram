@@ -72,27 +72,25 @@ func memoriesToObservations(mems []*models.Memory) []*models.Observation {
 		if mem == nil {
 			continue
 		}
-		result = append(result, &models.Observation{
-			ID:              mem.ID,
-			Project:         mem.Project,
-			Scope:           models.ScopeProject,
-			Type:            models.ObsTypeDiscovery,
-			MemoryType:      models.MemTypeContext,
-			SourceType:      models.SourceManual,
-			CreatedAt:       mem.CreatedAt.Format(time.RFC3339),
-			CreatedAtEpoch:  mem.CreatedAt.UnixMilli(),
-			Title:           sql.NullString{String: mem.Content, Valid: mem.Content != ""},
-			Narrative:       sql.NullString{String: mem.Content, Valid: mem.Content != ""},
-			Concepts:        models.JSONStringArray(mem.Tags),
-			ImportanceScore: 1,
-		})
+		result = append(result, memoryToObservation(mem))
 	}
 	return result
 }
 
+func memoryToObservation(mem *models.Memory) *models.Observation {
+	return &models.Observation{
+		ID: mem.ID, Project: mem.Project, Scope: models.ScopeProject,
+		Type: models.ObsTypeDiscovery, MemoryType: models.MemTypeContext, SourceType: models.SourceManual,
+		CreatedAt: mem.CreatedAt.Format(time.RFC3339), CreatedAtEpoch: mem.CreatedAt.UnixMilli(),
+		Title:     sql.NullString{String: mem.Content, Valid: mem.Content != ""},
+		Narrative: sql.NullString{String: mem.Content, Valid: mem.Content != ""},
+		Concepts:  models.JSONStringArray(mem.Tags), ImportanceScore: 1,
+	}
+}
+
 // handleSearchByPromptGET godoc
 // @Summary Search observations by prompt
-// @Description Searches observations relevant to a user prompt using query parameters. JSON bodies are ignored; use POST for large prompts.
+// @Description Searches observations using shared vector and text retrieval (FTS plus literal content/tag matches), optional configured cross-encoder reranking, and existing clustering. Unavailable embeddings degrade to text search; query expansion is not performed. Memory-store lookup failures return HTTP 500 rather than an empty success. JSON bodies are ignored; use POST for large prompts.
 // @Tags Search
 // @Produce json
 // @Security ApiKeyAuth
@@ -105,6 +103,7 @@ func memoriesToObservations(mems []*models.Memory) []*models.Observation {
 // @Param limit query int false "Number of results (default 50, max 200)"
 // @Success 200 {object} map[string]interface{}
 // @Failure 400 {string} string "project and query required"
+// @Failure 500 {string} string "memory-store lookup or retrieval failed"
 // @Router /api/context/search [get]
 func (s *Service) handleSearchByPromptGET(w http.ResponseWriter, r *http.Request) {
 	s.handleSearchByPrompt(w, r)
@@ -112,7 +111,7 @@ func (s *Service) handleSearchByPromptGET(w http.ResponseWriter, r *http.Request
 
 // handleSearchByPrompt godoc
 // @Summary Search observations by prompt
-// @Description Searches observations relevant to a user prompt using hybrid vector + FTS search with query expansion, cross-encoder reranking, and clustering. A nonempty project and query are each required in the query string or JSON body. Nonempty JSON fields override query parameters; session_id overrides even when empty. Invalid or absent JSON falls back to query parameters.
+// @Description Searches observations using shared vector and text retrieval (FTS plus literal content/tag matches), optional configured cross-encoder reranking, and existing clustering. Unavailable embeddings degrade to text search; query expansion is not performed. Memory-store lookup failures return HTTP 500 rather than an empty success. A nonempty project and query are each required in the query string or JSON body. Nonempty JSON fields override query parameters; session_id overrides even when empty. Invalid or absent JSON falls back to query parameters.
 // @Tags Search
 // @Accept json
 // @Produce json
@@ -127,6 +126,7 @@ func (s *Service) handleSearchByPromptGET(w http.ResponseWriter, r *http.Request
 // @Param body body object false "POST body: {project, query, agent_id, session_id, cwd, obs_type, files_being_edited}; nonempty fields override query params; session_id overrides even when empty; obs_type is body-only, limit is query-only"
 // @Success 200 {object} map[string]interface{}
 // @Failure 400 {string} string "project and query required"
+// @Failure 500 {string} string "memory-store lookup or retrieval failed"
 // @Router /api/context/search [post]
 func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
@@ -200,8 +200,9 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 	retrievalMeta := &retrievalMetadata{}
 	retrievalCtx := withRetrievalRequest(r.Context(), agentID, cwd, retrievalMeta)
 	clusteredObservations, similarityScores, err := s.RetrieveRelevant(retrievalCtx, project, query, RetrievalOptions{
-		MaxResults: maxResults,
-		FilePaths:  filesBeingEdited,
+		MaxResults:      maxResults,
+		FilePaths:       filesBeingEdited,
+		ObservationType: obsTypeFilter,
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -241,19 +242,17 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 		Float64("threshold", threshold).
 		Msg("Prompt-based observation search")
 
-	// Attach similarity scores to each observation for caller ranking.
+	// Rule and memory IDs are independent; only memory observations own these scores.
 	obsWithScores := make([]map[string]any, len(clusteredObservations))
 	for i, obs := range clusteredObservations {
 		obsMap := obs.ToMap()
-		if score, ok := similarityScores[obs.ID]; ok {
+		if score, ok := similarityScores[obs.ID]; ok && obs.Type != models.ObsTypeGuidance {
 			obsMap["similarity"] = score
 		}
 		obsWithScores[i] = obsMap
 	}
 
-	// Build expansion info for response.
-	// v5 (US9): query expansion removed — expandedQueries is always a single-element
-	// []string containing the original query. Weight and source fields are omitted.
+	// No query expansion: retain the original query and compatibility weight/source fields.
 	expansionInfo := make([]map[string]any, len(expandedQueries))
 	for i, eq := range expandedQueries {
 		expansionInfo[i] = map[string]any{

@@ -1,11 +1,12 @@
 /**
  * EngramRestClient — typed REST client for the engram HTTP API.
  *
- * All methods return null on error and update the availability tracker.
+ * Read methods return null on error; memory writes return explicit per-input outcomes.
  * No method ever throws to its caller — engram failures must not block agent operation.
  */
 
 import { randomUUID } from 'node:crypto';
+import { z } from 'zod';
 import { AvailabilityTracker } from './availability.js';
 import type { PluginConfig } from './config.js';
 import { resolveIdentity, validateProjectID, type ProjectIdentity } from './identity.js';
@@ -87,27 +88,49 @@ export interface SelfCheckResponse {
  components: Record<string, { status: string; message?: string }>;
 }
 
-export interface BulkObservationInput {
+export interface MemoryInput {
  title: string;
  content: string;
  type: string;
  project: string;
- scope?: string;
+ scope?: 'project' | 'global' | 'agent';
  tags?: string[];
 }
 
-/** @deprecated Use BulkObservationInput instead. */
-export type BulkImportRequest = BulkObservationInput;
-
-export interface BulkImportResponse {
- imported: number;
- skipped_duplicates: number;
- errors?: string[];
+export interface MemoryAttribution {
+ sourceAgent?: string;
+ sessionId?: string;
 }
 
-export interface BulkDeleteResponse {
- deleted: number;
+const StoredMemorySchema = z.object({
+ id: z.number().int().positive(),
+ project: z.string(),
+ content: z.string(),
+});
+
+export type StoredMemory = z.infer<typeof StoredMemorySchema>;
+export interface MemoryWriteFailure {
+ ok: false;
+ outcome: 'not_sent' | 'rejected' | 'unknown';
+ error: string;
 }
+
+export type MemoryWriteResult = { ok: true; memory: StoredMemory } | MemoryWriteFailure;
+
+const MemoryTransitionActionSchema = z.enum(['suppress', 'unsuppress', 'archive']);
+export type MemoryTransitionAction = z.infer<typeof MemoryTransitionActionSchema>;
+
+const MemoryTransitionReceiptSchema = z.object({
+ id: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+ action: MemoryTransitionActionSchema,
+ status: z.enum(['active', 'flagged', 'archived']),
+ version: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+ project: z.guid().refine(project => project !== '00000000-0000-0000-0000-000000000000' && project === project.toLowerCase()),
+});
+
+export type MemoryTransitionResult =
+ | { ok: true; memory: z.infer<typeof MemoryTransitionReceiptSchema> }
+ | MemoryWriteFailure;
 
 export interface ProjectResolutionSuccess {
  ok: true;
@@ -414,69 +437,79 @@ export class EngramRestClient {
   return this.get<SelfCheckResponse>('/api/selfcheck', 5000);
  }
 
- /**
-  * Bulk-import observations.
-  * POST /api/observations/bulk-import
-  *
-  * Server expects: { project, session_id?, observations: [{ type, title, narrative, scope, concepts }] }
-  * Client uses:    { content → narrative, tags → concepts }
-  *
-  * Passing sessionId reuses the caller's existing session instead of creating a new
-  * synthetic one per call, preventing phantom session proliferation.
-  */
- async bulkImport(
-  observations: BulkObservationInput[],
-  sessionId?: string,
- ): Promise<BulkImportResponse | null> {
-  if (observations.length === 0) return { imported: 0, skipped_duplicates: 0 };
-
-  // All observations in a batch must share the same project.
-  const project = observations[0].project;
-
-  const mapped = observations.map((o) => ({
-   type: o.type,
-   title: o.title,
-   narrative: o.content,
-   scope: o.scope,
-   concepts: o.tags,
-  }));
-
-  return this.post<BulkImportResponse>('/api/observations/bulk-import', {
-   project,
-   ...(sessionId ? { session_id: sessionId } : {}),
-   observations: mapped,
-  });
+ /** Each input produces one confirmed memory or an explicit failure; no retry or deduplication is implied. */
+ async storeMemories(
+  memories: MemoryInput[],
+  attribution: MemoryAttribution = {},
+ ): Promise<MemoryWriteResult[]> {
+  const results: MemoryWriteResult[] = [];
+  for (const memory of memories) {
+   let project: string;
+   try {
+    project = validateProjectID(memory.project).toLowerCase();
+   } catch (error) {
+    results.push({ ok: false, outcome: 'not_sent', error: error instanceof Error ? error.message : String(error) });
+    continue;
+   }
+   const scope = memory.scope ?? 'project';
+   if (!['project', 'global', 'agent'].includes(scope)) {
+    results.push({ ok: false, outcome: 'not_sent', error: 'Unsupported memory scope' });
+    continue;
+   }
+   // The canonical handler has no observation title/type columns. Preserve
+   // them as ordinary content and a tag, not as native classification fields.
+   const body = {
+    project,
+    content: memory.title === memory.content ? memory.content : `${memory.title}\n\n${memory.content}`,
+    tags: [...(memory.tags ?? []), `type:${memory.type}`],
+    privacy_scope: scope === 'global' ? 'global' : 'project',
+    ...(scope === 'agent' ? { agent_visibility: 'private' } : {}),
+    ...(attribution.sourceAgent ? { source_agent: attribution.sourceAgent } : {}),
+    ...(attribution.sessionId ? { session_id: attribution.sessionId } : {}),
+   };
+   let failure: MemoryWriteFailure = { ok: false, outcome: 'unknown', error: 'Memory write returned no confirmation; outcome is unknown, do not blindly retry' };
+   const response = await this.request<unknown>('POST', '/api/memories', body, undefined, result => {
+    failure = result.outcome === 'unknown' ? { ...result, error: `${result.error}; inspect the outcome before retrying` } : result;
+   });
+   const parsed = StoredMemorySchema.safeParse(response);
+   if (!parsed.success || parsed.data.project !== project || parsed.data.content !== body.content) {
+    results.push(response === null ? failure : { ok: false, outcome: 'unknown', error: 'Invalid memory write confirmation; outcome is unknown, do not blindly retry' });
+   } else {
+    results.push({ ok: true, memory: parsed.data });
+   }
+  }
+  return results;
  }
 
- /**
-  * Bulk-delete (archive) observations by ID.
-  * POST /api/observations/bulk-status  { action: "archive", ids, reason }
-  *
-  * The server has no dedicated bulk-delete endpoint. Archiving is the closest
-  * equivalent — it removes observations from search results and context injection.
-  */
- /**
-  * Suppress an observation (reversible soft-hide from search results).
-  * POST /api/observations/bulk-status { action: "suppress", ids: [id] }
-  */
- async suppressObservation(id: number): Promise<boolean> {
-  const resp = await this.post<{ updated: number }>('/api/observations/bulk-status', {
-   action: 'suppress',
-   ids: [id],
-  });
-  return resp != null && resp.updated > 0;
- }
-
- async bulkDelete(ids: string[]): Promise<BulkDeleteResponse | null> {
-  const numericIds = ids.map((id) => Number(id)).filter((n) => !Number.isNaN(n));
-  if (numericIds.length === 0) return { deleted: 0 };
-
-  const resp = await this.post<{ updated: number; failed: number }>(
-   '/api/observations/bulk-status',
-   { action: 'archive', ids: numericIds, reason: 'Deleted via memory_forget' },
-  );
-  if (!resp) return null;
-  return { deleted: resp.updated };
+ /** One retained-memory transition, with no workspace resolution or automatic retry. */
+ async transitionMemory(id: number, action: MemoryTransitionAction, project?: string): Promise<MemoryTransitionResult> {
+  if (!Number.isSafeInteger(id) || id <= 0 || !MemoryTransitionActionSchema.safeParse(action).success) {
+   return { ok: false, outcome: 'not_sent', error: 'Invalid memory transition' };
+  }
+  let selector = '';
+  if (project !== undefined) {
+   try {
+    project = validateProjectID(project).toLowerCase();
+    selector = `?project=${encodeURIComponent(project)}`;
+   } catch (error) {
+    return { ok: false, outcome: 'not_sent', error: error instanceof Error ? error.message : String(error) };
+   }
+  }
+  let failure: MemoryWriteFailure = { ok: false, outcome: 'unknown', error: 'Memory transition returned no confirmation; outcome is unknown, do not blindly retry' };
+  const response = await this.request<unknown>('POST', `/api/memories/${id}/transition${selector}`, { action }, undefined, (result, status) => {
+   // This endpoint guarantees HTTP 409 means rollback with no mutation.
+   if (status === 409) {
+    failure = { ...result, outcome: 'rejected' };
+    return;
+   }
+   failure = result.outcome === 'unknown' ? { ...result, error: `${result.error}; outcome is unknown, inspect the memory before retrying` } : result;
+  }, 409);
+  const parsed = MemoryTransitionReceiptSchema.safeParse(response);
+  const expectedStatus = action === 'suppress' ? 'flagged' : action === 'unsuppress' ? 'active' : 'archived';
+  if (!parsed.success || parsed.data.id !== id || parsed.data.action !== action || parsed.data.status !== expectedStatus || (project !== undefined && parsed.data.project !== project)) {
+   return response === null ? failure : { ok: false, outcome: 'unknown', error: 'Invalid memory transition confirmation; outcome is unknown, do not blindly retry' };
+  }
+  return { ok: true, memory: parsed.data };
  }
 
  /**
@@ -710,14 +743,22 @@ export class EngramRestClient {
   path: string,
   body: unknown,
   timeoutMs?: number,
+  onFailure?: (failure: MemoryWriteFailure, status?: number) => void,
+  reachableRejectionStatus?: number,
  ): Promise<T | null> {
-  if (!this.availability.isAvailable()) return null;
+  if (!this.availability.isAvailable()) {
+   onFailure?.({ ok: false, outcome: 'not_sent', error: 'engram is currently unreachable — memory was not sent' });
+   return null;
+  }
 
   const url = this.baseUrl + path;
   const timeout = timeoutMs ?? this.defaultTimeoutMs;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   const startMs = Date.now();
+  let outcome: MemoryWriteFailure['outcome'] = 'unknown';
+  let responseStatus: number | undefined;
+  let availabilityFailure = true;
 
   try {
    const headers: Record<string, string> = {
@@ -735,11 +776,16 @@ export class EngramRestClient {
     body: body !== undefined ? JSON.stringify(body) : undefined,
     signal: controller.signal,
    });
+   responseStatus = response.status;
+   if (!response.ok && [400, 401, 403, 404, 405, 413, 415, 422].includes(response.status)) outcome = 'rejected';
 
    const text = await response.text();
    const elapsedMs = Date.now() - startMs;
 
    if (!response.ok) {
+    // Reachability success is distinct from the rejected application outcome.
+    availabilityFailure = response.status !== reachableRejectionStatus;
+    if (!availabilityFailure) this.availability.recordSuccess();
     throw new Error(`HTTP ${response.status} ${response.statusText} (${elapsedMs}ms): ${text.slice(0, 200)}`);
    }
 
@@ -749,8 +795,9 @@ export class EngramRestClient {
    return JSON.parse(text) as T;
   } catch (err: unknown) {
    const elapsedMs = Date.now() - startMs;
-   this.availability.recordFailure();
+   if (availabilityFailure) this.availability.recordFailure();
    const msg = err instanceof Error ? err.message : String(err);
+   onFailure?.({ ok: false, outcome, error: msg }, responseStatus);
    const isAbort = err instanceof Error && err.name === 'AbortError';
    console.error(
     `[engram] ${method} ${path} failed after ${elapsedMs}ms` +

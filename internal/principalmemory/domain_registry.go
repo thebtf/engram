@@ -64,6 +64,22 @@ type DomainWriteWarning struct {
 	Message string `json:"message"`
 }
 
+// CheckWriteTx binds the native owner reader and audit writer to the memory
+// mutation transaction. Injected non-database implementations remain unchanged.
+func (s *DomainRegistryService) CheckWriteTx(ctx context.Context, tx *gormlib.DB, req DomainWriteCheckRequest) (*DomainWriteDecision, error) {
+	if s == nil || tx == nil {
+		return nil, fmt.Errorf("domain registry transaction is not configured")
+	}
+	scoped := *s
+	if _, ok := s.store.(*gormdb.DomainOwnerStore); ok {
+		scoped.store = gormdb.NewDomainOwnerStore(&gormdb.Store{DB: tx})
+	}
+	if _, ok := s.audit.(*gormdb.AuditStore); ok {
+		scoped.audit = gormdb.NewAuditStore(tx)
+	}
+	return scoped.CheckWrite(ctx, req)
+}
+
 func (s *DomainRegistryService) CheckWrite(ctx context.Context, req DomainWriteCheckRequest) (*DomainWriteDecision, error) {
 	if s == nil || s.store == nil {
 		return nil, fmt.Errorf("domain registry store is not configured")

@@ -24,9 +24,9 @@ func TestRecallMemoryPrincipalDefault_OwnSharedLegacyVisibleOtherPrivateHidden(t
 	t.Setenv("ENGRAM_VNEXT_ENABLED", "")
 
 	require.NoError(t, db.Exec(
-		`INSERT INTO memories (project, content, tags, privacy_scope, created_at)
-			VALUES (?, ?, ?::jsonb, ?, now() - interval '6 minutes')`,
-		project, "legacy recall marker unowned row", `["type:fact"]`, "private",
+		`INSERT INTO memories (project, content, tags, privacy_scope, source_workstation_id, created_at)
+			VALUES (?, ?, ?::jsonb, ?, ?, now() - interval '6 minutes')`,
+		project, "legacy recall marker unowned row", `["type:fact"]`, "private", "keycard-alice",
 	).Error)
 	require.NoError(t, db.Exec(
 		`INSERT INTO memories (project, content, tags, privacy_scope, owner_principal, owner_principal_kind, agent_visibility, created_at)
@@ -46,6 +46,11 @@ func TestRecallMemoryPrincipalDefault_OwnSharedLegacyVisibleOtherPrivateHidden(t
 			project, "bob recall marker private newest "+string(rune('0'+i)), `["type:fact"]`, "project", "agent/bob", "agent", "private", i,
 		).Error)
 	}
+	require.NoError(t, db.Exec(
+		`INSERT INTO memories (project, content, tags, privacy_scope)
+			VALUES (?, ?, ?::jsonb, ?)`,
+		project, "unknown workstation recall marker private newest", `["type:fact"]`, "private",
+	).Error)
 
 	ctx := auth.WithIdentity(context.Background(),
 		auth.ClientWithPrincipal("read-write", "keycard-alice", "agent/alice", auth.PrincipalKindAgent))
@@ -69,6 +74,8 @@ func TestRecallMemoryPrincipalDefault_OwnSharedLegacyVisibleOtherPrivateHidden(t
 		content := row["content"].(string)
 		require.False(t, strings.Contains(content, "private newest"),
 			"other-principal private row leaked through default recall")
+		require.NotEqual(t, "unknown workstation recall marker private newest", content,
+			"legacy private rows without a writing workstation must remain invisible")
 		byContent[content] = row
 	}
 

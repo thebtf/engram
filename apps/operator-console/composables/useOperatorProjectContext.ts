@@ -135,6 +135,16 @@ export function catalogProjectName(id: string, items: OperatorProjectDescriptor[
 }
 
 export function projectName(id: string) { return catalogProjectName(id, descriptors.value) }
+export function projectChoiceLabel(id: string): string {
+  const row = descriptors.value.find((item) => item.project_id === id)
+  if (!row) return id
+  const qualifier = row.repository_qualifier ? ` · ${row.repository_qualifier}` : ''
+  const needsIdentity = !row.repository_qualifier || descriptors.value.some((item) => item.project_id !== id && item.name === row.name)
+  if (!needsIdentity) return `${row.name}${qualifier}`
+  const prefix = id.slice(0, 8)
+  const collision = descriptors.value.some((item) => item.project_id !== id && item.project_id.slice(0, 8).toLowerCase() === prefix.toLowerCase())
+  return `${row.name}${qualifier} · ${collision ? id : prefix}`
+}
 export function isCatalogProject(id: string): boolean { return projects.value.includes(id) }
 
 function knownProjectQuery(query: LocationQuery): boolean {

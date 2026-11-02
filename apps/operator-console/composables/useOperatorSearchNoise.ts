@@ -74,12 +74,14 @@ interface ApiSearchRecent {
 interface ApiSearchAnalytics {
   total_searches?: number
   searches_today?: number
-  avg_latency_ms?: number
+  avg_latency_ms?: number | null
+  avg_latency_ms_result_status?: 'computed' | 'not_computable'
   zero_result_rate?: number
   vector_searches?: number
   filter_searches?: number
   cache_hits?: number
-  search_errors?: number
+  search_errors?: number | null
+  search_errors_result_status?: 'computed' | 'not_computable'
 }
 
 interface ApiRetrievalStats {

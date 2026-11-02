@@ -1,8 +1,6 @@
 /**
- * engram_suppress — suppress an observation from future search results.
- *
- * WHEN TO USE: When an observation is outdated, wrong, or no longer relevant.
- * Suppression is reversible — the observation stays in the database but is hidden from search.
+ * engram_suppress — suppress a retained memory or restore a flagged memory.
+ * Suppression is reversible; neither action deletes the memory.
  */
 
 import { z } from 'zod';
@@ -14,22 +12,27 @@ import type { AnyAgentTool, OpenClawPluginToolContext } from '../types/openclaw.
 
 const SuppressParamsSchema = z.object({
   id: IntegerSchema.positive(),
+  action: z.enum(['suppress', 'unsuppress']).optional().default('suppress'),
 });
 
 const suppressParameters = Type.Object({
-  id: Type.Number({ description: 'Observation ID to suppress' }),
+  id: Type.Number({ description: 'Memory ID to suppress or restore' }),
+  action: Type.Optional(Type.Union([
+    Type.Literal('suppress'),
+    Type.Literal('unsuppress'),
+  ], { description: 'Default: suppress. Use unsuppress to restore a flagged memory.' })),
 });
 
 export function createEngramSuppressTool(
   _ctx: OpenClawPluginToolContext,
   client: EngramRestClient,
-  _config: PluginConfig,
+  config: PluginConfig,
 ): AnyAgentTool {
   return {
     name: 'engram_suppress',
     description:
-      'Suppress an observation from future search results (reversible). ' +
-      'Use when an observation is outdated, wrong, or no longer relevant.',
+      'Suppress a memory from future search results (reversible). ' +
+      'Use action=unsuppress to restore a previously suppressed memory.',
     parameters: suppressParameters,
 
     async execute(_toolCallId: string, params: Record<string, unknown>): Promise<string> {
@@ -42,10 +45,16 @@ export function createEngramSuppressTool(
         return 'engram is currently unreachable — suppress unavailable';
       }
 
-      const success = await client.suppressObservation(parsed.data.id);
-      return success
-        ? `Suppressed observation ${parsed.data.id} — it will no longer appear in search results`
-        : `Failed to suppress observation ${parsed.data.id}`;
+      const { id, action } = parsed.data;
+      const result = await client.transitionMemory(id, action, config.project);
+      if (!result.ok) {
+        return result.outcome === 'unknown'
+          ? `Memory ${action} outcome unknown: ${result.error}`
+          : `Failed to ${action} memory ${id}: ${result.error}`;
+      }
+      return action === 'unsuppress'
+        ? `Restored memory ${id} — it can appear in search results again`
+        : `Suppressed memory ${id} — it will no longer appear in search results`;
     },
   };
 }
