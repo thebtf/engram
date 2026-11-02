@@ -133,6 +133,21 @@ contract for that condition; generic search/session-start body and response
 schemas are not complete conditional schemas. Separate inject GET/POST schemas
 remove the false required query field, not every existing schema limitation.
 
+Context search shares memory retrieval with MCP: vectors plus FTS and literal
+content/tag matches, with configured cross-encoder reranking and no query expansion.
+Unavailable embeddings degrade to text retrieval; memory-store lookup failures
+return HTTP 500, not an empty successful search. REST retains its observation-shaped
+response and audit-only source-session attribution without MCP memory mutations.
+
+`POST /api/memories/{id}/transition` takes a JSON object with required `action`:
+`suppress` changes active to flagged, `unsuppress` changes flagged to active, and
+`archive` changes active or flagged to archived without erasure. Optional query
+`project` must be a single canonical UUID and only narrows the ID's live membership;
+omission preserves caller visibility and domain-manage authorization. Missing or
+denied IDs return 404; state/version conflicts return 409 with transaction rollback.
+Success returns `{id, action, status, version, project}`. A transport failure can
+leave the outcome unknown and must not be retried automatically.
+
 ### Authentication (v6)
 
 Two-tier token model:
@@ -157,6 +172,7 @@ Bypass: `ENGRAM_AUTH_SKIP_LOCAL=true` skips auth for RFC 1918 addresses.
 | `POST` | `/api/memories` | Create memory. |
 | `PATCH` | `/api/memories/:id` | Update memory. |
 | `DELETE` | `/api/memories/:id` | Delete memory. |
+| `POST` | `/api/memories/:id/transition` | Suppress, unsuppress or archive a retained memory with optional canonical project narrowing. |
 | `GET` | `/api/issues` | List issues. |
 | `POST` | `/api/issues` | Create issue. |
 | `PATCH` | `/api/issues/:id` | Update issue (status, labels, etc.). |

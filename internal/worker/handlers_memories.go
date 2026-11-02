@@ -824,7 +824,7 @@ func (s *Service) handleSuppressMemoryByID(w http.ResponseWriter, r *http.Reques
 }
 
 type memoryTransitionRequest struct {
-	Action string `json:"action"`
+	Action string `json:"action" validate:"required" enums:"suppress,unsuppress,archive"`
 }
 
 type memoryTransitionResponse struct {
@@ -838,6 +838,23 @@ type memoryTransitionResponse struct {
 // handleTransitionMemoryByID changes retained lifecycle status, not deletion or
 // browser selection state. An omitted project resolves the ID's live canonical
 // membership; an explicit project can only narrow that existing authority.
+// @Summary Transition a retained memory by ID
+// @Description Requires a JSON action: suppress changes active to flagged, unsuppress changes flagged to active, and archive changes active or flagged to archived without erasure. The optional project query parameter must occur once with a canonical UUID and only narrows the memory's existing live canonical membership; omission does not bypass caller visibility or domain-manage authorization. Missing or denied memories return 404. State/version conflicts return 409 and roll back the transaction. The receipt contains id, action, resulting status, incremented version and canonical project. An ambiguous transport failure leaves the outcome unknown; do not automatically retry.
+// @Tags Memories
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path int64 true "Positive memory ID"
+// @Param project query string false "Optional single canonical project UUID; narrows existing membership only"
+// @Param body body memoryTransitionRequest true "Required lifecycle action"
+// @Success 200 {object} memoryTransitionResponse
+// @Failure 400 {string} string "invalid memory id, project selector, JSON or action"
+// @Failure 401 {string} string "authentication required"
+// @Failure 404 {string} string "memory not found or access denied"
+// @Failure 409 {string} string "memory state/version conflict; transaction rolled back"
+// @Failure 500 {string} string "memory transition failed"
+// @Failure 503 {string} string "memory store not available"
+// @Router /api/memories/{id}/transition [post]
 func (s *Service) handleTransitionMemoryByID(w http.ResponseWriter, r *http.Request) {
 	if s.memoryStore == nil {
 		http.Error(w, "memory store not available", http.StatusServiceUnavailable)

@@ -90,7 +90,7 @@ func memoryToObservation(mem *models.Memory) *models.Observation {
 
 // handleSearchByPromptGET godoc
 // @Summary Search observations by prompt
-// @Description Searches observations using shared vector and text retrieval (FTS plus literal content/tag matches), optional configured reranking, and existing clustering. Unavailable embeddings degrade to text search; query expansion is not performed. JSON bodies are ignored; use POST for large prompts.
+// @Description Searches observations using shared vector and text retrieval (FTS plus literal content/tag matches), optional configured cross-encoder reranking, and existing clustering. Unavailable embeddings degrade to text search; query expansion is not performed. Memory-store lookup failures return HTTP 500 rather than an empty success. JSON bodies are ignored; use POST for large prompts.
 // @Tags Search
 // @Produce json
 // @Security ApiKeyAuth
@@ -103,6 +103,7 @@ func memoryToObservation(mem *models.Memory) *models.Observation {
 // @Param limit query int false "Number of results (default 50, max 200)"
 // @Success 200 {object} map[string]interface{}
 // @Failure 400 {string} string "project and query required"
+// @Failure 500 {string} string "memory-store lookup or retrieval failed"
 // @Router /api/context/search [get]
 func (s *Service) handleSearchByPromptGET(w http.ResponseWriter, r *http.Request) {
 	s.handleSearchByPrompt(w, r)
@@ -110,7 +111,7 @@ func (s *Service) handleSearchByPromptGET(w http.ResponseWriter, r *http.Request
 
 // handleSearchByPrompt godoc
 // @Summary Search observations by prompt
-// @Description Searches observations using shared vector and text retrieval (FTS plus literal content/tag matches), optional configured cross-encoder reranking, and existing clustering. Unavailable embeddings degrade to text search; query expansion is not performed. A nonempty project and query are each required in the query string or JSON body. Nonempty JSON fields override query parameters; session_id overrides even when empty. Invalid or absent JSON falls back to query parameters.
+// @Description Searches observations using shared vector and text retrieval (FTS plus literal content/tag matches), optional configured cross-encoder reranking, and existing clustering. Unavailable embeddings degrade to text search; query expansion is not performed. Memory-store lookup failures return HTTP 500 rather than an empty success. A nonempty project and query are each required in the query string or JSON body. Nonempty JSON fields override query parameters; session_id overrides even when empty. Invalid or absent JSON falls back to query parameters.
 // @Tags Search
 // @Accept json
 // @Produce json
@@ -125,6 +126,7 @@ func (s *Service) handleSearchByPromptGET(w http.ResponseWriter, r *http.Request
 // @Param body body object false "POST body: {project, query, agent_id, session_id, cwd, obs_type, files_being_edited}; nonempty fields override query params; session_id overrides even when empty; obs_type is body-only, limit is query-only"
 // @Success 200 {object} map[string]interface{}
 // @Failure 400 {string} string "project and query required"
+// @Failure 500 {string} string "memory-store lookup or retrieval failed"
 // @Router /api/context/search [post]
 func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
