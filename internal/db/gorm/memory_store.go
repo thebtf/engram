@@ -1996,7 +1996,9 @@ func (s *MemoryStore) SearchLiteralWithOffset(ctx context.Context, project, quer
 	if query = strings.TrimSpace(query); query != "" {
 		pattern := "%" + escapeSQLLike(strings.ToLower(query)) + "%"
 		q = q.Where(`(LOWER(content) LIKE ? ESCAPE '\' OR EXISTS (
-			SELECT 1 FROM jsonb_array_elements_text(tags) AS literal_tag(value)
+			SELECT 1 FROM jsonb_array_elements_text(
+				CASE WHEN jsonb_typeof(tags) = 'array' THEN tags ELSE '[]'::jsonb END
+			) AS literal_tag(value)
 			WHERE LOWER(literal_tag.value) LIKE ? ESCAPE '\'
 		))`, pattern, pattern)
 	}

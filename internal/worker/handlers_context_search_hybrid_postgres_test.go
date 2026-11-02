@@ -527,6 +527,51 @@ func TestContextSearchHybridPostgres(t *testing.T) {
 		}
 		require.Equal(t, requestsBefore, embeddingRequests.Load(), "the unavailable embedder must not supply results")
 	})
+	t.Run("rest_review_nonarray_tags_do_not_poison_literal_search", func(t *testing.T) {
+		service.embeddingClient = nil
+		defer func() { service.embeddingClient = embedder }()
+		requestsBefore := embeddingRequests.Load()
+		for _, malformed := range []struct{ name, json string }{
+			{"null", `null`},
+			{"string", `"scalar"`},
+			{"number", `42`},
+			{"boolean", `true`},
+			{"object", `{"historical":"tag"}`},
+		} {
+			t.Run(malformed.name, func(t *testing.T) {
+				project := compatibilityProject(t)
+				contentMatch := compatibilityMemory(t, project, "Healthy VaporLedgerBoundary record", []string{"type:fact"})
+				tagMatch := compatibilityMemory(t, project, "Healthy cedar archive", []string{"type:fact", "arraytagboundary"})
+				poison := compatibilityMemory(t, project, "Unrelated historical row", []string{"type:fact"})
+				require.NoError(t, store.DB.Exec("UPDATE memories SET tags = ?::jsonb WHERE id = ?", malformed.json, poison.ID).Error,
+					"the actual historical schema permits non-array JSON tags")
+				for _, match := range []struct {
+					query string
+					id    int64
+				}{{"LedgerBoundary", contentMatch.ID}, {"ARRAYTAGBOUNDARY", tagMatch.ID}} {
+					t.Run(match.query, func(t *testing.T) {
+						t.Run("actual_store", func(t *testing.T) {
+							rows, err := memoryStore.SearchLiteralWithOffset(t.Context(), project, match.query, 10, 0)
+							require.NoError(t, err, "an unrelated non-array must not abort literal/tag discovery")
+							require.Len(t, rows, 1)
+							require.Equal(t, match.id, rows[0].ID)
+						})
+						for _, method := range []string{http.MethodGet, http.MethodPost} {
+							t.Run(method, func(t *testing.T) {
+								response := compatibilitySearch(t, project, method, match.query, 1)
+								require.Equal(t, []int64{match.id}, ids(response.Observations))
+							})
+						}
+					})
+				}
+				var unchanged string
+				require.NoError(t, store.DB.Raw("SELECT tags::text FROM memories WHERE id = ?", poison.ID).Scan(&unchanged).Error)
+				require.JSONEq(t, malformed.json, unchanged, "read-only search must not rewrite historical tags")
+			})
+		}
+		require.Equal(t, requestsBefore, embeddingRequests.Load(), "embeddings must not mask literal failures")
+	})
+
 	t.Run("rest_review_literal_visibility_before_candidate_cap", func(t *testing.T) {
 		service.embeddingClient = nil
 		defer func() { service.embeddingClient = embedder }()
