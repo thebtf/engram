@@ -745,8 +745,8 @@ func TestDreamCycle_RealDBRestartRetryPersistsExactlyOneCandidate(t *testing.T) 
 	ts1 := gorm.NewTranscriptStore(store1.DB)
 	require.NoError(t, ts1.Create(context.Background(), &gorm.SessionTranscript{SessionID: marker, Project: project, Content: decisionText, CreatedAt: createdAt}))
 	cs1 := gorm.NewCandidateStore(store1.DB, gorm.NewAuditStore(store1.DB))
-	first := &Service{dreamTranscriptStoreOverride: &markFailOnceTranscriptStore{dreamTranscriptStore: ts1}, dreamCandidateStoreOverride: cs1, dreamExtractorFunc: extractFn}
-	first.runDreamCrystallization(context.Background())
+	first := &Service{memoryStore: gorm.NewMemoryStore(store1), dreamTranscriptStoreOverride: &markFailOnceTranscriptStore{dreamTranscriptStore: ts1}, dreamCandidateStoreOverride: cs1, dreamExtractorFunc: extractFn}
+	first.maybeSleepCycle(context.Background())
 
 	var candidates, unprocessed int64
 	require.NoError(t, store1.DB.Table("crystallization_candidates").Where("source_session_id = ?", marker).Count(&candidates).Error)
@@ -758,8 +758,8 @@ func TestDreamCycle_RealDBRestartRetryPersistsExactlyOneCandidate(t *testing.T) 
 
 	store2, err := gorm.NewStore(gorm.Config{DSN: dsn, MaxConns: 2})
 	require.NoError(t, err)
-	restarted := &Service{dreamTranscriptStoreOverride: gorm.NewTranscriptStore(store2.DB), dreamCandidateStoreOverride: gorm.NewCandidateStore(store2.DB, gorm.NewAuditStore(store2.DB)), dreamExtractorFunc: extractFn}
-	restarted.runDreamCrystallization(context.Background())
+	restarted := &Service{memoryStore: gorm.NewMemoryStore(store2), dreamTranscriptStoreOverride: gorm.NewTranscriptStore(store2.DB), dreamCandidateStoreOverride: gorm.NewCandidateStore(store2.DB, gorm.NewAuditStore(store2.DB)), dreamExtractorFunc: extractFn}
+	restarted.maybeSleepCycle(context.Background())
 	require.NoError(t, store2.DB.Table("crystallization_candidates").Where("source_session_id = ?", marker).Count(&candidates).Error)
 	require.NoError(t, store2.DB.Table("session_transcripts").Where("session_id = ?", marker).Count(&unprocessed).Error)
 	require.EqualValues(t, 1, candidates, "fingerprint duplicate on retry must not create a second candidate")
@@ -769,8 +769,8 @@ func TestDreamCycle_RealDBRestartRetryPersistsExactlyOneCandidate(t *testing.T) 
 
 	store3, err := gorm.NewStore(gorm.Config{DSN: dsn, MaxConns: 2})
 	require.NoError(t, err)
-	afterSuccess := &Service{dreamTranscriptStoreOverride: gorm.NewTranscriptStore(store3.DB), dreamCandidateStoreOverride: gorm.NewCandidateStore(store3.DB, gorm.NewAuditStore(store3.DB)), dreamExtractorFunc: extractFn}
-	afterSuccess.runDreamCrystallization(context.Background())
+	afterSuccess := &Service{memoryStore: gorm.NewMemoryStore(store3), dreamTranscriptStoreOverride: gorm.NewTranscriptStore(store3.DB), dreamCandidateStoreOverride: gorm.NewCandidateStore(store3.DB, gorm.NewAuditStore(store3.DB)), dreamExtractorFunc: extractFn}
+	afterSuccess.maybeSleepCycle(context.Background())
 	require.NoError(t, store3.DB.Table("crystallization_candidates").Where("source_session_id = ?", marker).Count(&candidates).Error)
 	require.EqualValues(t, 1, candidates)
 	require.Equal(t, 2, extractCalls, "a post-success process restart must see no work")
