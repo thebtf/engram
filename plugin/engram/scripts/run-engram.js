@@ -530,6 +530,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+ TASK_CONTEXT_COMPLETION_RESERVE_MS,
  main,
  childEnvForEngram,
  configuredEnvValue,

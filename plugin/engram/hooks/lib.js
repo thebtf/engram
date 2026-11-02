@@ -604,7 +604,8 @@ async function request(method, endpoint, body, timeoutMs = 10000, options = {}) 
  const controller = new AbortController();
  const externalSignal = options && options.signal;
  const abort = () => controller.abort();
- const timer = setTimeout(abort, timeoutMs);
+ const timeout = options.processingBudgetMs !== undefined && Number.isSafeInteger(options.deadlineAt) ? Math.min(timeoutMs, Math.max(1, options.deadlineAt - Date.now())) : timeoutMs;
+ const timer = setTimeout(abort, timeout);
 
  try {
   if (externalSignal && externalSignal.aborted) {
@@ -616,6 +617,12 @@ async function request(method, endpoint, body, timeoutMs = 10000, options = {}) 
   if (externalSignal) externalSignal.addEventListener('abort', abort, { once: true });
 
   const headers = buildRequestHeaders(body !== undefined, options.token, hookRequestID(options));
+  if (options.processingBudgetMs !== undefined) {
+   if (!Number.isSafeInteger(options.processingBudgetMs) || options.processingBudgetMs <= 0) throw new Error('Invalid processing budget');
+   const budget = Math.floor(Math.min(options.processingBudgetMs, timeoutMs, Number.isSafeInteger(options.deadlineAt) ? options.deadlineAt - Date.now() : Infinity));
+   if (budget <= 0) { controller.abort(); throw abortError(); }
+   headers['X-Engram-Budget-Ms'] = String(budget);
+  }
   const response = await fetch(url, {
    method,
    headers,

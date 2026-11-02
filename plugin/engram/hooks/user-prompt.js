@@ -50,10 +50,27 @@ function formatKnowledgeResult(payload, expected) {
     if (item.similarity !== undefined && (!Number.isFinite(item.similarity) || item.similarity < Math.max(0.3, Number.isFinite(payload.threshold) ? payload.threshold : 0.3))) continue;
     const text = item.narrative || item.content || item.title;
     if (!validText(text) || !text.trim() || Buffer.byteLength(text) > materialLimit) continue;
-    const revision = Number.isSafeInteger(item.revision) && item.revision > 0 ? item.revision : Number.isSafeInteger(item.version) && item.version > 0 ? item.version : 'unknown';
+    let sourceRef;
+    if (item.source_ref !== undefined) {
+      const ref = item.source_ref;
+      if (!ref || typeof ref !== 'object' || Array.isArray(ref) || !['memory', 'behavioral_rule'].includes(ref.kind) || ref.id !== item.id) continue;
+      sourceRef = { kind: ref.kind, id: ref.id };
+      if (ref.record_version !== undefined) {
+        if (!Number.isSafeInteger(ref.record_version) || ref.record_version < 0) continue;
+        sourceRef.record_version = ref.record_version;
+      }
+      if (ref.content_sha256 !== undefined) {
+        if (typeof ref.content_sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(ref.content_sha256)) continue;
+        sourceRef.content_sha256 = ref.content_sha256;
+      }
+    }
+    const revision = Number.isSafeInteger(item.revision) && item.revision > 0 ? item.revision : 'unknown';
     const source = JSON.stringify(item.source ?? item.source_type ?? 'unknown');
     if (!validText(source) || Buffer.byteLength(source) > 2048) continue;
-    const line = `memory:${item.id} revision=${revision} source=${escapeData(redact(source, expected.token))}\n${escapeData(redact(text, expected.token))}`;
+    let line = `${sourceRef?.kind ?? 'observation'}:${item.id} revision=${revision} source=${escapeData(redact(source, expected.token))}`;
+    if (sourceRef) line += ` source_ref=${escapeData(redact(JSON.stringify(sourceRef), expected.token))}`;
+    if (sourceRef?.record_version !== undefined) line += ' (record_version is mutable; not an immutable body revision)';
+    line += `\n${escapeData(redact(text, expected.token))}`;
     const size = Buffer.byteLength(line) + (lines.length ? 2 : 0);
     // Drop a whole record rather than truncate a qualification or a trailing negation.
     if (bytes + size > materialLimit) continue;
@@ -144,7 +161,7 @@ async function requestPromptContext(facts = {}, options = {}) {
     }
     stage = 'knowledge';
     const knowledge = await requestPromptKnowledge(facts, {
-      signal: controller.signal, deadlineAt, supportHooks: options.supportHooks,
+      signal: controller.signal, deadlineAt: deadlineAt - launcher.TASK_CONTEXT_COMPLETION_RESERVE_MS, supportHooks: options.supportHooks,
       runtimeConfig: async () => config,
       // Fresh inspection from this one-shot only; never another process or cached/copied MCP binding.
       resolveContext: async () => ({ Project: project }), requestPost: options.requestPost,
@@ -208,11 +225,12 @@ async function requestPromptKnowledge(facts = {}, options = {}) {
     if (!projectID.test(context?.Project ?? '')) return result('invalid_context', stage);
     const query = redact(facts.prompt, config.token);
     const requestPost = options.requestPost ?? lib.requestPost;
-    const requestOptions = { signal: controller.signal, serverURL: config.serverURL, token: config.token, maxResponseBytes: 65536 };
+    const requestOptions = { signal: controller.signal, serverURL: config.serverURL, token: config.token, maxResponseBytes: 65536, deadlineAt };
     if (options.supportHooks) scheduleSupportHooks(context.Project, facts.session, query, requestPost, remaining(), requestOptions);
     if (config.quiet) return result('skipped', stage);
     stage = 'query';
-    const payload = await requestPost('/api/context/search?limit=3', { project: context.Project, session_id: facts.session, query }, remaining(), requestOptions);
+    const processingBudgetMs = remaining();
+    const payload = await requestPost('/api/context/search?limit=3', { project: context.Project, session_id: facts.session, query }, processingBudgetMs, { ...requestOptions, processingBudgetMs });
     remaining();
     stage = 'response';
     const formatted = formatKnowledgeResult(payload, { project: context.Project, query, token: config.token });

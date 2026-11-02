@@ -214,7 +214,7 @@ async function exerciseDefaultFactory(mode) {
         assert.equal(sent.length, 1);
         assert.match(sent[0].message.content, /trusted startup fixture memory/);
         assert.deepEqual(sent[0].options, { deliverAs: 'nextTurn' });
-        assert.match(recovered.message.content, /memory:42 revision=3[\s\S]*Do not remove the recovery backup\./);
+        assert.match(recovered.message.content, /observation:42 revision=3[\s\S]*Do not remove the recovery backup\./);
         assert.deepEqual(executions.map((item, index) => item.timeout > 0 && item.timeout <= (index === 0 ? 5000 : 500)), [true, true]);
       }
     }

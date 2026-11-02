@@ -322,7 +322,7 @@ test('OMP failed startup readiness recovers through verified local cache without
         },
         requestPost: async (route, body, timeout, options) => {
           contextRequests.push({ route, body, timeout });
-          assert.equal(timeout, budget);
+          assert.equal(timeout, route === '/api/context/session-start' ? budget : budget - 30);
           assert.equal(options.signal.aborted, false);
           return route === '/api/context/session-start'
             ? { memories: [{ content: `recovered memory for ${body.project}` }] }
