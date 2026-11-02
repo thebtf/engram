@@ -765,7 +765,7 @@ test("context recovery preserves native project code and fixed guidance through 
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('task context launcher uses one ready-only stdin process and closed UTF-8 responses', async () => {
+test('task context launcher uses one ready-only stdin process and closed UTF-8 responses', async t => {
  const { requestTaskContext } = require('./run-engram.js');
  const realExec = require('node:child_process').execFile;
  const responses = {
@@ -778,7 +778,17 @@ test('task context launcher uses one ready-only stdin process and closed UTF-8 r
   failed: 'process.stderr.write("private fixture diagnostic");process.exit(2)',
  };
  for (const [mode, output] of Object.entries(responses)) {
-  let executions = 0;
+  let executions = 0, complete, ready, failReady;
+  const waiting = new Promise((resolve, reject) => { ready = resolve; failReady = reject; });
+  const program = `let input='';process.stdin.on('data',b=>input+=b);process.stdin.on('end',()=>{const r=JSON.parse(input);if(!input.endsWith('\\n')||r.schema!==1||r.host_session_id!=='fixture-session'||r.query!=='Find the bounded callback implementation'||r.max_bytes!==8000||!Number.isSafeInteger(r.deadline_unix_ms))process.exit(3);${output}});process.stderr.write('fixture-ready\\n');`;
+  const child = realExec(process.execPath, ['-e', program], { cwd: __dirname, encoding: 'buffer', maxBuffer: 8000, timeout: 5000 }, (error, stdout) => {
+   if (complete) complete(error, stdout);
+   else failReady(error || new Error('codec fixture exited before readiness'));
+  });
+  t.after(() => { if (child.exitCode === null && !child.killed) child.kill(); });
+  child.once('error', failReady);
+  child.stderr.once('data', () => ready());
+  await waiting;
   const outcome = await requestTaskContext({ cwd: __dirname, session: 'fixture-session', prompt: 'Find the bounded callback implementation' }, {
    deadlineAt: Date.now() + 500, maxBytes: 8000,
    resolve: async options => { assert.equal(options.acquire, false); assert.equal(options.check, true); assert.equal(options.parserTarget, null); return { path: process.execPath, target: {} }; },
@@ -788,14 +798,16 @@ test('task context launcher uses one ready-only stdin process and closed UTF-8 r
     assert.equal(file, process.execPath);
     assert.deepEqual(args, ['task-context', '--json']);
     assert.equal(options.cwd, __dirname);
-    const program = `let input='';process.stdin.on('data',b=>input+=b);process.stdin.on('end',()=>{const r=JSON.parse(input);if(!input.endsWith('\\n')||r.schema!==1||r.host_session_id!=='fixture-session'||r.query!=='Find the bounded callback implementation'||r.max_bytes!==8000||!Number.isSafeInteger(r.deadline_unix_ms))process.exit(3);${output}});`;
-    return realExec(file, ['-e', program], options, callback);
+    complete = callback;
+    options.signal.addEventListener('abort', () => child.kill(), { once: true });
+    return child;
    },
   });
   assert.equal(executions, 1, mode);
   assert.equal(outcome.status, mode === 'ok' ? 'not_ready' : 'unavailable', mode);
   assert.doesNotMatch(JSON.stringify(outcome), /private fixture diagnostic/);
  }
+ t.diagnostic('Codec-only fixture excludes surrogate Node cold startup; native cold/warm latency and real termination remain separate checks.');
 });
 
 test('task context cancellation closes its only process and expired admission cannot execute', async () => {

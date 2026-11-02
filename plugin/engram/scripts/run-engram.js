@@ -10,6 +10,7 @@ const { DOWNLOAD_DEADLINE_MS, hashFile, loadPolicy, objectRoots, resolveForLaunc
 const { installationClientInstanceID } = require("./client-instance.js");
 
 const STARTUP_DIAGNOSTIC_LOG_MAX_BYTES = 128 * 1024;
+const TASK_CONTEXT_COMPLETION_RESERVE_MS = 30;
 const TASK_CONTEXT_STATUSES = new Set(['ok', 'empty', 'not_ready', 'stale', 'context_required', 'forbidden', 'unavailable', 'deadline_exceeded']);
 const TASK_CONTEXT_REASONS = new Set([
  'OK', 'NO_MATCH', 'INSTALLATION_NOT_READY', 'DAEMON_NOT_READY', 'OPERATION_NOT_READY',
@@ -179,7 +180,7 @@ function projectFromInspection(inspection) {
 async function requestTaskContext(facts = {}, options = {}) {
  const closed = (status, reason_code) => ({ schema: 1, status, reason_code });
  const now = Date.now();
- const deadlineAt = Math.min(Number.isSafeInteger(options.deadlineAt) ? options.deadlineAt : now + 500, now + 500);
+ const deadlineAt = Math.min(Number.isSafeInteger(options.deadlineAt) ? options.deadlineAt : now + 500, now + 500) - TASK_CONTEXT_COMPLETION_RESERVE_MS;
  if (deadlineAt <= now) return closed('deadline_exceeded', 'DEADLINE_EXCEEDED');
  if (typeof facts.cwd !== 'string' || !facts.cwd || typeof facts.prompt !== 'string' || !facts.prompt.trim() ||
   Buffer.byteLength(facts.prompt) > 16384 || Buffer.from(facts.prompt).toString('utf8') !== facts.prompt ||
@@ -189,12 +190,12 @@ async function requestTaskContext(facts = {}, options = {}) {
  if (Buffer.byteLength(input) > 20480) return closed('unavailable', 'BUDGET_EXCEEDED');
  const controller = new AbortController();
  const abort = () => controller.abort();
- let onAbort;
+ let onAbort, deadlineExpired = false;
  const stopped = new Promise(resolve => {
-  onAbort = () => resolve(closed(Date.now() >= deadlineAt ? 'deadline_exceeded' : 'unavailable', Date.now() >= deadlineAt ? 'DEADLINE_EXCEEDED' : 'CANCELLED'));
+  onAbort = () => resolve(closed(deadlineExpired || Date.now() >= deadlineAt ? 'deadline_exceeded' : 'unavailable', deadlineExpired || Date.now() >= deadlineAt ? 'DEADLINE_EXCEEDED' : 'CANCELLED'));
   controller.signal.addEventListener('abort', onAbort, { once: true });
  });
- const timer = setTimeout(abort, Math.max(1, deadlineAt - Date.now()));
+ const timer = setTimeout(() => { deadlineExpired = true; abort(); }, Math.max(1, deadlineAt - Date.now()));
  options.signal?.addEventListener('abort', abort, { once: true });
  if (options.signal?.aborted) abort();
  const remaining = () => {
@@ -223,8 +224,12 @@ async function requestTaskContext(facts = {}, options = {}) {
    !TASK_CONTEXT_STATUSES.has(response.status) || !TASK_CONTEXT_REASONS.has(response.reason_code) ||
    Object.keys(response).some(key => !['schema', 'status', 'reason_code', 'project', 'packet'].includes(key))) return closed('unavailable', 'INVALID_RESPONSE');
   if (response.project?.status === 'resolved') projectFromInspection(response.project);
+  remaining();
   return response;
- })().catch(() => closed(Date.now() >= deadlineAt ? 'deadline_exceeded' : 'unavailable', Date.now() >= deadlineAt ? 'DEADLINE_EXCEEDED' : 'CLIENT_UNAVAILABLE'));
+ })().catch(error => {
+  const timedOut = deadlineExpired || Date.now() >= deadlineAt || (error?.killed === true && error.code === null && error.signal === 'SIGTERM');
+  return closed(timedOut ? 'deadline_exceeded' : 'unavailable', timedOut ? 'DEADLINE_EXCEEDED' : 'CLIENT_UNAVAILABLE');
+ });
  try { return await Promise.race([operation, stopped]); }
  finally {
   clearTimeout(timer);

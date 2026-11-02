@@ -47,7 +47,11 @@ one ready-daemon-only `task-context --json` process with newline JSON on stdin.
 That bridge performs the one read-only project inspection and returns typed UCI
 search/source/call evidence with its original View and exposure references. No
 second project-resolve process or connected-MCP host API is used. The native
-operation caps itself at 300 ms within the caller's unchanged absolute deadline.
+operation caps itself at 400 ms, clamped to the actual supplied work deadline.
+JS derives that deadline once from the original outer 500 ms envelope minus a
+30 ms completion reserve; native layers carry it unchanged and do not subtract
+the reserve again. Formatting/dedup and final host delivery recheck the original
+outer deadline; an expired packet is never useful delivery.
 
 A useful native code packet is delivered immediately without waiting for the
 slow knowledge provider. This code-only path is not useful-note acceptance. If

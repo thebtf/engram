@@ -52,6 +52,7 @@ export function createEngramMemoryExtension(options = {}) {
   };
 
   async function message(event, ctx, timeoutMs, ambient) {
+    const callbackDeadlineAt = ambient ? Date.now() + timeoutMs : undefined;
     if (isQuiet()) return null;
     if (readiness === 'pending') return null;
     if (disposed) { unavailable(); return null; }
@@ -65,7 +66,7 @@ export function createEngramMemoryExtension(options = {}) {
       activePrompt = controller;
       try {
         const outcome = await requestPromptContext({ ...facts, prompt }, {
-          signal: controller.signal, delivered,
+          signal: controller.signal, delivered, deadlineAt: callbackDeadlineAt,
           runtimeConfig: async options => {
             const config = await runtimeConfig(options);
             if (disposed || readiness === 'skipped') {
@@ -78,7 +79,7 @@ export function createEngramMemoryExtension(options = {}) {
           requestPost,
         });
         if (outcome.code === 'HOOK_CLIENT_UNAVAILABLE') unavailable('prepare', { code: outcome.code });
-        return disposed || controller.signal.aborted || activePrompt !== controller || !outcome.content ? null : hiddenMessage(outcome.content);
+        return disposed || controller.signal.aborted || activePrompt !== controller || Date.now() >= callbackDeadlineAt || !outcome.content ? null : hiddenMessage(outcome.content);
       } finally {
         if (activePrompt === controller) activePrompt = undefined;
       }

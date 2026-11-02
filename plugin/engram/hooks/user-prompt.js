@@ -107,7 +107,7 @@ function formatNativeTaskContext(response, token = '') {
 
 async function requestPromptContext(facts = {}, options = {}) {
   if (!eligiblePrompt(facts)) return result('skipped', 'admission');
-  const deadlineAt = Date.now() + knowledgeBudgetMs;
+  const deadlineAt = Math.min(options.deadlineAt ?? Date.now() + knowledgeBudgetMs, Date.now() + knowledgeBudgetMs);
   const controller = new AbortController();
   const abort = () => controller.abort();
   let stage = 'config', onAbort, deliveryIdentity;
@@ -115,7 +115,7 @@ async function requestPromptContext(facts = {}, options = {}) {
     onAbort = () => resolve(result(Date.now() >= deadlineAt ? 'deadline' : 'cancelled', stage));
     controller.signal.addEventListener('abort', onAbort, { once: true });
   });
-  const timer = setTimeout(abort, knowledgeBudgetMs);
+  const timer = setTimeout(abort, Math.max(1, deadlineAt - Date.now()));
   options.signal?.addEventListener('abort', abort, { once: true });
   if (options.signal?.aborted) abort();
   const check = () => { if (controller.signal.aborted || Date.now() >= deadlineAt) throw new Error('callback stopped'); };
@@ -137,6 +137,7 @@ async function requestPromptContext(facts = {}, options = {}) {
     catch { return { ...result(native?.project || native?.status === 'ok' || native?.status === 'context_required' ? 'invalid_context' : native?.status ?? 'unavailable', stage), ...(native?.reason_code === 'CLIENT_UNAVAILABLE' ? { code: 'HOOK_CLIENT_UNAVAILABLE' } : {}) }; }
     deliveryIdentity.push(project);
     const code = formatNativeTaskContext(native, config.token);
+    check();
     if (code.content && !config.quiet) {
       if (options.supportHooks) scheduleSupportHooks(project, facts.session, query, options.requestPost ?? lib.requestPost, Math.max(1, deadlineAt - Date.now()), { signal: controller.signal, serverURL: config.serverURL, token: config.token, maxResponseBytes: 65536 });
       return { ...code, native_status: native.status, knowledge_status: 'not_requested_code_fast_path' };
@@ -153,8 +154,16 @@ async function requestPromptContext(facts = {}, options = {}) {
   })().catch(error => ({ ...result(errorStatus(error, controller.signal, deadlineAt), stage), ...(/HOOK_CLIENT_UNAVAILABLE|resolved client failed final integrity verification/.test(error?.message ?? '') ? { code: 'HOOK_CLIENT_UNAVAILABLE' } : {}) }));
   try {
     const outcome = await Promise.race([operation, stopped]);
+    if (controller.signal.aborted || Date.now() >= deadlineAt) {
+      options.delivered?.clear();
+      return result(Date.now() >= deadlineAt ? 'deadline' : 'cancelled', stage);
+    }
     if (outcome.content && options.delivered) {
       const key = crypto.createHash('sha256').update(JSON.stringify([deliveryIdentity, facts.cwd, facts.session, facts.prompt, outcome.content])).digest('hex');
+      if (controller.signal.aborted || Date.now() >= deadlineAt) {
+        options.delivered.clear();
+        return result(Date.now() >= deadlineAt ? 'deadline' : 'cancelled', stage);
+      }
       if (options.delivered.has(key)) return result('unchanged', outcome.stage);
       options.delivered.clear(); options.delivered.add(key);
     } else if (!outcome.content) options.delivered?.clear();

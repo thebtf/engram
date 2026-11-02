@@ -256,3 +256,72 @@ test('single outer prompt deadline cancels uncooperative native work without a f
   assert.equal(signal.aborted, true);
   assert.ok(performance.now() - started < 650);
 });
+
+test('native transport supplies one absolute work deadline with a thirty millisecond completion reserve', async t => {
+  const { requestTaskContext } = require('../scripts/run-engram.js');
+  const realExec = require('node:child_process').execFile;
+  const outer = Date.now() + 500, expectedWork = outer - 30;
+  let executions = 0;
+  const outcome = await requestTaskContext(facts, {
+    deadlineAt: outer, maxBytes: 8000,
+    resolve: async options => { assert.equal(options.deadlineAt, expectedWork); await new Promise(resolve => setTimeout(resolve, 50)); return { path: process.execPath, target: {} }; },
+    roots: () => ({ objects: __dirname }), hash: () => true,
+    execFile(file, args, options, callback) {
+      executions++;
+      assert.deepEqual(args, ['task-context', '--json']);
+      assert.ok(options.timeout > 0 && options.timeout <= 440);
+      const program = `let raw='';process.stdin.on('data',b=>raw+=b);process.stdin.on('end',()=>{const r=JSON.parse(raw);if(r.deadline_unix_ms!==${expectedWork})process.exit(3);process.stdout.write(JSON.stringify({schema:1,status:'not_ready',reason_code:'DAEMON_NOT_READY'})+'\\n');});`;
+      return realExec(file, ['-e', program], { ...options, cwd: __dirname }, callback);
+    },
+  });
+  assert.equal(outcome.status, 'not_ready');
+  assert.equal(executions, 1);
+  t.diagnostic(JSON.stringify({ originalOuter: outer, suppliedWork: expectedWork, reserveMs: outer - expectedWork }));
+});
+
+test('expired framing or dedup cannot deliver a packet or retain its delivery digest', async t => {
+  for (const stage of ['framing', 'dedup']) await t.test(stage, async t => {
+    let now = 1000;
+    t.mock.method(Date, 'now', () => now);
+    const native = nativeResponse(), delivered = new Set(), stringify = JSON.stringify;
+    t.mock.method(JSON, 'stringify', (value, ...args) => {
+      const encoded = stringify(value, ...args);
+      if (stage === 'framing' ? value === native.packet : Array.isArray(value) && value[1] === facts.cwd) now = 1501;
+      return encoded;
+    });
+    const outcome = await prompt.requestPromptContext(facts, { delivered, runtimeConfig: dependencies().runtimeConfig, requestTaskContext: async () => native });
+    assert.equal(outcome.status, 'deadline');
+    assert.equal(outcome.content, '');
+    assert.equal(delivered.size, 0);
+  });
+});
+
+test('reserved native timeout closes its real hung process within the original five hundred milliseconds', async t => {
+  const { requestTaskContext } = require('../scripts/run-engram.js');
+  const realExec = require('node:child_process').execFile;
+  const started = performance.now(), outer = Date.now() + 500;
+  let executions = 0, closed;
+  const timings = {};
+  const processClosed = new Promise(resolve => { closed = resolve; });
+  const outcome = await requestTaskContext(facts, {
+    deadlineAt: outer,
+    resolve: async () => ({ path: process.execPath, target: {} }), roots: () => ({ objects: __dirname }), hash: () => true,
+    execFile(file, args, options, callback) {
+      executions++;
+      timings.spawnAtMs = performance.now() - started;
+      options.signal.addEventListener('abort', () => { timings.abortAtMs = performance.now() - started; }, { once: true });
+      assert.deepEqual(args, ['task-context', '--json']);
+      const child = realExec(file, ['-e', "process.stdin.resume();setInterval(()=>{},1000)"], { ...options, cwd: __dirname }, callback);
+      child.once('exit', () => { timings.exitAtMs = performance.now() - started; });
+      child.once('close', () => { timings.closeAtMs = performance.now() - started; closed(); });
+      return child;
+    },
+  });
+  timings.helperReturnedAtMs = performance.now() - started;
+  assert.equal(executions, 1);
+  await processClosed;
+  const elapsed = performance.now() - started;
+  t.diagnostic(JSON.stringify({ elapsedMs: elapsed, outerBudgetMs: 500, processClosed: true, timings }));
+  assert.equal(outcome.status, 'deadline_exceeded');
+  assert.ok(elapsed < 500, `actual completion ${elapsed}ms`);
+});
