@@ -503,7 +503,7 @@ export class EngramRestClient {
     return;
    }
    failure = result.outcome === 'unknown' ? { ...result, error: `${result.error}; outcome is unknown, inspect the memory before retrying` } : result;
-  });
+  }, 409);
   const parsed = MemoryTransitionReceiptSchema.safeParse(response);
   const expectedStatus = action === 'suppress' ? 'flagged' : action === 'unsuppress' ? 'active' : 'archived';
   if (!parsed.success || parsed.data.id !== id || parsed.data.action !== action || parsed.data.status !== expectedStatus || (project !== undefined && parsed.data.project !== project)) {
@@ -744,6 +744,7 @@ export class EngramRestClient {
   body: unknown,
   timeoutMs?: number,
   onFailure?: (failure: MemoryWriteFailure, status?: number) => void,
+  availabilityNeutralStatus?: number,
  ): Promise<T | null> {
   if (!this.availability.isAvailable()) {
    onFailure?.({ ok: false, outcome: 'not_sent', error: 'engram is currently unreachable — memory was not sent' });
@@ -757,6 +758,7 @@ export class EngramRestClient {
   const startMs = Date.now();
   let outcome: MemoryWriteFailure['outcome'] = 'unknown';
   let responseStatus: number | undefined;
+  let availabilityFailure = true;
 
   try {
    const headers: Record<string, string> = {
@@ -781,6 +783,8 @@ export class EngramRestClient {
    const elapsedMs = Date.now() - startMs;
 
    if (!response.ok) {
+    // A fully received domain rejection is neither an outage nor a recovery.
+    availabilityFailure = response.status !== availabilityNeutralStatus;
     throw new Error(`HTTP ${response.status} ${response.statusText} (${elapsedMs}ms): ${text.slice(0, 200)}`);
    }
 
@@ -790,7 +794,7 @@ export class EngramRestClient {
    return JSON.parse(text) as T;
   } catch (err: unknown) {
    const elapsedMs = Date.now() - startMs;
-   this.availability.recordFailure();
+   if (availabilityFailure) this.availability.recordFailure();
    const msg = err instanceof Error ? err.message : String(err);
    onFailure?.({ ok: false, outcome, error: msg }, responseStatus);
    const isAbort = err instanceof Error && err.name === 'AbortError';
