@@ -133,15 +133,16 @@ func TestCrystallizationLifecycle_FullPath(t *testing.T) {
 	assert.NotEqual(t, candidateID, result2.CandidateID, "second route should create a different candidate (first is promoted)")
 }
 
-// TestCrystallizationLifecycle_FlagOff verifies that RouteDecision returns nil
-// (signalling "use legacy path") when the feature flag is off.
-func TestCrystallizationLifecycle_FlagOff(t *testing.T) {
+// A retired false override must not discard an extracted decision with a real writer.
+func TestCrystallizationLifecycle_RetiredFlagCannotDisableCandidates(t *testing.T) {
 	db := openIntegrationDB(t)
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "false")
 
 	ctx := context.Background()
 	auditStore := gormdb.NewAuditStore(db)
 	cs := gormdb.NewCandidateStore(db, auditStore)
+	project := newCrystallizationTestProject(t, db)
+	sessionID := uuid.NewString()
 
 	// Construct a decision directly (regex extraction path removed).
 	decision := crystallization.ExtractedDecision{
@@ -151,7 +152,24 @@ func TestCrystallizationLifecycle_FlagOff(t *testing.T) {
 		ProposedTarget: "rule",
 	}
 
-	result, err := crystallization.RouteDecision(ctx, decision, "sess-flag-off", "proj-flag-off", cs, nil)
-	assert.NoError(t, err, "flag-off RouteDecision must not error")
-	assert.Nil(t, result, "flag-off RouteDecision must return nil (legacy path signal)")
+	result, err := crystallization.RouteDecision(ctx, decision, sessionID, project, cs, nil)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.True(t, result.UsedCandidatePath)
+	assert.False(t, result.Duplicate)
+	require.Positive(t, result.CandidateID)
+	pending, err := cs.ListByStatus(ctx, project, models.CandidateStatusPending, 50)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	assert.Equal(t, result.CandidateID, pending[0].ID)
+	assert.Equal(t, models.CandidateStatusPending, pending[0].Status)
+	assert.Equal(t, decision.Text, pending[0].ProposedContent)
+	assert.Equal(t, sessionID, pending[0].SourceSessionID)
+	assert.Equal(t, []string{project}, pending[0].AffectedProjects)
+	disabled, err := crystallization.RouteDecision(ctx, decision, uuid.NewString(), project, nil, nil)
+	require.NoError(t, err)
+	require.Nil(t, disabled, "only an absent writer leaves the candidate path unused")
+	unchanged, err := cs.ListByStatus(ctx, project, models.CandidateStatusPending, 50)
+	require.NoError(t, err)
+	assert.Equal(t, pending, unchanged, "nil writer must not persist another candidate")
 }
