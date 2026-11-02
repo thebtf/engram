@@ -744,7 +744,7 @@ export class EngramRestClient {
   body: unknown,
   timeoutMs?: number,
   onFailure?: (failure: MemoryWriteFailure, status?: number) => void,
-  availabilityNeutralStatus?: number,
+  reachableRejectionStatus?: number,
  ): Promise<T | null> {
   if (!this.availability.isAvailable()) {
    onFailure?.({ ok: false, outcome: 'not_sent', error: 'engram is currently unreachable — memory was not sent' });
@@ -783,8 +783,9 @@ export class EngramRestClient {
    const elapsedMs = Date.now() - startMs;
 
    if (!response.ok) {
-    // A fully received domain rejection is neither an outage nor a recovery.
-    availabilityFailure = response.status !== availabilityNeutralStatus;
+    // Reachability success is distinct from the rejected application outcome.
+    availabilityFailure = response.status !== reachableRejectionStatus;
+    if (!availabilityFailure) this.availability.recordSuccess();
     throw new Error(`HTTP ${response.status} ${response.statusText} (${elapsedMs}ms): ${text.slice(0, 200)}`);
    }
 

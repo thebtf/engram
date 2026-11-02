@@ -46,7 +46,7 @@ test('three real HTTP transition conflicts remain rejected without blocking an u
   assert.equal(requests.at(-1).path, '/api/memories');
 });
 
-test('normal transition conflict preserves prior genuine failure history and exact cooldown recovery', async t => {
+test('reachable transition conflict breaks the failure streak while genuine consecutive failures keep cooldown', async t => {
   let now = Date.now();
   t.mock.method(Date, 'now', () => now);
   const { client, requests } = await fixture(t, (request, response, body) => {
@@ -60,15 +60,18 @@ test('normal transition conflict preserves prior genuine failure history and exa
   assert.equal((await client.transitionMemory(41, 'suppress', project)).outcome, 'rejected');
   assert.equal(client.isAvailable(), true, '409 must not add a third strike');
   await client.health();
-  assert.equal(client.isAvailable(), false, '409 must not reset the two genuine prior failures');
+  assert.equal(client.isAvailable(), true, 'a fully received409 must break the earlier failure streak');
+  assert.equal((await client.storeMemories([memory]))[0].ok, true, 'mixed errors and a rejected transition must not suppress a valid store');
+  for (let i = 0; i < 3; i++) await client.health();
+  assert.equal(client.isAvailable(), false, 'three genuinely consecutive failures still open the circuit');
   assert.equal((await client.storeMemories([memory]))[0].outcome, 'not_sent');
   now += 59_999;
   assert.equal((await client.storeMemories([memory]))[0].outcome, 'not_sent');
-  assert.equal(requests.length, 4);
+  assert.equal(requests.length, 8);
   now++;
   assert.equal((await client.storeMemories([memory]))[0].ok, true);
   assert.equal(client.isAvailable(), true);
-  assert.equal(requests.length, 5);
+  assert.equal(requests.length, 9);
 });
 
 test('genuine HTTP timeouts retain unknown outcomes, three strikes and no blind retry', async t => {
