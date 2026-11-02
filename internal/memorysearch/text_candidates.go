@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/thebtf/engram/internal/retrieval"
+	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -13,23 +14,33 @@ type LiteralStore interface {
 	SearchLiteralWithOffset(ctx context.Context, project, query string, limit, offset int) ([]*models.Memory, error)
 }
 
+type searchLiteralStore interface {
+	SearchLiteralForSearch(context.Context, string, string, int, int, scope.MemoryReadAccess) ([]*models.Memory, error)
+}
+
 type textCandidates struct {
 	retrieval.MemoryStoreInterface
-	literal LiteralStore
+	retrieval.SearchMemoryStore
+	literal searchLiteralStore
 	filter  *memoryFilter
 	// The engine joins its FTS goroutine before Search reads this request-local error.
 	literalErr error
 }
 
 func (s *textCandidates) SearchFTS(ctx context.Context, project, query string, limit int) ([]*models.Memory, error) {
-	fts, ftsErr := s.MemoryStoreInterface.SearchFTS(ctx, project, query, limit)
-	literal, literalErr := s.literalCandidates(ctx, project, query, limit)
+	rows, _, err := s.SearchFTSForSearch(ctx, project, query, limit, scope.MemoryReadAccess{Caller: s.filter.caller, Visibility: s.filter.visibility})
+	return rows, err
+}
+
+func (s *textCandidates) SearchFTSForSearch(ctx context.Context, project, query string, limit int, access scope.MemoryReadAccess) ([]*models.Memory, map[int64]bool, error) {
+	fts, partial, ftsErr := s.SearchMemoryStore.SearchFTSForSearch(ctx, project, query, limit, access)
+	literal, literalErr := s.literalCandidates(ctx, project, query, limit, access)
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	s.literalErr = literalErr
 	if literalErr != nil {
-		return nil, literalErr
+		return nil, nil, literalErr
 	}
 	visibleFTS := fts[:0]
 	for _, memory := range fts {
@@ -39,13 +50,13 @@ func (s *textCandidates) SearchFTS(ctx context.Context, project, query string, l
 	}
 	fts = visibleFTS
 	if ftsErr != nil {
-		return literal, literalErr
+		return literal, nil, literalErr
 	}
 	if len(literal) == 0 {
-		return fts, nil
+		return fts, partial, nil
 	}
 	if len(fts) == 0 {
-		return literal, nil
+		return literal, nil, nil
 	}
 
 	// Reuse the existing rank-fusion authority so neither text source crowds out
@@ -58,6 +69,8 @@ func (s *textCandidates) SearchFTS(ctx context.Context, project, query string, l
 		byID[memory.ID] = memory
 	}
 	for i, memory := range literal {
+		// A full content/tag literal match is stronger than OR-only recovery.
+		delete(partial, memory.ID)
 		literalIDs[i] = memory.ID
 		byID[memory.ID] = memory
 	}
@@ -69,14 +82,14 @@ func (s *textCandidates) SearchFTS(ctx context.Context, project, query string, l
 	for i, id := range ids {
 		result[i] = byID[id]
 	}
-	return result, nil
+	return result, partial, nil
 }
 
-func (s *textCandidates) literalCandidates(ctx context.Context, project, query string, limit int) ([]*models.Memory, error) {
+func (s *textCandidates) literalCandidates(ctx context.Context, project, query string, limit int, access scope.MemoryReadAccess) ([]*models.Memory, error) {
 	const batchSize = 200
 	var visible []*models.Memory
 	for offset := 0; len(visible) < limit; {
-		batch, err := s.literal.SearchLiteralWithOffset(ctx, project, query, batchSize, offset)
+		batch, err := s.literal.SearchLiteralForSearch(ctx, project, query, batchSize, offset, access)
 		if err != nil {
 			return nil, err
 		}

@@ -10,6 +10,8 @@ import (
 	"github.com/pgvector/pgvector-go"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
+
+	"github.com/thebtf/engram/internal/scope"
 )
 
 // EmbeddingStats summarises the current state of the content_chunks table.
@@ -83,8 +85,8 @@ func (s *Store) Stats(ctx context.Context) (EmbeddingStats, error) {
 // tables rather than a second Stats() call.
 type CoverageStats struct {
 	EmbeddingStats
-	ActiveMemoryCount  int64   `json:"active_memory_count"`
-	EmbeddingCoverage  float64 `json:"embedding_coverage"` // fraction 0..1; 0 when no active memories
+	ActiveMemoryCount int64   `json:"active_memory_count"`
+	EmbeddingCoverage float64 `json:"embedding_coverage"` // fraction 0..1; 0 when no active memories
 }
 
 // StatsWithCoverage returns EmbeddingStats plus the embedding coverage ratio.
@@ -121,10 +123,10 @@ func (s *Store) StatsWithCoverage(ctx context.Context) (CoverageStats, error) {
 
 // Chunk represents a row in the content_chunks table.
 type Chunk struct {
-	ID        int64           `gorm:"primaryKey;autoIncrement"`
-	MemoryID  int64           `gorm:"not null"`
-	Seq       int             `gorm:"not null"`
-	Text      string          `gorm:"type:text;not null;default:''"`
+	ID       int64  `gorm:"primaryKey;autoIncrement"`
+	MemoryID int64  `gorm:"not null"`
+	Seq      int    `gorm:"not null"`
+	Text     string `gorm:"type:text;not null;default:''"`
 	// Dimension is the SSOT EmbeddingDim (1536). The GORM tag must be a compile-time
 	// literal so it cannot reference the constant directly; the startup assert in
 	// AssertEmbeddingDimensions reconciles this tag, the DDL, and EmbeddingDim against
@@ -181,9 +183,11 @@ func (s *Store) StoreChunks(ctx context.Context, chunks []Chunk) error {
 
 // SimilarResult holds a memory ID and its cosine similarity score.
 type SimilarResult struct {
-	MemoryID   int64   `json:"memory_id"`
-	Similarity float64 `json:"similarity"`
-	Text       string  `json:"text"`
+	MemoryID      int64   `json:"memory_id"`
+	Similarity    float64 `json:"similarity"`
+	Text          string  `json:"text"`
+	Version       int     `json:"version,omitempty"`
+	ContentDigest string  `json:"content_digest,omitempty"`
 }
 
 // FindSimilar queries for chunks closest to the given embedding vector.
@@ -264,6 +268,53 @@ func (s *Store) FindSimilarForProject(ctx context.Context, project string, query
         ORDER BY cc.embedding <=> ?::vector
         LIMIT ?
     `, vec, project, vec, threshold, vec, limit).Scan(&results).Error
+	if err != nil {
+		return nil, fmt.Errorf("find similar for project %q: %w", project, err)
+	}
+	return results, nil
+}
+
+// FindSimilarForSearch authorizes memories before distance ordering and LIMIT.
+// Only authorized ID/version metadata is materialized, not 1536-dimensional
+// embeddings. Exact grouped distance ranking has no raw top-k before authorization.
+func (s *Store) FindSimilarForSearch(ctx context.Context, project string, queryVec []float32, limit int, threshold float64, access scope.MemoryReadAccess) ([]SimilarResult, error) {
+	if project == "" {
+		return nil, fmt.Errorf("find similar for project: project must not be empty")
+	}
+	if len(queryVec) == 0 {
+		return nil, fmt.Errorf("find similar: query vector must not be empty")
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	if threshold <= 0 {
+		threshold = 0.7
+	}
+	predicate, accessArgs := scope.MemoryReadAccessSQL(access)
+	args := []any{project}
+	args = append(args, accessArgs...)
+	args = append(args, pgvector.NewVector(queryVec), threshold, limit)
+	var results []SimilarResult
+	err := s.db.WithContext(ctx).Raw(`
+		WITH authorized AS MATERIALIZED (
+			SELECT m.id, m.version FROM memories m
+			WHERE m.project = ? AND m.status = 'active' AND m.deleted_at IS NULL
+			  AND (m.valid_from IS NULL OR m.valid_from <= NOW())
+			  AND (m.valid_until IS NULL OR m.valid_until >= NOW())
+			  AND (`+predicate+`)
+		), ranked AS (
+			SELECT a.id AS memory_id, a.version, MIN(cc.embedding <=> ?::vector) AS distance
+			FROM authorized a JOIN content_chunks cc ON cc.memory_id = a.id
+			WHERE cc.embedding IS NOT NULL GROUP BY a.id, a.version
+		), selected AS MATERIALIZED (
+			SELECT memory_id, version, distance FROM ranked
+			WHERE 1 - distance >= ? ORDER BY distance ASC, memory_id ASC LIMIT ?
+		)
+		SELECT s.memory_id, s.version, 1 - s.distance AS similarity,
+		       `+scope.MemoryContentDigestSQL+` AS content_digest
+		FROM selected s JOIN memories m ON m.id = s.memory_id AND m.version = s.version
+		ORDER BY s.distance ASC, s.memory_id ASC
+	`, args...).Scan(&results).Error
 	if err != nil {
 		return nil, fmt.Errorf("find similar for project %q: %w", project, err)
 	}
