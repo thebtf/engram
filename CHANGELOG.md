@@ -7,15 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Keep literal memory/tag search available when unrelated historical rows contain non-array JSON tags, without rewriting those rows or masking storage errors.
-- Canonicalize uppercase UUIDs only at OpenClaw memory-write and transition boundaries, preserving existing file-checkpoint identity and unknown-outcome no-retry guards. Keep CLI and local-file UTF-16 limits without splitting surrogate pairs; require exact server confirmations and unchanged source files.
-- Start the acquisition-cancellation fixture's deadline clock at the actual in-flight request boundary. Retain real abort/request closure, hashing, expired-before-send and staging-cleanup assertions without changing launcher behavior or timeout values.
-- Lower literal JSONB array-search syntax through the existing SQLite security-test seam, retaining real owner search/transition controls, invalid-selector rejection and revoked-key behavior. PostgreSQL operator behavior remains covered by PostgreSQL regressions.
-- Correct the crystallization integration fixture to seed a registered canonical project and require a persisted pending candidate despite the retired false flag. Preserve the absent-writer no-write control; do not restore the retired production flag.
-- Keep fully received OpenClaw memory-transition conflicts as rejected application outcomes while recording successful service reachability, so they break the consecutive-failure streak. Preserve genuine three-strike cooldowns, timeout uncertainty, no-blind-retry behavior and other endpoints' HTTP semantics.
-- Recover literal-search content and its bounded project/ID-based memory hydration even when a selected row has malformed JSON tags. Decode raw tags only in that recovery projection, retain valid string arrays and all other fields, omit undecodable tags from the projection, and leave durable JSON, global scanners and genuine storage errors unchanged.
-- Keep acquisition timer fixtures portable across native legacy and modern MockTimers APIs. Freeze Date.now during cold preflight and advance it only at the actual in-flight deadline boundary; retain current Node 22 behavior, abort/close/hash/cleanup controls and unchanged runtime requirements and timeouts.
-
 - Regenerate the API through the maintained worker target using canonical local Go package directories and Swag 1.16.6, with real producer errors stopping the build. Correct existing context search/inject/session-start annotations without changing handlers; document the shared GET/POST conditional-query limitation. The actual producer and server build pass, with 40 named schema checks and all 76 references resolved; that producer checkpoint established compile-only retained-reader oracle provenance, with later native query proof recorded separately, and installed/release acceptance remains separate.
 
 - Add retained catalog `families` metadata with kind, technical table, saved membership-occurrence count and declared/separate/metadata-only reader boundary. Preserve every group, opaque reference, safe label and reason without payload previews, readable-record totals, availability or historical ownership assignment. This descriptor change does not provide cross-group record discovery or installed-consumer acceptance.
@@ -56,6 +47,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [7.0.17] - 2026-11-02
 
 ### Fixed
+
+- Keep literal memory/tag search and scoped by-ID hydration available when matching historical rows have malformed tags. Preserve valid tags and content, omit undecodable tags only from recovery responses, and leave stored rows and genuine storage errors unchanged.
+- Treat fully received OpenClaw memory-transition conflicts as rejected operations from a reachable service, clearing the consecutive-failure streak without retrying the write. Preserve genuine-failure cooldowns, timeout uncertainty and other endpoints' HTTP semantics.
+- Give hybrid recall's unsupported-history response an executable read-only `recall(action="search")` recovery call with the same project, query, filters and caller identity. Return private recovery arguments only to the requesting caller, not in error messages or logs.
+- Bind migration 150's domain-owner constraint checks to the intended PostgreSQL relation, so same-named constraints on other relations cannot suppress its validation.
+- Canonicalize uppercase UUIDs at OpenClaw memory-write and transition boundaries without changing saved file-checkpoint identity or unknown-outcome retry guards. Preserve UTF-16 limits without splitting surrogate pairs, exact server confirmations and unchanged-source checks.
+- Correct acquisition-deadline, SQLite search and crystallization fixtures for native timer APIs and current canonical-project contracts without changing launcher timeouts, production flags or privacy guards.
 
 - Document the existing authenticated memory transition route and its real request/receipt schemas, optional canonical project narrowing, denied/state-conflict outcomes and unknown-outcome retry boundary. Align context-search descriptions with shared hybrid retrieval, configured reranking, embedding degradation, no query expansion and HTTP 500 for memory-store lookup failures; preserve shared GET/POST conditional-query limitations and runtime behavior.
 
