@@ -725,7 +725,7 @@ const docTemplate = `{
                         "ApiKeyAuth": []
                     }
                 ],
-                "description": "Searches observations relevant to a user prompt using query parameters. JSON bodies are ignored; use POST for large prompts.",
+                "description": "Searches observations using shared vector and text retrieval (FTS plus literal content/tag matches), optional configured cross-encoder reranking, and existing clustering. Unavailable embeddings degrade to text search; query expansion is not performed. Memory-store lookup failures return HTTP 500 rather than an empty success. JSON bodies are ignored; use POST for large prompts.",
                 "produces": [
                     "application/json"
                 ],
@@ -796,6 +796,12 @@ const docTemplate = `{
                         "schema": {
                             "type": "string"
                         }
+                    },
+                    "500": {
+                        "description": "memory-store lookup or retrieval failed",
+                        "schema": {
+                            "type": "string"
+                        }
                     }
                 }
             },
@@ -805,7 +811,7 @@ const docTemplate = `{
                         "ApiKeyAuth": []
                     }
                 ],
-                "description": "Searches observations relevant to a user prompt using hybrid vector + FTS search with query expansion, cross-encoder reranking, and clustering. A nonempty project and query are each required in the query string or JSON body. Nonempty JSON fields override query parameters; session_id overrides even when empty. Invalid or absent JSON falls back to query parameters.",
+                "description": "Searches observations using shared vector and text retrieval (FTS plus literal content/tag matches), optional configured cross-encoder reranking, and existing clustering. Unavailable embeddings degrade to text search; query expansion is not performed. Memory-store lookup failures return HTTP 500 rather than an empty success. A nonempty project and query are each required in the query string or JSON body. Nonempty JSON fields override query parameters; session_id overrides even when empty. Invalid or absent JSON falls back to query parameters.",
                 "consumes": [
                     "application/json"
                 ],
@@ -882,6 +888,12 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "project and query required",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "memory-store lookup or retrieval failed",
                         "schema": {
                             "type": "string"
                         }
@@ -1964,6 +1976,95 @@ const docTemplate = `{
                     },
                     "503": {
                         "description": "service unavailable",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/memories/{id}/transition": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Requires a JSON action: suppress changes active to flagged, unsuppress changes flagged to active, and archive changes active or flagged to archived without erasure. The optional project query parameter must occur once with a canonical UUID and only narrows the memory's existing live canonical membership; omission does not bypass caller visibility or domain-manage authorization. Missing or denied memories return 404. State/version conflicts return 409 and roll back the transaction. The receipt contains id, action, resulting status, incremented version and canonical project. An ambiguous transport failure leaves the outcome unknown; do not automatically retry.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Memories"
+                ],
+                "summary": "Transition a retained memory by ID",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "format": "int64",
+                        "description": "Positive memory ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Optional single canonical project UUID; narrows existing membership only",
+                        "name": "project",
+                        "in": "query"
+                    },
+                    {
+                        "description": "Required lifecycle action",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/worker.memoryTransitionRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/worker.memoryTransitionResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "invalid memory id, project selector, JSON or action",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "authentication required",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "memory not found or access denied",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "409": {
+                        "description": "memory state/version conflict; transaction rolled back",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "memory transition failed",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "memory store not available",
                         "schema": {
                             "type": "string"
                         }
@@ -5316,6 +5417,42 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "worker.memoryTransitionRequest": {
+            "type": "object",
+            "required": [
+                "action"
+            ],
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": [
+                        "suppress",
+                        "unsuppress",
+                        "archive"
+                    ]
+                }
+            }
+        },
+        "worker.memoryTransitionResponse": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "project": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "version": {
                     "type": "integer"
                 }
             }
