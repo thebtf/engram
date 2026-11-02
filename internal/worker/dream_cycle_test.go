@@ -716,6 +716,7 @@ func TestDreamCycle_RealDBRestartRetryPersistsExactlyOneCandidate(t *testing.T) 
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
 	marker := fmt.Sprintf("dream-restart-%d", time.Now().UnixNano())
 	project := uuid.NewString()
+	sentinelProject := uuid.NewString()
 	decisionText := "decision " + marker
 	createdAt := time.Now().UTC().Truncate(time.Microsecond)
 
@@ -726,6 +727,9 @@ func TestDreamCycle_RealDBRestartRetryPersistsExactlyOneCandidate(t *testing.T) 
 		}
 		_ = store.DB.Exec("DELETE FROM audit_log WHERE source_session_id = ? OR actor = ?", marker, marker).Error
 		_ = store.DB.Exec("DELETE FROM crystallization_candidates WHERE source_session_id = ?", marker).Error
+		require.NoError(t, store.DB.Exec(`DELETE FROM audit_log WHERE memory_id IN (SELECT id FROM memories WHERE project = ?)`, sentinelProject).Error)
+		require.NoError(t, store.DB.Exec(`DELETE FROM memories WHERE project = ?`, sentinelProject).Error)
+		require.NoError(t, store.DB.Where("id = ?", sentinelProject).Delete(&gorm.Project{}).Error)
 		_ = store.DB.Exec("DELETE FROM session_transcripts WHERE session_id = ?", marker).Error
 		_ = store.DB.Where("id = ?", project).Delete(&gorm.Project{}).Error
 		_ = store.Close()
@@ -741,12 +745,40 @@ func TestDreamCycle_RealDBRestartRetryPersistsExactlyOneCandidate(t *testing.T) 
 
 	store1, err := gorm.NewStore(gorm.Config{DSN: dsn, MaxConns: 2})
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store1.Close()) })
 	require.NoError(t, store1.DB.Create(&gorm.Project{ID: project}).Error)
+	require.NoError(t, store1.DB.Create(&gorm.Project{ID: sentinelProject}).Error)
+	sentinelStore := gorm.NewMemoryStore(store1)
+	for i := range sleepCycleMemoryCountThreshold {
+		_, err := sentinelStore.Create(context.Background(), &models.Memory{
+			Project: sentinelProject, Content: fmt.Sprintf("%s unrelated sentinel %d", marker, i),
+			Tags: []string{marker, "unrelated-sentinel"}, SourceAgent: marker, EditedBy: marker,
+			Status: "active", Tier: "episodic", EpistemicType: "fact", PrivacyScope: "project",
+			OwnerPrincipal: "agent/dream-fixture", OwnerPrincipalKind: "agent", AgentVisibility: "private",
+			CreatedAt: createdAt.AddDate(0, 0, -30), Stability: 3, Retrievability: 0.91, Confidence: 0.73,
+			RecurrenceCount: 2, InjectionCount: 1, CitationCount: 1,
+		})
+		require.NoError(t, err)
+	}
+	var sentinelCount int64
+	require.NoError(t, store1.DB.Table("memories").Where("project = ? AND status = 'active'", sentinelProject).Count(&sentinelCount).Error)
+	require.GreaterOrEqual(t, sentinelCount, int64(10), "the fixture must expose the real lifecycle count threshold")
+	snapshotSentinels := func(store *gorm.Store) string {
+		var snapshot string
+		require.NoError(t, store.DB.Raw(`SELECT COALESCE(jsonb_agg(to_jsonb(m) ORDER BY m.id), '[]'::jsonb)::text
+			FROM memories m WHERE m.project = ?`, sentinelProject).Scan(&snapshot).Error)
+		return snapshot
+	}
+	sentinelsBefore := snapshotSentinels(store1)
 	ts1 := gorm.NewTranscriptStore(store1.DB)
 	require.NoError(t, ts1.Create(context.Background(), &gorm.SessionTranscript{SessionID: marker, Project: project, Content: decisionText, CreatedAt: createdAt}))
 	cs1 := gorm.NewCandidateStore(store1.DB, gorm.NewAuditStore(store1.DB))
 	first := &Service{memoryStore: gorm.NewMemoryStore(store1), dreamTranscriptStoreOverride: &markFailOnceTranscriptStore{dreamTranscriptStore: ts1}, dreamCandidateStoreOverride: cs1, dreamExtractorFunc: extractFn}
+	watermark, err := first.memoryStore.MaxActiveID(context.Background())
+	require.NoError(t, err)
+	first.sleepCycleWatermarkID.Store(watermark)
 	first.maybeSleepCycle(context.Background())
+	require.Equal(t, sentinelsBefore, snapshotSentinels(store1), "the first queue attempt must not change any unrelated durable memory field")
 
 	var candidates, unprocessed int64
 	require.NoError(t, store1.DB.Table("crystallization_candidates").Where("source_session_id = ?", marker).Count(&candidates).Error)
@@ -758,8 +790,13 @@ func TestDreamCycle_RealDBRestartRetryPersistsExactlyOneCandidate(t *testing.T) 
 
 	store2, err := gorm.NewStore(gorm.Config{DSN: dsn, MaxConns: 2})
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store2.Close()) })
 	restarted := &Service{memoryStore: gorm.NewMemoryStore(store2), dreamTranscriptStoreOverride: gorm.NewTranscriptStore(store2.DB), dreamCandidateStoreOverride: gorm.NewCandidateStore(store2.DB, gorm.NewAuditStore(store2.DB)), dreamExtractorFunc: extractFn}
+	watermark, err = restarted.memoryStore.MaxActiveID(context.Background())
+	require.NoError(t, err)
+	restarted.sleepCycleWatermarkID.Store(watermark)
 	restarted.maybeSleepCycle(context.Background())
+	require.Equal(t, sentinelsBefore, snapshotSentinels(store2), "restart retry must not change any unrelated durable memory field")
 	require.NoError(t, store2.DB.Table("crystallization_candidates").Where("source_session_id = ?", marker).Count(&candidates).Error)
 	require.NoError(t, store2.DB.Table("session_transcripts").Where("session_id = ?", marker).Count(&unprocessed).Error)
 	require.EqualValues(t, 1, candidates, "fingerprint duplicate on retry must not create a second candidate")
@@ -769,11 +806,17 @@ func TestDreamCycle_RealDBRestartRetryPersistsExactlyOneCandidate(t *testing.T) 
 
 	store3, err := gorm.NewStore(gorm.Config{DSN: dsn, MaxConns: 2})
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store3.Close()) })
 	afterSuccess := &Service{memoryStore: gorm.NewMemoryStore(store3), dreamTranscriptStoreOverride: gorm.NewTranscriptStore(store3.DB), dreamCandidateStoreOverride: gorm.NewCandidateStore(store3.DB, gorm.NewAuditStore(store3.DB)), dreamExtractorFunc: extractFn}
+	watermark, err = afterSuccess.memoryStore.MaxActiveID(context.Background())
+	require.NoError(t, err)
+	afterSuccess.sleepCycleWatermarkID.Store(watermark)
 	afterSuccess.maybeSleepCycle(context.Background())
+	require.Equal(t, sentinelsBefore, snapshotSentinels(store3), "the post-success restart must not change any unrelated durable memory field")
 	require.NoError(t, store3.DB.Table("crystallization_candidates").Where("source_session_id = ?", marker).Count(&candidates).Error)
 	require.EqualValues(t, 1, candidates)
 	require.Equal(t, 2, extractCalls, "a post-success process restart must see no work")
+	t.Logf("preserved all durable fields of %d unrelated sentinels across three service lifetimes; candidates=%d extraction_calls=%d", sentinelCount, candidates, extractCalls)
 	require.NoError(t, store3.Close())
 }
 
