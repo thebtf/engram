@@ -823,7 +823,7 @@ func recallMemoryTool() Tool {
 		},
 		"include_superseded": map[string]any{
 			"type":        "boolean",
-			"description": "When true, include memories with status='superseded' in addition to status='active'.",
+			"description": "Hybrid recall rejects true. Use read-only recall(action=\"search\") with project=<same canonical project>, query=<same substring> and include_superseded=true for active and superseded history; confidence_min, session_id and include_scopes remain supported with the same caller identity.",
 		},
 		"include_rationale": map[string]any{
 			"type":        "boolean",
@@ -874,15 +874,20 @@ func (s *Server) primaryTools() []Tool {
 	return []Tool{
 		{
 			Name:        "recall",
-			Description: "Search and retrieve memories. Actions: search (default, trivial SQL filter over memories).",
+			Description: "Read-only memory search and history. Use action=search with a canonical project and optional substring query; include_superseded=true includes historical rows without changing caller privacy or ownership.",
 			tier:        tierCore,
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"action":  map[string]any{"type": "string", "enum": recallActions, "default": "search", "description": "Action to perform"},
-					"query":   map[string]any{"type": "string", "description": "Search query / substring filter (for search)"},
-					"project": map[string]any{"type": "string", "description": "Project name filter"},
-					"limit":   map[string]any{"type": "number", "description": "Max results"},
+					"action":             map[string]any{"type": "string", "enum": recallActions, "default": "search", "description": "Action to perform"},
+					"query":              map[string]any{"type": "string", "description": "Search query / substring filter (for search)"},
+					"project":            map[string]any{"type": "string", "description": "Canonical project UUID (defaults to current project)"},
+					"limit":              map[string]any{"type": "number", "description": "Max results"},
+					"session_id":         map[string]any{"type": "string", "description": "Caller's existing session identifier for private-workstation visibility; does not grant principal ownership."},
+					"include_scopes":     map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": []string{"private", "project", "shared", "global"}}, "description": "Restrict privacy scopes without widening caller visibility."},
+					"confidence_min":     map[string]any{"type": "number", "minimum": 0, "maximum": 1, "description": "Minimum stored confidence, applied before the visible result limit."},
+					"include_superseded": map[string]any{"type": "boolean", "description": "Include superseded memories alongside active rows; privacy, deletion and validity checks still apply."},
+					"include_rationale":  map[string]any{"type": "boolean", "description": "Attach ranking_rationale describing the applied history filters."},
 				},
 			},
 		},

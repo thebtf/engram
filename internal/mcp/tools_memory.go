@@ -1997,7 +1997,24 @@ func (s *Server) handleRecallMemoryHybrid(
 	}
 	if err != nil {
 		if errors.Is(err, memorysearch.ErrIncludeSuperseded) {
-			return "", err
+			recovery := map[string]any{
+				"action": "search", "project": project, "query": query, "limit": limit,
+				"include_superseded": true, "confidence_min": tg3ConfidenceMin,
+			}
+			if caller.SessionID != "" {
+				recovery["session_id"] = caller.SessionID
+			}
+			if scopes := coerceStringSlice(m["include_scopes"]); len(scopes) > 0 {
+				recovery["include_scopes"] = scopes
+			}
+			if tg3IncludeRationale {
+				recovery["include_rationale"] = true
+			}
+			arguments, marshalErr := json.Marshal(recovery)
+			if marshalErr != nil {
+				return "", fmt.Errorf("%w; use read-only recall(action=\"search\") with the same project and caller identity; recovery arguments could not be encoded: %v", err, marshalErr)
+			}
+			return "", fmt.Errorf("%w; retry read-only recall(action=\"search\") with the same caller identity; arguments: %s", err, arguments)
 		}
 		return "", fmt.Errorf("recall_memory %w", err)
 	}
