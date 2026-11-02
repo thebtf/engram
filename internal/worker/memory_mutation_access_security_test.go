@@ -73,6 +73,12 @@ func (c memoryMutationSQLiteConn) Prepare(query string) (driver.Stmt, error) {
 	// Current-validity readers use uppercase NOW(); preserve the same clock
 	// semantics as the lowercase PostgreSQL function already adapted above.
 	query = strings.ReplaceAll(query, "NOW()", "memory_mutation_now()")
+	// Preserve literal content/string-tag matching in this test-only dialect seam.
+	// PostgreSQL regressions separately own JSONB scalar safety and real SQL proof.
+	query = strings.ReplaceAll(query, "jsonb_array_elements_text(", "json_each(")
+	query = strings.ReplaceAll(query, "jsonb_typeof(tags)", "json_type(tags)")
+	query = strings.ReplaceAll(query, "'[]'::jsonb", "'[]'")
+	query = strings.ReplaceAll(query, "AS literal_tag(value)", "AS literal_tag")
 	return c.Conn.Prepare(query)
 }
 
