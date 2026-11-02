@@ -3689,31 +3689,6 @@ paths:
       summary: Get credential with decrypted value
       tags:
       - Vault
-  /api/vault/orphaned-credentials:
-    delete:
-      description: Removes credentials encrypted with a key that no longer matches
-        the current vault key fingerprint.
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            additionalProperties: true
-            type: object
-        "500":
-          description: internal error
-          schema:
-            type: string
-        "503":
-          description: vault not configured
-          schema:
-            type: string
-      security:
-      - ApiKeyAuth: []
-      summary: Delete orphaned credentials
-      tags:
-      - Vault
   /api/vault/status:
     get:
       description: Returns vault key configuration status, fingerprint, and credential

@@ -1746,8 +1746,7 @@
     "rotation": {
       "title": "Vault key rotation",
       "body": "The current server has no endpoint for safe rotation, so no operable modal is shown.",
-      "action": "Rotate key",
-      "cleanup": "Delete orphaned"
+      "action": "Rotate key"
     },
     "rotationModal": {
       "title": "Vault key rotation",

@@ -48,6 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Retire blanket Vault cleanup based on key-fingerprint mismatch, preserving recoverable ciphertext across projects and global scope. Keep read-only mismatch diagnostics and explicit scoped credential operations (issue 531).
 - Keep literal memory/tag search and scoped by-ID hydration available when matching historical rows have malformed tags. Preserve valid tags and content, omit undecodable tags only from recovery responses, and leave stored rows and genuine storage errors unchanged.
 - Treat fully received OpenClaw memory-transition conflicts as rejected operations from a reachable service, clearing the consecutive-failure streak without retrying the write. Preserve genuine-failure cooldowns, timeout uncertainty and other endpoints' HTTP semantics.
 - Give hybrid recall's unsupported-history response an executable read-only `recall(action="search")` recovery call with the same project, query, filters and caller identity. Return private recovery arguments only to the requesting caller, not in error messages or logs.

@@ -17,10 +17,8 @@ import (
 // CredentialStore provides credential-related database operations using GORM.
 // It targets the dedicated credentials table created by migration 087.
 //
-// Method signatures mirror the vault helpers on ObservationStore
-// (CountCredentials / CountCredentialsWithDifferentFingerprint / DeleteOrphanedCredentials)
-// so callers in internal/worker/handlers_vault.go can swap without signature changes
-// beyond the receiver type.
+// Read-only count helpers retain key-mismatch diagnostics without treating
+// credentials encrypted under another key as irrecoverable.
 type CredentialStore struct {
 	db *gorm.DB
 }
@@ -280,25 +278,6 @@ func (s *CredentialStore) CountWithDifferentFingerprint(ctx context.Context, cur
 		return 0, fmt.Errorf("count mismatched credentials: %w", err)
 	}
 	return count, nil
-}
-
-// DeleteOrphanedByFingerprint hard-deletes (permanent DELETE) all active credentials
-// whose encryption_key_fingerprint differs from currentFingerprint.
-// These rows cannot be decrypted with the current key and are irrecoverable.
-// Returns the number of rows deleted.
-// Mirrors ObservationStore.DeleteOrphanedCredentials signature.
-func (s *CredentialStore) DeleteOrphanedByFingerprint(ctx context.Context, currentFingerprint string) (int64, error) {
-	if currentFingerprint == "" {
-		return 0, fmt.Errorf("currentFingerprint must not be empty")
-	}
-	result := s.db.WithContext(ctx).
-		Where("deleted_at IS NULL").
-		Where("encryption_key_fingerprint != '' AND encryption_key_fingerprint != ?", currentFingerprint).
-		Delete(&Credential{})
-	if result.Error != nil {
-		return 0, fmt.Errorf("delete orphaned credentials (fingerprint %q): %w", currentFingerprint, result.Error)
-	}
-	return result.RowsAffected, nil
 }
 
 // credentialRowToModel converts an internal GORM Credential row to the pkg/models.Credential type.

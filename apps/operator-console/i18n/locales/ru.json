@@ -1746,8 +1746,7 @@
     "rotation": {
       "title": "Ротация ключа vault",
       "body": "На текущем сервере нет endpoint для безопасной ротации; не показываем operable modal.",
-      "action": "Сменить ключ",
-      "cleanup": "Удалить orphaned"
+      "action": "Сменить ключ"
     },
     "rotationModal": {
       "title": "Ротация ключа vault",

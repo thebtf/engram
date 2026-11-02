@@ -1982,7 +1982,6 @@ func (s *Service) setupRoutes() {
 		r.Post("/api/vault/credentials", s.handleStoreCredential)
 		r.Delete("/api/vault/credentials/{name}", s.handleDeleteCredential)
 		r.Get("/api/vault/status", s.handleVaultStatus)
-		r.Delete("/api/vault/orphaned-credentials", s.handleDeleteOrphanedCredentials)
 
 		// Memory routes (US3 Commit E — explicit user memories stored in memories table)
 		r.Post("/api/memories", s.handleStoreMemoryExplicit)

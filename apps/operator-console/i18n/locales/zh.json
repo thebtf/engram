@@ -1715,8 +1715,7 @@
     "rotation": {
       "title": "vault 密钥轮换",
       "body": "当前服务器没有安全轮换 endpoint，因此不显示可操作 modal。",
-      "action": "轮换密钥",
-      "cleanup": "删除 orphaned"
+      "action": "轮换密钥"
     },
     "rotationModal": {
       "title": "vault 密钥轮换",

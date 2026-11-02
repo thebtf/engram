@@ -117,13 +117,6 @@ export function deleteSecretCurrentStateParser(name: string, project: string): M
   }
 }
 
-export function cleanupOrphansCurrentStateParser(value: unknown): { deleted: number } | undefined {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
-  const deleted = Reflect.get(value, 'deleted')
-  return Reflect.get(value, 'status') === 'ok' && typeof deleted === 'number' && Number.isSafeInteger(deleted) && deleted >= 0
-    ? { deleted }
-    : undefined
-}
 
 
 function jsonInit(method: 'POST' | 'DELETE', body?: unknown): RequestInit {
@@ -215,7 +208,6 @@ export function useOperatorSecrets(): {
   revealSecret: (cred: OperatorCredential) => Promise<string>
   createSecret: (input: StoreSecretInput) => Promise<MutationResult<Omit<StoreSecretInput, 'value'>, OperatorVaultCreateReceipt>>
   deleteSecret: (cred: OperatorCredential) => Promise<MutationResult<{ credentialID: string }, { name: string }>>
-  cleanupOrphans: () => Promise<MutationResult<undefined, { deleted: number }>>
   rotationGap: ReturnType<typeof unsupportedOperatorAction>
 } {
   const credsEvidence = endpointEvidence('/api/vault/credentials', 'vault-credentials')
@@ -369,14 +361,11 @@ export function useOperatorSecrets(): {
     return { kind: 'committed_verification_pending' as const, request: result.request, httpStatus: result.httpStatus, commitment: 'committed' as const, reason: 'readback_invalid' as const }
   }
 
-  async function cleanupOrphans() {
-    return submitMutation('vault-orphan-cleanup', undefined, '/api/vault/orphaned-credentials', jsonInit('DELETE'), cleanupOrphansCurrentStateParser)
-  }
 
   const rotationGap = unsupportedOperatorAction(
     'vault-rotate',
     'POST /api/vault/rotate',
-    'The current server exposes status/list/reveal/store/delete/orphan cleanup, but no key-rotation route.',
+    'The current server exposes status/list/reveal/store/scoped delete, but no key-rotation route.',
   )
 
   startOnce('secrets-page', refresh)
@@ -392,7 +381,6 @@ export function useOperatorSecrets(): {
     revealSecret,
     createSecret,
     deleteSecret,
-    cleanupOrphans,
     rotationGap,
   }
 }
