@@ -2002,11 +2002,34 @@ func (s *MemoryStore) SearchLiteralWithOffset(ctx context.Context, project, quer
 			WHERE LOWER(literal_tag.value) LIKE ? ESCAPE '\'
 		))`, pattern, pattern)
 	}
-	rows, err := findMemoryRows(q, ListOptions{Limit: normalizeSearchFTSLimit(limit), Offset: offset})
+	rows, err := findRecoveryMemoryRows(applyMemoryListOptions(q, ListOptions{}).
+		Order("created_at DESC, id DESC").
+		Limit(normalizeSearchFTSLimit(limit)).
+		Offset(normalizeMemoryListOffset(offset)))
 	if err != nil {
 		return nil, fmt.Errorf("SearchLiteralWithOffset project=%q: %w", project, err)
 	}
 	return rows, nil
+}
+
+// Recovery reads retain matching content while projecting undecodable tags as empty.
+// Keep this policy out of JSONStringArray.Scan and ordinary memory readers.
+func findRecoveryMemoryRows(q *gorm.DB) ([]*models.Memory, error) {
+	var rows []struct {
+		Memory  `gorm:"embedded"`
+		RawTags json.RawMessage `gorm:"column:tags"`
+	}
+	if err := q.Model(&Memory{}).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	result := make([]*models.Memory, len(rows))
+	for i := range rows {
+		if err := rows[i].Tags.Scan([]byte(rows[i].RawTags)); err != nil {
+			rows[i].Tags = nil
+		}
+		result[i] = memoryRowToModel(&rows[i].Memory)
+	}
+	return result, nil
 }
 
 func normalizeSearchFTSLimit(limit int) int {
@@ -2087,20 +2110,17 @@ func (s *MemoryStore) GetByIDs(ctx context.Context, project string, ids []int64)
 	}
 	// Use SQL NOW() to avoid clock-skew with freshly-inserted rows whose
 	// valid_from is set by DB DEFAULT now() (same rationale as ListWithOffset).
-	var rows []Memory
-	err := s.db.WithContext(ctx).
+	rows, err := findRecoveryMemoryRows(s.db.WithContext(ctx).
 		Where("id = ANY(?) AND project = ? AND status = 'active' AND deleted_at IS NULL", pq.Array(ids), project).
 		Where("valid_from IS NULL OR valid_from <= NOW()").
-		Where("valid_until IS NULL OR valid_until >= NOW()").
-		Find(&rows).Error
+		Where("valid_until IS NULL OR valid_until >= NOW()"))
 	if err != nil {
 		return nil, fmt.Errorf("GetByIDs: %w", err)
 	}
 	// Rebuild in original id order.
 	byID := make(map[int64]*models.Memory, len(rows))
-	for i := range rows {
-		m := memoryRowToModel(&rows[i])
-		byID[m.ID] = m
+	for _, memory := range rows {
+		byID[memory.ID] = memory
 	}
 	result := make([]*models.Memory, 0, len(ids))
 	for _, id := range ids {

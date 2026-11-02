@@ -326,8 +326,10 @@ func TestContextSearchHybridPostgres(t *testing.T) {
 
 	t.Run("rest_memory_store_failure_preserves_server_error", func(t *testing.T) {
 		service.embeddingClient = nil
+		originalMemoryStore := service.memoryStore
 		defer func() {
 			service.embeddingClient = embedder
+			service.memoryStore = originalMemoryStore
 			service.memoryStoreSeam = nil
 		}()
 		requestsBefore := embeddingRequests.Load()
@@ -340,6 +342,8 @@ func TestContextSearchHybridPostgres(t *testing.T) {
 		quotedSchema := `"` + strings.ReplaceAll(schema, `"`, `""`) + `"`
 		originalTable := quotedSchema + `."memories"`
 		renamedTable := quotedSchema + `."issue520_unreadable_memories"`
+		// Public may already be initialized; this error oracle owns only its private table.
+		service.memoryStore = gormdb.NewMemoryStore(&gormdb.Store{DB: store.DB.Table(schema + ".memories")})
 		var originalOID int64
 		require.NoError(t, store.DB.Raw("SELECT to_regclass(?)::oid::bigint", originalTable).Scan(&originalOID).Error)
 		require.NotZero(t, originalOID)
@@ -364,7 +368,7 @@ func TestContextSearchHybridPostgres(t *testing.T) {
 			service.memoryStoreSeam = nil
 			if path == "fallback" {
 				// Select the retained fallback implementation, not a fake failing store.
-				service.memoryStoreSeam = memoryStore
+				service.memoryStoreSeam = service.memoryStore
 			}
 		}
 		healthy := func(phase string) {
@@ -383,9 +387,9 @@ func TestContextSearchHybridPostgres(t *testing.T) {
 		renamed = true
 		if !t.Run("real_memory_store_is_unreadable", func(t *testing.T) {
 			var memoryTableAbsent bool
-			require.NoError(t, store.DB.Raw("SELECT to_regclass('memories') IS NULL").Scan(&memoryTableAbsent).Error)
-			require.True(t, memoryTableAbsent, "no other schema may rescue the renamed test-owned memory table")
-			_, err := memoryStore.ListWithOffset(t.Context(), project, 1, 0)
+			require.NoError(t, store.DB.Raw("SELECT to_regclass(?) IS NULL", originalTable).Scan(&memoryTableAbsent).Error)
+			require.True(t, memoryTableAbsent, "the qualified private memory table must be absent")
+			_, err := service.memoryStore.ListWithOffset(t.Context(), project, 1, 0)
 			require.Error(t, err, "the actual PostgreSQL memory store must be unreadable")
 		}) {
 			return
@@ -570,6 +574,63 @@ func TestContextSearchHybridPostgres(t *testing.T) {
 			})
 		}
 		require.Equal(t, requestsBefore, embeddingRequests.Load(), "embeddings must not mask literal failures")
+	})
+	t.Run("rest_review_matching_nonarray_tags_remain_readable", func(t *testing.T) {
+		service.embeddingClient = nil
+		defer func() { service.embeddingClient = embedder }()
+		requestsBefore := embeddingRequests.Load()
+		for _, testcase := range []struct {
+			name, raw string
+			tags      []string
+		}{
+			{"null", `null`, []string{}},
+			{"string", `"historical"`, []string{}},
+			{"number", `42`, []string{}},
+			{"boolean", `true`, []string{}},
+			{"object", `{"historical":"tag"}`, []string{}},
+			{"array", `["type:decision","retained-safe-tag"]`, []string{"type:decision", "retained-safe-tag"}},
+			{"empty_array", `[]`, []string{}},
+		} {
+			t.Run(testcase.name, func(t *testing.T) {
+				project := compatibilityProject(t)
+				memory := compatibilityMemory(t, project, "Synthetic VaporRecoveryBoundary17Bridge retained payload", []string{"type:fact"})
+				require.NoError(t, store.DB.Exec("UPDATE memories SET tags = ?::jsonb WHERE id = ?", testcase.raw, memory.ID).Error)
+				before := memoryState(t)
+				t.Run("actual_store", func(t *testing.T) {
+					rows, err := memoryStore.SearchLiteralWithOffset(t.Context(), project, "RecoveryBoundary17", 10, 0)
+					require.NoError(t, err, "selected malformed tags must not discard useful matching content")
+					require.Len(t, rows, 1)
+					expected := *memory
+					expected.Tags = rows[0].Tags
+					if len(testcase.tags) == 0 {
+						require.Empty(t, rows[0].Tags)
+					} else {
+						require.Equal(t, testcase.tags, rows[0].Tags)
+					}
+					require.Equal(t, &expected, rows[0], "only the read projection's unsafe tags may change")
+					hydrated, err := memoryStore.GetByIDs(t.Context(), project, []int64{memory.ID})
+					require.NoError(t, err, "hybrid candidate hydration must retain the same safe read projection")
+					require.Equal(t, rows, hydrated)
+					foreignRows, err := memoryStore.GetByIDs(t.Context(), foreignProject, []int64{memory.ID})
+					require.NoError(t, err)
+					require.Empty(t, foreignRows, "raw-tag recovery must retain the project boundary")
+				})
+				for _, method := range []string{http.MethodGet, http.MethodPost} {
+					t.Run(method, func(t *testing.T) {
+						response := compatibilitySearch(t, project, method, "RecoveryBoundary17", 1)
+						require.Equal(t, []int64{memory.ID}, ids(response.Observations))
+						require.Equal(t, memory.Content, response.Observations[0].Narrative)
+						if len(testcase.tags) == 0 {
+							require.Empty(t, response.Observations[0].Concepts)
+						} else {
+							require.Equal(t, testcase.tags, response.Observations[0].Concepts)
+						}
+					})
+				}
+				require.Equal(t, before, memoryState(t), "search must preserve all original database fields and raw JSON tags")
+			})
+		}
+		require.Equal(t, requestsBefore, embeddingRequests.Load(), "embeddings must not hide literal materialization failures")
 	})
 
 	t.Run("rest_review_literal_visibility_before_candidate_cap", func(t *testing.T) {
