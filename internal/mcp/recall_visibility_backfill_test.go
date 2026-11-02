@@ -146,9 +146,9 @@ func TestRecall_PrincipalPrivateInvisibleNewestDoNotTruncate_FlagOff(t *testing.
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
 
 	require.NoError(t, db.Exec(
-		`INSERT INTO memories (project, content, tags, privacy_scope, created_at)
-			VALUES (?, ?, ?::jsonb, ?, now() - interval '5 minutes')`,
-		project, "older visible row A", `[]`, "private",
+		`INSERT INTO memories (project, content, tags, privacy_scope, source_workstation_id, created_at)
+			VALUES (?, ?, ?::jsonb, ?, ?, now() - interval '5 minutes')`,
+		project, "older visible row A", `[]`, "private", "keycard-alice",
 	).Error)
 	require.NoError(t, db.Exec(
 		`INSERT INTO memories (project, content, tags, privacy_scope, created_at)

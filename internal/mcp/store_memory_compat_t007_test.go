@@ -165,60 +165,25 @@ func TestEC_F1_TagDerivedBackfill_T007(t *testing.T) {
 	}
 	require.True(t, foundGlobalFixture,
 		"global-scoped fixture id=%d must be returned by MemoryStore.List within its own project", globalFixtureID)
-}
-
-// TestEC_F1_HandleRecallSearch_FlagOff_BackwardCompat_T007 verifies that the
-// v6.4-compatibility path through handleRecallSearch with the vNext F flag
-// OFF returns memories regardless of their privacy_scope column value — the
-// post-fetch scope.Resolve filter must be skipped, preserving byte-identical
-// recall behavior for legacy clients.
-//
-// Anti-stub: forcing scopeEnabled=true unconditionally in handleRecallSearch
-// would filter all rows (callerWorkstationID empty → private rows excluded;
-// but project/shared/global rows still admitted). The test here is that the
-// flag-OFF path doesn't enter the filter loop at all.
-func TestEC_F1_HandleRecallSearch_FlagOff_BackwardCompat_T007(t *testing.T) {
-	project := uuid.NewString()
-	env := newMemoryServerForT007(t, project)
-	db := env.store.DB
-	require.NoError(t, db.Create(&dbgorm.Project{ID: project}).Error)
-
-	// Explicitly clear the flag for this subprocess.
-	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
-
-	// Insert a global-scoped fixture row directly with privacy_scope set —
-	// flag OFF means the column value should not affect what recall returns.
-	require.NoError(t, db.Exec(
-		`INSERT INTO memories (project, content, tags, privacy_scope) VALUES (?, ?, ?::jsonb, ?)`,
-		project, "T007 flag-off global row", `["scope:global"]`, "global",
-	).Error)
-
-	args, err := json.Marshal(map[string]any{
-		"action":  "search",
-		"project": project,
-		"query":   "",
-	})
+	out, err := env.srv.handleRecall(context.Background(), mustJSON(t, map[string]any{
+		"action": "search", "project": project,
+	}))
 	require.NoError(t, err)
-
-	out, err := env.srv.handleRecall(context.Background(), args)
-	require.NoError(t, err)
-
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal([]byte(out), &resp))
-
-	count, _ := resp["count"].(float64)
-	require.GreaterOrEqual(t, int(count), 1, "flag-OFF recall must return the row regardless of privacy_scope")
-
-	// Response shape under flag OFF must not include privacy_scope per-result
-	// (memoryResult uses omitempty + scopeEnabled=false leaves the field
-	// unset on the result struct).
-	mems, _ := resp["memories"].([]any)
-	require.NotEmpty(t, mems)
-	for _, raw := range mems {
-		m, ok := raw.(map[string]any)
-		require.True(t, ok)
-		_, hasPS := m["privacy_scope"]
-		require.False(t, hasPS,
-			"flag-OFF recall response must NOT include privacy_scope per-result (RI-F1 backward compat); got %v", m)
+	var response struct {
+		Memories []struct {
+			ID           int64  `json:"id"`
+			Content      string `json:"content"`
+			PrivacyScope string `json:"privacy_scope"`
+		} `json:"memories"`
 	}
+	require.NoError(t, json.Unmarshal([]byte(out), &response))
+	require.Len(t, response.Memories, 3)
+	for _, memory := range response.Memories {
+		if memory.ID == globalFixtureID {
+			require.Equal(t, globalFixtureContent, memory.Content)
+			require.Equal(t, "global", memory.PrivacyScope)
+			return
+		}
+	}
+	t.Fatal("public recall omitted the migrated global fixture")
 }

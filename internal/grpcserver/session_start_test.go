@@ -289,10 +289,13 @@ func TestGetSessionStartContext_HappyPath(t *testing.T) {
 	require.Nil(t, resp.RuleRouter, "router metadata must stay absent while ENGRAM_RULE_ROUTER_ENABLED is off")
 
 	require.Len(t, resp.Memories, 1)
-	assert.Equal(t, newerMemory.ID, resp.Memories[0].Id)
-	assert.Equal(t, "newer memory", resp.Memories[0].Content)
-	assert.Equal(t, []string{"newer"}, resp.Memories[0].Tags)
-	assert.NotEqual(t, olderMemory.ID, resp.Memories[0].Id)
+	// Thompson sampling may select either eligible row, including the first persisted ID.
+	want := map[int64]*models.Memory{olderMemory.ID: olderMemory, newerMemory.ID: newerMemory}[resp.Memories[0].Id]
+	require.NotNil(t, want, "session-start must return an actual memory from this project")
+	assert.Equal(t, want.Content, resp.Memories[0].Content)
+	assert.Equal(t, want.Tags, resp.Memories[0].Tags)
+	assert.Equal(t, project, resp.Memories[0].Project)
+	assert.WithinDuration(t, want.CreatedAt, resp.Memories[0].CreatedAt.AsTime(), time.Microsecond)
 
 	require.Len(t, resp.Issues, 2)
 	assert.Equal(t, criticalIssueID, resp.Issues[0].Id)

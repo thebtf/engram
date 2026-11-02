@@ -1,22 +1,10 @@
 package grpcserver
 
-// session_start_scope_w4_test.go — W4 P1 scope-bypass regression guard.
-//
-// Tests the fix that closes the gRPC GetSessionStartContext scope bypass
-// (triage report §2.2 BYPASS 1): private-scope memories written by workstation-B
-// must not appear in responses to callers presenting workstation-A identity when
-// ENGRAM_VNEXT_F_ENABLED=true.
-//
-// Two coverage contracts per W4 fix rules:
-//   - Flag-OFF identity: memory list unchanged from pre-fix behavior.
-//   - Flag-ON private-row-invisible-cross-workstation: private row from other
-//     workstation absent; own-workstation private row present.
-//
-// DSN-gated: skipped when DATABASE_DSN is unset (same pattern as HappyPath tests).
+// Session-start privacy is unconditional in v7. These fixtures retain own-
+// workstation positives, foreign-workstation negatives and missing-identity denial.
 
 import (
 	"context"
-	"os"
 	"testing"
 
 	"github.com/google/uuid"
@@ -28,71 +16,12 @@ import (
 	pb "github.com/thebtf/engram/proto/engram/v1"
 )
 
-// TestEC_F1_P1_GRPCSessionStart_FlagOff_ByteIdentity verifies that with
-// ENGRAM_VNEXT_F_ENABLED unset the gRPC session-start path returns memories
-// identically to the pre-fix behavior: all project-visible rows regardless of
-// privacy_scope. This is the flag-OFF contract from the W4 fix rules.
-func TestEC_F1_P1_GRPCSessionStart_FlagOff_ByteIdentity(t *testing.T) {
+func TestGetSessionStartContext_PrivateWorkstationVisibility(t *testing.T) {
 	db, cleanup := openSessionStartTestDB(t)
 	defer cleanup()
 
-	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "") // explicitly off
-	t.Setenv("ENGRAM_VNEXT_ENABLED", "false")
-
-	ctx := context.Background()
-	project := uuid.NewString()
-	defer db.Exec(`DELETE FROM memories WHERE project = ?`, project)
-
-	memStore := localgorm.NewMemoryStore(&localgorm.Store{DB: db})
-
-	// Private memory from workstation-B.
-	_, err := memStore.Create(ctx, &models.Memory{
-		Project:             project,
-		Content:             "private from ws-B",
-		PrivacyScope:        "private",
-		SourceWorkstationID: "ws-writer-B",
-		SourceSessions:      []string{"sess-b"},
-		Tags:                []string{"private-b"},
-		SourceAgent:         "test",
-		EditedBy:            project,
-	})
-	require.NoError(t, err)
-
-	// Project-scoped memory (visible to everyone).
-	_, err = memStore.Create(ctx, &models.Memory{
-		Project:      project,
-		Content:      "project scoped",
-		PrivacyScope: "project",
-		Tags:         []string{"project"},
-		SourceAgent:  "test",
-		EditedBy:     project,
-	})
-	require.NoError(t, err)
-
-	// Caller presents workstation-A identity (different from ws-B).
-	callerCtx := auth.WithIdentity(ctx, auth.Client("ws-caller-A", "ws-caller-A"))
-
-	srv := &Server{db: db}
-	resp, err := srv.GetSessionStartContext(callerCtx, &pb.GetSessionStartContextRequest{
-		Project:       project,
-		MemoriesLimit: 10,
-	})
-	require.NoError(t, err)
-
-	// Flag OFF: both memories must be returned (byte-identity with pre-fix behavior).
-	assert.Len(t, resp.Memories, 2,
-		"flag-OFF: all project memories must be returned regardless of privacy_scope")
-}
-
-// TestEC_F1_P1_GRPCSessionStart_FlagOn_PrivateCrossWorkstationInvisible verifies
-// the core W4 P1 fix: with ENGRAM_VNEXT_F_ENABLED=true, a private-scope row
-// written by workstation-B is not returned to a caller from workstation-A.
-func TestEC_F1_P1_GRPCSessionStart_FlagOn_PrivateCrossWorkstationInvisible(t *testing.T) {
-	db, cleanup := openSessionStartTestDB(t)
-	defer cleanup()
-
-	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
-	t.Setenv("ENGRAM_VNEXT_ENABLED", "false") // use the legacy (non-Thompson) branch
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
+	t.Setenv("ENGRAM_VNEXT_ENABLED", "")
 
 	ctx := context.Background()
 	project := uuid.NewString()
@@ -229,6 +158,4 @@ func TestEC_F1_P1_GRPCSessionStart_FlagOn_NoCallerIdentity_PrivateInvisible(t *t
 			t.Errorf("P1 fail-closed NOT working: private memory visible to session caller (id=%d)", m.Id)
 		}
 	}
-
-	_ = os.Getenv("ENGRAM_VNEXT_F_ENABLED") // suppress unused import warning
 }

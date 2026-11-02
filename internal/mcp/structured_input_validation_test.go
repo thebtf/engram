@@ -147,10 +147,14 @@ func TestStructuredMutationSchemasMatchStrictHandlers(t *testing.T) {
 		{"docs", "title", "string"},
 		{"rule_governance_transition", "rule_version_id", "integer"},
 		{"rule_governance_pin_snapshot", "pinned", "boolean"},
-		{"rate_memory_significance", "id", "integer"},
 	} {
 		requireMutationSchemaType(t, h.server.ListTools(), expected.tool, expected.property, expected.typeName)
 	}
+	require.NotContains(t, listedToolNames(h.server.ListTools()), "rate_memory_significance")
+	out, err := h.server.callTool(h.ctx, "rate_memory_significance", json.RawMessage(`{"id":42,"rating":"useful"}`))
+	require.ErrorContains(t, err, "rate_memory_significance is deferred")
+	require.Empty(t, out)
+	h.requireZeroDurableDelta(t)
 }
 
 func TestStructuredMutationInputsRejectWithoutDurableDelta(t *testing.T) {
