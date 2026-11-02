@@ -1985,6 +1985,28 @@ func (s *MemoryStore) SearchFTS(ctx context.Context, project, query string, limi
 	return []*models.Memory{}, nil
 }
 
+// SearchLiteralWithOffset pages active, currently valid content/tag matches
+// for the same project. It supplies candidates to hybrid retrieval, not a separate
+// scorer; caller visibility is applied by the shared retrieval boundary.
+func (s *MemoryStore) SearchLiteralWithOffset(ctx context.Context, project, query string, limit, offset int) ([]*models.Memory, error) {
+	if project == "" {
+		return nil, fmt.Errorf("SearchLiteralWithOffset: project must not be empty")
+	}
+	q := baseMemoryListQuery(s.db.WithContext(ctx)).Where("project = ?", project)
+	if query = strings.TrimSpace(query); query != "" {
+		pattern := "%" + escapeSQLLike(strings.ToLower(query)) + "%"
+		q = q.Where(`(LOWER(content) LIKE ? ESCAPE '\' OR EXISTS (
+			SELECT 1 FROM jsonb_array_elements_text(tags) AS literal_tag(value)
+			WHERE LOWER(literal_tag.value) LIKE ? ESCAPE '\'
+		))`, pattern, pattern)
+	}
+	rows, err := findMemoryRows(q, ListOptions{Limit: normalizeSearchFTSLimit(limit), Offset: offset})
+	if err != nil {
+		return nil, fmt.Errorf("SearchLiteralWithOffset project=%q: %w", project, err)
+	}
+	return rows, nil
+}
+
 func normalizeSearchFTSLimit(limit int) int {
 	if limit <= 0 {
 		return 20

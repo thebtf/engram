@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	gormlib "gorm.io/gorm"
@@ -19,10 +18,10 @@ import (
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/internal/lifecycle"
+	"github.com/thebtf/engram/internal/memorysearch"
 	"github.com/thebtf/engram/internal/principalmemory"
 	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/internal/redaction"
-	"github.com/thebtf/engram/internal/reranking"
 	"github.com/thebtf/engram/internal/retrieval"
 	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/internal/staleness"
@@ -1938,32 +1937,6 @@ func marshalWithStaleAdvisory(resp any, terms []string) (string, error) {
 	return string(out), nil
 }
 
-// rerankAdapter bridges the concrete reranking.Client to the retrieval.CrossEncoder
-// interface, keeping internal/retrieval free of the reranking package import (the
-// same package-boundary discipline used for the store interfaces). It adapts the
-// returned []reranking.PassageScore into []retrieval.RerankResult.
-type rerankAdapter struct {
-	client *reranking.Client
-}
-
-func (a rerankAdapter) Rank(ctx context.Context, query string, passages []string) ([]retrieval.RerankResult, error) {
-	// Defensive: the adapter is only constructed under an s.rerankClient != nil guard,
-	// so this is unreachable in the live path — but a nil client returns no results
-	// (not an error), keeping the caller on fusion order per the failure-silent contract.
-	if a.client == nil {
-		return nil, nil
-	}
-	scores, err := a.client.Rank(ctx, query, passages)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]retrieval.RerankResult, len(scores))
-	for i, s := range scores {
-		out[i] = retrieval.RerankResult{Index: s.Index, RelevanceScore: s.RelevanceScore}
-	}
-	return out, nil
-}
-
 // caller, scopeEnabled, and includeScopes are forwarded from handleRecallMemory
 // so that privacy_scope visibility (scope.Resolve) is enforced on hybrid results.
 // This is required by the integration contract established in d9eea82: the hybrid
@@ -1995,129 +1968,42 @@ func (s *Server) handleRecallMemoryHybrid(
 			}
 		}
 	}()
-	expandGraph := coerceBool(m["expand_graph"], false)
-	minConfidence := coerceFloat64(m["min_confidence"], 0.0)
-	vecThreshold := coerceFloat64(m["vec_threshold"], 0.0) // translated from min_similarity by recall(similar)
-	tierFilter := coerceStringSlice(m["tier_filter"])
 	explain := coerceBool(m["explain"], false)
-
-	// Attempt to embed the query for Tier1 vector search.
-	// When the embedding client is nil (ENGRAM_EMBEDDING_URL not set),
-	// HybridSearch degrades gracefully to FTS-only.
-	var queryVec []float32
-	if s.embeddingClient != nil {
-		embedCtx := ctx
-		var cancel context.CancelFunc
-		ftsAllowed := len(tierFilter) == 0
-		for _, tier := range tierFilter {
-			if tier == "tier1_fts" {
-				ftsAllowed = true
-				break
-			}
-		}
-		if deadline, ok := ctx.Deadline(); ok && ftsAllowed {
-			now := time.Now()
-			remaining := deadline.Sub(now)
-			if remaining <= 0 {
-				return "", context.DeadlineExceeded
-			}
-			// Optional embedding gets half; retrieval keeps the original caller context.
-			embedCtx, cancel = context.WithDeadline(ctx, now.Add(remaining/2))
-		}
-		vecs, embErr := s.embeddingClient.Embed(embedCtx, []string{query})
-		if cancel != nil {
-			if embErr == nil {
-				embErr = embedCtx.Err()
-			}
-			cancel()
-		}
-		if err := ctx.Err(); err != nil {
-			return "", err
-		}
-		if embErr == nil && len(vecs) > 0 {
-			queryVec = vecs[0]
-		}
-		// Non-fatal: log at debug level and continue without vector.
-		if embErr != nil {
-			log.Debug().Err(embErr).Msg("recall_memory: embedding unavailable, falling back to FTS-only")
-		}
-	}
-
-	// T018 MAJOR fix (review hardening): include_superseded cannot be honored by
-	// the hybrid path because HybridSearch legs (FTS, vector, graph) query only
-	// active rows and the retrieval package is explicitly filter-agnostic (see
-	// SkipTier0 comment in HybridOptions). Silently no-oping the param was the
-	// bug — explicit rejection is better than silent degradation.
-	//
-	// Design choice: structured error > transparent downgrade.
-	// Rationale: the caller passed include_superseded=true expecting superseded
-	// memories to be included; silently dropping the flag returns a smaller,
-	// inconsistent result set with no indication of the gap. An error tells the
-	// caller to use the legacy path (ENGRAM_VNEXT_ENABLED=false) or omit the flag.
-	if tg3Active && tg3IncludeSuperseded {
-		return "", fmt.Errorf("include_superseded is not supported by hybrid retrieval; omit include_superseded")
-	}
-
-	opts := retrieval.HybridOptions{
-		QueryVec:      queryVec,
-		TierFilter:    tierFilter,
-		MinConfidence: minConfidence,
-		VecThreshold:  vecThreshold,
-		ExpandGraph:   expandGraph,
-		Explain:       explain,
-	}
-
-	var gStore retrieval.GraphStoreInterface
+	var graphStore retrieval.GraphStoreInterface
 	if s.graphStore != nil {
-		gStore = s.graphStore
+		graphStore = s.graphStore
 	}
-
-	var embStore retrieval.EmbeddingStoreInterface
+	var embeddingStore retrieval.EmbeddingStoreInterface
 	if s.embeddingStore != nil {
-		embStore = s.embeddingStore
+		embeddingStore = s.embeddingStore
 	}
-
-	// Rank-4: thread the cross-encoder reranker when configured. nil-guarded exactly
-	// like embStore above — when ENGRAM_RERANK_URL is unset s.rerankClient is nil and
-	// opts.Reranker stays nil (recall keeps the fusion order). The adapter bridges the
-	// reranking.Client to the retrieval.CrossEncoder interface (package-boundary clean).
-	if s.rerankClient != nil {
-		opts.Reranker = rerankAdapter{client: s.rerankClient}
-	}
-
-	// Request a wider candidate pool because type/tag/visibility filters all run
-	// after HybridSearch. Without over-fetching, private rows from other
-	// principals can consume the top-N and underfill otherwise-visible results.
-	const filterCandidateMultiplier = 4
-	fetchLimit := limit * filterCandidateMultiplier
-	if fetchLimit > 200 {
-		fetchLimit = 200
-	}
-
-	scored, explanations, err := retrieval.HybridSearch(
-		ctx,
-		project, query,
-		fetchLimit,
-		s.memoryStore,
-		embStore,
-		gStore,
-		opts,
-	)
+	searchResult, err := memorysearch.Search(ctx, memorysearch.Dependencies{
+		Memories: s.memoryStore, Embeddings: embeddingStore, Graph: graphStore,
+		Embedder: s.embeddingClient, Reranker: s.rerankClient,
+	}, memorysearch.Request{
+		Project: project, Query: query, Limit: limit,
+		Options: retrieval.HybridOptions{
+			TierFilter:    coerceStringSlice(m["tier_filter"]),
+			MinConfidence: coerceFloat64(m["min_confidence"], 0.0),
+			VecThreshold:  coerceFloat64(m["vec_threshold"], 0.0),
+			ExpandGraph:   coerceBool(m["expand_graph"], false), Explain: explain,
+		},
+		Caller: caller, Visibility: visibilityOpts, Type: obsType, Tags: tags,
+		ConfidenceMin:     tg3ConfidenceMin,
+		IncludeSuperseded: tg3Active && tg3IncludeSuperseded,
+	})
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 	if err != nil {
-		return "", fmt.Errorf("recall_memory hybrid: %w", err)
+		if errors.Is(err, memorysearch.ErrIncludeSuperseded) {
+			return "", err
+		}
+		return "", fmt.Errorf("recall_memory %w", err)
 	}
+	scored, explanations := searchResult.Matches, searchResult.Explanations
 
-	// Build result: filter by obsType / tags post-scoring (same semantics as legacy).
-	// Filters run BEFORE reconsolidation so lifecycle updates only touch memories
-	// returned to the caller (not the wider candidate set).
 	queryLower := strings.ToLower(query)
-	tagSet := make(map[string]struct{}, len(tags))
-	for _, tag := range tags {
-		tagSet[strings.ToLower(tag)] = struct{}{}
-	}
 
 	type hybridResult struct {
 		RankingExplanation *retrieval.RankingExplanation `json:"ranking_explanation,omitempty"`
@@ -2143,56 +2029,6 @@ func (s *Server) handleRecallMemoryHybrid(
 	items := make([]hybridResult, 0, limit)
 	for _, sm := range scored {
 		mem := sm.Memory
-
-		// Post-score obsType filter.
-		if obsType != "" {
-			typeTag := strings.ToLower("type:" + obsType)
-			typeMatched := false
-			for _, tag := range mem.Tags {
-				if strings.ToLower(tag) == typeTag {
-					typeMatched = true
-					break
-				}
-			}
-			if !typeMatched {
-				continue
-			}
-		}
-
-		// Post-score tag filter.
-		if len(tagSet) > 0 {
-			tagMatched := false
-			for _, tag := range mem.Tags {
-				if _, ok := tagSet[strings.ToLower(tag)]; ok {
-					tagMatched = true
-					break
-				}
-			}
-			if !tagMatched {
-				continue
-			}
-		}
-
-		// ── Privacy-scope filter (d9eea82 integration contract) ──────────────
-		// Runs BEFORE limit truncation so the returned limit reflects only
-		// memories visible to the caller — same semantics as the legacy
-		// batch-loop in handleRecallMemory. Without this check the hybrid path
-		// would re-introduce the cross-workstation leak that d9eea82 fixed.
-		if !scope.ResolveMemory(caller, mem, visibilityOpts) {
-			continue
-		}
-
-		// ── TG3 confidence_min post-fetch filter ──────────────────────────────
-		// Applied BEFORE limit truncation, consistent with the filter-before-limit
-		// contract. HybridOptions.MinConfidence filters on the fused hybrid score,
-		// not the raw confidence column; tg3ConfidenceMin filters on the stored
-		// memory.Confidence field (the v5-surface TG3 semantic). Both can coexist.
-		if tg3ConfidenceMin > 0 && mem.Confidence < tg3ConfidenceMin {
-			continue
-		}
-
-		// Suppress unused-variable warning; queryLower reserved for future FTS safety net.
-		_ = queryLower
 
 		memoryType := ""
 		for _, tag := range mem.Tags {
@@ -2222,108 +2058,6 @@ func (s *Server) handleRecallMemoryHybrid(
 			}
 		}
 		items = append(items, r)
-		if len(items) == limit {
-			break
-		}
-	}
-
-	// Tier0 fall-through: if HybridSearch returned results but every candidate
-	// was filtered out above (by scope, obsType, or tag predicates) AND the
-	// initial call did NOT already skip Tier0, the Tier0 exact-hash hit may be
-	// the only reason Tier1 never ran. Re-run with SkipTier0=true so FTS+vector
-	// Tier1 candidates get a chance to pass the same filter pipeline.
-	// This is a rare path (Tier0 hit + invisible to caller) so the extra
-	// HybridSearch call is acceptable. The SkipTier0 flag on the opts struct
-	// prevents a second re-run if Tier1 results are also fully filtered.
-	if len(scored) > 0 && len(items) == 0 && !opts.SkipTier0 {
-		opts.SkipTier0 = true
-		scored, explanations, err = retrieval.HybridSearch(
-			ctx,
-			project, query,
-			fetchLimit,
-			s.memoryStore,
-			embStore,
-			gStore,
-			opts,
-		)
-		if err := ctx.Err(); err != nil {
-			return "", err
-		}
-		if err != nil {
-			return "", fmt.Errorf("recall_memory hybrid (tier0 fallthrough): %w", err)
-		}
-		// Re-build the explanation lookup for the new result set.
-		explByID = make(map[int64]retrieval.RankingExplanation, len(explanations))
-		for _, e := range explanations {
-			explByID[e.MemoryID] = e
-		}
-		// Re-apply all post-score filters over the new candidate set.
-		items = make([]hybridResult, 0, limit)
-		for _, sm := range scored {
-			mem := sm.Memory
-			if obsType != "" {
-				typeTag := strings.ToLower("type:" + obsType)
-				typeMatched := false
-				for _, tag := range mem.Tags {
-					if strings.ToLower(tag) == typeTag {
-						typeMatched = true
-						break
-					}
-				}
-				if !typeMatched {
-					continue
-				}
-			}
-			if len(tagSet) > 0 {
-				tagMatched := false
-				for _, tag := range mem.Tags {
-					if _, ok := tagSet[strings.ToLower(tag)]; ok {
-						tagMatched = true
-						break
-					}
-				}
-				if !tagMatched {
-					continue
-				}
-			}
-			if !scope.ResolveMemory(caller, mem, visibilityOpts) {
-				continue
-			}
-			// TG3 confidence_min post-fetch filter (Tier0 fall-through path).
-			if tg3ConfidenceMin > 0 && mem.Confidence < tg3ConfidenceMin {
-				continue
-			}
-			memoryType := ""
-			for _, tag := range mem.Tags {
-				if strings.HasPrefix(tag, "type:") {
-					memoryType = strings.TrimPrefix(tag, "type:")
-					break
-				}
-			}
-			r := hybridResult{
-				ID:                 mem.ID,
-				Title:              truncateTitle(mem.Content, 80),
-				Type:               memoryType,
-				Content:            mem.Content,
-				Tags:               mem.Tags,
-				SourceAgent:        mem.SourceAgent,
-				OwnerPrincipal:     mem.OwnerPrincipal,
-				OwnerPrincipalKind: mem.OwnerPrincipalKind,
-				AgentVisibility:    mem.AgentVisibility,
-				Domain:             mem.Domain,
-				Project:            mem.Project,
-				Score:              sm.Score,
-			}
-			if explain {
-				if e, ok := explByID[mem.ID]; ok {
-					r.RankingExplanation = &e
-				}
-			}
-			items = append(items, r)
-			if len(items) == limit {
-				break
-			}
-		}
 	}
 
 	// Build a lookup from memory ID → ScoredMemory used by both the

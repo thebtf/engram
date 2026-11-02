@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/thebtf/engram/internal/memorysearch"
+	"github.com/thebtf/engram/internal/retrieval"
 	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/internal/worker/sdk"
 	"github.com/thebtf/engram/pkg/models"
@@ -19,10 +21,11 @@ const (
 
 // RetrievalOptions configures shared semantic retrieval.
 type RetrievalOptions struct {
-	MaxResults   int
-	SessionID    string
-	UseLLMFilter bool
-	FilePaths    []string
+	MaxResults      int
+	SessionID       string
+	UseLLMFilter    bool
+	FilePaths       []string
+	ObservationType string
 }
 
 type retrievalContextKey struct{}
@@ -112,19 +115,27 @@ func (s *Service) RetrieveRelevant(ctx context.Context, project, query string, o
 	}
 
 	similarityScores := make(map[int64]float64)
-	baseSimilarityScores := make(map[int64]float64)
-	observations := make([]*models.Observation, 0)
-
-	// This legacy observation-retrieval path is FTS-only: its vector leg was removed
-	// in v5 and not rewired to the migration-108 content_chunks table (vNext hybrid
-	// retrieval lives elsewhere). Use FTS-only retrieval here.
-	scopeFilter := retrievalScope{Project: project, AgentID: state.agentID}
-	fallbackObservations, fallbackErr := s.searchFallbackObservations(ctx, query, scopeFilter, limit)
-	if fallbackErr != nil {
-		return nil, nil, fallbackErr
+	var observations []*models.Observation
+	var err error
+	useFallback := s.memoryStore == nil || s.memoryStoreSeam != nil ||
+		(s.retrievalHooks != nil && (s.retrievalHooks.searchObservationsFTSFiltered != nil || s.retrievalHooks.getRecentObservationsFiltered != nil))
+	if useFallback {
+		observations, err = s.searchFallbackObservations(ctx, query, retrievalScope{Project: project, AgentID: state.agentID}, limit)
+	} else {
+		observations, err = s.searchHybridMemoryObservations(ctx, project, query, limit, opts.ObservationType, similarityScores)
 	}
-	observations = fallbackObservations
-	_ = baseSimilarityScores // no vector scores in v5
+	if err != nil {
+		return nil, nil, err
+	}
+	if opts.ObservationType != "" {
+		filtered := observations[:0]
+		for _, observation := range observations {
+			if string(observation.Type) == opts.ObservationType {
+				filtered = append(filtered, observation)
+			}
+		}
+		observations = filtered
+	}
 
 	freshObservations, staleCount := s.filterFreshObservations(ctx, observations, state.cwd)
 	freshCount := len(freshObservations)
@@ -134,16 +145,7 @@ func (s *Service) RetrieveRelevant(ctx context.Context, project, query string, o
 	const clusteringThreshold = 0.9
 	clusteredObservations := clusterObservations(freshObservations, clusteringThreshold)
 	duplicatesRemoved := len(freshObservations) - len(clusteredObservations)
-	// search.ApplyCompositeScoring / ApplyLaneWeights / ApplyDiversityPenalty /
-	// ApplySessionBoost all lived in internal/search which was dropped in v5 (US9).
-	// With no vector scores (similarityScores is always empty in v5 FTS-only mode)
-	// these scoring passes were no-ops anyway — observations are already ordered by
-	// FTS rank + importance from the DB query.
-	if len(similarityScores) > 0 && len(clusteredObservations) > 0 {
-		sort.Slice(clusteredObservations, func(i, j int) bool {
-			return similarityScores[clusteredObservations[i].ID] > similarityScores[clusteredObservations[j].ID]
-		})
-	}
+	// Keep the shared engine's ranking, including an optional cross-encoder order.
 	// InjectionFloor config field removed in v5; fill-to-floor is disabled.
 	// When similarityScores is empty (FTS-only mode, no vector scores) the
 	// score-gated loop would always yield zero, so fall back to observation count.
@@ -151,7 +153,7 @@ func (s *Service) RetrieveRelevant(ctx context.Context, project, query string, o
 	if len(similarityScores) > 0 {
 		totalResults = 0
 		for _, observation := range clusteredObservations {
-			if score, exists := similarityScores[observation.ID]; exists && score > NoiseFloorScore {
+			if score, exists := similarityScores[observation.ID]; observation.Type == models.ObsTypeGuidance || (exists && score > NoiseFloorScore) {
 				totalResults++
 			}
 		}
@@ -163,13 +165,83 @@ func (s *Service) RetrieveRelevant(ctx context.Context, project, query string, o
 		clusteredObservations = s.applyLLMFilter(ctx, project, query, clusteredObservations)
 	}
 	if metadata != nil {
-		metadata.usedVector = false // vector search removed in v5
 		metadata.totalResults = totalResults
 		metadata.staleCount = staleCount
 		metadata.freshCount = freshCount
 		metadata.duplicatesRemoved = duplicatesRemoved
 	}
 	return clusteredObservations, similarityScores, nil
+}
+
+func (s *Service) searchHybridMemoryObservations(ctx context.Context, project, query string, limit int, observationType string, scores map[int64]float64) ([]*models.Observation, error) {
+	observations := make([]*models.Observation, 0, limit)
+	if observationType == "" || observationType == string(models.ObsTypeDiscovery) {
+		var embeddingStore retrieval.EmbeddingStoreInterface
+		if s.embeddingStore != nil {
+			embeddingStore = s.embeddingStore
+		}
+		result, err := memorysearch.Search(ctx, memorysearch.Dependencies{
+			Memories: s.memoryStore, Embeddings: embeddingStore,
+			Embedder: s.embeddingClient, Reranker: s.rerankClient,
+			LiteralMatches: s.memoryStore,
+		}, memorysearch.Request{
+			Project: project, Query: query, Limit: limit,
+			Caller: memoryVisibilityCaller(ctx, ""), Visibility: memoryVisibilityOptions(),
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, match := range result.Matches {
+			observations = append(observations, memoryToObservation(match.Memory))
+			scores[match.Memory.ID] = match.Score
+		}
+	}
+	// Behavioral rules retain their existing observation projection and independent
+	// always-inject delivery. Apply the query/type predicates before the final cap.
+	if s.behavioralRulesStore != nil && (observationType == "" || observationType == string(models.ObsTypeGuidance)) {
+		rules, err := s.behavioralRulesStore.ListEnabled(ctx, &project, max(limit*10, 1000))
+		if err != nil {
+			return nil, err
+		}
+		queryLower := strings.ToLower(strings.TrimSpace(query))
+		guidance := behavioralRulesToObservations(rules)
+		matched := guidance[:0]
+		for _, observation := range guidance {
+			if queryLower == "" || observationMatchesFallbackQuery(observation, queryLower) {
+				matched = append(matched, observation)
+			}
+		}
+		if observationType == "" {
+			observations = mergeRelevantGuidance(observations, matched)
+		} else {
+			observations = append(observations, matched...)
+		}
+	}
+	return observations, nil
+}
+
+func mergeRelevantGuidance(memories, guidance []*models.Observation) []*models.Observation {
+	if len(guidance) == 0 {
+		return memories
+	}
+	sort.SliceStable(guidance, func(i, j int) bool {
+		return guidance[i].CreatedAtEpoch > guidance[j].CreatedAtEpoch
+	})
+	if len(memories) == 0 {
+		return guidance
+	}
+	// Interleave newer matching rules without re-sorting the hybrid/reranker
+	// memory order. Equal timestamps retain the legacy memory-before-rule tie.
+	merged := make([]*models.Observation, 0, len(memories)+len(guidance))
+	nextRule := 0
+	for _, memory := range memories {
+		for nextRule < len(guidance) && guidance[nextRule].CreatedAtEpoch > memory.CreatedAtEpoch {
+			merged = append(merged, guidance[nextRule])
+			nextRule++
+		}
+		merged = append(merged, memory)
+	}
+	return append(merged, guidance[nextRule:]...)
 }
 
 func (s *Service) getProjectThreshold(ctx context.Context, project string) float64 {
