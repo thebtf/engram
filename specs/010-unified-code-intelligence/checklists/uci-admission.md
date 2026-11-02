@@ -5,7 +5,7 @@
 **Feature**: [Unified Code Intelligence](../spec.md)
 **Approved specification commit**: `e08952a870735f0b27530351e871447b2eaa2266`
 **Reviewed plan commit**: `e08952a870735f0b27530351e871447b2eaa2266`
-**Constitution**: 1.1.0 at review. Constitution 2.0.0 current-order revalidation appears in the UCI plan and this checklist.
+**Constitution**: 1.1.0 at review. The UCI plan and this checklist retain the historical Constitution 2.0.0 revalidation; the current consumer-dependency annotation below supersedes its cross-feature sequence without renewing review markers.
 **Reviewer**: UCIPlanArchitectReview
 
 **Note**: Prepared from the installed `/speckit.checklist` template and requirements-quality rules. The parent explicitly requested reviewer evaluation of the items. No command was run or repository file written during this review.
@@ -68,8 +68,16 @@
 - `checklists/requirements.md` retains its separate built-in lifecycle under `/speckit.specify` and `/speckit.clarify`.
 - Spec and Plan citations refer to [spec.md](../spec.md) and [plan.md](../plan.md). Supporting planning references are [research.md](../research.md), [data-model.md](../data-model.md), and [quickstart.md](../quickstart.md).
 - Contract citations refer to [Identity](../supporting-contracts/identity-and-worktrees.md), [Storage](../supporting-contracts/storage-and-indexing.md), [Retrieval](../supporting-contracts/retrieval-and-graph.md), [API](../supporting-contracts/api-contracts.md), and [Migration](../supporting-contracts/migration.md).
-- Acceptance and Constitution citations refer to [uci-acceptance.md](../acceptance/uci-acceptance.md), the historical [Constitution 1.1.0](../../../.specify/memory/constitution.md), and the plan's Constitution 2.0.0 current-order revalidation. The Memory R1 feature remains separately defined in [Working Agent Memory R1](../../009-working-agent-memory-r1/spec.md).
+- Acceptance and Constitution citations refer to [uci-acceptance.md](../acceptance/uci-acceptance.md), the historical Constitution 1.1.0 review, the [current constitution](../../../.specify/memory/constitution.md), and the plan's historical Constitution 2.0.0 revalidation. Feature 009's current outcomes remain separately defined in [Working Agent Memory R1](../../009-working-agent-memory-r1/spec.md) and its [consumer acceptance](../../009-working-agent-memory-r1/acceptance/agent-use.md).
 
-## Constitution 2.0.0 revalidation
+## Historical Constitution 2.0.0 revalidation
 
-The 26 satisfied markers remain historical UCI admission evidence. The current-order annotation only assigns Code UI to Feature 011 and records the Book and Memory sequence. It does not re-review UCI-1 or mark Feature 011 accepted.
+The 26 satisfied markers remain historical UCI admission evidence. That annotation assigned Code UI to Feature 011 and recorded the then-current Book and Memory sequence. Decision 22 supersedes that sequence, not the historical review record. It does not re-review UCI-1 or mark Feature 011 accepted.
+
+## Current consumer-dependency annotation — 2026-11-02
+
+Feature 009 A consumes current project knowledge/notes and existing authorized UCI search, relationships, and same-View source through the actual loaded host. B depends on minimum Decision 21 self context for the same canonical principal without a fake project, one existing card-content owner with useful body search/revisions, and authorized usable links. Their actual providers and ordinary-client acceptance govern each path independently; full Feature 011, Book Context, full Assistant work, and unrelated task fields are not universal prerequisites.
+
+Feature 011 retains its own operator journey, UI acceptance, and native onboarding boundary. Deferred UCI-2/UCI-3 admission retains the UCI-1 completion gate and real scope/domain prerequisites, not full Feature 009 completion. Existing UCI-1 scope/acceptance and all migration, authorization/privacy, preservation, and destructive-contraction safeguards remain unchanged.
+
+This is a current-order annotation only. No checkbox is changed or newly reviewed; the original markers and named review commits do not certify these successor requirements, implementation, installation, or delivery.

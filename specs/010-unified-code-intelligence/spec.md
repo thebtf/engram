@@ -193,9 +193,13 @@ A coding agent uses UCI for representative navigation and impact questions and c
 - The machine-readable response schema, examples, acceptance scenarios, and document-validation artifact adopted with this feature.
 - A curated, authorized acceptance corpus and recorded twelve-task baseline suitable for the first-release value measurement.
 
-### Constitution 2.0 ordering revalidation
+### Consumer-dependency ordering revalidation — 2026-11-02
 
-UCI technical acceptance is recorded as `PASS_WITH_EXPLICIT_SONAR_WAIVER` while the operator temporarily defers Sonar. This admits only separately accepted Feature 011 after UCI technical acceptance. It does not make Code UI part of UCI-1, waive UCI authority or evidence rules, authorize an access-policy expansion, or make a UCI release claim. Feature 011 completes the Code Explorer and Rules-first basic collection outcome before the separate Book Context feature, then preserved Working Agent Memory R1.
+Historical UCI technical acceptance and its exact evidence limits remain recorded; they are not a new installed acceptance or a waiver of current release policy. Feature 011 retains its independently accepted operator code journey and UCI authority requirements.
+
+The former blanket sequence of full Feature 011, then Book Context, then Working Agent Memory R1 is superseded by Decision 22. Ordinary development task context may consume existing authorized UCI search, automatic relationships, and same-View source once their actual dependencies are available. Useful named-symbol navigation does not require semantic completion for every unrelated query; lexical fallback does not establish semantic success.
+
+Feature 009 owns the ordinary agent/external knowledge outcomes and their consumer proof. Feature 011 owns the operator working surface. Book Context, broader cognition, project-free external context, and unrelated task fields are not universal prerequisites for UCI's use by a current development task. Existing data, worktree, access, correctness, and current release obligations remain.
 
 ## Supporting Contract Boundary
 
