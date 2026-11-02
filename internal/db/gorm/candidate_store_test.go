@@ -45,7 +45,7 @@ func openCandidateTestDBInScope(t *testing.T, scope *gorm.DB) *gorm.DB {
 	if config.RuntimeParams == nil {
 		config.RuntimeParams = make(map[string]string)
 	}
-	config.RuntimeParams["application_name"] = candidateTestDBApplicationName
+	config.RuntimeParams["application_name"] = scopedTestApplicationName(candidateTestDBApplicationName, schema)
 	config.RuntimeParams["search_path"] = schema + ",public"
 	sqlDB := stdlib.OpenDB(*config)
 	sqlDB.SetMaxOpenConns(2)
@@ -103,7 +103,7 @@ func candidateTestDBOtherSessionCount(t *testing.T, observer *gorm.DB) int64 {
 		FROM pg_stat_activity
 		WHERE datname = current_database()
 		  AND pid <> pg_backend_pid()
-		  AND application_name = ?
+		  AND split_part(application_name, ':', 1) = ?
 	`, candidateTestDBApplicationName).Scan(&count).Error)
 	return count
 }

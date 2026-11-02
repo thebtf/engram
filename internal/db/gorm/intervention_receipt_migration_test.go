@@ -35,6 +35,12 @@ func openInterventionReceiptMigrationTestDB(t *testing.T) (*gormlib.DB, string) 
 	return openMigratedTestDBInSchema(t, dsn, schema, "engram_intervention_receipt_test"), schema
 }
 
+func scopedTestApplicationName(applicationName, schema string) string {
+	// PostgreSQL limits application_name to 63 bytes. Preserve the unique schema
+	// suffix so cleanup observes only sessions belonging to this fixture.
+	return applicationName[:min(len(applicationName), 30)] + ":" + schema[max(0, len(schema)-32):]
+}
+
 func openMigratedTestDBInSchema(t *testing.T, dsn, schema, applicationName string) *gormlib.DB {
 	t.Helper()
 
@@ -47,12 +53,19 @@ func openMigratedTestDBInSchema(t *testing.T, dsn, schema, applicationName strin
 	require.NoError(t, adminDB.Exec(`CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public`).Error, "install pgvector in stable public schema")
 
 	require.NoError(t, adminDB.Exec("CREATE SCHEMA "+schema).Error, "create isolated receipt schema")
+	drained := true
 	t.Cleanup(func() {
+		defer func() {
+			if err := adminSQL.Close(); err != nil {
+				t.Errorf("close receipt admin pool: %v", err)
+			}
+		}()
+		if !drained {
+			t.Errorf("retain isolated receipt schema %s: fixture sessions did not drain", schema)
+			return
+		}
 		if err := adminDB.Exec("DROP SCHEMA IF EXISTS " + schema + " CASCADE").Error; err != nil {
 			t.Errorf("drop isolated receipt schema %s: %v", schema, err)
-		}
-		if err := adminSQL.Close(); err != nil {
-			t.Errorf("close receipt admin pool: %v", err)
 		}
 	})
 
@@ -61,18 +74,30 @@ func openMigratedTestDBInSchema(t *testing.T, dsn, schema, applicationName strin
 	if config.RuntimeParams == nil {
 		config.RuntimeParams = make(map[string]string)
 	}
-	config.RuntimeParams["application_name"] = applicationName
+	fixtureApplicationName := scopedTestApplicationName(applicationName, schema)
+	config.RuntimeParams["application_name"] = fixtureApplicationName
 	config.RuntimeParams["search_path"] = schema + ", public"
 
 	testSQL := stdlib.OpenDB(*config)
 	testSQL.SetMaxOpenConns(2)
 	testSQL.SetMaxIdleConns(1)
+	drained = false
 	// Register after the schema cleanup so LIFO cleanup closes this pool before
 	// DROP SCHEMA CASCADE releases immutable fixture rows.
 	t.Cleanup(func() {
 		if err := testSQL.Close(); err != nil {
 			t.Errorf("close receipt test pool: %v", err)
 		}
+		// Close can return while a driver call is still using a connection. An
+		// async audit INSERT can hold its sequence while acquiring the memories FK
+		// lock, in the opposite order to DROP SCHEMA CASCADE.
+		require.Eventually(t, func() bool {
+			var count int64
+			err := adminDB.Raw(`SELECT count(*) FROM pg_stat_activity
+				WHERE datname = current_database() AND application_name = ?`, fixtureApplicationName).Scan(&count).Error
+			drained = err == nil && count == 0
+			return drained
+		}, 10*time.Second, 10*time.Millisecond, "closed fixture sessions must finish before schema cleanup")
 	})
 
 	db, err := gormlib.Open(postgres.New(postgres.Config{Conn: testSQL}), &gormlib.Config{Logger: logger.Default.LogMode(logger.Silent)})
