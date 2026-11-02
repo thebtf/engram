@@ -423,6 +423,21 @@ func TestContextSearchHybridPostgres(t *testing.T) {
 		requestsBefore := embeddingRequests.Load()
 		project := compatibilityProject(t)
 		const query = "collisionprobe520"
+		var schema string
+		require.NoError(t, store.DB.Raw("SELECT current_schema()").Scan(&schema).Error)
+		require.True(t, strings.HasPrefix(schema, "worker_uci_context_"), "sequence alignment must stay in this fixture's UUID schema")
+		quotedSchema := `"` + strings.ReplaceAll(schema, `"`, `""`) + `"`
+		memoryTable, ruleTable := quotedSchema+`."memories"`, quotedSchema+`."behavioral_rules"`
+		var collisionID int64
+		require.NoError(t, store.DB.Raw(`SELECT GREATEST(
+			COALESCE((SELECT MAX(id) FROM `+memoryTable+`), 0),
+			COALESCE((SELECT MAX(id) FROM `+ruleTable+`), 0),
+			pg_sequence_last_value(pg_get_serial_sequence(?, 'id')::regclass),
+			pg_sequence_last_value(pg_get_serial_sequence(?, 'id')::regclass)
+		) + 1`, memoryTable, ruleTable).Scan(&collisionID).Error)
+		for _, table := range []string{memoryTable, ruleTable} {
+			require.NoError(t, store.DB.Exec("SELECT setval(pg_get_serial_sequence(?, 'id'), ?, false)", table, collisionID).Error)
+		}
 		memory := compatibilityMemory(t, project, query+" cedar memory archive", []string{"type:fact", "collision-only-memory"})
 		rule, err := rules.Create(t.Context(), &models.BehavioralRule{
 			Project: &project, Content: query + " lunar guidance instruction", Priority: 10,
