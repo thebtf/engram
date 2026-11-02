@@ -52,6 +52,9 @@ a delivery digest, never reusable context/body authority, and rechecks each task
 The OMP callback has no arbitrary connected-MCP API; code/notes retrieval remains
 explicit when no supported native provider has delivered it. Source changes alone
 do not fix or prove loaded-host readiness.
+Inspect-only project resolution consumes `ProjectInspection`: only `status=resolved`
+with a valid, nonremoved canonical `binding.id` is usable. Unbound, conflicting or
+migration-required inspection is a context refusal, not an ordinary resolver record.
 
 ## Deliberate Memory Workflow
 

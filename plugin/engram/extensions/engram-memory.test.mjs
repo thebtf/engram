@@ -311,7 +311,7 @@ test('OMP failed startup readiness recovers through verified local cache without
               assert.equal(file, object);
               assert.equal(hashFile(file, policy.target.desired, roots.objects), true);
               assert.equal(options.timeout, budget);
-              callback(null, JSON.stringify({ project_id: projects[cwd] }));
+              callback(null, JSON.stringify(args.includes('--check') ? { status: 'resolved', binding: { id: projects[cwd], match: 'portable_marker' } } : { project_id: projects[cwd] }));
             },
           });
         },
@@ -586,7 +586,7 @@ test('OMP background readiness budget includes config and never trusts late prep
           assert.equal(hashFile(file, policy.target.desired, roots.objects), true);
           assert.equal(nativeOptions.signal.aborted, false);
           executions.push({ timeout: nativeOptions.timeout });
-          callback(null, JSON.stringify({ project_id: projects[cwd] }));
+          callback(null, JSON.stringify(_args.includes('--check') ? { status: 'resolved', binding: { id: projects[cwd], match: 'portable_marker' } } : { project_id: projects[cwd] }));
         },
       });
     },
@@ -718,13 +718,15 @@ test('OMP context keeps its absolute deadline when wall clock advances without t
 
 test('OMP prompt callback presents evidence once per current topic and cancels superseded work', async () => {
   let finish, signal;
-  const { adapter, calls } = extension({ requestPost: async (route, body, _budget, options) => {
-    calls.push({ route, body });
-    assert.equal(route, '/api/context/search?limit=3');
-    const value = { project: body.project, query: body.query, observations: [{ id: 7, project: body.project, narrative: 'Do not delete the backup 😀', revision: 4, source: 'notes/restore.md' }] };
-    if (body.query === 'slow old topic') { signal = options.signal; return new Promise(resolve => { finish = () => resolve(value); }); }
-    return value;
-  } });
+  const { adapter, calls } = extension({
+    requestPost: async (route, body, _budget, options) => {
+      calls.push({ route, body });
+      assert.equal(route, '/api/context/search?limit=3');
+      const value = { project: body.project, query: body.query, observations: [{ id: 7, project: body.project, narrative: 'Do not delete the backup 😀', revision: 4, source: 'notes/restore.md' }] };
+      if (body.query === 'slow old topic') { signal = options.signal; return new Promise(resolve => { finish = () => resolve(value); }); }
+      return value;
+    }
+  });
   const event = { cwd: '/session/a', sessionId: 'dedup', prompt: 'restore backups' };
   assert.match((await adapter.ambientMessage(event, {})).content, /revision=4/);
   assert.equal(await adapter.ambientMessage(event, {}), null);

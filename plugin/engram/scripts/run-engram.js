@@ -147,6 +147,15 @@ async function resolveLogicalProject(root, options = {}) {
  if (options.deadlineAt !== undefined && Date.now() >= options.deadlineAt) throw new Error('PROJECT_RESOLUTION_DEADLINE_EXCEEDED');
  let project;
  try { project = JSON.parse(raw); } catch { throw new Error('PROJECT_CLIENT_UPGRADE_REQUIRED'); }
+ if (options.check === true) {
+  if (project?.status !== 'resolved') throw new Error(project?.status === 'migration_required' ? 'PROJECT_MIGRATION_REQUIRED' : 'PROJECT_CONTEXT_REQUIRED');
+  const binding = project.binding;
+  if (!binding || binding.removed === true ||
+   !['manual_alias', 'git_remote', 'portable_marker', 'common_dir_cache'].includes(binding.match) ||
+   (binding.identity_status != null && binding.identity_status !== 'active') ||
+   (binding.project_key != null && binding.project_key !== binding.id)) throw new Error('PROJECT_IDENTITY_INVALID');
+  project = { project_id: binding.id };
+ }
  if (!project || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(project.project_id) ||
   project.project_id === '00000000-0000-0000-0000-000000000000' ||
   (project.name !== undefined && typeof project.name !== 'string')) throw new Error('PROJECT_IDENTITY_INVALID');

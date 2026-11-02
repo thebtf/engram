@@ -55,7 +55,7 @@ test('client acquisition and read-only project inspection are independent option
   acquire: false,
   resolve: async supplied => { assert.equal(supplied.acquire, false); return { path: 'verified-client', target: {} }; },
   hash: () => true, roots: () => ({ objects: 'objects' }),
-  execFile(_file, args, _options, callback) { calls.push(args); callback(null, JSON.stringify(project)); },
+  execFile(_file, args, _options, callback) { calls.push(args); callback(null, JSON.stringify(args.includes('--check') ? { status: 'resolved', binding: { id: project.project_id, match: 'portable_marker' } } : project)); },
  };
  await lib.resolveHookProjectContext('/actual/root', options);
  await lib.resolveHookProjectContext('/actual/root', { ...options, check: true });
@@ -63,4 +63,25 @@ test('client acquisition and read-only project inspection are independent option
   ['project', 'resolve', '--root', '/actual/root', '--json'],
   ['project', 'resolve', '--root', '/actual/root', '--json', '--check'],
  ]);
+});
+
+test('inspect-only resolution consumes resolved ProjectInspection rather than ordinary resolver output', async () => {
+ let inspection = { status: 'resolved', binding: { id: project.project_id, match: 'portable_marker', project_key: null, identity_status: null } };
+ const options = {
+  check: true, acquire: false,
+  resolve: async () => ({ path: 'verified-client', target: {} }),
+  hash: () => true, roots: () => ({ objects: 'objects' }),
+  execFile(_file, args, _options, callback) { assert.equal(args.at(-1), '--check'); callback(null, JSON.stringify(inspection)); },
+ };
+ assert.equal((await lib.resolveHookProjectContext('/actual/root', options)).Project, project.project_id);
+ for (const invalid of [
+  { status: 'unbound' }, { status: 'conflict' },
+  { status: 'migration_required', binding: { id: project.project_id, match: 'portable_marker' } },
+  { status: 'resolved', binding: { id: project.project_id, match: 'portable_marker', removed: true } },
+  { status: 'resolved', binding: { id: project.project_id, match: 'portable_marker', identity_status: 'inactive' } },
+  { project_id: project.project_id },
+ ]) {
+  inspection = invalid;
+  await assert.rejects(lib.resolveHookProjectContext('/actual/root', options), /PROJECT_/);
+ }
 });

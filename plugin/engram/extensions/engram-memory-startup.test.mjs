@@ -81,7 +81,7 @@ async function exerciseDefaultFactory(mode) {
         assert.equal(hashFile(file, policy.target.desired, roots.objects), true, 'only verified bytes may reach execution');
         assert.deepEqual(args, ['project', 'resolve', '--root', root, '--json', ...(options.check === true ? ['--check'] : [])]);
         executions.push({ args, timeout: execOptions.timeout });
-        callback(null, JSON.stringify({ project_id: project }));
+        callback(null, JSON.stringify(options.check === true ? { status: 'resolved', binding: { id: project, match: 'portable_marker' } } : { project_id: project }));
       },
     }).then(context => { readiness = 'trusted'; return context; });
   };
