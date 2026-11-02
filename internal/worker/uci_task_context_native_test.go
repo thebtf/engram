@@ -30,6 +30,10 @@ import (
 )
 
 func TestUCITaskContextNativeUsefulTwoWorktrees(t *testing.T) {
+	runNativeTaskContextFixture(t, false)
+}
+
+func runNativeTaskContextFixture(t *testing.T, joined bool) {
 	binary := os.Getenv("ENGRAM_TASK_CONTEXT_TEST_BINARY")
 	if binary == "" {
 		t.Skip("requires this candidate's built CLI")
@@ -139,6 +143,14 @@ func TestUCITaskContextNativeUsefulTwoWorktrees(t *testing.T) {
 		case <-timer.C:
 			t.Fatal("owned native daemon not ready")
 		}
+	}
+	if joined {
+		runJoinedNativeTaskContext(t, joinedNativeFixture{
+			binary: binary, root: root, first: first, second: second, project: project,
+			token: token, controlPath: controlPath, environment: environment,
+			fixtures: fixtures, store: store, composition: composition, daemonPID: daemon.Process.Pid,
+		})
+		return
 	}
 	var before []gormstore.UCICheckout
 	require.NoError(t, store.GetDB().Order("checkout_id").Find(&before).Error)
