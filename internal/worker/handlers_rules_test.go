@@ -37,11 +37,14 @@ func newRulesSelectionTestService(t *testing.T, project string) (*Service, *dbgo
 	store, err := dbgorm.NewStore(dbgorm.Config{DSN: dsn, MaxConns: 2})
 	require.NoError(t, err)
 
+	require.NoError(t, store.DB.Create(&dbgorm.Project{ID: project}).Error)
+
 	brs := dbgorm.NewBehavioralRulesStore(store)
-	svc := &Service{behavioralRulesStore: brs}
+	svc := &Service{store: store, behavioralRulesStore: brs}
 	t.Cleanup(func() {
 		require.NoError(t, store.DB.WithContext(context.Background()).
 			Exec("DELETE FROM behavioral_rules WHERE project = ?", project).Error)
+		require.NoError(t, store.DB.Where("id = ?", project).Delete(&dbgorm.Project{}).Error)
 		require.NoError(t, store.Close())
 	})
 	return svc, brs, dbgorm.NewCollectionSelectionStore(store.DB), store
@@ -51,7 +54,7 @@ func newRulesSelectionTestService(t *testing.T, project string) (*Service, *dbgo
 // returns 200 with a JSON receipt {deleted: <id>} and that a subsequent List
 // no longer returns the rule.
 func TestHandleDeleteBehavioralRule_Success(t *testing.T) {
-	project := "test-rules-handler-delete-success"
+	project := uuid.NewString()
 	svc, brs := newRulesTestService(t, project)
 
 	// Seed a rule.
@@ -88,7 +91,7 @@ func TestHandleDeleteBehavioralRule_Success(t *testing.T) {
 // TestHandleDeleteBehavioralRule_NotFound verifies that deleting a non-existent
 // or already-deleted rule returns 404.
 func TestHandleDeleteBehavioralRule_NotFound(t *testing.T) {
-	project := "test-rules-handler-delete-notfound"
+	project := uuid.NewString()
 	svc, _ := newRulesTestService(t, project)
 
 	req := newCHIRequest(http.MethodDelete, "/api/rules/999999999", "id", "999999999")
@@ -149,18 +152,19 @@ func TestHandleDeleteBehavioralRule_InvalidID(t *testing.T) {
 }
 
 func TestHandleListBehavioralRules_ProjectScope(t *testing.T) {
-	project := "test-rules-handler-list-project-scope"
+	project := uuid.NewString()
 	svc, brs := newRulesTestService(t, project)
 
 	globalContent := "handler test: global rule"
 	projectContent := "handler test: project rule"
-	otherProject := "test-rules-handler-list-other-project"
+	otherProject := seedWorkerTestProject(t, svc.store.DB, "other project")
 
 	globalRule, err := brs.Create(context.Background(), &models.BehavioralRule{
 		Content:  globalContent,
 		Priority: 5,
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, brs.Delete(context.Background(), globalRule.ID)) })
 
 	projectPtr := project
 	projectRule, err := brs.Create(context.Background(), &models.BehavioralRule{
@@ -178,7 +182,6 @@ func TestHandleListBehavioralRules_ProjectScope(t *testing.T) {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		require.NoError(t, brs.Delete(context.Background(), globalRule.ID))
 		require.NoError(t, storeDeleteRuleByProject(context.Background(), brs, otherProject))
 	})
 
@@ -196,7 +199,7 @@ func TestHandleListBehavioralRules_ProjectScope(t *testing.T) {
 }
 
 func TestHandleListBehavioralRules_AllScopes(t *testing.T) {
-	project := "test-rules-handler-list-all-scope"
+	project := uuid.NewString()
 	svc, brs := newRulesTestService(t, project)
 
 	globalRule, err := brs.Create(context.Background(), &models.BehavioralRule{
@@ -204,6 +207,7 @@ func TestHandleListBehavioralRules_AllScopes(t *testing.T) {
 		Priority: 5,
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, brs.Delete(context.Background(), globalRule.ID)) })
 
 	projectPtr := project
 	projectRule, err := brs.Create(context.Background(), &models.BehavioralRule{
@@ -213,7 +217,7 @@ func TestHandleListBehavioralRules_AllScopes(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	otherProject := project + "-other"
+	otherProject := seedWorkerTestProject(t, svc.store.DB, "other project")
 	otherProjectPtr := otherProject
 	otherRule, err := brs.Create(context.Background(), &models.BehavioralRule{
 		Project:  &otherProjectPtr,
@@ -223,7 +227,6 @@ func TestHandleListBehavioralRules_AllScopes(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
-		require.NoError(t, brs.Delete(context.Background(), globalRule.ID))
 		require.NoError(t, storeDeleteRuleByProject(context.Background(), brs, otherProject))
 	})
 
@@ -247,7 +250,7 @@ func TestHandleListBehavioralRules_AllScopes(t *testing.T) {
 }
 
 func TestHandleCreateBehavioralRule_Success(t *testing.T) {
-	project := "test-rules-handler-create-success"
+	project := uuid.NewString()
 	svc, brs := newRulesTestService(t, project)
 
 	body := `{"project":"` + project + `","content":"handler test: created over HTTP","priority":12,"edited_by":"operator-console"}`
@@ -274,7 +277,7 @@ func TestHandleCreateBehavioralRule_Success(t *testing.T) {
 }
 
 func TestHandleCreateBehavioralRule_NormalizesStoredFields(t *testing.T) {
-	project := "test-rules-handler-normalized"
+	project := uuid.NewString()
 	svc, brs := newRulesTestService(t, project)
 
 	body := `{"project":"  ` + project + `  ","content":"  normalized rule content  ","edited_by":"  operator-console  "}`
@@ -300,7 +303,7 @@ func TestHandleCreateBehavioralRule_NormalizesStoredFields(t *testing.T) {
 }
 
 func TestHandleUpdateBehavioralRule_PartialSuccess(t *testing.T) {
-	project := "test-rules-handler-update-success"
+	project := uuid.NewString()
 	svc, brs := newRulesTestService(t, project)
 
 	projectPtr := project
@@ -332,7 +335,7 @@ func TestHandleUpdateBehavioralRule_PartialSuccess(t *testing.T) {
 }
 
 func TestHandleSetBehavioralRuleEnabled_Success(t *testing.T) {
-	project := "test-rules-handler-enabled-success"
+	project := uuid.NewString()
 	svc, brs := newRulesTestService(t, project)
 
 	projectPtr := project
@@ -372,7 +375,7 @@ func TestHandleSetBehavioralRuleEnabled_Success(t *testing.T) {
 }
 
 func TestHandleSetBehavioralRuleEnabled_RequiresEnabled(t *testing.T) {
-	project := "test-rules-handler-enabled-required"
+	project := uuid.NewString()
 	svc, brs := newRulesTestService(t, project)
 
 	projectPtr := project
@@ -394,7 +397,7 @@ func TestHandleSetBehavioralRuleEnabled_RequiresEnabled(t *testing.T) {
 }
 
 func TestHandleSetBehavioralRuleEnabled_NotFound(t *testing.T) {
-	project := "test-rules-handler-enabled-not-found"
+	project := uuid.NewString()
 	svc, _ := newRulesTestService(t, project)
 
 	req := newCHIRequest(http.MethodPatch, "/api/rules/999999999/enabled", "id", "999999999")
@@ -407,7 +410,7 @@ func TestHandleSetBehavioralRuleEnabled_NotFound(t *testing.T) {
 }
 
 func TestHandleSetBehavioralRuleEnabled_OmittedEditedByPreservesAudit(t *testing.T) {
-	project := "test-rules-handler-enabled-preserve-edited-by"
+	project := uuid.NewString()
 	svc, brs := newRulesTestService(t, project)
 
 	projectPtr := project
@@ -435,7 +438,7 @@ func TestHandleSetBehavioralRuleEnabled_OmittedEditedByPreservesAudit(t *testing
 }
 
 func TestSearchFallbackObservations_UsesEnabledBehavioralRulesOnly(t *testing.T) {
-	project := "test-rules-search-fallback-enabled-only"
+	project := uuid.NewString()
 	svc, brs := newRulesTestService(t, project)
 
 	projectPtr := project
@@ -473,7 +476,7 @@ func TestRulesCollectionBridgeRoutesFreezeAndPageOverTwoHundredRules(t *testing.
 	ruleStore := openRulesCollectionBridgeStore(t)
 	store := dbgorm.NewBehavioralRulesStore(ruleStore)
 	ctx := context.Background()
-	project := uuid.NewString()
+	project := seedWorkerTestProject(t, ruleStore.DB, t.Name())
 	t.Cleanup(func() {
 		require.NoError(t, ruleStore.DB.Exec("DELETE FROM behavioral_rules WHERE project = ?", project).Error)
 	})

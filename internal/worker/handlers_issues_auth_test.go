@@ -3,6 +3,7 @@ package worker
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,9 +12,9 @@ import (
 	"os"
 	"strconv"
 	"testing"
-	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
@@ -30,6 +31,16 @@ func newIssueHTTPTestService(t *testing.T) (*Service, *gormdb.Store) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 	return &Service{issueStore: gormdb.NewIssueStore(store.GetDB())}, store
+}
+
+func seedWorkerTestProject(t *testing.T, db *gorm.DB, label string) string {
+	t.Helper()
+	project := uuid.NewString()
+	require.NoError(t, db.Create(&gormdb.Project{ID: project, DisplayName: sql.NullString{String: label, Valid: true}}).Error)
+	t.Cleanup(func() {
+		require.NoError(t, db.Where("id = ?", project).Delete(&gormdb.Project{}).Error)
+	})
+	return project
 }
 
 func issueHTTPRouteRequest(t *testing.T, method string, id int64, body any, identity auth.Identity) *http.Request {
@@ -62,14 +73,15 @@ func createIssueHTTPFixture(t *testing.T, store *gormdb.Store, issueStore *gormd
 
 func TestIssueHTTPCollaboratorProgressionProtectsSourceActions(t *testing.T) {
 	service, store := newIssueHTTPTestService(t)
-	project := fmt.Sprintf("zz-http-issue-%d", time.Now().UnixNano())
+	project := seedWorkerTestProject(t, store.GetDB(), t.Name())
+	commentProject := seedWorkerTestProject(t, store.GetDB(), "collaborator provenance is not creator authority")
 	owner := auth.Client("read-write", "keycard-owner")
 	foreign := auth.Client("read-write", "keycard-second")
 	id := createIssueHTTPFixture(t, store, service.issueStore, project, "keycard-owner", "open")
 
 	for _, body := range []map[string]any{
-		{"status": "resolved", "source_project": "spoofed-project", "source_agent": "spoofed"},
-		{"comment": "foreign collaborator", "source_project": "spoofed-project", "source_agent": "spoofed"},
+		{"status": "resolved", "source_project": commentProject, "source_agent": "spoofed"},
+		{"comment": "foreign collaborator", "source_project": commentProject, "source_agent": "spoofed"},
 	} {
 		rec := httptest.NewRecorder()
 		service.handleUpdateIssue(rec, issueHTTPRouteRequest(t, http.MethodPatch, id, body, foreign))
@@ -80,6 +92,10 @@ func TestIssueHTTPCollaboratorProgressionProtectsSourceActions(t *testing.T) {
 	require.Equal(t, "resolved", issue.Status)
 	require.Len(t, comments, 1)
 	require.Equal(t, "foreign collaborator", comments[0].Body)
+	require.Equal(t, project, issue.SourceProject)
+	require.Equal(t, project, issue.TargetProject)
+	require.Equal(t, "keycard-owner", issue.CreatorKeycardID)
+	require.Equal(t, commentProject, comments[0].AuthorProject)
 
 	for _, body := range []map[string]any{
 		{"title": "foreign field edit"},
@@ -111,7 +127,7 @@ func TestIssueHTTPCollaboratorProgressionProtectsSourceActions(t *testing.T) {
 
 func TestIssueHTTPProgressionRejectsMissingAndReadOnlyIdentity(t *testing.T) {
 	service, store := newIssueHTTPTestService(t)
-	project := fmt.Sprintf("zz-http-issue-readonly-%d", time.Now().UnixNano())
+	project := seedWorkerTestProject(t, store.GetDB(), t.Name())
 	id := createIssueHTTPFixture(t, store, service.issueStore, project, "keycard-owner", "open")
 	payload, err := json.Marshal(map[string]any{"status": "resolved"})
 	require.NoError(t, err)
@@ -134,7 +150,7 @@ func TestIssueHTTPProgressionRejectsMissingAndReadOnlyIdentity(t *testing.T) {
 
 func TestIssueHTTPLegacyAllowsProgressionButRestrictsSourceActions(t *testing.T) {
 	service, store := newIssueHTTPTestService(t)
-	project := fmt.Sprintf("zz-http-issue-legacy-%d", time.Now().UnixNano())
+	project := seedWorkerTestProject(t, store.GetDB(), t.Name())
 	id := createIssueHTTPFixture(t, store, service.issueStore, project, "", "open")
 	client := auth.Client("read-write", "keycard-client")
 	for _, body := range []map[string]any{
@@ -157,7 +173,7 @@ func TestIssueHTTPLegacyAllowsProgressionButRestrictsSourceActions(t *testing.T)
 
 func TestIssueHTTPOperatorOnlyRoutesAndAtomicAcknowledge(t *testing.T) {
 	service, store := newIssueHTTPTestService(t)
-	project := fmt.Sprintf("zz-http-issue-operator-%d", time.Now().UnixNano())
+	project := seedWorkerTestProject(t, store.GetDB(), t.Name())
 	id := createIssueHTTPFixture(t, store, service.issueStore, project, "keycard-owner", "open")
 	clientAdmin := auth.Identity{Role: auth.RoleAdmin, Source: auth.SourceClient, KeycardID: "keycard-owner"}
 
@@ -194,7 +210,7 @@ func TestIssueHTTPOperatorOnlyRoutesAndAtomicAcknowledge(t *testing.T) {
 
 func TestIssueHTTPCloseWithCommentStorageFailureReturnsServerError(t *testing.T) {
 	service, store := newIssueHTTPTestService(t)
-	project := fmt.Sprintf("zz-http-issue-close-%d", time.Now().UnixNano())
+	project := seedWorkerTestProject(t, store.GetDB(), t.Name())
 	id := createIssueHTTPFixture(t, store, service.issueStore, project, "keycard-owner", "resolved")
 	triggerName := fmt.Sprintf("engram_test_issue_comment_fail_%d", id)
 	db := store.GetDB()
@@ -219,7 +235,7 @@ func TestIssueHTTPCloseWithCommentStorageFailureReturnsServerError(t *testing.T)
 
 func TestIssueHTTPCloseInvalidTransitionReturnsClientError(t *testing.T) {
 	service, store := newIssueHTTPTestService(t)
-	project := fmt.Sprintf("zz-http-issue-transition-%d", time.Now().UnixNano())
+	project := seedWorkerTestProject(t, store.GetDB(), t.Name())
 	id := createIssueHTTPFixture(t, store, service.issueStore, project, "keycard-owner", "open")
 	rec := httptest.NewRecorder()
 	service.handleUpdateIssue(rec, issueHTTPRouteRequest(t, http.MethodPatch, id, map[string]any{
@@ -234,7 +250,7 @@ func TestIssueHTTPCloseInvalidTransitionReturnsClientError(t *testing.T) {
 
 func TestIssueHTTPInvalidStatusRollsBackFieldEdits(t *testing.T) {
 	service, store := newIssueHTTPTestService(t)
-	project := fmt.Sprintf("zz-http-issue-invalid-status-%d", time.Now().UnixNano())
+	project := seedWorkerTestProject(t, store.GetDB(), t.Name())
 	id := createIssueHTTPFixture(t, store, service.issueStore, project, "keycard-owner", "open")
 	rec := httptest.NewRecorder()
 	service.handleUpdateIssue(rec, issueHTTPRouteRequest(t, http.MethodPatch, id, map[string]any{
@@ -249,7 +265,7 @@ func TestIssueHTTPInvalidStatusRollsBackFieldEdits(t *testing.T) {
 
 func TestIssueHTTPOwnerCannotForceOperatorStatuses(t *testing.T) {
 	service, store := newIssueHTTPTestService(t)
-	project := fmt.Sprintf("zz-http-issue-operator-status-%d", time.Now().UnixNano())
+	project := seedWorkerTestProject(t, store.GetDB(), t.Name())
 	id := createIssueHTTPFixture(t, store, service.issueStore, project, "keycard-owner", "open")
 	owner := auth.Client("read-write", "keycard-owner")
 	for _, status := range []string{"open", "acknowledged"} {
@@ -261,7 +277,7 @@ func TestIssueHTTPOwnerCannotForceOperatorStatuses(t *testing.T) {
 
 func TestIssueHTTPAcknowledgeStorageFailureReturnsServerError(t *testing.T) {
 	service, store := newIssueHTTPTestService(t)
-	project := fmt.Sprintf("zz-http-issue-ack-storage-%d", time.Now().UnixNano())
+	project := seedWorkerTestProject(t, store.GetDB(), t.Name())
 	id := createIssueHTTPFixture(t, store, service.issueStore, project, "keycard-owner", "open")
 	callbackName := fmt.Sprintf("engram_test_ack_query_failure_%d", id)
 	queryCallbacks := store.GetDB().Callback().Query()

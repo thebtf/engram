@@ -53,10 +53,12 @@ func TestTG3IntegrationCombinations_T020(t *testing.T) {
 	store, cleanup := openIntegrationDB(t)
 	defer cleanup()
 
-	project := "test-tg3-integration-t020-" + uuid.NewString()
+	project := uuid.NewString()
 	db := store.DB
+	require.NoError(t, db.Create(&engramgorm.Project{ID: project}).Error)
 	defer func() {
 		assert.NoError(t, db.Exec(`DELETE FROM memories WHERE project = ?`, project).Error, "clean T020 fixture")
+		assert.NoError(t, db.Where("id = ?", project).Delete(&engramgorm.Project{}).Error, "clean T020 project")
 	}()
 
 	ctx := context.Background()

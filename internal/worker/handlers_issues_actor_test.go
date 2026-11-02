@@ -18,6 +18,63 @@ import (
 
 const issueActorTestProject = "26ebc5e4-c18b-4f41-8828-14bc946a6e10"
 
+func seedHistoricalIssueHTTPRows(t *testing.T, db *gorm.DB, seed func(*gorm.DB) error) error {
+	t.Helper()
+	type guard struct {
+		TableName string
+		Mode      string
+	}
+	readGuards := func(tx *gorm.DB) ([]guard, error) {
+		var rows []guard
+		err := tx.Raw(`SELECT c.relname AS table_name, t.tgenabled::text AS mode
+			FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace
+			WHERE n.nspname=current_schema() AND c.relname IN ('issues','issue_comments')
+			AND t.tgname='engram_consolidation_scope_write' AND NOT t.tgisinternal
+			AND t.tgfoid=to_regprocedure(quote_ident(current_schema())||'.engram_consolidation_write_guard()')
+			ORDER BY c.relname`).Scan(&rows).Error
+		return rows, err
+	}
+	var schema string
+	require.NoError(t, db.Raw("SELECT current_schema()").Scan(&schema).Error)
+	require.True(t, strings.HasPrefix(schema, "worker_uci_context_"), "historical seed must own an isolated synthetic schema")
+	before, err := readGuards(db)
+	require.NoError(t, err)
+	require.Equal(t, []guard{{"issue_comments", "O"}, {"issues", "O"}}, before)
+	err = db.Transaction(func(tx *gorm.DB) error {
+		for _, row := range before {
+			if err := tx.Exec("ALTER TABLE " + row.TableName + " DISABLE TRIGGER engram_consolidation_scope_write").Error; err != nil {
+				return err
+			}
+		}
+		if err := seed(tx); err != nil {
+			return err
+		}
+		for _, row := range before {
+			if err := tx.Exec("ALTER TABLE " + row.TableName + " ENABLE TRIGGER engram_consolidation_scope_write").Error; err != nil {
+				return err
+			}
+		}
+		after, err := readGuards(tx)
+		if err != nil {
+			return err
+		}
+		if len(after) != len(before) {
+			return errors.New("historical fixture guard count changed")
+		}
+		for index := range before {
+			if after[index] != before[index] {
+				return errors.New("historical fixture guard state changed")
+			}
+		}
+		return nil
+	})
+	after, readErr := readGuards(db)
+	require.NoError(t, readErr)
+	require.Equal(t, before, after, "commit or rollback must preserve both original guards")
+	t.Logf("historical seed schema=%s guards=%v restored=%v rolled_back=%t", schema, before, after, err != nil)
+	return err
+}
+
 func TestIssueHumanMutationSourceBoundary(t *testing.T) {
 	for _, identity := range []auth.Identity{
 		auth.Session("admin"),
@@ -120,20 +177,46 @@ func TestIssueSelectionActorEnvelopeBinding(t *testing.T) {
 }
 
 func TestIssueHumanHTTPMutationAuditAtomicity(t *testing.T) {
-	service, store := newIssueHTTPTestService(t)
-	service.store = store
+	store := openWorkerUCIContextCompositionStore(t)
+	service := &Service{store: store, issueStore: gormdb.NewIssueStore(store.GetDB())}
 	ctx := context.Background()
 	identity := auth.SessionForBrowserUser("admin", 41)
-	id := createIssueHTTPFixture(t, store, service.issueStore, "historical-original-source", "original-keycard", "open")
-	commentID, err := service.issueStore.AddComment(ctx, id, &gormdb.IssueComment{AuthorProject: "historical-comment-source", AuthorAgent: "original-agent", Body: "retained history"})
-	require.NoError(t, err)
+	var id, secondID, commentID int64
+	seed := func(tx *gorm.DB) error {
+		issues := gormdb.NewIssueStore(tx)
+		var err error
+		for _, target := range []*int64{&id, &secondID} {
+			*target, err = issues.CreateIssue(ctx, &gormdb.Issue{Title: "HTTP issue auth", SourceProject: "historical-original-source", TargetProject: "historical-original-source", Status: "open", Type: "bug", Priority: "medium", CreatorKeycardID: "original-keycard"})
+			if err != nil {
+				return err
+			}
+		}
+		commentID, err = issues.AddComment(ctx, id, &gormdb.IssueComment{AuthorProject: "historical-comment-source", AuthorAgent: "original-agent", Body: "retained history"})
+		return err
+	}
+	injected := errors.New("historical fixture rollback")
+	require.ErrorIs(t, seedHistoricalIssueHTTPRows(t, store.GetDB(), func(tx *gorm.DB) error {
+		if err := seed(tx); err != nil {
+			return err
+		}
+		return injected
+	}), injected)
+	for _, table := range []string{"issues", "issue_comments"} {
+		var count int64
+		require.NoError(t, store.GetDB().Table(table).Count(&count).Error)
+		require.Zero(t, count, "failed historical seed must roll back every row")
+	}
+	require.NoError(t, seedHistoricalIssueHTTPRows(t, store.GetDB(), seed))
+	_, err := service.issueStore.CreateIssue(ctx, &gormdb.Issue{Title: "invalid current writer", SourceProject: "new-raw-project", TargetProject: "new-raw-project", Type: "bug", Priority: "medium"})
+	require.ErrorContains(t, err, "PROJECT_ADOPTION_UNRESOLVED_MEMBERSHIP", "historical seeding must not disable current-writer adoption guards")
 	t.Cleanup(func() {
 		store.GetDB().Exec("DELETE FROM audit_log WHERE action LIKE 'issue.%' AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(after_state->'issue_ids') AS audit_ids(value) WHERE value::bigint = ?)", id)
 	})
 	before, comments, err := service.issueStore.GetIssue(ctx, id)
 	require.NoError(t, err)
 	require.Len(t, comments, 1)
-	secondID := createIssueHTTPFixture(t, store, service.issueStore, "historical-original-source", "original-keycard", "open")
+	require.Equal(t, "historical-original-source", before.SourceProject)
+	require.Equal(t, "historical-comment-source", comments[0].AuthorProject)
 	sessionID := fmt.Sprintf("issue-actor-%d", id)
 	t.Cleanup(func() {
 		store.GetDB().Exec("DELETE FROM collection_selections WHERE subject_user_id = ? AND session_id = ? AND domain = ?", 41, sessionID, issueSelectionDomain)

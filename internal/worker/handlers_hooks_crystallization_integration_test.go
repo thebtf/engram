@@ -35,7 +35,7 @@ func TestSessionEndIntegration_WritesRedactedTranscript(t *testing.T) {
 	t.Setenv("ENGRAM_CRYSTALLIZATION_ENABLED", "true")
 
 	const sessionID = "integ-transcript-sess-001"
-	const project = "integ-transcript-project"
+	project := seedWorkerTestProject(t, store.DB, "integ-transcript-project")
 	t.Cleanup(func() {
 		_ = store.DB.Where("session_id = ? AND project = ?", sessionID, project).
 			Delete(&gormdb.SessionTranscript{}).Error

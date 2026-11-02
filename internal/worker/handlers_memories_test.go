@@ -67,6 +67,7 @@ func newMemoryDomainWriteTestService(t *testing.T, project string) (*Service, *d
 
 	store, err := dbgorm.NewStore(dbgorm.Config{DSN: dsn, MaxConns: 2})
 	require.NoError(t, err)
+	require.NoError(t, store.DB.Create(&dbgorm.Project{ID: project}).Error)
 
 	memoryStore := dbgorm.NewMemoryStore(store)
 	domainOwnerStore := dbgorm.NewDomainOwnerStore(store)
@@ -81,13 +82,14 @@ func newMemoryDomainWriteTestService(t *testing.T, project string) (*Service, *d
 		require.NoError(t, store.DB.WithContext(context.Background()).Exec("DELETE FROM memories WHERE project = ?", project).Error)
 		require.NoError(t, store.DB.WithContext(context.Background()).Exec("DELETE FROM memory_domain_owners WHERE domain LIKE 'test-domain-%'").Error)
 		require.NoError(t, store.DB.WithContext(context.Background()).Exec("DELETE FROM audit_log WHERE action IN (?, ?)", principalmemory.AuditActionDomainWriteWarn, principalmemory.AuditActionDomainWriteReject).Error)
+		require.NoError(t, store.DB.Where("id = ?", project).Delete(&dbgorm.Project{}).Error)
 		require.NoError(t, store.Close())
 	}
 	return service, store, cleanup
 }
 
 func TestHandleStoreMemoryExplicit_RoundTrip(t *testing.T) {
-	project := "test-memory-handler-roundtrip-" + uuid.NewString()
+	project := uuid.NewString()
 	service := newMemoryTestService(t, project)
 
 	reqBody := storeMemoryRequest{
@@ -125,7 +127,7 @@ func TestHandleStoreMemoryExplicit_RoundTrip(t *testing.T) {
 }
 
 func TestHandleStoreMemoryExplicit_PrincipalOwnerDerivedFromIdentity(t *testing.T) {
-	project := "test-memory-handler-principal-" + uuid.NewString()
+	project := uuid.NewString()
 	service := newMemoryTestService(t, project)
 
 	body := []byte(`{
@@ -163,7 +165,7 @@ func TestApplyPrincipalMemoryMetadataREST_NonEmptyDomainRequiresPrincipal(t *tes
 }
 
 func TestHandleStoreMemoryExplicit_ValidationErrors(t *testing.T) {
-	project := "test-memory-handler-validation-" + uuid.NewString()
+	project := uuid.NewString()
 	service := newMemoryTestService(t, project)
 
 	tests := []struct {
@@ -201,7 +203,7 @@ func TestHandleStoreMemoryExplicit_ValidationErrors(t *testing.T) {
 }
 
 func TestHandleStoreMemoryDomainRegistry_WarnRejectAndCompatibility(t *testing.T) {
-	project := "test-memory-domain-registry-" + uuid.NewString()
+	project := uuid.NewString()
 	service, store, cleanup := newMemoryDomainWriteTestService(t, project)
 	defer cleanup()
 	domains := dbgorm.NewDomainOwnerStore(store)
@@ -275,7 +277,7 @@ func TestHandleStoreMemoryDomainRegistry_WarnRejectAndCompatibility(t *testing.T
 }
 
 func TestHandleStoreMemoryDomainRegistry_AuditFailureBlocksBeforePersistence(t *testing.T) {
-	project := "test-memory-domain-registry-audit-" + uuid.NewString()
+	project := uuid.NewString()
 	service, store, cleanup := newMemoryDomainWriteTestService(t, project)
 	defer cleanup()
 	service.domainRegistryService = &fakeRESTDomainRegistryService{err: errors.New("domain write audit: unavailable")}
@@ -519,7 +521,7 @@ func TestHandleListMemories_OutOfRangeTimestampsReturnJSON(t *testing.T) {
 }
 
 func TestHandleDeleteMemoryByID_RoundTrip(t *testing.T) {
-	project := "test-memory-handler-delete-" + uuid.NewString()
+	project := uuid.NewString()
 	service := newMemoryTestService(t, project)
 
 	storeReq := httptest.NewRequest(http.MethodPost, "/api/memories", bytes.NewReader([]byte(`{"project":"`+project+`","content":"delete-me"}`)))
@@ -550,7 +552,7 @@ func TestHandleDeleteMemoryByID_RoundTrip(t *testing.T) {
 }
 
 func TestHandleDeleteMemoryByID_NotFound(t *testing.T) {
-	project := "test-memory-handler-delete-not-found-" + uuid.NewString()
+	project := uuid.NewString()
 	service := newMemoryTestService(t, project)
 
 	nonExistentID := int64(999999999)
@@ -562,7 +564,7 @@ func TestHandleDeleteMemoryByID_NotFound(t *testing.T) {
 }
 
 func TestHandleGetMemoryAudit_RoundTrip(t *testing.T) {
-	project := "test-memory-handler-audit-" + uuid.NewString()
+	project := uuid.NewString()
 	service := newMemoryTestService(t, project)
 
 	storeReq := httptest.NewRequest(http.MethodPost, "/api/memories", bytes.NewReader([]byte(`{"project":"`+project+`","content":"audit-me"}`)))
@@ -607,7 +609,7 @@ func TestHandleGetMemoryAudit_RoundTrip(t *testing.T) {
 }
 
 func TestHandleGetMemoryAudit_NotFound(t *testing.T) {
-	project := "test-memory-handler-audit-not-found-" + uuid.NewString()
+	project := uuid.NewString()
 	service := newMemoryTestService(t, project)
 
 	nonExistentID := int64(999999999)
@@ -619,7 +621,7 @@ func TestHandleGetMemoryAudit_NotFound(t *testing.T) {
 }
 
 func TestHandleGetMemoryAudit_InvalidLimit(t *testing.T) {
-	project := "test-memory-handler-audit-invalid-limit-" + uuid.NewString()
+	project := uuid.NewString()
 	service := newMemoryTestService(t, project)
 
 	storeReq := httptest.NewRequest(http.MethodPost, "/api/memories", bytes.NewReader([]byte(`{"project":"`+project+`","content":"audit-limit"}`)))
@@ -699,7 +701,7 @@ func TestMemoryAuditReaderPrivacy(t *testing.T) {
 }
 
 func TestHandleSuppressMemoryByID_RoundTrip(t *testing.T) {
-	project := "test-memory-handler-suppress-" + uuid.NewString()
+	project := uuid.NewString()
 	service := newMemoryTestService(t, project)
 
 	storeReq := httptest.NewRequest(http.MethodPost, "/api/memories", bytes.NewReader([]byte(`{"project":"`+project+`","content":"suppress-me"}`)))
@@ -735,7 +737,7 @@ func TestHandleSuppressMemoryByID_RoundTrip(t *testing.T) {
 }
 
 func TestHandleSuppressMemoryByID_NotFound(t *testing.T) {
-	project := "test-memory-handler-suppress-not-found-" + uuid.NewString()
+	project := uuid.NewString()
 	service := newMemoryTestService(t, project)
 
 	nonExistentID := int64(999999999)
@@ -747,7 +749,7 @@ func TestHandleSuppressMemoryByID_NotFound(t *testing.T) {
 }
 
 func TestHandleSuppressMemories_RoundTrip(t *testing.T) {
-	project := "test-memory-handler-bulk-suppress-" + uuid.NewString()
+	project := uuid.NewString()
 	service := newMemoryTestService(t, project)
 
 	create := func(content string) models.Memory {
@@ -788,7 +790,7 @@ func TestHandleSuppressMemories_RoundTrip(t *testing.T) {
 }
 
 func TestHandleSuppressMemories_ValidatesBeforeDelete(t *testing.T) {
-	project := "test-memory-handler-bulk-suppress-validate-" + uuid.NewString()
+	project := uuid.NewString()
 	service := newMemoryTestService(t, project)
 
 	storeReq := httptest.NewRequest(http.MethodPost, "/api/memories", bytes.NewReader([]byte(`{"project":"`+project+`","content":"keep-me"}`)))
@@ -935,7 +937,7 @@ func TestHandleGetMemoryByID_ReadVisibility(t *testing.T) {
 }
 
 func TestMemoryCollectionSelectionOperations_RealFixture(t *testing.T) {
-	project := "test-memory-selection-operations-" + uuid.NewString()
+	project := uuid.NewString()
 	service := newMemoryTestService(t, project)
 	identity := auth.SessionForBrowserUser("operator", 41)
 	sessionID := "memory-selection-operations-" + uuid.NewString()
@@ -1063,7 +1065,7 @@ func TestMemoryCollectionSelectionOperations_RealFixture(t *testing.T) {
 }
 
 func TestMemoryCollectionSelectionFrozenTokenIsScopeBound(t *testing.T) {
-	project := "test-memory-selection-frozen-" + uuid.NewString()
+	project := uuid.NewString()
 	service := newMemoryTestService(t, project)
 	owner := auth.SessionForBrowserUser("operator", 41)
 	other := auth.SessionForBrowserUser("operator", 42)
