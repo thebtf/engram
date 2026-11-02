@@ -463,3 +463,112 @@ test('unknown A is not acknowledged by forcing different B and cannot replay whe
   const afterA = await loadMarker(markerPath);
   assert.deepEqual(afterA.writes[fingerprintA], originalA);
 });
+
+test('existing uppercase UUID uses one canonical store and transition selector and receipt identity', async t => {
+  const canonical = 'abcdefab-cdef-4abc-8def-abcdefabcdef';
+  const upper = canonical.toUpperCase();
+  const requests = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    const target = new URL(String(url));
+    assert.equal(target.origin, config.url);
+    const body = JSON.parse(options.body);
+    requests.push({ path: target.pathname, project: target.searchParams.get('project') ?? body.project });
+    if (target.pathname === '/api/memories') {
+      return new Response(JSON.stringify({ id: 41, project: canonical, content: body.content }), { status: 201 });
+    }
+    return new Response(JSON.stringify({ id: 41, action: body.action, status: 'flagged', version: 2, project: canonical }));
+  });
+  const client = new EngramRestClient(config);
+  const [stored] = await client.storeMemories([{ ...input, project: upper }]);
+  assert.equal(stored.ok, true, JSON.stringify(stored));
+  const transitioned = await client.transitionMemory(41, 'suppress', upper);
+  assert.equal(transitioned.ok, true, JSON.stringify(transitioned));
+  assert.deepEqual(requests, [
+    { path: '/api/memories', project: canonical },
+    { path: '/api/memories/41/transition', project: canonical },
+  ]);
+});
+
+test('canonical transition keeps invalid, foreign, rejection and unknown outcomes closed without retry', async t => {
+  const requests = [];
+  let response;
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    assert.equal(new URL(String(url)).origin, config.url);
+    requests.push(JSON.parse(options.body));
+    if (response instanceof Error) throw response;
+    return response;
+  });
+  const client = new EngramRestClient(config);
+  for (const invalid of ['not-a-project', '00000000-0000-0000-0000-000000000000']) {
+    assert.equal((await client.transitionMemory(41, 'suppress', invalid)).outcome, 'not_sent');
+  }
+  assert.equal(requests.length, 0);
+  response = new Response(JSON.stringify({ id: 41, action: 'suppress', status: 'flagged', version: 2, project: otherProject }));
+  assert.equal((await client.transitionMemory(41, 'suppress', project)).outcome, 'unknown');
+  response = new Response('synthetic confirmed rollback', { status: 409 });
+  assert.equal((await client.transitionMemory(41, 'suppress', project)).outcome, 'rejected');
+  response = new Error('synthetic acknowledgement lost');
+  assert.equal((await client.transitionMemory(41, 'suppress', project)).outcome, 'unknown');
+  assert.equal(requests.length, 3, 'No retry may follow an ambiguous or rejected transition');
+});
+
+test('CLI and local-file writer retain UTF-16 budgets without splitting pairs', async t => {
+  // Model the real Go encoding/json decoder at the mocked transport boundary.
+  // The paired Go-router regression separately exercises that decoder itself.
+  const { requests } = fixture(t, body => ({ id: 1, project: body.project, content: Buffer.from(body.content).toString('utf8') }));
+  let registrar;
+  plugin.register({ config: {}, pluginConfig: config, logger, on() { }, registerTool() { }, registerCommand() { }, registerService() { }, registerCli(callback) { registrar = callback; } });
+  const actions = new Map();
+  const node = name => ({ command(child) { return node(`${name} ${child}`); }, description() { return this; }, argument() { return this; }, option() { return this; }, action(callback) { actions.set(name, callback); return this; } });
+  registrar({ program: node('') });
+  const errors = [];
+  t.mock.method(console, 'error', message => errors.push(message));
+  t.mock.method(console, 'log', () => { });
+  for (const [content, expected] of [
+    ['a'.repeat(901), 'a'.repeat(900)],
+    ['a'.repeat(898) + '😀tail', 'a'.repeat(898) + '😀'],
+    ['a'.repeat(899) + '😀tail', 'a'.repeat(899)],
+    ['a'.repeat(76) + '😀' + 'b'.repeat(830), 'a'.repeat(76) + '😀' + 'b'.repeat(822)],
+  ]) {
+    await actions.get(' memory store')(content);
+    const title = content.length > 80 ? (content[76] === '\ud83d' ? content.slice(0, 76) : content.slice(0, 77)) + '...' : content;
+    assert.equal(requests.at(-1).content, `${title}\n\n${expected}`);
+    assert.equal(requests.at(-1).content, Buffer.from(requests.at(-1).content).toString('utf8'));
+  }
+  const root = workspace(t);
+  const client = new EngramRestClient(config);
+  const tool = createMemoryGetTool({ workspaceDir: root }, client, config, { resolvePath: file => path.join(root, file) });
+  for (const [content, expected] of [
+    ['b'.repeat(4001), 'b'.repeat(4000)],
+    ['b'.repeat(3998) + '😀tail', 'b'.repeat(3998) + '😀'],
+    ['b'.repeat(3999) + '😀tail', 'b'.repeat(3999)],
+  ]) {
+    fs.writeFileSync(path.join(root, 'note.md'), content);
+    assert.match(await tool.execute('unicode-file', { path: 'note.md', store: true }), /Imported into engram/);
+    assert.equal(requests.at(-1).content, `note\n\n${expected}`);
+    assert.equal(fs.readFileSync(path.join(root, 'note.md'), 'utf8'), content);
+  }
+  assert.deepEqual(errors, [], 'A well-formed truncated write must receive exact confirmation, not unknown');
+});
+
+test('canonical wire UUID does not bypass a pre-existing uppercase unknown file checkpoint', async t => {
+  const root = workspace(t);
+  const upper = 'ABCDEFAB-CDEF-4ABC-8DEF-ABCDEFABCDEF';
+  const source = '## Synthetic note\nSynthetic uncertain body';
+  fs.writeFileSync(path.join(root, 'MEMORY.md'), source);
+  const markerPath = path.join(root, MARKER_FILE);
+  const { client, requests } = fixture(t, () => { throw new Error('synthetic acknowledgement lost'); });
+  const result = await syncMemoryFile(client, markerPath, {
+    project: upper, sourcePath: 'MEMORY.md', hash: createHash('sha256').update(source).digest('hex'), tag: 'migrated',
+    chunks: [{ title: 'Synthetic note', content: 'Synthetic uncertain body', type: 'change', sourcePath: 'MEMORY.md' }],
+  }, {});
+  assert.equal(result.unresolved, 1);
+  const before = await loadMarker(markerPath);
+  assert.equal(Object.values(before.writes)[0].project, upper);
+  const tool = createMemoryMigrateTool({ workspaceDir: root }, client, { ...config, project: upper }, { resolvePath: file => path.join(root, file) });
+  assert.match(await tool.execute('must-not-resend', {}), /Migration incomplete/);
+  assert.equal(requests.length, 1, 'Canonical dispatch must not change checkpoint identity or replay an earlier unknown write');
+  assert.equal(requests[0].project, upper.toLowerCase());
+  assert.deepEqual(await loadMarker(markerPath), before);
+  assert.equal(fs.readFileSync(path.join(root, 'MEMORY.md'), 'utf8'), source);
+});

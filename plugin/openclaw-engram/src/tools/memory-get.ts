@@ -14,6 +14,7 @@ import type { EngramRestClient } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import { formatContext, quotedPromptPayload, quotedPromptScalar } from '../context/formatter.js';
 import type { AnyAgentTool, OpenClawPluginToolContext, OpenClawPluginApi } from '../types/openclaw.js';
+import { truncateUtf16 } from '../utils/strings.js';
 
 const GetParamsSchema = z.object({
  path: z.string().optional(),
@@ -66,7 +67,7 @@ export function createMemoryGetTool(
      const title = parsed.data.path.replace(/.*[/\\]/, '').replace(/\.(md|markdown)$/i, '');
      const [result] = await client.storeMemories([{
       title,
-      content: content.slice(0, 4000),
+      content: truncateUtf16(content, 4000),
       type: 'discovery',
       project,
       scope: 'project',

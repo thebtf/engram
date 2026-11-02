@@ -679,3 +679,66 @@ func TestOpenClawRegisteredMemoryLifecycleRealRouter(t *testing.T) {
 		}
 	}
 }
+
+func TestOpenClawWriterBoundariesRealRouter(t *testing.T) {
+	host, compiled := os.Getenv("ENGRAM_OPENCLAW_HOST_FIXTURE"), os.Getenv("ENGRAM_OPENCLAW_TEST_COMPILED")
+	if host == "" || compiled == "" {
+		t.Skip("requires pinned official OpenClaw host and freshly compiled adapter")
+	}
+	node, err := exec.LookPath("node")
+	require.NoError(t, err)
+	db := openClawMemoryFixtureDB(t)
+	f := newOpenClawLifecycleFixture(t, db)
+	// Ensure the existing registered project has an observable uppercase form.
+	const project = "abcdefab-cdef-4abc-8def-abcdefabcdef"
+	require.NoError(t, db.Create(&gormdb.Project{ID: project}).Error)
+	_, source, _, ok := runtime.Caller(0)
+	require.True(t, ok)
+	fixture := filepath.Join(filepath.Dir(source), "..", "..", "plugin", "openclaw-engram", "test", "writer-boundaries.fixture.mjs")
+	home, err := os.MkdirTemp(filepath.Dir(compiled), ".writer-boundaries-home-")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, os.RemoveAll(home)) })
+	input, err := json.Marshal(map[string]string{"url": f.server.URL, "token": f.tokenA, "project": project})
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(t.Context(), 45*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, node, fixture)
+	cmd.Dir, cmd.Stdin = home, bytes.NewReader(input)
+	for _, key := range []string{"PATH", "SystemRoot", "WINDIR", "PATHEXT", "COMSPEC"} {
+		if value := os.Getenv(key); value != "" {
+			cmd.Env = append(cmd.Env, key+"="+value)
+		}
+	}
+	for _, key := range []string{"HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "TMP", "TEMP", "TMPDIR"} {
+		cmd.Env = append(cmd.Env, key+"="+home)
+	}
+	cmd.Env = append(cmd.Env, "ENGRAM_OPENCLAW_HOST_FIXTURE="+host, "ENGRAM_OPENCLAW_TEST_COMPILED="+compiled,
+		"OPENCLAW_STATE_DIR="+filepath.Join(home, "state"), "OPENCLAW_CONFIG_PATH="+filepath.Join(home, "openclaw.json"),
+		"OPENCLAW_LOAD_SHELL_ENV=0", "OPENCLAW_NO_RESPAWN=1")
+	output, runErr := cmd.CombinedOutput()
+	t.Logf("real Go router writer boundary result:\n%s", output)
+	require.NoError(t, runErr)
+	var rows []gormdb.Memory
+	require.NoError(t, db.Where("project = ?", project).Find(&rows).Error)
+	require.Len(t, rows, 7, "two decoder controls, two canonical writes, two CLI writes and one local-file import")
+	contents := make([]string, 0, len(rows))
+	flagged := 0
+	for _, row := range rows {
+		require.Equal(t, project, row.Project)
+		contents = append(contents, row.Content)
+		if row.Status == "flagged" {
+			flagged++
+		} else {
+			require.Equal(t, "active", row.Status)
+		}
+	}
+	require.Equal(t, 1, flagged, "the canonical uppercase-selector transition must persist exactly once")
+	require.ElementsMatch(t, []string{
+		"Synthetic raw \ufffd", "Synthetic raw 😀",
+		"boundary\n\nSynthetic writer boundary", "boundary\n\nSynthetic writer boundary",
+		strings.Repeat("c", 77) + "...\n\n" + strings.Repeat("c", 899),
+		strings.Repeat("t", 76) + "...\n\n" + strings.Repeat("t", 76) + "😀" + strings.Repeat("c", 822),
+		"boundary\n\n" + strings.Repeat("f", 3999),
+	}, contents, "PostgreSQL rows must retain the exact sent and confirmed content, without split surrogate pairs")
+	t.Log("seven real-router writes retained exact stored content; one canonical project transition persisted once")
+}

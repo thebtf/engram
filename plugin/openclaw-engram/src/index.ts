@@ -49,6 +49,7 @@ import { createEngramIssuesTool } from './tools/engram-issues.js';
 import { buildMemoryCommand } from './commands/memory.js';
 import { buildRememberCommand } from './commands/remember.js';
 import { createFileWatcherService } from './services/file-watcher.js';
+import { truncateUtf16 } from './utils/strings.js';
 
 // ---------------------------------------------------------------------------
 // Plugin definition
@@ -215,7 +216,7 @@ const plugin: OpenClawPluginDefinition = {
     .argument('<text>', 'Text to remember')
     .action(async (text: unknown) => {
      const textStr = String(text);
-     const title = textStr.length > 80 ? textStr.slice(0, 77) + '...' : textStr;
+     const title = textStr.length > 80 ? truncateUtf16(textStr, 77) + '...' : textStr;
      const registration = await resolveProject(client, '', process.cwd(), config.project);
      if (!registration.ok) {
       console.error(`Project identity unavailable: ${registration.error.code} (${registration.error.upgradeAction})`);
@@ -223,7 +224,7 @@ const plugin: OpenClawPluginDefinition = {
      }
      const [result] = await client.storeMemories([{
       title,
-      content: textStr.slice(0, 900),
+      content: truncateUtf16(textStr, 900),
       type: 'change',
       project: registration.canonicalProject,
       scope: 'project',

@@ -446,7 +446,7 @@ export class EngramRestClient {
   for (const memory of memories) {
    let project: string;
    try {
-    project = validateProjectID(memory.project);
+    project = validateProjectID(memory.project).toLowerCase();
    } catch (error) {
     results.push({ ok: false, outcome: 'not_sent', error: error instanceof Error ? error.message : String(error) });
     continue;
@@ -489,7 +489,8 @@ export class EngramRestClient {
   let selector = '';
   if (project !== undefined) {
    try {
-    selector = `?project=${encodeURIComponent(validateProjectID(project))}`;
+    project = validateProjectID(project).toLowerCase();
+    selector = `?project=${encodeURIComponent(project)}`;
    } catch (error) {
     return { ok: false, outcome: 'not_sent', error: error instanceof Error ? error.message : String(error) };
    }
