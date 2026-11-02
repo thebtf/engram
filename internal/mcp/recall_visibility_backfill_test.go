@@ -1,12 +1,16 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/thebtf/engram/internal/auth"
@@ -298,6 +302,9 @@ func TestRecallMemory_IncludeSupersededRecoveryPreservesHistoryPrivacy(t *testin
 	env := newMemoryServerForT007(t, project)
 	db := env.store.DB
 	require.NoError(t, db.Create(&dbgorm.Project{ID: project}).Error)
+	queryMarker := "GO17_PRIVATE_QUERY_" + uuid.NewString()
+	sessionID := "GO17_PRIVATE_SESSION_" + uuid.NewString()
+	query := "contract memory " + queryMarker
 
 	for _, row := range []struct {
 		content, status, privacy, workstation, owner, ownerKind, visibility string
@@ -314,8 +321,8 @@ func TestRecallMemory_IncludeSupersededRecoveryPreservesHistoryPrivacy(t *testin
 		require.NoError(t, db.Exec(
 			`INSERT INTO memories (project, content, tags, status, confidence, privacy_scope,
 			 source_workstation_id, source_sessions, owner_principal, owner_principal_kind, agent_visibility, created_at)
-			 VALUES (?, ?, '["type:fact"]'::jsonb, ?, ?, ?, ?, '{session-alice}', ?, ?, ?, now() - (?::int * interval '1 minute'))`,
-			project, row.content, row.status, row.confidence, row.privacy, row.workstation,
+			 VALUES (?, ?, '["type:fact"]'::jsonb, ?, ?, ?, ?, ARRAY[?]::text[], ?, ?, ?, now() - (?::int * interval '1 minute'))`,
+			project, row.content+" "+queryMarker, row.status, row.confidence, row.privacy, row.workstation, sessionID,
 			row.owner, row.ownerKind, row.visibility, row.age,
 		).Error)
 	}
@@ -323,25 +330,54 @@ func TestRecallMemory_IncludeSupersededRecoveryPreservesHistoryPrivacy(t *testin
 	require.NoError(t, db.Raw(`SELECT to_jsonb(m)::text FROM memories m WHERE project = ? ORDER BY id`, project).Scan(&before).Error)
 
 	ctx := auth.WithIdentity(context.Background(),
-		auth.ClientWithPrincipal("read-write", "keycard-alice", "agent/alice", auth.PrincipalKindAgent))
+		auth.ClientWithPrincipal("read-only", "keycard-alice", "agent/alice", auth.PrincipalKindAgent))
 	request := map[string]any{
-		"query":              "contract memory",
+		"query":              query,
 		"project":            project,
 		"format":             "items",
 		"limit":              2,
 		"include_superseded": true,
 		"confidence_min":     0.7,
-		"session_id":         "session-alice",
+		"session_id":         sessionID,
 		"include_scopes":     []string{"project", "private"},
 	}
-	out, err := env.srv.callTool(ctx, "recall_memory", mustJSON(t, request))
+	var logs bytes.Buffer
+	originalLogger := log.Logger
+	log.Logger = zerolog.New(&logs)
+	t.Cleanup(func() { log.Logger = originalLogger })
+	_, err := env.srv.callTool(ctx, "recall_memory", mustJSON(t, request))
 	require.ErrorContains(t, err, "include_superseded")
-	require.Empty(t, out)
-	require.Contains(t, err.Error(), `recall(action="search")`)
-	_, recoveryJSON, ok := strings.Cut(err.Error(), "; arguments: ")
-	require.True(t, ok, "historical-filter rejection must supply executable recovery arguments")
-	var recovery map[string]any
-	require.NoError(t, json.Unmarshal([]byte(recoveryJSON), &recovery))
+	for _, payload := range []string{queryMarker, sessionID, project} {
+		assert.NotContains(t, err.Error(), payload, "logged Go error must be payload-free")
+	}
+	failed := env.srv.HandleRequest(ctx, &Request{
+		JSONRPC: "2.0", ID: 17, Method: "tools/call",
+		Params: mustJSON(t, map[string]any{"name": "recall_memory", "arguments": request}),
+	})
+	require.NotNil(t, failed.Error, "unsupported historical hybrid filter must remain an error")
+	require.Equal(t, -32000, failed.Error.Code)
+	require.Nil(t, failed.Result, "recovery must not turn rejection into a successful tool response")
+	require.Contains(t, failed.Error.Message, `recall(action="search")`)
+	for _, payload := range []string{queryMarker, sessionID, project} {
+		assert.NotContains(t, failed.Error.Message, payload)
+		assert.NotContains(t, logs.String(), payload, "public MCP handler must not log private recovery arguments")
+	}
+	require.Contains(t, logs.String(), `"tool":"recall_memory"`)
+	require.Contains(t, logs.String(), `"message":"Tool call failed"`)
+	var recoveryData struct {
+		Code     string `json:"code"`
+		Recovery struct {
+			Tool      string         `json:"tool"`
+			Arguments map[string]any `json:"arguments"`
+		} `json:"recovery"`
+	}
+	wireData, err := json.Marshal(failed.Error.Data)
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(wireData, &recoveryData))
+	require.Equal(t, "INCLUDE_SUPERSEDED_UNSUPPORTED", recoveryData.Code)
+	require.Equal(t, "recall", recoveryData.Recovery.Tool)
+	recovery := recoveryData.Recovery.Arguments
+	recoveryJSON := mustJSON(t, recovery)
 	want := make(map[string]any, len(request))
 	for key, value := range request {
 		if key != "format" {
@@ -349,13 +385,13 @@ func TestRecallMemory_IncludeSupersededRecoveryPreservesHistoryPrivacy(t *testin
 		}
 	}
 	want["action"] = "search"
-	require.JSONEq(t, string(mustJSON(t, want)), recoveryJSON)
+	require.JSONEq(t, string(mustJSON(t, want)), string(recoveryJSON))
 	props := findToolProperties(t, env.srv.ListTools(), "recall")
 	for key := range recovery {
 		require.Contains(t, props, key, "every recovery argument must be in the advertised public schema")
 	}
 
-	out, err = env.srv.callTool(ctx, "recall", json.RawMessage(recoveryJSON))
+	out, err := projectContextToolCall(t, env.srv, ctx, recoveryData.Recovery.Tool, recovery)
 	require.NoError(t, err)
 	var response struct {
 		Memories []struct {
@@ -374,7 +410,7 @@ func TestRecallMemory_IncludeSupersededRecoveryPreservesHistoryPrivacy(t *testin
 		require.Positive(t, row.ID)
 		contents = append(contents, row.Content)
 	}
-	require.ElementsMatch(t, []string{"active contract memory", "superseded contract memory"}, contents)
+	require.ElementsMatch(t, []string{"active contract memory " + queryMarker, "superseded contract memory " + queryMarker}, contents)
 	require.NoError(t, db.Raw(`SELECT to_jsonb(m)::text FROM memories m WHERE project = ? ORDER BY id`, project).Scan(&after).Error)
 	require.Equal(t, before, after, "hybrid rejection and read-only historical recovery must not mutate stored memories")
 }

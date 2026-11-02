@@ -1937,6 +1937,19 @@ func marshalWithStaleAdvisory(resp any, terms []string) (string, error) {
 	return string(out), nil
 }
 
+// Caller-only recovery payload belongs in JSON-RPC error data, never Error().
+type recallHistoryRecoveryError struct {
+	arguments json.RawMessage
+}
+
+func (*recallHistoryRecoveryError) Error() string {
+	return memorysearch.ErrIncludeSuperseded.Error() + `; for read-only history use recall(action="search") with the same caller identity and error.data.recovery.arguments`
+}
+
+func (*recallHistoryRecoveryError) Unwrap() error {
+	return memorysearch.ErrIncludeSuperseded
+}
+
 // caller, scopeEnabled, and includeScopes are forwarded from handleRecallMemory
 // so that privacy_scope visibility (scope.Resolve) is enforced on hybrid results.
 // This is required by the integration contract established in d9eea82: the hybrid
@@ -2014,7 +2027,7 @@ func (s *Server) handleRecallMemoryHybrid(
 			if marshalErr != nil {
 				return "", fmt.Errorf("%w; use read-only recall(action=\"search\") with the same project and caller identity; recovery arguments could not be encoded: %v", err, marshalErr)
 			}
-			return "", fmt.Errorf("%w; retry read-only recall(action=\"search\") with the same caller identity; arguments: %s", err, arguments)
+			return "", &recallHistoryRecoveryError{arguments: arguments}
 		}
 		return "", fmt.Errorf("recall_memory %w", err)
 	}

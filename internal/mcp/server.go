@@ -1269,16 +1269,26 @@ func (s *Server) handleToolsCall(ctx context.Context, req *Request) *Response {
 			event = event.Str("auth_source", string(identity.Source)).Str("auth_role", string(identity.Role))
 		}
 		event.Msg("Tool call failed")
-		message, data := "Tool error: "+err.Error(), err.Error()
+		message := "Tool error: " + err.Error()
+		var data any = err.Error()
 		var contextError *uci.ContextError
 		var projectError *projectidentity.LogicalError
+		var historyError *recallHistoryRecoveryError
 		if errors.As(err, &contextError) {
-			data = string(contextError.Code())
-			if guidance := projectidentity.RecoveryGuidance(data); guidance != "" {
+			code := string(contextError.Code())
+			data = code
+			if guidance := projectidentity.RecoveryGuidance(code); guidance != "" {
 				message += ": " + guidance
 			}
 		} else if errors.As(err, &projectError) {
 			data = projectError.Code
+		} else if errors.As(err, &historyError) {
+			data = map[string]any{
+				"code": "INCLUDE_SUPERSEDED_UNSUPPORTED",
+				"recovery": map[string]any{
+					"tool": "recall", "arguments": historyError.arguments,
+				},
+			}
 		}
 		return &Response{
 			JSONRPC: "2.0",
