@@ -37,6 +37,14 @@ function tempRoot() { return fs.mkdtempSync(path.join(os.tmpdir(), "engram-boots
 
 const selected = () => parsePolicy(JSON.stringify(fixture().policy), "6.47.0");
 
+function enableMockTimeouts(t) {
+  try { t.mock.timers.enable({ apis: ["setTimeout"] }); }
+  catch (error) {
+    if (error.code !== "ERR_INVALID_ARG_TYPE") throw error;
+    t.mock.timers.enable(["setTimeout"]);
+  }
+}
+
 test("strict policy rejects unknown fields, package skew, revoked hashes, and epoch-1 predecessor", () => {
   for (const mutate of [
     (policy) => { policy.extra = true; },
@@ -144,7 +152,7 @@ test("bounded acquisition rejects contradictory, truncated, and one-byte oversiz
   assert.deepEqual(fs.readdirSync(roots.staging), []);
 });
 test("cold-cache stream outlives the old limit but not the bounded bootstrap deadline", async (t) => {
-  t.mock.timers.enable({ apis: ["setTimeout"] });
+  enableMockTimeouts(t);
   const { bytes } = fixture();
   const target = selected().target.desired;
   let response;
@@ -218,7 +226,12 @@ test("parser policy is tied to the active plugin version and verified sibling by
 async function observeCancelledAcquisition(t, mode, launch) {
   const http = require("node:http");
   const wallTimeout = setTimeout;
-  if (mode === "deadline") t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.now() });
+  const deadlineStartedAt = Date.now();
+  let deadlineNow = deadlineStartedAt;
+  if (mode === "deadline") {
+    enableMockTimeouts(t);
+    t.mock.method(Date, "now", () => deadlineNow);
+  }
   const root = tempRoot();
   const roots = objectRoots(root);
   const policy = selected();
@@ -266,6 +279,8 @@ async function observeCancelledAcquisition(t, mode, launch) {
     if (mode === "deadline") {
       assert.equal(outcome, "pending", "the acquisition must be in flight before advancing its deadline");
       assert.equal(headersReceived, false, "deadline coverage must precede response headers");
+      assert.equal(Date.now(), deadlineStartedAt, "cold preflight must not consume the frozen deadline");
+      deadlineNow += 50;
       t.mock.timers.tick(50);
     } else controller.abort();
     await Promise.race([pending, new Promise((resolve) => wallTimeout(resolve, 300))]);
