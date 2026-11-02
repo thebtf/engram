@@ -81,9 +81,12 @@ func taskMemoryFixtureDB(t *testing.T) (*gormlib.DB, func()) {
 	t.Helper()
 	db, closeDB := openTestDB(t)
 	tx := db.Begin()
+	t.Cleanup(func() { _ = tx.Rollback().Error })
 	require.NoError(t, tx.Error)
-	require.NoError(t, tx.Exec(`CREATE TEMPORARY TABLE memories (LIKE public.memories INCLUDING DEFAULTS INCLUDING GENERATED) ON COMMIT DROP`).Error)
-	require.NoError(t, tx.Exec(`CREATE TEMPORARY TABLE content_chunks (LIKE public.content_chunks INCLUDING GENERATED) ON COMMIT DROP`).Error)
+	var schema string
+	require.NoError(t, tx.Raw(`SELECT current_schema()`).Scan(&schema).Error)
+	require.NoError(t, tx.Exec(`CREATE TEMPORARY TABLE memories (LIKE `+pq.QuoteIdentifier(schema)+`.memories INCLUDING DEFAULTS INCLUDING GENERATED) ON COMMIT DROP`).Error)
+	require.NoError(t, tx.Exec(`CREATE TEMPORARY TABLE content_chunks (LIKE `+pq.QuoteIdentifier(schema)+`.content_chunks INCLUDING GENERATED) ON COMMIT DROP`).Error)
 	return tx, func() {
 		_ = tx.Rollback().Error
 		closeDB()

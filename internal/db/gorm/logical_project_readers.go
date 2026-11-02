@@ -78,12 +78,8 @@ func RetainedContentIDs(rows []ConsolidationMembership) ([]int64, error) {
 }
 
 func memoryReaderPrivacy(q *gormlib.DB, caller scope.KeycardContext, opts scope.MemoryVisibilityOptions) *gormlib.DB {
-	principal, kind := strings.TrimSpace(caller.Principal), strings.TrimSpace(caller.PrincipalKind)
-	q = q.Where(memoryPrincipalAccessSQL, principal, kind, principal, kind, principal, kind, principal, kind)
-	if opts.ApplyPrivacyScope {
-		q = q.Where(memoryPrivacyAccessSQL, caller.WorkstationID, caller.WorkstationID, caller.SessionID, caller.SessionID)
-	}
-	return q
+	predicate, args := scope.MemoryReadAccessSQL(scope.MemoryReadAccess{Caller: caller, Visibility: opts})
+	return q.Where(predicate, args...)
 }
 
 func (s *SessionStore) RetainedMemories(ctx context.Context, ids []int64, query string, caller scope.KeycardContext, opts scope.MemoryVisibilityOptions, limit, offset int) ([]*models.Memory, int64, error) {

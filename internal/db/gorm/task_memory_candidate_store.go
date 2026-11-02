@@ -9,6 +9,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/thebtf/engram/internal/rankfusion"
+	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/internal/taskmemory"
 )
 
@@ -62,45 +63,9 @@ const taskMemoryCandidateAccessSQL = `
 	AND ` + memoryPrivacyAccessSQL + `
 	AND ` + memoryPrincipalAccessSQL
 
-const memoryPrivacyAccessSQL = `(
-		CASE COALESCE(NULLIF(m.privacy_scope, ''), 'project')
-			WHEN 'project' THEN TRUE
-			WHEN 'shared' THEN TRUE
-			WHEN 'global' THEN TRUE
-			WHEN 'private' THEN
-				? <> ''
-				AND m.source_workstation_id <> ''
-				AND m.source_workstation_id = ?
-				AND (? = '' OR ? = ANY(m.source_sessions))
-			ELSE FALSE
-		END
-	)`
+const memoryPrivacyAccessSQL = scope.MemoryPrivacyAccessSQL
 
-const memoryPrincipalAccessSQL = `(
-		btrim(m.agent_visibility) = ''
-		OR btrim(m.agent_visibility) = 'shared'
-		OR (
-			btrim(m.agent_visibility) = 'private'
-			AND btrim(m.owner_principal) <> ''
-			AND btrim(m.owner_principal_kind) <> ''
-			AND ? <> ''
-			AND ? <> ''
-			AND btrim(m.owner_principal) = ?
-			AND btrim(m.owner_principal_kind) = ?
-		)
-	)
-	AND (
-		btrim(m.domain) = ''
-		OR (
-			btrim(m.owner_principal) <> ''
-			AND btrim(m.owner_principal_kind) <> ''
-			AND ? <> ''
-			AND ? IN ('human', 'agent', 'service')
-			AND btrim(m.owner_principal) = ?
-			AND btrim(m.owner_principal_kind) = ?
-		)
-	)
-`
+const memoryPrincipalAccessSQL = scope.MemoryPrincipalAccessSQL
 
 // taskMemoryCandidateAccessFromContext shares the retrieval access predicate
 // with policy reads while keeping the authorized task context as the authority
