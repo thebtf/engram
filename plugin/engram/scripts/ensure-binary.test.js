@@ -217,6 +217,8 @@ test("parser policy is tied to the active plugin version and verified sibling by
 
 async function observeCancelledAcquisition(t, mode, launch) {
   const http = require("node:http");
+  const wallTimeout = setTimeout;
+  if (mode === "deadline") t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.now() });
   const root = tempRoot();
   const roots = objectRoots(root);
   const policy = selected();
@@ -229,6 +231,7 @@ async function observeCancelledAcquisition(t, mode, launch) {
   const closed = new Promise((resolve) => { responseDidClose = resolve; });
   let clientRequest;
   let requests = 0;
+  let headersReceived = false;
   const server = http.createServer((_request, response) => {
     response.once("close", () => { responseClosed = true; responseDidClose(); });
     if (mode !== "deadline") {
@@ -242,6 +245,7 @@ async function observeCancelledAcquisition(t, mode, launch) {
     requests++;
     // Only the transport is redirected; policy, streaming, hashing and publication stay real.
     clientRequest = http.request(`http://127.0.0.1:${server.address().port}`, options, (response) => {
+      headersReceived = true;
       callback(response);
       if (mode !== "deadline") requestSeen();
     });
@@ -257,13 +261,17 @@ async function observeCancelledAcquisition(t, mode, launch) {
       (error) => { outcome = "rejected"; errorMessage = error.message; });
   let snapshot;
   try {
-    const began = await Promise.race([started.then(() => true), new Promise((resolve) => setTimeout(() => resolve(false), 1000))]);
+    const began = await Promise.race([started.then(() => true), new Promise((resolve) => wallTimeout(() => resolve(false), 1000))]);
     assert.equal(began, true, "fixture did not receive the actual acquisition request; not cancellation RED");
-    if (mode !== "deadline") controller.abort();
-    await Promise.race([pending, new Promise((resolve) => setTimeout(resolve, 300))]);
+    if (mode === "deadline") {
+      assert.equal(outcome, "pending", "the acquisition must be in flight before advancing its deadline");
+      assert.equal(headersReceived, false, "deadline coverage must precede response headers");
+      t.mock.timers.tick(50);
+    } else controller.abort();
+    await Promise.race([pending, new Promise((resolve) => wallTimeout(resolve, 300))]);
     // A rejection alone is insufficient: the owned HTTP request must actually close.
     if (outcome !== "pending" && !responseClosed) {
-      await Promise.race([closed, new Promise((resolve) => setTimeout(resolve, 300))]);
+      await Promise.race([closed, new Promise((resolve) => wallTimeout(resolve, 300))]);
     }
     snapshot = {
       outcome, requestDestroyed: clientRequest.destroyed, responseClosed,
@@ -307,7 +315,7 @@ test("public hook resolver cancels cold acquisition without late project executi
   assert.equal(executions, 0);
 });
 
-test("plugin lifecycle: cache hits retain hashing and already-aborted acquisition starts no request", async (t) => {
+test("plugin lifecycle: cache hits retain hashing and already-aborted or expired acquisition starts no request", async (t) => {
   const root = tempRoot();
   const roots = objectRoots(root);
   const policy = selected();
@@ -328,8 +336,9 @@ test("plugin lifecycle: cache hits retain hashing and already-aborted acquisitio
     assert.equal(hashFile(object, target, roots.objects), true, "cancellation must not damage a verified cache hit");
     fs.writeFileSync(object, "poisoned");
     const poisoned = await resolveForLaunch({ ...options, signal: controller.signal }).then(() => "resolved", () => "rejected");
-    t.diagnostic(JSON.stringify({ cached, poisoned, requests }));
-    assert.deepEqual({ cached, poisoned, requests }, { cached: "rejected", poisoned: "rejected", requests: 0 });
+    const expired = await resolveForLaunch({ ...options, deadlineAt: Date.now() - 1 }).then(() => "resolved", () => "rejected");
+    t.diagnostic(JSON.stringify({ cached, poisoned, expired, requests }));
+    assert.deepEqual({ cached, poisoned, expired, requests }, { cached: "rejected", poisoned: "rejected", expired: "rejected", requests: 0 });
     assert.deepEqual(fs.readdirSync(roots.staging), []);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
