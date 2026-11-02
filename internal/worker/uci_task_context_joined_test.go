@@ -283,5 +283,5 @@ func runJoinedNativeTaskContext(t *testing.T, fixture joinedNativeFixture) {
 	}
 	require.NoError(t, processErr)
 	require.NoError(t, errorReading)
-	t.Log("JOINED_NATIVE_CONSUMER_PASS source_and_calls_in_real_JS no_provider no_catalog_change one_native_process_per_callback no_resident_upstream; loaded_OMP_and_installed_policy_CAS_not_exercised")
+	t.Logf("JOINED_NATIVE_CONSUMER_END scenario_success=%t invariants=checked no_provider no_catalog_change one_native_process_per_callback no_resident_upstream; loaded_OMP_and_installed_policy_CAS_not_exercised", !t.Failed())
 }

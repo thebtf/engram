@@ -77,6 +77,20 @@ named-pipe fixture proved request cancellation terminated the actual Git process
 and a subsequent Git request worked. No production, populated mirror or active
 profile was used for these probes.
 
+The subsequent joined source-consumer run exercised the actual registered
+production JS callback and framing with the real native/RPC/UCI/PG path. It
+delivered useful source/calls at cold 232.526 ms and warm-main 203.683 ms, but the
+predeclared warm-linked and post-cancellation next requests returned
+deadline_exceeded without useful evidence at 470.459/460.891 ms. Those outcomes
+were bounded, not successful delivery; the joined run exited 1. Its hash/setup
+stage stayed near 19–20 ms while the failed native stages consumed 440–457 ms.
+Supersession cancellation stopped observed SQL in 17.001 ms; no-match, late
+suppression, catalog preservation and no-provider checks remained intact. This
+does not close the linked-worktree/recovery or whole 500 ms acceptance criteria.
+The emulated event host and owned-build selection did not exercise loaded OMP,
+installed release-policy/CAS admission or useful notes. Preserve this distinct
+counterexample rather than rerunning warm requests until one passes.
+
 ### Execute real work and deliver
 
 Run A1–A6 as applicable through the real loaded host, including a Russian task and distinct worktrees. Fix causes within the same assignment. Preserve comparison evidence and report separately which query classes gained useful context.
