@@ -31,7 +31,7 @@ Tool: check_system_health()
 | Hook | Fires When | Behavior |
 |------|-----------|----------|
 | **SessionStart** | Conversation begins | Injects relevant project memories into context |
-| **UserPromptSubmit** | User sends a message | Searches for relevant memories and injects them as `<relevant-memory>` context |
+| **UserPromptSubmit** | User sends a message | Uses supported project context search for bounded current-task evidence; empty relevance and unavailable retrieval are distinct |
 | **Stop** | Session stops | Sends the transcript for citation and session processing |
 | **SessionEnd** | Session closes | Propagates the session outcome |
 | **SubagentStop** | Subagent finishes | Notifies the system of subagent completion |
@@ -41,6 +41,17 @@ and prompt-relevant context on `before_agent_start`. These callbacks are retriev
 not an automatic durable-correction writer. OMP does not execute Claude's hook table
 or thereby gain Stop/SessionEnd transcript and outcome processing. Availability and
 skill loading depend on the installed host/plugin; a source edit proves neither.
+
+Prompt retrieval has one 500 ms total budget, including configuration, read-only
+`project resolve --check` and `POST /api/context/search`. It never downloads,
+bootstraps, migrates, registers or indexes in the foreground. Oversize records are
+omitted whole rather than truncating a negation. Source/revision fields are evidence;
+missing revisions remain unknown. No-match, deadline, identity refusal, stale and
+unavailable results are not useful-delivery proof. Duplicate suppression keeps only
+a delivery digest, never reusable context/body authority, and rechecks each task.
+The OMP callback has no arbitrary connected-MCP API; code/notes retrieval remains
+explicit when no supported native provider has delivered it. Source changes alone
+do not fix or prove loaded-host readiness.
 
 ## Deliberate Memory Workflow
 

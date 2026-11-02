@@ -48,3 +48,19 @@ test('project resolution shares the caller deadline with acquisition and never e
  }), /PROJECT_RESOLUTION_DEADLINE_EXCEEDED/);
  assert.equal(calls.length, 2, 'acquisition must not restart the process budget');
 });
+
+test('client acquisition and read-only project inspection are independent options', async () => {
+ const calls = [];
+ const options = {
+  acquire: false,
+  resolve: async supplied => { assert.equal(supplied.acquire, false); return { path: 'verified-client', target: {} }; },
+  hash: () => true, roots: () => ({ objects: 'objects' }),
+  execFile(_file, args, _options, callback) { calls.push(args); callback(null, JSON.stringify(project)); },
+ };
+ await lib.resolveHookProjectContext('/actual/root', options);
+ await lib.resolveHookProjectContext('/actual/root', { ...options, check: true });
+ assert.deepEqual(calls, [
+  ['project', 'resolve', '--root', '/actual/root', '--json'],
+  ['project', 'resolve', '--root', '/actual/root', '--json', '--check'],
+ ]);
+});

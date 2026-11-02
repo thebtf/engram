@@ -94,10 +94,10 @@ async function resolveClient(options, projectOnly = false) {
  const resolved = await (options.resolve || resolveForLaunch)({
   pluginRoot: options.pluginRoot, pluginData: options.pluginData, policy,
   signal: options.signal, timeoutMs: options.timeoutMs, deadlineAt: options.deadlineAt,
-  acquire: options.acquire,
+  acquire: options.acquire, check: options.check,
   ...(projectOnly ? { parserTarget: null } : {}),
  });
- if (!(options.hash || hashFile)(resolved.path, resolved.target, (options.roots || objectRoots)(options.pluginData).objects, options)) {
+ if (!(options.hash || hashFile)(resolved.path, resolved.target, (options.roots || objectRoots)(options.pluginData, options).objects, options)) {
   throw new Error("resolved client failed final integrity verification");
  }
  return resolved;
@@ -127,7 +127,7 @@ async function resolveLogicalProject(root, options = {}) {
  if (options.signal?.aborted) throw new Error('PROJECT_RESOLUTION_ABORTED');
  if (remaining <= 0) throw new Error('PROJECT_RESOLUTION_DEADLINE_EXCEEDED');
  const raw = await new Promise((resolve, reject) => {
-  (options.execFile || execFile)(resolved.path, ['project', 'resolve', '--root', root, '--json'], {
+  (options.execFile || execFile)(resolved.path, ['project', 'resolve', '--root', root, '--json', ...(options.check === true ? ['--check'] : [])], {
    env: childEnvForEngram(options.env || process.env), encoding: 'utf8', windowsHide: true,
    timeout: remaining, maxBuffer: 4096, signal: options.signal,
   }, (error, stdout) => {

@@ -79,7 +79,7 @@ async function exerciseDefaultFactory(mode) {
         effects.projectExecutions++;
         assert.equal(file, object);
         assert.equal(hashFile(file, policy.target.desired, roots.objects), true, 'only verified bytes may reach execution');
-        assert.deepEqual(args, ['project', 'resolve', '--root', root, '--json']);
+        assert.deepEqual(args, ['project', 'resolve', '--root', root, '--json', ...(options.check === true ? ['--check'] : [])]);
         executions.push({ args, timeout: execOptions.timeout });
         callback(null, JSON.stringify({ project_id: project }));
       },
@@ -94,11 +94,11 @@ async function exerciseDefaultFactory(mode) {
     assert.equal(options.method, 'POST');
     const body = JSON.parse(options.body);
     assert.equal(body.project, project);
-    assert.ok(['/api/context/session-start', '/api/hooks/ambient-candidates'].includes(url.pathname));
+    assert.ok(['/api/context/session-start', '/api/context/search'].includes(url.pathname));
     requests.push({ route: url.pathname, body });
     return new Response(JSON.stringify(url.pathname === '/api/context/session-start'
       ? { memories: [{ content: 'trusted startup fixture memory' }] }
-      : { additional_context: 'trusted startup fixture ambient' }));
+      : { project, query: body.query, observations: [{ id: 42, project, narrative: 'Do not remove the recovery backup.', revision: 3 }] }));
   };
   const singleton = Object.freeze({
     register(name, callback) {
@@ -166,7 +166,7 @@ async function exerciseDefaultFactory(mode) {
       assert.equal(sent.length, 1);
       assert.match(sent[0].message.content, /trusted startup fixture memory/);
       assert.deepEqual(sent[0].options, { deliverAs: 'nextTurn' });
-      assert.equal(result.message.content, 'trusted startup fixture ambient');
+      assert.match(result.message.content, /Do not remove the recovery backup\./);
       assert.deepEqual(executions.map((item, index) => item.timeout > 0 && item.timeout <= (index === 0 ? 5000 : 500)), [true, true]);
       fs.writeFileSync(object, Buffer.alloc(bytes.length));
       assert.equal(await callbacks('after-tamper'), undefined);
@@ -189,7 +189,7 @@ async function exerciseDefaultFactory(mode) {
         assert.equal(sent.length, 1);
         assert.match(sent[0].message.content, /trusted startup fixture memory/);
         assert.deepEqual(sent[0].options, { deliverAs: 'nextTurn' });
-        assert.equal(recovered.message.content, 'trusted startup fixture ambient');
+        assert.match(recovered.message.content, /memory:42 revision=3[\s\S]*Do not remove the recovery backup\./);
         assert.deepEqual(executions.map((item, index) => item.timeout > 0 && item.timeout <= (index === 0 ? 5000 : 500)), [true, true]);
       }
     }
