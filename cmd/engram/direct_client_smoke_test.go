@@ -53,14 +53,19 @@ func directFixtureTempRoot(t *testing.T, cwd, physicalRoot string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(physicalRoot) < len(relative) {
+		return physicalRoot
+	}
 	return relative
 }
 
 func TestDirectFixtureTempRoot(t *testing.T) {
 	physical := "/primary/.agent/tmp/ed-1/temp"
 	cases := []struct{ cwd, want string }{
-		{"/candidate", "../primary/.agent/tmp/ed-1/temp"},
-		{"/candidate/cmd/engram", "../../../primary/.agent/tmp/ed-1/temp"},
+		{"/candidate", physical},
+		{"/candidate/cmd/engram", physical},
+		{"/primary", ".agent/tmp/ed-1/temp"},
+		{"/primary/candidate", "../.agent/tmp/ed-1/temp"},
 	}
 	if runtime.GOOS == "windows" {
 		physical = `D:\primary\.agent\tmp\ed-1\temp`
@@ -135,8 +140,8 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The client and its daemon inherit the candidate checkout cwd. A relative
-	// temp path keeps both sockets short while resolving to private primary scratch.
+	// Use the shortest real pathname from each caller cwd. Relative paths are
+	// not always shorter than the absolute private primary scratch path.
 	physicalTempRoot := filepath.Join(state, "temp")
 	if err := os.Mkdir(physicalTempRoot, 0o700); err != nil {
 		t.Fatal(err)
