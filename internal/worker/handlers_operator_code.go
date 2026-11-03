@@ -1770,7 +1770,7 @@ type operatorCodeRequestIdentity struct {
 
 func (identity operatorCodeRequestIdentity) auditContext(ctx context.Context) context.Context {
 	sessionID := identity.sessionID
-	if identity.identity.Source == auth.SourceSession {
+	if identity.identity.Source != auth.SourceAuthDisabled {
 		sessionID = gormdb.BrowserSessionPublicHandle(sessionID)
 	}
 	return auditcontext.WithSourceSession(ctx, sessionID)

@@ -46,6 +46,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [7.0.19] - 2026-11-03
 
+Source/review: [PR #610](https://github.com/thebtf/engram/pull/610).
+
 ### Fixed
 
 - Separate browser-session management and auth-audit correlation from the private HttpOnly cookie credential (issue 535). Add transactional migration 190 with one deterministic public-handle column, unique lookup index and old-writer compatibility trigger; preserve cookie/PK/lifecycle and historical audit rows. Use safe handles for session JSON, list/drilldown/revoke, recursive historical auth-state projection and browser-only Operator Code audit provenance, while preserving all access guards, raw tab authorization and SDK/agent correlation. Project scoped browser-session credential material from historical in-memory log snapshot and live SSE responses, preserving SDK/agent correlation and harmless diagnostics without deleting buffered records; text-query matching uses the safe projection, and query filtering precedes the snapshot tail limit. This is not general secret detection. Refuse destructive schema rollback; compatibility with older writers is not a safe rollback to an older credential-exposing binary. Source changes do not claim installed or release acceptance.

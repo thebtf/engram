@@ -54,7 +54,7 @@ The list below is generated. Do not edit it by hand; run `go run ./tools/gen-dat
 <!-- BEGIN GENERATED TABLES -->
 Generated from registered migrations in `internal/db/gorm/`.
 
-Migration count: **178**.
+Migration count: **179**.
 
 Live table count: **89**.
 
