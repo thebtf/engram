@@ -68,6 +68,18 @@ There is no historical startup-flag alternative to this public hybrid enum.
 
 Admin-gated families (candidates, governance, bulk ops) are additionally enforced at the handler level regardless of advertisement.
 
+`lifecycle` exact-ID reads (`info`, `decay_preview`) use ordinary reader
+caller/project, principal/domain and workstation privacy authority before loading
+metadata. Like recall without an explicit `session_id` argument, these reads do
+not narrow visibility with transport session metadata; lifecycle has no such
+argument. Mutations retain guarded by-ID manage authority, including the context
+session restriction when present. Hidden and absent IDs return the same tool
+error without lifecycle metadata or an existence signal. Read-only callers may
+read authorized metadata but cannot mutate. Tier validation, changes and
+promotion history run in one authorized transaction; a history-write failure
+rolls back the tier change. `sleep_status` remains content-free. Lifecycle is not
+forwarded by `--session-memory`.
+
 #### `know_about` Response Shape
 
 `know_about` is a content-free discovery tool. It accepts a required `topic`, an

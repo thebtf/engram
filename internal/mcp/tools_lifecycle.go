@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"time"
 
+	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/lifecycle"
+	"github.com/thebtf/engram/pkg/models"
+	"gorm.io/gorm"
 )
 
 type lifecycleArgs struct {
@@ -45,11 +48,31 @@ func (s *Server) handleLifecycle(ctx context.Context, args json.RawMessage) (str
 	}
 }
 
+func (s *Server) withLifecycleMemory(ctx context.Context, id int64, use func(*gorm.DB, *models.Memory) error) error {
+	access, err := memoryMutationAccessMCP(ctx, sessionFromContext(ctx))
+	if err != nil {
+		return err
+	}
+	return s.memoryStore.WithAuthorizedMemories(ctx, []int64{id}, access, func(tx *gorm.DB, memories map[int64]*models.Memory) error {
+		return use(tx, memories[id])
+	})
+}
+
+func (s *Server) lifecycleMemory(ctx context.Context, id int64) (*models.Memory, error) {
+	// Like ordinary recall without an explicit session_id argument, metadata
+	// reads use workstation scope rather than transport-session narrowing.
+	access, err := memoryMutationAccessMCP(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	return s.memoryStore.GetAuthorized(ctx, id, access)
+}
+
 func (s *Server) lifecycleInfo(ctx context.Context, id int64) (string, error) {
 	if id == 0 {
 		return "", fmt.Errorf("memory_id required")
 	}
-	mem, err := s.memoryStore.Get(ctx, id)
+	mem, err := s.lifecycleMemory(ctx, id)
 	if err != nil {
 		return "", fmt.Errorf("get memory: %w", err)
 	}
@@ -61,25 +84,25 @@ func (s *Server) lifecycleInfo(ctx context.Context, id int64) (string, error) {
 	liveRetrievability := lifecycle.ComputeRetrievability(mem.Stability, elapsed)
 
 	result := map[string]any{
-		"id":               mem.ID,
-		"tier":             mem.Tier,
-		"epistemic_type":   mem.EpistemicType,
-		"confidence":       mem.Confidence,
-		"stability":        mem.Stability,
-		"retrievability":   liveRetrievability,
-		"recurrence_count": mem.RecurrenceCount,
-		"citation_count":   mem.CitationCount,
-		"injection_count":  mem.InjectionCount,
-		"access_count":     mem.AccessCount,
-		"defeasibility":    mem.Defeasibility,
-		"promotion_target": mem.PromotionTarget,
-		"status":           mem.Status,
-		"created_at":       mem.CreatedAt,
+		"id":                mem.ID,
+		"tier":              mem.Tier,
+		"epistemic_type":    mem.EpistemicType,
+		"confidence":        mem.Confidence,
+		"stability":         mem.Stability,
+		"retrievability":    liveRetrievability,
+		"recurrence_count":  mem.RecurrenceCount,
+		"citation_count":    mem.CitationCount,
+		"injection_count":   mem.InjectionCount,
+		"access_count":      mem.AccessCount,
+		"defeasibility":     mem.Defeasibility,
+		"promotion_target":  mem.PromotionTarget,
+		"status":            mem.Status,
+		"created_at":        mem.CreatedAt,
 		"last_retrieved_at": mem.LastRetrievedAt,
-		"last_confirmed":   mem.LastConfirmed,
-		"review_after":     mem.ReviewAfter,
-		"valid_from":       mem.ValidFrom,
-		"valid_until":      mem.ValidUntil,
+		"last_confirmed":    mem.LastConfirmed,
+		"review_after":      mem.ReviewAfter,
+		"valid_from":        mem.ValidFrom,
+		"valid_until":       mem.ValidUntil,
 	}
 	return marshalJSON(result)
 }
@@ -91,25 +114,26 @@ func (s *Server) lifecyclePromote(ctx context.Context, id int64, targetTier stri
 	if !lifecycle.ValidTier(targetTier) {
 		return "", fmt.Errorf("invalid target tier: %s", targetTier)
 	}
-	mem, err := s.memoryStore.Get(ctx, id)
+	var fromTier string
+	err := s.withLifecycleMemory(ctx, id, func(tx *gorm.DB, mem *models.Memory) error {
+		if !lifecycle.ValidPromotion(mem.Tier, targetTier) {
+			return fmt.Errorf("invalid promotion: %s → %s (can only move one tier at a time)", mem.Tier, targetTier)
+		}
+		fromTier = mem.Tier
+		if err := s.memoryStore.UpdateLifecycleFieldsTx(ctx, tx, id, map[string]any{"tier": targetTier}); err != nil {
+			return err
+		}
+		if s.promotionStore != nil {
+			return gormdb.NewPromotionStore(tx).LogPromotion(ctx, id, fromTier, targetTier, "manual promotion")
+		}
+		return nil
+	})
 	if err != nil {
-		return "", fmt.Errorf("get memory: %w", err)
-	}
-	if !lifecycle.ValidPromotion(mem.Tier, targetTier) {
-		return "", fmt.Errorf("invalid promotion: %s → %s (can only move one tier at a time)", mem.Tier, targetTier)
-	}
-
-	if err := s.memoryStore.UpdateLifecycleFields(ctx, id, map[string]any{
-		"tier": targetTier,
-	}); err != nil {
 		return "", err
-	}
-	if s.promotionStore != nil {
-		_ = s.promotionStore.LogPromotion(ctx, id, mem.Tier, targetTier, "manual promotion")
 	}
 	return marshalJSON(map[string]any{
 		"memory_id": id,
-		"from_tier": mem.Tier,
+		"from_tier": fromTier,
 		"to_tier":   targetTier,
 		"message":   "promoted successfully",
 	})
@@ -122,25 +146,26 @@ func (s *Server) lifecycleDemote(ctx context.Context, id int64, targetTier strin
 	if !lifecycle.ValidTier(targetTier) {
 		return "", fmt.Errorf("invalid target tier: %s", targetTier)
 	}
-	mem, err := s.memoryStore.Get(ctx, id)
+	var fromTier string
+	err := s.withLifecycleMemory(ctx, id, func(tx *gorm.DB, mem *models.Memory) error {
+		if !lifecycle.ValidPromotion(mem.Tier, targetTier) {
+			return fmt.Errorf("invalid demotion: %s → %s (can only move one tier at a time)", mem.Tier, targetTier)
+		}
+		fromTier = mem.Tier
+		if err := s.memoryStore.UpdateLifecycleFieldsTx(ctx, tx, id, map[string]any{"tier": targetTier}); err != nil {
+			return err
+		}
+		if s.promotionStore != nil {
+			return gormdb.NewPromotionStore(tx).LogPromotion(ctx, id, fromTier, targetTier, "manual demotion")
+		}
+		return nil
+	})
 	if err != nil {
-		return "", fmt.Errorf("get memory: %w", err)
-	}
-	if !lifecycle.ValidPromotion(mem.Tier, targetTier) {
-		return "", fmt.Errorf("invalid demotion: %s → %s (can only move one tier at a time)", mem.Tier, targetTier)
-	}
-
-	if err := s.memoryStore.UpdateLifecycleFields(ctx, id, map[string]any{
-		"tier": targetTier,
-	}); err != nil {
 		return "", err
-	}
-	if s.promotionStore != nil {
-		_ = s.promotionStore.LogPromotion(ctx, id, mem.Tier, targetTier, "manual demotion")
 	}
 	return marshalJSON(map[string]any{
 		"memory_id": id,
-		"from_tier": mem.Tier,
+		"from_tier": fromTier,
 		"to_tier":   targetTier,
 		"message":   "demoted successfully",
 	})
@@ -156,8 +181,8 @@ func (s *Server) lifecycleSetConfidence(ctx context.Context, id int64, confidenc
 	if confidence < 0 || confidence > 1 {
 		return "", fmt.Errorf("confidence must be between 0.0 and 1.0")
 	}
-	if err := s.memoryStore.UpdateLifecycleFields(ctx, id, map[string]any{
-		"confidence": confidence,
+	if err := s.withLifecycleMemory(ctx, id, func(tx *gorm.DB, _ *models.Memory) error {
+		return s.memoryStore.UpdateLifecycleFieldsTx(ctx, tx, id, map[string]any{"confidence": confidence})
 	}); err != nil {
 		return "", err
 	}
@@ -176,8 +201,8 @@ func (s *Server) lifecycleSetDefeasibility(ctx context.Context, id int64, defeas
 	if !lifecycle.ValidDefeasibility(defeasibility) {
 		return "", fmt.Errorf("invalid defeasibility: %s", defeasibility)
 	}
-	if err := s.memoryStore.UpdateLifecycleFields(ctx, id, map[string]any{
-		"defeasibility": defeasibility,
+	if err := s.withLifecycleMemory(ctx, id, func(tx *gorm.DB, _ *models.Memory) error {
+		return s.memoryStore.UpdateLifecycleFieldsTx(ctx, tx, id, map[string]any{"defeasibility": defeasibility})
 	}); err != nil {
 		return "", err
 	}
@@ -201,7 +226,7 @@ func (s *Server) lifecycleDecayPreview(ctx context.Context, id int64, daysAhead 
 	if daysAhead <= 0 {
 		daysAhead = 30
 	}
-	mem, err := s.memoryStore.Get(ctx, id)
+	mem, err := s.lifecycleMemory(ctx, id)
 	if err != nil {
 		return "", fmt.Errorf("get memory: %w", err)
 	}
