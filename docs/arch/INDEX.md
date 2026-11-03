@@ -1,17 +1,20 @@
 # Architecture documentation
 
-These documents describe the current v5+ runtime from executable source and
-deployment artifacts. They do not treat old README prose, Swagger descriptions,
-comments, or a surviving symbol as proof that a feature is active.
+These documents describe the v7 runtime from executable source and deployment
+artifacts. They do not treat old README prose, Swagger descriptions, comments,
+or a surviving symbol as proof that a feature is active.
 
 ## Start here
 
 1. [README](../../README.md) — operator/developer front door and safe setup.
 2. [System overview](OVERVIEW.md) — boundaries and data paths.
 3. [Runtime components](COMPONENTS.md) — owners, configuration, and deployment forms.
-4. [Architecture rationale](architecture.md) — durable decisions and tombstones.
-5. [Current surface ledger](current-surface.json) — machine-readable claims,
-   feature gates, and a source-derived Vue page inventory.
+4. [API contracts](API_CONTRACTS.md) — canonical client/replacement-UI reference,
+   wire shapes, authorization, pagination, mutations, recovery and schema owners.
+5. [Architecture rationale](architecture.md) — durable decisions and tombstones.
+6. [Current surface ledger](current-surface.json) — retained machine-readable claims
+   and page inventory; its historical Nuxt/deployment labels are not the current
+   build contract. The component and API references describe the Vue/Vite cutover.
 
 The canonical architecture diagram is in the README. Keeping one diagram avoids
 parallel descriptions drifting apart.

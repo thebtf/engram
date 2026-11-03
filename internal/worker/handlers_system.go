@@ -44,6 +44,14 @@ type patchConfigFeatures struct {
 
 // handleGetConfig returns the current runtime configuration, grouped by category.
 // Secrets (API keys, DSN, encryption keys) are redacted.
+// @Summary Read effective runtime configuration
+// @Description Returns context, memory, storage, features and lifecycle groups. Sensitive bootstrap values are not exposed; this is the current-process snapshot, not an arbitrary settings editor.
+// @Tags System
+// @Produce json
+// @Security ApiKeyAuth
+// @Success 200 {object} map[string]interface{}
+// @Failure 503 {string} string "config not available"
+// @Router /api/config [get]
 func (s *Service) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
 	s.initMu.RLock()
 	cfg := s.config
@@ -59,6 +67,19 @@ func (s *Service) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
 
 // handlePatchConfig applies the narrow operator-safe runtime settings allowlist.
 // Env-controlled values are refused rather than reported as applied.
+// @Summary Change allowlisted runtime configuration
+// @Description Only features.enforce_source_project is writable. Unknown fields, trailing JSON, empty updates and telemetry_enabled are rejected. An environment-controlled value returns 409. Success includes applied, audit_logged, changed, restart_required, restart_required_fields and config; audit_logged=false does not undo a saved change. Requires an admin identity.
+// @Tags System
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param body body patchConfigRequest true "Allowlisted configuration patch; maximum 1 MiB"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {string} string "invalid or unsupported patch"
+// @Failure 403 {string} string "admin required"
+// @Failure 409 {string} string "setting controlled by environment"
+// @Failure 500 {string} string "save or reload failed; read config before retrying"
+// @Router /api/config [patch]
 func (s *Service) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 	if rejectNonAdmin(w, r) {
 		return
@@ -303,6 +324,14 @@ func configRestartRequiredFields(changed []string) []string {
 // The snapshot is intentionally not an apply surface: most subsystem gates are
 // process-start env flags, so changing them without an explicit restart receipt
 // would produce fake-operable UI.
+// @Summary Read effective runtime feature flags
+// @Description Returns flags, items, summary, read_only, apply and config. Built-in runtime and environment/config-backed flags are distinguished; this endpoint never changes flags.
+// @Tags System
+// @Produce json
+// @Security ApiKeyAuth
+// @Success 200 {object} runtimeFlagsResponse
+// @Failure 503 {string} string "config not available"
+// @Router /api/flags [get]
 func (s *Service) handleGetFlags(w http.ResponseWriter, _ *http.Request) {
 	s.initMu.RLock()
 	cfg := s.config

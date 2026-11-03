@@ -27,20 +27,22 @@ gRPC server while the remaining HTTP traffic reaches the REST router and browser
 console handler. `/health` distinguishes a reachable process from the service's
 readiness endpoint, `/api/ready`.
 
-The server image includes a generated Vue static bundle. `serveIndex` can instead
-proxy browser traffic to `ENGRAM_OPERATOR_CONSOLE_URL`. The supplied Compose file
-also runs the static Vue console as a separate service; it uses
-`ENGRAM_OPERATOR_API_TARGET=http://server:37777` and exposes port 3000 by default.
-These are deployment forms of the same browser application, not an HTTP MCP
-transport.
+The Docker server image embeds the Vue 3/Vite console built from
+`apps/operator-console/`. `serveIndex` can instead proxy browser traffic to
+`ENGRAM_OPERATOR_CONSOLE_URL`. Compose also starts the dependency-free Node
+console host on port 3000 by default; it forwards `/api/*` to
+`ENGRAM_OPERATOR_API_TARGET=http://server:37777`. None is an HTTP MCP transport.
 
-The embedded-server deployment form has one known route collision: the machine
-`/health` handler registers ahead of the SPA catch-all, so a direct browser load
-of `/health` at the server's own origin returns machine health JSON instead of
-`pages/health.vue`. The standalone Vue console (port 3000) has no such
-collision. See [current-surface.json](current-surface.json) for the full
-per-deployment-form ledger entry; do not teach the embedded `/health` page as
-working until this is repaired.
+The separate `apps/operator-web/` application uses Nuxt and is another API
+consumer, not the promoted Docker frontend. `make dashboard` still builds the
+legacy `ui/` bundle, and `make build` invokes it. Docker and Makefile therefore
+do not currently select the same UI source.
+
+`GET /health` is content-negotiated: an explicit HTML Accept header receives the
+SPA, while a machine request receives health JSON. `/api/health` is the machine
+API. The old unconditional embedded `/health` collision description in the
+retained ledger does not describe this handler. See [API contracts](API_CONTRACTS.md)
+for replacement-UI boundaries and the maintained HTTP/MCP/gRPC owners.
 
 ## Persistence proof
 

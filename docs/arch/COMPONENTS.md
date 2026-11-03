@@ -24,15 +24,20 @@ Source: `plugin/engram/hooks/`, `internal/worker/service.go`.
 
 ## Operator console
 
-The promoted console source is the Nuxt application in `apps/operator-console/`.
-The server embeds its generated static output by default and can proxy it to an
-explicit external upstream. The Compose stack also starts that Nuxt application
-as an independent service. The current page-file inventory is in
-[current-surface.json](current-surface.json).
+The promoted console is the Vue 3/Vite application in `apps/operator-console/`,
+not Nuxt. `Dockerfile` builds it, embeds `.output/public/` in the Go server and
+also packages the dependency-free Node host for the separate Compose service.
+The host forwards `/api/*` to `ENGRAM_OPERATOR_API_TARGET`; Go remains the owner
+of durable state and authorization. Its `.output/` and `/_nuxt/` names are output
+compatibility paths, not evidence of a Nuxt runtime.
 
-Nuxt's file-based routing maps its page components to routes; use the inventory
-as a source-derived route map, not as proof that every administrative workflow
-is accepted for public documentation.
+`apps/operator-web/` is a separate Nuxt application and additional HTTP consumer;
+it is not the source selected by the released Docker/Compose recipe. The legacy
+`make dashboard` still builds `ui/` and replaces the embedded static directory;
+`make build` calls that target. This build split exists and is not repaired here.
+See [API contracts](API_CONTRACTS.md#replacement-ui-and-deployment-boundary) for
+base URLs, cookie forwarding and the exact client/Go ownership boundary. The
+retained [surface ledger](current-surface.json) is not deployment acceptance.
 
 ## Feature gates
 

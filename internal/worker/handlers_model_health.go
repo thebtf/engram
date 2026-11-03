@@ -50,6 +50,16 @@ type modelConfigSignal struct {
 	Set      bool
 }
 
+// handleModelHealth godoc
+// @Summary Read configured model health evidence
+// @Description Returns generated_at, rows and summary from settings and current clients. Configured or standby is not proof that a provider request succeeded; secret_set is a presence signal, never a credential.
+// @Tags System
+// @Produce json
+// @Security ApiKeyAuth
+// @Success 200 {object} modelHealthResponse
+// @Failure 503 {string} string "store not initialized"
+// @Failure 500 {string} string "settings unavailable"
+// @Router /api/model-health [get]
 func (s *Service) handleModelHealth(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
 		http.Error(w, "model health unavailable: store not initialized", http.StatusServiceUnavailable)
