@@ -25,6 +25,7 @@ import (
 // Real gRPC authentication, dispatcher and MemoryStore SQL. SQLite proves
 // visibility and rollback; PostgreSQL tests own locking and serialization.
 func TestLifecycleLegacyAuthorization(t *testing.T) {
+	config.Get()
 	originalConfig, err := config.Load()
 	if err != nil {
 		t.Fatal("original config load failed")
