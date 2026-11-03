@@ -330,6 +330,12 @@ func TestRegisterLocalGitExplicitSemanticPromotionPreservesGoPublishedView(t *te
 	require.NoError(t, err)
 	require.Equal(t, pinned.Context.ViewID, current.ViewID)
 
+	var sourceBaseline, checkoutBaseline, profileBaseline, viewBaseline int64
+	require.NoError(t, fixture.db.Model(&UCISource{}).Count(&sourceBaseline).Error)
+	require.NoError(t, fixture.db.Model(&UCICheckout{}).Count(&checkoutBaseline).Error)
+	require.NoError(t, fixture.db.Model(&UCIAnalysisProfile{}).Count(&profileBaseline).Error)
+	require.NoError(t, fixture.db.Model(&UCIView{}).Count(&viewBaseline).Error)
+
 	promotion := input
 	promotion.ParserBundle = &parser
 	updated, err := fixture.context.RegisterLocalGit(ctx, promotion)
@@ -370,10 +376,10 @@ func TestRegisterLocalGitExplicitSemanticPromotionPreservesGoPublishedView(t *te
 	require.NoError(t, fixture.db.Model(&UCICheckout{}).Count(&checkoutCount).Error)
 	require.NoError(t, fixture.db.Model(&UCIAnalysisProfile{}).Count(&profileCount).Error)
 	require.NoError(t, fixture.db.Model(&UCIView{}).Count(&viewCount).Error)
-	require.EqualValues(t, 1, sourceCount)
-	require.EqualValues(t, 1, checkoutCount)
-	require.EqualValues(t, 2, profileCount)
-	require.EqualValues(t, 1, viewCount)
+	require.EqualValues(t, sourceBaseline, sourceCount)
+	require.EqualValues(t, checkoutBaseline, checkoutCount)
+	require.EqualValues(t, profileBaseline+1, profileCount)
+	require.EqualValues(t, viewBaseline, viewCount)
 }
 
 func TestRegisterLocalGitGoOnlyProfileStagesNativeArtifactAndView(t *testing.T) {

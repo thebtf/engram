@@ -31,7 +31,7 @@ For ordinary manual operator/memory acceptance, use the maintained populated loc
 
 ## A3: an existing note changes a decision
 
-**Job:** A new session works on a task for which a real preserved note records a constraint, established cause, or rejected approach. Its text and ID are absent from the prompt.
+**Job:** An authorized successor session picks up earlier project work. A real preserved note records a constraint, established cause, or rejected approach from that work. Its text and ID are absent from the prompt.
 
 **Pass:** The note is found and delivered before the relevant decision, its currentness/source is usable, and the agent avoids a known mistake or repeated investigation. A newer explicit instruction still takes precedence.
 
@@ -135,7 +135,7 @@ Use behavior, source-grounded reasoning, actual changes, and useful linked knowl
 
 ## Selection and release evidence
 
-All promised A/B behaviors require their ordinary consumer proof at delivery. During implementation, run only affected scenarios and relevant existing tests; unchanged preservation evidence may be reused with a stated compatibility basis. This is one acceptance set for these outcomes, not a requirement to repeat every scenario after every edit.
+Accept and release A and B independently under existing release policy: each needs ordinary consumer proof of its own full promised behavior. Both must preserve existing notes and Vault. During implementation, run only affected scenarios and relevant existing tests; unchanged preservation evidence may be reused with a stated compatibility basis. This is one acceptance set for these outcomes, not a requirement to repeat every scenario after every edit.
 
 Source-ready, local integrated, published, installed, and observed useful remain separate states. A failed semantic case cannot be relabeled by lexical fallback. A local helper cannot stand in for the loaded host. A blocked independent scenario does not prevent useful work on the other delivery.
 

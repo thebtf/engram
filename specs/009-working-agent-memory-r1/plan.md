@@ -14,11 +14,11 @@ Finish an already active corrective delivery through its accepted process. Prepa
 
 ## First implementation decisions
 
-At the first normal working checkpoint, main names one integration owner, the current candidate, and owners for A and B. Reuse the existing task/run records and actual current worktrees.
+At the first normal working checkpoint, main identifies the current candidate and one integration owner. Where the same people or integration capacity are needed for both deliveries, assign them to A first. B can start or continue independently through existing owners; assigning or starting B is not a condition for A. Reuse the existing task/run records and actual current worktrees.
 
-Select a real development job, an existing useful note, and a meaningful external-client follow-up question. Define the result checks before execution; do not put the expected answer or source filename into the prompt. Use neutral fixtures and an authorized ordinary client. Personal assistant configuration or data is outside the required implementation.
+For A, select a real development job and an existing useful note. For each delivery, define the result checks before execution; do not put the expected answer or source filename into the prompt.
 
-Record the selected existing card content owner and transport mappings. Resolve at most a consequential missing fact before building; do not restart a project-wide audit. Proposed relation names and context fields are design contracts until API_CONTRACTS and consumers are implemented together.
+When B starts, choose a meaningful external-client follow-up question and record the existing card content owner and transport mappings. Use neutral fixtures and an authorized ordinary client. Personal assistant configuration or data is outside the required implementation. Resolve at most a consequential missing fact before building; do not restart a project-wide audit. Proposed relation names and context fields are design contracts until API_CONTRACTS and consumers are implemented together.
 
 ## Delivery A: ordinary development context
 
@@ -192,9 +192,18 @@ did not change for that test-only correction. The owned fixture was retired
 after schema/session counts reached zero. This focused PASS does not relabel the
 earlier full-sequence failure or close loaded-host/full-A acceptance.
 
+Preparation recovery remains outside the prompt callback. Native registration
+can attach the actual cwd to an explicitly authorized existing SourceID without
+requiring an old View/index binding. Qualified parser recovery permits explicit
+Go-to-current-semantic promotion through a new immutable registration profile;
+implicit Go replay, old Source/Checkout/incarnation and historical Views remain
+unchanged. See [the maintained registration contract](../../docs/arch/API_CONTRACTS.md#native-existing-source-registration-and-parser-recovery).
+Neither registration nor a selected profile is a published View or useful
+same-turn delivery proof; prior deadline and relevance failures remain open.
+
 ### Execute real work and deliver
 
-Run A1–A6 as applicable through the real loaded host, including a Russian task and distinct worktrees. Fix causes within the same assignment. Preserve comparison evidence and report separately which query classes gained useful context.
+Run the applicable A1–A6 checks, including a Russian task and distinct worktrees. Prove automatic delivery through the real loaded host. Direct UCI operations retain their own supported paths and cannot by themselves prove automatic delivery. Fix causes within the same assignment. Preserve comparison evidence and report separately which query classes gained useful context.
 
 Publish/install through the existing authorized process and repeat the promised ordinary path. A package on disk or a compiled helper is not proof of the loaded extension. Do not restart unrelated roots or create another browser/runtime merely to produce evidence.
 
@@ -234,7 +243,7 @@ Use focused implementation checks and the existing consolidated release boundary
 
 ## Work sizing and continuation
 
-A coherent execution batch is approximately 6–8 hours where useful, not a fixed appointment, promise of completion, or automatic stop. Main first identifies real missing connections, then lets independent A/B owners build, integrates ready shared outputs, runs ordinary scenarios, and repairs concrete failures.
+A coherent execution batch is approximately 6–8 hours where useful, not a fixed appointment, promise of completion, or automatic stop. Main identifies missing connections, assigns ready work to existing owners, integrates ready shared outputs, runs ordinary scenarios, and repairs concrete failures.
 
 If a producer contract is stable but its implementation is pending, its consumer may proceed against that contract. Mocks prove only that layer. A blocked release effect holds that effect and preserves its resume condition; independent authorized implementation continues.
 

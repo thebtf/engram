@@ -93,6 +93,50 @@ content-bearing aliases such as `content`, `body`, `raw_content`, `narrative`,
 or `snippet`. A valid topic with no matches returns the empty packet above, not
 a tool error.
 
+### Native existing-Source registration and parser recovery
+
+Source/Checkout preparation is an explicit operation outside the same-turn
+callback. A fresh `codebase_context(action="list")` identifies authorized
+published contexts; a readable historical View does not confer registration or
+indexing authority. Establish the intended existing Source, not merely a matching
+display label, before registering another owned Git checkout.
+
+In the native client, `{"action":"register","source_id":"<existing authorized Source UUID>"}`
+derives the canonical locator from the actual process cwd through the existing
+sanitized Git owner. It does not require the historical View's index binding or
+accept a caller-invented root. The server still checks the active Git Source's
+realm, principal ownership and canonical project before attaching/replaying the
+workstation/locator checkout. This explicit SourceID path cannot allocate a new
+Source. Direct server registration still requires an explicit canonical locator.
+`source_label` is reserved for deliberate new-Source onboarding; it is not a
+fallback for a denied existing Source. Omitted selectors or an owned
+`context_handle` retain their existing index-capable binding contract.
+
+For JS/TS/TSX extraction, the daemon needs its supported, verified installed
+parser at the canonical CLI sibling (`parser/parser.exe` on Windows) and matching
+bundle identity. The existing `ENGRAM_UCI_PARSER_EXECUTABLE` and
+`ENGRAM_UCI_PARSER_BUNDLE_DIGEST` are daemon-startup inputs, not MCP arguments or
+per-prompt overrides. A missing/unavailable parser is not repaired by changing
+project identity or silently downgrading the profile. The installation owner uses
+normal verified delivery and supported identity-checked daemon lifecycle.
+
+After compatible parser startup, explicitly register that same Source/current
+cwd with `parser_bundle:true` to promote an existing Go checkout to the current
+semantic profile. The existing owner creates a new immutable analysis profile
+and changes only this checkout's registration profile for its next complete
+publication. Source, Checkout and incarnation remain unchanged; old Go profiles,
+artifacts and pinned/current old Views are not rewritten or replaced by
+registration. Implicit replay preserves Go even when a parser becomes available;
+explicit semantic-to-Go downgrade remains refused.
+
+Inspect the returned registered context, then use its own same-client handle for
+`codebase_status`, one authorized `codebase_index` run, and its bounded status
+barrier. A new profile, accepted job or no-View handle is not a published usable
+View. `PERMISSION_DENIED` from Source registration remains a refusal: do not
+borrow credentials/installation IDs, choose another Source/label, reset a project
+UUID or bypass the catalog. The automatic task-context operation below remains
+SELECT-only and never performs this recovery itself.
+
 ### Native same-turn task context
 
 The native client provides `engram task-context --json`. The verified executable

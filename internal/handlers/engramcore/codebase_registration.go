@@ -65,9 +65,6 @@ func (m *Module) prepareNativeCodebaseRegistration(ctx context.Context, project 
 	if args.Locator != nil && selectors == 1 && args.ContextHandle == nil {
 		return raw, nil
 	}
-	if args.Locator == nil && args.SourceID != nil {
-		return nil, &module.ModuleError{Code: "CONTEXT_MISMATCH", Message: "native register with source_id requires an explicit locator; omit source_id to reuse the current server selection"}
-	}
 	if args.SourceLabel == nil && args.SourceID == nil {
 		handle := ""
 		if args.ContextHandle != nil {
@@ -95,7 +92,7 @@ func (m *Module) prepareNativeCodebaseRegistration(ctx context.Context, project 
 }
 
 func nativeCodebaseRegistrationMismatch() error {
-	return &module.ModuleError{Code: "CONTEXT_MISMATCH", Message: "codebase_context register requires one source label, source ID, or owned context handle; omit all three to reuse the current server selection"}
+	return &module.ModuleError{Code: "CONTEXT_MISMATCH", Message: "codebase_context register accepts one source_label, existing authorized source_id, or owned context_handle. To attach this native Git cwd to an existing authorized Source, pass its source_id and omit locator; the server still checks realm, principal and canonical project. Omit all selectors only to reuse an existing index-capable binding. Do not invent IDs, replace project identity or choose another Source after an authorization denial."}
 }
 
 func nativeCodebaseGitLocator(ctx context.Context, selected string) (string, error) {
