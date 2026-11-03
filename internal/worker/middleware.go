@@ -24,6 +24,7 @@ import (
 	"github.com/rs/zerolog/log"
 	authpkg "github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/logbuf"
 )
 
 const comparisonAdapterHeaderV3 = "X-Engram-Project-Identity-Adapter"
@@ -483,7 +484,7 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 			if validator == nil {
 				// Bootstrap window before initializeAsync wires the validator.
 				// Reject defensively — better than silently allowing.
-				log.Warn().Str("path", r.URL.Path).Msg("auth: validator not yet wired, rejecting bearer")
+				log.Warn().Str("path", logbuf.RedactBrowserSessionPath(r.URL.Path)).Msg("auth: validator not yet wired, rejecting bearer")
 				writeAuthUnauthorized(w, r, authDisabled)
 				return
 			}
@@ -497,9 +498,9 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 					// Auth-class errors — bearer was syntactically present
 					// but failed validation. 401 is correct.
 					log.Warn().
-						Str("path", r.URL.Path).
+						Str("path", logbuf.RedactBrowserSessionPath(r.URL.Path)).
 						Str("remote_addr", r.RemoteAddr).
-						Err(err).
+						Str("error", logbuf.RedactBrowserSessionError(err, r.URL.Path)).
 						Msg("auth: bearer rejected")
 					writeAuthUnauthorized(w, r, authDisabled)
 				default:
@@ -508,9 +509,9 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 					// "rejected credential" from "auth subsystem down" (the
 					// gRPC interceptor maps the same case to codes.Internal).
 					log.Error().
-						Str("path", r.URL.Path).
+						Str("path", logbuf.RedactBrowserSessionPath(r.URL.Path)).
 						Str("remote_addr", r.RemoteAddr).
-						Err(err).
+						Str("error", logbuf.RedactBrowserSessionError(err, r.URL.Path)).
 						Msg("auth: store/bcrypt failure")
 					http.Error(w, "auth store unavailable", http.StatusInternalServerError)
 				}
@@ -574,7 +575,7 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 		}
 
 		// 4. No valid auth.
-		log.Warn().Str("path", r.URL.Path).Str("remote_addr", r.RemoteAddr).Msg("auth: rejected unauthenticated request")
+		log.Warn().Str("path", logbuf.RedactBrowserSessionPath(r.URL.Path)).Str("remote_addr", r.RemoteAddr).Msg("auth: rejected unauthenticated request")
 		writeAuthUnauthorized(w, r, authDisabled)
 	})
 }
@@ -760,7 +761,7 @@ func debugRequestLogger(next http.Handler) http.Handler {
 		next.ServeHTTP(ww, r)
 		log.Debug().
 			Str("method", r.Method).
-			Str("path", r.URL.Path).
+			Str("path", logbuf.RedactBrowserSessionPath(r.URL.Path)).
 			Int("status", ww.Status()).
 			Int("bytes", ww.BytesWritten()).
 			Dur("duration", time.Since(started)).

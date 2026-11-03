@@ -44,6 +44,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Use registered canonical UUIDs and authenticated caller project context in MCP fixtures without weakening default-deny, privacy or pre-mutation rejection guards. Reuse 119 prior PASS plus one exact retry PASS after the context fix, not 120 fresh PASS or installed acceptance.
 - Seed the isolated operator-code fixture with a registered canonical project UUID while preserving five queue candidates, published/no-view checks and redacted provisioning errors.
 
+## [7.0.19] - 2026-11-03
+
+### Fixed
+
+- Separate browser-session management and auth-audit correlation from the private HttpOnly cookie credential (issue 535). Add transactional migration 190 with one deterministic public-handle column, unique lookup index and old-writer compatibility trigger; preserve cookie/PK/lifecycle and historical audit rows. Use safe handles for session JSON, list/drilldown/revoke, recursive historical auth-state projection and browser-only Operator Code audit provenance, while preserving all access guards, raw tab authorization and SDK/agent correlation. Project scoped browser-session credential material from historical in-memory log snapshot and live SSE responses, preserving SDK/agent correlation and harmless diagnostics without deleting buffered records; text-query matching uses the safe projection, and query filtering precedes the snapshot tail limit. This is not general secret detection. Refuse destructive schema rollback; compatibility with older writers is not a safe rollback to an older credential-exposing binary. Source changes do not claim installed or release acceptance.
+
 ## [7.0.18] - 2026-11-03
 
 ### Fixed

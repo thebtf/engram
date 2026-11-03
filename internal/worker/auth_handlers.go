@@ -21,6 +21,7 @@ import (
 	authpkg "github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/config"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/logbuf"
 	"golang.org/x/crypto/bcrypt"
 	gormlib "gorm.io/gorm"
 )
@@ -544,7 +545,7 @@ func (h *AuthHandlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 			Action:     "auth_login",
 			Actor:      user.Email,
 			Reason:     "dashboard login",
-			AfterState: map[string]any{"user_id": user.ID, "session_id": sess.ID, "remote_addr": sess.RemoteAddr, "user_agent": sess.UserAgent},
+			AfterState: map[string]any{"user_id": user.ID, "session_id": sess.PublicHandle, "remote_addr": sess.RemoteAddr, "user_agent": sess.UserAgent},
 			CreatedAt:  time.Now().UTC(),
 		})
 	}
@@ -1012,12 +1013,16 @@ func (h *AuthHandlers) handleAccessRevokeSession(w http.ResponseWriter, r *http.
 		writeAuthJSONError(w, http.StatusBadRequest, "invalid session ID")
 		return
 	}
-	before, err := h.sessions.GetAnySession(id)
+	if !gormdb.ValidBrowserSessionPublicHandle(id) {
+		writeAuthJSONError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	before, err := h.sessions.GetSessionByPublicHandle(id)
 	if err != nil {
 		if errors.Is(err, gormlib.ErrRecordNotFound) {
 			writeAuthJSONError(w, http.StatusNotFound, "session not found")
 		} else {
-			log.Error().Err(err).Str("session_id", id).Msg("auth: failed to load session")
+			log.Error().Str("error", logbuf.RedactBrowserSessionError(err, r.URL.Path)).Str("session_handle", id).Msg("auth: failed to load session")
 			writeAuthJSONError(w, http.StatusInternalServerError, "failed to load session")
 		}
 		return
@@ -1027,12 +1032,12 @@ func (h *AuthHandlers) handleAccessRevokeSession(w http.ResponseWriter, r *http.
 		writeAuthJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	changed, err := h.sessions.RevokeSession(id, actorAuditID(actor), reason)
+	changed, err := h.sessions.RevokeSession(before.ID, actorAuditID(actor), reason)
 	if err != nil {
 		if errors.Is(err, gormlib.ErrRecordNotFound) {
 			writeAuthJSONError(w, http.StatusNotFound, "session not found")
 		} else {
-			log.Error().Err(err).Str("session_id", id).Msg("auth: failed to revoke session")
+			log.Error().Str("error", logbuf.RedactBrowserSessionError(err, r.URL.Path, before.ID)).Str("session_handle", id).Msg("auth: failed to revoke session")
 			writeAuthJSONError(w, http.StatusInternalServerError, "failed to revoke session")
 		}
 		return
@@ -1042,8 +1047,8 @@ func (h *AuthHandlers) handleAccessRevokeSession(w http.ResponseWriter, r *http.
 			Action:      "auth_session_revoked",
 			Actor:       actor.Email,
 			Reason:      reason,
-			BeforeState: map[string]any{"session_id": before.ID, "user_id": before.UserID, "user_agent": before.UserAgent, "remote_addr": before.RemoteAddr, "expires_at": before.ExpiresAt},
-			AfterState:  map[string]any{"session_id": before.ID, "revoked_by": actorAuditValue(actor), "reason": reason},
+			BeforeState: map[string]any{"session_id": before.PublicHandle, "user_id": before.UserID, "user_agent": before.UserAgent, "remote_addr": before.RemoteAddr, "expires_at": before.ExpiresAt},
+			AfterState:  map[string]any{"session_id": before.PublicHandle, "revoked_by": actorAuditValue(actor), "reason": reason},
 			CreatedAt:   time.Now().UTC(),
 		})
 	}

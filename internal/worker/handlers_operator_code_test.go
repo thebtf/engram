@@ -537,8 +537,8 @@ func TestOperatorCodeHTTPAdapter_BindsReleasedReadsToBrowserSession(t *testing.T
 				testCase.invoke(adapter, recorder, request)
 
 				require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
-				require.Equal(t, []string{"browser-session-41"}, fixture.app.sourceSessions)
-				require.Equal(t, []string{"browser-session-41"}, fixture.recorder.sourceSessions)
+				require.Equal(t, []string{gormdb.BrowserSessionPublicHandle("browser-session-41")}, fixture.app.sourceSessions)
+				require.Equal(t, []string{gormdb.BrowserSessionPublicHandle("browser-session-41")}, fixture.recorder.sourceSessions)
 			})
 		}
 	}
@@ -555,7 +555,7 @@ func TestOperatorCodeHTTPAdapter_UsesAuthenticatedSessionContext(t *testing.T) {
 	adapter.HandleSearch(recorder, request)
 
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
-	require.Equal(t, []string{authentikBrowserSessionID(41)}, fixture.app.sourceSessions)
+	require.Equal(t, []string{gormdb.BrowserSessionPublicHandle(authentikBrowserSessionID(41))}, fixture.app.sourceSessions)
 }
 
 func TestOperatorCodeHTTPAdapter_UsesGrantedSourceRealmForRelease(t *testing.T) {
@@ -767,7 +767,7 @@ func TestOperatorCodeHTTPAdapter_IndexIntentAcknowledgementIsNotCompletion(t *te
 	require.Equal(t, lateCompleted.ID, lateResponse["intent_ref"])
 	require.Equal(t, string(uci.IndexIntentSubmitted), lateResponse["state"])
 	operatorCodeHTTPTestRequireSafeIndexIntentResponse(t, lateReplay.Body.String(), false, fixture)
-	require.Equal(t, []string{"browser-session-41", "browser-session-41", "browser-session-41"}, fixture.app.indexSubmitSessions)
+	require.Equal(t, []string{gormdb.BrowserSessionPublicHandle("browser-session-41"), gormdb.BrowserSessionPublicHandle("browser-session-41"), gormdb.BrowserSessionPublicHandle("browser-session-41")}, fixture.app.indexSubmitSessions)
 
 	completed := operatorCodeHTTPTestIndexIntent(fixture.ref, "completed-status", uci.IndexIntentReindex, uci.IndexIntentCompleted)
 	fixture.app.indexIntents = map[string]uci.IndexIntent{completed.ID: completed}
@@ -782,7 +782,7 @@ func TestOperatorCodeHTTPAdapter_IndexIntentAcknowledgementIsNotCompletion(t *te
 	require.Equal(t, float64(completed.ResultView.Generation), result["generation"])
 	operatorCodeHTTPTestRequireSafeIndexIntentResponse(t, status.Body.String(), true, fixture)
 	require.Empty(t, fixture.recorder.inputs, "code_index_result is non-content release only")
-	require.Equal(t, []string{"browser-session-41"}, fixture.app.indexGetSessions)
+	require.Equal(t, []string{gormdb.BrowserSessionPublicHandle("browser-session-41")}, fixture.app.indexGetSessions)
 }
 
 func TestOperatorCodeHTTPAdapter_NoViewIndexIntentReauthorizesWithoutPin(t *testing.T) {
@@ -906,7 +906,7 @@ func TestOperatorCodeHTTPAdapter_IndexIntentIdempotencyAndRetry(t *testing.T) {
 		require.Equal(t, http.StatusConflict, replayedRetry.Code, replayedRetry.Body.String())
 		require.Empty(t, replayedRetry.Body.String())
 		require.Equal(t, 1, fixture.app.indexRetryExecutions)
-		require.Equal(t, []string{"browser-session-41", "browser-session-41"}, fixture.app.indexRetrySessions)
+		require.Equal(t, []string{gormdb.BrowserSessionPublicHandle("browser-session-41"), gormdb.BrowserSessionPublicHandle("browser-session-41")}, fixture.app.indexRetrySessions)
 	})
 
 	t.Run("completed retry return is a contract failure", func(t *testing.T) {
@@ -919,7 +919,7 @@ func TestOperatorCodeHTTPAdapter_IndexIntentIdempotencyAndRetry(t *testing.T) {
 		adapter.HandleIndexIntentRetry(recorder, operatorCodeHTTPTestIndexIntentRetryRequest(t, unavailable.ID, fixture.identity))
 		require.Equal(t, http.StatusServiceUnavailable, recorder.Code, recorder.Body.String())
 		require.Empty(t, recorder.Body.String())
-		require.Equal(t, []string{"browser-session-41"}, fixture.app.indexRetrySessions)
+		require.Equal(t, []string{gormdb.BrowserSessionPublicHandle("browser-session-41")}, fixture.app.indexRetrySessions)
 	})
 }
 
@@ -1104,7 +1104,7 @@ func TestOperatorCodeHTTPAdapter_GrantEmptyEnvelopeIsCanonical(t *testing.T) {
 			identity, guarded, ok := adapter.decodeEmptyEnvelope(recorder, request, testCase.endpoint, testCase.method)
 			require.True(t, ok, recorder.Body.String())
 			require.Equal(t, operatorCodeRequestDigest(testCase.endpoint, nil), identity.digest)
-			require.Equal(t, "browser-session-41", auditcontext.SourceSession(guarded.Context()))
+			require.Equal(t, gormdb.BrowserSessionPublicHandle("browser-session-41"), auditcontext.SourceSession(guarded.Context()))
 
 			invalid := operatorCodeHTTPTestRequest(t, `{}`, fixture.identity)
 			invalid.Method = testCase.method
@@ -1149,7 +1149,7 @@ func TestOperatorCodeHTTPAdapter_GrantHandlersCarryAuditBreadcrumb(t *testing.T)
 	revokeRecorder := httptest.NewRecorder()
 	adapter.HandleGrantRevoke(revokeRecorder, revoke)
 	require.Equal(t, http.StatusOK, revokeRecorder.Code, revokeRecorder.Body.String())
-	require.Equal(t, []string{"browser-session-41", "browser-session-41", "browser-session-41", "browser-session-41", "browser-session-41"}, onboarding.sessions)
+	require.Equal(t, []string{gormdb.BrowserSessionPublicHandle("browser-session-41"), gormdb.BrowserSessionPublicHandle("browser-session-41"), gormdb.BrowserSessionPublicHandle("browser-session-41"), gormdb.BrowserSessionPublicHandle("browser-session-41"), gormdb.BrowserSessionPublicHandle("browser-session-41")}, onboarding.sessions)
 }
 
 type operatorCodeGrantBreadcrumbApplication struct {

@@ -2,6 +2,7 @@ package gorm
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -11,6 +12,43 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
+
+const (
+	browserSessionHandleDomain = "engram/browser-session-management/v1:"
+	browserSessionHandlePrefix = "bsh1_"
+)
+
+// BrowserSessionPublicHandle derives correlation only, never authentication.
+// Preserve exact credential bytes; historical references need no surviving row.
+func BrowserSessionPublicHandle(credential string) string {
+	var digest [sha256.Size]byte
+	if len(credential) <= 64 {
+		var input [len(browserSessionHandleDomain) + 64]byte
+		n := copy(input[:], browserSessionHandleDomain)
+		n += copy(input[n:], credential)
+		digest = sha256.Sum256(input[:n])
+	} else {
+		digest = sha256.Sum256([]byte(browserSessionHandleDomain + credential))
+	}
+	var handle [len(browserSessionHandlePrefix) + 2*sha256.Size]byte
+	copy(handle[:], browserSessionHandlePrefix)
+	hex.Encode(handle[len(browserSessionHandlePrefix):], digest[:])
+	return string(handle[:])
+}
+
+// ValidBrowserSessionPublicHandle accepts only the management namespace.
+func ValidBrowserSessionPublicHandle(handle string) bool {
+	if len(handle) != len(browserSessionHandlePrefix)+2*sha256.Size || !strings.HasPrefix(handle, browserSessionHandlePrefix) {
+		return false
+	}
+	for i := len(browserSessionHandlePrefix); i < len(handle); i++ {
+		c := handle[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
 
 var (
 	ErrAuthSessionExpired = errors.New("auth session expired")
@@ -35,12 +73,13 @@ func (s *AuthSessionStore) CreateSession(userID int64, duration time.Duration, u
 	}
 	now := time.Now().UTC()
 	sess := &AuthSession{
-		ID:         id,
-		UserID:     userID,
-		CreatedAt:  now,
-		ExpiresAt:  now.Add(duration),
-		UserAgent:  strings.TrimSpace(userAgent),
-		RemoteAddr: strings.TrimSpace(remoteAddr),
+		ID:           id,
+		PublicHandle: BrowserSessionPublicHandle(id),
+		UserID:       userID,
+		CreatedAt:    now,
+		ExpiresAt:    now.Add(duration),
+		UserAgent:    strings.TrimSpace(userAgent),
+		RemoteAddr:   strings.TrimSpace(remoteAddr),
 	}
 	if err := s.db.Create(sess).Error; err != nil {
 		return nil, fmt.Errorf("create session: %w", err)
@@ -56,6 +95,19 @@ func (s *AuthSessionStore) GetAnySession(id string) (*AuthSession, error) {
 	}
 	var sess AuthSession
 	if err := s.db.Where("id = ?", id).First(&sess).Error; err != nil {
+		return nil, err
+	}
+	return &sess, nil
+}
+
+// GetSessionByPublicHandle uses migration 190's unique column index, including
+// expired/revoked rows. Cookie lookup deliberately never calls this method.
+func (s *AuthSessionStore) GetSessionByPublicHandle(handle string) (*AuthSession, error) {
+	if !ValidBrowserSessionPublicHandle(handle) {
+		return nil, gorm.ErrRecordNotFound
+	}
+	var sess AuthSession
+	if err := s.db.Where("public_handle = ?", handle).First(&sess).Error; err != nil {
 		return nil, err
 	}
 	return &sess, nil

@@ -158,7 +158,69 @@ Two-tier token model:
 Authorization: Bearer <token>
 ```
 
-Bypass: `ENGRAM_AUTH_SKIP_LOCAL=true` skips auth for RFC 1918 addresses.
+`ENGRAM_AUTH_DISABLED=true` supplies a synthetic identity for ordinary operations;
+it is not a browser session and does not pass access-administration reader guards.
+
+#### Browser session management (issue 535)
+
+The private `sessions.id` remains the `engram_auth` HttpOnly cookie credential.
+Cookie authentication, expiry, revocation and logout continue to use that private
+value. It is never a management selector or an `AuthSession` JSON ID.
+
+| Method | Path | Session identity contract |
+|--------|------|---------------------------|
+| `POST` | `/api/auth/user-login` | Issues the credential only in the cookie; records safe audit correlation. |
+| `POST` | `/api/auth/user-logout` | Revokes the cookie's session and clears that cookie; existing origin/idempotency checks remain. |
+| `GET` | `/api/access/sessions` | `sessions[].id` is a stable public handle. `include_revoked=true` also includes expired/revoked rows. |
+| `GET` | `/api/access/users/{id}` | Session IDs and browser-auth audit references use the same public handles. |
+| `GET` | `/api/access/log` | Historical and new browser-auth states expose safe correlation, not credentials. |
+| `POST` | `/api/access/sessions/{id}/revoke` | Accepts only the public handle; credential and unknown selectors return 404 without mutation. Success repeats the handle. |
+
+All seven access GET templates (`providers`, `invitations`, `users`, `users/{id}`,
+`roles`, `sessions`, `log`) retain their session-admin guard. Master/client keycards
+and synthetic auth-disabled identities do not pass it. Existing HMAC session-admin
+read admission remains; revocation additionally requires the current enabled DB
+admin cookie. A public handle never authenticates as a cookie. Refresh an old
+Access view before revoking; cached credential selectors are not accepted as a
+compatibility route.
+
+Migration `190_browser_session_public_handle` adds one `sessions.public_handle`
+TEXT column and the unique `idx_sessions_public_handle` index. Its value is
+`bsh1_` followed by lowercase SHA-256 of the exact UTF-8 bytes of
+`engram/browser-session-management/v1:` plus the stored credential. No trimming or
+case folding occurs. The transform relies on random credential entropy; it does
+not strengthen weak values. The original credential/PK and all lifecycle fields
+are retained. Backfill and owned DDL run in an explicit transaction and refuse
+incompatible retained handles or index state; collisions fail rather than select
+another handle. A BEFORE INSERT / UPDATE OF id, public_handle trigger computes
+the same value for old SQL writers. No mapping table or expression-index
+immutability assertion is involved. Reapplication is idempotent. Destructive down
+migration is refused and retains the additive schema. Old-writer compatibility
+does **not** make an older credential-exposing binary a safe behavioral rollback.
+
+New `auth_login` and `auth_session_revoked` events write safe handles. Their
+historical before/after states are projected recursively without rewriting stored
+audit rows, including orphan references whose session rows no longer exist.
+Representable metadata is retained; non-object JSON is safely wrapped instead of
+echoed as raw text. Browser-specific Operator Code audit provenance uses the same
+handle while tab/chooser/authorization identity remains private and cookie-bound.
+SDK/agent session IDs, generic source-session attribution and their APIs are not
+converted into browser handles.
+
+The separate `GET /api/logs` JSON snapshot and `GET /api/logs?follow=true` SSE
+stream apply scoped browser-session projection to matching log fields, messages
+and raw JSON. Browser-session management paths are normalized for logging, and
+identified browser credentials in browser-auth diagnostics are hidden. Existing
+historical in-memory records are projected on read, not deleted or rewritten;
+SSE projects queued/new entries before serialization. Text `query` matching uses
+the safe projected message/raw JSON, not hidden credential bytes. Snapshot query
+filtering also precedes the latest-`lines` limit; existing level filtering and
+chronological ordering remain. Ordinary log-route authentication is unchanged;
+this route does not acquire the access-administration session-admin guard.
+SDK/agent session correlation and unrelated harmless diagnostic fields remain.
+This is scoped browser-session projection, not general secret detection or a
+guarantee that arbitrary application logs contain no other secrets.
+
 
 ### Core Endpoints
 
