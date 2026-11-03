@@ -19,6 +19,7 @@ import (
 )
 
 func runTaskContext(parent context.Context, started time.Time, input io.Reader, output io.Writer) error {
+	defer traceTaskContextPhase("cli_total", started)
 	ctx, cancel := context.WithDeadline(parent, started.Add(taskcontext.MaxDuration))
 	defer cancel()
 	if closer, ok := input.(io.Closer); ok {
@@ -54,7 +55,9 @@ func nativeTaskContext(ctx context.Context, request taskcontext.Request) taskcon
 	if ctx.Err() != nil {
 		return closed("deadline_exceeded", "DEADLINE_EXCEEDED")
 	}
+	phaseStarted := time.Now()
 	instance, err := existingDirectClientInstanceID()
+	traceTaskContextPhase("installation_identity", phaseStarted)
 	if err != nil {
 		return closed("not_ready", "INSTALLATION_NOT_READY")
 	}
@@ -76,6 +79,7 @@ func nativeTaskContext(ctx context.Context, request taskcontext.Request) taskcon
 		return closed("unavailable", "TRANSPORT_UNAVAILABLE")
 	}
 	reader := bufio.NewReaderSize(connection, 4096)
+	phaseStarted = time.Now()
 	if err := taskContextWrite(connection, 1, "initialize", map[string]any{"protocolVersion": "2024-11-05", "capabilities": map[string]any{}, "clientInfo": map[string]string{"name": "engram-task-context", "version": daemonVersion}}); err != nil {
 		return closed("unavailable", "TRANSPORT_UNAVAILABLE")
 	}
@@ -85,11 +89,14 @@ func nativeTaskContext(ctx context.Context, request taskcontext.Request) taskcon
 	if err := taskContextWrite(connection, 0, "notifications/initialized", nil); err != nil {
 		return closed("unavailable", "TRANSPORT_UNAVAILABLE")
 	}
+	traceTaskContextPhase("mcp_initialize", phaseStarted)
 	request.DeadlineUnixMS = deadline.UnixMilli()
+	phaseStarted = time.Now()
 	if err := taskContextWrite(connection, 2, "tools/call", map[string]any{"name": "codebase_task_context", "arguments": request}); err != nil {
 		return closed("unavailable", "TRANSPORT_UNAVAILABLE")
 	}
 	raw, err := taskContextRead(reader, "2")
+	traceTaskContextPhase("mcp_tool_call", phaseStarted)
 	if err != nil {
 		return closed("not_ready", "OPERATION_NOT_READY")
 	}
@@ -151,6 +158,7 @@ func taskContextControl(ctx context.Context, path string, request muxcontrol.Req
 
 func taskContextAdmission(ctx context.Context, namespace, cwd, instance string) (net.Conn, error) {
 	path := serverid.DaemonControlPath("", namespace)
+	phaseStarted := time.Now()
 	marker, err := readMuxcoreDaemonVersionMarker(path + ".marker.json")
 	if err != nil {
 		return nil, err
@@ -163,7 +171,10 @@ func taskContextAdmission(ctx context.Context, namespace, cwd, instance string) 
 	if err != nil || action != daemonConvergenceJoin {
 		return nil, errors.New("daemon is not compatible")
 	}
+	traceTaskContextPhase("daemon_identity", phaseStarted)
+	phaseStarted = time.Now()
 	status, err := taskContextControl(ctx, path, muxcontrol.Request{Cmd: "status"}, marker.PID)
+	traceTaskContextPhase("control_status", phaseStarted)
 	if err != nil || status == nil || !status.OK {
 		return nil, errors.New("daemon status unavailable")
 	}
@@ -190,11 +201,15 @@ func taskContextAdmission(ctx context.Context, namespace, cwd, instance string) 
 		}
 	}
 	environment[config.EnvClientInstanceID] = instance
+	phaseStarted = time.Now()
 	admission, err := taskContextControl(ctx, path, muxcontrol.Request{Cmd: "spawn", Cwd: cwd, Mode: mode, Env: environment}, marker.PID)
+	traceTaskContextPhase("control_spawn", phaseStarted)
 	if err != nil || admission == nil || !admission.OK || admission.Token == "" || admission.IPCPath == "" {
 		return nil, errors.New("daemon admission unavailable")
 	}
+	phaseStarted = time.Now()
 	connection, err := taskContextDial(ctx, admission.IPCPath)
+	traceTaskContextPhase("ipc_connect", phaseStarted)
 	if err != nil {
 		return nil, err
 	}
@@ -208,6 +223,14 @@ func taskContextAdmission(ctx context.Context, namespace, cwd, instance string) 
 		return nil, err
 	}
 	return connection, nil
+}
+
+func traceTaskContextPhase(stage string, started time.Time) {
+	_ = json.NewEncoder(os.Stderr).Encode(struct {
+		Diagnostic string `json:"diagnostic"`
+		Stage      string `json:"stage"`
+		ElapsedUS  int64  `json:"elapsed_us"`
+	}{"native_task_phase", stage, time.Since(started).Microseconds()})
 }
 
 func taskContextWrite(writer io.Writer, id int, method string, params any) error {

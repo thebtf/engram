@@ -50,6 +50,14 @@ type joinedConsumerFrame struct {
 }
 
 func runJoinedNativeTaskContext(t *testing.T, fixture joinedNativeFixture) {
+	runJoinedNativeTaskContextCases(t, fixture, true)
+}
+
+func runJoinedNativeTaskContextDiscriminator(t *testing.T, fixture joinedNativeFixture) {
+	runJoinedNativeTaskContextCases(t, fixture, false)
+}
+
+func runJoinedNativeTaskContextCases(t *testing.T, fixture joinedNativeFixture, includeEmptyLate bool) {
 	t.Helper()
 	logPath := os.Getenv("ENGRAM_TASK_CONTEXT_JOINED_LOG")
 	require.True(t, filepath.IsAbs(logPath), "joined proof requires its unique absolute raw-log path")
@@ -206,28 +214,30 @@ func runJoinedNativeTaskContext(t *testing.T, fixture joinedNativeFixture) {
 			require.Equal(t, before+3, workerUCIApplicationExposureCount(t, fixture.store.GetDB()), "actual emitted packet lacks its three durable releases")
 		}
 	}
-	beforeEmpty := workerUCIApplicationExposureCount(t, fixture.store.GetDB())
-	empty := check("empty", 0, "NoSuchSymbol4f7", "empty")
-	require.Equal(t, "empty", empty.NativeStatus)
-	require.Equal(t, beforeEmpty+1, workerUCIApplicationExposureCount(t, fixture.store.GetDB()))
-	setDelay(true)
-	beforeLate := workerUCIApplicationExposureCount(t, fixture.store.GetDB())
-	late := check("late", 0, "Alpha", "deadline")
-	require.False(t, late.Useful)
-	setDelay(false)
-	lateStoppedAt := time.Now()
-	var latePending int
-	for {
-		err = observer.QueryRowContext(t.Context(), "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND state='active' AND wait_event='PgSleep' AND query='SELECT pg_sleep(30)'").Scan(&latePending)
-		require.NoError(t, err)
-		if latePending == 0 || time.Since(lateStoppedAt) >= 500*time.Millisecond {
-			break
+	if includeEmptyLate {
+		beforeEmpty := workerUCIApplicationExposureCount(t, fixture.store.GetDB())
+		empty := check("empty", 0, "NoSuchSymbol4f7", "empty")
+		require.Equal(t, "empty", empty.NativeStatus)
+		require.Equal(t, beforeEmpty+1, workerUCIApplicationExposureCount(t, fixture.store.GetDB()))
+		setDelay(true)
+		beforeLate := workerUCIApplicationExposureCount(t, fixture.store.GetDB())
+		late := check("late", 0, "Alpha", "deadline")
+		require.False(t, late.Useful)
+		setDelay(false)
+		lateStoppedAt := time.Now()
+		var latePending int
+		for {
+			err = observer.QueryRowContext(t.Context(), "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND state='active' AND wait_event='PgSleep' AND query='SELECT pg_sleep(30)'").Scan(&latePending)
+			require.NoError(t, err)
+			if latePending == 0 || time.Since(lateStoppedAt) >= 500*time.Millisecond {
+				break
+			}
+			time.Sleep(5 * time.Millisecond)
 		}
-		time.Sleep(5 * time.Millisecond)
+		require.Zero(t, latePending, "late callback left SQL running")
+		t.Logf("JOINED_LATE pending=0 observed_after_callback_ms=%.3f", float64(time.Since(lateStoppedAt).Microseconds())/1000)
+		require.Equal(t, beforeLate, workerUCIApplicationExposureCount(t, fixture.store.GetDB()))
 	}
-	require.Zero(t, latePending, "late callback left SQL running")
-	t.Logf("JOINED_LATE pending=0 observed_after_callback_ms=%.3f", float64(time.Since(lateStoppedAt).Microseconds())/1000)
-	require.Equal(t, beforeLate, workerUCIApplicationExposureCount(t, fixture.store.GetDB()))
 	setDelay(true)
 	beforeCancel := workerUCIApplicationExposureCount(t, fixture.store.GetDB())
 	send(map[string]any{"type": "invoke", "name": "cancel", "rootIndex": 0, "session": "joined-cancel", "prompt": "Alpha", "expect": "cancel"})

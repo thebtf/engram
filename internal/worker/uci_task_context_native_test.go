@@ -114,6 +114,12 @@ func runNativeTaskContextFixture(t *testing.T, consume func(*testing.T, joinedNa
 	daemon.Env = environment
 	var daemonLog bytes.Buffer
 	daemon.Stderr = &daemonLog
+	if logPath := os.Getenv("ENGRAM_TASK_CONTEXT_PHASE_LOG"); logPath != "" {
+		phaseLog, err := os.OpenFile(logPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, phaseLog.Close()) })
+		daemon.Stderr = phaseLog
+	}
 	require.NoError(t, daemon.Start())
 	done := make(chan error, 1)
 	go func() { done <- daemon.Wait() }()

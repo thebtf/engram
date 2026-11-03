@@ -47,3 +47,9 @@ func TestUCITaskContextD1PhaseDiscriminator(t *testing.T) {
 		require.Equal(t, before, taskContextCatalogSnapshot(t, fixture.store.GetDB()))
 	})
 }
+
+// This fixed discriminator uses the real registered JS/hash/controller/execFile
+// path. It omits only the no-match and separate late cases from the joined matrix.
+func TestUCITaskContextJoinedPhaseDiscriminator(t *testing.T) {
+	runNativeTaskContextFixture(t, runJoinedNativeTaskContextDiscriminator)
+}

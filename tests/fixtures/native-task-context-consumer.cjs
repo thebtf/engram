@@ -62,6 +62,13 @@ async function initialize(config) {
           const child = childProcess.execFile(file, args, execution, (error, stdout, stderr) => {
             trace.nativeElapsedMs = performance.now() - trace.execAt;
             trace.stdoutBytes = Buffer.byteLength(stdout ?? Buffer.alloc(0));
+            for (const line of String(stderr ?? '').split('\n')) {
+              let phase;
+              try { phase = JSON.parse(line); } catch { continue; }
+              if (phase?.diagnostic === 'native_task_phase' && typeof phase.stage === 'string' && Number.isSafeInteger(phase.elapsed_us)) {
+                emit({ event: 'native_phase', name: trace.name, stage: phase.stage, elapsed_us: phase.elapsed_us });
+              }
+            }
             callback(error, stdout, stderr);
           });
           child.once('close', () => { trace.closeAt = performance.now(); closed(); });

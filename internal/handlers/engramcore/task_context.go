@@ -46,7 +46,11 @@ func (m *Module) proxyNativeTaskContext(parent context.Context, project muxcore.
 		return closed("forbidden", "PERMISSION_DENIED")
 	}
 	ctx = outgoing
+	phaseStarted := time.Now()
 	discovered, locator, err := nativeCodebaseGitContext(ctx, project.Cwd)
+	if m.deps.Logger != nil {
+		m.deps.Logger.Info("native_task_phase", "stage", "local_git", "elapsed_us", time.Since(phaseStarted).Microseconds())
+	}
 	if err != nil {
 		return closed("context_required", "CONTEXT_REQUIRED")
 	}
@@ -55,7 +59,11 @@ func (m *Module) proxyNativeTaskContext(parent context.Context, project muxcore.
 	if err != nil {
 		return closed("unavailable", "SERVER_UNAVAILABLE")
 	}
+	phaseStarted = time.Now()
 	checked, err := projectidentity.CheckLogicalProject(ctx, project.Cwd, serverURL, m.envFor(project, config.EnvWorkstationToken))
+	if m.deps.Logger != nil {
+		m.deps.Logger.Info("native_task_phase", "stage", "project_check", "elapsed_us", time.Since(phaseStarted).Microseconds())
+	}
 	if err != nil {
 		return closed("context_required", "PROJECT_CONTEXT_REQUIRED")
 	}
@@ -67,11 +75,19 @@ func (m *Module) proxyNativeTaskContext(parent context.Context, project muxcore.
 		return closed("context_required", "PROJECT_CONTEXT_REQUIRED")
 	}
 	ctx = metadata.AppendToOutgoingContext(ctx, taskcontext.LocatorMetadataKey, locator)
+	phaseStarted = time.Now()
 	conn, err := m.pool.getOrDialGRPC(serverURL, m.envFor(project, config.EnvWorkstationToken))
+	if m.deps.Logger != nil {
+		m.deps.Logger.Info("native_task_phase", "stage", "grpc_pool", "elapsed_us", time.Since(phaseStarted).Microseconds())
+	}
 	if err != nil {
 		return closed("unavailable", "SERVER_UNAVAILABLE")
 	}
+	phaseStarted = time.Now()
 	response, err := pb.NewEngramServiceClient(conn).CallTool(ctx, &pb.CallToolRequest{ToolName: "codebase_task_context", ArgumentsJson: raw, SessionId: sessionID, Project: checked.Binding.ID})
+	if m.deps.Logger != nil {
+		m.deps.Logger.Info("native_task_phase", "stage", "rpc_uci", "elapsed_us", time.Since(phaseStarted).Microseconds())
+	}
 	if err != nil {
 		switch status.Code(err) {
 		case codes.DeadlineExceeded, codes.Canceled:
