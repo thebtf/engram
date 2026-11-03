@@ -21,6 +21,7 @@ import (
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/uci"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func TestOperatorCodeHTTPAdapter_ReleasesFiveBoundEndpoints(t *testing.T) {
@@ -556,6 +557,98 @@ func TestOperatorCodeHTTPAdapter_UsesAuthenticatedSessionContext(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
 	require.Equal(t, []string{gormdb.BrowserSessionPublicHandle(authentikBrowserSessionID(41))}, fixture.app.sourceSessions)
+}
+
+func TestOperatorCodeHTTPAdapter_AuditCorrelationUsesBrowserCookieProvenance(t *testing.T) {
+	const masterToken = "operator-code-audit-master-test-only"
+	credential := strings.Repeat("c", 64)
+	trustedBrowserSession := strings.Repeat("d", 64)
+	clientToken := auth.TokenRawPrefix + strings.Repeat("a", auth.TokenBodyLen)
+	clientHash, err := bcrypt.GenerateFromPassword([]byte(clientToken), bcrypt.MinCost)
+	require.NoError(t, err)
+	for _, testCase := range []struct {
+		name   string
+		source auth.Source
+	}{
+		{name: "master_bearer_with_browser_cookie", source: auth.SourceMaster},
+		{name: "client_keycard_with_browser_cookie", source: auth.SourceClient},
+		{name: "db_browser_context", source: auth.SourceSession},
+		{name: "auth_disabled_context", source: auth.SourceAuthDisabled},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Setenv("ENGRAM_AUTH_DISABLED", "false")
+			if testCase.source == auth.SourceAuthDisabled {
+				t.Setenv("ENGRAM_AUTH_DISABLED", "true")
+			}
+			adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+			request := httptest.NewRequest(http.MethodGet, "/api/operator/code/grants", nil)
+			request.Header.Set(operatorCodeRequestIDHeader, "mixed-auth-audit-request")
+			request.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: credential})
+			selectedSession := credential
+			if testCase.source == auth.SourceSession {
+				selectedSession = trustedBrowserSession
+				ctx := withAuthenticatedBrowserSession(request.Context(), trustedBrowserSession)
+				request = request.WithContext(auth.WithIdentity(ctx, fixture.identity))
+			} else {
+				request.Header.Set("Authorization", "Bearer "+masterToken)
+				if testCase.source == auth.SourceClient {
+					request.Header.Set("Authorization", "Bearer "+clientToken)
+				}
+			}
+			if testCase.source == auth.SourceAuthDisabled {
+				selectedSession = "local-code-document"
+			}
+			called := false
+			handler := http.HandlerFunc(func(w http.ResponseWriter, authenticated *http.Request) {
+				called = true
+				identity, found := auth.IdentityFrom(authenticated.Context())
+				require.True(t, found)
+				require.Equal(t, testCase.source, identity.Source)
+				decoded, guarded, ok := adapter.decodeEmptyEnvelope(w, authenticated, "operator-code-grant-choices", http.MethodGet)
+				require.True(t, ok, "the actual authenticated envelope must reach its audit-context boundary")
+				require.True(t, decoded.sessionID == selectedSession, "decoding must retain actual cookie/trusted-context provenance or the AuthDisabled synthetic session")
+				if identity.Source == auth.SourceMaster || identity.Source == auth.SourceClient {
+					_, browser := identity.SessionBrowserSubject()
+					require.False(t, browser)
+					body := `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current","query":"Fixture"}`
+					search := httptest.NewRequest(http.MethodPost, "/api/operator/code", bytes.NewBufferString(body))
+					search.Header = authenticated.Header.Clone()
+					search = search.WithContext(authenticated.Context())
+					denied := httptest.NewRecorder()
+					adapter.HandleSearch(denied, search)
+					require.Equal(t, http.StatusForbidden, denied.Code)
+					require.Empty(t, denied.Body.String())
+					require.Zero(t, fixture.grants.checks, "nonbrowser authorization must stop before grant lookup")
+					require.Zero(t, fixture.app.searchCalls)
+					require.Empty(t, fixture.recorder.inputs)
+					t.Log("counterevidence: actual adapter denies nonbrowser release before grant lookup/application/exposure; no persisted leakage is established")
+				}
+				correlation := auditcontext.SourceSession(guarded.Context())
+				isCredential := correlation == credential || correlation == trustedBrowserSession
+				t.Logf("source=%s decoded=true cookie_credential_in_audit_context=%t", identity.Source, isCredential)
+				require.False(t, isCredential, "browser-cookie credentials must not enter audit correlation, even when bearer/keycard authentication wins")
+				want := "local-code-document"
+				if identity.Source != auth.SourceAuthDisabled {
+					want = gormdb.BrowserSessionPublicHandle(selectedSession)
+				}
+				require.Equal(t, want, correlation)
+				require.True(t, decoded.sessionID == selectedSession, "audit projection must not rewrite private authorization identity")
+			})
+			recorder := httptest.NewRecorder()
+			if testCase.source == auth.SourceSession {
+				handler.ServeHTTP(recorder, request)
+			} else {
+				tokenAuth, err := NewTokenAuth(masterToken)
+				require.NoError(t, err)
+				tokenAuth.SetValidator(auth.NewValidator(masterToken, knowledgeFixtureTokens{{
+					ID: "synthetic-code-audit-keycard", Scope: "read-write", TokenHash: string(clientHash),
+					TokenPrefix: clientToken[len(auth.TokenRawPrefix) : len(auth.TokenRawPrefix)+auth.TokenPrefixLen],
+				}}))
+				tokenAuth.Middleware(handler).ServeHTTP(recorder, request)
+			}
+			require.True(t, called, "real credential precedence must reach the decoder; a middleware rejection is not the privacy oracle")
+		})
+	}
 }
 
 func TestOperatorCodeHTTPAdapter_UsesGrantedSourceRealmForRelease(t *testing.T) {
