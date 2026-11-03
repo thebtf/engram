@@ -156,6 +156,25 @@ and was retained, not hidden or force-terminated. These synthetic module checks
 are not useful native/backend, populated-data or loaded-OMP acceptance; the
 single frozen joined consumer check remains separate.
 
+The frozen real worker sequence delivered cold and linked source/calls at
+208.401/206.454 ms, but warm-main returned a genuine bounded no-useful deadline
+at 470.877 ms (child/thread closed by 479.064 ms). During that slow launch the
+parent recorded only 2.308 ms active versus 457.649 ms idle: host-thread
+responsiveness improved, not the native launch tail. Preserve that run's exit 1.
+Its cancellation observer used an invalid independent 350 ms partition and did
+not establish actual SQL cancellation or recovery.
+
+A test-only successor instead observed the exact already-transmitted absolute
+work deadline and kept the actual-SQL prerequisite. One focused cancel-to-next
+check passed: real delayed SQL stopped in 17.497 ms after supersession (pending
+zero), and the next same-daemon request delivered useful 4625-byte source/calls
+at 248.065 ms, with child/thread closure at 247.135 ms. Both operation threads
+exited zero; provider calls were zero, catalog/index snapshots equal and the
+shared owner count one with no resident upstream. Production worker/native code
+did not change for that test-only correction. The owned fixture was retired
+after schema/session counts reached zero. This focused PASS does not relabel the
+earlier full-sequence failure or close loaded-host/full-A acceptance.
+
 ### Execute real work and deliver
 
 Run A1–A6 as applicable through the real loaded host, including a Russian task and distinct worktrees. Fix causes within the same assignment. Preserve comparison evidence and report separately which query classes gained useful context.
