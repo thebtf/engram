@@ -50,14 +50,18 @@ type joinedConsumerFrame struct {
 }
 
 func runJoinedNativeTaskContext(t *testing.T, fixture joinedNativeFixture) {
-	runJoinedNativeTaskContextCases(t, fixture, true)
+	runJoinedNativeTaskContextCases(t, fixture, true, true)
 }
 
 func runJoinedNativeTaskContextDiscriminator(t *testing.T, fixture joinedNativeFixture) {
-	runJoinedNativeTaskContextCases(t, fixture, false)
+	runJoinedNativeTaskContextCases(t, fixture, false, true)
 }
 
-func runJoinedNativeTaskContextCases(t *testing.T, fixture joinedNativeFixture, includeEmptyLate bool) {
+func runJoinedNativeTaskContextBoundary(t *testing.T, fixture joinedNativeFixture) {
+	runJoinedNativeTaskContextCases(t, fixture, false, false)
+}
+
+func runJoinedNativeTaskContextCases(t *testing.T, fixture joinedNativeFixture, includeEmptyLate, includeCancellation bool) {
 	t.Helper()
 	logPath := os.Getenv("ENGRAM_TASK_CONTEXT_JOINED_LOG")
 	require.True(t, filepath.IsAbs(logPath), "joined proof requires its unique absolute raw-log path")
@@ -238,42 +242,44 @@ func runJoinedNativeTaskContextCases(t *testing.T, fixture joinedNativeFixture, 
 		t.Logf("JOINED_LATE pending=0 observed_after_callback_ms=%.3f", float64(time.Since(lateStoppedAt).Microseconds())/1000)
 		require.Equal(t, beforeLate, workerUCIApplicationExposureCount(t, fixture.store.GetDB()))
 	}
-	setDelay(true)
-	beforeCancel := workerUCIApplicationExposureCount(t, fixture.store.GetDB())
-	send(map[string]any{"type": "invoke", "name": "cancel", "rootIndex": 0, "session": "joined-cancel", "prompt": "Alpha", "expect": "cancel"})
-	await("native_spawned", "cancel", time.Second)
-	var waitingPID int
-	until := time.Now().Add(350 * time.Millisecond)
-	for time.Now().Before(until) {
-		err = observer.QueryRowContext(t.Context(), "SELECT COALESCE((SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND state='active' AND wait_event='PgSleep' AND query='SELECT pg_sleep(30)' LIMIT 1),0)").Scan(&waitingPID)
-		require.NoError(t, err)
-		if waitingPID != 0 {
-			break
+	if includeCancellation {
+		setDelay(true)
+		beforeCancel := workerUCIApplicationExposureCount(t, fixture.store.GetDB())
+		send(map[string]any{"type": "invoke", "name": "cancel", "rootIndex": 0, "session": "joined-cancel", "prompt": "Alpha", "expect": "cancel"})
+		await("native_spawned", "cancel", time.Second)
+		var waitingPID int
+		until := time.Now().Add(350 * time.Millisecond)
+		for time.Now().Before(until) {
+			err = observer.QueryRowContext(t.Context(), "SELECT COALESCE((SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND state='active' AND wait_event='PgSleep' AND query='SELECT pg_sleep(30)' LIMIT 1),0)").Scan(&waitingPID)
+			require.NoError(t, err)
+			if waitingPID != 0 {
+				break
+			}
+			time.Sleep(5 * time.Millisecond)
 		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	require.NotZero(t, waitingPID, "joined cancellation never reached actual delayed SQL")
-	cancelledAt := time.Now()
-	send(map[string]string{"type": "supersede"})
-	cancelled := await("result", "cancel", time.Second)
-	require.False(t, cancelled.Useful)
-	if cancelled.Failed {
-		t.Errorf("joined cancel failed: %s", cancelled.Error)
-	}
-	var pending int
-	for {
-		err = observer.QueryRowContext(t.Context(), "SELECT count(*) FROM pg_stat_activity WHERE pid=$1 AND state='active' AND wait_event='PgSleep'", waitingPID).Scan(&pending)
-		require.NoError(t, err)
-		if pending == 0 || time.Since(cancelledAt) >= 500*time.Millisecond {
-			break
+		require.NotZero(t, waitingPID, "joined cancellation never reached actual delayed SQL")
+		cancelledAt := time.Now()
+		send(map[string]string{"type": "supersede"})
+		cancelled := await("result", "cancel", time.Second)
+		require.False(t, cancelled.Useful)
+		if cancelled.Failed {
+			t.Errorf("joined cancel failed: %s", cancelled.Error)
 		}
-		time.Sleep(5 * time.Millisecond)
+		var pending int
+		for {
+			err = observer.QueryRowContext(t.Context(), "SELECT count(*) FROM pg_stat_activity WHERE pid=$1 AND state='active' AND wait_event='PgSleep'", waitingPID).Scan(&pending)
+			require.NoError(t, err)
+			if pending == 0 || time.Since(cancelledAt) >= 500*time.Millisecond {
+				break
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		require.Zero(t, pending, "cancelled JS callback retained SQL")
+		t.Logf("JOINED_CANCEL sql_stop_and_callback_ms=%.3f pending=0", float64(time.Since(cancelledAt).Microseconds())/1000)
+		setDelay(false)
+		require.Equal(t, beforeCancel, workerUCIApplicationExposureCount(t, fixture.store.GetDB()))
+		check("next", 0, "Alpha", "useful")
 	}
-	require.Zero(t, pending, "cancelled JS callback retained SQL")
-	t.Logf("JOINED_CANCEL sql_stop_and_callback_ms=%.3f pending=0", float64(time.Since(cancelledAt).Microseconds())/1000)
-	setDelay(false)
-	require.Equal(t, beforeCancel, workerUCIApplicationExposureCount(t, fixture.store.GetDB()))
-	check("next", 0, "Alpha", "useful")
 	require.Equal(t, catalogBefore, taskContextCatalogSnapshot(t, fixture.store.GetDB()), "joined callbacks mutated catalog/index state")
 	require.Zero(t, provider.calls.Load())
 	owners, err := muxcontrol.SendWithTimeout(fixture.controlPath, muxcontrol.Request{Cmd: "list_owners"}, time.Second)

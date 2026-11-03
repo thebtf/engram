@@ -4,6 +4,7 @@
 // observed source-built artifact at the existing resolver seam; production hash,
 // transport, framing and registered callback bodies remain in use.
 const childProcess = require('node:child_process');
+const { monitorEventLoopDelay, performance } = require('node:perf_hooks');
 const path = require('node:path');
 const readline = require('node:readline');
 const { pathToFileURL } = require('node:url');
@@ -12,6 +13,8 @@ const { setImmediate: nextTurn } = require('node:timers/promises');
 const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 const emit = value => process.stdout.write(JSON.stringify(value) + '\n');
 let setup, binding, handler, active, cleanup, launcher, lib;
+const loopDelay = monitorEventLoopDelay({ resolution: 10 });
+loopDelay.enable();
 
 function safeError(error) { return String(error?.message ?? error).replaceAll(process.env.ENGRAM_TOKEN || '\u0000', '[REDACTED]'); }
 function requireCondition(condition, message) { if (!condition) throw new Error(message); }
@@ -57,6 +60,9 @@ async function initialize(config) {
           trace.processes++;
           trace.execAt = performance.now();
           trace.integrityAndSetupMs = trace.execAt - trace.resolveAt;
+          loopDelay.reset();
+          trace.loopStart = performance.eventLoopUtilization();
+          emit({ event: 'native_boundary', name: trace.name, stage: 'node_pre_exec', at_unix_ms: Date.now() });
           let closed;
           trace.closed = new Promise(resolve => { closed = resolve; });
           const child = childProcess.execFile(file, args, execution, (error, stdout, stderr) => {
@@ -68,11 +74,30 @@ async function initialize(config) {
               if (phase?.diagnostic === 'native_task_phase' && typeof phase.stage === 'string' && Number.isSafeInteger(phase.elapsed_us)) {
                 emit({ event: 'native_phase', name: trace.name, stage: phase.stage, elapsed_us: phase.elapsed_us });
               }
+              if (phase?.diagnostic === 'native_boundary' && typeof phase.stage === 'string' && Number.isSafeInteger(phase.at_unix_ms)) {
+                emit({ event: 'native_boundary', name: trace.name, stage: phase.stage, at_unix_ms: phase.at_unix_ms });
+              }
             }
             callback(error, stdout, stderr);
           });
-          child.once('close', () => { trace.closeAt = performance.now(); closed(); });
-          child.once('spawn', () => emit({ event: 'native_spawned', name: trace.name, pid: child.pid }));
+          child.once('close', () => {
+            trace.closeAt = performance.now();
+            emit({ event: 'native_boundary', name: trace.name, stage: 'node_close', at_unix_ms: Date.now() });
+            const elu = performance.eventLoopUtilization(trace.loopStart);
+            emit({ event: 'parent_event_loop', name: trace.name, resolution_ms: 10, samples: Number(loopDelay.count), delay_mean_ms: Number.isFinite(loopDelay.mean) ? loopDelay.mean / 1e6 : null, delay_max_ms: loopDelay.max / 1e6, ...elu });
+            closed();
+          });
+          child.once('spawn', () => {
+            emit({ event: 'native_boundary', name: trace.name, stage: 'node_spawn', at_unix_ms: Date.now() });
+            emit({ event: 'native_spawned', name: trace.name, pid: child.pid });
+          });
+          let completeStdout = false;
+          child.stdout.on('data', bytes => {
+            if (!completeStdout && bytes.includes(10)) {
+              completeStdout = true;
+              emit({ event: 'native_boundary', name: trace.name, stage: 'node_first_complete_stdout', at_unix_ms: Date.now() });
+            }
+          });
           const end = child.stdin.end.bind(child.stdin);
           child.stdin.end = bytes => {
             const wire = JSON.parse(String(bytes));
@@ -173,7 +198,7 @@ input.on('line', line => {
   const operation = command.type === 'setup' ? initialize(command)
     : command.type === 'invoke' ? invoke(command)
       : command.type === 'supersede' ? handler({ cwd: setup.first, sessionId: 'joined-cancel', prompt: 'thanks' }, {})
-        : command.type === 'finish' ? Promise.resolve().then(async () => { await cleanup?.(); input.close(); emit({ event: 'finished' }); })
+        : command.type === 'finish' ? Promise.resolve().then(async () => { await cleanup?.(); loopDelay.disable(); input.close(); emit({ event: 'finished' }); })
           : Promise.reject(new Error('unsupported fixture command'));
   Promise.resolve(operation).catch(error => emit({ event: 'error', error: safeError(error) }));
 });

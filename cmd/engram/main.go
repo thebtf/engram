@@ -1194,12 +1194,14 @@ func main() {
 			fmt.Fprintln(os.Stderr, "usage: engram task-context --json")
 			os.Exit(1)
 		}
+		fmt.Fprintf(os.Stderr, "{\"diagnostic\":\"native_boundary\",\"stage\":\"go_firstmain\",\"at_unix_ms\":%d}\n", started.UnixMilli())
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		if err := runTaskContext(ctx, started, os.Stdin, os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, "[engram] task context output unavailable")
 			os.Exit(1)
 		}
+		fmt.Fprintf(os.Stderr, "{\"diagnostic\":\"native_boundary\",\"stage\":\"go_before_return\",\"at_unix_ms\":%d}\n", time.Now().UnixMilli())
 		return
 	}
 	if len(os.Args) > 1 && (os.Args[1] == "--help" || os.Args[1] == "-h" || os.Args[1] == "--version" || os.Args[1] == "-v") {

@@ -53,3 +53,9 @@ func TestUCITaskContextD1PhaseDiscriminator(t *testing.T) {
 func TestUCITaskContextJoinedPhaseDiscriminator(t *testing.T) {
 	runNativeTaskContextFixture(t, runJoinedNativeTaskContextDiscriminator)
 }
+
+// This three-callback observation isolates process/main/event-loop epochs and
+// deliberately does not repeat cancellation or the rest of the acceptance matrix.
+func TestUCITaskContextJoinedBoundaryDiscriminator(t *testing.T) {
+	runNativeTaskContextFixture(t, runJoinedNativeTaskContextBoundary)
+}
