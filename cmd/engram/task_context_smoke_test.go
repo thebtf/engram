@@ -50,6 +50,15 @@ func (backend *taskContextBaselineBackend) CallTool(ctx context.Context, request
 // This baseline measures admission + the actual native proxy/RPC path only.
 // It is deliberately not evidence of a useful code/source/call result.
 func TestTaskContextReadyDaemonTransportBaseline(t *testing.T) {
+	runTaskContextTransportFixture(t, false)
+}
+
+func TestTaskContextBuiltIdentityMiss(t *testing.T) {
+	runTaskContextTransportFixture(t, true)
+}
+
+func runTaskContextTransportFixture(t *testing.T, identityMiss bool) {
+	t.Helper()
 	binary := os.Getenv("ENGRAM_TASK_CONTEXT_TEST_BINARY")
 	if binary == "" {
 		t.Skip("ENGRAM_TASK_CONTEXT_TEST_BINARY must name this candidate's built CLI")
@@ -103,11 +112,13 @@ func TestTaskContextReadyDaemonTransportBaseline(t *testing.T) {
 		require.LessOrEqual(t, len(output), 8000)
 		return response, elapsed, len(output)
 	}
-	cold, elapsed, size := invoke()
-	require.Equal(t, "not_ready", cold.Status, "cold=%+v", cold)
-	t.Logf("NATIVE_COLD elapsed_ms=%.3f bytes=%d status=%s", float64(elapsed.Microseconds())/1000, size, cold.Status)
-	_, err = os.Stat(controlPath + ".marker.json")
-	require.True(t, os.IsNotExist(err), "cold path started a daemon")
+	if !identityMiss {
+		cold, elapsed, size := invoke()
+		require.Equal(t, "not_ready", cold.Status, "cold=%+v", cold)
+		t.Logf("NATIVE_COLD elapsed_ms=%.3f bytes=%d status=%s", float64(elapsed.Microseconds())/1000, size, cold.Status)
+		_, err = os.Stat(controlPath + ".marker.json")
+		require.True(t, os.IsNotExist(err), "cold path started a daemon")
+	}
 	daemon := exec.Command(binary, muxcoreDaemonFlag)
 	daemon.Dir = cwd
 	daemon.Env = environment
@@ -143,17 +154,50 @@ func TestTaskContextReadyDaemonTransportBaseline(t *testing.T) {
 			t.Fatalf("owned daemon not ready: %s", daemonLog.String())
 		}
 	}
-	for index := range 3 {
+	samples := 3
+	if identityMiss {
+		samples = 1
+	}
+	for index := range samples {
 		response, elapsed, size := invoke()
 		t.Logf("NATIVE_ADMISSION_BASELINE sample=%d elapsed_ms=%.3f bytes=%d status=%s backend_calls=%d useful=false", index, float64(elapsed.Microseconds())/1000, size, response.Status, backend.calls.Load())
 		require.Equal(t, "empty", response.Status, "response=%+v", response)
 		require.Equal(t, "NO_MATCH", response.ReasonCode)
 		require.Less(t, elapsed, 500*time.Millisecond, "transport alone exceeds total callback budget")
 	}
-	require.EqualValues(t, 3, backend.calls.Load())
+	require.EqualValues(t, samples, backend.calls.Load())
 	stored, err := os.ReadFile(filepath.Join(cwd, ".engram-project"))
 	require.NoError(t, err)
 	require.Equal(t, marker, stored)
 	_, err = os.Stat(filepath.Join(cwd, ".git", "engram-project.json"))
 	require.True(t, os.IsNotExist(err), "native check published a cache")
+	if identityMiss {
+		remote := exec.Command("git", "-C", cwd, "remote", "add", "origin", "https://example.test/Native/Existing.git")
+		require.NoError(t, remote.Run())
+		configPath := filepath.Join(cwd, ".git", "config")
+		configBefore, err := os.ReadFile(configPath)
+		require.NoError(t, err)
+		require.NoError(t, os.Remove(filepath.Join(cwd, ".engram-project")))
+		response, elapsed, size := invoke()
+		require.NoError(t, response.Validate())
+		classificationObserved := response.Status == "context_required"
+		if classificationObserved {
+			require.Equal(t, "PROJECT_CONTEXT_REQUIRED", response.ReasonCode)
+		} else {
+			require.Equal(t, "deadline_exceeded", response.Status)
+			require.Equal(t, "DEADLINE_EXCEEDED", response.ReasonCode)
+			t.Log("identity classification NOT_OBSERVED: caller work deadline expired")
+		}
+		require.Nil(t, response.Project)
+		require.Nil(t, response.Packet)
+		require.EqualValues(t, samples, backend.calls.Load(), "identity miss must not dispatch a backend tool")
+		configAfter, err := os.ReadFile(configPath)
+		require.NoError(t, err)
+		require.Equal(t, configBefore, configAfter)
+		for _, name := range []string{".engram-project", filepath.Join(".git", "engram-project.json")} {
+			_, err := os.Stat(filepath.Join(cwd, name))
+			require.True(t, os.IsNotExist(err), "identity miss must not bootstrap identity")
+		}
+		t.Logf("NATIVE_IDENTITY_MISS elapsed_ms=%.3f bytes=%d status=%s reason=%s backend_calls=%d classification_observed=%t useful=false", float64(elapsed.Microseconds())/1000, size, response.Status, response.ReasonCode, backend.calls.Load(), classificationObserved)
+	}
 }

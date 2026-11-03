@@ -262,19 +262,27 @@ test('single outer prompt deadline cancels uncooperative native work without a f
 
 test('native transport supplies one absolute work deadline with a thirty millisecond completion reserve', async t => {
   const { requestTaskContext } = require('../scripts/run-engram.js');
-  const realExec = require('node:child_process').execFile;
+  const { Worker } = require('node:worker_threads');
+  const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-reserve-worker-'));
+  let workerClosed;
+  t.after(async () => { await workerClosed; fs.rmSync(root, { recursive: true, force: true }); });
   const outer = Date.now() + 500, expectedWork = outer - 30;
+  fs.writeFileSync(path.join(root, 'task-context'), `let raw='';process.stdin.on('data',b=>raw+=b);process.stdin.on('end',()=>{const r=JSON.parse(raw);if(r.deadline_unix_ms!==${expectedWork})process.exit(3);process.stdout.write(JSON.stringify({schema:1,status:'not_ready',reason_code:'DAEMON_NOT_READY'})+'\\n');});`);
   let executions = 0;
-  const outcome = await requestTaskContext(facts, {
+  const outcome = await requestTaskContext({ ...facts, cwd: root }, {
     deadlineAt: outer, maxBytes: 8000,
     resolve: async options => { assert.equal(options.deadlineAt, expectedWork); await new Promise(resolve => setTimeout(resolve, 50)); return { path: process.execPath, target: {} }; },
     roots: () => ({ objects: __dirname }), hash: () => true,
-    execFile(file, args, options, callback) {
+    createTaskContextWorker(entry, execution) {
       executions++;
-      assert.deepEqual(args, ['task-context', '--json']);
-      assert.ok(options.timeout > 0 && options.timeout <= 440);
-      const program = `let raw='';process.stdin.on('data',b=>raw+=b);process.stdin.on('end',()=>{const r=JSON.parse(raw);if(r.deadline_unix_ms!==${expectedWork})process.exit(3);process.stdout.write(JSON.stringify({schema:1,status:'not_ready',reason_code:'DAEMON_NOT_READY'})+'\\n');});`;
-      return realExec(file, ['-e', program], { ...options, cwd: __dirname }, callback);
+      const work = execution.workerData;
+      assert.equal(work.deadlineAt, expectedWork);
+      assert.equal(work.cwd, root);
+      assert.ok(work.deadlineAt - Date.now() > 0 && work.deadlineAt - Date.now() <= 440);
+      const worker = new Worker(entry, execution);
+      workerClosed = new Promise(resolve => worker.once('exit', resolve));
+      return worker;
     },
   });
   assert.equal(outcome.status, 'not_ready');
@@ -301,31 +309,35 @@ test('expired framing or dedup cannot deliver a packet or retain its delivery di
 
 test('reserved native timeout closes its real hung process within the original five hundred milliseconds', async t => {
   const { requestTaskContext } = require('../scripts/run-engram.js');
-  const realExec = require('node:child_process').execFile;
+  const { Worker } = require('node:worker_threads');
+  const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-hung-worker-'));
+  fs.writeFileSync(path.join(root, 'task-context'), 'process.stdin.resume();setInterval(()=>{},1000);setTimeout(()=>process.exit(3),2000).unref();');
   const started = performance.now(), outer = Date.now() + 500;
-  let executions = 0, closed;
+  let executions = 0, workerClosed, childPID;
   const timings = {};
-  const processClosed = new Promise(resolve => { closed = resolve; });
-  const outcome = await requestTaskContext(facts, {
+  t.after(async () => { await workerClosed; fs.rmSync(root, { recursive: true, force: true }); });
+  const outcome = await requestTaskContext({ ...facts, cwd: root }, {
     deadlineAt: outer,
-    resolve: async () => ({ path: process.execPath, target: {} }), roots: () => ({ objects: __dirname }), hash: () => true,
-    execFile(file, args, options, callback) {
-      executions++;
-      timings.spawnAtMs = performance.now() - started;
-      options.signal.addEventListener('abort', () => { timings.abortAtMs = performance.now() - started; }, { once: true });
-      assert.deepEqual(args, ['task-context', '--json']);
-      const child = realExec(file, ['-e', "process.stdin.resume();setInterval(()=>{},1000)"], { ...options, cwd: __dirname }, callback);
-      child.once('exit', () => { timings.exitAtMs = performance.now() - started; });
-      child.once('close', () => { timings.closeAtMs = performance.now() - started; closed(); });
-      return child;
+    resolve: async () => ({ path: process.execPath, target: {} }), roots: () => ({ objects: root }), hash: () => true,
+    createTaskContextWorker(entry, execution) {
+      timings.workerAtMs = performance.now() - started;
+      const worker = new Worker(entry, execution);
+      worker.on('message', message => {
+        if (message.type === 'spawned') { executions++; childPID = message.childPID; timings.spawnObservedAtMs = performance.now() - started; }
+        if (message.type === 'closed') timings.nativeClosedAtMs = performance.now() - started;
+      });
+      workerClosed = new Promise(resolve => worker.once('exit', () => { timings.workerClosedAtMs = performance.now() - started; resolve(); }));
+      return worker;
     },
   });
   timings.helperReturnedAtMs = performance.now() - started;
   assert.equal(executions, 1);
-  await processClosed;
+  await workerClosed;
   const elapsed = performance.now() - started;
-  t.diagnostic(JSON.stringify({ elapsedMs: elapsed, outerBudgetMs: 500, processClosed: true, timings }));
+  t.diagnostic(JSON.stringify({ elapsedMs: elapsed, outerBudgetMs: 500, processClosed: true, threadClosed: true, timings }));
   assert.equal(outcome.status, 'deadline_exceeded');
+  assert.throws(() => process.kill(childPID, 0), error => error.code === 'ESRCH');
   assert.ok(elapsed < 500, `actual completion ${elapsed}ms`);
 });
 

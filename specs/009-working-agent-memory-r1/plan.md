@@ -151,6 +151,18 @@ common-dir cache. If both are absent, it closes context-required before another
 Git remote lookup or REST recovery. Explicit project resolve/check/init retain
 their ordinary recovery behavior; the prompt never bootstraps local identity.
 
+The combined source retains the admitted REST producer's optional remaining-work
+header and actual stored-row source references. Header absence preserves ordinary
+provider/deadline behavior; row version is mutable state, not an immutable body
+revision. The existing code-fast path and same-call project agreement remain;
+knowledge uses only the remaining budget after fresh inspection, without another
+resolver or dependence on unrelated features. Focused source proofs do not replace
+the protected populated-venue consumer. A rebuilt CLI ready-RPC smoke reached its
+control, but its missing-identity classification expired at the caller deadline
+and remains NOT_OBSERVED in that sample; the direct identity regression proves
+context-required with zero remote reads. Preserve the smoke's original failed
+oracle output rather than calling it a latency or loaded-host PASS.
+
 Real Node 24.22.1 and Bun 1.4.4 standalone fixtures exercised the actual worker,
 real executable hash verification, normal protocol, a controlled 650 ms blocking
 launch, expired worker startup, cancellation during launch, late output and an
