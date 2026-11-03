@@ -42,6 +42,9 @@ type Request struct {
 	Tags              []string
 	ConfidenceMin     float64
 	IncludeSuperseded bool
+	// BudgetProviders bounds optional provider work inside an explicit HTTP budget.
+	// Other callers retain the ordinary embedding/reranking deadline behavior.
+	BudgetProviders bool
 }
 
 type Result struct {
@@ -109,7 +112,7 @@ func Search(ctx context.Context, deps Dependencies, req Request) (result Result,
 		return Result{}, ErrIncludeSuperseded
 	}
 	if deps.Reranker != nil {
-		opts.Reranker = rerankAdapter{client: deps.Reranker}
+		opts.Reranker = rerankAdapter{client: deps.Reranker, budgeted: req.BudgetProviders}
 	}
 	filter := memoryFilter{caller: req.Caller, visibility: req.Visibility, confidenceMin: req.ConfidenceMin}
 	if req.Type != "" {
@@ -223,10 +226,28 @@ func (f *memoryFilter) matches(mem *models.Memory) bool {
 }
 
 type rerankAdapter struct {
-	client *reranking.Client
+	client   *reranking.Client
+	budgeted bool
 }
 
 func (a rerankAdapter) Rank(ctx context.Context, query string, passages []string) ([]retrieval.RerankResult, error) {
+	if a.budgeted {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if deadline, ok := ctx.Deadline(); ok {
+			remaining := time.Until(deadline)
+			if remaining <= 0 {
+				return nil, context.DeadlineExceeded
+			}
+			// Keep half the remaining request time for the engine's final current
+			// ACL/version/body-digest revalidation and the HTTP response. A stage
+			// timeout retains fusion order; cancellation of ctx still fails Search.
+			providerCtx, cancel := context.WithTimeout(ctx, remaining/2)
+			defer cancel()
+			ctx = providerCtx
+		}
+	}
 	scores, err := a.client.Rank(ctx, query, passages)
 	if err != nil {
 		return nil, err

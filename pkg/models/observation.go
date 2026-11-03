@@ -274,6 +274,15 @@ func (j JSONInt64Array) Value() (driver.Value, error) {
 	return json.Marshal(j)
 }
 
+// ObservationSourceRef identifies the actual stored row behind a compatibility
+// observation. RecordVersion is mutable row state, not an immutable body revision.
+type ObservationSourceRef struct {
+	Kind          string `json:"kind"`
+	ID            int64  `json:"id"`
+	RecordVersion *int   `json:"record_version,omitempty"`
+	ContentSHA256 string `json:"content_sha256,omitempty"`
+}
+
 // Observation represents a learning extracted from a Claude Code session.
 //
 // Deprecated: the observations table was dropped in v5 (migration 099) and
@@ -328,6 +337,8 @@ type Observation struct {
 	EffectivenessScore      float64          `db:"effectiveness_score" json:"effectiveness_score"`
 	EffectivenessInjections int              `db:"effectiveness_injections" json:"effectiveness_injections"`
 	EffectivenessSuccesses  int              `db:"effectiveness_successes" json:"effectiveness_successes"`
+
+	SourceRef *ObservationSourceRef `db:"-" gorm:"-" json:"source_ref,omitempty"`
 }
 
 // ParsedObservation is the intermediate representation of an observation parsed
@@ -503,6 +514,8 @@ type ObservationJSON struct {
 	ExpiresAt               *time.Time       `json:"expires_at,omitempty"`
 	TtlDays                 *int32           `json:"ttl_days,omitempty"`
 	IsExpired               bool             `json:"is_expired,omitempty"`
+
+	SourceRef *ObservationSourceRef `json:"source_ref,omitempty"`
 }
 
 // MarshalJSON implements json.Marshaler for Observation.
@@ -510,6 +523,7 @@ type ObservationJSON struct {
 func (o *Observation) MarshalJSON() ([]byte, error) {
 	j := ObservationJSON{
 		ID:              o.ID,
+		SourceRef:       o.SourceRef,
 		SDKSessionID:    o.SDKSessionID,
 		Project:         o.Project,
 		Scope:           o.Scope,
@@ -652,6 +666,9 @@ func (o *Observation) ToMap() map[string]interface{} {
 	if err := json.Unmarshal(data, &result); err != nil {
 		return map[string]interface{}{"id": o.ID, "error": err.Error()}
 	}
+	// JSON's map decoder uses float64; restore the original integer identity so
+	// compatibility observations above the JS-safe range are never rounded.
+	result["id"] = o.ID
 	return result
 }
 

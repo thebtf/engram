@@ -26,6 +26,8 @@ type RetrievalOptions struct {
 	UseLLMFilter    bool
 	FilePaths       []string
 	ObservationType string
+	// BudgetProviders reserves processing time only for explicitly budgeted prompt searches.
+	BudgetProviders bool
 }
 
 type retrievalContextKey struct{}
@@ -122,7 +124,7 @@ func (s *Service) RetrieveRelevant(ctx context.Context, project, query string, o
 	if useFallback {
 		observations, err = s.searchFallbackObservations(ctx, query, retrievalScope{Project: project, AgentID: state.agentID}, limit)
 	} else {
-		observations, err = s.searchHybridMemoryObservations(ctx, project, query, limit, opts.ObservationType, similarityScores)
+		observations, err = s.searchHybridMemoryObservations(ctx, project, query, limit, opts.ObservationType, opts.BudgetProviders, similarityScores)
 	}
 	if err != nil {
 		return nil, nil, err
@@ -173,7 +175,7 @@ func (s *Service) RetrieveRelevant(ctx context.Context, project, query string, o
 	return clusteredObservations, similarityScores, nil
 }
 
-func (s *Service) searchHybridMemoryObservations(ctx context.Context, project, query string, limit int, observationType string, scores map[int64]float64) ([]*models.Observation, error) {
+func (s *Service) searchHybridMemoryObservations(ctx context.Context, project, query string, limit int, observationType string, budgetProviders bool, scores map[int64]float64) ([]*models.Observation, error) {
 	observations := make([]*models.Observation, 0, limit)
 	if observationType == "" || observationType == string(models.ObsTypeDiscovery) {
 		var embeddingStore retrieval.EmbeddingStoreInterface
@@ -187,6 +189,7 @@ func (s *Service) searchHybridMemoryObservations(ctx context.Context, project, q
 		}, memorysearch.Request{
 			Project: project, Query: query, Limit: limit,
 			Caller: memoryVisibilityCaller(ctx, ""), Visibility: memoryVisibilityOptions(),
+			BudgetProviders: budgetProviders,
 		})
 		if err != nil {
 			return nil, err

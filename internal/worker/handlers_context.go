@@ -30,6 +30,20 @@ type sessionStartContextProvider interface {
 	GetSessionStartContext(context.Context, *pb.GetSessionStartContextRequest) (*pb.GetSessionStartContextResponse, error)
 }
 
+func observationSourceRef(kind string, id int64, version int, content string) *models.ObservationSourceRef {
+	const maxSafeInteger = 1<<53 - 1
+	if id <= 0 || id > maxSafeInteger {
+		return nil
+	}
+	ref := &models.ObservationSourceRef{
+		Kind: kind, ID: id, ContentSHA256: scope.MemoryContentDigest(content),
+	}
+	if version >= 0 && int64(version) <= maxSafeInteger {
+		ref.RecordVersion = &version
+	}
+	return ref
+}
+
 // behavioralRulesToObservations converts behavioral rules into the observation shape
 // expected by context-inject callers. Rules use guidance type so downstream consumers
 // can distinguish them from user-authored observations.
@@ -47,6 +61,7 @@ func behavioralRulesToObservations(rules []*models.BehavioralRule) []*models.Obs
 		}
 		result = append(result, &models.Observation{
 			ID:              rule.ID,
+			SourceRef:       observationSourceRef("behavioral_rule", rule.ID, rule.Version, rule.Content),
 			Project:         project,
 			Scope:           scope,
 			Type:            models.ObsTypeGuidance,
@@ -82,6 +97,7 @@ func memoryToObservation(mem *models.Memory) *models.Observation {
 		ID: mem.ID, Project: mem.Project, Scope: models.ScopeProject,
 		Type: models.ObsTypeDiscovery, MemoryType: models.MemTypeContext, SourceType: models.SourceManual,
 		CreatedAt: mem.CreatedAt.Format(time.RFC3339), CreatedAtEpoch: mem.CreatedAt.UnixMilli(),
+		SourceRef: observationSourceRef("memory", mem.ID, mem.Version, mem.Content),
 		Title:     sql.NullString{String: mem.Content, Valid: mem.Content != ""},
 		Narrative: sql.NullString{String: mem.Content, Valid: mem.Content != ""},
 		Concepts:  models.JSONStringArray(mem.Tags), ImportanceScore: 1,
@@ -91,6 +107,8 @@ func memoryToObservation(mem *models.Memory) *models.Observation {
 // handleSearchByPromptGET godoc
 // @Summary Search observations by prompt
 // @Description Searches observations using shared vector and text retrieval (FTS plus literal content/tag matches), optional configured cross-encoder reranking, and existing clustering. Unavailable embeddings degrade to text search; query expansion is not performed. Memory-store lookup failures return HTTP 500 rather than an empty success. JSON bodies are ignored; use POST for large prompts.
+// @Description Optional X-Engram-Budget-Ms is a positive int64 remaining processing budget: it only shortens the existing deadline, rejects malformed/nonpositive/overflow values with HTTP 400, and reserves provider time for authorized lexical fallback and final ACL/version/body-digest checks. Absent keeps existing deadline/provider behavior; there is no global 500ms cap.
+// @Description observations and always_inject may include source_ref with kind (memory or behavioral_rule), a positive JS-safe id matching the observation id, optional nonnegative JS-safe record_version (mutable row state, not body revision), and optional lowercase SHA-256 of the exact stored UTF-8 body. Source-less or unsafe-ID observations omit source_ref; legacy numeric observation ids remain exact.
 // @Tags Search
 // @Produce json
 // @Security ApiKeyAuth
@@ -101,8 +119,9 @@ func memoryToObservation(mem *models.Memory) *models.Observation {
 // @Param session_id query string false "Optional source-session audit attribution; does not change project-scoped search visibility"
 // @Param files_being_edited query []string false "File paths; repeat the query parameter" collectionFormat(multi)
 // @Param limit query int false "Number of results (default 50, max 200)"
+// @Param X-Engram-Budget-Ms header int64 false "Positive remaining processing budget in milliseconds; never extends the existing deadline"
 // @Success 200 {object} map[string]interface{}
-// @Failure 400 {string} string "project and query required"
+// @Failure 400 {string} string "project/query invalid or budget header invalid"
 // @Failure 500 {string} string "memory-store lookup or retrieval failed"
 // @Router /api/context/search [get]
 func (s *Service) handleSearchByPromptGET(w http.ResponseWriter, r *http.Request) {
@@ -112,6 +131,8 @@ func (s *Service) handleSearchByPromptGET(w http.ResponseWriter, r *http.Request
 // handleSearchByPrompt godoc
 // @Summary Search observations by prompt
 // @Description Searches observations using shared vector and text retrieval (FTS plus literal content/tag matches), optional configured cross-encoder reranking, and existing clustering. Unavailable embeddings degrade to text search; query expansion is not performed. Memory-store lookup failures return HTTP 500 rather than an empty success. A nonempty project and query are each required in the query string or JSON body. Nonempty JSON fields override query parameters; session_id overrides even when empty. Invalid or absent JSON falls back to query parameters.
+// @Description Optional X-Engram-Budget-Ms is a positive int64 remaining processing budget: it only shortens the existing deadline, rejects malformed/nonpositive/overflow values with HTTP 400, and reserves provider time for authorized lexical fallback and final ACL/version/body-digest checks. Absent keeps existing deadline/provider behavior; there is no global 500ms cap.
+// @Description observations and always_inject may include source_ref with kind (memory or behavioral_rule), a positive JS-safe id matching the observation id, optional nonnegative JS-safe record_version (mutable row state, not body revision), and optional lowercase SHA-256 of the exact stored UTF-8 body. Source-less or unsafe-ID observations omit source_ref; legacy numeric observation ids remain exact.
 // @Tags Search
 // @Accept json
 // @Produce json
@@ -124,11 +145,36 @@ func (s *Service) handleSearchByPromptGET(w http.ResponseWriter, r *http.Request
 // @Param files_being_edited query []string false "File paths; repeat the query parameter or supply a POST JSON array" collectionFormat(multi)
 // @Param limit query int false "Query-only number of results (default 50, max 200)"
 // @Param body body object false "POST body: {project, query, agent_id, session_id, cwd, obs_type, files_being_edited}; nonempty fields override query params; session_id overrides even when empty; obs_type is body-only, limit is query-only"
+// @Param X-Engram-Budget-Ms header int64 false "Positive remaining processing budget in milliseconds; never extends the existing deadline"
 // @Success 200 {object} map[string]interface{}
-// @Failure 400 {string} string "project and query required"
+// @Failure 400 {string} string "project/query invalid or budget header invalid"
 // @Failure 500 {string} string "memory-store lookup or retrieval failed"
 // @Router /api/context/search [post]
 func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
+	budgetHeaders, budgeted := r.Header["X-Engram-Budget-Ms"]
+	if budgeted {
+		if len(budgetHeaders) != 1 {
+			http.Error(w, "X-Engram-Budget-Ms must be a positive integer", http.StatusBadRequest)
+			return
+		}
+		milliseconds, err := strconv.ParseInt(budgetHeaders[0], 10, 64)
+		if err != nil || milliseconds <= 0 {
+			http.Error(w, "X-Engram-Budget-Ms must be a positive integer", http.StatusBadRequest)
+			return
+		}
+		budget := DefaultHTTPTimeout
+		if deadline, ok := r.Context().Deadline(); ok {
+			budget = time.Until(deadline)
+		}
+		// Compare integer milliseconds before conversion: even MaxInt64 is a
+		// valid positive header, but multiplying it by time.Millisecond overflows.
+		if milliseconds <= int64(budget/time.Millisecond) {
+			budget = time.Duration(milliseconds) * time.Millisecond
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), budget)
+		defer cancel()
+		r = r.WithContext(ctx)
+	}
 	project := r.URL.Query().Get("project")
 	query := r.URL.Query().Get("query")
 	cwd := r.URL.Query().Get("cwd")
@@ -203,6 +249,7 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 		MaxResults:      maxResults,
 		FilePaths:       filesBeingEdited,
 		ObservationType: obsTypeFilter,
+		BudgetProviders: budgeted,
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -286,6 +333,11 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 		} else {
 			alwaysInjectObs = behavioralRulesToObservations(rules)
 		}
+	}
+
+	if err := r.Context().Err(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 
 	writeJSON(w, map[string]any{
