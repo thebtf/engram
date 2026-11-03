@@ -49,8 +49,8 @@ type Result struct {
 	Explanations []retrieval.RankingExplanation
 }
 
-// Search embeds, retrieves, and filters before the final visible limit. It never
-// performs reconsolidation or any other memory mutation; MCP owns those effects.
+// Search authorizes candidates before retrieval caps and revalidates materialized
+// bodies before external reranking and return. It performs no memory mutations.
 func Search(ctx context.Context, deps Dependencies, req Request) (result Result, resultErr error) {
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
@@ -68,6 +68,8 @@ func Search(ctx context.Context, deps Dependencies, req Request) (result Result,
 		req.Limit = 10
 	}
 	opts := req.Options
+	// Never accept an Access override supplied through retrieval options.
+	opts.Access = &scope.MemoryReadAccess{Caller: req.Caller, Visibility: req.Visibility}
 	if deps.Embedder != nil {
 		embedCtx := ctx
 		var cancel context.CancelFunc
@@ -122,7 +124,15 @@ func Search(ctx context.Context, deps Dependencies, req Request) (result Result,
 	memories := deps.Memories
 	var text *textCandidates
 	if deps.LiteralMatches != nil {
-		text = &textCandidates{MemoryStoreInterface: memories, literal: deps.LiteralMatches, filter: &filter}
+		authorized, ok := memories.(retrieval.SearchMemoryStore)
+		if !ok {
+			return Result{}, fmt.Errorf("memory search: authorized memory reader unavailable")
+		}
+		literal, ok := deps.LiteralMatches.(searchLiteralStore)
+		if !ok {
+			return Result{}, fmt.Errorf("memory search: authorized literal reader unavailable")
+		}
+		text = &textCandidates{MemoryStoreInterface: memories, SearchMemoryStore: authorized, literal: literal, filter: &filter}
 		memories = text
 	}
 

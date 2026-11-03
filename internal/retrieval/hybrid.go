@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"sort"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/internal/graph"
 	"github.com/thebtf/engram/internal/rankfusion"
+	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -74,6 +76,9 @@ type RerankResult struct {
 
 // HybridOptions configures an individual HybridSearch call.
 type HybridOptions struct {
+	// Access is mandatory for caller-facing shared search. Nil retains the trusted
+	// internal HybridSearch contract; it never substitutes for missing authorized stores.
+	Access *scope.MemoryReadAccess
 	// QueryVec is the embedding of the query string. When nil and no embedding
 	// service is available, retrieval degrades gracefully to FTS-only (Tier1).
 	QueryVec []float32
@@ -98,12 +103,8 @@ type HybridOptions struct {
 	ExpandGraph bool
 	// Explain enables per-result score breakdown. Populated in each ScoredMemory.
 	Explain bool
-	// SkipTier0 disables the Tier0 exact content-hash short-circuit when true.
-	// The caller sets this to re-run the pipeline via Tier1/Tier2 only after a
-	// Tier0 hit was returned but then filtered out (e.g. by scope or tag
-	// predicates at the MCP layer). Keeping this option here rather than moving
-	// MCP-layer predicates into HybridSearch preserves the layer boundary: the
-	// retrieval package stays filter-agnostic.
+	// SkipTier0 disables the exact content-hash short-circuit. Adapters can retry
+	// Tier1 when a visible exact hit does not satisfy their non-security filters.
 	SkipTier0 bool
 	// Reranker, when non-nil, reorders the fused+scored candidate pool with a
 	// cross-encoder before the final sort (rank-4). It runs on the full pool
@@ -156,20 +157,54 @@ func HybridSearch(
 	// the server's local timezone is not UTC.
 	now := time.Now().UTC()
 	tierAllowed := buildTierSet(opts.TierFilter)
+	var searchStore SearchMemoryStore
+	var searchEmbStore SearchEmbeddingStore
+	var searchGraphStore SearchGraphStore
+	if opts.Access != nil {
+		var ok bool
+		searchStore, ok = memStore.(SearchMemoryStore)
+		if !ok {
+			return nil, nil, fmt.Errorf("memory search: authorized memory reader unavailable")
+		}
+		if embStore != nil && len(opts.QueryVec) > 0 && tierAllowed("tier1_vector") {
+			searchEmbStore, ok = embStore.(SearchEmbeddingStore)
+			if !ok {
+				return nil, nil, fmt.Errorf("memory search: authorized vector reader unavailable")
+			}
+		}
+		if opts.ExpandGraph && gStore != nil && tierAllowed("tier2_graph") {
+			searchGraphStore, ok = gStore.(SearchGraphStore)
+			if !ok {
+				return nil, nil, fmt.Errorf("memory search: authorized graph reader unavailable")
+			}
+		}
+	}
 
-	// Tier 0 — exact content-hash match.
-	// Skipped when SkipTier0 is set so callers can fall through to Tier1 after
-	// a prior Tier0 result was fully filtered at the MCP layer (e.g. scope or
-	// tag mismatch). See HybridOptions.SkipTier0 for rationale.
+	// Tier0 can be skipped when an exact hit fails adapter-level type/tag filters.
 	if !opts.SkipTier0 && tierAllowed("tier0_exact") {
 		queryHash := contentHash(query)
-		// Fetch a candidate pool via List (no index on content; practical for small projects).
-		// For large deployments an indexed content_hash column would be preferred; that is
-		// a follow-on migration — see NFR-C2 for the <100ms budget rationale.
-		candidates, err := memStore.List(ctx, project, 200)
+		// The bounded pool contains only authorized rows for public search.
+		var candidates []*models.Memory
+		var err error
+		if searchStore != nil {
+			candidates, err = searchStore.ListForSearch(ctx, project, 200, *opts.Access)
+		} else {
+			candidates, err = memStore.List(ctx, project, 200)
+		}
 		if err == nil {
 			for _, m := range candidates {
 				if contentHash(m.Content) == queryHash {
+					if searchStore != nil {
+						ref := scope.MemoryReference(m)
+						current, getErr := searchStore.GetByRefsForSearch(ctx, project, []scope.MemoryRef{ref}, *opts.Access)
+						if getErr != nil {
+							return nil, nil, getErr
+						}
+						if len(current) != 1 || !searchMemoryMatches(current[0], project, ref, *opts.Access) {
+							continue
+						}
+						m = current[0]
+					}
 					sm := Score(m, 1.0, now)
 					sm.Memory = m
 					var expl []RankingExplanation
@@ -200,9 +235,12 @@ func HybridSearch(
 	const vecLimit = 50
 
 	var (
-		ftsIDs  []int64
-		vecIDs  []int64
-		vecSims map[int64]float64 // memory_id → cosine similarity
+		ftsIDs     []int64
+		vecIDs     []int64
+		vecSims    map[int64]float64 // memory_id → cosine similarity
+		ftsRefs    map[int64]scope.MemoryRef
+		vecRefs    map[int64]scope.MemoryRef
+		ftsPartial map[int64]bool
 	)
 
 	eg, egCtx := errgroup.WithContext(ctx)
@@ -210,35 +248,58 @@ func HybridSearch(
 	// FTS branch.
 	if tierAllowed("tier1_fts") {
 		eg.Go(func() error {
-			rows, err := memStore.SearchFTS(egCtx, project, query, ftsLimit)
+			var rows []*models.Memory
+			var err error
+			if searchStore != nil {
+				rows, ftsPartial, err = searchStore.SearchFTSForSearch(egCtx, project, query, ftsLimit, *opts.Access)
+			} else {
+				rows, err = memStore.SearchFTS(egCtx, project, query, ftsLimit)
+			}
 			if err != nil {
 				// FTS failure is non-fatal; log via the caller — here we degrade silently.
 				return nil
 			}
 			ftsIDs = make([]int64, len(rows))
+			if searchStore != nil {
+				ftsRefs = make(map[int64]scope.MemoryRef, len(rows))
+			}
 			for i, m := range rows {
 				ftsIDs[i] = m.ID
+				if searchStore != nil {
+					ftsRefs[m.ID] = scope.MemoryReference(m)
+				}
 			}
 			return nil
 		})
 	}
 
-	// Vector branch — skipped when embedding store or query vector unavailable.
-	// Uses FindSimilarForProject to scope results to the caller's project,
-	// preventing cross-project leakage (content_chunks has no project column).
+	// Vector candidates always retain project scope. Caller-facing search also
+	// applies read policy before the vector ordering and candidate cap.
 	useVector := embStore != nil && len(opts.QueryVec) > 0 && tierAllowed("tier1_vector")
 	if useVector {
 		eg.Go(func() error {
 			vecThreshold := opts.VecThreshold // 0 → embedding store default (0.7)
-			results, err := embStore.FindSimilarForProject(egCtx, project, opts.QueryVec, vecLimit, vecThreshold)
+			var results []embedding.SimilarResult
+			var err error
+			if searchEmbStore != nil {
+				results, err = searchEmbStore.FindSimilarForSearch(egCtx, project, opts.QueryVec, vecLimit, vecThreshold, *opts.Access)
+			} else {
+				results, err = embStore.FindSimilarForProject(egCtx, project, opts.QueryVec, vecLimit, vecThreshold)
+			}
 			if err != nil {
 				return nil // degrade to FTS-only
 			}
 			vecIDs = make([]int64, len(results))
 			vecSims = make(map[int64]float64, len(results))
+			if searchStore != nil {
+				vecRefs = make(map[int64]scope.MemoryRef, len(results))
+			}
 			for i, r := range results {
 				vecIDs[i] = r.MemoryID
 				vecSims[r.MemoryID] = r.Similarity
+				if searchStore != nil {
+					vecRefs[r.MemoryID] = scope.MemoryRef{ID: r.MemoryID, Version: r.Version, ContentDigest: r.ContentDigest}
+				}
 			}
 			return nil
 		})
@@ -248,28 +309,46 @@ func HybridSearch(
 		return nil, nil, err
 	}
 
+	// Concurrent legs may have selected different bodies for one ID. Resolve
+	// those exact references before either fusion credit or its candidate cap.
+	if searchStore != nil {
+		var err error
+		ftsIDs, vecIDs, err = reconcileSearchLegs(ctx, project, searchStore, *opts.Access,
+			ftsIDs, vecIDs, ftsRefs, vecRefs, vecSims)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
 	// Fuse with RRF.
 	const rrfK = 60
 	fusedIDs := RRF(ftsIDs, vecIDs, rrfK)
 	if len(fusedIDs) == 0 {
 		return nil, nil, nil
 	}
-	// Cap candidate fetch.
-	// Multiplier 5× (was 3×) to ensure enough candidates survive the MCP-layer
-	// scope.Resolve privacy filter (F-TG1). If the top-ranked fused candidates
-	// are private/shared rows invisible to the caller, a 3× cap could exhaust
-	// before reaching visible matches; 5× keeps the cap tight while reducing
-	// false-empty results under realistic private-heavy corpora.
+	// Bound fusion after each leg has authorized its candidate ordering and cap.
 	fetchN := limit * 5
 	if fetchN > len(fusedIDs) {
 		fetchN = len(fusedIDs)
 	}
 	fusedIDs = fusedIDs[:fetchN]
 
-	// Materialise candidate memories — project-scoped to block cross-project leakage.
-	// Candidates can include IDs from the unscoped-by-nature vector leg; filtering by
-	// project here is the second defence (FindSimilarForProject is the first).
-	memories, err := memStore.GetByIDs(ctx, project, fusedIDs)
+	// Recheck selected versions, body digests and current policy before scoring.
+	var memories []*models.Memory
+	var err error
+	if searchStore != nil {
+		refs := make([]scope.MemoryRef, 0, len(fusedIDs))
+		for _, id := range fusedIDs {
+			ref, ok := ftsRefs[id]
+			if !ok {
+				ref = vecRefs[id]
+			}
+			refs = append(refs, ref)
+		}
+		memories, err = searchStore.GetByRefsForSearch(ctx, project, refs, *opts.Access)
+	} else {
+		memories, err = memStore.GetByIDs(ctx, project, fusedIDs)
+	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -278,12 +357,8 @@ func HybridSearch(
 	ftsSet := idSet(ftsIDs)
 	vecSet := idSet(vecIDs)
 
-	// Pre-compute FTS rank lookup for RRF-aware relevance estimation.
-	// FTS rank position is used to normalise relevance for FTS-only candidates so
-	// that relevance carries signal from the FTS ordering rather than a flat 0.5.
-	// Formula: relevance = 1 / (rank + rrfK + 1), clamped to [0.1, 0.9] so it
-	// stays distinguishable from exact (1.0) and zero-signal paths.
-	// For vector candidates the actual cosine similarity is used directly (preferred).
+	// Preserve lexical rank within its evidence class. A successful OR-recovery
+	// pass is partial-query evidence, not a strict top hit with relevance 0.9.
 	ftsRankMap := make(map[int64]int, len(ftsIDs))
 	for rank, id := range ftsIDs {
 		ftsRankMap[id] = rank
@@ -294,14 +369,9 @@ func HybridSearch(
 	explMap := make(map[int64]RankingExplanation, len(memories))
 
 	for _, m := range memories {
-		// Relevance assignment (FR-C4):
-		// - tier1_vector: cosine similarity from the embedding store (most precise).
-		// - tier1_fts (vector also present): cosine similarity used even when FTS also
-		//   matched, because cosine is a better-calibrated signal.
-		// - tier1_fts-only: normalised RRF term 1/(rank+k+1) clamped to [0.1,0.9].
-		//   Rationale: this carries the FTS ordering signal rather than a flat 0.5,
-		//   which caused all FTS-only candidates to tie on relevance and sort by
-		//   recency/importance only — discarding the FTS rank completely.
+		// Real vector similarity remains authoritative for vector-supported rows.
+		// Lexical-only rows retain rank ordering, with a lower ceiling for OR-only
+		// recovery. Full literal matches are promoted out of that partial class.
 		var relevance float64
 		tier := "tier1_fts"
 		if sim, ok := vecSims[m.ID]; ok {
@@ -313,18 +383,18 @@ func HybridSearch(
 				tier = "tier1_vector"
 			}
 		} else if rank, ok := ftsRankMap[m.ID]; ok {
-			// FTS-only candidate: map rank to relevance in [0.3, 0.9] using linear
-			// position within the FTS result list. rank-0 (best FTS match) → 0.9,
-			// rank-(N-1) (worst) → 0.3. This carries the FTS ts_rank_cd ordering
-			// through the FR-C4 relevance term rather than using a flat 0.5 which
-			// discards rank entirely and collapses all FTS results to identical relevance.
-			// Formula: relevance = 0.3 + 0.6 * (1 - rank/(len(ftsIDs)))
-			// For N=1 (single FTS result) this produces exactly 0.9.
-			n := len(ftsIDs)
-			if n <= 1 {
-				relevance = 0.9
-			} else {
-				relevance = 0.3 + 0.6*(1.0-float64(rank)/float64(n))
+			// Strict/literal relevance spans [0.3, 0.9]. Partial OR recovery spans
+			// [0.3, 0.6], below the vector leg's default 0.7 similarity floor.
+			// Recovery remains useful on its own without claiming stronger evidence
+			// than an independently supported semantic match.
+			span := 0.6
+			relevance = 0.9
+			if ftsPartial[m.ID] {
+				span = 0.3
+				relevance = 0.6
+			}
+			if len(ftsIDs) > 1 {
+				relevance = 0.3 + span*(1.0-float64(rank)/float64(len(ftsIDs)))
 			}
 		} else {
 			// ID arrived outside both FTS and vector sets (e.g. Tier0 path quirk).
@@ -359,28 +429,36 @@ func HybridSearch(
 		if len(top5) > 5 {
 			top5 = top5[:5]
 		}
-		// Collect 1-hop neighbour IDs from top-5.
-		neighbourSet := make(map[int64]bool)
-		for _, sm := range top5 {
-			results, tErr := gStore.Traverse(tier2Ctx, sm.Memory.ID, 1, nil)
-			if tErr != nil {
-				// Includes context.DeadlineExceeded — degrade silently.
-				continue
+		var neighbours []*models.Memory
+		var gErr error
+		if searchGraphStore != nil {
+			seeds := make([]int64, len(top5))
+			for i, sm := range top5 {
+				seeds[i] = sm.Memory.ID
 			}
-			for _, r := range results {
-				nID := r.TargetID
-				if nID == sm.Memory.ID {
-					nID = r.SourceID
+			refs, neighborErr := searchGraphStore.NeighborsForSearch(tier2Ctx, project, seeds, fusedIDs, 20, *opts.Access)
+			gErr = neighborErr
+			if gErr == nil {
+				neighbours, gErr = searchStore.GetByRefsForSearch(tier2Ctx, project, refs, *opts.Access)
+			}
+		} else {
+			// Trusted internal callers retain the existing traversal contract.
+			neighbourSet := make(map[int64]bool)
+			for _, sm := range top5 {
+				results, tErr := gStore.Traverse(tier2Ctx, sm.Memory.ID, 1, nil)
+				if tErr != nil {
+					continue
 				}
-				if !idInList(nID, fusedIDs) {
-					neighbourSet[nID] = true
+				for _, r := range results {
+					nID := r.TargetID
+					if nID == sm.Memory.ID {
+						nID = r.SourceID
+					}
+					if !idInList(nID, fusedIDs) {
+						neighbourSet[nID] = true
+					}
 				}
 			}
-		}
-		if len(neighbourSet) > 0 {
-			// Cap neighbour expansion to 20 (EC-C3).
-			// Collect all IDs then sort ascending before truncation so the set is
-			// deterministic — Go map iteration order is randomised.
 			nIDs := make([]int64, 0, len(neighbourSet))
 			for id := range neighbourSet {
 				nIDs = append(nIDs, id)
@@ -389,28 +467,28 @@ func HybridSearch(
 			if len(nIDs) > 20 {
 				nIDs = nIDs[:20]
 			}
-			// Use project-scoped GetByIDs to prevent cross-project leakage through
-			// graph edges that may reference memories in other projects.
-			neighbours, gErr := memStore.GetByIDs(tier2Ctx, project, nIDs)
-			if gErr == nil {
-				for _, m := range neighbours {
-					// Graph penalty: 0.85 multiplier on the composite score.
-					sm := Score(m, 0.5, now)
-					sm.Score *= 0.85
-					sm.orderKey = sm.Score // keep the sort key aligned with the penalized composite
-					if opts.MinConfidence > 0 && sm.Score < opts.MinConfidence {
-						continue
-					}
-					scored = append(scored, sm)
-					if opts.Explain {
-						explMap[m.ID] = RankingExplanation{
-							MemoryID:   m.ID,
-							Relevance:  0.5,
-							Recency:    sm.Recency,
-							Importance: sm.Importance,
-							FusedScore: sm.Score,
-							SourceTier: "tier2_graph",
-						}
+			if len(nIDs) > 0 {
+				neighbours, gErr = memStore.GetByIDs(tier2Ctx, project, nIDs)
+			}
+		}
+		if gErr == nil {
+			for _, m := range neighbours {
+				// Graph penalty: 0.85 multiplier on the composite score.
+				sm := Score(m, 0.5, now)
+				sm.Score *= 0.85
+				sm.orderKey = sm.Score // keep the sort key aligned with the penalized composite
+				if opts.MinConfidence > 0 && sm.Score < opts.MinConfidence {
+					continue
+				}
+				scored = append(scored, sm)
+				if opts.Explain {
+					explMap[m.ID] = RankingExplanation{
+						MemoryID:   m.ID,
+						Relevance:  0.5,
+						Recency:    sm.Recency,
+						Importance: sm.Importance,
+						FusedScore: sm.Score,
+						SourceTier: "tier2_graph",
 					}
 				}
 			}
@@ -427,7 +505,24 @@ func HybridSearch(
 	// failure-silent — any error keeps the fusion order (a missing/broken reranker
 	// must NEVER block or fail recall). Mirrors the embedding-client degrade pattern.
 	if opts.Reranker != nil && len(scored) > 1 {
-		rerankApplyCrossEncoder(ctx, opts.Reranker, query, scored)
+		// Revalidate immediately before the external payload and its candidate cap.
+		if searchStore != nil {
+			scored, err = revalidateSearchResults(ctx, project, scored, searchStore, *opts.Access)
+			if err != nil {
+				return nil, nil, err
+			}
+		}
+		if len(scored) > 1 {
+			rerankApplyCrossEncoder(ctx, opts.Reranker, query, scored)
+		}
+	}
+	// A provider call can overlap ACL, lifecycle or version changes. Do not return
+	// stale bodies or let those references consume the final visible limit.
+	if searchStore != nil {
+		scored, err = revalidateSearchResults(ctx, project, scored, searchStore, *opts.Access)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 
 	// Final sort: orderKey desc → ID asc (deterministic tie-breaker). orderKey equals

@@ -1962,37 +1962,57 @@ func hasNegationTerm(terms []string) bool {
 // limited to limit rows (capped at 200 internally to prevent unbounded scans).
 // Returns an empty slice — not an error — when no rows match.
 func (s *MemoryStore) SearchFTS(ctx context.Context, project, query string, limit int) ([]*models.Memory, error) {
+	return s.searchFTS(ctx, project, query, limit, nil)
+}
+
+func (s *MemoryStore) searchFTS(ctx context.Context, project, query string, limit int, access *scope.MemoryReadAccess) ([]*models.Memory, error) {
+	rows, _, err := s.searchFTSWithFallback(ctx, project, query, limit, access)
+	return rows, err
+}
+
+func (s *MemoryStore) searchFTSWithFallback(ctx context.Context, project, query string, limit int, access *scope.MemoryReadAccess) ([]*models.Memory, bool, error) {
 	if project == "" {
-		return nil, fmt.Errorf("SearchFTS: project must not be empty")
+		return nil, false, fmt.Errorf("SearchFTS: project must not be empty")
 	}
 	if query == "" {
-		return nil, fmt.Errorf("SearchFTS: query must not be empty")
+		return nil, false, fmt.Errorf("SearchFTS: query must not be empty")
 	}
 	limit = normalizeSearchFTSLimit(limit)
 	variants := searchFTSQueryVariants(query)
 	for i, variant := range variants {
-		rows, err := s.searchFTSPage(ctx, project, variant, limit, 0)
+		rows, err := s.searchFTSPageWithAccess(ctx, project, variant, limit, 0, access)
 		if err != nil {
 			if i > 0 {
-				return nil, fmt.Errorf("SearchFTS project=%q (OR fallback): %w", project, err)
+				return nil, false, fmt.Errorf("SearchFTS project=%q (OR fallback): %w", project, err)
 			}
-			return nil, fmt.Errorf("SearchFTS project=%q: %w", project, err)
+			return nil, false, fmt.Errorf("SearchFTS project=%q: %w", project, err)
 		}
 		if len(rows) > 0 || i == len(variants)-1 {
-			return rows, nil
+			return rows, i > 0, nil
 		}
 	}
-	return []*models.Memory{}, nil
+	return []*models.Memory{}, false, nil
 }
 
 // SearchLiteralWithOffset pages active, currently valid content/tag matches
-// for the same project. It supplies candidates to hybrid retrieval, not a separate
-// scorer; caller visibility is applied by the shared retrieval boundary.
+// for trusted internal readers. Caller-facing search uses SearchLiteralForSearch
+// to apply visibility before ordering and pagination.
 func (s *MemoryStore) SearchLiteralWithOffset(ctx context.Context, project, query string, limit, offset int) ([]*models.Memory, error) {
+	return s.searchLiteralWithAccess(ctx, project, query, limit, offset, nil)
+}
+
+func (s *MemoryStore) searchLiteralWithAccess(ctx context.Context, project, query string, limit, offset int, access *scope.MemoryReadAccess) ([]*models.Memory, error) {
 	if project == "" {
 		return nil, fmt.Errorf("SearchLiteralWithOffset: project must not be empty")
 	}
 	q := baseMemoryListQuery(s.db.WithContext(ctx)).Where("project = ?", project)
+	if access != nil {
+		var err error
+		q, err = s.memorySearchQuery(ctx, project, *access)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if query = strings.TrimSpace(query); query != "" {
 		pattern := "%" + escapeSQLLike(strings.ToLower(query)) + "%"
 		q = q.Where(`(LOWER(content) LIKE ? ESCAPE '\' OR EXISTS (
@@ -2055,6 +2075,10 @@ func searchFTSQueryVariants(query string) []string {
 }
 
 func (s *MemoryStore) searchFTSPage(ctx context.Context, project, query string, limit int, offset int) ([]*models.Memory, error) {
+	return s.searchFTSPageWithAccess(ctx, project, query, limit, offset, nil)
+}
+
+func (s *MemoryStore) searchFTSPageWithAccess(ctx context.Context, project, query string, limit int, offset int, access *scope.MemoryReadAccess) ([]*models.Memory, error) {
 	if project == "" {
 		return nil, fmt.Errorf("SearchFTS: project must not be empty")
 	}
@@ -2065,7 +2089,12 @@ func (s *MemoryStore) searchFTSPage(ctx context.Context, project, query string, 
 	if offset < 0 {
 		offset = 0
 	}
-	const ftsQuerySQL = `
+	accessSQL := "TRUE"
+	var accessArgs []any
+	if access != nil {
+		accessSQL, accessArgs = scope.MemoryReadAccessSQL(*access)
+	}
+	ftsQuerySQL := `
 		WITH parsed AS (
 			SELECT websearch_to_tsquery('english', ?) AS wsq,
 			       plainto_tsquery('english', ?)      AS ptq
@@ -2077,6 +2106,7 @@ func (s *MemoryStore) searchFTSPage(ctx context.Context, project, query string, 
 		AND    m.deleted_at IS NULL
 		AND   (m.valid_from IS NULL OR m.valid_from <= NOW())
 		AND   (m.valid_until IS NULL OR m.valid_until >= NOW())
+		AND (` + accessSQL + `)
 		AND    m.search_vector @@ COALESCE(NULLIF(parsed.wsq, ''::tsquery), parsed.ptq)
 		ORDER BY ts_rank_cd(m.search_vector,
 		             COALESCE(NULLIF(parsed.wsq, ''::tsquery), parsed.ptq)) DESC,
@@ -2086,7 +2116,10 @@ func (s *MemoryStore) searchFTSPage(ctx context.Context, project, query string, 
 		OFFSET ?
 	`
 	var rows []Memory
-	err := s.db.WithContext(ctx).Raw(ftsQuerySQL, query, query, project, limit, offset).Scan(&rows).Error
+	args := []any{query, query, project}
+	args = append(args, accessArgs...)
+	args = append(args, limit, offset)
+	err := s.db.WithContext(ctx).Raw(ftsQuerySQL, args...).Scan(&rows).Error
 	if err != nil {
 		return nil, err
 	}
