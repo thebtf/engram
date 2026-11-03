@@ -50,6 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Authorize project-search candidates with the actual REST/MCP caller before Tier0, FTS/OR, literal, vector and graph ordering or limits. Reuse the shared principal/domain/privacy SQL projection, pin selected versions and UTF-8 body digests against rollback/version reuse, reconcile conflicting lexical/vector identities before fusion credit or caps, and recheck current lifecycle and ACLs when hydrating bodies before external reranking and return. Keep visible reranking, bounded graph expansion, literal recovery and trusted direct retrieval consumers active; materialize only authorized ID/version metadata before exact vector aggregation (issue 532).
 - Preserve useful semantic search after authorized FTS falls back to OR: carry partial-match provenance into scoring instead of treating a weak rank-one OR hit as a strict match. Keep OR recovery and full literal/tag matching active, preserve strict/direct ranking, and let configured reranking receive the authorized candidate pool.
+- Keep the real-router memory lifecycle/security SQLite fixture's body-identity check faithful to PostgreSQL's UTF-8 SHA-256 expression, including NULL propagation, digest/version mismatch and same-version content replacement. Preserve current ACL/lifecycle filtering and every real-router assertion; production PostgreSQL queries and release assets are unchanged.
 
 ## [7.0.17] - 2026-11-02
 
