@@ -135,6 +135,27 @@ earlier joined failure or establish universal acceptance. Epochs are integer
 milliseconds, callback timestamps are not kernel events, and instrumentation
 overhead is uncalibrated. The temporary Go epoch writes were removed afterward.
 
+The selected repair moves only the hardcoded task-context native launch and pipe
+I/O to one operation-scoped standard worker thread, not a second resident process
+or transport. The parent still verifies the executable and owns the original
+absolute callback deadline. Cancellation uses a request-owned shared flag plus a
+port notification; after even a blocking spawn returns, the worker checks that
+flag and the unchanged absolute deadline before sending stdin. It reports closure
+only after both native callback and child close, then exits. The parent does not
+terminate or unref an active worker. A callback deadline can return a closed
+failure while the thread retains cleanup ownership; callback return alone is not
+a reaping receipt. No deadline, source authority or native daemon policy changes.
+
+Real Node 24.22.1 and Bun 1.4.4 standalone fixtures exercised the actual worker,
+real executable hash verification, normal protocol, a controlled 650 ms blocking
+launch, expired worker startup, cancellation during launch, late output and an
+owned stdin exception. Parent deadlines stayed within 500 ms while heartbeats
+continued; each owned child was reaped before thread exit, with zero live child
+after cleanup. Deliberately blocked cleanup completed after the callback budget
+and was retained, not hidden or force-terminated. These synthetic module checks
+are not useful native/backend, populated-data or loaded-OMP acceptance; the
+single frozen joined consumer check remains separate.
+
 ### Execute real work and deliver
 
 Run A1–A6 as applicable through the real loaded host, including a Russian task and distinct worktrees. Fix causes within the same assignment. Preserve comparison evidence and report separately which query classes gained useful context.

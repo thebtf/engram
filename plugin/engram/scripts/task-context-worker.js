@@ -6,6 +6,7 @@ const path = require('node:path');
 
 let child, timer, callbackDone = false, childClosed = false, finished = false;
 let output, failed = false;
+let nativeStarted = 0;
 const data = workerData;
 const valid = parentPort && data?.schema === 1 && path.isAbsolute(data.path ?? '') &&
  path.isAbsolute(data.cwd ?? '') && typeof data.input === 'string' && Buffer.byteLength(data.input) <= 20480 &&
@@ -22,7 +23,10 @@ function finish() {
  // Transfer an exact-sized owned buffer, never a pooled backing store containing
  // unrelated bytes. No stderr, environment, locator or credential leaves here.
  const bytes = ok ? Uint8Array.from(output) : null;
- parentPort.postMessage({ type: 'closed', ok, bytes: bytes?.buffer, childPID: child?.pid ?? null }, bytes ? [bytes.buffer] : []);
+ parentPort.postMessage({
+  type: 'closed', ok, bytes: bytes?.buffer, childPID: child?.pid ?? null,
+  elapsedMS: child ? performance.now() - nativeStarted : 0,
+ }, bytes ? [bytes.buffer] : []);
  parentPort.close();
 }
 
@@ -44,6 +48,7 @@ if (!valid) {
  parentPort.once('close', cancel);
  timer = setTimeout(cancel, Math.max(1, data.deadlineAt - Date.now()));
  try {
+  nativeStarted = performance.now();
   child = execFile(data.path, ['task-context', '--json'], {
    cwd: data.cwd, env: data.env, windowsHide: true, encoding: 'buffer',
    maxBuffer: data.maxBytes, timeout: Math.max(1, data.deadlineAt - Date.now()),
@@ -62,7 +67,7 @@ if (!valid) {
   else child.stdin.end(data.input);
  } catch {
   failed = true;
-  callbackDone = childClosed = true;
-  finish();
+  if (child) cancel();
+  else { callbackDone = childClosed = true; finish(); }
  }
 }

@@ -27,6 +27,10 @@ func TestUCITaskContextJoinedProductionCallback(t *testing.T) {
 	runNativeTaskContextFixture(t, runJoinedNativeTaskContext)
 }
 
+func TestUCITaskContextJoinedWorkerLaunch(t *testing.T) {
+	runNativeTaskContextFixture(t, runJoinedNativeTaskContextDiscriminator)
+}
+
 type joinedNativeFixture struct {
 	binary, root, first, second, project, token, controlPath string
 	environment                                              []string
@@ -153,7 +157,7 @@ func runJoinedNativeTaskContextCases(t *testing.T, fixture joinedNativeFixture, 
 		select {
 		case <-done:
 		case <-time.After(3 * time.Second):
-			_ = command.Process.Kill()
+			t.Errorf("joined consumer still owns thread/child cleanup after3s; refusing to kill its parent")
 			<-done
 		}
 		if stderr.Len() > 0 {

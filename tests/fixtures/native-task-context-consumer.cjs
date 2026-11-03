@@ -3,7 +3,7 @@
 // Test-only consumer for the worker-owned real native/UCI fixture. It selects an
 // observed source-built artifact at the existing resolver seam; production hash,
 // transport, framing and registered callback bodies remain in use.
-const childProcess = require('node:child_process');
+const { Worker } = require('node:worker_threads');
 const { monitorEventLoopDelay, performance } = require('node:perf_hooks');
 const path = require('node:path');
 const readline = require('node:readline');
@@ -54,59 +54,42 @@ async function initialize(config) {
       trace.outerDeadline = options.deadlineAt;
       const response = await launcher.requestTaskContext(facts, {
         ...options, ...artifact,
-        execFile: (file, args, execution, callback) => {
-          requireCondition(file === config.binary && args.length === 2 && args[0] === 'task-context' && args[1] === '--json', 'unexpected native executable/argv');
-          requireCondition(execution.cwd === facts.cwd && execution.encoding === 'buffer', 'native cwd/codec changed');
-          trace.processes++;
+        createTaskContextWorker: (entry, execution) => {
+          const data = execution.workerData;
+          requireCondition(entry === path.join(config.pluginRoot, 'scripts', 'task-context-worker.js'), 'unexpected worker entry');
+          requireCondition(data.path === config.binary && data.cwd === facts.cwd, 'native path/cwd changed');
+          const wire = JSON.parse(data.input);
+          requireCondition(Object.keys(wire).sort().join(',') === 'deadline_unix_ms,host_session_id,max_bytes,query,schema', 'unexpected native wire fields');
+          requireCondition(wire.query === facts.prompt && wire.host_session_id === facts.session, 'native request changed');
+          requireCondition(wire.deadline_unix_ms === trace.outerDeadline - 30 && data.deadlineAt === wire.deadline_unix_ms && wire.max_bytes === 8000, 'native deadline reserve was reset or repeated');
+          trace.wireDeadline = wire.deadline_unix_ms;
+          trace.workerThreads = (trace.workerThreads || 0) + 1;
           trace.execAt = performance.now();
           trace.integrityAndSetupMs = trace.execAt - trace.resolveAt;
           loopDelay.reset();
           trace.loopStart = performance.eventLoopUtilization();
-          emit({ event: 'native_boundary', name: trace.name, stage: 'node_pre_exec', at_unix_ms: Date.now() });
           let closed;
           trace.closed = new Promise(resolve => { closed = resolve; });
-          const child = childProcess.execFile(file, args, execution, (error, stdout, stderr) => {
-            trace.nativeElapsedMs = performance.now() - trace.execAt;
-            trace.stdoutBytes = Buffer.byteLength(stdout ?? Buffer.alloc(0));
-            for (const line of String(stderr ?? '').split('\n')) {
-              let phase;
-              try { phase = JSON.parse(line); } catch { continue; }
-              if (phase?.diagnostic === 'native_task_phase' && typeof phase.stage === 'string' && Number.isSafeInteger(phase.elapsed_us)) {
-                emit({ event: 'native_phase', name: trace.name, stage: phase.stage, elapsed_us: phase.elapsed_us });
-              }
-              if (phase?.diagnostic === 'native_boundary' && typeof phase.stage === 'string' && Number.isSafeInteger(phase.at_unix_ms)) {
-                emit({ event: 'native_boundary', name: trace.name, stage: phase.stage, at_unix_ms: phase.at_unix_ms });
-              }
+          const worker = new Worker(entry, execution);
+          worker.on('message', message => {
+            if (message.type === 'spawned') {
+              trace.processes++;
+              emit({ event: 'native_spawned', name: trace.name, pid: message.childPID });
             }
-            callback(error, stdout, stderr);
+            if (message.type === 'closed') {
+              trace.nativeElapsedMs = message.elapsedMS;
+              trace.stdoutBytes = message.bytes?.byteLength ?? 0;
+            }
           });
-          child.once('close', () => {
+          worker.once('exit', code => {
             trace.closeAt = performance.now();
-            emit({ event: 'native_boundary', name: trace.name, stage: 'node_close', at_unix_ms: Date.now() });
+            trace.workerElapsedMs = trace.closeAt - trace.execAt;
+            emit({ event: 'worker_closed', name: trace.name, exit: code, elapsed_ms: trace.workerElapsedMs });
             const elu = performance.eventLoopUtilization(trace.loopStart);
             emit({ event: 'parent_event_loop', name: trace.name, resolution_ms: 10, samples: Number(loopDelay.count), delay_mean_ms: Number.isFinite(loopDelay.mean) ? loopDelay.mean / 1e6 : null, delay_max_ms: loopDelay.max / 1e6, ...elu });
             closed();
           });
-          child.once('spawn', () => {
-            emit({ event: 'native_boundary', name: trace.name, stage: 'node_spawn', at_unix_ms: Date.now() });
-            emit({ event: 'native_spawned', name: trace.name, pid: child.pid });
-          });
-          let completeStdout = false;
-          child.stdout.on('data', bytes => {
-            if (!completeStdout && bytes.includes(10)) {
-              completeStdout = true;
-              emit({ event: 'native_boundary', name: trace.name, stage: 'node_first_complete_stdout', at_unix_ms: Date.now() });
-            }
-          });
-          const end = child.stdin.end.bind(child.stdin);
-          child.stdin.end = bytes => {
-            const wire = JSON.parse(String(bytes));
-            requireCondition(Object.keys(wire).sort().join(',') === 'deadline_unix_ms,host_session_id,max_bytes,query,schema', 'unexpected native wire fields');
-            requireCondition(wire.deadline_unix_ms === trace.outerDeadline - 30 && wire.max_bytes === 8000, 'native deadline reserve was reset or repeated');
-            trace.wireDeadline = wire.deadline_unix_ms;
-            return end(bytes);
-          };
-          return child;
+          return worker;
         },
       });
       trace.native = response;
@@ -167,7 +150,7 @@ async function invoke(command) {
     else requireCondition(!message, 'failed/no-match/cancelled callback delivered evidence');
     if (command.expect === 'empty') requireCondition(trace.native?.status === 'empty', 'no-match did not remain an explicit native empty result');
     if (command.expect === 'deadline') requireCondition(trace.native?.status === 'deadline_exceeded', 'late native work did not fail closed');
-    requireCondition(trace.processes === 1, 'callback did not use exactly one native process');
+    requireCondition(trace.processes === 1 && trace.workerThreads === 1, 'callback did not use exactly one native process and scoped thread');
     requireCondition(trace.callbackElapsedMs <= 500, 'callback exceeded original500ms budget');
   } catch (failure) { error = safeError(failure); }
   if (trace.closed) {
@@ -184,6 +167,7 @@ async function invoke(command) {
     callback_elapsed_ms: trace.callbackElapsedMs, child_closed_elapsed_ms: elapsed,
     config_ms: trace.configMs, integrity_and_setup_ms: trace.integrityAndSetupMs,
     native_elapsed_ms: trace.nativeElapsedMs, stdout_bytes: trace.stdoutBytes,
+    worker_operation_elapsed_ms: trace.workerElapsedMs, worker_threads: trace.workerThreads,
     processes: trace.processes, rest_requests: trace.restRequests, rest_budget_ms: trace.restBudgetMs,
     outer_deadline_unix_ms: trace.outerDeadline, wire_deadline_unix_ms: trace.wireDeadline,
     native_status: trace.native?.status, native_reason: trace.native?.reason_code,

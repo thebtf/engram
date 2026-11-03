@@ -1,12 +1,14 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const os = require('node:os');
 const { spawnSync } = require("node:child_process");
 const test = require("node:test");
 
 const root = path.resolve(__dirname, "..");
 const manifestPath = path.join(root, "plugin", "engram", "package.json");
 const extensionPath = path.join(root, "plugin", "engram", "extensions", "engram-memory.mjs");
+const workerPath = path.join(root, 'plugin', 'engram', 'scripts', 'task-context-worker.js');
 const version = JSON.parse(fs.readFileSync(manifestPath, "utf8")).version;
 function expectedArchives(expectedVersion = version) {
   const normalizedVersion = expectedVersion.replace(/^v/, "");
@@ -81,7 +83,7 @@ function writeZip(archiveRoot, archivePath, entries) {
   fs.writeFileSync(archivePath, Buffer.concat([...records, directory, end]));
 }
 
-function buildArchive(archiveRoot, archivePath, entries = ["engram-server", "package.json", "extensions/engram-memory.mjs"]) {
+function buildArchive(archiveRoot, archivePath, entries = ["engram-server", "package.json", "extensions/engram-memory.mjs", "scripts/task-context-worker.js"]) {
   if (archivePath.endsWith(".tar.gz")) {
     run("tar", ["-czf", archivePath, "-C", archiveRoot, ...entries]);
   } else {
@@ -89,13 +91,15 @@ function buildArchive(archiveRoot, archivePath, entries = ["engram-server", "pac
   }
 }
 function createFixture() {
-  const temporary = fs.mkdtempSync(path.join(root, ".tmp-server-plugin-artifacts-"));
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "engram-server-plugin-artifacts-"));
   const archiveRoot = path.join(temporary, "archive");
   const dist = path.join(temporary, "dist");
   fs.mkdirSync(path.join(archiveRoot, "extensions"), { recursive: true });
+  fs.mkdirSync(path.join(archiveRoot, 'scripts'));
   fs.mkdirSync(dist);
   fs.copyFileSync(manifestPath, path.join(archiveRoot, "package.json"));
   fs.copyFileSync(extensionPath, path.join(archiveRoot, "extensions", "engram-memory.mjs"));
+  fs.copyFileSync(workerPath, path.join(archiveRoot, 'scripts', 'task-context-worker.js'));
   fs.writeFileSync(path.join(archiveRoot, "engram-server"), `#!/usr/bin/env bash
 if [[ -n "\${NO_COLOR:-}" ]]; then
   printf 'INF Starting engram server version=v${version}\\n' >&2
@@ -242,6 +246,27 @@ test("server-plugin archive gate rejects manifest contract mutation and extensio
     const byteDrift = gate(fixture.dist);
     assert.notEqual(byteDrift.status, 0);
     assert.match(`${byteDrift.stderr}\n${byteDrift.stdout}`, /extension differs from tagged source/);
+  } finally {
+    fs.rmSync(fixture.temporary, { recursive: true, force: true });
+  }
+});
+
+test('server-plugin archive gate requires exact task-context worker bytes in all three archives', () => {
+  const fixture = createFixture();
+  try {
+    buildExpectedMatrix(fixture);
+    assert.equal(gate(fixture.dist).status, 0);
+    const archive = path.join(fixture.dist, expectedArchives()[2]);
+    buildArchive(fixture.archiveRoot, archive, ['engram-server', 'package.json', 'extensions/engram-memory.mjs']);
+    const missing = gate(fixture.dist);
+    assert.notEqual(missing.status, 0);
+    assert.match(`${missing.stderr}\n${missing.stdout}`, /canonical scripts\/task-context-worker\.js/);
+    buildArchive(fixture.archiveRoot, archive);
+    fs.appendFileSync(path.join(fixture.archiveRoot, 'scripts', 'task-context-worker.js'), '\n// altered fixture\n');
+    buildArchive(fixture.archiveRoot, path.join(fixture.dist, expectedArchives()[0]));
+    const changed = gate(fixture.dist);
+    assert.notEqual(changed.status, 0);
+    assert.match(`${changed.stderr}\n${changed.stdout}`, /task-context worker differs/);
   } finally {
     fs.rmSync(fixture.temporary, { recursive: true, force: true });
   }

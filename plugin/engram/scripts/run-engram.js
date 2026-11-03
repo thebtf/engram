@@ -3,6 +3,7 @@
 // Used as plugin MCP command to handle Windows .exe suffix and path resolution.
 
 const { execFile, spawnSync } = require("child_process");
+const { Worker } = require('node:worker_threads');
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
@@ -177,12 +178,52 @@ function projectFromInspection(inspection) {
  return binding.id;
 }
 
+function executeTaskContextProcess(data, { signal, createTaskContextWorker } = {}) {
+ return new Promise((resolve, reject) => {
+  if (signal?.aborted || Date.now() >= data.deadlineAt) return reject(new Error('TASK_CONTEXT_STOPPED'));
+  const cancellation = new SharedArrayBuffer(4);
+  let worker, result, settled = false;
+  const fail = () => { if (!settled) { settled = true; reject(new Error('TASK_CONTEXT_STOPPED')); } };
+  const cancel = () => {
+   Atomics.store(new Int32Array(cancellation), 0, 1);
+   try { worker?.postMessage('cancel'); } catch { }
+   fail();
+  };
+  signal?.addEventListener('abort', cancel, { once: true });
+  try {
+   worker = (createTaskContextWorker || ((file, options) => new Worker(file, options)))(path.join(__dirname, 'task-context-worker.js'), {
+    env: {}, execArgv: [], stdout: true, stderr: true,
+    workerData: { schema: 1, ...data, cancellation },
+   });
+  } catch {
+   signal?.removeEventListener('abort', cancel);
+   fail();
+   return;
+  }
+  worker.stdout.resume();
+  worker.stderr.resume();
+  worker.on('message', message => { if (message?.type === 'closed') result = message; });
+  worker.once('error', cancel);
+  worker.once('exit', code => {
+   signal?.removeEventListener('abort', cancel);
+   if (settled) return;
+   if (signal?.aborted || Date.now() >= data.deadlineAt || code !== 0 || result?.ok !== true ||
+    !(result.bytes instanceof ArrayBuffer) || result.bytes.byteLength > data.maxBytes) return fail();
+   settled = true;
+   resolve(Buffer.from(result.bytes));
+  });
+  // Do not terminate/unref the worker when the callback expires. Its listener
+  // owns cancellation until even a blocked spawn returns and its child closes.
+  if (signal?.aborted || Date.now() >= data.deadlineAt) cancel();
+ });
+}
+
 async function requestTaskContext(facts = {}, options = {}) {
  const closed = (status, reason_code) => ({ schema: 1, status, reason_code });
  const now = Date.now();
  const deadlineAt = Math.min(Number.isSafeInteger(options.deadlineAt) ? options.deadlineAt : now + 500, now + 500) - TASK_CONTEXT_COMPLETION_RESERVE_MS;
  if (deadlineAt <= now) return closed('deadline_exceeded', 'DEADLINE_EXCEEDED');
- if (typeof facts.cwd !== 'string' || !facts.cwd || typeof facts.prompt !== 'string' || !facts.prompt.trim() ||
+ if (typeof facts.cwd !== 'string' || !path.isAbsolute(facts.cwd) || typeof facts.prompt !== 'string' || !facts.prompt.trim() ||
   Buffer.byteLength(facts.prompt) > 16384 || Buffer.from(facts.prompt).toString('utf8') !== facts.prompt ||
   typeof facts.session !== 'string' || !/^[^\s\p{Cc}/\\@]{1,256}$/u.test(facts.session)) return closed('unavailable', 'INVALID_REQUEST');
  const maxBytes = Math.max(1024, Math.min(32768, Number.isSafeInteger(options.maxBytes) ? options.maxBytes : 16384));
@@ -208,14 +249,11 @@ async function requestTaskContext(facts = {}, options = {}) {
   remaining();
   const resolved = await resolveClient({ ...options, pluginRoot, pluginData, signal: controller.signal, deadlineAt, timeoutMs: remaining(), acquire: false, check: true }, true);
   remaining();
-  const stdout = await new Promise((resolve, reject) => {
-   const child = (options.execFile || execFile)(resolved.path, ['task-context', '--json'], {
-    cwd: facts.cwd, env: childEnvForEngram(options.env || process.env), windowsHide: true,
-    timeout: remaining(), maxBuffer: maxBytes, signal: controller.signal, encoding: 'buffer',
-   }, (error, stdout) => error ? reject(error) : resolve(stdout));
-   child.stdin.once('error', () => { });
-   child.stdin.end(input);
-  });
+  if (!path.isAbsolute(resolved.path)) throw new Error('TASK_CONTEXT_STOPPED');
+  const stdout = await executeTaskContextProcess({
+   path: resolved.path, cwd: facts.cwd,
+   env: childEnvForEngram(options.env || process.env), input, deadlineAt, maxBytes,
+  }, { signal: controller.signal, createTaskContextWorker: options.createTaskContextWorker });
   remaining();
   if (Buffer.byteLength(stdout) > maxBytes) return closed('unavailable', 'BUDGET_EXCEEDED');
   const text = new TextDecoder('utf-8', { fatal: true }).decode(stdout);
