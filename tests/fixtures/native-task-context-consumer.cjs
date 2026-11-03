@@ -74,7 +74,7 @@ async function initialize(config) {
           worker.on('message', message => {
             if (message.type === 'spawned') {
               trace.processes++;
-              emit({ event: 'native_spawned', name: trace.name, pid: message.childPID });
+              emit({ event: 'native_spawned', name: trace.name, pid: message.childPID, deadline_unix_ms: data.deadlineAt });
             }
             if (message.type === 'closed') {
               trace.nativeElapsedMs = message.elapsedMS;

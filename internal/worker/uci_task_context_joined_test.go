@@ -31,6 +31,12 @@ func TestUCITaskContextJoinedWorkerLaunch(t *testing.T) {
 	runNativeTaskContextFixture(t, runJoinedNativeTaskContextDiscriminator)
 }
 
+func TestUCITaskContextJoinedWorkerCancellation(t *testing.T) {
+	runNativeTaskContextFixture(t, func(t *testing.T, fixture joinedNativeFixture) {
+		runJoinedNativeTaskContextCases(t, fixture, joinedCaseSelection{cancellation: true})
+	})
+}
+
 type joinedNativeFixture struct {
 	binary, root, first, second, project, token, controlPath string
 	environment                                              []string
@@ -41,31 +47,34 @@ type joinedNativeFixture struct {
 }
 
 type joinedConsumerFrame struct {
-	Event             string              `json:"event"`
-	Name              string              `json:"name"`
-	Failed            bool                `json:"failed"`
-	Error             string              `json:"error"`
-	Useful            bool                `json:"useful"`
-	Processes         int                 `json:"processes"`
-	NativeStatus      string              `json:"native_status"`
-	CallbackElapsedMS float64             `json:"callback_elapsed_ms"`
-	ChildElapsedMS    float64             `json:"child_closed_elapsed_ms"`
-	Packet            *taskcontext.Packet `json:"packet"`
+	Event              string              `json:"event"`
+	Name               string              `json:"name"`
+	Failed             bool                `json:"failed"`
+	Error              string              `json:"error"`
+	Useful             bool                `json:"useful"`
+	Processes          int                 `json:"processes"`
+	NativeStatus       string              `json:"native_status"`
+	CallbackElapsedMS  float64             `json:"callback_elapsed_ms"`
+	ChildElapsedMS     float64             `json:"child_closed_elapsed_ms"`
+	WorkDeadlineUnixMS int64               `json:"deadline_unix_ms"`
+	Packet             *taskcontext.Packet `json:"packet"`
 }
 
 func runJoinedNativeTaskContext(t *testing.T, fixture joinedNativeFixture) {
-	runJoinedNativeTaskContextCases(t, fixture, true, true)
+	runJoinedNativeTaskContextCases(t, fixture, joinedCaseSelection{initialUseful: true, emptyLate: true, cancellation: true})
 }
 
 func runJoinedNativeTaskContextDiscriminator(t *testing.T, fixture joinedNativeFixture) {
-	runJoinedNativeTaskContextCases(t, fixture, false, true)
+	runJoinedNativeTaskContextCases(t, fixture, joinedCaseSelection{initialUseful: true, cancellation: true})
 }
 
 func runJoinedNativeTaskContextBoundary(t *testing.T, fixture joinedNativeFixture) {
-	runJoinedNativeTaskContextCases(t, fixture, false, false)
+	runJoinedNativeTaskContextCases(t, fixture, joinedCaseSelection{initialUseful: true})
 }
 
-func runJoinedNativeTaskContextCases(t *testing.T, fixture joinedNativeFixture, includeEmptyLate, includeCancellation bool) {
+type joinedCaseSelection struct{ initialUseful, emptyLate, cancellation bool }
+
+func runJoinedNativeTaskContextCases(t *testing.T, fixture joinedNativeFixture, selected joinedCaseSelection) {
 	t.Helper()
 	logPath := os.Getenv("ENGRAM_TASK_CONTEXT_JOINED_LOG")
 	require.True(t, filepath.IsAbs(logPath), "joined proof requires its unique absolute raw-log path")
@@ -211,18 +220,20 @@ func runJoinedNativeTaskContextCases(t *testing.T, fixture joinedNativeFixture, 
 		}
 		return frame
 	}
-	for _, sample := range []struct {
-		name  string
-		root  int
-		query string
-	}{{"cold", 0, "Alpha"}, {"warm_main", 0, "SearchNeedle Alpha"}, {"warm_linked", 1, "Alpha"}} {
-		before := workerUCIApplicationExposureCount(t, fixture.store.GetDB())
-		frame := check(sample.name, sample.root, sample.query, "useful")
-		if frame.Useful {
-			require.Equal(t, before+3, workerUCIApplicationExposureCount(t, fixture.store.GetDB()), "actual emitted packet lacks its three durable releases")
+	if selected.initialUseful {
+		for _, sample := range []struct {
+			name  string
+			root  int
+			query string
+		}{{"cold", 0, "Alpha"}, {"warm_main", 0, "SearchNeedle Alpha"}, {"warm_linked", 1, "Alpha"}} {
+			before := workerUCIApplicationExposureCount(t, fixture.store.GetDB())
+			frame := check(sample.name, sample.root, sample.query, "useful")
+			if frame.Useful {
+				require.Equal(t, before+3, workerUCIApplicationExposureCount(t, fixture.store.GetDB()), "actual emitted packet lacks its three durable releases")
+			}
 		}
 	}
-	if includeEmptyLate {
+	if selected.emptyLate {
 		beforeEmpty := workerUCIApplicationExposureCount(t, fixture.store.GetDB())
 		empty := check("empty", 0, "NoSuchSymbol4f7", "empty")
 		require.Equal(t, "empty", empty.NativeStatus)
@@ -246,13 +257,14 @@ func runJoinedNativeTaskContextCases(t *testing.T, fixture joinedNativeFixture, 
 		t.Logf("JOINED_LATE pending=0 observed_after_callback_ms=%.3f", float64(time.Since(lateStoppedAt).Microseconds())/1000)
 		require.Equal(t, beforeLate, workerUCIApplicationExposureCount(t, fixture.store.GetDB()))
 	}
-	if includeCancellation {
+	if selected.cancellation {
 		setDelay(true)
 		beforeCancel := workerUCIApplicationExposureCount(t, fixture.store.GetDB())
 		send(map[string]any{"type": "invoke", "name": "cancel", "rootIndex": 0, "session": "joined-cancel", "prompt": "Alpha", "expect": "cancel"})
-		await("native_spawned", "cancel", time.Second)
+		spawned := await("native_spawned", "cancel", time.Second)
 		var waitingPID int
-		until := time.Now().Add(350 * time.Millisecond)
+		until := time.UnixMilli(spawned.WorkDeadlineUnixMS)
+		require.True(t, time.Now().Before(until), "native spawn exhausted the unchanged absolute work deadline")
 		for time.Now().Before(until) {
 			err = observer.QueryRowContext(t.Context(), "SELECT COALESCE((SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND state='active' AND wait_event='PgSleep' AND query='SELECT pg_sleep(30)' LIMIT 1),0)").Scan(&waitingPID)
 			require.NoError(t, err)
