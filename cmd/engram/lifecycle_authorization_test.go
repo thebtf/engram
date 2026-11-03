@@ -25,6 +25,23 @@ import (
 // Real gRPC authentication, dispatcher and MemoryStore SQL. SQLite proves
 // visibility and rollback; PostgreSQL tests own locking and serialization.
 func TestLifecycleLegacyAuthorization(t *testing.T) {
+	originalConfig, err := config.Load()
+	if err != nil {
+		t.Fatal("original config load failed")
+	}
+	t.Cleanup(func() {
+		restored, _, err := config.Reload()
+		if err != nil {
+			t.Errorf("restore shared config after lifecycle authorization test: %v", err)
+			return
+		}
+		if config.Get() != restored {
+			t.Error("global config snapshot was not restored")
+		}
+		if restored.EnforceSourceProject != originalConfig.EnforceSourceProject {
+			t.Errorf("restored enforce_source_project = %t, want %t", restored.EnforceSourceProject, originalConfig.EnforceSourceProject)
+		}
+	})
 	t.Setenv("ENGRAM_AUTH_DISABLED", "false")
 	t.Setenv("ENGRAM_ENFORCE_SOURCE_PROJECT", "true")
 	t.Setenv("ENGRAM_LIFECYCLE_ENABLED", "false")
