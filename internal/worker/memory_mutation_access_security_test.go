@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"database/sql/driver"
 	"encoding/hex"
@@ -27,6 +28,7 @@ import (
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/mcp"
+	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/internal/worker/sse"
 	"github.com/thebtf/engram/pkg/models"
 	"golang.org/x/crypto/bcrypt"
@@ -73,6 +75,7 @@ func (c memoryMutationSQLiteConn) Prepare(query string) (driver.Stmt, error) {
 	// Current-validity readers use uppercase NOW(); preserve the same clock
 	// semantics as the lowercase PostgreSQL function already adapted above.
 	query = strings.ReplaceAll(query, "NOW()", "memory_mutation_now()")
+	query = strings.ReplaceAll(query, scope.MemoryContentDigestSQL, "memory_mutation_content_digest(m.content)")
 	// Preserve literal content/string-tag matching in this test-only dialect seam.
 	// PostgreSQL regressions separately own JSONB scalar safety and real SQL proof.
 	query = strings.ReplaceAll(query, "jsonb_array_elements_text(", "json_each(")
@@ -114,6 +117,17 @@ func memoryMutationSQLiteDB(t *testing.T) *gorm.DB {
 			}
 			return int64(0), nil
 		}))
+		require.NoError(t, sqlite.RegisterScalarFunction("memory_mutation_content_digest", 1, func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+			if args[0] == nil {
+				return nil, nil
+			}
+			content, ok := args[0].(string)
+			if !ok {
+				return nil, fmt.Errorf("memory mutation fixture digest requires text")
+			}
+			digest := sha256.Sum256([]byte(content))
+			return hex.EncodeToString(digest[:]), nil
+		}))
 	})
 	sqlDB, err := sql.Open("memory-mutation-security-sqlite", ":memory:")
 	require.NoError(t, err)
@@ -147,6 +161,81 @@ func memoryMutationSQLiteDB(t *testing.T) *gorm.DB {
 		require.NoError(t, db.Exec(fmt.Sprintf("CREATE TABLE %q (%s)", parsed.Table, strings.Join(columns, ","))).Error)
 	}
 	return db
+}
+
+func TestMemoryMutationSQLiteSearchMaterialization(t *testing.T) {
+	db := memoryMutationSQLiteDB(t)
+	for _, test := range []struct {
+		name    string
+		content any
+	}{
+		{"empty", ""},
+		{"ascii", "selected body"},
+		{"utf8", "selected body — память 😀\n"},
+		{"null", nil},
+	} {
+		t.Run("digest/"+test.name, func(t *testing.T) {
+			var actual sql.NullString
+			err := db.Raw("SELECT "+scope.MemoryContentDigestSQL+" FROM (SELECT ? AS content) AS m", test.content).Row().Scan(&actual)
+			require.NoError(t, err)
+			if test.content == nil {
+				require.False(t, actual.Valid, "SQL NULL must not become the digest of an empty body")
+				return
+			}
+			digest := sha256.Sum256([]byte(test.content.(string)))
+			require.True(t, actual.Valid)
+			require.Equal(t, hex.EncodeToString(digest[:]), actual.String)
+		})
+	}
+
+	f := newMemoryMutationSecurityFixture(t, db)
+	memory := f.seed(t, f.tokenA, "project", "private", "")
+	const selectedBody = "selected body — память 😀\n"
+	require.NoError(t, db.Model(&gormdb.Memory{}).Where("id = ?", memory.ID).Update("content", selectedBody).Error)
+	digest := sha256.Sum256([]byte(selectedBody))
+	ref := scope.MemoryRef{ID: memory.ID, Version: memory.Version, ContentDigest: hex.EncodeToString(digest[:])}
+	access := scope.MemoryReadAccess{
+		Caller: scope.KeycardContext{
+			Principal: memory.OwnerPrincipal, PrincipalKind: memory.OwnerPrincipalKind,
+			WorkstationID: memory.SourceWorkstationID,
+		},
+		Visibility: scope.MemoryVisibilityOptions{ApplyPrivacyScope: true},
+	}
+	store := gormdb.NewMemoryStore(&gormdb.Store{DB: db})
+	materialize := func(t *testing.T, selected scope.MemoryRef, expected int) {
+		t.Helper()
+		rows, err := store.GetByRefsForSearch(t.Context(), f.project, []scope.MemoryRef{selected}, access)
+		require.NoError(t, err)
+		require.Len(t, rows, expected)
+	}
+	t.Run("unchanged_body", func(t *testing.T) { materialize(t, ref, 1) })
+	t.Run("wrong_digest", func(t *testing.T) {
+		wrong := ref
+		wrong.ContentDigest = strings.Repeat("0", 64)
+		materialize(t, wrong, 0)
+	})
+	t.Run("wrong_version", func(t *testing.T) {
+		wrong := ref
+		wrong.Version++
+		materialize(t, wrong, 0)
+	})
+	t.Run("same_version_changed_body", func(t *testing.T) {
+		require.NoError(t, db.Model(&gormdb.Memory{}).Where("id = ?", memory.ID).Update("content", "replacement body").Error)
+		materialize(t, ref, 0)
+	})
+	digest = sha256.Sum256([]byte("replacement body"))
+	ref.ContentDigest = hex.EncodeToString(digest[:])
+	t.Run("fresh_body_reference", func(t *testing.T) { materialize(t, ref, 1) })
+	t.Run("current_acl", func(t *testing.T) {
+		require.NoError(t, db.Model(&gormdb.Memory{}).Where("id = ?", memory.ID).Update("owner_principal", "agent/other").Error)
+		materialize(t, ref, 0)
+	})
+	t.Run("current_lifecycle", func(t *testing.T) {
+		require.NoError(t, db.Model(&gormdb.Memory{}).Where("id = ?", memory.ID).Updates(map[string]any{
+			"owner_principal": memory.OwnerPrincipal, "status": "flagged",
+		}).Error)
+		materialize(t, ref, 0)
+	})
 }
 
 type memoryMutationSecurityFixture struct {
