@@ -105,6 +105,21 @@ repeat warm requests until passing from this no-stall sample. The retained
 direct-driver probe is diagnostic only; the joined callback remains the
 acceptance path.
 
+The next single discriminator did preserve the actual registered JS callback,
+hashFile, child environment, AbortController and execFile-close path, using the
+original first three requests plus actual supersession and recovery (no no-match
+or separate late repeat). It reproduced a deadline failure at warm-main:
+470.323 ms callback / 477.698 ms child close, 76 bytes and no useful packet.
+The native elapsed observation was 454.734 ms, but the separately recorded
+Go main-entry-to-return interval was only 125.319 ms: Git 54.950 ms, local project
+0.998 ms, RPC/UCI 63.869 ms and control/initialization about 2.5 ms. The remaining
+329.415 ms lies outside that Go interval; the retained records do not separate
+process launch/pre-main work from parent callback scheduling. This is not
+evidence for a filesystem Git rewrite. Cold, linked and recovery delivered
+useful packets in 212.783/212.135/221.998 ms; cancellation stopped SQL in 17.000 ms.
+The fixed observation exited 1 and is not acceptance. Preserve its frozen source,
+binary and raw stages; no further unchanged timing loop or cause claim follows.
+
 ### Execute real work and deliver
 
 Run A1–A6 as applicable through the real loaded host, including a Russian task and distinct worktrees. Fix causes within the same assignment. Preserve comparison evidence and report separately which query classes gained useful context.
