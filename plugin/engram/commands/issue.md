@@ -23,17 +23,17 @@ Returns `{"projects": [...], "count": N}`. A project is tracked if it has
 observations OR existing issues in engram — meaning an agent working on it
 will actually see injected issues at session start.
 
-**Role discipline (NON-NEGOTIABLE):**
-- You are the TARGET agent when an issue's `target_project` matches your project.
-  Your job: resolve or comment. You do NOT close issues you didn't create.
-- You are the SOURCE agent when an issue's `source_project` matches your project.
-  Your job: verify fixes, then close (fix works) or reopen (fix failed).
-- Only the source agent (or dashboard operator) can close.
-- Only resolve an issue when the fix is actually deployed — not when you think it will work.
+**Participation and verification:**
+- When an issue's `target_project` matches your project, handle its implementation, evidence, and follow-up as your project's inbox.
+- When an issue's `source_project` matches your project, follow up on the reported problem and verify the proposed solution.
+- Authorized participants, including creators and other read-write participants, may mark resolved, close after appropriate verification, or reopen when a resolution fails. These actions are not creator/source-only privileges.
+- Preserve permission checks, readonly/unauthenticated denials, project routing, and explicit higher-priority instructions. Participation does not grant authority to edit unrelated issue fields or reject an issue.
+- Only resolve an issue when the fix is actually deployed — not when you think it will work. `resolved` explicitly awaits verification; it does not mean checked completion.
+- Close only after actually checking the relevant behavior with evidence appropriate to the issue. A status label alone does not prove historical verification. If verification is unavailable, comment with what remains unverified and what is needed; do not close.
 
 ## Workflow
 
-Use the verified native caller project for mutation attribution; it is not established by a `project` argument. That argument remains optional compatibility input for writes, and a target filter for list. Do not invent a dummy project. If caller identity is unavailable, get/by-ID and explicitly scoped list remain usable; keep writes pending and inspect via the installed launcher's `project resolve --root <actual-directory> --json --check`. Preserve marker/cache/data and follow the owner mapping/conservation boundary from the error. Never init a replacement UUID. Guide: https://github.com/thebtf/engram/blob/main/docs/operating-engram.md#context-recovery .
+Use the verified native caller project for mutation attribution; it is not established by a `project` argument. That argument remains optional compatibility input for writes, and a target filter for list. When recovery is required, retain the original operation and actual native caller identity. Use the recovery response's supported actions to perform safe, authorized, unambiguous recovery automatically, then resume the original operation. If selection is ambiguous and an existing-project choice is available, present its supported options and resume after selection; never guess a project or assume an unavailable chooser exists. If the required recovery action or choice is unavailable, retain the pending write and report the exact missing capability rather than replacing recovery with mandatory manual shell or database edits. Get/by-ID and explicitly scoped list remain usable while the write is held. Preserve marker/cache/data, authorization and identity safeguards. Never invent a dummy project, initialize a replacement UUID, or ask the user to edit the database. Guide: https://github.com/thebtf/engram/blob/main/docs/operating-engram.md#context-recovery .
 
 ### Step 1 — Live issues targeting your project (you as TARGET)
 
@@ -45,11 +45,11 @@ issues(action="list", project="<your-project>", status="open,acknowledged,reopen
 
 For each returned issue:
 1. Read the title, body, and latest comments with `issues(action="get", id=N)`.
-2. Treat it as YOUR project's inbox and a direct work order: study the situation, verify the claim, decide whether to implement, reject, clarify, or comment with blocker/progress.
+2. Treat it as YOUR project's inbox and a direct work order: study the situation, verify the claim, decide whether to implement, clarify, or comment with blocker/progress.
 3. `acknowledged` means delivered and accepted into your active backlog — not done.
-4. If resolved: `issues(action="update", project="<your-project>", id=N, status="resolved", comment="Fixed in <commit/version>: <explanation>")`.
+4. When the fix is deployed and you are authorized: `issues(action="update", project="<your-project>", id=N, status="resolved", comment="Fixed in <commit/version>: <explanation>; awaiting verification: <remaining checks>")`.
 5. If the source project misunderstood the problem or requested the wrong change: comment with evidence and explain why; do not silently ignore it.
-6. Do NOT close — that's the source agent's job.
+6. As an authorized participant, use Step 3 to close after actual appropriate verification or reopen when the resolution fails. If you cannot verify, comment with what remains unverified.
 
 Report at the end: how many were actionable, which are blocked, which you resolved.
 
@@ -61,8 +61,7 @@ Fetch issues you resolved that might have been reopened or commented on:
 issues(action="list", project="<your-project>", status="reopened", limit=20)
 ```
 
-Then separately for resolved issues you created or worked on, check if the
-source agent added comments:
+Then separately for resolved issues your project created, check the comments:
 
 ```
 issues(action="list", source_project="<your-project>", status="resolved", limit=20)
@@ -74,22 +73,22 @@ For each reopened issue:
 3. If the reason is valid → plan another fix. If the reopener misunderstood → comment politely explaining.
 4. Never re-resolve silently.
 
-### Step 3 — Your cross-project issues (you as SOURCE)
+### Step 3 — Verify resolved issues as an authorized participant
 
-Issues YOU filed against OTHER projects that are now resolved — you must verify:
+Start with issues your project filed against OTHER projects that are now resolved. This follow-up responsibility does not reserve verification or closure to the creator:
 
 ```
 issues(action="list", source_project="<your-project>", status="resolved", limit=20)
 ```
 
-For each resolved issue you created:
-1. `issues(action="get", id=N)` — read the resolution comment.
-2. Treat this as YOUR follow-up inbox for cross-project dialogue: understand what the other project claims to have fixed or added, inspect comments/reports, and judge the quality of the result.
-3. **Actually verify the fix works.** Test the behavior, read the commit, check the deployed version.
-4. If the fix works and you're satisfied → `issues(action="close", project="<your-project>", id=N)`. This is terminal — the issue disappears from all injections.
-5. If the fix does NOT work, is incomplete, or the other project misunderstood the request → `issues(action="reopen", project="<your-project>", id=N, body="Tested X, still broken because Y")` with concrete evidence.
+For each resolved issue you created or otherwise participate in (including those found in Steps 1–2):
+1. `issues(action="get", id=N)` — read the resolution comment and available evidence. `resolved` means awaiting verification, not proof that verification already happened.
+2. Treat this as follow-up dialogue: understand the claimed fix, inspect comments/reports, and identify the relevant behavior and delivery target.
+3. **Actually verify the fix works.** Check the relevant behavior on that target with evidence appropriate to the issue; a commit or version label alone is not behavioral proof.
+4. If you are authorized and the relevant checks demonstrate completion → `issues(action="close", project="<your-project>", id=N)`. Comment with the checks and results. This is terminal — the issue disappears from all injections.
+5. If you are authorized and the resolution fails, is incomplete, or addresses the wrong problem → `issues(action="reopen", project="<your-project>", id=N, body="Tested X, still broken because Y")` with concrete evidence.
 6. If more discussion is needed before reopen/close → comment with precise feedback and what still needs verification.
-7. If you cannot verify (insufficient access, needs deploy) → comment with what's missing; do NOT close.
+7. If you cannot verify (insufficient access, needs deploy) → comment with what's missing; do NOT close. No status label alone proves historical verification.
 
 ### Step 4 — New problems discovered during this session
 
@@ -139,7 +138,7 @@ Engram issues triage for <your-project>:
 ## Anti-patterns (DO NOT)
 
 - Do NOT file engram issues for untracked projects — use their native tracker.
-- Do NOT close issues you didn't create. That's the source agent or operator.
+- Do NOT close without authorization and actual appropriate verification, regardless of who created the issue.
 - Do NOT create duplicates — check existing issues first with `list`.
 - Do NOT resolve an issue while the fix is only half-done — comment with progress instead.
 - Do NOT decide unilaterally "my part is done, splitting into new issues for X" — comment your analysis and ask the operator.
