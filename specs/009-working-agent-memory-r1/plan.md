@@ -120,6 +120,21 @@ useful packets in 212.783/212.135/221.998 ms; cancellation stopped SQL in 17.000
 The fixed observation exited 1 and is not acceptance. Preserve its frozen source,
 binary and raw stages; no further unchanged timing loop or cause claim follows.
 
+One subsequent three-callback epoch observation separated the remaining
+boundary without changing the 400/500 ms limits. Warm-main was useful at
+456.644 ms, but Node pre-exec to its spawn callback consumed 290 ms (cold/linked:
+9/6 ms); Go firstmain followed spawn by 24 ms, ran for 114 ms and completed
+stdout in the same millisecond as before-return. Close followed by 8 ms.
+Parent event-loop utilization recorded 291.544 ms active / 144.034 ms idle;
+the 10 ms sampled delay histogram did not capture the initial active interval
+and cannot establish absence of blocking. This localizes the observed extra
+delay to the pre-exec/spawn-callback interval, not late stdout delivery or Go
+query execution, but does not identify its underlying system/launch cause.
+All three callbacks were useful in this observation; that does not erase either
+earlier joined failure or establish universal acceptance. Epochs are integer
+milliseconds, callback timestamps are not kernel events, and instrumentation
+overhead is uncalibrated. The temporary Go epoch writes were removed afterward.
+
 ### Execute real work and deliver
 
 Run A1–A6 as applicable through the real loaded host, including a Russian task and distinct worktrees. Fix causes within the same assignment. Preserve comparison evidence and report separately which query classes gained useful context.
