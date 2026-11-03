@@ -146,6 +146,11 @@ terminate or unref an active worker. A callback deadline can return a closed
 failure while the thread retains cleanup ownership; callback return alone is not
 a reaping receipt. No deadline, source authority or native daemon policy changes.
 
+Sealed native prompt inspection accepts only an existing local project marker or
+common-dir cache. If both are absent, it closes context-required before another
+Git remote lookup or REST recovery. Explicit project resolve/check/init retain
+their ordinary recovery behavior; the prompt never bootstraps local identity.
+
 Real Node 24.22.1 and Bun 1.4.4 standalone fixtures exercised the actual worker,
 real executable hash verification, normal protocol, a controlled 650 ms blocking
 launch, expired worker startup, cancellation during launch, late output and an
