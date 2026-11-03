@@ -84,6 +84,7 @@ func (s *Service) handleLogsSSE(w http.ResponseWriter, r *http.Request, level, q
 			if level != "" && !logbuf.LevelAtLeast(entry.Level, level) {
 				continue
 			}
+			entry = logbuf.RedactBrowserSessionEntry(entry)
 			if query != "" && !logbuf.EntryMatchesQuery(entry, query) {
 				continue
 			}

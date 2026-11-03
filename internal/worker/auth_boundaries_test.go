@@ -40,7 +40,7 @@ func openAuthBoundaryReads(t *testing.T) (*gormlib.DB, *sql.DB) {
 	require.NoError(t, err)
 	for _, statement := range []string{
 		`CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT, password_hash TEXT, role TEXT, disabled BOOLEAN, created_at DATETIME, last_login_at DATETIME)`,
-		`CREATE TABLE sessions (id TEXT PRIMARY KEY, user_id INTEGER, created_at DATETIME, expires_at DATETIME, user_agent TEXT, remote_addr TEXT, revoked_at DATETIME, revoked_by INTEGER, revocation_reason TEXT)`,
+		`CREATE TABLE sessions (id TEXT PRIMARY KEY, public_handle TEXT, user_id INTEGER, created_at DATETIME, expires_at DATETIME, user_agent TEXT, remote_addr TEXT, revoked_at DATETIME, revoked_by INTEGER, revocation_reason TEXT)`,
 	} {
 		require.NoError(t, db.Exec(statement).Error)
 	}

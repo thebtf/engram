@@ -695,6 +695,29 @@ func (s *MemoryStore) mutationVisibleQuery(ctx context.Context, tx *gorm.DB, acc
 	return memoryReaderPrivacy(query.Where("m.deleted_at IS NULL"), access.Caller, scope.MemoryVisibilityOptions{ApplyPrivacyScope: true}), nil
 }
 
+// GetAuthorized scopes an exact-ID read before materialization using the
+// adapter's existing visibility and optional project authority, without manage
+// checks or mutation locks. The caller selects its own read-session semantics.
+func (s *MemoryStore) GetAuthorized(ctx context.Context, id int64, access MemoryMutationAccess) (*models.Memory, error) {
+	query := memoryMutationVisibleQuery(ctx, s.db, access.Caller)
+	if access.Project != "" || access.RequireCanonicalProject {
+		var err error
+		query, err = s.mutationVisibleQuery(ctx, s.db, access)
+		if err != nil {
+			return nil, err
+		}
+	}
+	var row Memory
+	if err := query.Where("m.id = ?", id).Take(&row).Error; err != nil {
+		return nil, err
+	}
+	memory := memoryRowToModel(&row)
+	if access.RequireCanonicalProject {
+		memory.Project = access.Project
+	}
+	return memory, nil
+}
+
 func memoryMutationCanonicalProject(ctx context.Context, tx *gorm.DB, id int64) (string, error) {
 	member := tx.WithContext(ctx).Table("memories AS m").Select("1").Where("m.id = ?", id).
 		Where(canonicalProjectMembershipPredicate("m", "project"), clause.Column{Table: "p", Name: "id"}, "memories", "memories", clause.Column{Table: "p", Name: "id"})

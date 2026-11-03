@@ -404,7 +404,7 @@ func (adapter *OperatorCodeHTTPAdapter) HandleIndexIntentSubmit(w http.ResponseW
 		return
 	}
 	identity.digest = operatorCodeIndexIntentDigest("operator-code-index-intent-submit", request.Proof(), "", request.RequestRef, request.Kind)
-	r = r.WithContext(auditcontext.WithSourceSession(r.Context(), identity.sessionID))
+	r = r.WithContext(identity.auditContext(r.Context()))
 	if request.Target != nil {
 		adapter.handleNoViewIndexIntentSubmit(w, r, identity, request)
 		return
@@ -513,7 +513,7 @@ func (adapter *OperatorCodeHTTPAdapter) HandleIndexIntentStatus(w http.ResponseW
 	if !ok {
 		return
 	}
-	r = r.WithContext(auditcontext.WithSourceSession(r.Context(), identity.sessionID))
+	r = r.WithContext(identity.auditContext(r.Context()))
 	if adapter.writeNoViewIndexIntentStatus(w, r, identity, intentRef, proof) {
 		return
 	}
@@ -610,7 +610,7 @@ func (adapter *OperatorCodeHTTPAdapter) HandleIndexIntentRetry(w http.ResponseWr
 		return
 	}
 	identity.digest = operatorCodeIndexIntentDigest("operator-code-index-intent-retry", request.Proof(), intentRef, "", "")
-	r = r.WithContext(auditcontext.WithSourceSession(r.Context(), identity.sessionID))
+	r = r.WithContext(identity.auditContext(r.Context()))
 	if application, available := adapter.app.(operatorCodeNoViewIndexIntentApplication); available {
 		scope, profileID, err := application.NoViewIndexIntentTarget(r.Context(), intentRef)
 		if err == nil {
@@ -666,7 +666,7 @@ func (adapter *OperatorCodeHTTPAdapter) HandleStructure(w http.ResponseWriter, r
 		return
 	}
 	filter, _ := request.filter()
-	r = r.WithContext(auditcontext.WithSourceSession(r.Context(), identity.sessionID))
+	r = r.WithContext(identity.auditContext(r.Context()))
 	caller, failure := adapter.authorize(r.Context(), identity, request.Proof())
 	if failure != uci.ReleaseFailureNone {
 		operatorCodeWriteFailure(w, failure)
@@ -722,7 +722,7 @@ func (adapter *OperatorCodeHTTPAdapter) HandleSearch(w http.ResponseWriter, r *h
 		return
 	}
 	filter, _ := request.filter()
-	r = r.WithContext(auditcontext.WithSourceSession(r.Context(), identity.sessionID))
+	r = r.WithContext(identity.auditContext(r.Context()))
 	adapter.handleOperatorCodeSearch(w, r, identity, request, filter)
 }
 
@@ -819,7 +819,7 @@ func (adapter *OperatorCodeHTTPAdapter) HandleGraph(w http.ResponseWriter, r *ht
 	if !ok {
 		return
 	}
-	r = r.WithContext(auditcontext.WithSourceSession(r.Context(), identity.sessionID))
+	r = r.WithContext(identity.auditContext(r.Context()))
 	input, deadlineMS, valid := request.input(time.Now().UTC())
 	if !valid {
 		operatorCodeWriteBodyless(w, http.StatusBadRequest)
@@ -860,7 +860,7 @@ func (adapter *OperatorCodeHTTPAdapter) HandleVersionedRead(w http.ResponseWrite
 		}
 		return
 	}
-	r = r.WithContext(auditcontext.WithSourceSession(r.Context(), identity.sessionID))
+	r = r.WithContext(identity.auditContext(r.Context()))
 	caller, failure := adapter.authorize(r.Context(), identity, request.Proof())
 	if failure != uci.ReleaseFailureNone {
 		operatorCodeWriteFailure(w, failure)
@@ -995,7 +995,7 @@ func (adapter *OperatorCodeHTTPAdapter) HandleGrantChoices(w http.ResponseWriter
 			return
 		}
 	}
-	ctx := auditcontext.WithSourceSession(r.Context(), identity.sessionID)
+	ctx := identity.auditContext(r.Context())
 	choices, err := adapter.onboarding.ListOwnerChoices(ctx, identity.identity)
 	if err != nil {
 		operatorCodeWriteBodyless(w, http.StatusForbidden)
@@ -1052,7 +1052,7 @@ func (adapter *OperatorCodeHTTPAdapter) HandleGrantInventory(w http.ResponseWrit
 		}
 		after = fields[0]
 	}
-	rows, err := adapter.onboarding.ListOwnerActive(auditcontext.WithSourceSession(r.Context(), identity.sessionID), identity.identity, after, operatorCodeGrantInventoryPageSize+1)
+	rows, err := adapter.onboarding.ListOwnerActive(identity.auditContext(r.Context()), identity.identity, after, operatorCodeGrantInventoryPageSize+1)
 	if err != nil {
 		if errors.Is(err, errCodeGrantCallerDenied) || errors.Is(err, gormdb.ErrBrowserReadGrantDenied) {
 			operatorCodeWriteBodyless(w, http.StatusForbidden)
@@ -1100,7 +1100,7 @@ func (adapter *OperatorCodeHTTPAdapter) HandleGrantIssue(w http.ResponseWriter, 
 		operatorCodeWriteBodyless(w, http.StatusBadRequest)
 		return
 	}
-	grant, err := adapter.onboarding.IssueOnboarding(auditcontext.WithSourceSession(r.Context(), identity.sessionID), identity.identity, IssueOnboardingCodeGrantInput{Target: auth.BrowserSubjectForUser(targetID), ChoiceRef: choiceRef, ExpiresAt: request.ExpiresAt})
+	grant, err := adapter.onboarding.IssueOnboarding(identity.auditContext(r.Context()), identity.identity, IssueOnboardingCodeGrantInput{Target: auth.BrowserSubjectForUser(targetID), ChoiceRef: choiceRef, ExpiresAt: request.ExpiresAt})
 	if err != nil {
 		operatorCodeWriteBodyless(w, http.StatusForbidden)
 		return
@@ -1127,7 +1127,7 @@ func (adapter *OperatorCodeHTTPAdapter) HandleGrantLabel(w http.ResponseWriter, 
 		operatorCodeWriteBodyless(w, http.StatusBadRequest)
 		return
 	}
-	choice, err := adapter.onboarding.SetWorkingCopyLabel(auditcontext.WithSourceSession(r.Context(), identity.sessionID), identity.identity, choiceRef, request.WorkingCopy)
+	choice, err := adapter.onboarding.SetWorkingCopyLabel(identity.auditContext(r.Context()), identity.identity, choiceRef, request.WorkingCopy)
 	if err != nil {
 		operatorCodeWriteBodyless(w, http.StatusForbidden)
 		return
@@ -1768,6 +1768,14 @@ type operatorCodeRequestIdentity struct {
 	sessionID string
 }
 
+func (identity operatorCodeRequestIdentity) auditContext(ctx context.Context) context.Context {
+	sessionID := identity.sessionID
+	if identity.identity.Source != auth.SourceAuthDisabled {
+		sessionID = gormdb.BrowserSessionPublicHandle(sessionID)
+	}
+	return auditcontext.WithSourceSession(ctx, sessionID)
+}
+
 type operatorCodeAuthorizedRequest struct {
 	operatorCodeRequestIdentity
 	caller     operatorCodeVerifiedCaller
@@ -1838,7 +1846,7 @@ func (adapter *OperatorCodeHTTPAdapter) decodeEmptyEnvelope(w http.ResponseWrite
 		return operatorCodeRequestIdentity{}, nil, false
 	}
 	identity.digest = operatorCodeRequestDigest(endpoint, nil)
-	return identity, r.WithContext(auditcontext.WithSourceSession(r.Context(), identity.sessionID)), true
+	return identity, r.WithContext(identity.auditContext(r.Context())), true
 }
 
 func (adapter *OperatorCodeHTTPAdapter) decodeIndexIntentJSON(w http.ResponseWriter, r *http.Request, endpoint string, target any) (operatorCodeRequestIdentity, bool) {

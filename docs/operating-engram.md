@@ -24,6 +24,13 @@ plugin — по фактически загруженному пути и вер
 [release note](release-notes/v7.0.18.md): обновляется серверный поиск, без
 переноса данных, смены идентификаторов или нового режима конфигурации.
 
+Для защиты browser-session credentials в v7.0.19 смотри
+[release note](release-notes/v7.0.19.md). Миграция 190 добавляет публичный handle
+для управления сессией, сохраняя private cookie ID, историю и старые SQL writers.
+Обнови старую вкладку Access перед Revoke: private cookie ID больше не принимается
+как management selector. Не меняй auth mode и не создавай новые credentials ради
+этого обновления; обычные release/migration/recovery проверки остаются обязательными.
+
 Публикация, здоровье сервера, обычный native/browser-сценарий и активация plugin
 в свежем OMP — разные проверки. Не переноси приёмку старой версии на новую.
 Локальная synthetic/no-auth проверка не доказывает production или principal.

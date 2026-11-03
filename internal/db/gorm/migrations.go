@@ -6873,6 +6873,7 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 		logicalSourceProjectMigration187(),
 		memoryPrincipalConstraintsMigration188(),
 		issueProjectWriteScopeMigration189(),
+		browserSessionPublicHandleMigration190(),
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

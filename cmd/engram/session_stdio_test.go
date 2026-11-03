@@ -68,13 +68,14 @@ var memoryTestSQLite sync.Once
 func newMemoryTestBackend(t *testing.T) *memoryTestBackend {
 	t.Helper()
 	memoryTestSQLite.Do(func() {
+		registerMemoryTestSQLite(t)
 		if err := sqlite.RegisterScalarFunction("now", 0, func(*sqlite.FunctionContext, []driver.Value) (driver.Value, error) {
 			return time.Now().UTC().Format("2006-01-02 15:04:05"), nil
 		}); err != nil {
 			t.Fatal(err)
 		}
 	})
-	sqlDB, err := sql.Open("sqlite", ":memory:")
+	sqlDB, err := sql.Open("memory-test-sqlite", ":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +86,7 @@ func newMemoryTestBackend(t *testing.T) *memoryTestBackend {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, model := range []any{dbstore.Memory{}} {
+	for _, model := range []any{dbstore.Memory{}, dbstore.Project{}, dbstore.ConsolidationMembership{}} {
 		parsed, err := schema.Parse(model, &sync.Map{}, schema.NamingStrategy{})
 		if err != nil {
 			t.Fatal(err)
@@ -109,6 +110,11 @@ func newMemoryTestBackend(t *testing.T) *memoryTestBackend {
 			columns = append(columns, fmt.Sprintf("%q %s", field.DBName, kind))
 		}
 		if err := db.Exec(fmt.Sprintf("CREATE TABLE %q (%s)", parsed.Table, strings.Join(columns, ","))).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, project := range []string{memoryTestProjectA, memoryTestProjectB} {
+		if err := db.Create(&dbstore.Project{ID: project}).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
