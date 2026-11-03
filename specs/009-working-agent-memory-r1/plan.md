@@ -91,6 +91,20 @@ The emulated event host and owned-build selection did not exercise loaded OMP,
 installed release-policy/CAS admission or useful notes. Preserve this distinct
 counterexample rather than rerunning warm requests until one passes.
 
+One bounded D1 discriminator subsequently used the same native fixture builder,
+but a direct Go subprocess driver, not the registered JS callback, hashFile,
+parent AbortController or framing. Six fixed alternating main/linked requests
+returned useful 4625-byte packets in 143.660–175.099 ms. Temporary phase-only
+instrumentation observed Git discovery at 53.358–60.027 ms, local project checks
+at 0.498–1.007 ms and RPC/UCI at 57.999–82.070 ms; it was then removed. This
+different-observation run did not reproduce or locate the joined failures and
+does not repair or supersede them. Its exact diagnostic source patches and raw
+logs are retained separately from the original native and joined receipts.
+Do not infer a Git bottleneck, introduce a partial topology parser/cache or
+repeat warm requests until passing from this no-stall sample. The retained
+direct-driver probe is diagnostic only; the joined callback remains the
+acceptance path.
+
 ### Execute real work and deliver
 
 Run A1–A6 as applicable through the real loaded host, including a Russian task and distinct worktrees. Fix causes within the same assignment. Preserve comparison evidence and report separately which query classes gained useful context.

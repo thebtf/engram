@@ -24,7 +24,7 @@ import (
 )
 
 func TestUCITaskContextJoinedProductionCallback(t *testing.T) {
-	runNativeTaskContextFixture(t, true)
+	runNativeTaskContextFixture(t, runJoinedNativeTaskContext)
 }
 
 type joinedNativeFixture struct {

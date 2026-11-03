@@ -30,10 +30,10 @@ import (
 )
 
 func TestUCITaskContextNativeUsefulTwoWorktrees(t *testing.T) {
-	runNativeTaskContextFixture(t, false)
+	runNativeTaskContextFixture(t, nil)
 }
 
-func runNativeTaskContextFixture(t *testing.T, joined bool) {
+func runNativeTaskContextFixture(t *testing.T, consume func(*testing.T, joinedNativeFixture)) {
 	binary := os.Getenv("ENGRAM_TASK_CONTEXT_TEST_BINARY")
 	if binary == "" {
 		t.Skip("requires this candidate's built CLI")
@@ -144,8 +144,8 @@ func runNativeTaskContextFixture(t *testing.T, joined bool) {
 			t.Fatal("owned native daemon not ready")
 		}
 	}
-	if joined {
-		runJoinedNativeTaskContext(t, joinedNativeFixture{
+	if consume != nil {
+		consume(t, joinedNativeFixture{
 			binary: binary, root: root, first: first, second: second, project: project,
 			token: token, controlPath: controlPath, environment: environment,
 			fixtures: fixtures, store: store, composition: composition, daemonPID: daemon.Process.Pid,
