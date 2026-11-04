@@ -466,7 +466,7 @@ are separate facts; none of the attribution fields grants authorization.
 | `GET /api/issues/{id}` | Native issue ID; optional single canonical `project` narrows membership. Adds `history_events`, `history_limit`, `history_has_more`, `history_next_after_id` to `{issue,comments,comment_count,source_project_display_name,target_project_display_name}`. Lifecycle history is bounded separately from comments, which remain a full `created_at ASC` read. Hidden/wrong membership is 404. |
 | `POST /api/issues` | Required nonempty title; body, priority, type, source_project, target_project, source_agent, **created_by_session**, client, target_session, labels. Target defaults to source when omitted; target must then be nonempty. Store defaults: status `open`, priority `medium`, type `task`; omitted recipient is unknown. 201 `{id,message:"issue created"}`. Creator keycard comes from verified context, not JSON. `created_by_session` already existed at the released baseline. |
 | `PATCH /api/issues/{id}` | `status`, `comment`, source_project/source_agent, session_id, client, target_session, title/body/priority/type/labels. 200 `{message:"issue updated"}`; atomic fields/lifecycle history/optional-comment transaction. Empty scalar fields generally mean no change; this is not JSON Merge Patch. Recipient omission preserves; empty string or null clears. Recipient-only updates do not resolve the issue. Field edits, including a mixed field/status PATCH, require creator/operator authority. Target-project rerouting is not in this DTO. |
-| `DELETE /api/issues/{id}` | Exact acting `source_project=<canonical UUID>&source_agent=human` for human-console attribution, no body. Creator/operator authorization remains; success is **204**, not JSON. |
+| `DELETE /api/issues/{id}` | Exact acting `source_project=<canonical UUID>&source_agent=human` for human-console attribution, no body. Operator authorization is required; success is **204**, not JSON. |
 | `POST /api/issues/acknowledge` | `issueAcknowledgeRequest`: positive `ids`, acting source_project/source_agent; `{acknowledged:number}`. Not a lifecycle-close operation. |
 | `POST /api/issues/selection` | `issueSelectionSnapshotRequest`: selection plus acting source_project/source_agent. Returns `{selection:issueSelectionSnapshot}`. |
 | `POST /api/issues/selection/current` | Acting source_project/source_agent; returns the current server-owned selection under that scope. |
@@ -476,8 +476,9 @@ are separate facts; none of the attribution fields grants authorization.
 Authenticated read-write participants, including creators and other participants,
 may comment, mark `resolved`, close or reopen under the existing transition
 checks. Readonly and unauthenticated callers remain denied. Unrelated field edits
-(including `target_session`) and deletion retain creator-keycard/operator
-authority; matching a project or session label does not grant it. Human admin
+(including `target_session`) retain creator-keycard/operator authority. Direct
+and selected deletion are operator-only; a creator read-write keycard alone cannot
+delete. Matching a project or session label does not grant authority. Human admin
 operations additionally require explicit canonical acting project and
 `source_agent=human`; those labels do not replace the verified actor.
 
