@@ -240,7 +240,7 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	run := func() {
+	run := func(offline bool) {
 		command := exec.CommandContext(ctx, binary)
 		command.Dir = root
 		command.Env = env
@@ -265,7 +265,11 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 		scanner := bufio.NewScanner(stdout)
 		scanner.Buffer(make([]byte, 64*1024), 16<<20)
 		encoder := json.NewEncoder(stdin)
-		for _, method := range []string{"initialize", "tools/list"} {
+		methods := []string{"initialize", "tools/list"}
+		if offline {
+			methods = methods[:1]
+		}
+		for _, method := range methods {
 			params := map[string]any{}
 			if method == "initialize" {
 				params = map[string]any{"protocolVersion": "2025-11-25", "capabilities": map[string]any{}, "clientInfo": map[string]string{"name": "direct-fixture", "version": "1"}}
@@ -297,6 +301,19 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 					finish()
 					t.Fatalf("%s failed: response %s stderr %s", method, raw, stderr.String())
 				}
+				if method == "initialize" {
+					var initialized struct {
+						Instructions string `json:"instructions"`
+					}
+					if err := json.Unmarshal(frame.Result, &initialized); err != nil {
+						t.Fatal(err)
+					}
+					for _, want := range []string{"Use available injected evidence before repeating discovery", "not before every task or file edit", "Routine task completion requires neither a memory write nor feedback", "native caller's verified canonical project", "PROJECT_MIGRATION_REQUIRED"} {
+						if !strings.Contains(initialized.Instructions, want) {
+							t.Fatalf("initialize omitted %q (backend unavailable: %t)", want, offline)
+						}
+					}
+				}
 				if method == "tools/list" {
 					var listed struct {
 						Tools []struct {
@@ -324,7 +341,7 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 	}
 	var first string
 	for client := 0; client < 2; client++ {
-		run()
+		run(false)
 		id, err := os.ReadFile(filepath.Join(state, "installation", "client-instance-id"))
 		if err != nil || !strings.HasPrefix(string(id), "engram-") {
 			t.Fatalf("direct installation identity absent: %v", err)
@@ -344,4 +361,6 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 		}
 		first = string(id)
 	}
+	fixture.Stop()
+	run(true)
 }

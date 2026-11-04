@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/thebtf/engram/internal/mcpinstructions"
+
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
 )
 
@@ -24,6 +26,7 @@ func (d *Dispatcher) handleInitialize(_ context.Context, _ muxcore.ProjectContex
 			"name":    "engram",
 			"version": d.serverVersion,
 		},
+		"instructions": mcpinstructions.Core,
 	}
 	return marshalResult(req.ID, result), nil
 }
