@@ -111,7 +111,7 @@ export async function requestProjectContext(
   try {
     return await new Promise<ProjectContextResult>((resolve) => {
       execFile(env.ENGRAM_EXECUTABLE || 'engram', args, {
-        env, cwd: workspaceDir, encoding: 'utf8', windowsHide: true,
+        env, encoding: 'utf8', windowsHide: true,
         timeout: options.timeoutMs ?? 15000, maxBuffer: 2 * 1024 * 1024, signal: options.signal,
       }, (error, stdout) => {
         let payload: unknown;
