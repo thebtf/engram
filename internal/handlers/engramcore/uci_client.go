@@ -522,7 +522,39 @@ func (a *UCIIndexAdapter) ReadCodebaseStatus(ctx context.Context, project muxcor
 	if err != nil {
 		return nil, err
 	}
-	return a.module.ProxyHandleTool(ctx, project, "codebase_status", args)
+	// This daemon-owned read is intentionally absent from the server's public
+	// catalog. Its only arguments are constructed above; the backend still
+	// resolves and authorizes the caller-bound context on every request.
+	sessionID, err := requireUCITransportSession(ctx)
+	if err != nil {
+		return nil, err
+	}
+	serverURL, err := a.module.requireServerURL(project)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := a.module.pool.getOrDialGRPC(serverURL, a.module.envFor(project, config.EnvWorkstationToken))
+	if err != nil {
+		return nil, fmt.Errorf("gRPC connect: %w", err)
+	}
+	callCtx, err := uciClientOutgoingContext(ctx, a.module.v3ClientInstanceID)
+	if err != nil {
+		return nil, err
+	}
+	response, err := pb.NewEngramServiceClient(conn).CallTool(callCtx, &pb.CallToolRequest{
+		ToolName: "codebase_status", ArgumentsJson: args, SessionId: sessionID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("gRPC CallTool: %w", err)
+	}
+	block, err := buildInnerBlock(response.ContentJson)
+	if err != nil {
+		return nil, err
+	}
+	if response.IsError {
+		return nil, &module.ProxyIsError{RawContent: block}
+	}
+	return block, nil
 }
 
 // ProxyHandleTool forwards a typed target call without a raw project field.

@@ -40,7 +40,7 @@ function assertNoDuplicateProperties(text) {
       cursor += 1; skip();
       const keys = new Set();
       if (text[cursor] === "}") { cursor += 1; return; }
-      for (;;) {
+      for (; ;) {
         skip(); const key = string();
         if (keys.has(key)) fail("bootstrap policy has duplicate fields");
         keys.add(key); skip();
@@ -53,7 +53,7 @@ function assertNoDuplicateProperties(text) {
     if (text[cursor] === "[") {
       cursor += 1; skip();
       if (text[cursor] === "]") { cursor += 1; return; }
-      for (;;) {
+      for (; ;) {
         value(); skip();
         if (text[cursor] === "]") { cursor += 1; return; }
         if (text[cursor++] !== ",") fail("bootstrap policy is not valid JSON");
@@ -131,14 +131,31 @@ function parsePolicy(text, packageVersion) {
   return validatePolicy(raw, packageVersion);
 }
 
-function createPolicy(version, targets) {
+function parseMarkerlessAttestation(text) {
+  let raw;
+  try { assertNoDuplicateProperties(text); raw = JSON.parse(text); } catch (error) { if (error instanceof BootstrapError) throw error; fail("markerless attestation is not valid JSON"); }
+  exactFields(raw, ["schema_version", "revoked_sha256", "windows_amd64"], "markerless attestation");
+  if (raw.schema_version !== 1 || !Array.isArray(raw.revoked_sha256) || raw.revoked_sha256.some((hash) => typeof hash !== "string" || !SHA256.test(hash)) || new Set(raw.revoked_sha256).size !== raw.revoked_sha256.length) fail("markerless attestation revocations are invalid");
+  if (!Array.isArray(raw.windows_amd64)) fail("markerless attestation targets are invalid");
+  const hashes = new Set();
+  for (const target of raw.windows_amd64) {
+    exactFields(target, ["version", "daemon_compat_epoch", "size", "sha256"], "markerless target");
+    if (typeof target.version !== "string" || !target.version.startsWith("v")) fail("markerless version is invalid");
+    canonicalVersion(target.version.slice(1), "markerless version");
+    if (target.daemon_compat_epoch !== 1 || !Number.isSafeInteger(target.size) || target.size <= 0 || target.size > MAX_OBJECT_BYTES || typeof target.sha256 !== "string" || !SHA256.test(target.sha256) || hashes.has(target.sha256)) fail("markerless target is invalid");
+    hashes.add(target.sha256);
+  }
+  return raw;
+}
+
+function createPolicy(version, targets, revokedSha256 = []) {
   return validatePolicy({
     schema_version: 1,
     launcher_security_epoch: 1,
     package_version: version,
     daemon_compat_epoch: 1,
     targets: Object.fromEntries(Object.entries(TARGET_ASSETS).map(([key, asset]) => [key, { desired: targets[key], predecessor: null }])),
-    revoked_sha256: [],
+    revoked_sha256: revokedSha256,
     build_contract: { go_version: "1.26.10", trimpath: true, buildvcs: false, client_cgo: false, daemon_version_ldflag: `v${version}` },
   }, version);
 }
@@ -153,4 +170,4 @@ if (require.main === module) {
   try { main(); } catch (error) { process.stderr.write(`${error.message}\n`); process.exitCode = 1; }
 }
 
-module.exports = { BootstrapError, MAX_OBJECT_BYTES, SHA256, TARGET_ASSETS, canonicalVersion, createPolicy, parsePolicy, validatePolicy };
+module.exports = { BootstrapError, MAX_OBJECT_BYTES, SHA256, TARGET_ASSETS, canonicalVersion, createPolicy, parseMarkerlessAttestation, parsePolicy, validatePolicy };

@@ -491,11 +491,17 @@ func readLiveMuxcoreDaemonActionAt(markerPath, legacyPath string, status muxcore
 	if !errors.Is(markerErr, os.ErrNotExist) {
 		return daemonConvergenceFail, markerErr
 	}
-	legacyAction, legacyErr := muxcoreLegacyDaemonConvergenceAction(legacyPath, status, client)
-	if legacyErr == nil {
-		return legacyAction, nil
+	if _, legacyReadErr := readMuxcoreMarkerFile(legacyPath); legacyReadErr != nil {
+		if errors.Is(legacyReadErr, os.ErrNotExist) {
+			return daemonConvergenceFail, markerErr
+		}
+		return daemonConvergenceFail, legacyReadErr
 	}
-	return daemonConvergenceFail, markerErr
+	legacyAction, legacyErr := muxcoreLegacyDaemonConvergenceAction(legacyPath, status, client)
+	if legacyErr != nil {
+		return daemonConvergenceFail, fmt.Errorf("%w: %v", errMuxcoreDaemonMarkerUncorrelated, legacyErr)
+	}
+	return legacyAction, nil
 }
 
 var (
@@ -513,6 +519,11 @@ var (
 	waitForCurrentMuxcoreDaemonReady                                      = waitForMuxcoreDaemonVersion
 	openMuxcorePredecessorProcess                                         = openProcessExitProof
 	waitForRestartedMuxcoreDaemon                                         = waitForMuxcoreDaemonVersionOrExit
+	runMarkerlessReconciliation                                           = reconcileMarkerlessDaemon
+	admitMarkerlessCurrent                                                = admitMarkerlessDaemon
+	waitForMuxcoreConvergence                                             = waitMuxcoreConvergenceTick
+	bindObservedMuxcoreOwner                                              = openBoundObservedMuxcoreOwner
+	captureObservedMarkers                                                = snapshotObservedMarkerState
 	acquireRestartLock                          func() (io.Closer, error) = func() (io.Closer, error) { return acquireMuxcoreDaemonLock() }
 	muxcoreMarkerPublicationTimeout                                       = muxcoreDaemonMarkerPublicationTimeout
 )
@@ -521,6 +532,7 @@ var (
 	errMuxcoreDaemonStillLower         = errors.New("muxcore daemon remains lower than client")
 	errMuxcoreDaemonMarkerUncorrelated = errors.New("muxcore daemon marker is not correlated")
 	errMuxcoreDaemonLockAvailable      = errors.New("muxcore daemon restart lock became available")
+	errMuxcoreDaemonOwnerChanged       = errors.New("muxcore daemon owner changed during reconciliation")
 	writeMuxcoreMarker                 = writeMuxcoreMarkerAtomically
 	isRestartLockContended             = isMuxcoreDaemonLockContended
 )
@@ -528,7 +540,19 @@ var (
 const (
 	muxcoreDaemonMarkerPublicationTimeout = 5 * time.Second
 	muxcoreDaemonLockRetryInterval        = 10 * time.Millisecond
+	muxcoreConvergenceRetryInterval       = 100 * time.Millisecond
 )
+
+func waitMuxcoreConvergenceTick(ctx context.Context) error {
+	timer := time.NewTimer(muxcoreConvergenceRetryInterval)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
 
 // acquireRestartLockWithContext retries only the expected nonblocking-lock
 // contention. All other acquisition failures and the caller's deadline remain
@@ -603,6 +627,9 @@ func waitForMuxcoreDaemonVersionOrExit(ctx context.Context, predecessor muxcoreP
 					return errMuxcoreDaemonStillLower
 				}
 			case errors.Is(actionErr, os.ErrNotExist), errors.Is(actionErr, errMuxcoreDaemonMarkerUncorrelated):
+				if previous.PID > 0 && !sameMuxcoreDaemon(previous, status) {
+					return errMuxcoreDaemonStillLower
+				}
 			case action == daemonConvergenceFail && actionErr != nil:
 				return actionErr
 			}
@@ -678,6 +705,151 @@ func probeMuxcoreDaemonNamespace(ctx context.Context, expected *muxcoreDaemonSta
 		return false, errMuxcoreDaemonStillLower
 	}
 	return false, nil
+}
+
+type observedMarkerSnapshot struct {
+	schema, legacy               string
+	schemaPresent, legacyPresent bool
+}
+
+func snapshotObservedMarkerState(status muxcoreDaemonStatusIdentity) (observedMarkerSnapshot, error) {
+	return snapshotObservedMarkerStateAt(muxcoreDaemonMarkerPath(), muxcoreLegacyDaemonVersionPath(), status)
+}
+
+func snapshotObservedMarkerStateAt(markerPath, legacyPath string, status muxcoreDaemonStatusIdentity) (observedMarkerSnapshot, error) {
+	var snapshot observedMarkerSnapshot
+	read := func(path string) (string, bool, error) {
+		info, err := os.Lstat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			return "", false, nil
+		}
+		if err != nil {
+			return "", false, err
+		}
+		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+			return "", false, errors.New("observed marker is not a regular file")
+		}
+		raw, err := readMuxcoreMarkerFile(path)
+		if err != nil {
+			return "", false, err
+		}
+		return string(raw), true, nil
+	}
+	var err error
+	snapshot.schema, snapshot.schemaPresent, err = read(markerPath)
+	if err != nil {
+		return snapshot, err
+	}
+	snapshot.legacy, snapshot.legacyPresent, err = read(legacyPath)
+	if err != nil {
+		return snapshot, err
+	}
+	if snapshot.schemaPresent {
+		var marker muxcoreDaemonVersionMarker
+		if err := decodeStrictJSON([]byte(snapshot.schema), &marker); err != nil {
+			return snapshot, err
+		}
+		_, absolute := normalizedExecutablePath(marker.Exe)
+		if marker.SchemaVersion != 2 || marker.PID <= 0 || strings.TrimSpace(marker.DaemonGeneration) == "" || !absolute || !validDaemonIdentity(daemonConvergenceIdentity{ProductVersion: marker.ProductVersion, DaemonCompatEpoch: marker.DaemonCompatEpoch}) {
+			return snapshot, errors.New("invalid observed schema marker")
+		}
+		if marker.PID != status.PID || marker.DaemonGeneration != status.DaemonGeneration {
+			return snapshot, fmt.Errorf("%w: schema marker names another owner", errMuxcoreDaemonOwnerChanged)
+		}
+	}
+	if snapshot.legacyPresent {
+		var marker legacyMuxcoreDaemonVersionMarker
+		if err := decodeStrictJSON([]byte(snapshot.legacy), &marker); err != nil {
+			return snapshot, err
+		}
+		_, absolute := normalizedExecutablePath(marker.Exe)
+		if marker.PID <= 0 || !absolute || !semver.IsValid(marker.Version) || semver.Canonical(marker.Version) != marker.Version {
+			return snapshot, errors.New("invalid observed legacy marker")
+		}
+		if marker.PID != status.PID {
+			return snapshot, fmt.Errorf("%w: legacy marker names another owner", errMuxcoreDaemonOwnerChanged)
+		}
+	}
+	return snapshot, nil
+}
+
+func openBoundObservedMuxcoreOwner(ctx context.Context, status muxcoreDaemonStatusIdentity) (muxcoreProcessExitProof, observedMarkerSnapshot, error) {
+	var empty observedMarkerSnapshot
+	if status.PID <= 0 || strings.TrimSpace(status.DaemonGeneration) == "" || status.ShuttingDown {
+		return nil, empty, errors.New("invalid observed daemon identity")
+	}
+	proof, err := openMuxcorePredecessorProcess(status.PID)
+	if err != nil {
+		if proof != nil {
+			err = errors.Join(err, proof.Close())
+		}
+		return nil, empty, err
+	}
+	if proof == nil {
+		return nil, empty, errors.New("empty observed daemon exit proof")
+	}
+	for attempt := range 2 {
+		unowned, probeErr := probeMuxcoreDaemonNamespace(ctx, &status)
+		if probeErr != nil || unowned {
+			if unowned && probeErr == nil {
+				probeErr = errors.New("observed daemon disappeared before peer binding")
+			}
+			return nil, empty, errors.Join(probeErr, proof.Close())
+		}
+		if attempt == 0 {
+			empty, err = captureObservedMarkers(status)
+			if err != nil {
+				return nil, observedMarkerSnapshot{}, errors.Join(err, proof.Close())
+			}
+		}
+	}
+	exited, err := proof.Exited()
+	if err != nil || exited {
+		if err == nil {
+			err = errors.New("observed daemon exited before proof binding completed")
+		}
+		return nil, observedMarkerSnapshot{}, errors.Join(err, proof.Close())
+	}
+	return proof, empty, nil
+}
+
+func fencedObservedDaemonExit(ctx context.Context, proof muxcoreProcessExitProof, status muxcoreDaemonStatusIdentity, snapshot observedMarkerSnapshot) (allowed bool, result error) {
+	exited, err := proof.Exited()
+	if err != nil || !exited {
+		return false, err
+	}
+	lock, err := acquireRestartLockWithContext(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer func() {
+		if closeErr := lock.Close(); closeErr != nil {
+			allowed = false
+			result = fmt.Errorf("release observed daemon fence after %v: %w", result, closeErr)
+		}
+	}()
+	for attempt := range 2 {
+		current, err := captureObservedMarkers(status)
+		if err != nil {
+			return false, err
+		}
+		if current != snapshot {
+			return false, fmt.Errorf("%w: observed daemon markers changed after binding", errMuxcoreDaemonOwnerChanged)
+		}
+		if attempt == 0 {
+			unowned, err := probeMuxcoreDaemonNamespace(ctx, nil)
+			if err != nil {
+				return false, err
+			}
+			if !unowned {
+				return false, errMuxcoreDaemonOwnerChanged
+			}
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func waitForMuxcoreDaemonMarker(ctx context.Context) error {
@@ -770,36 +942,91 @@ func reconcileMuxcoreDaemonVersion(parent context.Context) (result error) {
 	ctx, cancel := context.WithTimeout(parent, 2*time.Minute)
 	defer cancel()
 
-	postRestart, coldStartAuthorized := false, false
+	postRestart, coldStartAuthorized, ownerObserved := false, false, false
 	coldStartHandback := false
+	var observedProof muxcoreProcessExitProof
+	var observedStatus muxcoreDaemonStatusIdentity
+	var observedMarkers observedMarkerSnapshot
+	defer func() {
+		if observedProof != nil {
+			result = errors.Join(result, observedProof.Close())
+		}
+	}()
 	defer func() {
 		if result != nil || !postRestart || coldStartHandback {
 			return
 		}
-		// Every post-ACK current handback must pass the same final admission.
-		status, ok := readMuxcoreDaemonStatusIdentity(serverid.DaemonControlPath("", muxcoreNamespace))
-		if !ok {
-			result = errors.New("read muxcore daemon status before post-restart admission")
-			return
-		}
-		action, err := readLiveMuxcoreDaemonAction(status, client)
-		if err != nil || action != daemonConvergenceJoin {
-			if err == nil {
-				err = errors.New("muxcore daemon is not compatible current")
+		for {
+			status, ok := readMuxcoreDaemonStatusIdentity(serverid.DaemonControlPath("", muxcoreNamespace))
+			if !ok || status.ShuttingDown {
+				if err := waitForMuxcoreConvergence(ctx); err != nil {
+					result = err
+					return
+				}
+				continue
 			}
-			result = fmt.Errorf("authenticate post-restart muxcore daemon PID %d: %w", status.PID, err)
+			action, err := readLiveMuxcoreDaemonAction(status, client)
+			if errors.Is(err, errMuxcoreDaemonMarkerUncorrelated) {
+				lock, lockErr := acquireRestartLockWithContext(ctx)
+				if lockErr != nil {
+					result = lockErr
+					return
+				}
+				current, found := readMuxcoreDaemonStatusIdentity(serverid.DaemonControlPath("", muxcoreNamespace))
+				changed := !found || current.ShuttingDown || !sameMuxcoreDaemon(status, current)
+				if !changed {
+					action, err = readLiveMuxcoreDaemonAction(current, client)
+				}
+				if closeErr := lock.Close(); closeErr != nil {
+					result = fmt.Errorf("release marker publication fence: %w", closeErr)
+					return
+				}
+				if changed {
+					if waitErr := waitForMuxcoreConvergence(ctx); waitErr != nil {
+						result = waitErr
+						return
+					}
+					continue
+				}
+				if (err == nil && action == daemonConvergenceJoin) || errors.Is(err, os.ErrNotExist) {
+					continue
+				}
+			}
+			if errors.Is(err, os.ErrNotExist) && markerlessRecoveryAvailable {
+				err = admitMarkerlessCurrent(ctx, status, client)
+				if errors.Is(err, errMuxcoreDaemonOwnerChanged) || errors.Is(err, errMuxcoreDaemonStillLower) {
+					if err := waitForMuxcoreConvergence(ctx); err != nil {
+						result = err
+						return
+					}
+					continue
+				}
+				if err == nil {
+					action = daemonConvergenceJoin
+				}
+			}
+			if err != nil || action != daemonConvergenceJoin {
+				if err == nil {
+					err = errors.New("muxcore daemon is not compatible current")
+				}
+				result = fmt.Errorf("authenticate post-restart muxcore daemon PID %d: %w", status.PID, err)
+				return
+			}
+			unowned, err := probeMuxcoreDaemonNamespace(ctx, &status)
+			if errors.Is(err, errMuxcoreDaemonStillLower) || (err == nil && unowned) {
+				if err := waitForMuxcoreConvergence(ctx); err != nil {
+					result = err
+					return
+				}
+				continue
+			}
+			if err != nil {
+				result = fmt.Errorf("bind post-restart muxcore daemon PID %d: %w", status.PID, err)
+				return
+			}
+			fmt.Fprintf(os.Stderr, "[engram] authenticated post-restart muxcore daemon PID %d with %s\n", status.PID, daemonVersion)
 			return
 		}
-		unowned, err := probeMuxcoreDaemonNamespace(ctx, &status)
-		if err != nil {
-			result = fmt.Errorf("bind post-restart muxcore daemon PID %d: %w", status.PID, err)
-			return
-		}
-		if unowned {
-			result = errors.New("post-restart muxcore daemon disappeared before admission")
-			return
-		}
-		fmt.Fprintf(os.Stderr, "[engram] authenticated post-restart muxcore daemon PID %d with %s\n", status.PID, daemonVersion)
 	}()
 	for {
 		if err := ctx.Err(); err != nil {
@@ -807,43 +1034,115 @@ func reconcileMuxcoreDaemonVersion(parent context.Context) (result error) {
 		}
 		status, ok := readMuxcoreDaemonStatusIdentity(serverid.DaemonControlPath("", muxcoreNamespace))
 		if !ok {
-			if !postRestart {
-				return nil // muxcore elects the cold-start daemon after this shim begins.
+			if !postRestart && !ownerObserved {
+				return nil // muxcore elects the initial cold-start daemon.
 			}
-			lock, err := acquireRestartLockWithContext(ctx)
-			if err != nil {
-				return err
+			if observedProof != nil {
+				allowed, err := fencedObservedDaemonExit(ctx, observedProof, observedStatus, observedMarkers)
+				if errors.Is(err, errMuxcoreDaemonOwnerChanged) {
+					closeErr := observedProof.Close()
+					observedProof = nil
+					coldStartAuthorized = false
+					if closeErr != nil {
+						return closeErr
+					}
+					if err := waitForMuxcoreConvergence(ctx); err != nil {
+						return err
+					}
+					continue
+				}
+				if err != nil {
+					return fmt.Errorf("fence observed daemon exit: %w", err)
+				}
+				if allowed {
+					coldStartHandback = true
+					return nil
+				}
 			}
-			unowned, probeErr := probeMuxcoreDaemonNamespace(ctx, nil)
-			closeErr := lock.Close()
-			if probeErr != nil || closeErr != nil {
-				return errors.Join(probeErr, closeErr)
-			}
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			if !unowned {
+			if postRestart {
+				lock, err := acquireRestartLockWithContext(ctx)
+				if err != nil {
+					return err
+				}
+				unowned, probeErr := probeMuxcoreDaemonNamespace(ctx, nil)
+				closeErr := lock.Close()
+				if probeErr != nil || closeErr != nil {
+					return errors.Join(probeErr, closeErr)
+				}
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				if unowned && coldStartAuthorized {
+					coldStartHandback = true
+					return nil
+				}
 				coldStartAuthorized = false
-				continue
 			}
-			if coldStartAuthorized {
-				coldStartHandback = true // Only this exit-proven, freshly fenced absence admits cold start.
-				return nil
+			if err := waitForMuxcoreConvergence(ctx); err != nil {
+				return err
 			}
-			// Without exit proof, only authenticated current convergence can admit.
-			waitErr := waitForMuxcoreDaemonMarker(ctx)
-			if waitErr == nil {
-				return nil
+			continue
+		}
+		ownerObserved = true
+		if observedProof != nil && !sameMuxcoreDaemon(observedStatus, status) {
+			if err := observedProof.Close(); err != nil {
+				return err
 			}
-			if errors.Is(waitErr, errMuxcoreDaemonStillLower) {
-				continue
-			}
-			return fmt.Errorf("post-restart namespace is unowned without an exit-proven handback: %w", waitErr)
+			observedProof = nil
 		}
 		if postRestart {
 			coldStartAuthorized = false
 		}
+		if status.ShuttingDown {
+			if err := waitForMuxcoreConvergence(ctx); err != nil {
+				return err
+			}
+			continue
+		}
 		action, err := readLiveMuxcoreDaemonAction(status, client)
+		if observedProof == nil && (errors.Is(err, os.ErrNotExist) || (err == nil && action == daemonConvergenceReplace)) {
+			proof, markers, proofErr := bindObservedMuxcoreOwner(ctx, status)
+			if proofErr == nil && proof != nil {
+				observedProof, observedStatus, observedMarkers = proof, status, markers
+			}
+			if proofErr != nil && proof != nil {
+				if closeErr := proof.Close(); closeErr != nil {
+					return errors.Join(proofErr, closeErr)
+				}
+			}
+		}
+		if errors.Is(err, os.ErrNotExist) && !markerlessRecoveryAvailable && observedProof != nil {
+			if err := waitForMuxcoreConvergence(ctx); err != nil {
+				return err
+			}
+			continue
+		}
+		if errors.Is(err, os.ErrNotExist) && markerlessRecoveryAvailable {
+			restarted, exitProven, recoveryErr := runMarkerlessReconciliation(ctx, status, client)
+			if restarted {
+				if observedProof != nil {
+					closeErr := observedProof.Close()
+					observedProof = nil
+					if closeErr != nil {
+						return errors.Join(recoveryErr, closeErr)
+					}
+				}
+				postRestart, coldStartAuthorized = true, exitProven
+			}
+			if errors.Is(recoveryErr, errMuxcoreDaemonOwnerChanged) {
+				if err := waitForMuxcoreConvergence(ctx); err != nil {
+					return err
+				}
+				continue
+			}
+			if errors.Is(recoveryErr, errMuxcoreDaemonStillLower) || errors.Is(recoveryErr, errMuxcoreDaemonLockAvailable) {
+				continue
+			}
+			if recoveryErr != nil {
+				return fmt.Errorf("authenticate markerless muxcore daemon PID %d: %w", status.PID, recoveryErr)
+			}
+			return nil
+		}
 		if errors.Is(err, os.ErrNotExist) || errors.Is(err, errMuxcoreDaemonMarkerUncorrelated) {
 			if waitErr := waitForMuxcoreDaemonMarker(ctx); waitErr == nil {
 				return nil
@@ -883,13 +1182,13 @@ func reconcileMuxcoreDaemonVersion(parent context.Context) (result error) {
 		current, ok := readMuxcoreDaemonStatusIdentity(serverid.DaemonControlPath("", muxcoreNamespace))
 		if !ok {
 			closeErr := lock.Close()
-			if postRestart {
-				if closeErr != nil {
-					return closeErr
-				}
-				continue // Re-enter strict namespace validation, never boolean absence admission.
+			if closeErr != nil {
+				return closeErr
 			}
-			return nil
+			if err := waitForMuxcoreConvergence(ctx); err != nil {
+				return err
+			}
+			continue
 		}
 		if !sameMuxcoreDaemon(status, current) {
 			_ = lock.Close()
@@ -945,6 +1244,16 @@ func reconcileMuxcoreDaemonVersion(parent context.Context) (result error) {
 		}
 		if closeErr != nil {
 			fmt.Fprintf(os.Stderr, "[engram] WARN: released muxcore daemon restart lock with error: %v\n", closeErr)
+		}
+		if observedProof != nil {
+			closeErr := observedProof.Close()
+			observedProof = nil
+			if closeErr != nil {
+				if predecessor != nil {
+					closeErr = errors.Join(closeErr, predecessor.Close())
+				}
+				return fmt.Errorf("close superseded observed daemon proof: %w", closeErr)
+			}
 		}
 		postRestart, coldStartAuthorized = true, false
 		waitErr := waitForRestartedMuxcoreDaemon(ctx, predecessor, current)

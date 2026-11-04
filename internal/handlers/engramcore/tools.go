@@ -5,9 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"slices"
+	"sync"
 	"time"
 
 	"github.com/thebtf/engram/internal/config"
+	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/module"
 	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/internal/uci"
@@ -15,63 +18,282 @@ import (
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 const proxyToolsDiscoveryTimeout = 30 * time.Second
 
 const projectIdentityResolutionRefusedMessage = "project identity resolution refused"
 
-// ProxyTools fetches the dynamic tool set from the engram server via a gRPC
-// Initialize handshake. Implements module.ProxyToolProvider per FR-11a.
-//
-// Ported verbatim from cmd/engram/main.go handleToolsList v4.2.0 — the
-// translation from pb.ToolDefinition to module.ToolDef preserves the exact
-// shape the CC client expects.
-//
-// Missing both supported server URL variables is intentional offline mode and
-// remains eligible for a static Loom-only response. Once either backend URL is
-// configured, every identity, connection, or Initialize failure fails loud.
+type discoveredCatalog struct {
+	version string
+	tools   []module.ToolDef
+}
+
+var (
+	offlineCatalogOnce sync.Once
+	offlineCatalog     []module.ToolDef
+	offlineCatalogErr  error
+)
+
+// ProxyTools returns local schemas without waiting for remote discovery.
+// Authenticated remote schemas and subject proof are refreshed asynchronously.
 func (m *Module) ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]module.ToolDef, error) {
 	serverURL, err := m.requireServerURL(p)
 	if err != nil {
-		// No configured server URL is the intentional offline contract: the
-		// dispatcher may still return static Loom tools.
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, &module.RequiredProxyToolsError{Cause: err}
+	}
+	fallback, err := supportedOfflineTools()
+	if err != nil {
 		return nil, err
 	}
 	token := m.envFor(p, config.EnvWorkstationToken)
-	discoveryCtx, cancel := context.WithTimeout(ctx, proxyToolsDiscoveryTimeout)
-	defer cancel()
-
-	conn, err := m.pool.getOrDialGRPC(serverURL, token)
+	key, err := advisorProofKeyFor(serverURL, token)
 	if err != nil {
-		return nil, &module.RequiredProxyToolsError{Cause: fmt.Errorf("gRPC connect: %w", err)}
+		return slices.Clone(fallback), nil
 	}
-	client := pb.NewEngramServiceClient(conn)
+	m.refreshMu.Lock()
+	cached := m.liveCatalog[key]
+	live := append([]module.ToolDef(nil), cached.tools...)
+	m.refreshMu.Unlock()
+	m.refreshDiscovery(serverURL, token, p.ID)
+	for i := range live {
+		live[i].Description = "Previously discovered remote schema; current availability and authorization are unverified. " + live[i].Description
+	}
+	known := make(map[string]bool, len(live))
+	for _, tool := range live {
+		known[tool.Name] = true
+	}
+	for _, tool := range fallback {
+		if !known[tool.Name] {
+			live = append(live, tool)
+		}
+	}
+	return live, nil
+}
 
-	// The catalogue is independent of local project state.
-	request := &pb.InitializeRequest{ClientName: "engram-daemon", ClientVersion: daemonClientVersion}
-	resp, err := client.Initialize(discoveryCtx, request, grpc.WaitForReady(true))
+func supportedOfflineTools() ([]module.ToolDef, error) {
+	offlineCatalogOnce.Do(func() {
+		catalog := mcp.SupportedToolCatalog()
+		offlineCatalog = make([]module.ToolDef, 0, len(catalog))
+		for _, tool := range catalog {
+			schema, err := json.Marshal(tool.InputSchema)
+			if err != nil {
+				offlineCatalogErr = &module.RequiredProxyToolsError{Cause: err}
+				return
+			}
+			offlineCatalog = append(offlineCatalog, module.ToolDef{
+				Name:        tool.Name,
+				Description: "Local schema only; remote support and authorization are unverified and must be checked by the backend. " + tool.Description,
+				InputSchema: schema,
+			})
+		}
+	})
+	return offlineCatalog, offlineCatalogErr
+}
+
+func (m *Module) refreshDiscovery(serverURL, token, projectID string) {
+	key, err := advisorProofKeyFor(serverURL, token)
 	if err != nil {
-		return nil, &module.RequiredProxyToolsError{Cause: fmt.Errorf("gRPC Initialize: %w", err)}
+		return
 	}
+	m.refreshMu.Lock()
+	if m.refreshCtx == nil || m.refreshCtx.Err() != nil || m.terminalDiscovery[key] {
+		m.refreshMu.Unlock()
+		return
+	}
+	if _, exists := m.discoveryGeneration[key]; !exists {
+		if len(m.discoveryGeneration) >= maxAdvisorSubjectProofCacheItems {
+			m.refreshMu.Unlock()
+			return
+		}
+		m.discoveryGeneration[key] = 0
+	}
+	projects := m.refreshing[key]
+	if projects == nil {
+		if len(m.refreshing) >= maxAdvisorSubjectProofCacheItems {
+			m.refreshMu.Unlock()
+			return
+		}
+		projects = make(map[string]bool)
+		m.refreshing[key] = projects
+	}
+	if projects[projectID] || len(projects) >= maxAdvisorSubjectProofCacheItems {
+		m.refreshMu.Unlock()
+		return
+	}
+	projects[projectID] = true
+	m.refreshWG.Add(1)
+	ctx := m.refreshCtx
+	notifier := m.notifier
+	m.refreshMu.Unlock()
+	go func() {
+		defer m.refreshWG.Done()
+		defer func() {
+			m.refreshMu.Lock()
+			delete(m.refreshing[key], projectID)
+			if len(m.refreshing[key]) == 0 {
+				delete(m.refreshing, key)
+			}
+			m.signalDiscoveryUpdateLocked(key)
+			m.refreshMu.Unlock()
+		}()
+		delay := time.Second
+		for {
+			if ctx.Err() != nil {
+				return
+			}
+			conn, err := m.pool.getOrDialGRPC(serverURL, token)
+			if err != nil {
+				m.markDiscoveryTerminal(key)
+				if !waitDiscoveryRetry(ctx, &delay) {
+					return
+				}
+				continue
+			}
+			m.refreshMu.Lock()
+			generation := m.discoveryGeneration[key]
+			m.refreshMu.Unlock()
+			callCtx, cancel := context.WithTimeout(ctx, proxyToolsDiscoveryTimeout)
+			resp, err := pb.NewEngramServiceClient(conn).Initialize(callCtx, &pb.InitializeRequest{ClientName: "engram-daemon", ClientVersion: daemonClientVersion}, grpc.WaitForReady(true))
+			cancel()
+			if err == nil {
+				tools := make([]module.ToolDef, 0, len(resp.Tools))
+				valid := true
+				for _, tool := range resp.Tools {
+					if tool == nil || tool.Name == "" || !json.Valid(tool.InputSchemaJson) {
+						valid = false
+						break
+					}
+					tools = append(tools, module.ToolDef{Name: tool.Name, Description: tool.Description, InputSchema: tool.InputSchemaJson})
+				}
+				if !valid {
+					m.markDiscoveryTerminal(key)
+					if !waitDiscoveryRetry(ctx, &delay) {
+						return
+					}
+					continue
+				}
+				m.refreshMu.Lock()
+				if generation != m.discoveryGeneration[key] {
+					m.refreshMu.Unlock()
+					continue
+				}
+				if m.advisorProofs.record(serverURL, token, resp.GetAuthenticatedSubjectProofSha256()) != nil {
+					m.refreshMu.Unlock()
+					m.markDiscoveryTerminal(key)
+					if !waitDiscoveryRetry(ctx, &delay) {
+						return
+					}
+					continue
+				}
+				delete(m.terminalDiscovery, key)
+				delay = time.Second
+				if len(m.liveCatalog) < maxAdvisorSubjectProofCacheItems {
+					m.liveCatalog[key] = discoveredCatalog{version: resp.GetServerVersion(), tools: tools}
+				}
+				m.signalDiscoveryUpdateLocked(key)
+				signal := m.discoverySignals[key]
+				if signal == nil {
+					signal = make(chan struct{})
+					m.discoverySignals[key] = signal
+				}
+				m.refreshMu.Unlock()
+				if notifier != nil {
+					_ = notifier.Notify(projectID, []byte(`{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}`))
+				}
+				watchCtx, cancelWatch := context.WithCancel(ctx)
+				go func() {
+					select {
+					case <-signal:
+						cancelWatch()
+					case <-watchCtx.Done():
+					}
+				}()
+				for conn.GetState() == connectivity.Ready && conn.WaitForStateChange(watchCtx, connectivity.Ready) {
+				}
+				cancelWatch()
+				if ctx.Err() != nil {
+					return
+				}
+				m.invalidateDiscoveryGeneration(key, serverURL, token, generation)
+				continue
+			}
+			m.refreshMu.Lock()
+			m.signalDiscoveryUpdateLocked(key)
+			m.refreshMu.Unlock()
+			if status.Code(err) != codes.Unavailable && status.Code(err) != codes.DeadlineExceeded {
+				m.markDiscoveryTerminal(key)
+			}
+			if !waitDiscoveryRetry(ctx, &delay) {
+				return
+			}
+		}
+	}()
+}
 
-	tools := make([]module.ToolDef, 0, len(resp.Tools))
-	for _, t := range resp.Tools {
-		tools = append(tools, module.ToolDef{
-			Name:        t.Name,
-			Description: t.Description,
-			InputSchema: t.InputSchemaJson,
-		})
+func waitDiscoveryRetry(ctx context.Context, delay *time.Duration) bool {
+	timer := time.NewTimer(*delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
 	}
-	// The proof becomes usable only after the existing response validation and
-	// complete tools-list projection above have succeeded. Empty is the
-	// old-server-compatible case; malformed non-empty values fail closed.
-	if err := m.advisorProofs.record(serverURL, token, resp.GetAuthenticatedSubjectProofSha256()); err != nil {
-		return nil, &module.RequiredProxyToolsError{Cause: err}
+	if *delay < 8*time.Second {
+		*delay *= 2
 	}
+	return true
+}
 
-	return tools, nil
+func (m *Module) markDiscoveryTerminal(key advisorProofKey) {
+	m.refreshMu.Lock()
+	defer m.refreshMu.Unlock()
+	if len(m.terminalDiscovery) < maxAdvisorSubjectProofCacheItems {
+		m.terminalDiscovery[key] = true
+	}
+	m.signalDiscoveryUpdateLocked(key)
+}
+
+func (m *Module) invalidateDiscoveryGeneration(key advisorProofKey, serverURL, token string, generation uint64) {
+	m.refreshMu.Lock()
+	defer m.refreshMu.Unlock()
+	if m.discoveryGeneration[key] == generation {
+		m.invalidateDiscoveryLocked(key, serverURL, token)
+	}
+}
+
+func (m *Module) invalidateDiscovery(key advisorProofKey, serverURL, token string) {
+	m.refreshMu.Lock()
+	defer m.refreshMu.Unlock()
+	m.invalidateDiscoveryLocked(key, serverURL, token)
+}
+
+func (m *Module) signalDiscoveryUpdateLocked(key advisorProofKey) {
+	if signal := m.discoveryUpdates[key]; signal != nil {
+		close(signal)
+		delete(m.discoveryUpdates, key)
+	}
+}
+
+func (m *Module) invalidateDiscoveryLocked(key advisorProofKey, serverURL, token string) {
+	delete(m.liveCatalog, key)
+	m.signalDiscoveryUpdateLocked(key)
+	delete(m.terminalDiscovery, key)
+	if signal := m.discoverySignals[key]; signal != nil {
+		close(signal)
+		delete(m.discoverySignals, key)
+	}
+	if _, ok := m.discoveryGeneration[key]; ok || len(m.discoveryGeneration) < maxAdvisorSubjectProofCacheItems {
+		m.discoveryGeneration[key]++
+	}
+	_ = m.advisorProofs.record(serverURL, token, nil)
 }
 
 // ProxyHandleTool forwards a tools/call request to the engram server via
@@ -95,6 +317,7 @@ func (m *Module) ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]mo
 //	    sentinel and wraps with isError:true. End result is byte-identical
 //	    to v4.2.0 both in content and in the isError boolean.
 func (m *Module) ProxyHandleTool(ctx context.Context, p muxcore.ProjectContext, name string, args json.RawMessage) (json.RawMessage, error) {
+	originalArgs := args
 	sessionID, uciTool, err := m.proxyToolSession(ctx, p, name)
 	if err != nil {
 		return nil, err
@@ -109,21 +332,51 @@ func (m *Module) ProxyHandleTool(ctx context.Context, p muxcore.ProjectContext, 
 	if err != nil {
 		return nil, err
 	}
-	conn, err := m.pool.getOrDialGRPC(serverURL, m.envFor(p, config.EnvWorkstationToken))
-	if err != nil {
-		return nil, fmt.Errorf("gRPC connect: %w", err)
-	}
 	request := &pb.CallToolRequest{ToolName: name, ArgumentsJson: args, SessionId: sessionID}
 	callCtx, err := m.proxyToolCallContext(ctx, p, request, uciTool)
 	if err != nil {
 		return nil, err
 	}
+	token := m.envFor(p, config.EnvWorkstationToken)
+	guarded := !unconditionallySafeHealth(name, originalArgs)
+	conn, err := m.pool.getOrDialGRPC(serverURL, token)
+	if err != nil {
+		if guarded {
+			return nil, capabilityNotSent("Backend connection setup failed.")
+		}
+		return nil, fmt.Errorf("gRPC connect: %w", err)
+	}
+	if guarded {
+		if err := m.checkProxyCapability(ctx, conn, serverURL, token, p.ID, name, originalArgs, args); err != nil {
+			return nil, err
+		}
+	}
 	if name == "codebase_context" && m.registrationParserAvailable {
 		callCtx = metadata.AppendToOutgoingContext(callCtx, "x-engram-verified-parser-bundle", string(uci.TreeSitterSemanticContractDigest()))
 	}
+	if guarded && callCtx.Err() != nil {
+		return nil, capabilityNotSent("The caller cancelled before dispatch.")
+	}
 	response, err := pb.NewEngramServiceClient(conn).CallTool(callCtx, request)
+	if err != nil && (status.Code(err) == codes.Unavailable || status.Code(err) == codes.DeadlineExceeded) {
+		token := m.envFor(p, config.EnvWorkstationToken)
+		if key, keyErr := advisorProofKeyFor(serverURL, token); keyErr == nil {
+			m.invalidateDiscovery(key, serverURL, token)
+			m.refreshDiscovery(serverURL, token, p.ID)
+		}
+	}
 	if err != nil {
+		if guarded {
+			return nil, &module.ModuleError{Code: "OUTCOME_UNKNOWN", Message: "The backend tool request was dispatched but its outcome is unknown. Inspect its outcome before any retry; do not replay automatically."}
+		}
 		return nil, fmt.Errorf("gRPC CallTool: %w", err)
+	}
+	token = m.envFor(p, config.EnvWorkstationToken)
+	if key, keyErr := advisorProofKeyFor(serverURL, token); keyErr == nil {
+		m.refreshMu.Lock()
+		delete(m.terminalDiscovery, key)
+		m.refreshMu.Unlock()
+		m.refreshDiscovery(serverURL, token, p.ID)
 	}
 	block, mErr := buildInnerBlock(response.ContentJson)
 	if mErr != nil {

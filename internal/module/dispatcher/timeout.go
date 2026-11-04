@@ -15,9 +15,8 @@ import (
 // HandleTool call. Per FR-14 and design.md Section 4.7.
 const defaultToolTimeout = 30 * time.Second
 
-// dispatcherTimeoutError is the sentinel returned by [callToolWithTimeout]
-// when the dispatcher's own 30 s cap fires (as distinct from a module-authored
-// [module.ErrTimeout] which is a voluntary result-level error per FR-12).
+// dispatcherTimeoutError is the sentinel returned when a deadline expires and
+// the provider does not report a preserved delivery outcome.
 //
 // content.go handleToolsCall detects this sentinel BEFORE the generic
 // ModuleError check and maps it to JSON-RPC -32603 with timeout details, per
@@ -28,9 +27,9 @@ const defaultToolTimeout = 30 * time.Second
 //	returns ctx.Err(), dispatcher sends -32603 internal error with timeout
 //	details; other sessions are unaffected."
 //
-// A module-returned ErrTimeout (e.g. when a module with its own internal 10 s
-// upstream timeout voluntarily surfaces a structured error) is NOT wrapped in
-// this sentinel and travels through the normal result-level ModuleError path.
+// A provider's CAPABILITY_NOT_SENT or OUTCOME_UNKNOWN ModuleError remains a
+// result-level error even after a deadline. Other errors, including ErrTimeout,
+// are mapped to this sentinel when the deadline has expired.
 type dispatcherTimeoutError struct {
 	wall time.Duration
 }
@@ -47,11 +46,10 @@ func (e *dispatcherTimeoutError) Error() string {
 // passed through to HandleTool.
 //
 // Returns (result, nil) on success.
-// Returns (nil, *dispatcherTimeoutError) when the dispatcher's own 30 s cap
-// fires — content.go maps this to -32603.
-// Returns (nil, *module.ModuleError) when the module voluntarily surfaces a
-// structured error — content.go wraps this in a result.content isError:true
-// envelope per FR-12.
+// Returns (nil, *dispatcherTimeoutError) for a deadline unless the provider
+// reports CAPABILITY_NOT_SENT or OUTCOME_UNKNOWN; content.go maps the sentinel
+// to -32603. Preserved delivery outcomes and other ModuleErrors returned before
+// the deadline remain result-level errors with isError:true per FR-12.
 // Returns (nil, panicErr) if HandleTool panics — panic is recovered.
 //
 // Design reference: FR-14 (30 s hard cap) and FR-15 (panic isolation).
@@ -113,13 +111,12 @@ func callWithTimeout(
 
 	result, outErr = fn(tctx)
 
-	// If the call returned an error AND our own 30 s cap fired, that is an
-	// INTERNAL safety-net tripped by the dispatcher — not a voluntary module
-	// error. Surface via dispatcherTimeoutError sentinel so content.go emits
-	// JSON-RPC -32603 per the spec edge case. If tctx.Err() is set for a
-	// different reason (parent ctx cancelled), propagate the raw error.
+	// Preserve the provider's explicit delivery outcome even when the
+	// deadline expires. For all other errors retain the timeout contract.
 	if outErr != nil && tctx.Err() == context.DeadlineExceeded {
-		outErr = &dispatcherTimeoutError{wall: defaultToolTimeout}
+		if moduleErr, ok := outErr.(*module.ModuleError); !ok || (moduleErr.Code != "CAPABILITY_NOT_SENT" && moduleErr.Code != "OUTCOME_UNKNOWN") {
+			outErr = &dispatcherTimeoutError{wall: defaultToolTimeout}
+		}
 	}
 	return result, outErr
 }

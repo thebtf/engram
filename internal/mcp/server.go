@@ -373,6 +373,14 @@ func (s *Server) ListTools() []Tool {
 	return tools
 }
 
+// SupportedToolCatalog returns this binary's known schemas without asserting
+// that a particular server has enabled or authorized them.
+func SupportedToolCatalog() []Tool {
+	s := &Server{}
+	resp := s.buildToolsList(&Request{Params: json.RawMessage(`{"include_all":true}`)}, true)
+	return resp.Result.(map[string]any)["tools"].([]Tool)
+}
+
 // Version returns the server version string.
 func (s *Server) Version() string {
 	return s.version
@@ -1002,13 +1010,17 @@ func (s *Server) primaryTools() []Tool {
 // find_by_type removed — they were backed by internal/search (dropped). Use the
 // consolidated recall(action="search") tool instead.
 func (s *Server) handleToolsList(req *Request) *Response {
+	return s.buildToolsList(req, false)
+}
+
+func (s *Server) buildToolsList(req *Request, catalogOnly bool) *Response {
 	tools := []Tool{}
 
 	// Behavioral rules tools — only advertise when the store is wired (US3 Commit C).
 	// Advertising store_rule/list_rules when behavioralRulesStore is nil would cause
 	// every call to fail with "behavioral rules store not initialised" — unhelpful noise
 	// for deployments that have not yet run migration 089.
-	if s.behavioralRulesStore != nil {
+	if catalogOnly || s.behavioralRulesStore != nil {
 		tools = append(tools,
 			Tool{
 				Name:        "store_rule",
@@ -1040,38 +1052,38 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	}
 
 	// Recall's expanded schema remains available when memory storage is wired.
-	if s.memoryStore != nil {
+	if catalogOnly || s.memoryStore != nil {
 		tools = append(tools, recallMemoryTool())
 	}
-	if s.memoryStore != nil && s.continuitySlotStore != nil && s.auditStore != nil {
+	if catalogOnly || s.memoryStore != nil && s.continuitySlotStore != nil && s.auditStore != nil {
 		tools = append(tools, continuitySlotTool())
 	}
-	if s6OutcomeEnabledFromEnv() && s.effectiveMemorySignificanceUpdater() != nil {
+	if catalogOnly || s6OutcomeEnabledFromEnv() && s.effectiveMemorySignificanceUpdater() != nil {
 		tools = append(tools, rateMemorySignificanceTool())
 	}
-	if s2MetaMemoryEnabled() && s.metaMemoryIndex != nil {
+	if catalogOnly || s2MetaMemoryEnabled() && s.metaMemoryIndex != nil {
 		tools = append(tools, knowAboutTool())
 	}
-	if s.principalMemoryQuerySvc != nil {
+	if catalogOnly || s.principalMemoryQuerySvc != nil {
 		tools = append(tools, principalMemoryQueryTool())
 	}
 	// Native state-plane tools are advertised only when the runtime state store is wired.
-	if s.stateStore != nil {
+	if catalogOnly || s.stateStore != nil {
 		tools = append(tools, stateTool(), setStateTool())
 	}
 	// Experience/history read tools are advertised only when the CR-009 provider is wired.
-	if s.experienceProvider != nil {
+	if catalogOnly || s.experienceProvider != nil {
 		tools = append(tools, experienceHistoryTools()...)
 	}
-	if s.temporalTruthProvider != nil && temporalTruthEnabledFromEnv() {
+	if catalogOnly || s.temporalTruthProvider != nil && temporalTruthEnabledFromEnv() {
 		tools = append(tools, temporalTruthTool(), temporalTruthRefreshTool())
 	}
-	if s.directiveCaptureService != nil && directivesCaptureEnabledFromEnv() {
+	if catalogOnly || s.directiveCaptureService != nil && directivesCaptureEnabledFromEnv() {
 		tools = append(tools, rememberDirectiveTool())
 	}
 
 	// Adaptive memory tools — advertise only when memory store is available AND adaptive features are enabled.
-	if s.memoryStore != nil {
+	if catalogOnly || s.memoryStore != nil {
 		tools = append(tools,
 			Tool{
 				Name:        "get_memory_brief",
@@ -1098,18 +1110,18 @@ func (s *Server) handleToolsList(req *Request) *Response {
 
 	// Crystallization candidate tools — advertised only when ENGRAM_VNEXT_F_ENABLED=true
 	// and the candidate store is wired (Milestone-F TG4 T026).
-	if s.candidateStore != nil {
+	if catalogOnly || s.candidateStore != nil {
 		tools = append(tools, candidateTools()...)
 	}
 
 	// Governance tools (Milestone-F TG6 T043): snapshot list/rollback/pin + redaction status.
 	// Admin-gated at handler level; advertised only when snapshotStore is wired.
-	if s.snapshotStore != nil {
+	if catalogOnly || s.snapshotStore != nil {
 		tools = append(tools, governanceTools()...)
 	}
 
-	if s.ruleGovernanceReadStore != nil {
-		tools = append(tools, ruleGovernanceReadTools(s.ruleInjectionTelemetry != nil)...)
+	if catalogOnly || s.ruleGovernanceReadStore != nil {
+		tools = append(tools, ruleGovernanceReadTools(catalogOnly || s.ruleInjectionTelemetry != nil)...)
 	}
 
 	// Bulk-op tools (Milestone-F TG6 T044): bulk_promote/delete/supersede with dry-run.
@@ -1122,27 +1134,27 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	// Code intelligence search is available through scoped UCI or the explicit
 	// legacy-only rollback reader; a scoped application always takes precedence.
 	// codebase_status remains daemon-owned and is not advertised here.
-	if codeIntelEnabled() && (s.hasCodebaseIntelligenceApplication() || s.hasLegacyUnscopedCodeChunkStore()) {
+	if catalogOnly || codeIntelEnabled() && (s.hasCodebaseIntelligenceApplication() || s.hasLegacyUnscopedCodeChunkStore()) {
 		tools = append(tools, codebaseSearchTool())
 	}
-	if codeIntelEnabled() && s.hasCodebaseContextApplication() {
+	if catalogOnly || codeIntelEnabled() && s.hasCodebaseContextApplication() {
 		tools = append(tools, codebaseContextTool())
 	}
-	if codeIntelEnabled() && s.hasCodebaseReadApplication() {
+	if catalogOnly || codeIntelEnabled() && s.hasCodebaseReadApplication() {
 		tools = append(tools, codebaseReadTool())
 	}
-	if codeIntelEnabled() && s.hasCodebaseGraphApplication() {
+	if catalogOnly || codeIntelEnabled() && s.hasCodebaseGraphApplication() {
 		tools = append(tools, codebaseGraphTool())
 	}
 
 	// Ambient fallback polling — advertise only when the S3 flag is on and the queue seam is wired.
-	if ambientHintsEnabledFromEnv() && s.hintQueue != nil {
+	if catalogOnly || ambientHintsEnabledFromEnv() && s.hintQueue != nil {
 		tools = append(tools, ambientHintsTool())
 	}
 
 	// Lifecycle tool — advertise when memory store + promotion store are available
 	// and ENGRAM_LIFECYCLE_ENABLED is true.
-	if s.memoryStore != nil && s.promotionStore != nil {
+	if catalogOnly || s.memoryStore != nil && s.promotionStore != nil {
 		tools = append(tools, Tool{
 			Name:        "lifecycle",
 			Description: "[Lifecycle] Manage memory lifecycle: view tier/decay info, promote/demote, set confidence, preview decay, check sleep cycle status.",
@@ -1164,7 +1176,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	}
 
 	// Historical graph reads remain available without a legacy feature flag.
-	if s.graphStore != nil {
+	if catalogOnly || s.graphStore != nil {
 		tools = append(tools, Tool{
 			Name:        "graph",
 			Description: "[Graph] Read historical graph edges, traversals, paths, and synonyms.",
@@ -1190,7 +1202,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	}
 
 	// Ingest tool — always available when memory store exists
-	if s.memoryStore != nil {
+	if catalogOnly || s.memoryStore != nil {
 		tools = append(tools, Tool{
 			Name:        "ingest",
 			Description: "[Ingest] Ingest documents into engram as chunked memories with source provenance. Level 1: raw chunking, no LLM needed.",

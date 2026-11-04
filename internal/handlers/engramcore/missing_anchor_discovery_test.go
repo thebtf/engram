@@ -39,7 +39,7 @@ func TestToolsList_ProjectStateDoesNotFilterAuthenticatedCatalog(t *testing.T) {
 	catalog := mcp.NewServer(mcp.ServerOptions{Version: daemonClientVersion})
 	catalog.SetCodebaseContextApplication(application)
 	expected := make(map[string]mcp.Tool)
-	for _, tool := range catalog.ListTools() {
+	for _, tool := range mcp.SupportedToolCatalog() {
 		expected[tool.Name] = tool
 	}
 	for _, required := range []string{"store", "recall", "codebase_context", "codebase_search", "codebase_read", "codebase_graph"} {
@@ -99,9 +99,7 @@ func TestToolsList_ProjectStateDoesNotFilterAuthenticatedCatalog(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if state == "unauthenticated" {
-				assertToolsListServiceUnavailable(t, response)
-			} else {
+			{
 				var got struct {
 					Error  any `json:"error"`
 					Result struct {
@@ -130,7 +128,7 @@ func TestToolsList_ProjectStateDoesNotFilterAuthenticatedCatalog(t *testing.T) {
 				seen := make(map[string]bool)
 				for _, tool := range got.Result.Tools[1:] {
 					definition, ok := expected[tool.Name]
-					if !ok || seen[tool.Name] || tool.Description != definition.Description {
+					if !ok || seen[tool.Name] || !strings.HasSuffix(tool.Description, definition.Description) || !strings.Contains(tool.Description, "remote support and authorization are unverified") {
 						t.Fatalf("catalog descriptor changed or duplicated: %q", tool.Name)
 					}
 					schema, err := json.Marshal(definition.InputSchema)

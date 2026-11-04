@@ -19,14 +19,9 @@ import (
 // then appends the dynamic tool list from the single registered
 // ProxyToolProvider (if any) per FR-11a.
 //
-// This is a hot path: the aggregated slice is rebuilt on each call in v0.1.0.
-// Static aggregation is O(n) across ~1-5 modules. The proxy call may block on
-// network I/O (typically a gRPC Initialize handshake) — this is accepted
-// because tools/list is low-frequency (once per session open).
-//
-// Optional proxy errors preserve the static-only offline contract. A
-// RequiredProxyToolsError means a configured authoritative backend failed, so
-// tools/list returns a service-unavailable error instead of a partial inventory.
+// The proxy owns its discovery and outage policy. An optional proxy error
+// retains static tools; a required proxy error remains a service error rather
+// than being misrepresented as a complete catalog.
 //
 // Design reference: FR-4 (Dispatcher) + FR-11a (ProxyToolProvider) and
 // design.md Section 5.1.

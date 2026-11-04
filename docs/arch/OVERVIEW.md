@@ -14,10 +14,16 @@ enabled, the workstation needs an appropriate keycard through `ENGRAM_TOKEN`
 (or the launcher's `api_token` configuration); an empty token does not bypass
 server authorization.
 
-- Agent-host discovery problems are local stdio/process problems.
+- Agent-host transport is local stdio/process. Configured discovery returns client-known schemas without waiting for the backend, marking remote support and authorization as unverified.
 - Daemon tool execution uses gRPC; logical-project recovery also uses authorized REST readers.
 - Hook failures are REST-client problems.
 - Browser failures are console/static/proxy problems.
+
+The local catalog is available independently of backend readiness; its schemas do not establish remote support or authorization. Authenticated backend discovery and refresh run asynchronously, with `tools/list_changed` notifications when the catalog refreshes. A backend-dependent original request can wait for authenticated capability discovery within its existing context and budget, then is dispatched at most once. `CAPABILITY_NOT_SENT` means the request was not dispatched; `OUTCOME_UNKNOWN` means it was dispatched but its outcome is unknown, and it must not be automatically replayed.
+
+On Windows, only genuine absence of both daemon marker files permits fail-closed attestation and joining of the same image, or identification of the exact pinned v7.0.19 image for the existing graceful replacement path. Attestation binds process and image handles, mapping, pipe peer, PID and the full generation; unsupported or untrusted cases fail closed. Identifying an old image does not authorize executing its binary. Other platforms retain the existing marker flow.
+
+These describe source behavior, not proof of an installed or released client. The observed installed failure was a marker reconciliation timeout; the cause of earlier daemon EOF remains unproved.
 
 **Accepted requirement — local MCP startup and recovery (not an implementation claim).**
 Main session `01a15ebb-8730-7265-b641-a99d23c8e947` relayed the user's wording in native message `aff74417-48b7-494a-8720-71ed92b01610`; the original native USER message ID is unknown:

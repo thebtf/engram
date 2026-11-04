@@ -27,8 +27,11 @@ import (
 	"github.com/thebtf/engram/internal/auth"
 	dbstore "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/grpcserver"
+	"github.com/thebtf/engram/internal/handlers/engramcore"
 	"github.com/thebtf/engram/internal/mcp"
+	"github.com/thebtf/engram/internal/module"
 	"github.com/thebtf/engram/internal/projectidentity"
+	muxcore "github.com/thebtf/mcp-mux/muxcore"
 	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/grpc"
 	"gorm.io/driver/postgres"
@@ -424,6 +427,30 @@ func memoryTestInitialize(t *testing.T, client *memoryTestClient) {
 	}
 	if !found {
 		t.Fatal("real recall not advertised")
+	}
+}
+
+func TestSessionMemoryMalformedURLCannotCorruptSharedCatalog(t *testing.T) {
+	core := engramcore.NewModule()
+	if err := core.Init(t.Context(), module.ModuleDeps{}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = core.Shutdown(context.Background()) })
+	valid := muxcore.ProjectContext{ID: "valid", Env: map[string]string{"ENGRAM_URL": "http://127.0.0.1:1"}}
+	before, err := core.ProxyTools(t.Context(), valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	malformed := muxcore.ProjectContext{ID: "malformed", Env: map[string]string{"ENGRAM_URL": "http://%"}}
+	if _, err := (&sessionMemoryModule{core}).ProxyTools(t.Context(), malformed); err != nil {
+		t.Fatal(err)
+	}
+	after, err := core.ProxyTools(t.Context(), valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("session-memory filtering mutated the shared full catalog")
 	}
 }
 

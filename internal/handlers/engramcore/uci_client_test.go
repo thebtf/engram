@@ -161,7 +161,8 @@ func TestUCILegacyModuleReachesAuthenticatedRPCWithoutInstallationAnchor(t *test
 	}
 	serverURL := startUCIIndexAdapterGRPC(t, server)
 	mod := NewModule()
-	t.Cleanup(mod.pool.closeAll)
+	require.NoError(t, mod.Init(context.Background(), module.ModuleDeps{}))
+	t.Cleanup(func() { require.NoError(t, mod.Shutdown(context.Background())) })
 	adapter := NewUCIIndexAdapter(mod)
 	ctx := auditcontext.WithUCITransportSession(context.Background(), "legacy-session")
 	ctx = metadata.AppendToOutgoingContext(ctx, uci.NoAuthCodeClientInstanceMetadataKey, "spoofed")
@@ -716,7 +717,8 @@ func TestUCIIndexAdapterResolvesNoViewAndProxiesWithoutCollaborator(t *testing.T
 	}
 	serverURL := startUCIIndexAdapterGRPC(t, server)
 	mod := NewModuleWithClientInstanceID("fixture-daemon-install")
-	t.Cleanup(mod.pool.closeAll)
+	require.NoError(t, mod.Init(context.Background(), module.ModuleDeps{}))
+	t.Cleanup(func() { require.NoError(t, mod.Shutdown(context.Background())) })
 	adapter := NewUCIIndexAdapter(mod)
 	ctx := auditcontext.WithUCITransportSession(context.Background(), clientSessionID)
 
@@ -744,7 +746,8 @@ func TestUCIIndexAdapterForwardsV3InstallationAcrossAuthenticatedBindAndProxy(t 
 	server := &uciIndexAdapterGRPCServer{}
 	serverURL := startUCIIndexAdapterGRPC(t, server)
 	mod := NewModuleWithClientInstanceID(instance)
-	t.Cleanup(mod.pool.closeAll)
+	require.NoError(t, mod.Init(context.Background(), module.ModuleDeps{}))
+	t.Cleanup(func() { require.NoError(t, mod.Shutdown(context.Background())) })
 	adapter := NewUCIIndexAdapter(mod)
 	ctx := auditcontext.WithUCITransportSession(context.Background(), transportTag)
 
@@ -796,6 +799,31 @@ func TestUCIIndexAdapterRejectsMissingTransportTagForBoundTarget(t *testing.T) {
 	require.Nil(t, block)
 	require.ErrorContains(t, err, "UCI transport session")
 	require.Empty(t, server.callRequestsSnapshot(), "missing transport context must fail before CallTool")
+}
+
+func TestUCIIndexAdapterPlainStatusUsesOnlyCallerBoundHandle(t *testing.T) {
+	server := &uciIndexAdapterGRPCServer{}
+	serverURL := startUCIIndexAdapterGRPC(t, server)
+	mod := NewModuleWithClientInstanceID("fixture-daemon-install")
+	t.Cleanup(mod.pool.closeAll)
+	adapter := NewUCIIndexAdapter(mod)
+	project := uciClientTestProject(serverURL)
+	ctx := auditcontext.WithUCITransportSession(context.Background(), "status-session")
+	_, err := adapter.ReadCodebaseStatus(ctx, project, "selected-handle")
+	require.NoError(t, err)
+	requests := server.callRequestsSnapshot()
+	require.Len(t, requests, 1)
+	require.Equal(t, "codebase_status", requests[0].ToolName)
+	require.Equal(t, "status-session", requests[0].SessionId)
+	require.JSONEq(t, `{"context_handle":"selected-handle"}`, string(requests[0].ArgumentsJson))
+	_, callMetadata := server.metadataSnapshot()
+	require.Equal(t, []string{"Bearer fixture-token"}, callMetadata.Get("authorization"))
+	require.Equal(t, []string{"status-session"}, callMetadata.Get(auditcontext.SourceSessionMetadataKey))
+	_, err = adapter.ReadCodebaseStatus(context.Background(), project, "selected-handle")
+	require.Error(t, err)
+	_, err = adapter.ReadCodebaseStatus(ctx, project, "")
+	require.Error(t, err)
+	require.Len(t, server.callRequestsSnapshot(), 1, "invalid inputs must not be forwarded")
 }
 
 func TestUCIIndexAdapterRejectsForeignTransportForResolvedTarget(t *testing.T) {
@@ -973,7 +1001,8 @@ func TestUCIIndexAdapterOpaqueInstallationRoundTrip(t *testing.T) {
 			}
 			serverURL := startUCIIndexAdapterGRPC(t, server)
 			mod := NewModuleWithClientInstanceID(test.instance)
-			t.Cleanup(mod.pool.closeAll)
+			require.NoError(t, mod.Init(context.Background(), module.ModuleDeps{}))
+			t.Cleanup(func() { require.NoError(t, mod.Shutdown(context.Background())) })
 			adapter := NewUCIIndexAdapter(mod)
 			ctx := auditcontext.WithUCITransportSession(context.Background(), "client-a")
 			ctx = metadata.AppendToOutgoingContext(ctx,
@@ -1061,6 +1090,10 @@ type uciIndexAdapterGRPCServer struct {
 	callRequests []*pb.CallToolRequest
 	bindMetadata metadata.MD
 	callMetadata metadata.MD
+}
+
+func (server *uciIndexAdapterGRPCServer) Initialize(context.Context, *pb.InitializeRequest) (*pb.InitializeResponse, error) {
+	return &pb.InitializeResponse{Tools: supportedFixtureDefinitions()}, nil
 }
 
 func (server *uciIndexAdapterGRPCServer) BindCodeContext(ctx context.Context, request *pb.BindCodeContextRequest) (*pb.BindCodeContextResponse, error) {

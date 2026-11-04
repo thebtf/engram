@@ -67,7 +67,7 @@ func (backend *issueRecoveryBackend) Initialize(context.Context, *pb.InitializeR
 	backend.mu.Lock()
 	backend.initializes++
 	backend.mu.Unlock()
-	return &pb.InitializeResponse{}, nil
+	return &pb.InitializeResponse{Tools: supportedFixtureDefinitions()}, nil
 }
 
 func (backend *issueRecoveryBackend) CallTool(ctx context.Context, request *pb.CallToolRequest) (*pb.CallToolResponse, error) {
@@ -178,7 +178,11 @@ func assertIssueRecoveryRequests(t *testing.T, backend *issueRecoveryBackend, re
 		assert.Empty(t, request.cookie, "a native host session must not be fabricated as an auth_session browser cookie")
 	}
 	assert.Len(t, backend.calls, forwards, "the original mutation must be forwarded exactly once, or not at all on refusal")
-	assert.Zero(t, backend.initializes, "recovery must not substitute catalog/session initialization for the held operation")
+	if forwards == 0 {
+		assert.Zero(t, backend.initializes, "invalid or refused identity must not start discovery")
+	} else {
+		assert.GreaterOrEqual(t, backend.initializes, 1, "dispatch requires authenticated capability discovery")
+	}
 }
 
 func TestIssueProjectRecovery_OriginalOperationResumesExactlyOnce(t *testing.T) {
@@ -306,7 +310,7 @@ func TestIssueProjectRecovery_PostMutationResponseLossNeverReplays(t *testing.T)
 			assertIssueRecoveryRequests(t, backend, 1, 1)
 			require.Error(t, err, "response loss after acceptance is not success and must not be retried")
 			assert.Empty(t, content)
-			assert.Equal(t, code, status.Code(err), "retain the real gRPC unknown-outcome failure instead of converting it to migration recovery")
+			assert.ErrorContains(t, err, "OUTCOME_UNKNOWN", "response loss must remain an unknown outcome and never trigger replay")
 		})
 	}
 }
