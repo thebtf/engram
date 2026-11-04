@@ -244,15 +244,81 @@ func TestProjectConsolidationMigration186RetainedRestoreAndPartialArray(t *testi
 		}
 		return restore()
 	}))
+	historyProject := uuid.NewString()
+	require.NoError(t, source.Create(&Project{ID: historyProject}).Error)
+	issueStore := NewIssueStore(source)
+	const creatorSession = "01a1a369-dfce-7241-9330-2a0a3f697f9c"
+	const reportedSession = "01a1a369-dfce-7241-9330-2a0a3f697f9d"
+	issueID, err := issueStore.CreateIssue(ctx, &Issue{
+		Title: "retained lifecycle parent", Body: "verbatim issue body", SourceProject: historyProject, TargetProject: historyProject,
+		SourceAgent: "fixture-creator", CreatedBySession: creatorSession, CreatedBySessionSource: "transport", SourceClient: "omp", CreatorKeycardID: "fixture-keycard",
+	})
+	require.NoError(t, err)
+	require.NoError(t, issueStore.UpdateIssueAtomically(ctx, issueID, IssueUpdate{
+		Status: "resolved", Comment: "verbatim user comment", AuthorProject: historyProject, AuthorAgent: "fixture-author",
+		Attribution: IssueAttribution{SessionID: reportedSession, SessionSource: "reported", Client: "openclaw"},
+	}, false), "ordinary lifecycle mutation must generate real history and a separate user comment")
+	require.NoError(t, issueStore.UpdateIssueAtomically(ctx, issueID, IssueUpdate{Status: "closed"}, false), "unknown lifecycle author stays unknown")
+	guardsBeforeSeed, err := consolidationCatalog(source)
+	require.NoError(t, err)
+	require.NoError(t, source.Transaction(func(tx *gormlib.DB) error {
+		restore, err := consolidationSuspendWriteGuards(tx)
+		if err != nil {
+			return err
+		}
+		if err := NewIssueStore(tx).UpdateIssueAtomically(ctx, issueID, IssueUpdate{
+			Status: "reopened", AuthorProject: "legacy-history-author", AuthorAgent: "retained-author-label",
+			Attribution: IssueAttribution{SessionID: creatorSession, SessionSource: "reported", Client: "omp"},
+		}, false); err != nil {
+			return err
+		}
+		return restore()
+	}))
+	guardsAfterSeed, err := consolidationCatalog(source)
+	require.NoError(t, err)
+	require.Equal(t, guardsBeforeSeed, guardsAfterSeed, "fixture-owned historical seed must restore every original guard mode and owner")
+	originalIssue := consolidationTestRowJSON(t, source, "issues", issueID)
+	_, originalComments, err := issueStore.GetIssue(ctx, issueID)
+	require.NoError(t, err)
+	require.Len(t, originalComments, 1, "lifecycle-only actions must not invent comments")
+	originalComment := consolidationTestRowJSON(t, source, "issue_comments", originalComments[0].ID)
+	historyBefore, err := issueStore.GetIssueHistoryPage(ctx, issueID, 100, 0)
+	require.NoError(t, err)
+	require.Len(t, historyBefore.Events, 3)
+	require.False(t, historyBefore.HasMore)
+	require.Nil(t, historyBefore.NextAfterID)
+	require.Equal(t, []string{"resolved", "closed", "reopened"}, []string{historyBefore.Events[0].Status, historyBefore.Events[1].Status, historyBefore.Events[2].Status})
+	require.Equal(t, historyProject, historyBefore.Events[0].AuthorProject)
+	require.Equal(t, "fixture-author", historyBefore.Events[0].AuthorAgent)
+	require.Equal(t, reportedSession, historyBefore.Events[0].SessionID)
+	require.Equal(t, "reported", historyBefore.Events[0].SessionSource)
+	require.Equal(t, "openclaw", historyBefore.Events[0].Client)
+	require.Empty(t, historyBefore.Events[1].AuthorProject)
+	require.Empty(t, historyBefore.Events[1].AuthorAgent)
+	require.Empty(t, historyBefore.Events[1].SessionID)
+	require.Empty(t, historyBefore.Events[1].SessionSource)
+	require.Empty(t, historyBefore.Events[1].Client)
+	require.Equal(t, "legacy-history-author", historyBefore.Events[2].AuthorProject)
+	require.Equal(t, "retained-author-label", historyBefore.Events[2].AuthorAgent)
+	require.Equal(t, creatorSession, historyBefore.Events[2].SessionID)
+	require.Equal(t, "reported", historyBefore.Events[2].SessionSource)
+	require.Equal(t, "omp", historyBefore.Events[2].Client)
+	originalEvents := make([]string, len(historyBefore.Events))
+	for index, event := range historyBefore.Events {
+		originalEvents[index] = consolidationTestRowJSON(t, source, "issue_history_events", event.ID)
+	}
 	originalMemory := consolidationTestRowJSON(t, source, "memories", memory.ID)
 	originalCandidate := consolidationTestRowJSON(t, source, "crystallization_candidates", candidate.ID)
 	require.NoError(t, projectConsolidationMigration186().Migrate(source), "installation retry must retain unresolved historical rows")
 	require.JSONEq(t, originalMemory, consolidationTestRowJSON(t, source, "memories", memory.ID))
 	require.JSONEq(t, originalCandidate, consolidationTestRowJSON(t, source, "crystallization_candidates", candidate.ID))
+	// The inherited 186 replay reinstalls its generic issue trigger. Restore the
+	// current 189-owned shape so source and normally migrated target match.
+	require.NoError(t, issueProjectWriteScopeMigration189().Migrate(source))
 
 	for _, db := range []*gormlib.DB{source, target} {
 		for _, mode := range []struct{ table, action string }{
-			{"sdk_sessions", "ENABLE REPLICA"}, {"memories", "ENABLE ALWAYS"}, {"behavioral_rules", "DISABLE"},
+			{"sdk_sessions", "ENABLE REPLICA"}, {"memories", "ENABLE ALWAYS"}, {"behavioral_rules", "DISABLE"}, {"issue_history_events", "ENABLE ALWAYS"},
 		} {
 			require.NoError(t, db.Exec("ALTER TABLE "+quoted(mode.table)+" "+mode.action+" TRIGGER engram_consolidation_scope_write").Error)
 		}
@@ -271,20 +337,95 @@ func TestProjectConsolidationMigration186RetainedRestoreAndPartialArray(t *testi
 	}
 	beforeModes := guardModes(target)
 	canonical := uuid.NewString()
+	// Compare complete persisted rows; only explicit mapped project fields may differ.
+	mappedJSON := func(original string, fields ...string) string {
+		t.Helper()
+		var object map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal([]byte(original), &object))
+		for _, field := range fields {
+			object[field], err = json.Marshal(canonical)
+			require.NoError(t, err)
+		}
+		raw, marshalErr := json.Marshal(object)
+		require.NoError(t, marshalErr)
+		return string(raw)
+	}
+	assertHistory := func(db *gormlib.DB, adopted bool) {
+		t.Helper()
+		expectedIssue, expectedComment := originalIssue, originalComment
+		if adopted {
+			expectedIssue = mappedJSON(originalIssue, "source_project", "target_project")
+			expectedComment = mappedJSON(originalComment, "author_project")
+		}
+		require.JSONEq(t, expectedIssue, consolidationTestRowJSON(t, db, "issues", issueID))
+		require.JSONEq(t, expectedComment, consolidationTestRowJSON(t, db, "issue_comments", originalComments[0].ID))
+		_, comments, readErr := NewIssueStore(db).GetIssue(ctx, issueID)
+		require.NoError(t, readErr)
+		require.Len(t, comments, 1)
+		require.Equal(t, "verbatim user comment", comments[0].Body)
+		page, readErr := NewIssueStore(db).GetIssueHistoryPage(ctx, issueID, 100, 0)
+		require.NoError(t, readErr)
+		require.Len(t, page.Events, len(historyBefore.Events))
+		require.False(t, page.HasMore)
+		require.Nil(t, page.NextAfterID)
+		for index, before := range historyBefore.Events {
+			expected, actual := before, page.Events[index]
+			expectedJSON := originalEvents[index]
+			if adopted && before.AuthorProject != "" {
+				expected.AuthorProject = canonical
+				expectedJSON = mappedJSON(expectedJSON, "author_project")
+			}
+			require.Equal(t, issueID, actual.IssueID, "every event retains its actual parent FK")
+			require.True(t, expected.CreatedAt.Equal(actual.CreatedAt), "event %d must retain the exact timestamp instant", expected.ID)
+			actual.CreatedAt = expected.CreatedAt
+			require.Equal(t, expected, actual, "event IDs, status and all non-time provenance remain exact")
+			require.JSONEq(t, expectedJSON, consolidationTestRowJSON(t, db, "issue_history_events", before.ID))
+		}
+	}
+	schemaBefore, _, foreignKeys, err := consolidationSchema(source)
+	require.NoError(t, err)
+	eventFKCount := 0
+	for _, fk := range foreignKeys {
+		if fk.TableName == "issue_history_events" {
+			eventFKCount++
+			require.Equal(t, "issues", fk.ParentTable)
+			require.Equal(t, pq.StringArray{"issue_id"}, fk.Columns)
+			require.Equal(t, pq.StringArray{"id"}, fk.ParentColumns)
+		}
+	}
+	require.Equal(t, 1, eventFKCount)
+	assertHistory(source, false)
 	census, err := store.Census(ctx, "migration186-retention")
 	require.NoError(t, err)
 	var censusState consolidationCensusState
 	require.NoError(t, store.open(census.Reference, "census", &censusState))
+	foundHistoryTable := false
+	for _, table := range censusState.Tables {
+		if table.Name == "issue_history_events" {
+			foundHistoryTable = true
+			require.EqualValues(t, 3, table.Count)
+			require.Equal(t, "durable_history", table.Kind)
+		}
+	}
+	require.True(t, foundHistoryTable)
 	var mappedReference string
+	var mappedHistoryReferences []string
 	for _, row := range censusState.Rows {
 		if row.Table == "crystallization_candidates" && row.Column == "affected_projects" && len(row.Path) == 1 && row.Path[0] == "0" {
 			mappedReference = row.Reference
 		}
+		if (row.Table == "issues" && (row.Column == "source_project" || row.Column == "target_project")) ||
+			((row.Table == "issue_comments" || row.Table == "issue_history_events") && row.Column == "author_project" && row.Selector != "") {
+			require.Equal(t, "tenant", row.Kind)
+			mappedHistoryReferences = append(mappedHistoryReferences, row.Reference)
+		}
 	}
 	require.NotEmpty(t, mappedReference)
+	require.Len(t, mappedHistoryReferences, 5, "evidence covers both parent roles, the comment author and two nonempty lifecycle authors")
+	mappedReferences := append([]string{mappedReference}, mappedHistoryReferences...)
 	plan, err := store.Preflight(ctx, ConsolidationPreflightRequest{
 		CensusReference: census.Reference, CensusFingerprint: census.Fingerprint,
-		Evidence: []ConsolidationEvidence{{Reference: "urn:engram:test:marker", Kind: "portable_marker", Group: "urn:engram:test:group", ProjectID: canonical, Rows: []string{mappedReference}}},
+		Evidence: []ConsolidationEvidence{{Reference: "urn:engram:test:marker", Kind: "portable_marker", Group: "urn:engram:test:group", ProjectID: canonical, Rows: mappedReferences}},
 	})
 	require.NoError(t, err)
 	backup, err := os.OpenFile(filepath.Join(t.TempDir(), "retained-backup.sealed"), os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
@@ -306,6 +447,17 @@ func TestProjectConsolidationMigration186RetainedRestoreAndPartialArray(t *testi
 	for i, sequence := range backupState.Sequences {
 		require.Equal(t, sequenceNames[i], sequence.Name, "sealed backup must retain the actual sequence identity")
 	}
+	var eventSequenceName string
+	require.NoError(t, source.Raw(`SELECT relname FROM pg_class WHERE oid=pg_get_serial_sequence('issue_history_events','id')::regclass`).Row().Scan(&eventSequenceName))
+	foundEventSequence := false
+	for _, sequence := range backupState.Sequences {
+		if sequence.Name == eventSequenceName {
+			foundEventSequence = true
+			require.True(t, sequence.IsCalled)
+			require.Equal(t, historyBefore.Events[len(historyBefore.Events)-1].ID, sequence.LastValue)
+		}
+	}
+	require.True(t, foundEventSequence, "the encrypted manifest must cover the populated lifecycle sequence, not only pre-existing table sequences")
 	t.Logf("sealed backup sequence names: %v", sequenceNames)
 	_, err = backup.Seek(0, io.SeekStart)
 	require.NoError(t, err)
@@ -314,7 +466,7 @@ func TestProjectConsolidationMigration186RetainedRestoreAndPartialArray(t *testi
 	require.ErrorAs(t, err, &hold)
 	require.Equal(t, "PROJECT_ADOPTION_RESTORE_CONSTRAINT_FAILED", hold.Code)
 	require.Equal(t, beforeModes, guardModes(target), "failed copy must roll back exact trigger modes")
-	for _, table := range []string{"memories", "crystallization_candidates", "project_consolidation_backups", "project_consolidation_frames"} {
+	for _, table := range []string{"memories", "crystallization_candidates", "issues", "issue_comments", "issue_history_events", "project_consolidation_backups", "project_consolidation_frames"} {
 		var count int64
 		require.NoError(t, target.Table(table).Count(&count).Error)
 		require.Zero(t, count, "failed copy must retain no partial rows or receipt")
@@ -327,11 +479,17 @@ func TestProjectConsolidationMigration186RetainedRestoreAndPartialArray(t *testi
 		require.NoError(t, db.Exec(`ALTER TABLE crystallization_candidates DISABLE TRIGGER consolidation_test_copy_guard`).Error)
 	}
 	// Trigger modes are signed schema inputs; deliberate fixture DDL needs a fresh plan and backup.
+	sourceBefore := streamIntegrityRead(t, source)
+	schemaBefore, _, _, err = consolidationSchema(source)
+	require.NoError(t, err)
+	targetSchemaBefore, _, _, err := consolidationSchema(target)
+	require.NoError(t, err)
+	require.Equal(t, schemaBefore, targetSchemaBefore, "both current migrated fixtures must match after deliberate guard-mode changes")
 	census, err = store.Census(ctx, "migration186-retention-retry")
 	require.NoError(t, err)
 	plan, err = store.Preflight(ctx, ConsolidationPreflightRequest{
 		CensusReference: census.Reference, CensusFingerprint: census.Fingerprint,
-		Evidence: []ConsolidationEvidence{{Reference: "urn:engram:test:marker", Kind: "portable_marker", Group: "urn:engram:test:group", ProjectID: canonical, Rows: []string{mappedReference}}},
+		Evidence: []ConsolidationEvidence{{Reference: "urn:engram:test:marker", Kind: "portable_marker", Group: "urn:engram:test:group", ProjectID: canonical, Rows: mappedReferences}},
 	})
 	require.NoError(t, err)
 	retryBackup, err := os.OpenFile(filepath.Join(t.TempDir(), "retained-retry-backup.sealed"), os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
@@ -344,6 +502,10 @@ func TestProjectConsolidationMigration186RetainedRestoreAndPartialArray(t *testi
 	backupReference, err := store.VerifyBackup(ctx, plan.Reference, plan.Fingerprint, backup)
 	require.NoError(t, err, "isolated restore must preserve unresolved historical data and actual FK references")
 	require.Equal(t, beforeModes, guardModes(target))
+	assertHistory(target, false)
+	restoredSchema, _, _, err := consolidationSchema(target)
+	require.NoError(t, err)
+	require.Equal(t, schemaBefore, restoredSchema, "isolated restore retains exact FK, trigger/function ownership and guard modes")
 	restoredSequences, err := consolidationSequences(target)
 	require.NoError(t, err)
 	require.Equal(t, backupState.Sequences, restoredSequences, "verified restore must conserve sequence identities and state")
@@ -362,6 +524,10 @@ func TestProjectConsolidationMigration186RetainedRestoreAndPartialArray(t *testi
 	require.NoError(t, err)
 	require.JSONEq(t, originalCandidate, consolidationTestRowJSON(t, target, "crystallization_candidates", candidate.ID), "dry-run must roll back mapped occurrence")
 	require.Equal(t, beforeModes, guardModes(target))
+	assertHistory(target, false)
+	dryRunSequences, err := consolidationSequences(target)
+	require.NoError(t, err)
+	require.Equal(t, backupState.Sequences, dryRunSequences, "dry-run must not consume history sequence state")
 
 	// Inject only after freshness checks: pre-Apply metadata edits correctly invalidate the verified snapshot.
 	mappingMutationReached := false
@@ -388,6 +554,7 @@ func TestProjectConsolidationMigration186RetainedRestoreAndPartialArray(t *testi
 	require.Equal(t, "PROJECT_ADOPTION_STALE_MAPPING", hold.Code)
 	require.JSONEq(t, originalCandidate, consolidationTestRowJSON(t, target, "crystallization_candidates", candidate.ID))
 	require.Equal(t, beforeModes, guardModes(target), "failed mapping must roll back trigger DDL as well as row UPDATE")
+	assertHistory(target, false)
 	var partialProjects, receipts int64
 	require.NoError(t, target.Model(&Project{}).Where("id = ?", canonical).Count(&partialProjects).Error)
 	require.NoError(t, target.Model(&consolidationOperation{}).Count(&receipts).Error)
@@ -397,6 +564,13 @@ func TestProjectConsolidationMigration186RetainedRestoreAndPartialArray(t *testi
 	_, err = store.Apply(ctx, request)
 	require.NoError(t, err)
 	require.Equal(t, beforeModes, guardModes(target), "successful apply must restore exact modes before receipt")
+	assertHistory(target, true)
+	adoptedSequences, err := consolidationSequences(target)
+	require.NoError(t, err)
+	require.Equal(t, backupState.Sequences, adoptedSequences, "synthetic adoption must retain every sequence value and is_called")
+	adoptedSchema, _, _, err := consolidationSchema(target)
+	require.NoError(t, err)
+	require.Equal(t, schemaBefore, adoptedSchema, "Apply must retain exact parent FK and trigger/function ownership")
 	var expected map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal([]byte(originalCandidate), &expected))
 	expected["affected_projects"], err = json.Marshal([]string{canonical, "retained", "mapped"})
@@ -418,6 +592,11 @@ func TestProjectConsolidationMigration186RetainedRestoreAndPartialArray(t *testi
 	var fkError *pgconn.PgError
 	require.ErrorAs(t, target.Create(&invalidFK).Error, &fkError)
 	require.Equal(t, "23503", fkError.Code, "ordinary FK protection stays active")
+	var eventFKError *pgconn.PgError
+	require.ErrorAs(t, target.Exec(`INSERT INTO issue_history_events(id,issue_id,status,author_project) VALUES(-1,-1,'resolved',?)`, canonical).Error, &eventFKError)
+	require.Equal(t, "23503", eventFKError.Code, "restored/adopted event parent FK must reject a real orphan without consuming a sequence")
+	assertHistory(target, true)
+	require.Equal(t, sourceBefore, streamIntegrityRead(t, source), "backup, isolated restore, dry-run and Apply must leave every source row, xmin, sequence and catalog object unchanged")
 }
 
 func assertConsolidationSQLRefusal(t *testing.T, err error, code string) {

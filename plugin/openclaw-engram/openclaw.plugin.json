@@ -94,7 +94,8 @@
       "engram_how_it_works",
       "engram_vault_store",
       "engram_vault_get",
-      "engram_issues"
+      "engram_issues",
+      "engram_project_context"
     ]
   },
   "commands": [

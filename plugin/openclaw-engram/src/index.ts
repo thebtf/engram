@@ -9,7 +9,7 @@
  *   - Transcript backfill on compaction / session end
  *   - Agent tools: engram_search, engram_remember, engram_decisions,
  *                  memory_search, memory_store, memory_forget, memory_get,
- *                  memory_migrate, engram_issues
+ *                  memory_migrate, engram_issues, engram_project_context
  *   - Slash commands: /memory, /remember, /migrate
  *   - CLI: openclaw memory status|search|store|migrate
  */
@@ -45,6 +45,7 @@ import { createEngramTimelineTool } from './tools/engram-timeline.js';
 import { createEngramChangesTool, createEngramHowItWorksTool } from './tools/engram-presets.js';
 import { createEngramVaultStoreTool, createEngramVaultGetTool } from './tools/engram-vault.js';
 import { createEngramIssuesTool } from './tools/engram-issues.js';
+import { createEngramProjectContextTool } from './tools/engram-project-context.js';
 
 import { buildMemoryCommand } from './commands/memory.js';
 import { buildRememberCommand } from './commands/remember.js';
@@ -122,6 +123,7 @@ const plugin: OpenClawPluginDefinition = {
    createEngramVaultStoreTool(ctx, client, config),
    createEngramVaultGetTool(ctx, client, config),
    createEngramIssuesTool(ctx, client, config),
+   createEngramProjectContextTool(ctx, client, config),
   ];
 
   api.registerTool(toolFactory, {
@@ -135,6 +137,7 @@ const plugin: OpenClawPluginDefinition = {
     'engram_rate', 'engram_suppress', 'engram_outcome', 'engram_timeline',
     'engram_changes', 'engram_how_it_works',
     'engram_vault_store', 'engram_vault_get', 'engram_issues',
+    'engram_project_context',
    ],
   });
 

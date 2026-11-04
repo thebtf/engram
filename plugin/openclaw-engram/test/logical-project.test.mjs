@@ -37,7 +37,7 @@ test('OpenClaw consumes the real Go UUID across concurrent roots and moves', asy
  assert.equal(absent.error.code, 'PROJECT_CONTEXT_REQUIRED');
 });
 
-test('OpenClaw consumes native historical migration refusal without inventing identity', async t => {
+test('OpenClaw preserves native unavailable legacy-reader refusal without inventing identity', async t => {
  assert.ok(executable, 'Set ENGRAM_EXECUTABLE to the built candidate Go client');
  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-legacy-'));
  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -45,19 +45,27 @@ test('OpenClaw consumes native historical migration refusal without inventing id
  const marker = path.join(root, '.engram-project');
  const raw = Buffer.from('{"id":"941b49","name":"ai-warden"}\n');
  fs.writeFileSync(marker, raw);
- const env = { ...process.env, ENGRAM_EXECUTABLE: executable, ENGRAM_URL: 'http://127.0.0.1:9', ENGRAM_SERVER_URL: '', ENGRAM_TOKEN: '' };
+ const env = {
+  ...process.env, ENGRAM_EXECUTABLE: executable, ENGRAM_URL: 'http://127.0.0.1:9', ENGRAM_SERVER_URL: '', ENGRAM_TOKEN: '',
+  ENGRAM_TLS_CA: '', ENGRAM_CLIENT_INSTANCE_ID: '',
+ };
  await assert.rejects(resolveIdentity('legacy-agent', root, { env }), error => {
-  assert.equal(error.message, 'PROJECT_MIGRATION_REQUIRED');
-  assert.match(error.guidance, /GET \/api\/projects\/resolve\?legacy_id=/);
-  assert.match(error.guidance, /not a mapping/);
+  assert.equal(error.message, 'PROJECT_RESOLUTION_UNAVAILABLE');
+  assert.match(error.guidance, /project_context/, 'Native guidance must expose the supported project-context flow');
+  assert.match(error.guidance, /\bchoices\b/);
+  assert.match(error.guidance, /\bselect\b/);
   assert.ok(error.guidance.length <= 3072, 'native guidance must fit the existing adapter bound');
   return true;
  });
  const client = { resolveWorkspaceProject: () => resolveIdentity('legacy-agent', root, { env }) };
  const held = await resolveProject(client, 'legacy-agent', root);
  assert.equal(held.ok, false);
- assert.equal(held.error.code, 'PROJECT_MIGRATION_REQUIRED');
- assert.match(held.error.upgradeAction, /legacy_marker/);
+ assert.equal(held.canonicalProject, undefined, 'An unavailable legacy reader cannot supply project identity');
+ assert.equal(held.error.code, 'PROJECT_RESOLUTION_UNAVAILABLE');
+ assert.equal(held.error.httpStatus, 503);
+ assert.match(held.error.upgradeAction, /engram_project_context/, 'OpenClaw recovery must name its ordinary registered tool');
+ assert.match(held.error.upgradeAction, /\bchoices\b/);
+ assert.match(held.error.upgradeAction, /\bselect\b/);
  const check = JSON.parse(execFileSync(executable, ['project', 'resolve', '--root', root, '--json', '--check'], { env, encoding: 'utf8' }));
  assert.deepEqual(check, { status: 'migration_required', binding: { id: '941b49', project_key: null, identity_status: null, match: 'legacy_marker' } });
  assert.deepEqual(fs.readFileSync(marker), raw);

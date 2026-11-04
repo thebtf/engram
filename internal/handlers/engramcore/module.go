@@ -39,6 +39,7 @@ const moduleName = "engramcore"
 //   - module.ProjectLifecycle   — session connect/disconnect logging
 //   - module.ProjectRemovalAware — project removal lifecycle logging
 //   - module.ProxyToolProvider  — dynamic tool set fetched from engram-server
+//   - module.ToolProvider       — local caller project-context recovery
 type Module struct {
 	pool                        *grpcPool
 	advisorProofs               *advisorProofCache
@@ -57,6 +58,7 @@ var (
 	_ module.ProjectLifecycle    = (*Module)(nil)
 	_ module.ProjectRemovalAware = (*Module)(nil)
 	_ module.ProxyToolProvider   = (*Module)(nil)
+	_ module.ToolProvider        = (*Module)(nil)
 )
 
 // NewModule constructs an unstarted engramcore module. Call Init before

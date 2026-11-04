@@ -86,7 +86,7 @@ For each resolved issue you created or otherwise participate in (including those
 2. Treat this as follow-up dialogue: understand the claimed fix, inspect comments/reports, and identify the relevant behavior and delivery target.
 3. **Actually verify the fix works.** Check the relevant behavior on that target with evidence appropriate to the issue; a commit or version label alone is not behavioral proof.
 4. If you are authorized and the relevant checks demonstrate completion → `issues(action="close", project="<your-project>", id=N)`. Comment with the checks and results. This is terminal — the issue disappears from all injections.
-5. If you are authorized and the resolution fails, is incomplete, or addresses the wrong problem → `issues(action="reopen", project="<your-project>", id=N, body="Tested X, still broken because Y")` with concrete evidence.
+5. If you are authorized and the resolution fails, is incomplete, or addresses the wrong problem → `issues(action="reopen", project="<your-project>", id=N, comment="Tested X, still broken because Y")` with concrete evidence.
 6. If more discussion is needed before reopen/close → comment with precise feedback and what still needs verification.
 7. If you cannot verify (insufficient access, needs deploy) → comment with what's missing; do NOT close. No status label alone proves historical verification.
 

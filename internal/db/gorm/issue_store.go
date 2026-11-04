@@ -68,6 +68,7 @@ type IssueSelectionAction struct {
 	Comment       *string
 	AuthorProject string
 	AuthorAgent   string
+	Attribution   IssueAttribution
 }
 
 // IssueSelectionOperation is a bounded handler-resolved selected-issue mutation.
@@ -135,19 +136,22 @@ var validIssueTypes = map[string]bool{"bug": true, "feature": true, "improvement
 func (s *IssueStore) CreateIssue(ctx context.Context, issue *Issue) (int64, error) {
 	now := time.Now()
 	created := Issue{
-		Title:            issue.Title,
-		Body:             issue.Body,
-		Status:           issue.Status,
-		Priority:         issue.Priority,
-		Type:             issue.Type,
-		SourceProject:    issue.SourceProject,
-		TargetProject:    issue.TargetProject,
-		SourceAgent:      issue.SourceAgent,
-		CreatedBySession: issue.CreatedBySession,
-		CreatorKeycardID: issue.CreatorKeycardID,
-		Labels:           issue.Labels,
-		CreatedAt:        now,
-		UpdatedAt:        now,
+		Title:                  issue.Title,
+		Body:                   issue.Body,
+		Status:                 issue.Status,
+		Priority:               issue.Priority,
+		Type:                   issue.Type,
+		SourceProject:          issue.SourceProject,
+		TargetProject:          issue.TargetProject,
+		SourceAgent:            issue.SourceAgent,
+		CreatedBySession:       issue.CreatedBySession,
+		CreatedBySessionSource: issue.CreatedBySessionSource,
+		SourceClient:           issue.SourceClient,
+		TargetSession:          NormalizeIssueSession(issue.TargetSession),
+		CreatorKeycardID:       issue.CreatorKeycardID,
+		Labels:                 issue.Labels,
+		CreatedAt:              now,
+		UpdatedAt:              now,
 	}
 	if created.Status == "" {
 		created.Status = "open"
@@ -180,14 +184,17 @@ func (s *IssueStore) CreateIssue(ctx context.Context, issue *Issue) (int64, erro
 
 // IssueListParams holds optional filters for ListIssues.
 type IssueListParams struct {
-	TargetProject string
-	SourceProject string
-	SourceAgent   string
-	Statuses      []string
-	ResolvedSince *time.Time
-	Type          string
-	Limit         int
-	Offset        int
+	TargetProject      string
+	SourceProject      string
+	SourceAgent        string
+	SourceSession      string
+	TargetSession      string
+	ParticipantSession string
+	Statuses           []string
+	ResolvedSince      *time.Time
+	Type               string
+	Limit              int
+	Offset             int
 }
 
 // ListIssues returns issues matching the filters with comment counts, stale_days, and total count.
@@ -203,6 +210,11 @@ func (s *IssueStore) ListIssues(ctx context.Context, targetProject string, statu
 
 // ListIssuesEx applies exact project and actor filters before counting and pagination.
 func (s *IssueStore) ListIssuesEx(ctx context.Context, params IssueListParams) ([]IssueWithCount, int64, error) {
+	for _, selector := range []string{params.SourceSession, params.TargetSession, params.ParticipantSession} {
+		if err := ValidateIssueSessionSelector(selector); err != nil {
+			return nil, 0, err
+		}
+	}
 	limit := params.Limit
 	if limit <= 0 {
 		limit = 50
@@ -217,6 +229,18 @@ func (s *IssueStore) ListIssuesEx(ctx context.Context, params IssueListParams) (
 	}
 	if params.SourceAgent != "" {
 		query = query.Where("source_agent = ?", params.SourceAgent)
+	}
+	if params.SourceSession != "" {
+		query = query.Where("issues.created_by_session = ?", params.SourceSession)
+	}
+	if params.TargetSession != "" {
+		query = query.Where("issues.target_session = ?", params.TargetSession)
+	}
+	if params.ParticipantSession != "" {
+		query = query.Where(`(issues.created_by_session = ?
+			OR EXISTS (SELECT 1 FROM issue_comments c WHERE c.issue_id = issues.id AND c.author_session = ?)
+			OR EXISTS (SELECT 1 FROM issue_history_events e WHERE e.issue_id = issues.id AND e.author_session = ?))`,
+			params.ParticipantSession, params.ParticipantSession, params.ParticipantSession)
 	}
 	if len(params.Statuses) > 0 {
 		query = query.Where("status IN ?", params.Statuses)
@@ -282,6 +306,9 @@ func (s *IssueStore) UpdateIssueStatusWithComment(ctx context.Context, id int64,
 		if err := updateIssueStatusTx(tx, id, status, now); err != nil {
 			return err
 		}
+		if err := addIssueHistoryTx(tx, id, status, authorProject, authorAgent, IssueAttribution{}, now); err != nil {
+			return err
+		}
 		if comment == "" {
 			return nil
 		}
@@ -300,21 +327,23 @@ type IssueUpdate struct {
 	Comment       string
 	AuthorProject string
 	AuthorAgent   string
+	Attribution   IssueAttribution
 	Title         string
 	Body          string
 	Priority      string
 	Type          string
 	Labels        []string
+	TargetSession *string
 }
 
 func (u IssueUpdate) hasFields() bool {
-	return u.Title != "" || u.Body != "" || u.Priority != "" || u.Type != "" || u.Labels != nil
+	return u.Title != "" || u.Body != "" || u.Priority != "" || u.Type != "" || u.Labels != nil || u.TargetSession != nil
 }
 
 // HasSourceAuthorityAction reports whether a PATCH needs the creator keycard
 // (or an operator) rather than ordinary collaborator progression rights.
 func (u IssueUpdate) HasSourceAuthorityAction() bool {
-	return u.hasFields() || u.Status == "reopened" || u.Status == "closed"
+	return u.hasFields()
 }
 
 // UpdateIssueAtomically applies fields, a lifecycle transition, and an optional
@@ -330,7 +359,7 @@ func (s *IssueStore) UpdateIssueAtomically(ctx context.Context, id int64, update
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		now := time.Now()
 		if update.hasFields() {
-			if err := updateIssueFieldsTx(tx, id, update.Title, update.Body, update.Priority, update.Type, update.Labels, now); err != nil {
+			if err := updateIssueFieldsTx(tx, id, update.Title, update.Body, update.Priority, update.Type, update.Labels, update.TargetSession, now); err != nil {
 				return err
 			}
 		}
@@ -339,7 +368,7 @@ func (s *IssueStore) UpdateIssueAtomically(ctx context.Context, id int64, update
 			if update.Comment == "" {
 				return nil
 			}
-			_, err := addIssueCommentTx(tx, id, &IssueComment{AuthorProject: update.AuthorProject, AuthorAgent: update.AuthorAgent, Body: update.Comment}, now)
+			_, err := addIssueCommentTx(tx, id, issueUpdateComment(update), now)
 			return err
 		case "resolved":
 			if err := updateIssueStatusTx(tx, id, update.Status, now); err != nil {
@@ -367,12 +396,18 @@ func (s *IssueStore) UpdateIssueAtomically(ctx context.Context, id int64, update
 			if update.Comment == "" {
 				return fmt.Errorf("%w: comment is required when rejecting an issue", ErrIssueInvalidInput)
 			}
-			return rejectIssueTx(tx, id, update.Comment, update.AuthorProject, update.AuthorAgent, now)
+			if err := rejectIssueTx(tx, id, update.Comment, update.AuthorProject, update.AuthorAgent, update.Attribution, now); err != nil {
+				return err
+			}
+			return addIssueHistoryTx(tx, id, update.Status, update.AuthorProject, update.AuthorAgent, update.Attribution, now)
+		}
+		if err := addIssueHistoryTx(tx, id, update.Status, update.AuthorProject, update.AuthorAgent, update.Attribution, now); err != nil {
+			return err
 		}
 		if update.Comment == "" {
 			return nil
 		}
-		_, err := addIssueCommentTx(tx, id, &IssueComment{AuthorProject: update.AuthorProject, AuthorAgent: update.AuthorAgent, Body: update.Comment}, now)
+		_, err := addIssueCommentTx(tx, id, issueUpdateComment(update), now)
 		return err
 	})
 }
@@ -412,10 +447,10 @@ func reopenIssueTx(tx *gorm.DB, id int64, now time.Time) error {
 		}
 		return err
 	}
-	if issue.Status != "resolved" {
-		return fmt.Errorf("%w: issue %d is %s, not resolved — cannot reopen", ErrIssueInvalidTransition, id, issue.Status)
+	if issue.Status != "resolved" && issue.Status != "closed" {
+		return fmt.Errorf("%w: issue %d is %s, not resolved or closed — cannot reopen", ErrIssueInvalidTransition, id, issue.Status)
 	}
-	result := tx.Model(&Issue{}).Where("id = ? AND status = ?", id, "resolved").Updates(map[string]any{
+	result := tx.Model(&Issue{}).Where("id = ? AND status = ?", id, issue.Status).Updates(map[string]any{
 		"status":      "reopened",
 		"reopened_at": now,
 		"updated_at":  now,
@@ -424,12 +459,12 @@ func reopenIssueTx(tx *gorm.DB, id int64, now time.Time) error {
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
-		return fmt.Errorf("%w: issue %d is no longer resolved (concurrent modification)", ErrIssueInvalidTransition, id)
+		return fmt.Errorf("%w: issue %d state changed concurrently", ErrIssueInvalidTransition, id)
 	}
 	return nil
 }
 
-func rejectIssueTx(tx *gorm.DB, id int64, comment, authorProject, authorAgent string, now time.Time) error {
+func rejectIssueTx(tx *gorm.DB, id int64, comment, authorProject, authorAgent string, attribution IssueAttribution, now time.Time) error {
 	result := tx.Model(&Issue{}).Where("id = ?", id).Updates(map[string]any{
 		"status":     "rejected",
 		"closed_at":  now,
@@ -442,11 +477,14 @@ func rejectIssueTx(tx *gorm.DB, id int64, comment, authorProject, authorAgent st
 		return fmt.Errorf("%w: issue %d", ErrIssueNotFound, id)
 	}
 	return tx.Create(&IssueComment{
-		IssueID:       id,
-		AuthorProject: authorProject,
-		AuthorAgent:   authorAgent,
-		Body:          "Rejected: " + comment,
-		CreatedAt:     now,
+		IssueID:             id,
+		AuthorProject:       authorProject,
+		AuthorAgent:         authorAgent,
+		AuthorSession:       attribution.SessionID,
+		AuthorSessionSource: attribution.SessionSource,
+		AuthorClient:        attribution.Client,
+		Body:                "Rejected: " + comment,
+		CreatedAt:           now,
 	}).Error
 }
 
@@ -474,11 +512,14 @@ func addIssueCommentTx(tx *gorm.DB, issueID int64, comment *IssueComment, now ti
 		return 0, fmt.Errorf("%w: issue %d", ErrIssueNotFound, issueID)
 	}
 	created := IssueComment{
-		IssueID:       issueID,
-		AuthorProject: comment.AuthorProject,
-		AuthorAgent:   comment.AuthorAgent,
-		Body:          comment.Body,
-		CreatedAt:     now,
+		IssueID:             issueID,
+		AuthorProject:       comment.AuthorProject,
+		AuthorAgent:         comment.AuthorAgent,
+		AuthorSession:       comment.AuthorSession,
+		AuthorSessionSource: comment.AuthorSessionSource,
+		AuthorClient:        comment.AuthorClient,
+		Body:                comment.Body,
+		CreatedAt:           now,
 	}
 	if err := tx.Create(&created).Error; err != nil {
 		return 0, err
@@ -718,8 +759,7 @@ func authorizeIssueSelectionRow(row *Issue, action IssueSelectionAction, actor I
 		return fmt.Errorf("%w: authenticated client keycard is required", ErrIssueForbidden)
 	}
 
-	sourceAuthority := action.Kind == IssueSelectionPriority || action.Kind == IssueSelectionLabels ||
-		(action.Kind == IssueSelectionStatus && action.Status != nil && (*action.Status == "reopened" || *action.Status == "closed"))
+	sourceAuthority := action.Kind == IssueSelectionPriority || action.Kind == IssueSelectionLabels
 	if sourceAuthority && (row.CreatorKeycardID == "" || row.CreatorKeycardID != actor.KeycardID) {
 		return fmt.Errorf("%w: issue mutation forbidden", ErrIssueForbidden)
 	}
@@ -739,7 +779,7 @@ func validateIssueSelectionCurrentRow(row *Issue, action IssueSelectionAction, a
 	case IssueSelectionStatus:
 		switch *action.Status {
 		case "reopened":
-			if row.Status != "resolved" {
+			if row.Status != "resolved" && row.Status != "closed" {
 				return ErrIssueSelectionConflict
 			}
 		case "closed":
@@ -766,10 +806,10 @@ func applyIssueSelectionActionTx(tx *gorm.DB, row *Issue, action IssueSelectionA
 	case IssueSelectionAcknowledge:
 		err = updateIssueStatusTx(tx, row.ID, "acknowledged", now)
 	case IssueSelectionPriority:
-		err = updateIssueFieldsTx(tx, row.ID, "", "", *action.Priority, "", nil, now)
+		err = updateIssueFieldsTx(tx, row.ID, "", "", *action.Priority, "", nil, nil, now)
 	case IssueSelectionLabels:
 		labels := append([]string{}, (*action.Labels)...)
-		err = updateIssueFieldsTx(tx, row.ID, "", "", "", "", labels, now)
+		err = updateIssueFieldsTx(tx, row.ID, "", "", "", "", labels, nil, now)
 	case IssueSelectionStatus:
 		switch *action.Status {
 		case "reopened":
@@ -777,15 +817,21 @@ func applyIssueSelectionActionTx(tx *gorm.DB, row *Issue, action IssueSelectionA
 		case "closed":
 			err = closeIssueTx(tx, row.ID, isOperator, now)
 		case "rejected":
-			err = rejectIssueTx(tx, row.ID, *action.Comment, action.AuthorProject, action.AuthorAgent, now)
+			err = rejectIssueTx(tx, row.ID, *action.Comment, action.AuthorProject, action.AuthorAgent, action.Attribution, now)
 		default:
 			err = updateIssueStatusTx(tx, row.ID, *action.Status, now)
 		}
+		if err == nil {
+			err = addIssueHistoryTx(tx, row.ID, *action.Status, action.AuthorProject, action.AuthorAgent, action.Attribution, now)
+		}
 		if err == nil && *action.Status != "rejected" && action.Comment != nil && *action.Comment != "" {
 			_, err = addIssueCommentTx(tx, row.ID, &IssueComment{
-				AuthorProject: action.AuthorProject,
-				AuthorAgent:   action.AuthorAgent,
-				Body:          *action.Comment,
+				AuthorProject:       action.AuthorProject,
+				AuthorAgent:         action.AuthorAgent,
+				AuthorSession:       action.Attribution.SessionID,
+				AuthorSessionSource: action.Attribution.SessionSource,
+				AuthorClient:        action.Attribution.Client,
+				Body:                *action.Comment,
 			}, now)
 		}
 	}
@@ -824,51 +870,17 @@ func issueSelectionFailureOutcome(err error) IssueSelectionOutcome {
 	return IssueSelectionFailed
 }
 
-// ReopenIssue transitions a resolved issue back to reopened state.
-// Returns error if issue is not in 'resolved' state.
+// ReopenIssue transitions a resolved or closed issue back to reopened state.
 // Optionally adds a comment explaining the reopen reason.
 func (s *IssueStore) ReopenIssue(ctx context.Context, id int64, comment, authorProject, authorAgent string) error {
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// Verify issue exists and is resolved.
-		var issue Issue
-		if err := tx.First(&issue, id).Error; err != nil {
-			if err == gorm.ErrRecordNotFound {
-				return fmt.Errorf("%w: issue %d", ErrIssueNotFound, id)
-			}
-			return err
-		}
-		if issue.Status != "resolved" {
-			return fmt.Errorf("%w: issue %d is %s, not resolved — cannot reopen", ErrIssueInvalidTransition, id, issue.Status)
-		}
-
-		// Include the old state in the update to prevent a race.
-		now := time.Now()
-		result := tx.Model(&Issue{}).Where("id = ? AND status = ?", id, "resolved").Updates(map[string]interface{}{
-			"status":      "reopened",
-			"reopened_at": now,
-			"updated_at":  now,
-		})
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected == 0 {
-			return fmt.Errorf("%w: issue %d is no longer resolved (concurrent modification)", ErrIssueInvalidTransition, id)
-		}
-		if comment == "" {
-			return nil
-		}
-		_, err := addIssueCommentTx(tx, id, &IssueComment{
-			AuthorProject: authorProject,
-			AuthorAgent:   authorAgent,
-			Body:          comment,
-		}, now)
-		return err
-	})
+	return s.UpdateIssueAtomically(ctx, id, IssueUpdate{
+		Status: "reopened", Comment: comment, AuthorProject: authorProject, AuthorAgent: authorAgent,
+	}, false)
 }
 
 // AuthorizeIssueProgressionMutation permits any authenticated read-write
-// SourceClient keycard or an authenticated operator to comment or resolve an
-// issue. Project metadata and creator attribution are never authorization data.
+// SourceClient keycard or an authenticated operator to comment, resolve, close,
+// or reopen an issue. Project and session attribution never grant authority.
 func (s *IssueStore) AuthorizeIssueProgressionMutation(_ context.Context, keycardID string, isOperator bool) error {
 	if isOperator || keycardID != "" {
 		return nil
@@ -877,8 +889,8 @@ func (s *IssueStore) AuthorizeIssueProgressionMutation(_ context.Context, keycar
 }
 
 // AuthorizeIssueSourceMutation permits an authenticated operator or the SourceClient
-// keycard that created the issue. It protects terminal source actions and field
-// edits; project metadata is never authorization data.
+// keycard that created the issue. It protects unrelated field edits;
+// project and session metadata are never authorization data.
 func (s *IssueStore) AuthorizeIssueSourceMutation(ctx context.Context, id int64, keycardID string, isOperator bool) error {
 	if isOperator {
 		return nil
@@ -908,21 +920,9 @@ func (s *IssueStore) CloseIssue(ctx context.Context, id int64, isOperator bool) 
 
 // CloseIssueWithComment atomically closes an issue and records an optional comment.
 func (s *IssueStore) CloseIssueWithComment(ctx context.Context, id int64, isOperator bool, comment, authorProject, authorAgent string) error {
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		now := time.Now()
-		if err := closeIssueTx(tx, id, isOperator, now); err != nil {
-			return err
-		}
-		if comment == "" {
-			return nil
-		}
-		_, err := addIssueCommentTx(tx, id, &IssueComment{
-			AuthorProject: authorProject,
-			AuthorAgent:   authorAgent,
-			Body:          comment,
-		}, now)
-		return err
-	})
+	return s.UpdateIssueAtomically(ctx, id, IssueUpdate{
+		Status: "closed", Comment: comment, AuthorProject: authorProject, AuthorAgent: authorAgent,
+	}, isOperator)
 }
 
 func closeIssueTx(tx *gorm.DB, id int64, isOperator bool, now time.Time) error {
@@ -957,30 +957,9 @@ func closeIssueTx(tx *gorm.DB, id int64, isOperator bool, now time.Time) error {
 // RejectIssue transitions any issue to rejected state with a mandatory comment.
 // Intended for human operators (dashboard). No lifecycle validation.
 func (s *IssueStore) RejectIssue(ctx context.Context, id int64, comment, authorProject, authorAgent string) error {
-	if comment == "" {
-		return fmt.Errorf("%w: comment is required when rejecting an issue", ErrIssueInvalidInput)
-	}
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		now := time.Now()
-		result := tx.Model(&Issue{}).Where("id = ?", id).Updates(map[string]any{
-			"status":     "rejected",
-			"closed_at":  now,
-			"updated_at": now,
-		})
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected == 0 {
-			return fmt.Errorf("%w: issue %d", ErrIssueNotFound, id)
-		}
-		return tx.Create(&IssueComment{
-			IssueID:       id,
-			AuthorProject: authorProject,
-			AuthorAgent:   authorAgent,
-			Body:          "Rejected: " + comment,
-			CreatedAt:     now,
-		}).Error
-	})
+	return s.UpdateIssueAtomically(ctx, id, IssueUpdate{
+		Status: "rejected", Comment: comment, AuthorProject: authorProject, AuthorAgent: authorAgent,
+	}, true)
 }
 
 // DeleteIssue hard-deletes an issue and all its comments.
@@ -1014,11 +993,11 @@ func deleteIssueTx(tx *gorm.DB, id int64) error {
 // Only non-zero-value fields are updated.
 func (s *IssueStore) UpdateIssueFields(ctx context.Context, id int64, title, body, priority, issueType string, labels []string) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		return updateIssueFieldsTx(tx, id, title, body, priority, issueType, labels, time.Now())
+		return updateIssueFieldsTx(tx, id, title, body, priority, issueType, labels, nil, time.Now())
 	})
 }
 
-func updateIssueFieldsTx(tx *gorm.DB, id int64, title, body, priority, issueType string, labels []string, now time.Time) error {
+func updateIssueFieldsTx(tx *gorm.DB, id int64, title, body, priority, issueType string, labels []string, targetSession *string, now time.Time) error {
 	updates := map[string]any{"updated_at": now}
 	if title != "" {
 		updates["title"] = title
@@ -1041,6 +1020,12 @@ func updateIssueFieldsTx(tx *gorm.DB, id int64, title, body, priority, issueType
 	}
 	if labels != nil {
 		updates["labels"] = models.JSONStringArray(labels)
+	}
+	if targetSession != nil {
+		if err := ValidateIssueSessionSelector(*targetSession); err != nil {
+			return err
+		}
+		updates["target_session"] = *targetSession
 	}
 	result := tx.Model(&Issue{}).Where("id = ?", id).Updates(updates)
 	if result.Error != nil {

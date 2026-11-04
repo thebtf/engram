@@ -170,6 +170,73 @@ func TestIssueStoreApplySelectionOperationPostgres(t *testing.T) {
 	}
 }
 
+func TestIssueStoreParticipantSelectionLifecyclePostgres(t *testing.T) {
+	db := openCandidateTestDB(t)
+	store := NewIssueStore(db)
+	ctx := context.Background()
+	project := sessionTestProject(t, db)
+
+	for _, tc := range []struct{ name, from, to string }{
+		{"resolve", "open", "resolved"},
+		{"close", "resolved", "closed"},
+		{"reopen_resolved", "resolved", "reopened"},
+		{"reopen_closed", "closed", "reopened"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rows := make([]Issue, 0, 2)
+			histories := make(map[int64][]IssueComment)
+			for _, creator := range []string{"issue-selection-owner", ""} {
+				id, err := store.CreateIssue(ctx, &Issue{
+					Title: "participant selection lifecycle", SourceProject: project, TargetProject: project,
+					Status: tc.from, CreatorKeycardID: creator, Priority: "medium", Type: "task",
+					Labels: models.JSONStringArray{"preserved"},
+				})
+				require.NoError(t, err)
+				_, err = store.AddComment(ctx, id, &IssueComment{AuthorProject: project, Body: "existing history"})
+				require.NoError(t, err)
+				before, comments, err := store.GetIssue(ctx, id)
+				require.NoError(t, err)
+				rows = append(rows, *before)
+				histories[id] = comments
+			}
+			comment := "participant bulk transition"
+			result, err := store.ApplyIssueSelectionOperation(ctx, IssueSelectionOperation{
+				Action: IssueSelectionAction{
+					Kind: IssueSelectionStatus, Status: &tc.to, Comment: &comment, AuthorProject: project,
+				},
+				Actor:   IssueSelectionActor{KeycardID: "issue-selection-collaborator"},
+				Targets: issueSelectionTargets(rows...),
+			})
+			require.NoError(t, err)
+			require.Len(t, result.Items, len(rows))
+			for index, before := range rows {
+				item := result.Items[index]
+				require.Equal(t, before.ID, item.TargetID)
+				require.Equal(t, IssueSelectionCommitted, item.Outcome)
+				require.NotNil(t, item.Readback)
+				require.Equal(t, tc.to, item.Readback.Status)
+				issue, comments, err := store.GetIssue(ctx, before.ID)
+				require.NoError(t, err)
+				require.Equal(t, tc.to, issue.Status)
+				require.Equal(t, before.Title, issue.Title)
+				require.Equal(t, before.SourceProject, issue.SourceProject)
+				require.Equal(t, before.TargetProject, issue.TargetProject)
+				require.Equal(t, before.CreatorKeycardID, issue.CreatorKeycardID)
+				require.Equal(t, before.Priority, issue.Priority)
+				require.Equal(t, before.Labels, issue.Labels)
+				require.Len(t, comments, 2)
+				require.Contains(t, comments, histories[before.ID][0])
+				for _, actual := range comments {
+					if actual.ID != histories[before.ID][0].ID {
+						require.Equal(t, comment, actual.Body)
+						require.Equal(t, project, actual.AuthorProject)
+					}
+				}
+			}
+		})
+	}
+}
+
 func issueSelectionTestRows(t *testing.T, db *gorm.DB, ids []int64) []Issue {
 	t.Helper()
 	rows := make([]Issue, 0, len(ids))
@@ -289,8 +356,6 @@ func TestIssueSelectionAuthorizationAndTransitions(t *testing.T) {
 	for _, action := range []IssueSelectionAction{
 		{Kind: IssueSelectionPriority, Priority: stringPtr("high")},
 		{Kind: IssueSelectionLabels, Labels: &labels},
-		{Kind: IssueSelectionStatus, Status: stringPtr("reopened")},
-		{Kind: IssueSelectionStatus, Status: stringPtr("closed")},
 	} {
 		require.ErrorIs(t, authorizeIssueSelectionRow(row, action, IssueSelectionActor{KeycardID: "other"}), ErrIssueForbidden)
 	}
@@ -304,7 +369,14 @@ func TestIssueSelectionAuthorizationAndTransitions(t *testing.T) {
 	} {
 		require.ErrorIs(t, authorizeIssueSelectionRow(row, action, owner), ErrIssueForbidden)
 	}
-	require.NoError(t, authorizeIssueSelectionRow(row, IssueSelectionAction{Kind: IssueSelectionStatus, Status: stringPtr("resolved")}, IssueSelectionActor{KeycardID: "other"}))
+	for _, creator := range []string{"creator", ""} {
+		for _, status := range []string{"resolved", "reopened", "closed"} {
+			action := IssueSelectionAction{Kind: IssueSelectionStatus, Status: stringPtr(status)}
+			issue := &Issue{CreatorKeycardID: creator}
+			require.NoError(t, authorizeIssueSelectionRow(issue, action, IssueSelectionActor{KeycardID: "other"}))
+			require.ErrorIs(t, authorizeIssueSelectionRow(issue, action, IssueSelectionActor{}), ErrIssueForbidden)
+		}
+	}
 
 	for _, scenario := range []struct {
 		name     string
@@ -316,6 +388,7 @@ func TestIssueSelectionAuthorizationAndTransitions(t *testing.T) {
 		{"acknowledge open", "open", IssueSelectionAction{Kind: IssueSelectionAcknowledge}, operator, false},
 		{"acknowledge resolved", "resolved", IssueSelectionAction{Kind: IssueSelectionAcknowledge}, operator, true},
 		{"reopen resolved", "resolved", IssueSelectionAction{Kind: IssueSelectionStatus, Status: stringPtr("reopened")}, owner, false},
+		{"reopen closed", "closed", IssueSelectionAction{Kind: IssueSelectionStatus, Status: stringPtr("reopened")}, owner, false},
 		{"reopen open", "open", IssueSelectionAction{Kind: IssueSelectionStatus, Status: stringPtr("reopened")}, owner, true},
 		{"operator closes open", "open", IssueSelectionAction{Kind: IssueSelectionStatus, Status: stringPtr("closed")}, operator, false},
 		{"owner closes resolved", "resolved", IssueSelectionAction{Kind: IssueSelectionStatus, Status: stringPtr("closed")}, owner, false},

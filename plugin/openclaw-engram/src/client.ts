@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { AvailabilityTracker } from './availability.js';
 import type { PluginConfig } from './config.js';
-import { resolveIdentity, validateProjectID, type ProjectIdentity } from './identity.js';
+import { resolveIdentity, validateProjectID, projectContextGuidance, requestProjectContext, type ProjectIdentity, type ProjectContextRequest, type ProjectContextResult } from './identity.js';
 
 // ---------------------------------------------------------------------------
 // Response types
@@ -198,11 +198,8 @@ export async function resolveProject(
   return { ok: true, canonicalProject: project };
  } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
-  const code = /^PROJECT_[A-Z_]+$/.test(message) ? message : 'PROJECT_RESOLUTION_UNAVAILABLE';
-  const supplied = error instanceof Error && 'guidance' in error && typeof error.guidance === 'string' && error.guidance.length <= 3072 ? error.guidance : '';
-  const guidance = supplied || (code === 'PROJECT_MIGRATION_REQUIRED' || code === 'PROJECT_IDENTITY_CONFLICT' || code === 'PROJECT_CONTEXT_REQUIRED' || code === 'PROJECT_RESOLUTION_UNAVAILABLE'
-   ? 'Use the host-reported installed Engram launcher: node <installed-plugin-path>/scripts/run-engram.js project resolve --root <actual-caller-root> --json --check (or the same installed native client). No bootstrap, marker/cache writes or migration. A valid historical id/name marker returns local migration_required evidence, match=legacy_marker, null canonical metadata and no HTTP/remote requirement; it is not a verified server binding. Next use existing authenticated GET /api/projects/resolve?legacy_id=<URI-encoded-exact-marker-id>, with the validated id encoded as query data, not executable text. The reader returns resolved canonical project_id or unresolved reference; unresolved is not a mapping. Preserve marker/cache/data. For migration_required/conflict obtain the owner-confirmed existing-project mapping and authorized conservation plan: admin GET /api/projects/consolidation/census?source_version=<exact-source>, then POST /api/projects/consolidation/preflight with structural evidence; backup, isolated rehearsal and explicit apply authority are separate. Do not init/reset/create a replacement UUID or change permissions. Project-free issues get/explicit-filter list can continue. Retry only after verified canonical identity. Guide: https://github.com/thebtf/engram/blob/main/docs/operating-engram.md#context-recovery'
-   : 'Preserve the actual caller marker, common cache, v2 anchor and data. Inspect that caller root and .engram-project with bounded regular-file reads (4096 bytes maximum), and the Git common directory engram-project.json separately. Do not follow symlinks, borrow another repository identity or execute marker content. Invalid/unknown fields or error codes require exact owner inspection/mapping and authorized repair, not another failing check, deletion, init or replacement UUID. Keep the operation held; do not bypass permissions or treat failure as an empty successful result. Guide: https://github.com/thebtf/engram/blob/main/docs/operating-engram.md#context-recovery');
+  const code = /^PROJECT_[A-Z_]{1,80}$/.test(message) ? message : 'PROJECT_RESOLUTION_UNAVAILABLE';
+  const guidance = projectContextGuidance(code);
   return projectResolutionFailure(code, guidance, guidance, code === 'PROJECT_RESOLUTION_UNAVAILABLE' ? 503 : 400);
  }
 }
@@ -232,7 +229,11 @@ export interface Issue {
  priority: string;
  source_project: string;
  target_project: string;
+ target_session?: string;
  source_agent: string;
+ source_client?: string;
+ created_by_session?: string;
+ created_by_session_source?: string;
  labels: string[];
  comment_count?: number;
  created_at: string;
@@ -244,7 +245,22 @@ export interface IssueComment {
  issue_id: number;
  author_project: string;
  author_agent: string;
+ author_client?: string;
+ author_session?: string;
+ author_session_source?: string;
  body: string;
+ created_at: string;
+}
+
+export interface IssueHistoryEvent {
+ id: number;
+ issue_id: number;
+ status: string;
+ author_project: string;
+ author_agent: string;
+ session_id?: string;
+ session_source?: string;
+ client?: string;
  created_at: string;
 }
 
@@ -257,6 +273,9 @@ export interface IssueDetailResponse {
  issue: Issue;
  comments: IssueComment[];
  comment_count: number;
+ history_events?: IssueHistoryEvent[] | null;
+ history_has_more?: boolean;
+ history_next_after_id?: number | null;
 }
 
 export interface CreateIssueRequest {
@@ -265,8 +284,10 @@ export interface CreateIssueRequest {
  priority?: string;
  source_project?: string;
  target_project: string;
+ target_session?: string | null;
  source_agent?: string;
  created_by_session?: string;
+ client?: string;
  labels?: string[];
 }
 
@@ -280,6 +301,9 @@ export interface UpdateIssueRequest {
  comment?: string;
  source_project?: string;
  source_agent?: string;
+ session_id?: string;
+ client?: string;
+ target_session?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -306,6 +330,12 @@ export class EngramRestClient {
 
  async resolveWorkspaceProject(agentId: string, workspaceDir?: string): Promise<ProjectIdentity> {
   return resolveIdentity(agentId, workspaceDir, {
+   env: { ...process.env, ENGRAM_URL: this.baseUrl, ENGRAM_TOKEN: this.token },
+  });
+ }
+
+ async projectContext(request: ProjectContextRequest, workspaceDir?: string): Promise<ProjectContextResult> {
+  return requestProjectContext(request, workspaceDir, {
    env: { ...process.env, ENGRAM_URL: this.baseUrl, ENGRAM_TOKEN: this.token },
   });
  }
@@ -688,6 +718,9 @@ export class EngramRestClient {
  async listIssues(params: {
   project?: string;
   source_project?: string;
+  source_session?: string;
+  target_session?: string;
+  participant_session?: string;
   status?: string;
   limit?: number;
   offset?: number;
@@ -695,6 +728,9 @@ export class EngramRestClient {
   const qs = new URLSearchParams();
   if (params.project) qs.set('project', params.project);
   if (params.source_project) qs.set('source_project', params.source_project);
+  if (params.source_session !== undefined) qs.set('source_session', params.source_session);
+  if (params.target_session !== undefined) qs.set('target_session', params.target_session);
+  if (params.participant_session !== undefined) qs.set('participant_session', params.participant_session);
   if (params.status) qs.set('status', params.status);
   if (params.limit) qs.set('limit', String(params.limit));
   if (params.offset) qs.set('offset', String(params.offset));
@@ -702,8 +738,15 @@ export class EngramRestClient {
   return this.get<IssueListResponse>(`/api/issues${query ? `?${query}` : ''}`);
  }
 
- async getIssue(id: number): Promise<IssueDetailResponse | null> {
-  return this.get<IssueDetailResponse>(`/api/issues/${id}`);
+ async getIssue(id: number, options?: {
+  history_limit?: number;
+  history_after_id?: number;
+ }): Promise<IssueDetailResponse | null> {
+  const qs = new URLSearchParams();
+  if (options?.history_limit !== undefined) qs.set('history_limit', String(options.history_limit));
+  if (options?.history_after_id !== undefined) qs.set('history_after_id', String(options.history_after_id));
+  const query = qs.toString();
+  return this.get<IssueDetailResponse>(`/api/issues/${id}${query ? `?${query}` : ''}`);
  }
 
  async createIssue(body: CreateIssueRequest): Promise<CreateIssueResponse | null> {

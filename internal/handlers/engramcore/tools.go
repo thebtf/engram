@@ -144,7 +144,7 @@ func (m *Module) ConfigureRegistrationParser() {
 func (m *Module) proxyToolSession(ctx context.Context, project muxcore.ProjectContext, name string) (string, bool, error) {
 	uciTool := isUCIProxyTool(name)
 	if !uciTool {
-		return m.envFor(project, config.EnvClaudeSessionID), false, nil
+		return project.Env[config.EnvClaudeSessionID], false, nil
 	}
 	sessionID, err := requireUCITransportSession(ctx)
 	return sessionID, true, err
@@ -165,8 +165,9 @@ func (m *Module) proxyToolCallContext(ctx context.Context, project muxcore.Proje
 	if err != nil {
 		return nil, err
 	}
-	resolved, err := projectidentity.ResolveLogicalProject(ctx, project.Cwd,
-		projectidentity.HTTPBootstrap(serverURL, m.envFor(project, config.EnvWorkstationToken)))
+	resolved, err := projectidentity.ResolveLogicalProjectWithRecovery(ctx, projectidentity.ProjectContextCaller{
+		Cwd: project.Cwd, CallerID: m.v3ClientInstanceID, ServerURL: serverURL, Token: m.envFor(project, config.EnvWorkstationToken),
+	})
 	if err != nil {
 		return nil, projectIdentityRefusal(err, project.Cwd)
 	}

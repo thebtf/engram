@@ -14,7 +14,7 @@ import {
 import { createOperatorSelection, type OperatorSelectionTarget } from '../composables/useOperatorSelection'
 import type { MutationResult } from '../composables/useApi'
 
-type IssueFilter = 'all' | 'open' | 'work' | 'closed' | 'rejected'
+type IssueFilter = 'all' | 'open' | 'work' | 'resolved' | 'closed' | 'rejected'
 type BulkField = 'status' | 'priority'
 type CreateTemplate = 'bug' | 'handoff' | 'question' | 'improvement'
 
@@ -33,7 +33,8 @@ const filterStatuses: Record<IssueFilter, OperatorIssueStatus[]> = {
   all: [],
   open: ['open'],
   work: ['acknowledged', 'reopened'],
-  closed: ['resolved', 'closed'],
+  resolved: ['resolved'],
+  closed: ['closed'],
   rejected: ['rejected'],
 }
 const { pageSize, pageSizeOptions } = usePersistentPageSize('issues', 10)
@@ -70,7 +71,7 @@ const priorityOptions: OperatorIssuePriority[] = ['critical', 'high', 'medium', 
 const typeOptions: OperatorIssueType[] = ['bug', 'feature', 'improvement', 'task']
 const statusOptions: OperatorIssueStatus[] = ['open', 'acknowledged', 'reopened', 'resolved', 'closed', 'rejected']
 const bulkStatusOptions = statusOptions.filter((status) => status !== 'rejected')
-const filterOptions: IssueFilter[] = ['all', 'open', 'work', 'closed', 'rejected']
+const filterOptions: IssueFilter[] = ['all', 'open', 'work', 'resolved', 'closed', 'rejected']
 const templateOptions: CreateTemplate[] = ['bug', 'handoff', 'question', 'improvement']
 
 const selection = createOperatorSelection('issues')
@@ -131,7 +132,8 @@ const statebarKind = computed(() => scopeError.value || error.value || detailErr
 const stats = computed(() => ({
   open: rows.filter((issue) => issue.status === 'open').length,
   work: rows.filter((issue) => issue.status === 'acknowledged' || issue.status === 'reopened').length,
-  done: rows.filter((issue) => issue.status === 'resolved' || issue.status === 'closed').length,
+  resolved: rows.filter((issue) => issue.status === 'resolved').length,
+  closed: rows.filter((issue) => issue.status === 'closed').length,
   total: registryTotal.value,
 }))
 
@@ -739,7 +741,8 @@ function renderMarkdown(value: string) {
           </div>
           <div class="bfigs">
             <div class="bfig warn"><div class="bn">{{ stats.work }}</div><div class="bl">{{ t('issues.stats.work') }}</div></div>
-            <div class="bfig good"><div class="bn">{{ stats.done }}</div><div class="bl">{{ t('issues.stats.done') }}</div></div>
+            <div class="bfig"><div class="bn">{{ stats.resolved }}</div><div class="bl">{{ t('issues.stats.resolved') }}</div></div>
+            <div class="bfig good"><div class="bn">{{ stats.closed }}</div><div class="bl">{{ t('issues.stats.closed') }}</div></div>
             <div class="bfig"><div class="bn">{{ stats.total }}</div><div class="bl">{{ t('issues.stats.total') }}</div></div>
           </div>
         </div>
@@ -805,7 +808,7 @@ function renderMarkdown(value: string) {
                 <span v-for="label in issue.labels" :key="label" class="issue-chip subtle">{{ label }}</span>
               </span>
             </span>
-            <span class="issue-chip" :data-tone="issue.status">{{ t(`issues.status.${issue.status}`) }}</span>
+            <span class="issue-chip issue-row-status" :data-tone="issue.status">{{ t(`issues.status.${issue.status}`) }}</span>
             <span class="issue-route-mini">{{ rowRoute(issue) }}</span>
             <span class="issue-age">{{ issue.age }}</span>
             <span class="issue-comments">▱ {{ issue.comments }}</span>
@@ -1269,6 +1272,7 @@ textarea.txt { min-height:130px; resize:vertical; line-height:1.5; font-family:v
 .issue-route-mini, .issue-age, .issue-comments { color:var(--muted); font-family:var(--font-mono); font-size:var(--text-xs); line-height:1.25; overflow:hidden; text-overflow:ellipsis; }
 .issue-comments { text-align:right; }
 .issue-chip { display:inline-flex; align-items:center; width:max-content; max-width:100%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; border:1px solid currentColor; border-radius:6px; padding:2px 8px; font-size:10px; font-weight:800; line-height:1.35; text-transform:uppercase; letter-spacing:.06em; background:color-mix(in oklab,currentColor,transparent 88%); }
+.issue-row > .issue-row-status { display:block; min-width:0; white-space:normal; overflow-wrap:anywhere; }
 .issue-chip[data-tone="critical"], .issue-chip[data-tone="bug"], .issue-chip[data-tone="rejected"] { color:var(--danger); }
 .issue-chip[data-tone="high"], .issue-chip[data-tone="reopened"] { color:var(--state-warn); }
 .issue-chip[data-tone="medium"], .issue-chip[data-tone="acknowledged"] { color:var(--class-dormant); }
@@ -1377,7 +1381,9 @@ textarea.txt { min-height:130px; resize:vertical; line-height:1.5; font-family:v
 @media (max-width:1100px) {
   .issues-grid .grid-h { display:none; }
   .issue-row { grid-template-columns:22px 42px 1fr 42px; gap:8px; align-items:start; }
-  .issue-row > .issue-chip, .issue-row > .issue-route-mini, .issue-row > .issue-age { display:none; }
+  .issue-row > .issue-chip:not(.issue-row-status), .issue-row > .issue-route-mini, .issue-row > .issue-age { display:none; }
+  .issue-row > .issue-row-status { grid-column:3 / -1; grid-row:2; }
+  .issue-row > .issue-comments { grid-column:4; grid-row:1; }
   .issue-open-grid, .issue-modal-body { grid-template-columns:1fr; }
   .issue-open-head { flex-direction:column; }
   .issue-template-row { grid-template-columns:1fr 1fr; }

@@ -39,13 +39,20 @@ func TestInvalidIdentityLegacyMarkerRecovery(t *testing.T) {
 			var calls atomic.Int32
 			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls.Add(1)
-				http.Error(w, "local historical evidence must not trigger HTTP or bootstrap", http.StatusInternalServerError)
+				if r.Method != http.MethodGet || r.URL.Path != "/api/projects/resolve" || r.URL.RawQuery != "legacy_id=941b49" {
+					t.Errorf("unexpected identity request; no bootstrap or replacement is permitted: %s %s", r.Method, r.URL.RequestURI())
+					http.Error(w, "unexpected identity request", http.StatusInternalServerError)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"status":"unresolved","reference":"urn:engram:migration:unresolved:legacy-marker","reason":"Historical membership remains unresolved"}`))
 			}))
 			defer backend.Close()
 			t.Setenv("ENGRAM_URL", backend.URL)
 			t.Setenv("ENGRAM_SERVER_URL", "")
 			t.Setenv("ENGRAM_TOKEN", "")
 			for _, check := range []bool{false, true, false} {
+				callsBefore := calls.Load()
 				args := []string{"resolve", "--root", root, "--json"}
 				if check {
 					args = append(args, "--check")
@@ -65,7 +72,11 @@ func TestInvalidIdentityLegacyMarkerRecovery(t *testing.T) {
 					assert.Contains(t, guidance, "GET /api/projects/resolve?legacy_id=", "the existing exact legacy reader is the supported no-remote next action")
 					assert.Contains(t, strings.ToLower(guidance), "preserve")
 				}
-				assert.Zero(t, calls.Load(), "neither check nor ordinary held resolution may query/bootstrap a replacement")
+				wantCalls := callsBefore
+				if !check {
+					wantCalls++
+				}
+				assert.Equal(t, wantCalls, calls.Load(), "ordinary resolve reads the exact legacy mapping once; --check makes no HTTP request")
 				for path, expected := range protected {
 					actual, readErr := os.ReadFile(filepath.Join(root, path))
 					require.NoError(t, readErr)
@@ -157,11 +168,17 @@ func TestInvalidIdentityNestedAndSymlinkBoundaries(t *testing.T) {
 			var calls atomic.Int32
 			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls.Add(1)
-				http.Error(w, "nested boundary must not borrow outer repository", http.StatusInternalServerError)
+				if r.Method != http.MethodGet || r.URL.Path != "/api/projects/resolve" || r.URL.RawQuery != "legacy_id=941b49" {
+					t.Errorf("nested boundary must not borrow the outer remote or bootstrap: %s %s", r.Method, r.URL.RequestURI())
+					http.Error(w, "unexpected identity request", http.StatusInternalServerError)
+					return
+				}
+				http.NotFound(w, r)
 			}))
 			defer backend.Close()
 			t.Setenv("ENGRAM_URL", backend.URL)
 			for _, check := range []bool{false, true} {
+				callsBefore := calls.Load()
 				args := []string{"resolve", "--root", nested, "--json"}
 				if check {
 					args = append(args, "--check")
@@ -176,10 +193,17 @@ func TestInvalidIdentityNestedAndSymlinkBoundaries(t *testing.T) {
 				} else if !check {
 					assert.Error(t, err)
 					assert.Equal(t, "PROJECT_MIGRATION_REQUIRED", payload["code"])
+				} else {
+					assert.NoError(t, err)
+					assert.Equal(t, "migration_required", payload["status"])
 				}
 				assert.NotEqual(t, "resolved", payload["status"])
 				assert.NotContains(t, payload, "project_id")
-				assert.Zero(t, calls.Load())
+				wantCalls := callsBefore
+				if !symlink && !check {
+					wantCalls++
+				}
+				assert.Equal(t, wantCalls, calls.Load(), "only ordinary resolution of a valid nested marker may read its exact legacy mapping")
 				actual, readErr := os.ReadFile(target)
 				require.NoError(t, readErr)
 				assert.Equal(t, raw, actual)
@@ -203,13 +227,20 @@ func TestInvalidIdentityPublicCLI(t *testing.T) {
 	var calls atomic.Int32
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		http.Error(w, "public CLI must not initialize this historical project", http.StatusInternalServerError)
+		if r.Method != http.MethodGet || r.URL.Path != "/api/projects/resolve" || r.URL.RawQuery != "legacy_id=941b49" {
+			t.Errorf("public CLI must not bootstrap or initialize a replacement: %s %s", r.Method, r.URL.RequestURI())
+			http.Error(w, "unexpected identity request", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"unresolved","reference":"urn:engram:migration:unresolved:public-cli","reason":"Historical membership remains unresolved"}`))
 	}))
 	defer backend.Close()
 	t.Setenv("ENGRAM_URL", backend.URL)
 	t.Setenv("ENGRAM_SERVER_URL", "")
 	t.Setenv("ENGRAM_TOKEN", "")
 	for _, check := range []bool{false, true} {
+		callsBefore := calls.Load()
 		args := []string{"project", "resolve", "--root", root, "--json"}
 		if check {
 			args = append(args, "--check")
@@ -238,6 +269,56 @@ func TestInvalidIdentityPublicCLI(t *testing.T) {
 		assert.Equal(t, raw, actual)
 		_, statErr := os.Lstat(filepath.Join(root, ".git", "engram-project.json"))
 		assert.True(t, os.IsNotExist(statErr))
-		assert.Zero(t, calls.Load())
+		wantCalls := callsBefore
+		if !check {
+			wantCalls++
+		}
+		assert.Equal(t, wantCalls, calls.Load(), "public ordinary resolve reads once; public --check stays local and read-only")
+	}
+}
+
+func TestInvalidIdentityLegacyReaderUnavailableRemainsAnError(t *testing.T) {
+	root := t.TempDir()
+	gitProjectInit(t, root, "init", "--quiet", "--template=")
+	raw := []byte("{\"id\":\"941b49\",\"name\":\"ai-warden\"}\n")
+	marker := filepath.Join(root, ".engram-project")
+	require.NoError(t, os.WriteFile(marker, raw, 0o600))
+	var calls atomic.Int32
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if r.Method != http.MethodGet || r.URL.Path != "/api/projects/resolve" || r.URL.RawQuery != "legacy_id=941b49" {
+			t.Errorf("unavailable reader must not trigger bootstrap or another identity selector: %s %s", r.Method, r.URL.RequestURI())
+		}
+		http.Error(w, "synthetic legacy reader failure", http.StatusInternalServerError)
+	}))
+	defer backend.Close()
+	t.Setenv("ENGRAM_URL", backend.URL)
+	t.Setenv("ENGRAM_SERVER_URL", "")
+	t.Setenv("ENGRAM_TOKEN", "")
+	for _, check := range []bool{false, true} {
+		callsBefore := calls.Load()
+		args := []string{"resolve", "--root", root, "--json"}
+		if check {
+			args = append(args, "--check")
+		}
+		var output bytes.Buffer
+		err := runProjectCommand(args, &output)
+		var payload map[string]any
+		require.NoError(t, json.Unmarshal(output.Bytes(), &payload))
+		if check {
+			assert.NoError(t, err)
+			assert.Equal(t, "migration_required", payload["status"])
+			assert.Equal(t, callsBefore, calls.Load(), "--check must not consult even an unavailable reader")
+		} else {
+			assert.Error(t, err)
+			assert.Equal(t, "PROJECT_RESOLUTION_UNAVAILABLE", payload["code"], "HTTP 500 is an unavailable reader, not unresolved membership or successful recovery")
+			assert.Equal(t, callsBefore+1, calls.Load(), "an unavailable reader must not trigger retries or bootstrap")
+		}
+		assert.NotContains(t, payload, "project_id")
+		actual, readErr := os.ReadFile(marker)
+		require.NoError(t, readErr)
+		assert.Equal(t, raw, actual)
+		_, statErr := os.Lstat(filepath.Join(root, ".git", "engram-project.json"))
+		assert.True(t, os.IsNotExist(statErr), "reader failure must not create a replacement cache")
 	}
 }

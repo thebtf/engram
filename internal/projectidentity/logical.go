@@ -187,6 +187,10 @@ func ToolRequiresProject(name string, arguments []byte) bool {
 // ResolveLogicalProject reads the actual caller root, never the daemon cwd.
 // bootstrap is consulted only before an ID is pinned; nil supports offline use.
 func ResolveLogicalProject(ctx context.Context, cwd string, bootstrap func(context.Context, BootstrapRequest) (Project, error)) (Project, error) {
+	return resolveLogicalProject(ctx, cwd, bootstrap, nil)
+}
+
+func resolveLogicalProject(ctx context.Context, cwd string, bootstrap func(context.Context, BootstrapRequest) (Project, error), legacyLookup func(context.Context, string) (Project, error)) (Project, error) {
 	if cwd == "" {
 		return Project{}, logicalError("PROJECT_CONTEXT_REQUIRED")
 	}
@@ -206,7 +210,11 @@ func ResolveLogicalProject(ctx context.Context, cwd string, bootstrap func(conte
 	for candidate := selected; ; candidate = filepath.Dir(candidate) {
 		marker, present, err := readLogicalMarker(filepath.Join(candidate, anchorFilenameV3), true)
 		if err != nil {
-			return Project{}, err
+			var historical *LogicalError
+			if legacyLookup == nil || !errors.As(err, &historical) || historical.Code != "PROJECT_MIGRATION_REQUIRED" || !validLegacyMarkerID(historical.legacyID) {
+				return Project{}, err
+			}
+			return legacyLookup(ctx, historical.legacyID)
 		}
 		if present && marker.ProjectID != "" {
 			if common != "" && samePath(candidate, root) {
@@ -302,6 +310,10 @@ func readLogicalMarker(path string, allowLegacyMarker bool) (Project, bool, erro
 	if err != nil {
 		return Project{}, true, logicalError("PROJECT_RESOLUTION_UNAVAILABLE")
 	}
+	return parseLogicalMarker(raw, allowLegacyMarker)
+}
+
+func parseLogicalMarker(raw []byte, allowLegacyMarker bool) (Project, bool, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
 		return Project{}, true, logicalError("PROJECT_IDENTITY_INVALID")

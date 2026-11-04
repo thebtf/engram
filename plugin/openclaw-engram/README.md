@@ -9,7 +9,8 @@ OpenClaw plugin that connects agents to an [engram](https://github.com/thebtf/en
 - An API token configured on the engram server
 - The matching release Go client (`engram`) on PATH, or its absolute executable
   selected with `ENGRAM_EXECUTABLE`. It must support
-  `project resolve --root <actual-workspace> --json`; no JS/TS identity fallback exists.
+  `project resolve`, `project choices` and `project select` with the current JSON
+  caller-context contract; no JS/TS identity fallback exists.
 
 ### Tested compatibility boundary
 
@@ -109,12 +110,54 @@ Project resolution reads the portable `.engram-project` UUID or the real Git
 common-dir binding through the Go client. Initialize only an explicitly selected
 new project with `engram project init`; carry the marker into independent clones.
 Project-scoped hooks and tools use their current `ctx.workspaceDir` or a configured
-`project` UUID override. Missing or invalid project context returns a scoped error
-without registration/capability roundtrips or changes to the OpenClaw host.
+`project` UUID override. Missing or invalid project context returns a scoped error.
+Ambiguous existing-project recovery uses `engram_project_context` as described below;
+the adapter does not replace host configuration or infer another caller workspace.
 Explicit global Vault calls do not require project context. Channel `/migrate`
 uses the configured `workspaceDir` or the documented `~/.openclaw/workspace/`
 default. Before importing, it resolves that workspace through the Go client unless
 a valid `project` UUID override is configured.
+
+### Project context recovery
+
+When an operation is held by `PROJECT_MIGRATION_REQUIRED`, conflicting identity
+or a stale selection, use the ordinary registered `engram_project_context` tool:
+
+1. Call it with `action: "choices"`. This reads fresh authorized existing projects
+   without selecting one. Review each name, full `project_id`, available
+   `repository_qualifier` and opaque `selection_ref` as catalog data.
+2. Identify the intended existing project from the original task. If that remains
+   ambiguous, present the meaningful choices. Do not select first/latest, by name
+   alone or merely because one result exists; an empty list does not authorize
+   creation of a replacement project.
+3. Call `action: "select"` with that exact fresh `selection_ref` in the same caller
+   workspace/server. The native Go client rechecks authorization and owns the
+   caller-scoped binding. No marker/cache/data migration, permission change or
+   fabricated session is performed by the adapter. Refresh choices after a stale
+   or refused selection; do not reuse a previously visible catalog after denial.
+4. After confirmed selection, retry the original operation unchanged, including
+   its target and actual actor/session/client. Neither recovery action replays
+   the operation automatically. A lost selection response is an unknown outcome:
+   the binding may already have changed. Recovery also does not prove an earlier
+   issue/memory write failed; inspect unknown mutation outcomes before retrying.
+
+Both actions use only the actual tool `ctx.workspaceDir`, never terminal cwd,
+`config.workspaceDir`, another project or a caller-supplied path. Missing host
+workspace returns `PROJECT_CONTEXT_REQUIRED` before a child is launched. The
+installed native executable receives fixed argument arrays without a shell;
+configured URL/token are passed only in its child environment. The public tool
+accepts no root, project UUID, credential or session override. An explicit
+configured `project` override remains unchanged and continues to govern the
+operations that use it.
+
+Output contains only validated public choice/selection fields and static recovery
+guidance, with quoted prompt-safe values. Native output is bounded to 2 MiB and
+4096 choices; rendered choice output is also bounded to 2 MiB. Oversized, malformed
+or denied results do not expose a partial catalog, raw stderr, credentials or
+private caller paths. `PROJECT_IDENTITY_INVALID` and unknown refusals retain the
+preserve-first owner boundary: bounded regular-file inspection (4096 bytes maximum)
+and authorized repair, not a repeated check loop, shell/SQL workaround, symlink
+traversal, deletion or initialization of a replacement project.
 
 ### OpenClaw conversation access
 
@@ -203,8 +246,10 @@ Available to the agent during a session:
 | `engram_suppress` | Suppress a retained memory by ID; `action: "unsuppress"` restores a flagged memory |
 | `memory_forget` | Suppress by default; `permanent: true` archives without erasing the memory |
 | `memory_migrate` | Import local `MEMORY.md` / `memory/**/*.md` files into engram |
+| `engram_issues` | Create, list, read, comment, resolve, close or reopen cross-project issues |
+| `engram_project_context` | Read fresh authorized project choices and explicitly select an existing caller context |
 
-All explicit writers, file migration and file synchronization use the canonical
+All explicit memory writers, file migration and file synchronization use the canonical
 `POST /api/memories`. The retired observations import endpoint is not retried or
 used as a fallback. A successful result requires a returned memory ID and matching
 project/content. A distinct title is retained before the body in `content`; a title
@@ -219,7 +264,7 @@ from the configured bearer keycard and refuses a write without a principal.
 Host `agentId` is source attribution, not authentication. Use an agent-bound
 keycard for that agent; sharing one principal across agents shares its private
 memory. Workstation-private scope is not substituted for agent privacy.
-Writer tools preserve the host `sessionId` and fall back to its `sessionKey` when
+Memory writer tools preserve the host `sessionId` and fall back to its `sessionKey` when
 the ID is absent. These are source-session identifiers, not authentication; a
 project UUID is never substituted. Commands, CLI and the watcher have source
 labels but do not invent host session metadata.
@@ -282,6 +327,69 @@ does not invoke native project resolution or write progress. It can compare a
 checkpoint with a locally validated configured project UUID; without that UUID it
 shows candidates and marks checkpoint project attribution unverified, rather than
 treating any file as completed.
+
+#### Issue lifecycle and attribution
+
+`engram_issues` retains `create`, `list`, `get`, `update`, `comment` and `reopen`,
+and exposes `close` through the registered action schema. Use
+`update` with `status: "resolved"` for a reported solution awaiting verification;
+use `close` after checking completion, or `reopen` when verification fails.
+`acknowledged` and `reopened` remain active backlog. A status label or lifecycle
+entry alone does not prove historical verification. Authorized participants may
+resolve, close and reopen under backend policy; the adapter adds no authorization.
+
+Mutations resolve the canonical caller project and preserve the host `agentId`
+as agent attribution. They separately report `client: "openclaw"`. Creation sends
+the exact host `ctx.sessionId` as `created_by_session`; comments and lifecycle
+PATCH requests send it as `session_id`. When the host supplies no session ID,
+session attribution stays absent: no session key, project, installation or
+authentication fallback is used. Caller-supplied attribution cannot override the
+host context. Existing issue project routing is unchanged by these calls.
+These HTTP fields are reported provenance, not authentication or proof of session
+ownership. Close reports success only after the existing PATCH call succeeds;
+an unavailable server or failed response is not reported as successful closure.
+
+Optional `target_session` on `create` records an explicit recipient reference,
+separate from the creator's actual host session. Empty string or `null` means no
+recipient; omission never infers one. `update` can set/change that recipient, or
+clear it with `target_session: ""` or `target_session: null`; omission preserves
+the stored recipient. Recipient-only updates do not change status. If supplied,
+`status` remains restricted to `"resolved"`; an update without either status or
+recipient is invalid, including a comment-only update. Recipient edits, including
+mixed status/recipient updates, remain subject to backend creator/operator
+source-field authorization. Being named as recipient grants no permission and
+does not prove delivery or that a session is live.
+
+Explicit `list` selectors are independent: `source_session` matches only issue
+creation attribution, `target_session` matches the stored recipient, and
+`participant_session` matches creator OR authored-comment OR lifecycle-event
+attribution. Multiple supplied filters compose with AND before count/pagination.
+Session-only filters retain the canonical default project inbox; existing
+explicit project filters retain their scope. No selector defaults to the caller's
+session or establishes identity/ownership. Nonempty references may be UUIDs or
+opaque host conversation IDs, up to 256 UTF-8 bytes, without surrounding
+whitespace, control/formatting characters or a nil UUID. Empty, null or malformed
+explicit list selectors are rejected rather than broadening the read.
+List/detail output includes an available nonempty `target_session`; missing or
+empty recipient data is not invented from actor attribution.
+
+Detail output renders available `source_client`, `created_by_session` and
+`created_by_session_source`, plus comment `author_client`, `author_session` and
+`author_session_source`. Available `history_events` are rendered separately from
+authored comments, including status, actor, session, provenance source, client and
+timestamp. All values use the existing escaped, quoted prompt-safe formatter.
+Older responses without these optional fields or history remain readable;
+missing provenance is not invented.
+
+`get` accepts `history_limit` (integer 1..100, default 50) and `history_after_id`
+(exclusive nonnegative event-ID cursor, default 0). Cursors must be exactly
+representable JavaScript safe integers. The client requests one page only;
+comments are unchanged. When the server reports `history_has_more: true` and a
+valid advancing `history_next_after_id`, output includes the exact next
+`engram_issues` get call with that cursor and the same page size. Only an explicit
+consumer call fetches another page. A missing/invalid cursor reports continuation
+unavailable; an older response without pagination metadata reports unknown
+completeness, never an invented terminal page.
 
 ### Slash commands
 

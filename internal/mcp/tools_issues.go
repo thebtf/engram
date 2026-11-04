@@ -19,13 +19,14 @@ import (
 // validateIssueActionParams() with clear error messages showing the full signature.
 func issuesToolSchema() map[string]any {
 	return map[string]any{
-		"type":     "object",
-		"required": []string{"action"},
+		"type":                    "object",
+		"required":                []string{"action"},
+		"x-engram-caller-context": "issues/v1",
 		"properties": map[string]any{
 			"action": map[string]any{
 				"type":        "string",
 				"enum":        []string{"create", "list", "get", "update", "comment", "reopen", "close"},
-				"description": "Action to perform. list/get are project-free authorized reads and remain available during a project migration hold. Mutations require the native caller's canonical identity; changing a project argument cannot establish it. PROJECT_MIGRATION_REQUIRED: " + projectidentity.RecoveryGuidance("PROJECT_MIGRATION_REQUIRED"),
+				"description": "Action to perform. Authenticated read-write participants may resolve, close, or reopen resolved/closed issues; resolved awaits verification and closed records the actor's checked-completion claim, not independently verified evidence. list/get are project-free authorized reads and remain available during a project migration hold. Mutations require the native caller's canonical identity; changing a project argument cannot establish it. PROJECT_MIGRATION_REQUIRED: " + projectidentity.RecoveryGuidance("PROJECT_MIGRATION_REQUIRED"),
 			},
 			"project": map[string]any{
 				"type":        "string",
@@ -39,6 +40,26 @@ func issuesToolSchema() map[string]any {
 				"type":        "string",
 				"description": "REQUIRED_FOR: create. Which project the issue is FOR (where it will be injected at session start).",
 			},
+			"target_session": map[string]any{
+				"type":        []string{"string", "null"},
+				"description": "OPTIONAL_FOR: create|update|list. Explicit recipient session reference, not an assignee, permission or liveness claim. Create defaults unknown. Update omission preserves; empty/null clears and requires creator/operator field authority. List exact-matches stored recipient and composes with other filters.",
+			},
+			"source_session": map[string]any{
+				"type":        "string",
+				"description": "OPTIONAL_FOR: list. Exact creator session filter on created_by_session only; not comments or lifecycle authors. Read selection only; no implicit project or session default.",
+			},
+			"participant_session": map[string]any{
+				"type":        "string",
+				"description": "OPTIONAL_FOR: list. Exact full session ID matching the creator OR a comment author OR a lifecycle-event author. ANDed with project, source_session, target_session and other filters before count/pagination. Never permission, identity, ownership or liveness.",
+			},
+			"history_limit": map[string]any{
+				"type": "integer", "minimum": 1, "maximum": gormdb.IssueHistoryMaxLimit,
+				"description": "OPTIONAL_FOR: get. Lifecycle event page size, default 50, maximum 100. Readback includes history_has_more and history_next_after_id; comments are separate.",
+			},
+			"history_after_id": map[string]any{
+				"type": "integer", "minimum": 0,
+				"description": "OPTIONAL_FOR: get. Exclusive event ID cursor, default 0. Continue with history_next_after_id when history_has_more=true. Each page reuses issue read authorization; no stable snapshot is implied.",
+			},
 			"id": map[string]any{
 				"type":        "integer",
 				"description": "REQUIRED_FOR: get|update|comment|reopen|close. Issue ID returned by create or list.",
@@ -49,8 +70,7 @@ func issuesToolSchema() map[string]any {
 			},
 			"status": map[string]any{
 				"type":        "string",
-				"enum":        []string{"resolved"},
-				"description": "REQUIRED_FOR: update. Only 'resolved' is allowed. Use close/reopen actions for other transitions.",
+				"description": "For list: comma-separated statuses such as open,acknowledged,reopened,resolved,closed,rejected; empty selects all. For update: only resolved is allowed, and status may be omitted only when target_session is supplied. Use close/reopen for other transitions.",
 			},
 			"priority": map[string]any{
 				"type":        "string",
@@ -77,9 +97,21 @@ func issuesToolSchema() map[string]any {
 				"type":        "string",
 				"description": "OPTIONAL_FOR: list. Exact actor label filter, independent of source_project.",
 			},
+			"agent_source": map[string]any{
+				"type":        "string",
+				"description": "OPTIONAL_FOR: create|update|comment|reopen|close. Actual author agent label when known. Omitted stays unknown; separate from client and session.",
+			},
+			"session_id": map[string]any{
+				"type":        "string",
+				"description": "OPTIONAL_FOR: create|update|comment|reopen|close. Caller-reported host conversation ID, including UUIDs or opaque IDs (maximum 256 UTF-8 bytes, no controls or surrounding whitespace). Safe request-transport attribution takes precedence. Nil UUID/unsafe values stay unknown without failing the write. Provenance only; never project, lane, keycard, browser/auth session or connection tag.",
+			},
+			"client": map[string]any{
+				"type":        "string",
+				"description": "OPTIONAL_FOR: create|update|comment|reopen|close. Actual public per-call client label, independent of agent_source. Stored labels: omp, openclaw, claude-code, codex, cursor, gemini-cli, human. Missing/unrecognized labels stay unknown without failing the write; never copied from auth context.",
+			},
 			"comment": map[string]any{
 				"type":        "string",
-				"description": "OPTIONAL_FOR: update|reopen. Add a comment when changing status.",
+				"description": "OPTIONAL_FOR: update|reopen|close. User-authored comment when changing status. Lifecycle actor history is recorded even without a comment.",
 			},
 			"resolved_since": map[string]any{
 				"type":        "integer",
@@ -100,9 +132,9 @@ var actionRequirements = map[string]struct {
 	full     string
 }{
 	"create":  {required: []string{"title", "target_project"}, full: "action, title, target_project"},
-	"list":    {required: []string{}, full: "action  [optional: project, source_project, source_agent, status, resolved_since, limit]"},
-	"get":     {required: []string{"id"}, full: "action, id"},
-	"update":  {required: []string{"id", "status"}, full: "action, id, status=resolved"},
+	"list":    {required: []string{}, full: "action  [optional: project, source_project, source_agent, source_session, target_session, participant_session, status, resolved_since, limit]"},
+	"get":     {required: []string{"id"}, full: "action, id  [optional: history_limit, history_after_id]"},
+	"update":  {required: []string{"id"}, full: "action, id, status=resolved OR target_session"},
 	"comment": {required: []string{"id", "body"}, full: "action, id, body"},
 	"reopen":  {required: []string{"id"}, full: "action, id"},
 	"close":   {required: []string{"id"}, full: "action, id"},
@@ -145,6 +177,17 @@ func validateIssueActionParams(action string, m map[string]any) error {
 		}
 	}
 
+	if action == "update" {
+		if _, targetPresent := m["target_session"]; !targetPresent {
+			status, present, err := optionalStringArg(m, "status")
+			if err != nil {
+				return fmt.Errorf("issues %q: %w", action, err)
+			}
+			if !present || status == "" {
+				missing = append(missing, `status="resolved" or target_session`)
+			}
+		}
+	}
 	if len(missing) > 0 {
 		return fmt.Errorf(
 			"issues %q: missing required param(s): %s.\nFull signature: issues(%s)",
@@ -229,17 +272,6 @@ func (s *Server) authorizeIssueProgression(ctx context.Context) (bool, error) {
 	return isOperator, nil
 }
 
-func (s *Server) authorizeIssueSourceMutation(ctx context.Context, id int64) (bool, error) {
-	keycardID, isOperator, err := issueMutationActor(ctx)
-	if err != nil {
-		return false, err
-	}
-	if err := s.issueStore.AuthorizeIssueSourceMutation(ctx, id, keycardID, isOperator); err != nil {
-		return false, err
-	}
-	return isOperator, nil
-}
-
 func (s *Server) handleIssueCreate(ctx context.Context, m map[string]any) (string, error) {
 	title, present, err := optionalStringArg(m, "title")
 	if err != nil {
@@ -274,12 +306,13 @@ func (s *Server) handleIssueCreate(ctx context.Context, m map[string]any) (strin
 	if err != nil {
 		return "", err
 	}
-	sourceAgent, present, err := optionalStringArg(m, "agent_source")
+	sourceAgent, _, err := optionalStringArg(m, "agent_source")
 	if err != nil {
 		return "", err
 	}
-	if !present {
-		sourceAgent = "claude-code"
+	attribution, err := issueCallAttribution(ctx, m)
+	if err != nil {
+		return "", err
 	}
 	if targetProject != "" {
 		targetProject, err = s.issueStore.ResolveProject(ctx, targetProject)
@@ -305,16 +338,24 @@ func (s *Server) handleIssueCreate(ctx context.Context, m map[string]any) (strin
 		return "", fmt.Errorf("target_project is required (or set project for current project)")
 	}
 
+	targetSession, err := issueTargetSessionArg(m)
+	if err != nil {
+		return "", err
+	}
 	issue := &gormdb.Issue{
-		Title:            title,
-		Body:             body,
-		Priority:         priority,
-		Type:             issueType,
-		SourceProject:    sourceProject,
-		TargetProject:    targetProject,
-		SourceAgent:      sourceAgent,
-		CreatorKeycardID: keycardID,
-		Labels:           labels,
+		Title:                  title,
+		Body:                   body,
+		Priority:               priority,
+		Type:                   issueType,
+		SourceProject:          sourceProject,
+		TargetProject:          targetProject,
+		SourceAgent:            sourceAgent,
+		CreatedBySession:       attribution.SessionID,
+		CreatedBySessionSource: attribution.SessionSource,
+		SourceClient:           attribution.Client,
+		TargetSession:          issueTargetSessionValue(targetSession),
+		CreatorKeycardID:       keycardID,
+		Labels:                 labels,
 	}
 
 	id, err := s.issueStore.CreateIssue(ctx, issue)
@@ -329,6 +370,18 @@ func (s *Server) handleIssueList(ctx context.Context, m map[string]any) (string,
 	project := coerceString(m["project"], "")
 	sourceProject := coerceString(m["source_project"], "")
 	sourceAgent, _, err := optionalStringArg(m, "source_agent")
+	if err != nil {
+		return "", err
+	}
+	sourceSession, err := issueSessionSelectorArg(m, "source_session")
+	if err != nil {
+		return "", err
+	}
+	targetSession, err := issueSessionSelectorArg(m, "target_session")
+	if err != nil {
+		return "", err
+	}
+	participantSession, err := issueSessionSelectorArg(m, "participant_session")
 	if err != nil {
 		return "", err
 	}
@@ -350,11 +403,14 @@ func (s *Server) handleIssueList(ctx context.Context, m map[string]any) (string,
 	}
 
 	params := gormdb.IssueListParams{
-		TargetProject: project,
-		SourceProject: sourceProject,
-		SourceAgent:   sourceAgent,
-		Statuses:      statuses,
-		Limit:         limit,
+		TargetProject:      project,
+		SourceProject:      sourceProject,
+		SourceAgent:        sourceAgent,
+		SourceSession:      sourceSession,
+		TargetSession:      targetSession,
+		ParticipantSession: participantSession,
+		Statuses:           statuses,
+		Limit:              limit,
 	}
 	if resolvedSinceMs > 0 {
 		t := time.UnixMilli(resolvedSinceMs)
@@ -382,9 +438,9 @@ func (s *Server) handleIssueList(ctx context.Context, m map[string]any) (string,
 		if issue.CommentCount > 0 {
 			comments = fmt.Sprintf(" · %d comments", issue.CommentCount)
 		}
-		sb.WriteString(fmt.Sprintf("#%d [%s] [%s] %s\n  %s → %s%s\n\n",
+		sb.WriteString(fmt.Sprintf("#%d [%s] [%s] %s\n  %s → %s%s\n  source_session=%q target_session=%q (reported references only)\n\n",
 			issue.ID, strings.ToUpper(issue.Priority), status,
-			issue.Title, issue.SourceProject, issue.TargetProject, comments))
+			issue.Title, issue.SourceProject, issue.TargetProject, comments, issue.CreatedBySession, issue.TargetSession))
 	}
 
 	return sb.String(), nil
@@ -420,6 +476,10 @@ func (s *Server) handleIssueGet(ctx context.Context, m map[string]any) (string, 
 		return "", fmt.Errorf("id is required for issues get")
 	}
 
+	historyLimit, historyAfterID, err := parseIssueHistoryParams(m)
+	if err != nil {
+		return "", err
+	}
 	issue, comments, err := s.issueStore.GetIssue(ctx, id)
 	if err != nil {
 		return "", err
@@ -430,6 +490,13 @@ func (s *Server) handleIssueGet(ctx context.Context, m map[string]any) (string, 
 	sb.WriteString(fmt.Sprintf("Status: %s | Priority: %s\n", issue.Status, issue.Priority))
 	sb.WriteString(fmt.Sprintf("From: %s → %s\n", issue.SourceProject, issue.TargetProject))
 	sb.WriteString(fmt.Sprintf("Created: %s\n\n", issue.CreatedAt.Format("2006-01-02 15:04")))
+	if issue.CreatedBySession != "" || issue.SourceClient != "" || issue.SourceAgent != "" {
+		sb.WriteString(fmt.Sprintf("Creator: agent=%q client=%q host_session=%q session_source=%q (provenance only)\n\n",
+			issue.SourceAgent, issue.SourceClient, issue.CreatedBySession, issue.CreatedBySessionSource))
+	}
+	if issue.TargetSession != "" {
+		sb.WriteString(fmt.Sprintf("Recipient session: %q (reported reference only; no authority or liveness)\n\n", issue.TargetSession))
+	}
 
 	if issue.Body != "" {
 		sb.WriteString(issue.Body)
@@ -439,11 +506,29 @@ func (s *Server) handleIssueGet(ctx context.Context, m map[string]any) (string, 
 	if len(comments) > 0 {
 		sb.WriteString(fmt.Sprintf("--- Comments (%d) ---\n\n", len(comments)))
 		for _, c := range comments {
-			sb.WriteString(fmt.Sprintf("[%s] %s (%s):\n%s\n\n",
-				c.CreatedAt.Format("2006-01-02 15:04"), c.AuthorProject, c.AuthorAgent, c.Body))
+			sb.WriteString(fmt.Sprintf("[%s] %s (%s), client=%q host_session=%q session_source=%q (provenance only):\n%s\n\n",
+				c.CreatedAt.Format("2006-01-02 15:04"), c.AuthorProject, c.AuthorAgent, c.AuthorClient, c.AuthorSession, c.AuthorSessionSource, c.Body))
 		}
 	}
 
+	page, err := s.issueStore.GetIssueHistoryPage(ctx, id, historyLimit, historyAfterID)
+	if err != nil {
+		return "", err
+	}
+	if len(page.Events) > 0 {
+		sb.WriteString("--- Lifecycle history (actor claims, not independent verification) ---\n\n")
+		for _, event := range page.Events {
+			sb.WriteString(fmt.Sprintf("[%s] event_id=%d status=%s author_project=%q agent=%q client=%q host_session=%q session_source=%q (provenance only)\n",
+				event.CreatedAt.Format("2006-01-02 15:04"), event.ID, event.Status, event.AuthorProject, event.AuthorAgent, event.Client, event.SessionID, event.SessionSource))
+		}
+	}
+	sb.WriteString(fmt.Sprintf("history_limit: %d\nhistory_has_more: %t\n", historyLimit, page.HasMore))
+	if page.NextAfterID == nil {
+		sb.WriteString("history_next_after_id: null\n")
+	} else {
+		sb.WriteString(fmt.Sprintf("history_next_after_id: %d\n", *page.NextAfterID))
+		sb.WriteString(fmt.Sprintf("Continue: issues(action=\"get\", id=%d, history_limit=%d, history_after_id=%d)\n", id, historyLimit, *page.NextAfterID))
+	}
 	return sb.String(), nil
 }
 
@@ -456,21 +541,38 @@ func (s *Server) handleIssueUpdate(ctx context.Context, m map[string]any) (strin
 	if err != nil {
 		return "", err
 	}
-	if !present || status == "" {
-		return "", fmt.Errorf("status is required for issues update")
+	if present && status != "resolved" {
+		return "", fmt.Errorf("status can only be set to 'resolved' via update (use close/reopen actions for other transitions)")
+	}
+	targetSession, err := issueTargetSessionArg(m)
+	if err != nil {
+		return "", err
+	}
+	if !present && targetSession == nil {
+		return "", fmt.Errorf("status=resolved or target_session is required for issues update")
 	}
 	comment, _, err := optionalStringArg(m, "comment")
 	if err != nil {
 		return "", err
 	}
-	sourceAgent, present, err := optionalStringArg(m, "agent_source")
+	sourceAgent, _, err := optionalStringArg(m, "agent_source")
 	if err != nil {
 		return "", err
 	}
-	if !present {
-		sourceAgent = "claude-code"
+	attribution, err := issueCallAttribution(ctx, m)
+	if err != nil {
+		return "", err
 	}
-	if _, err := s.authorizeIssueProgression(ctx); err != nil {
+	keycardID, isOperator, err := issueMutationActor(ctx)
+	if err != nil {
+		return "", err
+	}
+	if targetSession != nil {
+		err = s.issueStore.AuthorizeIssueSourceMutation(ctx, id, keycardID, isOperator)
+	} else {
+		err = s.issueStore.AuthorizeIssueProgressionMutation(ctx, keycardID, isOperator)
+	}
+	if err != nil {
 		return "", err
 	}
 	sourceProject, err := s.issueSourceProject(ctx)
@@ -478,14 +580,17 @@ func (s *Server) handleIssueUpdate(ctx context.Context, m map[string]any) (strin
 		return "", err
 	}
 
-	if status != "resolved" {
-		return "", fmt.Errorf("status can only be set to 'resolved' via update (use reopen action to reopen)")
-	}
-	if err := s.issueStore.UpdateIssueStatusWithComment(ctx, id, status, comment, sourceProject, sourceAgent); err != nil {
+	if err := s.issueStore.UpdateIssueAtomically(ctx, id, gormdb.IssueUpdate{
+		Status: status, Comment: comment, AuthorProject: sourceProject, AuthorAgent: sourceAgent,
+		Attribution: attribution, TargetSession: targetSession,
+	}, isOperator); err != nil {
 		return "", err
 	}
 
-	return fmt.Sprintf("Issue #%d resolved.", id), nil
+	if status == "resolved" {
+		return fmt.Sprintf("Issue #%d resolved.", id), nil
+	}
+	return fmt.Sprintf("Issue #%d recipient session updated.", id), nil
 }
 
 func (s *Server) handleIssueComment(ctx context.Context, m map[string]any) (string, error) {
@@ -500,12 +605,13 @@ func (s *Server) handleIssueComment(ctx context.Context, m map[string]any) (stri
 	if !present || body == "" {
 		return "", fmt.Errorf("body is required for issues comment")
 	}
-	sourceAgent, present, err := optionalStringArg(m, "agent_source")
+	sourceAgent, _, err := optionalStringArg(m, "agent_source")
 	if err != nil {
 		return "", err
 	}
-	if !present {
-		sourceAgent = "claude-code"
+	attribution, err := issueCallAttribution(ctx, m)
+	if err != nil {
+		return "", err
 	}
 	if _, err := s.authorizeIssueProgression(ctx); err != nil {
 		return "", err
@@ -516,9 +622,12 @@ func (s *Server) handleIssueComment(ctx context.Context, m map[string]any) (stri
 	}
 
 	commentID, err := s.issueStore.AddComment(ctx, id, &gormdb.IssueComment{
-		AuthorProject: sourceProject,
-		AuthorAgent:   sourceAgent,
-		Body:          body,
+		AuthorProject:       sourceProject,
+		AuthorAgent:         sourceAgent,
+		AuthorSession:       attribution.SessionID,
+		AuthorSessionSource: attribution.SessionSource,
+		AuthorClient:        attribution.Client,
+		Body:                body,
 	})
 	if err != nil {
 		return "", err
@@ -536,14 +645,15 @@ func (s *Server) handleIssueReopen(ctx context.Context, m map[string]any) (strin
 	if err != nil {
 		return "", err
 	}
-	sourceAgent, present, err := optionalStringArg(m, "agent_source")
+	sourceAgent, _, err := optionalStringArg(m, "agent_source")
 	if err != nil {
 		return "", err
 	}
-	if !present {
-		sourceAgent = "claude-code"
+	attribution, err := issueCallAttribution(ctx, m)
+	if err != nil {
+		return "", err
 	}
-	if _, err := s.authorizeIssueSourceMutation(ctx, id); err != nil {
+	if _, err := s.authorizeIssueProgression(ctx); err != nil {
 		return "", err
 	}
 	sourceProject, err := s.issueSourceProject(ctx)
@@ -551,7 +661,9 @@ func (s *Server) handleIssueReopen(ctx context.Context, m map[string]any) (strin
 		return "", err
 	}
 
-	if err := s.issueStore.ReopenIssue(ctx, id, comment, sourceProject, sourceAgent); err != nil {
+	if err := s.issueStore.UpdateIssueAtomically(ctx, id, gormdb.IssueUpdate{
+		Status: "reopened", Comment: comment, AuthorProject: sourceProject, AuthorAgent: sourceAgent, Attribution: attribution,
+	}, false); err != nil {
 		return "", err
 	}
 
@@ -564,14 +676,101 @@ func (s *Server) handleIssueClose(ctx context.Context, m map[string]any) (string
 		return "", fmt.Errorf("id is required for issues close")
 	}
 
-	isOperator, err := s.authorizeIssueSourceMutation(ctx, id)
+	isOperator, err := s.authorizeIssueProgression(ctx)
 	if err != nil {
 		return "", err
 	}
-
-	if err := s.issueStore.CloseIssue(ctx, id, isOperator); err != nil {
+	sourceProject, err := s.issueSourceProject(ctx)
+	if err != nil {
+		return "", err
+	}
+	sourceAgent, _, err := optionalStringArg(m, "agent_source")
+	if err != nil {
+		return "", err
+	}
+	comment, _, err := optionalStringArg(m, "comment")
+	if err != nil {
+		return "", err
+	}
+	attribution, err := issueCallAttribution(ctx, m)
+	if err != nil {
+		return "", err
+	}
+	if err := s.issueStore.UpdateIssueAtomically(ctx, id, gormdb.IssueUpdate{
+		Status: "closed", Comment: comment, AuthorProject: sourceProject, AuthorAgent: sourceAgent, Attribution: attribution,
+	}, isOperator); err != nil {
 		return "", err
 	}
 
 	return fmt.Sprintf("Issue #%d closed. The issue will no longer appear in any session injection.", id), nil
+}
+
+func issueCallAttribution(ctx context.Context, args map[string]any) (gormdb.IssueAttribution, error) {
+	var session, client string
+	var err error
+	if args["session_id"] != nil {
+		session, _, err = optionalStringArg(args, "session_id")
+		if err != nil {
+			return gormdb.IssueAttribution{}, err
+		}
+	}
+	if args["client"] != nil {
+		client, _, err = optionalStringArg(args, "client")
+		if err != nil {
+			return gormdb.IssueAttribution{}, err
+		}
+	}
+	return gormdb.NewIssueAttribution(sessionFromContext(ctx), session, client)
+}
+
+func issueTargetSessionArg(args map[string]any) (*string, error) {
+	raw, present := args["target_session"]
+	if !present {
+		return nil, nil
+	}
+	value := ""
+	if raw != nil {
+		var ok bool
+		value, ok = raw.(string)
+		if !ok {
+			return nil, fmt.Errorf("target_session must be a string or null")
+		}
+	}
+	if err := gormdb.ValidateIssueSessionSelector(value); err != nil {
+		return nil, err
+	}
+	return &value, nil
+}
+
+func issueTargetSessionValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func issueSessionSelectorArg(args map[string]any, key string) (string, error) {
+	value, present, err := optionalStringArg(args, key)
+	if err != nil {
+		return "", err
+	}
+	if present && (value == "" || gormdb.ValidateIssueSessionSelector(value) != nil) {
+		return "", fmt.Errorf("%s must be a nonempty bounded session identifier", key)
+	}
+	return value, nil
+}
+
+func parseIssueHistoryParams(args map[string]any) (int, int64, error) {
+	limit, present, err := optionalInt64Arg(args, "history_limit")
+	if !present {
+		limit = gormdb.IssueHistoryDefaultLimit
+	}
+	if err != nil || limit < 1 || limit > gormdb.IssueHistoryMaxLimit {
+		return 0, 0, fmt.Errorf("history_limit must be an integer between 1 and %d", gormdb.IssueHistoryMaxLimit)
+	}
+	after, _, err := optionalInt64Arg(args, "history_after_id")
+	if err != nil || after < 0 {
+		return 0, 0, fmt.Errorf("history_after_id must be a nonnegative integer")
+	}
+	return int(limit), after, nil
 }

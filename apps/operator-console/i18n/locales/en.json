@@ -1466,7 +1466,8 @@
     "stats": {
       "open": "open on this page",
       "work": "in progress · reopened on this page",
-      "done": "closed · resolved on this page",
+      "resolved": "needs verification on this page",
+      "closed": "closed on this page",
       "total": "matching issues"
     },
     "create": {
@@ -1537,6 +1538,7 @@
       "all": "All",
       "open": "Open",
       "work": "In progress",
+      "resolved": "Needs verification",
       "closed": "Closed",
       "rejected": "Rejected"
     },
@@ -1564,7 +1566,7 @@
       "created": "Issue #{id} created",
       "saved": "Issue saved",
       "acknowledged": "Issue acknowledged",
-      "resolved": "Issue marked resolved",
+      "resolved": "Issue marked resolved · awaiting verification",
       "rejected": "Issue rejected",
       "deleted": "Issue #{id} deleted",
       "commented": "Comment added",
@@ -1598,7 +1600,7 @@
       "resolveComment": "operator-console: issue marked resolved",
       "save": "Save",
       "acknowledge": "Acknowledge",
-      "resolve": "Close",
+      "resolve": "Mark resolved",
       "reject": "Reject",
       "actions": "Actions",
       "copyLink": "Copy link",
@@ -1691,7 +1693,7 @@
       "open": "open",
       "acknowledged": "in progress",
       "reopened": "reopened",
-      "resolved": "resolved",
+      "resolved": "resolved · needs verification",
       "closed": "closed",
       "rejected": "rejected"
     },
