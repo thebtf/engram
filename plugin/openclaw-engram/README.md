@@ -141,6 +141,11 @@ or a stale selection, use the ordinary registered `engram_project_context` tool:
    the binding may already have changed. Recovery also does not prove an earlier
    issue/memory write failed; inspect unknown mutation outcomes before retrying.
 
+For an existing selected caller binding, a changed marker digest is accepted only
+when the valid pinned canonical ID and caller scope still match. The client
+rechecks the fresh authorized catalog, rejects a different ID or a race, and does
+not rewrite the marker or binding during revalidation.
+
 Both actions use only the actual tool `ctx.workspaceDir`, never terminal cwd,
 `config.workspaceDir`, another project or a caller-supplied path. Missing host
 workspace returns `PROJECT_CONTEXT_REQUIRED` before a child is launched. The
@@ -149,6 +154,10 @@ configured URL/token are passed only in its child environment. The public tool
 accepts no root, project UUID, credential or session override. An explicit
 configured `project` override remains unchanged and continues to govern the
 operations that use it.
+
+The actual `ctx.workspaceDir` is passed as the project root, not as the child
+executable lookup cwd. Relative `PATH` entries can therefore depend on the
+inherited parent cwd; use an absolute `ENGRAM_EXECUTABLE` when appropriate.
 
 Output contains only validated public choice/selection fields and static recovery
 guidance, with quoted prompt-safe values. Native output is bounded to 2 MiB and
