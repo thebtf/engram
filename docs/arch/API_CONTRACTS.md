@@ -4,11 +4,15 @@ This is the canonical reference for an agent replacing the UI or implementing an
 Engram client. It describes implemented **v7** behavior, including uneven legacy
 wire formats; it does not specify an API redesign.
 
-**Source boundary:** released source `8edd95ccb7cdd12049f92c6beaa8981a25335190`,
-tree `f7471d2809a46ab0060da00adc793f2cf332cdee`. Documentation and Swagger
-annotations added here do not change that behavior or prove an installed runtime.
-The successor recovery/session/issue patch is a separate integration input; see
-[Successor reconciliation](#successor-reconciliation).
+**Source boundary:** the measured released-v7.0.19 baseline is
+`8edd95ccb7cdd12049f92c6beaa8981a25335190`, tree
+`f7471d2809a46ab0060da00adc793f2cf332cdee`. Current recovery and issue contracts
+below are reconciled against corrective source
+`3ad28a61256feb7012844aacc13197ff673b0c9d`, composed with the accepted baseline
+documentation at integration input `4cc8ccbc2eac3a777e9487ed739e468f0790bf87`.
+These are source boundaries, not installed versions or runtime-delivery proof.
+The measured coverage below remains the released baseline, not a final-candidate
+census. See [Current-source reconciliation](#current-source-reconciliation).
 
 ## Authority and coverage
 
@@ -58,12 +62,14 @@ model-health and document-reader annotations, and corrects both session paths.
 Unannotated families remain explicitly linked to their maintained DTO/handler
 owners below; a generic `object` response is not a complete schema.
 
-After regeneration for this documentation slice: **91** operations, **80** paths,
-**75** definitions; all **91** operations match the released router. Matching
+For the released baseline after its documentation/annotation regeneration:
+**91** operations, **80** paths, **75** definitions; all **91** operations match
+the released router. Swagger covers **91 of 199** machine operations. Matching
 frontend Swagger coverage is **53 of 110** operations, up from 42. The remaining
 57 comprise 56 registered operations documented through the family contracts and
 exact maintained owners here, plus the one explicitly unsupported web request.
-This is not a claim that Swagger alone now covers the complete API.
+These are preserved released-source measurements, not a current-candidate
+coverage census or a claim that Swagger covers the complete API.
 
 ### Swagger production and limitations
 
@@ -443,20 +449,23 @@ GET /api/documents/read?project=11111111-1111-4111-8111-111111111111&path=notes%
 The digest is SHA-256 of the exact synthetic content bytes. Actual IDs, timestamp,
 versions and hashes come from the store; a requested example path need not exist.
 
-## Issues (10 frontend-consumed operations; released baseline)
+## Issues (10 frontend-consumed operations at the released baseline)
 
 Owners: [HTTP DTOs/handlers](../../internal/worker/handlers_issues.go),
-[issue_store.go](../../internal/db/gorm/issue_store.go) and
-[canonical issue readers](../../internal/db/gorm/issue_project_readers.go).
-An issue's source/target project membership, historical origin, creator keycard,
-actor label and session attribution are different facts.
+[request metadata validation](../../internal/worker/issue_request_metadata.go),
+[issue_store.go](../../internal/db/gorm/issue_store.go),
+[attribution and lifecycle history](../../internal/db/gorm/issue_attribution.go)
+and [canonical issue readers](../../internal/db/gorm/issue_project_readers.go).
+The table describes current source. Source/target project membership, historical
+origin, creator keycard, actor label, client, host session and recipient session
+are separate facts; none of the attribution fields grants authorization.
 
-| Operation | Released request and response |
+| Operation | Current-source request and response |
 | --- | --- |
-| `GET /api/issues` | Optional canonical target `project`, canonical `source_project`, exact `source_agent`, CSV `status`, normalized `type`, epoch-ms `resolved_since`, `limit` default 50, `offset` default 0. Invalid/nonpositive limit and invalid/negative offset fall back; invalid resolved_since is ignored. No maximum is imposed by this handler/store path. `{issues:[issueListReadItem],total,project_names}`. Filters precede count/page; order is critical→high→medium→low, then `created_at DESC, id DESC`. |
-| `GET /api/issues/{id}` | Native issue ID; optional single canonical `project` narrows membership. `{issue,comments,comment_count,source_project_display_name,target_project_display_name}`. In this released source comments are read in full, `created_at ASC`; no bounded history/cursor contract is present. Hidden/wrong membership is 404. |
-| `POST /api/issues` | Required nonempty title; body, priority, type, source_project, target_project, source_agent, **created_by_session**, labels. Target defaults to source when omitted; target must then be nonempty. Store defaults: status `open`, priority `medium`, type `task`. 201 `{id,message:"issue created"}`. Creator keycard comes from verified context, not JSON. |
-| `PATCH /api/issues/{id}` | `status`, `comment`, source_project/source_agent, title/body/priority/type/labels. 200 `{message:"issue updated"}`; atomic fields/lifecycle/comment transaction. Empty scalar fields generally mean no change; it is not JSON Merge Patch and cannot be assumed to clear every field. Target-project rerouting is not in this DTO. |
+| `GET /api/issues` | Optional canonical target `project`, canonical `source_project`, exact `source_agent`, `source_session`, `target_session`, `participant_session`, CSV `status`, normalized `type`, epoch-ms `resolved_since`, `limit` default 50, `offset` default 0. Invalid/nonpositive limit and invalid/negative offset fall back; invalid resolved_since is ignored. No maximum is imposed by this handler/store list path. `{issues:[issueListReadItem],total,project_names}`. Filters precede count/page; order is critical→high→medium→low, then `created_at DESC, id DESC`. Session-filter validation is stricter; see below. |
+| `GET /api/issues/{id}` | Native issue ID; optional single canonical `project` narrows membership. Adds `history_events`, `history_limit`, `history_has_more`, `history_next_after_id` to `{issue,comments,comment_count,source_project_display_name,target_project_display_name}`. Lifecycle history is bounded separately from comments, which remain a full `created_at ASC` read. Hidden/wrong membership is 404. |
+| `POST /api/issues` | Required nonempty title; body, priority, type, source_project, target_project, source_agent, **created_by_session**, client, target_session, labels. Target defaults to source when omitted; target must then be nonempty. Store defaults: status `open`, priority `medium`, type `task`; omitted recipient is unknown. 201 `{id,message:"issue created"}`. Creator keycard comes from verified context, not JSON. `created_by_session` already existed at the released baseline. |
+| `PATCH /api/issues/{id}` | `status`, `comment`, source_project/source_agent, session_id, client, target_session, title/body/priority/type/labels. 200 `{message:"issue updated"}`; atomic fields/lifecycle history/optional-comment transaction. Empty scalar fields generally mean no change; this is not JSON Merge Patch. Recipient omission preserves; empty string or null clears. Recipient-only updates do not resolve the issue. Field edits, including a mixed field/status PATCH, require creator/operator authority. Target-project rerouting is not in this DTO. |
 | `DELETE /api/issues/{id}` | Exact acting `source_project=<canonical UUID>&source_agent=human` for human-console attribution, no body. Creator/operator authorization remains; success is **204**, not JSON. |
 | `POST /api/issues/acknowledge` | `issueAcknowledgeRequest`: positive `ids`, acting source_project/source_agent; `{acknowledged:number}`. Not a lifecycle-close operation. |
 | `POST /api/issues/selection` | `issueSelectionSnapshotRequest`: selection plus acting source_project/source_agent. Returns `{selection:issueSelectionSnapshot}`. |
@@ -464,15 +473,31 @@ actor label and session attribution are different facts.
 | `POST /api/issues/selection/page` | Acting source fields plus filter or issued cursor, limit; returns `{filter_fingerprint,cursor,targets,next_cursor,total}`. |
 | `POST /api/issues/operations` | `issueSelectionOperationRequest`: request_id, action, selection_version/kind/token and action-specific status/priority/labels, acting source fields. Returns request_id, operation_state, item_results and authoritative readback where supplied; it is not the direct PATCH envelope. |
 
-Ordinary read-write collaborators may comment and advance `resolved`; source
-field edits, `reopened` and `closed` require the creator keycard or operator.
-Human admin operations additionally require explicit canonical acting project
-and `source_agent=human`; changing those labels does not change the verified
-actor. Source ownership is not obtained by knowing an issue ID or matching a
-project name. The store's lifecycle transition matrix is authoritative: rejected
-requires a reason/comment; closed/reopened and operator-only transitions are not
-arbitrary status replacement. Failed authorization and transaction rollback must
-not be presented as a successful state change.
+Authenticated read-write participants, including creators and other participants,
+may comment, mark `resolved`, close or reopen under the existing transition
+checks. Readonly and unauthenticated callers remain denied. Unrelated field edits
+(including `target_session`) and deletion retain creator-keycard/operator
+authority; matching a project or session label does not grant it. Human admin
+operations additionally require explicit canonical acting project and
+`source_agent=human`; those labels do not replace the verified actor.
+
+`resolved` means a reported solution awaits verification. `closed` records an
+actor's checked-completion claim, not independent evidence that checks happened.
+Check the relevant behavior before closing; if unavailable, comment with what
+remains unverified. A current or historical status label alone proves no prior
+verification. Existing closed rows do not acquire invented verification events.
+`acknowledged` remains accepted backlog, not done.
+
+For non-operators, close accepts `resolved` or `reopened`; reopen accepts
+`resolved` or `closed`. Operator close retains its wider existing transition
+authority, but an already-closed issue cannot be closed again. The HTTP update
+path keeps `open`, `acknowledged` and `rejected` operator-only; rejection also
+requires a comment. Native MCP `update` accepts only `status="resolved"` or a
+recipient update; use explicit `close`/`reopen`, with `comment` for transition
+reasons. OpenClaw's separate `engram_issues` reopen input uses `body`, mapped to
+the HTTP comment; do not interchange the two tool contracts. Lifecycle events
+are recorded even without a user comment, in the same transaction as the action.
+Failed authorization, invalid transitions and rollback are not successful writes.
 
 `issueReadProjection` exposes canonical project IDs when lawfully mapped and
 preserves historical `project_origin` rather than relabeling provenance.
@@ -495,10 +520,70 @@ Content-Type: application/json
 ```
 
 The server must authenticate/authorize the request; the example source-session
-string does not establish a browser login or a new visibility boundary. The
-released PATCH has no `session_id`, `client` or `target_session`, and the released
-list has no session filter. Do not describe the successor's proposed fields as
-already shipped.
+string does not establish a browser login or a new visibility boundary. This
+example preserves the released POST's existing `created_by_session` field; its
+presence is not a newly implemented guarantee. Current-source attribution and
+history additions follow below, without claiming installed-client acceptance.
+
+### Per-call attribution, recipients and list selection
+
+HTTP POST takes reported `created_by_session`; PATCH takes reported `session_id`.
+Native MCP mutation arguments use `session_id`, `client` and separate
+`agent_source`; the canonical acting project comes from verified native caller
+context, never the optional compatibility `project` argument. On native list,
+`project` filters the target project; get needs only its issue ID. Native list/get
+remain project-free authorized reads during a project-identity hold. OpenClaw
+get and explicitly target/source-filtered list also remain project-free; its
+default inbox still requires the current caller workspace's identity.
+
+A safe request-transport session wins over a reported session, with provenance
+`transport` or `reported`. Transport provenance is not authenticated host-session
+ownership. Session values may be UUIDs or opaque host conversation IDs, at most
+256 UTF-8 bytes, without surrounding whitespace, control/format characters or a
+nil UUID. Missing or unsafe optional attribution stays unknown instead of
+blocking an otherwise authorized write. Optional `client` recognizes exactly
+`omp`, `openclaw`, `claude-code`, `codex`, `cursor`, `gemini-cli`, `human`;
+unknown labels stay unknown. Client and agent labels are independent and never
+derived from an auth/browser session, keycard, project, lane or connection tag.
+
+Issue JSON exposes `created_by_session`, `created_by_session_source`,
+`source_client`, `target_session`. Comments retain `author_session`,
+`author_session_source`, `author_client`; lifecycle events retain `session_id`,
+`session_source`, `client` beside their own ID, issue ID, status, author project,
+author agent and creation timestamp. These are attribution, not private session
+content or new session-reader authority.
+
+`target_session` is an explicit recipient reference, not an assignee, delivery
+receipt, liveness claim or permission. Create omission leaves it unknown; update
+omission preserves it; empty string/null clears it under creator/operator field
+authority. Invalid recipient input is refused rather than silently clearing.
+
+List filters are exact full session IDs: `source_session` matches only
+`created_by_session`; `target_session` matches only the recipient;
+`participant_session` matches creator **OR** comment author **OR** lifecycle-event
+author. Each is ANDed with all other supplied filters before count/pagination,
+not evaluated on the returned page. None implicitly selects the current
+conversation. `client` is provenance, **not a list filter**. HTTP session query
+selectors must occur once and be nonempty, bounded, valid identifiers; invalid,
+duplicate or empty selectors return 400 instead of broadening the read.
+
+### Bounded lifecycle history
+
+Issue detail accepts optional `history_limit` (default 50, range 1..100) and
+`history_after_id` (default 0, nonnegative exclusive event-ID cursor). HTTP
+parameters must each occur once; invalid values return 400. Events are ordered
+by `id ASC`, selecting `id > history_after_id` with one-row lookahead. The HTTP
+detail envelope includes `history_events` (always an array), `history_limit`,
+`history_has_more` and `history_next_after_id`. When more rows exist, continue
+using the last returned event ID in `history_next_after_id`; otherwise that
+field is null. Native MCP/OpenClaw detail output exposes explicit continuation;
+the client does not silently fetch every page.
+
+Each page requires the issue's ordinary read authorization. The cursor is a row
+position, not a capability or snapshot: later appends can appear on later pages.
+Comments are separate and retain their existing full-read behavior; the lifecycle
+limit is not a promise that the entire detail response is bounded to 100 records.
+No new async job, background completion or private session-history API is implied.
 
 ## Rules, Queue and collection operations
 
@@ -866,7 +951,7 @@ Maintained schema/dispatch owners:
 | `recall`, `recall_memory`, `store`, `feedback` | [tools_recall.go](../../internal/mcp/tools_recall.go), [tools_memory.go](../../internal/mcp/tools_memory.go), [tools_store_consolidated.go](../../internal/mcp/tools_store_consolidated.go), [tools_feedback.go](../../internal/mcp/tools_feedback.go) |
 | Issues/docs/settings/vault | [tools_issues.go](../../internal/mcp/tools_issues.go), [tools_docs_consolidated.go](../../internal/mcp/tools_docs_consolidated.go), [tools_settings.go](../../internal/mcp/tools_settings.go), [tools_vault_consolidated.go](../../internal/mcp/tools_vault_consolidated.go) |
 | `codebase_context`, `codebase_search`, `codebase_status`, `codebase_read`, `codebase_graph` | [tools_code_context.go](../../internal/mcp/tools_code_context.go), [tools_code_intel.go](../../internal/mcp/tools_code_intel.go), [tools_code_read.go](../../internal/mcp/tools_code_read.go), [tools_code_graph.go](../../internal/mcp/tools_code_graph.go) |
-| Local transport/context resolution and daemon-side index action | [internal/module](../../internal/module), [cmd/engram](../../cmd/engram); tools advertised by the native client can include daemon-owned actions, not just remote Server.ListTools. |
+| Local transport/context resolution and daemon-side index action | [internal/module](../../internal/module), [cmd/engram](../../cmd/engram), [Engram native proxy](../../internal/handlers/engramcore/tools.go). The local [project_context tool](../../internal/handlers/engramcore/project_context.go) is registered before canonical project resolution and is not proxied as a backend mutation. |
 | Principal memory/state/continuity/lifecycle/rules/governance/candidates/history | Their named `tools_*.go` implementations in [internal/mcp](../../internal/mcp); the live InputSchema is authoritative for action enums, required and additionalProperties rules. |
 
 The primary entry points are recall, store, feedback, vault, settings, docs, admin,
@@ -902,29 +987,82 @@ not be substituted for each other.
 
 ### Supported recovery actions
 
-1. On `CONTEXT_REQUIRED` or `CONTEXT_MISMATCH`, use the registered native
-   `codebase_context` schema to inspect/resolve/select the authorized source
-   context. Preserve refs and the actual caller root; do not change a project
-   label to force a match.
-2. On `PROJECT_MIGRATION_REQUIRED`, run the installed native project resolver
-   with `project resolve --root <actual-root> --json --check`. Check is read-only;
-   a historical marker is migration evidence, not a verified canonical binding.
-   `GET /api/projects/resolve?legacy_id=<encoded-value>` or the actual repository
-   locator reader can inspect the existing mapping. An unresolved result is not
-   permission to create a replacement UUID or reset the marker/cache.
-3. Use the existing consolidation census/preflight/backup/verification/dry-run
-   protocol when a real mapping/conservation operation is required. Applying it
-   is a separately authorized data effect. Retain useful data and ambiguous
-   bindings. Project-free issue list/get remains available during an identity
-   hold; do not fabricate a mutation identity.
-4. On stale/retired View, expired grant or selection, reacquire the exact catalog
-   context and required authority. Index pending/producer offline is not solved
-   by selecting another checkout or inventing a fresh successful response.
+Owners: [logical recovery](../../internal/projectidentity/logical_recovery.go),
+[choices/select](../../internal/projectidentity/project_context.go),
+[caller-scoped binding](../../internal/projectidentity/project_context_binding.go)
+and [recovery HTTP trust policy](../../internal/projectidentity/recovery_http.go).
+These are current-source operations, not claims about a loaded installation.
 
+1. On `CONTEXT_REQUIRED` or `CONTEXT_MISMATCH`, first use
+   `codebase_context(action="list")` for project-free inspection. Select only the
+   intended authorized Source/Checkout from that fresh response using its
+   `context_handle`, verify `action="resolve"`, then retry the original query.
+   Code context selection is distinct from logical-project recovery below.
+2. Ordinary native resolution automatically recovers a strict historical
+   `id`/`name` marker only when the configured server's authorized
+   `GET /api/projects/resolve?legacy_id=<encoded-exact-marker-id>` verifies one
+   existing canonical mapping. It checks local identity again before using the
+   mapping; changed state or a conflicting pinned identity refuses. Recovery
+   does not create a project/UUID/alias or rewrite the marker/common cache.
+3. If the intended existing project needs an explicit choice, call local native
+   `project_context(action="choices")`. The result is
+   `{choices:[{project_id,name,repository_qualifier?,selection_ref}]}`; it reads
+   the fresh authorized catalog without selecting or writing a binding. Review
+   names, full IDs and qualifiers. Never choose first/latest, by name alone or
+   merely because one result exists. Preserve ambiguity and ask for the intended
+   supported choice rather than guessing or inventing a replacement project.
+4. Call `project_context(action="select", selection_ref="<exact-fresh-ref>")`
+   in the same actual caller/root/server scope. Native select returns
+   `{project_id,name}`. It rechecks the catalog and local state, then persists
+   only that caller-scoped context sidecar. Scope includes the actual caller
+   root, installation namespace, server and credential fingerprint; the tool
+   accepts no root, project, credential or session overrides. Existing pinned
+   identity, marker/common cache, project data, permissions and the current
+   session are not replaced. A stale reference requires fresh choices, not a
+   forged reference or a name/UUID substituted for `selection_ref`.
+5. After confirmed recovery/selection, retry the original operation with its
+   original arguments, target project, actor, session and client. Automatic
+   verified mapping runs inside ordinary resolution; explicit selection does
+   not itself replay a held tool call. A timeout/disconnect after a mutation
+   leaves its outcome unknown: establish the original result before replaying.
+   Recovery is not evidence that the mutation was never sent or never committed.
+
+OpenClaw exposes `engram_project_context` with the same `choices`/`select`
+intent through its native-client adapter and the actual host caller workspace.
+Its result formatting is host-specific, not the native MCP text/JSON envelope.
+Do not substitute a visible terminal cwd, configured label or session ID for
+missing caller-root metadata. Native issue list/get and explicitly scoped
+OpenClaw reads remain usable during an identity hold; an error is not an empty
+successful inbox. `PROJECT_IDENTITY_INVALID`, conflicts and unknown refusals
+retain the original operation and useful files for bounded owner repair.
+
+Recovery readers have a 15-second deadline. Legacy mapping and identity/binding
+files have 4096-byte bounds; choices catalog is limited to 1 MiB and 4096 entries.
+Malformed/duplicate fields, invalid catalog entries, changed identity and unsafe
+identity files refuse rather than yield a partial successful selection. Selection
+is bound to current state/catalog, not an advertised wall-clock lease; a saved
+binding is revalidated against current authorization on ordinary use.
+
+Both recovery GETs use the configured bearer credential on a fresh direct
+transport without redirects. When `ENGRAM_TLS_CA` is set, its PEM roots are
+required and TLS 1.2+ is forced even for an `http` configured URL; CA/load/TLS
+failure has no plaintext fallback. Without that setting, HTTPS uses ordinary
+verified TLS and HTTP remains supported. Do not weaken trust to recover identity.
+
+`project resolve --root <actual-root> --json --check` remains optional read-only
+owner diagnostics, not a mandatory user shell step. It does not perform ordinary
+legacy mapping recovery or bind a project. Existing consolidation
+census/preflight/backup/verification/dry-run/apply is a separate authorized
+data-migration protocol, not a prerequisite to choosing an existing context.
+Preserve its backup/conservation and explicit apply safeguards when an actual
+data move is required; never ask the user to edit the database as recovery.
+
+On stale/retired View, expired grant or code selection, reacquire that exact
+catalog context and required authority. Index pending/producer offline is not
+solved by selecting another checkout or inventing a successful response.
 [Operating guide: context recovery](../operating-engram.md#context-recovery)
-owns executable installed-client procedures and final current tool descriptions.
-It is maintained with the successor repair; this released reference does not
-promise yet-unreleased choose/select/session/history behavior.
+supplies the corresponding operator procedure; tool descriptions/errors retain
+the essential actions for clients without a checkout-local guide.
 
 ## gRPC contract
 
@@ -980,28 +1118,45 @@ not proof that context was delivered or stored. No automatic tool-result memory
 capture or retired outcome callback should be inferred from the existence of a
 hook file.
 
-## Successor reconciliation
+Current OMP source registers a per-call adapter in
+[engram-memory.mjs](../../plugin/engram/extensions/engram-memory.mjs): it supplies
+the actual host session-manager UUID as `session_id` and `client:"omp"` only for
+the uniquely matched MCP tool whose advertised schema carries
+`x-engram-caller-context:"issues/v1"` and string attribution fields. Missing or
+invalid host session metadata leaves the call unchanged; it does not fabricate
+a project/lane/daemon ID or rewrite unrelated tools. OpenClaw's
+[issues adapter](../../plugin/openclaw-engram/src/tools/engram-issues.ts) sends
+its optional actual `ctx.sessionId` and `client:"openclaw"`, with `ctx.agentId`
+kept separate. These source paths describe reported provenance, not verified
+host ownership, new issue permissions or proof a running host loaded them.
 
-This reference deliberately completes the reachable released-source contract
-without waiting for the in-flight repair. Before composing it into that patch,
-the integrator must bind the **final stable source commit and proof**, then
-reconcile only the changed wire facts:
+## Current-source reconciliation
 
-- Native project-context choices/select, CLI and OpenClaw recovery/tool-schema
-  descriptions, against the final executable owner and operating guide.
-- Issue create/update attribution, session/client/target filters and detail
-  history/continuation, including exact omission/null/default/limit/order/error
-  and visibility behavior. `created_by_session` already exists in the released
-  POST DTO; do not count its presence as a newly implemented guarantee.
-- Session read/history ownership and any new cursor/async variants, without
-  confusing SDK/source session attribution with browser cookie management.
-- Regenerate the same Swagger outputs after final annotation composition and
-  recheck route/consumer coverage for the final candidate. The baseline census
-  above is not automatically a successor census.
+The current recovery/issue delta is implemented in corrective source
+`3ad28a61256feb7012844aacc13197ff673b0c9d`; the released documentation contribution
+was composed at integration input `4cc8ccbc2eac3a777e9487ed739e468f0790bf87`.
+These immutable inputs distinguish the historical measurements from the current
+contracts above; they are not a claim about a later documentation commit's HEAD.
 
-Pending field names are not frozen schemas or released acceptance. No production,
-database, browser, profile, push/tag/publication or installed-client acceptance
-is implied by this source documentation.
+- Logical-project automatic verified mapping, caller-bound choices/select,
+  transport trust and resumption are owned by `internal/projectidentity` and the
+  native/OpenClaw adapters linked above, not by a new HTTP MCP endpoint.
+- Issue per-call attribution, recipient updates, exact session filters, RW
+  lifecycle transitions and bounded lifecycle-event history are current source.
+  POST `created_by_session` predates this correction; no historical host identity
+  or verification evidence is inferred from its presence or a closed status.
+- Issue lifecycle history and reported host conversation references do not
+  change browser cookie/session management, grant private transcript access or
+  introduce async session-history jobs. Existing session read owners and
+  browser-handle protections remain separate contracts.
+- The five accepted annotation-bearing Go files remain documentation-only
+  additions; their generated Swagger outputs describe the annotated subset.
+  Preserved **91/199** machine-operation and **53/110** frontend coverage are
+  released-baseline measurements, not a recensus of the corrective candidate.
+
+Source reconciliation and schema generation do not prove installation, host
+activation, production/database/browser acceptance or publication. Those require
+their own exact-artifact consumer evidence; no such delivery is claimed here.
 
 ## Canonical project and knowledge readers
 

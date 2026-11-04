@@ -187,7 +187,7 @@
       "capability_status": "live",
       "journey_status": "partial",
       "auth": "requireReady group with global auth middleware; console treats 401/403 responses as `forbidden` and locks the page",
-      "limitations": "This route is the live access-administration read/admin surface (providers, invitations, users, roles, sessions, audit log per apps/operator-console/composables/useOperatorAccess.ts). It is NOT a keycard-issuance workflow: creating an invitation here differs from the daemon's fatal-error text pointing operators at a `/tokens` page that does not exist in this console (see the Legacy /tokens limitations entry below). Treat invitation/session/user administration as live; treat keycard issuance as convergence-in-progress and unaccepted.",
+      "limitations": "This route is the live access-administration read/admin surface (providers, invitations, users, roles, sessions, audit log per apps/operator-console/composables/useOperatorAccess.ts). Creating an invitation is not keycard issuance, and /access is not an accepted issuance wizard. Current daemon help and plugin launcher diagnostics no longer point to a /tokens page; see the preserved Legacy /tokens text limitations entry below. Treat invitation/session/user administration as live; treat the browser keycard-issuance journey as convergence-in-progress and unaccepted.",
       "evidence": "apps/operator-console/pages/access.vue; internal/worker/service.go:1513-1524; apps/operator-console/composables/useOperatorAccess.ts:401-402,448"
     },
     {
@@ -486,8 +486,8 @@
     {
       "subject": "Legacy /tokens text",
       "classification": "tombstone",
-      "evidence": "cmd/engram/main.go:75,244; apps/operator-console/pages/access.vue",
-      "note": "The daemon's fatal-token diagnostic and its --help text still name a dashboard '/tokens' route. The promoted console has no matching page file; the closest live route is /access, which is an administration surface, not an issuance wizard. internal/config/envnames.go's EnvWorkstationToken doc-comment previously repeated the same stale '/tokens UI' phrasing; it has been corrected in this batch to point at the actual issuance endpoint (POST /api/auth/tokens). Do not treat the daemon text as proof of a working /tokens page."
+      "evidence": "cmd/engram/main.go:1191-1199; internal/config/envnames.go:16-23,49-53; plugin/engram/scripts/run-engram.js:29-67; apps/operator-console/pages/access.vue",
+      "note": "Historical /tokens setup guidance is retired; the subject name is retained because internal/config/envnames.go links this entry. Current daemon help requires a workstation keycard when server auth is enabled, not for tokenless auth-disabled transport. The plugin launcher's ordinary MCP startup rejects a missing server URL, not an empty token. Neither current owner directs users to a /tokens issuance page. The promoted console has no matching page; /access is an administration surface, not an accepted keycard-issuance wizard. Keycards are issued through the authenticated POST /api/auth/tokens admin endpoint; this does not claim an accepted browser click-path. ENGRAM_AUTH_ADMIN_TOKEN remains server-host-only, never a workstation credential."
     },
     {
       "subject": "Embedded /health direct-load collision",

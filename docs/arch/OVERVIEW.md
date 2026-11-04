@@ -6,12 +6,16 @@ shared server over gRPC; lifecycle hooks call the server's REST API separately.
 
 ## Workstation boundary
 
-`ENGRAM_URL` is a server origin such as `http://host:37777`. It is not an HTTP
-MCP endpoint. The local daemon receives `ENGRAM_URL` and its own
-`ENGRAM_TOKEN`; it fails at startup when a URL is configured without that token.
+`ENGRAM_URL` is a server origin such as `http://host:37777`, not an HTTP MCP
+endpoint. The plugin launcher's ordinary MCP startup rejects a missing server
+URL; it does not reject an empty token. Tokenless transport is supported for a
+server configured with authentication disabled. When server authentication is
+enabled, the workstation needs an appropriate keycard through `ENGRAM_TOKEN`
+(or the launcher's `api_token` configuration); an empty token does not bypass
+server authorization.
 
 - Agent-host discovery problems are local stdio/process problems.
-- Daemon failures are on the gRPC path.
+- Daemon tool execution uses gRPC; logical-project recovery also uses authorized REST readers.
 - Hook failures are REST-client problems.
 - Browser failures are console/static/proxy problems.
 
@@ -19,6 +23,13 @@ The workstation must never receive `ENGRAM_AUTH_ADMIN_TOKEN`. Workstation
 keycards are distinct database-backed credentials; authenticated admin API calls
 can create and revoke them. The public browser issuance journey is not yet
 accepted, so the README does not turn a route label into a setup instruction.
+
+Current source can recover a strict historical marker through an existing
+verified project mapping, or expose caller-bound `project_context` choices and
+selection before canonical project resolution. This does not migrate project
+data, change a host session or grant access. The recovery readers retain the
+configured TLS trust policy; source implementation is not installed-host proof.
+See [recovery contracts](API_CONTRACTS.md#supported-recovery-actions).
 
 ## Server boundary
 
