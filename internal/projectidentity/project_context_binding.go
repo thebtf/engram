@@ -146,7 +146,9 @@ func inspectProjectContext(ctx context.Context, caller ProjectContextCaller) (pr
 	if decodeProjectContextJSON(raw, &binding) != nil || binding.Version != 1 || !ValidProjectID(binding.ProjectID) || !validProjectContextDigest(binding.ScopeDigest) || !validProjectContextDigest(binding.MarkerDigest) || !validProjectSelectionReference(binding.SelectionRef) {
 		return projectContextSnapshot{}, logicalError("PROJECT_IDENTITY_INVALID")
 	}
-	if binding.ScopeDigest != snapshot.scopeDigest || binding.MarkerDigest != snapshot.markerDigest || snapshot.pinnedID != "" && snapshot.pinnedID != binding.ProjectID {
+	if binding.ScopeDigest != snapshot.scopeDigest ||
+		snapshot.pinnedID != "" && snapshot.pinnedID != binding.ProjectID ||
+		binding.MarkerDigest != snapshot.markerDigest && snapshot.pinnedID == "" {
 		return projectContextSnapshot{}, logicalError("PROJECT_IDENTITY_CONFLICT")
 	}
 	snapshot.binding = &binding
