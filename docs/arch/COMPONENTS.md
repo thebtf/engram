@@ -50,6 +50,8 @@ compatibility paths, not evidence of a Nuxt runtime.
 it is not the source selected by the released Docker/Compose recipe. The legacy
 `make dashboard` still builds `ui/` and replaces the embedded static directory;
 `make build` calls that target. This build split exists and is not repaired here.
+Both clients still import `ui/src/utils/projectCatalog.ts`, so removing `ui/` requires
+preserving or relocating that shared utility first.
 See [API contracts](API_CONTRACTS.md#replacement-ui-and-deployment-boundary) for
 base URLs, cookie forwarding and the exact client/Go ownership boundary. The
 retained [surface ledger](current-surface.json) is not deployment acceptance.
