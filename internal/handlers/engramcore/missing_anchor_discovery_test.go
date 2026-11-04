@@ -115,11 +115,20 @@ func TestToolsList_ProjectStateDoesNotFilterAuthenticatedCatalog(t *testing.T) {
 				if err := json.Unmarshal(response, &got); err != nil {
 					t.Fatal(err)
 				}
-				if got.Error != nil || len(got.Result.Tools) != len(expected) {
-					t.Fatalf("%s tools/list=%s, want the complete production catalog", state, response)
+				if got.Error != nil || len(got.Result.Tools) != len(expected)+1 {
+					t.Fatalf("%s tools/list=%s, want local recovery and the complete production catalog", state, response)
 				}
+				local, err := json.Marshal(got.Result.Tools[0])
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertJSONEqual(t, "local recovery descriptor", local, []byte(`{
+					"name":"project_context",
+					"description":"Choose an existing authorized work project for this actual caller/root. action=choices is read-only and returns current names, full project IDs, repository qualifiers and opaque selection_ref values. action=select requires an exact fresh selection_ref and persists only this caller/root/server binding; it does not change the historical marker, migrate data or grant permissions. Then retry the original operation unchanged. Never replay a mutation whose outcome is unknown.",
+					"inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["choices","select"]},"selection_ref":{"type":"string","description":"Exact fresh opaque reference from choices; required for select, not a name or project UUID."}},"required":["action"],"additionalProperties":false}
+				}`))
 				seen := make(map[string]bool)
-				for _, tool := range got.Result.Tools {
+				for _, tool := range got.Result.Tools[1:] {
 					definition, ok := expected[tool.Name]
 					if !ok || seen[tool.Name] || tool.Description != definition.Description {
 						t.Fatalf("catalog descriptor changed or duplicated: %q", tool.Name)

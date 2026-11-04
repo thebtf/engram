@@ -138,17 +138,27 @@ test('visible canonical role choice separates source-owned and incoming issues w
   assert.ok(state.calls.every(call => call.method === 'GET'))
 })
 
-test('server status filtering and numeric pages use the full matching total, not the loaded slice', async t => {
+test('distinct status filters and numeric pages use the full matching total, not the loaded slice', async t => {
   const state = await mount(t)
-  const closed = walk(state.host).find(row => row.tag === 'button' && row.props.class === 'fchip' && text(row).trim() === 'Closed')
-  await click(closed); await until(() => !state.issues.pending.value)
+  const filter = label => walk(state.host).find(row => row.tag === 'button' && row.props.class === 'fchip' && text(row).trim() === label)
+  await click(filter('Needs verification')); await until(() => !state.issues.pending.value)
   assert.equal(state.issues.registryTotal.value, 251)
   assert.equal(rows(state).length, 10)
+  assert.ok(state.issues.rows.every(issue => issue.status === 'resolved'))
+  assert.ok(ids(state).every(id => id % 2 === 0))
   assert.ok(text(state.host).includes('1–10 of 251'))
-  assert.equal(listCalls(state).at(-1).url.searchParams.get('status'), 'resolved,closed')
+  assert.equal(listCalls(state).at(-1).url.searchParams.get('status'), 'resolved')
   await click(next(state)); await until(() => !state.issues.pending.value)
+  assert.equal(rows(state).length, 10)
+  assert.ok(state.issues.rows.every(issue => issue.status === 'resolved'))
   assert.ok(text(state.host).includes('11–20 of 251'))
   assert.equal(listCalls(state).at(-1).url.searchParams.get('offset'), '10')
+  await click(filter('Closed')); await until(() => !state.issues.pending.value)
+  assert.equal(listCalls(state).at(-1).url.searchParams.get('status'), 'closed')
+  assert.equal(listCalls(state).at(-1).url.searchParams.get('offset'), '0')
+  assert.equal(state.issues.registryTotal.value, 1)
+  assert.deepEqual(ids(state), [1])
+  assert.deepEqual(state.issues.rows.map(issue => issue.status), ['closed'])
 })
 
 test('foreign scope changes clear source-owned detail and comments and refuse unrelated detail', async t => {

@@ -388,9 +388,9 @@ func TestContract_ToolsList_OfflineWithoutURLReturnsLoomOnly(t *testing.T) {
 	if got.Error != nil {
 		t.Fatalf("offline tools/list error: %+v", got.Error)
 	}
-	want := []string{"loom_submit", "loom_get", "loom_list", "loom_cancel"}
+	want := []string{"loom_submit", "loom_get", "loom_list", "loom_cancel", "project_context"}
 	if len(got.Result.Tools) != len(want) {
-		t.Fatalf("offline tools=%v, want Loom-only %v", got.Result.Tools, want)
+		t.Fatalf("offline tools=%v, want local recovery and Loom tools %v", got.Result.Tools, want)
 	}
 	for i, name := range want {
 		if got.Result.Tools[i].Name != name {
@@ -463,7 +463,7 @@ func TestContract_ToolsList_WaitsForDelayedGRPCReadiness(t *testing.T) {
 	if got.Error != nil {
 		t.Fatalf("delayed readiness error: %+v", got.Error)
 	}
-	want := []string{"memory_store", "memory_search"}
+	want := []string{"project_context", "memory_store", "memory_search"}
 	if len(got.Result.Tools) != len(want) {
 		t.Fatalf("tools=%v, want %v", got.Result.Tools, want)
 	}
@@ -585,7 +585,7 @@ func TestContract_ToolsList_DeadlineIsBoundedAndConnectionIsReusable(t *testing.
 	if err := json.Unmarshal(retryResp, &retry); err != nil {
 		t.Fatalf("unmarshal retry response: %v", err)
 	}
-	if retry.Error != nil || len(retry.Result.Tools) != 1 || retry.Result.Tools[0].Name != "memory_store" {
+	if retry.Error != nil || len(retry.Result.Tools) != 2 || retry.Result.Tools[0].Name != "project_context" || retry.Result.Tools[1].Name != "memory_store" {
 		t.Fatalf("retry response=%s, want recovered full list", retryResp)
 	}
 	srv.mu.Lock()
@@ -596,10 +596,8 @@ func TestContract_ToolsList_DeadlineIsBoundedAndConnectionIsReusable(t *testing.
 	}
 }
 
-// TestContract_ToolsList_MatchesV42 verifies that a tools/list response
-// dispatched through the dispatcher, with a mock gRPC server returning 3 canned
-// tools via InitializeResponse, produces a byte-identical envelope to the v4.2.0
-// reference format.
+// TestContract_ToolsList_MatchesV42 verifies the local recovery tool and the
+// v4.2.0 reference envelope for three tools returned by the mock gRPC server.
 func TestContract_ToolsList_MatchesV42(t *testing.T) {
 	t.Parallel()
 
@@ -633,12 +631,17 @@ func TestContract_ToolsList_MatchesV42(t *testing.T) {
 		t.Fatalf("HandleRequest: %v", err)
 	}
 
-	// v4.2.0 reference envelope — hand-written as the ground truth.
+	// The local recovery descriptor precedes the v4.2.0 remote reference tools.
 	wantEnvelope := []byte(`{
 		"jsonrpc": "2.0",
 		"id": 1,
 		"result": {
 			"tools": [
+				{
+					"name": "project_context",
+					"description": "Choose an existing authorized work project for this actual caller/root. action=choices is read-only and returns current names, full project IDs, repository qualifiers and opaque selection_ref values. action=select requires an exact fresh selection_ref and persists only this caller/root/server binding; it does not change the historical marker, migrate data or grant permissions. Then retry the original operation unchanged. Never replay a mutation whose outcome is unknown.",
+					"inputSchema": {"type":"object","properties":{"action":{"type":"string","enum":["choices","select"]},"selection_ref":{"type":"string","description":"Exact fresh opaque reference from choices; required for select, not a name or project UUID."}},"required":["action"],"additionalProperties":false}
+				},
 				{
 					"name": "memory_store",
 					"description": "Store a memory observation",
@@ -679,10 +682,10 @@ func TestContract_ToolsList_MatchesV42(t *testing.T) {
 	if got.Error != nil {
 		t.Fatalf("unexpected error: %+v", got.Error)
 	}
-	if len(got.Result.Tools) != 3 {
-		t.Fatalf("expected 3 tools, got %d", len(got.Result.Tools))
+	if len(got.Result.Tools) != 4 {
+		t.Fatalf("expected 4 tools, got %d", len(got.Result.Tools))
 	}
-	wantNames := []string{"memory_store", "memory_search", "memory_delete"}
+	wantNames := []string{"project_context", "memory_store", "memory_search", "memory_delete"}
 	for i, w := range wantNames {
 		if got.Result.Tools[i].Name != w {
 			t.Errorf("tool[%d].name: got %q, want %q", i, got.Result.Tools[i].Name, w)
