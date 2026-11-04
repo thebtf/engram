@@ -49,6 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Treat nonempty explicit relative caller roots and their lexical absolute forms as the same project-context scope; reject missing or invalid roots without a cwd fallback, while preserving full-root and credential privacy checks.
+- Accept validated remote repository qualifiers containing caller-root text while retaining caller-root and credential rejection; correct document-history API documentation to the existing explicit cap of 200.
 - Remove the caller-binding publisher's persistent lock dependency while preserving existing identity files and atomic no-overwrite; hold unavailable recovery and reconcile unknown outcomes before retry.
 - Preserve the actual OpenClaw workspace as the project root without changing executable lookup cwd; safely revalidate caller-bound selections after marker digest changes; and isolate direct session-memory attribution from shared daemon environment.
 - Allow authorized read-write issue participants, including creators, to resolve, close and reopen issues while preserving readonly denial and unrelated-field authorization. Resolved awaits verification; closed records an actor's checked-completion claim, not proof that the issue or historical closed rows were verified.

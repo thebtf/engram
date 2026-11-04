@@ -2300,7 +2300,7 @@ paths:
     get:
       description: Uses an exact live canonical project and its lawful stored aliases.
         Omitted limit uses the store's unbounded history behavior; explicit positive
-        limits are capped at 500. Count is the returned version count, not a paginated
+        limits are capped at 200. Count is the returned version count, not a paginated
         total.
       parameters:
       - description: Exact canonical project UUID
@@ -2313,7 +2313,7 @@ paths:
         name: path
         required: true
         type: string
-      - description: Positive version limit, capped at 500; omitted means all versions
+      - description: Positive version limit, capped at 200; omitted means all versions
         in: query
         name: limit
         type: integer

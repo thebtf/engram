@@ -79,6 +79,50 @@ const ProjectChoicesSchema = z.object({ choices: z.array(ProjectChoiceSchema).ma
 const SelectedProjectSchema = z.object({ project_id: ContextProjectIDSchema, name: ProjectNameSchema.optional() });
 const ProjectCommandFailureSchema = z.object({ code: z.string().regex(/^PROJECT_[A-Z_]{1,80}$/) });
 
+function locatorPath(value: string, qualifier: boolean): { start: number; end: number } | undefined {
+  if (/[\s\\\p{Cc}]/u.test(value) || /%(?![0-9A-Fa-f]{2})/u.test(value)) return undefined;
+  if (qualifier && !RepositoryQualifierSchema.safeParse(value).success) return undefined;
+  const prefix = qualifier ? 'https://' : '';
+  const text = prefix + value;
+  const match = /^(?:https?|ssh|git):\/\/([^/?#]+)(\/[^?#]*)?(?:[?#].*)?$/u.exec(text);
+  if (!match || match[1].includes('@') || match[1].endsWith(':')) return undefined;
+  const port = /:(\d+)$/u.exec(match[1]);
+  if (port && (Number(port[1]) < 1 || Number(port[1]) > 65535)) return undefined;
+  if (qualifier) {
+    if (match[1] !== match[1].toLowerCase() || !match[2]) return undefined;
+    try {
+      const segments = match[2].slice(1).split('/').map((part) => decodeURIComponent(part));
+      if (segments.some((part) => !part || part === '.' || part === '..' || /[\/\\\p{Cc}]/u.test(part)) ||
+        segments[segments.length - 1].endsWith('.git')) return undefined;
+    } catch { return undefined; }
+  }
+  try {
+    const url = new URL(text);
+    if (!url.hostname || url.username || url.password) return undefined;
+    const start = match[0].indexOf('://') + 3 + match[1].length - prefix.length;
+    return { start, end: start + (match[2]?.length ?? 0) };
+  } catch { return undefined; }
+}
+
+function exposesWorkspace(value: string, workspace: string, qualifier: boolean): boolean {
+  if (qualifier) return value !== '' && !locatorPath(value, true);
+  const paths: Array<{ start: number; end: number }> = [];
+  for (const match of value.matchAll(/(?:https?|ssh|git):\/\/\[[0-9a-f:.]+\](?::[0-9]+)?[^\s"'<> ()\u005b\u005d{},;]*|[^\s"'<> ()\u005b\u005d{},;]+/giu)) {
+    const path = locatorPath(match[0], false);
+    if (path) {
+      paths.push({ start: match.index + path.start, end: match.index + path.end });
+      if (workspace === '/') {
+        const separator = match.index + match[0].indexOf('://') + 1;
+        paths.push({ start: separator, end: separator + 2 });
+      }
+    }
+  }
+  for (let index = value.indexOf(workspace); index !== -1; index = value.indexOf(workspace, index + 1)) {
+    if (!paths.some((path) => index >= path.start && index + workspace.length <= path.end)) return true;
+  }
+  return false;
+}
+
 export type ProjectContextResult =
   | { ok: true; action: 'choices'; choices: z.infer<typeof ProjectChoicesSchema>['choices'] }
   | { ok: true; action: 'select'; project: z.infer<typeof SelectedProjectSchema> }
@@ -112,8 +156,8 @@ export async function requestProjectContext(
   const unconfirmedOutcome = request.action === 'select' ? 'unknown' : 'rejected';
   try {
     const absoluteWorkspace = resolvePath(workspaceDir);
-    const exposesCallerValue = (value: string | undefined): boolean => value !== undefined &&
-      (value.includes(absoluteWorkspace) || Boolean(env.ENGRAM_TOKEN && value.includes(env.ENGRAM_TOKEN)));
+    const exposesCallerValue = (value: string | undefined, qualifier = false): boolean => value !== undefined &&
+      (Boolean(env.ENGRAM_TOKEN && value.includes(env.ENGRAM_TOKEN)) || exposesWorkspace(value, absoluteWorkspace, qualifier));
     return await new Promise<ProjectContextResult>((resolve) => {
       execFile(env.ENGRAM_EXECUTABLE || 'engram', args, {
         env, encoding: 'utf8', windowsHide: true,
@@ -130,7 +174,7 @@ export async function requestProjectContext(
         }
         if (request.action === 'choices') {
           const parsed = ProjectChoicesSchema.safeParse(payload);
-          if (parsed.success && !parsed.data.choices.some((choice) => exposesCallerValue(choice.name) || exposesCallerValue(choice.repository_qualifier))) {
+          if (parsed.success && !parsed.data.choices.some((choice) => exposesCallerValue(choice.name) || exposesCallerValue(choice.repository_qualifier, true))) {
             resolve({ ok: true, action: 'choices', choices: parsed.data.choices });
             return;
           }

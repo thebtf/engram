@@ -983,13 +983,13 @@ func (s *Service) handleListDocuments(w http.ResponseWriter, r *http.Request) {
 
 // handleDocumentHistory godoc
 // @Summary Read retained versions of one document path
-// @Description Uses an exact live canonical project and its lawful stored aliases. Omitted limit uses the store's unbounded history behavior; explicit positive limits are capped at 500. Count is the returned version count, not a paginated total.
+// @Description Uses an exact live canonical project and its lawful stored aliases. Omitted limit uses the store's unbounded history behavior; explicit positive limits are capped at 200. Count is the returned version count, not a paginated total.
 // @Tags Documents
 // @Produce json
 // @Security ApiKeyAuth
 // @Param project query string true "Exact canonical project UUID"
 // @Param path query string true "Exact document path"
-// @Param limit query int false "Positive version limit, capped at 500; omitted means all versions"
+// @Param limit query int false "Positive version limit, capped at 200; omitted means all versions"
 // @Success 200 {object} documentHistoryResponse
 // @Failure 400 {object} documentErrorResponse
 // @Failure 403 {object} documentErrorResponse

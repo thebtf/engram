@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/netip"
 	"net/url"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -221,14 +223,112 @@ func readProjectContextCatalog(ctx context.Context, caller ProjectContextCaller,
 			return nil, "", logicalError("PROJECT_IDENTITY_INVALID")
 		}
 		seen[item.ProjectID] = struct{}{}
-		for _, text := range [...]string{item.Name, item.RepositoryQualifier} {
-			if caller.Token != "" && strings.Contains(text, caller.Token) || strings.Contains(text, root) {
-				return nil, "", logicalError("PROJECT_IDENTITY_INVALID")
-			}
+		if caller.Token != "" && (strings.Contains(item.Name, caller.Token) || strings.Contains(item.RepositoryQualifier, caller.Token)) || projectContextNameLeaksRoot(item.Name, root) {
+			return nil, "", logicalError("PROJECT_IDENTITY_INVALID")
 		}
 	}
 	canonical, _ := json.Marshal(catalog.Items)
 	return catalog.Items, projectContextDigest(string(canonical)), nil
+}
+
+// A validated repository qualifier is a remote locator. In a name, only the
+// path portion of a well-formed remote URL is similarly unambiguous enough
+// to exempt; all other occurrences of the local root remain private.
+func projectContextNameLeaksRoot(name, root string) bool {
+	if root == "" {
+		return true
+	}
+	delimiter := func(r rune) bool {
+		return unicode.IsSpace(r) || strings.ContainsRune("'\"<>()[]{},;", r)
+	}
+	if strings.IndexFunc(root, delimiter) >= 0 {
+		return strings.Contains(name, root)
+	}
+	for cursor := 0; cursor < len(name); {
+		r, size := utf8.DecodeRuneInString(name[cursor:])
+		if delimiter(r) {
+			cursor += size
+			continue
+		}
+		start := cursor
+		open, close := projectContextIPv6Brackets(name[start:])
+		for cursor < len(name) {
+			r, size = utf8.DecodeRuneInString(name[cursor:])
+			if delimiter(r) && cursor-start != open && cursor-start != close {
+				break
+			}
+			cursor += size
+		}
+		part := name[start:cursor]
+		if !strings.Contains(part, root) {
+			continue
+		}
+		u, err := url.Parse(part)
+		if err != nil || strings.Contains(part, `\`) || (u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "ssh" && u.Scheme != "git") || u.Hostname() == "" || u.User != nil || u.Opaque != "" {
+			return true
+		}
+		if !projectContextValidEscapes(part) {
+			return true
+		}
+		if port := u.Port(); port != "" {
+			n, err := strconv.Atoi(port)
+			if err != nil || n < 1 || n > 65535 {
+				return true
+			}
+		}
+		authorityEnd := len(u.Scheme) + 3
+		if !strings.HasPrefix(part, u.Scheme+"://") {
+			return true
+		}
+		if root == "/" && !strings.Contains(part[authorityEnd:], root) {
+			continue
+		}
+		pathOffset := strings.IndexAny(part[authorityEnd:], "/?#")
+		if pathOffset < 0 || part[authorityEnd+pathOffset] != '/' {
+			return true
+		}
+		pathStart := authorityEnd + pathOffset
+		pathEnd := len(part)
+		if end := strings.IndexAny(part[pathStart:], "?#"); end >= 0 {
+			pathEnd = pathStart + end
+		}
+		if strings.Contains(part[authorityEnd:pathStart], root) || strings.Contains(part[pathEnd:], root) || !strings.Contains(part[pathStart:pathEnd], root) {
+			return true
+		}
+	}
+	return false
+}
+
+func projectContextIPv6Brackets(text string) (int, int) {
+	scheme, rest, ok := strings.Cut(text, "://[")
+	if !ok || (scheme != "http" && scheme != "https" && scheme != "ssh" && scheme != "git") {
+		return -1, -1
+	}
+	end := strings.IndexByte(rest, ']')
+	if end < 0 {
+		return -1, -1
+	}
+	address, err := netip.ParseAddr(rest[:end])
+	if err != nil || !address.Is6() {
+		return -1, -1
+	}
+	open := len(scheme) + 3
+	return open, open + 1 + end
+}
+
+func projectContextValidEscapes(text string) bool {
+	hex := func(c byte) bool {
+		return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
+	}
+	for i := 0; i < len(text); i++ {
+		if text[i] == '%' {
+			if i+2 >= len(text) || !hex(text[i+1]) || !hex(text[i+2]) {
+				return false
+			}
+			i += 2
+		}
+	}
+	return true
 }
 
 // Reject duplicate object members before typed decoding; encoding/json otherwise

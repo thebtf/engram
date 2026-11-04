@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -551,6 +552,97 @@ func TestProjectContextRelativeRootRejectsPrivateCatalogText(t *testing.T) {
 				if len(choices.Choices) != 0 || ProjectErrorCode(err) != "PROJECT_IDENTITY_INVALID" {
 					t.Errorf("private catalog text must be rejected: count=%d code=%q", len(choices.Choices), ProjectErrorCode(err))
 				}
+			}
+		})
+	}
+}
+
+func TestProjectContextCatalogPathBoundary(t *testing.T) {
+	for _, scenario := range []struct {
+		name      string
+		root      string
+		qualifier string
+	}{
+		{name: "filesystem-root", root: "/", qualifier: "example.test/team/root"},
+		{name: "app", root: "/app", qualifier: "example.test/team/app"},
+		{name: "src", root: "/src", qualifier: "example.test/team/src"},
+		{name: "work", root: "/work", qualifier: "example.test/team/work"},
+		{name: "deep", root: "/srv/project/app", qualifier: "example.test/srv/project/app"},
+		{name: "windows", root: `C:\Users\fixture\app`, qualifier: "example.test/team/app"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			var name, qualifier string
+			root, caller := publicationFixture(t, func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"items":      []map[string]string{{"project_id": publicationProjectA, "name": name, "repository_qualifier": qualifier}},
+					"unresolved": []any{},
+				})
+			})
+			before := crossCallerFileSnapshot(t, root)
+			qualifier = scenario.qualifier
+			urlRoot := strings.ReplaceAll(filepath.ToSlash(scenario.root), `\`, "/")
+			for _, goodName := range []string{"ordinary project", "https://example.test", "https://example.test/team" + urlRoot, "https://example.test/team%20space" + urlRoot, "ssh://example.test/team" + urlRoot, "git://example.test/team" + urlRoot, "https://[::1]", "https://[::1]/team" + urlRoot} {
+				name = goodName
+				items, _, err := readProjectContextCatalog(t.Context(), caller, scenario.root)
+				if err != nil || len(items) != 1 || items[0].Name != goodName || items[0].RepositoryQualifier != qualifier {
+					t.Errorf("legitimate catalog descriptor rejected: count=%d code=%q", len(items), ProjectErrorCode(err))
+				}
+			}
+			qualifier = "example.test/team/neutral"
+			for _, leakedName := range []string{
+				scenario.root,
+				"open " + scenario.root + " now",
+				"root=\"" + scenario.root + "\"",
+				"root=" + scenario.root + "/child",
+				"private " + publicationToken,
+				"embedded" + scenario.root + "/child",
+				"https://example.test/team" + urlRoot + " then " + scenario.root,
+				"https://example.test/team" + urlRoot + "," + scenario.root,
+				"https://example.test/team" + urlRoot + ";" + scenario.root,
+				"https://[::1]/team" + urlRoot + "[" + scenario.root + "]",
+				"https://[not-ipv6]/team" + scenario.root,
+				"https://example.test/team" + urlRoot + " then " + publicationToken,
+				"https://example.test/%zz" + scenario.root,
+				"https://example.test" + scenario.root + "?bad=%zz",
+				"https://example.test/path?local=" + scenario.root,
+				"https://example.test?local=" + scenario.root,
+				"https://example.test/path#local=" + scenario.root,
+				"https://example.test:99999" + scenario.root,
+				"https://user@example.test" + scenario.root,
+				`https://example.test\bad` + scenario.root,
+				"https://example.test/" + publicationToken + scenario.root,
+			} {
+				name = leakedName
+				items, _, err := readProjectContextCatalog(t.Context(), caller, scenario.root)
+				if len(items) != 0 || ProjectErrorCode(err) != "PROJECT_IDENTITY_INVALID" {
+					t.Errorf("private catalog descriptor accepted: count=%d code=%q", len(items), ProjectErrorCode(err))
+				}
+			}
+			name = scenario.root
+			qualifier = scenario.qualifier
+			items, _, err := readProjectContextCatalog(t.Context(), caller, scenario.root)
+			if len(items) != 0 || ProjectErrorCode(err) != "PROJECT_IDENTITY_INVALID" {
+				t.Errorf("combined qualifier and root disclosure accepted: count=%d code=%q", len(items), ProjectErrorCode(err))
+			}
+			name = "ordinary project"
+			qualifier = "example.test/team/../invalid"
+			items, _, err = readProjectContextCatalog(t.Context(), caller, scenario.root)
+			if len(items) != 0 || ProjectErrorCode(err) != "PROJECT_IDENTITY_INVALID" {
+				t.Errorf("malformed qualifier accepted: count=%d code=%q", len(items), ProjectErrorCode(err))
+			}
+			qualifier = "example.test/team/" + publicationToken
+			items, _, err = readProjectContextCatalog(t.Context(), caller, scenario.root)
+			if len(items) != 0 || ProjectErrorCode(err) != "PROJECT_IDENTITY_INVALID" {
+				t.Errorf("token in valid qualifier accepted: count=%d code=%q", len(items), ProjectErrorCode(err))
+			}
+			name = "private /workspace/private dir/child"
+			qualifier = "example.test/team/neutral"
+			items, _, err = readProjectContextCatalog(t.Context(), caller, "/workspace/private dir")
+			if len(items) != 0 || ProjectErrorCode(err) != "PROJECT_IDENTITY_INVALID" {
+				t.Errorf("root containing spaces accepted: count=%d code=%q", len(items), ProjectErrorCode(err))
+			}
+			if after := crossCallerFileSnapshot(t, root); !reflect.DeepEqual(before, after) {
+				t.Error("catalog reads changed fixture files")
 			}
 		})
 	}

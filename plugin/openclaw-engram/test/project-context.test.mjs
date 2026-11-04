@@ -236,6 +236,139 @@ for (const { workspaceInput, choice } of [
   });
 }
 
+for (const workspaceInput of ['/app', '/src', '/work', '/srv/private/team/work']) {
+  const linuxOnly = { skip: process.platform !== 'linux' && 'Requires Linux absolute workspace semantics' };
+  test(`project context: Linux root ${workspaceInput} permits matching repository and URL suffixes`, linuxOnly, async t => {
+    const choice = {
+      ...choices[0],
+      name: `Service https://example.test/team${workspaceInput}`,
+      repository_qualifier: `example.test/team${workspaceInput}`,
+    };
+    const catalog = [choice];
+    const f = await fixture(t, { workspaceInput, catalog });
+    const result = await requestProjectContext({ action: 'choices' }, workspaceInput);
+    assert.deepEqual(result, { ok: true, action: 'choices', choices: catalog },
+      'A repository or URL path suffix is not the caller workspace');
+    const visible = f.privateOutput(await f.find('engram_project_context').execute('linux-root-choices', { action: 'choices' }));
+    assert.ok(visible.includes(choice.name));
+    assert.ok(visible.includes(choice.repository_qualifier));
+    assert.ok(visible.includes(choice.selection_ref));
+    assert.deepEqual(f.cli.map(call => call.args[1]), ['choices', 'choices']);
+    assert.deepEqual(f.issues, []);
+    assert.equal(fs.readFileSync(path.join(f.workspaceDir, '.engram-project'), 'utf8'), f.marker);
+  });
+
+  test(`project context: Linux root ${workspaceInput} permits an empty repository qualifier`, linuxOnly, async t => {
+    const choice = { ...choices[0], repository_qualifier: '' };
+    const catalog = [choice];
+    await fixture(t, { workspaceInput, catalog });
+    assert.deepEqual(await requestProjectContext({ action: 'choices' }, workspaceInput),
+      { ok: true, action: 'choices', choices: catalog });
+  });
+
+  test(`project context: Linux root ${workspaceInput} permits credential-free SSH and Git URL paths`, linuxOnly, async t => {
+    const catalog = [];
+    await fixture(t, { workspaceInput, catalog });
+    for (const scheme of ['ssh', 'git']) {
+      const choice = { ...choices[0], name: `Service ${scheme}://example.test/team${workspaceInput}` };
+      catalog.splice(0, catalog.length, choice);
+      assert.deepEqual(await requestProjectContext({ action: 'choices' }, workspaceInput),
+        { ok: true, action: 'choices', choices: [choice] });
+    }
+  });
+
+  test(`project context: Linux root ${workspaceInput} permits IPv6 URL authorities without hiding later paths`, linuxOnly, async t => {
+    const catalog = [];
+    await fixture(t, { workspaceInput, catalog });
+    const url = `https://[2001:db8::1]:8443/team${workspaceInput}`;
+    const choice = { ...choices[0], name: `Service ${url}`, repository_qualifier: `[2001:db8::1]:8443/team${workspaceInput}` };
+    catalog.push(choice);
+    assert.deepEqual(await requestProjectContext({ action: 'choices' }, workspaceInput),
+      { ok: true, action: 'choices', choices: [choice] });
+    catalog.splice(0, catalog.length, { ...choice, name: `${url}[${workspaceInput}]` });
+    assert.deepEqual(await requestProjectContext({ action: 'choices' }, workspaceInput),
+      { ok: false, code: 'PROJECT_IDENTITY_INVALID', outcome: 'rejected' });
+  });
+
+  test(`project context: Linux root ${workspaceInput} rejects unsafe occurrences around URLs`, linuxOnly, async t => {
+    const catalog = [];
+    await fixture(t, { workspaceInput, catalog });
+    const url = `https://example.test/team${workspaceInput}`;
+    for (const name of [
+      `${url} and ${workspaceInput}/private`,
+      `${url} '${workspaceInput}'`,
+      `${url},${workspaceInput}`,
+      `${url};${workspaceInput}/private`,
+      `${url}?local=${workspaceInput}`,
+      `${url}#${workspaceInput}`,
+      `https://example.test/team${workspaceInput}%ZZ`,
+      `https://example.test:0/team${workspaceInput}`,
+      `https://example.test:65536/team${workspaceInput}`,
+      `https://user:password@example.test/team${workspaceInput}`,
+      `https://example.test/${token}/team${workspaceInput}`,
+    ]) {
+      const choice = { ...choices[0], name };
+      catalog.splice(0, catalog.length, choice);
+      assert.deepEqual(await requestProjectContext({ action: 'choices' }, workspaceInput),
+        { ok: false, code: 'PROJECT_IDENTITY_INVALID', outcome: 'rejected' });
+      assert.deepEqual(await requestProjectContext({ action: 'select', selection_ref: choice.selection_ref }, workspaceInput),
+        { ok: false, code: 'PROJECT_IDENTITY_INVALID', outcome: 'unknown' });
+    }
+    for (const repository_qualifier of [
+      `example.test/team${workspaceInput}%ZZ`, `example.test/${token}/team${workspaceInput}`,
+      'example.test/team/../other',
+      `example.test/team/..${workspaceInput}`, `example.test/team/%2e%2e${workspaceInput}`,
+      `example.test/team/%2f${workspaceInput}`, `example.test/team/%5c${workspaceInput}`,
+      `example.test/team${workspaceInput}/`, `example.test/team${workspaceInput}.git`,
+      `example.test/team${workspaceInput}//repo`, `example.test/team${workspaceInput}/%00`,
+      `https://example.test/team${workspaceInput}`,
+      `EXAMPLE.test/team${workspaceInput}`,
+    ]) {
+      catalog.splice(0, catalog.length, { ...choices[0], repository_qualifier });
+      assert.deepEqual(await requestProjectContext({ action: 'choices' }, workspaceInput),
+        { ok: false, code: 'PROJECT_IDENTITY_INVALID', outcome: 'rejected' });
+    }
+  });
+
+  test(`project context: Linux root ${workspaceInput} rejects actual private paths and token`, linuxOnly, async t => {
+    const catalog = [];
+    const f = await fixture(t, { workspaceInput, catalog });
+    for (const name of [workspaceInput, `Workspace ${workspaceInput}`, `Workspace "${workspaceInput}"`,
+      `Workspace ${workspaceInput}/nested/private`, `Workspace '${workspaceInput}/nested/private'`, `Credential ${token}`]) {
+      catalog.splice(0, catalog.length, { ...choices[0], name });
+      const result = await requestProjectContext({ action: 'choices' }, workspaceInput);
+      assert.deepEqual(result, { ok: false, code: 'PROJECT_IDENTITY_INVALID', outcome: 'rejected' });
+      const visible = f.privateOutput(await f.find('engram_project_context').execute('linux-root-refusal', { action: 'choices' }));
+      assert.match(visible, /PROJECT_IDENTITY_INVALID/);
+      assert.ok(!visible.includes(workspaceInput), 'Refusal must not disclose the private workspace');
+      assert.ok(!visible.includes(token), 'Refusal must not disclose the synthetic token');
+    }
+    assert.equal(f.cli.length, 12);
+    assert.ok(f.cli.every(call => call.args[1] === 'choices'));
+    assert.deepEqual(f.issues, []);
+    assert.equal(fs.readFileSync(path.join(f.workspaceDir, '.engram-project'), 'utf8'), f.marker);
+  });
+}
+
+test('project context: filesystem root distinguishes URL separators from disclosed paths',
+  { skip: process.platform !== 'linux' && 'Requires Linux absolute workspace semantics' }, async t => {
+    const workspaceInput = '/';
+    const catalog = [];
+    await fixture(t, { workspaceInput, catalog });
+    for (const name of ['https://example.test', 'https://example.test/team/repo']) {
+      const choice = { ...choices[0], name, repository_qualifier: 'example.test/team/repo' };
+      catalog.splice(0, catalog.length, choice);
+      assert.deepEqual(await requestProjectContext({ action: 'choices' }, workspaceInput),
+        { ok: true, action: 'choices', choices: [choice] });
+    }
+    for (const name of ['/', 'https://example.test /', 'https://example.test?local=/', 'https://example.test#/',
+      'https://example.test/team/repo,/', 'https://example.test/%ZZ', 'https://example.test:0']) {
+      catalog.splice(0, catalog.length, { ...choices[0], name });
+      assert.deepEqual(await requestProjectContext({ action: 'choices' }, workspaceInput),
+        { ok: false, code: 'PROJECT_IDENTITY_INVALID', outcome: 'rejected' });
+    }
+  });
+
 for (const leaked of ['token', 'absolute workspace']) {
   test(`project context: relative workspace rejects catalog leaking ${leaked}`, async t => {
     const catalog = [];
@@ -248,6 +381,17 @@ for (const leaked of ['token', 'absolute workspace']) {
     assert.deepEqual(f.issues, []);
   });
 }
+
+test('project context: native relative workspace still rejects a later absolute path with spaces', async t => {
+  const catalog = [];
+  const f = await fixture(t, { workspaceInput: dir => path.relative(process.cwd(), dir), catalog });
+  const choice = { ...choices[0], name: `https://example.test/team/service [${path.resolve(f.workspaceInput)}]` };
+  catalog.push(choice);
+  assert.deepEqual(await requestProjectContext({ action: 'choices' }, f.workspaceInput),
+    { ok: false, code: 'PROJECT_IDENTITY_INVALID', outcome: 'rejected' });
+  assert.deepEqual(await requestProjectContext({ action: 'select', selection_ref: choice.selection_ref }, f.workspaceInput),
+    { ok: false, code: 'PROJECT_IDENTITY_INVALID', outcome: 'unknown' });
+});
 
 test('project context: missing workspace is not sent without inventing cwd', async () => {
   const result = await requestProjectContext({ action: 'choices' }, undefined);

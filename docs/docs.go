@@ -1704,7 +1704,7 @@ const docTemplate = `{
                         "ApiKeyAuth": []
                     }
                 ],
-                "description": "Uses an exact live canonical project and its lawful stored aliases. Omitted limit uses the store's unbounded history behavior; explicit positive limits are capped at 500. Count is the returned version count, not a paginated total.",
+                "description": "Uses an exact live canonical project and its lawful stored aliases. Omitted limit uses the store's unbounded history behavior; explicit positive limits are capped at 200. Count is the returned version count, not a paginated total.",
                 "produces": [
                     "application/json"
                 ],
@@ -1729,7 +1729,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "integer",
-                        "description": "Positive version limit, capped at 500; omitted means all versions",
+                        "description": "Positive version limit, capped at 200; omitted means all versions",
                         "name": "limit",
                         "in": "query"
                     }
