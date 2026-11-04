@@ -4,11 +4,17 @@ package gorm
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"io"
+	"net"
+	"runtime"
 	"slices"
 	"sync"
+	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/rs/zerolog/log"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -40,7 +46,7 @@ type Config struct {
 
 // NewStore opens a PostgreSQL connection, configures the connection pool,
 // verifies reachability, runs all pending migrations, and warms the pool.
-// It is the single entry point for obtaining a Store.
+// It makes one connection attempt.
 func NewStore(cfg Config) (*Store, error) {
 	db, err := openGORM(cfg)
 	if err != nil {
@@ -65,23 +71,90 @@ func NewStore(cfg Config) (*Store, error) {
 		return nil, fmt.Errorf("ping postgres: %w", err)
 	}
 
+	store, err := finishStore(db, sqlDB, maxConns)
+	if err != nil {
+		return nil, err
+	}
+	initialized = true
+	return store, nil
+}
+
+// NewStoreWhenAvailable retries only PostgreSQL connection establishment. Once
+// connected, migration and startup effects are attempted exactly once.
+func NewStoreWhenAvailable(ctx context.Context, cfg Config) (*Store, error) {
+	db, err := gorm.Open(postgres.Open(cfg.DSN), &gorm.Config{
+		Logger: logger.Default.LogMode(cfg.LogLevel), PrepareStmt: true, DisableAutomaticPing: true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("open gorm postgres: %w", err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, fmt.Errorf("get sql.DB: %w", err)
+	}
+	initialized := false
+	defer func() {
+		if !initialized {
+			_ = sqlDB.Close()
+		}
+	}()
+	maxConns := resolveMaxConns(cfg.MaxConns)
+	configurePool(sqlDB, maxConns)
+	for {
+		attempt, cancel := context.WithTimeout(ctx, 2*time.Second)
+		err = sqlDB.PingContext(attempt)
+		cancel()
+		if err == nil {
+			break
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if !transientPostgresConnectionError(err) {
+			return nil, fmt.Errorf("ping postgres: %w", err)
+		}
+		timer := time.NewTimer(time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	store, err := finishStore(db, sqlDB, maxConns)
+	if err != nil {
+		return nil, err
+	}
+	initialized = true
+	return store, nil
+}
+
+func transientPostgresConnectionError(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "57P03"
+	}
+	var netErr net.Error
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.EOF) ||
+		errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNABORTED) ||
+		(runtime.GOOS == "windows" && (errors.Is(err, syscall.Errno(10053)) || errors.Is(err, syscall.Errno(10054)) || errors.Is(err, syscall.Errno(10061)))) ||
+		(errors.As(err, &netErr) && netErr.Timeout())
+}
+
+func finishStore(db *gorm.DB, sqlDB *sql.DB, maxConns int) (*Store, error) {
 	store := &Store{
 		DB:             db,
 		sqlDB:          sqlDB,
-		metrics:        NewPoolMetrics(100), // sliding window of 100 latency samples
-		healthCacheTTL: 5 * time.Second,     // avoid hammering DB during health polls
+		metrics:        NewPoolMetrics(100),
+		healthCacheTTL: 5 * time.Second,
 	}
-
 	if err := runMigrations(db); err != nil {
 		return nil, fmt.Errorf("run migrations: %w", err)
 	}
-
-	// Pre-create connections so the first real request does not pay cold-start
-	// latency. We warm half the pool — enough to absorb a burst without spending
-	// startup time on connections that may never be needed.
 	store.WarmPool(maxConns / 2)
-	initialized = true
-
 	return store, nil
 }
 
