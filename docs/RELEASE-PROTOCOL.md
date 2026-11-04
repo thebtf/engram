@@ -13,7 +13,7 @@ When ordinary Engram MCP or memory access is unavailable, prioritize an emergenc
 
 Admit a cut only when its exact installable bytes are established and evidence proves:
 
-- The cut builds and starts through the supported path; the affected ordinary client completes initialization/discovery and a useful call, including a meaningful read of existing data after restoration. For backend-loss incidents, prove unavailable and restored behavior in the same client/session.
+- The cut builds and starts through the supported path; the affected ordinary client completes initialization/discovery and a useful call, including a meaningful read of existing data after restoration. Before claiming the local MCP path fixed, prove unavailable-backend and restored-backend behavior in the same client/session as required by AGENTS.md. This proof is not an extra prerequisite for an unrelated emergency cut that makes no such claim.
 - Applicable authorization, authentication/identity, security, data-integrity, migration/data-preservation and rollback requirements are satisfied. A failed required useful path or concrete security/data-loss risk blocks this cut until fixed or a safe restoration is extracted.
 - Actual failures, skipped/unrun checks and deferred review/test work are recorded honestly. Do not wait for general full-suite GREEN, project-policy PR approval or required-thread closure, review-comment zero, unrelated release contents, or additional broad approval; complete the deferred tail after working delivery. Preserve actual approvals and thread state; do not falsely approve, resolve or mark deferred work passed. Platform-enforced requirements and explicit unsafe-effect approvals still apply.
 
@@ -235,6 +235,7 @@ If bounded runner recovery is actually assigned, use only modes advertised by th
 
 ## Terminal Verdict
 
-- `PROJECT_RELEASE_PROTOCOL_PASS`: all applicable non-Sonar release/delivery requirements have evidence. Report Sonar's post-release result or pending/unavailable status separately; it is never an inferred PASS.
-- `PROJECT_RELEASE_PROTOCOL_BLOCKED`: a required non-Sonar criterion, independent security/data-integrity obligation or blocking accepted-behavior obligation under Release Convergence is missing, stale, failed or cannot be verified. Sonar availability, its numeric gate and undifferentiated findings alone are not blockers.
+- `PROJECT_RELEASE_PROTOCOL_PASS`: all applicable non-Sonar release/delivery requirements have evidence, with no permitted emergency work outstanding. Report Sonar's post-release result or pending/unavailable status separately; it is never an inferred PASS.
+- `PROJECT_RELEASE_PROTOCOL_EMERGENCY_DELIVERED_WITH_DEFERRED_WORK`: a qualifying availability-emergency cut has been delivered with all restoration, safety, platform-enforced and other mandatory conditions satisfied, and only work explicitly permitted by Availability emergency remains deferred. Record each deferred item, its owner and corrective follow-up; deferred work is not passed. This verdict is neither a full protocol PASS nor BLOCKED solely because of that permitted deferral.
+- `PROJECT_RELEASE_PROTOCOL_BLOCKED`: a required non-Sonar criterion not permitted to be deferred, independent security/data-integrity obligation or blocking accepted-behavior obligation under Release Convergence is missing, stale, failed or cannot be verified. Sonar availability, its numeric gate and undifferentiated findings alone are not blockers.
 - `PROJECT_RELEASE_PROTOCOL_DRY_RUN`: intended actions are fully described and no mutation was performed.
