@@ -16,6 +16,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/handlers/engramcore"
 	"github.com/thebtf/engram/internal/module"
 	"github.com/thebtf/engram/internal/module/dispatcher"
@@ -95,6 +96,9 @@ func runSessionMemoryWithOutputLock(ctx context.Context, input io.ReadCloser, ou
 	reg.Freeze()
 	disp := dispatcher.NewWithVersion(reg, logger, daemonVersion)
 	project := muxcore.ProjectContext{ID: cwd, Cwd: cwd}
+	if sessionID := os.Getenv(config.EnvClaudeSessionID); sessionID != "" {
+		project.Env = map[string]string{config.EnvClaudeSessionID: sessionID}
+	}
 	disp.OnProjectConnect(project)
 	defer disp.OnProjectDisconnect(project.ID)
 	return serveSessionMemory(ctx, input, output, disp, project, outputMu)

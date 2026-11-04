@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/thebtf/engram/internal/auditcontext"
 	"github.com/thebtf/engram/internal/auth"
 	dbstore "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/grpcserver"
@@ -41,8 +42,9 @@ const (
 	memoryTestProjectA = "33333333-3333-4333-8333-333333333333"
 	memoryTestProjectB = "44444444-4444-4444-8444-444444444444"
 	// Public synthetic auth-test keycards, never installed credentials.
-	memoryTestTokenA = "engram_facade00000000000000000000000aaa"
-	memoryTestTokenB = "engram_facade00000000000000000000000bbb"
+	memoryTestTokenA      = "engram_facade00000000000000000000000aaa"
+	memoryTestTokenB      = "engram_facade00000000000000000000000bbb"
+	memoryTestTokenWriter = "engram_facade00000000000000000000000ccc"
 )
 
 type memoryTestTokens []dbstore.APIToken
@@ -61,6 +63,12 @@ type memoryTestBackend struct {
 	url       string
 	started   chan string
 	cancelled chan string
+	sessions  chan memoryTestSessionObservation
+}
+
+type memoryTestSessionObservation struct {
+	principal string
+	session   string
 }
 
 var memoryTestSQLite sync.Once
@@ -139,12 +147,12 @@ func newMemoryTestBackend(t *testing.T) *memoryTestBackend {
 		}
 	}
 	tokens := memoryTestTokens{}
-	for _, value := range []struct{ raw, id, principal string }{{memoryTestTokenA, "fixture-card-a", "agent/local-a"}, {memoryTestTokenB, "fixture-card-b", "agent/local-b"}} {
+	for _, value := range []struct{ raw, id, principal, scope string }{{memoryTestTokenA, "fixture-card-a", "agent/local-a", "read-only"}, {memoryTestTokenB, "fixture-card-b", "agent/local-b", "read-only"}, {memoryTestTokenWriter, "fixture-card-writer", "agent/local-writer", "read-write"}} {
 		hash, err := bcrypt.GenerateFromPassword([]byte(value.raw), bcrypt.MinCost)
 		if err != nil {
 			t.Fatal(err)
 		}
-		tokens = append(tokens, dbstore.APIToken{ID: value.id, TokenHash: string(hash), Scope: "read-only", Principal: value.principal, PrincipalKind: "agent"})
+		tokens = append(tokens, dbstore.APIToken{ID: value.id, TokenHash: string(hash), Scope: value.scope, Principal: value.principal, PrincipalKind: "agent"})
 	}
 	fixture := &memoryTestBackend{db: db, mcp: mcp.NewServer(mcp.ServerOptions{Version: "local-handler-fixture"}), started: make(chan string, 32), cancelled: make(chan string, 32)}
 	fixture.mcp.SetMemoryStore(dbstore.NewMemoryStore(&dbstore.Store{DB: db}))
@@ -162,6 +170,10 @@ func newMemoryTestBackend(t *testing.T) *memoryTestBackend {
 }
 
 func (f *memoryTestBackend) HandleToolCall(ctx context.Context, name string, args []byte) ([]byte, bool, error) {
+	if f.sessions != nil && (name == "recall" || name == "store_rule") {
+		identity, _ := auth.IdentityFrom(ctx)
+		f.sessions <- memoryTestSessionObservation{principal: identity.Principal, session: auditcontext.SourceSession(ctx)}
+	}
 	var request struct {
 		Query string `json:"query"`
 	}
@@ -217,10 +229,25 @@ func startMemoryTestClient(t *testing.T, binary, root, installation, serverURL, 
 
 func startMemoryTestClientWithOutput(t *testing.T, binary, root, installation, serverURL, token string, readOutput bool, extra ...string) *memoryTestClient {
 	t.Helper()
+	session := "fixture-a"
+	return startMemoryTestClientWithSession(t, binary, root, installation, serverURL, token, readOutput, &session, extra...)
+}
+
+func startMemoryTestClientWithSession(t *testing.T, binary, root, installation, serverURL, token string, readOutput bool, session *string, extra ...string) *memoryTestClient {
+	t.Helper()
 	command := exec.Command(binary, sessionMemoryFlag)
 	command.Dir = root
 	// Clear inherited overrides; each installation uses the real file resolver.
-	command.Env = append(os.Environ(), "ENGRAM_URL="+serverURL, "ENGRAM_SERVER_URL=", "ENGRAM_TOKEN="+token, "ENGRAM_CLIENT_INSTANCE_ID=", "ENGRAM_DATA_DIR="+installation, "ENGRAM_TLS_CA=", "CLAUDE_SESSION_ID=fixture-a")
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if !strings.EqualFold(key, "CLAUDE_SESSION_ID") {
+			command.Env = append(command.Env, entry)
+		}
+	}
+	command.Env = append(command.Env, "ENGRAM_URL="+serverURL, "ENGRAM_SERVER_URL=", "ENGRAM_TOKEN="+token, "ENGRAM_CLIENT_INSTANCE_ID=", "ENGRAM_DATA_DIR="+installation, "ENGRAM_TLS_CA=")
+	if session != nil {
+		command.Env = append(command.Env, "CLAUDE_SESSION_ID="+*session)
+	}
 	command.Env = append(command.Env, extra...)
 	client := &memoryTestClient{cmd: command, frames: make(chan []byte, 32), exited: make(chan error, 1)}
 	var err error
@@ -569,6 +596,112 @@ func memoryTestObservedGate(t *testing.T, client *memoryTestClient, gate *memory
 	case <-time.After(5 * time.Second):
 		t.Fatal("real response was not forwarded into the write-return gate")
 	}
+}
+
+func TestSessionMemoryCarriesHostSessionWithoutCrossClientLeak(t *testing.T) {
+	scratch := clientIdentityTempDir(t)
+	binary := filepath.Join(scratch, "engram")
+	goName := "go"
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+		goName += ".exe"
+	}
+	build := exec.Command(filepath.Join(runtime.GOROOT(), "bin", goName), "build", "-p=1", "-o", binary, ".")
+	if raw, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build actual CLI: %v: %s", err, raw)
+	}
+	rootA := memoryTestRepository(t, scratch, "a", memoryTestProjectA)
+	rootB := memoryTestRepository(t, scratch, "b", memoryTestProjectB)
+	backend := newMemoryTestBackend(t)
+	if err := backend.db.Exec(`CREATE TABLE behavioral_rules (id INTEGER PRIMARY KEY, project TEXT, content TEXT NOT NULL, edited_by TEXT, created_at TIMESTAMP, updated_at TIMESTAMP, deleted_at TIMESTAMP, priority INTEGER, version INTEGER, enabled BOOLEAN)`).Error; err != nil {
+		t.Fatal(err)
+	}
+	backend.mcp.SetBehavioralRulesStore(dbstore.NewBehavioralRulesStoreFromDB(backend.db))
+	backend.sessions = make(chan memoryTestSessionObservation, 4)
+	sessionA, sessionB := "host-session-a", "host-session-b"
+	a := startMemoryTestClientWithSession(t, binary, rootA, filepath.Join(scratch, "install-a"), backend.url, memoryTestTokenA, true, &sessionA)
+	b := startMemoryTestClientWithSession(t, binary, rootB, filepath.Join(scratch, "install-b"), backend.url, memoryTestTokenB, true, &sessionB)
+	absent := startMemoryTestClientWithSession(t, binary, rootA, filepath.Join(scratch, "install-absent"), backend.url, memoryTestTokenA, true, nil)
+	sessionWriter := "host-session-writer"
+	writer := startMemoryTestClientWithSession(t, binary, rootA, filepath.Join(scratch, "install-writer"), backend.url, memoryTestTokenWriter, true, &sessionWriter)
+	for _, client := range []*memoryTestClient{a, b, absent, writer} {
+		memoryTestInitialize(t, client)
+	}
+	for _, tc := range []struct {
+		name      string
+		client    *memoryTestClient
+		principal string
+		session   string
+	}{
+		{"a", a, "agent/local-a", sessionA},
+		{"b", b, "agent/local-b", sessionB},
+		{"absent_after_b", absent, "agent/local-a", ""},
+		{"a_after_b", a, "agent/local-a", sessionA},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			response := tc.client.call(t, tc.name, "tools/call", map[string]any{"name": "recall", "arguments": map[string]any{"query": "", "limit": 20}})
+			if memoryTestRefused(response) {
+				t.Fatalf("recall refused: %v", response)
+			}
+			if _, ok := memoryTestUnwrap(response)["memories"].([]any); !ok {
+				t.Fatalf("recall did not return memory records: %v", response)
+			}
+			select {
+			case got := <-backend.sessions:
+				if got.principal != tc.principal || got.session != tc.session {
+					t.Errorf("server MCP context = principal %q session %q; want principal %q session %q", got.principal, got.session, tc.principal, tc.session)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("server did not observe recall")
+			}
+		})
+	}
+	t.Run("authorized_rule", func(t *testing.T) {
+		content := "Synthetic rule for session attribution."
+		response := writer.call(t, "rule", "tools/call", map[string]any{"name": "store_rule", "arguments": map[string]any{"content": content}})
+		if memoryTestRefused(response) {
+			t.Fatalf("store_rule refused: %v", response)
+		}
+		var row dbstore.BehavioralRule
+		if err := backend.db.Where("content = ?", content).First(&row).Error; err != nil {
+			t.Fatalf("store_rule did not persist a real rule: %v", err)
+		}
+		select {
+		case got := <-backend.sessions:
+			if got.principal != "agent/local-writer" || got.session != sessionWriter {
+				t.Errorf("store_rule server MCP context = principal %q session %q; want principal %q session %q", got.principal, got.session, "agent/local-writer", sessionWriter)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("server did not observe store_rule")
+		}
+	})
+	t.Run("read_only_rule_denied", func(t *testing.T) {
+		content := "Read-only client must not store this rule."
+		response := a.call(t, "rule-denied", "tools/call", map[string]any{"name": "store_rule", "arguments": map[string]any{"content": content}})
+		result, ok := response["result"].(map[string]any)
+		if !ok || result["isError"] != true {
+			t.Errorf("read-only store_rule did not return result.isError: %v", response)
+		}
+		blocks, ok := result["content"].([]any)
+		readOnlyDenied := false
+		for _, item := range blocks {
+			block, ok := item.(map[string]any)
+			if !ok || block["type"] != "text" {
+				continue
+			}
+			text, _ := block["text"].(string)
+			if strings.Contains(text, "read_only: action is not permitted") {
+				readOnlyDenied = true
+			}
+		}
+		if !ok || !readOnlyDenied {
+			t.Errorf("read-only store_rule lacked the read_only denial: %v", response)
+		}
+		var count int64
+		if err := backend.db.Model(&dbstore.BehavioralRule{}).Where("content = ?", content).Count(&count).Error; err != nil || count != 0 {
+			t.Fatalf("read-only rule persistence: count=%d error=%v", count, err)
+		}
+	})
 }
 
 // One permanent consumer-level regression; no alternate memory implementation.
