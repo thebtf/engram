@@ -148,7 +148,7 @@ func inspectProjectContext(ctx context.Context, caller ProjectContextCaller) (pr
 	}
 	if binding.ScopeDigest != snapshot.scopeDigest ||
 		snapshot.pinnedID != "" && snapshot.pinnedID != binding.ProjectID ||
-		binding.MarkerDigest != snapshot.markerDigest && snapshot.pinnedID == "" {
+		binding.MarkerDigest != snapshot.markerDigest && (snapshot.pinnedID == "" || snapshot.legacyID != "") {
 		return projectContextSnapshot{}, logicalError("PROJECT_IDENTITY_CONFLICT")
 	}
 	snapshot.binding = &binding

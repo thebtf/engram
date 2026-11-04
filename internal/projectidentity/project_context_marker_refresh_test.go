@@ -244,8 +244,8 @@ func TestProjectContextLegacyMarkerCacheFence(t *testing.T) {
 			}
 			resolved, err := ResolveLogicalProjectWithRecovery(t.Context(), caller)
 			if scenario.conflict {
-				if err == nil || resolved != (Project{}) {
-					t.Errorf("selected caller silently returned a project despite changed historical B versus cache A: project=%+v err=%v", resolved, err)
+				if ProjectErrorCode(err) != "PROJECT_IDENTITY_CONFLICT" || resolved != (Project{}) {
+					t.Errorf("selected caller must conflict on changed historical B versus cache A: project=%+v code=%q err=%v", resolved, ProjectErrorCode(err), err)
 				}
 			} else if err != nil || resolved.ProjectID != projectA {
 				t.Errorf("selected same-A formatting control: project=%+v err=%v", resolved, err)
