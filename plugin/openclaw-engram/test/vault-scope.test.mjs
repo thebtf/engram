@@ -129,23 +129,34 @@ test('Vault tools isolate same-name credentials and store globally without proje
 
     {
       for (const scope of [undefined, 'project']) {
-        assert.match(await store.execute('missing-project', { name: 'same/name', value: 'synthetic', scope }),
-          /^Project identity unavailable: PROJECT_CONTEXT_REQUIRED \(.*--check/);
-        assert.match(await get.execute('missing-project-read', { name: 'same/name', scope }),
-          /^Project identity unavailable: PROJECT_CONTEXT_REQUIRED \(.*--check/);
+        const storeRefusal = await store.execute('missing-project', { name: 'same/name', value: 'synthetic', scope });
+        const getRefusal = await get.execute('missing-project-read', { name: 'same/name', scope });
+        for (const refusal of [storeRefusal, getRefusal]) {
+          assert.match(refusal, /^Project identity unavailable: PROJECT_CONTEXT_REQUIRED \(/);
+          assert.match(refusal, /actual caller workspace/i);
+          assert.match(refusal, /engram_project_context/);
+          assert.match(refusal, /\bchoices\b/);
+          assert.match(refusal, /\bselect\b/);
+        }
       }
       for (const project of ['legacy-slug', '00000000-0000-0000-0000-000000000000']) {
         const invalid = toolModule.createEngramVaultStoreTool({}, client, { ...config, project });
         const storeRefusal = await invalid.execute('invalid-project', { name: 'same/name', value: 'synthetic' });
         assert.match(storeRefusal, /^Project identity unavailable: PROJECT_IDENTITY_INVALID \(/);
         assert.match(storeRefusal, /Preserve .*marker/);
-        assert.match(storeRefusal, /Inspect .*bounded regular-file reads \(4096 bytes maximum\)/);
+        assert.match(storeRefusal, /bounded regular-file.*(inspection|reads)/i);
+        assert.match(storeRefusal, /4096 bytes maximum/);
+        assert.match(storeRefusal, /Do not follow symlinks/i);
+        assert.match(storeRefusal, /authorized repair/i);
         assert.doesNotMatch(storeRefusal, /--check/);
         const invalidGet = toolModule.createEngramVaultGetTool({}, client, { ...config, project });
         const getRefusal = await invalidGet.execute('invalid-project-read', { name: 'same/name' });
         assert.match(getRefusal, /^Project identity unavailable: PROJECT_IDENTITY_INVALID \(/);
         assert.match(getRefusal, /Preserve .*marker/);
-        assert.match(getRefusal, /Inspect .*bounded regular-file reads \(4096 bytes maximum\)/);
+        assert.match(getRefusal, /bounded regular-file.*(inspection|reads)/i);
+        assert.match(getRefusal, /4096 bytes maximum/);
+        assert.match(getRefusal, /Do not follow symlinks/i);
+        assert.match(getRefusal, /authorized repair/i);
         assert.doesNotMatch(getRefusal, /--check/);
       }
       assert.equal(requests.length, 0);
