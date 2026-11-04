@@ -58,7 +58,8 @@ func projectContextScopeDigest(caller ProjectContextCaller, root string) string 
 	}
 	// An absent-sidecar check must not introduce an HTTP/config dependency into
 	// ordinary canonical-marker resolution. Inspection validates the endpoint.
-	return projectContextDigest("project-context-v1", caller.Cwd, root, caller.CallerID,
+	// Keep both root slots for byte compatibility with canonical absolute-root bindings.
+	return projectContextDigest("project-context-v1", root, root, caller.CallerID,
 		serverReference, projectContextDigest(caller.Token))
 }
 

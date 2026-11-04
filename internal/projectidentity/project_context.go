@@ -55,7 +55,7 @@ func ProjectContextChoices(ctx context.Context, caller ProjectContextCaller) (Pr
 	if err != nil {
 		return ProjectChoices{}, err
 	}
-	catalog, digest, err := readProjectContextCatalog(ctx, caller)
+	catalog, digest, err := readProjectContextCatalog(ctx, caller, before.root)
 	if err != nil {
 		return ProjectChoices{}, err
 	}
@@ -86,7 +86,7 @@ func SelectProjectContext(ctx context.Context, caller ProjectContextCaller, sele
 	if err != nil {
 		return Project{}, err
 	}
-	catalog, digest, err := readProjectContextCatalog(ctx, caller)
+	catalog, digest, err := readProjectContextCatalog(ctx, caller, before.root)
 	if err != nil {
 		return Project{}, err
 	}
@@ -123,7 +123,7 @@ func resolveSelectedProjectContext(ctx context.Context, caller ProjectContextCal
 	if before.binding == nil {
 		return Project{}, true, logicalError("PROJECT_SELECTION_STALE")
 	}
-	catalog, _, err := readProjectContextCatalog(ctx, caller)
+	catalog, _, err := readProjectContextCatalog(ctx, caller, before.root)
 	if err != nil {
 		return Project{}, true, err
 	}
@@ -179,7 +179,7 @@ func projectContextEndpoint(serverURL string) (*url.URL, error) {
 	return endpoint, nil
 }
 
-func readProjectContextCatalog(ctx context.Context, caller ProjectContextCaller) ([]contextCatalogProject, string, error) {
+func readProjectContextCatalog(ctx context.Context, caller ProjectContextCaller, root string) ([]contextCatalogProject, string, error) {
 	endpoint, err := projectContextEndpoint(caller.ServerURL)
 	if err != nil {
 		return nil, "", err
@@ -222,7 +222,7 @@ func readProjectContextCatalog(ctx context.Context, caller ProjectContextCaller)
 		}
 		seen[item.ProjectID] = struct{}{}
 		for _, text := range [...]string{item.Name, item.RepositoryQualifier} {
-			if caller.Token != "" && strings.Contains(text, caller.Token) || caller.Cwd != "" && strings.Contains(text, caller.Cwd) {
+			if caller.Token != "" && strings.Contains(text, caller.Token) || strings.Contains(text, root) {
 				return nil, "", logicalError("PROJECT_IDENTITY_INVALID")
 			}
 		}

@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { resolve as resolvePath } from 'node:path';
 import { z } from 'zod';
 
 export interface ProjectIdentity {
@@ -108,10 +109,11 @@ export async function requestProjectContext(
   const env = options.env ?? process.env;
   const args = ['project', request.action, '--root', workspaceDir, '--json'];
   if (request.action === 'select') args.push('--selection-ref', request.selection_ref);
-  const exposesCallerValue = (value: string | undefined): boolean => value !== undefined &&
-    (value.includes(workspaceDir) || Boolean(env.ENGRAM_TOKEN && value.includes(env.ENGRAM_TOKEN)));
   const unconfirmedOutcome = request.action === 'select' ? 'unknown' : 'rejected';
   try {
+    const absoluteWorkspace = resolvePath(workspaceDir);
+    const exposesCallerValue = (value: string | undefined): boolean => value !== undefined &&
+      (value.includes(absoluteWorkspace) || Boolean(env.ENGRAM_TOKEN && value.includes(env.ENGRAM_TOKEN)));
     return await new Promise<ProjectContextResult>((resolve) => {
       execFile(env.ENGRAM_EXECUTABLE || 'engram', args, {
         env, encoding: 'utf8', windowsHide: true,

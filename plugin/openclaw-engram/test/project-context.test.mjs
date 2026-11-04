@@ -7,6 +7,7 @@ import test from 'node:test';
 
 const compiled = process.env.ENGRAM_OPENCLAW_TEST_COMPILED || fileURLToPath(new URL('../dist/', import.meta.url));
 const imported = await import(pathToFileURL(path.join(compiled, 'index.js')));
+const { requestProjectContext } = await import(pathToFileURL(path.join(compiled, 'identity.js')));
 const plugin = imported.default.default ?? imported.default;
 const manifest = JSON.parse(fs.readFileSync(new URL('../openclaw.plugin.json', import.meta.url), 'utf8'));
 const sessionId = '44444444-4444-4444-8444-444444444444';
@@ -22,9 +23,10 @@ const text = result => typeof result === 'string' ? result : Array.isArray(resul
 // This is the real registration/factory and REST client, with a controlled Node
 // executable standing in for the shared Go CLI. It proves adapter behavior only;
 // it neither starts an installed OpenClaw host nor proves Go authorization.
-async function fixture(t, { workspace = true, hostSession = sessionId, catalog = choices } = {}) {
+async function fixture(t, { workspace = true, workspaceInput, hostSession = sessionId, catalog = choices } = {}) {
   const root = fs.mkdtempSync(path.join(compiled, '.project-context-fixture-'));
   const workspaceDir = path.join(root, 'actual caller workspace');
+  if (typeof workspaceInput === 'function') workspaceInput = workspaceInput(workspaceDir);
   const configuredWorkspace = path.join(root, 'not the caller workspace');
   fs.mkdirSync(workspaceDir);
   fs.mkdirSync(configuredWorkspace);
@@ -53,11 +55,11 @@ async function fixture(t, { workspace = true, hostSession = sessionId, catalog =
       const url = new URL(request.url, 'http://127.0.0.1');
       if (url.pathname === '/fixture/project' && request.method === 'POST') {
         cli.push(body);
-        assert.equal(body.root, workspaceDir, 'CLI must use ctx.workspaceDir, not cwd, config.workspaceDir or a tool argument');
+        assert.equal(body.root, workspaceInput ?? workspaceDir, 'CLI must use ctx.workspaceDir, not cwd, config.workspaceDir or a tool argument');
         assert.equal(body.args[0], 'project');
         assert.ok(['resolve', 'choices', 'select'].includes(body.args[1]), 'No shell, init or migration command is allowed');
         assert.ok(body.args.includes('--json'));
-        const allowed = new Set(['project', body.args[1], '--root', workspaceDir, '--json', '--selection-ref', body.selection_ref]);
+        const allowed = new Set(['project', body.args[1], '--root', workspaceInput ?? workspaceDir, '--json', '--selection-ref', body.selection_ref]);
         assert.ok(body.args.every(value => allowed.has(value)), 'CLI args cannot carry a project override, credentials or invented session');
         let outcome;
         if (body.args[1] === 'resolve') outcome = state.selected
@@ -125,7 +127,7 @@ process.exit(result.exitCode ?? 2);
   });
   const ctx = {
     agentId: 'project-context-fixture', sessionKey: 'agent:project-context-fixture:main',
-    ...(hostSession ? { sessionId: hostSession } : {}), ...(workspace ? { workspaceDir } : {})
+    ...(hostSession ? { sessionId: hostSession } : {}), ...(workspace ? { workspaceDir: workspaceInput ?? workspaceDir } : {})
   };
   const tools = (await Promise.all(registrations.map(entry => entry.factory(ctx)))).flat().filter(Boolean);
   const find = name => {
@@ -141,7 +143,7 @@ process.exit(result.exitCode ?? 2);
     assert.deepEqual(errors, [], 'A fixture contract error is not behavioral RED');
     return visible;
   }
-  return { find, tools, registrations, state, cli, issues, messages, workspaceDir, marker, privateOutput };
+  return { find, tools, registrations, state, cli, issues, messages, workspaceDir, workspaceInput, marker, privateOutput };
 }
 
 test('project context: declared contract and real factory expose the ordinary choices/select tool', async t => {
@@ -216,6 +218,40 @@ test('project context: one-letter repository host with a nondefault port retains
   assert.equal(f.cli[1].selection_ref, portChoice.selection_ref, 'Forward the exact opaque reference shown to the caller');
   assert.deepEqual(f.issues, [], 'Context choices/select must not invent or replay an issue operation');
   assert.equal(fs.readFileSync(path.join(f.workspaceDir, '.engram-project'), 'utf8'), f.marker);
+});
+
+for (const { workspaceInput, choice } of [
+  { workspaceInput: '.', choice: { ...choices[0], repository_qualifier: 'example.test/team/service' } },
+  { workspaceInput: 'svc', choice: { ...choices[1], name: 'svc service', repository_qualifier: 'example.test/team/svc' } },
+]) {
+  test(`project context: relative workspace ${workspaceInput} does not invalidate an authorized catalog`, async t => {
+    const catalog = [choice];
+    const f = await fixture(t, { workspaceInput, catalog });
+    const result = await requestProjectContext({ action: 'choices' }, workspaceInput);
+    assert.deepEqual(result, { ok: true, action: 'choices', choices: catalog },
+      'A valid name or dotted qualifier containing relative workspace spelling is not a private path leak');
+    assert.deepEqual(f.cli.map(call => call.args[1]), ['choices']);
+    assert.deepEqual(f.issues, []);
+    assert.equal(fs.readFileSync(path.join(f.workspaceDir, '.engram-project'), 'utf8'), f.marker);
+  });
+}
+
+for (const leaked of ['token', 'absolute workspace']) {
+  test(`project context: relative workspace rejects catalog leaking ${leaked}`, async t => {
+    const catalog = [];
+    const f = await fixture(t, { workspaceInput: dir => path.relative(process.cwd(), dir), catalog });
+    const workspaceInput = f.workspaceInput;
+    catalog.push({ ...choices[0], name: leaked === 'token' ? token : path.resolve(workspaceInput) });
+    const result = await requestProjectContext({ action: 'choices' }, workspaceInput);
+    assert.deepEqual(result, { ok: false, code: 'PROJECT_IDENTITY_INVALID', outcome: 'rejected' });
+    assert.deepEqual(f.cli.map(call => call.args[1]), ['choices']);
+    assert.deepEqual(f.issues, []);
+  });
+}
+
+test('project context: missing workspace is not sent without inventing cwd', async () => {
+  const result = await requestProjectContext({ action: 'choices' }, undefined);
+  assert.deepEqual(result, { ok: false, code: 'PROJECT_CONTEXT_REQUIRED', outcome: 'not_sent' });
 });
 
 for (const action of ['choices', 'select']) {

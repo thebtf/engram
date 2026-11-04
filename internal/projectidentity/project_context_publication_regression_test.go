@@ -2,11 +2,13 @@ package projectidentity
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -389,6 +391,166 @@ func TestProjectContextExistingBindingRevalidation(t *testing.T) {
 			}
 			if _, err := os.Lstat(filepath.Join(root, ".git", "engram-project.json")); !os.IsNotExist(err) {
 				t.Errorf("selection changed absent cache: %v", err)
+			}
+		})
+	}
+}
+
+func TestProjectContextRelativeRootChoicesSelectResolve(t *testing.T) {
+	for _, rootForm := range []string{"dot", "short"} {
+		for _, direction := range []string{"relative-to-absolute", "absolute-to-relative"} {
+			t.Run(rootForm+"/"+direction, func(t *testing.T) {
+				root, absolute := publicationFixture(t, func(w http.ResponseWriter, r *http.Request) {
+					_, _ = w.Write([]byte(`{"items":[{"project_id":"11111111-1111-4111-8111-111111111111","name":"atlas","repository_qualifier":"example.test/team/atlas"},{"project_id":"22222222-2222-4222-8222-222222222222","name":"other","repository_qualifier":"example.test/team/other"}],"unresolved":[]}`))
+				})
+				t.Chdir(root)
+				relativeRoot := "."
+				if rootForm == "short" {
+					relativeRoot = "a"
+					if err := os.Mkdir(filepath.Join(root, relativeRoot), 0o700); err != nil {
+						t.Fatal(err)
+					}
+					absolute.Cwd = filepath.Join(root, relativeRoot)
+				}
+				markerPath := filepath.Join(absolute.Cwd, ".engram-project")
+				marker := []byte("{\"id\":\"941b49\",\"name\":\"historical\"}\n")
+				if err := os.WriteFile(markerPath, marker, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				relative := absolute
+				relative.Cwd = relativeRoot
+				listCaller, selectCaller := relative, absolute
+				if direction == "absolute-to-relative" {
+					listCaller, selectCaller = absolute, relative
+				}
+				choices := publicationChoices(t, listCaller)
+				if choices[0].Name != "atlas" || choices[0].RepositoryQualifier != "example.test/team/atlas" {
+					t.Fatal("legitimate dotted qualifier or name was not preserved")
+				}
+				selected, err := SelectProjectContext(t.Context(), selectCaller, choices[0].SelectionRef)
+				if err != nil || selected.ProjectID != publicationProjectA {
+					t.Fatalf("equivalent root selection: project=%+v code=%q", selected, ProjectErrorCode(err))
+				}
+				for _, caller := range []ProjectContextCaller{relative, absolute} {
+					resolved, err := ResolveLogicalProjectWithRecovery(t.Context(), caller)
+					if err != nil || resolved.ProjectID != publicationProjectA {
+						t.Errorf("equivalent root resolution: project=%+v code=%q", resolved, ProjectErrorCode(err))
+					}
+				}
+				if got := publicationRead(t, markerPath); !bytes.Equal(got, marker) {
+					t.Error("selection changed the historical marker")
+				}
+				bindings, err := filepath.Glob(filepath.Join(absolute.Cwd, ".engram-context.*.json"))
+				if err != nil || len(bindings) != 1 {
+					t.Errorf("equivalent roots must share one binding: count=%d err=%v", len(bindings), err)
+				}
+			})
+		}
+	}
+}
+
+func TestProjectContextRelativeRootExistingAbsoluteBinding(t *testing.T) {
+	root, absolute := publicationFixture(t, nil)
+	t.Chdir(root)
+	markerPath := filepath.Join(root, ".engram-project")
+	marker := []byte("{\"id\":\"941b49\",\"name\":\"historical\"}\n")
+	if err := os.WriteFile(markerPath, marker, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	choices := publicationChoices(t, absolute)
+	snapshot, err := inspectProjectContext(t.Context(), absolute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Preserve the 7.0.20 absolute-root binding format independently of any new path algorithm.
+	scope := projectContextDigest("project-context-v1", root, root, absolute.CallerID, absolute.ServerURL+"/api/projects", projectContextDigest(absolute.Token))
+	bindingPath := filepath.Join(root, ".engram-context."+scope+".json")
+	binding, err := json.Marshal(projectContextBinding{Version: 1, ProjectID: publicationProjectA, ScopeDigest: scope, MarkerDigest: snapshot.markerDigest, SelectionRef: choices[0].SelectionRef})
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding = append(binding, '\n')
+	if err := os.WriteFile(bindingPath, binding, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	relative := absolute
+	relative.Cwd = "."
+	for _, caller := range []ProjectContextCaller{relative, absolute} {
+		resolved, err := ResolveLogicalProjectWithRecovery(t.Context(), caller)
+		if err != nil || resolved.ProjectID != publicationProjectA {
+			t.Errorf("existing absolute binding resolution: project=%+v code=%q", resolved, ProjectErrorCode(err))
+		}
+	}
+	fresh := publicationChoices(t, relative)
+	selected, err := SelectProjectContext(t.Context(), absolute, fresh[1].SelectionRef)
+	if selected != (Project{}) || ProjectErrorCode(err) != "PROJECT_IDENTITY_CONFLICT" {
+		t.Errorf("existing binding must reject another project: project=%+v code=%q", selected, ProjectErrorCode(err))
+	}
+	if got := publicationRead(t, bindingPath); !bytes.Equal(got, binding) {
+		t.Error("existing absolute binding was overwritten")
+	}
+	if got := publicationRead(t, markerPath); !bytes.Equal(got, marker) {
+		t.Error("existing historical marker was overwritten")
+	}
+	bindings, err := filepath.Glob(filepath.Join(root, ".engram-context.*.json"))
+	if err != nil || len(bindings) != 1 {
+		t.Errorf("relative root must not create a second binding: count=%d err=%v", len(bindings), err)
+	}
+}
+
+func TestProjectContextRelativeRootDoesNotManufactureMissingContext(t *testing.T) {
+	root, caller := publicationFixture(t, nil)
+	t.Chdir(root)
+	choices := publicationChoices(t, caller)
+	before := crossCallerFileSnapshot(t, root)
+	for _, invalidRoot := range []string{"", "missing-root"} {
+		invalid := caller
+		invalid.Cwd = invalidRoot
+		listed, err := ProjectContextChoices(t.Context(), invalid)
+		if len(listed.Choices) != 0 || ProjectErrorCode(err) != "PROJECT_CONTEXT_REQUIRED" {
+			t.Errorf("invalid root choices: count=%d code=%q", len(listed.Choices), ProjectErrorCode(err))
+		}
+		selected, err := SelectProjectContext(t.Context(), invalid, choices[0].SelectionRef)
+		if selected != (Project{}) || ProjectErrorCode(err) != "PROJECT_CONTEXT_REQUIRED" {
+			t.Errorf("invalid root selection: project=%+v code=%q", selected, ProjectErrorCode(err))
+		}
+		resolved, err := ResolveLogicalProjectWithRecovery(t.Context(), invalid)
+		if resolved != (Project{}) || ProjectErrorCode(err) != "PROJECT_CONTEXT_REQUIRED" {
+			t.Errorf("invalid root resolution: project=%+v code=%q", resolved, ProjectErrorCode(err))
+		}
+	}
+	after := crossCallerFileSnapshot(t, root)
+	if !reflect.DeepEqual(before, after) {
+		t.Error("missing or invalid caller context changed fixture files")
+	}
+}
+
+func TestProjectContextRelativeRootRejectsPrivateCatalogText(t *testing.T) {
+	for _, leaked := range []string{"absolute-root", "token"} {
+		t.Run(leaked, func(t *testing.T) {
+			var privateText string
+			root, absolute := publicationFixture(t, func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"items":      []map[string]string{{"project_id": publicationProjectA, "name": "private " + privateText}},
+					"unresolved": []any{},
+				})
+			})
+			child := filepath.Join(root, "child")
+			if err := os.Mkdir(child, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			t.Chdir(child)
+			privateText = root
+			if leaked == "token" {
+				privateText = publicationToken
+			}
+			relative := absolute
+			relative.Cwd = ".."
+			for _, caller := range []ProjectContextCaller{relative, absolute} {
+				choices, err := ProjectContextChoices(t.Context(), caller)
+				if len(choices.Choices) != 0 || ProjectErrorCode(err) != "PROJECT_IDENTITY_INVALID" {
+					t.Errorf("private catalog text must be rejected: count=%d code=%q", len(choices.Choices), ProjectErrorCode(err))
+				}
 			}
 		})
 	}

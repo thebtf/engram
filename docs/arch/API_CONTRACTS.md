@@ -1021,6 +1021,11 @@ These are current-source operations, not claims about a loaded installation.
    identity, marker/common cache, project data, permissions and the current
    session are not replaced. A stale reference requires fresh choices, not a
    forged reference or a name/UUID substituted for `selection_ref`.
+   A nonempty explicit relative root and its lexical absolute form identify the
+   same caller/root/server scope. A missing or invalid caller root is refused;
+   it is never replaced with the daemon's working directory. Catalog privacy
+   checks reject the full absolute caller root and credential, not a short
+   relative spelling that can occur in a legitimate name or qualifier.
 5. After confirmed recovery/selection, retry the original operation with its
    original arguments, target project, actor, session and client. Automatic
    verified mapping runs inside ordinary resolution; explicit selection does
