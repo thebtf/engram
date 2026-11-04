@@ -7,7 +7,11 @@
 
 Repository-only procedure or CI corrections reach `main` through normal review and Actions; they do not require a new product version/tag or consumer binary release unless their accepted scope changes a shipped surface. Source-only scope does not waive required PR rules or proof for the changed procedure.
 
+<a id="emergency-client-release"></a>
+
 ## Availability emergency
+
+For a real service outage that prevents users from working, prioritize the smallest client release that restores the ordinary user path. The user directed: «если у нас СЛОМАНО ВСЁ - мы выпускаем срочный релиз, чтобы починилось. а ЗАМЕЧАНИЯ ДОВОДИМ ПОЗЖЕ» and «вы с коллегами в первую очередь отвечаете за работоспособность проекта ... это ... противоречит моим правилам». These words were relayed by Main session `01a15ebb-8730-7265-b641-a99d23c8e947` on 2026-11-04; the original message ID is not known.
 
 When ordinary Engram MCP or memory access is unavailable, prioritize an emergency release of the smallest installable safe restoration cut. This bounded exception takes precedence over normal project-policy PR approval and review, required-thread closure and general full-suite waits; it does not waive actual platform-enforced branch permissions or checks, explicit unsafe-effect approvals, publication authority, or safety controls. Normal feature releases retain their ordinary gates.
 
@@ -20,6 +24,8 @@ Admit a cut only when its exact installable bytes are established and evidence p
 A candidate-introduced or worsened supported-path regression that does not affect the required restoration path or present a concrete safety, security, authorization, privacy, data-integrity or rollback risk may be deferred for this cut, only if no applicable platform-enforced requirement or other mandatory safety condition requires its repair first. Record the failure, owner and corrective follow-up; do not treat the regression as passed or waive normal-release supported-path obligations.
 
 A verified compatible client-only package may restore access to an unchanged healthy backend without waiting for unrelated container rollout. Keep enforced platform permissions, secrets/identity, manual-only root/profile controls, and Docker/image/data safeguards. Use the existing publication owner; do not add release machinery.
+
+Publication or fixture proof is not installed-user acceptance.
 
 ## Production latest channel
 

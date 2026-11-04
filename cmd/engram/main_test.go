@@ -315,6 +315,22 @@ func TestReadLiveMuxcoreDaemonActionRejectsUncorrelatedHigherEpoch(t *testing.T)
 	}
 }
 
+func TestMissingSchemaMarkerDoesNotHideLegacyState(t *testing.T) {
+	dir := t.TempDir()
+	marker, legacy := filepath.Join(dir, "daemon.marker.json"), filepath.Join(dir, "daemon.version")
+	status := muxcoreDaemonStatusIdentity{PID: 42, DaemonGeneration: "generation"}
+	client := daemonConvergenceIdentity{ProductVersion: daemonVersion, DaemonCompatEpoch: muxcoreDaemonCompatEpoch}
+	if _, err := readLiveMuxcoreDaemonActionAt(marker, legacy, status, client); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("both absent: %v", err)
+	}
+	if err := os.WriteFile(legacy, []byte("not-json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readLiveMuxcoreDaemonActionAt(marker, legacy, status, client); err == nil || errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("malformed legacy marker treated as absent: %v", err)
+	}
+}
+
 func TestReadLiveMuxcoreDaemonActionRejectsIncompleteFreshStatus(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "marker.json")
 	action, err := readLiveMuxcoreDaemonActionAt(path, path+".legacy", muxcoreDaemonStatusIdentity{PID: 42}, daemonConvergenceIdentity{ProductVersion: daemonVersion, DaemonCompatEpoch: 1})

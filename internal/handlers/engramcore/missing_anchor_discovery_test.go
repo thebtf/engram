@@ -39,7 +39,7 @@ func TestToolsList_ProjectStateDoesNotFilterAuthenticatedCatalog(t *testing.T) {
 	catalog := mcp.NewServer(mcp.ServerOptions{Version: daemonClientVersion})
 	catalog.SetCodebaseContextApplication(application)
 	expected := make(map[string]mcp.Tool)
-	for _, tool := range catalog.ListTools() {
+	for _, tool := range mcp.SupportedToolCatalog() {
 		expected[tool.Name] = tool
 	}
 	for _, required := range []string{"store", "recall", "codebase_context", "codebase_search", "codebase_read", "codebase_graph"} {
@@ -89,7 +89,7 @@ func TestToolsList_ProjectStateDoesNotFilterAuthenticatedCatalog(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			dispatcher, _, project := buildV3ContractDispatcher(t, listener.Addr().String())
+			dispatcher, core, project := buildV3ContractDispatcher(t, listener.Addr().String())
 			project.Cwd = root
 			project.Env[config.EnvWorkstationToken] = token
 			if state == "unauthenticated" {
@@ -99,9 +99,7 @@ func TestToolsList_ProjectStateDoesNotFilterAuthenticatedCatalog(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if state == "unauthenticated" {
-				assertToolsListServiceUnavailable(t, response)
-			} else {
+			{
 				var got struct {
 					Error  any `json:"error"`
 					Result struct {
@@ -121,7 +119,7 @@ func TestToolsList_ProjectStateDoesNotFilterAuthenticatedCatalog(t *testing.T) {
 				seen := make(map[string]bool)
 				for _, tool := range got.Result.Tools {
 					definition, ok := expected[tool.Name]
-					if !ok || seen[tool.Name] || tool.Description != definition.Description {
+					if !ok || seen[tool.Name] || !strings.HasSuffix(tool.Description, definition.Description) || !strings.Contains(tool.Description, "remote support and authorization are unverified") {
 						t.Fatalf("catalog descriptor changed or duplicated: %q", tool.Name)
 					}
 					schema, err := json.Marshal(definition.InputSchema)
@@ -130,6 +128,11 @@ func TestToolsList_ProjectStateDoesNotFilterAuthenticatedCatalog(t *testing.T) {
 					}
 					assertJSONEqual(t, tool.Name+" schema", tool.InputSchema, schema)
 					seen[tool.Name] = true
+				}
+			}
+			if state == "unauthenticated" {
+				if _, err := core.ProxyHandleTool(t.Context(), project, "check_system_health", json.RawMessage(`{}`)); err == nil {
+					t.Fatal("local schema must not authorize backend calls")
 				}
 			}
 			for _, private := range []string{root, project.ID, "private-display-name", "private-invalid-uuid", contractProjectID, token} {

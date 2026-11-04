@@ -49,10 +49,21 @@ type Dispatcher struct {
 	logger        *slog.Logger
 	serverVersion string
 	draining      atomic.Bool
+	listChanged   atomic.Bool
 	tracked       sync.Map // projectID (string) → struct{} — active sessions per US4
 }
 
 var _ muxcore.SessionHandlerWithSessionMeta = (*Dispatcher)(nil)
+
+// SetNotifier connects muxcore notifications to the proxy provider.
+func (d *Dispatcher) SetNotifier(notifier muxcore.Notifier) {
+	if proxy, _, ok := d.reg.GetProxyToolProvider(); ok {
+		if receiver, ok := proxy.(interface{ SetNotifier(muxcore.Notifier) }); ok {
+			receiver.SetNotifier(notifier)
+			d.listChanged.Store(notifier != nil)
+		}
+	}
+}
 
 // New creates a Dispatcher bound to the given frozen registry and logger.
 // The registry MUST be frozen before the dispatcher processes any requests.

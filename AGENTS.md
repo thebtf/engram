@@ -8,6 +8,10 @@ Recurring `connecting` / `not connected`, startup EOF or lost memory tools are p
 
 Before claiming this path fixed, observe the ordinary local MCP handshake/discovery and a useful call, including unavailable-backend and restored-backend behavior in the same client/session. HTTP readiness, version strings, a unit-test PASS or a different fresh session alone do not prove the affected connection recovered. These are required behavior and acceptance criteria, not claims that the current implementation already satisfies them.
 
+Main session `01a15ebb-8730-7265-b641-a99d23c8e947` relayed the user's wording in native message `aff74417-48b7-494a-8720-71ed92b01610`; the original native USER message ID is unknown:
+
+> «если сервер живой - клиент должен соединяться. если проблемы - клиент должен их решить. если сервер отвалился - клиент пересоединяется. и во всех этих случаях сессия обязана соединяться с клиентским mcp.»
+
 **Availability emergencies.** If ordinary Engram MCP or memory access is unavailable, use [Availability emergency](docs/RELEASE-PROTOCOL.md#availability-emergency) before selecting release gates: restore the smallest verified safe cut and prove the affected ordinary client path first. Its exception takes precedence over normal project-policy PR review, thread closure and general suite waits; preserve actual review state and complete deferred work afterward. Platform-enforced branch permissions, explicit unsafe-effect approvals, and security, data and required-restoration-path blockers remain binding. Normal feature releases use their normal gates.
 
 ## Goal and scope

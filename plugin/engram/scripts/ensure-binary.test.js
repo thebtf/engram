@@ -59,6 +59,18 @@ test("strict policy rejects unknown fields, package skew, revoked hashes, and ep
   }
 });
 
+test("attestation revocations feed generated policy without authorizing a predecessor", () => {
+  const { createPolicy, parseMarkerlessAttestation } = require("./bootstrap-policy.js");
+  const { policy } = fixture();
+  const target = policy.targets["win32-x64"].desired;
+  const raw = JSON.stringify({ schema_version: 1, revoked_sha256: [target.sha256], windows_amd64: [{ version: "v6.46.9", daemon_compat_epoch: 1, size: target.size, sha256: target.sha256 }] });
+  const source = parseMarkerlessAttestation(raw);
+  const targets = Object.fromEntries(Object.entries(policy.targets).map(([key, value]) => [key, value.desired]));
+  assert.throws(() => createPolicy("6.47.0", targets, source.revoked_sha256), /revoked/);
+  assert.throws(() => parseMarkerlessAttestation(raw.replace('"schema_version":1', '"schema_version":1,"schema_version":1')), /duplicate/i);
+  assert.equal(createPolicy("6.47.0", targets, []).targets["win32-x64"].predecessor, null);
+});
+
 test("policy selection only accepts the exact host platform tuple", () => {
   const policy = selected();
   assert.equal(policy.target.desired.asset, policy.targets[policy.platform].desired.asset);

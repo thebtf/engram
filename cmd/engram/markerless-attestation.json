@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "revoked_sha256": [],
+  "windows_amd64": [
+    {
+      "version": "v7.0.19",
+      "daemon_compat_epoch": 1,
+      "size": 23260160,
+      "sha256": "2ea844169dcb7dcfa77f732e4883629035c79043625626c1b52ce675e3487897"
+    }
+  ]
+}
