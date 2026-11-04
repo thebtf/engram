@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -158,6 +159,37 @@ func TestHandleRequest_Initialize_ReturnsCorrectServerInfo(t *testing.T) {
 	}
 	if result["protocolVersion"] != "2024-11-05" {
 		t.Errorf("protocolVersion: got %v, want 2024-11-05", result["protocolVersion"])
+	}
+}
+
+func TestHandleRequest_InitializeProvidesGuidanceWithoutProviders(t *testing.T) {
+	d := buildDispatcher(t)
+	response, err := d.HandleRequest(context.Background(), projectCtx("p1"), jsonrpcReq(1, "initialize", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := parseResp(t, response)
+	if r.Error != nil {
+		t.Fatalf("initialize: %+v", r.Error)
+	}
+	var result struct {
+		Instructions string `json:"instructions"`
+	}
+	if err := json.Unmarshal(r.Result, &result); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Use available injected evidence before repeating discovery",
+		"not before every task or file edit",
+		"Routine task completion requires neither a memory write nor feedback",
+		"advertised `tools/list` response is authoritative",
+		"native caller's verified canonical project",
+		"PROJECT_MIGRATION_REQUIRED",
+		"resolved (target agent) → closed (source confirms)",
+	} {
+		if !strings.Contains(result.Instructions, want) {
+			t.Errorf("initialize guidance missing %q", want)
+		}
 	}
 }
 

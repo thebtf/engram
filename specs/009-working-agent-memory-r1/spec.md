@@ -6,7 +6,7 @@
 
 ## Outcome
 
-Engram improves ordinary work by delivering relevant prior knowledge and current code context when a consumer needs them, and by making useful results reusable in later sessions. An ordinary development agent reaches a correct action with less repeated investigation. An external knowledge client can maintain its own linked knowledge cards across sessions without inventing a project.
+Engram improves ordinary work by delivering relevant prior knowledge and current code context when a consumer needs them, and by making useful results reusable in later sessions. An ordinary development agent reaches a correct action with less repeated investigation. A generic external client uses Engram's public API to save, find, link, and reuse its own knowledge across sessions without inventing a project.
 
 A running server, stored record, populated index, successful tool call, or matching symbol name is intermediate evidence. Acceptance concerns correct completed work and useful knowledge reuse, including the costs of retrieval, injected context, stale information, and maintenance.
 
@@ -122,7 +122,7 @@ Use a few representative actual tasks and ordinary evidence. Do not force memory
 
 **B — own linked knowledge across sessions.** Deliver the minimum Decision 21 self-context and principal mapping, an existing content owner with real search, and the knowledge-link contract. Prove save, fresh-session find, link traversal, revise, and reuse. It does not require a new assistant runtime, code graph, or broad IAM.
 
-A and B may proceed independently under existing owners and share stable domain primitives. Each delivered claim requires its ordinary consumer evidence. Partial producer readiness must remain explicit and must not turn an API-only demonstration into complete A or B acceptance.
+When A and B need the same people or integration capacity, give A priority: help existing working sessions reuse shared project knowledge and navigate code quickly in their actual View. B is an independent use of the same memory and knowledge capabilities and may proceed in parallel. Either delivery may ship when its own consumer evidence and applicable release requirements are met; neither requires completion of the other. Partial producer readiness must remain explicit and must not turn an API-only demonstration into complete A or B acceptance.
 
 ## Existing authority and supersession
 

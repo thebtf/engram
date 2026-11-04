@@ -24,6 +24,7 @@ import (
 	gorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/internal/graph"
+	"github.com/thebtf/engram/internal/mcpinstructions"
 	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/internal/redaction"
 	"github.com/thebtf/engram/internal/reranking"
@@ -558,7 +559,7 @@ func (s *Server) buildInstructions() string {
 	var b strings.Builder
 
 	// Core usage instructions — always included so any MCP client knows how to use engram
-	b.WriteString(engramInstructions)
+	b.WriteString(mcpinstructions.Core)
 
 	// Append available collections if any
 	if s.collectionRegistry != nil {
@@ -582,132 +583,6 @@ func (s *Server) buildInstructions() string {
 
 	return b.String()
 }
-
-// engramInstructions is the MCP server instructions text returned to clients on initialize.
-// It teaches any agent how to effectively use engram's tools without needing a plugin.
-const engramInstructions = `# Engram — Your ONLY Persistent Memory
-
-Engram is your permanent memory store. Memories saved here persist across ALL sessions, workstations, and projects. No other tool provides durable cross-session memory — do NOT use other tools for memory storage.
-
-## MANDATORY Workflow
-
-**BEFORE every task:**
-1. ` + "`recall(query=\"...\")`" + ` — check what is already known about this topic.
-2. ` + "`recall(query=\"file:path/to/file\")`" + ` — before modifying any file.
-3. ` + "`recall(query=\"prior decisions about ...\")`" + ` — before architectural decisions.
-
-**AFTER every task:**
-4. ` + "`store(content=\"...\", title=\"...\", tags=[\"...\"])`" + ` — save decisions, discoveries, patterns, and lessons learned. If you learned something worth knowing next session, store it.
-5. ` + "`feedback(action=\"outcome\", session_id=\"<claude-session-id>\", outcome=\"success\")`" + ` — record session outcome when done.
-
-**Steps 4-5 are NOT optional.** Every completed task produces knowledge. Store it or it is lost forever.
-
-## 9 Tools
-
-| Tool | Purpose | Key Actions |
-|------|---------|-------------|
-| ` + "`recall`" + ` | **Search & retrieve** memories | search (default) |
-| ` + "`store`" + ` | **Save** memories, edit, import | create (default), edit, import |
-| ` + "`feedback`" + ` | **Suppress** low-quality memories, record outcomes | suppress, outcome |
-| ` + "`issues`" + ` | **Cross-project issue tracking** between agents | create, list, get, update, comment, reopen |
-| ` + "`vault`" + ` | **Credentials** — encrypted AES-256-GCM | store, get, list, delete, status |
-| ` + "`settings`" + ` | **Model settings** used by recall | set, get, list, delete |
-| ` + "`docs`" + ` | **Documents** — versioned docs & collections | create, read, list, history, comment, collections, documents, get_doc, remove, ingest |
-| ` + "`admin`" + ` | **Administrative telemetry** | stats; purge_project when enabled |
-| ` + "`check_system_health`" + ` | **Health** check of all subsystems | (no params) |
-
-## Issues — Cross-Project Agent Bug Tracker
-
-The ` + "`issues`" + ` tool tracks bugs, feature requests, and tasks between agents across projects.
-**Do NOT use ` + "`store`" + ` or ` + "`docs`" + ` for issues** — they lack lifecycle management.
-
-**For the full triage workflow use the ` + "`/engram:issue`" + ` slash command.** It walks through: (1) live issues assigned to you, (2) your reopens, (3) your cross-project issues to verify, (4) filing new issues. Run it at the start of every session in a tracked project.
-
-**Engram issues are ONLY for engram-tracked projects.** Before filing an issue against another project, check it exists in the tracker: ` + "`GET /api/issues/tracked-projects`" + ` returns the list of projects that have observations or issues in engram. If the target project is NOT in that list, use its native issue tracker (GitHub, Linear, etc.) — engram agents working on it won't see injected issues otherwise.
-
-### Lifecycle
-` + "`open → acknowledged (auto) → resolved (target agent) → closed (source confirms) ⟲ reopened`" + `
-- **Target agent** (assignee): resolves issues or comments with progress. Cannot close.
-- **Source agent** (creator): verifies fix and closes, OR reopens if fix didn't work.
-- **Closed/rejected** issues disappear from all injections.
-
-### Your Role as TARGET Agent (issue assigned to your project)
-When you see ` + "`<open-issues>`" + ` in your session context:
-1. Read each issue carefully — understand what the source agent needs
-2. Work on it OR comment explaining timeline/blockers
-3. When fixed: ` + "`issues(action=\"update\", id=N, status=\"resolved\", comment=\"Fixed in commit abc123\")`" + `
-4. Do NOT close — only the source agent (or human operator) closes after verifying
-
-### Your Role as SOURCE Agent (you created the issue)
-When you see ` + "`<resolved-issues from-you>`" + ` in your session context:
-1. Read the resolution comment — understand what was done
-2. Verify the fix actually works (test, read code, check behavior)
-3. If fix works: ` + "`issues(action=\"close\", id=N)`" + ` — confirms fix, removes from all injections
-4. If fix doesn't work: ` + "`issues(action=\"reopen\", id=N, body=\"Still broken because...\")`" + `
-
-### Actions (mutations use the native caller's verified canonical project)
-The optional compatibility ` + "`project`" + ` argument does not establish actor identity. Mutations use the canonical project injected from the native caller context; omit the compatibility argument rather than invent a dummy value. Do not change an argument, marker or UUID to escape a hold. ` + "`target_project`" + ` is a separate destination; ` + "`project/source_project`" + ` on reads are filters.
-**Create:** ` + "`issues(action=\"create\", title=\"...\", target_project=\"<target-project>\")`" + `
-**List assigned:** ` + "`issues(action=\"list\", project=\"<target-project>\")`" + ` — project-free authorized read.
-**Read one:** ` + "`issues(action=\"get\", id=N)`" + ` — project-free; remains available during a caller identity hold.
-**List filed:** ` + "`issues(action=\"list\", source_project=\"<source-project>\", status=\"resolved\")`" + `
-**Comment/resolve/close/reopen:** keep the existing action fields; the native caller supplies acting identity. Authorization and source-owner closure rules still apply.
-
-For CONTEXT_REQUIRED, use codebase_context list, select only the exact intended authorized context from that fresh response, verify resolve and retry the original operation. Never select an unrelated lone Source. For PROJECT_MIGRATION_REQUIRED, inspect through the host-reported installed launcher with ` + "`project resolve --root <actual-caller-root> --json --check`" + `; it does not bootstrap or pin. Preserve identity/data and follow the owner conservation boundary in the error/tool description, not project init. Guide: https://github.com/thebtf/engram/blob/main/docs/operating-engram.md#context-recovery
-
-### DO NOT
-- Close issues you didn't create (only source/operator can close)
-- Change issue status without reading the issue first
-- Reopen resolved issues without verifying the fix failed
-- Use store/docs for cross-project bugs — use issues
-- Create an issue without first checking for duplicates: ` + "`issues(action=\"list\", target_project=\"...\", status=\"\")`" + `
-- Decide that "your part is done, remaining work is another project's problem" — that is a scope decision for the operator, not the agent. Comment your analysis, but do not resolve and split into new issues without operator approval
-- Resolve an issue if the original requirement is only partially met — comment with progress instead
-
-## What to Store
-
-After completing work, store observations about:
-- **Decisions made** and WHY (architecture, library choices, trade-offs)
-- **Bugs found** in the CURRENT project and their root cause (prevents recurrence)
-- **Patterns discovered** (recurring code structures, project conventions)
-- **Lessons learned** (what worked, what failed, what to avoid)
-- **File knowledge** (what a file does, gotchas, non-obvious behavior)
-
-**Bugs/tasks for OTHER projects → use ` + "`issues`" + `**, not ` + "`store`" + `.** ` + "`store`" + ` is for knowledge. ` + "`issues`" + ` is for actionable work items.
-
-Use ` + "`store(action=\"import\", path=\"...\")`" + ` to bulk import pre-authored observations when you already have them in file form.
-
-## Workflow Patterns
-
-**Starting work:** Context is auto-injected by hooks. Use ` + "`recall(query=\"...\")`" + ` for deeper search.
-**Before modifying code:** ` + "`recall(query=\"file:path/to/file\")`" + ` to find file-related memories.
-**After completing a feature:** ` + "`store(content=\"...\", title=\"...\", type=\"decision\")`" + ` — capture what was built and why.
-**After fixing a bug:** ` + "`store(content=\"...\", title=\"...\", type=\"discovery\")`" + ` — capture root cause and fix.
-**After research:** ` + "`store(content=\"...\", title=\"...\", type=\"discovery\")`" + ` — capture findings. (Do NOT use memory_type values like ` + "`insight`" + ` in the observation ` + "`type`" + ` field.)
-**Found a bug in another project:** ` + "`issues(action=\"create\", title=\"...\", target_project=\"...\", priority=\"high\")`" + ` — NOT store.
-**Secrets:** ` + "`vault(action=\"store\")`" + ` for API keys. Never store secrets in observations.
-
-## Markdown Formatting (MANDATORY for all text content)
-
-All text rendered in the dashboard supports full Markdown with syntax highlighting.
-**Always use proper formatting** — never paste raw unformatted code or terminal output.
-
-- **Code:** wrap in fenced blocks with language tag: ` + "````" + `go\\nfunc main(){}\\n` + "````" + `
-- **Terminal:** ` + "````" + `bash\\n$ command\\noutput\\n` + "````" + `
-- **Diffs:** ` + "````" + `diff\\n-old line\\n+new line\\n` + "````" + `
-- **YAML/JSON/Config:** ` + "````" + `yaml\\nkey: value\\n` + "````" + `
-- **Inline code:** ` + "\\`" + `variable_name` + "\\`" + ` for identifiers, paths, commands
-- **Lists:** ` + "`- item`" + ` for findings, steps, bullet points
-- **Bold:** ` + "`**important**`" + ` for emphasis
-
-This applies to: ` + "`store(content=...)`" + `, ` + "`issues(body=..., comment=...)`" + `, ` + "`docs(content=...)`" + `.
-Unfenced text renders as plain paragraphs — code without fencing is unreadable.
-
-## Advanced: Expanded Tools
-
-By default, engram exposes the 9 primary tools above. Provider-backed tools are added only when their store and feature gate are active. Use ` + "`tools/list`" + ` with ` + "`include_all: true`" + ` to inspect the working expanded surface; unadvertised legacy names are not dispatched.
-
-`
 
 // storeTool returns the consolidated store tool definition.
 //

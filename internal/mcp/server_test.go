@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -13,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/auth"
+	"github.com/thebtf/engram/internal/collections"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 )
 
@@ -376,6 +379,19 @@ func TestHandleInitialize_ProtocolAndVersion(t *testing.T) {
 	info := result["serverInfo"].(map[string]any)
 	assert.Equal(t, "engram", info["name"])
 	assert.Equal(t, "4.0.0", info["version"])
+}
+
+func TestHandleInitialize_IncludesCollectionDescriptions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "collections.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("collections:\n  - name: notes\n    description: Existing notes\n  - name: empty\n    description: '  '\n"), 0o600))
+	registry, err := collections.Load(path)
+	require.NoError(t, err)
+	s := NewServer(ServerOptions{CollectionRegistry: registry})
+	result := s.handleInitialize(&Request{JSONRPC: "2.0", ID: float64(1), Method: "initialize"}).Result.(map[string]any)
+	instructions := result["instructions"].(string)
+	assert.Contains(t, instructions, "Use available injected evidence before repeating discovery")
+	assert.Contains(t, instructions, "# Available Collections\n\n## notes\nExisting notes")
+	assert.NotContains(t, instructions, "## empty")
 }
 
 func TestHandleInitialize_CapabilitiesPresent(t *testing.T) {
