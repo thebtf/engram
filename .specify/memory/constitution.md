@@ -105,8 +105,12 @@ reconciliation, task-aware retrieval, exposure, outcome recording, migration, ro
 installed behavior. Hashes, manifests, route existence, flags, or mocked green surfaces alone do
 not establish product acceptance.
 Apply these evidence obligations to the accepted slice and affected dependencies, together with
-all mandatory regression/security/release checks. They MUST NOT silently add unrelated product
-domains to every release. Test doubles prove their stated layer, not installed end-to-end behavior.
+mandatory regression/security/release checks, subject to the qualifying availability-emergency
+exception in the release protocol. Platform-enforced requirements, explicit unsafe-effect
+approvals, and security, data and required-restoration-path blockers remain binding. Deferred
+review and tests remain pending, not passed. Normal release gates remain unchanged. These
+obligations MUST NOT silently add unrelated product domains to every release. Test doubles prove
+their stated layer, not installed end-to-end behavior.
 
 ### XIV. Recover Outcomes Without Resurrecting Demolished Implementations
 The historical demolition establishes evidence about obsolete implementations, not a permanent
@@ -154,7 +158,8 @@ contracts.
   or violate a mandatory condition. This policy does not authorize shipping a known unsafe change.
   Do not alter thresholds, scope or scanner exceptions, suppress findings or relabel historical
   failures to manufacture green. All other functional, Docker/image, supported-platform,
-  migration, recovery and rollout obligations in the release protocol remain in force.
+  migration, recovery and rollout obligations in the release protocol remain in force, subject
+  to its qualifying availability-emergency exception.
 - A destructive contraction occurs only after backup or export, migration receipts, zero-drift
   observation, compatibility sunset, and rollback boundary evidence exist.
 
