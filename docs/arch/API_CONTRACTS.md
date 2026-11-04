@@ -228,7 +228,7 @@ not arbitrary forwarded identity headers.
 | Method and path | Input, result and important boundary |
 | --- | --- |
 | `GET /api/auth/me` | Returns `authenticated`, `role`, `auth_disabled`; a DB browser identity may include `user:{id,email,role}`. Disabled-auth additionally reports `source:"auth-disabled",synthetic:true`. Unauthenticated is 401, not a fabricated user. |
-| `GET /api/auth/setup-needed` | Public `{needed:boolean}` from user count. 503 while the user store is unavailable. True does not grant setup authority. |
+| `GET /api/auth/setup-needed` | Public. Returns 503 if the auth handler is not initialized or the user store is unavailable, and 500 if counting users fails. A successful `{needed:boolean}` has `needed:true` when the initialized user store counts zero users. True does not grant setup authority. |
 | `POST /api/auth/setup` | JSON `email`, `password`; requires the server-host operator bearer token even on first run. Returns 201 `{user:safeUser}` without logging in. Existing users/racing setup return 409. |
 | `POST /api/auth/user-login` | JSON `email`, `password`; trimmed email, nonempty password. 200 `{user:safeUser}`, plus private `engram_auth` cookie: HttpOnly, Path `/`, SameSite Lax, **7 days**. JSON never returns the credential. 400 malformed input; 401 invalid credentials; 403 disabled account; 429 login throttling. |
 | `POST /api/auth/user-logout` | No required body. Revokes that cookie's DB session, clears the cookie, returns `{status:"ok"}`; absent cookie succeeds. Foreign/opaque logout Origin is 403 before mutation; revocation failure is 503, not a successful local sign-out. |

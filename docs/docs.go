@@ -335,7 +335,7 @@ const docTemplate = `{
         },
         "/api/auth/setup-needed": {
             "get": {
-                "description": "Public readiness-independent route; returns needed=true only when the user store contains no users. Store initialization can still return 503.",
+                "description": "Public route. Returns 503 if the auth handler is not initialized or the user store is unavailable, and 500 if counting users fails. A successful response has needed=true when the initialized user store counts zero users; this does not grant setup authority.",
                 "produces": [
                     "application/json"
                 ],
