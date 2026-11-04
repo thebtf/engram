@@ -7,8 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Preserve the actual OpenClaw workspace as the project root without changing executable lookup cwd; safely revalidate caller-bound selections after marker digest changes; and isolate direct session-memory attribution from shared daemon environment.
-
 - Regenerate the API through the maintained worker target using canonical local Go package directories and Swag 1.16.6, with real producer errors stopping the build. Correct existing context search/inject/session-start annotations without changing handlers; document the shared GET/POST conditional-query limitation. The actual producer and server build pass, with 40 named schema checks and all 76 references resolved; that producer checkpoint established compile-only retained-reader oracle provenance, with later native query proof recorded separately, and installed/release acceptance remains separate.
 
 - Add retained catalog `families` metadata with kind, technical table, saved membership-occurrence count and declared/separate/metadata-only reader boundary. Preserve every group, opaque reference, safe label and reason without payload previews, readable-record totals, availability or historical ownership assignment. This descriptor change does not provide cross-group record discovery or installed-consumer acceptance.
@@ -50,6 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Preserve the actual OpenClaw workspace as the project root without changing executable lookup cwd; safely revalidate caller-bound selections after marker digest changes; and isolate direct session-memory attribution from shared daemon environment.
 - Allow authorized read-write issue participants, including creators, to resolve, close and reopen issues while preserving readonly denial and unrelated-field authorization. Resolved awaits verification; closed records an actor's checked-completion claim, not proof that the issue or historical closed rows were verified.
 - Preserve optional actual per-call session and client attribution as provenance, not authority; support explicit session recipients, session filters and bounded lifecycle history.
 - Recover safe, authorized, unambiguous existing-project mappings automatically; when a choice is needed, provide local project-context choices bound to the actual caller, root and server. Preserve the original operation's arguments, target and session, and guard unknown mutation outcomes without requiring manual shell, HTTP or SQL recovery or destructive consolidation.
