@@ -19,6 +19,13 @@ server authorization.
 - Hook failures are REST-client problems.
 - Browser failures are console/static/proxy problems.
 
+**Accepted requirement — local MCP startup and recovery (not an implementation claim).**
+Main session `01a15ebb-8730-7265-b641-a99d23c8e947` relayed the user's wording in native message `aff74417-48b7-494a-8720-71ed92b01610`; the original native USER message ID is unknown:
+
+> «если сервер живой - клиент должен соединяться. если проблемы - клиент должен их решить. если сервер отвалился - клиент пересоединяется. и во всех этих случаях сессия обязана соединяться с клиентским mcp.»
+
+A valid configured client must establish local MCP and expose the complete supported tool and recovery surface during backend unavailability or reconnection. Report genuine backend errors; never substitute fake empty results or present four Loom tools as the complete catalog. Recover transient faults in the existing owner with bounded backoff and cancellation. Never fabricate identity or credentials, or automatically replay mutations with unknown outcomes.
+
 The workstation must never receive `ENGRAM_AUTH_ADMIN_TOKEN`. Workstation
 keycards are distinct database-backed credentials; authenticated admin API calls
 can create and revoke them. The public browser issuance journey is not yet
