@@ -117,11 +117,33 @@ func writeIssueStoreError(w http.ResponseWriter, err error) {
 	}
 }
 
-// handleListIssues handles GET /api/issues with optional filters.
+// handleListIssues handles GET /api/issues. source_session matches the creator;
+// target_session matches the recipient; participant_session matches creator OR
+// comment/lifecycle author. All are exact read filters, ANDed before count/page.
 func (s *Service) handleListIssues(w http.ResponseWriter, r *http.Request) {
-	project := r.URL.Query().Get("project")
-	sourceProject := r.URL.Query().Get("source_project")
-	sourceAgent := r.URL.Query().Get("source_agent")
+	query, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		writeDocumentError(w, http.StatusBadRequest, "invalid issue query")
+		return
+	}
+	project := query.Get("project")
+	sourceProject := query.Get("source_project")
+	sourceAgent := query.Get("source_agent")
+	sourceSession, err := issueSessionQuerySelector(query, "source_session")
+	if err != nil {
+		writeIssueStoreError(w, err)
+		return
+	}
+	targetSession, err := issueSessionQuerySelector(query, "target_session")
+	if err != nil {
+		writeIssueStoreError(w, err)
+		return
+	}
+	participantSession, err := issueSessionQuerySelector(query, "participant_session")
+	if err != nil {
+		writeIssueStoreError(w, err)
+		return
+	}
 	for _, selector := range []string{project, sourceProject} {
 		if selector == "" {
 			continue
@@ -156,13 +178,16 @@ func (s *Service) handleListIssues(w http.ResponseWriter, r *http.Request) {
 	}
 
 	params := gormdb.IssueListParams{
-		TargetProject: project,
-		SourceProject: sourceProject,
-		SourceAgent:   sourceAgent,
-		Statuses:      statuses,
-		Type:          typeParam,
-		Limit:         limit,
-		Offset:        offset,
+		TargetProject:      project,
+		SourceProject:      sourceProject,
+		SourceAgent:        sourceAgent,
+		SourceSession:      sourceSession,
+		TargetSession:      targetSession,
+		ParticipantSession: participantSession,
+		Statuses:           statuses,
+		Type:               typeParam,
+		Limit:              limit,
+		Offset:             offset,
 	}
 	if resolvedSinceStr != "" {
 		if ms, err := strconv.ParseInt(resolvedSinceStr, 10, 64); err == nil {
@@ -173,7 +198,7 @@ func (s *Service) handleListIssues(w http.ResponseWriter, r *http.Request) {
 
 	issues, total, err := s.issueStore.ListIssuesEx(r.Context(), params)
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error": %q}`, err.Error()), http.StatusInternalServerError)
+		writeIssueStoreError(w, err)
 		return
 	}
 
@@ -208,7 +233,9 @@ func (s *Service) handleListIssues(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleGetIssue handles GET /api/issues/{id}.
+// handleGetIssue handles GET /api/issues/{id}. Lifecycle events use optional
+// history_limit (default 50, maximum 100) and exclusive history_after_id.
+// history_has_more/history_next_after_id expose continuation, never silent loss.
 func (s *Service) handleGetIssue(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
@@ -220,6 +247,11 @@ func (s *Service) handleGetIssue(w http.ResponseWriter, r *http.Request) {
 	params, err := urlParseIssueDetail(r)
 	if err != nil {
 		writeDocumentError(w, http.StatusBadRequest, "an exact canonical project ID is required")
+		return
+	}
+	historyLimit, historyAfterID, err := issueHistoryQuery(r)
+	if err != nil {
+		writeIssueStoreError(w, err)
 		return
 	}
 	var issue *gormdb.Issue
@@ -238,6 +270,11 @@ func (s *Service) handleGetIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	page, err := s.issueStore.GetIssueHistoryPage(r.Context(), id, historyLimit, historyAfterID)
+	if err != nil {
+		writeIssueStoreError(w, err)
+		return
+	}
 	roles, err := s.issueStore.ProjectRoles(r.Context(), []int64{id})
 	if err != nil {
 		writeIssueStoreError(w, err)
@@ -247,6 +284,10 @@ func (s *Service) handleGetIssue(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"issue":                       issueReadProjection(*issue, roles[id]),
 		"comments":                    comments,
+		"history_events":              page.Events,
+		"history_limit":               historyLimit,
+		"history_has_more":            page.HasMore,
+		"history_next_after_id":       page.NextAfterID,
 		"comment_count":               len(comments),
 		"source_project_display_name": s.getProjectDisplayName(r.Context(), issue.SourceProject),
 		"target_project_display_name": s.getProjectDisplayName(r.Context(), issue.TargetProject),
@@ -255,7 +296,9 @@ func (s *Service) handleGetIssue(w http.ResponseWriter, r *http.Request) {
 
 func urlParseIssueDetail(r *http.Request) (string, error) {
 	query, err := url.ParseQuery(r.URL.RawQuery)
-	if err != nil { return "", err }
+	if err != nil {
+		return "", err
+	}
 	if !query.Has("project") {
 		return "", nil
 	}
@@ -265,18 +308,22 @@ func urlParseIssueDetail(r *http.Request) (string, error) {
 	return query.Get("project"), nil
 }
 
-// handleCreateIssue handles POST /api/issues.
+// handleCreateIssue handles POST /api/issues. Optional created_by_session is a
+// caller-reported host conversation ID; client is a separate public per-call label.
+// These fields are provenance only and never alter authentication or visibility.
 func (s *Service) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Title            string   `json:"title"`
-		Body             string   `json:"body"`
-		Priority         string   `json:"priority"`
-		Type             string   `json:"type"`
-		SourceProject    string   `json:"source_project"`
-		TargetProject    string   `json:"target_project"`
-		SourceAgent      string   `json:"source_agent"`
-		CreatedBySession string   `json:"created_by_session"`
-		Labels           []string `json:"labels"`
+		Title            string          `json:"title"`
+		Body             string          `json:"body"`
+		Priority         string          `json:"priority"`
+		Type             string          `json:"type"`
+		SourceProject    string          `json:"source_project"`
+		TargetProject    string          `json:"target_project"`
+		SourceAgent      string          `json:"source_agent"`
+		CreatedBySession string          `json:"created_by_session"`
+		Client           string          `json:"client"`
+		TargetSession    json.RawMessage `json:"target_session"`
+		Labels           []string        `json:"labels"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -305,17 +352,32 @@ func (s *Service) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 	if isOperator {
 		keycardID = ""
 	}
+	attribution, err := gormdb.NewIssueAttribution("", req.CreatedBySession, req.Client)
+	if err != nil {
+		writeIssueStoreError(w, err)
+		return
+	}
+	targetSession, err := issueRecipientPatch(req.TargetSession)
+	if err != nil {
+		writeIssueStoreError(w, err)
+		return
+	}
 	issue := &gormdb.Issue{
-		Title:            req.Title,
-		Body:             req.Body,
-		Priority:         req.Priority,
-		Type:             req.Type,
-		SourceProject:    req.SourceProject,
-		TargetProject:    req.TargetProject,
-		SourceAgent:      req.SourceAgent,
-		CreatedBySession: req.CreatedBySession,
-		CreatorKeycardID: keycardID,
-		Labels:           req.Labels,
+		Title:                  req.Title,
+		Body:                   req.Body,
+		Priority:               req.Priority,
+		Type:                   req.Type,
+		SourceProject:          req.SourceProject,
+		TargetProject:          req.TargetProject,
+		SourceAgent:            req.SourceAgent,
+		CreatedBySession:       attribution.SessionID,
+		CreatedBySessionSource: attribution.SessionSource,
+		SourceClient:           attribution.Client,
+		CreatorKeycardID:       keycardID,
+		Labels:                 req.Labels,
+	}
+	if targetSession != nil {
+		issue.TargetSession = *targetSession
 	}
 
 	id, err := s.issueStore.CreateIssue(r.Context(), issue)
@@ -339,7 +401,12 @@ func (s *Service) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleUpdateIssue handles PATCH /api/issues/{id}.
+// handleUpdateIssue handles PATCH /api/issues/{id}. Read-write participants may
+// resolve, close, or reopen resolved/closed issues. Resolved awaits verification;
+// closed records the actor's checked-completion claim, not independent evidence.
+// Optional session_id (host conversation ID) and client are provenance only;
+// never replace authorization or derive from an auth/browser session.
+// target_session is a source-authority field: omission preserves, empty/null clears.
 func (s *Service) handleUpdateIssue(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
@@ -349,15 +416,18 @@ func (s *Service) handleUpdateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Status        string   `json:"status"`
-		Comment       string   `json:"comment"`
-		SourceProject string   `json:"source_project"`
-		SourceAgent   string   `json:"source_agent"`
-		Title         string   `json:"title"`
-		Body          string   `json:"body"`
-		Priority      string   `json:"priority"`
-		Type          string   `json:"type"`
-		Labels        []string `json:"labels"`
+		Status        string          `json:"status"`
+		Comment       string          `json:"comment"`
+		SourceProject string          `json:"source_project"`
+		SourceAgent   string          `json:"source_agent"`
+		SessionID     string          `json:"session_id"`
+		Client        string          `json:"client"`
+		TargetSession json.RawMessage `json:"target_session"`
+		Title         string          `json:"title"`
+		Body          string          `json:"body"`
+		Priority      string          `json:"priority"`
+		Type          string          `json:"type"`
+		Labels        []string        `json:"labels"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, `{"error": "invalid JSON body"}`, http.StatusBadRequest)
@@ -367,19 +437,31 @@ func (s *Service) handleUpdateIssue(w http.ResponseWriter, r *http.Request) {
 	// Normalize type before validation and storage.
 	req.Type = strings.ToLower(strings.TrimSpace(req.Type))
 
+	attribution, err := gormdb.NewIssueAttribution("", req.SessionID, req.Client)
+	if err != nil {
+		writeIssueStoreError(w, err)
+		return
+	}
+	targetSession, err := issueRecipientPatch(req.TargetSession)
+	if err != nil {
+		writeIssueStoreError(w, err)
+		return
+	}
 	update := gormdb.IssueUpdate{
 		Status:        req.Status,
 		Comment:       req.Comment,
 		AuthorProject: req.SourceProject,
 		AuthorAgent:   req.SourceAgent,
+		Attribution:   attribution,
 		Title:         req.Title,
 		Body:          req.Body,
 		Priority:      req.Priority,
 		Type:          req.Type,
 		Labels:        req.Labels,
+		TargetSession: targetSession,
 	}
-	// Field edits and source-terminal actions require the creator keycard or an
-	// operator. Comment-only and resolved progression require only a RW keycard.
+	// Field edits, including mixed field/status PATCHes, retain creator/operator
+	// authority. Lifecycle-only and comment-only actions permit RW participants.
 	var isOperator bool
 	if update.HasSourceAuthorityAction() {
 		isOperator, err = s.authorizeIssueSourceMutation(r.Context(), id)
@@ -580,6 +662,8 @@ type issueSelectionOperationRequest struct {
 	Labels        *[]string                 `json:"labels,omitempty"`
 	SourceProject string                    `json:"source_project"`
 	SourceAgent   string                    `json:"source_agent"`
+	SessionID     string                    `json:"session_id"`
+	Client        string                    `json:"client"`
 }
 
 type issueSelectionActionScope struct {
@@ -768,6 +852,16 @@ func (s *Service) HandleIssueSelectionOperation(w http.ResponseWriter, r *http.R
 	ids := make([]int64, len(targets))
 	for index, target := range targets {
 		ids[index] = target.ID
+	}
+	if action.Kind == gormdb.IssueSelectionStatus {
+		attribution, attrErr := gormdb.NewIssueAttribution("", request.SessionID, request.Client)
+		if attrErr != nil {
+			writeIssueSelectionError(w, attrErr)
+			return
+		}
+		action.AuthorProject = request.SourceProject
+		action.AuthorAgent = request.SourceAgent
+		action.Attribution = attribution
 	}
 	result, err := s.issueStore.ApplyIssueSelectionOperation(r.Context(), gormdb.IssueSelectionOperation{
 		Action:  action,

@@ -47,13 +47,15 @@ test('context recovery: failed preflight is not relabelled an empty successful i
   assert.doesNotMatch(result, /No issues found/);
 });
 
-test('context recovery: migration blocks issue writes and supplies the real owner inspection boundary', async t => {
+test('context recovery: migration blocks issue writes and supplies supported project-context choices', async t => {
   const { tool, calls } = fixture();
   const result = await tool.execute('recovery-create', { action: 'create', title: 'Must remain pending', target_project: target, project: target });
   t.diagnostic(result);
   assert.deepEqual(calls, ['resolve'], 'Destination/caller arguments cannot substitute for resolved actor identity');
   assert.match(result, /PROJECT_MIGRATION_REQUIRED/);
-  assert.match(result, /\/api\/projects\/consolidation\/census/, 'Essential supported inspection cannot depend on a relative guide in the foreign repository');
+  assert.match(result, /engram_project_context/, 'Ordinary recovery must use the supported host tool, not require user shell or direct HTTP');
+  assert.match(result, /\bchoices\b/);
+  assert.match(result, /\bselect\b/);
   assert.match(tool.description, /list.*get|get.*list/, 'Shipped tool description must expose the project-free preflight actions');
 });
 
@@ -62,19 +64,24 @@ test('context recovery: default workspace inbox remains scoped and held on unkno
   const result = await tool.execute('recovery-default-inbox', { action: 'list' });
   assert.deepEqual(calls, ['resolve']);
   assert.match(result, /PROJECT_MIGRATION_REQUIRED/);
-  assert.match(result, /--check/);
+  assert.match(result, /engram_project_context/);
+  assert.match(result, /\bchoices\b/);
+  assert.match(result, /\bselect\b/);
   assert.doesNotMatch(result, /No issues found/);
 });
 
-test('context recovery: historical migration names the existing encoded legacy reader', async () => {
-  const { tool } = fixture();
+test('context recovery: historical migration offers host choices/select without claiming a verified binding', async () => {
+  const { tool, calls } = fixture();
   const result = await tool.execute('legacy-held', { action: 'create', title: 'Held', target_project: target });
-  assert.match(result, /GET \/api\/projects\/resolve\?legacy_id=/);
-  assert.match(result, /URI-encoded/);
-  assert.match(result, /not a verified server binding/);
-  assert.match(result, /unresolved is not a mapping/);
-  assert.match(tool.description, /legacy_marker/);
-  assert.match(tool.description, /legacy_id=/);
+  assert.deepEqual(calls, ['resolve'], 'Historical evidence is not verified identity and cannot authorize the held write');
+  assert.match(result, /PROJECT_MIGRATION_REQUIRED/);
+  assert.match(result, /engram_project_context/);
+  assert.match(result, /\bchoices\b/);
+  assert.match(result, /\bselect\b/);
+  assert.match(result, /\bretry\b/i);
+  assert.match(tool.description, /engram_project_context/);
+  assert.match(tool.description, /\bchoices\b/);
+  assert.match(tool.description, /\bselect\b/);
 });
 
 for (const code of ['PROJECT_IDENTITY_INVALID', 'PROJECT_FUTURE_REFUSAL']) {

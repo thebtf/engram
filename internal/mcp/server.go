@@ -373,6 +373,14 @@ func (s *Server) ListTools() []Tool {
 	return tools
 }
 
+// SupportedToolCatalog returns this binary's known schemas without asserting
+// that a particular server has enabled or authorized them.
+func SupportedToolCatalog() []Tool {
+	s := &Server{}
+	resp := s.buildToolsList(&Request{Params: json.RawMessage(`{"include_all":true}`)}, true)
+	return resp.Result.(map[string]any)["tools"].([]Tool)
+}
+
 // Version returns the server version string.
 func (s *Server) Version() string {
 	return s.version
@@ -619,9 +627,9 @@ The ` + "`issues`" + ` tool tracks bugs, feature requests, and tasks between age
 **Engram issues are ONLY for engram-tracked projects.** Before filing an issue against another project, check it exists in the tracker: ` + "`GET /api/issues/tracked-projects`" + ` returns the list of projects that have observations or issues in engram. If the target project is NOT in that list, use its native issue tracker (GitHub, Linear, etc.) — engram agents working on it won't see injected issues otherwise.
 
 ### Lifecycle
-` + "`open → acknowledged (auto) → resolved (target agent) → closed (source confirms) ⟲ reopened`" + `
-- **Target agent** (assignee): resolves issues or comments with progress. Cannot close.
-- **Source agent** (creator): verifies fix and closes, OR reopens if fix didn't work.
+` + "`open → acknowledged (auto) → resolved → closed ⟲ reopened`" + `
+- **Authenticated read-write participants**, including creator and collaborators, may resolve, close, or reopen resolved/closed issues.
+- **Resolved** awaits verification. **Closed** records the acting participant's checked-completion claim; historic closed rows do not prove verification.
 - **Closed/rejected** issues disappear from all injections.
 
 ### Your Role as TARGET Agent (issue assigned to your project)
@@ -629,14 +637,14 @@ When you see ` + "`<open-issues>`" + ` in your session context:
 1. Read each issue carefully — understand what the source agent needs
 2. Work on it OR comment explaining timeline/blockers
 3. When fixed: ` + "`issues(action=\"update\", id=N, status=\"resolved\", comment=\"Fixed in commit abc123\")`" + `
-4. Do NOT close — only the source agent (or human operator) closes after verifying
+4. Close after checking completion, or leave resolved when verification is still pending; source ownership is not required for lifecycle actions.
 
 ### Your Role as SOURCE Agent (you created the issue)
 When you see ` + "`<resolved-issues from-you>`" + ` in your session context:
 1. Read the resolution comment — understand what was done
 2. Verify the fix actually works (test, read code, check behavior)
 3. If fix works: ` + "`issues(action=\"close\", id=N)`" + ` — confirms fix, removes from all injections
-4. If fix doesn't work: ` + "`issues(action=\"reopen\", id=N, body=\"Still broken because...\")`" + `
+4. If fix doesn't work: ` + "`issues(action=\"reopen\", id=N, comment=\"Still broken because...\")`" + ` — available from resolved or closed.
 
 ### Actions (mutations use the native caller's verified canonical project)
 The optional compatibility ` + "`project`" + ` argument does not establish actor identity. Mutations use the canonical project injected from the native caller context; omit the compatibility argument rather than invent a dummy value. Do not change an argument, marker or UUID to escape a hold. ` + "`target_project`" + ` is a separate destination; ` + "`project/source_project`" + ` on reads are filters.
@@ -644,16 +652,19 @@ The optional compatibility ` + "`project`" + ` argument does not establish actor
 **List assigned:** ` + "`issues(action=\"list\", project=\"<target-project>\")`" + ` — project-free authorized read.
 **Read one:** ` + "`issues(action=\"get\", id=N)`" + ` — project-free; remains available during a caller identity hold.
 **List filed:** ` + "`issues(action=\"list\", source_project=\"<source-project>\", status=\"resolved\")`" + `
-**Comment/resolve/close/reopen:** keep the existing action fields; the native caller supplies acting identity. Authorization and source-owner closure rules still apply.
+**Comment/resolve/close/reopen:** authenticated read-write participants may act. Optional ` + "`session_id`" + ` is the caller's actual bounded host conversation ID (UUID or opaque ID); safe request-transport attribution takes precedence. Optional ` + "`client`" + ` is a separate public per-call client label; ` + "`agent_source`" + ` remains the author label. Missing/unsafe attribution stays unknown without blocking a valid write. Transport/reported provenance never authenticates host ownership or grants access.
+**Recipient:** optional ` + "`target_session`" + ` on create is an explicit reference, not an assignee or live delivery claim. ` + "`issues(action=\"update\", id=N, target_session=\"...\")`" + ` sets/changes it; empty/null clears, omission preserves. Recipient edits, including mixed status changes, require creator/operator field authority. A supplied update status remains resolved-only.
+**Session selection:** list supports exact ` + "`source_session`" + ` (creator only), ` + "`target_session`" + ` (recipient), and ` + "`participant_session`" + ` (creator OR comment/lifecycle author). Supplied filters compose with AND before counting/pagination. They never establish project identity, permissions or liveness, and defaults stay unchanged.
+**Lifecycle history:** get accepts ` + "`history_limit`" + ` (default 50, maximum 100) and exclusive ` + "`history_after_id`" + `. Read ` + "`history_has_more`" + ` and continue with ` + "`history_next_after_id`" + `; no stable snapshot is implied. User comments remain separate.
 
-For CONTEXT_REQUIRED, use codebase_context list, select only the exact intended authorized context from that fresh response, verify resolve and retry the original operation. Never select an unrelated lone Source. For PROJECT_MIGRATION_REQUIRED, inspect through the host-reported installed launcher with ` + "`project resolve --root <actual-caller-root> --json --check`" + `; it does not bootstrap or pin. Preserve identity/data and follow the owner conservation boundary in the error/tool description, not project init. Guide: https://github.com/thebtf/engram/blob/main/docs/operating-engram.md#context-recovery
+For CONTEXT_REQUIRED/CONTEXT_MISMATCH, call codebase_context with action="list", select only the exact intended authorized Source/Checkout from that fresh response using its context_handle, then verify action="resolve". Never choose an unrelated lone Source. For PROJECT_MIGRATION_REQUIRED, ordinary calls attempt safe automatic resolution of a strict historical id/name marker only when the configured server authorizes one existing canonical mapping. If the intended project still needs a choice, call the local project_context tool with action="choices"; review the fresh authorized names, full project IDs and repository qualifiers, then use action="select" with that exact intended entry's selection_ref—not a guessed name or UUID. Selection binds only this actual caller/root/server; it does not migrate historical data or grant access. Preserve the original operation, target and host-session attribution. Resume unchanged after a confirmed pre-dispatch refusal; if a mutation outcome is unknown, inspect confirmation before any replay. Never select first/latest/by name alone, initialize a replacement project, use manual SQL or bypass the existing conservation safeguards. Guide: https://github.com/thebtf/engram/blob/main/docs/operating-engram.md#context-recovery
 
 ### DO NOT
-- Close issues you didn't create (only source/operator can close)
+- Claim checked completion without checking it, or treat a stored closed status as independent verification evidence
 - Change issue status without reading the issue first
-- Reopen resolved issues without verifying the fix failed
+- Reopen resolved or closed issues without identifying why the completion claim failed
 - Use store/docs for cross-project bugs — use issues
-- Create an issue without first checking for duplicates: ` + "`issues(action=\"list\", target_project=\"...\", status=\"\")`" + `
+- Create an issue without first checking for duplicates: ` + "`issues(action=\"list\", project=\"...\", status=\"\")`" + `
 - Decide that "your part is done, remaining work is another project's problem" — that is a scope decision for the operator, not the agent. Comment your analysis, but do not resolve and split into new issues without operator approval
 - Resolve an issue if the original requirement is only partially met — comment with progress instead
 
@@ -976,7 +987,11 @@ func (s *Server) primaryTools() []Tool {
 				"Mutations act as the native caller's verified canonical project; the compatibility project argument cannot establish or replace that identity. For list, project/source_project are read filters; get needs only id. These reads are project-free and remain usable during an identity hold.\n" +
 				"`target_project` = project the issue is FOR (where it will be injected).\n" +
 				"Lifecycle: open → acknowledged (auto) → resolved → closed ⟲ reopened.\n" +
-				"Target agent resolves, source agent closes. Only source or dashboard operator can close.\n\n" +
+				"Authenticated read-write participants, including creators and collaborators, may resolve, close, and reopen resolved or closed issues. Resolved awaits verification; closed records an actor's checked-completion claim, not independent evidence about historical rows. Unrelated field edits retain creator/operator authority.\n" +
+				"Optional session_id reports an actual bounded host conversation ID (UUID or opaque, maximum 256 UTF-8 bytes, no controls/surrounding whitespace); safe request-transport attribution takes precedence. Nil UUID/unsafe optional attribution remains unknown without blocking a valid write. Client is a separate public per-call label, not agent_source. Transport/reported provenance never verifies host ownership or grants authority.\n" +
+				"Create/update accept target_session: explicit recipient reference only, not assignee or liveness. Recipient-only update is allowed; omission preserves, empty/null clears. Recipient edits and mixed lifecycle/recipient updates require creator/operator field authority. Supplied update status remains resolved-only.\n" +
+				"List accepts exact source_session (creator), target_session (recipient), participant_session (creator OR comment OR lifecycle-event author); all compose with other filters before count/pagination and never alter defaults or authorization. List status accepts comma-separated statuses or empty for all.\n" +
+				"Get accepts history_limit (default 50, maximum 100), history_after_id (exclusive event ID); readback history_has_more/history_next_after_id gives explicit continuation. Lifecycle actors persist even without a comment; user comments stay separate. No historical verification or stable history snapshot is inferred.\n\n" +
 				"FORMATTING (body and comments support Markdown — rendered in dashboard):\n" +
 				"- Wrap code in fenced blocks: ```go\\nfunc main(){}\\n``` (with language tag)\n" +
 				"- Wrap terminal output: ```bash\\n$ command\\noutput\\n```\n" +
@@ -995,13 +1010,17 @@ func (s *Server) primaryTools() []Tool {
 // find_by_type removed — they were backed by internal/search (dropped). Use the
 // consolidated recall(action="search") tool instead.
 func (s *Server) handleToolsList(req *Request) *Response {
+	return s.buildToolsList(req, false)
+}
+
+func (s *Server) buildToolsList(req *Request, catalogOnly bool) *Response {
 	tools := []Tool{}
 
 	// Behavioral rules tools — only advertise when the store is wired (US3 Commit C).
 	// Advertising store_rule/list_rules when behavioralRulesStore is nil would cause
 	// every call to fail with "behavioral rules store not initialised" — unhelpful noise
 	// for deployments that have not yet run migration 089.
-	if s.behavioralRulesStore != nil {
+	if catalogOnly || s.behavioralRulesStore != nil {
 		tools = append(tools,
 			Tool{
 				Name:        "store_rule",
@@ -1033,38 +1052,38 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	}
 
 	// Recall's expanded schema remains available when memory storage is wired.
-	if s.memoryStore != nil {
+	if catalogOnly || s.memoryStore != nil {
 		tools = append(tools, recallMemoryTool())
 	}
-	if s.memoryStore != nil && s.continuitySlotStore != nil && s.auditStore != nil {
+	if catalogOnly || s.memoryStore != nil && s.continuitySlotStore != nil && s.auditStore != nil {
 		tools = append(tools, continuitySlotTool())
 	}
-	if s6OutcomeEnabledFromEnv() && s.effectiveMemorySignificanceUpdater() != nil {
+	if catalogOnly || s6OutcomeEnabledFromEnv() && s.effectiveMemorySignificanceUpdater() != nil {
 		tools = append(tools, rateMemorySignificanceTool())
 	}
-	if s2MetaMemoryEnabled() && s.metaMemoryIndex != nil {
+	if catalogOnly || s2MetaMemoryEnabled() && s.metaMemoryIndex != nil {
 		tools = append(tools, knowAboutTool())
 	}
-	if s.principalMemoryQuerySvc != nil {
+	if catalogOnly || s.principalMemoryQuerySvc != nil {
 		tools = append(tools, principalMemoryQueryTool())
 	}
 	// Native state-plane tools are advertised only when the runtime state store is wired.
-	if s.stateStore != nil {
+	if catalogOnly || s.stateStore != nil {
 		tools = append(tools, stateTool(), setStateTool())
 	}
 	// Experience/history read tools are advertised only when the CR-009 provider is wired.
-	if s.experienceProvider != nil {
+	if catalogOnly || s.experienceProvider != nil {
 		tools = append(tools, experienceHistoryTools()...)
 	}
-	if s.temporalTruthProvider != nil && temporalTruthEnabledFromEnv() {
+	if catalogOnly || s.temporalTruthProvider != nil && temporalTruthEnabledFromEnv() {
 		tools = append(tools, temporalTruthTool(), temporalTruthRefreshTool())
 	}
-	if s.directiveCaptureService != nil && directivesCaptureEnabledFromEnv() {
+	if catalogOnly || s.directiveCaptureService != nil && directivesCaptureEnabledFromEnv() {
 		tools = append(tools, rememberDirectiveTool())
 	}
 
 	// Adaptive memory tools — advertise only when memory store is available AND adaptive features are enabled.
-	if s.memoryStore != nil {
+	if catalogOnly || s.memoryStore != nil {
 		tools = append(tools,
 			Tool{
 				Name:        "get_memory_brief",
@@ -1091,18 +1110,18 @@ func (s *Server) handleToolsList(req *Request) *Response {
 
 	// Crystallization candidate tools — advertised only when ENGRAM_VNEXT_F_ENABLED=true
 	// and the candidate store is wired (Milestone-F TG4 T026).
-	if s.candidateStore != nil {
+	if catalogOnly || s.candidateStore != nil {
 		tools = append(tools, candidateTools()...)
 	}
 
 	// Governance tools (Milestone-F TG6 T043): snapshot list/rollback/pin + redaction status.
 	// Admin-gated at handler level; advertised only when snapshotStore is wired.
-	if s.snapshotStore != nil {
+	if catalogOnly || s.snapshotStore != nil {
 		tools = append(tools, governanceTools()...)
 	}
 
-	if s.ruleGovernanceReadStore != nil {
-		tools = append(tools, ruleGovernanceReadTools(s.ruleInjectionTelemetry != nil)...)
+	if catalogOnly || s.ruleGovernanceReadStore != nil {
+		tools = append(tools, ruleGovernanceReadTools(catalogOnly || s.ruleInjectionTelemetry != nil)...)
 	}
 
 	// Bulk-op tools (Milestone-F TG6 T044): bulk_promote/delete/supersede with dry-run.
@@ -1115,27 +1134,27 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	// Code intelligence search is available through scoped UCI or the explicit
 	// legacy-only rollback reader; a scoped application always takes precedence.
 	// codebase_status remains daemon-owned and is not advertised here.
-	if codeIntelEnabled() && (s.hasCodebaseIntelligenceApplication() || s.hasLegacyUnscopedCodeChunkStore()) {
+	if catalogOnly || codeIntelEnabled() && (s.hasCodebaseIntelligenceApplication() || s.hasLegacyUnscopedCodeChunkStore()) {
 		tools = append(tools, codebaseSearchTool())
 	}
-	if codeIntelEnabled() && s.hasCodebaseContextApplication() {
+	if catalogOnly || codeIntelEnabled() && s.hasCodebaseContextApplication() {
 		tools = append(tools, codebaseContextTool())
 	}
-	if codeIntelEnabled() && s.hasCodebaseReadApplication() {
+	if catalogOnly || codeIntelEnabled() && s.hasCodebaseReadApplication() {
 		tools = append(tools, codebaseReadTool())
 	}
-	if codeIntelEnabled() && s.hasCodebaseGraphApplication() {
+	if catalogOnly || codeIntelEnabled() && s.hasCodebaseGraphApplication() {
 		tools = append(tools, codebaseGraphTool())
 	}
 
 	// Ambient fallback polling — advertise only when the S3 flag is on and the queue seam is wired.
-	if ambientHintsEnabledFromEnv() && s.hintQueue != nil {
+	if catalogOnly || ambientHintsEnabledFromEnv() && s.hintQueue != nil {
 		tools = append(tools, ambientHintsTool())
 	}
 
 	// Lifecycle tool — advertise when memory store + promotion store are available
 	// and ENGRAM_LIFECYCLE_ENABLED is true.
-	if s.memoryStore != nil && s.promotionStore != nil {
+	if catalogOnly || s.memoryStore != nil && s.promotionStore != nil {
 		tools = append(tools, Tool{
 			Name:        "lifecycle",
 			Description: "[Lifecycle] Manage memory lifecycle: view tier/decay info, promote/demote, set confidence, preview decay, check sleep cycle status.",
@@ -1157,7 +1176,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	}
 
 	// Historical graph reads remain available without a legacy feature flag.
-	if s.graphStore != nil {
+	if catalogOnly || s.graphStore != nil {
 		tools = append(tools, Tool{
 			Name:        "graph",
 			Description: "[Graph] Read historical graph edges, traversals, paths, and synonyms.",
@@ -1183,7 +1202,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	}
 
 	// Ingest tool — always available when memory store exists
-	if s.memoryStore != nil {
+	if catalogOnly || s.memoryStore != nil {
 		tools = append(tools, Tool{
 			Name:        "ingest",
 			Description: "[Ingest] Ingest documents into engram as chunked memories with source provenance. Level 1: raw chunking, no LLM needed.",

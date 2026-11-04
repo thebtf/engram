@@ -98,6 +98,35 @@ export function createEngramMemoryExtension(options = {}) {
       const result = await ambientMessage(event, ctx);
       return result ? { message: result } : undefined;
     });
+    pi.on('tool_call', (event, ctx) => {
+      try {
+        if (typeof event?.toolName !== 'string' || !event.toolName.startsWith('mcp__')) return;
+        const tools = pi.getAllTools?.();
+        if (!Array.isArray(tools)) return;
+        let selected;
+        for (const tool of tools) {
+          if (tool?.name !== event.toolName) continue;
+          if (selected) return;
+          selected = tool;
+        }
+        const schema = selected?.parameters;
+        const properties = schema?.properties;
+        const sessionField = properties?.session_id;
+        const clientField = properties?.client;
+        if (selected?.sourceInfo?.source !== 'mcp' || !schema || typeof schema !== 'object' || Array.isArray(schema)
+          || schema.type !== 'object' || schema['x-engram-caller-context'] !== 'issues/v1'
+          || !properties || typeof properties !== 'object' || Array.isArray(properties)
+          || !sessionField || typeof sessionField !== 'object' || Array.isArray(sessionField) || sessionField.type !== 'string'
+          || !clientField || typeof clientField !== 'object' || Array.isArray(clientField) || clientField.type !== 'string') return;
+        const input = event.input;
+        if (!input || typeof input !== 'object' || Array.isArray(input)) return;
+        const session = ctx?.sessionManager?.getSessionId?.();
+        if (typeof session !== 'string' || session.length !== 36
+          || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(session)) return;
+        // The marker opts into reported provenance, not authenticated origin or authorization.
+        return { input: { ...input, session_id: session, client: 'omp' } };
+      } catch { return; }
+    });
     const controller = new AbortController();
     const deadlineAt = Date.now() + DOWNLOAD_DEADLINE_MS;
     let onAbort, preparation, stage = 'config';

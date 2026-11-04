@@ -98,18 +98,18 @@ func TestIssueHTTPCollaboratorProgressionProtectsSourceActions(t *testing.T) {
 	require.Equal(t, commentProject, comments[0].AuthorProject)
 
 	for _, body := range []map[string]any{
-		{"title": "foreign field edit"},
-		{"status": "resolved", "title": "mixed foreign edit"},
-		{"status": "reopened"},
-		{"status": "closed"},
+		{"title": "foreign field edit", "comment": "denied field edit"},
+		{"status": "resolved", "title": "mixed foreign edit", "comment": "denied resolve"},
+		{"status": "reopened", "title": "mixed foreign edit", "comment": "denied reopen"},
+		{"status": "closed", "title": "mixed foreign edit", "comment": "denied close"},
 	} {
 		rec := httptest.NewRecorder()
 		service.handleUpdateIssue(rec, issueHTTPRouteRequest(t, http.MethodPatch, id, body, foreign))
 		require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
-		issue, _, err := service.issueStore.GetIssue(context.Background(), id)
+		actual, actualComments, err := service.issueStore.GetIssue(context.Background(), id)
 		require.NoError(t, err)
-		require.Equal(t, "HTTP issue auth", issue.Title)
-		require.Equal(t, "resolved", issue.Status)
+		require.Equal(t, issue, actual)
+		require.Equal(t, comments, actualComments)
 	}
 
 	ownerID := createIssueHTTPFixture(t, store, service.issueStore, project, "keycard-owner", "resolved")
@@ -125,27 +125,116 @@ func TestIssueHTTPCollaboratorProgressionProtectsSourceActions(t *testing.T) {
 	}
 }
 
+func TestIssueHTTPAuthenticatedParticipantsCanResolveCloseAndReopen(t *testing.T) {
+	service, store := newIssueHTTPTestService(t)
+	project := seedWorkerTestProject(t, store.GetDB(), t.Name())
+	for _, actor := range []struct {
+		name    string
+		keycard string
+	}{
+		{"creator", "keycard-owner"},
+		{"collaborator", "keycard-second"},
+	} {
+		t.Run(actor.name, func(t *testing.T) {
+			for _, tc := range []struct{ name, from, to string }{
+				{"resolve", "open", "resolved"},
+				{"close", "resolved", "closed"},
+				{"reopen_resolved", "resolved", "reopened"},
+				{"reopen_closed", "closed", "reopened"},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					id := createIssueHTTPFixture(t, store, service.issueStore, project, "keycard-owner", tc.from)
+					_, err := service.issueStore.AddComment(context.Background(), id, &gormdb.IssueComment{
+						AuthorProject: project, Body: "existing history",
+					})
+					require.NoError(t, err)
+					before, history, err := service.issueStore.GetIssue(context.Background(), id)
+					require.NoError(t, err)
+					rec := httptest.NewRecorder()
+					service.handleUpdateIssue(rec, issueHTTPRouteRequest(t, http.MethodPatch, id, map[string]any{
+						"status": tc.to, "comment": "participant transition", "source_project": project,
+					}, auth.Client("read-write", actor.keycard)))
+					require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+					issue, comments, err := service.issueStore.GetIssue(context.Background(), id)
+					require.NoError(t, err)
+					require.Equal(t, tc.to, issue.Status)
+					require.Equal(t, before.Title, issue.Title)
+					require.Equal(t, before.SourceProject, issue.SourceProject)
+					require.Equal(t, before.TargetProject, issue.TargetProject)
+					require.Equal(t, before.SourceAgent, issue.SourceAgent)
+					require.Equal(t, before.CreatorKeycardID, issue.CreatorKeycardID)
+					require.Equal(t, before.CreatedAt, issue.CreatedAt)
+					require.Len(t, comments, 2)
+					require.Contains(t, comments, history[0])
+					for _, comment := range comments {
+						if comment.ID != history[0].ID {
+							require.Equal(t, "participant transition", comment.Body)
+							require.Equal(t, project, comment.AuthorProject)
+						}
+					}
+					switch tc.to {
+					case "resolved":
+						require.NotNil(t, issue.ResolvedAt)
+					case "closed":
+						require.NotNil(t, issue.ClosedAt)
+					case "reopened":
+						require.NotNil(t, issue.ReopenedAt)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestIssueHTTPProgressionRejectsMissingAndReadOnlyIdentity(t *testing.T) {
 	service, store := newIssueHTTPTestService(t)
 	project := seedWorkerTestProject(t, store.GetDB(), t.Name())
-	id := createIssueHTTPFixture(t, store, service.issueStore, project, "keycard-owner", "open")
-	payload, err := json.Marshal(map[string]any{"status": "resolved"})
-	require.NoError(t, err)
-	missing := httptest.NewRequest(http.MethodPatch, "/api/issues/"+strconv.FormatInt(id, 10), bytes.NewReader(payload))
-	routeCtx := chi.NewRouteContext()
-	routeCtx.URLParams.Add("id", strconv.FormatInt(id, 10))
-	missing = missing.WithContext(context.WithValue(missing.Context(), chi.RouteCtxKey, routeCtx))
-	rec := httptest.NewRecorder()
-	service.handleUpdateIssue(rec, missing)
-	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
-
-	rec = httptest.NewRecorder()
-	service.handleUpdateIssue(rec, issueHTTPRouteRequest(t, http.MethodPatch, id, map[string]any{"comment": "denied"}, auth.Client("read-only", "keycard-read-only")))
-	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
-	issue, comments, err := service.issueStore.GetIssue(context.Background(), id)
-	require.NoError(t, err)
-	require.Equal(t, "open", issue.Status)
-	require.Empty(t, comments)
+	for _, actor := range []struct {
+		name     string
+		identity auth.Identity
+		missing  bool
+	}{
+		{"missing", auth.Identity{}, true},
+		{"read_only", auth.Client("read-only", "keycard-read-only"), false},
+		{"missing_keycard", auth.Client("read-write", ""), false},
+	} {
+		t.Run(actor.name, func(t *testing.T) {
+			for _, tc := range []struct{ name, from, status string }{
+				{"resolve", "open", "resolved"},
+				{"close", "resolved", "closed"},
+				{"reopen_resolved", "resolved", "reopened"},
+				{"reopen_closed", "closed", "reopened"},
+				{"comment", "open", ""},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					id := createIssueHTTPFixture(t, store, service.issueStore, project, "keycard-owner", tc.from)
+					_, err := service.issueStore.AddComment(context.Background(), id, &gormdb.IssueComment{
+						AuthorProject: project, Body: "preserved history",
+					})
+					require.NoError(t, err)
+					before, history, err := service.issueStore.GetIssue(context.Background(), id)
+					require.NoError(t, err)
+					body := map[string]any{"status": tc.status, "comment": "denied", "source_project": project}
+					req := issueHTTPRouteRequest(t, http.MethodPatch, id, body, actor.identity)
+					if actor.missing {
+						payload, err := json.Marshal(body)
+						require.NoError(t, err)
+						req = httptest.NewRequest(http.MethodPatch, "/api/issues/"+strconv.FormatInt(id, 10), bytes.NewReader(payload))
+						routeCtx := chi.NewRouteContext()
+						routeCtx.URLParams.Add("id", strconv.FormatInt(id, 10))
+						req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, routeCtx))
+					}
+					rec := httptest.NewRecorder()
+					service.handleUpdateIssue(rec, req)
+					require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+					issue, comments, err := service.issueStore.GetIssue(context.Background(), id)
+					require.NoError(t, err)
+					require.Equal(t, before, issue)
+					require.Equal(t, history, comments)
+				})
+			}
+		})
+	}
 }
 
 func TestIssueHTTPLegacyAllowsProgressionButRestrictsSourceActions(t *testing.T) {
@@ -155,20 +244,38 @@ func TestIssueHTTPLegacyAllowsProgressionButRestrictsSourceActions(t *testing.T)
 	client := auth.Client("read-write", "keycard-client")
 	for _, body := range []map[string]any{
 		{"status": "resolved"},
-		{"comment": "legacy collaboration"},
+		{"comment": "legacy collaboration", "source_project": project},
 	} {
 		rec := httptest.NewRecorder()
 		service.handleUpdateIssue(rec, issueHTTPRouteRequest(t, http.MethodPatch, id, body, client))
 		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	}
-	for _, body := range []map[string]any{{"title": "forbidden"}, {"status": "reopened"}, {"status": "closed"}} {
+	before, history, err := service.issueStore.GetIssue(context.Background(), id)
+	require.NoError(t, err)
+	for _, body := range []map[string]any{
+		{"title": "forbidden", "comment": "denied"},
+		{"status": "closed", "title": "forbidden", "comment": "denied"},
+	} {
 		rec := httptest.NewRecorder()
 		service.handleUpdateIssue(rec, issueHTTPRouteRequest(t, http.MethodPatch, id, body, client))
 		require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+		issue, comments, err := service.issueStore.GetIssue(context.Background(), id)
+		require.NoError(t, err)
+		require.Equal(t, before, issue)
+		require.Equal(t, history, comments)
 	}
-	rec := httptest.NewRecorder()
-	service.handleUpdateIssue(rec, issueHTTPRouteRequest(t, http.MethodPatch, id, map[string]any{"status": "closed"}, auth.Admin()))
-	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	for _, status := range []string{"closed", "reopened"} {
+		rec := httptest.NewRecorder()
+		service.handleUpdateIssue(rec, issueHTTPRouteRequest(t, http.MethodPatch, id, map[string]any{"status": status}, client))
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		issue, comments, err := service.issueStore.GetIssue(context.Background(), id)
+		require.NoError(t, err)
+		require.Equal(t, status, issue.Status)
+		require.Empty(t, issue.CreatorKeycardID)
+		require.Equal(t, before.Title, issue.Title)
+		require.Equal(t, before.SourceProject, issue.SourceProject)
+		require.Equal(t, history, comments)
+	}
 }
 
 func TestIssueHTTPOperatorOnlyRoutesAndAtomicAcknowledge(t *testing.T) {

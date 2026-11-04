@@ -68,7 +68,7 @@ const cases = [
     success: /^Issue created:/,
     expected: (labels) => ({
       method: 'createIssue',
-      issue: { title: 'Collection title', body: undefined, priority: 'medium', source_project: project, target_project: project, source_agent: ctx.agentId, labels },
+      issue: { title: 'Collection title', body: undefined, priority: 'medium', source_project: project, target_project: project, source_agent: ctx.agentId, client: 'openclaw', created_by_session: ctx.sessionId, labels },
     }),
   },
 ];

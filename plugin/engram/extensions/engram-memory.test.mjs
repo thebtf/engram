@@ -67,7 +67,7 @@ test('OMP binding shares one background preparation across repeated installation
   await Promise.all([adapter.install(pi), adapter.install(pi)]);
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(preparations, 1);
-  assert.equal(registrations, 2);
+  assert.equal(registrations, 3);
   await handlers.get('session_start')({ cwd: '/session/a', sessionId: 'early' }, {});
   assert.equal(await handlers.get('before_agent_start')({ cwd: '/session/a', sessionId: 'early', prompt: 'fixture' }, {}), undefined);
   assert.equal(configurations, 1, 'pending callbacks must not start their own configuration work');
@@ -165,7 +165,7 @@ test('OMP install registers before cold readiness without executing the first sh
   t.diagnostic(JSON.stringify({ installState, trustedCAS: fs.existsSync(object), requests, executions: executions.length, contextRequests: contextRequests.length }));
   assert.equal(fs.existsSync(object), false);
   assert.equal(installState, 'ready', 'cold acquisition must not block foreground installation');
-  assert.deepEqual([...handlers.keys()], ['session_start', 'before_agent_start']);
+  assert.deepEqual([...handlers.keys()], ['session_start', 'before_agent_start', 'tool_call']);
   await handlers.get('session_start')({ cwd: '/session/a', sessionId: 'early-skipped' }, {});
   t.mock.timers.tick(5001);
   await new Promise(resolve => setImmediate(resolve));
@@ -259,7 +259,7 @@ test('OMP background readiness handles offline, hash and cooperative abort failu
       await installing;
       await new Promise(resolve => setImmediate(resolve));
       assert.equal(installError, undefined, 'background failure must not reject foreground registration');
-      assert.deepEqual([...handlers.keys()], ['session_start', 'before_agent_start']);
+      assert.deepEqual([...handlers.keys()], ['session_start', 'before_agent_start', 'tool_call']);
       await handlers.get('session_start')({ cwd: '/session/a', sessionId: mode }, {});
       assert.equal(await handlers.get('before_agent_start')({ cwd: '/session/a', sessionId: mode, prompt: 'fixture' }, {}), undefined);
       assert.match(diagnostics.join('\n'), /readiness unavailable/, 'genuine failed/corrupt/cancelled readiness must remain visible');
@@ -511,7 +511,7 @@ for (const mode of ['unconfigured', 'config-quiet']) {
     });
     await adapter.install({ on: (name, callback) => handlers.set(name, callback), sendMessage() { messages++; } });
     await new Promise(resolve => setImmediate(resolve));
-    assert.deepEqual([...handlers.keys()], ['session_start', 'before_agent_start']);
+    assert.deepEqual([...handlers.keys()], ['session_start', 'before_agent_start', 'tool_call']);
     assert.equal(await handlers.get('session_start')({ cwd: '/session/a', sessionId: mode }, {}), undefined);
     assert.equal(await handlers.get('before_agent_start')({ cwd: '/session/a', sessionId: mode, prompt: 'fixture' }, {}), undefined);
     const ineligibleDiagnostics = [...diagnostics];
@@ -601,7 +601,7 @@ test('OMP background readiness budget includes config and never trusts late prep
   await new Promise(resolve => setImmediate(resolve));
   t.mock.timers.tick(59999);
   assert.equal(preparedSignal.aborted, false);
-  assert.deepEqual([...handlers.keys()], ['session_start', 'before_agent_start']);
+  assert.deepEqual([...handlers.keys()], ['session_start', 'before_agent_start', 'tool_call']);
   t.mock.timers.tick(1);
   await installed;
   await new Promise(resolve => setImmediate(resolve));
@@ -611,7 +611,7 @@ test('OMP background readiness budget includes config and never trusts late prep
   assert.equal(executions.length, 0, 'late completion of the expired preparation must not execute a client');
   assert.equal(calls.length, 0, 'late preparation completion must not replay any context request');
   assert.equal(sent.length, 0);
-  assert.deepEqual([...handlers.keys()], ['session_start', 'before_agent_start']);
+  assert.deepEqual([...handlers.keys()], ['session_start', 'before_agent_start', 'tool_call']);
   assert.equal(await handlers.get('session_start')({ cwd: '/session/a', sessionId: 'expired' }, {}), undefined);
   assert.equal(await handlers.get('before_agent_start')({ cwd: '/session/a', sessionId: 'expired', prompt: 'fixture' }, {}), undefined);
   assert.equal(calls.length, 0);

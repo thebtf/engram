@@ -1103,6 +1103,15 @@ func handleUserUpdateError(w http.ResponseWriter, err error) {
 // These are registered on the chi router in setupRoutes and delegate to s.authHandlers,
 // returning 503 Service Unavailable if the handler is not yet initialized (async init).
 
+// handleUserSetupNeeded godoc
+// @Summary Check whether first-admin setup is needed
+// @Description Public route. Returns 503 if the auth handler is not initialized or the user store is unavailable, and 500 if counting users fails. A successful response has needed=true when the initialized user store counts zero users; this does not grant setup authority.
+// @Tags Auth
+// @Produce json
+// @Success 200 {object} map[string]bool
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/auth/setup-needed [get]
 func (s *Service) handleUserSetupNeeded(w http.ResponseWriter, r *http.Request) {
 	s.initMu.RLock()
 	h := s.authHandlers
@@ -1114,6 +1123,21 @@ func (s *Service) handleUserSetupNeeded(w http.ResponseWriter, r *http.Request) 
 	h.handleSetupNeeded(w, r)
 }
 
+// handleUserSetup godoc
+// @Summary Create the first browser admin
+// @Description Requires the server-host operator bearer token even when setup-needed is true. JSON requires nonblank email and nonempty password. Returns user without setting a login cookie. Existing users return 409. Current bcrypt failures, including password inputs over 72 bytes, return 500 rather than a validation error (issue 539).
+// @Tags Auth
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param body body map[string]string true "Required email and password strings"
+// @Success 201 {object} map[string]interface{}
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 409 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/auth/setup [post]
 func (s *Service) handleUserSetup(w http.ResponseWriter, r *http.Request) {
 	s.initMu.RLock()
 	h := s.authHandlers
@@ -1125,6 +1149,21 @@ func (s *Service) handleUserSetup(w http.ResponseWriter, r *http.Request) {
 	h.handleSetup(w, r)
 }
 
+// handleUserLogin godoc
+// @Summary Sign in with email and password
+// @Description JSON requires email and password. Returns safe user metadata and sets the private HttpOnly engram_auth cookie (SameSite=Lax, 7 days); no credential is returned in JSON. Failed credentials return 401, disabled accounts 403, and login throttling 429.
+// @Tags Auth
+// @Accept json
+// @Produce json
+// @Param body body map[string]string true "Required email and password strings"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 403 {object} map[string]string
+// @Failure 429 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/auth/user-login [post]
 func (s *Service) handleUserLogin(w http.ResponseWriter, r *http.Request) {
 	s.initMu.RLock()
 	h := s.authHandlers
@@ -1136,6 +1175,15 @@ func (s *Service) handleUserLogin(w http.ResponseWriter, r *http.Request) {
 	h.handleLogin(w, r)
 }
 
+// handleUserLogout godoc
+// @Summary Revoke the current browser login
+// @Description Revokes the private cookie session and clears engram_auth; absent cookie succeeds with status=ok. A foreign or opaque Origin is rejected before mutation. A revocation failure returns 503 without claiming logout.
+// @Tags Auth
+// @Produce json
+// @Success 200 {object} map[string]string
+// @Failure 403 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/auth/user-logout [post]
 func (s *Service) handleUserLogout(w http.ResponseWriter, r *http.Request) {
 	if !s.requireLogoutOrigin(w, r) {
 		return
@@ -1150,6 +1198,20 @@ func (s *Service) handleUserLogout(w http.ResponseWriter, r *http.Request) {
 	h.handleLogout(w, r)
 }
 
+// handleUserRegister godoc
+// @Summary Register using an invitation
+// @Description JSON requires email, password and invitation. Password must contain at least 8 bytes under the current len check; bcrypt inputs over 72 bytes currently return 500. Invitation consumption and user creation are transactional. Returns safe user metadata, not a login cookie.
+// @Tags Auth
+// @Accept json
+// @Produce json
+// @Param body body map[string]string true "Required email, password and invitation strings"
+// @Success 201 {object} map[string]interface{}
+// @Failure 400 {object} map[string]string
+// @Failure 403 {object} map[string]string
+// @Failure 409 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/auth/register [post]
 func (s *Service) handleUserRegister(w http.ResponseWriter, r *http.Request) {
 	s.initMu.RLock()
 	h := s.authHandlers

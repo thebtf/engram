@@ -694,7 +694,7 @@ func consolidationDomain(table string) string {
 		return "immutable_audit"
 	case "sources", "space_sources", "legacy_context_aliases", "content_chunks", "knowledge_edges":
 		return "derived_membership"
-	case "audit_log", "memory_versions", "memory_audit_log", "memory_audits", "versioned_document_comments", "issue_comments", "rule_versions", "rule_families", "rule_transition_log", "rule_governance_snapshots", "bulk_op_snapshots", "agent_session_state", "citation_log", "promotion_log", "rule_arbiter_evaluations":
+	case "audit_log", "memory_versions", "memory_audit_log", "memory_audits", "versioned_document_comments", "issue_comments", "issue_history_events", "rule_versions", "rule_families", "rule_transition_log", "rule_governance_snapshots", "bulk_op_snapshots", "agent_session_state", "citation_log", "promotion_log", "rule_arbiter_evaluations":
 		return "durable_history"
 	}
 	if strings.HasPrefix(table, "ci_") || strings.HasPrefix(table, "uci_") {

@@ -257,38 +257,44 @@ func (APIToken) TableName() string { return "api_tokens" }
 // raw SQL, not AutoMigrate — stays live until its CR-3 DROP migration.)
 
 // Issue represents a cross-project issue filed by an agent.
-// Lifecycle: open → acknowledged → resolved ⟲ reopened
+// Resolved awaits verification; closed records a participant's checked-completion claim.
 type Issue struct {
-	ID               int64                  `gorm:"primaryKey;autoIncrement" json:"id"`
-	Title            string                 `gorm:"type:text;not null" json:"title"`
-	Body             string                 `gorm:"type:text" json:"body"`
-	Status           string                 `gorm:"type:text;not null;default:'open';check:status IN ('open','acknowledged','resolved','reopened');index:idx_issues_target_status,priority:2" json:"status"`
-	Priority         string                 `gorm:"type:text;not null;default:'medium';check:priority IN ('critical','high','medium','low')" json:"priority"`
-	Type             string                 `gorm:"type:text;not null;default:task" json:"type"`
-	SourceProject    string                 `gorm:"type:text;not null;index:idx_issues_source_project" json:"source_project"`
-	TargetProject    string                 `gorm:"type:text;not null;index:idx_issues_target_status,priority:1" json:"target_project"`
-	SourceAgent      string                 `gorm:"type:text" json:"source_agent"`
-	CreatedBySession string                 `gorm:"type:text" json:"created_by_session"`
-	CreatorKeycardID string                 `gorm:"type:text" json:"-"`
-	Labels           models.JSONStringArray `gorm:"type:jsonb;default:'[]'" json:"labels"`
-	AcknowledgedAt   *time.Time             `gorm:"type:timestamptz" json:"acknowledged_at"`
-	ResolvedAt       *time.Time             `gorm:"type:timestamptz" json:"resolved_at"`
-	ReopenedAt       *time.Time             `gorm:"type:timestamptz" json:"reopened_at"`
-	ClosedAt         *time.Time             `gorm:"type:timestamptz" json:"closed_at"`
-	CreatedAt        time.Time              `gorm:"type:timestamptz;not null;default:now()" json:"created_at"`
-	UpdatedAt        time.Time              `gorm:"type:timestamptz;not null;default:now()" json:"updated_at"`
+	ID                     int64                  `gorm:"primaryKey;autoIncrement" json:"id"`
+	Title                  string                 `gorm:"type:text;not null" json:"title"`
+	Body                   string                 `gorm:"type:text" json:"body"`
+	Status                 string                 `gorm:"type:text;not null;default:'open';check:status IN ('open','acknowledged','resolved','reopened');index:idx_issues_target_status,priority:2" json:"status"`
+	Priority               string                 `gorm:"type:text;not null;default:'medium';check:priority IN ('critical','high','medium','low')" json:"priority"`
+	Type                   string                 `gorm:"type:text;not null;default:task" json:"type"`
+	SourceProject          string                 `gorm:"type:text;not null;index:idx_issues_source_project" json:"source_project"`
+	TargetProject          string                 `gorm:"type:text;not null;index:idx_issues_target_status,priority:1" json:"target_project"`
+	SourceAgent            string                 `gorm:"type:text" json:"source_agent"`
+	CreatedBySession       string                 `gorm:"type:text" json:"created_by_session"`
+	CreatedBySessionSource string                 `gorm:"type:text;not null;default:''" json:"created_by_session_source"`
+	SourceClient           string                 `gorm:"type:text;not null;default:''" json:"source_client"`
+	TargetSession          string                 `gorm:"type:text;not null;default:''" json:"target_session"`
+	CreatorKeycardID       string                 `gorm:"type:text" json:"-"`
+	Labels                 models.JSONStringArray `gorm:"type:jsonb;default:'[]'" json:"labels"`
+	AcknowledgedAt         *time.Time             `gorm:"type:timestamptz" json:"acknowledged_at"`
+	ResolvedAt             *time.Time             `gorm:"type:timestamptz" json:"resolved_at"`
+	ReopenedAt             *time.Time             `gorm:"type:timestamptz" json:"reopened_at"`
+	ClosedAt               *time.Time             `gorm:"type:timestamptz" json:"closed_at"`
+	CreatedAt              time.Time              `gorm:"type:timestamptz;not null;default:now()" json:"created_at"`
+	UpdatedAt              time.Time              `gorm:"type:timestamptz;not null;default:now()" json:"updated_at"`
 }
 
 func (Issue) TableName() string { return "issues" }
 
 // IssueComment represents a comment on an issue, enabling dialogue between agents.
 type IssueComment struct {
-	ID            int64     `gorm:"primaryKey;autoIncrement" json:"id"`
-	IssueID       int64     `gorm:"not null;index:idx_issue_comments_issue_created,priority:1" json:"issue_id"`
-	AuthorProject string    `gorm:"type:text;not null" json:"author_project"`
-	AuthorAgent   string    `gorm:"type:text" json:"author_agent"`
-	Body          string    `gorm:"type:text;not null" json:"body"`
-	CreatedAt     time.Time `gorm:"type:timestamptz;not null;default:now();index:idx_issue_comments_issue_created,priority:2" json:"created_at"`
+	ID                  int64     `gorm:"primaryKey;autoIncrement" json:"id"`
+	IssueID             int64     `gorm:"not null;index:idx_issue_comments_issue_created,priority:1" json:"issue_id"`
+	AuthorProject       string    `gorm:"type:text;not null" json:"author_project"`
+	AuthorAgent         string    `gorm:"type:text" json:"author_agent"`
+	AuthorSession       string    `gorm:"type:text;not null;default:''" json:"author_session"`
+	AuthorSessionSource string    `gorm:"type:text;not null;default:''" json:"author_session_source"`
+	AuthorClient        string    `gorm:"type:text;not null;default:''" json:"author_client"`
+	Body                string    `gorm:"type:text;not null" json:"body"`
+	CreatedAt           time.Time `gorm:"type:timestamptz;not null;default:now();index:idx_issue_comments_issue_created,priority:2" json:"created_at"`
 }
 
 func (IssueComment) TableName() string { return "issue_comments" }

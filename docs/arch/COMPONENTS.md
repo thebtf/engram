@@ -10,10 +10,25 @@ Source: `cmd/engram-server/main.go`, `internal/worker/service.go`.
 ## `engram`
 
 The local executable is the MCP stdio daemon launched by an agent host. It uses
-the workstation `ENGRAM_URL` and `ENGRAM_TOKEN` to reach the server over gRPC.
-Its current fatal diagnostic still names the old `/tokens` browser route; that is
-a source contradiction, not public setup guidance.
-Source: `cmd/engram/main.go`, `internal/config/envnames.go`.
+the workstation `ENGRAM_URL` to reach the server over gRPC. The plugin launcher's
+ordinary MCP startup rejects a missing URL, not an empty token. Tokenless
+transport is supported for an auth-disabled server; an auth-enabled server
+requires an appropriate workstation keycard through `ENGRAM_TOKEN`. Current
+daemon help and launcher diagnostics no longer direct users to a `/tokens`
+browser page. The promoted console's `/access` administration surface is not an
+accepted browser keycard-issuance journey.
+Source: `cmd/engram/main.go`, `internal/config/envnames.go`,
+[`run-engram.js`](../../plugin/engram/scripts/run-engram.js).
+
+The local [project_context tool](../../internal/handlers/engramcore/project_context.go)
+is available before canonical project resolution. Its read-only `choices` and
+caller-bound `select` use the native
+[recovery resolver](../../internal/projectidentity/logical_recovery.go) and
+authorized REST catalog/mapping readers; ordinary tool execution remains gRPC.
+Selection persists only a caller-scoped local binding, not a historical marker,
+project migration or permission grant. The
+[recovery contract](API_CONTRACTS.md#supported-recovery-actions) states trust,
+limits and original-operation resumption; this is not installed-client acceptance.
 
 ## Lifecycle hooks
 
@@ -24,15 +39,22 @@ Source: `plugin/engram/hooks/`, `internal/worker/service.go`.
 
 ## Operator console
 
-The promoted console source is the Nuxt application in `apps/operator-console/`.
-The server embeds its generated static output by default and can proxy it to an
-explicit external upstream. The Compose stack also starts that Nuxt application
-as an independent service. The current page-file inventory is in
-[current-surface.json](current-surface.json).
+The promoted console is the Vue 3/Vite application in `apps/operator-console/`,
+not Nuxt. `Dockerfile` builds it, embeds `.output/public/` in the Go server and
+also packages the dependency-free Node host for the separate Compose service.
+The host forwards `/api/*` to `ENGRAM_OPERATOR_API_TARGET`; Go remains the owner
+of durable state and authorization. Its `.output/` and `/_nuxt/` names are output
+compatibility paths, not evidence of a Nuxt runtime.
 
-Nuxt's file-based routing maps its page components to routes; use the inventory
-as a source-derived route map, not as proof that every administrative workflow
-is accepted for public documentation.
+`apps/operator-web/` is a separate Nuxt application and additional HTTP consumer;
+it is not the source selected by the released Docker/Compose recipe. The legacy
+`make dashboard` still builds `ui/` and replaces the embedded static directory;
+`make build` calls that target. This build split exists and is not repaired here.
+Both clients still import `ui/src/utils/projectCatalog.ts`, so removing `ui/` requires
+preserving or relocating that shared utility first.
+See [API contracts](API_CONTRACTS.md#replacement-ui-and-deployment-boundary) for
+base URLs, cookie forwarding and the exact client/Go ownership boundary. The
+retained [surface ledger](current-surface.json) is not deployment acceptance.
 
 ## Feature gates
 

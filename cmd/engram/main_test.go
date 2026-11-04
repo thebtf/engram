@@ -315,6 +315,23 @@ func TestReadLiveMuxcoreDaemonActionRejectsUncorrelatedHigherEpoch(t *testing.T)
 	}
 }
 
+func TestMissingSchemaMarkerDoesNotHideLegacyState(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "daemon.marker.json")
+	legacy := filepath.Join(dir, "daemon.version")
+	status := muxcoreDaemonStatusIdentity{PID: 42, DaemonGeneration: "generation"}
+	client := daemonConvergenceIdentity{ProductVersion: daemonVersion, DaemonCompatEpoch: muxcoreDaemonCompatEpoch}
+	if _, err := readLiveMuxcoreDaemonActionAt(marker, legacy, status, client); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("both absent: expected absence, got %v", err)
+	}
+	if err := os.WriteFile(legacy, []byte("not-json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readLiveMuxcoreDaemonActionAt(marker, legacy, status, client); err == nil || errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("malformed legacy marker was treated as absent: %v", err)
+	}
+}
+
 func TestReadLiveMuxcoreDaemonActionRejectsIncompleteFreshStatus(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "marker.json")
 	action, err := readLiveMuxcoreDaemonActionAt(path, path+".legacy", muxcoreDaemonStatusIdentity{PID: 42}, daemonConvergenceIdentity{ProductVersion: daemonVersion, DaemonCompatEpoch: 1})
@@ -385,6 +402,10 @@ func stubReconciliation(t *testing.T, status muxcoreDaemonStatusIdentity, action
 	stubMuxcorePredecessorProof(t)
 	oldStatus, oldAction, oldExe, oldRestart, oldWait := readMuxcoreDaemonStatusIdentity, readLiveMuxcoreDaemonAction, currentExecutable, restartMuxcoreDaemon, waitForCurrentMuxcoreDaemonReady
 	oldLock, oldContended := acquireRestartLock, isRestartLockContended
+	oldObserved := bindObservedMuxcoreOwner
+	bindObservedMuxcoreOwner = func(context.Context, muxcoreDaemonStatusIdentity) (muxcoreProcessExitProof, observedMarkerSnapshot, error) {
+		return nil, observedMarkerSnapshot{}, errors.New("stub has no bound exit proof")
+	}
 	readMuxcoreDaemonStatusIdentity = func(string) (muxcoreDaemonStatusIdentity, bool) { return status, true }
 	readLiveMuxcoreDaemonAction = func(muxcoreDaemonStatusIdentity, daemonConvergenceIdentity) (daemonConvergenceAction, error) {
 		return action, actionErr
@@ -394,6 +415,7 @@ func stubReconciliation(t *testing.T, status muxcoreDaemonStatusIdentity, action
 	t.Cleanup(func() {
 		readMuxcoreDaemonStatusIdentity, readLiveMuxcoreDaemonAction, currentExecutable, restartMuxcoreDaemon, waitForCurrentMuxcoreDaemonReady = oldStatus, oldAction, oldExe, oldRestart, oldWait
 		acquireRestartLock, isRestartLockContended = oldLock, oldContended
+		bindObservedMuxcoreOwner = oldObserved
 	})
 }
 

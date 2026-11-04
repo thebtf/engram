@@ -893,9 +893,12 @@ function formatIssuesBlock(issues, project) {
  block += `ACTION REQUIRED: ${sorted.length} active issue(s) assigned to this project (statuses: open, acknowledged, reopened).\n`;
  block += `Before starting new work, you MUST triage these. Run /engram:issue for the full workflow, or at minimum:\n`;
  block += `  1. Read each with issues(action="get", id=N, project="${projectText}")\n`;
- block += `  2. Treat them as YOUR project's inbox and direct work orders — study, investigate, test, implement, comment, resolve, or reject with evidence\n`;
+ block += `  2. Treat them as YOUR project's inbox and direct work orders — study, investigate, test, implement, comment, or resolve with evidence and appropriate authorization\n`;
  block += `  3. acknowledged means delivered and accepted into YOUR active backlog, not done\n`;
- block += `  4. Do NOT close — only the source agent closes after verifying your fix\n`;
+ block += `  4. Authorized participants, including creators and other read-write participants, may mark resolved, close after appropriate verification, or reopen when a resolution fails\n`;
+ block += `  5. resolved explicitly awaits verification; a status label alone does not prove historical verification\n`;
+ block += `  6. Actually check the relevant behavior before closing; if verification is unavailable, comment with what remains unverified\n`;
+ block += `  7. Preserve permission checks and follow explicit higher-priority instructions\n`;
  block += `Ignoring this block means real work from another agent is blocked on you.\n\n`;
 
  for (const issue of sorted) {

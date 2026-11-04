@@ -271,6 +271,12 @@ Callback не загружает и не приобретает client в foregr
 Локальный `initialize` не доказывает доступ к памяти: проверь `tools/list`
 и настоящий `recall`. Неверная identity или авторизация остаётся отказом.
 
+Прямой `--session-memory` передаёт в `ProjectContext.Env` только собственный
+непустой `CLAUDE_SESSION_ID` процесса. Если переменная отсутствует или пуста,
+сессионный ID не передаётся. Общий proxy/daemon не берёт его из своего окружения:
+для вызовов вне UCI используется `Env` конкретного соединения, а UCI использует
+отдельную transport identity.
+
 В обычном SQL `recall` (`action: "search"`) отсутствующий или пустой `project`
 берётся из уже разрешённого контекста вызова. Явный `project` имеет приоритет
 в handler; прежняя transport-проверка и канонизация сохраняются. Этот fallback
@@ -598,6 +604,37 @@ Git environment names are compared case-insensitively only on Windows; Unix keep
 
 `CONTEXT_REQUIRED` означает отсутствие выбранного code context, а не разрешение создать проект. Выполни `codebase_context(action="list")`. Это project-free просмотр: он не вызывает bootstrap и не выбирает context. Из свежего ответа выбери **только точный разрешённый Source/Checkout нужного репозитория** через `action="select"` и возвращённый `context_handle`; проверь `action="resolve"`, затем повтори исходный запрос. Названия — данные, не identity authority. Не выбирай first/latest, чужой handle или посторонний единственный Source. При пустом списке, несовпадении или неоднозначности сохрани binding: уточни нужный repository/checkout. Регистрация — отдельное разрешённое действие для собственного worktree и canonical project, не автоматический `init`.
 
+**Обычный путь восстановления существующего проекта.** Ошибка `PROJECT_MIGRATION_REQUIRED` не требует от пользователя запускать shell, HTTP, Census или SQL. Native resolver автоматически использует существующую привязку, если настроенный сервер через авторизованный `GET /api/projects/resolve?legacy_id=<URI-encoded-exact-marker-id>` подтвердил один canonical project для строгого исторического маркера `id`/`name`. Это восстановление не создаёт проект, alias или UUID и не переписывает marker/common cache. Единственный результат каталога или совпадение имени сами по себе не доказывают такую привязку.
+
+Если нужен выбор существующего проекта, агент выполняет следующие действия через локальный native `project_context` текущего caller:
+
+1. Вызови `project_context(action="choices")`. Это read-only запрос свежих разрешённых вариантов без выбора проекта. Покажи имя, полный `project_id` и `repository_qualifier`, если он возвращён; отсутствие qualifier не восполняй догадкой.
+2. Установи, какой вариант относится к исходной задаче. При неоднозначности предложи пользователю эти осмысленные варианты. Не выбирай first/latest, по одному имени или только потому, что результат один. Пустой список, отказ доступа или недоступный reader не разрешают создавать проект или расширять permissions.
+3. Вызови `project_context(action="select", selection_ref="<точный свежий selection_ref выбранного варианта>")` в том же caller/root/server. `selection_ref` — непрозрачная ссылка из `choices`, не имя или UUID. Выбор сохраняет локальную запись выбора контекста, отдельную для данного caller, но не меняет исторический marker, common cache, данные, текущую сессию или права. Чужой caller/root/server и уже закреплённая другая identity не подменяются. Устаревшая ссылка требует свежего `choices`; конфликт или неверная identity требуют разрешённого owner repair, а не обхода проверки.
+4. После подтверждённого выбора повтори исходную операцию с прежними аргументами, `target_project`, actor, session и client. Если ответ на mutation потерян или результат принятия неизвестен, не повторяй её вслепую: сначала установи результат исходной записи. Восстановление контекста само по себе не доказывает, что запись не состоялась.
+
+Если `choices` или `select` недоступны, приостанови восстановление до устранения
+причины: восстановления соединения, авторизации или локального хранилища.
+Неподтверждённый выбор сначала выясни с помощью bounded owner-диагностики ниже;
+не повторяй исходную запись с неизвестным результатом, пока он не установлен.
+Если безопасно установить caller-привязку или результат нельзя, сохрани unknown
+и оставь операцию приостановленной. Свежие `choices` получай после восстановления
+доступа и выяснения неподтверждённого выбора; сохрани исходные аргументы, target,
+actor, session и client.
+
+Для уже выбранной caller-привязки изменение digest маркера допустимо только
+при совпадении области caller и того же корректного закреплённого canonical ID.
+Клиент повторно проверяет свежий авторизованный каталог и отказывает при другом
+ID или гонке изменений. При этой проверке он не переписывает marker или binding.
+
+Публикация caller-привязки не зависит от старого постоянного файла `.lock` и не
+изменяет его. Атомарная публикация без перезаписи сохраняет существующие identity
+files, включая marker и binding.
+
+Выбор существующего контекста **не является destructive project consolidation**. Он не объединяет проекты и не переносит исторические записи. Такая миграция сохраняет отдельные требования: проверенный restorable backup, физически отдельный restored target, rehearsal и явное разрешение на точный Apply/cutover effect в разделе [Проверка миграции проектов на восстановленной копии](#проверка-миграции-проектов-на-восстановленной-копии). Identity, приватность и проверки доступа остаются обязательными в обоих путях.
+
+**Необязательная диагностика владельца.** Следующие shell/HTTP действия нужны для расследования отказа или повреждённой identity, а не как обязательные ручные шаги пользователя после `PROJECT_MIGRATION_REQUIRED`.
+
 При `PROJECT_MIGRATION_REQUIRED` или конфликте сначала установи фактический caller root. Native preflight не раскрывает путь: ошибка содержит только `caller_root_sha256`, SHA-256 точных UTF-8 bytes `Cwd`. Сравни его локально только с уже известными собственными caller-root кандидатами. Не нормализуй slash/case, не добавляй newline и не обрезай строку перед hash. Совпадение помогает сопоставить вызов, но не доказывает project identity и не разрешает selection, adoption или migration. Если host не сообщил root и известных совпадающих кандидатов нет, сохрани unknown и получи фактические caller metadata у владельца host; не угадывай путь и не сканируй чужие roots. Для OpenClaw используй workspace directory конкретного вызова, который сообщил host. Видимый terminal cwd не доказывает каталог MCP-вызова. Используй путь установленного plugin, который сообщил host, а не случайный PATH binary:
 
 ```text
@@ -605,22 +642,29 @@ node <installed-plugin-path>/scripts/run-engram.js project resolve --root <actua
 ```
 
 `--check` не вызывает bootstrap, не создаёт UUID/project/alias, не закрепляет marker/cache и не запускает Census/Preflight или migration. Explicit nested marker сохраняет свою границу; outer remote не подменяет его. `null` означает неизвестное значение, не «active». Diagnostic evidence не выдаёт права и не назначает проект.
+`--check` не подтверждает выбор caller-привязки. Обычный `project resolve` без
+установленной привязки может выполнить bootstrap и запись, поэтому ни один из
+этих путей не является универсальным read-only подтверждением неизвестного выбора.
 
 **Файловая граница запуска.** Серверный `readOnly` относится к инструменту, а не к запуску MCP-клиента. Обычный startup может записать оба файла: `.engram-project` и common-dir cache `engram-project.json`. Для осмотра без записи используй установленный `project resolve --root ... --json --check`, показанный выше. После отказа filesystem scope дождись фактического writable-root допуска для этого root перед любым запуском, который может там писать. Не обходи отказ через Eval, shell или другой CLI.
 
-Если `.engram-project` содержит ровно `id` из шести lowercase hex символов и корректный `name`, обычный resolver удерживает `PROJECT_MIGRATION_REQUIRED` до bootstrap/pin/publication. Read-only `--check` возвращает локальное `migration_required`, исходный `id`, `project_key:null`, `identity_status:null`, `match:"legacy_marker"`. Для этой ветви не нужны remote или HTTP. Это свидетельство о локальном маркере, **не доказанная серверная привязка**. Такой же `id` в common cache не становится допустимой identity. V2 anchor сохраняется, но не включает старый runtime fallback.
+Если `.engram-project` содержит ровно `id` из шести lowercase hex символов и корректный `name`, read-only `--check` возвращает локальное `migration_required`, исходный `id`, `project_key:null`, `identity_status:null`, `match:"legacy_marker"`. В отличие от обычного resolver с восстановлением, эта диагностика не запрашивает серверную привязку для legacy marker. Для этой ветви не нужны remote или HTTP. Это свидетельство о локальном маркере, **не доказанная серверная привязка**. Такой же `id` в common cache не становится допустимой identity. V2 anchor сохраняется, но не включает старый runtime fallback.
 
-Следующий поддерживаемый шаг для `legacy_marker` — существующий аутентифицированный `GET /api/projects/resolve?legacy_id=<URI-encoded-exact-marker-id>`. Передай точный проверенный `id` как URI-encoded query data, не как shell snippet. Сервер сам проверяет доступ. Ответ этой старой ветви — `resolved` с canonical `project_id` либо `unresolved` с opaque reference; это не DTO локального `--check`. `unresolved` не устанавливает mapping и не разрешает init/adoption. Не выдумывай remote, не заимствуй parent origin и не выводи mapping из `name`.
+Для owner-диагностики `legacy_marker` существует авторизованный `GET /api/projects/resolve?legacy_id=<URI-encoded-exact-marker-id>`; обычное автоматическое восстановление использует этот же reader. Передай точный проверенный `id` как URI-encoded query data, не как shell snippet. Сервер сам проверяет доступ. Ответ этой старой ветви — `resolved` с canonical `project_id` либо `unresolved` с opaque reference; это не DTO локального `--check`. `unresolved` не устанавливает mapping и не разрешает init/adoption. Для выбора существующего проекта используй native `choices`/`select`, а не ручной ремонт БД. Не выдумывай remote, не заимствуй parent origin и не выводи mapping из `name`.
 
 Для остальных ещё не закреплённых Git roots `--check` читает marker/common cache и вызывает `GET /api/projects/resolve?repository_locator=...` только по их фактическому primary remote. Здесь ответы: `resolved` с одной привязкой; `migration_required` с nullable metadata; `conflict`/`unbound` без автоматического создания. HTTP selector `repository_locator` исключает одновременный `legacy_id`; его серверные matching rules остаются прежними: active/redirected manual alias раньше remote fallback, точная нормализация primary remote, исключение historical subdirectory binding. Labels, legacy IDs и remote metadata — данные, не shell-команды и не authority для adoption.
 
-При `PROJECT_IDENTITY_INVALID` не повторяй тот же неудачный `--check`. Сохрани marker, common cache, v2 anchor и данные. Проверь actual caller root и его `.engram-project` bounded regular-file чтением, максимум 4096 bytes; отдельно проверь `engram-project.json` в его Git common directory. Не следуй symlink и не исполняй содержимое файла. Зафиксируй роль файла и ошибочные поля без секретов. Malformed ID, неизвестные поля, небезопасное имя и недопустимый cache требуют точного owner mapping и отдельно разрешённого ремонта marker/cache. Не удаляй файл ради нового UUID. Неизвестный identity code сохрани и передай владельцу вместе с этой bounded диагностикой; операция остаётся held, а не становится пустым успешным результатом.
+При `PROJECT_IDENTITY_INVALID` не повторяй тот же неудачный `--check`. Сохрани marker, локальную запись выбора контекста данного caller, common cache, v2 anchor и данные. Владелец проверяет actual caller root и его identity files bounded regular-file чтением, максимум 4096 bytes на файл; отдельно проверяет `engram-project.json` в его Git common directory. Не следуй symlink и не исполняй содержимое файла. Зафиксируй роль файла и ошибочные поля без секретов. Malformed ID, неизвестные поля, небезопасное имя и недопустимый cache требуют точного owner mapping и отдельно разрешённого ремонта; selection не обходит неверную identity. Не удаляй файл ради нового UUID. Неизвестный identity code сохрани и передай владельцу вместе с этой bounded диагностикой; операция остаётся held, а не становится пустым успешным результатом.
 
-Если результат `migration_required`/`conflict`, сохрани marker/cache/data и передай владельцу точную диагностическую привязку. Нужны его доказательства существующего проекта и разрешённый conservation plan, а не новый UUID. Существующий admin-путь: `GET /api/projects/consolidation/census?source_version=<exact-source>`, затем `POST /api/projects/consolidation/preflight` со свежими census bindings и структурными evidence. Эти права не возникают из ошибки. Backup, физически отдельный restored target, rehearsal и explicit apply authority описаны ниже в разделе миграции. Default dry-run выполняет target transaction с откатом: это не бесплатный read-only запрос. После принятого восстановления проверь canonical identity обычным resolver и повтори исходное действие. Не выполняй `init`, reset marker/cache, locator spoofing или замену permissions ради обхода hold.
+Если диагностика возвращает `migration_required`/`conflict`, это не предписание пользователю выполнять consolidation. Сохрани marker/cache/selection/data; используй обычное восстановление или native выбор выше, если их проверки допускают это. Только когда действительно нужен перенос исторических данных, владелец использует существующий admin-путь: `GET /api/projects/consolidation/census?source_version=<exact-source>`, затем `POST /api/projects/consolidation/preflight` со свежими census bindings и структурными evidence, в рамках разрешённого conservation plan. Эти права не возникают из ошибки. Backup, физически отдельный restored target, rehearsal и explicit apply authority описаны ниже в разделе миграции. Default dry-run выполняет target transaction с откатом: это не бесплатный read-only запрос. После принятого восстановления проверь canonical identity обычным resolver; исходное действие возобновляется с сохранёнными target/session и учётом известного результата предыдущей попытки. Не выполняй `init`, reset marker/cache/selection, locator spoofing или замену permissions ради обхода hold.
 
 Native `issues list/get` остаются project-free разрешёнными чтениями. В OpenClaw без caller resolution доступны get и list с явным target/source filter; default inbox сохраняет смысл текущего workspace и при неизвестной identity не превращается в all-project list. Ошибка чтения не означает пустой inbox. Для mutations acting project поступает из проверенного native context; optional compatibility `project` не задаёт actor, а `target_project` остаётся отдельным назначением.
 
-Агент в чужом checkout получает обязательные следующие действия из shipped tool descriptions/errors. Для подробностей доступна эта стабильная upstream-ссылка: https://github.com/thebtf/engram/blob/main/docs/operating-engram.md#context-recovery . Локальная копия Engram guide, mutable cache wiki или project-scoped `docs` для восстановления не требуются.
+`resolved` у issue означает, что заявленное решение ждёт проверки. `closed` фиксирует заявление участника о проверенном завершении, но не служит доказательством проверки результата или исторических closed rows. Creator и другие авторизованные read-write участники могут resolve, close и reopen в рамках прежних access checks; readonly/unauthenticated ограничения и права на прочие поля не отменяются.
+
+Необязательный `session_id` — фактический host session UUID или непрозрачный conversation ID, не более 256 UTF-8 bytes, без surrounding whitespace, control/formatting characters или nil UUID. Безопасная request-transport session имеет приоритет над reported session; отсутствующее или небезопасное значение остаётся unknown. Необязательный `client` сообщает фактический клиент отдельно для каждого действия; неизвестная метка остаётся unknown, а `agent_source` остаётся отдельной атрибуцией автора. Эти сведения — provenance, не authenticated authority, project/lane identity, keycard или browser/auth session. Явный `target_session` — ссылка на получателя, не выдача прав, подтверждение доставки или liveness; `source_session`, `target_session` и `participant_session` фильтруют чтение и не подставляют текущую беседу автоматически.
+
+Описанные native действия сверены с исходниками текущего кандидата; это не утверждение об установленной версии, release acceptance или готовности адаптера OpenClaw. Агент вне этого checkout должен получать существенные recovery actions из tool descriptions/errors своего клиента. Для подробностей доступна стабильная upstream-ссылка: https://github.com/thebtf/engram/blob/main/docs/operating-engram.md#context-recovery . Локальная копия Engram guide, mutable cache wiki или project-scoped `docs` для восстановления не требуются.
 
 ### Переносимый UUID проекта
 

@@ -208,7 +208,7 @@ async function exerciseDefaultFactory(mode) {
     assert.equal(unhandled.length, 0, 'background rejection must be handled');
     // 7.0.8 replaces callback-admission blocking, never the trusted-execution guard.
     assert.equal(held.factoryState, 'fulfilled', 'default factory must finish while cold preparation is held');
-    assert.deepEqual(held.callbacks, ['session_start', 'before_agent_start'], 'register before readiness, execute only after trust');
+    assert.deepEqual(held.callbacks, ['session_start', 'before_agent_start', 'tool_call'], 'register before readiness, execute only after trust');
   } catch (error) { failure = error; }
   finally {
     gate.resolve();

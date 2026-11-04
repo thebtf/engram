@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -158,6 +159,11 @@ func TestHandleRequest_Initialize_ReturnsCorrectServerInfo(t *testing.T) {
 	}
 	if result["protocolVersion"] != "2024-11-05" {
 		t.Errorf("protocolVersion: got %v, want 2024-11-05", result["protocolVersion"])
+	}
+	caps, _ := result["capabilities"].(map[string]any)
+	tools, _ := caps["tools"].(map[string]any)
+	if tools["listChanged"] != false {
+		t.Errorf("tools.listChanged without notifier: got %v, want false", tools["listChanged"])
 	}
 }
 
@@ -402,6 +408,68 @@ func TestHandleRequest_ToolTimeout_Returns32603(t *testing.T) {
 	}
 	if r.Error.Code != -32603 {
 		t.Errorf("error code: got %d, want -32603", r.Error.Code)
+	}
+}
+
+func TestHandleRequest_DeadlinePreservesExplicitDeliveryOutcome(t *testing.T) {
+	for _, tc := range []struct {
+		name, code         string
+		dispatched, cancel bool
+		wantProtocol       bool
+	}{
+		{name: "not sent at deadline", code: "CAPABILITY_NOT_SENT"},
+		{name: "unknown outcome at deadline", code: "OUTCOME_UNKNOWN", dispatched: true},
+		{name: "other module error at deadline", code: "OTHER", wantProtocol: true},
+		{name: "generic timeout at deadline", wantProtocol: true},
+		{name: "not sent on cancellation", code: "CAPABILITY_NOT_SENT", cancel: true},
+		{name: "unknown outcome on cancellation", code: "OUTCOME_UNKNOWN", dispatched: true, cancel: true},
+		{name: "generic cancellation", cancel: true, wantProtocol: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var ctx context.Context
+			var cancel context.CancelFunc
+			if tc.cancel {
+				ctx, cancel = context.WithCancel(context.Background())
+			} else {
+				ctx, cancel = context.WithTimeout(context.Background(), 20*time.Millisecond)
+			}
+			defer cancel()
+			var invocations, dispatched int32
+			m := &fakeMod{name: "deadline", tools: []module.ToolDef{{Name: "deadline.tool"}}, handleFn: func(ctx context.Context, _ muxcore.ProjectContext, _ string, _ json.RawMessage) (json.RawMessage, error) {
+				atomic.AddInt32(&invocations, 1)
+				if tc.dispatched {
+					atomic.AddInt32(&dispatched, 1)
+				}
+				if tc.cancel {
+					cancel()
+				}
+				<-ctx.Done()
+				if tc.code == "" {
+					return nil, ctx.Err()
+				}
+				return nil, &module.ModuleError{Code: tc.code, Message: "provider delivery outcome"}
+			}}
+			d := buildDispatcher(t, m)
+			response, err := d.HandleRequest(ctx, projectCtx("p1"), jsonrpcReq(301, "tools/call", map[string]any{"name": "deadline.tool", "arguments": map[string]any{}}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := parseResp(t, response)
+			if tc.wantProtocol {
+				if got.Error == nil || got.Error.Code != -32603 {
+					t.Fatalf("expected generic protocol error: %s", response)
+				}
+			} else if got.Error != nil || !strings.Contains(string(got.Result), `"isError":true`) || !strings.Contains(string(got.Result), tc.code) {
+				t.Fatalf("provider outcome not preserved: %s", response)
+			}
+			wantDispatched := int32(0)
+			if tc.dispatched {
+				wantDispatched = 1
+			}
+			if invocations != 1 || dispatched != wantDispatched {
+				t.Fatalf("provider invocations=%d dispatched=%d", invocations, dispatched)
+			}
+		})
 	}
 }
 

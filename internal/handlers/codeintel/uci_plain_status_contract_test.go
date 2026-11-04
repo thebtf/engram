@@ -16,7 +16,9 @@ import (
 	"github.com/thebtf/engram/internal/handlers/codeintel"
 	"github.com/thebtf/engram/internal/handlers/engramcore"
 	"github.com/thebtf/engram/internal/mcp"
+	modulepkg "github.com/thebtf/engram/internal/module"
 	"github.com/thebtf/engram/internal/uci"
+	"github.com/thebtf/engram/internal/version"
 	"github.com/thebtf/engram/internal/worker"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
 )
@@ -41,7 +43,7 @@ func TestCodebaseStatusPinnedViewReaderAuthority(t *testing.T) {
 	require.NoError(t, err)
 	app, err := worker.NewUCIApplication(contextApp, &uci.AliasResolver{}, &uci.QueryService{}, nil, &uci.GraphService{}, &uci.VersionedReadService{}, uci.NewIndexStatusService(store, nil))
 	require.NoError(t, err)
-	server := mcp.NewServer(mcp.ServerOptions{Version: "plain-status-authority"})
+	server := mcp.NewServer(mcp.ServerOptions{Version: version.Daemon})
 	server.SetCodebaseContextApplication(app)
 	port, err := mcp.NewUCIContextHandlePort(server, store, store)
 	require.NoError(t, err)
@@ -52,6 +54,7 @@ func TestCodebaseStatusPinnedViewReaderAuthority(t *testing.T) {
 	go grpcServer.Serve(listener)
 	t.Cleanup(grpcServer.Stop)
 	core := engramcore.NewModuleWithClientInstanceID("status-reader-install")
+	require.NoError(t, core.Init(context.Background(), modulepkg.ModuleDeps{}))
 	t.Cleanup(func() { require.NoError(t, core.Shutdown(context.Background())) })
 	module := codeintel.NewModule(core)
 	ctx := auditcontext.WithUCITransportSession(context.Background(), "plain-status-reader")
@@ -130,6 +133,7 @@ func TestCodebaseStatusPinnedViewReaderAuthority(t *testing.T) {
 	t.Run("owned unpublished checkout retains never-indexed", func(t *testing.T) {
 		store.unpublished.Store(true)
 		owner := engramcore.NewModuleWithClientInstanceID("status-owner-install")
+		require.NoError(t, owner.Init(context.Background(), modulepkg.ModuleDeps{}))
 		t.Cleanup(func() { require.NoError(t, owner.Shutdown(context.Background())) })
 		ownerContext := auditcontext.WithUCITransportSession(context.Background(), "unpublished-status-owner")
 		selector, err := json.Marshal(map[string]any{"action": "select", "checkout": map[string]any{"source_id": ref.SourceID, "checkout_id": ref.CheckoutID, "incarnation_id": "55555555-5555-4555-8555-555555555555", "analysis_profile_id": ref.AnalysisProfileID}})

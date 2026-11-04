@@ -171,6 +171,9 @@ func (f *fakeDocumentStore) GetHistory(_ context.Context, path, project string, 
 	if f.historyErr != nil {
 		return nil, f.historyErr
 	}
+	if limit > 0 && limit < len(f.historyRows) {
+		return f.historyRows[:limit], nil
+	}
 	return f.historyRows, nil
 }
 
@@ -400,6 +403,51 @@ func TestHandlersDocuments_History(t *testing.T) {
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, float64(2), resp["count"])
+}
+
+func TestHandlersDocuments_History_Limit(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		query      string
+		status     int
+		count      int
+		storeLimit int
+	}{
+		{name: "above maximum", query: "&limit=201", status: http.StatusOK, count: 200, storeLimit: 200},
+		{name: "omitted", status: http.StatusOK, count: 201, storeLimit: 0},
+		{name: "invalid", query: "&limit=invalid", status: http.StatusBadRequest},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeDocumentStore{}
+			for version := 201; version > 0; version-- {
+				fake.historyRows = append(fake.historyRows, gormdb.VersionedDocument{ID: int64(version), Version: version})
+			}
+			svc := documentsTestService(fake)
+			req := httptest.NewRequest(http.MethodGet, "/api/documents/history?path=notes/a.md&project="+documentReaderTestProject+tc.query, nil)
+			w := httptest.NewRecorder()
+
+			svc.handleDocumentHistory(w, req)
+
+			require.Equal(t, tc.status, w.Code)
+			if tc.status != http.StatusOK {
+				assert.False(t, fake.historyCall.called)
+				return
+			}
+			require.True(t, fake.historyCall.called)
+			assert.Equal(t, tc.storeLimit, fake.historyCall.limit)
+			var resp documentHistoryResponse
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+			assert.Equal(t, tc.count, resp.Count)
+			require.Len(t, resp.Versions, tc.count)
+			for i, item := range resp.Versions {
+				assert.Equal(t, 201-i, item.Version)
+			}
+		})
+	}
 }
 
 // TestHandlersDocuments_History_RequiresPathAndProject verifies validation.

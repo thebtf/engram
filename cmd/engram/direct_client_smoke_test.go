@@ -12,28 +12,44 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/thebtf/engram/internal/version"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	muxcontrol "github.com/thebtf/mcp-mux/muxcore/control"
 	muxserverid "github.com/thebtf/mcp-mux/muxcore/serverid"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 type directDiscoveryFixture struct {
 	pb.UnimplementedEngramServiceServer
-	requests chan *pb.InitializeRequest
+	requests  chan *pb.InitializeRequest
+	mutations atomic.Int32
+	statuses  atomic.Int32
 }
 
-func (f *directDiscoveryFixture) Initialize(_ context.Context, request *pb.InitializeRequest) (*pb.InitializeResponse, error) {
+func (f *directDiscoveryFixture) Initialize(ctx context.Context, request *pb.InitializeRequest) (*pb.InitializeResponse, error) {
 	if request.GetProject() != "" {
 		return nil, errors.New("direct discovery must be unscoped")
 	}
-	f.requests <- request
+	incoming, _ := metadata.FromIncomingContext(ctx)
+	if values := incoming.Get("authorization"); len(values) != 1 || values[0] != "Bearer fixture-keycard" {
+		return nil, status.Error(codes.Unauthenticated, "fixture requires its synthetic bearer")
+	}
+	select {
+	case f.requests <- request:
+	default:
+	}
 	return &pb.InitializeResponse{
+		ServerVersion: version.Daemon,
 		Tools: []*pb.ToolDefinition{
+			{Name: "vault", Description: "fixture backend status and store", InputSchemaJson: []byte(`{"type":"object","properties":{"action":{"type":"string","enum":["status","store"]},"name":{"type":"string"},"value":{"type":"string"},"scope":{"type":"string","enum":["global"]}},"required":["action"],"additionalProperties":false}`)},
 			{Name: "codebase_context", Description: "select authorized checkout", InputSchemaJson: []byte(`{"type":"object"}`)},
 			{Name: "codebase_index", Description: "index selected checkout", InputSchemaJson: []byte(`{"type":"object"}`)},
 			{Name: "codebase_status", Description: "read selected index status", InputSchemaJson: []byte(`{"type":"object"}`)},
@@ -42,6 +58,27 @@ func (f *directDiscoveryFixture) Initialize(_ context.Context, request *pb.Initi
 			{Name: "codebase_graph", Description: "explore authorized graph", InputSchemaJson: []byte(`{"type":"object"}`)},
 		},
 	}, nil
+}
+
+func (f *directDiscoveryFixture) CallTool(_ context.Context, request *pb.CallToolRequest) (*pb.CallToolResponse, error) {
+	var args struct {
+		Action string `json:"action"`
+		Name   string `json:"name"`
+		Value  string `json:"value"`
+		Scope  string `json:"scope"`
+	}
+	if request.GetToolName() != "vault" || json.Unmarshal(request.GetArgumentsJson(), &args) != nil {
+		return nil, errors.New("unexpected fixture tool call")
+	}
+	if args.Action == "store" && args.Name == "outage-fixture" && args.Value == "synthetic-only" && args.Scope == "global" {
+		f.mutations.Add(1)
+		return nil, status.Error(codes.Unavailable, "fixture recorded mutation; outcome unknown")
+	}
+	if args.Action != "status" {
+		return nil, errors.New("unexpected fixture tool call")
+	}
+	f.statuses.Add(1)
+	return &pb.CallToolResponse{ContentJson: []byte(`{"fixture":"backend-recovered"}`)}, nil
 }
 
 func directFixtureTempRoot(t *testing.T, cwd, physicalRoot string) string {
@@ -83,15 +120,26 @@ func TestDirectFixtureTempRoot(t *testing.T) {
 	}
 }
 
+func TestDirectBinaryStdioBackendOutageRecovery(t *testing.T) {
+	testDirectBinaryStdio(t, true)
+}
+
 func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
+	testDirectBinaryStdio(t, false)
+}
+
+func testDirectBinaryStdio(t *testing.T, outage bool) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	fixture := grpc.NewServer()
-	discovery := &directDiscoveryFixture{requests: make(chan *pb.InitializeRequest, 2)}
+	discovery := &directDiscoveryFixture{requests: make(chan *pb.InitializeRequest, 16)}
 	pb.RegisterEngramServiceServer(fixture, discovery)
-	go func() { _ = fixture.Serve(listener) }()
+	if !outage {
+		go func() { _ = fixture.Serve(listener) }()
+	}
+	defer listener.Close()
 	defer fixture.Stop()
 	root := uciInstalledAcceptanceCandidateSourceRoot(t)
 	git := exec.Command("git", "rev-parse", "--show-toplevel", "--git-common-dir")
@@ -150,6 +198,8 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 	t.Cleanup(func() {
 		if err := os.RemoveAll(state); err != nil {
 			t.Error(err)
+		} else {
+			t.Logf("removed owned fixture state %s", state)
 		}
 	})
 	probeRoot := directFixtureTempRoot(t, filepath.Join(root, "cmd", "engram"), physicalTempRoot)
@@ -194,7 +244,7 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build direct binary: %v: %s", err, out)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	env := make([]string, 0)
 	for _, entry := range os.Environ() {
@@ -238,6 +288,8 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 		}
 		if err := uciWaitInstalledAcceptanceProcessExit(pid, 5*time.Second); err != nil {
 			t.Error(err)
+		} else {
+			t.Logf("owned fixture daemon %d exited after identity-checked shutdown", pid)
 		}
 	})
 	run := func() {
@@ -265,6 +317,10 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 		scanner := bufio.NewScanner(stdout)
 		scanner.Buffer(make([]byte, 64*1024), 16<<20)
 		encoder := json.NewEncoder(stdin)
+		if outage {
+			directOutageScenario(ctx, t, encoder, scanner, fixture, listener, discovery)
+			return
+		}
 		for _, method := range []string{"initialize", "tools/list"} {
 			params := map[string]any{}
 			if method == "initialize" {
@@ -316,24 +372,227 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 			}
 		}
 	}
+	if outage {
+		run()
+		return
+	}
 	var first string
-	for range 2 {
+	for client := 0; client < 2; client++ {
+		t.Logf("direct client %d", client+1)
 		run()
 		id, err := os.ReadFile(filepath.Join(state, "installation", "client-instance-id"))
 		if err != nil || !strings.HasPrefix(string(id), "engram-") {
 			t.Fatalf("direct installation identity absent: %v", err)
 		}
-		select {
-		case request := <-discovery.requests:
-			if request.GetProject() != "" || request.GetClientName() != "engram-daemon" || request.GetClientVersion() == "" {
-				t.Fatalf("direct Initialize was not unscoped capability discovery: %s", request)
+		// The daemon can serve the second client from its authenticated catalog;
+		// a second Initialize RPC is not required for a shared connection.
+		if client == 0 {
+			select {
+			case request := <-discovery.requests:
+				if request.GetProject() != "" || request.GetClientName() != "engram-daemon" || request.GetClientVersion() == "" {
+					t.Fatalf("direct Initialize was not unscoped capability discovery: %s", request)
+				}
+			case <-time.After(15 * time.Second):
+				t.Fatal("first direct client did not send Initialize to fixture within 15s")
+			case <-ctx.Done():
+				t.Fatalf("first direct client discovery stopped: %v", ctx.Err())
 			}
-		default:
-			t.Fatal("direct client did not send Initialize to fixture")
 		}
 		if first != "" && string(id) != first {
 			t.Fatalf("direct client restart changed identity")
 		}
 		first = string(id)
+	}
+}
+
+func directOutageScenario(ctx context.Context, t *testing.T, encoder *json.Encoder, scanner *bufio.Scanner, fixture *grpc.Server, listener net.Listener, discovery *directDiscoveryFixture) {
+	t.Helper()
+	type frame struct {
+		ID     *string         `json:"id"`
+		Method string          `json:"method"`
+		Params json.RawMessage `json:"params"`
+		Result json.RawMessage `json:"result"`
+		Error  json.RawMessage `json:"error"`
+	}
+	frames := make(chan []byte, 16)
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		defer close(frames)
+		for scanner.Scan() {
+			raw := append([]byte(nil), scanner.Bytes()...)
+			select {
+			case frames <- raw:
+			case <-done:
+				return
+			}
+		}
+	}()
+	pending := make(map[string]bool)
+	responses := make(map[string]frame)
+	var notifications []frame
+	defer func() { t.Logf("received %d stdio notifications", len(notifications)) }()
+	send := func(id, method string, params any) string {
+		t.Helper()
+		if pending[id] {
+			t.Fatalf("duplicate request ID %q", id)
+		}
+		pending[id] = true
+		if err := encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params}); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	read := func(id, label string, timeout time.Duration) (frame, bool) {
+		t.Helper()
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		for {
+			if result, ok := responses[id]; ok {
+				delete(responses, id)
+				delete(pending, id)
+				return result, true
+			}
+			select {
+			case raw, ok := <-frames:
+				if !ok {
+					t.Fatalf("%s: stdio closed: %v", label, scanner.Err())
+				}
+				var result frame
+				if err := json.Unmarshal(raw, &result); err != nil {
+					t.Fatalf("%s returned invalid frame: %q: %v", label, raw, err)
+				}
+				if result.ID == nil {
+					if result.Method == "" {
+						t.Fatalf("%s returned a frame without ID or notification method: %s", label, raw)
+					}
+					if len(notifications) == 64 {
+						t.Fatalf("%s received too many stdio notifications", label)
+					}
+					notifications = append(notifications, result)
+					continue
+				}
+				if !pending[*result.ID] {
+					t.Fatalf("%s returned unexpected response ID %q: %s", label, *result.ID, raw)
+				}
+				if _, exists := responses[*result.ID]; exists {
+					t.Fatalf("%s returned duplicate response ID %q", label, *result.ID)
+				}
+				t.Logf("stdio response %s: %s", *result.ID, raw)
+				responses[*result.ID] = result
+			case <-timer.C:
+				return frame{}, false
+			}
+		}
+	}
+	initialized, ok := read(send("initialize", "initialize", map[string]any{"protocolVersion": "2025-11-25", "capabilities": map[string]any{}, "clientInfo": map[string]string{"name": "outage-fixture", "version": "1"}}), "initialize", 10*time.Second)
+	if !ok || len(initialized.Error) != 0 || len(initialized.Result) == 0 {
+		t.Fatalf("local initialize failed: response=%+v received=%t", initialized, ok)
+	}
+	listed, ok := read(send("outage-list", "tools/list", map[string]any{}), "outage tools/list", 5*time.Second)
+	if !ok || len(listed.Error) != 0 || len(listed.Result) == 0 {
+		t.Fatalf("configured backend unavailable: tools/list did not return: response=%+v received=%t", listed, ok)
+	}
+	if !strings.Contains(string(listed.Result), `"name":"vault"`) || !strings.Contains(string(listed.Result), `"name":"codebase_search"`) {
+		t.Fatalf("configured backend unavailable: tools/list did not expose the supported backend catalog: %s", listed.Result)
+	}
+	// Stdio has no caller-supplied timeout field on this route. The existing
+	// dispatcher bounds each tool call to 30 seconds; allow five seconds only
+	// for the response to cross the local transport after that real deadline.
+	unavailable, ok := read(send("unavailable-call", "tools/call", map[string]any{"name": "vault", "arguments": map[string]string{"action": "status"}}), "unavailable call", 35*time.Second)
+	if !ok || len(unavailable.Error) != 0 || !strings.Contains(string(unavailable.Result), `"isError":true`) || !strings.Contains(string(unavailable.Result), "CAPABILITY_NOT_SENT") {
+		t.Fatalf("unresponsive backend did not report not-sent within the existing call budget: response=%+v received=%t", unavailable, ok)
+	}
+	if count := discovery.statuses.Load(); count != 0 {
+		t.Fatalf("unresponsive backend received %d status calls", count)
+	}
+	// This original request is already pending while the listener is held.
+	// It must survive more than three seconds and complete once discovery works.
+	slowCall := send("slow-first-call", "tools/call", map[string]any{"name": "vault", "arguments": map[string]string{"action": "status"}})
+	if response, returned := read(slowCall, "slow first call before recovery", 4*time.Second); returned {
+		t.Fatalf("slow first call returned before backend recovery: %+v", response)
+	}
+	ping, ok := read(send("pending-ping", "ping", map[string]any{}), "ping during discovery", 5*time.Second)
+	if !ok || len(ping.Error) != 0 || len(ping.Result) == 0 {
+		t.Fatalf("local ping blocked during discovery: response=%+v received=%t", ping, ok)
+	}
+	go func() { _ = fixture.Serve(listener) }()
+	first, ok := read(slowCall, "original slow first call", 15*time.Second)
+	if !ok || len(first.Error) != 0 || strings.Contains(string(first.Result), `"isError":true`) || !strings.Contains(string(first.Result), "backend-recovered") {
+		t.Fatalf("original slow first call did not recover: response=%+v received=%t", first, ok)
+	}
+	if count := discovery.statuses.Load(); count != 1 {
+		t.Fatalf("backend received %d status calls, want original request once", count)
+	}
+	recoveredList, ok := read(send("recovered-list", "tools/list", map[string]any{}), "recovered tools/list", 15*time.Second)
+	if !ok || len(recoveredList.Error) != 0 || !strings.Contains(string(recoveredList.Result), `"name":"vault"`) {
+		t.Fatalf("same-client discovery did not recover: response=%+v received=%t", recoveredList, ok)
+	}
+	call, ok := read(send("recovered-call", "tools/call", map[string]any{"name": "vault", "arguments": map[string]string{"action": "status"}}), "recovered call", 15*time.Second)
+	if !ok || len(call.Error) != 0 || strings.Contains(string(call.Result), `"isError":true`) || !strings.Contains(string(call.Result), "backend-recovered") {
+		t.Fatalf("same-client backend call did not recover: response=%+v received=%t", call, ok)
+	}
+
+	mutation, ok := read(send("unknown-mutation", "tools/call", map[string]any{"name": "vault", "arguments": map[string]string{"action": "store", "name": "outage-fixture", "value": "synthetic-only", "scope": "global"}}), "unknown-outcome mutation", 5*time.Second)
+	if !ok || (len(mutation.Error) == 0 && !strings.Contains(string(mutation.Result), `"isError":true`)) {
+		t.Fatalf("mutation with unknown outcome did not return an error: response=%+v received=%t", mutation, ok)
+	}
+	if count := discovery.mutations.Load(); count != 1 {
+		t.Fatalf("fixture received mutation %d times before backend loss; want exactly once", count)
+	}
+
+	drainInitializes := func() {
+		for count := len(discovery.requests); count > 0; count-- {
+			<-discovery.requests
+		}
+	}
+	drainInitializes()
+	address := listener.Addr().String()
+	fixture.Stop()
+	drainInitializes()
+	statusBeforeLoss := discovery.statuses.Load()
+	lostCall := send("lost-call", "tools/call", map[string]any{"name": "vault", "arguments": map[string]string{"action": "status"}})
+	lost, returned := read(lostCall, "call after backend loss", time.Second)
+	if returned && !strings.Contains(string(lost.Result), "OUTCOME_UNKNOWN") && !strings.Contains(string(lost.Result), "CAPABILITY_NOT_SENT") {
+		t.Fatalf("call after backend loss returned neither unknown nor not-sent: %+v", lost)
+	}
+	statusAtRestart := discovery.statuses.Load()
+
+	restartedListener, err := net.Listen("tcp", address)
+	if err != nil {
+		t.Fatalf("restart synthetic backend listener: %v", err)
+	}
+	restarted := grpc.NewServer()
+	pb.RegisterEngramServiceServer(restarted, discovery)
+	defer restarted.Stop()
+	defer restartedListener.Close()
+	go func() { _ = restarted.Serve(restartedListener) }()
+	if !returned {
+		lost, ok = read(lostCall, "original pending call after second recovery", 20*time.Second)
+		if !ok || len(lost.Error) != 0 || strings.Contains(string(lost.Result), `"isError":true`) || !strings.Contains(string(lost.Result), "backend-recovered") {
+			t.Fatalf("original pending call did not recover: response=%+v received=%t", lost, ok)
+		}
+		if count := discovery.statuses.Load(); count != statusBeforeLoss+1 {
+			t.Fatalf("pending original call produced %d status calls, want one", count-statusBeforeLoss)
+		}
+	} else if count := discovery.statuses.Load(); count != statusAtRestart {
+		t.Fatalf("failed original call was replayed after restart: before=%d after=%d", statusAtRestart, count)
+	}
+	readyCtx, cancelReady := context.WithTimeout(ctx, 15*time.Second)
+	defer cancelReady()
+	select {
+	case request := <-discovery.requests:
+		if request.GetProject() != "" || request.GetClientName() != "engram-daemon" || request.GetClientVersion() == "" {
+			t.Fatalf("post-restart discovery was not unscoped daemon initialization: %s", request)
+		}
+	case <-readyCtx.Done():
+		t.Fatalf("authenticated backend discovery did not resume after restart: %v", readyCtx.Err())
+	}
+	call, ok = read(send("second-recovered-call", "tools/call", map[string]any{"name": "vault", "arguments": map[string]string{"action": "status"}}), "call after backend restart", 15*time.Second)
+	if !ok || len(call.Error) != 0 || strings.Contains(string(call.Result), `"isError":true`) || !strings.Contains(string(call.Result), "backend-recovered") {
+		t.Fatalf("same-client backend call did not recover after restart: response=%+v received=%t", call, ok)
+	}
+	if count := discovery.mutations.Load(); count != 1 {
+		t.Errorf("unknown-outcome mutation was automatically replayed: fixture received %d calls, want 1", count)
 	}
 }

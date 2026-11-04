@@ -21,11 +21,17 @@ func TestInvalidIdentityRecoveryShippedDiscovery(t *testing.T) {
 		if tool.Name != "codebase_context" {
 			continue
 		}
-		require.Contains(t, tool.Description, "legacy_marker")
-		require.Contains(t, tool.Description, "GET /api/projects/resolve?legacy_id=")
-		require.Contains(t, tool.Description, "URI-encoded")
-		require.Contains(t, tool.Description, "PROJECT_IDENTITY_INVALID")
-		require.Contains(t, tool.Description, "not a mapping")
+		require.Contains(t, tool.Description, "PROJECT_MIGRATION_REQUIRED")
+		require.Contains(t, tool.Description, "automatically recover a strict historical id/name marker")
+		require.Contains(t, tool.Description, "authorized GET /api/projects/resolve?legacy_id=<encoded-exact-id>")
+		require.Contains(t, tool.Description, "local project_context tool with action=\"choices\"")
+		require.Contains(t, tool.Description, "exact fresh selection_ref")
+		require.Contains(t, tool.Description, "do not pick first/latest, by name alone or merely because one result exists")
+		require.Contains(t, tool.Description, "not a guessed terminal cwd")
+		require.Contains(t, tool.Description, "never bypass permissions")
+		require.Contains(t, tool.Description, "not a server binding")
+		require.Contains(t, tool.Description, "conflicting or invalid existing identity records remain preserved for authorized owner repair")
+		require.Contains(t, tool.Description, "Never replay a mutation after response loss or an unknown acceptance outcome")
 		return
 	}
 	t.Fatal("actual tools/list omitted codebase_context")

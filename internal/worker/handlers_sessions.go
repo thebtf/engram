@@ -164,7 +164,7 @@ type SessionStartRequest struct {
 // @Failure 400 {string} string "invalid session id"
 // @Failure 404 {string} string "session not found"
 // @Failure 500 {string} string "internal error"
-// @Router /sessions/{id}/init [post]
+// @Router /api/sessions/{id}/init [post]
 func (s *Service) handleSessionStart(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
@@ -348,7 +348,7 @@ type SummarizeRequest struct {
 // @Success 200 "OK"
 // @Failure 400 {string} string "invalid session id"
 // @Failure 500 {string} string "internal error"
-// @Router /sessions/{id}/summarize [post]
+// @Router /api/sessions/{id}/summarize [post]
 func (s *Service) handleSummarize(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)

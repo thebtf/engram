@@ -613,10 +613,66 @@ definitions:
     required:
     - project
     type: object
+  worker.documentCommentItem:
+    properties:
+      author:
+        type: string
+      content:
+        type: string
+      created_at:
+        type: string
+      document_id:
+        type: integer
+      id:
+        type: integer
+      line_end:
+        type: integer
+      line_start:
+        type: integer
+      status:
+        type: string
+    type: object
+  worker.documentCommentsResponse:
+    properties:
+      comments:
+        items:
+          $ref: '#/definitions/worker.documentCommentItem'
+        type: array
+      count:
+        type: integer
+      document_id:
+        type: integer
+    type: object
   worker.documentErrorResponse:
     properties:
       error:
         type: string
+    type: object
+  worker.documentHistoryItem:
+    properties:
+      author:
+        type: string
+      content_hash:
+        type: string
+      created_at:
+        type: string
+      id:
+        type: integer
+      version:
+        type: integer
+    type: object
+  worker.documentHistoryResponse:
+    properties:
+      count:
+        type: integer
+      path:
+        type: string
+      project:
+        type: string
+      versions:
+        items:
+          $ref: '#/definitions/worker.documentHistoryItem'
+        type: array
     type: object
   worker.documentListItem:
     properties:
@@ -648,6 +704,29 @@ definitions:
       offset:
         type: integer
       total:
+        type: integer
+    type: object
+  worker.documentReadResponse:
+    properties:
+      author:
+        type: string
+      content:
+        type: string
+      content_hash:
+        type: string
+      created_at:
+        type: string
+      doc_type:
+        type: string
+      id:
+        type: integer
+      metadata:
+        type: string
+      path:
+        type: string
+      project:
+        type: string
+      version:
         type: integer
     type: object
   worker.embeddingTelemetry:
@@ -759,6 +838,57 @@ definitions:
       version:
         type: integer
     type: object
+  worker.modelHealthResponse:
+    properties:
+      generated_at:
+        type: string
+      rows:
+        items:
+          $ref: '#/definitions/worker.modelHealthRow'
+        type: array
+      summary:
+        $ref: '#/definitions/worker.modelHealthSummary'
+    type: object
+  worker.modelHealthRow:
+    properties:
+      configured:
+        type: boolean
+      endpoint:
+        type: string
+      evidence:
+        items:
+          type: string
+        type: array
+      health:
+        type: string
+      id:
+        type: string
+      message:
+        type: string
+      model:
+        type: string
+      provider:
+        type: string
+      role:
+        type: string
+      secret_set:
+        type: boolean
+      source:
+        type: string
+    type: object
+  worker.modelHealthSummary:
+    properties:
+      configured:
+        type: integer
+      degraded:
+        type: integer
+      ok:
+        type: integer
+      standby:
+        type: integer
+      total:
+        type: integer
+    type: object
   worker.operatorCollectionFilterRequest:
     properties:
       scope:
@@ -779,6 +909,18 @@ definitions:
         $ref: '#/definitions/operability.ResultStatus'
       unrecorded_sessions:
         type: integer
+    type: object
+  worker.patchConfigFeatures:
+    properties:
+      enforce_source_project:
+        type: boolean
+      telemetry_enabled:
+        type: boolean
+    type: object
+  worker.patchConfigRequest:
+    properties:
+      features:
+        $ref: '#/definitions/worker.patchConfigFeatures'
     type: object
   worker.projectCitationRate:
     properties:
@@ -819,6 +961,44 @@ definitions:
         type: string
       total:
         type: integer
+    type: object
+  worker.runtimeFlagItem:
+    properties:
+      category:
+        type: string
+      description:
+        type: string
+      enabled:
+        type: boolean
+      name:
+        type: string
+      restart_required_to_change:
+        type: boolean
+      source:
+        type: string
+    type: object
+  worker.runtimeFlagsResponse:
+    properties:
+      apply:
+        additionalProperties: {}
+        type: object
+      config:
+        additionalProperties: {}
+        type: object
+      flags:
+        additionalProperties:
+          type: boolean
+        type: object
+      items:
+        items:
+          $ref: '#/definitions/worker.runtimeFlagItem'
+        type: array
+      read_only:
+        type: boolean
+      summary:
+        additionalProperties:
+          type: integer
+        type: object
     type: object
   worker.sessionEndRequest:
     properties:
@@ -1058,6 +1238,155 @@ paths:
       summary: Check authentication status
       tags:
       - Auth
+  /api/auth/register:
+    post:
+      consumes:
+      - application/json
+      description: JSON requires email, password and invitation. Password must contain
+        at least 8 bytes under the current len check; bcrypt inputs over 72 bytes
+        currently return 500. Invitation consumption and user creation are transactional.
+        Returns safe user metadata, not a login cookie.
+      parameters:
+      - description: Required email, password and invitation strings
+        in: body
+        name: body
+        required: true
+        schema:
+          additionalProperties:
+            type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Register using an invitation
+      tags:
+      - Auth
+  /api/auth/setup:
+    post:
+      consumes:
+      - application/json
+      description: Requires the server-host operator bearer token even when setup-needed
+        is true. JSON requires nonblank email and nonempty password. Returns user
+        without setting a login cookie. Existing users return 409. Current bcrypt
+        failures, including password inputs over 72 bytes, return 500 rather than
+        a validation error (issue 539).
+      parameters:
+      - description: Required email and password strings
+        in: body
+        name: body
+        required: true
+        schema:
+          additionalProperties:
+            type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      summary: Create the first browser admin
+      tags:
+      - Auth
+  /api/auth/setup-needed:
+    get:
+      description: Public route. Returns 503 if the auth handler is not initialized
+        or the user store is unavailable, and 500 if counting users fails. A successful
+        response has needed=true when the initialized user store counts zero users;
+        this does not grant setup authority.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: boolean
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Check whether first-admin setup is needed
+      tags:
+      - Auth
   /api/auth/tokens:
     get:
       description: Returns all API tokens (excluding hashes) for admin management.
@@ -1178,6 +1507,99 @@ paths:
       summary: Get API token usage stats
       tags:
       - Auth
+  /api/auth/user-login:
+    post:
+      consumes:
+      - application/json
+      description: JSON requires email and password. Returns safe user metadata and
+        sets the private HttpOnly engram_auth cookie (SameSite=Lax, 7 days); no credential
+        is returned in JSON. Failed credentials return 401, disabled accounts 403,
+        and login throttling 429.
+      parameters:
+      - description: Required email and password strings
+        in: body
+        name: body
+        required: true
+        schema:
+          additionalProperties:
+            type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "429":
+          description: Too Many Requests
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Sign in with email and password
+      tags:
+      - Auth
+  /api/auth/user-logout:
+    post:
+      description: Revokes the private cookie session and clears engram_auth; absent
+        cookie succeeds with status=ok. A foreign or opaque Origin is rejected before
+        mutation. A revocation failure returns 503 without claiming logout.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Revoke the current browser login
+      tags:
+      - Auth
   /api/backfill/session:
     post:
       consumes:
@@ -1227,6 +1649,72 @@ paths:
       summary: Get backfill status
       tags:
       - Backfill
+  /api/config:
+    get:
+      description: Returns context, memory, storage, features and lifecycle groups.
+        Sensitive bootstrap values are not exposed; this is the current-process snapshot,
+        not an arbitrary settings editor.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "503":
+          description: config not available
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Read effective runtime configuration
+      tags:
+      - System
+    patch:
+      consumes:
+      - application/json
+      description: Only features.enforce_source_project is writable. Unknown fields,
+        trailing JSON, empty updates and telemetry_enabled are rejected. An environment-controlled
+        value returns 409. Success includes applied, audit_logged, changed, restart_required,
+        restart_required_fields and config; audit_logged=false does not undo a saved
+        change. Requires an admin identity.
+      parameters:
+      - description: Allowlisted configuration patch; maximum 1 MiB
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/worker.patchConfigRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: invalid or unsupported patch
+          schema:
+            type: string
+        "403":
+          description: admin required
+          schema:
+            type: string
+        "409":
+          description: setting controlled by environment
+          schema:
+            type: string
+        "500":
+          description: save or reload failed; read config before retrying
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Change allowlisted runtime configuration
+      tags:
+      - System
   /api/context/by-file:
     get:
       description: Returns observations with files_modified or files_read matching
@@ -1773,6 +2261,142 @@ paths:
       summary: List current documents for one canonical project
       tags:
       - Documents
+  /api/documents/comments:
+    get:
+      description: Returns comments, count and document_id. This existing reader uses
+        the authenticated route and positive native ID; it does not accept a project
+        selector or add a per-document ACL.
+      parameters:
+      - description: Positive native document version ID
+        in: query
+        name: document_id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/worker.documentCommentsResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/worker.documentErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/worker.documentErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/worker.documentErrorResponse'
+      security:
+      - ApiKeyAuth: []
+      summary: Read comments for a document version ID
+      tags:
+      - Documents
+  /api/documents/history:
+    get:
+      description: Uses an exact live canonical project and its lawful stored aliases.
+        Omitted limit uses the store's unbounded history behavior; explicit positive
+        limits are capped at 200. Count is the returned version count, not a paginated
+        total.
+      parameters:
+      - description: Exact canonical project UUID
+        in: query
+        name: project
+        required: true
+        type: string
+      - description: Exact document path
+        in: query
+        name: path
+        required: true
+        type: string
+      - description: Positive version limit, capped at 200; omitted means all versions
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/worker.documentHistoryResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/worker.documentErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/worker.documentErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/worker.documentErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/worker.documentErrorResponse'
+      security:
+      - ApiKeyAuth: []
+      summary: Read retained versions of one document path
+      tags:
+      - Documents
+  /api/documents/read:
+    get:
+      description: Requires an exact live canonical project and path. Omitted version
+        selects latest; a positive version selects that retained version. Metadata
+        is a JSON-encoded string, not a nested object.
+      parameters:
+      - description: Exact canonical project UUID
+        in: query
+        name: project
+        required: true
+        type: string
+      - description: Exact document path
+        in: query
+        name: path
+        required: true
+        type: string
+      - description: Positive document version; omitted means latest
+        in: query
+        name: version
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/worker.documentReadResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/worker.documentErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/worker.documentErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/worker.documentErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/worker.documentErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/worker.documentErrorResponse'
+      security:
+      - ApiKeyAuth: []
+      summary: Read one document version
+      tags:
+      - Documents
   /api/events/ingest:
     post:
       consumes:
@@ -1808,6 +2432,27 @@ paths:
       summary: Ingest tool event
       tags:
       - Events
+  /api/flags:
+    get:
+      description: Returns flags, items, summary, read_only, apply and config. Built-in
+        runtime and environment/config-backed flags are distinguished; this endpoint
+        never changes flags.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/worker.runtimeFlagsResponse'
+        "503":
+          description: config not available
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Read effective runtime feature flags
+      tags:
+      - System
   /api/health:
     get:
       description: Returns 200 OK immediately (even during init) so hooks can connect
@@ -2477,6 +3122,31 @@ paths:
       summary: Match memory triggers
       tags:
       - Context
+  /api/model-health:
+    get:
+      description: Returns generated_at, rows and summary from settings and current
+        clients. Configured or standby is not proof that a provider request succeeded;
+        secret_set is a presence signal, never a credential.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/worker.modelHealthResponse'
+        "500":
+          description: settings unavailable
+          schema:
+            type: string
+        "503":
+          description: store not initialized
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Read configured model health evidence
+      tags:
+      - System
   /api/models:
     get:
       description: Returns available embedding models with default and current model
@@ -3218,6 +3888,82 @@ paths:
       summary: Get session by Claude session ID
       tags:
       - Sessions
+  /api/sessions/{id}/init:
+    post:
+      consumes:
+      - application/json
+      description: Initializes an SDK agent session in the session manager. Observations
+        are processed asynchronously.
+      parameters:
+      - description: Session database ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Session start params
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/worker.SessionStartRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+        "400":
+          description: invalid session id
+          schema:
+            type: string
+        "404":
+          description: session not found
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Start SDK agent session
+      tags:
+      - Sessions
+  /api/sessions/{id}/summarize:
+    post:
+      consumes:
+      - application/json
+      description: Handles summarize requests from the stop hook. Queues a summarization
+        request for background processing.
+      parameters:
+      - description: Session database ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Last messages for summarization
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/worker.SummarizeRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+        "400":
+          description: invalid session id
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Summarize session
+      tags:
+      - Sessions
   /api/sessions/check:
     post:
       consumes:
@@ -3758,82 +4504,6 @@ paths:
       summary: Get worker version
       tags:
       - System
-  /sessions/{id}/init:
-    post:
-      consumes:
-      - application/json
-      description: Initializes an SDK agent session in the session manager. Observations
-        are processed asynchronously.
-      parameters:
-      - description: Session database ID
-        in: path
-        name: id
-        required: true
-        type: integer
-      - description: Session start params
-        in: body
-        name: body
-        required: true
-        schema:
-          $ref: '#/definitions/worker.SessionStartRequest'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-        "400":
-          description: invalid session id
-          schema:
-            type: string
-        "404":
-          description: session not found
-          schema:
-            type: string
-        "500":
-          description: internal error
-          schema:
-            type: string
-      security:
-      - ApiKeyAuth: []
-      summary: Start SDK agent session
-      tags:
-      - Sessions
-  /sessions/{id}/summarize:
-    post:
-      consumes:
-      - application/json
-      description: Handles summarize requests from the stop hook. Queues a summarization
-        request for background processing.
-      parameters:
-      - description: Session database ID
-        in: path
-        name: id
-        required: true
-        type: integer
-      - description: Last messages for summarization
-        in: body
-        name: body
-        required: true
-        schema:
-          $ref: '#/definitions/worker.SummarizeRequest'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-        "400":
-          description: invalid session id
-          schema:
-            type: string
-        "500":
-          description: internal error
-          schema:
-            type: string
-      security:
-      - ApiKeyAuth: []
-      summary: Summarize session
-      tags:
-      - Sessions
   /v1/models:
     get:
       description: OpenAI-compatibility shim. Embedding pipeline removed in v5; always

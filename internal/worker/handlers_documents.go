@@ -981,6 +981,21 @@ func (s *Service) handleListDocuments(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleDocumentHistory godoc
+// @Summary Read retained versions of one document path
+// @Description Uses an exact live canonical project and its lawful stored aliases. Omitted limit uses the store's unbounded history behavior; explicit positive limits are capped at 200. Count is the returned version count, not a paginated total.
+// @Tags Documents
+// @Produce json
+// @Security ApiKeyAuth
+// @Param project query string true "Exact canonical project UUID"
+// @Param path query string true "Exact document path"
+// @Param limit query int false "Positive version limit, capped at 200; omitted means all versions"
+// @Success 200 {object} documentHistoryResponse
+// @Failure 400 {object} documentErrorResponse
+// @Failure 403 {object} documentErrorResponse
+// @Failure 500 {object} documentErrorResponse
+// @Failure 503 {object} documentErrorResponse
+// @Router /api/documents/history [get]
 func (s *Service) handleDocumentHistory(w http.ResponseWriter, r *http.Request) {
 	store := s.currentDocumentStore()
 	if store == nil {
@@ -1027,6 +1042,22 @@ func (s *Service) handleDocumentHistory(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+// handleReadDocument godoc
+// @Summary Read one document version
+// @Description Requires an exact live canonical project and path. Omitted version selects latest; a positive version selects that retained version. Metadata is a JSON-encoded string, not a nested object.
+// @Tags Documents
+// @Produce json
+// @Security ApiKeyAuth
+// @Param project query string true "Exact canonical project UUID"
+// @Param path query string true "Exact document path"
+// @Param version query int false "Positive document version; omitted means latest"
+// @Success 200 {object} documentReadResponse
+// @Failure 400 {object} documentErrorResponse
+// @Failure 403 {object} documentErrorResponse
+// @Failure 404 {object} documentErrorResponse
+// @Failure 500 {object} documentErrorResponse
+// @Failure 503 {object} documentErrorResponse
+// @Router /api/documents/read [get]
 func (s *Service) handleReadDocument(w http.ResponseWriter, r *http.Request) {
 	store := s.currentDocumentStore()
 	if store == nil {
@@ -1135,6 +1166,18 @@ func (s *Service) handleAddDocumentComment(w http.ResponseWriter, r *http.Reques
 	})
 }
 
+// handleListDocumentComments godoc
+// @Summary Read comments for a document version ID
+// @Description Returns comments, count and document_id. This existing reader uses the authenticated route and positive native ID; it does not accept a project selector or add a per-document ACL.
+// @Tags Documents
+// @Produce json
+// @Security ApiKeyAuth
+// @Param document_id query int true "Positive native document version ID"
+// @Success 200 {object} documentCommentsResponse
+// @Failure 400 {object} documentErrorResponse
+// @Failure 500 {object} documentErrorResponse
+// @Failure 503 {object} documentErrorResponse
+// @Router /api/documents/comments [get]
 func (s *Service) handleListDocumentComments(w http.ResponseWriter, r *http.Request) {
 	store := s.currentDocumentStore()
 	if store == nil {

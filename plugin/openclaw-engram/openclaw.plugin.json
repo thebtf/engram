@@ -1,7 +1,7 @@
 {
   "name": "engram",
   "id": "engram",
-  "version": "7.0.19",
+  "version": "7.0.20",
   "displayName": "Engram Memory",
   "description": "Connects OpenClaw agents to engram persistent memory server for long-term context retention",
   "kind": "memory",
@@ -94,7 +94,8 @@
       "engram_how_it_works",
       "engram_vault_store",
       "engram_vault_get",
-      "engram_issues"
+      "engram_issues",
+      "engram_project_context"
     ]
   },
   "commands": [

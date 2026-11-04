@@ -57,11 +57,10 @@ const (
 	// an installation-stable ID when no explicit value is configured.
 	EnvClientInstanceID = "ENGRAM_CLIENT_INSTANCE_ID"
 
-	// EnvClaudeSessionID is the Claude Code session identifier injected by the
-	// Claude Code harness into the daemon process environment on every session.
-	// The daemon reads it from p.Env (per-session override) or os.Getenv
-	// (process-level) and propagates it as SessionId in pb.CallToolRequest so
-	// the server-side audit helpers can record the correct SourceSessionID.
+	// EnvClaudeSessionID identifies a caller session for attribution. For non-UCI
+	// calls, the proxy reads it from the connection's ProjectContext.Env, not the
+	// shared daemon environment. Direct session-memory captures its own nonempty
+	// process value; UCI uses a separate transport identity.
 	EnvClaudeSessionID = "CLAUDE_SESSION_ID"
 
 	// EnvContinuitySlotEnabled enables the bounded project continuity reservation.

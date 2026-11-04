@@ -1439,7 +1439,8 @@
     "stats": {
       "open": "打开任务",
       "work": "进行中 · 重新打开",
-      "done": "已关闭 · 已解决",
+      "resolved": "本页待验证",
+      "closed": "本页已关闭",
       "total": "登记总数"
     },
     "create": {
@@ -1506,6 +1507,7 @@
       "all": "全部",
       "open": "打开",
       "work": "进行中",
+      "resolved": "待验证",
       "closed": "已关闭",
       "rejected": "已拒绝"
     },
@@ -1533,7 +1535,7 @@
       "created": "任务 #{id} 已创建",
       "saved": "任务已保存",
       "acknowledged": "任务已接手",
-      "resolved": "任务已标记为解决",
+      "resolved": "任务已标记为解决 · 等待验证",
       "rejected": "任务已拒绝",
       "deleted": "任务 #{id} 已删除",
       "commented": "评论已添加",
@@ -1567,7 +1569,7 @@
       "resolveComment": "operator-console: task marked resolved",
       "save": "保存",
       "acknowledge": "接手",
-      "resolve": "关闭",
+      "resolve": "标记为已解决",
       "reject": "拒绝",
       "actions": "操作",
       "copyLink": "复制链接",
@@ -1660,7 +1662,7 @@
       "open": "打开",
       "acknowledged": "进行中",
       "reopened": "重新打开",
-      "resolved": "已解决",
+      "resolved": "已解决 · 待验证",
       "closed": "已关闭",
       "rejected": "已拒绝"
     },

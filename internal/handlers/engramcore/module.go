@@ -4,14 +4,14 @@
 // + ProxyToolProvider.
 //
 // Design reference: design.md §4.2 (US2 first tenant migration) and spec.md
-// §FR-11a (ProxyToolProvider amendment — necessary because the engram tool
-// set is owned by the server and not knowable at compile time).
+// The backend owns the live catalog. This client also exposes the same
+// source-owned schemas with explicit unverified-availability notices during
+// backend outages, and requests rediscovery after recovery.
 //
 // Constraints:
-//   - NFR-5 zero breaking change: tools/list and tools/call output MUST be
-//     byte-identical to v4.2.0 for any given gRPC backend response.
-//   - FR-13 ProxyHandleTool <1s soft contract is satisfied by the server-side
-//     timeout; the proxy itself adds no blocking.
+//   - Preserve the server's live descriptors and authorization outcomes.
+//   - Guarded calls wait only within the caller and discovery bounds for
+//     authenticated discovery; local tool listing remains nonblocking.
 //   - FR-11a single ProxyToolProvider: the registry rejects any attempt to
 //     register a second proxy module.
 package engramcore
@@ -39,12 +39,24 @@ const moduleName = "engramcore"
 //   - module.ProjectLifecycle   — session connect/disconnect logging
 //   - module.ProjectRemovalAware — project removal lifecycle logging
 //   - module.ProxyToolProvider  — dynamic tool set fetched from engram-server
+//   - module.ToolProvider       — local caller project-context recovery
 type Module struct {
 	pool                        *grpcPool
 	advisorProofs               *advisorProofCache
 	v3ClientInstanceID          string
 	registrationParserAvailable bool
 	deps                        module.ModuleDeps
+	refreshMu                   sync.Mutex
+	refreshing                  map[advisorProofKey]map[string]bool
+	liveCatalog                 map[advisorProofKey]discoveredCatalog
+	discoveryGeneration         map[advisorProofKey]uint64
+	discoverySignals            map[advisorProofKey]chan struct{}
+	discoveryUpdates            map[advisorProofKey]chan struct{}
+	terminalDiscovery           map[advisorProofKey]bool
+	refreshWG                   sync.WaitGroup
+	notifier                    muxcore.Notifier
+	refreshCtx                  context.Context
+	refreshCancel               context.CancelFunc
 
 	preparedIndexMu            sync.RWMutex
 	preparedIndex              PreparedIndexCollaborator
@@ -57,6 +69,7 @@ var (
 	_ module.ProjectLifecycle    = (*Module)(nil)
 	_ module.ProjectRemovalAware = (*Module)(nil)
 	_ module.ProxyToolProvider   = (*Module)(nil)
+	_ module.ToolProvider        = (*Module)(nil)
 )
 
 // NewModule constructs an unstarted engramcore module. Call Init before
@@ -99,6 +112,19 @@ func (m *Module) Name() string { return moduleName }
 // initialisation — gRPC connections are dialled lazily on first use.
 // Implements module.EngramModule.
 func (m *Module) Init(_ context.Context, deps module.ModuleDeps) error {
+	m.refreshMu.Lock()
+	parent := deps.DaemonCtx
+	if parent == nil {
+		parent = context.Background()
+	}
+	m.refreshCtx, m.refreshCancel = context.WithCancel(parent)
+	m.refreshing = make(map[advisorProofKey]map[string]bool)
+	m.liveCatalog = make(map[advisorProofKey]discoveredCatalog)
+	m.discoveryGeneration = make(map[advisorProofKey]uint64)
+	m.discoverySignals = make(map[advisorProofKey]chan struct{})
+	m.discoveryUpdates = make(map[advisorProofKey]chan struct{})
+	m.terminalDiscovery = make(map[advisorProofKey]bool)
+	m.refreshMu.Unlock()
 	m.deps = deps
 	if deps.Logger != nil {
 		deps.Logger.Info("engramcore module initialised",
@@ -109,12 +135,25 @@ func (m *Module) Init(_ context.Context, deps module.ModuleDeps) error {
 	return nil
 }
 
+// SetNotifier receives muxcore's scoped notifier through the dispatcher.
+func (m *Module) SetNotifier(notifier muxcore.Notifier) {
+	m.refreshMu.Lock()
+	m.notifier = notifier
+	m.refreshMu.Unlock()
+}
+
 // Shutdown closes all pooled gRPC connections. Implements module.EngramModule.
 //
 // Per design.md §4.1 shutdown proceeds in reverse registration order; this
 // module is typically registered first so it drains last. Closing gRPC
 // connections is idempotent so concurrent Shutdown calls are safe.
 func (m *Module) Shutdown(_ context.Context) error {
+	m.refreshMu.Lock()
+	if m.refreshCancel != nil {
+		m.refreshCancel()
+	}
+	m.refreshMu.Unlock()
+	m.refreshWG.Wait()
 	m.preparedIndexMu.Lock()
 	m.shuttingDown = true
 	m.preparedIndexMu.Unlock()
