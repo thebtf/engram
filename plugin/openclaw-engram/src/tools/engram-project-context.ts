@@ -43,7 +43,13 @@ export function createEngramProjectContextTool(
           `code: ${quotedPromptScalar(result.code)}`,
           `outcome: ${quotedPromptScalar(result.outcome)}`,
           ...(parsed.data.action === 'select' && result.outcome === 'unknown'
-            ? ['Selection was not confirmed; the caller binding may already have changed. Keep the original operation held, refresh choices and inspect any unknown write outcome before retrying it.']
+            ? ['Selection was not confirmed; the existing caller binding may already have changed. Inspect the existing caller binding or selection outcome before retrying selection. If the outcome cannot be established safely, keep the original operation held for authorized owner inspection.']
+            : []),
+          ...(parsed.data.action === 'select' && result.outcome === 'unknown' && ['PROJECT_MIGRATION_REQUIRED', 'PROJECT_IDENTITY_CONFLICT', 'PROJECT_SELECTION_INVALID', 'PROJECT_SELECTION_STALE'].includes(result.code)
+            ? ['Only if the selection outcome has been safely inspected and any unavailable dependency restored, follow this choice guidance; otherwise keep the operation held:']
+            : []),
+          ...(parsed.data.action === 'select' && result.outcome === 'unknown' && !['PROJECT_RESOLUTION_UNAVAILABLE', 'PROJECT_MIGRATION_REQUIRED', 'PROJECT_IDENTITY_CONFLICT', 'PROJECT_SELECTION_INVALID', 'PROJECT_SELECTION_STALE'].includes(result.code)
+            ? ['Inspect any unknown write outcome before retrying it.']
             : []),
           projectContextGuidance(result.code),
         ].join('\n');

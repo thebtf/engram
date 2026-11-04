@@ -258,3 +258,80 @@ test('project context: revoked catalog authorization does not reuse visible choi
   assert.equal(f.state.selected, undefined);
   assert.deepEqual(f.issues, []);
 });
+
+for (const action of ['choices', 'select']) {
+  test(`project context: unavailable ${action} holds recovery until catalog access is restored`, async t => {
+    const f = await fixture(t);
+    const issue = f.find('engram_issues');
+    const context = f.find('engram_project_context');
+    const original = Object.freeze({ action: 'create', title: 'Held unavailable recovery', body: 'Keep the original operation', priority: 'high', target_project: '33333333-3333-4333-8333-333333333333' });
+    const held = f.privateOutput(await issue.execute('unavailable-held-issue', original));
+    assert.match(held, /PROJECT_MIGRATION_REQUIRED/);
+    assert.match(held, /choices/);
+    assert.match(held, /select/);
+    const listed = f.privateOutput(await context.execute('before-denial', { action: 'choices' }));
+    assert.ok(listed.includes(choices[1].selection_ref));
+    f.state.denied = true;
+    const params = action === 'select' ? { action, selection_ref: choices[1].selection_ref } : { action };
+    const refused = f.privateOutput(await context.execute('unavailable-context', params));
+    assert.match(refused, /PROJECT_RESOLUTION_UNAVAILABLE/);
+    assert.match(refused, /connect|server|service|dependenc|authori[sz]|permission/i);
+    assert.match(refused, /(?:after|once|until|when)[^.\n]{0,180}\b(?:restored|restoration|recovered|recovery|reestablished|reestablishment|available again)\b/i,
+      'Recovery must wait for the connection or authorization to be restored, not immediately repeat choices/select');
+    const condition = refused.search(/(?:after|once|until|when)[^.\n]{0,180}\b(?:restored|restoration|recovered|recovery|reestablished|reestablishment|available again)\b/i);
+    if (action === 'choices') {
+      assert.match(refused, /no select[^.\n]{0,40}attempted[^.\n]{0,100}known not sent[^.\n]{0,100}fresh authorized choices/i,
+        'A read-only failure or selection known not sent must not require an existing binding');
+      assert.match(refused, /(?:unconfirmed|unknown)[^.\n]{0,100}(?:selection|select)|(?:selection|select)[^.\n]{0,100}(?:unconfirmed|unknown)/i);
+      assert.ok(refused.toLowerCase().indexOf('fresh authorized choices') > condition, 'Fresh choices must follow restoration');
+    }
+    if (condition >= 0) {
+      for (const sentence of refused.slice(0, condition).split(/[.\n]/)) {
+        if (/\b(?:call|use|refresh|retry)\b[^.\n]*(?:choices|select)/i.test(sentence)) {
+          assert.match(sentence, /\b(?:do not|don't|never|avoid|hold)\b/i, 'No immediate recovery loop before restoration');
+        }
+      }
+    }
+    assert.ok(refused.split(/[.\n]/).some(sentence =>
+      /unknown|unconfirmed/i.test(sentence) && /write|mutation/i.test(sentence) &&
+      /inspect|verify|check|reconcile/i.test(sentence) && /before|first|prior/i.test(sentence) && /retr(?:y|ying)/i.test(sentence)),
+      'Inspect an unknown original write outcome before retry');
+    if (action === 'select') {
+      assert.match(refused, /outcome:\s*"unknown"/i, 'A failed select has an unconfirmed outcome');
+      const inspection = refused.search(/(?:inspect|verify|check|reconcile)[^.\n]{0,160}(?:binding|selection|selected)|(?:binding|selection|selected)[^.\n]{0,160}(?:inspect|verify|check|reconcile)/i);
+      assert.ok(inspection >= 0, 'Inspect the existing caller binding or selection outcome');
+      assert.match(refused, /(?:inspect|verify|check|reconcile)[^.\n]{0,160}(?:binding|selection|selected)[^.\n]{0,160}(?:before|first|prior)[^.\n]{0,100}retr(?:y|ying)|(?:before|prior)[^.\n]{0,160}retr(?:y|ying)[^.\n]{0,160}(?:inspect|verify|check|reconcile)[^.\n]{0,160}(?:binding|selection|selected)|first[^.\n]{0,100}(?:inspect|verify|check|reconcile)[^.\n]{0,160}(?:binding|selection|selected)/i,
+        'Reconcile the unconfirmed selection before retrying');
+      if (inspection >= 0) {
+        for (const sentence of refused.slice(0, inspection).split(/[.\n]/)) {
+          if (/\b(?:call|use|refresh|retry)\b[^.\n]*(?:choices|select)/i.test(sentence)) {
+            assert.match(sentence, /\b(?:do not|don't|never|avoid|hold|before)\b/i, 'Do not retry selection before inspecting its outcome');
+          }
+        }
+      }
+    }
+    for (const term of ['original', 'target', 'actor', 'session', 'client']) assert.match(refused, new RegExp(term, 'i'));
+    assert.ok(!refused.includes(choices[1].selection_ref), 'Do not echo private selection input');
+    for (const choice of choices) assert.ok(!refused.includes(choice.name), 'Do not expose cached catalog data');
+    assert.equal(f.state.selected, undefined);
+    assert.deepEqual(f.issues, [], 'The refused recovery cannot replay the held write');
+
+    f.state.denied = false;
+    const fresh = f.privateOutput(await context.execute('restored-choices', { action: 'choices' }));
+    assert.ok(fresh.includes(choices[1].selection_ref));
+    const selected = f.privateOutput(await context.execute('restored-select', { action: 'select', selection_ref: choices[1].selection_ref }));
+    assert.match(selected, /ok: true/);
+    assert.deepEqual(f.issues, [], 'Recovery does not replay an operation with an unknown outcome');
+    const retried = f.privateOutput(await issue.execute('retry-known-held-issue', original));
+    assert.match(retried, /Issue created/);
+    assert.equal(f.issues.length, 1);
+    assert.equal(f.issues[0].source_project, choices[1].project_id);
+    assert.equal(f.issues[0].target_project, original.target_project);
+    assert.notEqual(f.issues[0].target_project, f.issues[0].source_project, 'The explicit target differs from the selected source');
+    assert.equal(f.issues[0].source_agent, 'project-context-fixture');
+    assert.equal(f.issues[0].created_by_session, sessionId);
+    assert.equal(f.issues[0].client, 'openclaw');
+    for (const key of ['title', 'body', 'priority']) assert.equal(f.issues[0][key], original[key]);
+    assert.equal(fs.readFileSync(path.join(f.workspaceDir, '.engram-project'), 'utf8'), f.marker);
+  });
+}

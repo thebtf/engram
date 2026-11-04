@@ -193,17 +193,8 @@ func readProjectContextFile(path string, limit int64) ([]byte, bool, error) {
 }
 
 func publishProjectContext(ctx context.Context, caller ProjectContextCaller, before projectContextSnapshot, projectID, selectionRef string) error {
-	// All refusal paths before this point are read-only. Only this caller scope
-	// owns the destination and lock; another caller in the same root is independent.
+	// The destination belongs to this caller scope; other caller scopes are independent.
 	path := before.bindingPath
-	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err != nil {
-		return logicalError("PROJECT_IDENTITY_CONFLICT")
-	}
-	defer os.Remove(path + ".lock")
-	if err := lock.Close(); err != nil {
-		return logicalError("PROJECT_RESOLUTION_UNAVAILABLE")
-	}
 	current, err := inspectProjectContext(ctx, caller)
 	if err != nil {
 		return err
@@ -212,7 +203,7 @@ func publishProjectContext(ctx context.Context, caller ProjectContextCaller, bef
 		return logicalError("PROJECT_SELECTION_STALE")
 	}
 	if current.binding != nil {
-		if current.binding.ProjectID == projectID {
+		if before.binding != nil && *before.binding == *current.binding && current.binding.ProjectID == projectID {
 			return nil
 		}
 		return logicalError("PROJECT_IDENTITY_CONFLICT")
@@ -255,7 +246,10 @@ func publishProjectContext(ctx context.Context, caller ProjectContextCaller, bef
 	// Link is an atomic absent->bound CAS. Never rename over an existing file,
 	// so another writer's bytes (including malformed records) remain preserved.
 	if err := os.Link(temporary, path); err != nil {
-		return logicalError("PROJECT_IDENTITY_CONFLICT")
+		if errors.Is(err, os.ErrExist) {
+			return logicalError("PROJECT_IDENTITY_CONFLICT")
+		}
+		return logicalError("PROJECT_RESOLUTION_UNAVAILABLE")
 	}
 	return nil
 }

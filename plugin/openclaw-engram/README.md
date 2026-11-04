@@ -133,18 +133,33 @@ or a stale selection, use the ordinary registered `engram_project_context` tool:
 3. Call `action: "select"` with that exact fresh `selection_ref` in the same caller
    workspace/server. The native Go client rechecks authorization and owns the
    caller-scoped binding. No marker/cache/data migration, permission change or
-   fabricated session is performed by the adapter. Refresh choices after a stale
-   or refused selection; do not reuse a previously visible catalog after denial.
+   fabricated session is performed by the adapter. Do not reuse a previously
+   visible catalog after denial.
 4. After confirmed selection, retry the original operation unchanged, including
    its target and actual actor/session/client. Neither recovery action replays
    the operation automatically. A lost selection response is an unknown outcome:
    the binding may already have changed. Recovery also does not prove an earlier
    issue/memory write failed; inspect unknown mutation outcomes before retrying.
 
+If `choices` or `select` is unavailable, hold recovery until the relevant
+connectivity, authorization or local-storage problem is resolved. Reconcile an
+unconfirmed selection using the bounded owner-inspection guidance below; if the
+binding or outcome cannot be established safely, it remains unknown and the
+operation stays held. Refresh stale choices only after access is restored and any
+unknown selection outcome is reconciled. Do not replay an unknown write; preserve
+the original operation, target, actor, session and client.
+
 For an existing selected caller binding, a changed marker digest is accepted only
 when the valid pinned canonical ID and caller scope still match. The client
 rechecks the fresh authorized catalog, rejects a different ID or a race, and does
 not rewrite the marker or binding during revalidation.
+
+Caller-binding publication does not depend on the old persistent `.lock` file and
+does not alter it. Atomic no-overwrite publication preserves existing identity
+files, including the marker and binding. Ordinary `project resolve` can bootstrap
+and persist when no binding is established; `project resolve --check` does not
+prove a caller selection. Neither is universal read-only confirmation of an
+unknown selection.
 
 Both actions use only the actual tool `ctx.workspaceDir`, never terminal cwd,
 `config.workspaceDir`, another project or a caller-supplied path. Missing host

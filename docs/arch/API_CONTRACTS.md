@@ -1028,6 +1028,20 @@ These are current-source operations, not claims about a loaded installation.
    leaves its outcome unknown: establish the original result before replaying.
    Recovery is not evidence that the mutation was never sent or never committed.
 
+When `choices` or `select` is unavailable, hold recovery until connectivity,
+authorization or local storage is restored. Reconcile an unconfirmed selection
+using the existing [bounded owner inspection](../operating-engram.md#context-recovery).
+If the binding or outcome cannot be established safely, it remains unknown and
+the operation stays held. Refresh stale choices only after access is restored and
+any unknown selection outcome is reconciled; do not replay an unknown write.
+Preserve the original operation, target, actor, session and client.
+
+Caller-binding publication does not require or alter the old persistent `.lock`;
+atomic no-overwrite preserves existing identity files, including marker and binding.
+Ordinary `project resolve` can bootstrap and persist without an established binding.
+`project resolve --check` does not prove a caller selection; neither is universal
+read-only confirmation of an unknown selection.
+
 OpenClaw exposes `engram_project_context` with the same `choices`/`select`
 intent through its native-client adapter and the actual host caller workspace.
 Its result formatting is host-specific, not the native MCP text/JSON envelope.

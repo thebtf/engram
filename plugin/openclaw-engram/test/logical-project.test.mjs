@@ -51,7 +51,11 @@ test('OpenClaw preserves native unavailable legacy-reader refusal without invent
  };
  await assert.rejects(resolveIdentity('legacy-agent', root, { env }), error => {
   assert.equal(error.message, 'PROJECT_RESOLUTION_UNAVAILABLE');
-  assert.match(error.guidance, /project_context/, 'Native guidance must expose the supported project-context flow');
+  assert.match(error.guidance, /original operation held/i);
+  assert.match(error.guidance, /(?:once|after|when|until)[^.\n]{0,180}\b(?:restored|recovered|reestablished|available again)\b/i, 'Native guidance must require restored access before re-entry');
+  assert.match(error.guidance, /do not repeat choices or select while/i);
+  assert.match(error.guidance, /unknown write outcome before retry/i);
+  assert.match(error.guidance, /project_context/);
   assert.match(error.guidance, /\bchoices\b/);
   assert.match(error.guidance, /\bselect\b/);
   assert.ok(error.guidance.length <= 3072, 'native guidance must fit the existing adapter bound');
@@ -63,7 +67,11 @@ test('OpenClaw preserves native unavailable legacy-reader refusal without invent
  assert.equal(held.canonicalProject, undefined, 'An unavailable legacy reader cannot supply project identity');
  assert.equal(held.error.code, 'PROJECT_RESOLUTION_UNAVAILABLE');
  assert.equal(held.error.httpStatus, 503);
- assert.match(held.error.upgradeAction, /engram_project_context/, 'OpenClaw recovery must name its ordinary registered tool');
+ assert.match(held.error.upgradeAction, /original operation held/i);
+ assert.match(held.error.upgradeAction, /(?:once|after|when|until)[^.\n]{0,180}\b(?:restored|recovered|reestablished|available again)\b/i, 'OpenClaw guidance must require restored access before re-entry');
+ assert.match(held.error.upgradeAction, /do not repeat choices or select while/i);
+ assert.match(held.error.upgradeAction, /unknown write outcome before retry/i);
+ assert.match(held.error.upgradeAction, /engram_project_context/);
  assert.match(held.error.upgradeAction, /\bchoices\b/);
  assert.match(held.error.upgradeAction, /\bselect\b/);
  const check = JSON.parse(execFileSync(executable, ['project', 'resolve', '--root', root, '--json', '--check'], { env, encoding: 'utf8' }));
