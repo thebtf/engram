@@ -44,6 +44,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Use registered canonical UUIDs and authenticated caller project context in MCP fixtures without weakening default-deny, privacy or pre-mutation rejection guards. Reuse 119 prior PASS plus one exact retry PASS after the context fix, not 120 fresh PASS or installed acceptance.
 - Seed the isolated operator-code fixture with a registered canonical project UUID while preserving five queue candidates, published/no-view checks and redacted provisioning errors.
 
+## [7.0.20] - 2026-11-04
+
+### Fixed
+
+- Keep configured local MCP discovery available during backend outages and reconnect discovery when the backend returns, without replaying writes with unknown outcomes. On Windows, fail closed when attesting and gracefully replacing the exact known markerless v7.0.19 daemon. Installed-client acceptance remains unproved.
+
 ## [7.0.19] - 2026-11-03
 
 Source/review: [PR #610](https://github.com/thebtf/engram/pull/610).

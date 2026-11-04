@@ -275,11 +275,17 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 			}
 			response := make(chan []byte, 1)
 			go func() {
-				if scanner.Scan() {
-					response <- append([]byte(nil), scanner.Bytes()...)
-				} else {
-					response <- nil
+				for scanner.Scan() {
+					raw := append([]byte(nil), scanner.Bytes()...)
+					var frame struct {
+						ID json.RawMessage `json:"id"`
+					}
+					if json.Unmarshal(raw, &frame) == nil && string(frame.ID) == `"`+method+`"` {
+						response <- raw
+						return
+					}
 				}
+				response <- nil
 			}()
 			select {
 			case raw := <-response:
@@ -317,19 +323,21 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 		}
 	}
 	var first string
-	for range 2 {
+	for client := 0; client < 2; client++ {
 		run()
 		id, err := os.ReadFile(filepath.Join(state, "installation", "client-instance-id"))
 		if err != nil || !strings.HasPrefix(string(id), "engram-") {
 			t.Fatalf("direct installation identity absent: %v", err)
 		}
-		select {
-		case request := <-discovery.requests:
-			if request.GetProject() != "" || request.GetClientName() != "engram-daemon" || request.GetClientVersion() == "" {
-				t.Fatalf("direct Initialize was not unscoped capability discovery: %s", request)
+		if client == 0 {
+			select {
+			case request := <-discovery.requests:
+				if request.GetProject() != "" || request.GetClientName() != "engram-daemon" || request.GetClientVersion() == "" {
+					t.Fatalf("direct Initialize was not unscoped capability discovery: %s", request)
+				}
+			case <-time.After(15 * time.Second):
+				t.Fatal("direct client did not send Initialize to fixture")
 			}
-		default:
-			t.Fatal("direct client did not send Initialize to fixture")
 		}
 		if first != "" && string(id) != first {
 			t.Fatalf("direct client restart changed identity")

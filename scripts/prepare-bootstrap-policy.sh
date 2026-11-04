@@ -37,7 +37,8 @@ candidate="$workdir/bootstrap-targets.json"
 node - "$version" "$workdir" "$candidate" <<'NODE'
 const crypto = require('node:crypto');
 const fs = require('node:fs');
-const { createPolicy } = require('./plugin/engram/scripts/bootstrap-policy.js');
+const { createPolicy, parseMarkerlessAttestation } = require('./plugin/engram/scripts/bootstrap-policy.js');
+const attestation = parseMarkerlessAttestation(fs.readFileSync('./cmd/engram/markerless-attestation.json', 'utf8'));
 const [version, dir, output] = process.argv.slice(2);
 const target = (asset) => {
   const bytes = fs.readFileSync(`${dir}/${asset}`);
@@ -47,7 +48,7 @@ const policy = createPolicy(version, {
   'win32-x64': target('engram-windows-amd64.exe'),
   'linux-x64': target('engram-linux-amd64'),
   'darwin-arm64': target('engram-darwin-arm64'),
-});
+}, attestation.revoked_sha256);
 fs.writeFileSync(output, `${JSON.stringify(policy, null, 2)}\n`);
 NODE
 
