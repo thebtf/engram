@@ -26,10 +26,10 @@ import (
 	"github.com/thebtf/engram/internal/version"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
-	"go.uber.org/goleak"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -181,6 +181,24 @@ func (l *delayedAcceptListener) Accept() (net.Conn, error) {
 	l.acceptOnce.Do(func() { close(l.acceptStarted) })
 	<-l.release
 	return conn, nil
+}
+
+type discoveryNotifier struct{ notifications chan string }
+
+func (n *discoveryNotifier) Notify(projectID string, notification []byte) error {
+	if string(notification) == `{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}` {
+		n.notifications <- projectID
+	}
+	return nil
+}
+
+func (n *discoveryNotifier) Broadcast([]byte) {}
+
+func assertLocalCatalog(t *testing.T, response []byte) {
+	t.Helper()
+	if !strings.Contains(string(response), `"name":"recall"`) || !strings.Contains(string(response), `"name":"vault"`) || !strings.Contains(string(response), "remote support and authorization are unverified") {
+		t.Fatalf("local catalog missing or not candid: %s", response)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -399,7 +417,7 @@ func TestContract_ToolsList_OfflineWithoutURLReturnsLoomOnly(t *testing.T) {
 	}
 }
 
-func TestContract_ToolsList_ConfiguredInitializeFailureIsServiceUnavailable(t *testing.T) {
+func TestContract_ToolsList_ConfiguredInitializeFailureReturnsLocalCatalog(t *testing.T) {
 	srv := &mockEngramServer{initErr: status.Error(codes.Unavailable, "backend starting")}
 	grpcAddr := startMockGRPC(t, srv)
 	disp, _, p := buildContractDispatcher(t, grpcAddr)
@@ -408,7 +426,7 @@ func TestContract_ToolsList_ConfiguredInitializeFailureIsServiceUnavailable(t *t
 	if err != nil {
 		t.Fatalf("HandleRequest: %v", err)
 	}
-	assertToolsListServiceUnavailable(t, resp)
+	assertLocalCatalog(t, resp)
 }
 
 func TestContract_ToolsList_ServerURLAliasIsConfigured(t *testing.T) {
@@ -424,270 +442,148 @@ func TestContract_ToolsList_ServerURLAliasIsConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HandleRequest: %v", err)
 	}
-	assertToolsListServiceUnavailable(t, resp)
+	assertLocalCatalog(t, resp)
 }
 
-func TestContract_ToolsList_WaitsForDelayedGRPCReadiness(t *testing.T) {
-	srv := &mockEngramServer{initResp: &pb.InitializeResponse{Tools: []*pb.ToolDefinition{
-		{Name: "memory_store", Description: "store"},
-		{Name: "memory_search", Description: "search"},
-	}}}
-	grpcAddr, release, _ := startDeferredMockGRPC(t, srv)
-	disp, _, p := buildContractDispatcher(t, "")
-	p.Env[config.EnvServerURL] = "http://" + grpcAddr
-	releaseResult := make(chan error, 1)
-	go func() {
-		releaseResult <- release()
-	}()
-
-	ctx, cancel := context.WithTimeout(context.Background(), proxyToolsDiscoveryTimeout)
-	defer cancel()
-	resp, err := disp.HandleRequest(ctx, p, jsonrpcListReq(1))
-	if releaseErr := <-releaseResult; releaseErr != nil {
-		t.Fatalf("release delayed gRPC server: %v", releaseErr)
-	}
-	if err != nil {
-		t.Fatalf("HandleRequest: %v", err)
-	}
-	var got struct {
-		Result struct {
-			Tools []struct {
-				Name string `json:"name"`
-			} `json:"tools"`
-		} `json:"result"`
-		Error *struct{ Code int } `json:"error"`
-	}
-	if err := json.Unmarshal(resp, &got); err != nil {
-		t.Fatalf("unmarshal response: %v", err)
-	}
-	if got.Error != nil {
-		t.Fatalf("delayed readiness error: %+v", got.Error)
-	}
-	want := []string{"memory_store", "memory_search"}
-	if len(got.Result.Tools) != len(want) {
-		t.Fatalf("tools=%v, want %v", got.Result.Tools, want)
-	}
-	for i, name := range want {
-		if got.Result.Tools[i].Name != name {
-			t.Fatalf("tool[%d]=%q, want %q", i, got.Result.Tools[i].Name, name)
-		}
-	}
-}
-
-func TestContract_ToolsList_CancellationStopsNetworkDiscovery(t *testing.T) {
-	srv := &mockEngramServer{initResp: &pb.InitializeResponse{Tools: []*pb.ToolDefinition{{Name: "recall"}}}}
-	grpcAddr, release, accepted := startDeferredMockGRPC(t, srv)
+func TestContract_ToolsList_NonblockingRecoveryAndCancellation(t *testing.T) {
+	schema := []byte(`{"type":"object","properties":{"content":{"type":"string"}}}`)
+	srv := &mockEngramServer{initResp: &pb.InitializeResponse{Tools: []*pb.ToolDefinition{{Name: "memory_store", Description: "store", InputSchemaJson: schema}}}}
+	addr, release, _ := startDeferredMockGRPC(t, srv)
 	disp, _, project := buildContractDispatcher(t, "")
-	project.Env[config.EnvServerURL] = "http://" + grpcAddr
+	notifier := &discoveryNotifier{notifications: make(chan string, 2)}
+	disp.SetNotifier(notifier)
+	project.Env[config.EnvServerURL] = "http://" + addr
+	response, err := disp.HandleRequest(t.Context(), project, jsonrpcListReq(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertLocalCatalog(t, response)
+	if err := release(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case id := <-notifier.notifications:
+		if id != project.ID {
+			t.Fatalf("notification project=%q", id)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("recovered discovery did not notify")
+	}
+	response, err = disp.HandleRequest(t.Context(), project, jsonrpcListReq(2))
+	if err != nil || !strings.Contains(string(response), `"name":"memory_store"`) || !strings.Contains(string(response), `"content":{"type":"string"}`) || !strings.Contains(string(response), "Previously discovered remote schema") {
+		t.Fatalf("recovered list lost remote schema: %s (%v)", response, err)
+	}
 	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	result := make(chan []byte, 1)
-	requestErr := make(chan error, 1)
-	go func() {
-		response, err := disp.HandleRequest(ctx, project, jsonrpcListReq(1))
-		result <- response
-		requestErr <- err
-	}()
+	cancel()
+	response, err = disp.HandleRequest(ctx, project, jsonrpcListReq(3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertToolsListServiceUnavailable(t, response)
+}
+
+func TestContract_ToolsList_ShutdownStopsInflightDiscovery(t *testing.T) {
+	srv := &mockEngramServer{}
+	addr, release, accepted := startDeferredMockGRPC(t, srv)
+	disp, mod, project := buildContractDispatcher(t, "")
+	project.Env[config.EnvServerURL] = "http://" + addr
+	response, err := disp.HandleRequest(t.Context(), project, jsonrpcListReq(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertLocalCatalog(t, response)
 	select {
 	case <-accepted:
-		cancel()
 	case <-time.After(5 * time.Second):
-		t.Fatal("network discovery did not attempt a connection")
+		t.Fatal("background discovery did not connect")
 	}
+	var pooled *grpc.ClientConn
+	connections := 0
+	mod.pool.conns.Range(func(_, value any) bool {
+		connections++
+		pooled = value.(*grpc.ClientConn)
+		return true
+	})
+	if connections != 1 || pooled == nil {
+		t.Fatalf("discovery pooled %d connections, want one", connections)
+	}
+	stopped := make(chan error, 1)
+	go func() { stopped <- mod.Shutdown(context.Background()) }()
 	select {
-	case response := <-result:
-		if err := <-requestErr; err != nil {
+	case err := <-stopped:
+		if err != nil {
 			t.Fatal(err)
 		}
-		assertToolsListServiceUnavailable(t, response)
-		if !strings.Contains(string(response), context.Canceled.Error()) {
-			t.Fatalf("cancelled discovery response=%s", response)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("network discovery did not return after cancellation")
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdown did not stop in-flight discovery")
+	}
+	if pooled.GetState() != connectivity.Shutdown {
+		t.Fatalf("pooled connection remains active: %s", pooled.GetState())
 	}
 	if err := release(); err != nil {
 		t.Fatal(err)
 	}
+	observerCtx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	observer, err := grpc.DialContext(observerCtx, addr, grpc.WithBlock(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("verify recovered listener: %v", err)
+	}
+	_ = observer.Close()
+	if _, err := mod.ProxyTools(t.Context(), project); err != nil {
+		t.Fatal(err)
+	}
+	mod.refreshMu.Lock()
+	active := len(mod.refreshing)
+	mod.refreshMu.Unlock()
 	srv.mu.Lock()
-	defer srv.mu.Unlock()
-	if srv.initCalls != 0 {
-		t.Fatalf("cancelled discovery executed %d Initialize calls", srv.initCalls)
+	initializes := srv.initCalls
+	srv.mu.Unlock()
+	if active != 0 || initializes != 0 || pooled.GetState() != connectivity.Shutdown {
+		t.Fatalf("discovery restarted after shutdown: active=%d initializes=%d state=%s", active, initializes, pooled.GetState())
 	}
 }
 
-func TestContract_ToolsList_DeadlineIsBoundedAndConnectionIsReusable(t *testing.T) {
-	leakBaseline := goleak.IgnoreCurrent()
-	t.Cleanup(func() { goleak.VerifyNone(t, leakBaseline) })
-	srv := &mockEngramServer{initResp: &pb.InitializeResponse{Tools: []*pb.ToolDefinition{{Name: "memory_store"}}}}
-	grpcAddr, release, _ := startDeferredMockGRPC(t, srv)
-	disp, mod, p := buildContractDispatcher(t, "")
-	p.Env[config.EnvServerURL] = "http://" + grpcAddr
-
-	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
-	startedAt := time.Now()
-	resp, err := disp.HandleRequest(ctx, p, jsonrpcListReq(1))
-	cancel()
+// The live catalog preserves the backend schema while marking availability unverified.
+func TestContract_ToolsList_PreservesDiscoveredSchemas(t *testing.T) {
+	schema := []byte(`{"type":"object","properties":{"content":{"type":"string"}},"required":["content"]}`)
+	srv := &mockEngramServer{initResp: &pb.InitializeResponse{Tools: []*pb.ToolDefinition{{Name: "memory_store", Description: "Store a memory observation", InputSchemaJson: schema}}}}
+	disp, _, project := buildContractDispatcher(t, startMockGRPC(t, srv))
+	notifier := &discoveryNotifier{notifications: make(chan string, 1)}
+	disp.SetNotifier(notifier)
+	if _, err := disp.HandleRequest(t.Context(), project, jsonrpcListReq(1)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-notifier.notifications:
+	case <-time.After(5 * time.Second):
+		t.Fatal("discovery did not complete")
+	}
+	response, err := disp.HandleRequest(t.Context(), project, jsonrpcListReq(2))
 	if err != nil {
-		t.Fatalf("HandleRequest: %v", err)
+		t.Fatal(err)
 	}
-	assertToolsListServiceUnavailable(t, resp)
-	// Race instrumentation can delay an already-fired timer while the full
-	// package gate is saturated. This must still return well before the
-	// production discovery timeout rather than waiting for the full retry budget.
-	if elapsed := time.Since(startedAt); elapsed < 50*time.Millisecond || elapsed > proxyToolsDiscoveryTimeout/4 {
-		t.Fatalf("deadline elapsed=%s, want caller cancellation before discovery timeout", elapsed)
-	}
-	if !strings.Contains(string(resp), context.DeadlineExceeded.Error()) {
-		t.Fatalf("deadline response=%s, want caller deadline exceeded", resp)
-	}
-
-	countConnections := func() int {
-		count := 0
-		mod.pool.conns.Range(func(_, _ any) bool {
-			count++
-			return true
-		})
-		return count
-	}
-	connectionsAfterFirst := countConnections()
-	if connectionsAfterFirst == 0 {
-		t.Fatal("deadline attempt left no reusable pooled connection")
-	}
-	secondCtx, secondCancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
-	secondResp, err := disp.HandleRequest(secondCtx, p, jsonrpcListReq(2))
-	secondCancel()
-	if err != nil {
-		t.Fatalf("second deadline HandleRequest: %v", err)
-	}
-	assertToolsListServiceUnavailable(t, secondResp)
-	if got := countConnections(); got != connectionsAfterFirst {
-		t.Fatalf("pooled connections grew across retries: first=%d second=%d", connectionsAfterFirst, got)
-	}
-
-	if err := release(); err != nil {
-		t.Fatalf("release gRPC server: %v", err)
-	}
-	retryCtx, retryCancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer retryCancel()
-	retryResp, err := disp.HandleRequest(retryCtx, p, jsonrpcListReq(3))
-	if err != nil {
-		t.Fatalf("retry HandleRequest: %v", err)
-	}
-	var retry struct {
+	var result struct {
 		Result struct {
 			Tools []struct {
-				Name string `json:"name"`
+				Name, Description string
+				InputSchema       json.RawMessage `json:"inputSchema"`
 			} `json:"tools"`
 		} `json:"result"`
-		Error *struct{ Code int } `json:"error"`
 	}
-	if err := json.Unmarshal(retryResp, &retry); err != nil {
-		t.Fatalf("unmarshal retry response: %v", err)
+	if err := json.Unmarshal(response, &result); err != nil {
+		t.Fatal(err)
 	}
-	if retry.Error != nil || len(retry.Result.Tools) != 1 || retry.Result.Tools[0].Name != "memory_store" {
-		t.Fatalf("retry response=%s, want recovered full list", retryResp)
-	}
-	srv.mu.Lock()
-	initCalls := srv.initCalls
-	srv.mu.Unlock()
-	if initCalls != 1 {
-		t.Fatalf("Initialize calls=%d, want only the post-deadline retry", initCalls)
-	}
-}
-
-// TestContract_ToolsList_MatchesV42 verifies that a tools/list response
-// dispatched through the dispatcher, with a mock gRPC server returning 3 canned
-// tools via InitializeResponse, produces a byte-identical envelope to the v4.2.0
-// reference format.
-func TestContract_ToolsList_MatchesV42(t *testing.T) {
-	t.Parallel()
-
-	srv := &mockEngramServer{
-		initResp: &pb.InitializeResponse{
-			Tools: []*pb.ToolDefinition{
-				{
-					Name:            "memory_store",
-					Description:     "Store a memory observation",
-					InputSchemaJson: []byte(`{"type":"object","properties":{"content":{"type":"string"}},"required":["content"]}`),
-				},
-				{
-					Name:            "memory_search",
-					Description:     "Search stored memories",
-					InputSchemaJson: []byte(`{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}`),
-				},
-				{
-					Name:            "memory_delete",
-					Description:     "Delete a memory by ID",
-					InputSchemaJson: []byte(`{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}`),
-				},
-			},
-		},
-	}
-
-	grpcAddr := startMockGRPC(t, srv)
-	disp, _, p := buildContractDispatcher(t, grpcAddr)
-
-	resp, err := disp.HandleRequest(context.Background(), p, jsonrpcListReq(1))
-	if err != nil {
-		t.Fatalf("HandleRequest: %v", err)
-	}
-
-	// v4.2.0 reference envelope — hand-written as the ground truth.
-	wantEnvelope := []byte(`{
-		"jsonrpc": "2.0",
-		"id": 1,
-		"result": {
-			"tools": [
-				{
-					"name": "memory_store",
-					"description": "Store a memory observation",
-					"inputSchema": {"type":"object","properties":{"content":{"type":"string"}},"required":["content"]}
-				},
-				{
-					"name": "memory_search",
-					"description": "Search stored memories",
-					"inputSchema": {"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}
-				},
-				{
-					"name": "memory_delete",
-					"description": "Delete a memory by ID",
-					"inputSchema": {"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}
-				}
-			]
-		}
-	}`)
-
-	assertJSONEqual(t, "tools/list envelope", resp, wantEnvelope)
-
-	// Also verify structural invariants explicitly so the diff is actionable.
-	var got struct {
-		JSONRPC string `json:"jsonrpc"`
-		ID      int    `json:"id"`
-		Result  struct {
-			Tools []struct {
-				Name        string          `json:"name"`
-				Description string          `json:"description"`
-				InputSchema json.RawMessage `json:"inputSchema"`
-			} `json:"tools"`
-		} `json:"result"`
-		Error *struct{ Code int } `json:"error"`
-	}
-	if err := json.Unmarshal(resp, &got); err != nil {
-		t.Fatalf("unmarshal response: %v", err)
-	}
-	if got.Error != nil {
-		t.Fatalf("unexpected error: %+v", got.Error)
-	}
-	if len(got.Result.Tools) != 3 {
-		t.Fatalf("expected 3 tools, got %d", len(got.Result.Tools))
-	}
-	wantNames := []string{"memory_store", "memory_search", "memory_delete"}
-	for i, w := range wantNames {
-		if got.Result.Tools[i].Name != w {
-			t.Errorf("tool[%d].name: got %q, want %q", i, got.Result.Tools[i].Name, w)
+	for _, tool := range result.Result.Tools {
+		if tool.Name == "memory_store" {
+			if !strings.HasSuffix(tool.Description, "Store a memory observation") {
+				t.Fatalf("description=%q", tool.Description)
+			}
+			assertJSONEqual(t, "remote schema", tool.InputSchema, schema)
+			return
 		}
 	}
+	t.Fatalf("remote tool missing: %s", response)
 }
 
 // TestContract_ToolsCall_Success_MatchesV42 verifies that a successful

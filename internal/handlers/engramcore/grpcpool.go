@@ -182,6 +182,7 @@ func parseGRPCAddr(serverURL string) (string, error) {
 func dialGRPC(addr, serverURL, token string) (*grpc.ClientConn, error) {
 	opts := []grpc.DialOption{
 		grpc.WithNoProxy(),
+		grpc.WithDisableRetry(),
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
 			Time:                30 * time.Second,
 			Timeout:             10 * time.Second,

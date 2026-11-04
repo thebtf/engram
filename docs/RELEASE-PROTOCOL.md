@@ -7,6 +7,12 @@
 
 Repository-only procedure or CI corrections reach `main` through normal review and Actions; they do not require a new product version/tag or consumer binary release unless their accepted scope changes a shipped surface. Source-only scope does not waive required PR rules or proof for the changed procedure.
 
+## Emergency client release
+
+For a real service outage that prevents users from working, prioritize the smallest client release that restores the ordinary user path. The user directed: «если у нас СЛОМАНО ВСЁ - мы выпускаем срочный релиз, чтобы починилось. а ЗАМЕЧАНИЯ ДОВОДИМ ПОЗЖЕ» and «вы с коллегами в первую очередь отвечаете за работоспособность проекта ... это ... противоречит моим правилам». These words were relayed by Main session `01a15ebb-8730-7265-b641-a99d23c8e947` on 2026-11-04; the original message ID is not known.
+
+Prove the affected user-working path with the minimum relevant evidence and preserve actual failures and evidence limits. Defer unrelated review, the unrelated full-platform matrix and the Sonar tail until after working delivery; retain their open findings and follow-up rather than claiming they passed. This exception does not waive artifact integrity or concrete security, data, identity and rollback safeguards, and does not bypass enforceable platform protections. A causal defect or failed applicable safety boundary still blocks its dependent release effect. Publication or fixture proof is not installed-user acceptance.
+
 ## Production latest channel
 
 The owner's production Unraid `Repository` stays `ghcr.io/thebtf/engram:latest`.

@@ -618,8 +618,25 @@ func TestSessionMemoryTransport(t *testing.T) {
 			for _, token := range []string{"", "invalid-local-fixture-token"} {
 				denied := startMemoryTestClient(t, binary, rootA, installationA, backend.url, token)
 				denied.call(t, 1, "initialize", nil)
-				if !memoryTestRefused(denied.call(t, 2, "tools/list", nil)) {
-					t.Fatal("bad auth discovered memory")
+				listed := denied.call(t, 2, "tools/list", nil)
+				if memoryTestRefused(listed) {
+					t.Fatalf("local memory catalog unavailable: %v", listed)
+				}
+				tools, ok := memoryTestUnwrap(listed)["tools"].([]any)
+				if !ok {
+					t.Fatalf("local memory catalog missing: %v", listed)
+				}
+				found := false
+				for _, raw := range tools {
+					tool, ok := raw.(map[string]any)
+					if !ok || tool["name"] != "recall" {
+						continue
+					}
+					description, _ := tool["description"].(string)
+					found = strings.Contains(description, "remote support and authorization are unverified")
+				}
+				if !found {
+					t.Fatalf("local recall schema did not disclose unverified authorization: %v", listed)
 				}
 				if !memoryTestRefused(denied.call(t, 3, "tools/call", map[string]any{"name": "recall", "arguments": map[string]any{"query": ""}})) {
 					t.Fatal("bad auth read memory")
