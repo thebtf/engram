@@ -27,6 +27,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/db/sqlitetest"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/internal/worker/sse"
@@ -82,6 +83,10 @@ func (c memoryMutationSQLiteConn) Prepare(query string) (driver.Stmt, error) {
 	query = strings.ReplaceAll(query, "jsonb_typeof(tags)", "json_type(tags)")
 	query = strings.ReplaceAll(query, "'[]'::jsonb", "'[]'")
 	query = strings.ReplaceAll(query, "AS literal_tag(value)", "AS literal_tag")
+	query, err := sqlitetest.MembershipSQL(query)
+	if err != nil {
+		return nil, err
+	}
 	return c.Conn.Prepare(query)
 }
 
@@ -160,6 +165,7 @@ func memoryMutationSQLiteDB(t *testing.T) *gorm.DB {
 		}
 		require.NoError(t, db.Exec(fmt.Sprintf("CREATE TABLE %q (%s)", parsed.Table, strings.Join(columns, ","))).Error)
 	}
+	require.NoError(t, db.Exec(sqlitetest.RedirectSchema).Error)
 	return db
 }
 

@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/db/sqlitetest"
 	"github.com/thebtf/engram/pkg/models"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/driver/postgres"
@@ -81,6 +82,10 @@ func (c knowledgeSQLiteConn) Prepare(query string) (driver.Stmt, error) {
 		query = strings.ReplaceAll(query, "r.ordinality", "(CAST(r.key AS INTEGER) + 1)")
 		query = strings.Replace(query, "jsonb_array_elements($1::jsonb) WITH ORDINALITY AS r(value, ordinality)", "json_each($1) AS r", 1)
 		query = strings.Replace(query, "s.source_id::text", "s.source_id", 1)
+	}
+	query, err := sqlitetest.MembershipSQL(query)
+	if err != nil {
+		return nil, err
 	}
 	return c.Conn.Prepare(query)
 }
@@ -170,6 +175,7 @@ func knowledgeSQLiteDB(t *testing.T) *gorm.DB {
 		}
 		require.NoError(t, db.Exec(fmt.Sprintf("CREATE TABLE %q (%s)", parsed.Table, strings.Join(columns, ","))).Error)
 	}
+	require.NoError(t, db.Exec(sqlitetest.RedirectSchema).Error)
 	require.NoError(t, db.Exec("PRAGMA case_sensitive_like = ON").Error)
 	return db
 }

@@ -8,14 +8,17 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/thebtf/engram/internal/db/sqlitetest"
 	"gorm.io/driver/postgres"
 	gormlib "gorm.io/gorm"
 	_ "modernc.org/sqlite"
 )
 
 func TestIssueStore_ListIssuesExPaginatesTiesDeterministically(t *testing.T) {
-	sqlDB, err := sql.Open("sqlite", ":memory:")
+	registered, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
+	sqlDB := sqlitetest.OpenMemory(registered.Driver())
+	require.NoError(t, registered.Close())
 	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
 	sqlDB.SetMaxOpenConns(1)
 	db, err := gormlib.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gormlib.Config{SkipDefaultTransaction: true})
@@ -35,6 +38,8 @@ func TestIssueStore_ListIssuesExPaginatesTiesDeterministically(t *testing.T) {
 		`CREATE TABLE project_consolidation_memberships (
 			table_name TEXT, field_path TEXT, row_key TEXT, project_id TEXT
 		)`,
+		sqlitetest.RedirectSchema,
+		`CREATE TABLE projects (id TEXT PRIMARY KEY, removed_at TIMESTAMP, identity_status TEXT)`,
 	} {
 		require.NoError(t, db.Exec(statement).Error)
 	}
@@ -101,4 +106,37 @@ func TestIssueStore_ListIssuesExPaginatesTiesDeterministically(t *testing.T) {
 	}
 	require.Len(t, seen, len(want))
 	assert.Equal(t, want, allIDs)
+	target := "11111111-1111-4111-8111-111111111111"
+	alias := "22222222-2222-4222-8222-222222222222"
+	other := "33333333-3333-4333-8333-333333333333"
+	invalid := "not-a-uuid"
+	for _, id := range []string{target, alias, other, invalid} {
+		require.NoError(t, db.Exec("INSERT INTO projects(id, identity_status) VALUES (?, 'active')", id).Error)
+	}
+	for _, id := range []string{alias, invalid} {
+		require.NoError(t, db.Exec("INSERT INTO project_consolidation_redirects(selector, session_id, project_id) VALUES (?, '', ?)", id, target).Error)
+	}
+	for _, row := range []struct {
+		id      int
+		project string
+	}{{101, alias}, {102, invalid}, {103, target}, {104, target}, {105, other}, {106, target}} {
+		require.NoError(t, db.Exec(`INSERT INTO issues (id, priority, created_at, source_project, target_project, source_agent, status, type) VALUES (?, 'high', ?, 'source', ?, 'agent', 'open', 'task')`, row.id, createdAt, row.project).Error)
+	}
+	for _, row := range []struct {
+		key     string
+		project any
+	}{{`{"id":103}`, target}, {`{ "id" : 103 }`, other}, {`{"id":104}`, nil}, {`{"id":105}`, target}} {
+		require.NoError(t, db.Exec(`INSERT INTO project_consolidation_memberships(table_name,field_path,row_key,project_id) VALUES ('issues','["target_project"]',?,?)`, row.key, row.project).Error)
+	}
+	page, total, err := store.ListIssuesEx(context.Background(), IssueListParams{TargetProject: target, Limit: 20})
+	require.NoError(t, err)
+	require.EqualValues(t, 3, total)
+	var selected []int64
+	for _, issue := range page {
+		selected = append(selected, issue.ID)
+	}
+	require.ElementsMatch(t, []int64{101, 105, 106}, selected, "valid aliases and unambiguous membership only")
+	require.NoError(t, db.Exec("DROP TABLE project_consolidation_redirects").Error)
+	_, _, err = store.ListIssuesEx(context.Background(), IssueListParams{TargetProject: target, Limit: 20})
+	require.ErrorContains(t, err, "project_consolidation_redirects")
 }
