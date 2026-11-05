@@ -31,6 +31,10 @@ func TestContextRecoveryNativePreflightNeverBootstrapsOrPublishesIdentity(t *tes
 			var calls atomic.Int32
 			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls.Add(1)
+				if scenario == "existing-legacy-hold" && r.URL.Path == "/api/projects/resolve" {
+					_, _ = w.Write([]byte(`{"status":"unresolved","reference":"urn:fixture","reason":"ambiguous"}`))
+					return
+				}
 				require.Equal(t, "/api/projects/bootstrap", r.URL.Path)
 				w.Header().Set("Content-Type", "application/json")
 				if scenario == "existing-migration-hold" {
@@ -85,7 +89,11 @@ func TestContextRecoveryNativePreflightNeverBootstrapsOrPublishesIdentity(t *tes
 				}
 				require.Equal(t, want, refusal.Code)
 				require.Empty(t, request.Project, "caller project argument cannot bypass the hold")
-				require.Zero(t, calls.Load(), "held identity must not bootstrap for mutation")
+				if scenario == "existing-legacy-hold" {
+					require.EqualValues(t, 1, calls.Load(), "legacy hold uses one read-only lookup")
+				} else {
+					require.Zero(t, calls.Load(), "held identity must not bootstrap for mutation")
+				}
 			}
 			for _, path := range paths {
 				actual, err := os.ReadFile(path)
