@@ -11,6 +11,7 @@ import (
 const (
 	liveDocumentMembershipReason      = "document-live-version/v1:"
 	liveDocumentMembershipFingerprint = "urn:engram:migration:document-live-version/v1:"
+	liveDocumentReferencePrefix       = "urn:engram:migration:document-live-row/v1:"
 )
 
 type liveDocumentProof struct {
@@ -88,7 +89,12 @@ func (s *ProjectConsolidationStore) validateLoadedMembershipEvidence(initial Con
 		if len(path) > 1 {
 			nested = path[1:]
 		}
-		ref := s.opaque("row", struct {
+		kind := "row"
+		liveReference := strings.HasPrefix(member.Reference, liveDocumentReferencePrefix)
+		if liveReference {
+			kind = "document-live-row/v1"
+		}
+		ref := s.opaque(kind, struct {
 			Table, Column string
 			Key           JSONRaw
 			Path          []string
@@ -96,8 +102,8 @@ func (s *ProjectConsolidationStore) validateLoadedMembershipEvidence(initial Con
 		if ref != member.Reference || member.PlanFingerprint == "" || member.NativeVersion == "" || member.SourceSnapshot == "" {
 			return consolidationHold("STALE_MAPPING")
 		}
-		if !strings.HasPrefix(member.PlanFingerprint, liveDocumentMembershipFingerprint) {
-			if strings.HasPrefix(member.Reason, liveDocumentMembershipReason) {
+		if !liveReference {
+			if strings.HasPrefix(member.PlanFingerprint, liveDocumentMembershipFingerprint) || strings.HasPrefix(member.Reason, liveDocumentMembershipReason) {
 				return consolidationHold("STALE_MAPPING")
 			}
 			if member.ProjectID == nil {
@@ -106,6 +112,9 @@ func (s *ProjectConsolidationStore) validateLoadedMembershipEvidence(initial Con
 				}
 			}
 			break
+		}
+		if !strings.HasPrefix(member.PlanFingerprint, liveDocumentMembershipFingerprint) {
+			return consolidationHold("STALE_MAPPING")
 		}
 		parentRef := strings.TrimPrefix(member.Reason, liveDocumentMembershipReason)
 		if member.Table != "versioned_documents" || string(member.FieldPath) != `["project"]` || member.ProjectID == nil || parentRef == member.Reason || parentRef == "" || s.liveDocumentFingerprint(member, parentRef) != member.PlanFingerprint {
@@ -132,7 +141,7 @@ func (s *ProjectConsolidationStore) writeLiveDocumentMembership(tx *gormlib.DB, 
 		return err
 	}
 	member := ConsolidationMembership{Table: "versioned_documents", RowKey: JSONRaw(key), SourceRowKey: JSONRaw(key), FieldPath: JSONRaw(`["project"]`), ProjectID: parent.ProjectID, Reason: liveDocumentMembershipReason + parent.Reference, SelectorReference: s.opaque("selector", doc.Project)}
-	member.Reference = s.opaque("row", struct {
+	member.Reference = s.opaque("document-live-row/v1", struct {
 		Table, Column string
 		Key           JSONRaw
 		Path          []string

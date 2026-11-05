@@ -146,6 +146,25 @@ func TestPlanProducedRetainedDocumentVersionScope(t *testing.T) {
 	require.NotEqual(t, parent.PlanFingerprint, derived.PlanFingerprint)
 	require.True(t, strings.HasPrefix(derived.PlanFingerprint, liveDocumentMembershipFingerprint))
 	require.Equal(t, liveDocumentMembershipReason+parent.Reference, derived.Reason)
+	require.True(t, strings.HasPrefix(derived.Reference, liveDocumentReferencePrefix))
+	loaded, err := membershipEvidence(target, []ConsolidationMembership{*derived})
+	require.NoError(t, err)
+	forged := *derived
+	forged.Reference = liveDocumentReferencePrefix + strings.Repeat("0", 64)
+	require.Error(t, reader.validateLoadedMembershipEvidence(forged, loaded, make(map[string]bool)), "a textual live prefix is not an authenticated reference")
+	var liveRow consolidationRow
+	for _, row := range newState.Rows {
+		if row.Table == "versioned_documents" && row.Column == "project" && string(row.Key) == string(derived.RowKey) {
+			liveRow = row
+		}
+	}
+	require.NotEmpty(t, liveRow.Reference)
+	remapped, retained, err := consolidationPlannedMembership(consolidationPlanState{retained: newBindings}, liveRow, ConsolidationMapping{ProjectID: b}, JSONRaw(`{"id":999999}`))
+	require.NoError(t, err)
+	require.True(t, retained)
+	require.Equal(t, derived.Reference, remapped.Reference)
+	require.Equal(t, derived.SourceRowKey, remapped.SourceRowKey)
+	require.NoError(t, reader.validateLoadedMembershipEvidence(remapped, loaded, make(map[string]bool)), "retained row-key remapping must preserve authenticated source provenance")
 	_, err = documents.CreateVersionForLineage(ctx, original.Path, b, "duplicate", "markdown", "{}", "synthetic", original.ID, 1)
 	require.ErrorIs(t, err, ErrDocumentVersionStale)
 	// A failed membership insert must roll back the preceding document insert.
@@ -199,6 +218,37 @@ func TestPlanProducedRetainedDocumentVersionScope(t *testing.T) {
 	_, err = documents.CreateVersionForLineage(ctx, original.Path, b, "must fail", "markdown", "{}", "synthetic", latest.ID, latest.Version)
 	require.Error(t, err)
 	require.NoError(t, target.Model(&ConsolidationMembership{}).Where("reference = ?", derived.Reference).Update("plan_fingerprint", derived.PlanFingerprint).Error)
+	// Both mutable type markers may be changed together; neither a successor
+	// nor a later consolidation may accept the resulting historical downgrade.
+	rollback := errors.New("rollback synthetic downgrade")
+	err = target.Transaction(func(tx *gormlib.DB) error {
+		if updateErr := tx.Model(&ConsolidationMembership{}).Where("reference = ?", derived.Reference).Updates(map[string]any{"plan_fingerprint": "synthetic-corrupt-fingerprint", "reason": "synthetic-corrupt-reason"}).Error; updateErr != nil {
+			return updateErr
+		}
+		txDocuments := NewVersionedDocumentStoreWithVault(&Store{DB: tx}, vault)
+		_, writeErr := txDocuments.CreateVersionForLineage(ctx, original.Path, b, "downgrade must fail", "markdown", "{}", "synthetic", latest.ID, latest.Version)
+		assert.Error(t, writeErr, "a two-field downgrade must invalidate the descendant write")
+		_, censusErr := reader.retainedMemberships(tx, lastState.Rows)
+		assert.Error(t, censusErr, "a two-field downgrade must invalidate later consolidation")
+		historicalRef := reader.opaque("row", struct {
+			Table, Column string
+			Key           JSONRaw
+			Path          []string
+		}{derived.Table, "project", derived.SourceRowKey, nil})
+		if updateErr := tx.Model(&ConsolidationMembership{}).Where("reference = ?", derived.Reference).Update("reference", historicalRef).Error; updateErr != nil {
+			return updateErr
+		}
+		_, writeErr = txDocuments.CreateVersionForLineage(ctx, original.Path, b, "replaced parent must fail", "markdown", "{}", "synthetic", latest.ID, latest.Version)
+		assert.Error(t, writeErr, "a descendant cannot follow a replaced intermediate reference")
+		_, censusErr = reader.retainedMemberships(tx, lastState.Rows)
+		assert.Error(t, censusErr, "later consolidation must reject a missing signed parent reference")
+		return rollback
+	})
+	require.ErrorIs(t, err, rollback)
+	var restored ConsolidationMembership
+	require.NoError(t, target.Where("reference = ?", derived.Reference).Take(&restored).Error)
+	require.Equal(t, derived.PlanFingerprint, restored.PlanFingerprint)
+	require.Equal(t, derived.Reason, restored.Reason)
 	var preserved VersionedDocument
 	require.NoError(t, target.First(&preserved, original.ID).Error)
 	assert.Equal(t, before, preserved, "the original row and its native provenance remain unchanged")
