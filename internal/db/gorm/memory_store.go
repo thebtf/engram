@@ -1576,7 +1576,7 @@ func (s *MemoryStore) BatchIncrementCitedN(ctx context.Context, ids []int64, n, 
 			importance_base = LEAST(1.0, GREATEST(importance_base,
 				importance_base + (importance_base * ln(2.0 + citation_count) - importance_base) * ?)),
 			updated_at = now()
-		WHERE id = ANY(?)`,
+		WHERE id = ANY(?) AND NOT `+retainedLegacyBookkeeping,
 		n, importanceFactor, pq.Array(ids),
 	).Error
 }
@@ -1585,7 +1585,7 @@ func (s *MemoryStore) BatchIncrementCitedN(ctx context.Context, ids []int64, n, 
 // citation counter for the given memory IDs.
 func (s *MemoryStore) BatchIncrementUncitedN(ctx context.Context, ids []int64, n float64) error {
 	return s.db.WithContext(ctx).Exec(
-		"UPDATE memories SET ts_beta = ts_beta + ?, consecutive_citation_count = 0, updated_at = now() WHERE id = ANY(?)",
+		"UPDATE memories SET ts_beta = ts_beta + ?, consecutive_citation_count = 0, updated_at = now() WHERE id = ANY(?) AND NOT "+retainedLegacyBookkeeping,
 		n, pq.Array(ids),
 	).Error
 }
@@ -1593,7 +1593,7 @@ func (s *MemoryStore) BatchIncrementUncitedN(ctx context.Context, ids []int64, n
 // BatchIncrementViolated applies a strong ts_beta penalty for violated memories.
 func (s *MemoryStore) BatchIncrementViolated(ctx context.Context, ids []int64, n float64) error {
 	return s.db.WithContext(ctx).Exec(
-		"UPDATE memories SET ts_beta = ts_beta + ?, updated_at = now() WHERE id = ANY(?)",
+		"UPDATE memories SET ts_beta = ts_beta + ?, updated_at = now() WHERE id = ANY(?) AND NOT "+retainedLegacyBookkeeping,
 		n, pq.Array(ids),
 	).Error
 }
