@@ -385,18 +385,21 @@ func memoryTestInitialize(t *testing.T, client *memoryTestClient) {
 	if !ok {
 		t.Fatalf("missing inventory: %v", response)
 	}
-	found := false
+	found, recovery := false, false
 	for _, tool := range tools {
 		name := tool.(map[string]any)["name"].(string)
 		if name == "recall" {
 			found = true
 		}
-		if !sessionMemoryTool(name) {
+		if name == "project_context" {
+			recovery = true
+		}
+		if !sessionMemoryTool(name) && name != "project_context" {
 			t.Fatalf("non-memory tool advertised: %s", name)
 		}
 	}
-	if !found {
-		t.Fatal("real recall not advertised")
+	if !found || !recovery {
+		t.Fatal("memory recall or its local project recovery is not advertised")
 	}
 }
 
@@ -584,11 +587,11 @@ func TestSessionMemoryTransport(t *testing.T) {
 	if raw, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build actual CLI: %v: %s", err, raw)
 	}
-	rootA := memoryTestRepository(t, scratch, "a", memoryTestProjectA)
-	rootB := memoryTestRepository(t, scratch, "b", memoryTestProjectB)
-	installationA, installationB := filepath.Join(scratch, "install-a"), filepath.Join(scratch, "install-b")
 	for _, flag := range []string{"true", "false"} {
 		t.Run("privacy_flag_"+flag, func(t *testing.T) {
+			rootA := memoryTestRepository(t, scratch, "a-"+flag, memoryTestProjectA)
+			rootB := memoryTestRepository(t, scratch, "b-"+flag, memoryTestProjectB)
+			installationA, installationB := filepath.Join(scratch, "install-a-"+flag), filepath.Join(scratch, "install-b-"+flag)
 			t.Setenv("ENGRAM_VNEXT_F_ENABLED", flag)
 			backend := newMemoryTestBackend(t)
 			a := startMemoryTestClient(t, binary, rootA, installationA, backend.url, memoryTestTokenA)
@@ -602,13 +605,16 @@ func TestSessionMemoryTransport(t *testing.T) {
 			memoryTestRecall(t, b, memoryTestProjectB, memoryTestProjectA, []int64{92001, 92002})
 			t.Logf("actual CLI initialize/list/recall: A=%v B=[92001 92002], flag=%s; foreign principal/domain excluded", wantA, flag)
 			for _, binding := range []struct{ root, project string }{{rootA, memoryTestProjectA}, {rootB, memoryTestProjectB}} {
-				raw, err := os.ReadFile(filepath.Join(binding.root, ".git", "engram-project.json"))
+				cache := filepath.Join(binding.root, ".git", "engram-project.json")
+				if _, err := os.Lstat(cache); !os.IsNotExist(err) {
+					t.Fatalf("portable marker read unexpectedly wrote common cache: %v", err)
+				}
+				raw, err := json.Marshal(projectidentity.Project{ProjectID: binding.project})
 				if err != nil {
 					t.Fatal(err)
 				}
-				var cached projectidentity.Project
-				if err := json.Unmarshal(raw, &cached); err != nil || cached.ProjectID != binding.project {
-					t.Fatalf("common-dir cache %s: project=%+v error=%v", binding.root, cached, err)
+				if err := os.WriteFile(cache, raw, 0o600); err != nil {
+					t.Fatal(err)
 				}
 			}
 			if err := os.Remove(filepath.Join(rootA, ".engram-project")); err != nil {

@@ -56,7 +56,7 @@ func TestToolsList_ProjectStateDoesNotFilterAuthenticatedCatalog(t *testing.T) {
 	go func() { _ = backend.Serve(listener) }()
 	t.Cleanup(backend.GracefulStop)
 
-	for _, state := range []string{"absent", "portable", "malformed", "directory", "git-index-error", "missing-cwd", "unauthenticated"} {
+	for _, state := range []string{"absent", "portable", "legacy", "conflict", "malformed", "directory", "git-index-error", "missing-cwd", "unauthenticated"} {
 		t.Run(state, func(t *testing.T) {
 			root := t.TempDir()
 			marker := filepath.Join(root, ".engram-project")
@@ -64,6 +64,18 @@ func TestToolsList_ProjectStateDoesNotFilterAuthenticatedCatalog(t *testing.T) {
 			switch state {
 			case "portable", "unauthenticated":
 				writeContractProjectMarker(t, root, contractProjectID)
+			case "legacy":
+				if err := os.WriteFile(marker, []byte(`{"id":"abcdef","name":"historical"}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "conflict":
+				if output, err := exec.Command("git", "-C", root, "init", "--quiet", "--template=").CombinedOutput(); err != nil {
+					t.Fatalf("fixture git: %v: %s", err, output)
+				}
+				writeContractProjectMarker(t, root, contractProjectID)
+				if err := os.WriteFile(filepath.Join(root, ".git", "engram-project.json"), []byte(`{"project_id":"22222222-2222-4222-8222-222222222222"}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
 			case "malformed":
 				if err := os.WriteFile(marker, []byte(`{"project_id":"private-invalid-uuid"}`), 0o600); err != nil {
 					t.Fatal(err)
@@ -83,7 +95,7 @@ func TestToolsList_ProjectStateDoesNotFilterAuthenticatedCatalog(t *testing.T) {
 				root = filepath.Join(root, "missing")
 				marker = filepath.Join(root, ".engram-project")
 			}
-			if state == "portable" || state == "malformed" || state == "unauthenticated" {
+			if state == "portable" || state == "legacy" || state == "conflict" || state == "malformed" || state == "unauthenticated" {
 				beforeMarker, err = os.ReadFile(marker)
 				if err != nil {
 					t.Fatal(err)
@@ -94,6 +106,16 @@ func TestToolsList_ProjectStateDoesNotFilterAuthenticatedCatalog(t *testing.T) {
 			project.Env[config.EnvWorkstationToken] = token
 			if state == "unauthenticated" {
 				project.Env[config.EnvWorkstationToken] = ""
+			}
+			initialized, err := dispatcher.HandleRequest(t.Context(), project, jsonrpcInitReq(0))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var initReply struct {
+				Error any `json:"error"`
+			}
+			if err := json.Unmarshal(initialized, &initReply); err != nil || initReply.Error != nil {
+				t.Fatalf("%s initialize failed: %s (%v)", state, initialized, err)
 			}
 			response, err := dispatcher.HandleRequest(t.Context(), project, jsonrpcListReq(1))
 			if err != nil {
@@ -113,11 +135,18 @@ func TestToolsList_ProjectStateDoesNotFilterAuthenticatedCatalog(t *testing.T) {
 				if err := json.Unmarshal(response, &got); err != nil {
 					t.Fatal(err)
 				}
-				if got.Error != nil || len(got.Result.Tools) != len(expected) {
+				if got.Error != nil || len(got.Result.Tools) < len(expected) || len(got.Result.Tools) > len(expected)+1 {
 					t.Fatalf("%s tools/list=%s, want the complete production catalog", state, response)
 				}
 				seen := make(map[string]bool)
 				for _, tool := range got.Result.Tools {
+					if tool.Name == "project_context" {
+						if seen[tool.Name] || tool.Description == "" || !json.Valid(tool.InputSchema) {
+							t.Fatal("invalid or duplicate local recovery descriptor")
+						}
+						seen[tool.Name] = true
+						continue
+					}
 					definition, ok := expected[tool.Name]
 					if !ok || seen[tool.Name] || !strings.HasSuffix(tool.Description, definition.Description) || !strings.Contains(tool.Description, "remote support and authorization are unverified") {
 						t.Fatalf("catalog descriptor changed or duplicated: %q", tool.Name)

@@ -260,6 +260,16 @@ func (m *Module) proxyToolCallContext(ctx context.Context, project muxcore.Proje
 	resolved, err := projectidentity.ResolveLogicalProject(ctx, project.Cwd,
 		projectidentity.HTTPBootstrap(serverURL, m.envFor(project, config.EnvWorkstationToken)))
 	if err != nil {
+		if code := projectidentity.ProjectErrorCode(err); request.ToolName == "recall_memory" && (code == "PROJECT_IDENTITY_CONFLICT" || code == "PROJECT_MIGRATION_REQUIRED") {
+			id, bindingErr := m.conflictSafeRead(ctx, project, serverURL, m.envFor(project, config.EnvWorkstationToken), request.ArgumentsJson)
+			if bindingErr != nil {
+				return nil, projectIdentityRefusal(bindingErr, project.Cwd)
+			}
+			if id != "" {
+				request.Project = id
+				return ctx, nil
+			}
+		}
 		return nil, projectIdentityRefusal(err, project.Cwd)
 	}
 	request.Project = resolved.ProjectID

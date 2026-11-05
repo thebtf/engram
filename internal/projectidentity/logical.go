@@ -203,6 +203,7 @@ func ResolveLogicalProject(ctx context.Context, cwd string, bootstrap func(conte
 		return Project{}, err
 	}
 	// A nested portable marker is an explicit boundary. A subdirectory alone is not.
+	nameOnly := false
 	for candidate := selected; ; candidate = filepath.Dir(candidate) {
 		marker, present, err := readLogicalMarker(filepath.Join(candidate, anchorFilenameV3), true)
 		if err != nil {
@@ -210,9 +211,22 @@ func ResolveLogicalProject(ctx context.Context, cwd string, bootstrap func(conte
 		}
 		if present && marker.ProjectID != "" {
 			if common != "" && samePath(candidate, root) {
-				return pinLogicalCache(common, marker)
+				cached, present, err := readLogicalMarker(filepath.Join(common, "engram-project.json"), false)
+				if err != nil {
+					return Project{}, err
+				}
+				if present && cached.ProjectID != marker.ProjectID {
+					return Project{}, logicalError("PROJECT_IDENTITY_CONFLICT")
+				}
 			}
 			return marker, nil
+		}
+		if present {
+			if common == "" || !samePath(candidate, root) {
+				return Project{}, logicalError("PROJECT_CONTEXT_REQUIRED")
+			}
+			nameOnly = true
+			break
 		}
 		if common != "" && samePath(candidate, root) || filepath.Dir(candidate) == candidate {
 			break
@@ -228,6 +242,9 @@ func ResolveLogicalProject(ctx context.Context, cwd string, bootstrap func(conte
 	}
 	if present && cached.ProjectID != "" {
 		return cached, nil
+	}
+	if nameOnly {
+		return Project{}, logicalError("PROJECT_CONTEXT_REQUIRED")
 	}
 	if bootstrap == nil {
 		return Project{}, logicalError("PROJECT_CONTEXT_REQUIRED")
@@ -291,17 +308,14 @@ func logicalProjectDirectories(ctx context.Context, selected string) (string, st
 }
 
 func readLogicalMarker(path string, allowLegacyMarker bool) (Project, bool, error) {
-	info, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return Project{}, false, nil
+	raw, present, err := readRecoveryMarker(path)
+	if err != nil || !present {
+		return Project{}, present, err
 	}
-	if err != nil || !info.Mode().IsRegular() || info.Size() > 4096 {
-		return Project{}, true, logicalError("PROJECT_IDENTITY_INVALID")
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return Project{}, true, logicalError("PROJECT_RESOLUTION_UNAVAILABLE")
-	}
+	return parseLogicalMarker(raw, allowLegacyMarker)
+}
+
+func parseLogicalMarker(raw []byte, allowLegacyMarker bool) (Project, bool, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
 		return Project{}, true, logicalError("PROJECT_IDENTITY_INVALID")
