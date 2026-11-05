@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Recover an absent trusted hook client after a transient acquisition failure: eligible callbacks trigger coalesced, backoff-limited background preparation, while execution still requires verified bytes. Bootstrap failures retain a safe typed diagnostic; this does not establish the cause of any particular installed-session warning.
+
 - Recover a configured name-only caller with no cache from its active primary-origin binding without writing the marker or cache. For a genuinely unbound origin, reuse the existing bootstrap and confirm the resulting binding; reconcile an unknown bootstrap outcome through the origin lookup rather than replaying it. This does not claim installed-consumer acceptance.
 
 - Regenerate the API through the maintained worker target using canonical local Go package directories and Swag 1.16.6, with real producer errors stopping the build. Correct existing context search/inject/session-start annotations without changing handlers; document the shared GET/POST conditional-query limitation. The actual producer and server build pass, with 40 named schema checks and all 76 references resolved; that producer checkpoint established compile-only retained-reader oracle provenance, with later native query proof recorded separately, and installed/release acceptance remains separate.
