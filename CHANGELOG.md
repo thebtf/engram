@@ -48,6 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Recover an absent trusted hook client after a transient acquisition failure: eligible callbacks trigger coalesced, backoff-limited background preparation, while execution still requires verified bytes. Bootstrap failures retain a safe typed diagnostic; this does not establish the cause of any particular installed-session warning.
 - Apply authoritative canonical membership to memory search, list, vector and graph reads before ranking and limits, preserving privacy and refusing invalid selectors without reassigning historical records.
 - Prevent automatic recall and session feedback from rewriting historical non-UUID selectors while preserving UUID-backed and project-free bookkeeping and private-read auditing.
 - Recover name-only callers from active primary-origin bindings without modifying their marker or cache; reconcile unknown bootstrap outcomes without replaying a mutation.
