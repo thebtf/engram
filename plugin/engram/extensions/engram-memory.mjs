@@ -76,6 +76,7 @@ export function createEngramMemoryExtension(options = {}) {
         Math.max(1, deadline - Date.now()),
         { signal: controller.signal, serverURL: config.serverURL, token: config.token },
       );
+      if (disposed) return null;
       const content = ambient ? formatAmbientAdditionalContext(payload) : buildSessionStartContext(payload, context.Project, { maxLength: hiddenContextLimit });
       if (controller.signal.aborted || Date.now() >= deadline || typeof content !== 'string' || !content || Buffer.byteLength(content) > hiddenContextLimit) return null;
       return hiddenMessage(content);

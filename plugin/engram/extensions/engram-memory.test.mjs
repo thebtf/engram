@@ -436,6 +436,36 @@ test('OMP disposed background readiness cannot recover through a later resolvabl
   assert.equal(sent.length, 0);
 });
 
+test('OMP teardown prevents in-flight callbacks from delivering late context', async () => {
+  let cleanup, releaseRequests, bothStarted;
+  const held = new Promise(resolve => { releaseRequests = resolve; });
+  const started = new Promise(resolve => { bothStarted = resolve; });
+  const handlers = new Map(), sent = [], requests = [];
+  const { adapter } = extension({
+    registerCleanup: (_name, callback) => { cleanup = callback; },
+    onDiagnostic() { },
+    requestPost: async route => {
+      requests.push(route);
+      if (requests.length === 2) bothStarted();
+      await held;
+      return route === '/api/context/session-start'
+        ? { memories: [{ content: 'late memory' }] }
+        : { additional_context: 'late ambient' };
+    },
+  });
+  await adapter.install({ on: (name, handler) => handlers.set(name, handler), sendMessage: message => sent.push(message) });
+  await new Promise(resolve => setImmediate(resolve));
+  const event = { cwd: '/session/a', sessionId: 'in-flight', prompt: 'fixture' };
+  const session = handlers.get('session_start')(event, {});
+  const ambient = handlers.get('before_agent_start')(event, {});
+  await started;
+  await cleanup();
+  releaseRequests();
+  const [, ambientResult] = await Promise.all([session, ambient]);
+  assert.deepEqual({ sent, ambientResult }, { sent: [], ambientResult: undefined },
+    'callbacks that settle after teardown must not deliver hidden context');
+});
+
 test('OMP cleanup captured before settlement still closes failed readiness when invoked late', async () => {
   let cleanup, resolutions = 0;
   const handlers = new Map();
