@@ -18,6 +18,7 @@ import (
 	"github.com/thebtf/engram/internal/auditcontext"
 	"github.com/thebtf/engram/internal/config"
 	loomhandler "github.com/thebtf/engram/internal/handlers/loom"
+	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/module"
 	"github.com/thebtf/engram/internal/module/dispatcher"
 	"github.com/thebtf/engram/internal/module/lifecycle"
@@ -383,37 +384,66 @@ func assertToolsListServiceUnavailable(t *testing.T, resp []byte) {
 // Contract tests
 // ---------------------------------------------------------------------------
 
-func TestContract_ToolsList_OfflineWithoutURLReturnsLoomOnly(t *testing.T) {
+func TestContract_ToolsList_OfflineWithoutURLReturnsLocalCatalog(t *testing.T) {
 	t.Setenv(config.EnvServerURL, "")
 	t.Setenv(config.EnvServerURLAlt, "")
 	disp, _, p := buildContractDispatcher(t, "", loomhandler.NewModule())
 
+	initialized, err := disp.HandleRequest(context.Background(), p, jsonrpcInitReq(0))
+	if err != nil || strings.Contains(string(initialized), `"error"`) {
+		t.Fatalf("offline initialize failed: %s (%v)", initialized, err)
+	}
 	resp, err := disp.HandleRequest(context.Background(), p, jsonrpcListReq(1))
 	if err != nil {
-		t.Fatalf("HandleRequest: %v", err)
+		t.Fatalf("offline tools/list: %v", err)
 	}
 	var got struct {
 		Result struct {
 			Tools []struct {
-				Name string `json:"name"`
+				Name        string          `json:"name"`
+				Description string          `json:"description"`
+				InputSchema json.RawMessage `json:"inputSchema"`
 			} `json:"tools"`
 		} `json:"result"`
 		Error *struct{ Code int } `json:"error"`
 	}
-	if err := json.Unmarshal(resp, &got); err != nil {
-		t.Fatalf("unmarshal response: %v", err)
+	if err := json.Unmarshal(resp, &got); err != nil || got.Error != nil {
+		t.Fatalf("offline tools/list response: %s (%v)", resp, err)
 	}
-	if got.Error != nil {
-		t.Fatalf("offline tools/list error: %+v", got.Error)
+	expected := make(map[string]mcp.Tool)
+	for _, tool := range mcp.SupportedToolCatalog() {
+		expected[tool.Name] = tool
 	}
-	want := []string{"loom_submit", "loom_get", "loom_list", "loom_cancel"}
-	if len(got.Result.Tools) != len(want) {
-		t.Fatalf("offline tools=%v, want Loom-only %v", got.Result.Tools, want)
-	}
-	for i, name := range want {
-		if got.Result.Tools[i].Name != name {
-			t.Fatalf("offline tool[%d]=%q, want %q", i, got.Result.Tools[i].Name, name)
+	seen := make(map[string]bool)
+	for _, tool := range got.Result.Tools {
+		if seen[tool.Name] {
+			t.Fatalf("duplicate tool %q", tool.Name)
 		}
+		seen[tool.Name] = true
+		if definition, ok := expected[tool.Name]; ok {
+			if !strings.Contains(tool.Description, "remote support and authorization are unverified") {
+				t.Fatalf("offline tool %q omits availability disclaimer", tool.Name)
+			}
+			schema, err := json.Marshal(definition.InputSchema)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertJSONEqual(t, tool.Name+" schema", tool.InputSchema, schema)
+		}
+	}
+	for _, name := range []string{"loom_submit", "loom_get", "loom_list", "loom_cancel", "project_context", "recall_memory", "recall", "store"} {
+		if !seen[name] {
+			t.Errorf("offline catalog missing %q", name)
+		}
+	}
+	for name := range expected {
+		if !seen[name] {
+			t.Errorf("offline catalog missing supported tool %q", name)
+		}
+	}
+	call, err := disp.HandleRequest(context.Background(), p, jsonrpcCallReq(2, "recall_memory"))
+	if err != nil || !strings.Contains(string(call), "ENGRAM_URL or ENGRAM_SERVER_URL not set") {
+		t.Fatalf("unconfigured recall must refuse safely: %s (%v)", call, err)
 	}
 }
 

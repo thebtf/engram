@@ -34,16 +34,16 @@ var (
 
 // ProxyTools returns local schemas without waiting for authenticated discovery.
 func (m *Module) ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]module.ToolDef, error) {
-	serverURL, err := m.requireServerURL(p)
-	if err != nil {
-		return nil, err
-	}
 	if err := ctx.Err(); err != nil {
 		return nil, &module.RequiredProxyToolsError{Cause: err}
 	}
 	fallback, err := supportedOfflineTools()
 	if err != nil {
 		return nil, err
+	}
+	serverURL, err := m.requireServerURL(p)
+	if err != nil {
+		return slices.Clone(fallback), nil
 	}
 	token := m.envFor(p, config.EnvWorkstationToken)
 	key, err := advisorProofKeyFor(serverURL, token)
