@@ -89,9 +89,13 @@ duplicating that entry on Home and Projects and hides its self-link on
 `/projects/unresolved`, including equivalent trailing-slash routes. Other pages
 retain the direct `/projects/unresolved` shortcut when groups exist, with the
 same localized group count. One shared choice-label helper always exposes an existing
-repository qualifier and adds a stable UUID hint when a qualifier is absent or
-primary names are equal: the first eight UUID characters when that prefix is
-unique across the entire catalog (case-insensitive), otherwise the full UUID.
+repository qualifier. It adds a stable UUID hint for a generic `Registered project`
+without a qualifier or when complete displayed labels collide. Collision comparison
+collapses and trims HTML-collapsible ASCII whitespace without changing the label.
+The hint is the first eight UUID characters when that prefix is unique across the
+entire catalog (case-insensitive), otherwise the full UUID. If a hinted label
+collides with another project's natural label, it falls back to the full UUID and,
+if necessary, repeats it until the displayed labels differ.
 Global and page choices and selected Projects/Home headings use that same label.
 They keep every catalog row, including version/hash-like names, exact full-UUID
 option values and selection state. Project search still matches names and full

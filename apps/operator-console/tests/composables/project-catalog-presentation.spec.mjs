@@ -252,15 +252,39 @@ for (const path of ['/projects', '/']) {
           { project_id: 'deadbeef-0005-4000-8000-000000000005', name: 'Collision two' },
           { project_id: 'cafebabe-0006-4000-8000-000000000006', name: 'Catalog-wide collision' },
           { project_id: 'CAFEBABE-0007-4000-8000-000000000007', name: 'Qualified peer', repository_qualifier: 'examples/peer' },
+          { project_id: '11111111-0008-4000-8000-000000000008', name: 'Forked name', repository_qualifier: 'examples/first' },
+          { project_id: '22222222-0009-4000-8000-000000000009', name: 'Forked name', repository_qualifier: 'examples/second' },
+          { project_id: 'f00dcafe-0010-4000-8000-000000000010', name: 'True collision', repository_qualifier: 'examples/same' },
+          { project_id: 'F00DCAFE-0011-4000-8000-000000000011', name: 'True collision', repository_qualifier: 'examples/same' },
+          { project_id: '33333333-0012-4000-8000-000000000012', name: 'Plain · examples/repo' },
+          { project_id: '44444444-0013-4000-8000-000000000013', name: 'Plain', repository_qualifier: 'examples/repo' },
+          { project_id: '77777777-0014-4000-8000-000000000014', name: 'Space case' },
+          { project_id: '88888888-0015-4000-8000-000000000015', name: 'Space case ' },
+          { project_id: '99999999-0016-4000-8000-000000000016', name: 'Alpha' },
+          { project_id: 'aaaaaaaa-0017-4000-8000-000000000017', name: 'Alpha' },
+          { project_id: 'bbbbbbbb-0018-4000-8000-000000000018', name: 'Alpha · 99999999' },
+          { project_id: 'cccccccc-0019-4000-8000-000000000019', name: 'Alpha · 99999999-0016-4000-8000-000000000016' },
         ]
         const expected = [
           'Registered project · abcdef01',
           'Shared name · examples/shared · 23456789',
           'Shared name · examples/shared · 34567890',
-          `Collision one · ${rows[3].project_id}`,
-          `Collision two · ${rows[4].project_id}`,
-          `Catalog-wide collision · ${rows[5].project_id}`,
+          'Collision one',
+          'Collision two',
+          'Catalog-wide collision',
           'Qualified peer · examples/peer',
+          'Forked name · examples/first',
+          'Forked name · examples/second',
+          `True collision · examples/same · ${rows[9].project_id}`,
+          `True collision · examples/same · ${rows[10].project_id}`,
+          'Plain · examples/repo · 33333333',
+          'Plain · examples/repo · 44444444',
+          'Space case · 77777777',
+          'Space case  · 88888888',
+          `Alpha · ${rows[15].project_id} · ${rows[15].project_id}`,
+          'Alpha · aaaaaaaa',
+          'Alpha · 99999999',
+          'Alpha · 99999999-0016-4000-8000-000000000016',
         ]
         const state = await mount(t, { path, language, items: [...rows].reverse(), unresolved: [] })
         const selectOptions = walk(selector(state.host)).filter(item => item.tag === 'option' && item.props.value !== 'all')
@@ -297,12 +321,40 @@ for (const path of ['/projects', '/']) {
       assert.equal(labels.size, ids.length)
       assertIDHint(labels.get(GENERIC), GENERIC)
     })
+    test(`${path} RU ${surface}: whitespace-padded generic name keeps its identity hint`, async t => {
+      const state = await mount(t, { path, items: [{ project_id: GENERIC, name: 'Registered project ' }], unresolved: [] })
+      const labels = await choices(state, surface)
+      assert.equal(labels.size, 1)
+      assert.equal(labels.get(GENERIC).trim(), 'Registered project  · 12345678')
+      await chooseOption(state, GENERIC)
+    })
     test(`${path} RU ${surface}: same-name choices have stable identity hints rather than ordinals alone`, async t => {
       const state = await mount(t, { path })
       const labels = await choices(state, surface)
       assert.notEqual(labels.get(SAME_A), labels.get(SAME_B), 'Keep existing equal-name distinction')
       assertIDHint(labels.get(SAME_A), SAME_A)
       assertIDHint(labels.get(SAME_B), SAME_B)
+    })
+    test(`${path} RU ${surface}: unique meaningful names need no UUID suffix`, async t => {
+      const state = await mount(t, { path })
+      const labels = await choices(state, surface)
+      for (const id of [VERSION, HASH, CONTROL]) {
+        assert.equal(labels.get(id).trim(), catalog.items.find(row => row.project_id === id).name)
+        await chooseOption(state, id)
+      }
+    })
+    test(`${path} RU ${surface}: distinct qualifiers disambiguate the same name without UUID suffixes`, async t => {
+      const items = [
+        { project_id: SAME_A, name: 'Shared repository', repository_qualifier: 'examples/first' },
+        { project_id: SAME_B, name: 'Shared repository', repository_qualifier: 'examples/second' },
+      ]
+      const state = await mount(t, { path, items, unresolved: [] })
+      const labels = await choices(state, surface)
+      assert.equal(labels.size, 2)
+      assert.equal(labels.get(SAME_A).trim(), 'Shared repository · examples/first')
+      assert.equal(labels.get(SAME_B).trim(), 'Shared repository · examples/second')
+      await chooseOption(state, SAME_A)
+      await chooseOption(state, SAME_B)
     })
     test(`${path} RU ${surface}: uniquely named descriptor exposes its repository qualifier`, async t => {
       const state = await mount(t, { path })
