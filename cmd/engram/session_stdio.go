@@ -11,11 +11,13 @@ import (
 	"log/slog"
 	"math/big"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
 
+	"github.com/thebtf/engram/internal/auditcontext"
 	"github.com/thebtf/engram/internal/handlers/engramcore"
 	"github.com/thebtf/engram/internal/module"
 	"github.com/thebtf/engram/internal/module/dispatcher"
@@ -35,7 +37,14 @@ const (
 // Only the callable surface changes here; the core owns auth, identity and handlers.
 type sessionMemoryModule struct{ *engramcore.Module }
 
-func (*sessionMemoryModule) Tools() []module.ToolDef { return nil }
+func (m *sessionMemoryModule) Tools() []module.ToolDef {
+	for _, tool := range m.Module.Tools() {
+		if tool.Name == "project_context" {
+			return []module.ToolDef{tool}
+		}
+	}
+	return nil
+}
 
 func sessionMemoryTool(name string) bool {
 	switch name {
@@ -74,6 +83,11 @@ func runSessionMemory(ctx context.Context, input io.ReadCloser, output io.WriteC
 }
 
 func runSessionMemoryWithOutputLock(ctx context.Context, input io.ReadCloser, output io.WriteCloser, outputMu sync.Locker) error {
+	transportSession, err := newUCITransportSession()
+	if err != nil || !auditcontext.ValidUCITransportSession(transportSession) {
+		return errors.New("memory stdio transport correlation unavailable")
+	}
+	ctx = auditcontext.WithUCITransportSession(ctx, transportSession)
 	clientID, err := directClientInstanceID()
 	if err != nil {
 		return fmt.Errorf("client identity initialization: %w", err)
@@ -84,7 +98,7 @@ func runSessionMemoryWithOutputLock(ctx context.Context, input io.ReadCloser, ou
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	core := &sessionMemoryModule{engramcore.NewModuleWithClientInstanceID(clientID)}
-	if err := core.Init(ctx, module.ModuleDeps{Logger: logger, DaemonCtx: ctx}); err != nil {
+	if err := core.Init(ctx, module.ModuleDeps{Logger: logger, DaemonCtx: ctx, StorageDir: filepath.Join(dataDir(), "modules", "engramcore")}); err != nil {
 		return err
 	}
 	defer core.Shutdown(context.Background())

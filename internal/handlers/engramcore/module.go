@@ -52,6 +52,10 @@ type Module struct {
 	refreshing                  map[advisorProofKey]map[string]bool
 	liveCatalog                 map[advisorProofKey][]module.ToolDef
 	notifier                    muxcore.Notifier
+	projectChoicesMu            sync.Mutex
+	projectChoices              map[string]projectChoiceEvidence
+	projectReadBindings         map[string]projectChoiceEvidence
+	projectPendingReads         map[string]projectChoiceEvidence
 
 	preparedIndexMu            sync.RWMutex
 	preparedIndex              PreparedIndexCollaborator
@@ -63,6 +67,7 @@ var (
 	_ module.EngramModule        = (*Module)(nil)
 	_ module.ProjectLifecycle    = (*Module)(nil)
 	_ module.ProjectRemovalAware = (*Module)(nil)
+	_ module.ToolProvider        = (*Module)(nil)
 	_ module.ProxyToolProvider   = (*Module)(nil)
 )
 

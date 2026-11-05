@@ -76,6 +76,58 @@ func TestLogicalProjectCommonDirAndConflict(t *testing.T) {
 	}
 }
 
+func TestLogicalProjectPortableMarkerDoesNotRequireCacheWrite(t *testing.T) {
+	root := t.TempDir()
+	gitLogical(t, root, "init", "--quiet", "--template=")
+	project := Project{ProjectID: "11111111-1111-4111-8111-111111111111", Name: "Existing"}
+	raw, err := json.Marshal(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, anchorFilenameV3), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cache := filepath.Join(root, ".git", "engram-project.json")
+	if err := os.WriteFile(cache+".lock", []byte("other writer"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ResolveLogicalProject(t.Context(), root, nil)
+	if err != nil || got != project {
+		probe := anchorGitCommandV3(t.Context(), root, "rev-parse", "--path-format=absolute", "--git-common-dir", "--is-bare-repository")
+		output, probeErr := probe.CombinedOutput()
+		t.Logf("git directory probe: err=%v output=%q", probeErr, output)
+		probe = anchorGitCommandV3(t.Context(), root, "rev-parse", "--show-toplevel")
+		output, probeErr = probe.CombinedOutput()
+		t.Logf("git root probe: err=%v output=%q", probeErr, output)
+		t.Fatalf("portable marker without derived cache: project=%+v err=%v", got, err)
+	}
+	if _, err := os.Lstat(cache); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("read-only marker resolution unexpectedly wrote cache: %v", err)
+	}
+}
+
+func TestLogicalProjectPortableMarkerAcrossIndependentCheckouts(t *testing.T) {
+	project := Project{ProjectID: "11111111-1111-4111-8111-111111111111", Name: "Synthetic"}
+	raw, err := json.Marshal(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		root := t.TempDir()
+		gitLogical(t, root, "init", "--quiet", "--template=")
+		if err := os.WriteFile(filepath.Join(root, anchorFilenameV3), raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got, err := ResolveLogicalProject(t.Context(), root, nil)
+		if err != nil || got != project {
+			t.Fatalf("independent portable checkout: %+v %v", got, err)
+		}
+		if _, err := os.Lstat(filepath.Join(root, ".git", "engram-project.json")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("unexpected common cache: %v", err)
+		}
+	}
+}
+
 func TestLogicalProjectNoImplicitNonGitCreation(t *testing.T) {
 	root := nonGitLogicalTempDir(t)
 	if _, err := ResolveLogicalProject(t.Context(), root, nil); ProjectErrorCode(err) != "PROJECT_CONTEXT_REQUIRED" {
