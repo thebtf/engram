@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 )
 
 // ExistingProjectChoice is a current server-authorized catalog entry, not a
@@ -206,30 +207,66 @@ func ResolveHistoricalProject(ctx context.Context, serverURL, token, legacyID st
 	if err != nil || len(raw) > 4096 {
 		return Project{}, false, logicalError("PROJECT_RESOLUTION_UNAVAILABLE")
 	}
-	if response.StatusCode == http.StatusNotFound {
-		var refusal struct {
-			Error string `json:"error"`
+	if !utf8.Valid(raw) {
+		return Project{}, false, logicalError("PROJECT_IDENTITY_INVALID")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
+		return Project{}, false, logicalError("PROJECT_IDENTITY_INVALID")
+	}
+	fields := make(map[string]string)
+	for decoder.More() {
+		key, err := decoder.Token()
+		name, ok := key.(string)
+		if err != nil || !ok {
+			return Project{}, false, logicalError("PROJECT_IDENTITY_INVALID")
 		}
-		if json.Unmarshal(raw, &refusal) == nil && refusal.Error == "PROJECT_ADOPTION_UNKNOWN_REFERENCE" {
+		if _, duplicate := fields[name]; duplicate {
+			return Project{}, false, logicalError("PROJECT_IDENTITY_INVALID")
+		}
+		switch name {
+		case "status", "project_id", "name", "reference", "reason", "error":
+		default:
+			return Project{}, false, logicalError("PROJECT_IDENTITY_INVALID")
+		}
+		value, err := decoder.Token()
+		text, ok := value.(string)
+		if err != nil || !ok {
+			return Project{}, false, logicalError("PROJECT_IDENTITY_INVALID")
+		}
+		fields[name] = text
+	}
+	if token, err := decoder.Token(); err != nil || token != json.Delim('}') {
+		return Project{}, false, logicalError("PROJECT_IDENTITY_INVALID")
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return Project{}, false, logicalError("PROJECT_IDENTITY_INVALID")
+	}
+	if response.StatusCode == http.StatusNotFound {
+		if len(fields) == 1 && fields["error"] == "PROJECT_ADOPTION_UNKNOWN_REFERENCE" {
 			return Project{}, false, nil
 		}
 		return Project{}, false, logicalError("PROJECT_IDENTITY_CONFLICT")
 	}
-	var result struct {
-		Status    string `json:"status"`
-		ProjectID string `json:"project_id"`
-		Name      string `json:"name"`
-	}
-	if json.Unmarshal(raw, &result) != nil {
+	result := struct{ Status, ProjectID, Name string }{fields["status"], fields["project_id"], fields["name"]}
+	if _, exists := fields["error"]; exists {
 		return Project{}, false, logicalError("PROJECT_IDENTITY_INVALID")
 	}
 	switch result.Status {
 	case "unresolved":
-		if result.ProjectID != "" || result.Name != "" {
+		_, hasID := fields["project_id"]
+		_, hasName := fields["name"]
+		if hasID || hasName {
 			return Project{}, false, logicalError("PROJECT_IDENTITY_INVALID")
 		}
 		return Project{}, false, nil
 	case "resolved":
+		if _, reference := fields["reference"]; reference {
+			return Project{}, false, logicalError("PROJECT_IDENTITY_INVALID")
+		}
+		if _, reason := fields["reason"]; reason {
+			return Project{}, false, logicalError("PROJECT_IDENTITY_INVALID")
+		}
 		project := Project{ProjectID: result.ProjectID, Name: result.Name}
 		if err := ValidateProject(project); err != nil {
 			return Project{}, false, err
