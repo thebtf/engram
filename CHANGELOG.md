@@ -44,6 +44,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Use registered canonical UUIDs and authenticated caller project context in MCP fixtures without weakening default-deny, privacy or pre-mutation rejection guards. Reuse 119 prior PASS plus one exact retry PASS after the context fix, not 120 fresh PASS or installed acceptance.
 - Seed the isolated operator-code fixture with a registered canonical project UUID while preserving five queue candidates, published/no-view checks and redacted provisioning errors.
 
+## [7.0.21] - 2026-11-05
+
+### Fixed
+
+- Recover the same backend process when PostgreSQL starts late after a transient connection failure, including temporary DNS failures. Retry connection establishment only; run database migrations and startup effects once after connection, preserve terminal authentication/configuration errors, and honor cancellation.
+- Return prompt gRPC unavailable responses before the fully initialized, authentication-wired service is ready instead of leaving MCP calls waiting for a permanently absent server. The same local MCP client can discover tools while the database is down and read its existing issue after PostgreSQL returns or disconnects and returns again.
+- Include the maintained shared MCP guidance in the ordinary local mux initialization response, while keeping remote tool availability dependent on actual discovery rather than a static promise.
+- Recover existing logical-project context locally from current authorized historical/origin evidence or fresh caller-scoped choices. Return host-guarded marker actions and resume only the original safe read; preserve existing UUIDs, shared files, authorization and unknown mutation outcomes without reassigning history.
+- Read bounded project catalogs containing large retained-history envelopes without treating unrelated metadata size or ordinary local-clone origins as a veto on existing identity recovery. Preserve strict remote-bootstrap normalization and portable project UUIDs across paths, hosts and worktrees.
+- Keep the native module's retained tool schemas explicitly unverified when configuration or backend discovery is unavailable, while calls continue to fail closed until their requirements are satisfied.
+
 ## [7.0.20] - 2026-11-04
 
 ### Fixed

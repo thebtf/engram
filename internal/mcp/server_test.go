@@ -390,6 +390,9 @@ func TestHandleInitialize_IncludesCollectionDescriptions(t *testing.T) {
 	result := s.handleInitialize(&Request{JSONRPC: "2.0", ID: float64(1), Method: "initialize"}).Result.(map[string]any)
 	instructions := result["instructions"].(string)
 	assert.Contains(t, instructions, "Use available injected evidence before repeating discovery")
+	assert.Contains(t, instructions, "`project_context` is advertised")
+	assert.Contains(t, instructions, "`project_context` is not advertised")
+	assert.Contains(t, instructions, "project resolve --root <actual-caller-root> --json --check")
 	assert.Contains(t, instructions, "# Available Collections\n\n## notes\nExisting notes")
 	assert.NotContains(t, instructions, "## empty")
 }
