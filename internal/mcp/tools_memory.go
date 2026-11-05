@@ -1610,9 +1610,6 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 	if project == "" {
 		return "", fmt.Errorf("project is required for recall_memory in v5")
 	}
-	if err := s.memoryStore.CheckCanonicalProject(ctx, project); err != nil {
-		return "", err
-	}
 
 	// ── Visibility params — parsed unconditionally so both hybrid and legacy
 	// paths enforce the same memory visibility contract. ENGRAM_VNEXT_F_ENABLED
@@ -1667,6 +1664,9 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 	// predicate as the legacy List path below.
 	if !includePrincipalsSet {
 		return s.handleRecallMemoryHybrid(ctx, m, query, project, format, limit, obsType, tags, caller, visibilityOpts, tg3Active, tg3ConfidenceMin, tg3IncludeSuperseded, tg3IncludeRationale)
+	}
+	if err := s.memoryStore.CheckCanonicalProject(ctx, project); err != nil {
+		return "", err
 	}
 	// ── legacy List-based path with shared visibility filtering ─
 
@@ -1989,6 +1989,29 @@ func (s *Server) handleRecallMemoryHybrid(
 			}
 		}
 	}()
+	if tg3Active && tg3IncludeSuperseded {
+		recovery := map[string]any{
+			"action": "search", "project": project, "query": query, "limit": limit,
+			"include_superseded": true, "confidence_min": tg3ConfidenceMin,
+		}
+		if caller.SessionID != "" {
+			recovery["session_id"] = caller.SessionID
+		}
+		if scopes := coerceStringSlice(m["include_scopes"]); len(scopes) > 0 {
+			recovery["include_scopes"] = scopes
+		}
+		if tg3IncludeRationale {
+			recovery["include_rationale"] = true
+		}
+		arguments, err := json.Marshal(recovery)
+		if err != nil {
+			return "", fmt.Errorf("%w; use read-only recall(action=\"search\") with the same project and caller identity; recovery arguments could not be encoded: %v", memorysearch.ErrIncludeSuperseded, err)
+		}
+		return "", &recallHistoryRecoveryError{arguments: arguments}
+	}
+	if err := s.memoryStore.CheckCanonicalProject(ctx, project); err != nil {
+		return "", err
+	}
 	explain := coerceBool(m["explain"], false)
 	var graphStore retrieval.GraphStoreInterface
 	if s.graphStore != nil {
@@ -2017,26 +2040,6 @@ func (s *Server) handleRecallMemoryHybrid(
 		return "", err
 	}
 	if err != nil {
-		if errors.Is(err, memorysearch.ErrIncludeSuperseded) {
-			recovery := map[string]any{
-				"action": "search", "project": project, "query": query, "limit": limit,
-				"include_superseded": true, "confidence_min": tg3ConfidenceMin,
-			}
-			if caller.SessionID != "" {
-				recovery["session_id"] = caller.SessionID
-			}
-			if scopes := coerceStringSlice(m["include_scopes"]); len(scopes) > 0 {
-				recovery["include_scopes"] = scopes
-			}
-			if tg3IncludeRationale {
-				recovery["include_rationale"] = true
-			}
-			arguments, marshalErr := json.Marshal(recovery)
-			if marshalErr != nil {
-				return "", fmt.Errorf("%w; use read-only recall(action=\"search\") with the same project and caller identity; recovery arguments could not be encoded: %v", err, marshalErr)
-			}
-			return "", &recallHistoryRecoveryError{arguments: arguments}
-		}
 		return "", fmt.Errorf("recall_memory %w", err)
 	}
 	scored, explanations := searchResult.Matches, searchResult.Explanations

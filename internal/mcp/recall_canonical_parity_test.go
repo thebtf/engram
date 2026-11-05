@@ -153,6 +153,15 @@ func TestRecallCanonicalMembershipNative(t *testing.T) {
 	}
 	require.Equal(t, beforeRow, capture(rowSQL, principalHistorical.ID), "public recall must preserve the historical raw row")
 	require.Equal(t, beforeMembership, capture(memberSQL, fmt.Sprint(principalHistorical.ID)), "public recall must preserve membership")
+	history := srv.HandleRequest(caller, &Request{JSONRPC: "2.0", ID: 5, Method: "tools/call", Params: mustJSON(t, map[string]any{
+		"name": "recall_memory", "arguments": map[string]any{"project": project, "query": "absent-history-marker", "format": "items", "include_superseded": true, "include_principals": []map[string]any{{"principal": "agent/bob", "principal_kind": "agent"}}},
+	})})
+	require.NotNil(t, history)
+	require.Nil(t, history.Error, "explicit-principal legacy recall supports include_superseded")
+	encoded, err = json.Marshal(history.Result)
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(encoded, &envelope))
+	require.False(t, envelope.IsError)
 }
 
 func TestRecallInvalidProjectNative(t *testing.T) {
