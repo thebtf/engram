@@ -859,11 +859,14 @@ func (s *Service) initializeAsync() {
 	}
 
 	// Open the PostgreSQL connection pool and run pending schema migrations.
-	store, err := gorm.NewStore(gorm.Config{
+	store, err := gorm.NewStoreWhenAvailable(s.ctx, gorm.Config{
 		DSN:      s.config.DatabaseDSN,
 		MaxConns: s.config.DatabaseMaxConns,
 	})
 	if err != nil {
+		if s.ctx.Err() != nil {
+			return
+		}
 		s.setInitError(fmt.Errorf("init database: %w", err))
 		return
 	}
@@ -2360,25 +2363,9 @@ func (s *Service) Start() error {
 		// Without this, the gRPC client blocks waiting for the server preface and
 		// the connection times out. For TLS, ALPN handles HTTP/2 negotiation, but
 		// SendSettings is harmless there — it works correctly for both modes.
-		// The gRPC server may not be ready yet (initializeAsync sets s.grpcServer),
-		// so we start Serve() in a goroutine that waits for the server to appear.
+		// Reject RPCs until the fully initialized, auth-wired server is available.
 		grpcL := m.MatchWithWriters(cmux.HTTP2MatchHeaderFieldPrefixSendSettings("content-type", "application/grpc"))
-		go func() {
-			// Wait for initializeAsync to create the gRPC server.
-			s.initMu.RLock()
-			for s.grpcServer == nil {
-				s.initMu.RUnlock()
-				time.Sleep(100 * time.Millisecond)
-				s.initMu.RLock()
-			}
-			grpcSrv := s.grpcServer
-			s.initMu.RUnlock()
-
-			log.Info().Msg("gRPC server ready, serving on cmux")
-			if err := grpcSrv.Serve(grpcL); err != nil {
-				log.Error().Err(err).Msg("gRPC server error")
-			}
-		}()
+		go s.serveGRPCWhenReady(grpcL)
 
 		// All other connections (HTTP/1.1, HTTP/2 non-gRPC) go to the HTTP server.
 		httpL := m.Match(cmux.Any())
