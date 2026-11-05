@@ -185,6 +185,10 @@ func TestHandleRequest_InitializeProvidesGuidanceWithoutProviders(t *testing.T) 
 		"advertised `tools/list` response is authoritative",
 		"native caller's verified canonical project",
 		"PROJECT_MIGRATION_REQUIRED",
+		"`project_context` is advertised",
+		"`user_input_required`",
+		"`project_context` is not advertised",
+		"never an unknown-outcome mutation",
 		"resolved (target agent) → closed (source confirms)",
 	} {
 		if !strings.Contains(result.Instructions, want) {
