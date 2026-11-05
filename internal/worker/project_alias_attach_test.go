@@ -488,6 +488,16 @@ func TestProjectAliasAttachHTTP(t *testing.T) {
 	require.Equal(t, http.StatusConflict, call(http.MethodPost, base+"/apply", apply, &admin).Code)
 	rec = call(http.MethodGet, fmt.Sprintf("/api/memories/%d?project=%s", records[1].ID, target), nil, &admin)
 	require.Equal(t, http.StatusNotFound, rec.Code)
+	secondRollback := gormdb.ProjectAliasRollbackRequest{ApplyKey: secondApply.IdempotencyKey, IdempotencyKey: uuid.NewString()}
+	rec = call(http.MethodPost, base+"/rollback", secondRollback, &admin)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	rec = call(http.MethodGet, "/api/projects", nil, &admin)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var rawCatalog map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &rawCatalog))
+	groupsJSON, present := rawCatalog["logical_groups"]
+	require.True(t, present, "logical_groups must signal capability after the final alias rollback")
+	require.JSONEq(t, `[]`, string(groupsJSON))
 	for i := range records {
 		require.Equal(t, before[i], snapshot("memories", records[i].ID))
 	}
