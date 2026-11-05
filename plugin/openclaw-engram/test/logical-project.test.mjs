@@ -57,7 +57,9 @@ test('OpenClaw consumes native historical migration refusal without inventing id
  const held = await resolveProject(client, 'legacy-agent', root);
  assert.equal(held.ok, false);
  assert.equal(held.error.code, 'PROJECT_MIGRATION_REQUIRED');
- assert.match(held.error.upgradeAction, /legacy_marker/);
+ assert.match(held.error.upgradeAction, /project_context/);
+ assert.match(held.error.upgradeAction, /action="repair"/);
+ assert.match(held.error.upgradeAction, /action="choices"/);
  const check = JSON.parse(execFileSync(executable, ['project', 'resolve', '--root', root, '--json', '--check'], { env, encoding: 'utf8' }));
  assert.deepEqual(check, { status: 'migration_required', binding: { id: '941b49', project_key: null, identity_status: null, match: 'legacy_marker' } });
  assert.deepEqual(fs.readFileSync(marker), raw);
