@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Omit unnecessary project chooser UUID hints for distinctive displayed labels while preserving qualifiers, collision disambiguation and full selected identities.
+- Omit unnecessary project chooser UUID hints for distinctive displayed labels while preserving qualifiers, collision disambiguation and full selected identities. Disambiguate labels matching the active locale's all-projects, choose-project or browse-all controls across the selector, Home and Projects.
 
 - Expose the exact nullable stored project label alongside the existing catalog presentation name, and allow operators to conditionally update or restore it on an existing active canonical project. Preserve project identity and retained history; reject stale preconditions.
 

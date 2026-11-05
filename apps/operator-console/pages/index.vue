@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { useOperatorProjectContext, projectChoiceLabel, loadKnowledgePage } from '../composables/useOperatorProjectContext'
+import { useOperatorProjectContext, localizedProjectChoiceLabel, loadKnowledgePage } from '../composables/useOperatorProjectContext'
 import { operatorDiagnosisKey, toOperatorSourceError, type OperatorSourceError } from '../composables/useOperatorApi'
 const { t } = useI18n()
+const projectChoiceLabel = (id: string) => localizedProjectChoiceLabel(id, t)
 const context = useOperatorProjectContext()
 const { project, projects, unresolved, pending, error, selectionPending, selectionError } = context
 const projectQuery = ref('')

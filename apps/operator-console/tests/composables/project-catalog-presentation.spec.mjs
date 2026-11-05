@@ -114,8 +114,9 @@ async function mount(t, { path = '/projects', language = 'ru', items = catalog.i
   const app = renderer.createApp({ render: () => vue.h(layout, null, { default: () => vue.h(page) }) })
   app.component('ProjectContext', component('components/ProjectContext.vue'))
   for (const name of ['SettingsModal', 'ProfileModal', 'LoginModal', 'MutationResultNotice', 'HonestyBadge']) app.component(name, { render: () => null })
-  const messages = JSON.parse(readFileSync(new URL(`i18n/locales/${language}.json`, root), 'utf8'))
-  app.use(router).use(createI18n({ legacy: false, locale: language, messages: { [language]: messages }, missingWarn: false, fallbackWarn: false }))
+  const messages = Object.fromEntries(['ru', 'en', 'zh'].map(code => [code, JSON.parse(readFileSync(new URL(`i18n/locales/${code}.json`, root), 'utf8'))]))
+  const i18n = createI18n({ legacy: false, locale: language, messages, missingWarn: false, fallbackWarn: false })
+  app.use(router).use(i18n)
   app.config.errorHandler = error => errors.push(error.message)
   const host = node('root')
   app.mount(host)
@@ -126,7 +127,7 @@ async function mount(t, { path = '/projects', language = 'ru', items = catalog.i
   assert.equal(context.pending.value, false)
   assert.ok(walk(host).some(item => hasClass(item, pageClass)), 'Real authenticated layout must render the actual page or inert non-catalog slot')
   assert.ok(walk(host).some(item => item.props['data-testid'] === 'project-context-select'), 'Actual global ProjectContext must be present')
-  return { host, router, context, calls, errors, path, globals }
+  return { host, router, context, calls, errors, path, globals, i18n }
 }
 const retainedLinks = host => walk(host).filter(item => item.tag === 'a' && item.props.href && new URL(item.props.href, 'http://synthetic.invalid').pathname === '/projects/unresolved')
 const selector = host => walk(host).find(item => item.props['data-testid'] === 'project-context-select')
@@ -398,5 +399,87 @@ for (const path of ['/projects', '/']) {
     assert.equal(retainedLinks(state.host).length, 0)
     assert.deepEqual(options(state.host).map(item => item.props.value).sort(), [...ids].sort())
     assert.equal(pageRows(state).length, ids.length)
+  })
+}
+
+for (const path of ['/', '/projects']) {
+  for (const language of ['ru', 'en', 'zh']) {
+    for (const sentinel of ['allProjects', 'chooseProject', 'browseAll']) {
+      test(`${path} ${language}: project named like ${sentinel} remains distinct from scope controls`, async t => {
+        const messages = JSON.parse(readFileSync(new URL(`i18n/locales/${language}.json`, root), 'utf8'))
+        const names = messages.knowledge
+        const items = [
+          { project_id: GENERIC, name: names[sentinel] },
+          { project_id: CONTROL, name: 'Ordinary project' },
+        ]
+        const state = await mount(t, { path, language, items })
+        const rendered = value => value.replace(/[ \t\r\n\f]+/g, ' ').trim()
+        const selectOptions = walk(selector(state.host)).filter(item => item.tag === 'option')
+        const projectOption = selectOptions.find(item => item.props.value === GENERIC)
+        const allOption = selectOptions.find(item => item.props.value === 'all')
+        const choose = selectOptions.find(item => item.props.value === '')
+        assert.ok(projectOption && allOption && choose)
+        assert.ok(Object.hasOwn(choose.props, 'disabled') && choose.props.disabled !== false && choose.props.disabled != null, 'The choose-project option remains disabled')
+        assert.equal(rendered(text(allOption)), rendered(names.allProjects))
+        assert.equal(rendered(text(choose)), rendered(names.chooseProject))
+        const projectLabel = rendered(text(projectOption))
+        assert.ok(projectLabel.includes(rendered(names[sentinel])), 'Preserve the actual project name')
+        assert.notEqual(projectLabel, rendered(text(allOption)), 'A project choice must not look like all-project scope')
+        assert.notEqual(projectLabel, rendered(text(choose)), 'A project choice must not look like the disabled prompt')
+        assert.notEqual(projectLabel, rendered(names.browseAll), 'A project choice must not look like the browse-all action')
+        for (const group of catalog.unresolved) {
+          assert.ok(!selectOptions.some(item => item.props.value === group.reference), 'Retained groups are not project choices')
+        }
+
+        const row = pageRows(state).find(item => rendered(text(item)) === projectLabel)
+        assert.ok(row, 'The mounted page and global selector present the same project label')
+        await row.props.onClick()
+        await tick()
+        assert.equal(state.router.currentRoute.value.query.project, GENERIC)
+        assert.equal(state.context.project.value, GENERIC)
+        assert.equal(selector(state.host).props.value, GENERIC)
+        const page = walk(state.host).find(item => hasClass(item, path === '/' ? 'home-page' : 'project-content'))
+        const heading = path === '/' ? page.children.find(item => item.tag === 'header')?.children.find(item => item.tag === 'h1') : page.children.find(item => item.tag === 'h2')
+        assert.equal(rendered(text(heading)), projectLabel, 'The selected page heading agrees with the selector')
+        assert.ok(walk(page).some(item => item.tag === 'code' && text(item).trim() === GENERIC), 'The selected identity remains the exact UUID')
+
+        await chooseOption(state, 'all')
+        assert.equal(state.context.project.value, 'all', 'The all option selects all-project scope, not the UUID')
+        await chooseOption(state, GENERIC)
+        await state.router.push(path)
+        await tick()
+        assert.equal(state.context.project.value, '')
+        const browse = walk(state.host).find(item => item.tag === 'button' && hasClass(item, 'btn') && rendered(text(item)) === rendered(names.browseAll))
+        assert.ok(browse, 'The mounted page exposes its browse-all action')
+        await browse.props.onClick()
+        await tick()
+        assert.equal(state.router.currentRoute.value.query.project, 'all')
+        assert.equal(state.context.project.value, 'all')
+        assert.equal(selector(state.host).props.value, 'all')
+        assert.deepEqual(state.errors, [])
+      })
+    }
+  }
+}
+
+for (const path of ['/', '/projects']) {
+  test(`${path}: changing locale updates reserved labels without changing project identity`, async t => {
+    const russian = JSON.parse(readFileSync(new URL('i18n/locales/ru.json', root), 'utf8')).knowledge.allProjects
+    const state = await mount(t, { path, language: 'ru', items: [{ project_id: GENERIC, name: russian }], unresolved: [], selected: GENERIC })
+    for (const language of ['ru', 'en', 'zh', 'ru']) {
+      state.i18n.global.locale.value = language
+      await tick()
+      const option = options(state.host).find(item => item.props.value === GENERIC)
+      const label = text(option).trim()
+      if (language === 'ru') assert.notEqual(label, russian, 'The active all-project label needs an identity hint')
+      else assert.equal(label, russian, 'A name no longer matching the active controls keeps its natural label')
+      assert.equal(selector(state.host).props.value, GENERIC)
+      assert.equal(state.router.currentRoute.value.query.project, GENERIC)
+      assert.equal(state.context.project.value, GENERIC)
+      const page = walk(state.host).find(item => hasClass(item, path === '/' ? 'home-page' : 'project-content'))
+      const heading = path === '/' ? page.children.find(item => item.tag === 'header')?.children.find(item => item.tag === 'h1') : page.children.find(item => item.tag === 'h2')
+      assert.equal(text(heading).trim(), label, 'The mounted page follows the selector after each locale change')
+    }
+    assert.deepEqual(state.errors, [])
   })
 }
