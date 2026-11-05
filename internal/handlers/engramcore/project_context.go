@@ -282,7 +282,7 @@ func (m *Module) conflictSafeRead(ctx context.Context, caller muxcore.ProjectCon
 func (m *Module) Tools() []module.ToolDef {
 	return []module.ToolDef{{
 		Name:        "project_context",
-		Description: "Read current existing projects under the backend's authorization policy with action=choices. For a server-confirmed historical mapping or matching primary-origin mapping, action=repair needs no selection_ref; otherwise explicitly select a fresh choice using its selection_ref. Repair returns marker content, a caller-relative target and exact precondition for the host to apply through its filesystem guard; it does not write a file, change historical membership or grant access. Retry only the original safe read, never an unknown-outcome mutation.",
+		Description: "Read current existing projects under the backend's authorization policy with action=choices. For a server-confirmed historical mapping or matching primary-origin mapping, action=repair needs no selection_ref; otherwise explicitly select a fresh choice using its selection_ref. Repair returns marker content and preconditions; it does not write a file, change historical membership or grant access. " + projectidentity.MarkerActionGuidance,
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"action":{"type":"string","enum":["choices","repair"]},"selection_ref":{"type":"string"}},"required":["action"]}`),
 	}}
 }
@@ -558,7 +558,7 @@ func (m *Module) HandleTool(ctx context.Context, caller muxcore.ProjectContext, 
 	if state.Present {
 		precondition = map[string]string{"state": "sha256", "sha256": state.MarkerDigest}
 	}
-	action := map[string]any{"project_id": selected.ProjectID, "target": state.Target, "caller_root_sha256": state.RootDigest, "target_root_sha256": state.TargetRootDigest, "marker_content": string(marker) + "\n", "precondition": precondition, "historical_membership_changed": false, "instructions": "The host must resolve target relative to the exact caller Cwd, verify both root fingerprints and all preconditions, and preserve existing marker bytes. Apply only if the host filesystem guard permits that exact target; if denied, request access without bypassing the denial. Recheck stale input rather than overwriting. Retry only the original safe read; do not replay a mutation with unknown outcome."}
+	action := map[string]any{"project_id": selected.ProjectID, "target": state.Target, "caller_root_sha256": state.RootDigest, "target_root_sha256": state.TargetRootDigest, "marker_content": string(marker) + "\n", "precondition": precondition, "historical_membership_changed": false, "instructions": projectidentity.MarkerActionGuidance}
 	if seedConfirmed {
 		action["mapping_source"] = "approved_local_seed"
 		action["v2_precondition"] = map[string]string{"target": seedTarget, "sha256": seedDigest}
