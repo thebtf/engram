@@ -188,7 +188,11 @@ func TestContextRecoveryProjectResolveCheckMatchesPinnedCacheConflicts(t *testin
 			require.Error(t, err)
 			var refusal map[string]any
 			require.NoError(t, json.Unmarshal(ordinary.Bytes(), &refusal))
-			require.Equal(t, "PROJECT_IDENTITY_CONFLICT", refusal["code"], "retain the existing protective resolver")
+			wantRefusal := "PROJECT_IDENTITY_CONFLICT"
+			if source == "http-resolved" {
+				wantRefusal = "PROJECT_CONTEXT_REQUIRED"
+			}
+			require.Equal(t, wantRefusal, refusal["code"], "ordinary resolution must hold without publishing identity")
 			preserved()
 			var checked bytes.Buffer
 			require.NoError(t, runProjectCommand([]string{"resolve", "--root", root, "--json", "--check"}, &checked))
@@ -202,7 +206,7 @@ func TestContextRecoveryProjectResolveCheckMatchesPinnedCacheConflicts(t *testin
 				want = 1
 			}
 			require.Equal(t, want, gets.Load())
-			require.Equal(t, want, posts.Load(), "only ordinary resolution may bootstrap; --check performs GET only")
+			require.Zero(t, posts.Load(), "neither ordinary resolution of a name-only marker nor --check may bootstrap")
 			t.Logf("%s: ordinary=%v check=%s GET=%d POST=%d; marker/cache byte-identical", source, refusal["code"], inspection["status"], gets.Load(), posts.Load())
 		})
 	}
