@@ -160,6 +160,64 @@ denied IDs return 404; state/version conflicts return 409 with transaction rollb
 Success returns `{id, action, status, version, project}`. A transport failure can
 leave the outcome unknown and must not be retried automatically.
 
+### Live events and logs
+
+`GET /api/events` and `GET /api/logs` are registered before the database-ready
+gate, but ordinary authentication and per-client rate limiting still apply when
+enabled. Authentication accepts `X-Auth-Token`, `Authorization: Bearer <token>`,
+or the `token` query parameter, in that order, before supported session cookies.
+A supplied invalid token does not fall back to a cookie. Query credentials can
+leak through URLs; prefer headers or an authenticated cookie when available.
+Auth-disabled mode supplies the usual synthetic identity. Before the validator is
+wired, a supplied token can receive 401 even though the routes are pre-ready.
+Unauthorized requests receive plain-text 401; disallowed keycard classes receive
+403; rate limiting can return 429. Authentication-store failure can return 500.
+These responses occur before the stream starts, and do not imply DB readiness.
+
+`GET /api/events` returns `text/event-stream`. On connection the handler writes
+`data: {"type":"connected","clientId":"client-<number>"}\n\n`; the ID is
+connection-local, not a replay cursor. Registration occurs before that write, so
+a concurrent broadcast can arrive first. Other `data: <JSON>\n\n` frames carry
+live dashboard events, whose fields depend on the event type (for example,
+`session` or `processing_status`). The server sends `: keepalive\n\n` comments
+every 25 seconds. Comments are not application events. A writer without flushing
+support gets 500 `streaming not supported`. Disconnecting ends the subscription;
+reconnect establishes a new connection. There are no SSE event IDs, Last-Event-ID
+handling, or replay, so clients must refresh relevant state after a gap.
+
+`GET /api/logs` normally returns `application/json`: an array of entries with
+`timestamp`, `level`, `message`, optional `fields`, and `raw`. RFC3339 timestamps
+are converted to Unix seconds; numeric timestamps are retained as integers and
+missing or unparseable timestamps may be zero. Entries are chronological, oldest
+first. `lines` defaults to 100;
+positive integers are capped at 10000, while invalid, zero, or negative values
+use the default. It limits the most recent matching records in the in-memory ring;
+an empty result is `[]`.
+
+Only `follow=true` (exact, case-sensitive value) selects `text/event-stream`.
+It ignores `lines`, subscribes to new entries without an initial snapshot, and
+first writes `: connected\n\n`. Each matching new entry is a JSON log entry in a
+`data: <JSON>\n\n` frame. There is no periodic follow-mode keepalive. The
+subscriber queue holds 64 entries and drops new entries when full; disconnect or
+reconnect has no replay or event cursor. Clients can fetch a new snapshot to
+resynchronize, but that is not an atomic handoff and cannot guarantee gap-free
+delivery. A missing log buffer returns 503; a follow response whose writer cannot
+flush returns 500 `streaming not supported`.
+
+Both log modes support `level` as a minimum severity (`trace`, `debug`, `info`,
+`warn`, `error`, `fatal`, `panic`); unknown requested or entry levels pass the
+filter. `query` is a case-insensitive substring search of the projected message
+and raw log, after scoped browser-session redaction. Filtering precedes the
+snapshot limit. Projection covers identified browser-session fields, messages,
+and raw data, including retained records; it is not a general secret scrubber.
+The endpoint does not require the access-administration session-admin guard.
+
+Swagger 2 cannot represent different 200 response schemas and media types based
+on `follow` for the same operation. The generated operation lists both media types
+without claiming a single response schema; this section specifies the conditional
+contract. `internal/worker/sse/broadcaster.go`, `handlers_logs.go`,
+`internal/logbuf/ring.go`, and `middleware.go` own these behaviors.
+
 ### Authentication (v6)
 
 Two-tier token model:
@@ -521,13 +579,6 @@ automatically; use MCP `store` and `recall` for deliberate memory operations.
 
 ## Response Format
 
-All HTTP API responses are JSON. Serialization via `github.com/goccy/go-json`.
-
-Error responses:
-```json
-{
-  "error": "human-readable message"
-}
-```
-
-No internal error details are exposed in HTTP responses (logged server-side only).
+HTTP endpoints use different response formats. Many return JSON; the streaming
+endpoints above return SSE, and some errors are plain text. Consult each endpoint
+rather than assuming a uniform success or error envelope.

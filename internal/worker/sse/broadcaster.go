@@ -233,6 +233,20 @@ func (b *Broadcaster) ClientCount() int {
 // under any reasonable write timeout while being invisible to the client.
 const KeepaliveInterval = 25 * time.Second
 
+// HandleSSE streams live dashboard events; frames contain JSON in SSE data fields.
+// @Summary Stream dashboard events
+// @Description Sends a connected object and live JSON event objects; a concurrent broadcast can arrive before the connected object. SSE comment keepalives occur every 25 seconds. No event IDs or replay are provided; reconnecting starts a new stream.
+// @Description Available before database readiness, subject to authentication and rate limiting. A query token is supported for browser SSE clients.
+// @Tags System
+// @Produce text/event-stream
+// @Security ApiKeyAuth
+// @Param token query string false "Authentication token alternative; avoid exposing credentials in URLs"
+// @Success 200 {string} string "SSE stream of JSON data frames and comment keepalives"
+// @Failure 401 {string} string "unauthorized"
+// @Failure 403 {string} string "keycard class forbidden on this route"
+// @Failure 429 {string} string "rate limit exceeded"
+// @Failure 500 {string} string "streaming not supported or authentication store unavailable"
+// @Router /api/events [get]
 func (b *Broadcaster) HandleSSE(w http.ResponseWriter, r *http.Request) {
 	// Set SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")

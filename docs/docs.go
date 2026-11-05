@@ -1206,6 +1206,63 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/events": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Sends a connected object and live JSON event objects; a concurrent broadcast can arrive before the connected object. SSE comment keepalives occur every 25 seconds. No event IDs or replay are provided; reconnecting starts a new stream.\nAvailable before database readiness, subject to authentication and rate limiting. A query token is supported for browser SSE clients.",
+                "produces": [
+                    "text/event-stream"
+                ],
+                "tags": [
+                    "System"
+                ],
+                "summary": "Stream dashboard events",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Authentication token alternative; avoid exposing credentials in URLs",
+                        "name": "token",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "SSE stream of JSON data frames and comment keepalives",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "keycard class forbidden on this route",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "429": {
+                        "description": "rate limit exceeded",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "streaming not supported or authentication store unavailable",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/api/events/ingest": {
             "post": {
                 "security": [
@@ -1423,48 +1480,73 @@ const docTemplate = `{
                         "ApiKeyAuth": []
                     }
                 ],
-                "description": "Returns log entries as JSON snapshot or SSE stream (follow mode). Supports level filtering and text search.",
+                "description": "Without follow=true, returns a JSON array of recent matching entries. Only the exact value true enables SSE; follow ignores lines and sends only new entries after subscription, starting with a connected comment. Slow subscribers can miss entries; reconnecting does not replay them.\nBoth modes apply level and case-insensitive query filters and browser-session redaction. Available before database readiness, subject to authentication and rate limiting. Swagger 2 cannot express the query-dependent 200 response shape; see docs/arch/API_CONTRACTS.md.",
                 "produces": [
-                    "application/json"
+                    "application/json",
+                    "text/event-stream"
                 ],
                 "tags": [
                     "System"
                 ],
-                "summary": "Get log entries",
+                "summary": "Get log entries or follow new entries",
                 "parameters": [
                     {
+                        "type": "string",
+                        "description": "Authentication token alternative; avoid exposing credentials in URLs",
+                        "name": "token",
+                        "in": "query"
+                    },
+                    {
                         "type": "integer",
-                        "description": "Number of entries (default 100, max 10000)",
+                        "description": "Snapshot count (default 100, max 10000); ignored when following",
                         "name": "lines",
                         "in": "query"
                     },
                     {
                         "type": "string",
-                        "description": "Minimum log level: trace, debug, info, warn, error, fatal",
+                        "description": "Minimum level: trace, debug, info, warn, error, fatal, panic; unknown values pass through",
                         "name": "level",
                         "in": "query"
                     },
                     {
                         "type": "string",
-                        "description": "Case-insensitive text search",
+                        "description": "Case-insensitive search of redacted message and raw log",
                         "name": "query",
                         "in": "query"
                     },
                     {
-                        "type": "boolean",
-                        "description": "If true, switches to SSE streaming mode",
+                        "type": "string",
+                        "description": "Only the exact value true enables SSE",
                         "name": "follow",
                         "in": "query"
                     }
                 ],
                 "responses": {
                     "200": {
-                        "description": "OK",
+                        "description": "JSON snapshot array or SSE stream, depending on follow"
+                    },
+                    "401": {
+                        "description": "unauthorized",
                         "schema": {
-                            "type": "array",
-                            "items": {
-                                "type": "object"
-                            }
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "keycard class forbidden on this route",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "429": {
+                        "description": "rate limit exceeded",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "streaming not supported or authentication store unavailable",
+                        "schema": {
+                            "type": "string"
                         }
                     },
                     "503": {
