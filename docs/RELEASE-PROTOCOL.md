@@ -7,6 +7,14 @@
 
 Repository-only procedure or CI corrections reach `main` through normal review and Actions; they do not require a new product version/tag or consumer binary release unless their accepted scope changes a shipped surface. Source-only scope does not waive required PR rules or proof for the changed procedure.
 
+## Work and release convergence
+
+This cycle applies to every Engram lane within its assigned scope. Audit actual code and behavior, then prioritize an independently useful, coherent front of work. Define its outcome and proportionate specification, implement it, and complete code review, relevant tests and smoke of the actual changed paths before opening a PR. Integrate the reviewed PR into `main`; when delivery is in scope, complete the applicable release and ordinary-consumer proof. Repeat for substantial known findings within the assigned scope. A worktree alone is not delivery; avoid both ceremony after every single edit and multi-day batches left unintegrated. Preserve actual branch protection, authority and safety requirements.
+
+Before implementation, use SpecKit for medium or large work: a new capability or a material multi-component, domain, API or data-contract change. In OMP, the existing entrypoints are `/speckit.specify`, `/speckit.plan` and `/speckit.tasks`, backed by `.omp/commands/` and the project `.specify/` templates and scripts. Use an applicable accepted spec for routine repairs; update it when the scope materially changes. Do not split material work artificially to evade the spec requirement or restart active work already covered by an accepted spec. For example, a new cross-component memory contract requires SpecKit; a localized correction to a clear existing error message needs only a short plan and focused proof, not a full new SpecKit cycle.
+
+For a qualifying [availability emergency](#availability-emergency), deliver the smallest safe restoration cut under that exception. Do not delay it for retrospective SpecKit work, unrelated review comments or the normal pre-PR review and general test waits that the exception permits deferring. Record and complete the deferred work afterward; the exception does not waive its restoration, safety, authority or platform-enforced conditions.
+
 <a id="emergency-client-release"></a>
 
 ## Availability emergency
@@ -223,8 +231,8 @@ a separate reviewed security change, not an operator-side escape hatch.
 
 ## Publish / Smoke / Handoff
 
-- Create an annotated tag and push it to origin.
-- Verify the tag exists remotely.
+- For each new release, create and push an annotated `vX.Y.Z` tag and a retained `release/vX.Y.Z` branch at the exact released commit. Verify the remote branch commit and the peeled annotated tag commit both equal that commit, and verify the tag is annotated. Preserve both refs after delivery: never advance, reuse or rewrite a release snapshot branch or move a published tag. Resolve a collision rather than overwriting an existing ref; do not blindly create branches for historical releases.
+- Release snapshot branches are retained release records, not ephemeral candidate or work branches. Dispose of a spent work branch only under the existing preservation and cleanup rules; never apply that cleanup to a retained release snapshot.
 - Verify the GitHub release workflow succeeds for the tag.
 - For an OpenClaw package release, verify the `plugin-publish` workflow, `npm view openclaw-engram@X.Y.Z version`, and both package/descriptor version sources before declaring publication complete.
 - For rollout, verify deployed `server` version and at least one server/client MCP smoke before declaring deployment complete.
