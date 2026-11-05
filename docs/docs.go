@@ -2786,6 +2786,93 @@ const docTemplate = `{
                         }
                     }
                 }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Requires an operator/admin identity, a canonical project UUID, and both display_name and expected_display_name as string or null. The expected value is the exact stored value from the project catalog, not its presentation name.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Projects"
+                ],
+                "summary": "Conditionally update a project's stored display label",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Canonical project UUID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "display_name and expected_display_name",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/worker.projectLabelPatchSchema"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "invalid request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "operator access required",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "project not found or inactive",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "409": {
+                        "description": "stored label changed",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "413": {
+                        "description": "request body too large",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
             }
         },
         "/api/ready": {
@@ -4340,7 +4427,14 @@ const docTemplate = `{
         },
         "gorm.ProjectDescriptor": {
             "type": "object",
+            "required": [
+                "display_name"
+            ],
             "properties": {
+                "display_name": {
+                    "type": "string",
+                    "x-nullable": true
+                },
                 "name": {
                     "type": "string"
                 },
@@ -5468,6 +5562,23 @@ const docTemplate = `{
                 },
                 "total_injections": {
                     "type": "integer"
+                }
+            }
+        },
+        "worker.projectLabelPatchSchema": {
+            "type": "object",
+            "required": [
+                "display_name",
+                "expected_display_name"
+            ],
+            "properties": {
+                "display_name": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "expected_display_name": {
+                    "type": "string",
+                    "x-nullable": true
                 }
             }
         },

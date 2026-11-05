@@ -135,15 +135,37 @@ export function catalogProjectName(id: string, items: OperatorProjectDescriptor[
 }
 
 export function projectName(id: string) { return catalogProjectName(id, descriptors.value) }
-export function projectChoiceLabel(id: string): string {
+export function projectChoiceLabel(id: string, reservedLabels: readonly string[] = []): string {
   const row = descriptors.value.find((item) => item.project_id === id)
   if (!row) return id
-  const qualifier = row.repository_qualifier ? ` · ${row.repository_qualifier}` : ''
-  const needsIdentity = !row.repository_qualifier || descriptors.value.some((item) => item.project_id !== id && item.name === row.name)
-  if (!needsIdentity) return `${row.name}${qualifier}`
+  const display = row.repository_qualifier ? `${row.name} · ${row.repository_qualifier}` : row.name
+  const visibleLabel = display.replace(/[ \t\r\n\f]+/g, ' ').replace(/^ | $/g, '')
+  const reserved = reservedLabels.map((label) => label.replace(/[ \t\r\n\f]+/g, ' ').replace(/^ | $/g, ''))
+  const needsIdentity = reserved.includes(visibleLabel) || (visibleLabel === 'Registered project' && !row.repository_qualifier) || descriptors.value.some((item) => {
+    if (item.project_id === id) return false
+    const itemLabel = item.repository_qualifier ? `${item.name} · ${item.repository_qualifier}` : item.name
+    return itemLabel.replace(/[ \t\r\n\f]+/g, ' ').replace(/^ | $/g, '') === visibleLabel
+  })
+  if (!needsIdentity) return display
   const prefix = id.slice(0, 8)
-  const collision = descriptors.value.some((item) => item.project_id !== id && item.project_id.slice(0, 8).toLowerCase() === prefix.toLowerCase())
-  return `${row.name}${qualifier} · ${collision ? id : prefix}`
+  const normalizedPrefix = prefix.toLowerCase()
+  const otherLabels = new Set<string>(reserved)
+  let collision = false
+  for (const item of descriptors.value) {
+    if (item.project_id === id) continue
+    const itemLabel = item.repository_qualifier ? `${item.name} · ${item.repository_qualifier}` : item.name
+    otherLabels.add(itemLabel.replace(/[ \t\r\n\f]+/g, ' ').replace(/^ | $/g, ''))
+    if (item.project_id.slice(0, 8).toLowerCase() === normalizedPrefix) collision = true
+  }
+  let result = `${display} · ${collision ? id : prefix}`
+  if (otherLabels.has(result.replace(/[ \t\r\n\f]+/g, ' ').replace(/^ | $/g, ''))) result = `${display} · ${id}`
+  for (let i = 0; i < otherLabels.size && otherLabels.has(result.replace(/[ \t\r\n\f]+/g, ' ').replace(/^ | $/g, '')); i++) {
+    result += ` · ${id}`
+  }
+  return result
+}
+export function localizedProjectChoiceLabel(id: string, translate: (key: string) => string): string {
+  return projectChoiceLabel(id, [translate('knowledge.allProjects'), translate('knowledge.chooseProject'), translate('knowledge.browseAll')])
 }
 export function isCatalogProject(id: string): boolean { return projects.value.includes(id) }
 

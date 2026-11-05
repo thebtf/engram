@@ -202,9 +202,10 @@ func (s *SessionStore) GetSessionsToday(ctx context.Context) (int, error) {
 
 // ProjectDescriptor keeps canonical identity separate from its human label.
 type ProjectDescriptor struct {
-	ID                  string `json:"project_id"`
-	DisplayName         string `json:"name"`
-	RepositoryQualifier string `json:"repository_qualifier,omitempty"`
+	ID                  string  `json:"project_id"`
+	DisplayName         string  `json:"name"`
+	StoredDisplayName   *string `json:"display_name" binding:"required" extensions:"x-nullable"`
+	RepositoryQualifier string  `json:"repository_qualifier,omitempty"`
 }
 
 func liveKnowledgeProjects(q *gorm.DB) *gorm.DB {
@@ -220,7 +221,8 @@ func (s *SessionStore) GetAllProjects(ctx context.Context) ([]ProjectDescriptor,
 		return nil, err
 	}
 	items := make([]ProjectDescriptor, 0, len(rows))
-	for _, row := range rows {
+	for i := range rows {
+		row := &rows[i]
 		if !projectidentity.ValidProjectID(row.ID) {
 			continue
 		}
@@ -229,6 +231,9 @@ func (s *SessionStore) GetAllProjects(ctx context.Context) ([]ProjectDescriptor,
 			label = "Registered project"
 		}
 		item := ProjectDescriptor{ID: row.ID, DisplayName: label}
+		if row.DisplayName.Valid {
+			item.StoredDisplayName = &row.DisplayName.String
+		}
 		if locator, err := projectidentity.NormalizeRepositoryLocator(row.GitRemote.String); err == nil {
 			item.RepositoryQualifier = locator
 		}

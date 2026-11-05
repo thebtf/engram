@@ -395,8 +395,9 @@ func runKnowledgeReadersHTTP(t *testing.T, db *gorm.DB, sqliteFixture bool) {
 	}
 	var catalog projectListResponse
 	get("/api/projects", tokenA, 200, &catalog)
-	require.Contains(t, catalog.Items, gormdb.ProjectDescriptor{ID: projectA, DisplayName: "Same human label"})
-	require.Contains(t, catalog.Items, gormdb.ProjectDescriptor{ID: projectB, DisplayName: "Same human label"})
+	label := "Same human label"
+	require.Contains(t, catalog.Items, gormdb.ProjectDescriptor{ID: projectA, DisplayName: label, StoredDisplayName: &label})
+	require.Contains(t, catalog.Items, gormdb.ProjectDescriptor{ID: projectB, DisplayName: label, StoredDisplayName: &label})
 	require.Contains(t, catalog.Items, gormdb.ProjectDescriptor{ID: unlabelled, DisplayName: "Registered project"})
 	require.Contains(t, catalog.Items, gormdb.ProjectDescriptor{ID: memoryOnly, DisplayName: "Registered project"})
 	require.Contains(t, catalog.Items, gormdb.ProjectDescriptor{ID: documentOnly, DisplayName: "Registered project"})

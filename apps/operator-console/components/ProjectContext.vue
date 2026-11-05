@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { useOperatorProjectContext, projectName, projectChoiceLabel } from '../composables/useOperatorProjectContext'
+import { useOperatorProjectContext, projectName, localizedProjectChoiceLabel } from '../composables/useOperatorProjectContext'
 import { operatorDiagnosisKey } from '../composables/useOperatorApi'
 const { t } = useI18n()
+const projectChoiceLabel = (id: string) => localizedProjectChoiceLabel(id, t)
 const route = useRoute()
 const context = useOperatorProjectContext()
 const { project, projects, descriptors, unresolved, pending, error, selectionPending, selectionError } = context

@@ -193,10 +193,13 @@ func TestSessionStore_GetAllProjects(t *testing.T) {
 	require.NoError(t, err)
 	for i, id := range ids {
 		label := "Duplicate label"
+		var raw *string
 		if i == 2 {
 			label = "Registered project"
+		} else {
+			raw = &label
 		}
-		assert.Contains(t, projects, ProjectDescriptor{ID: id, DisplayName: label})
+		assert.Contains(t, projects, ProjectDescriptor{ID: id, DisplayName: label, StoredDisplayName: raw})
 	}
 }
 

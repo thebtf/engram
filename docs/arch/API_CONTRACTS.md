@@ -256,14 +256,34 @@ guarantee that arbitrary application logs contain no other secrets.
 
 ### Knowledge readers
 
-`GET /api/projects` returns `{items:[{project_id,name,repository_qualifier?}],unresolved:[{reference,name,reason,reader_kinds}]}`.
+`GET /api/projects` returns `{items:[{project_id,name,display_name,repository_qualifier?}],unresolved:[{reference,name,reason,reader_kinds}]}`.
 `items` contains live canonical `projects` rows, not session labels or legacy
 selectors. `project_id` is the canonical UUID; `name` is a human label that falls
-back to `Registered project` when missing or blank. The optional
+back to `Registered project` when missing or blank. `display_name` is always
+present and is the exact stored string or JSON null, without that fallback. The optional
 `repository_qualifier` is a normalized repository locator. Duplicate labels remain
 distinct UUIDs. Existing ordinary authenticated readers retain their server-wide project
 scope. HAP project/legacy credentials remain forbidden by the existing route
 policy. The catalog response is `private, no-store`, never publicly cached.
+
+`PATCH /api/projects/{id}` changes only the stored label of an existing active,
+non-removed canonical UUID. It requires the server's operator/admin identity;
+read-only and read-write client keycards cannot mutate this server-wide metadata.
+The existing auth-disabled mode uses its synthetic admin identity. The JSON object
+must contain exactly `display_name` and `expected_display_name`, each either a
+string or null. Both fields must be present; an empty string is distinct from
+null. Strings are limited to 255 Unicode code points and cannot contain control
+characters; the request body is limited to 4096 bytes. Use the catalog's exact
+`display_name` as the precondition, never its presentation `name`.
+
+The server locks the live row and atomically compares the stored nullable value
+before changing it. Success returns HTTP 200 with `project_id` and the stored
+`display_name`; 409 means the value is stale, and 404 means the project is missing
+or inactive. Invalid input is 400, oversized bodies are 413, and unauthorized
+callers are denied. The same conditional operation can restore a prior null,
+empty or valid string value; it does not create projects or reassign history.
+Historical labels containing control characters cannot be supplied as a
+precondition, so this endpoint refuses their rename rather than prevent rollback.
 
 `unresolved` describes retained data owners without a canonical project assignment.
 Each entry has an opaque `reference`, display `name`, `reason`, and `reader_kinds`

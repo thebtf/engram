@@ -24,12 +24,17 @@ definitions:
     - CollectionSelectionFrozenFilter
   gorm.ProjectDescriptor:
     properties:
+      display_name:
+        type: string
+        x-nullable: true
       name:
         type: string
       project_id:
         type: string
       repository_qualifier:
         type: string
+    required:
+    - display_name
     type: object
   gorm.UnresolvedProject:
     properties:
@@ -792,6 +797,18 @@ definitions:
         type: integer
       total_injections:
         type: integer
+    type: object
+  worker.projectLabelPatchSchema:
+    properties:
+      display_name:
+        type: string
+        x-nullable: true
+      expected_display_name:
+        type: string
+        x-nullable: true
+    required:
+    - display_name
+    - expected_display_name
     type: object
   worker.projectListResponse:
     properties:
@@ -2712,6 +2729,66 @@ paths:
       security:
       - ApiKeyAuth: []
       summary: Soft-delete a project
+      tags:
+      - Projects
+    patch:
+      consumes:
+      - application/json
+      description: Requires an operator/admin identity, a canonical project UUID,
+        and both display_name and expected_display_name as string or null. The expected
+        value is the exact stored value from the project catalog, not its presentation
+        name.
+      parameters:
+      - description: Canonical project UUID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: display_name and expected_display_name
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/worker.projectLabelPatchSchema'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: invalid request
+          schema:
+            type: string
+        "401":
+          description: unauthorized
+          schema:
+            type: string
+        "403":
+          description: operator access required
+          schema:
+            type: string
+        "404":
+          description: project not found or inactive
+          schema:
+            type: string
+        "409":
+          description: stored label changed
+          schema:
+            type: string
+        "413":
+          description: request body too large
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Conditionally update a project's stored display label
       tags:
       - Projects
   /api/projects/unresolved/{reference}/content:
