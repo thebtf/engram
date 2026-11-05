@@ -405,8 +405,12 @@ func TestServerImageContract(t *testing.T) {
 	waitNotHealthy(t, failedServer, 60*time.Second)
 	failedURL := mappedURL(t, failedServer, "37777/tcp")
 	failedHealth := requireHTTP(t, failedURL+"/health", http.StatusOK)
-	if !bytes.Contains(failedHealth, []byte(`"status":"error"`)) {
-		t.Fatalf("failed initialization liveness must remain 200/error, got %q", failedHealth)
+	if !bytes.Contains(failedHealth, []byte(`"status":"starting"`)) {
+		t.Fatalf("transient database outage liveness must remain 200/starting, got %q", failedHealth)
+	}
+	failedReady := requireHTTP(t, failedURL+"/api/ready", http.StatusServiceUnavailable)
+	if !strings.Contains(string(failedReady), "service initializing") {
+		t.Fatalf("transient database outage must remain semantically unready, got %q", failedReady)
 	}
 
 	for _, fixture := range []struct {

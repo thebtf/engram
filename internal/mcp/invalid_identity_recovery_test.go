@@ -26,6 +26,8 @@ func TestInvalidIdentityRecoveryShippedDiscovery(t *testing.T) {
 		require.Contains(t, tool.Description, "project_context")
 		require.Contains(t, tool.Description, `action="repair"`)
 		require.Contains(t, tool.Description, `action="choices"`)
+		require.Contains(t, tool.Description, "GET /api/projects/resolve?legacy_id=")
+		require.Contains(t, tool.Description, "URI-encoded")
 		require.Contains(t, tool.Description, "not a mapping")
 		require.Contains(t, tool.Description, "never replay an unknown-outcome mutation")
 		invalid := projectidentity.RecoveryGuidance("PROJECT_IDENTITY_INVALID")
