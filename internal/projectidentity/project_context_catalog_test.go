@@ -1,10 +1,14 @@
 package projectidentity
 
 import (
+	"encoding/pem"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -128,5 +132,55 @@ func TestReadExistingProjectChoicesLargeUnresolvedEnvelope(t *testing.T) {
 				t.Fatalf("invalid catalog accepted: count=%d err=%v", len(choices), err)
 			}
 		})
+	}
+}
+
+func TestAutomaticHistoricalRecoveryTransport(t *testing.T) {
+	root := t.TempDir()
+	gitLogical(t, root, "init", "--quiet", "--template=")
+	if err := os.WriteFile(filepath.Join(root, ".engram-project"), []byte(`{"id":"abcdef","name":"Existing"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, initialErr := ResolveLogicalProject(t.Context(), root, nil)
+	if ProjectErrorCode(initialErr) != "PROJECT_MIGRATION_REQUIRED" {
+		t.Fatalf("legacy baseline: %v", initialErr)
+	}
+	t.Setenv("ENGRAM_TLS_CA", "")
+	var sinkCalls atomic.Int32
+	sink := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { sinkCalls.Add(1); w.WriteHeader(http.StatusOK) }))
+	defer sink.Close()
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, sink.URL, http.StatusFound) }))
+	defer redirect.Close()
+	if _, err := ResolveAutomaticHistoricalProject(t.Context(), root, redirect.URL, "fixture-keycard", initialErr); ProjectErrorCode(err) != "PROJECT_RESOLUTION_UNAVAILABLE" || sinkCalls.Load() != 0 {
+		t.Fatalf("redirect was followed or accepted: %v", err)
+	}
+	if _, err := ResolveAutomaticHistoricalProject(t.Context(), root, "http://example.invalid:1234", "fixture-keycard", initialErr); ProjectErrorCode(err) != "PROJECT_RESOLUTION_UNAVAILABLE" {
+		t.Fatalf("unsafe plaintext transport accepted: %v", err)
+	}
+	tlsServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer fixture-keycard" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte(`{"status":"resolved","project_id":"11111111-1111-4111-8111-111111111111","name":"Existing"}`))
+	}))
+	defer tlsServer.Close()
+	if _, err := ResolveAutomaticHistoricalProject(t.Context(), root, tlsServer.URL, "fixture-keycard", initialErr); ProjectErrorCode(err) != "PROJECT_RESOLUTION_UNAVAILABLE" {
+		t.Fatalf("untrusted TLS accepted: %v", err)
+	}
+	ca := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: tlsServer.Certificate().Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ENGRAM_TLS_CA", ca)
+	project, err := ResolveAutomaticHistoricalProject(t.Context(), root, tlsServer.URL, "fixture-keycard", initialErr)
+	if err != nil || project.ProjectID != "11111111-1111-4111-8111-111111111111" {
+		t.Fatalf("configured CA did not authorize mapping: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".engram-project"), []byte(`{"id":"abcdef","name":"Changed"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ResolveAutomaticHistoricalProject(t.Context(), root, tlsServer.URL, "fixture-keycard", initialErr); ProjectErrorCode(err) != "PROJECT_SELECTION_STALE" {
+		t.Fatalf("changed initial marker accepted: %v", err)
 	}
 }

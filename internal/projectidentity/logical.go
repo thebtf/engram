@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -30,8 +31,10 @@ type BootstrapRequest struct {
 }
 
 type LogicalError struct {
-	Code     string
-	legacyID string
+	Code               string
+	legacyID           string
+	legacyMarkerPath   string
+	legacyMarkerDigest string
 }
 
 func (e *LogicalError) Error() string {
@@ -282,6 +285,86 @@ func ResolveLogicalProject(ctx context.Context, cwd string, bootstrap func(conte
 	return project, nil
 }
 
+// ResolveAutomaticHistoricalProject only reads a verified historical mapping.
+// It never changes identity files or forwards the caller's operation.
+func ResolveAutomaticHistoricalProject(ctx context.Context, cwd, serverURL, token string, initialErr error) (Project, error) {
+	var initial *LogicalError
+	if !errors.As(initialErr, &initial) || initial.Code != "PROJECT_MIGRATION_REQUIRED" {
+		return Project{}, logicalError("PROJECT_SELECTION_STALE")
+	}
+	if initial.legacyID == "" || initial.legacyMarkerDigest == "" {
+		return Project{}, initialErr
+	}
+	endpoint, err := url.Parse(serverURL)
+	if err != nil || endpoint.User != nil || endpoint.Host == "" || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+		return Project{}, logicalError("PROJECT_RESOLUTION_UNAVAILABLE")
+	}
+	if endpoint.Scheme != "https" && os.Getenv("ENGRAM_TLS_CA") == "" {
+		ip := net.ParseIP(endpoint.Hostname())
+		if endpoint.Scheme != "http" || (endpoint.Hostname() != "localhost" && (ip == nil || !ip.IsLoopback())) {
+			return Project{}, logicalError("PROJECT_RESOLUTION_UNAVAILABLE")
+		}
+	}
+	before, err := InspectProjectMarker(ctx, cwd)
+	if err != nil {
+		return Project{}, err
+	}
+	if before.LegacyID != initial.legacyID || before.MarkerDigest != initial.legacyMarkerDigest {
+		return Project{}, logicalError("PROJECT_SELECTION_STALE")
+	}
+	selected, err := filepath.Abs(cwd)
+	if err != nil {
+		return Project{}, logicalError("PROJECT_CONTEXT_REQUIRED")
+	}
+	if filepath.Clean(filepath.Join(selected, filepath.FromSlash(before.Target))) != filepath.Clean(initial.legacyMarkerPath) {
+		return Project{}, logicalError("PROJECT_SELECTION_STALE")
+	}
+	callerInfo, err := os.Stat(selected)
+	if err != nil || !callerInfo.IsDir() {
+		return Project{}, logicalError("PROJECT_SELECTION_STALE")
+	}
+	gitRoot, common, err := logicalProjectDirectories(ctx, selected)
+	if err != nil {
+		return Project{}, err
+	}
+	var commonInfo os.FileInfo
+	if common != "" {
+		commonInfo, err = os.Stat(common)
+		if err != nil || !commonInfo.IsDir() {
+			return Project{}, logicalError("PROJECT_SELECTION_STALE")
+		}
+	}
+	project, resolved, err := ResolveHistoricalProject(ctx, serverURL, token, before.LegacyID)
+	if err != nil {
+		return Project{}, err
+	}
+	if !resolved {
+		return Project{}, logicalError("PROJECT_MIGRATION_REQUIRED")
+	}
+	after, err := InspectProjectMarker(ctx, cwd)
+	if err != nil {
+		return Project{}, err
+	}
+	currentCaller, statErr := os.Stat(selected)
+	currentRoot, currentCommon, gitErr := logicalProjectDirectories(ctx, selected)
+	if statErr != nil || !os.SameFile(callerInfo, currentCaller) || gitErr != nil || gitRoot != currentRoot || common != currentCommon {
+		return Project{}, logicalError("PROJECT_SELECTION_STALE")
+	}
+	if common != "" {
+		currentInfo, err := os.Stat(common)
+		if err != nil || !os.SameFile(commonInfo, currentInfo) {
+			return Project{}, logicalError("PROJECT_SELECTION_STALE")
+		}
+	}
+	if before != after {
+		return Project{}, logicalError("PROJECT_SELECTION_STALE")
+	}
+	if after.CacheID != "" && after.CacheID != project.ProjectID {
+		return Project{}, logicalError("PROJECT_IDENTITY_CONFLICT")
+	}
+	return project, nil
+}
+
 func logicalProjectDirectories(ctx context.Context, selected string) (string, string, error) {
 	root, common := selected, ""
 	output, gitErr := anchorGitCommandV3(ctx, selected, "rev-parse", "--path-format=absolute", "--git-common-dir", "--is-bare-repository").Output()
@@ -312,7 +395,13 @@ func readLogicalMarker(path string, allowLegacyMarker bool) (Project, bool, erro
 	if err != nil || !present {
 		return Project{}, present, err
 	}
-	return parseLogicalMarker(raw, allowLegacyMarker)
+	project, markerPresent, parseErr := parseLogicalMarker(raw, allowLegacyMarker)
+	var legacy *LogicalError
+	if errors.As(parseErr, &legacy) && legacy.Code == "PROJECT_MIGRATION_REQUIRED" {
+		legacy.legacyMarkerPath = path
+		legacy.legacyMarkerDigest = markerEvidenceDigest(raw)
+	}
+	return project, markerPresent, parseErr
 }
 
 func parseLogicalMarker(raw []byte, allowLegacyMarker bool) (Project, bool, error) {
