@@ -1,33 +1,33 @@
 {
   "schema_version": 1,
   "launcher_security_epoch": 1,
-  "package_version": "7.0.24",
+  "package_version": "7.0.25",
   "daemon_compat_epoch": 1,
   "targets": {
     "win32-x64": {
       "desired": {
-        "version": "7.0.24",
+        "version": "7.0.25",
         "asset": "engram-windows-amd64.exe",
-        "size": 30769664,
-        "sha256": "dabfd1eb1628583aa91fe07b3fba4cdfc1432e18a76e753951c626367fcf7236"
+        "size": 30810112,
+        "sha256": "50f38fb6aff02611aafa558e0f7a5b6bc6e31f3528fa65507c443988c55fce86"
       },
       "predecessor": null
     },
     "linux-x64": {
       "desired": {
-        "version": "7.0.24",
+        "version": "7.0.25",
         "asset": "engram-linux-amd64",
-        "size": 29888638,
-        "sha256": "b7441402366948c1ec98b1f7f6aebd05d12f8fdee46af61d36a6234dc06d328f"
+        "size": 29929598,
+        "sha256": "8e0ae9cd09328b3d6df70f953490c66dcb92bd332a181d8f8ba38a36a4f2f288"
       },
       "predecessor": null
     },
     "darwin-arm64": {
       "desired": {
-        "version": "7.0.24",
+        "version": "7.0.25",
         "asset": "engram-darwin-arm64",
-        "size": 29086098,
-        "sha256": "6b557d95d8b4658cb3134c28c7717719e0511fff7df20e5960ab51ce1f616a1d"
+        "size": 29119154,
+        "sha256": "497116e6748e4335b52615b5c4d77de8cdab0a34b354c1797cbaa825f9c6f205"
       },
       "predecessor": null
     }
@@ -38,6 +38,6 @@
     "trimpath": true,
     "buildvcs": false,
     "client_cgo": false,
-    "daemon_version_ldflag": "v7.0.24"
+    "daemon_version_ldflag": "v7.0.25"
   }
 }
