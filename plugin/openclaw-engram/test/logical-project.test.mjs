@@ -43,7 +43,7 @@ test('OpenClaw consumes native historical migration refusal without inventing id
  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
  execFileSync('git', ['init', '--quiet', '--template='], { cwd: root, stdio: 'pipe' });
  const marker = path.join(root, '.engram-project');
- const raw = Buffer.from('{"id":"941b49","name":"ai-warden"}\n');
+ const raw = Buffer.from('{"id":"abcdef","name":"synthetic legacy"}\n');
  fs.writeFileSync(marker, raw);
  const env = { ...process.env, ENGRAM_EXECUTABLE: executable, ENGRAM_URL: 'http://127.0.0.1:9', ENGRAM_SERVER_URL: '', ENGRAM_TOKEN: '' };
  await assert.rejects(resolveIdentity('legacy-agent', root, { env }), error => {
@@ -57,9 +57,11 @@ test('OpenClaw consumes native historical migration refusal without inventing id
  const held = await resolveProject(client, 'legacy-agent', root);
  assert.equal(held.ok, false);
  assert.equal(held.error.code, 'PROJECT_MIGRATION_REQUIRED');
- assert.match(held.error.upgradeAction, /legacy_marker/);
+ assert.match(held.error.upgradeAction, /project_context/);
+ assert.match(held.error.upgradeAction, /action="repair"/);
+ assert.match(held.error.upgradeAction, /action="choices"/);
  const check = JSON.parse(execFileSync(executable, ['project', 'resolve', '--root', root, '--json', '--check'], { env, encoding: 'utf8' }));
- assert.deepEqual(check, { status: 'migration_required', binding: { id: '941b49', project_key: null, identity_status: null, match: 'legacy_marker' } });
+ assert.deepEqual(check, { status: 'migration_required', binding: { id: 'abcdef', project_key: null, identity_status: null, match: 'legacy_marker' } });
  assert.deepEqual(fs.readFileSync(marker), raw);
  assert.equal(fs.existsSync(path.join(root, '.git', 'engram-project.json')), false);
 });

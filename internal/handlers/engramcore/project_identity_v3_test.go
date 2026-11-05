@@ -198,12 +198,8 @@ func TestProxyHandleTool_NestedProjectBoundaryPreservesRepository(t *testing.T) 
 	if _, err := os.Lstat(filepath.Join(project.Cwd, ".engram-project")); !os.IsNotExist(err) {
 		t.Fatal("ordinary subdirectory resolution created a project boundary")
 	}
-	var cached struct {
-		ProjectID string `json:"project_id"`
-	}
-	raw, err := os.ReadFile(filepath.Join(root, ".git", "engram-project.json"))
-	if err != nil || json.Unmarshal(raw, &cached) != nil || cached.ProjectID != contractProjectID {
-		t.Fatalf("nested project replaced the pinned repository UUID: %s: %v", raw, err)
+	if _, err := os.Lstat(filepath.Join(root, ".git", "engram-project.json")); !os.IsNotExist(err) {
+		t.Fatalf("portable resolution unexpectedly wrote a common cache: %v", err)
 	}
 }
 
@@ -212,6 +208,10 @@ func TestProxyHandleTool_MarkerCacheConflictDoesNotDispatch(t *testing.T) {
 	_, mod, project := buildContractDispatcher(t, startMockGRPC(t, srv))
 	project.Cwd = daemonV3Repository(t)
 	writeContractProjectMarker(t, project.Cwd, contractProjectID)
+	cache := filepath.Join(project.Cwd, ".git", "engram-project.json")
+	if err := os.WriteFile(cache, []byte(`{"project_id":"`+contractProjectID+`"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := mod.ProxyHandleTool(t.Context(), project, "recall", json.RawMessage(`{}`)); err != nil {
 		t.Fatal(err)
 	}

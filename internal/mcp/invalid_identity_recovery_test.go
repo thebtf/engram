@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/thebtf/engram/internal/projectidentity"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,11 +23,14 @@ func TestInvalidIdentityRecoveryShippedDiscovery(t *testing.T) {
 		if tool.Name != "codebase_context" {
 			continue
 		}
-		require.Contains(t, tool.Description, "legacy_marker")
-		require.Contains(t, tool.Description, "GET /api/projects/resolve?legacy_id=")
-		require.Contains(t, tool.Description, "URI-encoded")
-		require.Contains(t, tool.Description, "PROJECT_IDENTITY_INVALID")
+		require.Contains(t, tool.Description, "project_context")
+		require.Contains(t, tool.Description, `action="repair"`)
+		require.Contains(t, tool.Description, `action="choices"`)
 		require.Contains(t, tool.Description, "not a mapping")
+		require.Contains(t, tool.Description, "never replay an unknown-outcome mutation")
+		invalid := projectidentity.RecoveryGuidance("PROJECT_IDENTITY_INVALID")
+		require.Contains(t, invalid, "malformed IDs")
+		require.Contains(t, invalid, "do not delete/reset/init")
 		return
 	}
 	t.Fatal("actual tools/list omitted codebase_context")

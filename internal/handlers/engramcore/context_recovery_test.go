@@ -26,7 +26,7 @@ import (
 )
 
 func TestContextRecoveryNativePreflightNeverBootstrapsOrPublishesIdentity(t *testing.T) {
-	for _, scenario := range []string{"new-unpinned-repository", "existing-migration-hold"} {
+	for _, scenario := range []string{"new-unpinned-repository", "existing-migration-hold", "existing-legacy-hold"} {
 		t.Run(scenario, func(t *testing.T) {
 			var calls atomic.Int32
 			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -51,11 +51,14 @@ func TestContextRecoveryNativePreflightNeverBootstrapsOrPublishesIdentity(t *tes
 			}
 			paths := []string{filepath.Join(project.Cwd, ".engram-project"), filepath.Join(project.Cwd, ".git", "engram-project.json")}
 			var existing []byte
-			if scenario == "existing-migration-hold" {
+			if scenario != "new-unpinned-repository" {
 				existing = []byte("{ \"name\": \"Keep original legacy label\" }\n")
 				for _, path := range paths {
 					require.NoError(t, os.WriteFile(path, existing, 0o600))
 				}
+			}
+			if scenario == "existing-legacy-hold" {
+				require.NoError(t, os.WriteFile(paths[0], []byte(`{"id":"abcdef","name":"Keep original legacy label"}`), 0o600))
 			}
 			ctx := auditcontext.WithUCITransportSession(t.Context(), "recovery-preflight-session")
 			for _, operation := range []struct{ tool, arguments string }{
@@ -71,14 +74,18 @@ func TestContextRecoveryNativePreflightNeverBootstrapsOrPublishesIdentity(t *tes
 				require.Empty(t, request.Project, "project-free reads must not acquire canonical authority")
 			}
 			require.Zero(t, calls.Load(), "native guard must not bootstrap just to inspect or select authorized code contexts/read issues")
-			if scenario == "existing-migration-hold" {
+			if scenario != "new-unpinned-repository" {
 				request := &pb.CallToolRequest{ToolName: "issues", ArgumentsJson: json.RawMessage(`{"action":"create","project":"22222222-2222-4222-8222-222222222222"}`)}
 				_, err := mod.proxyToolCallContext(ctx, project, request, false)
 				var refusal *module.ModuleError
 				require.ErrorAs(t, err, &refusal)
-				require.Equal(t, "PROJECT_MIGRATION_REQUIRED", refusal.Code)
-				require.Empty(t, request.Project, "caller project argument cannot bypass migration hold")
-				require.EqualValues(t, 1, calls.Load(), "write control proves that the real bootstrap seam was reachable")
+				want := "PROJECT_CONTEXT_REQUIRED"
+				if scenario == "existing-legacy-hold" {
+					want = "PROJECT_MIGRATION_REQUIRED"
+				}
+				require.Equal(t, want, refusal.Code)
+				require.Empty(t, request.Project, "caller project argument cannot bypass the hold")
+				require.Zero(t, calls.Load(), "held identity must not bootstrap for mutation")
 			}
 			for _, path := range paths {
 				actual, err := os.ReadFile(path)
@@ -86,7 +93,11 @@ func TestContextRecoveryNativePreflightNeverBootstrapsOrPublishesIdentity(t *tes
 					require.True(t, os.IsNotExist(err), "new repository inspection must not publish marker/cache")
 				} else {
 					require.NoError(t, err)
-					require.Equal(t, existing, actual, "migration preflight must preserve existing marker/cache")
+					want := existing
+					if scenario == "existing-legacy-hold" && path == paths[0] {
+						want = []byte(`{"id":"abcdef","name":"Keep original legacy label"}`)
+					}
+					require.Equal(t, want, actual, "preflight must preserve existing marker/cache")
 				}
 			}
 			t.Logf("%s: native project-free guard skipped bootstrap for 5 reads; identity files preserved", scenario)
