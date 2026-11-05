@@ -44,6 +44,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Use registered canonical UUIDs and authenticated caller project context in MCP fixtures without weakening default-deny, privacy or pre-mutation rejection guards. Reuse 119 prior PASS plus one exact retry PASS after the context fix, not 120 fresh PASS or installed acceptance.
 - Seed the isolated operator-code fixture with a registered canonical project UUID while preserving five queue candidates, published/no-view checks and redacted provisioning errors.
 
+## [7.0.21] - 2026-11-05
+
+### Fixed
+
+- Recover the same backend process when PostgreSQL starts late after a transient connection failure, including temporary DNS failures. Retry connection establishment only; run database migrations and startup effects once after connection, preserve terminal authentication/configuration errors, and honor cancellation.
+- Return prompt gRPC unavailable responses before the fully initialized, authentication-wired service is ready instead of leaving MCP calls waiting for a permanently absent server. The same local MCP client can discover tools while the database is down and read its existing issue after PostgreSQL returns or disconnects and returns again.
+- Include the maintained shared MCP guidance in the ordinary local mux initialization response, while keeping remote tool availability dependent on actual discovery rather than a static promise.
+
 ## [7.0.20] - 2026-11-04
 
 ### Fixed
