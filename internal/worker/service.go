@@ -1920,6 +1920,7 @@ func (s *Service) setupRoutes() {
 		r.Post("/api/projects/consolidation/verify-backup", s.handleProjectConsolidationVerifyBackup)
 		r.Post("/api/projects/consolidation/dry-run", s.handleProjectConsolidationDryRun)
 		r.Post("/api/projects/consolidation/apply", s.handleProjectConsolidationApply)
+		r.Patch("/api/projects/{id}", s.handlePatchProjectLabel)
 		r.Delete("/api/projects/{id}", s.handleDeleteProject)
 		r.Get("/api/stats", s.handleGetStats)
 		r.Get("/api/stats/retrieval", s.handleGetRetrievalStats)
