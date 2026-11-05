@@ -1,8 +1,10 @@
 package projectidentity
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -67,5 +69,64 @@ func TestProjectContextAuthDisabledBackend(t *testing.T) {
 	project, resolved, err := ResolveHistoricalProject(t.Context(), server.URL, "", "abcdef")
 	if err != nil || !resolved || project.ProjectID != choices[0].ProjectID {
 		t.Fatalf("auth-disabled historical resolution: %+v %v %v", project, resolved, err)
+	}
+}
+
+func TestReadExistingProjectChoicesLargeUnresolvedEnvelope(t *testing.T) {
+	t.Setenv("ENGRAM_TLS_CA", "")
+	item := `{"project_id":"11111111-1111-4111-8111-111111111111","name":"Existing"}`
+	fragment := `{"reference":"urn:fixture:` + strings.Repeat("x", 320) + `","kind":"memory"},`
+	large := `{"items":[` + item + `],"unresolved":[` + strings.Repeat(fragment, 6200) + `{"reference":"urn:fixture:last"}]}`
+	if len(large) <= 1024*1024 {
+		t.Fatal("large catalog fixture must exceed former cap")
+	}
+	var tooMany strings.Builder
+	tooMany.WriteString(`{"items":[`)
+	for i := range 4097 {
+		if i != 0 {
+			tooMany.WriteByte(',')
+		}
+		fmt.Fprintf(&tooMany, `{"project_id":"%08x-1111-4111-8111-111111111111","name":"Existing"}`, i+1)
+	}
+	tooMany.WriteString(`],"unresolved":[]}`)
+	cases := []struct {
+		name   string
+		status int
+		body   string
+		want   bool
+	}{
+		{"large-current-catalog", http.StatusOK, large, true},
+		{"large-unresolved-first", http.StatusOK, `{"unresolved":[` + strings.Repeat(fragment, 6200) + `{"reference":"urn:fixture:last"}],"items":[` + item + `]}`, true},
+		{"too-many-items", http.StatusOK, tooMany.String(), false},
+		{"oversized", http.StatusOK, `{"items":[` + item + `],"unresolved":["` + strings.Repeat("x", 17*1024*1024) + `"]}`, false},
+		{"malformed-trailing", http.StatusOK, large + ` {}`, false},
+		{"duplicate-project", http.StatusOK, `{"items":[` + item + `,` + item + `],"unresolved":[]}`, false},
+		{"duplicate-items-key", http.StatusOK, `{"items":[` + item + `],"items":[` + item + `]}`, false},
+		{"duplicate-item-field", http.StatusOK, `{"items":[{"project_id":"11111111-1111-4111-8111-111111111111","name":"One","name":"Two"}]}`, false},
+		{"duplicate-unresolved-field", http.StatusOK, `{"items":[` + item + `],"unresolved":[{"reference":"one","reference":"two"}]}`, false},
+		{"deep-unresolved", http.StatusOK, `{"items":[` + item + `],"unresolved":` + strings.Repeat("[", 70) + `0` + strings.Repeat("]", 70) + `}`, false},
+		{"malformed-unresolved", http.StatusOK, `{"items":[` + item + `],"unresolved":[{"reference":}]}`, false},
+		{"denied", http.StatusForbidden, large, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get("Authorization") != "Bearer synthetic-keycard" {
+					w.WriteHeader(http.StatusUnauthorized)
+					return
+				}
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+			choices, err := ReadExistingProjectChoices(t.Context(), server.URL, "synthetic-keycard")
+			if tc.want {
+				if err != nil || len(choices) != 1 || choices[0].Name != "Existing" {
+					t.Fatalf("large authorized catalog should retain current item: count=%d err=%v", len(choices), err)
+				}
+			} else if err == nil || len(choices) != 0 {
+				t.Fatalf("invalid catalog accepted: count=%d err=%v", len(choices), err)
+			}
+		})
 	}
 }

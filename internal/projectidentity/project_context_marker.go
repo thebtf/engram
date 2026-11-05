@@ -24,6 +24,7 @@ type ProjectMarkerState struct {
 	PinnedID          string
 	PortableID        string
 	CacheID           string
+	OriginDigest      string
 	RepositoryLocator string
 }
 
@@ -65,6 +66,13 @@ func readBoundedRecoveryFile(path string, limit int64) ([]byte, bool, error) {
 		return nil, true, logicalError("PROJECT_SELECTION_STALE")
 	}
 	return raw, true, nil
+}
+
+func isLocalRecoveryOrigin(value string) bool {
+	if strings.HasPrefix(strings.ToLower(value), "file:") || filepath.IsAbs(value) || strings.HasPrefix(value, "./") || strings.HasPrefix(value, "../") || strings.HasPrefix(value, `.\`) || strings.HasPrefix(value, `..\`) || strings.HasPrefix(value, `\\`) {
+		return true
+	}
+	return len(value) >= 3 && ((value[0] >= 'a' && value[0] <= 'z') || (value[0] >= 'A' && value[0] <= 'Z')) && value[1] == ':' && (value[2] == '/' || value[2] == '\\')
 }
 
 // InspectProjectMarker follows the nearest marker only inside the caller's Git
@@ -146,9 +154,12 @@ func InspectProjectMarker(ctx context.Context, cwd string) (ProjectMarkerState, 
 			if remoteErr != nil {
 				return ProjectMarkerState{}, logicalError("PROJECT_RESOLUTION_UNAVAILABLE")
 			}
-			state.RepositoryLocator, remoteErr = NormalizeRepositoryLocator(strings.TrimSpace(string(value)))
-			if remoteErr != nil {
-				return ProjectMarkerState{}, remoteErr
+			origin := strings.TrimSpace(string(value))
+			state.OriginDigest = markerEvidenceDigest([]byte(origin))
+			if !isLocalRecoveryOrigin(origin) {
+				if locator, normalizeErr := NormalizeRepositoryLocator(origin); normalizeErr == nil {
+					state.RepositoryLocator = locator
+				}
 			}
 			break
 		}
@@ -169,6 +180,6 @@ func InspectProjectMarker(ctx context.Context, cwd string) (ProjectMarkerState, 
 			}
 		}
 	}
-	state.EvidenceDigest = markerEvidenceDigest([]byte(state.RootDigest + "\x00" + state.TargetRootDigest + "\x00" + state.Target + "\x00" + state.MarkerDigest + "\x00" + cacheDigest + "\x00" + state.RepositoryLocator))
+	state.EvidenceDigest = markerEvidenceDigest([]byte(state.RootDigest + "\x00" + state.TargetRootDigest + "\x00" + state.Target + "\x00" + state.MarkerDigest + "\x00" + cacheDigest + "\x00" + state.RepositoryLocator + "\x00" + state.OriginDigest))
 	return state, nil
 }

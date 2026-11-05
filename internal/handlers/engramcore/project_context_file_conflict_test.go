@@ -29,7 +29,23 @@ func TestProjectContextLegacyCacheConflictScopedRead(t *testing.T) {
 	testProjectContextScopedConflict(t, true)
 }
 
-func testProjectContextScopedConflict(t *testing.T, legacy bool) {
+func TestProjectContextLocalOriginPortableConflict(t *testing.T) {
+	testProjectContextScopedConflict(t, false, "file:///D:/synthetic-repository")
+}
+
+func TestProjectContextLocalOriginLegacyConflict(t *testing.T) {
+	testProjectContextScopedConflict(t, true, "file:///D:/synthetic-repository")
+}
+
+func TestProjectContextRelativeOriginPortableConflict(t *testing.T) {
+	testProjectContextScopedConflict(t, false, "repo.git")
+}
+
+func TestProjectContextUnsupportedOriginLegacyConflict(t *testing.T) {
+	testProjectContextScopedConflict(t, true, "ftp://example.invalid/synthetic.git")
+}
+
+func testProjectContextScopedConflict(t *testing.T, legacy bool, localOrigin ...string) {
 	t.Helper()
 	t.Setenv("ENGRAM_TLS_CA", "")
 	backend := &markerRecoveryBackend{}
@@ -48,6 +64,11 @@ func testProjectContextScopedConflict(t *testing.T, legacy bool) {
 	caller.Env[config.EnvWorkstationToken] = markerRecoveryToken
 	if out, err := exec.CommandContext(t.Context(), "git", "-C", caller.Cwd, "init", "--quiet", "--template=").CombinedOutput(); err != nil {
 		t.Fatalf("git: %v %s", err, out)
+	}
+	if len(localOrigin) != 0 {
+		if out, err := exec.CommandContext(t.Context(), "git", "-C", caller.Cwd, "remote", "add", "origin", localOrigin[0]).CombinedOutput(); err != nil {
+			t.Fatalf("git fixture origin: %v %s", err, out)
+		}
 	}
 	markerPath := filepath.Join(caller.Cwd, ".engram-project")
 	cachePath := filepath.Join(caller.Cwd, ".git", "engram-project.json")
@@ -150,6 +171,19 @@ func testProjectContextScopedConflict(t *testing.T, legacy bool) {
 		t.Fatalf("cross-caller choice accepted: %s", wire)
 	}
 	caller.ID = originalID
+	if len(localOrigin) != 0 {
+		setOrigin := func(value string) {
+			t.Helper()
+			if out, err := exec.CommandContext(t.Context(), "git", "-C", caller.Cwd, "remote", "set-url", "origin", value).CombinedOutput(); err != nil {
+				t.Fatalf("change synthetic origin: %v %s", err, out)
+			}
+		}
+		setOrigin("file:///D:/different-synthetic-repository")
+		if wire, ok := call(ctxA, "project_context", selectArgs); ok || !strings.Contains(wire, "PROJECT_SELECTION_STALE") {
+			t.Fatalf("changed local origin accepted: %s", wire)
+		}
+		setOrigin(localOrigin[0])
+	}
 	if err := os.WriteFile(cachePath, append(append([]byte(nil), cache...), '\n'), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -23,6 +24,7 @@ func TestProjectContextPrimaryOriginRecovery(t *testing.T) {
 	for _, tc := range []struct {
 		name             string
 		marker           string
+		remote           string
 		legacyStatus     int
 		legacyBody       string
 		repositoryStatus int
@@ -33,6 +35,10 @@ func TestProjectContextPrimaryOriginRecovery(t *testing.T) {
 		{name: "unresolved-with-alias", marker: `{"id":"abcdef","name":"legacy"}`, legacyBody: `{"status":"unresolved","reference":"urn:fixture:unresolved"}`, wantAction: true},
 		{name: "unknown-reference-with-alias", marker: `{"id":"abcdef","name":"legacy"}`, legacyStatus: 404, legacyBody: `{"error":"PROJECT_ADOPTION_UNKNOWN_REFERENCE"}`, wantAction: true},
 		{name: "name-only-with-alias", marker: `{"name":"legacy label"}`, wantAction: true},
+		{name: "legacy-file-origin", marker: `{"id":"abcdef","name":"legacy"}`, legacyBody: `{"status":"resolved","project_id":"11111111-1111-4111-8111-111111111111","name":"Existing"}`, remote: "file:///D:/synthetic-repository", wantAction: true},
+		{name: "legacy-drive-origin", marker: `{"id":"abcdef","name":"legacy"}`, legacyBody: `{"status":"resolved","project_id":"11111111-1111-4111-8111-111111111111","name":"Existing"}`, remote: "D:/synthetic-repository", wantAction: true},
+		{name: "legacy-relative-origin", marker: `{"id":"abcdef","name":"legacy"}`, legacyBody: `{"status":"resolved","project_id":"11111111-1111-4111-8111-111111111111","name":"Existing"}`, remote: "some/repo.git", wantAction: true},
+		{name: "legacy-unsupported-origin", marker: `{"id":"abcdef","name":"legacy"}`, legacyBody: `{"status":"resolved","project_id":"11111111-1111-4111-8111-111111111111","name":"Existing"}`, remote: "ftp://example.invalid/synthetic.git", wantAction: true},
 		{name: "auth-disabled-alias", marker: `{"name":"legacy label"}`, noToken: true, wantAction: true},
 		{name: "conflicting-mappings", marker: `{"id":"abcdef","name":"legacy"}`, legacyBody: `{"status":"resolved","project_id":"22222222-2222-4222-8222-222222222222","name":"Other"}`},
 		{name: "other-legacy-404", marker: `{"id":"abcdef","name":"legacy"}`, legacyStatus: 404, legacyBody: `{"error":"PROJECT_ADOPTION_STALE"}`},
@@ -46,7 +52,11 @@ func TestProjectContextPrimaryOriginRecovery(t *testing.T) {
 			t.Setenv("ENGRAM_TLS_CA", "")
 			t.Setenv("ENGRAM_TOKEN", "")
 			root := t.TempDir()
-			for _, args := range [][]string{{"init", "--quiet", "--template="}, {"remote", "add", "origin", "https://example.test/Fixture/Repo.git"}} {
+			remote := tc.remote
+			if remote == "" {
+				remote = "https://example.test/Fixture/Repo.git"
+			}
+			for _, args := range [][]string{{"init", "--quiet", "--template="}, {"remote", "add", "origin", remote}} {
 				command := exec.CommandContext(t.Context(), "git", append([]string{"-C", root}, args...)...)
 				if output, err := command.CombinedOutput(); err != nil {
 					t.Fatalf("git fixture: %v: %s", err, output)
@@ -292,5 +302,72 @@ func TestProjectContextPrimaryOriginRecovery(t *testing.T) {
 				t.Fatalf("handler created derived cache: %v", err)
 			}
 		})
+	}
+}
+
+func TestProjectContextBackendAuthorizationRefusal(t *testing.T) {
+	for _, phase := range []string{"historical", "repository", "catalog"} {
+		for _, code := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+			t.Run(fmt.Sprintf("%s-%d", phase, code), func(t *testing.T) {
+				t.Setenv("ENGRAM_TLS_CA", "")
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.Header.Get("Authorization") != "Bearer "+markerRecoveryToken {
+						w.WriteHeader(http.StatusForbidden)
+						return
+					}
+					switch {
+					case r.URL.Path == "/api/projects/resolve" && r.URL.Query().Get("legacy_id") == "abcdef":
+						if phase == "historical" {
+							w.WriteHeader(code)
+							return
+						}
+						_, _ = w.Write([]byte(`{"status":"resolved","project_id":"` + markerRecoveryID + `","name":"Existing"}`))
+					case r.URL.Path == "/api/projects/resolve" && r.URL.Query().Get("repository_locator") == "example.test/Synthetic/Repo":
+						if phase == "repository" {
+							w.WriteHeader(code)
+							return
+						}
+						t.Error("unexpected origin request")
+					case r.URL.Path == "/api/projects":
+						if phase == "catalog" {
+							w.WriteHeader(code)
+							return
+						}
+						_, _ = w.Write([]byte(`{"items":[],"unresolved":[]}`))
+					default:
+						t.Error("unexpected recovery route")
+						w.WriteHeader(http.StatusBadRequest)
+					}
+				}))
+				defer server.Close()
+				dispatcher, _, caller := buildV3ContractDispatcher(t, "")
+				caller.Env[config.EnvServerURL] = server.URL
+				caller.Env[config.EnvWorkstationToken] = markerRecoveryToken
+				if out, err := exec.CommandContext(t.Context(), "git", "-C", caller.Cwd, "init", "--quiet", "--template=").CombinedOutput(); err != nil {
+					t.Fatalf("git: %v %s", err, out)
+				}
+				marker := `{"id":"abcdef","name":"legacy"}`
+				if phase == "repository" {
+					marker = `{"name":"legacy"}`
+					if out, err := exec.CommandContext(t.Context(), "git", "-C", caller.Cwd, "remote", "add", "origin", "https://example.test/Synthetic/Repo.git").CombinedOutput(); err != nil {
+						t.Fatalf("git origin: %v %s", err, out)
+					}
+				}
+				if err := os.WriteFile(filepath.Join(caller.Cwd, ".engram-project"), []byte(marker), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				raw, err := dispatcher.HandleRequest(t.Context(), caller, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"project_context","arguments":{"action":"repair"}}}`))
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := "PROJECT_AUTH_REQUIRED"
+				if code == http.StatusForbidden {
+					want = "PROJECT_ACCESS_DENIED"
+				}
+				if !strings.Contains(string(raw), want) || !strings.Contains(string(raw), "keycard") || !strings.Contains(string(raw), "host conversation") || strings.Contains(string(raw), markerRecoveryToken) || strings.Contains(string(raw), caller.Cwd) {
+					t.Fatalf("authorization refusal lacks safe actionable guidance: %s", raw)
+				}
+			})
+		}
 	}
 }

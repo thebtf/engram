@@ -9,6 +9,17 @@ import (
 	"os"
 )
 
+func projectRecoveryStatusError(status int) error {
+	switch status {
+	case http.StatusUnauthorized:
+		return logicalError("PROJECT_AUTH_REQUIRED")
+	case http.StatusForbidden:
+		return logicalError("PROJECT_ACCESS_DENIED")
+	default:
+		return logicalError("PROJECT_RESOLUTION_UNAVAILABLE")
+	}
+}
+
 // projectRecoveryGET follows the installed client's TLS trust configuration and
 // never forwards credentials through an HTTP redirect or an inherited proxy.
 func projectRecoveryGET(ctx context.Context, endpoint *url.URL, token string) (*http.Response, func(), error) {
