@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { useOperatorSecrets, type OperatorCredential } from '../composables/useOperatorSecrets'
 import type { MutationResult } from '../composables/useApi'
 import { isCatalogProject, projectName, useOperatorProjectContext } from '../composables/useOperatorProjectContext'
+import { authGeneration, operatorUnauthorizedRevision } from '../composables/useOperatorApi'
 
 const { t } = useI18n()
+const route = useRoute()
 const context = useOperatorProjectContext()
 const {
   creds,
@@ -35,6 +38,8 @@ const selected = computed(() => creds.find((cred) => cred.id === openedName.valu
 const scopeError = computed(() => context.selectionError.value || context.error.value)
 const canCreate = computed(() => createName.value.trim().length > 0 && isCatalogProject(createProject.value) && createValue.value.length > 0 && !pending.value && !context.pending.value && !context.selectionPending.value && !scopeError.value)
 let revealGeneration = 0
+let mutationGeneration = 0
+watch([() => route.fullPath, authGeneration, operatorUnauthorizedRevision], () => { mutationGeneration += 1; mutationResult.value = null }, { flush: 'sync' })
 watch(context.project, (project) => {
   createProject.value = isCatalogProject(project) ? project : ''
   createValue.value = ''
@@ -47,6 +52,7 @@ watch(context.project, (project) => {
 }, { immediate: true, flush: 'sync' })
 watch(loadState, () => { revealed.value = null; revealGeneration += 1 }, { flush: 'sync' })
 watch([context.selectionPending, scopeError], () => {
+  if (scopeError.value) mutationGeneration += 1
   openedName.value = null
   deleteConfirm.value = false
   revealed.value = null
@@ -54,7 +60,7 @@ watch([context.selectionPending, scopeError], () => {
   mutationResult.value = null
   revealGeneration += 1
 }, { flush: 'sync' })
-onBeforeUnmount(() => { revealGeneration += 1; revealed.value = null; createValue.value = ''; if (fpTimer) clearTimeout(fpTimer) })
+onBeforeUnmount(() => { revealGeneration += 1; mutationGeneration += 1; revealed.value = null; createValue.value = ''; if (fpTimer) clearTimeout(fpTimer) })
 
 function revealFp() {
   fpShown.value = !fpShown.value
@@ -100,6 +106,8 @@ function hideSecret(id: string) {
 async function createSecret() {
   if (!canCreate.value) return
   const scope = context.project.value
+  const generation = ++mutationGeneration
+  mutationResult.value = null
   const value = createValue.value
   createValue.value = ''
   const result = await runCreateSecret({
@@ -108,12 +116,13 @@ async function createSecret() {
     project: createProject.value.trim(),
     scope: 'project',
   })
-  if (scope !== context.project.value || context.selectionPending.value || scopeError.value) return
-  mutationResult.value = result
-  if (result.kind !== 'committed_verified') return
+  if (generation !== mutationGeneration || scope !== context.project.value || context.selectionPending.value || scopeError.value) return
+  if (result.kind !== 'committed_verified') { mutationResult.value = result; return }
   createName.value = ''
   createValue.value = ''
   await refresh()
+  if (generation !== mutationGeneration || scope !== context.project.value || context.selectionPending.value || scopeError.value) return
+  mutationResult.value = result
 }
 
 async function deleteOpened() {
@@ -125,14 +134,17 @@ async function deleteOpened() {
 
   const cred = selected.value
   const scope = context.project.value
+  const generation = ++mutationGeneration
+  mutationResult.value = null
   const result = await deleteSecret(cred)
-  if (scope !== context.project.value || context.selectionPending.value || scopeError.value) return
-  mutationResult.value = result
-  if (result.kind !== 'committed_verified') return
+  if (generation !== mutationGeneration || scope !== context.project.value || context.selectionPending.value || scopeError.value) return
+  if (result.kind !== 'committed_verified') { mutationResult.value = result; return }
   openedName.value = null
   deleteConfirm.value = false
   hideSecret(cred.id)
   await refresh()
+  if (generation !== mutationGeneration || scope !== context.project.value || context.selectionPending.value || scopeError.value) return
+  mutationResult.value = result
 }
 
 async function requestDelete(cred: OperatorCredential) {

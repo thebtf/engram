@@ -372,6 +372,10 @@ source/target projects and `source_agent=human`; list filters apply before pagin
 counts. Vault fixtures retain exact project/name binding, explicit `scope=global`
 without `project`, and UUID/null `project_id` metadata. Values are returned only by
 the explicit reveal reader, never catalog, history or mutation readback metadata.
+Verified Vault create/delete notices are published after the credential and catalog
+refresh settles in the original scope. Scope, authentication, error or page-lifetime
+changes invalidate the in-flight notice; a catalog reset alone does not redirect a
+global credential operation to the selected project.
 
 
 Memory and document inventories require `project=<exact selected canonical ID>`.
