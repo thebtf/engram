@@ -130,8 +130,11 @@ test("OMP manifest resolves its script from the plugin root independently of the
   assert.equal(codexPlugin.version, claudePlugin.version);
   assert.equal(claudeMarketplace.version, claudePlugin.version);
   assert.equal(claudeMarketplace.plugins[0].version, claudePlugin.version);
-  assert.equal(ompMarketplace.version, claudePlugin.version);
-  assert.equal(ompMarketplace.plugins[0].version, claudePlugin.version);
+  assert.equal(ompMarketplace.plugins[0].version, ompMarketplace.version);
+  assert.equal(ompMarketplace.plugins[0].source.ref, `v${ompMarketplace.version}`);
+  assert.equal(ompMarketplace.plugins[0].source.source, "git-subdir");
+  assert.equal(ompMarketplace.plugins[0].source.path, "plugin/engram");
+  assert.match(ompMarketplace.plugins[0].source.sha, /^[0-9a-f]{40}$/);
 });
 
 test("Claude MCP config preserves host argv via the package-root wrapper path", () => {

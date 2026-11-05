@@ -14,7 +14,13 @@
       "author": {
         "name": "thebtf"
       },
-      "source": "./plugin/engram",
+      "source": {
+        "source": "git-subdir",
+        "url": "thebtf/engram",
+        "path": "plugin/engram",
+        "ref": "v7.0.22",
+        "sha": "d8404bdaac8c48c55ff441913fedcdb1683afb9f"
+      },
       "category": "productivity"
     }
   ]
