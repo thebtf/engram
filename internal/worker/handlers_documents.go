@@ -774,6 +774,17 @@ func (s *Service) handleCreateDocument(w http.ResponseWriter, r *http.Request) {
 		id, err = store.Create(r.Context(), path, project, content, docType, metadata, author)
 	}
 	if err != nil {
+		if hasDocumentID && hasExpectedVersion {
+			var refusal *gormdb.ConsolidationError
+			if errors.As(err, &refusal) && refusal.Code == "PROJECT_ADOPTION_STALE_MAPPING" {
+				writeDocumentError(w, http.StatusConflict, "DOCUMENT_PROVENANCE_INVALID")
+				return
+			}
+			if errors.Is(err, gormdb.ErrDocumentProvenanceUnavailable) {
+				writeDocumentError(w, http.StatusServiceUnavailable, "DOCUMENT_PROVENANCE_UNAVAILABLE")
+				return
+			}
+		}
 		if errors.Is(err, gormdb.ErrDocumentVersionStale) || errors.Is(err, gormdb.ErrDocumentLineageAmbiguous) {
 			writeDocumentError(w, http.StatusConflict, "document lineage or version conflict; select the latest document_id from the list")
 			return

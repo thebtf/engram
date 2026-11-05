@@ -645,28 +645,17 @@ func (s *ProjectConsolidationStore) retainedMemberships(tx *gormlib.DB, rows []c
 	 ON m.table_name=x.table_name AND m.row_key=x.row_key ORDER BY m.reference`, string(raw)).Scan(&retained).Error; err != nil {
 		return nil, err
 	}
+	members, err := membershipEvidence(tx, retained)
+	if err != nil {
+		return nil, err
+	}
+	validated := make(map[string]bool, len(members))
 	for _, member := range retained {
 		if err := consolidationNormalizeMembership(&member); err != nil {
 			return nil, err
 		}
-		var path []string
-		_ = json.Unmarshal(member.FieldPath, &path)
-		var nested []string
-		if len(path) > 1 {
-			nested = path[1:]
-		}
-		ref := s.opaque("row", struct {
-			Table, Column string
-			Key           JSONRaw
-			Path          []string
-		}{member.Table, path[0], member.SourceRowKey, nested})
-		if ref != member.Reference || member.PlanFingerprint == "" || member.NativeVersion == "" || member.SourceSnapshot == "" {
-			return nil, consolidationHold("STALE_MAPPING")
-		}
-		if member.ProjectID == nil {
-			if _, _, err := s.unresolvedMembershipMetadata(&member); err != nil {
-				return nil, err
-			}
+		if err := s.validateLoadedMembershipEvidence(member, members, validated); err != nil {
+			return nil, err
 		}
 		occurrence := consolidationOccurrenceKey(member.Table, member.RowKey, member.FieldPath)
 		if _, duplicate := bindings.occurrences[occurrence]; duplicate {
