@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -23,6 +24,10 @@ func projectRecoveryStatusError(status int) error {
 // projectRecoveryGET follows the installed client's TLS trust configuration and
 // never forwards credentials through an HTTP redirect or an inherited proxy.
 func projectRecoveryGET(ctx context.Context, endpoint *url.URL, token string) (*http.Response, func(), error) {
+	return projectRecoveryRequest(ctx, endpoint, token, http.MethodGet, nil)
+}
+
+func projectRecoveryRequest(ctx context.Context, endpoint *url.URL, token, method string, body io.Reader) (*http.Response, func(), error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
@@ -49,9 +54,12 @@ func projectRecoveryGET(ctx context.Context, endpoint *url.URL, token string) (*
 			return http.ErrUseLastResponse
 		},
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL.String(), nil)
+	request, err := http.NewRequestWithContext(ctx, method, requestURL.String(), body)
 	if err != nil {
 		return nil, nil, logicalError("PROJECT_RESOLUTION_UNAVAILABLE")
+	}
+	if body != nil {
+		request.Header.Set("Content-Type", "application/json")
 	}
 	if token != "" {
 		request.Header.Set("Authorization", "Bearer "+token)

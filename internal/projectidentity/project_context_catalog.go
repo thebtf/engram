@@ -67,7 +67,7 @@ func skipRecoveryCatalogValue(decoder *json.Decoder, depth int, foldKeys bool) b
 				return false
 			}
 			seen[name] = true
-			if !skipRecoveryCatalogValue(decoder, depth+1, false) {
+			if !skipRecoveryCatalogValue(decoder, depth+1, foldKeys) {
 				return false
 			}
 		}
@@ -75,7 +75,7 @@ func skipRecoveryCatalogValue(decoder *json.Decoder, depth int, foldKeys bool) b
 		return err == nil && end == json.Delim('}')
 	case json.Delim('['):
 		for decoder.More() {
-			if !skipRecoveryCatalogValue(decoder, depth+1, false) {
+			if !skipRecoveryCatalogValue(decoder, depth+1, foldKeys) {
 				return false
 			}
 		}
@@ -289,34 +289,9 @@ func (*RepositoryCandidatesUnknownError) Unwrap() error {
 // ResolveRepositoryProject checks one normalized primary origin through the
 // server's existing read-only resolver. Conflict is never treated as absence.
 func ResolveRepositoryProject(ctx context.Context, serverURL, token, locator string) (Project, bool, error) {
-	if err := ValidateRepositoryLocator(locator); err != nil {
-		return Project{}, false, err
-	}
-	endpoint, err := url.Parse(strings.TrimRight(serverURL, "/") + "/api/projects/resolve")
-	if err != nil || endpoint.User != nil || endpoint.Host == "" || endpoint.RawQuery != "" || endpoint.Fragment != "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") {
-		return Project{}, false, logicalError("PROJECT_RESOLUTION_UNAVAILABLE")
-	}
-	query := endpoint.Query()
-	query.Set("repository_locator", locator)
-	endpoint.RawQuery = query.Encode()
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	response, release, err := projectRecoveryGET(ctx, endpoint, token)
+	inspection, err := resolveRepositoryInspection(ctx, serverURL, token, locator)
 	if err != nil {
 		return Project{}, false, err
-	}
-	defer release()
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return Project{}, false, projectRecoveryStatusError(response.StatusCode)
-	}
-	raw, err := io.ReadAll(io.LimitReader(response.Body, 4097))
-	if err != nil || len(raw) > 4096 {
-		return Project{}, false, logicalError("PROJECT_RESOLUTION_UNAVAILABLE")
-	}
-	var inspection ProjectInspection
-	if json.Unmarshal(raw, &inspection) != nil || inspection.Validate() != nil {
-		return Project{}, false, logicalError("PROJECT_IDENTITY_INVALID")
 	}
 	switch inspection.Status {
 	case "unbound":
@@ -334,4 +309,46 @@ func ResolveRepositoryProject(ctx context.Context, serverURL, token, locator str
 	default:
 		return Project{}, false, logicalError("PROJECT_IDENTITY_CONFLICT")
 	}
+}
+
+func resolveRepositoryInspection(ctx context.Context, serverURL, token, locator string) (ProjectInspection, error) {
+	if err := ValidateRepositoryLocator(locator); err != nil {
+		return ProjectInspection{}, err
+	}
+	endpoint, err := url.Parse(strings.TrimRight(serverURL, "/") + "/api/projects/resolve")
+	if err != nil || endpoint.User != nil || endpoint.Host == "" || endpoint.RawQuery != "" || endpoint.Fragment != "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") {
+		return ProjectInspection{}, logicalError("PROJECT_RESOLUTION_UNAVAILABLE")
+	}
+	query := endpoint.Query()
+	query.Set("repository_locator", locator)
+	endpoint.RawQuery = query.Encode()
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	response, release, err := projectRecoveryGET(ctx, endpoint, token)
+	if err != nil {
+		return ProjectInspection{}, err
+	}
+	defer release()
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return ProjectInspection{}, projectRecoveryStatusError(response.StatusCode)
+	}
+	raw, err := io.ReadAll(io.LimitReader(response.Body, 4097))
+	if err != nil || len(raw) > 4096 || !utf8.Valid(raw) {
+		return ProjectInspection{}, logicalError("PROJECT_RESOLUTION_UNAVAILABLE")
+	}
+	check := json.NewDecoder(bytes.NewReader(raw))
+	if !skipRecoveryCatalogValue(check, 0, true) {
+		return ProjectInspection{}, logicalError("PROJECT_IDENTITY_INVALID")
+	}
+	if _, err := check.Token(); err != io.EOF {
+		return ProjectInspection{}, logicalError("PROJECT_IDENTITY_INVALID")
+	}
+	var inspection ProjectInspection
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&inspection) != nil || inspection.Validate() != nil {
+		return ProjectInspection{}, logicalError("PROJECT_IDENTITY_INVALID")
+	}
+	return inspection, nil
 }
