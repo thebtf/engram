@@ -256,7 +256,7 @@ guarantee that arbitrary application logs contain no other secrets.
 
 ### Knowledge readers
 
-`GET /api/projects` returns `{items:[{project_id,name,display_name,repository_qualifier?}],unresolved:[{reference,name,reason,reader_kinds}]}`.
+`GET /api/projects` returns `{items:[{project_id,name,display_name,repository_qualifier?}],unresolved:[{reference,name,reason,reader_kinds}],logical_groups:[{primary_project_id,alias_project_ids}]}`.
 `items` contains live canonical `projects` rows, not session labels or legacy
 selectors. `project_id` is the canonical UUID; `name` is a human label that falls
 back to `Registered project` when missing or blank. `display_name` is always
@@ -265,6 +265,9 @@ present and is the exact stored string or JSON null, without that fallback. The 
 distinct UUIDs. Existing ordinary authenticated readers retain their server-wide project
 scope. HAP project/legacy credentials remain forbidden by the existing route
 policy. The catalog response is `private, no-store`, never publicly cached.
+This server always emits `logical_groups` as an array, including `[]` when no
+groups exist. Older servers may omit it; an already feature-aware client must not
+silently downgrade if it disappears. The relation is not an authorization grant.
 
 `PATCH /api/projects/{id}` changes only the stored label of an existing active,
 non-removed canonical UUID. It requires the server's operator/admin identity;
@@ -289,6 +292,14 @@ precondition, so this endpoint refuses their rename rather than prevent rollback
 Each entry has an opaque `reference`, display `name`, `reason`, and `reader_kinds`
 identifying retained `memory`, `document`, `issue` or `code` data. This metadata
 neither verifies retained content nor grants reader access.
+
+Administrators explicitly attach confirmed UUID aliases through
+`POST /api/projects/consolidation/aliases/prepare`,
+`POST /api/projects/consolidation/aliases/apply`,
+`GET /api/projects/consolidation/aliases/status` and
+`POST /api/projects/consolidation/aliases/rollback`. See
+[Explicit project aliases](../operating-engram.md#explicit-project-aliases) for
+request and response semantics, database identity limits and unknown-outcome handling.
 
 #### Bounded retained-record discovery
 
@@ -396,8 +407,8 @@ unrestricted; one value is the scalar subset. Each parameter accepts at most
 six raw values before deduplication and validates every value, including later
 ones. Blank/control/malformed UTF-8 values are 400. Document values retain the
 128-byte raw UTF-8 bound and Unicode whitespace trimming; comma-containing
-types are literal values, not CSV. Types apply after latest-version-per-path
-selection, so matching only an older version never admits the document.
+types are literal values, not CSV. Types apply after latest-version selection per
+native `(project,path)` lineage, so matching only an older version never admits it.
 
 `GET /api/memories/:id?project=<exact live canonical ID>` requires the same
 fresh project authorization and uniquely owned alias set before loading the ID.
@@ -417,15 +428,34 @@ Audit validation errors (invalid ID, malformed query, missing/invalid project or
 limit) use plain-text 400 bodies; project authorization uses a JSON error object
 with status 403, matching the existing OpenAPI response schemas.
 
-Documents select the latest version of each path **before** filtering. Search is
+Documents select the latest version of each native `(project,path)` lineage
+**before** filtering, without merging independent same-path histories. Search is
 limited to public list metadata (`path`, `doc_type`, `author`), not content,
 arbitrary JSON metadata or secrets. `doc_type` (128 bytes) and literal
 `path_prefix` (4096 bytes) remain supported; ordering is `created_at DESC, id DESC`.
-Document content/version/history shapes and comments are unchanged. Content,
-version and history reads use the same exact live canonical project and lawful
-stored alias set as list/count. The current document schema has no independent
+Content and history reads use the same exact live canonical project and lawful
+read scope as list/count. The current document schema has no independent
 principal/privacy ACL: its reader boundary is the existing authenticated
 project-reader scope.
+
+`GET /api/documents/read` and `/api/documents/history` accept an optional positive
+`document_id` query parameter issued by list to select a lineage for the requested
+`project` and `path`; read also accepts its existing optional `version`. Without
+an ID, the requested native lineage wins, then a single authorized lineage;
+ambiguity returns 409. A version-write `POST /api/documents` may supply positive
+`document_id` and `expected_version` together to bind the latest version of that
+lineage; stale, foreign or mismatched targets are refused.
+
+`POST /api/documents/comment` and `GET /api/documents/comments` require
+`document_id`; scoped calls additionally supply `project` and positive
+`expected_version` together, identifying the exact selected history row, not
+necessarily the latest. For scoped export, selection snapshot/current requests
+and `POST /api/documents` with `action: export` carry `project`; explicit
+selection targets carry `id` and `expected_version`. Execution and the unchanged
+`/api/documents/exports/{id}` download reauthorize stored targets. Authenticated
+legacy calls omitting project retain their existing server-wide ID-addressed
+branch; a supplied scope that fails does not fall back to it. See the linked
+operator guidance for the complete contracts and no-replay boundary.
 
 Missing/blank project or invalid parameters: 400. Noncanonical, missing, removed
 project or forbidden credential: nondisclosing 403. Authentication remains 401;
@@ -434,14 +464,13 @@ Offsets are stable only while the dataset is unchanged, not snapshot/cursor
 tokens. An explicit UI “All projects” context uses descriptor IDs; empty project
 never widens server reads and does not trigger an automatic content scan.
 
-Stored legacy TEXT projects are readable only when the live canonical row's
-existing `legacy_ids` maps each selector uniquely back to that same ID. Aliases
-claimed by another, removed or merged project are excluded. Canonical descriptors
-come from `projects`, including memory-only/document-only registered projects,
-not from sessions or label grouping. Unregistered orphan TEXT rows have no lawful
-catalog ID and remain untouched; this reader cannot register or infer one.
-No orphan endpoint, migration, raw-selector fallback or automatic registration
-is introduced. Existing authorized data diagnostics are separate from this API.
+For memory and document rows, authoritative consolidation membership overrides
+the native project selector; conflicting or unassigned memberships fail closed.
+Without membership, native project matching applies. Confirmed unambiguous,
+active UUID redirects expand the logical read scope without changing write
+authority or stored provenance. Canonical descriptors come from `projects`,
+not from session labels or inferred name grouping. Unregistered orphan TEXT rows
+without authoritative membership remain outside these canonical readers.
 
 For real-API preview, compose this backend with the UI envelope consumers and an
 existing authorized database. No migration, provider or identity onboarding is
