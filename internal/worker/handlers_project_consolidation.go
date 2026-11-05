@@ -83,6 +83,116 @@ func decodeConsolidationRequest(w http.ResponseWriter, r *http.Request, value an
 	return true
 }
 
+func projectAliasHTTPError(w http.ResponseWriter, err error) {
+	status, code := http.StatusServiceUnavailable, "PROJECT_ALIAS_UNAVAILABLE"
+	message := "Alias service unavailable; retain the operation key and check status before any further action."
+	var refusal *dbgorm.ConsolidationError
+	switch {
+	case errors.Is(err, gormlib.ErrRecordNotFound):
+		status, code = http.StatusNotFound, "PROJECT_ALIAS_NOT_RECORDED"
+		message = "No operation is recorded as of this check. The request may still be in flight; retain the original key and check again."
+	case errors.As(err, &refusal):
+		code = refusal.Code
+		switch refusal.Code {
+		case "PROJECT_ADOPTION_AUTH_REQUIRED":
+			status, message = http.StatusForbidden, "Administrator authorization is required."
+		case "PROJECT_ADOPTION_INVENTORY_INCOMPLETE", "PROJECT_ADOPTION_BACKUP_MISSING":
+			status, message = http.StatusServiceUnavailable, "Alias service unavailable; retain the operation key and check status before any further action."
+		case "PROJECT_ADOPTION_UNKNOWN_REFERENCE":
+			status, message = http.StatusBadRequest, "The alias request is invalid; select existing projects and retry preparation."
+		default:
+			status, message = http.StatusConflict, "Alias state changed or conflicts with this request; review the current catalog and prepare again. For an unknown operation outcome, retain its original key and check status."
+		}
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSONStatus(w, status, map[string]string{"code": code, "message": message})
+}
+
+func (s *Service) projectAliasStore(w http.ResponseWriter, r *http.Request) (*dbgorm.ProjectConsolidationStore, string) {
+	identity, ok := auth.IdentityFrom(r.Context())
+	if !ok || !identity.IsAdmin() {
+		projectAliasHTTPError(w, &dbgorm.ConsolidationError{Code: "PROJECT_ADOPTION_AUTH_REQUIRED"})
+		return nil, ""
+	}
+	if s.store == nil || s.store.DB == nil || s.vault == nil {
+		projectAliasHTTPError(w, &dbgorm.ConsolidationError{Code: "PROJECT_ADOPTION_INVENTORY_INCOMPLETE"})
+		return nil, ""
+	}
+	actor, _ := configAuditIdentity(r.Context())
+	if subject, found := identity.SessionBrowserSubject(); found {
+		actor = string(identity.Source) + ":human:" + subject.Principal
+	}
+	return dbgorm.NewProjectConsolidationStore(s.store.DB, s.vault, nil), actor
+}
+
+func (s *Service) handleProjectAliasPrepare(w http.ResponseWriter, r *http.Request) {
+	store, _ := s.projectAliasStore(w, r)
+	if store == nil {
+		return
+	}
+	var request dbgorm.ProjectAliasAttachRequest
+	if !decodeConsolidationRequest(w, r, &request) {
+		return
+	}
+	plan, err := store.PrepareProjectAliases(r.Context(), request)
+	if err != nil {
+		projectAliasHTTPError(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, plan)
+}
+
+func (s *Service) handleProjectAliasApply(w http.ResponseWriter, r *http.Request) {
+	store, actor := s.projectAliasStore(w, r)
+	if store == nil {
+		return
+	}
+	var request dbgorm.ProjectAliasApplyRequest
+	if !decodeConsolidationRequest(w, r, &request) {
+		return
+	}
+	receipt, err := store.ApplyProjectAliases(r.Context(), request, actor)
+	if err != nil {
+		projectAliasHTTPError(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, receipt)
+}
+
+func (s *Service) handleProjectAliasStatus(w http.ResponseWriter, r *http.Request) {
+	store, _ := s.projectAliasStore(w, r)
+	if store == nil {
+		return
+	}
+	receipt, err := store.ProjectAliasStatus(r.Context(), r.URL.Query().Get("idempotency_key"))
+	if err != nil {
+		projectAliasHTTPError(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, receipt)
+}
+
+func (s *Service) handleProjectAliasRollback(w http.ResponseWriter, r *http.Request) {
+	store, actor := s.projectAliasStore(w, r)
+	if store == nil {
+		return
+	}
+	var request dbgorm.ProjectAliasRollbackRequest
+	if !decodeConsolidationRequest(w, r, &request) {
+		return
+	}
+	receipt, err := store.RollbackProjectAliases(r.Context(), request, actor)
+	if err != nil {
+		projectAliasHTTPError(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, receipt)
+}
+
 func (s *Service) handleProjectConsolidationCensus(w http.ResponseWriter, r *http.Request) {
 	store, cleanup, err := s.projectConsolidation(r, false)
 	if err != nil {
