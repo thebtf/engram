@@ -213,3 +213,73 @@ func TestRecallInvalidProjectNative(t *testing.T) {
 	require.NotNil(t, projectFree)
 	require.Nil(t, projectFree.Error, "the existing project-free recall response must remain available")
 }
+
+func TestRecallExplicitUUIDAliasNative(t *testing.T) {
+	store := openRecallProjectPrivacyStore(t)
+	target, source, other := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	require.NoError(t, store.DB.Create(&[]dbgorm.Project{{ID: target}, {ID: source}, {ID: other}}).Error)
+	row := dbgorm.Memory{Project: source, Content: "uuidaliasneedle authorized synthetic", Status: "active", PrivacyScope: "project", Version: 4}
+	hidden := dbgorm.Memory{Project: other, Content: "uuidaliasneedle unrelated synthetic", Status: "active", PrivacyScope: "project", Version: 1}
+	require.NoError(t, store.DB.Create(&row).Error)
+	require.NoError(t, store.DB.Create(&hidden).Error)
+	require.NoError(t, store.DB.Exec(`INSERT INTO project_consolidation_redirects(selector,session_id,project_id,plan_fingerprint) VALUES (?, '', ?, ?)`, source, target, "synthetic-alias").Error)
+	srv := NewServer(ServerOptions{Version: "synthetic-alias"})
+	srv.memoryStore = dbgorm.NewMemoryStore(store)
+	caller := auth.WithIdentity(t.Context(), auth.Identity{Role: auth.Role("admin"), Source: auth.SourceClient, KeycardID: "alias-ws"})
+	response := srv.HandleRequest(caller, &Request{JSONRPC: "2.0", ID: 1, Method: "tools/call", Params: mustJSON(t, map[string]any{"name": "recall", "arguments": map[string]any{"action": "search", "project": target, "query": "uuidaliasneedle", "limit": 10}})})
+	require.NotNil(t, response)
+	require.Nil(t, response.Error)
+	raw, err := json.Marshal(response.Result)
+	require.NoError(t, err)
+	require.Contains(t, string(raw), row.Content)
+	require.NotContains(t, string(raw), hidden.Content)
+}
+
+func TestDocsExplicitUUIDAliasLineages(t *testing.T) {
+	store := openRecallProjectPrivacyStore(t)
+	target, source, other := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	require.NoError(t, store.DB.Create(&[]dbgorm.Project{{ID: target}, {ID: source}, {ID: other}}).Error)
+	docs := []dbgorm.VersionedDocument{
+		{Project: target, Path: "shared.md", Content: "target document", ContentHash: "target-hash", DocType: "markdown", Author: "test", Version: 1},
+		{Project: source, Path: "shared.md", Content: "source document", ContentHash: "source-hash", DocType: "markdown", Author: "test", Version: 1},
+		{Project: other, Path: "shared.md", Content: "foreign document", ContentHash: "foreign-hash", DocType: "markdown", Author: "test", Version: 1},
+	}
+	for i := range docs {
+		require.NoError(t, store.DB.Create(&docs[i]).Error)
+	}
+	require.NoError(t, store.DB.Exec(`INSERT INTO project_consolidation_redirects(selector,session_id,project_id,plan_fingerprint) VALUES (?, '', ?, ?)`, source, target, "synthetic-alias").Error)
+	srv := NewServer(ServerOptions{Version: "synthetic-document-alias"})
+	srv.SetVersionedDocumentStore(dbgorm.NewVersionedDocumentStore(store))
+	caller := auth.WithIdentity(t.Context(), auth.Identity{Role: auth.Role("admin"), Source: auth.SourceClient, KeycardID: "alias-ws"})
+	call := func(action string, id int64) *Response {
+		args := map[string]any{"action": action, "project": target, "path": "shared.md"}
+		if id != 0 {
+			args["document_id"] = id
+		}
+		return srv.HandleRequest(caller, &Request{JSONRPC: "2.0", ID: 1, Method: "tools/call", Params: mustJSON(t, map[string]any{"name": "docs", "arguments": args})})
+	}
+	for i := 0; i < 2; i++ {
+		response := call("read", docs[i].ID)
+		require.NotNil(t, response)
+		require.Nil(t, response.Error)
+		raw, err := json.Marshal(response.Result)
+		require.NoError(t, err)
+		require.Contains(t, string(raw), docs[i].Content)
+		response = call("history", docs[i].ID)
+		require.NotNil(t, response)
+		require.Nil(t, response.Error)
+		raw, err = json.Marshal(response.Result)
+		require.NoError(t, err)
+		require.Contains(t, string(raw), docs[i].ContentHash)
+		require.NotContains(t, string(raw), docs[1-i].ContentHash)
+	}
+	response := call("read", docs[2].ID)
+	require.NotNil(t, response)
+	require.NotNil(t, response.Error)
+	response = call("read", 0)
+	require.NotNil(t, response)
+	require.Nil(t, response.Error)
+	raw, err := json.Marshal(response.Result)
+	require.NoError(t, err)
+	require.Contains(t, string(raw), docs[0].Content)
+}

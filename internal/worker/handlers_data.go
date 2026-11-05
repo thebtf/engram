@@ -218,8 +218,9 @@ func (s *Service) handleGetObservations(w http.ResponseWriter, r *http.Request) 
 }
 
 type projectListResponse struct {
-	Items      []gorm.ProjectDescriptor `json:"items"`
-	Unresolved []gorm.UnresolvedProject `json:"unresolved"`
+	Items         []gorm.ProjectDescriptor   `json:"items"`
+	Unresolved    []gorm.UnresolvedProject   `json:"unresolved"`
+	LogicalGroups []gorm.LogicalProjectGroup `json:"logical_groups"`
 }
 
 // handleGetProjects godoc
@@ -275,7 +276,15 @@ func (s *Service) handleGetProjects(w http.ResponseWriter, r *http.Request) {
 		writeRetainedProjectError(w, err)
 		return
 	}
-	writeJSON(w, projectListResponse{Items: projects, Unresolved: unresolved})
+	groups, err := s.sessionStore.LogicalProjectGroups(r.Context(), projects)
+	if err != nil {
+		writeDocumentError(w, http.StatusInternalServerError, "project read unavailable")
+		return
+	}
+	if groups == nil {
+		groups = []gorm.LogicalProjectGroup{}
+	}
+	writeJSON(w, projectListResponse{Items: projects, Unresolved: unresolved, LogicalGroups: groups})
 }
 
 // handleGetTypes godoc

@@ -45,7 +45,28 @@ func (s *Server) handleDocCreate(ctx context.Context, args json.RawMessage) (str
 		return "", fmt.Errorf("project is required")
 	}
 
-	id, err := s.versionedDocumentStore.Create(ctx, path, project, content, docType, metadata, author)
+	var id int64
+	_, hasID := m["document_id"]
+	_, hasVersion := m["expected_version"]
+	if hasID != hasVersion {
+		return "", fmt.Errorf("document_id and expected_version must be supplied together")
+	}
+	if hasID {
+		anchor, parseErr := parseDocumentLineageID(m)
+		if parseErr != nil {
+			return "", parseErr
+		}
+		expected, parseErr := requireInt64Arg(m, "expected_version")
+		if parseErr != nil {
+			return "", parseErr
+		}
+		if expected <= 0 || expected > int64(math.MaxInt) {
+			return "", fmt.Errorf("expected_version must be a positive integer")
+		}
+		id, err = s.versionedDocumentStore.CreateVersionForLineage(ctx, path, project, content, docType, metadata, author, anchor, int(expected))
+	} else {
+		id, err = s.versionedDocumentStore.Create(ctx, path, project, content, docType, metadata, author)
+	}
 	if err != nil {
 		return "", fmt.Errorf("doc_create: %w", err)
 	}
@@ -83,15 +104,19 @@ func (s *Server) handleDocRead(ctx context.Context, args json.RawMessage) (strin
 		return "", fmt.Errorf("project is required")
 	}
 
+	anchor, err := parseDocumentLineageID(m)
+	if err != nil {
+		return "", err
+	}
 	version, present, err := parseDocumentVersion(m)
 	if err != nil {
 		return "", err
 	}
 	var doc *gormpkg.VersionedDocument
 	if present {
-		doc, err = s.versionedDocumentStore.ReadVersion(ctx, path, project, version)
+		doc, err = s.versionedDocumentStore.ReadVersionForLineage(ctx, path, project, version, anchor)
 	} else {
-		doc, err = s.versionedDocumentStore.ReadLatest(ctx, path, project)
+		doc, err = s.versionedDocumentStore.ReadLatestForLineage(ctx, path, project, anchor)
 	}
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -198,8 +223,12 @@ func (s *Server) handleDocHistory(ctx context.Context, args json.RawMessage) (st
 	if err != nil {
 		return "", err
 	}
+	anchor, err := parseDocumentLineageID(m)
+	if err != nil {
+		return "", err
+	}
 
-	docs, err := s.versionedDocumentStore.GetHistory(ctx, path, project, limit)
+	docs, err := s.versionedDocumentStore.GetHistoryForLineage(ctx, path, project, limit, anchor)
 	if err != nil {
 		return "", fmt.Errorf("docs(action=history): %w", err)
 	}
@@ -233,6 +262,20 @@ func (s *Server) handleDocHistory(ctx context.Context, args json.RawMessage) (st
 		return "", fmt.Errorf("marshal result: %w", err)
 	}
 	return string(out), nil
+}
+
+func parseDocumentLineageID(m map[string]any) (int64, error) {
+	if _, present := m["document_id"]; !present {
+		return 0, nil
+	}
+	id, err := requireInt64Arg(m, "document_id")
+	if err != nil {
+		return 0, err
+	}
+	if id <= 0 {
+		return 0, fmt.Errorf("document_id must be a positive integer")
+	}
+	return id, nil
 }
 
 const documentQueryMaxLimit = 100

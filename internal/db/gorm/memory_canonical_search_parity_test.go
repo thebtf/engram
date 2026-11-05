@@ -252,3 +252,43 @@ func TestMemoryCanonicalSearchParity(t *testing.T) {
 		assert.Empty(t, rows)
 	})
 }
+
+func TestExplicitUUIDRedirectMemoryReads(t *testing.T) {
+	consolidationTestDatabaseConfig(t, os.Getenv("DATABASE_DSN"), "source")
+	db, _ := openInterventionReceiptMigrationTestDB(t)
+	ctx := t.Context()
+	selected, alias := sessionTestProject(t, db), sessionTestProject(t, db)
+	row := Memory{Project: alias, Content: "synthetic explicit UUID alias", Status: "active", PrivacyScope: "project", Version: 1}
+	require.NoError(t, db.Create(&row).Error)
+	require.NoError(t, consolidationRedirect(db, alias, "", selected, "synthetic-explicit-alias"))
+	store := NewMemoryStore(&Store{DB: db})
+	caller := scope.KeycardContext{}
+	visibility := scope.MemoryVisibilityOptions{}
+	old, err := store.GetVisible(ctx, row.ID, alias, caller, visibility)
+	require.NoError(t, err)
+	require.Equal(t, row.Content, old.Content)
+	current, err := store.GetVisible(ctx, row.ID, selected, caller, visibility)
+	if assert.NoError(t, err, "explicit alias must join the current detail scope") {
+		assert.Equal(t, row.Content, current.Content)
+	}
+	rows, err := store.ListForSearch(ctx, selected, 50, scope.MemoryReadAccess{Caller: caller, Visibility: visibility})
+	require.NoError(t, err)
+	ids := make([]int64, 0, len(rows))
+	for _, item := range rows {
+		ids = append(ids, item.ID)
+	}
+	assert.Contains(t, ids, row.ID, "explicit alias must join the current search scope")
+	_, err = store.GetAuthorized(ctx, row.ID, MemoryMutationAccess{Project: selected, Caller: caller, RequireCanonicalProject: true})
+	require.Error(t, err, "read aliases must not broaden the existing mutation-authority predicate")
+	if current != nil {
+		ref := scope.MemoryReference(current)
+		matched, err := store.GetByRefsForSearch(ctx, selected, []scope.MemoryRef{ref}, scope.MemoryReadAccess{Caller: caller, Visibility: visibility})
+		require.NoError(t, err)
+		require.Len(t, matched, 1)
+		require.Equal(t, selected, matched[0].Project)
+		ref.ContentDigest = scope.MemoryContentDigest("wrong content")
+		matched, err = store.GetByRefsForSearch(ctx, selected, []scope.MemoryRef{ref}, scope.MemoryReadAccess{Caller: caller, Visibility: visibility})
+		require.NoError(t, err)
+		require.Empty(t, matched)
+	}
+}

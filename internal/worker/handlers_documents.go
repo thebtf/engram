@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/projectidentity"
 	gormlib "gorm.io/gorm"
 )
 
@@ -35,6 +36,13 @@ type versionedDocumentStore interface {
 	GetHistory(ctx context.Context, path, project string, limit int) ([]gormdb.VersionedDocument, error)
 	AddComment(ctx context.Context, documentID int64, author, content string, lineStart, lineEnd *int) (int64, error)
 	GetComments(ctx context.Context, documentID int64) ([]gormdb.VersionedDocumentComment, error)
+}
+
+type scopedDocumentStore interface {
+	ReadScopedDocument(context.Context, string, int64, int) (*gormdb.VersionedDocument, error)
+	AddScopedComment(context.Context, string, int64, int, string, string, *int, *int) (int64, error)
+	GetScopedComments(context.Context, string, int64, int) ([]gormdb.VersionedDocumentComment, error)
+	WithScopedDocuments(context.Context, string, []gormdb.CollectionSelectionTarget, func([]gormdb.VersionedDocument) error) error
 }
 
 type documentSelectionStore interface {
@@ -111,15 +119,18 @@ type documentCommentsResponse struct {
 }
 
 type documentCreateRequest struct {
-	Path      string                      `json:"path"`
-	Project   string                      `json:"project"`
-	Content   string                      `json:"content"`
-	DocType   string                      `json:"doc_type"`
-	Metadata  string                      `json:"metadata"`
-	Author    string                      `json:"author"`
-	RequestID string                      `json:"request_id,omitempty"`
-	Action    string                      `json:"action,omitempty"`
-	Selection *documentOperationSelection `json:"selection,omitempty"`
+	Path            string                      `json:"path"`
+	Project         string                      `json:"project,omitempty"`
+	Content         string                      `json:"content"`
+	DocType         string                      `json:"doc_type"`
+	Metadata        string                      `json:"metadata"`
+	Author          string                      `json:"author"`
+	DocumentID      *int64                      `json:"document_id,omitempty"`
+	ExpectedVersion *int                        `json:"expected_version,omitempty"`
+	RequestID       string                      `json:"request_id,omitempty"`
+	Action          string                      `json:"action,omitempty"`
+	Selection       *documentOperationSelection `json:"selection,omitempty"`
+	projectSupplied bool
 }
 
 type documentOperationSelection struct {
@@ -162,6 +173,8 @@ type documentExportArtifact struct {
 	contentType string
 	scope       gormdb.CollectionSelectionScope
 	expiresAt   time.Time
+	project     string
+	targets     []gormdb.CollectionSelectionTarget
 }
 
 type documentExportPayload struct {
@@ -224,6 +237,30 @@ func documentSelectionScope(r *http.Request) (gormdb.CollectionSelectionScope, e
 	return scope, nil
 }
 
+func documentSelectionProjectScope(r *http.Request, project *string) (gormdb.CollectionSelectionScope, error) {
+	scope, err := documentSelectionScope(r)
+	if err != nil || project == nil {
+		return scope, err
+	}
+	if !projectidentity.ValidProjectID(*project) {
+		return gormdb.CollectionSelectionScope{}, gormdb.ErrCollectionSelectionInvalid
+	}
+	digest := sha256.Sum256([]byte("document-project-scope/v1\x00" + scope.ContextFingerprint + "\x00" + *project))
+	scope.ContextFingerprint = fmt.Sprintf("sha256:%x", digest)
+	return scope, nil
+}
+
+func parseOptionalDocumentProject(raw json.RawMessage) (*string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var value string
+	if json.Unmarshal(raw, &value) != nil || !projectidentity.ValidProjectID(value) {
+		return nil, gormdb.ErrCollectionSelectionInvalid
+	}
+	return &value, nil
+}
+
 func validDocumentSelectionProject(project string) bool {
 	return operatorCodeText(project)
 }
@@ -273,7 +310,7 @@ func (s *Service) documentSelectionTargets(ctx context.Context, project string) 
 	return targets, nil
 }
 
-func (s *Service) documentSelectionExplicitTargets(ctx context.Context, requested []gormdb.CollectionSelectionTarget) ([]gormdb.CollectionSelectionTarget, error) {
+func (s *Service) documentSelectionExplicitTargets(ctx context.Context, project *string, requested []gormdb.CollectionSelectionTarget) ([]gormdb.CollectionSelectionTarget, error) {
 	if len(requested) == 0 || len(requested) > gormdb.CollectionSelectionMaxTargets {
 		return nil, gormdb.ErrCollectionSelectionInvalid
 	}
@@ -285,19 +322,31 @@ func (s *Service) documentSelectionExplicitTargets(ctx context.Context, requeste
 	seen := make(map[int64]struct{}, len(requested))
 	for _, target := range requested {
 		id, err := strconv.ParseInt(target.ID, 10, 64)
-		if err != nil || id < 1 || target.ExpectedVersion == 0 {
+		if err != nil || id < 1 || target.ExpectedVersion == 0 || target.ExpectedVersion > uint64(^uint(0)>>1) {
 			return nil, gormdb.ErrCollectionSelectionInvalid
 		}
 		if _, duplicate := seen[id]; duplicate {
 			return nil, gormdb.ErrCollectionSelectionInvalid
 		}
 		seen[id] = struct{}{}
-		document, err := store.ReadByID(ctx, id)
-		if errors.Is(err, gormlib.ErrRecordNotFound) || document == nil {
+		var document *gormdb.VersionedDocument
+		if project != nil {
+			scoped, ok := store.(scopedDocumentStore)
+			if !ok {
+				return nil, errors.New("scoped document store unavailable")
+			}
+			document, err = scoped.ReadScopedDocument(ctx, *project, id, int(target.ExpectedVersion))
+		} else {
+			document, err = store.ReadByID(ctx, id)
+		}
+		if errors.Is(err, gormlib.ErrRecordNotFound) || errors.Is(err, gormdb.ErrKnowledgeProjectForbidden) {
 			return nil, gormdb.ErrCollectionSelectionDenied
 		}
 		if err != nil {
 			return nil, err
+		}
+		if document == nil {
+			return nil, gormdb.ErrCollectionSelectionDenied
 		}
 		if document.Version != int(target.ExpectedVersion) {
 			return nil, gormdb.ErrCollectionSelectionReconfirmationRequired
@@ -387,12 +436,20 @@ func writeDocumentSelectionError(w http.ResponseWriter, err error) {
 }
 
 func (s *Service) handleDocumentSelectionSnapshot(w http.ResponseWriter, r *http.Request) {
-	var request operatorCollectionSnapshotRequest
+	var request struct {
+		operatorCollectionSnapshotRequest
+		Project json.RawMessage `json:"project,omitempty"`
+	}
 	if !operatorCodeText(r.Header.Get(engramRequestIDHeader)) || json.NewDecoder(r.Body).Decode(&request) != nil || request.Domain != documentSelectionDomain {
 		writeDocumentError(w, http.StatusBadRequest, documentSelectionInvalidMessage)
 		return
 	}
-	scope, err := documentSelectionScope(r)
+	project, err := parseOptionalDocumentProject(request.Project)
+	if err != nil {
+		writeDocumentSelectionError(w, err)
+		return
+	}
+	scope, err := documentSelectionProjectScope(r, project)
 	if err != nil {
 		writeDocumentSelectionError(w, err)
 		return
@@ -405,11 +462,15 @@ func (s *Service) handleDocumentSelectionSnapshot(w http.ResponseWriter, r *http
 	switch selection.Kind {
 	case gormdb.CollectionSelectionNone:
 	case gormdb.CollectionSelectionExplicit:
-		selection.Targets, err = s.documentSelectionExplicitTargets(r.Context(), selection.Targets)
+		selection.Targets, err = s.documentSelectionExplicitTargets(r.Context(), project, selection.Targets)
 	case gormdb.CollectionSelectionPage:
 		cursor, decodeErr := documentSelectionPageCursorDecode(selection.Cursor)
 		if decodeErr != nil {
 			err = decodeErr
+			break
+		}
+		if project != nil && cursor.Project != *project {
+			err = gormdb.ErrCollectionSelectionInvalid
 			break
 		}
 		page, pageErr := s.documentSelectionPage(r.Context(), cursor.Project, selection.Cursor, cursor.Limit)
@@ -423,10 +484,14 @@ func (s *Service) handleDocumentSelectionSnapshot(w http.ResponseWriter, r *http
 			err = gormdb.ErrCollectionSelectionInvalid
 			break
 		}
-		project := request.Selection.Filter.Scope
-		selection.Targets, err = s.documentSelectionTargets(r.Context(), project)
+		filterProject := request.Selection.Filter.Scope
+		if project != nil && filterProject != *project {
+			err = gormdb.ErrCollectionSelectionInvalid
+			break
+		}
+		selection.Targets, err = s.documentSelectionTargets(r.Context(), filterProject)
 		if err == nil {
-			selection.FilterFingerprint = documentSelectionFilterFingerprint(project)
+			selection.FilterFingerprint = documentSelectionFilterFingerprint(filterProject)
 			selection.ExpiresAt = time.Now().UTC().Add(15 * time.Minute)
 		}
 	default:
@@ -454,12 +519,20 @@ func (s *Service) handleDocumentSelectionSnapshot(w http.ResponseWriter, r *http
 }
 
 func (s *Service) handleDocumentSelectionCurrent(w http.ResponseWriter, r *http.Request) {
-	var request operatorCollectionCurrentRequest
+	var request struct {
+		operatorCollectionCurrentRequest
+		Project json.RawMessage `json:"project,omitempty"`
+	}
 	if !operatorCodeText(r.Header.Get(engramRequestIDHeader)) || json.NewDecoder(r.Body).Decode(&request) != nil || request.Domain != documentSelectionDomain {
 		writeDocumentError(w, http.StatusBadRequest, documentSelectionInvalidMessage)
 		return
 	}
-	scope, err := documentSelectionScope(r)
+	project, err := parseOptionalDocumentProject(request.Project)
+	if err != nil {
+		writeDocumentSelectionError(w, err)
+		return
+	}
+	scope, err := documentSelectionProjectScope(r, project)
 	if err != nil {
 		writeDocumentSelectionError(w, err)
 		return
@@ -629,11 +702,18 @@ func (s *Service) handleCreateDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var raw json.RawMessage
 	var req documentCreateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil || json.Unmarshal(raw, &req) != nil {
 		writeDocumentError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
+	var supplied map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &supplied); err != nil {
+		writeDocumentError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	_, req.projectSupplied = supplied["project"]
 	if req.Action != "" {
 		s.handleDocumentSelectionOperation(w, r, &req)
 		return
@@ -642,6 +722,9 @@ func (s *Service) handleCreateDocument(w http.ResponseWriter, r *http.Request) {
 		writeDocumentError(w, http.StatusBadRequest, "document selection operation requires an action")
 		return
 	}
+	// Keep field presence distinct from null for ordinary version writes.
+	_, hasDocumentID := supplied["document_id"]
+	_, hasExpectedVersion := supplied["expected_version"]
 
 	path := strings.TrimSpace(req.Path)
 	project := strings.TrimSpace(req.Project)
@@ -672,8 +755,33 @@ func (s *Service) handleCreateDocument(w http.ResponseWriter, r *http.Request) {
 		author = "operator"
 	}
 
-	id, err := store.Create(r.Context(), path, project, content, docType, metadata, author)
+	var id int64
+	var err error
+	if hasDocumentID || hasExpectedVersion {
+		if req.DocumentID == nil || req.ExpectedVersion == nil || *req.DocumentID <= 0 || *req.ExpectedVersion <= 0 {
+			writeDocumentError(w, http.StatusBadRequest, "document_id and expected_version must be positive and supplied together")
+			return
+		}
+		writer, ok := store.(interface {
+			CreateVersionForLineage(context.Context, string, string, string, string, string, string, int64, int) (int64, error)
+		})
+		if !ok {
+			writeDocumentError(w, http.StatusServiceUnavailable, "document lineage unavailable")
+			return
+		}
+		id, err = writer.CreateVersionForLineage(r.Context(), path, project, content, docType, metadata, author, *req.DocumentID, *req.ExpectedVersion)
+	} else {
+		id, err = store.Create(r.Context(), path, project, content, docType, metadata, author)
+	}
 	if err != nil {
+		if errors.Is(err, gormdb.ErrDocumentVersionStale) || errors.Is(err, gormdb.ErrDocumentLineageAmbiguous) {
+			writeDocumentError(w, http.StatusConflict, "document lineage or version conflict; select the latest document_id from the list")
+			return
+		}
+		if errors.Is(err, gormdb.ErrKnowledgeProjectForbidden) || errors.Is(err, gormlib.ErrRecordNotFound) {
+			writeDocumentError(w, http.StatusNotFound, "document not found")
+			return
+		}
 		writeDocumentError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -694,7 +802,11 @@ func (s *Service) handleDocumentSelectionOperation(w http.ResponseWriter, r *htt
 		writeDocumentOperationFailure(w, http.StatusBadRequest, "", "validation_error")
 		return
 	}
-	selection, scope, err := s.resolveDocumentOperationSelection(r, request.Selection)
+	var project *string
+	if request.projectSupplied {
+		project = &request.Project
+	}
+	selection, scope, err := s.resolveDocumentOperationSelection(r, project, request.Selection)
 	if err != nil {
 		writeDocumentSelectionOperationError(w, request.RequestID, err)
 		return
@@ -707,6 +819,39 @@ func (s *Service) handleDocumentSelectionOperation(w http.ResponseWriter, r *htt
 	store := s.currentDocumentStore()
 	if store == nil {
 		writeDocumentOperationFailure(w, http.StatusServiceUnavailable, request.RequestID, "failed")
+		return
+	}
+	if project != nil {
+		scoped, ok := store.(scopedDocumentStore)
+		if !ok {
+			writeDocumentOperationFailure(w, http.StatusServiceUnavailable, request.RequestID, "failed")
+			return
+		}
+		var response documentOperationResponse
+		err := scoped.WithScopedDocuments(r.Context(), *project, targets, func(docs []gormdb.VersionedDocument) error {
+			items := make([]documentOperationItemResult, 0, len(docs))
+			exported := make([]documentExportDocument, 0, len(docs))
+			for _, doc := range docs {
+				version := doc.Version
+				items = append(items, documentOperationItemResult{TargetID: doc.ID, Outcome: "committed", ObservedVersion: &version})
+				exported = append(exported, documentExportDocument{ID: doc.ID, Path: doc.Path, Project: *project, Version: doc.Version, ContentHash: doc.ContentHash})
+			}
+			artifact, err := s.saveDocumentExportArtifact(scope, exported, *project, targets)
+			if err != nil {
+				return err
+			}
+			response = documentOperationResponse{RequestID: request.RequestID, OperationID: "documents-export:" + request.RequestID, OperationState: "completed", ItemResults: items, Readback: &documentOperationReadback{Authoritative: true, Kind: "non_disclosing", OperationStatus: "export_ready"}, Artifact: &artifact}
+			return nil
+		})
+		if errors.Is(err, gormlib.ErrRecordNotFound) || errors.Is(err, gormdb.ErrKnowledgeProjectForbidden) {
+			writeDocumentOperationFailure(w, http.StatusConflict, request.RequestID, "stale")
+			return
+		}
+		if err != nil {
+			writeDocumentOperationFailure(w, http.StatusServiceUnavailable, request.RequestID, "failed")
+			return
+		}
+		writeJSON(w, response)
 		return
 	}
 
@@ -739,7 +884,7 @@ func (s *Service) handleDocumentSelectionOperation(w http.ResponseWriter, r *htt
 
 	response := documentOperationResponse{RequestID: request.RequestID, OperationID: "documents-export:" + request.RequestID, ItemResults: items}
 	if committed == len(items) {
-		artifact, err := s.saveDocumentExportArtifact(scope, exported)
+		artifact, err := s.saveDocumentExportArtifact(scope, exported, "", nil)
 		if err != nil {
 			writeDocumentOperationFailure(w, http.StatusServiceUnavailable, request.RequestID, "failed")
 			return
@@ -777,13 +922,13 @@ func documentSelectionOperationValid(request *documentCreateRequest) bool {
 	}
 }
 
-func (s *Service) resolveDocumentOperationSelection(r *http.Request, requested *documentOperationSelection) (gormdb.CollectionSelection, gormdb.CollectionSelectionScope, error) {
+func (s *Service) resolveDocumentOperationSelection(r *http.Request, project *string, requested *documentOperationSelection) (gormdb.CollectionSelection, gormdb.CollectionSelectionScope, error) {
 	var empty gormdb.CollectionSelection
 	var emptyScope gormdb.CollectionSelectionScope
 	if requested == nil {
 		return empty, emptyScope, gormdb.ErrCollectionSelectionInvalid
 	}
-	scope, err := documentSelectionScope(r)
+	scope, err := documentSelectionProjectScope(r, project)
 	if err != nil {
 		return empty, emptyScope, err
 	}
@@ -860,7 +1005,7 @@ const (
 	documentExportArtifactTTL      = 15 * time.Minute
 )
 
-func (s *Service) saveDocumentExportArtifact(scope gormdb.CollectionSelectionScope, documents []documentExportDocument) (documentExportArtifactReference, error) {
+func (s *Service) saveDocumentExportArtifact(scope gormdb.CollectionSelectionScope, documents []documentExportDocument, project string, targets []gormdb.CollectionSelectionTarget) (documentExportArtifactReference, error) {
 	payload, err := json.Marshal(documentExportPayload{SchemaVersion: "engram.documents.export/v1", Documents: documents})
 	if err != nil || len(payload) == 0 || len(payload) > documentExportArtifactMaxBytes {
 		return documentExportArtifactReference{}, errors.New("document export artifact is invalid")
@@ -889,7 +1034,7 @@ func (s *Service) saveDocumentExportArtifact(scope gormdb.CollectionSelectionSco
 		}
 		delete(s.documentExportArtifacts, oldestID)
 	}
-	s.documentExportArtifacts[id] = documentExportArtifact{bytes: payload, filename: filename, contentType: "application/json", scope: scope, expiresAt: expiresAt}
+	s.documentExportArtifacts[id] = documentExportArtifact{bytes: payload, filename: filename, contentType: "application/json", scope: scope, expiresAt: expiresAt, project: project, targets: append([]gormdb.CollectionSelectionTarget(nil), targets...)}
 	return documentExportArtifactReference{DownloadURL: "/api/documents/exports/" + id, Filename: filename, ContentType: "application/json", ByteLength: len(payload)}, nil
 }
 
@@ -915,11 +1060,37 @@ func (s *Service) handleDownloadDocumentExport(w http.ResponseWriter, r *http.Re
 		http.NotFound(w, r)
 		return
 	}
-	w.Header().Set("Content-Type", artifact.contentType)
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", artifact.filename))
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	_, _ = w.Write(artifact.bytes)
+	writeArtifact := func() {
+		w.Header().Set("Content-Type", artifact.contentType)
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", artifact.filename))
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		_, _ = w.Write(artifact.bytes)
+	}
+	if artifact.project == "" {
+		writeArtifact()
+		return
+	}
+	boundScope, err := documentSelectionProjectScope(r, &artifact.project)
+	if err != nil || boundScope.ContextFingerprint != artifact.scope.ContextFingerprint {
+		http.NotFound(w, r)
+		return
+	}
+	store, ok := s.currentDocumentStore().(scopedDocumentStore)
+	if !ok {
+		http.Error(w, "document export unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	err = store.WithScopedDocuments(r.Context(), artifact.project, artifact.targets, func(_ []gormdb.VersionedDocument) error { return nil })
+	if errors.Is(err, gormlib.ErrRecordNotFound) || errors.Is(err, gormdb.ErrKnowledgeProjectForbidden) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		http.Error(w, "document export unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	writeArtifact()
 }
 
 func writeDocumentOperationFailure(w http.ResponseWriter, status int, requestID, state string) {
@@ -981,6 +1152,23 @@ func (s *Service) handleListDocuments(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+type documentLineageStore interface {
+	ReadLatestForLineage(context.Context, string, string, int64) (*gormdb.VersionedDocument, error)
+	ReadVersionForLineage(context.Context, string, string, int, int64) (*gormdb.VersionedDocument, error)
+	GetHistoryForLineage(context.Context, string, string, int, int64) ([]gormdb.VersionedDocument, error)
+}
+
+func documentLineageAnchor(r *http.Request) (int64, error) {
+	values, present := r.URL.Query()["document_id"]
+	if !present {
+		return 0, nil
+	}
+	if len(values) != 1 {
+		return 0, fmt.Errorf("one document_id is required")
+	}
+	return parseDocumentPositiveInt64(values[0], "document_id")
+}
+
 func (s *Service) handleDocumentHistory(w http.ResponseWriter, r *http.Request) {
 	store := s.currentDocumentStore()
 	if store == nil {
@@ -1008,10 +1196,33 @@ func (s *Service) handleDocumentHistory(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	docs, err := store.GetHistory(r.Context(), path, project, limit)
+	anchor, err := documentLineageAnchor(r)
+	if err != nil {
+		writeDocumentError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var docs []gormdb.VersionedDocument
+	if anchor != 0 {
+		lineages, ok := store.(documentLineageStore)
+		if !ok {
+			writeDocumentError(w, http.StatusServiceUnavailable, "document lineage unavailable")
+			return
+		}
+		docs, err = lineages.GetHistoryForLineage(r.Context(), path, project, limit, anchor)
+	} else {
+		docs, err = store.GetHistory(r.Context(), path, project, limit)
+	}
 	if err != nil {
 		if errors.Is(err, gormdb.ErrKnowledgeProjectForbidden) {
 			writeDocumentError(w, http.StatusForbidden, "project read forbidden")
+			return
+		}
+		if errors.Is(err, gormdb.ErrDocumentLineageAmbiguous) {
+			writeDocumentError(w, http.StatusConflict, "document lineage ambiguous; select a document_id from the list")
+			return
+		}
+		if errors.Is(err, gormlib.ErrRecordNotFound) {
+			writeDocumentError(w, http.StatusNotFound, "document not found")
 			return
 		}
 		writeDocumentError(w, http.StatusInternalServerError, "document history unavailable")
@@ -1050,20 +1261,42 @@ func (s *Service) handleReadDocument(w http.ResponseWriter, r *http.Request) {
 	}
 
 	versionRaw := strings.TrimSpace(r.URL.Query().Get("version"))
+	anchor, err := documentLineageAnchor(r)
+	if err != nil {
+		writeDocumentError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	lineages, hasLineages := store.(documentLineageStore)
+	if anchor != 0 && !hasLineages {
+		writeDocumentError(w, http.StatusServiceUnavailable, "document lineage unavailable")
+		return
+	}
 	var doc *gormdb.VersionedDocument
 	if versionRaw == "" {
-		doc, err = store.ReadLatest(r.Context(), path, project)
+		if anchor != 0 {
+			doc, err = lineages.ReadLatestForLineage(r.Context(), path, project, anchor)
+		} else {
+			doc, err = store.ReadLatest(r.Context(), path, project)
+		}
 	} else {
 		version, parseErr := parseDocumentPositiveInt(versionRaw, "version")
 		if parseErr != nil {
 			writeDocumentError(w, http.StatusBadRequest, parseErr.Error())
 			return
 		}
-		doc, err = store.ReadVersion(r.Context(), path, project, version)
+		if anchor != 0 {
+			doc, err = lineages.ReadVersionForLineage(r.Context(), path, project, version, anchor)
+		} else {
+			doc, err = store.ReadVersion(r.Context(), path, project, version)
+		}
 	}
 	if err != nil {
 		if errors.Is(err, gormdb.ErrKnowledgeProjectForbidden) {
 			writeDocumentError(w, http.StatusForbidden, "project read forbidden")
+			return
+		}
+		if errors.Is(err, gormdb.ErrDocumentLineageAmbiguous) {
+			writeDocumentError(w, http.StatusConflict, "document lineage ambiguous; select a document_id from the list")
 			return
 		}
 		if errors.Is(err, gormlib.ErrRecordNotFound) {
@@ -1085,11 +1318,13 @@ func (s *Service) handleAddDocumentComment(w http.ResponseWriter, r *http.Reques
 	}
 
 	var req struct {
-		DocumentID int64  `json:"document_id"`
-		Author     string `json:"author"`
-		Content    string `json:"content"`
-		LineStart  *int   `json:"line_start"`
-		LineEnd    *int   `json:"line_end"`
+		DocumentID      int64           `json:"document_id"`
+		Author          string          `json:"author"`
+		Content         string          `json:"content"`
+		LineStart       *int            `json:"line_start"`
+		LineEnd         *int            `json:"line_end"`
+		Project         json.RawMessage `json:"project,omitempty"`
+		ExpectedVersion json.RawMessage `json:"expected_version,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeDocumentError(w, http.StatusBadRequest, "invalid JSON body")
@@ -1121,8 +1356,37 @@ func (s *Service) handleAddDocumentComment(w http.ResponseWriter, r *http.Reques
 		author = "operator"
 	}
 
-	commentID, err := store.AddComment(r.Context(), req.DocumentID, author, content, req.LineStart, req.LineEnd)
+	project, projectErr := parseOptionalDocumentProject(req.Project)
+	var version int
+	versionSupplied := len(req.ExpectedVersion) != 0
+	versionErr := error(nil)
+	if versionSupplied {
+		versionErr = json.Unmarshal(req.ExpectedVersion, &version)
+	}
+	if projectErr != nil || (project != nil) != versionSupplied || versionSupplied && (versionErr != nil || version <= 0) {
+		writeDocumentError(w, http.StatusBadRequest, "project and expected_version must be valid and supplied together")
+		return
+	}
+	var commentID int64
+	var err error
+	if project != nil {
+		if !s.authorizeKnowledgeProject(w, r, *project) {
+			return
+		}
+		scoped, ok := store.(scopedDocumentStore)
+		if !ok {
+			writeDocumentError(w, http.StatusServiceUnavailable, "document scope unavailable")
+			return
+		}
+		commentID, err = scoped.AddScopedComment(r.Context(), *project, req.DocumentID, version, author, content, req.LineStart, req.LineEnd)
+	} else {
+		commentID, err = store.AddComment(r.Context(), req.DocumentID, author, content, req.LineStart, req.LineEnd)
+	}
 	if err != nil {
+		if errors.Is(err, gormlib.ErrRecordNotFound) || errors.Is(err, gormdb.ErrKnowledgeProjectForbidden) {
+			writeDocumentError(w, http.StatusNotFound, "document not found")
+			return
+		}
 		writeDocumentError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -1148,8 +1412,37 @@ func (s *Service) handleListDocumentComments(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	comments, err := store.GetComments(r.Context(), documentID)
+	values := r.URL.Query()
+	projects, hasProject := values["project"]
+	versions, hasVersion := values["expected_version"]
+	var comments []gormdb.VersionedDocumentComment
+	if hasProject || hasVersion {
+		if !hasProject || !hasVersion || len(projects) != 1 || len(versions) != 1 || !projectidentity.ValidProjectID(projects[0]) {
+			writeDocumentError(w, http.StatusBadRequest, "project and expected_version must be valid and supplied together")
+			return
+		}
+		version, parseErr := parseDocumentPositiveInt(versions[0], "expected_version")
+		if parseErr != nil {
+			writeDocumentError(w, http.StatusBadRequest, "project and expected_version must be valid and supplied together")
+			return
+		}
+		if !s.authorizeKnowledgeProject(w, r, projects[0]) {
+			return
+		}
+		scoped, ok := store.(scopedDocumentStore)
+		if !ok {
+			writeDocumentError(w, http.StatusServiceUnavailable, "document scope unavailable")
+			return
+		}
+		comments, err = scoped.GetScopedComments(r.Context(), projects[0], documentID, version)
+	} else {
+		comments, err = store.GetComments(r.Context(), documentID)
+	}
 	if err != nil {
+		if errors.Is(err, gormlib.ErrRecordNotFound) || errors.Is(err, gormdb.ErrKnowledgeProjectForbidden) {
+			writeDocumentError(w, http.StatusNotFound, "document not found")
+			return
+		}
 		writeDocumentError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

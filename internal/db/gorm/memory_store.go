@@ -686,7 +686,7 @@ func (s *MemoryStore) mutationVisibleQuery(ctx context.Context, tx *gorm.DB, acc
 	}
 	// Resolve the catalog using a clean transaction query, before adding the
 	// memory alias and privacy predicates to the content query.
-	query, err := canonicalProjectRows(ctx, tx.Model(&Memory{}), access.Project, "memories", "m")
+	query, err := canonicalNativeProjectRows(ctx, tx.Model(&Memory{}), access.Project, "memories", "m")
 	if err != nil {
 		if errors.Is(err, ErrKnowledgeProjectForbidden) {
 			return nil, gorm.ErrRecordNotFound
@@ -721,7 +721,7 @@ func (s *MemoryStore) GetAuthorized(ctx context.Context, id int64, access Memory
 
 func memoryMutationCanonicalProject(ctx context.Context, tx *gorm.DB, id int64) (string, error) {
 	member := tx.WithContext(ctx).Table("memories AS m").Select("1").Where("m.id = ?", id).
-		Where(canonicalProjectMembershipPredicate("m", "project"), clause.Column{Table: "p", Name: "id"}, "memories", "memories", clause.Column{Table: "p", Name: "id"})
+		Where(projectscope.NativeMembershipPredicate("m", "project"), clause.Column{Table: "p", Name: "id"}, "memories", "memories", clause.Column{Table: "p", Name: "id"})
 	var projects []string
 	if err := tx.WithContext(ctx).Table("projects AS p").Where("p.removed_at IS NULL AND (p.identity_status IS NULL OR p.identity_status = 'active')").
 		Where("EXISTS (?)", member).Limit(2).Pluck("p.id", &projects).Error; err != nil {

@@ -31,8 +31,16 @@ const browserCodeProjectMembershipJoin = `LEFT JOIN LATERAL (
 ) membership ON TRUE`
 
 // An inventoried occurrence overrides its historical selector. Uninventoried
-// current rows belong only to their exact UUID, never to an alias bucket.
+// UUID rows may also be read through an explicit, unambiguous alias group.
 func canonicalProjectRows(ctx context.Context, db *gormlib.DB, project, table, alias string) (*gormlib.DB, error) {
+	return canonicalProjectRowsWithPredicate(ctx, db, project, table, alias, projectscope.MembershipPredicate(alias, "project"))
+}
+
+func canonicalNativeProjectRows(ctx context.Context, db *gormlib.DB, project, table, alias string) (*gormlib.DB, error) {
+	return canonicalProjectRowsWithPredicate(ctx, db, project, table, alias, projectscope.NativeMembershipPredicate(alias, "project"))
+}
+
+func canonicalProjectRowsWithPredicate(ctx context.Context, db *gormlib.DB, project, table, alias, predicate string) (*gormlib.DB, error) {
 	if !projectidentity.ValidProjectID(project) {
 		return nil, ErrKnowledgeProjectForbidden
 	}
@@ -47,7 +55,7 @@ func canonicalProjectRows(ctx context.Context, db *gormlib.DB, project, table, a
 		return nil, fmt.Errorf("unsupported content table")
 	}
 	q := db.WithContext(ctx).Table(table + " AS " + alias)
-	return q.Where(canonicalProjectMembershipPredicate(alias, "project"), project, table, table, project), nil
+	return q.Where(predicate, project, table, table, project), nil
 }
 
 func canonicalProjectMembershipPredicate(alias, field string) string {

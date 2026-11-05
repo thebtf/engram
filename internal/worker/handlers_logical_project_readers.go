@@ -153,17 +153,6 @@ func (s *Service) handleResolveLogicalProject(w http.ResponseWriter, r *http.Req
 		return
 	}
 	selector := params.Get("legacy_id")
-	if projectidentity.ValidProjectID(selector) {
-		exists, err := s.sessionStore.CanonicalProjectExists(r.Context(), selector)
-		if err != nil {
-			writeRetainedProjectError(w, err)
-			return
-		}
-		if exists {
-			writeJSON(w, map[string]string{"status": "resolved", "project_id": selector, "name": s.getProjectDisplayName(r.Context(), selector)})
-			return
-		}
-	}
 	sessionID, _ := operatorCodeSessionID(r)
 	id, err := store.ResolveLegacy(r.Context(), selector, sessionID)
 	if err == nil {
@@ -178,8 +167,19 @@ func (s *Service) handleResolveLogicalProject(w http.ResponseWriter, r *http.Req
 		}
 	} else {
 		var refusal *gormdb.ConsolidationError
-		if !errors.As(err, &refusal) {
+		if !errors.As(err, &refusal) || refusal.Code != "PROJECT_ADOPTION_UNRESOLVED_MEMBERSHIP" {
 			writeRetainedProjectError(w, err)
+			return
+		}
+	}
+	if projectidentity.ValidProjectID(selector) {
+		exists, err := s.sessionStore.CanonicalProjectExists(r.Context(), selector)
+		if err != nil {
+			writeRetainedProjectError(w, err)
+			return
+		}
+		if exists {
+			writeJSON(w, map[string]string{"status": "resolved", "project_id": selector, "name": s.getProjectDisplayName(r.Context(), selector)})
 			return
 		}
 	}
