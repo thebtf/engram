@@ -137,6 +137,10 @@ func transientPostgresConnectionError(err error) bool {
 	if errors.As(err, &pgErr) {
 		return pgErr.Code == "57P03"
 	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return !dnsErr.IsNotFound && (dnsErr.IsTemporary || dnsErr.IsTimeout)
+	}
 	var netErr net.Error
 	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.EOF) ||
 		errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNABORTED) ||

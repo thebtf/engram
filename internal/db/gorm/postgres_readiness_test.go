@@ -3,6 +3,7 @@ package gorm
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/url"
@@ -24,6 +25,9 @@ func TestTransientPostgresConnectionError(t *testing.T) {
 		{"reset", syscall.ECONNRESET, true},
 		{"closed connection", io.EOF, true},
 		{"attempt timeout", context.DeadlineExceeded, true},
+		{"wrapped temporary DNS SERVFAIL", fmt.Errorf("connect failed: %w", &net.OpError{Op: "dial", Net: "tcp", Err: &net.DNSError{Err: "server misbehaving", IsTemporary: true}}), true},
+		{"wrapped DNS not found with transient flags", fmt.Errorf("connect failed: %w", &net.OpError{Op: "dial", Net: "tcp", Err: &net.DNSError{Err: "no such host", IsNotFound: true, IsTemporary: true, IsTimeout: true}}), false},
+		{"DNS timeout", &net.DNSError{Err: "i/o timeout", IsTimeout: true}, true},
 		{"database starting", &pgconn.PgError{Code: "57P03"}, true},
 		{"invalid password", &pgconn.PgError{Code: "28P01"}, false},
 		{"unknown database", &pgconn.PgError{Code: "3D000"}, false},
