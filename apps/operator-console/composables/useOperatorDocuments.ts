@@ -1,6 +1,6 @@
 import { computed, onBeforeUnmount, ref as sharedRef, type Ref as SharedRef } from 'vue'
 import { startedLoads } from './useConsolePreferences'
-import { isCatalogProject, loadKnowledgePage, safeNavigation, type OperatorKnowledgePage } from './useOperatorProjectContext'
+import { documentScopeUncertain, isCatalogProject, loadKnowledgePage, safeNavigation, supportsDocumentLineage, validDocumentID, type OperatorKnowledgePage } from './useOperatorProjectContext'
 import { useRoute } from 'vue-router'
 
 let sharedDocumentsPageDocuments: SharedRef<OperatorDocumentSummary[]> | undefined
@@ -379,7 +379,7 @@ export function useOperatorDocuments(projectContext?: Ref<string>): {
   pending: ComputedRef<boolean>
   error: ComputedRef<string | null>
   refresh: () => Promise<void>
-  openDocument: (doc: OperatorDocumentSummary) => Promise<void>
+  openDocument: (doc: OperatorDocumentSummary, allowPathOnly?: boolean) => Promise<void>
   selectPrimaryVersion: (version: number) => Promise<void>
   selectSecondaryVersion: (version: number) => Promise<void>
   addComment: (input: DocumentCommentInput) => Promise<MutationResult<DocumentCommentInput>>
@@ -433,6 +433,7 @@ export function useOperatorDocuments(projectContext?: Ref<string>): {
   let secondaryGeneration = 0
   let commentsGeneration = 0
   let documentProject = ''
+  let documentID = ''
   let listRequest: AbortController | undefined
   const total = sharedRef<number | null>(null)
   const hasMore = sharedRef(false)
@@ -443,6 +444,7 @@ export function useOperatorDocuments(projectContext?: Ref<string>): {
     secondaryGeneration += 1
     commentsGeneration += 1
     selectedPath.value = ''
+    documentID = ''
     primaryVersion.value = null
     secondaryVersion.value = null
     primaryDocumentValue.value = null
@@ -468,9 +470,10 @@ export function useOperatorDocuments(projectContext?: Ref<string>): {
     const detail = detailGeneration
     const isCurrent = () => detail === detailGeneration && project === documentProject && path === selectedPath.value
       && generation === (source === 'documents-read-primary' ? primaryGeneration : secondaryGeneration)
-    const endpoint = version === null
-      ? `/api/documents/read?path=${encodeURIComponent(path)}&project=${encodeURIComponent(project)}`
-      : `/api/documents/read?path=${encodeURIComponent(path)}&project=${encodeURIComponent(project)}&version=${version}`
+    const params = new URLSearchParams({ path, project })
+    if (documentID) params.set('document_id', documentID)
+    if (version !== null) params.set('version', String(version))
+    const endpoint = `/api/documents/read?${params}`
     const evidence = endpointEvidence(endpoint, source)
     if (version === null && source === 'documents-read-secondary') {
       valueRef.value = null
@@ -507,6 +510,11 @@ export function useOperatorDocuments(projectContext?: Ref<string>): {
   async function refreshCommentsForVersion(version: number | null) {
     const generation = ++commentsGeneration
     const detail = detailGeneration
+    if (supportsDocumentLineage(documentProject) || documentScopeUncertain(documentProject)) {
+      replaceArray(comments.value, [])
+      commentsStateValue.value = { kind: 'gated', evidence: commentsEvidence, flag: 'scoped-document-comments', reason: 'Project-scoped document comments are unavailable.', updatedAt: new Date().toISOString(), data: [] }
+      return
+    }
     const versionEntry = history.value.find((row) => row.version === version)
     if (!versionEntry?.id) {
       replaceArray(comments.value, [])
@@ -549,7 +557,9 @@ export function useOperatorDocuments(projectContext?: Ref<string>): {
     }
 
     selectedPath.value = path
-    const endpoint = `/api/documents/history?path=${encodeURIComponent(path)}&project=${encodeURIComponent(project)}`
+    const params = new URLSearchParams({ path, project })
+    if (documentID) params.set('document_id', documentID)
+    const endpoint = `/api/documents/history?${params}`
     const evidence = endpointEvidence(endpoint, 'documents-history')
     historyStateValue.value = pendingState(evidence, history.value)
 
@@ -587,11 +597,14 @@ export function useOperatorDocuments(projectContext?: Ref<string>): {
     }
   }
 
-  async function openDocument(doc: OperatorDocumentSummary) {
+  async function openDocument(doc: OperatorDocumentSummary, allowPathOnly = false) {
     clearDocumentDetail()
     const project = doc.project
     if (!isCatalogProject(project) || (selectedProject.value !== 'all' && selectedProject.value !== project)) return
+    if (documentScopeUncertain(project)) throw new TypeError('The document project scope is uncertain')
+    if (supportsDocumentLineage(project) && !validDocumentID(doc.id) && !allowPathOnly) throw new TypeError('A valid document lineage is required')
     documentProject = project
+    documentID = supportsDocumentLineage(project) && validDocumentID(doc.id) ? doc.id : ''
     selectedPath.value = doc.path
     const generation = detailGeneration
     await loadVersionDocument(doc.path, project, null, primaryStateValue, primaryDocumentValue, 'documents-read-primary')
@@ -683,6 +696,7 @@ export function useOperatorDocuments(projectContext?: Ref<string>): {
 
   async function addComment(input: DocumentCommentInput) {
     if (!isCatalogProject(documentProject)) throw new TypeError('A catalog document project is required')
+    if (supportsDocumentLineage(documentProject) || documentScopeUncertain(documentProject)) throw new TypeError('Scoped document actions are unavailable')
     const currentVersionEntry = history.value.find((entry) => entry.version === primaryVersion.value)
     if (!currentVersionEntry?.id) {
       throw new Error('No document version selected for comments')
@@ -706,6 +720,7 @@ export function useOperatorDocuments(projectContext?: Ref<string>): {
 
   async function runDocumentSelectionOperation(input: DocumentSelectionOperationInput): Promise<DocumentSelectionOperationResult> {
     if (!isCatalogProject(documentProject)) throw new TypeError('A catalog document project is required')
+    if (supportsDocumentLineage(documentProject) || documentScopeUncertain(documentProject)) throw new TypeError('Scoped document actions are unavailable')
     if (!Number.isSafeInteger(input.target.documentId) || input.target.documentId < 1 || !Number.isSafeInteger(input.target.version) || input.target.version < 1) {
       throw new TypeError('Documents export target is invalid')
     }

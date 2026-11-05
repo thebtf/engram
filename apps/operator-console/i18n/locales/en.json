@@ -13,6 +13,9 @@
     "back": "Return",
     "unknownProject": "The project is unavailable or unresolved.",
     "unavailable": "The project catalog is unavailable. Retry to load projects.",
+    "lineageUnsupported": "This document link requires a supported, verified project group. Return to the document list.",
+    "lineageActionsUnavailable": "Comments and export are unavailable for grouped projects until project-scoped actions are supported.",
+    "lineageScopeUncertain": "Document access is unavailable because this project's group metadata is inconsistent. Retry the project catalog.",
     "ambiguousName": "Equal names; a name does not establish project membership.",
     "selectionRequired": "Choose a catalog project before continuing.",
     "loading": "Loading the catalog and resolving the project…",
@@ -317,7 +320,8 @@
       "request-rejected": "The Engram server rejected this request.",
       "server-unavailable": "The Engram server is unavailable.",
       "unreachable": "The Engram server could not be reached.",
-      "invalid-response": "The Engram server returned an unreadable response."
+      "invalid-response": "The Engram server returned an unreadable response.",
+      "document-lineage-ambiguous": "Several documents share this path. Return to the list and choose one."
     }
   },
   "switchRow": {

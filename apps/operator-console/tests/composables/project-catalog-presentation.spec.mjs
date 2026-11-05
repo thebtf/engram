@@ -54,7 +54,7 @@ function evaluate(source, dependency, globals) {
   return module.exports
 }
 
-async function mount(t, { path = '/projects', language = 'ru', items = catalog.items, unresolved = catalog.unresolved, selected = '' } = {}) {
+async function mount(t, { path = '/projects', language = 'ru', items = catalog.items, unresolved = catalog.unresolved, selected = '', logical_groups, scopedRows, documentFetch, catalogFetch, initialQuery = {}, homeDocuments = false, capturePageState = false, allowSyntheticMutations = false } = {}) {
   const modules = new Map(), storage = new Map(), calls = [], errors = []
   let context
   const globals = {
@@ -67,15 +67,23 @@ async function mount(t, { path = '/projects', language = 'ru', items = catalog.i
     sessionStorage: { getItem: key => storage.get(key) || null, setItem: (key, value) => storage.set(key, value) },
     fetch: async (path, init) => {
       const url = new URL(path, 'http://synthetic.invalid')
-      calls.push({ url, method: init.method || 'GET', credentials: init.credentials })
-      assert.equal(init.method || 'GET', 'GET', 'Catalog presentation must never mutate even the synthetic backend')
-      if (url.pathname === '/api/projects') return Response.json({ items, unresolved })
+      calls.push({ url, method: init.method || 'GET', credentials: init.credentials, body: init.body })
+      assert.ok((init.method || 'GET') === 'GET' || allowSyntheticMutations, 'Unexpected synthetic mutation')
+      if (url.pathname === '/api/projects') return catalogFetch ? catalogFetch() : Response.json({ items, unresolved, ...(logical_groups === undefined ? {} : { logical_groups }) })
       if (url.pathname === '/api/auth/me') return Response.json({ authenticated: true, auth_disabled: false, role: 'viewer', user: { email: 'catalog@example.test' } })
       if (url.pathname === '/api/selfcheck') return Response.json({ overall: 'healthy' })
       if (url.pathname === '/api/stats') return Response.json({ uptime: '1m' })
       if (url.pathname === '/api/stats/vnext') return Response.json({ embedding: { active_memory_count: 0 } })
       if (url.pathname === '/api/sessions/list') return Response.json({ sessions: [], total: 0 })
-      if (['/api/memories', '/api/documents'].includes(url.pathname)) return Response.json({ items: [], total: 0, offset: Number(url.searchParams.get('offset')), limit: Number(url.searchParams.get('limit')), has_more: false })
+      const documentResponse = documentFetch?.(url, init)
+      if (documentResponse) return documentResponse
+      if (['/api/memories', '/api/documents'].includes(url.pathname)) {
+        const offset = Number(url.searchParams.get('offset'))
+        const limit = Number(url.searchParams.get('limit'))
+        const project = url.searchParams.get('project')
+        const rows = scopedRows?.[url.pathname]?.[project] || []
+        return Response.json({ items: rows.slice(offset, offset + limit).map(row => ({ ...row, project })), total: rows.length, offset, limit, has_more: offset + limit < rows.length })
+      }
       throw new Error(`Unexpected synthetic request: ${url}`)
     },
   }
@@ -107,11 +115,17 @@ async function mount(t, { path = '/projects', language = 'ru', items = catalog.i
   }
   const layout = component('layouts/default.vue')
   const pagePath = path.replace(/\/+$/, '').toLowerCase() || '/'
-  const pageClass = pagePath === '/' ? 'home-page' : pagePath === '/projects' ? 'projects-page' : 'inert-page'
-  const page = pagePath === '/' ? component('pages/index.vue') : pagePath === '/projects' ? component('pages/projects.vue') : { render: () => vue.h('main', { class: pageClass }) }
+  const pageClass = pagePath === '/' ? 'home-page' : pagePath === '/projects' ? 'projects-page' : pagePath === '/documents' ? 'documents-page' : 'inert-page'
+  const page = pagePath === '/' ? component('pages/index.vue') : pagePath === '/projects' ? component('pages/projects.vue') : pagePath === '/documents' ? component('pages/documents.vue') : { render: () => vue.h('main', { class: pageClass }) }
+  let pageState
+  if (capturePageState) {
+    const setup = page.setup
+    page.setup = (props, setupContext) => { pageState = setup(props, setupContext); return pageState }
+  }
+  const documentPage = homeDocuments ? component('pages/documents.vue') : null
   const router = routing.createRouter({ history: routing.createMemoryHistory(), routes: [{ path: '/:pathMatch(.*)*', component: { render: () => null } }] })
-  await router.push({ path, query: selected ? { project: selected } : {} })
-  const app = renderer.createApp({ render: () => vue.h(layout, null, { default: () => vue.h(page) }) })
+  await router.push({ path, query: { ...initialQuery, ...(selected ? { project: selected } : {}) } })
+  const app = renderer.createApp({ render: () => vue.h(layout, null, { default: () => vue.h(homeDocuments && router.currentRoute.value.path === '/documents' ? documentPage : page) }) })
   app.component('ProjectContext', component('components/ProjectContext.vue'))
   for (const name of ['SettingsModal', 'ProfileModal', 'LoginModal', 'MutationResultNotice', 'HonestyBadge']) app.component(name, { render: () => null })
   const messages = Object.fromEntries(['ru', 'en', 'zh'].map(code => [code, JSON.parse(readFileSync(new URL(`i18n/locales/${code}.json`, root), 'utf8'))]))
@@ -127,7 +141,7 @@ async function mount(t, { path = '/projects', language = 'ru', items = catalog.i
   assert.equal(context.pending.value, false)
   assert.ok(walk(host).some(item => hasClass(item, pageClass)), 'Real authenticated layout must render the actual page or inert non-catalog slot')
   assert.ok(walk(host).some(item => item.props['data-testid'] === 'project-context-select'), 'Actual global ProjectContext must be present')
-  return { host, router, context, calls, errors, path, globals, i18n }
+  return { host, router, context, calls, errors, path, globals, i18n, pageState: () => pageState, loadKnowledgePage: load('useOperatorProjectContext').loadKnowledgePage }
 }
 const retainedLinks = host => walk(host).filter(item => item.tag === 'a' && item.props.href && new URL(item.props.href, 'http://synthetic.invalid').pathname === '/projects/unresolved')
 const selector = host => walk(host).find(item => item.props['data-testid'] === 'project-context-select')
@@ -483,3 +497,585 @@ for (const path of ['/', '/projects']) {
     assert.deepEqual(state.errors, [])
   })
 }
+
+const logicalItems = [
+  { project_id: SAME_A, name: 'North primary' }, { project_id: SAME_B, name: 'North alias' },
+  { project_id: QUALIFIED, name: 'South primary' }, { project_id: CONTROL, name: 'South alias' },
+  { project_id: GENERIC, name: 'Independent project' },
+]
+const logicalGroups = [
+  { primary_project_id: SAME_A, alias_project_ids: [SAME_B] },
+  { primary_project_id: QUALIFIED, alias_project_ids: [CONTROL] },
+]
+const realProjectOptions = host => walk(selector(host)).filter(item => item.tag === 'option' && item.props.value && item.props.value !== 'all')
+
+for (const path of ['/', '/projects']) {
+  for (const language of ['en', 'ru', 'zh']) {
+    test(`${path} ${language}: verified logical groups retain individually selectable UUIDs`, async t => {
+      const items = [...logicalItems, { project_id: VERSION, name: 'North second alias' }]
+      const logical_groups = [{ primary_project_id: SAME_A, alias_project_ids: [SAME_B, VERSION] }, logicalGroups[1]]
+      const state = await mount(t, { path, language, items, unresolved: [], logical_groups })
+      const groups = walk(selector(state.host)).filter(item => item.tag === 'optgroup')
+      assert.equal(groups.length, 2, 'Each verified logical group has a non-selectable selector heading')
+      assert.ok(groups.every(group => typeof group.props.label === 'string' && group.props.label.trim()))
+      assert.notEqual(groups[0].props.label, groups[1].props.label, 'Distinct logical groups remain distinguishable')
+      for (const group of logical_groups) {
+        const expected = [group.primary_project_id, ...group.alias_project_ids]
+        assert.ok(groups.some(node => {
+          const children = walk(node).filter(item => item.tag === 'option').map(item => item.props.value)
+          return children.length === expected.length && expected.every(id => children.includes(id))
+        }), 'A group presents its primary and every alias as individual choices')
+      }
+      const optionRows = realProjectOptions(state.host)
+      assert.deepEqual(optionRows.map(item => item.props.value).sort(), items.map(item => item.project_id).sort())
+      const page = walk(state.host).find(item => hasClass(item, path === '/' ? 'home-page' : 'projects-page'))
+      const headings = walk(page).filter(item => ['h2', 'h3', 'h4', 'legend'].includes(item.tag)).map(item => text(item).trim())
+      for (const group of groups) assert.ok(headings.includes(group.props.label), 'The page also shows a non-selectable group heading')
+      for (const option of optionRows) {
+        const row = walk(page).find(item => item.tag === 'button' && text(item).trim() === text(option).trim())
+        assert.ok(row, 'The page offers the same individual project as the selector')
+        await row.props.onClick()
+        await tick()
+        assert.equal(state.router.currentRoute.value.query.project, option.props.value)
+        await state.router.push(path)
+        await tick()
+        await chooseOption(state, option.props.value)
+        await state.router.push(path)
+        await tick()
+      }
+      assert.ok(state.calls.filter(call => ['/api/memories', '/api/documents', '/api/sessions/list'].includes(call.url.pathname)).every(call => items.some(item => item.project_id === call.url.searchParams.get('project'))))
+      assert.deepEqual(state.errors, [])
+    })
+  }
+
+  test(`${path}: missing or malformed logical groups preserve flat selectable projects`, async t => {
+    for (const logical_groups of [undefined, null, 'invalid', [{ primary_project_id: 'not-a-uuid', alias_project_ids: [SAME_A] }]]) {
+      const state = await mount(t, { path, language: 'en', items: logicalItems, unresolved: [], logical_groups })
+      assert.deepEqual(realProjectOptions(state.host).map(item => item.props.value).sort(), logicalItems.map(item => item.project_id).sort())
+      assert.equal(walk(selector(state.host)).filter(item => item.tag === 'optgroup').length, 0)
+      for (const item of logicalItems) await chooseOption(state, item.project_id)
+      assert.ok(!state.calls.some(call => call.url.pathname.includes('/resolve') || call.url.pathname.includes('/unresolved/')))
+      assert.deepEqual(state.errors, [])
+    }
+  })
+
+  test(`${path}: conflicting and unknown aliases cannot create authority or hide an independent valid group`, async t => {
+    const items = [...logicalItems, { project_id: VERSION, name: 'Independent primary' }, { project_id: HASH, name: 'Independent alias' }]
+    const unknown = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    const logical_groups = [
+      { primary_project_id: SAME_A, alias_project_ids: [SAME_B] },
+      { primary_project_id: QUALIFIED, alias_project_ids: [SAME_B] },
+      { primary_project_id: CONTROL, alias_project_ids: [unknown] },
+      { primary_project_id: VERSION, alias_project_ids: [HASH] },
+    ]
+    const state = await mount(t, { path, language: 'en', items, unresolved: [], logical_groups })
+    const groups = walk(selector(state.host)).filter(item => item.tag === 'optgroup')
+    const grouped = groups.map(group => walk(group).filter(item => item.tag === 'option').map(item => item.props.value))
+    assert.ok(grouped.some(ids => ids.length === 2 && ids.includes(VERSION) && ids.includes(HASH)), 'An unrelated verified group remains available')
+    assert.ok(grouped.every(ids => !ids.includes(SAME_B) && !ids.includes(unknown)), 'Ambiguous or unknown aliases must not be asserted as group members')
+    const values = realProjectOptions(state.host).map(item => item.props.value)
+    assert.deepEqual(values.sort(), items.map(item => item.project_id).sort())
+    assert.equal(new Set(values).size, values.length)
+    for (const item of items) await chooseOption(state, item.project_id)
+    assert.ok(!state.calls.some(call => call.url.searchParams.get('project') === unknown || call.url.pathname.includes('/resolve')))
+    assert.deepEqual(state.errors, [])
+  })
+}
+
+test('Malformed group implicating a known project cannot authorize its otherwise valid group', async t => {
+  const logical_groups = [logicalGroups[0], logicalGroups[1], { primary_project_id: SAME_A, alias_project_ids: ['not-a-uuid'] }]
+  const state = await mount(t, { path: '/documents', language: 'en', selected: SAME_A, items: logicalItems, unresolved: [], logical_groups, documentFetch: lineageResponses({ oldServer: true }), initialQuery: { path: lineagePath, document_id: '101' } })
+  const groups = walk(selector(state.host)).filter(item => item.tag === 'optgroup')
+  const grouped = groups.map(group => walk(group).filter(item => item.tag === 'option').map(item => item.props.value))
+  assert.ok(grouped.some(ids => ids.includes(QUALIFIED) && ids.includes(CONTROL)))
+  assert.ok(grouped.every(ids => !ids.includes(SAME_A) && !ids.includes(SAME_B)))
+  assert.deepEqual(realProjectOptions(state.host).map(item => item.props.value).sort(), logicalItems.map(item => item.project_id).sort())
+  assert.equal(documentReads(state).length, 0, 'Contradictory metadata must not grant lineage capability')
+  assert.ok(text(state.host).includes(state.i18n.global.t('projectCatalog.lineageScopeUncertain')))
+})
+
+for (const [name, logical_groups] of [
+  ['implicated project', [logicalGroups[0], logicalGroups[1], { primary_project_id: SAME_A, alias_project_ids: ['not-a-uuid'] }]],
+  ['unparseable metadata', null],
+]) {
+  test(`Documents ${name} does not fall back to unscoped legacy reads or actions`, async t => {
+    const state = await mount(t, { path: '/documents', language: 'en', selected: SAME_A, items: logicalItems, unresolved: [], logical_groups, documentFetch: lineageResponses({ oldServer: true }), initialQuery: { path: lineagePath }, capturePageState: true, allowSyntheticMutations: true })
+    await tick()
+    assert.ok(text(state.host).includes(state.i18n.global.t('projectCatalog.lineageScopeUncertain')))
+    assert.equal(documentContent(state), undefined)
+    assert.ok(!state.calls.some(call => ['/api/documents/read', '/api/documents/history', '/api/documents/comments'].includes(call.url.pathname)), 'An uncertain scope cannot issue unscoped reads')
+    await state.pageState().comment()
+    await state.pageState().exportDocument()
+    assert.ok(!state.calls.some(call => call.method === 'POST'))
+    await state.router.push({ path: '/documents', query: { project: SAME_A } })
+    await tick()
+    const row = walk(state.host).find(item => item.tag === 'button' && hasClass(item, 'doc-row'))
+    assert.ok(row)
+    await row.props.onClick()
+    await tick()
+    assert.equal(state.router.currentRoute.value.query.document_id, '')
+    assert.ok(text(state.host).includes(state.i18n.global.t('projectCatalog.lineageScopeUncertain')))
+    assert.ok(!state.calls.some(call => ['/api/documents/read', '/api/documents/history', '/api/documents/comments'].includes(call.url.pathname)))
+    assert.deepEqual(realProjectOptions(state.host).map(item => item.props.value).sort(), logicalItems.map(item => item.project_id).sort())
+  })
+  test(`Home ${name} does not create a legacy path-only document link`, async t => {
+    const state = await mount(t, { path: '/', language: 'en', selected: SAME_A, items: logicalItems, unresolved: [], logical_groups, documentFetch: lineageResponses({ oldServer: true }), homeDocuments: true })
+    const link = walk(state.host).find(item => item.tag === 'a' && item.props.href && new URL(item.props.href, 'http://synthetic.invalid').searchParams.get('path') === lineagePath)
+    assert.ok(link)
+    const target = new URL(link.props.href, 'http://synthetic.invalid')
+    assert.equal(target.searchParams.get('document_id'), '')
+    await state.router.push(target.pathname + target.search)
+    await tick()
+    assert.ok(text(state.host).includes(state.i18n.global.t('projectCatalog.lineageScopeUncertain')))
+    assert.ok(!state.calls.some(call => ['/api/documents/read', '/api/documents/history', '/api/documents/comments'].includes(call.url.pathname)))
+  })
+}
+
+for (const endpoint of ['/api/memories', '/api/documents']) {
+  test(`${endpoint}: explicit all paginates a verified logical union without duplicates`, async t => {
+    const items = [logicalItems[0], logicalItems[1], logicalItems[4]]
+    const logical_groups = [logicalGroups[0]]
+    const shared = [{ id: 101, path: 'synthetic-a', content: 'a' }, { id: 102, path: 'synthetic-b', content: 'b' }, { id: 103, path: 'synthetic-c', content: 'c' }]
+    const separate = [{ id: 104, path: 'synthetic-d', content: 'd' }]
+    const scopedRows = { [endpoint]: { [SAME_A]: shared, [SAME_B]: shared, [GENERIC]: separate } }
+    const state = await mount(t, { path: '/', language: 'en', items, unresolved: [], logical_groups, scopedRows })
+    const pages = []
+    for (const offset of [0, 2, 4]) {
+      const page = await state.loadKnowledgePage(endpoint, 'all', new URLSearchParams({ offset: String(offset), limit: '2' }))
+      assert.equal(page.total, 4, 'The verified alias union is counted once together with the independent project')
+      assert.equal(page.has_more, offset < 2)
+      pages.push(page)
+    }
+    assert.deepEqual(pages.map(page => page.items.length), [2, 2, 0])
+    assert.deepEqual(pages.flatMap(page => page.items.map(row => row.id)).sort(), [101, 102, 103, 104])
+    assert.equal(new Set(pages.flatMap(page => page.items.map(row => row.id))).size, 4)
+    await chooseOption(state, SAME_B)
+    const before = state.calls.length
+    const alias = await state.loadKnowledgePage(endpoint, SAME_B, new URLSearchParams({ offset: '0', limit: '2' }))
+    assert.equal(alias.total, 3)
+    assert.ok(alias.items.every(row => row.project === SAME_B))
+    const reads = state.calls.slice(before).filter(call => call.url.pathname === endpoint)
+    assert.ok(reads.length > 0 && reads.every(call => call.url.searchParams.get('project') === SAME_B), 'Direct alias selection must use the exact alias UUID')
+    assert.deepEqual(state.errors, [])
+  })
+  test(`${endpoint}: explicit all keeps disjoint pre-upgrade readers when grouping is absent`, async t => {
+    const items = [logicalItems[0], logicalItems[1], logicalItems[4]]
+    const scopedRows = {
+      [endpoint]: {
+        [SAME_A]: [{ id: 201, path: 'synthetic-one' }],
+        [SAME_B]: [{ id: 202, path: 'synthetic-two' }],
+        [GENERIC]: [{ id: 203, path: 'synthetic-three' }],
+      }
+    }
+    const state = await mount(t, { path: '/', language: 'en', items, unresolved: [], scopedRows })
+    const first = await state.loadKnowledgePage(endpoint, 'all', new URLSearchParams({ offset: '0', limit: '2' }))
+    const second = await state.loadKnowledgePage(endpoint, 'all', new URLSearchParams({ offset: '2', limit: '2' }))
+    assert.equal(first.total, 3)
+    assert.equal(second.total, 3)
+    assert.equal(first.has_more, true)
+    assert.equal(second.has_more, false)
+    assert.deepEqual([...first.items, ...second.items].map(row => row.id).sort(), [201, 202, 203])
+    assert.deepEqual(state.errors, [])
+  })
+}
+
+test('explicit all refuses incomplete logical group metadata without hiding individual choices', async t => {
+  for (const logical_groups of [null, 'invalid', [{ primary_project_id: SAME_A, alias_project_ids: [SAME_B] }, { primary_project_id: QUALIFIED, alias_project_ids: [SAME_B] }]]) {
+    const state = await mount(t, { path: '/', language: 'en', items: logicalItems, unresolved: [], logical_groups })
+    assert.deepEqual(realProjectOptions(state.host).map(item => item.props.value).sort(), logicalItems.map(item => item.project_id).sort())
+    await chooseOption(state, SAME_B)
+    for (const endpoint of ['/api/memories', '/api/documents']) {
+      await assert.rejects(state.loadKnowledgePage(endpoint, 'all', new URLSearchParams({ offset: '0', limit: '2' })), 'Incomplete or conflicting group metadata must not claim a complete all-project total')
+    }
+  }
+})
+
+const lineagePath = 'shared/synthetic.md'
+const lineageItems = [
+  { id: 101, path: lineagePath, project: SAME_A, version: 2, author: 'Alpha entry', doc_type: 'markdown' },
+  { id: 201, path: lineagePath, project: SAME_A, version: 2, author: 'Beta entry', doc_type: 'markdown' },
+]
+function lineageResponses({ oldServer = false, refusalStatus = 0 } = {}) {
+  return url => {
+    if (url.pathname === '/api/documents') {
+      const rows = oldServer ? lineageItems.slice(0, 1) : lineageItems
+      return Response.json({ items: rows, total: rows.length, offset: Number(url.searchParams.get('offset')), limit: Number(url.searchParams.get('limit')), has_more: false })
+    }
+    if (url.pathname === '/api/documents/comments') return Response.json({ comments: [] })
+    if (!['/api/documents/read', '/api/documents/history'].includes(url.pathname)) return undefined
+    const anchor = url.searchParams.get('document_id')
+    if (anchor && (oldServer || refusalStatus)) return Response.json({ error: 'synthetic lineage refusal' }, { status: refusalStatus || 400 })
+    if (!anchor && !oldServer && !refusalStatus) return Response.json({ error: 'document lineage ambiguous' }, { status: 409 })
+    const id = oldServer || (!anchor && refusalStatus) ? '101' : anchor
+    if (!['101', '201'].includes(id) || url.searchParams.get('project') !== SAME_A || url.searchParams.get('path') !== lineagePath) return Response.json({ error: 'synthetic lineage mismatch' }, { status: 404 })
+    const kind = id === '101' ? 'Alpha' : 'Beta'
+    if (url.pathname === '/api/documents/history') return Response.json({
+      path: lineagePath, project: SAME_A, versions: [
+        { id: Number(id), version: 2, author: `${kind} version two`, content_hash: `${kind}-2` },
+        { id: Number(id) - 1, version: 1, author: `${kind} version one`, content_hash: `${kind}-1` },
+      ]
+    })
+    const version = Number(url.searchParams.get('version') || 2)
+    return Response.json({ id: version === 2 ? Number(id) : Number(id) - 1, path: lineagePath, project: SAME_A, version, content: `${kind} body version ${version}`, content_hash: `${kind}-${version}`, author: `${kind} author`, doc_type: 'markdown' })
+  }
+}
+const documentReads = state => state.calls.filter(call => ['/api/documents/read', '/api/documents/history'].includes(call.url.pathname))
+const documentContent = state => walk(state.host).find(item => item.props['data-testid'] === 'document-content')
+
+for (const source of ['Documents', 'Home']) {
+  test(`${source} distinguishes same-path rows with otherwise identical metadata`, async t => {
+    const base = lineageResponses()
+    const documentFetch = (url, init) => url.pathname === '/api/documents'
+      ? Response.json({ items: lineageItems.map(item => ({ ...item, author: 'Same author' })), total: 2, offset: Number(url.searchParams.get('offset')), limit: Number(url.searchParams.get('limit')), has_more: false })
+      : base(url, init)
+    const state = await mount(t, { path: source === 'Home' ? '/' : '/documents', language: 'en', selected: SAME_A, items: [logicalItems[0], logicalItems[1]], unresolved: [], logical_groups: [logicalGroups[0]], documentFetch, homeDocuments: source === 'Home' })
+    const rows = walk(state.host).filter(item => source === 'Home'
+      ? item.tag === 'a' && item.props.href && new URL(item.props.href, 'http://synthetic.invalid').searchParams.get('path') === lineagePath
+      : item.tag === 'button' && hasClass(item, 'doc-row'))
+    assert.equal(rows.length, 2)
+    const labels = rows.map(row => text(row))
+    assert.notEqual(labels[0], labels[1], 'A reader can distinguish the same-path choices')
+    assert.ok(labels.some(label => label.includes('101')) && labels.some(label => label.includes('201')), 'The differentiators derive from the issued IDs')
+  })
+}
+
+for (const [label, id] of [['missing', undefined], ['zero', 0], ['malformed', 'not-an-id']]) {
+  for (const source of ['Documents', 'Home']) {
+    test(`${source} grouped row with ${label} ID never opens a path-only reader`, async t => {
+      const base = lineageResponses()
+      const documentFetch = (url, init) => url.pathname === '/api/documents'
+        ? Response.json({ items: [{ ...lineageItems[0], id }], total: 1, offset: Number(url.searchParams.get('offset')), limit: Number(url.searchParams.get('limit')), has_more: false })
+        : base(url, init)
+      const state = await mount(t, { path: source === 'Home' ? '/' : '/documents', language: 'en', selected: SAME_A, items: [logicalItems[0], logicalItems[1]], unresolved: [], logical_groups: [logicalGroups[0]], documentFetch, homeDocuments: source === 'Home' })
+      if (source === 'Home') {
+        const link = walk(state.host).find(item => item.tag === 'a' && item.props.href && new URL(item.props.href, 'http://synthetic.invalid').searchParams.get('path') === lineagePath)
+        assert.ok(link, 'The row remains visible with an actionable diagnosis')
+        const target = new URL(link.props.href, 'http://synthetic.invalid')
+        await state.router.push(target.pathname + target.search)
+      } else {
+        const row = walk(state.host).find(item => item.tag === 'button' && hasClass(item, 'doc-row'))
+        assert.ok(row)
+        await row.props.onClick()
+      }
+      await tick()
+      assert.equal(documentReads(state).length, 0, 'Invalid list identity must not reach a path-only or ID reader')
+      assert.equal(documentContent(state), undefined)
+      assert.ok(text(state.host).includes(state.i18n.global.t('projectCatalog.lineageUnsupported')))
+      assert.deepEqual(state.errors, [])
+    })
+  }
+}
+
+test('Home on a pre-group server preserves the path-only link', async t => {
+  const state = await mount(t, { path: '/', language: 'en', selected: SAME_A, items: [logicalItems[0]], unresolved: [], documentFetch: lineageResponses({ oldServer: true }), homeDocuments: true })
+  const link = walk(state.host).find(item => item.tag === 'a' && item.props.href && new URL(item.props.href, 'http://synthetic.invalid').searchParams.get('path') === lineagePath)
+  assert.ok(link)
+  const target = new URL(link.props.href, 'http://synthetic.invalid')
+  assert.equal(target.searchParams.has('document_id'), false)
+  await state.router.push(target.pathname + target.search)
+  await tick()
+  assert.equal(text(documentContent(state)).trim(), 'Alpha body version 2')
+  assert.ok(documentReads(state).length && documentReads(state).every(call => !call.url.searchParams.has('document_id')))
+})
+
+for (const source of ['all inventory', 'uncertain document']) {
+  test(`Documents ${source} retries the catalog and recovers`, async t => {
+    let catalogCalls = 0
+    const items = logicalItems.slice(0, 2)
+    const catalogFetch = () => Response.json({ items, unresolved: [], ...(++catalogCalls === 1 ? { logical_groups: null } : { logical_groups: [logicalGroups[0]] }) })
+    const base = lineageResponses()
+    const documentFetch = url => {
+      if (source !== 'all inventory' || url.pathname !== '/api/documents') return base(url)
+      const offset = Number(url.searchParams.get('offset')), limit = Number(url.searchParams.get('limit'))
+      return Response.json({ items: lineageItems.slice(offset, offset + limit), total: lineageItems.length, offset, limit, has_more: offset + limit < lineageItems.length })
+    }
+    const state = await mount(t, { path: '/documents', language: 'en', selected: source === 'all inventory' ? 'all' : SAME_A, items, unresolved: [], catalogFetch, documentFetch, initialQuery: source === 'all inventory' ? { allRead: '1' } : { path: lineagePath, document_id: '101' }, capturePageState: true })
+    const retry = walk(state.host).find(item => item.props['data-testid'] === 'retry-project-catalog')
+    assert.ok(retry, 'The catalog-specific failure offers its actual recovery action')
+    assert.deepEqual(realProjectOptions(state.host).map(item => item.props.value).sort(), items.map(item => item.project_id).sort())
+    await retry.props.onClick(); await tick(); await tick()
+    assert.equal(catalogCalls, 2)
+    if (source === 'all inventory') assert.equal(state.pageState().total.value, 2)
+    else assert.equal(text(documentContent(state)).trim(), 'Alpha body version 2')
+    assert.deepEqual(state.errors, [])
+  })
+}
+
+test('Catalog rollback clears same-project document detail and rejects a late grouped response', async t => {
+  let grouped = true, releaseCatalog, releaseOld
+  const nextCatalog = new Promise(resolve => { releaseCatalog = resolve })
+  const oldRead = new Promise(resolve => { releaseOld = resolve })
+  let catalogCalls = 0
+  const catalogFetch = () => ++catalogCalls === 1 ? Response.json({ items: logicalItems.slice(0, 2), unresolved: [], logical_groups: [logicalGroups[0]] }) : nextCatalog
+  const documentFetch = url => {
+    if (url.pathname === '/api/documents') return Response.json({ items: lineageItems.slice(0, 1), total: 1, offset: Number(url.searchParams.get('offset')), limit: Number(url.searchParams.get('limit')), has_more: false })
+    if (url.pathname === '/api/documents/comments') return Response.json({ comments: [] })
+    if (url.pathname === '/api/documents/history') return Response.json({ path: lineagePath, project: SAME_A, versions: [{ id: 101, version: 2 }, { id: 100, version: 1 }] })
+    if (url.pathname === '/api/documents/read') {
+      const version = Number(url.searchParams.get('version') || 2)
+      const body = content => Response.json({ id: version === 2 ? 101 : 100, path: lineagePath, project: SAME_A, version, content, content_hash: content })
+      if (grouped && version === 1) return oldRead.then(() => body('stale grouped version'))
+      return body(grouped ? 'grouped content' : 'legacy content')
+    }
+  }
+  const state = await mount(t, { path: '/documents', language: 'en', selected: SAME_A, items: logicalItems.slice(0, 2), unresolved: [], catalogFetch, documentFetch, initialQuery: { path: lineagePath }, capturePageState: true })
+  assert.equal(text(documentContent(state)).trim(), 'grouped content')
+  await state.router.push({ path: '/documents', query: { project: SAME_A, path: lineagePath, version: '1' } })
+  await tick()
+  const refresh = state.context.refresh()
+  assert.equal(state.context.project.value, '', 'The old scope is synchronously invalidated')
+  assert.equal(state.pageState().primaryDocument.value, null)
+  assert.equal(state.pageState().history.length, 0)
+  assert.equal(state.pageState().comments.length, 0)
+  grouped = false
+  releaseCatalog(Response.json({ items: logicalItems.slice(0, 2), unresolved: [] }))
+  await refresh; await tick(); await tick()
+  assert.equal(state.context.project.value, SAME_A)
+  assert.equal(text(documentContent(state)).trim(), 'legacy content')
+  releaseOld()
+  await tick(); await tick()
+  assert.equal(text(documentContent(state)).trim(), 'legacy content', 'A late grouped response cannot overwrite the settled legacy scope')
+  assert.deepEqual(state.errors, [])
+})
+
+test('Catalog rollback recomputes explicit all document totals for the settled scopes', async t => {
+  let releaseCatalog, catalogCalls = 0
+  const nextCatalog = new Promise(resolve => { releaseCatalog = resolve })
+  const catalogFetch = () => ++catalogCalls === 1 ? Response.json({ items: logicalItems.slice(0, 2), unresolved: [], logical_groups: [logicalGroups[0]] }) : nextCatalog
+  const documentFetch = url => {
+    if (url.pathname !== '/api/documents') return undefined
+    const id = url.searchParams.get('project')
+    const rows = [{ id: id === SAME_A ? 101 : 201, path: id, project: id, version: 1 }]
+    return Response.json({ items: rows, total: 1, offset: Number(url.searchParams.get('offset')), limit: Number(url.searchParams.get('limit')), has_more: false })
+  }
+  const state = await mount(t, { path: '/documents', language: 'en', selected: 'all', items: logicalItems.slice(0, 2), unresolved: [], catalogFetch, documentFetch, initialQuery: { allRead: '1' }, capturePageState: true })
+  assert.equal(state.pageState().total.value, 1)
+  const refresh = state.context.refresh()
+  assert.equal(state.pageState().total.value, null, 'Old union total is cleared before the catalog settles')
+  releaseCatalog(Response.json({ items: logicalItems.slice(0, 2), unresolved: [] }))
+  await refresh; await tick(); await tick()
+  assert.equal(state.context.project.value, 'all')
+  assert.equal(state.pageState().total.value, 2, 'Settled disjoint readers each contribute once')
+  assert.deepEqual(state.errors, [])
+})
+
+test('Catalog rollback clears and reloads Home for the same canonical project', async t => {
+  let grouped = true, releaseCatalog, catalogCalls = 0
+  const nextCatalog = new Promise(resolve => { releaseCatalog = resolve })
+  const catalogFetch = () => ++catalogCalls === 1 ? Response.json({ items: logicalItems.slice(0, 2), unresolved: [], logical_groups: [logicalGroups[0]] }) : nextCatalog
+  const documentFetch = url => {
+    if (!['/api/documents', '/api/memories'].includes(url.pathname)) return undefined
+    const label = grouped ? 'grouped home row' : 'legacy home row'
+    const row = url.pathname === '/api/memories' ? { id: 1, project: SAME_A, content: label } : { id: 101, project: SAME_A, path: label, version: 1 }
+    return Response.json({ items: [row], total: 1, offset: Number(url.searchParams.get('offset')), limit: Number(url.searchParams.get('limit')), has_more: false })
+  }
+  const state = await mount(t, { path: '/', language: 'en', selected: SAME_A, items: logicalItems.slice(0, 2), unresolved: [], catalogFetch, documentFetch })
+  assert.ok(text(state.host).includes('grouped home row'))
+  const refresh = state.context.refresh()
+  assert.equal(state.context.project.value, '')
+  await tick()
+  assert.ok(!text(state.host).includes('grouped home row'))
+  grouped = false
+  releaseCatalog(Response.json({ items: logicalItems.slice(0, 2), unresolved: [] }))
+  await refresh; await tick(); await tick()
+  assert.equal(state.context.project.value, SAME_A)
+  assert.ok(text(state.host).includes('legacy home row'))
+  assert.ok(!text(state.host).includes('grouped home row'))
+})
+
+test('Documents opens same-path list-issued lineages independently across history, Back and refresh', async t => {
+  const state = await mount(t, { path: '/documents', language: 'en', selected: SAME_A, items: [logicalItems[0], logicalItems[1]], unresolved: [], logical_groups: [logicalGroups[0]], documentFetch: lineageResponses() })
+  for (const [id, kind] of [['101', 'Alpha'], ['201', 'Beta']]) {
+    const rows = walk(state.host).filter(item => item.tag === 'button' && hasClass(item, 'doc-row'))
+    assert.equal(rows.length, 2, 'Distinct list-issued IDs at the same path remain distinct actionable rows')
+    const row = rows.find(item => text(item).includes(`${kind} entry`))
+    assert.ok(row)
+    const start = state.calls.length
+    await row.props.onClick()
+    await tick()
+    assert.equal(state.router.currentRoute.value.query.document_id, id)
+    assert.equal(text(documentContent(state)).trim(), `${kind} body version 2`)
+    const currentRows = walk(state.host).filter(item => item.tag === 'button' && hasClass(item, 'doc-row'))
+    assert.equal(currentRows.filter(item => item.props['aria-pressed'] === true).length, 1, 'Same-path rows cannot both appear selected')
+    assert.ok(text(state.host).includes(`${kind} version one`))
+    assert.ok(!text(state.host).includes(`${kind === 'Alpha' ? 'Beta' : 'Alpha'} version one`))
+    const historyButton = walk(state.host).find(item => item.tag === 'button' && text(item).includes(`${kind} version one`))
+    assert.ok(historyButton)
+    await historyButton.props.onClick()
+    await tick()
+    assert.equal(text(documentContent(state)).trim(), `${kind} body version 1`)
+    assert.equal(state.router.currentRoute.value.query.document_id, id)
+    const page = walk(state.host).find(item => hasClass(item, 'documents-page'))
+    const refresh = walk(page.children.find(item => item.tag === 'header')).find(item => item.tag === 'button')
+    await refresh.props.onClick()
+    await tick()
+    assert.equal(state.router.currentRoute.value.query.document_id, id)
+    assert.equal(text(documentContent(state)).trim(), `${kind} body version 1`)
+    const reads = state.calls.slice(start).filter(call => ['/api/documents/read', '/api/documents/history'].includes(call.url.pathname))
+    assert.ok(reads.some(call => call.url.pathname === '/api/documents/history') && reads.some(call => call.url.pathname === '/api/documents/read' && call.url.searchParams.get('version') === '1'))
+    assert.ok(reads.every(call => call.url.searchParams.get('document_id') === id && call.url.searchParams.get('project') === SAME_A && call.url.searchParams.get('path') === lineagePath))
+    const back = walk(state.host).find(item => item.tag === 'button' && hasClass(item, 'back'))
+    await back.props.onClick()
+    await tick()
+    assert.equal(state.router.currentRoute.value.query.document_id, undefined)
+    state.router.back()
+    await tick()
+    await tick()
+    assert.equal(state.router.currentRoute.value.query.document_id, id, 'Browser Back restores the exact selected lineage')
+    assert.equal(text(documentContent(state)).trim(), `${kind} body version 1`)
+    const backAgain = walk(state.host).find(item => item.tag === 'button' && hasClass(item, 'back'))
+    await backAgain.props.onClick()
+    await tick()
+  }
+  assert.deepEqual(state.errors, [])
+})
+
+test('Documents on a pre-group server keeps the existing path-only reader', async t => {
+  const state = await mount(t, { path: '/documents', language: 'en', selected: SAME_A, items: [logicalItems[0]], unresolved: [], documentFetch: lineageResponses({ oldServer: true }), initialQuery: { path: lineagePath } })
+  await tick()
+  assert.equal(text(documentContent(state)).trim(), 'Alpha body version 2')
+  assert.ok(text(state.host).includes('Alpha version one'))
+  const back = walk(state.host).find(item => item.tag === 'button' && hasClass(item, 'back'))
+  await back.props.onClick()
+  await tick()
+  const row = walk(state.host).find(item => item.tag === 'button' && hasClass(item, 'doc-row'))
+  assert.ok(row)
+  await row.props.onClick()
+  await tick()
+  assert.equal(text(documentContent(state)).trim(), 'Alpha body version 2')
+  assert.equal(state.router.currentRoute.value.query.document_id, undefined)
+  const reads = documentReads(state)
+  assert.ok(reads.some(call => call.url.pathname === '/api/documents/read') && reads.some(call => call.url.pathname === '/api/documents/history'))
+  assert.ok(reads.every(call => !call.url.searchParams.has('document_id') && call.url.searchParams.get('path') === lineagePath))
+  assert.ok(state.calls.some(call => call.url.pathname === '/api/documents/comments' && call.method === 'GET'), 'Legacy ungrouped comments remain readable')
+  assert.deepEqual(state.errors, [])
+})
+
+for (const [name, status, oldServer] of [['unsupported', 400, true], ['stale', 404, false], ['foreign', 403, false], ['mismatched', 400, false]]) {
+  test(`Documents explicit ${name} lineage never retries by path`, async t => {
+    const state = await mount(t, { path: '/documents', language: 'en', selected: SAME_A, items: oldServer ? [logicalItems[0]] : [logicalItems[0], logicalItems[1]], unresolved: [], ...(oldServer ? {} : { logical_groups: [logicalGroups[0]] }), documentFetch: lineageResponses({ oldServer, refusalStatus: status }), initialQuery: { path: lineagePath, document_id: '999' } })
+    await tick()
+    const reads = documentReads(state)
+    if (oldServer) assert.equal(reads.length, 0, 'An unsupported server may ignore document_id, so do not issue an ambiguous read')
+    else {
+      assert.ok(reads.length > 0, 'The explicit lineage reaches the supported reader')
+      assert.ok(reads.every(call => call.url.searchParams.get('document_id') === '999'), 'A refused lineage must never be retried without its ID')
+    }
+    assert.equal(documentContent(state), undefined, 'No path-only body may be substituted')
+    const reader = walk(state.host).find(item => item.tag === 'article' && hasClass(item, 'reader'))
+    assert.ok(reader && walk(reader).some(item => hasClass(item, 'error')), 'The user sees an honest reader error')
+    assert.deepEqual(state.errors, [])
+  })
+}
+
+test('Home recent documents open the exact same-path lineage in Documents', async t => {
+  const state = await mount(t, { path: '/', language: 'en', selected: SAME_A, items: [logicalItems[0], logicalItems[1]], unresolved: [], logical_groups: [logicalGroups[0]], documentFetch: lineageResponses(), homeDocuments: true })
+  for (const [id, kind] of [['101', 'Alpha'], ['201', 'Beta']]) {
+    const heading = walk(state.host).find(item => item.tag === 'h2' && text(item).trim() === state.i18n.global.t('knowledge.recentDocuments'))
+    assert.ok(heading?.parent, 'The Home recent-documents section is present')
+    const links = walk(heading.parent).filter(item => item.tag === 'a' && item.props.href && new URL(item.props.href, 'http://synthetic.invalid').searchParams.get('path') === lineagePath)
+    assert.equal(links.length, 2, 'Both same-path recent documents remain distinct links')
+    const targets = links.map(link => new URL(link.props.href, 'http://synthetic.invalid'))
+    assert.deepEqual(targets.map(url => url.searchParams.get('document_id')).sort(), ['101', '201'])
+    const target = targets.find(url => url.searchParams.get('document_id') === id)
+    assert.equal(target.pathname, '/documents')
+    assert.equal(target.searchParams.get('project'), SAME_A)
+    await state.router.push(target.pathname + target.search)
+    await tick()
+    await tick()
+    assert.equal(text(documentContent(state)).trim(), `${kind} body version 2`)
+    const reads = documentReads(state)
+    assert.ok(reads.length && reads.every(call => ['101', '201'].includes(call.url.searchParams.get('document_id'))))
+    await state.router.push({ path: '/', query: { project: SAME_A } })
+    await tick()
+  }
+  assert.deepEqual(state.errors, [])
+})
+
+test('Documents switching same-path lineage clears stale detail and targets subsequent actions correctly', async t => {
+  let releaseBeta
+  const betaReady = new Promise(resolve => { releaseBeta = resolve })
+  const responses = lineageResponses()
+  const documentFetch = (url, init) => {
+    if ((init.method || 'GET') === 'POST') return Response.json({ error: 'synthetic denial' }, { status: 403 })
+    if (['/api/documents/read', '/api/documents/history'].includes(url.pathname) && url.searchParams.get('document_id') === '201') return betaReady.then(() => responses(url))
+    return responses(url)
+  }
+  const state = await mount(t, { path: '/documents', language: 'en', selected: SAME_A, items: [logicalItems[0], logicalItems[1]], unresolved: [], logical_groups: [logicalGroups[0]], documentFetch, capturePageState: true, allowSyntheticMutations: true })
+  const findRow = kind => walk(state.host).find(item => item.tag === 'button' && hasClass(item, 'doc-row') && text(item).includes(`${kind} entry`))
+  await findRow('Alpha').props.onClick()
+  await tick()
+  assert.equal(text(documentContent(state)).trim(), 'Alpha body version 2')
+  await findRow('Beta').props.onClick()
+  await tick()
+  assert.equal(state.router.currentRoute.value.query.document_id, '201')
+  assert.ok(!text(state.host).includes('Alpha body version 2'), 'Old content is withheld while the other lineage loads')
+  assert.ok(!text(state.host).includes('Alpha version one'), 'Old history cannot remain actionable during a switch')
+  assert.ok(!walk(state.host).some(item => item.tag === 'form' && hasClass(item, 'comment-form')), 'Old comment target cannot remain actionable during the switch')
+  assert.ok(!walk(state.host).some(item => item.props['data-testid'] === 'document-export' && !item.props.disabled), 'Old export cannot be triggered during the switch')
+  releaseBeta()
+  await tick()
+  await tick()
+  assert.equal(text(documentContent(state)).trim(), 'Beta body version 2')
+  assert.ok(text(state.host).includes('Beta version one'))
+  assert.ok(!text(state.host).includes('Alpha version one'))
+  assert.ok(!walk(state.host).some(item => item.tag === 'form' && hasClass(item, 'comment-form')), 'Grouped comments are unavailable without a scoped mutation contract')
+  const exportButton = walk(state.host).find(item => item.props['data-testid'] === 'document-export')
+  assert.ok(exportButton?.props.disabled, 'Grouped export is unavailable without a scoped mutation contract')
+  assert.ok(text(state.host).includes(state.i18n.global.t('projectCatalog.lineageActionsUnavailable')))
+  assert.ok(!text(state.host).includes(state.i18n.global.t('documents.comments.emptyBody')), 'Unavailable comments are not presented as an empty thread')
+  assert.ok(!state.calls.some(call => call.method === 'GET' && call.url.pathname === '/api/documents/comments'), 'Grouped comments must not issue unscoped reads')
+  assert.equal(state.pageState().comments.length, 0, 'No stale comments remain visible')
+  state.pageState().commentDraft.value = 'synthetic comment'
+  await state.pageState().comment()
+  await state.pageState().exportDocument()
+  assert.ok(!state.calls.some(call => call.method === 'POST'), 'No grouped action may submit an unscoped document ID')
+  assert.deepEqual(state.errors, [])
+})
+
+for (const language of ['en', 'ru', 'zh']) {
+  test(`Documents ${language}: path-only ambiguous lineage offers a localized route back to choices`, async t => {
+    const base = lineageResponses()
+    const wrongSibling = lineageResponses({ oldServer: true })
+    const attempts = new Map()
+    const documentFetch = url => {
+      if (!['/api/documents/read', '/api/documents/history'].includes(url.pathname)) return base(url)
+      const count = (attempts.get(url.pathname) || 0) + 1
+      attempts.set(url.pathname, count)
+      if (count > 1) return wrongSibling(url)
+      return Response.json({ error: 'document lineage ambiguous', detail: 'private arbitrary server text' }, { status: 409 })
+    }
+    const state = await mount(t, { path: '/documents', language, selected: SAME_A, items: [logicalItems[0], logicalItems[1]], unresolved: [], logical_groups: [logicalGroups[0]], documentFetch, initialQuery: { path: lineagePath } })
+    await tick()
+    assert.equal(documentContent(state), undefined)
+    assert.ok([...attempts.values()].every(count => count === 1), 'Ambiguity must not silently retry the same path and open a sibling')
+    const reader = walk(state.host).find(item => item.tag === 'article' && hasClass(item, 'reader'))
+    const error = walk(reader).find(item => hasClass(item, 'error'))
+    assert.ok(error)
+    assert.ok(!text(error).includes(state.i18n.global.t('errors.diagnosis.request-rejected')), 'A known ambiguity needs more than the generic 409 diagnosis')
+    assert.ok(!text(error).includes('private arbitrary server text') && !text(error).includes('document lineage ambiguous'), 'Arbitrary server text is not rendered as operator copy')
+    const back = walk(reader).find(item => item.tag === 'button' && hasClass(item, 'back'))
+    assert.ok(back, 'The user can return to the list and choose a lineage')
+    await back.props.onClick()
+    await tick()
+    assert.equal(state.router.currentRoute.value.query.path, undefined)
+    assert.equal(walk(state.host).filter(item => item.tag === 'button' && hasClass(item, 'doc-row')).length, 2)
+    assert.deepEqual(state.errors, [])
+  })
+}
+
+test('Documents unrelated 409 stays a generic rejection rather than a lineage ambiguity', async t => {
+  const base = lineageResponses()
+  const documentFetch = url => ['/api/documents/read', '/api/documents/history'].includes(url.pathname)
+    ? Response.json({ error: 'unrelated synthetic conflict', detail: 'private arbitrary server text' }, { status: 409 })
+    : base(url)
+  const state = await mount(t, { path: '/documents', language: 'en', selected: SAME_A, items: [logicalItems[0], logicalItems[1]], unresolved: [], logical_groups: [logicalGroups[0]], documentFetch, initialQuery: { path: lineagePath } })
+  await tick()
+  const reader = walk(state.host).find(item => item.tag === 'article' && hasClass(item, 'reader'))
+  const error = walk(reader).find(item => hasClass(item, 'error'))
+  assert.ok(error)
+  assert.ok(text(error).includes(state.i18n.global.t('errors.diagnosis.request-rejected')))
+  assert.ok(!text(error).includes('private arbitrary server text'))
+  assert.equal(documentContent(state), undefined)
+  assert.deepEqual(state.errors, [])
+})

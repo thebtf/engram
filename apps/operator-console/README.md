@@ -203,7 +203,7 @@ successful-empty backend data, installed delivery or release acceptance.
 | `/` | Choose a project, open its knowledge or the independent code Workspace. A concrete project loads at most three latest memories and three document summaries, not every project's bodies. |
 | `/projects` | Choose one canonical project, enter memory/documents/code, and read up to 50 existing sessions. Project archive remains secondary and requires typing the exact selected ID. |
 | `/memory` | Server-filtered content search and paging, then the real ID reader, origin/currentness fields, source sessions, and up to 200 accessible audit events. Suppress, restore, archive, delete, and explicit bulk suppress use existing mutation/readback contracts. |
-| `/documents` | Metadata search, type/path-prefix filtering and paging, then current/version content, real version history, comparison, version-specific comments, and the existing export action. Download is exposed only after `committed_verified`; a new attempt or reader scope/version/state change clears its artifact. |
+| `/documents` | Metadata search, type/path-prefix filtering and paging, then current/version content, real version history and comparison. Version-specific comments and the existing export action remain available for legacy ungrouped readers; grouped actions are unavailable until a project-scoped action contract is supported. Download is exposed only after `committed_verified`; a new attempt or reader scope/version/state change clears its artifact. |
 | `/search` | Optional project context search through the existing context reader. Memory-backed results open the canonical scoped ID reader and return to the original query. Unsupported, forbidden, stale and unavailable search offers the same literal query in real project-scoped memory content or document-metadata search; these are not semantic/similarity results. Request evidence and search diagnostics remain secondary. |
 | `/code` | Existing independently selected and server-pinned Workspace. Knowledge labels never establish repository linkage or source access. |
 | `/rules`, `/queue` | Retained supported actions follow the shared selected project. Rules retain their explicit global scope; candidates retain the existing flag and explicit all-project contract. |
@@ -223,6 +223,7 @@ The canonical catalog is one shape, not an optional compatibility mode:
 type ProjectsResponse = {
   items: { project_id: string; name: string; repository_qualifier?: string }[]
   unresolved: { reference: string; name: string; reason: string; reader_kinds: ('memory' | 'document' | 'issue' | 'code')[] }[]
+  logical_groups?: { primary_project_id: string; alias_project_ids: string[] }[]
 }
 type ReaderPage<T> = { items: T[]; total: number; offset: number; limit: number; has_more: boolean }
 ```
@@ -232,6 +233,22 @@ not identity or authority. Equal names retain distinct IDs; project choices and
 selected Projects/Home headings use repository qualifiers when supplied and the
 catalog-unique UUID hints described above. Workspace
 Repository/Working copy/Indexed snapshot selection remains independent.
+
+The optional `logical_groups` field is a conditional reader contract, not identity
+or repository authority. An emitted group must mean that its primary and every alias
+provide the same caller-authorized, deduplicated memory and document union, including
+correct totals and paging, with each row projected to the requested canonical UUID.
+The client validates membership, duplicates and overlap before presenting a group;
+malformed or contradictory entries do not grant group or lineage support, while
+unrelated valid groups and every individual UUID choice remain available. Affected
+document scopes do not fall back to legacy reads or actions; if malformed metadata
+cannot identify affected projects, all document scopes are uncertain. Absent grouping
+retains the older flat choices and assumes the older readers are disjoint. These UI
+conditions do not prove the server union or its authorization.
+Catalog refresh temporarily clears the selected scope, invalidating existing Home,
+memory and document results and action targets before new membership is applied.
+The unchanged route is resolved again against the settled catalog; late responses
+from the prior scope cannot repopulate the refreshed view.
 
 The shared context retains `project`, `projects`, `descriptors`, `pending`, `error`,
 `label`, `refresh`, `select`, `to`, and `remember`. It adds `unresolved`,
@@ -360,7 +377,9 @@ enabled chips combined by AND before the visible total and page. Values are
 `all|active|flagged|stale|low|chain`; omitted means all, and explicit all is neutral.
 The server validates at most six incoming values, deduplicates them, and rejects unknown,
 blank or CSV values. Unknown confidence is not zero. Document query searches `path`, `doc_type`, and `author`,
-never bodies or vault data. Documents choose the latest version per path before filters.
+never bodies or vault data. Legacy readers choose the latest version per path before
+filters. Under the proposed grouped reader contract, distinct native lineages may
+share a path and must remain distinct, with the latest version selected per lineage.
 No array, `details=true`, stored-alias, display-name, or client 500-body fallback exists.
 
 Repeated `filter` values remain status/quality predicates, separate from types.
@@ -370,7 +389,8 @@ Documents use repeated literal `doc_type` values, without a fixed enum. `markdow
 `text` are examples, not the only choices. Omitted types are unrestricted; one selected
 type is the scalar subset. Any selected type matches (IN/OR), AND all other query/status/
 quality/canonical/privacy criteria before count/page. Document types apply after latest
-version selection per path, never to historical versions before choosing the latest.
+version selection per path for legacy readers, or per lineage for a grouped reader,
+never to historical versions before choosing the latest.
 Each selector accepts at most six raw values before deduplication. Document values use
 Unicode whitespace trimming, valid UTF-8 up to128 bytes, no control characters, and
 nonempty values. There is no CSV parsing or blanket comma rejection for literal types.
@@ -395,6 +415,16 @@ selected canonical ID, never a raw stored alias. The server owns strict unique l
 alias resolution and privacy. Unknown/unregistered or ambiguous identities are not
 invented, auto-registered, merged, or presented as successfully empty projects.
 
+For a validated group, a document list row's positive issued ID identifies its
+lineage in Home and Documents links and in current/version/history requests. Same-path
+choices expose the issued IDs when needed to distinguish them. A grouped row with a
+missing or invalid ID is diagnosed without a path-only read; an explicit ID link to
+an unsupported server is also blocked rather than sent to a server that might ignore
+it. Legacy ungrouped links continue to use paths. A path-only ambiguity is shown as
+an actionable return to the list, not retried as another document. Grouped comment
+reads, comment writes and export remain unavailable until the server supplies proven
+project-scoped contracts; legacy ungrouped reads and actions retain their behavior.
+
 `GET /api/memories/:id/audit?project=<canonical ID>&limit=200` now requires the
 same exact selected canonical project as the detail reader; its DTO remains
 `{ memory_id, entries[] }`. Missing project is 400, nonlive project is 403, and
@@ -408,12 +438,17 @@ never `project=all`, a stored alias or a display label. Denials remain visible e
 not empty history. Existing query/filter/page and search return remain unchanged.
 
 “All projects” is explicit. Home never fans out knowledge bodies. Inventories require
-an explicit Find submission before composing pages over canonical descriptor IDs;
-ordering is by project, then by creation time within each project. A failed member
-read remains an error rather than a partial total presented as complete.
+an explicit Find submission before composing pages over canonical descriptor IDs.
+When valid groups are present, composition reads each group's primary once and skips
+its aliases, relying on the conditional union contract above; direct alias selection
+still reads that exact UUID. Invalid or conflicting group metadata fails closed for
+the all-project composition rather than claiming a complete total. With grouping
+absent, composition retains the legacy disjoint-reader behavior. Ordering is by
+project, then by creation time within each project. A failed member read remains an
+error rather than a partial total presented as complete.
 
 The route preserves project, query, filters, page, page size, selected record/path,
-and document version/comparison. Per-project route state also stays in this tab's
+issued document lineage ID when supported, and document version/comparison. Per-project route state also stays in this tab's
 session storage so navigation back from another knowledge page survives a reload.
 Desktop uses master/detail; the narrow layout uses one reader column and hides the list.
 Opening focuses and scrolls the reader title into view. Back/Escape restores the result

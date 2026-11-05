@@ -6,7 +6,7 @@ const { t } = useI18n()
 const projectChoiceLabel = (id: string) => localizedProjectChoiceLabel(id, t)
 const route = useRoute()
 const context = useOperatorProjectContext()
-const { project, projects, descriptors, unresolved, pending, error, selectionPending, selectionError } = context
+const { project, projects, descriptors, unresolved, projectSections, pending, error, selectionPending, selectionError } = context
 const showRetainedGroups = computed(() => !['/', '/projects', '/projects/unresolved'].includes(route.path.replace(/\/+$/, '').toLowerCase() || '/'))
 function select(event: Event) { if (event.target instanceof HTMLSelectElement) void context.select(event.target.value) }
 </script>
@@ -15,26 +15,84 @@ function select(event: Event) { if (event.target instanceof HTMLSelectElement) v
   <div class="project-context">
     <label>
       <span>{{ t('knowledge.contextProject') }}</span>
-      <select :value="project" :aria-label="t('knowledge.contextProject')" :disabled="pending && !projects.length" @change="select" data-testid="project-context-select">
+      <select :value="project" :aria-label="t('knowledge.contextProject')" :disabled="pending && !projects.length"
+        @change="select" data-testid="project-context-select">
         <option value="" disabled>{{ t('knowledge.chooseProject') }}</option>
-        <option v-for="id in projects" :key="id" :value="id">{{ projectChoiceLabel(id) }}</option>
+        <template v-for="section in projectSections" :key="section.key">
+          <option v-for="id in section.label ? [] : section.ids" :key="id" :value="id">{{ projectChoiceLabel(id) }}
+          </option>
+          <optgroup v-if="section.label" :label="section.label">
+            <option v-for="id in section.ids" :key="id" :value="id">{{ projectChoiceLabel(id) }}</option>
+          </optgroup>
+        </template>
         <option value="all">{{ t('knowledge.allProjects') }}</option>
       </select>
     </label>
     <span v-if="pending || selectionPending" role="status">{{ t('projectCatalog.loading') }}</span>
-    <span v-if="project && project !== 'all' && descriptors.filter(row => projectName(row.project_id) === projectName(project)).length > 1">{{ t('projectCatalog.ambiguousName') }}</span>
+    <span
+      v-if="project && project !== 'all' && descriptors.filter(row => projectName(row.project_id) === projectName(project)).length > 1">{{
+        t('projectCatalog.ambiguousName') }}</span>
     <div v-if="error || selectionError" class="context-error" role="alert">
-      {{ t('projectCatalog.unknownProject') }} {{ t(operatorDiagnosisKey(error || selectionError)) }} <button type="button" @click="context.refresh">{{ t('knowledge.retry') }}</button>
+      {{ t('projectCatalog.unknownProject') }} {{ t(operatorDiagnosisKey(error || selectionError)) }} <button
+        type="button" @click="context.refresh">{{ t('knowledge.retry') }}</button>
     </div>
-    <RouterLink v-if="unresolved.length && showRetainedGroups" to="/projects/unresolved">{{ t('projectCatalog.groupDiscovery') }} ({{ unresolved.length }})</RouterLink>
+    <RouterLink v-if="unresolved.length && showRetainedGroups" to="/projects/unresolved">{{
+      t('projectCatalog.groupDiscovery') }} ({{ unresolved.length }})</RouterLink>
   </div>
 </template>
 
 <style scoped>
-.project-context { min-width:0; max-width:100%; flex:0 1 340px; }
-label { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:var(--text-sm); }
-select { min-width:0; max-width:100%; width:clamp(140px,22vw,300px); min-height:36px; padding:6px 10px; color:var(--fg); background:var(--surface); border:1px solid var(--border); border-radius:var(--r-sm); }
-.context-error { font-size:var(--text-xs); color:var(--state-warn); }
-button { background:transparent; color:var(--accent); border:0; cursor:pointer; }
-@media(max-width:760px) { .project-context { flex:1; max-width:calc(100vw - 80px); } label > span { display:none; } select { width:100%; min-height:44px; } }
+.project-context {
+  min-width: 0;
+  max-width: 100%;
+  flex: 0 1 340px;
+}
+
+label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+select {
+  min-width: 0;
+  max-width: 100%;
+  width: clamp(140px, 22vw, 300px);
+  min-height: 36px;
+  padding: 6px 10px;
+  color: var(--fg);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+.context-error {
+  font-size: var(--text-xs);
+  color: var(--state-warn);
+}
+
+button {
+  background: transparent;
+  color: var(--accent);
+  border: 0;
+  cursor: pointer;
+}
+
+@media(max-width:760px) {
+  .project-context {
+    flex: 1;
+    max-width: calc(100vw - 80px);
+  }
+
+  label>span {
+    display: none;
+  }
+
+  select {
+    width: 100%;
+    min-height: 44px;
+  }
+}
 </style>
