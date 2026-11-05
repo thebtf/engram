@@ -257,8 +257,7 @@ func (m *Module) proxyToolCallContext(ctx context.Context, project muxcore.Proje
 	if err != nil {
 		return nil, err
 	}
-	resolved, err := projectidentity.ResolveLogicalProject(ctx, project.Cwd,
-		projectidentity.HTTPBootstrap(serverURL, m.envFor(project, config.EnvWorkstationToken)))
+	resolved, err := projectidentity.ResolveLogicalProjectForBackend(ctx, project.Cwd, serverURL, m.envFor(project, config.EnvWorkstationToken))
 	originalErr := err
 	if projectidentity.ProjectErrorCode(err) == "PROJECT_MIGRATION_REQUIRED" {
 		resolved, err = projectidentity.ResolveAutomaticHistoricalProject(ctx, project.Cwd, serverURL, m.envFor(project, config.EnvWorkstationToken), err)
