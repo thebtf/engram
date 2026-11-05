@@ -120,8 +120,36 @@ func TestProjectContextPrimaryOriginRecovery(t *testing.T) {
 			if tc.name == "name-only-with-alias" || tc.name == "origin-unavailable" {
 				read := []byte(`{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"recall_memory","arguments":{"query":"existing-memory-sentinel"}}}`)
 				wire, err := dispatcher.HandleRequest(t.Context(), caller, read)
-				if err != nil || !strings.Contains(string(wire), "PROJECT_CONTEXT_REQUIRED") {
-					t.Fatalf("name-only read was not held: %s %v", wire, err)
+				if err != nil {
+					t.Fatalf("name-only read transport: %v", err)
+				}
+				var response struct {
+					Error  any `json:"error"`
+					Result struct {
+						IsError bool `json:"isError"`
+						Content []struct {
+							Text string `json:"text"`
+						} `json:"content"`
+					} `json:"result"`
+				}
+				want := "PROJECT_CONTEXT_REQUIRED"
+				if tc.name == "origin-unavailable" {
+					want = "PROJECT_RESOLUTION_UNAVAILABLE"
+				}
+				if err := json.Unmarshal(wire, &response); err != nil || response.Error != nil || !response.Result.IsError || len(response.Result.Content) != 1 || !strings.HasPrefix(response.Result.Content[0].Text, want+":") {
+					t.Fatalf("name-only read must hold with %s: %s (%v)", want, wire, err)
+				}
+				grpcBackend.mu.Lock()
+				forwarded := len(grpcBackend.calls)
+				grpcBackend.mu.Unlock()
+				if forwarded != 0 {
+					t.Fatal("held read reached the backend tool handler")
+				}
+				if current, err := os.ReadFile(path); err != nil || string(current) != tc.marker {
+					t.Fatal("held read changed the marker")
+				}
+				if _, err := os.Lstat(filepath.Join(root, ".git", "engram-project.json")); !os.IsNotExist(err) {
+					t.Fatal("held read created or changed the cache")
 				}
 			}
 			request := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"project_context","arguments":{"action":"repair"}}}`)
