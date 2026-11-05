@@ -43,15 +43,16 @@ const renderer = vue.createRenderer({
 })
 function walk(node) { return [node, ...node.children.flatMap(walk)] }
 
-async function mountConsumer(t, location, { storage = new Map(), rejectMemory = false, catalogReady = Promise.resolve(), resolveLegacy = false } = {}) {
+async function mountConsumer(t, location, { storage = new Map(), rejectMemory = false, catalogReady = Promise.resolve(), resolveLegacy = false, catalogFetch, memoryFetch } = {}) {
   const requests = []
   let reader
   const fetch = async (input) => {
     const url = new URL(input, 'http://synthetic.invalid')
-    if (url.pathname === '/api/projects') { await catalogReady; return Response.json({ items: [{ project_id: projectID, name: 'Synthetic project' }], unresolved: [] }) }
+    if (url.pathname === '/api/projects') { await catalogReady; return catalogFetch ? catalogFetch() : Response.json({ items: [{ project_id: projectID, name: 'Synthetic project' }], unresolved: [] }) }
     if (url.pathname === '/api/projects/resolve') return resolveLegacy ? Response.json({ status: 'resolved', project_id: projectID, name: 'Synthetic project' }) : Response.json({ error: 'Mapping unavailable' }, { status: 503 })
     if (url.pathname === '/api/memories') {
       requests.push(url)
+      if (memoryFetch) return memoryFetch(url)
       return rejectMemory ? Response.json({ error: 'Synthetic request refusal' }, { status: 400 }) : Response.json({
         items: [], total: 0, offset: Number(url.searchParams.get('offset')), limit: Number(url.searchParams.get('limit')), has_more: false,
       })
@@ -180,4 +181,41 @@ test('pending and failed legacy resolution never dispatch a raw or broader memor
   assert.equal(failed.context.project.value, '')
   assert.equal(failed.context.selectionError.value.status, 503)
   assert.ok(walk(failed.host).some((node) => node.props['data-testid'] === 'memory-project-error'))
+})
+
+test('catalog rollback clears and recomputes the explicit all-memory total', async t => {
+  const alias = '22222222-2222-4222-8222-222222222222'
+  const items = [{ project_id: projectID, name: 'Primary' }, { project_id: alias, name: 'Alias' }]
+  let releaseCatalog, catalogCalls = 0
+  const nextCatalog = new Promise(resolve => { releaseCatalog = resolve })
+  const catalogFetch = () => ++catalogCalls === 1 ? Response.json({ items, unresolved: [], logical_groups: [{ primary_project_id: projectID, alias_project_ids: [alias] }] }) : nextCatalog
+  const memoryFetch = url => {
+    const project = url.searchParams.get('project')
+    return Response.json({ items: [{ id: project === projectID ? 1 : 2, project, content: 'synthetic memory' }], total: 1, offset: Number(url.searchParams.get('offset')), limit: Number(url.searchParams.get('limit')), has_more: false })
+  }
+  const consumer = await mountConsumer(t, '/memory?project=all&allRead=1', { catalogFetch, memoryFetch })
+  assert.equal(consumer.reader().total.value, 1)
+  const refresh = consumer.context.refresh()
+  assert.equal(consumer.context.project.value, '')
+  assert.equal(consumer.reader().total.value, null)
+  assert.equal(consumer.reader().rows.length, 0)
+  releaseCatalog(Response.json({ items, unresolved: [], logical_groups: [] }))
+  await refresh; await tick(); await tick()
+  assert.equal(consumer.context.project.value, 'all')
+  assert.equal(consumer.reader().total.value, 2)
+  assert.equal(consumer.reader().rows.length, 2)
+})
+
+test('all-memory catalog error retries the catalog and recovers', async t => {
+  let catalogCalls = 0
+  const items = [{ project_id: projectID, name: 'Synthetic project' }]
+  const catalogFetch = () => Response.json({ items, unresolved: [], logical_groups: ++catalogCalls === 1 ? null : [] })
+  const consumer = await mountConsumer(t, '/memory?project=all&allRead=1', { catalogFetch })
+  assert.equal(consumer.reader().loadState.value.kind, 'error')
+  const retry = walk(consumer.host).find(node => node.props['data-testid'] === 'retry-project-catalog')
+  assert.ok(retry)
+  await retry.props.onClick(); await tick(); await tick()
+  assert.equal(catalogCalls, 2)
+  assert.equal(consumer.reader().loadState.value.kind, 'empty')
+  assert.equal(consumer.reader().total.value, 0)
 })

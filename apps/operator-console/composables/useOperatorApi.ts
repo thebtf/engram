@@ -32,6 +32,7 @@ export const OPERATOR_DIAGNOSIS_CATEGORIES = [
  'server-unavailable',
  'unreachable',
  'invalid-response',
+ 'document-lineage-ambiguous',
 ] as const
 
 /**
@@ -270,7 +271,10 @@ export async function operatorFetchJson<T>(
  const text = await readOperatorResponseText(response, path, source, method)
 
  if (!response.ok) {
-  const category = operatorErrorDiagnosis(response.status)
+  let category = operatorErrorDiagnosis(response.status)
+  if (response.status === 409 && (source === 'documents-read-primary' || source === 'documents-read-secondary' || source === 'documents-history')) {
+   try { if (['document lineage ambiguous', 'document lineage ambiguous; select a document_id from the list'].includes(JSON.parse(text)?.error)) category = 'document-lineage-ambiguous' } catch { /* Unrecognized errors retain the generic diagnosis. */ }
+  }
   const message = `${method} ${path} failed with status ${response.status}`
   throw new OperatorFetchError(message, {
    message,
