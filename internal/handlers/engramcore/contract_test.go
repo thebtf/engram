@@ -442,8 +442,35 @@ func TestContract_ToolsList_OfflineWithoutURLReturnsLocalCatalog(t *testing.T) {
 		}
 	}
 	call, err := disp.HandleRequest(context.Background(), p, jsonrpcCallReq(2, "recall_memory"))
-	if err != nil || !strings.Contains(string(call), "ENGRAM_URL or ENGRAM_SERVER_URL not set") {
-		t.Fatalf("unconfigured recall must refuse safely: %s (%v)", call, err)
+	if err != nil {
+		t.Fatalf("unconfigured recall dispatch: %v", err)
+	}
+	var refusal struct {
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+		Result struct {
+			IsError bool `json:"isError"`
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(call, &refusal); err != nil {
+		t.Fatalf("unconfigured recall returned invalid JSON: %v", err)
+	}
+	message := ""
+	if refusal.Error != nil {
+		message = refusal.Error.Message
+	} else if refusal.Result.IsError {
+		for _, block := range refusal.Result.Content {
+			message += block.Text
+		}
+	} else {
+		t.Fatalf("unconfigured recall did not return an error: %s", call)
+	}
+	if !strings.Contains(message, "ENGRAM_URL or ENGRAM_SERVER_URL not set") {
+		t.Fatalf("unconfigured recall lacks bounded configuration refusal: %s", call)
 	}
 }
 
