@@ -46,11 +46,13 @@ type ProjectAliasReceipt struct {
 	PlanFingerprint string                 `json:"plan_fingerprint"`
 	Target          string                 `json:"target"`
 	Aliases         []ProjectAliasExpected `json:"aliases"`
+	Database        string                 `json:"database"`
 	ProjectSnapshot string                 `json:"project_snapshot"`
 	Actor           string                 `json:"actor"`
 }
 type projectAliasPlanState struct {
 	Request          ProjectAliasAttachRequest
+	Database         string
 	ProjectSnapshot  string
 	RedirectSnapshot string
 	Fingerprint      string
@@ -115,9 +117,9 @@ func aliasSnapshots(tx *gormlib.DB, req ProjectAliasAttachRequest) (string, stri
 
 func aliasPlanFingerprint(state projectAliasPlanState) string {
 	return structuralDigest(struct {
-		Request             ProjectAliasAttachRequest
-		Projects, Redirects string
-	}{state.Request, state.ProjectSnapshot, state.RedirectSnapshot})
+		Request                       ProjectAliasAttachRequest
+		Database, Projects, Redirects string
+	}{state.Request, state.Database, state.ProjectSnapshot, state.RedirectSnapshot})
 }
 
 // PrepareProjectAliases is read-only; an empty redirect set is part of the sealed expected state.
@@ -132,6 +134,10 @@ func (s *ProjectConsolidationStore) PrepareProjectAliases(ctx context.Context, r
 	state := projectAliasPlanState{Request: req}
 	err = s.db.WithContext(ctx).Transaction(func(tx *gormlib.DB) error {
 		var e error
+		state.Database, e = consolidationDatabaseIdentity(tx)
+		if e != nil {
+			return e
+		}
 		state.ProjectSnapshot, state.RedirectSnapshot, e = aliasSnapshots(tx, req)
 		if e != nil {
 			return e
@@ -163,7 +169,7 @@ func (s *ProjectConsolidationStore) openAliasPlan(ref, fp string) (projectAliasP
 		return state, consolidationHold("STALE_PLAN")
 	}
 	state.Request = req
-	if fp != state.Fingerprint || fp != aliasPlanFingerprint(state) || state.ID != uuid.NewSHA1(uuid.NameSpaceOID, []byte(fp)).String() {
+	if state.Database == "" || fp != state.Fingerprint || fp != aliasPlanFingerprint(state) || state.ID != uuid.NewSHA1(uuid.NameSpaceOID, []byte(fp)).String() {
 		return state, consolidationHold("STALE_PLAN")
 	}
 	return state, nil
@@ -174,6 +180,13 @@ func aliasLock(tx *gormlib.DB) error {
 		return err
 	}
 	return tx.Exec(`LOCK TABLE audit_log, project_consolidation_operations, project_consolidation_redirects, projects IN SHARE ROW EXCLUSIVE MODE`).Error
+}
+
+func aliasCheckDatabase(expected, actual string) error {
+	if expected == "" || expected != actual {
+		return consolidationHold("STALE_PLAN")
+	}
+	return nil
 }
 
 func aliasOperation(tx *gormlib.DB, key string) (consolidationOperation, ProjectAliasReceipt, error) {
@@ -242,11 +255,21 @@ func (s *ProjectConsolidationStore) ApplyProjectAliases(ctx context.Context, req
 	}
 	var result ProjectAliasReceipt
 	err = s.db.WithContext(ctx).Transaction(func(tx *gormlib.DB) error {
+		database, err := consolidationDatabaseIdentity(tx)
+		if err != nil {
+			return err
+		}
+		if err := aliasCheckDatabase(state.Database, database); err != nil {
+			return err
+		}
 		if err := aliasLock(tx); err != nil {
 			return err
 		}
 		op, prior, err := aliasOperation(tx, request.IdempotencyKey)
 		if err == nil {
+			if err := aliasCheckDatabase(prior.Database, database); err != nil {
+				return err
+			}
 			if prior.Status != "applied" || op.PlanID != state.ID || op.PlanFingerprint != state.Fingerprint {
 				return consolidationHold("REPLAY_CONFLICT")
 			}
@@ -278,7 +301,7 @@ func (s *ProjectConsolidationStore) ApplyProjectAliases(ctx context.Context, req
 				return err
 			}
 		}
-		result = ProjectAliasReceipt{Kind: "project-alias-v1", Status: "applied", IdempotencyKey: request.IdempotencyKey, PlanFingerprint: state.Fingerprint, Target: state.Request.Target, Aliases: state.Request.Aliases, ProjectSnapshot: state.ProjectSnapshot, Actor: actor}
+		result = ProjectAliasReceipt{Kind: "project-alias-v1", Status: "applied", IdempotencyKey: request.IdempotencyKey, PlanFingerprint: state.Fingerprint, Target: state.Request.Target, Aliases: state.Request.Aliases, Database: database, ProjectSnapshot: state.ProjectSnapshot, Actor: actor}
 		if err := aliasRecord(tx, request.IdempotencyKey, state.ID, state.Fingerprint, result); err != nil {
 			return err
 		}
@@ -296,13 +319,25 @@ func (s *ProjectConsolidationStore) ProjectAliasStatus(ctx context.Context, key 
 	}
 	var receipt ProjectAliasReceipt
 	err := s.db.WithContext(ctx).Transaction(func(tx *gormlib.DB) error {
-		var err error
+		database, err := consolidationDatabaseIdentity(tx)
+		if err != nil {
+			return err
+		}
 		_, receipt, err = aliasOperation(tx, key)
 		if err != nil {
 			return err
 		}
+		if err := aliasCheckDatabase(receipt.Database, database); err != nil {
+			return err
+		}
 		if receipt.Status == "applied" {
 			var count int64
+			if err := tx.Model(&consolidationOperation{}).Where("receipt->>'kind' = ? AND receipt->>'status' = ? AND receipt->>'apply_key' = ? AND COALESCE(receipt->>'database', '') <> ?", "project-alias-v1", "rolled_back", key, database).Count(&count).Error; err != nil {
+				return err
+			}
+			if count != 0 {
+				return consolidationHold("STALE_PLAN")
+			}
 			if err := tx.Model(&consolidationOperation{}).Where("receipt->>'kind' = ? AND receipt->>'status' = ? AND receipt->>'apply_key' = ?", "project-alias-v1", "rolled_back", key).Count(&count).Error; err != nil {
 				return err
 			}
@@ -326,11 +361,18 @@ func (s *ProjectConsolidationStore) RollbackProjectAliases(ctx context.Context, 
 	}
 	var result ProjectAliasReceipt
 	err := s.db.WithContext(ctx).Transaction(func(tx *gormlib.DB) error {
+		database, err := consolidationDatabaseIdentity(tx)
+		if err != nil {
+			return err
+		}
 		if err := aliasLock(tx); err != nil {
 			return err
 		}
 		_, prior, err := aliasOperation(tx, request.IdempotencyKey)
 		if err == nil {
+			if err := aliasCheckDatabase(prior.Database, database); err != nil {
+				return err
+			}
 			if prior.Status != "rolled_back" || prior.ApplyKey != request.ApplyKey {
 				return consolidationHold("REPLAY_CONFLICT")
 			}
@@ -342,6 +384,9 @@ func (s *ProjectConsolidationStore) RollbackProjectAliases(ctx context.Context, 
 		}
 		appliedOp, applied, err := aliasOperation(tx, request.ApplyKey)
 		if err != nil {
+			return err
+		}
+		if err := aliasCheckDatabase(applied.Database, database); err != nil {
 			return err
 		}
 		if applied.Status != "applied" {

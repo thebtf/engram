@@ -96,7 +96,7 @@ func projectAliasHTTPError(w http.ResponseWriter, err error) {
 		switch refusal.Code {
 		case "PROJECT_ADOPTION_AUTH_REQUIRED":
 			status, message = http.StatusForbidden, "Administrator authorization is required."
-		case "PROJECT_ADOPTION_INVENTORY_INCOMPLETE", "PROJECT_ADOPTION_BACKUP_MISSING":
+		case "PROJECT_ADOPTION_INVENTORY_INCOMPLETE", "PROJECT_ADOPTION_BACKUP_MISSING", "PROJECT_ADOPTION_SOURCE_IDENTITY_UNAVAILABLE":
 			status, message = http.StatusServiceUnavailable, "Alias service unavailable; retain the operation key and check status before any further action."
 		case "PROJECT_ADOPTION_UNKNOWN_REFERENCE":
 			status, message = http.StatusBadRequest, "The alias request is invalid; select existing projects and retry preparation."

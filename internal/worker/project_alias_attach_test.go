@@ -514,6 +514,7 @@ func TestProjectAliasHTTPErrorSemantics(t *testing.T) {
 	}{
 		{gormlib.ErrRecordNotFound, http.StatusNotFound, "PROJECT_ALIAS_NOT_RECORDED"},
 		{errors.New("private database detail"), http.StatusServiceUnavailable, "PROJECT_ALIAS_UNAVAILABLE"},
+		{&gormdb.ConsolidationError{Code: "PROJECT_ADOPTION_SOURCE_IDENTITY_UNAVAILABLE"}, http.StatusServiceUnavailable, "PROJECT_ADOPTION_SOURCE_IDENTITY_UNAVAILABLE"},
 		{&gormdb.ConsolidationError{Code: "PROJECT_ADOPTION_STALE_PLAN"}, http.StatusConflict, "PROJECT_ADOPTION_STALE_PLAN"},
 	} {
 		rec := httptest.NewRecorder()
