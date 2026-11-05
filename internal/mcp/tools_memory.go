@@ -276,7 +276,7 @@ func (s *scopedWriteLintMemoryStore) List(ctx context.Context, project string, l
 		if currentLimit <= 0 {
 			break
 		}
-		batch, err := s.pager.ListWithOffset(ctx, project, currentLimit, offset)
+		batch, err := gormdb.ListMemoryPageForSearch(ctx, s.pager, project, currentLimit, offset, scope.MemoryReadAccess{Caller: s.caller, Visibility: s.opts})
 		if err != nil {
 			return nil, err
 		}
@@ -1610,6 +1610,9 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 	if project == "" {
 		return "", fmt.Errorf("project is required for recall_memory in v5")
 	}
+	if err := s.memoryStore.CheckCanonicalProject(ctx, project); err != nil {
+		return "", err
+	}
 
 	// ── Visibility params — parsed unconditionally so both hybrid and legacy
 	// paths enforce the same memory visibility contract. ENGRAM_VNEXT_F_ENABLED
@@ -1691,12 +1694,12 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 		const batchSize = 500
 		offset := 0
 		for len(filtered) < limit {
-			batch, err := s.memoryStore.ListWithFilters(ctx, project, gormdb.ListOptions{
+			batch, err := s.memoryStore.ListWithFiltersForSearch(ctx, project, gormdb.ListOptions{
 				ConfidenceMin:     tg3ConfidenceMin,
 				IncludeSuperseded: tg3IncludeSuperseded,
 				Limit:             batchSize,
 				Offset:            offset,
-			})
+			}, scope.MemoryReadAccess{Caller: caller, Visibility: visibilityOpts})
 			if err != nil {
 				return "", fmt.Errorf("recall_memory: %w", err)
 			}
@@ -1723,7 +1726,7 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 		const batchSize = 500
 		offset := 0
 		for len(filtered) < limit {
-			batch, err := s.memoryStore.ListWithOffset(ctx, project, batchSize, offset)
+			batch, err := s.memoryStore.ListWithFiltersForSearch(ctx, project, gormdb.ListOptions{Limit: batchSize, Offset: offset}, scope.MemoryReadAccess{Caller: caller, Visibility: visibilityOpts})
 			if err != nil {
 				return "", fmt.Errorf("recall_memory: %w", err)
 			}
@@ -1766,7 +1769,12 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 						fields["stability"] = newStability
 					}
 				}
-				_ = s.memoryStore.UpdateLifecycleFields(context.Background(), mem.ID, fields)
+				updated, err := s.memoryStore.UpdateRecallBookkeeping(context.Background(), mem.ID, fields)
+				if err != nil {
+					log.Warn().Err(err).Int64("memory_id", mem.ID).Msg("recall bookkeeping failed")
+				} else if !updated {
+					log.Debug().Int64("memory_id", mem.ID).Msg("recall bookkeeping skipped for retained historical selector")
+				}
 			}
 		}()
 	}
@@ -2132,7 +2140,12 @@ func (s *Server) handleRecallMemoryHybrid(
 						fields["stability"] = newStability
 					}
 				}
-				_ = s.memoryStore.UpdateLifecycleFields(context.Background(), ri.id, fields)
+				updated, err := s.memoryStore.UpdateRecallBookkeeping(context.Background(), ri.id, fields)
+				if err != nil {
+					log.Warn().Err(err).Int64("memory_id", ri.id).Msg("recall bookkeeping failed")
+				} else if !updated {
+					log.Debug().Int64("memory_id", ri.id).Msg("recall bookkeeping skipped for retained historical selector")
+				}
 			}
 		}()
 	}

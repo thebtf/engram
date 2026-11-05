@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/thebtf/engram/internal/db/projectscope"
 	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/pkg/models"
@@ -50,13 +51,7 @@ func canonicalProjectRows(ctx context.Context, db *gormlib.DB, project, table, a
 }
 
 func canonicalProjectMembershipPredicate(alias, field string) string {
-	return `((` + alias + `.` + field + ` = ? AND NOT EXISTS (SELECT 1 FROM project_consolidation_memberships membership
- WHERE membership.table_name = ? AND membership.field_path = '["` + field + `"]' AND membership.row_key->>'id' = CAST(` + alias + `.id AS text))) OR EXISTS
- (SELECT 1 FROM project_consolidation_memberships membership WHERE membership.table_name = ? AND membership.field_path = '["` + field + `"]'
- AND membership.row_key->>'id' = CAST(` + alias + `.id AS text) AND membership.project_id = ?
- AND NOT EXISTS (SELECT 1 FROM project_consolidation_memberships conflict
- WHERE conflict.table_name = membership.table_name AND conflict.row_key = membership.row_key AND conflict.field_path = membership.field_path
- AND (conflict.project_id IS NULL OR conflict.project_id <> membership.project_id))))`
+	return projectscope.MembershipPredicate(alias, field)
 }
 
 func RetainedContentIDs(rows []ConsolidationMembership) ([]int64, error) {

@@ -434,7 +434,7 @@ func listVisibleMemoriesREST(ctx context.Context, store memoryListStore, project
 	const batchSize = 500
 	offset := 0
 	for len(visible) < limit {
-		batch, err := store.ListWithOffset(ctx, project, batchSize, offset)
+		batch, err := gormdb.ListMemoryPageForSearch(ctx, store, project, batchSize, offset, scope.MemoryReadAccess{Caller: caller, Visibility: opts})
 		if err != nil {
 			return nil, err
 		}
@@ -630,12 +630,20 @@ type injectionCandidateStore interface {
 // the same project. This helper closes that gap at the worker/mcp boundary
 // without adding auth/scope imports to the db/gorm layer.
 func listVisibleForInjection(ctx context.Context, store injectionCandidateStore, project string, limit int) ([]*models.Memory, error) {
-	candidates, err := store.ListForInjection(ctx, project, limit)
+	caller := memoryVisibilityCaller(ctx, "")
+	opts := memoryVisibilityOptions()
+	var candidates []*models.Memory
+	var err error
+	if authorized, ok := store.(interface {
+		ListForInjectionForSearch(context.Context, string, int, scope.MemoryReadAccess) ([]*models.Memory, error)
+	}); ok {
+		candidates, err = authorized.ListForInjectionForSearch(ctx, project, limit, scope.MemoryReadAccess{Caller: caller, Visibility: opts})
+	} else {
+		candidates, err = store.ListForInjection(ctx, project, limit)
+	}
 	if err != nil {
 		return nil, err
 	}
-	caller := memoryVisibilityCaller(ctx, "")
-	opts := memoryVisibilityOptions()
 	visible := make([]*models.Memory, 0, len(candidates))
 	for _, mem := range candidates {
 		if scope.ResolveMemory(caller, mem, opts) {
