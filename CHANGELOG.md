@@ -7,11 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Apply authoritative canonical memory membership to search, list, vector and graph retrieval before ranking and limits. Keep conflicting or unassigned occurrences inaccessible, project authorized bodies into the selected project, and retain exact version, digest and caller-privacy checks. Public recall rejects invalid or inactive project selectors rather than reporting an empty match. This does not rewrite historical records or establish an occurrence in owner data.
-- Skip recall access/reconsolidation bookkeeping and injection-count updates for non-empty non-UUID native selectors, regardless of current membership, because membership can change after a read and the existing update trigger may rewrite the selector. UUID-backed and project-free memories continue to receive those updates; private-read auditing and explicit edits are unchanged.
-- Recover a configured name-only caller with no cache from its active primary-origin binding without writing the marker or cache. For a genuinely unbound origin, reuse the existing bootstrap and confirm the resulting binding; reconcile an unknown bootstrap outcome through the origin lookup rather than replaying it. This does not claim installed-consumer acceptance.
-- Add an administrator-only sealed, expected-state-checked prepare/apply/status/conditional-rollback path for explicit existing-project UUID aliases. Apply the unambiguous logical group to memory, document and issue reads without changing native rows or mutation grants. Keep independent same-path document lineages addressable by an authorized list-issued document ID, including version writes with stale-version refusal.
-
 - Regenerate the API through the maintained worker target using canonical local Go package directories and Swag 1.16.6, with real producer errors stopping the build. Correct existing context search/inject/session-start annotations without changing handlers; document the shared GET/POST conditional-query limitation. The actual producer and server build pass, with 40 named schema checks and all 76 references resolved; that producer checkpoint established compile-only retained-reader oracle provenance, with later native query proof recorded separately, and installed/release acceptance remains separate.
 
 - Add retained catalog `families` metadata with kind, technical table, saved membership-occurrence count and declared/separate/metadata-only reader boundary. Preserve every group, opaque reference, safe label and reason without payload previews, readable-record totals, availability or historical ownership assignment. This descriptor change does not provide cross-group record discovery or installed-consumer acceptance.
@@ -48,6 +43,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Isolate canonical GORM/gRPC fixtures, bound their pools and await caller-owned audit writes before schema cleanup; retain restore guards and public data. Reuse focused retention/audit/gRPC proofs; the earlier 37-PASS run remains preservation FAIL (audit rows 37→40), followed by seven focused PASS with 40→40 preservation. Canonical continuity fixtures now migrate once per isolated parent (17→6), preserving every assertion and the unchanged 12m budget; reuse 22 focused lifecycle PASS plus three hash-bound slot CRUD/migration PASS from the earlier incomplete timeout run, not a full-suite or installed-acceptance claim.
 - Use registered canonical UUIDs and authenticated caller project context in MCP fixtures without weakening default-deny, privacy or pre-mutation rejection guards. Reuse 119 prior PASS plus one exact retry PASS after the context fix, not 120 fresh PASS or installed acceptance.
 - Seed the isolated operator-code fixture with a registered canonical project UUID while preserving five queue candidates, published/no-view checks and redacted provisioning errors.
+
+## [7.0.25] - 2026-11-05
+
+### Fixed
+
+- Apply authoritative canonical membership to memory search, list, vector and graph reads before ranking and limits, preserving privacy and refusing invalid selectors without reassigning historical records.
+- Prevent automatic recall and session feedback from rewriting historical non-UUID selectors while preserving UUID-backed and project-free bookkeeping and private-read auditing.
+- Recover name-only callers from active primary-origin bindings without modifying their marker or cache; reconcile unknown bootstrap outcomes without replaying a mutation.
+- Provide expected-state-checked administrator UUID aliases and scoped document lineages without changing native rows or broadening mutation grants. Keep independent same-path documents addressable by authorized IDs with stale-version refusal.
+- Scope catalog and document UI actions to verified project context and existing authorized lineage.
 
 ## [7.0.24] - 2026-11-05
 

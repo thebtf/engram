@@ -4425,6 +4425,20 @@ const docTemplate = `{
                 "CollectionSelectionFrozenFilter"
             ]
         },
+        "gorm.LogicalProjectGroup": {
+            "type": "object",
+            "properties": {
+                "alias_project_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "primary_project_id": {
+                    "type": "string"
+                }
+            }
+        },
         "gorm.ProjectDescriptor": {
             "type": "object",
             "required": [
@@ -5589,6 +5603,12 @@ const docTemplate = `{
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/gorm.ProjectDescriptor"
+                    }
+                },
+                "logical_groups": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/gorm.LogicalProjectGroup"
                     }
                 },
                 "unresolved": {
