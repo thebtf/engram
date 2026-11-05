@@ -2304,8 +2304,9 @@ try {
         server_ldd_sha256 = $lddHash
         pinned_sources = [ordered]@{
             dockerfile_frontend = 'docker/dockerfile:1@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89'
-            server = 'gcr.io/distroless/base-debian13@sha256:0ebad3510af52aefe45045cc01b07564570be4feecf8d9f93d3a05d1b5f2f93b'
-            operator_console = 'gcr.io/distroless/nodejs22-debian13@sha256:412a5f8fce490bcff01fc2a73ec43bb62071e1b71dd847eeacaae7b8ecef1dc1'
+            server = 'gcr.io/distroless/base-nossl-debian13@sha256:e6b0f82595aa1edde72c8054de7a9dca30f0f8f54820c37a167c0ddfc21c5c67'
+            operator_console = 'gcr.io/distroless/base-nossl-debian13@sha256:e6b0f82595aa1edde72c8054de7a9dca30f0f8f54820c37a167c0ddfc21c5c67'
+            operator_node_runtime = 'gcr.io/distroless/nodejs22-debian13@sha256:412a5f8fce490bcff01fc2a73ec43bb62071e1b71dd847eeacaae7b8ecef1dc1'
             postgres = 'docker.io/library/postgres:17.11-alpine3.24@sha256:e4cb93687b062cd25a0e8f672d85a7708235009d70d31f8a7698d9370092a9c4'
             pgvector_source = 'https://codeload.github.com/pgvector/pgvector/tar.gz/778dacf20c07caf904557a88705142631818d8cb'
             pgvector_source_sha256 = '4c33cf053329784ba6d992d05c9588b93789e907a7511f20ff5a5a5b8a0703c1'
@@ -2314,7 +2315,9 @@ try {
             node_builder = 'node:22-bookworm-slim@sha256:53ada149d435c38b14476cb57e4a7da73c15595aba79bd6971b547ceb6d018bf'
         }
         pinned_packages = [ordered]@{
-            libssl3t64 = '3.5.7-1~deb13u3'
+            libstdcpp6 = '14.2.0-19'
+            libgcc_s1 = '14.2.0-19'
+            gcc_14_base = '14.2.0-19'
             bash = '5.3.9-r1'
             busybox = '1.37.0-r31'
             gosu = '1.19'
