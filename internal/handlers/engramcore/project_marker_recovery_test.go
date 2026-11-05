@@ -16,6 +16,7 @@ import (
 
 	"github.com/thebtf/engram/internal/auditcontext"
 	"github.com/thebtf/engram/internal/config"
+	"github.com/thebtf/engram/internal/projectidentity"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
@@ -164,18 +165,40 @@ func markerRecoveryExistingProjectSameSession(t *testing.T, unresolved bool) {
 		return []byte(reply.Result.Content[0].Text), true
 	}
 
-	for _, request := range [][]byte{jsonrpcInitReq(1), jsonrpcListReq(2)} {
+	for index, request := range [][]byte{jsonrpcInitReq(1), jsonrpcListReq(2)} {
 		raw, err := dispatcher.HandleRequest(t.Context(), caller, request)
 		if err != nil {
 			t.Fatal(err)
 		}
 		var reply struct {
-			Error any `json:"error"`
+			Error  any `json:"error"`
+			Result struct {
+				Tools []struct {
+					Name        string `json:"name"`
+					Description string `json:"description"`
+				} `json:"tools"`
+			} `json:"result"`
 		}
 		if err := json.Unmarshal(raw, &reply); err != nil || reply.Error != nil {
 			t.Fatalf("initialization/discovery failed: %s (%v)", raw, err)
 		}
+		if index == 1 {
+			found := false
+			for _, tool := range reply.Result.Tools {
+				if tool.Name == "project_context" {
+					found = true
+					assertMarkerActionGuidance(t, tool.Description)
+					if strings.Contains(tool.Description, caller.Cwd) || strings.Contains(tool.Description, markerRecoveryToken) {
+						t.Error("tool description disclosed caller private data")
+					}
+				}
+			}
+			if !found {
+				t.Error("project_context missing from caller-visible discovery")
+			}
+		}
 	}
+	assertMarkerActionGuidance(t, projectidentity.RecoveryGuidance("PROJECT_MIGRATION_REQUIRED"))
 	original := json.RawMessage(`{"query":"existing-memory-sentinel"}`)
 	if raw, ok := call(3, "recall_memory", original); ok {
 		t.Fatalf("pre-repair memory read must be held: %s", raw)
@@ -281,6 +304,7 @@ func markerRecoveryExistingProjectSameSession(t *testing.T, unresolved bool) {
 		Target       string `json:"target"`
 		RootDigest   string `json:"caller_root_sha256"`
 		Content      string `json:"marker_content"`
+		Instructions string `json:"instructions"`
 		Precondition struct {
 			State  string `json:"state"`
 			SHA256 string `json:"sha256"`
@@ -290,6 +314,7 @@ func markerRecoveryExistingProjectSameSession(t *testing.T, unresolved bool) {
 	if err := json.Unmarshal(actionRaw, &action); err != nil {
 		t.Fatal(err)
 	}
+	assertMarkerActionGuidance(t, action.Instructions)
 	current, err := os.ReadFile(marker)
 	if err != nil || string(current) != string(legacy) {
 		t.Fatal("MCP handler wrote marker instead of returning a host action")
@@ -335,6 +360,56 @@ func markerRecoveryExistingProjectSameSession(t *testing.T, unresolved bool) {
 	for i, request := range backend.calls {
 		if request.GetProject() != markerRecoveryID || request.GetToolName() != "recall_memory" || request.GetSessionId() != "synthetic-marker-recovery-session" || string(request.GetArgumentsJson()) != string(original) || backend.auth[i] != "Bearer "+markerRecoveryToken {
 			t.Fatal("read lost its canonical project, arguments or caller authentication")
+		}
+	}
+}
+
+func assertMarkerActionGuidance(t *testing.T, instructions string) {
+	t.Helper()
+	if len(instructions) > 3072 {
+		t.Errorf("marker action instructions exceed 3072 bytes: %d", len(instructions))
+	}
+	sentences := strings.Split(strings.ToLower(instructions), ". ")
+	for _, requirement := range []struct {
+		name   string
+		groups [][]string
+	}{
+		{"caller fingerprint input and comparison", [][]string{{"caller_root_sha256"}, {"sha-256", "sha256"}, {"exact"}, {"caller cwd"}, {"utf-8", "utf8"}, {"compare"}, {"returned"}}},
+		{"target fingerprint input and comparison", [][]string{{"target_root_sha256"}, {"sha-256", "sha256"}, {"utf-8", "utf8"}, {"absolute"}, {"target root"}, {"compare"}, {"returned"}}},
+		{"target root derivation", [][]string{{"target root"}, {"os-native", "os native", "platform-native", "platform native"}, {"absolute"}, {"clean"}, {"walk"}, {"spelling"}, {"nearest"}, {"marker"}, {"worktree"}}},
+		{"walked candidate rather than Git spelling", [][]string{{"hash"}, {"walked"}, {"candidate"}, {"not"}, {"spell"}, {"git"}, {"root"}}},
+		{"relative action target", [][]string{{"slash-normalized", "slash normalized"}, {"relative"}, {"marker"}, {"target"}, {"caller cwd"}, {"separators"}, {"os-native", "os native", "platform-native", "platform native"}, {"do not hash", "never hash"}}},
+		{"marker precondition digest comparison", [][]string{{"marker"}, {"precondition.state=sha256"}, {"sha-256", "sha256"}, {"raw"}, {"bytes"}, {"compare"}, {"precondition.sha256"}}},
+		{"absent marker precondition", [][]string{{"precondition.state=absent"}, {"marker"}, {"absent", "absence"}, {"verify", "check"}}},
+		{"v2 precondition digest comparison", [][]string{{"v2_precondition"}, {"sha-256", "sha256"}, {"raw"}, {"v2"}, {"bytes"}, {"compare"}, {"v2_precondition.sha256"}}},
+		{"fingerprint normalization prohibitions", [][]string{{"do not", "never"}, {"newline"}, {"case"}, {"slash"}, {"symlink"}, {"fingerprint"}, {"after derivation"}}},
+		{"fingerprints are not authority", [][]string{{"fingerprint"}, {"freshness"}, {"not"}, {"identity"}, {"authority"}}},
+		{"filesystem guard and stale input", [][]string{{"guard"}, {"denial"}, {"stale"}}},
+		{"safe retry only", [][]string{{"safe read"}, {"never"}, {"mutation"}}},
+	} {
+		found := false
+		for _, sentence := range sentences {
+			matched := true
+			for _, alternatives := range requirement.groups {
+				present := false
+				for _, term := range alternatives {
+					if strings.Contains(sentence, term) {
+						present = true
+						break
+					}
+				}
+				if !present {
+					matched = false
+					break
+				}
+			}
+			if matched {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("marker action guidance does not associate %s", requirement.name)
 		}
 	}
 }
