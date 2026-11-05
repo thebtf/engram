@@ -44,6 +44,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Use registered canonical UUIDs and authenticated caller project context in MCP fixtures without weakening default-deny, privacy or pre-mutation rejection guards. Reuse 119 prior PASS plus one exact retry PASS after the context fix, not 120 fresh PASS or installed acceptance.
 - Seed the isolated operator-code fixture with a registered canonical project UUID while preserving five queue candidates, published/no-view checks and redacted provisioning errors.
 
+## [7.0.22] - 2026-11-05
+
+### Fixed
+
+- Deliver the local MCP, PostgreSQL startup and existing-project recovery fixes staged for the unpublished v7.0.21 cut. Preserve existing project identities, authorization, retained data and unknown mutation outcomes.
+- Correct the direct `golang.org/x/net` requirement without changing its version or dependency checksums, and run the existing module-tidiness hook before creating another immutable release tag.
+- Align recovery and image-runtime verification with read-only portable markers, supported recovery guidance and transient database startup retries, while retaining fail-closed conflict, readiness and terminal-error controls.
+
 ## [7.0.21] - 2026-11-05
 
 ### Fixed
