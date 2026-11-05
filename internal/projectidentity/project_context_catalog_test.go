@@ -154,8 +154,18 @@ func TestAutomaticHistoricalRecoveryTransport(t *testing.T) {
 	if _, err := ResolveAutomaticHistoricalProject(t.Context(), root, redirect.URL, "fixture-keycard", initialErr); ProjectErrorCode(err) != "PROJECT_RESOLUTION_UNAVAILABLE" || sinkCalls.Load() != 0 {
 		t.Fatalf("redirect was followed or accepted: %v", err)
 	}
-	if _, err := ResolveAutomaticHistoricalProject(t.Context(), root, "http://example.invalid:1234", "fixture-keycard", initialErr); ProjectErrorCode(err) != "PROJECT_RESOLUTION_UNAVAILABLE" {
-		t.Fatalf("unsafe plaintext transport accepted: %v", err)
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/projects/resolve" || r.URL.Query().Get("legacy_id") != "abcdef" || r.Header.Get("Authorization") != "Bearer fixture-keycard" {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		_, _ = w.Write([]byte(`{"status":"resolved","project_id":"11111111-1111-4111-8111-111111111111","name":"Existing"}`))
+	}))
+	defer plain.Close()
+	configuredURL := strings.Replace(plain.URL, "127.0.0.1", "localhost.", 1)
+	plainProject, err := ResolveAutomaticHistoricalProject(t.Context(), root, configuredURL, "fixture-keycard", initialErr)
+	if err != nil || plainProject.ProjectID != "11111111-1111-4111-8111-111111111111" {
+		t.Fatalf("configured HTTP hostname did not resolve mapping: %v", err)
 	}
 	tlsServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer fixture-keycard" {

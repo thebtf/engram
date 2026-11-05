@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -298,12 +297,6 @@ func ResolveAutomaticHistoricalProject(ctx context.Context, cwd, serverURL, toke
 	endpoint, err := url.Parse(serverURL)
 	if err != nil || endpoint.User != nil || endpoint.Host == "" || endpoint.RawQuery != "" || endpoint.Fragment != "" {
 		return Project{}, logicalError("PROJECT_RESOLUTION_UNAVAILABLE")
-	}
-	if endpoint.Scheme != "https" && os.Getenv("ENGRAM_TLS_CA") == "" {
-		ip := net.ParseIP(endpoint.Hostname())
-		if endpoint.Scheme != "http" || (endpoint.Hostname() != "localhost" && (ip == nil || !ip.IsLoopback())) {
-			return Project{}, logicalError("PROJECT_RESOLUTION_UNAVAILABLE")
-		}
 	}
 	before, err := InspectProjectMarker(ctx, cwd)
 	if err != nil {
