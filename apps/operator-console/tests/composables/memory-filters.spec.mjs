@@ -199,7 +199,7 @@ test('catalog rollback clears and recomputes the explicit all-memory total', asy
   assert.equal(consumer.context.project.value, '')
   assert.equal(consumer.reader().total.value, null)
   assert.equal(consumer.reader().rows.length, 0)
-  releaseCatalog(Response.json({ items, unresolved: [] }))
+  releaseCatalog(Response.json({ items, unresolved: [], logical_groups: [] }))
   await refresh; await tick(); await tick()
   assert.equal(consumer.context.project.value, 'all')
   assert.equal(consumer.reader().total.value, 2)
@@ -209,7 +209,7 @@ test('catalog rollback clears and recomputes the explicit all-memory total', asy
 test('all-memory catalog error retries the catalog and recovers', async t => {
   let catalogCalls = 0
   const items = [{ project_id: projectID, name: 'Synthetic project' }]
-  const catalogFetch = () => Response.json({ items, unresolved: [], ...(++catalogCalls === 1 ? { logical_groups: null } : {}) })
+  const catalogFetch = () => Response.json({ items, unresolved: [], logical_groups: ++catalogCalls === 1 ? null : [] })
   const consumer = await mountConsumer(t, '/memory?project=all&allRead=1', { catalogFetch })
   assert.equal(consumer.reader().loadState.value.kind, 'error')
   const retry = walk(consumer.host).find(node => node.props['data-testid'] === 'retry-project-catalog')

@@ -141,7 +141,7 @@ async function mount(t, { path = '/projects', language = 'ru', items = catalog.i
   assert.equal(context.pending.value, false)
   assert.ok(walk(host).some(item => hasClass(item, pageClass)), 'Real authenticated layout must render the actual page or inert non-catalog slot')
   assert.ok(walk(host).some(item => item.props['data-testid'] === 'project-context-select'), 'Actual global ProjectContext must be present')
-  return { host, router, context, calls, errors, path, globals, i18n, pageState: () => pageState, loadKnowledgePage: load('useOperatorProjectContext').loadKnowledgePage }
+  return { host, router, context, calls, errors, path, globals, i18n, pageState: () => pageState, operatorApi: load('useOperatorApi'), loadKnowledgePage: load('useOperatorProjectContext').loadKnowledgePage }
 }
 const retainedLinks = host => walk(host).filter(item => item.tag === 'a' && item.props.href && new URL(item.props.href, 'http://synthetic.invalid').pathname === '/projects/unresolved')
 const selector = host => walk(host).find(item => item.props['data-testid'] === 'project-context-select')
@@ -828,7 +828,7 @@ test('Catalog rollback clears same-project document detail and rejects a late gr
   assert.equal(state.pageState().history.length, 0)
   assert.equal(state.pageState().comments.length, 0)
   grouped = false
-  releaseCatalog(Response.json({ items: logicalItems.slice(0, 2), unresolved: [] }))
+  releaseCatalog(Response.json({ items: logicalItems.slice(0, 2), unresolved: [], logical_groups: [] }))
   await refresh; await tick(); await tick()
   assert.equal(state.context.project.value, SAME_A)
   assert.equal(text(documentContent(state)).trim(), 'legacy content')
@@ -852,7 +852,7 @@ test('Catalog rollback recomputes explicit all document totals for the settled s
   assert.equal(state.pageState().total.value, 1)
   const refresh = state.context.refresh()
   assert.equal(state.pageState().total.value, null, 'Old union total is cleared before the catalog settles')
-  releaseCatalog(Response.json({ items: logicalItems.slice(0, 2), unresolved: [] }))
+  releaseCatalog(Response.json({ items: logicalItems.slice(0, 2), unresolved: [], logical_groups: [] }))
   await refresh; await tick(); await tick()
   assert.equal(state.context.project.value, 'all')
   assert.equal(state.pageState().total.value, 2, 'Settled disjoint readers each contribute once')
@@ -876,7 +876,7 @@ test('Catalog rollback clears and reloads Home for the same canonical project', 
   await tick()
   assert.ok(!text(state.host).includes('grouped home row'))
   grouped = false
-  releaseCatalog(Response.json({ items: logicalItems.slice(0, 2), unresolved: [] }))
+  releaseCatalog(Response.json({ items: logicalItems.slice(0, 2), unresolved: [], logical_groups: [] }))
   await refresh; await tick(); await tick()
   assert.equal(state.context.project.value, SAME_A)
   assert.ok(text(state.host).includes('legacy home row'))
@@ -992,7 +992,7 @@ test('Home recent documents open the exact same-path lineage in Documents', asyn
   assert.deepEqual(state.errors, [])
 })
 
-test('Documents switching same-path lineage clears stale detail and targets subsequent actions correctly', async t => {
+test('SCOPED-ACTION Documents switching same-path lineage clears stale detail and targets subsequent actions correctly', async t => {
   let releaseBeta
   const betaReady = new Promise(resolve => { releaseBeta = resolve })
   const responses = lineageResponses()
@@ -1019,17 +1019,16 @@ test('Documents switching same-path lineage clears stale detail and targets subs
   assert.equal(text(documentContent(state)).trim(), 'Beta body version 2')
   assert.ok(text(state.host).includes('Beta version one'))
   assert.ok(!text(state.host).includes('Alpha version one'))
-  assert.ok(!walk(state.host).some(item => item.tag === 'form' && hasClass(item, 'comment-form')), 'Grouped comments are unavailable without a scoped mutation contract')
-  const exportButton = walk(state.host).find(item => item.props['data-testid'] === 'document-export')
-  assert.ok(exportButton?.props.disabled, 'Grouped export is unavailable without a scoped mutation contract')
-  assert.ok(text(state.host).includes(state.i18n.global.t('projectCatalog.lineageActionsUnavailable')))
-  assert.ok(!text(state.host).includes(state.i18n.global.t('documents.comments.emptyBody')), 'Unavailable comments are not presented as an empty thread')
-  assert.ok(!state.calls.some(call => call.method === 'GET' && call.url.pathname === '/api/documents/comments'), 'Grouped comments must not issue unscoped reads')
-  assert.equal(state.pageState().comments.length, 0, 'No stale comments remain visible')
+  const comments = state.calls.filter(call => call.url.pathname === '/api/documents/comments')
+  assert.ok(comments.some(call => call.url.searchParams.get('project') === SAME_A && call.url.searchParams.get('document_id') === '201' && call.url.searchParams.get('expected_version') === '2'), 'Beta comments use the requested project and immutable version')
+  assert.ok(!comments.some(call => !call.url.searchParams.has('project') || !call.url.searchParams.has('expected_version')))
+  assert.ok(walk(state.host).some(item => item.tag === 'form' && hasClass(item, 'comment-form')))
   state.pageState().commentDraft.value = 'synthetic comment'
   await state.pageState().comment()
-  await state.pageState().exportDocument()
-  assert.ok(!state.calls.some(call => call.method === 'POST'), 'No grouped action may submit an unscoped document ID')
+  const comment = state.calls.find(call => call.method === 'POST' && call.url.pathname === '/api/documents/comment')
+  assert.ok(comment)
+  const payload = JSON.parse(comment.body)
+  assert.deepEqual({ project: payload.project, document_id: payload.document_id, expected_version: payload.expected_version }, { project: SAME_A, document_id: 201, expected_version: 2 })
   assert.deepEqual(state.errors, [])
 })
 
@@ -1078,4 +1077,293 @@ test('Documents unrelated 409 stays a generic rejection rather than a lineage am
   assert.ok(!text(error).includes('private arbitrary server text'))
   assert.equal(documentContent(state), undefined)
   assert.deepEqual(state.errors, [])
+})
+
+function scopedActionResponses({ commentStatus = 200, selectionStatus = 200, actionStatus = 200, selectionReady } = {}) {
+  const base = lineageResponses()
+  return (url, init) => {
+    const method = init.method || 'GET'
+    if (url.pathname === '/api/documents/comments') return commentStatus === 200
+      ? Response.json({ comments: [], count: 0, document_id: Number(url.searchParams.get('document_id')) })
+      : Response.json({ error: 'synthetic scoped refusal' }, { status: commentStatus })
+    if (url.pathname === '/api/documents/comment' && method === 'POST') return Response.json({ error: 'synthetic refusal' }, { status: 403 })
+    if (url.pathname === '/api/documents/selection' && method === 'POST') {
+      const payload = JSON.parse(init.body)
+      const response = () => selectionStatus === 200
+        ? Response.json({ selection: { domain: 'documents', kind: 'explicit', selection_version: 7, targets: payload.selection.targets } })
+        : Response.json({ error: 'synthetic scoped refusal' }, { status: selectionStatus })
+      return selectionReady ? selectionReady.then(response) : response()
+    }
+    if (url.pathname === '/api/documents' && method === 'POST') return actionStatus === 200
+      ? Response.json({ operation_state: 'completed', readback: { authoritative: true, kind: 'non_disclosing', operation_status: 'export_ready' }, artifact: { download_url: '/api/documents/exports/b857ebf7-c1cf-4a1f-a733-465ee492d3cb', filename: 'synthetic.json', content_type: 'application/json', byte_length: 32 } })
+      : Response.json({ error: 'synthetic scoped refusal' }, { status: actionStatus })
+    return base(url)
+  }
+}
+
+for (const [name, logical_groups] of [['grouped', [logicalGroups[0]]], ['empty groups', []]]) {
+  test(`SCOPED-ACTION ${name} preserves issued lineage and uses selected historical row for scoped comments and export`, async t => {
+    const state = await mount(t, { path: '/documents', language: 'en', selected: SAME_A, items: [logicalItems[0], logicalItems[1]], unresolved: [], logical_groups, documentFetch: scopedActionResponses(), initialQuery: { path: lineagePath, document_id: '101' }, capturePageState: true, allowSyntheticMutations: true })
+    await tick()
+    assert.ok(documentContent(state), 'A valid feature signal supports the issued document ID')
+    assert.equal(text(documentContent(state)).trim(), 'Alpha body version 2', 'A valid feature signal supports the issued document ID')
+    const history = walk(state.host).find(item => item.tag === 'button' && text(item).includes('Alpha version one'))
+    assert.ok(history)
+    await history.props.onClick(); await tick()
+    assert.equal(text(documentContent(state)).trim(), 'Alpha body version 1')
+    const reads = documentReads(state)
+    assert.ok(reads.length && reads.every(call => call.url.searchParams.get('document_id') === '101' && call.url.searchParams.get('project') === SAME_A))
+    const comments = state.calls.filter(call => call.url.pathname === '/api/documents/comments')
+    assert.ok(comments.some(call => call.url.searchParams.get('project') === SAME_A && call.url.searchParams.get('document_id') === '100' && call.url.searchParams.get('expected_version') === '1'))
+    assert.ok(comments.every(call => call.url.searchParams.get('project') === SAME_A && call.url.searchParams.has('expected_version')))
+    state.pageState().commentDraft.value = 'synthetic historical comment'
+    await state.pageState().comment()
+    const comment = state.calls.find(call => call.url.pathname === '/api/documents/comment' && call.method === 'POST')
+    assert.ok(comment)
+    const body = JSON.parse(comment.body)
+    assert.deepEqual({ project: body.project, document_id: body.document_id, expected_version: body.expected_version }, { project: SAME_A, document_id: 100, expected_version: 1 })
+    const button = walk(state.host).find(item => item.props['data-testid'] === 'document-export')
+    assert.ok(button && !button.props.disabled)
+    await button.props.onClick(); await tick()
+    const selection = state.calls.find(call => call.url.pathname === '/api/documents/selection' && call.method === 'POST')
+    const action = state.calls.find(call => call.url.pathname === '/api/documents' && call.method === 'POST')
+    assert.ok(selection && action)
+    const selected = JSON.parse(selection.body), exported = JSON.parse(action.body)
+    assert.equal(selected.project, SAME_A)
+    assert.deepEqual(selected.selection.targets, [{ id: '100', expected_version: 1 }])
+    assert.equal(exported.project, SAME_A)
+    assert.equal(exported.selection.selection_version, 7)
+    const download = walk(state.host).find(item => item.props['data-testid'] === 'document-export-download')
+    assert.ok(download)
+    assert.equal(download.props.href, '/api/documents/exports/b857ebf7-c1cf-4a1f-a733-465ee492d3cb')
+  })
+}
+
+test('SCOPED-ACTION empty groups preserves the Home list-issued lineage link', async t => {
+  const state = await mount(t, { path: '/', language: 'en', selected: SAME_A, items: [logicalItems[0]], unresolved: [], logical_groups: [], documentFetch: scopedActionResponses(), homeDocuments: true })
+  const links = walk(state.host).filter(item => item.tag === 'a' && item.props.href && new URL(item.props.href, 'http://synthetic.invalid').searchParams.get('path') === lineagePath)
+  assert.equal(links.length, 2)
+  assert.deepEqual(links.map(link => new URL(link.props.href, 'http://synthetic.invalid').searchParams.get('document_id')).sort(), ['101', '201'])
+  await state.router.push(links[0].props.href); await tick(); await tick()
+  assert.ok(documentReads(state).every(call => call.url.searchParams.get('document_id') === '101'))
+})
+
+for (const status of [403, 404, 409]) {
+  test(`SCOPED-ACTION scoped comment refusal ${status} never retries without scope`, async t => {
+    const state = await mount(t, { path: '/documents', language: 'en', selected: SAME_A, items: [logicalItems[0], logicalItems[1]], unresolved: [], logical_groups: [logicalGroups[0]], documentFetch: scopedActionResponses({ commentStatus: status }), initialQuery: { path: lineagePath, document_id: '101' } })
+    await tick()
+    const calls = state.calls.filter(call => call.url.pathname === '/api/documents/comments')
+    assert.ok(calls.length)
+    assert.ok(calls.every(call => call.url.searchParams.get('project') === SAME_A && call.url.searchParams.get('document_id') === '101' && call.url.searchParams.get('expected_version') === '2'))
+    assert.ok(walk(state.host).some(item => hasClass(item, 'comments') && walk(item).some(child => hasClass(child, 'error'))), 'A scoped refusal stays visible')
+  })
+  test(`SCOPED-ACTION scoped selection refusal ${status} does not dispatch export`, async t => {
+    const state = await mount(t, { path: '/documents', language: 'en', selected: SAME_A, items: [logicalItems[0], logicalItems[1]], unresolved: [], logical_groups: [logicalGroups[0]], documentFetch: scopedActionResponses({ selectionStatus: status }), initialQuery: { path: lineagePath, document_id: '101' }, capturePageState: true, allowSyntheticMutations: true })
+    await tick()
+    const button = walk(state.host).find(item => item.props['data-testid'] === 'document-export')
+    assert.ok(button && !button.props.disabled)
+    await button.props.onClick(); await tick()
+    const selection = state.calls.filter(call => call.url.pathname === '/api/documents/selection' && call.method === 'POST')
+    assert.equal(selection.length, 1)
+    assert.equal(JSON.parse(selection[0].body).project, SAME_A)
+    assert.ok(!state.calls.some(call => call.url.pathname === '/api/documents' && call.method === 'POST'))
+    assert.ok(!walk(state.host).some(item => item.props['data-testid'] === 'document-export-download'))
+  })
+}
+
+for (const transition of ['project', 'lineage', 'version', 'auth', 'rollback']) {
+  test(`SCOPED-ACTION ${transition} transition during selection prevents export dispatch`, async t => {
+    let releaseSelection
+    const selectionReady = new Promise(resolve => { releaseSelection = resolve })
+    t.after(() => releaseSelection())
+    const responses = scopedActionResponses({ selectionReady })
+    let grouped = true
+    const catalogFetch = () => Response.json({ items: [logicalItems[0], logicalItems[1]], unresolved: [], logical_groups: grouped ? [logicalGroups[0]] : [] })
+    const documentFetch = (url, init) => url.pathname === '/api/synthetic-auth-check' ? Response.json({ error: 'unauthorized' }, { status: 401 }) : responses(url, init)
+    const state = await mount(t, { path: '/documents', language: 'en', selected: SAME_A, items: [logicalItems[0], logicalItems[1]], unresolved: [], catalogFetch, documentFetch, initialQuery: { path: lineagePath, document_id: '101' }, capturePageState: true, allowSyntheticMutations: true })
+    await tick()
+    const button = walk(state.host).find(item => item.props['data-testid'] === 'document-export')
+    assert.ok(button && !button.props.disabled, 'A feature-aware valid lineage offers scoped export')
+    const attempt = state.pageState().exportDocument()
+    await tick()
+    assert.ok(state.calls.some(call => call.url.pathname === '/api/documents/selection' && call.method === 'POST'))
+    if (transition === 'project') await state.router.push({ path: '/documents', query: { project: SAME_B, path: lineagePath, document_id: '101' } })
+    if (transition === 'lineage') await state.router.push({ path: '/documents', query: { project: SAME_A, path: lineagePath, document_id: '201' } })
+    if (transition === 'version') await state.pageState().selectPrimaryVersion(1)
+    if (transition === 'auth') await state.operatorApi.operatorFetchResponse('/api/synthetic-auth-check')
+    if (transition === 'rollback') { grouped = false; await state.context.refresh() }
+    await tick()
+    releaseSelection()
+    await attempt; await tick()
+    assert.ok(!state.calls.some(call => call.url.pathname === '/api/documents' && call.method === 'POST'), 'Selection completion cannot export an obsolete target')
+    assert.ok(!walk(state.host).some(item => item.props['data-testid'] === 'document-export-download'), 'A late result cannot contaminate the new view')
+  })
+}
+
+for (const [name, missing] of [['omission', undefined], ['malformed', null]]) {
+  test(`SCOPED-ACTION feature signal followed by ${name} fails closed and retry recovers`, async t => {
+    let catalogCalls = 0
+    const items = [logicalItems[0], logicalItems[1]]
+    const catalogFetch = () => {
+      const call = ++catalogCalls
+      return Response.json({ items, unresolved: [], ...(call === 2 ? (missing === undefined ? {} : { logical_groups: missing }) : { logical_groups: [logicalGroups[0]] }) })
+    }
+    const base = scopedActionResponses()
+    const documentFetch = (url, init) => {
+      if (url.pathname !== '/api/documents' || (init.method || 'GET') !== 'GET') return base(url, init)
+      const offset = Number(url.searchParams.get('offset')), limit = Number(url.searchParams.get('limit'))
+      const rows = lineageItems.map(row => ({ ...row, project: url.searchParams.get('project') }))
+      return Response.json({ items: rows.slice(offset, offset + limit), total: rows.length, offset, limit, has_more: offset + limit < rows.length })
+    }
+    const state = await mount(t, { path: '/documents', language: 'en', selected: SAME_A, items, unresolved: [], catalogFetch, documentFetch, initialQuery: { path: lineagePath, document_id: '101' }, capturePageState: true, allowSyntheticMutations: true })
+    assert.equal(text(documentContent(state)).trim(), 'Alpha body version 2')
+    const before = state.calls.length
+    await state.context.refresh(); await tick()
+    await assert.rejects(state.loadKnowledgePage('/api/documents', 'all', new URLSearchParams({ offset: '0', limit: '2' })), 'Stale feature metadata must not claim complete all-project totals')
+    assert.deepEqual(realProjectOptions(state.host).map(item => item.props.value).sort(), items.map(item => item.project_id).sort())
+    await state.pageState().comment(); await state.pageState().exportDocument()
+    const later = state.calls.slice(before)
+    assert.ok(!later.some(call => call.method === 'POST'))
+    assert.ok(!later.some(call => ['/api/documents/read', '/api/documents/history'].includes(call.url.pathname) && !call.url.searchParams.has('document_id')))
+    assert.ok(!later.some(call => call.url.pathname === '/api/documents/comments' && !call.url.searchParams.has('project')))
+    const retry = walk(state.host).find(item => item.props['data-testid'] === 'retry-project-catalog')
+    assert.ok(retry, 'Unknown capability remains recoverable')
+    await retry.props.onClick(); await tick(); await tick()
+    assert.equal(catalogCalls, 3)
+    assert.equal(text(documentContent(state)).trim(), 'Alpha body version 2')
+  })
+}
+
+for (const status of [403, 404, 409]) {
+  test(`SCOPED-ACTION empty groups ID refusal ${status} has no path fallback`, async t => {
+    const state = await mount(t, { path: '/documents', language: 'en', selected: SAME_A, items: [logicalItems[0]], unresolved: [], logical_groups: [], documentFetch: lineageResponses({ refusalStatus: status }), initialQuery: { path: lineagePath, document_id: '999' } })
+    await tick()
+    const reads = documentReads(state)
+    assert.ok(reads.length, 'The scoped request reaches the feature-aware backend')
+    assert.ok(reads.every(call => call.url.searchParams.get('document_id') === '999' && call.url.searchParams.get('project') === SAME_A))
+    assert.equal(documentContent(state), undefined)
+  })
+}
+
+test('SCOPED-ACTION initial old-server omission retains legacy comment policy', async t => {
+  const legacy = lineageResponses({ oldServer: true })
+  const documentFetch = (url, init) => url.pathname === '/api/documents/comment' && init.method === 'POST' ? Response.json({ error: 'synthetic legacy refusal' }, { status: 403 }) : legacy(url)
+  const state = await mount(t, { path: '/documents', language: 'en', selected: SAME_A, items: [logicalItems[0]], unresolved: [], documentFetch, initialQuery: { path: lineagePath }, capturePageState: true, allowSyntheticMutations: true })
+  await tick()
+  assert.equal(text(documentContent(state)).trim(), 'Alpha body version 2')
+  const comments = state.calls.filter(call => call.url.pathname === '/api/documents/comments')
+  assert.ok(comments.length && comments.every(call => !call.url.searchParams.has('project') && !call.url.searchParams.has('expected_version')))
+  state.pageState().commentDraft.value = 'synthetic legacy comment'
+  await state.pageState().comment()
+  const comment = state.calls.find(call => call.url.pathname === '/api/documents/comment' && call.method === 'POST')
+  assert.ok(comment)
+  assert.equal(JSON.parse(comment.body).document_id, 101)
+  assert.ok(!Object.hasOwn(JSON.parse(comment.body), 'project'))
+})
+
+test('SCOPED-ACTION empty groups list row opens its exact issued ID', async t => {
+  const state = await mount(t, { path: '/documents', language: 'en', selected: SAME_A, items: [logicalItems[0]], unresolved: [], logical_groups: [], documentFetch: scopedActionResponses() })
+  const row = walk(state.host).find(item => item.tag === 'button' && hasClass(item, 'doc-row') && text(item).includes('Alpha entry'))
+  assert.ok(row)
+  await row.props.onClick(); await tick()
+  assert.equal(state.router.currentRoute.value.query.document_id, '101')
+  assert.equal(text(documentContent(state)).trim(), 'Alpha body version 2')
+  assert.ok(documentReads(state).every(call => call.url.searchParams.get('document_id') === '101'))
+})
+
+for (const status of [403, 404, 409]) {
+  test(`SCOPED-ACTION scoped export action refusal ${status} stays visible without fallback`, async t => {
+    const state = await mount(t, { path: '/documents', language: 'en', selected: SAME_A, items: [logicalItems[0], logicalItems[1]], unresolved: [], logical_groups: [logicalGroups[0]], documentFetch: scopedActionResponses({ actionStatus: status }), initialQuery: { path: lineagePath, document_id: '101' }, capturePageState: true, allowSyntheticMutations: true })
+    await tick()
+    const button = walk(state.host).find(item => item.props['data-testid'] === 'document-export')
+    assert.ok(button && !button.props.disabled)
+    await button.props.onClick(); await tick()
+    const actions = state.calls.filter(call => call.url.pathname === '/api/documents' && call.method === 'POST')
+    assert.equal(actions.length, 1)
+    assert.equal(JSON.parse(actions[0].body).project, SAME_A)
+    assert.ok(!walk(state.host).some(item => item.props['data-testid'] === 'document-export-download'))
+  })
+}
+
+test('SCOPED-ACTION alias comment uses the exact requested alias project', async t => {
+  const scoped = scopedActionResponses()
+  const documentFetch = (url, init) => {
+    if (['/api/documents/read', '/api/documents/history'].includes(url.pathname)) {
+      const forwarded = new URL(url)
+      forwarded.searchParams.set('project', SAME_A)
+      return Promise.resolve(scoped(forwarded, init)).then(async response => {
+        const body = await response.json()
+        return Response.json({ ...body, project: SAME_B }, { status: response.status })
+      })
+    }
+    if (url.pathname === '/api/documents' && (init.method || 'GET') === 'GET') return Response.json({ items: lineageItems.map(row => ({ ...row, project: SAME_B })), total: 2, offset: Number(url.searchParams.get('offset')), limit: Number(url.searchParams.get('limit')), has_more: false })
+    return scoped(url, init)
+  }
+  const state = await mount(t, { path: '/documents', language: 'en', selected: SAME_B, items: [logicalItems[0], logicalItems[1]], unresolved: [], logical_groups: [logicalGroups[0]], documentFetch, initialQuery: { path: lineagePath, document_id: '101' }, capturePageState: true, allowSyntheticMutations: true })
+  await tick()
+  assert.equal(text(documentContent(state)).trim(), 'Alpha body version 2')
+  const comments = state.calls.filter(call => call.url.pathname === '/api/documents/comments')
+  assert.ok(comments.some(call => call.url.searchParams.get('project') === SAME_B && call.url.searchParams.get('document_id') === '101' && call.url.searchParams.get('expected_version') === '2'))
+  state.pageState().commentDraft.value = 'synthetic alias comment'
+  await state.pageState().comment()
+  const call = state.calls.find(item => item.method === 'POST' && item.url.pathname === '/api/documents/comment')
+  assert.ok(call)
+  assert.equal(JSON.parse(call.body).project, SAME_B)
+})
+
+test('SCOPED-ACTION initial old-server omission retains legacy export policy', async t => {
+  const legacy = lineageResponses({ oldServer: true }), scoped = scopedActionResponses()
+  const documentFetch = (url, init) => (init.method || 'GET') === 'POST' ? scoped(url, init) : legacy(url)
+  const state = await mount(t, { path: '/documents', language: 'en', selected: SAME_A, items: [logicalItems[0]], unresolved: [], documentFetch, initialQuery: { path: lineagePath }, capturePageState: true, allowSyntheticMutations: true })
+  await tick()
+  const button = walk(state.host).find(item => item.props['data-testid'] === 'document-export')
+  assert.ok(button && !button.props.disabled)
+  await button.props.onClick(); await tick()
+  const selection = state.calls.find(call => call.method === 'POST' && call.url.pathname === '/api/documents/selection')
+  const action = state.calls.find(call => call.method === 'POST' && call.url.pathname === '/api/documents')
+  assert.ok(selection && action)
+  assert.ok(!Object.hasOwn(JSON.parse(selection.body), 'project'))
+  assert.ok(!Object.hasOwn(JSON.parse(action.body), 'project'))
+  assert.deepEqual(JSON.parse(selection.body).selection.targets, [{ id: '101', expected_version: 2 }])
+})
+
+test('SCOPED-ACTION backend ambiguity response offers the lineage-specific diagnosis', async t => {
+  const base = scopedActionResponses()
+  const documentFetch = (url, init) => ['/api/documents/read', '/api/documents/history'].includes(url.pathname)
+    ? Response.json({ error: 'document lineage ambiguous; select a document_id from the list' }, { status: 409 })
+    : base(url, init)
+  const state = await mount(t, { path: '/documents', language: 'en', selected: SAME_A, items: [logicalItems[0]], unresolved: [], logical_groups: [], documentFetch, initialQuery: { path: lineagePath } })
+  await tick()
+  assert.equal(documentContent(state), undefined)
+  assert.ok(text(state.host).includes(state.i18n.global.t('errors.diagnosis.document-lineage-ambiguous')))
+  assert.ok(!text(state.host).includes('document lineage ambiguous; select a document_id from the list'))
+  assert.ok(documentReads(state).every(call => !call.url.searchParams.has('document_id')))
+})
+
+test('SCOPED-ACTION initially malformed capability cannot establish old-server fallback for an unmentioned project', async t => {
+  const logical_groups = [logicalGroups[0], { primary_project_id: SAME_A, alias_project_ids: ['not-a-uuid'] }]
+  const state = await mount(t, { path: '/documents', language: 'en', selected: GENERIC, items: logicalItems, unresolved: [], logical_groups, documentFetch: lineageResponses({ oldServer: true }), initialQuery: { path: lineagePath }, capturePageState: true, allowSyntheticMutations: true })
+  await tick()
+  assert.ok(text(state.host).includes(state.i18n.global.t('projectCatalog.lineageScopeUncertain')))
+  assert.equal(documentContent(state), undefined)
+  assert.ok(!state.calls.some(call => ['/api/documents/read', '/api/documents/history', '/api/documents/comments'].includes(call.url.pathname)))
+  await state.pageState().comment(); await state.pageState().exportDocument()
+  assert.ok(!state.calls.some(call => call.method === 'POST'))
+  assert.deepEqual(realProjectOptions(state.host).map(item => item.props.value).sort(), logicalItems.map(item => item.project_id).sort())
+})
+
+test('SCOPED-ACTION omission after an initially malformed capability remains uncertain until valid recovery', async t => {
+  let count = 0
+  const items = [logicalItems[0]]
+  const catalogFetch = () => Response.json({ items, unresolved: [], ...(++count === 1 ? { logical_groups: null } : count === 2 ? {} : { logical_groups: [] }) })
+  const state = await mount(t, { path: '/documents', language: 'en', selected: SAME_A, items, unresolved: [], catalogFetch, documentFetch: scopedActionResponses(), initialQuery: { path: lineagePath, document_id: '101' }, capturePageState: true, allowSyntheticMutations: true })
+  await state.context.refresh(); await tick()
+  assert.ok(text(state.host).includes(state.i18n.global.t('projectCatalog.lineageScopeUncertain')))
+  await assert.rejects(state.loadKnowledgePage('/api/documents', 'all', new URLSearchParams({ offset: '0', limit: '2' })))
+  assert.ok(!state.calls.some(call => ['/api/documents/read', '/api/documents/history', '/api/documents/comments'].includes(call.url.pathname)))
+  const retry = walk(state.host).find(item => item.props['data-testid'] === 'retry-project-catalog')
+  assert.ok(retry)
+  await retry.props.onClick(); await tick(); await tick()
+  assert.equal(count, 3)
+  assert.equal(text(documentContent(state)).trim(), 'Alpha body version 2')
 })

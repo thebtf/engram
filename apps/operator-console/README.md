@@ -203,7 +203,7 @@ successful-empty backend data, installed delivery or release acceptance.
 | `/` | Choose a project, open its knowledge or the independent code Workspace. A concrete project loads at most three latest memories and three document summaries, not every project's bodies. |
 | `/projects` | Choose one canonical project, enter memory/documents/code, and read up to 50 existing sessions. Project archive remains secondary and requires typing the exact selected ID. |
 | `/memory` | Server-filtered content search and paging, then the real ID reader, origin/currentness fields, source sessions, and up to 200 accessible audit events. Suppress, restore, archive, delete, and explicit bulk suppress use existing mutation/readback contracts. |
-| `/documents` | Metadata search, type/path-prefix filtering and paging, then current/version content, real version history and comparison. Version-specific comments and the existing export action remain available for legacy ungrouped readers; grouped actions are unavailable until a project-scoped action contract is supported. Download is exposed only after `committed_verified`; a new attempt or reader scope/version/state change clears its artifact. |
+| `/documents` | Metadata search, type/path-prefix filtering and paging, then current/version content, real version history, comparison, version-specific comments and export. Feature-aware servers receive project-scoped document actions; initially old servers retain their legacy contract. Download is exposed only after `committed_verified`; a new attempt or reader scope/version/state change clears its artifact. |
 | `/search` | Optional project context search through the existing context reader. Memory-backed results open the canonical scoped ID reader and return to the original query. Unsupported, forbidden, stale and unavailable search offers the same literal query in real project-scoped memory content or document-metadata search; these are not semantic/similarity results. Request evidence and search diagnostics remain secondary. |
 | `/code` | Existing independently selected and server-pinned Workspace. Knowledge labels never establish repository linkage or source access. |
 | `/rules`, `/queue` | Retained supported actions follow the shared selected project. Rules retain their explicit global scope; candidates retain the existing flag and explicit all-project contract. |
@@ -240,11 +240,16 @@ provide the same caller-authorized, deduplicated memory and document union, incl
 correct totals and paging, with each row projected to the requested canonical UUID.
 The client validates membership, duplicates and overlap before presenting a group;
 malformed or contradictory entries do not grant group or lineage support, while
-unrelated valid groups and every individual UUID choice remain available. Affected
+unrelated valid groups and every individual UUID choice remain available. A valid
+present array, including `[]`, signals support for lineage selectors and scoped
+document actions for the live client. Initial absence retains legacy compatibility;
+after that signal has been observed, later omission is unknown, not a downgrade.
+Initially malformed metadata cannot establish legacy compatibility, so all document
+scopes are uncertain until a valid signal arrives. After a valid signal, affected
 document scopes do not fall back to legacy reads or actions; if malformed metadata
-cannot identify affected projects, all document scopes are uncertain. Absent grouping
-retains the older flat choices and assumes the older readers are disjoint. These UI
-conditions do not prove the server union or its authorization.
+cannot identify affected projects, all document scopes are uncertain.
+Invalid, contradictory or unexpectedly absent metadata blocks a complete all-project
+total and offers a catalog retry. These UI conditions do not prove server authorization.
 Catalog refresh temporarily clears the selected scope, invalidating existing Home,
 memory and document results and action targets before new membership is applied.
 The unchanged route is resolved again against the settled catalog; late responses
@@ -415,15 +420,20 @@ selected canonical ID, never a raw stored alias. The server owns strict unique l
 alias resolution and privacy. Unknown/unregistered or ambiguous identities are not
 invented, auto-registered, merged, or presented as successfully empty projects.
 
-For a validated group, a document list row's positive issued ID identifies its
-lineage in Home and Documents links and in current/version/history requests. Same-path
-choices expose the issued IDs when needed to distinguish them. A grouped row with a
-missing or invalid ID is diagnosed without a path-only read; an explicit ID link to
-an unsupported server is also blocked rather than sent to a server that might ignore
-it. Legacy ungrouped links continue to use paths. A path-only ambiguity is shown as
-an actionable return to the list, not retried as another document. Grouped comment
-reads, comment writes and export remain unavailable until the server supplies proven
-project-scoped contracts; legacy ungrouped reads and actions retain their behavior.
+On a feature-aware server, a document list row's positive issued ID identifies its
+lineage in Home and Documents links and current/version/history requests, even when
+`logical_groups` is empty. Same-path choices expose IDs when needed to distinguish
+them. Missing or invalid list IDs and explicit IDs on unsupported servers fail closed;
+an ID or scope refusal never retries by path. Initial old-server links retain their
+path-only behavior. A path-only ambiguity offers a return to the list.
+
+Feature-aware comment reads and writes use the exact requested project and the selected
+immutable version row's ID and expected version. Export selection and action include
+the requested project; the selection identifies that same row and version. A changed
+scope, lineage, version, authentication or catalog invalidates a pending selection
+before export dispatch. Download remains the no-query artifact URL and is exposed only
+after verified completion. Initial old-server actions retain the existing ID-only
+contract; later missing or malformed capability metadata never re-enables it.
 
 `GET /api/memories/:id/audit?project=<canonical ID>&limit=200` now requires the
 same exact selected canonical project as the detail reader; its DTO remains
@@ -443,7 +453,8 @@ When valid groups are present, composition reads each group's primary once and s
 its aliases, relying on the conditional union contract above; direct alias selection
 still reads that exact UUID. Invalid or conflicting group metadata fails closed for
 the all-project composition rather than claiming a complete total. With grouping
-absent, composition retains the legacy disjoint-reader behavior. Ordering is by
+initially absent, composition retains the legacy disjoint-reader behavior; an omission
+after feature detection is instead unknown and requires catalog recovery. Ordering is by
 project, then by creation time within each project. A failed member read remains an
 error rather than a partial total presented as complete.
 

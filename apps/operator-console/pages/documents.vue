@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { documentScopeUncertain, isCatalogProject, useOperatorProjectContext, projectName, safeNavigation, supportsDocumentLineage, validDocumentID } from '../composables/useOperatorProjectContext'
 import { useOperatorDocuments, type DocumentExportArtifact } from '../composables/useOperatorDocuments'
-import { operatorApiUrl, operatorDiagnosisKey } from '../composables/useOperatorApi'
+import { authGeneration, operatorApiUrl, operatorDiagnosisKey, operatorUnauthorizedRevision } from '../composables/useOperatorApi'
 const { t, locale } = useI18n()
 const route = useRoute()
 const router = useRouter()
@@ -19,7 +19,7 @@ const requestedPath = computed(() => typeof route.query.path === 'string' ? rout
 const documentProject = computed(() => project.value === 'all' && typeof route.query.docProject === 'string' ? route.query.docProject : project.value)
 const requestedDocumentID = computed(() => route.query.document_id)
 const lineageUnavailable = computed(() => documentScopeUncertain(documentProject.value) || (requestedDocumentID.value !== undefined && (!validDocumentID(requestedDocumentID.value) || !supportsDocumentLineage(documentProject.value))))
-const lineageActionsUnavailable = computed(() => supportsDocumentLineage(documentProject.value) || documentScopeUncertain(documentProject.value))
+const lineageActionsUnavailable = computed(() => documentScopeUncertain(documentProject.value))
 const page = computed(() => Math.max(1, Number.parseInt(String(route.query.page || '1'), 10) || 1))
 const pageSize = computed(() => [10, 20, 50].includes(Number(route.query.size)) ? Number(route.query.size) : 20)
 const draft = ref(typeof route.query.draftQ === 'string' ? route.query.draftQ : query.value)
@@ -36,7 +36,7 @@ const mutationResult = ref<Awaited<ReturnType<typeof docs.addComment>> | Awaited
 const detailHeading = ref<HTMLElement | null>(null)
 let generation = 0
 let exportGeneration = 0
-watch([project, documentProject, requestedPath, requestedDocumentID, primaryVersion, () => primaryDocument.value?.id, () => primaryState.value.kind], () => {
+watch([project, documentProject, requestedPath, requestedDocumentID, primaryVersion, authGeneration, operatorUnauthorizedRevision, () => primaryDocument.value?.id, () => primaryState.value.kind], () => {
   exportGeneration += 1
   exportArtifact.value = null
 }, { flush: 'sync' })
@@ -130,13 +130,15 @@ async function comment() {
   const path = requestedPath.value
   const lineage = requestedDocumentID.value
   const version = primaryVersion.value
+  const auth = authGeneration.value
+  const unauthorized = operatorUnauthorizedRevision.value
   busy.value = true
   try {
     const result = await docs.addComment({ content, author: 'operator-console', lineStart: start, lineEnd: end })
-    if (project.value !== scope || requestedPath.value !== path || requestedDocumentID.value !== lineage || primaryVersion.value !== version) return
+    if (project.value !== scope || requestedPath.value !== path || requestedDocumentID.value !== lineage || primaryVersion.value !== version || authGeneration.value !== auth || operatorUnauthorizedRevision.value !== unauthorized) return
     mutationResult.value = result
     if (result.kind === 'committed_verified') { commentDraft.value = ''; lineStart.value = ''; lineEnd.value = ''; if (version) await selectPrimaryVersion(version) }
-  } catch { if (project.value === scope && requestedPath.value === path && requestedDocumentID.value === lineage) actionError.value = t('knowledge.actionFailed') }
+  } catch { if (project.value === scope && requestedPath.value === path && requestedDocumentID.value === lineage && authGeneration.value === auth && operatorUnauthorizedRevision.value === unauthorized) actionError.value = t('knowledge.actionFailed') }
   finally { busy.value = false }
 }
 

@@ -9,7 +9,7 @@ export interface OperatorUnresolvedProject {
   families?: Array<{ kind: string; table_name: string; membership_count: number; reader_support: 'declared' | 'separate' | 'metadata_only' }>
 }
 export interface OperatorLogicalGroup { primary_project_id: string; alias_project_ids: string[] }
-export interface OperatorProjectCatalog { items: OperatorProjectDescriptor[]; unresolved: OperatorUnresolvedProject[]; logicalGroups: OperatorLogicalGroup[]; logicalGroupsInvalid: boolean; uncertainDocumentProjects: string[] }
+export interface OperatorProjectCatalog { items: OperatorProjectDescriptor[]; unresolved: OperatorUnresolvedProject[]; logicalGroups: OperatorLogicalGroup[]; logicalGroupsPresent: boolean; logicalGroupsInvalid: boolean; uncertainDocumentProjects: string[] }
 export type OperatorProjectResolution = { status: 'resolved'; project_id: string; name: string } | { status: 'unresolved'; reference: string; reason: string }
 export interface OperatorKnowledgePage<T> { items: T[]; total: number; offset: number; limit: number; has_more: boolean }
 
@@ -18,6 +18,9 @@ const descriptors = ref<OperatorProjectDescriptor[]>([])
 const unresolved = ref<OperatorUnresolvedProject[]>([])
 const logicalGroups = ref<OperatorLogicalGroup[]>([])
 const logicalGroupsInvalid = ref(false)
+const documentCapabilityActive = ref(false)
+let documentCapabilityObserved = false
+let documentCapabilityUncertain = false
 const uncertainDocumentProjects = ref<string[]>([])
 const projects = computed(() => descriptors.value.map((row) => row.project_id))
 const projectSections = computed(() => {
@@ -127,7 +130,7 @@ export function parseProjectCatalog(payload: unknown): OperatorProjectCatalog {
   const candidates: OperatorLogicalGroup[] = []
   let logicalGroupsInvalid = false
   const implicated = new Set<string>()
-  if (payload.logical_groups !== undefined) {
+  if (Object.hasOwn(payload, 'logical_groups')) {
     if (!Array.isArray(payload.logical_groups)) { logicalGroupsInvalid = true; for (const id of ids) implicated.add(id) }
     else for (const group of payload.logical_groups) {
       if (!object(group) || !isProjectUUID(group.primary_project_id) || !ids.has(group.primary_project_id) || !Array.isArray(group.alias_project_ids) || !group.alias_project_ids.length || group.alias_project_ids.some((id: unknown) => !isProjectUUID(id) || !ids.has(id)) || new Set([group.primary_project_id, ...group.alias_project_ids]).size !== group.alias_project_ids.length + 1) {
@@ -157,7 +160,7 @@ export function parseProjectCatalog(payload: unknown): OperatorProjectCatalog {
     if (!valid) logicalGroupsInvalid = true
     return valid
   })
-  return { items, unresolved: retained, logicalGroups, logicalGroupsInvalid, uncertainDocumentProjects: [...implicated] }
+  return { items, unresolved: retained, logicalGroups, logicalGroupsPresent: Object.hasOwn(payload, 'logical_groups'), logicalGroupsInvalid, uncertainDocumentProjects: [...implicated] }
 }
 
 export function parseProjectResolution(payload: unknown): OperatorProjectResolution {
@@ -212,7 +215,7 @@ export function localizedProjectChoiceLabel(id: string, translate: (key: string)
   return projectChoiceLabel(id, [translate('knowledge.allProjects'), translate('knowledge.chooseProject'), translate('knowledge.browseAll')])
 }
 export function isCatalogProject(id: string): boolean { return projects.value.includes(id) }
-export function supportsDocumentLineage(id: string): boolean { return logicalGroups.value.some(group => group.primary_project_id === id || group.alias_project_ids.includes(id)) }
+export function supportsDocumentLineage(id: string): boolean { return documentCapabilityActive.value && isCatalogProject(id) && !documentScopeUncertain(id) }
 export function documentScopeUncertain(id: string): boolean { return uncertainDocumentProjects.value.includes(id) }
 export function validDocumentID(value: unknown): value is string { return typeof value === 'string' && /^[1-9]\d*$/.test(value) && Number.isSafeInteger(Number(value)) }
 
@@ -242,9 +245,13 @@ function refreshProjects(): Promise<void> {
       if (generation !== catalogGeneration) return
       descriptors.value = catalog.items.sort((a, b) => a.name.localeCompare(b.name) || (a.repository_qualifier || '').localeCompare(b.repository_qualifier || '') || a.project_id.localeCompare(b.project_id))
       unresolved.value = catalog.unresolved
+      const missingAfterUncertain = !catalog.logicalGroupsPresent && (documentCapabilityObserved || documentCapabilityUncertain)
+      if (catalog.logicalGroupsPresent && !catalog.logicalGroupsInvalid) { documentCapabilityObserved = true; documentCapabilityUncertain = false }
+      else if (catalog.logicalGroupsInvalid || missingAfterUncertain) documentCapabilityUncertain = true
       logicalGroups.value = catalog.logicalGroups
-      logicalGroupsInvalid.value = catalog.logicalGroupsInvalid
-      uncertainDocumentProjects.value = catalog.uncertainDocumentProjects
+      logicalGroupsInvalid.value = catalog.logicalGroupsInvalid || missingAfterUncertain
+      uncertainDocumentProjects.value = missingAfterUncertain || (catalog.logicalGroupsInvalid && !documentCapabilityObserved) ? catalog.items.map(item => item.project_id) : catalog.uncertainDocumentProjects
+      documentCapabilityActive.value = documentCapabilityObserved && catalog.logicalGroupsPresent
     } catch (cause) {
       if (generation !== catalogGeneration) return
       descriptors.value = []
@@ -252,6 +259,7 @@ function refreshProjects(): Promise<void> {
       logicalGroups.value = []
       logicalGroupsInvalid.value = false
       uncertainDocumentProjects.value = []
+      documentCapabilityActive.value = false
       error.value = toOperatorSourceError(cause, { source: 'project-context', path: '/api/projects', method: 'GET' })
       if (cause instanceof TypeError) error.value.category = 'invalid-response'
     } finally {

@@ -273,7 +273,7 @@ export async function operatorFetchJson<T>(
  if (!response.ok) {
   let category = operatorErrorDiagnosis(response.status)
   if (response.status === 409 && (source === 'documents-read-primary' || source === 'documents-read-secondary' || source === 'documents-history')) {
-   try { if (JSON.parse(text)?.error === 'document lineage ambiguous') category = 'document-lineage-ambiguous' } catch { /* Unrecognized errors retain the generic diagnosis. */ }
+   try { if (['document lineage ambiguous', 'document lineage ambiguous; select a document_id from the list'].includes(JSON.parse(text)?.error)) category = 'document-lineage-ambiguous' } catch { /* Unrecognized errors retain the generic diagnosis. */ }
   }
   const message = `${method} ${path} failed with status ${response.status}`
   throw new OperatorFetchError(message, {
