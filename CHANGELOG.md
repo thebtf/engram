@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Return a JSON 400 for registration passwords exceeding bcrypt's 72-byte limit without consuming the invitation or creating a user.
 
+- Preserve graph edge instants in JSON when a local offset crosses the four-digit year boundary, while retaining ordinary offsets and out-of-range UTC errors.
 - Set `Content-Type: application/json` on successful 201 responses for setup, registration, invitation creation, and Vault credential creation.
 
 - Explain non-401 update-check failures accessibly in Health and Settings with localized, safe diagnoses while preserving unknown availability; a successful Refresh can clear the notice. A current update-check 401 instead locks protected UI and offers sign-in.
