@@ -638,6 +638,16 @@ func (s *MemoryStore) List(ctx context.Context, project string, limit int) ([]*m
 	return result, nil
 }
 
+// ListCorrectionCandidates limits automatic correction to manageable native members.
+func (s *MemoryStore) ListCorrectionCandidates(ctx context.Context, project string, caller scope.KeycardContext, limit int) ([]*models.Memory, error) {
+	q, err := canonicalNativeProjectRows(ctx, s.db.Model(&Memory{}), project, "memories", "m")
+	if err != nil {
+		return nil, err
+	}
+	q = memoryReaderPrivacy(baseMemoryListQuery(q), caller, scope.MemoryVisibilityOptions{ApplyPrivacyScope: true})
+	return findMemoryRows(q, ListOptions{Limit: limit})
+}
+
 func (s *MemoryStore) visibleKnowledgeQuery(ctx context.Context, project string, caller scope.KeycardContext, opts scope.MemoryVisibilityOptions) (*gorm.DB, error) {
 	q, err := canonicalProjectRows(ctx, s.db.Model(&Memory{}), project, "memories", "m")
 	if err != nil {
