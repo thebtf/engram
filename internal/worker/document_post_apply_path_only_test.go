@@ -71,6 +71,8 @@ func TestPostApplyRetainedDocumentPathOnlyPostgres(t *testing.T) {
 		{Project: a, Path: "post-apply-http.md", Content: "retained http", ContentHash: "http-hash", DocType: "markdown", Author: "fixture", Version: 1},
 		{Project: a, Path: "post-apply-mcp.md", Content: "retained mcp", ContentHash: "mcp-hash", DocType: "markdown", Author: "fixture", Version: 1},
 		{Project: a, Path: "post-apply-explicit.md", Content: "retained explicit", ContentHash: "explicit-hash", DocType: "markdown", Author: "fixture", Version: 1},
+		{Project: a, Path: "legacy-retained-http.md", Content: "legacy retained http", ContentHash: "legacy-http-hash", DocType: "markdown", Author: "fixture", Version: 2},
+		{Project: a, Path: "legacy-retained-mcp.md", Content: "legacy retained mcp", ContentHash: "legacy-mcp-hash", DocType: "markdown", Author: "fixture", Version: 2},
 	}
 	for i := range docs {
 		require.NoError(t, source.DB.Create(&docs[i]).Error)
@@ -102,6 +104,15 @@ func TestPostApplyRetainedDocumentPathOnlyPostgres(t *testing.T) {
 		var memberships int64
 		require.NoError(t, db.Model(&gormdb.ConsolidationMembership{}).Where("table_name = ? AND row_key->>'id' = ? AND project_id = ?", "versioned_documents", fmt.Sprint(doc.ID), b).Count(&memberships).Error)
 		require.EqualValues(t, 1, memberships)
+	}
+	// This confirmed legacy redirect is fixture-established after Apply, not an Apply output.
+	legacy := "confirmed-legacy-" + uuid.NewString()
+	require.NoError(t, db.Exec(`INSERT INTO project_consolidation_redirects(selector,session_id,project_id,plan_fingerprint) VALUES (?, '', ?, 'fixture-confirmed')`, legacy, b).Error)
+	for _, doc := range docs[3:] {
+		var row gormdb.VersionedDocument
+		require.NoError(t, db.First(&row, doc.ID).Error)
+		require.Equal(t, 2, row.Version)
+		require.Equal(t, b, row.Project)
 	}
 	svc := &Service{store: target, sessionStore: gormdb.NewSessionStore(target), documentStore: gormdb.NewVersionedDocumentStoreWithVault(target, vault)}
 	router := chi.NewRouter()
@@ -151,6 +162,44 @@ func TestPostApplyRetainedDocumentPathOnlyPostgres(t *testing.T) {
 		v2, m2 := counts(docs[1].Path)
 		assert.Equal(t, v, v2)
 		assert.Equal(t, m, m2)
+	})
+	t.Run("legacy_http_path_only_refused", func(t *testing.T) {
+		v, m := counts(docs[3].Path)
+		rec := httpCreate(map[string]any{"project": legacy, "path": docs[3].Path, "content": "legacy http must not insert"})
+		assert.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+		assert.Contains(t, rec.Body.String(), "document_id and expected_version")
+		v2, m2 := counts(docs[3].Path)
+		assert.Equal(t, v, v2)
+		assert.Equal(t, m, m2)
+		var rows []gormdb.VersionedDocument
+		require.NoError(t, db.Where("path = ?", docs[3].Path).Order("version").Find(&rows).Error)
+		t.Logf("legacy HTTP status=%d versions_before=%d after=%d memberships_before=%d after=%d rows=%+v", rec.Code, v, v2, m, m2, rows)
+	})
+	t.Run("legacy_mcp_path_only_refused", func(t *testing.T) {
+		v, m := counts(docs[4].Path)
+		params, e := json.Marshal(map[string]any{"name": "docs", "arguments": map[string]any{"action": "create", "project": legacy, "path": docs[4].Path, "content": "legacy mcp must not insert"}})
+		require.NoError(t, e)
+		response := mcpServer.HandleRequest(auth.WithIdentity(t.Context(), admin), &mcp.Request{JSONRPC: "2.0", ID: 1, Method: "tools/call", Params: params})
+		require.NotNil(t, response)
+		if assert.NotNil(t, response.Error) {
+			assert.Equal(t, -32000, response.Error.Code)
+			assert.Contains(t, response.Error.Message, "document_id and expected_version")
+		}
+		v2, m2 := counts(docs[4].Path)
+		assert.Equal(t, v, v2)
+		assert.Equal(t, m, m2)
+		var rows []gormdb.VersionedDocument
+		require.NoError(t, db.Where("path = ?", docs[4].Path).Order("version").Find(&rows).Error)
+		t.Logf("legacy MCP error=%+v result=%+v versions_before=%d after=%d memberships_before=%d after=%d rows=%+v", response.Error, response.Result, v, v2, m, m2, rows)
+	})
+	t.Run("fresh_legacy_path_is_allowed", func(t *testing.T) {
+		rec := httpCreate(map[string]any{"project": legacy, "path": "legacy-fresh.md", "content": "fresh legacy document"})
+		require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+		var row gormdb.VersionedDocument
+		require.NoError(t, db.Where("path = ?", "legacy-fresh.md").Take(&row).Error)
+		assert.Equal(t, b, row.Project)
+		assert.Equal(t, 1, row.Version)
+		t.Logf("fresh legacy HTTP status=%d native_project=%s version=%d", rec.Code, row.Project, row.Version)
 	})
 	t.Run("ordinary_path_only_and_explicit_lineage", func(t *testing.T) {
 		fresh := httpCreate(map[string]any{"project": b, "path": "fresh.md", "content": "fresh"})
