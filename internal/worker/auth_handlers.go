@@ -496,6 +496,7 @@ func (h *AuthHandlers) handleSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	writeJSON(w, map[string]any{"user": toSafeUser(user)})
 }
@@ -616,6 +617,7 @@ func (h *AuthHandlers) handleCreateInvitation(w http.ResponseWriter, r *http.Req
 		writeAuthJSONError(w, http.StatusInternalServerError, "failed to create invitation")
 		return
 	}
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	writeJSON(w, map[string]any{"code": inv.Code, "id": inv.ID, "email": inv.Email, "role": inv.Role, "expires_at": inv.ExpiresAt})
 }
@@ -688,6 +690,7 @@ func (h *AuthHandlers) handleRegister(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	writeJSON(w, map[string]any{"user": toSafeUser(user)})
 }
@@ -822,6 +825,7 @@ func (h *AuthHandlers) handleAccessCreateInvitation(w http.ResponseWriter, r *ht
 			CreatedAt:  time.Now().UTC(),
 		})
 	}
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	writeJSON(w, map[string]any{
 		"invitation": gormdb.AccessInvitationView{
