@@ -34,6 +34,52 @@ func TestUCITaskContextNativeUsefulTwoWorktrees(t *testing.T) {
 	runNativeTaskContextFixture(t, nil)
 }
 
+func TestUCITaskContextPromptPersistedClientIdentity(t *testing.T) {
+	runNativeTaskContextFixture(t, func(t *testing.T, fixture joinedNativeFixture) {
+		pluginData := filepath.Join(fixture.root, "plugin-data")
+		require.NoError(t, os.Mkdir(pluginData, 0o700))
+		var instance string
+		for _, entry := range fixture.environment {
+			if strings.HasPrefix(entry, "ENGRAM_CLIENT_INSTANCE_ID=") {
+				instance = strings.TrimPrefix(entry, "ENGRAM_CLIENT_INSTANCE_ID=")
+			}
+		}
+		require.NotEmpty(t, instance)
+		identityFile := filepath.Join(pluginData, "client-instance-id")
+		require.NoError(t, os.WriteFile(identityFile, []byte(instance+"\n"), 0o600))
+		launcher, err := filepath.Abs("../../plugin/engram/scripts/run-engram.js")
+		require.NoError(t, err)
+		const script = `const crypto=require('node:crypto'),fs=require('node:fs');
+const launcher=require(process.env.FIXTURE_LAUNCHER), binary=process.env.FIXTURE_BINARY;
+const digest=crypto.createHash('sha256').update(fs.readFileSync(binary)).digest('hex');
+launcher.requestTaskContext({cwd:process.cwd(),session:'native-prompt-fixture',prompt:'Alpha'}, {
+ pluginData:process.env.FIXTURE_PLUGIN_DATA, resolve:async()=>({path:binary,target:{}}), roots:()=>({objects:process.env.FIXTURE_PLUGIN_DATA}),
+ hash:file=>crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')===digest,
+}).then(result=>process.stdout.write(JSON.stringify(result)));`
+		command := exec.Command("node", "-e", script)
+		command.Dir = fixture.first
+		for _, entry := range fixture.environment {
+			if !strings.HasPrefix(entry, "ENGRAM_CLIENT_INSTANCE_ID=") && !strings.HasPrefix(entry, "ENGRAM_DATA_DIR=") {
+				command.Env = append(command.Env, entry)
+			}
+		}
+		command.Env = append(command.Env, "FIXTURE_LAUNCHER="+launcher, "FIXTURE_BINARY="+fixture.binary, "FIXTURE_PLUGIN_DATA="+pluginData)
+		var stderr bytes.Buffer
+		command.Stderr = &stderr
+		output, err := command.Output()
+		require.NoError(t, err, "prompt child: %s", stderr.String())
+		var response taskcontext.Response
+		require.NoError(t, json.Unmarshal(output, &response))
+		require.Equal(t, "ok", response.Status, "response=%s", output)
+		require.NotNil(t, response.Packet, "response=%s", output)
+		require.NoError(t, response.Validate())
+		contents, err := os.ReadFile(identityFile)
+		require.NoError(t, err)
+		require.Equal(t, instance+"\n", string(contents))
+		t.Log("URL/token-only prompt read persisted identity; real native CLI reached existing fixture daemon namespace and returned code")
+	})
+}
+
 func TestUCITaskContextNativeIndependentKnowledgeAndCode(t *testing.T) {
 	runNativeTaskContextFixture(t, func(t *testing.T, fixture joinedNativeFixture) {
 		invoke := func() taskcontext.Response {
@@ -181,7 +227,7 @@ func runNativeTaskContextFixture(t *testing.T, consume func(*testing.T, joinedNa
 	for _, part := range []string{"home", "temp", "installation", "cache"} {
 		require.NoError(t, os.Mkdir(filepath.Join(root, part), 0o700))
 	}
-	instance := "native-task-" + uuid.NewString()
+	instance := "engram-" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	digest := sha256.Sum256([]byte(instance))
 	namespace := "engram-" + hex.EncodeToString(digest[:16])
 	controlPath := serverid.DaemonControlPath(filepath.Join(root, "temp"), namespace)
