@@ -113,8 +113,8 @@ a tool error.
 The generated [Swagger schema](../swagger.json) is maintained in the repository.
 On a running server, `/api/docs` redirects to the Swagger UI at
 `/api/docs/index.html`, which serves its schema at `/api/docs/doc.json`.
-These routes are subject to global authentication when configured. For the
-runtime product version, use `/api/version` rather than the schema's
+The server's token authentication middleware exempts the `/api/docs` prefix.
+For the runtime product version, use `/api/version` rather than the schema's
 `info.version`. The schema has conditional limitations described below and
 should not be treated as a complete description of every API behavior.
 
