@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/thebtf/engram/docs"
 	"github.com/thebtf/engram/pkg/models"
 	"gopkg.in/yaml.v3"
@@ -79,6 +80,26 @@ func TestContextInject_RejectsRawSelectorBeforeProjectMutation(t *testing.T) {
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("project=%q status=%d body=%s", project, rec.Code, rec.Body.String())
 		}
+	}
+}
+
+func TestSwaggerServedSchemaUsesDocumentationOrigin(t *testing.T) {
+	service := &Service{router: chi.NewRouter()}
+	service.setupRoutes()
+	rec := httptest.NewRecorder()
+	service.router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "http://example.test:45678/api/docs/doc.json", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("schema status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var spec map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &spec); err != nil {
+		t.Fatal(err)
+	}
+	if host, ok := spec["host"]; ok && host != "" {
+		t.Fatalf("schema fixes host to %v, rather than using its serving origin", host)
+	}
+	if schemes, ok := spec["schemes"].([]any); ok && len(schemes) != 0 {
+		t.Fatalf("schema fixes schemes to %v, rather than using its serving origin", schemes)
 	}
 }
 

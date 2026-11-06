@@ -5938,11 +5938,11 @@ const docTemplate = `{
 // SwaggerInfo holds exported Swagger Info so clients can modify it
 var SwaggerInfo = &swag.Spec{
 	Version:          "1.0.0",
-	Host:             "localhost:37777",
+	Host:             "",
 	BasePath:         "/",
 	Schemes:          []string{},
 	Title:            "Engram API",
-	Description:      "Persistent shared memory infrastructure for AI agents. Stores memories + behavioral rules + credentials in PostgreSQL. REST API over HTTP; MCP tools are served via stdio client proxy only (server-side MCP HTTP transports removed in v5). Note: the host below is the default for local development; set ENGRAM_LISTEN_ADDR to change the listen address in production.",
+	Description:      "Persistent shared memory infrastructure for AI agents. Stores memories + behavioral rules + credentials in PostgreSQL. REST API over HTTP; MCP tools are served via stdio client proxy only (server-side MCP HTTP transports removed in v5).",
 	InfoInstanceName: "swagger",
 	SwaggerTemplate:  docTemplate,
 	LeftDelim:        "{{",

@@ -114,9 +114,13 @@ The generated [Swagger schema](../swagger.json) is maintained in the repository.
 On a running server, `/api/docs` redirects to the Swagger UI at
 `/api/docs/index.html`, which serves its schema at `/api/docs/doc.json`.
 The server's token authentication middleware exempts the `/api/docs` prefix.
-The generated schema declares `localhost:37777` as its host, so Swagger UI's
-Try it out may target the reader's own machine instead of a remote server. Use
-the explicitly configured server address for API calls.
+The current source does not fix a host or scheme in the schema: Swagger UI uses
+the origin serving the documentation. This requires the documentation and API
+to be reachable at that origin; reverse-proxy path rewriting is not covered.
+Older deployments, including the observed 7.0.26 installation, may still declare
+`localhost:37777`, causing Try it out to target the reader's machine. Check the
+served `/api/docs/doc.json` before use and use the intended server address for
+API calls when it declares that host. A source change does not update a deployment.
 For the runtime product version, use `/api/version` rather than the schema's
 `info.version`. The schema has conditional limitations described below and
 should not be treated as a complete description of every API behavior.
