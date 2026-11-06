@@ -156,7 +156,7 @@ func (s *Server) filterVisibleGraphEdges(ctx context.Context, edges []graph.Edge
 			(edge.NodeTargetID != nil && !nodeVisible(*edge.NodeTargetID)) {
 			continue
 		}
-		visible = append(visible, edge)
+		visible = append(visible, graph.EdgeForJSON(edge))
 	}
 	return visible
 }
