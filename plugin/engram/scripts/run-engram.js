@@ -189,6 +189,7 @@ async function resolveLogicalProject(root, options = {}) {
 }
 
 function projectFromInspection(inspection) {
+ if (inspection?.status === 'conflict') throw new Error('PROJECT_IDENTITY_CONFLICT');
  if (inspection?.status !== 'resolved') throw new Error(inspection?.status === 'migration_required' ? 'PROJECT_MIGRATION_REQUIRED' : 'PROJECT_CONTEXT_REQUIRED');
  const binding = inspection.binding;
  if (!binding || binding.removed === true ||

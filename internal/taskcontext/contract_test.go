@@ -32,6 +32,26 @@ func TestTaskContextWireClampsWithoutExtendingParent(t *testing.T) {
 	require.Equal(t, DefaultMaxBytes, request.OutputLimit())
 }
 
+func TestDecodeNormalizesOnlyQueryCRLF(t *testing.T) {
+	for _, tc := range []struct {
+		query, session string
+		valid          bool
+		want           string
+	}{
+		{"первый\r\n😀 второй", "host", true, "первый\n😀 второй"},
+		{"one\rtwo", "host", false, "one\rtwo"},
+		{"one\r\ntwo", "host\r\nother", false, "one\ntwo"},
+		{strings.Repeat("a", 16383) + "\r\n", "host", false, strings.Repeat("a", 16383) + "\r\n"},
+	} {
+		raw, err := json.Marshal(Request{Schema: 1, HostSessionID: tc.session, Query: tc.query, DeadlineUnixMS: 1})
+		require.NoError(t, err)
+		var got Request
+		require.NoError(t, Decode(bytes.NewReader(raw), &got))
+		require.Equal(t, tc.want, got.Query)
+		require.Equal(t, tc.valid, got.Validate() == nil)
+	}
+}
+
 func TestTaskContextWireRejectsMalformedAndBoundsWholeFrame(t *testing.T) {
 	for _, raw := range [][]byte{
 		[]byte(`{"schema":1,"schema":1}`),

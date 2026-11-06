@@ -11,7 +11,7 @@ function payload(query = facts.prompt, observations = [{ id: 42, project, type: 
 function dependencies(extra = {}) {
   return {
     runtimeConfig: async () => ({ serverURL: 'http://fixture', token: 'private-auth', quiet: false }),
-    resolveContext: async (cwd, options) => { assert.equal(cwd, facts.cwd); assert.equal(options.acquire, false); assert.equal(options.check, true); assert.equal(options.env.ENGRAM_TOKEN, 'private-auth'); return { Project: project }; },
+    resolveContext: async (cwd, options) => { assert.equal(cwd, facts.cwd); assert.equal(options.acquire, false); assert.equal(options.check, true); assert.ok(!Object.keys(options.env).some(key => ['ENGRAM_URL', 'ENGRAM_SERVER_URL', 'ENGRAM_TOKEN'].includes(key.toUpperCase()))); return { Project: project }; },
     requestPost: async (route, body, budget, options) => {
       assert.equal(route, '/api/context/search?limit=3');
       assert.deepEqual(body, { project, session_id: facts.session, query: facts.prompt });
@@ -30,7 +30,7 @@ test('correction detection and failing support requests do not veto useful knowl
   assert.equal(prompt.detectCorrection('Actually, do not remove it'), true);
   assert.equal(prompt.detectCorrection('ordinary task'), false);
   t.mock.method(lib, 'resolveEngramRuntimeConfig', dependencies().runtimeConfig);
-  t.mock.method(lib, 'resolveHookProjectContext', async () => { assert.fail('prompt must not spawn a second project resolver'); });
+  t.mock.method(lib, 'resolveHookProjectContext', dependencies().resolveContext);
   t.mock.method(require('../scripts/run-engram.js'), 'requestTaskContext', async () => nativeKnowledge());
   const calls = [];
   t.mock.method(lib, 'requestPost', async (route, body) => {
@@ -64,6 +64,7 @@ test('support capture survives prompt return, including empty and quiet context,
     const outcome = await prompt.requestPromptContext({ ...facts, prompt: 'Actually, do not remove it' }, {
       signal: controller.signal, supportHooks: true,
       runtimeConfig: async () => ({ serverURL, token: '', quiet }),
+      resolveContext: async (_cwd, options) => { assert.equal(options.check, true); assert.equal(options.acquire, false); return { Project: project }; },
       requestTaskContext: async () => empty ? nativeResponse('empty') : nativeKnowledge(),
     });
     assert.equal(outcome.status, quiet ? 'skipped' : empty ? 'empty' : 'delivered');
@@ -107,6 +108,22 @@ test('native knowledge redacts secrets without losing negation or Unicode', () =
   assert.equal(formatted.status, 'delivered');
   assert.match(formatted.content, /НЕ удалять 😀/);
   assert.doesNotMatch(formatted.content, /fixture-secret/);
+});
+
+test('expanded escaped knowledge retains bounded useful evidence and original hashes', () => {
+  const response = nativeKnowledge(), item = response.knowledge.items[0];
+  item.content = '😀 ' + '<p>'.repeat(1300) + ' token=fixture-secret';
+  item.content_hash = require('node:crypto').createHash('sha256').update(item.content).digest('hex');
+  item.source_hash = item.content_hash;
+  const output = prompt.formatNativeTaskContext(response, 'fixture-secret');
+  assert.equal(output.status, 'delivered');
+  assert.ok(Buffer.byteLength(output.content) <= 12000);
+  assert.match(output.content, /&lt;p&gt;/);
+  assert.match(output.content, /😀/);
+  assert.match(output.content, /\[display truncated\]/);
+  assert.ok(output.content.includes(item.content_hash));
+  assert.ok(!output.content.includes('fixture-secret'));
+  assert.equal(Buffer.from(output.content).toString('utf8'), output.content);
 });
 
 test('quoted diagnostics are masked before JSON serialization without changing provenance', () => {
@@ -156,6 +173,18 @@ test('native packet presentation retains View/source/exposure and rejects stale 
   native.packet.search.items[0].excerpt = '😀'.repeat(4000) + ' DO NOT remove';
   assert.equal(prompt.formatNativeTaskContext(native).status, 'invalid_context');
 });
+test('expanded code excerpt retains bounded UTF-8 and original View evidence', () => {
+  const response = nativeResponse(), item = response.packet.search.items[0];
+  item.excerpt = '😀 ' + '<p>'.repeat(1300);
+  const output = prompt.formatNativeTaskContext(response);
+  assert.equal(output.status, 'delivered');
+  assert.ok(Buffer.byteLength(output.content) <= 12000);
+  assert.match(output.content, /😀 &lt;p&gt;/);
+  assert.match(output.content, /\[display truncated\]/);
+  for (const value of ['view-fixture', 'source-fixture', 'exposure-fixture', 'membership-fixture', item.content_digest]) assert.ok(output.content.includes(value));
+  assert.equal(Buffer.from(output.content).toString('utf8'), output.content);
+});
+
 
 test('useful native code uses one process result and never waits for the slow knowledge provider', async () => {
   let nativeCalls = 0;
@@ -187,6 +216,146 @@ test('native no-match does not start serial REST knowledge', async () => {
     requestPost: async () => { assert.fail('missing project cannot authorize REST knowledge'); },
   });
   assert.equal(refused.status, 'not_ready');
+});
+
+test('support capture resolves independently when native identity is unavailable and honors cancellation', async () => {
+  const calls = [], controller = new AbortController();
+  let inspectedSignal;
+  const outcome = await prompt.requestPromptContext({ ...facts, prompt: 'Actually, do not remove it' }, {
+    supportHooks: true, signal: controller.signal, runtimeConfig: dependencies().runtimeConfig,
+    resolveContext: async (cwd, options) => {
+      assert.equal(cwd, facts.cwd); assert.equal(options.check, true); assert.equal(options.acquire, false);
+      assert.ok(!Object.keys(options.env).some(key => ['ENGRAM_URL', 'ENGRAM_SERVER_URL', 'ENGRAM_TOKEN'].includes(key.toUpperCase())));
+      inspectedSignal = options.signal; return { Project: project };
+    },
+    requestTaskContext: async () => ({ schema: 1, status: 'not_ready', reason_code: 'DAEMON_NOT_READY' }),
+    requestPost: async (route, body, budget, options) => {
+      calls.push({ route, body }); assert.ok(budget > 0 && budget <= 500);
+      assert.equal(options.signal, inspectedSignal);
+      return new Promise(resolve => options.signal.addEventListener('abort', resolve, { once: true }));
+    },
+  });
+  assert.equal(outcome.status, 'not_ready');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(calls.map(call => call.route).sort(), ['/api/hooks/correction', '/api/hooks/segment-check']);
+  assert.ok(calls.every(call => call.body.project === project && call.body.session_id === facts.session));
+  controller.abort();
+  assert.equal(inspectedSignal.aborted, true);
+});
+
+test('support capture uses verified local binding while native work is hung', { timeout: 2000 }, async () => {
+  const controller = new AbortController(), calls = [];
+  let captured;
+  const bothCaptured = new Promise(resolve => { captured = resolve; });
+  const pending = prompt.requestPromptContext({ ...facts, prompt: 'Actually, do not remove it' }, {
+    signal: controller.signal, supportHooks: true, runtimeConfig: dependencies().runtimeConfig,
+    resolveContext: async () => ({ Project: project }),
+    requestTaskContext: () => new Promise(() => { }),
+    requestPost: async (route, body, budget) => {
+      assert.ok(budget > 0 && budget <= 500);
+      calls.push({ route, body });
+      if (calls.length === 2) captured();
+    },
+  });
+  await bothCaptured;
+  assert.deepEqual(calls.map(call => call.route).sort(), ['/api/hooks/correction', '/api/hooks/segment-check']);
+  assert.ok(calls.every(call => call.body.project === project));
+  controller.abort();
+  assert.equal((await pending).status, 'cancelled');
+});
+
+test('support capture refuses unresolved project and starts no writes', async () => {
+  let calls = 0;
+  await prompt.requestPromptContext(facts, {
+    supportHooks: true, runtimeConfig: dependencies().runtimeConfig,
+    resolveContext: async () => { throw new Error('PROJECT_CONTEXT_REQUIRED'); },
+    requestTaskContext: async () => nativeKnowledge(),
+    requestPost: async () => { calls++; },
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls, 0);
+});
+
+test('support capture uses verified native project when local inspection is unavailable', async () => {
+  const calls = [];
+  const outcome = await prompt.requestPromptContext({ ...facts, prompt: 'Actually, do not remove it' }, {
+    supportHooks: true, runtimeConfig: dependencies().runtimeConfig,
+    resolveContext: async () => { throw Object.assign(new Error('offline'), { code: 'PROJECT_RESOLUTION_UNAVAILABLE' }); },
+    requestTaskContext: async () => nativeKnowledge(),
+    requestPost: async (route, body) => { calls.push({ route, body }); },
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(outcome.status, 'delivered');
+  assert.deepEqual(calls.map(call => call.route).sort(), ['/api/hooks/correction', '/api/hooks/segment-check']);
+  assert.ok(calls.every(call => call.body.project === project && call.body.session_id === facts.session));
+});
+
+test('support capture cancels while awaiting native identity', async () => {
+  const controller = new AbortController();
+  let finishNative, calls = 0;
+  const native = new Promise(resolve => { finishNative = resolve; });
+  const pending = prompt.requestPromptContext(facts, {
+    supportHooks: true, signal: controller.signal, runtimeConfig: dependencies().runtimeConfig,
+    resolveContext: async () => { throw Object.assign(new Error('offline'), { code: 'PROJECT_RESOLUTION_UNAVAILABLE' }); },
+    requestTaskContext: () => native,
+    requestPost: async () => { calls++; },
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  controller.abort();
+  assert.equal((await pending).status, 'cancelled');
+  finishNative(nativeKnowledge());
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls, 0);
+});
+
+test('support capture refuses invalid local or native identity', async () => {
+  for (const [localError, native] of [
+    ['PROJECT_IDENTITY_INVALID', nativeKnowledge()],
+    ['PROJECT_IDENTITY_CONFLICT', nativeKnowledge()],
+    ['PROJECT_RESOLUTION_UNAVAILABLE', { ...nativeKnowledge(), project: { status: 'conflict' } }],
+  ]) {
+    let calls = 0;
+    await prompt.requestPromptContext(facts, {
+      supportHooks: true, runtimeConfig: dependencies().runtimeConfig,
+      resolveContext: async () => { throw Object.assign(new Error(localError), { code: localError }); },
+      requestTaskContext: async () => native,
+      requestPost: async () => { calls++; },
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(calls, 0, localError);
+  }
+});
+
+test('support capture refuses a known native conflict or mismatched project', async () => {
+  const different = nativeKnowledge();
+  different.project.binding.id = '22222222-2222-4222-8222-222222222222';
+  for (const native of [{ ...nativeKnowledge(), project: { status: 'conflict' } }, different]) {
+    let finishInspection, calls = 0;
+    const inspection = new Promise(resolve => { finishInspection = resolve; });
+    await prompt.requestPromptContext(facts, {
+      supportHooks: true, runtimeConfig: dependencies().runtimeConfig,
+      resolveContext: () => inspection,
+      requestTaskContext: async () => native,
+      requestPost: async () => { calls++; },
+    });
+    finishInspection({ Project: project });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(calls, 0);
+  }
+});
+
+test('project inspection preserves conflict, migration and unresolved distinctions', async () => {
+  const launcher = require('../scripts/run-engram.js');
+  for (const [status, code] of [['conflict', 'PROJECT_IDENTITY_CONFLICT'], ['migration_required', 'PROJECT_MIGRATION_REQUIRED'], ['unbound', 'PROJECT_CONTEXT_REQUIRED']]) {
+    assert.throws(() => launcher.projectFromInspection({ status }), new RegExp(code));
+    await assert.rejects(launcher.resolveLogicalProject(facts.cwd, {
+      pluginRoot: facts.cwd, pluginData: facts.cwd, check: true,
+      resolve: async () => ({ path: 'trusted-fixture-client', target: {} }),
+      roots: () => ({ objects: facts.cwd }), hash: () => true,
+      execFile(_file, args, _options, callback) { assert.ok(args.includes('--check')); callback(null, JSON.stringify({ status })); },
+    }), new RegExp(code));
+  }
+  assert.equal(launcher.projectFromInspection(nativeKnowledge().project), project);
 });
 
 test('composed delivery dedup changes with credentials, topic and native generation', async () => {

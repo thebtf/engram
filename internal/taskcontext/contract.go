@@ -146,6 +146,9 @@ func Decode(input io.Reader, target any) error {
 	if decoder.Decode(&struct{}{}) != io.EOF {
 		return errors.New("extra task context value")
 	}
+	if request, ok := target.(*Request); ok && len(request.Query) <= 16<<10 {
+		request.Query = strings.ReplaceAll(request.Query, "\r\n", "\n")
+	}
 	return nil
 }
 

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Normalize CRLF only in bounded task queries; budget redacted, escaped knowledge and code within the existing output cap; capture corrections and segments using verified local or available native project identity within a separate bounded budget; and require packaged prompt runtime dependencies and source-matching prompt/launcher bytes in the archive gate.
+
 - Assemble ready prompt knowledge in declared provider order, preserving each provider's ranking regardless of completion timing and keeping bounded-frame trimming stable for unchanged evidence.
 
 - Preserve bounded knowledge when an empty code packet exceeds the shared frame budget; keep correction and segmentation capture alive through successful prompt return and quiet mode. Include the native task schema in the explicitly unverified offline catalog and check packaged extension dependencies.

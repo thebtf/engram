@@ -83,10 +83,10 @@ function writeZip(archiveRoot, archivePath, entries) {
   fs.writeFileSync(archivePath, Buffer.concat([...records, directory, end]));
 }
 
-const archiveEntries = ["engram-server", "package.json", "extensions/engram-memory.mjs", "scripts/task-context-worker.js", "hooks/user-prompt.js", "scripts/run-engram.js"];
+const archiveEntries = ['engram-server', 'package.json', 'bootstrap-targets.json', 'parser-targets.json', 'extensions/engram-memory.mjs', 'hooks/lib.js', 'hooks/session-start.js', 'hooks/user-prompt.js', 'scripts/bootstrap-policy.js', 'scripts/client-instance.js', 'scripts/ensure-binary.js', 'scripts/run-engram.js', 'scripts/task-context-worker.js'];
 function buildArchive(archiveRoot, archivePath, entries = archiveEntries) {
   if (archivePath.endsWith(".tar.gz")) {
-    run("tar", ["-czf", archivePath, "-C", archiveRoot, ...entries]);
+    run("tar", ["-czf", bashPath(archivePath), "-C", bashPath(archiveRoot), ...entries]);
   } else {
     writeZip(archiveRoot, archivePath, entries);
   }
@@ -99,11 +99,9 @@ function createFixture() {
   fs.mkdirSync(path.join(archiveRoot, 'scripts'));
   fs.mkdirSync(path.join(archiveRoot, 'hooks'));
   fs.mkdirSync(dist);
-  fs.copyFileSync(manifestPath, path.join(archiveRoot, "package.json"));
-  fs.copyFileSync(extensionPath, path.join(archiveRoot, "extensions", "engram-memory.mjs"));
-  fs.copyFileSync(workerPath, path.join(archiveRoot, 'scripts', 'task-context-worker.js'));
-  fs.copyFileSync(path.join(root, 'plugin/engram/hooks/user-prompt.js'), path.join(archiveRoot, 'hooks/user-prompt.js'));
-  fs.copyFileSync(path.join(root, 'plugin/engram/scripts/run-engram.js'), path.join(archiveRoot, 'scripts/run-engram.js'));
+  for (const entry of archiveEntries.filter(entry => entry !== 'engram-server')) {
+    fs.copyFileSync(path.join(root, 'plugin/engram', entry), path.join(archiveRoot, entry));
+  }
   fs.writeFileSync(path.join(archiveRoot, "engram-server"), `#!/usr/bin/env bash
 if [[ -n "\${NO_COLOR:-}" ]]; then
   printf 'INF Starting engram server version=v${version}\\n' >&2
@@ -186,7 +184,7 @@ test("server-plugin archive gate rejects duplicate or non-canonical OMP entry pa
     assert.notEqual(duplicate.status, 0);
     assert.match(`${duplicate.stderr}\n${duplicate.stdout}`, /exactly one canonical package\.json/);
 
-    buildArchive(fixture.archiveRoot, path.join(fixture.dist, expectedArchives()[0]), ["package.json"]);
+    buildArchive(fixture.archiveRoot, path.join(fixture.dist, expectedArchives()[0]), ['package.json', 'bootstrap-targets.json', 'parser-targets.json']);
     const missingCanonicalPath = gate(fixture.dist);
     assert.notEqual(missingCanonicalPath.status, 0);
     assert.match(`${missingCanonicalPath.stderr}\n${missingCanonicalPath.stdout}`, /canonical extensions\/engram-memory\.mjs/);
@@ -261,7 +259,7 @@ test('server-plugin archive gate requires exact task-context worker bytes in all
     buildExpectedMatrix(fixture);
     assert.equal(gate(fixture.dist).status, 0);
     const archive = path.join(fixture.dist, expectedArchives()[2]);
-    buildArchive(fixture.archiveRoot, archive, ['engram-server', 'package.json', 'extensions/engram-memory.mjs']);
+    buildArchive(fixture.archiveRoot, archive, archiveEntries.filter(entry => entry !== 'scripts/task-context-worker.js'));
     const missing = gate(fixture.dist);
     assert.notEqual(missing.status, 0);
     assert.match(`${missing.stderr}\n${missing.stdout}`, /canonical scripts\/task-context-worker\.js/);
@@ -281,11 +279,29 @@ test('server-plugin archive gate rejects missing extension dependencies', () => 
   try {
     buildExpectedMatrix(fixture);
     const archive = path.join(fixture.dist, expectedArchives()[2]);
-    for (const missing of ['hooks/user-prompt.js', 'scripts/run-engram.js']) {
+    for (const missing of archiveEntries.filter(entry => !['engram-server', 'package.json', 'extensions/engram-memory.mjs', 'scripts/task-context-worker.js'].includes(entry))) {
       buildArchive(fixture.archiveRoot, archive, archiveEntries.filter(entry => entry !== missing));
       const result = gate(fixture.dist);
       assert.notEqual(result.status, 0);
       assert.ok(`${result.stderr}\n${result.stdout}`.includes(`canonical ${missing}`));
+    }
+  } finally {
+    fs.rmSync(fixture.temporary, { recursive: true, force: true });
+  }
+});
+
+test('server-plugin archive gate rejects prompt and launcher byte drift', () => {
+  const fixture = createFixture();
+  try {
+    buildExpectedMatrix(fixture);
+    for (const entry of ['hooks/user-prompt.js', 'scripts/run-engram.js']) {
+      const file = path.join(fixture.archiveRoot, entry);
+      fs.appendFileSync(file, '\n// altered fixture\n');
+      buildArchive(fixture.archiveRoot, path.join(fixture.dist, expectedArchives()[2]));
+      const rejected = gate(fixture.dist);
+      assert.notEqual(rejected.status, 0);
+      assert.ok(`${rejected.stderr}\n${rejected.stdout}`.includes(`${entry} differs from tagged source`));
+      fs.copyFileSync(path.join(root, 'plugin/engram', entry), file);
     }
   } finally {
     fs.rmSync(fixture.temporary, { recursive: true, force: true });
