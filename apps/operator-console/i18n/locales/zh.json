@@ -701,9 +701,9 @@
       "body": "每个动作都会进入服务器状态机；当 VNEXT_F 关闭时，页面会诚实显示 gated 状态。"
     },
     "metrics": {
-      "pending": "等待决策",
-      "promotable": "可提升目标",
-      "lowConfidence": "低置信度"
+      "pending": "等待决策 · 已加载",
+      "promotable": "可提升目标 · 已加载",
+      "lowConfidence": "低置信度 · 已加载"
     },
     "filters": {
       "project": "队列项目",
@@ -711,7 +711,7 @@
       "unscoped": "未绑定项目"
     },
     "actions": {
-      "selectAll": "全选",
+      "selectAll": "选择当前页",
       "clearSelection": "清除选择",
       "refresh": "刷新",
       "promote": "提升",
@@ -724,16 +724,16 @@
         "supersede": "确认替代"
       }
     },
-    "countInFilter": "{shown} 个候选项 · 已选择 {selected} 个",
+    "countInFilter": "已加载 {shown} 个候选项 · 当前页已选择 {selected} 个",
     "rowsLabel": "行数",
-    "allRows": "全部",
-    "pageRange": "{from}–{to} / {total}",
+    "allRows": "全部已加载",
+    "pageRange": "已加载 {total} 个中的 {from}–{to}",
     "pagination": {
-      "first": "转到第一页",
+      "first": "转到已加载的第一页",
       "previous": "转到上一页",
-      "current": "当前第 {page} 页",
+      "current": "当前已加载的第 {page} 页",
       "next": "转到下一页",
-      "last": "转到最后一页"
+      "last": "转到已加载的最后一页"
     },
     "aria": {
       "toggleCandidate": "选择候选项 {id}",
@@ -748,15 +748,18 @@
       "recurrence": "{count} 次重复"
     },
     "state": {
+      "legacyTruncated": "列表可能不完整：服务器未提供后续页面信息。",
+      "more": "还有更多候选项。",
+      "exhausted": "本次读取时没有更多候选项。",
       "pending": "正在加载候选队列…",
       "error": "无法加载候选队列：{message}",
-      "empty": "所选项目没有等待审核的候选项。",
+      "empty": "当前加载的部分没有候选项。",
       "gated": "队列被 flag {flag} 关闭。",
       "retry": "重试"
     },
     "empty": {
-      "title": "队列为空",
-      "body": "当前所选项目没有候选项。"
+      "title": "加载的部分为空",
+      "body": "当前加载的部分没有候选项。"
     },
     "detail": {
       "title": "候选项 #{id}",
