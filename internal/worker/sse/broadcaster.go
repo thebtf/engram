@@ -237,8 +237,10 @@ const KeepaliveInterval = 25 * time.Second
 // @Summary Stream dashboard events
 // @Description Sends a connected object and live JSON event objects; a concurrent broadcast can arrive before the connected object. SSE comment keepalives occur every 25 seconds. No event IDs or replay are provided; reconnecting starts a new stream.
 // @Description Available before database readiness, subject to authentication and rate limiting. A query token is supported for browser SSE clients.
+// @Description A timed-out or failed broadcast may remove a subscriber without closing its HTTP stream; keepalives do not prove event delivery. Clients can reconnect and refresh state, but cannot replay gaps.
+// @Description Success is text/event-stream; pre-stream http.Error responses are text/plain. Swagger 2 lists media types at operation scope, not per status.
 // @Tags System
-// @Produce text/event-stream
+// @Produce text/event-stream,plain
 // @Security ApiKeyAuth
 // @Security StreamQueryToken
 // @Success 200 {string} string "SSE stream of JSON data frames and comment keepalives"

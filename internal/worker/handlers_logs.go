@@ -13,8 +13,9 @@ import (
 // @Summary Get log entries or follow new entries
 // @Description Without follow=true, returns a JSON array of recent matching entries. Only the exact value true enables SSE; follow ignores lines and sends only new entries after subscription, starting with a connected comment. Slow subscribers can miss entries; reconnecting does not replay them.
 // @Description Both modes apply level and case-insensitive query filters and browser-session redaction. Available before database readiness, subject to authentication and rate limiting. Swagger 2 cannot express the query-dependent 200 response shape; see docs/arch/API_CONTRACTS.md.
+// @Description Success is application/json for snapshots or text/event-stream for follow; pre-stream http.Error responses are text/plain. Swagger 2 lists media types at operation scope, not per status or query value.
 // @Tags System
-// @Produce json,text/event-stream
+// @Produce json,text/event-stream,plain
 // @Security ApiKeyAuth
 // @Security StreamQueryToken
 // @Param lines query int false "Snapshot count (default 100, max 10000); ignored when following"

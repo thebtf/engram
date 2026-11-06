@@ -1216,9 +1216,10 @@ const docTemplate = `{
                         "StreamQueryToken": []
                     }
                 ],
-                "description": "Sends a connected object and live JSON event objects; a concurrent broadcast can arrive before the connected object. SSE comment keepalives occur every 25 seconds. No event IDs or replay are provided; reconnecting starts a new stream.\nAvailable before database readiness, subject to authentication and rate limiting. A query token is supported for browser SSE clients.",
+                "description": "Sends a connected object and live JSON event objects; a concurrent broadcast can arrive before the connected object. SSE comment keepalives occur every 25 seconds. No event IDs or replay are provided; reconnecting starts a new stream.\nAvailable before database readiness, subject to authentication and rate limiting. A query token is supported for browser SSE clients.\nA timed-out or failed broadcast may remove a subscriber without closing its HTTP stream; keepalives do not prove event delivery. Clients can reconnect and refresh state, but cannot replay gaps.\nSuccess is text/event-stream; pre-stream http.Error responses are text/plain. Swagger 2 lists media types at operation scope, not per status.",
                 "produces": [
-                    "text/event-stream"
+                    "text/event-stream",
+                    "text/plain"
                 ],
                 "tags": [
                     "System"
@@ -1478,10 +1479,11 @@ const docTemplate = `{
                         "StreamQueryToken": []
                     }
                 ],
-                "description": "Without follow=true, returns a JSON array of recent matching entries. Only the exact value true enables SSE; follow ignores lines and sends only new entries after subscription, starting with a connected comment. Slow subscribers can miss entries; reconnecting does not replay them.\nBoth modes apply level and case-insensitive query filters and browser-session redaction. Available before database readiness, subject to authentication and rate limiting. Swagger 2 cannot express the query-dependent 200 response shape; see docs/arch/API_CONTRACTS.md.",
+                "description": "Without follow=true, returns a JSON array of recent matching entries. Only the exact value true enables SSE; follow ignores lines and sends only new entries after subscription, starting with a connected comment. Slow subscribers can miss entries; reconnecting does not replay them.\nBoth modes apply level and case-insensitive query filters and browser-session redaction. Available before database readiness, subject to authentication and rate limiting. Swagger 2 cannot express the query-dependent 200 response shape; see docs/arch/API_CONTRACTS.md.\nSuccess is application/json for snapshots or text/event-stream for follow; pre-stream http.Error responses are text/plain. Swagger 2 lists media types at operation scope, not per status or query value.",
                 "produces": [
                     "application/json",
-                    "text/event-stream"
+                    "text/event-stream",
+                    "text/plain"
                 ],
                 "tags": [
                     "System"

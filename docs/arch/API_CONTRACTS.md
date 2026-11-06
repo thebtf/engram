@@ -172,7 +172,8 @@ Auth-disabled mode supplies the usual synthetic identity. Before the validator i
 wired, a supplied token can receive 401 even though the routes are pre-ready.
 Unauthorized requests receive plain-text 401; disallowed keycard classes receive
 403; rate limiting can return 429. Authentication-store failure can return 500.
-These responses occur before the stream starts, and do not imply DB readiness.
+These `http.Error` responses are `text/plain; charset=utf-8`, occur before the
+stream starts, and do not imply DB readiness.
 
 `GET /api/events` returns `text/event-stream`. On connection the handler writes
 `data: {"type":"connected","clientId":"client-<number>"}\n\n`; the ID is
@@ -184,6 +185,15 @@ every 25 seconds. Comments are not application events. A writer without flushing
 support gets 500 `streaming not supported`. Disconnecting ends the subscription;
 reconnect establishes a new connection. There are no SSE event IDs, Last-Event-ID
 handling, or replay, so clients must refresh relevant state after a gap.
+
+Broadcast write errors or timeouts can remove a client from the broadcaster
+without ending its HTTP handler. If its writer is usable again, the handler can
+still send keepalive comments while no longer receiving broadcasts. Neither a
+keepalive nor an otherwise idle stream proves continued event delivery, and the
+stream provides no explicit signal of this removal. Clients can close and
+reconnect and refresh relevant state, including periodically when appropriate;
+that creates a new subscription but cannot recover events missed in the gap.
+A quiet stream alone does not establish that removal occurred.
 
 `GET /api/logs` normally returns `application/json`: an array of entries with
 `timestamp`, `level`, `message`, optional `fields`, and `raw`. RFC3339 timestamps
@@ -212,9 +222,11 @@ snapshot limit. Projection covers identified browser-session fields, messages,
 and raw data, including retained records; it is not a general secret scrubber.
 The endpoint does not require the access-administration session-admin guard.
 
-Swagger 2 cannot represent different 200 response schemas and media types based
-on `follow` for the same operation. The generated operation lists both media types
-without claiming a single response schema; this section specifies the conditional
+Swagger 2 cannot represent response media types per status or different 200
+schemas based on `follow` for the same operation. Both operations list `text/plain`
+alongside their success media types at operation scope; that does not mean a
+successful stream is plain text. The logs operation does not claim a single 200
+schema; this section specifies the conditional
 contract. `internal/worker/sse/broadcaster.go`, `handlers_logs.go`,
 `internal/logbuf/ring.go`, and `middleware.go` own these behaviors.
 
