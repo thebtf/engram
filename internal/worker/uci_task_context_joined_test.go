@@ -17,6 +17,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	gormstore "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/taskcontext"
 	"github.com/thebtf/engram/internal/uci"
 	muxcontrol "github.com/thebtf/mcp-mux/muxcore/control"
@@ -43,6 +44,7 @@ type joinedNativeFixture struct {
 	fixtures                                                 []workerUCIApplicationFixture
 	store                                                    *gormstore.Store
 	composition                                              *uciContextComposition
+	server                                                   *mcp.Server
 	daemonPID                                                int
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/thebtf/engram/internal/projectidentity"
@@ -15,6 +16,9 @@ import (
 const taskCompositionReserve = 30 * time.Millisecond
 
 func (server *Server) handleCodebaseTaskContext(parent context.Context, raw json.RawMessage) (string, error) {
+	if !server.hasTaskContextProvider() {
+		return "", errors.New("unknown tool: codebase_task_context")
+	}
 	var request taskcontext.Request
 	if taskcontext.Decode(bytes.NewReader(raw), &request) != nil || request.Validate() != nil {
 		encoded, err := taskcontext.Encode(taskcontext.Closed("unavailable", "INVALID_REQUEST"), taskcontext.DefaultMaxBytes)

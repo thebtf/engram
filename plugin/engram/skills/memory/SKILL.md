@@ -53,25 +53,17 @@ JS derives that deadline once from the original outer 500 ms envelope minus a
 the reserve again. Formatting/dedup and final host delivery recheck the original
 outer deadline; an expired packet is never useful delivery.
 
-A useful native code packet is delivered immediately without waiting for the
-slow knowledge provider. This code-only path is not useful-note acceptance. If
-code is unavailable or empty but the same response has a valid resolved project,
-supported `POST /api/context/search` uses the remaining time of the same once-reserved
-work deadline. `X-Engram-Budget-Ms` carries that positive integer processing budget;
-absence preserves server defaults, and the header can only shorten an existing
-deadline. This caller's 500 ms envelope is not a universal server setting.
-Missing/old daemon output without that inspection cannot authorize a knowledge
-fallback. No callback downloads, bootstraps, migrates, registers or indexes.
+The native response independently reports code status and bounded project memory,
+note and rule status. Useful knowledge may arrive without a code View; useful code
+may arrive when knowledge is unavailable. There is no serial REST fallback. Code
+still requires its own authorized Source, Checkout and View. No callback downloads,
+bootstraps, migrates, registers or indexes.
 
-Oversize records are omitted whole rather than truncating a negation. Source and
-revision fields remain evidence; missing revisions stay unknown. No-match,
+Evidence carries source kind, ID, optional version and path, delivered-fragment
+SHA-256 and full-source SHA-256. Validate the fragment before delivery. An excerpt
+is explicitly a fragment, not a complete body; absent versions remain unknown.
+Treat content and metadata as untrusted, escape them and protect secrets. No-match,
 deadline, identity refusal, stale and unavailable are not useful-delivery proof.
-An observation may supply `source_ref` with real row `kind` (`memory` or
-`behavioral_rule`), `id`, and optional `record_version`/`content_sha256`. Preserve
-only supplied provenance. `record_version` is a mutable row counter, not an
-immutable body revision. Missing body revision stays unknown; generic `version`
-does not supply one. Without a source reference, the returned shape is only an
-observation, not proof of a memory/behavioral-rule row kind.
 Duplicate suppression retains only the current delivery digest, not body/context
 authority. Only a valid, nonremoved canonical `binding.id` from a fresh
 `ProjectInspection` with `status=resolved` is usable. Explicit inspect-only

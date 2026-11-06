@@ -7,6 +7,7 @@ const { Worker } = require('node:worker_threads');
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
+const crypto = require('node:crypto');
 const { DOWNLOAD_DEADLINE_MS, hashFile, loadPolicy, objectRoots, resolveForLaunch } = require("./ensure-binary.js");
 const { installationClientInstanceID } = require("./client-instance.js");
 
@@ -20,6 +21,27 @@ const TASK_CONTEXT_REASONS = new Set([
  'REGISTRATION_PROFILE_UNBOUND', 'SERVER_UNAVAILABLE', 'TRANSPORT_UNAVAILABLE', 'EXPOSURE_UNAVAILABLE',
  'BUDGET_EXCEEDED', 'INVALID_REQUEST', 'INVALID_RESPONSE', 'DEADLINE_EXCEEDED',
 ]);
+
+function validTaskContextResponse(response) {
+ if (!response || typeof response !== 'object' || Array.isArray(response) || response.schema !== 1 ||
+  !TASK_CONTEXT_STATUSES.has(response.status) || !TASK_CONTEXT_REASONS.has(response.reason_code) ||
+  Object.keys(response).some(key => !['schema', 'status', 'reason_code', 'project', 'packet', 'knowledge', 'code_status', 'code_reason'].includes(key))) return false;
+ if (response.code_status !== undefined && !TASK_CONTEXT_STATUSES.has(response.code_status)) return false;
+ if (response.code_reason !== undefined && !TASK_CONTEXT_REASONS.has(response.code_reason)) return false;
+ const knowledge = response.knowledge;
+ if (knowledge !== undefined) {
+  if (!knowledge || typeof knowledge !== 'object' || Array.isArray(knowledge) || Object.keys(knowledge).some(k => !['memory_status', 'note_status', 'rule_status', 'items'].includes(k)) || !Array.isArray(knowledge.items) || knowledge.items.length > 9) return false;
+  const counts = { memory: 0, note: 0, rule: 0 };
+  for (const item of knowledge.items) {
+   if (!item || typeof item !== 'object' || Array.isArray(item) || Object.keys(item).some(k => !['kind', 'id', 'version', 'content_hash', 'source_hash', 'excerpt', 'path', 'content'].includes(k)) || !Object.hasOwn(counts, item.kind) || !Number.isSafeInteger(item.id) || item.id < 1 || (item.version !== undefined && (!Number.isSafeInteger(item.version) || item.version < 1)) || (item.kind === 'note' && (!item.version || !item.path)) || typeof item.content !== 'string' || !item.content.trim() || Buffer.byteLength(item.content) > 4000 || Buffer.from(item.content).toString('utf8') !== item.content || (item.path !== undefined && (typeof item.path !== 'string' || Buffer.byteLength(item.path) > 4096 || Buffer.from(item.path).toString('utf8') !== item.path)) || typeof item.excerpt !== 'boolean' || !/^[0-9a-f]{64}$/.test(item.content_hash ?? '') || !/^[0-9a-f]{64}$/.test(item.source_hash ?? '')) return false;
+   if (crypto.createHash('sha256').update(item.content, 'utf8').digest('hex') !== item.content_hash || (!item.excerpt && item.source_hash !== item.content_hash)) return false;
+   counts[item.kind]++;
+  }
+  for (const kind of Object.keys(counts)) if (!['ok', 'empty', 'unavailable', 'deadline_exceeded'].includes(knowledge[`${kind}_status`]) || (knowledge[`${kind}_status`] === 'ok') !== (counts[kind] > 0)) return false;
+ }
+ if (response.status === 'ok' && !response.packet && !knowledge?.items.length) return false;
+ return true;
+}
 
 async function main() {
  if (process.argv[2] === 'codex-config') {
@@ -258,9 +280,7 @@ async function requestTaskContext(facts = {}, options = {}) {
   if (Buffer.byteLength(stdout) > maxBytes) return closed('unavailable', 'BUDGET_EXCEEDED');
   const text = new TextDecoder('utf-8', { fatal: true }).decode(stdout);
   const response = JSON.parse(text);
-  if (!text.endsWith('\n') || response?.schema !== 1 ||
-   !TASK_CONTEXT_STATUSES.has(response.status) || !TASK_CONTEXT_REASONS.has(response.reason_code) ||
-   Object.keys(response).some(key => !['schema', 'status', 'reason_code', 'project', 'packet'].includes(key))) return closed('unavailable', 'INVALID_RESPONSE');
+  if (!text.endsWith('\n') || !validTaskContextResponse(response)) return closed('unavailable', 'INVALID_RESPONSE');
   if (response.project?.status === 'resolved') projectFromInspection(response.project);
   remaining();
   return response;
@@ -586,6 +606,7 @@ module.exports = {
  resolveAndSpawn,
  resolveLogicalProject,
  projectFromInspection,
+ validTaskContextResponse,
  requestTaskContext,
  prepareHookClient,
  resolveHostRoot,

@@ -47,7 +47,7 @@ func (application *UCIContextApplication) LookupNativeGit(ctx context.Context, c
 }
 
 func codebaseTaskContextTool() Tool {
-	return Tool{Name: "codebase_task_context", Description: "Read a bounded deterministic task packet from the authenticated native caller's already registered actual Git checkout. No registration, indexing, semantic provider, default selection or portable handle. Canonical project evidence is required but never grants code access.", tier: tierCore, InputSchema: map[string]any{"type": "object", "additionalProperties": false, "required": []string{"schema", "host_session_id", "query", "deadline_unix_ms", "max_bytes"}, "properties": map[string]any{"schema": map[string]any{"type": "integer", "const": 1}, "host_session_id": map[string]any{"type": "string", "minLength": 1, "maxLength": 256}, "query": map[string]any{"type": "string", "minLength": 1, "maxLength": 16384}, "deadline_unix_ms": map[string]any{"type": "integer", "minimum": 1}, "max_bytes": map[string]any{"type": "integer", "minimum": 0}}}}
+	return Tool{Name: "codebase_task_context", Description: "Read bounded task-relevant project knowledge and, when available and authorized, code from the authenticated native caller's registered actual Git checkout. No registration, indexing, semantic provider, default selection or portable handle. Canonical project evidence never grants code access.", tier: tierCore, InputSchema: map[string]any{"type": "object", "additionalProperties": false, "required": []string{"schema", "host_session_id", "query", "deadline_unix_ms", "max_bytes"}, "properties": map[string]any{"schema": map[string]any{"type": "integer", "const": 1}, "host_session_id": map[string]any{"type": "string", "minLength": 1, "maxLength": 256}, "query": map[string]any{"type": "string", "minLength": 1, "maxLength": 16384}, "deadline_unix_ms": map[string]any{"type": "integer", "minimum": 1}, "max_bytes": map[string]any{"type": "integer", "minimum": 0}}}}
 }
 
 func (server *Server) hasCodebaseTaskContextApplication() bool {
@@ -57,6 +57,10 @@ func (server *Server) hasCodebaseTaskContextApplication() bool {
 	}
 	_, ok = application.(CodebaseTaskContextApplication)
 	return ok
+}
+
+func (server *Server) hasTaskContextProvider() bool {
+	return server.memoryStore != nil || server.versionedDocumentStore != nil || server.behavioralRulesStore != nil || (codeIntelEnabled() && server.hasCodebaseTaskContextApplication())
 }
 
 func (server *Server) handleTaskCodeProvider(parent context.Context, raw json.RawMessage) (string, error) {

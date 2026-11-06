@@ -23,6 +23,7 @@ import (
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/internal/taskcontext"
+	"github.com/thebtf/engram/pkg/models"
 	muxcontrol "github.com/thebtf/mcp-mux/muxcore/control"
 	"github.com/thebtf/mcp-mux/muxcore/serverid"
 	"golang.org/x/crypto/bcrypt"
@@ -31,6 +32,41 @@ import (
 
 func TestUCITaskContextNativeUsefulTwoWorktrees(t *testing.T) {
 	runNativeTaskContextFixture(t, nil)
+}
+
+func TestUCITaskContextNativeIndependentKnowledgeAndCode(t *testing.T) {
+	runNativeTaskContextFixture(t, func(t *testing.T, fixture joinedNativeFixture) {
+		invoke := func() taskcontext.Response {
+			req := taskcontext.Request{Schema: 1, HostSessionID: "compound-fixture", Query: "Alpha", DeadlineUnixMS: time.Now().Add(470 * time.Millisecond).UnixMilli(), MaxBytes: 8000}
+			raw, err := json.Marshal(req)
+			require.NoError(t, err)
+			command := exec.Command(fixture.binary, "task-context", "--json")
+			command.Dir, command.Env, command.Stdin = fixture.first, fixture.environment, bytes.NewReader(raw)
+			output, err := command.Output()
+			require.NoError(t, err)
+			var response taskcontext.Response
+			require.NoError(t, json.Unmarshal(output, &response))
+			require.NoError(t, response.Validate())
+			return response
+		}
+		code := invoke()
+		require.Equal(t, "ok", code.CodeStatus)
+		require.NotNil(t, code.Packet)
+		require.NotNil(t, code.Knowledge)
+		require.Equal(t, "unavailable", code.Knowledge.RuleStatus)
+		rules := gormstore.NewBehavioralRulesStore(fixture.store)
+		_, err := rules.Create(t.Context(), &models.BehavioralRule{Project: &fixture.project, Content: "Do not delete the synthetic backup 😀", Priority: 10})
+		require.NoError(t, err)
+		fixture.server.SetBehavioralRulesStore(rules)
+		t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "false")
+		knowledge := invoke()
+		require.Equal(t, "ok", knowledge.Status)
+		require.NotEqual(t, "ok", knowledge.CodeStatus)
+		require.Nil(t, knowledge.Packet)
+		require.Equal(t, "ok", knowledge.Knowledge.RuleStatus)
+		require.Contains(t, knowledge.Knowledge.Items[0].Content, "Do not delete")
+		t.Log("qualified native CLI/daemon/gRPC/MCP/PG: released code with unavailable knowledge; ready rule with code disabled")
+	})
 }
 
 func runNativeTaskContextFixture(t *testing.T, consume func(*testing.T, joinedNativeFixture)) {
@@ -148,7 +184,7 @@ func runNativeTaskContextFixture(t *testing.T, consume func(*testing.T, joinedNa
 		consume(t, joinedNativeFixture{
 			binary: binary, root: root, first: first, second: second, project: project,
 			token: token, controlPath: controlPath, environment: environment,
-			fixtures: fixtures, store: store, composition: composition, daemonPID: daemon.Process.Pid,
+			fixtures: fixtures, store: store, composition: composition, server: server, daemonPID: daemon.Process.Pid,
 		})
 		return
 	}

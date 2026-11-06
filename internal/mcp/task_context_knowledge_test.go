@@ -1,13 +1,17 @@
 package mcp
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
+	dbgorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/taskcontext"
 )
 
@@ -28,4 +32,23 @@ func TestTaskEvidencePreservesSourceAndFragmentHashes(t *testing.T) {
 	memory, ok := taskEvidence("memory", 7, 0, "", "unversioned memory", "")
 	require.True(t, ok)
 	require.Zero(t, memory.Version)
+}
+
+func TestTaskContextAdmissionWithoutCodeAndNativeGuard(t *testing.T) {
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "false")
+	server := NewServer(ServerOptions{Version: "test"})
+	server.SetMemoryStore(&dbgorm.MemoryStore{})
+	found := false
+	for _, tool := range server.ListTools() {
+		found = found || tool.Name == "codebase_task_context"
+	}
+	require.True(t, found)
+	raw, err := json.Marshal(taskcontext.Request{Schema: 1, HostSessionID: "host", Query: "restore", DeadlineUnixMS: time.Now().Add(time.Second).UnixMilli(), MaxBytes: 8000})
+	require.NoError(t, err)
+	text, err := server.handleCodebaseTaskContext(context.Background(), raw)
+	require.NoError(t, err)
+	var response taskcontext.Response
+	require.NoError(t, json.Unmarshal([]byte(text), &response))
+	require.Equal(t, "forbidden", response.Status)
+	require.Equal(t, "PERMISSION_DENIED", response.ReasonCode)
 }

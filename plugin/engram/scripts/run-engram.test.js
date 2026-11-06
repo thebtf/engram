@@ -774,6 +774,7 @@ test('task context launcher uses one ready-only stdin worker and closed UTF-8 re
  const responses = {
   ok: 'process.stdout.write(JSON.stringify({schema:1,status:"not_ready",reason_code:"DAEMON_NOT_READY"})+"\\n")',
   unknownReason: 'process.stdout.write(JSON.stringify({schema:1,status:"not_ready",reason_code:"UNRECOGNIZED"})+"\\n")',
+  badHash: 'process.stdout.write(JSON.stringify({schema:1,status:"ok",reason_code:"OK",knowledge:{memory_status:"ok",note_status:"empty",rule_status:"empty",items:[{kind:"memory",id:1,content:"Do not delete",content_hash:"0".repeat(64),source_hash:"0".repeat(64),excerpt:false}]}})+"\\n")',
   missingLF: 'process.stdout.write(JSON.stringify({schema:1,status:"not_ready",reason_code:"DAEMON_NOT_READY"}))',
   malformed: 'process.stdout.write("not JSON\\n")',
   oversized: 'process.stdout.write("x".repeat(9000))',

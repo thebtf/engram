@@ -16,6 +16,10 @@ const { prepareHookClient } = require('../scripts/run-engram.js');
 const { createPolicy } = require('../scripts/bootstrap-policy.js');
 
 const projects = { '/session/a': '11111111-1111-4111-8111-111111111111', '/session/b': '22222222-2222-4222-8222-222222222222' };
+function knowledgeResponse(project, content = 'Do not remove the recovery backup.') {
+  const hash = crypto.createHash('sha256').update(content).digest('hex');
+  return { schema: 1, status: 'ok', reason_code: 'OK', project: { status: 'resolved', binding: { id: project, match: 'portable_marker' } }, code_status: 'not_ready', code_reason: 'OPERATION_NOT_READY', knowledge: { memory_status: 'ok', note_status: 'empty', rule_status: 'empty', items: [{ kind: 'memory', id: 42, content, content_hash: hash, source_hash: hash, excerpt: false }] } };
+}
 function extension(overrides = {}) {
   const calls = [];
   const inspect = overrides.resolveHookProjectContext ?? (async cwd => ({ Project: projects[cwd] }));
@@ -26,7 +30,7 @@ function extension(overrides = {}) {
     resolveHookProjectContext: async cwd => ({ Project: projects[cwd] }),
     requestTaskContext: async (facts, options) => {
       const context = await inspect(facts.cwd, { ...options, timeoutMs: Math.max(1, options.deadlineAt - Date.now()), acquire: false, check: true });
-      return { schema: 1, status: 'empty', reason_code: 'NO_MATCH', project: { status: 'resolved', binding: { id: context.Project, match: 'portable_marker' } } };
+      return knowledgeResponse(context.Project, `Do not remove the recovery backup. ${context.Project}`);
     },
     requestPost: async (route, body) => {
       calls.push({ route, body });
@@ -54,8 +58,8 @@ test('OMP automatic callbacks use current root and one UUID without identity reg
   assert.deepEqual(sent[0].options, { deliverAs: 'nextTurn' });
   const result = await handlers.get('before_agent_start')({ cwd: '/session/b', sessionId: 'a', prompt: 'new root' }, {});
   assert.match(result.message.content, /Do not remove the recovery backup\./);
-  assert.deepEqual(calls.map(call => call.body.project), [projects['/session/a'], projects['/session/b'], projects['/session/b']]);
-  assert.deepEqual(calls.map(call => call.route), ['/api/context/session-start', '/api/context/session-start', '/api/context/search?limit=3']);
+  assert.deepEqual(calls.map(call => call.body.project), [projects['/session/a'], projects['/session/b']]);
+  assert.deepEqual(calls.map(call => call.route), ['/api/context/session-start', '/api/context/session-start']);
   assert.equal(calls.some(call => 'project_descriptor' in call.body || 'sessionCapability' in call.body), false);
 });
 
@@ -456,13 +460,13 @@ test('OMP failed startup readiness recovers through verified local cache with bo
       assert.ok(delivered.content.includes(eventName === 'session_start' ? `recovered memory for ${projects['/session/a']}` : 'Do not remove the recovery backup.'));
       assert.equal(executions.length, 1);
       assert.ok(resolutions.length >= 3, 'missing, invalid and valid callbacks must each use the trusted resolver');
-      assert.equal(contextRequests.length, 1);
+      assert.equal(contextRequests.length, eventName === 'session_start' ? 1 : 0);
       if (eventName === 'session_start') assert.deepEqual(sent[0].options, { deliverAs: 'nextTurn' });
       fs.writeFileSync(object, Buffer.alloc(bytes.length));
       const afterTamper = await fire('invalid-after-recovery', '/session/b');
       assert.equal(afterTamper, undefined);
       assert.equal(executions.length, 1, 'recovery must not bypass later final integrity verification');
-      assert.equal(contextRequests.length, 1, 'tampered cache must not fetch another project context');
+      assert.equal(contextRequests.length, eventName === 'session_start' ? 1 : 0);
       await new Promise(resolve => setImmediate(resolve));
       assert.equal(preparations, 2, 'failed retries are backoff-limited');
       assert.equal(acquisitions, 2, 'callbacks during backoff do not start downloads');
@@ -472,7 +476,7 @@ test('OMP failed startup readiness recovers through verified local cache with bo
       assert.equal(preparations, 3, 'a later eligible callback can retry after backoff');
       assert.equal(acquisitions, 3);
       assert.equal(executions.length, 1);
-      assert.equal(contextRequests.length, 1);
+      assert.equal(contextRequests.length, eventName === 'session_start' ? 1 : 0);
     });
   }
 });
@@ -558,6 +562,12 @@ test('OMP teardown prevents in-flight callbacks from delivering late context', a
   const { adapter } = extension({
     registerCleanup: (_name, callback) => { cleanup = callback; },
     onDiagnostic() { },
+    requestTaskContext: async () => {
+      requests.push('native');
+      if (requests.length === 2) bothStarted();
+      await held;
+      return knowledgeResponse(projects['/session/a'], 'late ambient');
+    },
     requestPost: async route => {
       requests.push(route);
       if (requests.length === 2) bothStarted();
@@ -769,14 +779,14 @@ test('OMP background readiness budget includes config and never trusts late prep
   }, { session: true, ambient: true }, 'new qualified callbacks must recover after the startup timer expires once local cache verifies');
   assert.deepEqual(resolutions.slice(-2).map(result => result.timeoutMs), [5000, 500]);
   assert.deepEqual(executions.map(result => result.timeout), [5000, 500]);
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 1, 'only session-start uses REST');
   assert.equal(preparations, 2, 'missing-cache callbacks coalesce a fresh background preparation');
   assert.equal(acquisitions, 0, 'recovery must only verify existing local bytes');
   await cleanup();
   await handlers.get('session_start')({ cwd: '/session/a', sessionId: 'disposed-after-timeout-recovery' }, {});
   assert.equal(await handlers.get('before_agent_start')({ cwd: '/session/a', sessionId: 'disposed-after-timeout-recovery', prompt: 'fixture' }, {}), undefined);
   assert.equal(executions.length, 2, 'captured explicit disposal must still permanently close future native execution');
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 1);
   assert.equal(sent.length, 1);
 });
 
@@ -864,17 +874,16 @@ test('OMP context keeps its absolute deadline when wall clock advances without t
 
 test('OMP prompt callback presents evidence once per current topic and cancels superseded work', async () => {
   let finish, signal;
-  const { adapter, calls } = extension({
-    requestPost: async (route, body, _budget, options) => {
-      calls.push({ route, body });
-      assert.equal(route, '/api/context/search?limit=3');
-      const value = { project: body.project, query: body.query, observations: [{ id: 7, project: body.project, narrative: 'Do not delete the backup 😀', revision: 4, source: 'notes/restore.md' }] };
-      if (body.query === 'slow old topic') { signal = options.signal; return new Promise(resolve => { finish = () => resolve(value); }); }
+  const { adapter } = extension({
+    requestTaskContext: async (facts, options) => {
+      const value = knowledgeResponse(projects[facts.cwd], 'Do not delete the backup 😀');
+      value.knowledge.items[0].version = 4;
+      if (facts.prompt === 'slow old topic') { signal = options.signal; return new Promise(resolve => { finish = () => resolve(value); }); }
       return value;
     }
   });
   const event = { cwd: '/session/a', sessionId: 'dedup', prompt: 'restore backups' };
-  assert.match((await adapter.ambientMessage(event, {})).content, /revision=4/);
+  assert.match((await adapter.ambientMessage(event, {})).content, /"version":4/);
   assert.equal(await adapter.ambientMessage(event, {}), null);
   assert.ok(await adapter.ambientMessage({ ...event, prompt: 'different topic' }, {}));
   assert.ok(await adapter.ambientMessage(event, {}));
