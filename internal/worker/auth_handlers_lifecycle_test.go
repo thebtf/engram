@@ -107,6 +107,7 @@ func TestAuthHandlersLifecycle_InvitationSingleUseRace(t *testing.T) {
 	}
 	statuses := make([]int, len(payloads))
 	bodies := make([]string, len(payloads))
+	contentTypes := make([]string, len(payloads))
 	start := make(chan struct{})
 	var wg sync.WaitGroup
 	for i := range payloads {
@@ -119,6 +120,7 @@ func TestAuthHandlersLifecycle_InvitationSingleUseRace(t *testing.T) {
 			env.handlers.handleRegister(rec, req)
 			statuses[idx] = rec.Code
 			bodies[idx] = rec.Body.String()
+			contentTypes[idx] = rec.Result().Header.Get("Content-Type")
 		}(i)
 	}
 	close(start)
@@ -128,6 +130,7 @@ func TestAuthHandlersLifecycle_InvitationSingleUseRace(t *testing.T) {
 	for i, status := range statuses {
 		if status == http.StatusCreated {
 			successes++
+			require.Equal(t, "application/json", contentTypes[i])
 			continue
 		}
 		if status != http.StatusConflict && status != http.StatusForbidden {
@@ -255,6 +258,7 @@ func TestAuthHandlersLifecycle_SetupCreatesOnlyOneInitialAdmin(t *testing.T) {
 
 	statuses := make([]int, len(emails))
 	bodies := make([]string, len(emails))
+	contentTypes := make([]string, len(emails))
 	var wg sync.WaitGroup
 	for i, email := range emails {
 		wg.Add(1)
@@ -270,6 +274,7 @@ func TestAuthHandlersLifecycle_SetupCreatesOnlyOneInitialAdmin(t *testing.T) {
 			env.handlers.handleSetup(rec, req)
 			statuses[idx] = rec.Code
 			bodies[idx] = rec.Body.String()
+			contentTypes[idx] = rec.Result().Header.Get("Content-Type")
 		}(i, email)
 	}
 	for range emails {
@@ -283,6 +288,7 @@ func TestAuthHandlersLifecycle_SetupCreatesOnlyOneInitialAdmin(t *testing.T) {
 		switch status {
 		case http.StatusCreated:
 			successes++
+			require.Equal(t, "application/json", contentTypes[i])
 			require.Contains(t, bodies[i], `"user"`)
 			require.NotContains(t, bodies[i], "password")
 		case http.StatusConflict:
@@ -363,6 +369,7 @@ func TestAuthHandlersLifecycle_AccessCreateInvitationAcceptsDashboardAdminCookie
 	rec := httptest.NewRecorder()
 	env.handlers.handleAccessCreateInvitation(rec, req)
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	require.Equal(t, "application/json", rec.Result().Header.Get("Content-Type"))
 	var payload struct {
 		Invitation gormdb.AccessInvitationView `json:"invitation"`
 	}
@@ -371,6 +378,22 @@ func TestAuthHandlersLifecycle_AccessCreateInvitationAcceptsDashboardAdminCookie
 	require.Equal(t, adminEmail, payload.Invitation.CreatedByEmail)
 	require.Equal(t, inviteEmail, payload.Invitation.Email)
 	require.NotEmpty(t, payload.Invitation.Code, "create is the only bounded code reveal")
+
+	legacyEmail := fmt.Sprintf("zz-legacy-invite-%d@example.com", time.Now().UnixNano())
+	legacyReq := requestWithRoute(http.MethodPost, "/api/admin/invitations", []byte(fmt.Sprintf(`{"email":%q,"role":"operator"}`, legacyEmail)), authpkg.Session("admin"), nil)
+	legacyReq = legacyReq.WithContext(context.WithValue(legacyReq.Context(), authRoleKey{}, gormdb.DashboardRoleAdmin))
+	legacyReq.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: session.ID})
+	legacyRec := httptest.NewRecorder()
+	env.handlers.handleCreateInvitation(legacyRec, legacyReq)
+	require.Equal(t, http.StatusCreated, legacyRec.Code, legacyRec.Body.String())
+	require.Equal(t, "application/json", legacyRec.Result().Header.Get("Content-Type"))
+	var legacyPayload struct {
+		Code  string `json:"code"`
+		Email string `json:"email"`
+	}
+	require.NoError(t, json.Unmarshal(legacyRec.Body.Bytes(), &legacyPayload))
+	require.NotEmpty(t, legacyPayload.Code)
+	require.Equal(t, legacyEmail, legacyPayload.Email)
 }
 
 func TestAuthHandlersLifecycle_AccessCreateInvitationRejectsRetiredAuthentikHeaderWithoutCookie(t *testing.T) {
