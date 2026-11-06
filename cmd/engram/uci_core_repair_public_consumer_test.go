@@ -286,6 +286,10 @@ func uciCoreRepairKeycard(t *testing.T, ctx context.Context, authority *uciInsta
 }
 
 func uciCoreRepairEmbeddingProvider(t *testing.T) (uciInstalledAcceptanceEmbeddingProvider, *atomic.Int64) {
+	return uciCoreRepairEmbeddingProviderObserved(t, nil)
+}
+
+func uciCoreRepairEmbeddingProviderObserved(t *testing.T, observe func([]string)) (uciInstalledAcceptanceEmbeddingProvider, *atomic.Int64) {
 	t.Helper()
 	key, err := uciInstalledAcceptanceKeycard()
 	if err != nil {
@@ -309,6 +313,9 @@ func uciCoreRepairEmbeddingProvider(t *testing.T) (uciInstalledAcceptanceEmbeddi
 			t.Error("candidate embedding request has invalid model, dimension, or synthetic inputs")
 			http.Error(w, "invalid local fixture request", http.StatusBadRequest)
 			return
+		}
+		if observe != nil {
+			observe(request.Input)
 		}
 		type item struct {
 			Object    string    `json:"object"`
