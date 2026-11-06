@@ -43,6 +43,10 @@ func TestAutomaticOriginResolutionWindowsShortPath(t *testing.T) {
 	}))
 	defer server.Close()
 	for _, caller := range []string{shortRoot, filepath.Join(shortRoot, "nested")} {
+		state, err := InspectProjectMarker(t.Context(), caller)
+		if err != nil || state.RootDigest != markerEvidenceDigest([]byte(caller)) || state.TargetRootDigest != markerEvidenceDigest([]byte(shortRoot)) {
+			t.Fatalf("raw path fingerprints changed: state=%+v err=%v", state, err)
+		}
 		project, err := ResolveLogicalProjectForBackend(t.Context(), caller, server.URL, "fixture-keycard")
 		if err != nil || project.ProjectID != id {
 			t.Fatalf("short-path recovery: project=%+v err=%v", project, err)
@@ -50,5 +54,34 @@ func TestAutomaticOriginResolutionWindowsShortPath(t *testing.T) {
 	}
 	if got, err := os.ReadFile(filepath.Join(root, ".engram-project")); err != nil || string(got) != string(original) {
 		t.Fatal("marker changed")
+	}
+}
+
+func TestInspectProjectMarkerRejectsOutsideAncestorThroughSymlink(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "repository")
+	outside := filepath.Join(root, "outside")
+	child := filepath.Join(repo, "sub", "child")
+	for _, dir := range []string{child, outside} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gitLogical(t, repo, "init", "--quiet", "--template=")
+	link := filepath.Join(outside, "link")
+	if err := os.Symlink(filepath.Join(repo, "sub"), link); err != nil {
+		t.Skipf("directory symlink unavailable: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, ".engram-project"), []byte(`{"project_id":"11111111-1111-4111-8111-111111111111","name":"outside"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	caller := filepath.Join(link, "child")
+	gitRoot, common, rootErr := logicalProjectDirectories(t.Context(), caller)
+	if rootErr != nil || common == "" || !samePath(gitRoot, repo) {
+		t.Fatalf("symlink caller did not resolve fixture repository: root=%q err=%v", gitRoot, rootErr)
+	}
+	state, err := InspectProjectMarker(t.Context(), caller)
+	if ProjectErrorCode(err) != "PROJECT_CONTEXT_REQUIRED" {
+		t.Fatalf("outside ancestor must not select a marker: state=%+v err=%v", state, err)
 	}
 }
