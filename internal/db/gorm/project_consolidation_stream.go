@@ -46,11 +46,18 @@ type consolidationStoredFrame struct {
 func (consolidationStoredFrame) TableName() string { return "project_consolidation_frames" }
 
 func consolidationClassification(census consolidationCensusState) string {
-	return structuralDigest(struct {
+	legacy := structuralDigest(struct {
 		Rows  []consolidationRow
 		Gaps  []string
 		Roles []consolidationRole
 	}{census.Rows, census.Gaps, consolidationRoles})
+	if len(census.ExcludedNative) == 0 {
+		return legacy
+	}
+	return structuralDigest(struct {
+		Classification string
+		ExcludedNative []consolidationOmittedVersion
+	}{legacy, census.ExcludedNative})
 }
 
 func consolidationCipherHash(ciphertext []byte) string {
@@ -615,6 +622,9 @@ func (s *ProjectConsolidationStore) walkStored(tx *gormlib.DB, backupID string, 
 	}
 	versions := make(map[string]string, len(state.Census.Rows))
 	for _, row := range state.Census.Rows {
+		versions[consolidationObjectKey(row.Table, row.Key)] = row.NativeVersion
+	}
+	for _, row := range state.Census.ExcludedNative {
 		versions[consolidationObjectKey(row.Table, row.Key)] = row.NativeVersion
 	}
 	for {

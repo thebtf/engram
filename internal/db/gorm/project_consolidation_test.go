@@ -63,6 +63,24 @@ func TestProjectConsolidationMixedBucketAndEvidenceConflict(t *testing.T) {
 	require.EqualError(t, err, "PROJECT_ADOPTION_INVALID_EVIDENCE")
 }
 
+func TestProjectConsolidationExcludedNativeClassificationCompatibility(t *testing.T) {
+	legacy := consolidationCensusState{Rows: []consolidationRow{{Table: "memories", Key: JSONRaw(`{"id":1}`), NativeVersion: "7"}}, Gaps: []string{}}
+	previous := structuralDigest(struct {
+		Rows  []consolidationRow
+		Gaps  []string
+		Roles []consolidationRole
+	}{legacy.Rows, legacy.Gaps, consolidationRoles})
+	require.Equal(t, previous, consolidationClassification(legacy), "legacy sealed backup classification must remain unchanged")
+	encoded, err := json.Marshal(legacy)
+	require.NoError(t, err)
+	require.NotContains(t, string(encoded), "ExcludedNative")
+	legacy.ExcludedNative = []consolidationOmittedVersion{{Table: "memories", Key: JSONRaw(`{"id":2}`), NativeVersion: "8"}}
+	bound := consolidationClassification(legacy)
+	require.NotEqual(t, previous, bound)
+	legacy.ExcludedNative[0].NativeVersion = "9"
+	require.NotEqual(t, bound, consolidationClassification(legacy), "excluded native versions must be authenticated")
+}
+
 func TestProjectConsolidationPostMigrationMemoryCensusPlan(t *testing.T) {
 	db, _ := openMemoryContext191UpgradeDB(t)
 	require.NoError(t, db.Exec(`CREATE TABLE projects (id TEXT PRIMARY KEY)`).Error)
@@ -73,6 +91,47 @@ func TestProjectConsolidationPostMigrationMemoryCensusPlan(t *testing.T) {
 		(19201, ?, 'typed project fixture', 'project', '', ''),
 		(19202, '', 'self fixture', 'self', 'agent/fixture', 'agent'),
 		(19203, '', 'global fixture', 'global', '', '')`, memoryContext191Project).Error)
+	require.NoError(t, db.Exec(`CREATE TABLE content_chunks (
+		id BIGSERIAL PRIMARY KEY, memory_id BIGINT NOT NULL REFERENCES memories(id),
+		seq INTEGER NOT NULL, text TEXT NOT NULL DEFAULT '', embedding public.vector(4096),
+		model TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE(memory_id, seq))`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO content_chunks (id, memory_id, seq, text, model) VALUES
+		(19201, 19201, 0, 'project chunk', 'fixture'),
+		(19202, 19202, 0, 'self chunk', 'fixture'),
+		(19203, 19203, 0, 'global chunk', 'fixture')`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO memory_revisions (memory_id, version, content, changed_by_principal, changed_by_principal_kind) VALUES
+		(19201, 1, 'project revision', 'agent/fixture', 'agent'),
+		(19202, 1, 'self revision', 'agent/fixture', 'agent'),
+		(19203, 1, 'global revision', 'agent/fixture', 'agent')`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO memory_request_keys (principal_kind, principal, context_kind, project, request_key, request_digest, memory_id) VALUES
+		('agent', 'agent/fixture', 'project', ?, 'project-request', ?, 19201),
+		('agent', 'agent/fixture', 'self', '', 'self-request', ?, 19202),
+		('agent', 'agent/fixture', 'global', '', 'global-request', ?, 19203)`, memoryContext191Project, strings.Repeat("a", 64), strings.Repeat("b", 64), strings.Repeat("c", 64)).Error)
+	for _, table := range []string{"content_chunks", "memory_revisions", "memory_request_keys"} {
+		var count int64
+		require.NoError(t, db.Raw("SELECT count(*) FROM "+table+" c JOIN memories m ON m.id=c.memory_id WHERE m.id IN (19201,19202,19203)").Scan(&count).Error)
+		require.EqualValues(t, 3, count, "%s fixture rows must have real memory parents", table)
+	}
+	// These multi-hop and mixed-parent controls were added after the original RED.
+	require.NoError(t, db.Exec(`INSERT INTO memories (id, project, content, context_kind, context_principal, context_principal_kind) VALUES (19204, '', 'second self fixture', 'self', 'agent/fixture', 'agent')`).Error)
+	require.NoError(t, db.Exec(`CREATE TABLE memory_links (id BIGSERIAL PRIMARY KEY, source_id BIGINT REFERENCES memories(id) ON DELETE SET NULL, target_id BIGINT REFERENCES memories(id) ON DELETE SET NULL, relation TEXT NOT NULL CHECK (relation IN ('related_to','references')), target_version INTEGER CHECK (target_version > 0), author_principal_kind TEXT NOT NULL, author_principal TEXT NOT NULL, source_session_id TEXT NOT NULL DEFAULT '', removed_at TIMESTAMPTZ, CHECK (relation <> 'related_to' OR (source_id < target_id AND target_version IS NULL)))`).Error)
+	require.NoError(t, db.Exec(`CREATE TABLE memory_link_receipts (principal_kind TEXT NOT NULL, principal TEXT NOT NULL, request_key TEXT NOT NULL CHECK (octet_length(request_key) BETWEEN 1 AND 1024), request_digest TEXT NOT NULL, link_id BIGINT NOT NULL REFERENCES memory_links(id) ON DELETE RESTRICT, PRIMARY KEY (principal_kind, principal, request_key))`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO memory_links (id, source_id, target_id, relation, author_principal_kind, author_principal) VALUES
+		(1, 19202, 19204, 'references', 'agent', 'agent/fixture'),
+		(2, 19101, 19201, 'references', 'agent', 'agent/fixture'),
+		(3, 19202, 19201, 'references', 'agent', 'agent/fixture'),
+		(4, NULL, 19201, 'references', 'agent', 'agent/fixture')`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO memory_link_receipts (principal_kind, principal, request_key, request_digest, link_id) VALUES
+		('agent', 'agent/fixture', 'self-link', 'fixture', 1),
+		('agent', 'agent/fixture', 'project-link', 'fixture', 2),
+		('agent', 'agent/fixture', 'mixed-link', 'fixture', 3),
+		('agent', 'agent/fixture', 'unknown-link', 'fixture', 4)`).Error)
+	snapshots := map[string]string{}
+	for _, table := range []string{"memories", "content_chunks", "memory_revisions", "memory_request_keys", "memory_links", "memory_link_receipts"} {
+		var snapshot string
+		require.NoError(t, db.Raw("SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text), '[]'::jsonb)::text FROM "+table+" t").Scan(&snapshot).Error)
+		snapshots[table] = snapshot
+	}
 	v, err := vaultcrypto.OpenExistingVault(&config.Config{EncryptionKey: strings.Repeat("ab", 32)})
 	require.NoError(t, err)
 	s := NewProjectConsolidationStore(db, v, nil)
@@ -122,6 +181,90 @@ func TestProjectConsolidationPostMigrationMemoryCensusPlan(t *testing.T) {
 			assert.NotEqual(t, "context_kind", mapping.Role)
 		}
 	}
+	byReference := make(map[string]ConsolidationMapping, len(plan.Mapping))
+	for _, mapping := range plan.Mapping {
+		byReference[mapping.Reference] = mapping
+	}
+	seenProject := map[string]bool{}
+	for _, row := range native.Rows {
+		if row.Table != "content_chunks" && row.Table != "memory_revisions" && row.Table != "memory_request_keys" {
+			continue
+		}
+		var key struct {
+			ID          int64  `json:"id"`
+			MemoryID    int64  `json:"memory_id"`
+			ContextKind string `json:"context_kind"`
+		}
+		require.NoError(t, json.Unmarshal(row.Key, &key))
+		id := key.MemoryID
+		if row.Table == "content_chunks" {
+			id = key.ID
+		} else if row.Table == "memory_request_keys" {
+			switch key.ContextKind {
+			case "project":
+				id = 19201
+			case "self":
+				id = 19202
+			case "global":
+				id = 19203
+			}
+		}
+		mapping, ok := byReference[row.Reference]
+		require.True(t, ok, "preflight must account for each census row")
+		switch id {
+		case 19201:
+			seenProject[row.Table] = true
+			assert.Equal(t, target, mapping.ProjectID, "%s must inherit its project parent", row.Table)
+			assert.Empty(t, mapping.UnresolvedReference, "%s project child must resolve", row.Table)
+		case 19202, 19203:
+			assert.Empty(t, mapping.ProjectID, "%s memory %d must not acquire project membership", row.Table, id)
+			assert.Empty(t, mapping.UnresolvedReference, "%s memory %d must not become unresolved project data (reason %s)", row.Table, id, mapping.Reason)
+		}
+	}
+	for _, table := range []string{"content_chunks", "memory_revisions", "memory_request_keys"} {
+		assert.True(t, seenProject[table], "%s project control must appear in the census", table)
+	}
+	seenLinks := map[string]bool{}
+	for _, row := range native.Rows {
+		if row.Table != "memory_links" && row.Table != "memory_link_receipts" {
+			continue
+		}
+		var key struct {
+			ID         int64  `json:"id"`
+			RequestKey string `json:"request_key"`
+		}
+		require.NoError(t, json.Unmarshal(row.Key, &key))
+		kind := key.RequestKey
+		if row.Table == "memory_links" {
+			kind = map[int64]string{1: "self-link", 2: "project-link", 3: "mixed-link", 4: "unknown-link"}[key.ID]
+		}
+		seenLinks[row.Table+":"+kind] = true
+		mapping, ok := byReference[row.Reference]
+		require.True(t, ok)
+		switch kind {
+		case "self-link":
+			assert.Empty(t, mapping.ProjectID)
+			assert.Empty(t, mapping.UnresolvedReference)
+		case "project-link":
+			assert.Equal(t, target, mapping.ProjectID, "%s project link must inherit both parents", row.Table)
+			assert.Empty(t, mapping.UnresolvedReference)
+		case "mixed-link", "unknown-link":
+			assert.Empty(t, mapping.ProjectID, "%s %s must not guess ownership", row.Table, kind)
+			assert.NotEmpty(t, mapping.UnresolvedReference, "%s %s must remain unresolved", row.Table, kind)
+		default:
+			t.Fatalf("unexpected %s fixture key %q", row.Table, kind)
+		}
+	}
+	for _, table := range []string{"memory_links", "memory_link_receipts"} {
+		for _, kind := range []string{"project-link", "mixed-link", "unknown-link"} {
+			assert.True(t, seenLinks[table+":"+kind], "%s %s must remain in the census", table, kind)
+		}
+	}
+	for table, before := range snapshots {
+		var after string
+		require.NoError(t, db.Raw("SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text), '[]'::jsonb)::text FROM "+table+" t").Scan(&after).Error)
+		assert.Equal(t, before, after, "%s synthetic records must remain unchanged", table)
+	}
 	state, err := s.plan(plan.Reference, plan.Fingerprint)
 	require.NoError(t, err)
 	bindings, sessions := consolidationRedirectBindings(state)
@@ -129,6 +272,277 @@ func TestProjectConsolidationPostMigrationMemoryCensusPlan(t *testing.T) {
 	assert.Contains(t, bindings, consolidationRedirectBinding{Selector: memoryContext191Project, Target: target})
 	for _, binding := range bindings {
 		assert.NotContains(t, []string{"project", "legacy", "self", "global"}, binding.Selector)
+	}
+}
+
+func TestProjectConsolidationNullableIntermediateParent(t *testing.T) {
+	db, _ := openMemoryContext191UpgradeDB(t)
+	require.NoError(t, db.Exec(`CREATE TABLE projects (id TEXT PRIMARY KEY)`).Error)
+	require.NoError(t, projectConsolidationMigration186().Migrate(db))
+	require.NoError(t, gormigrate.New(db, gormigrate.DefaultOptions, []*gormigrate.Migration{memoryPrincipalsMigration149(), memoryContextMigration191()}).Migrate())
+	require.NoError(t, db.Exec(`INSERT INTO memories (id,project,content,context_kind,context_principal,context_principal_kind) VALUES (19201,?,'project fixture','project','','')`, memoryContext191Project).Error)
+	require.NoError(t, db.Exec(`CREATE TABLE fixture_parent (id BIGINT PRIMARY KEY, memory_id BIGINT NOT NULL REFERENCES memories(id))`).Error)
+	require.NoError(t, db.Exec(`CREATE TABLE fixture_child (id BIGINT PRIMARY KEY, memory_id BIGINT NOT NULL REFERENCES memories(id), parent_id BIGINT REFERENCES fixture_parent(id))`).Error)
+	require.NoError(t, db.Exec(`CREATE TABLE fixture_descendant (id BIGINT PRIMARY KEY, child_id BIGINT NOT NULL REFERENCES fixture_child(id))`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO fixture_parent VALUES (1,19201)`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO fixture_child VALUES (1,19201,NULL),(2,19201,1)`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO fixture_descendant VALUES (1,1),(2,2)`).Error)
+	var missing, complete int64
+	require.NoError(t, db.Raw(`SELECT count(*) FILTER (WHERE c.parent_id IS NULL), count(*) FILTER (WHERE p.memory_id=c.memory_id) FROM fixture_child c JOIN memories m ON m.id=c.memory_id LEFT JOIN fixture_parent p ON p.id=c.parent_id`).Row().Scan(&missing, &complete))
+	require.EqualValues(t, 1, missing, "the negative fixture has a real project parent and a NULL intermediate FK")
+	require.EqualValues(t, 1, complete, "the control has both real, project-owned parents")
+	v, err := vaultcrypto.OpenExistingVault(&config.Config{EncryptionKey: strings.Repeat("ab", 32)})
+	require.NoError(t, err)
+	s := NewProjectConsolidationStore(db, v, nil)
+	census, err := s.Census(t.Context(), "nullable-intermediate-fixture")
+	require.NoError(t, err)
+	var native consolidationCensusState
+	require.NoError(t, s.open(census.Reference, "census", &native))
+	refs := map[string]string{}
+	for _, row := range native.Rows {
+		if row.Table != "memories" && row.Table != "fixture_child" && row.Table != "fixture_descendant" {
+			continue
+		}
+		var key struct {
+			ID int64 `json:"id"`
+		}
+		require.NoError(t, json.Unmarshal(row.Key, &key))
+		if row.Table == "memories" && row.Column == "project" && key.ID == 19201 {
+			refs["memory"] = row.Reference
+		}
+		if row.Table == "fixture_child" || row.Table == "fixture_descendant" {
+			refs[fmt.Sprintf("%s:%d", row.Table, key.ID)] = row.Reference
+		}
+	}
+	for _, key := range []string{"memory", "fixture_child:1", "fixture_child:2", "fixture_descendant:1", "fixture_descendant:2"} {
+		require.NotEmpty(t, refs[key], "fixture object %s must be inventoried", key)
+	}
+	project := uuid.NewString()
+	plan, err := s.Preflight(t.Context(), ConsolidationPreflightRequest{CensusReference: census.Reference, CensusFingerprint: census.Fingerprint, Evidence: []ConsolidationEvidence{{Reference: "urn:engram:proof:nullable-parent", Kind: "portable_marker", Group: "urn:engram:group:nullable-parent", ProjectID: project, Rows: []string{refs["memory"]}}}})
+	require.NoError(t, err)
+	mappings := map[string]ConsolidationMapping{}
+	for _, mapping := range plan.Mapping {
+		mappings[mapping.Reference] = mapping
+	}
+	for _, key := range []string{"fixture_child:1", "fixture_descendant:1"} {
+		mapping, ok := mappings[refs[key]]
+		require.True(t, ok)
+		assert.Empty(t, mapping.ProjectID, "%s has incomplete FK ancestry", key)
+		assert.NotEmpty(t, mapping.UnresolvedReference, "%s must remain unresolved", key)
+	}
+	for _, key := range []string{"fixture_child:2", "fixture_descendant:2"} {
+		mapping, ok := mappings[refs[key]]
+		require.True(t, ok)
+		assert.Equal(t, project, mapping.ProjectID, "%s has complete project ancestry", key)
+		assert.Empty(t, mapping.UnresolvedReference, "%s must resolve", key)
+	}
+}
+
+func TestProjectConsolidationExternalMemoryParent(t *testing.T) {
+	db, schema := openMemoryContext191UpgradeDB(t)
+	require.NoError(t, db.Exec(`CREATE TABLE projects (id TEXT PRIMARY KEY)`).Error)
+	require.NoError(t, projectConsolidationMigration186().Migrate(db))
+	require.NoError(t, gormigrate.New(db, gormigrate.DefaultOptions, []*gormigrate.Migration{memoryPrincipalsMigration149(), memoryContextMigration191()}).Migrate())
+	require.NoError(t, db.Exec(`INSERT INTO memories (id, project, content, context_kind, context_principal, context_principal_kind) VALUES
+		(19201, ?, 'project fixture', 'project', '', ''),
+		(19202, '', 'self fixture', 'self', 'agent/fixture', 'agent')`, memoryContext191Project).Error)
+	external := "memory_context_external_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	require.NoError(t, db.Exec("CREATE SCHEMA "+quoted(external)).Error)
+	t.Cleanup(func() { require.NoError(t, db.Exec("DROP SCHEMA "+quoted(external)+" CASCADE").Error) })
+	require.NoError(t, db.Exec("CREATE TABLE "+quoted(external)+`.memories (id BIGINT PRIMARY KEY)`).Error)
+	require.NoError(t, db.Exec("INSERT INTO "+quoted(external)+`.memories VALUES (19202)`).Error)
+	require.NoError(t, db.Exec(`CREATE TABLE external_fk_child (id BIGINT PRIMARY KEY, memory_id BIGINT NOT NULL REFERENCES memories(id), external_id BIGINT NOT NULL REFERENCES `+quoted(external)+`.memories(id))`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO external_fk_child VALUES (1, 19202, 19202)`).Error)
+	require.NoError(t, db.Exec(`CREATE TABLE project_fk_control (id BIGINT PRIMARY KEY, memory_id BIGINT NOT NULL REFERENCES memories(id))`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO project_fk_control VALUES (2, 19201)`).Error)
+	var foreignParents int64
+	require.NoError(t, db.Raw(`SELECT count(*) FROM pg_constraint c JOIN pg_class child ON child.oid=c.conrelid JOIN pg_namespace cn ON cn.oid=child.relnamespace JOIN pg_class parent ON parent.oid=c.confrelid JOIN pg_namespace pn ON pn.oid=parent.relnamespace WHERE c.contype='f' AND cn.nspname=? AND child.relname='external_fk_child' AND pn.nspname=? AND parent.relname='memories'`, schema, external).Scan(&foreignParents).Error)
+	require.EqualValues(t, 1, foreignParents, "the second FK must point to a different schema with the same parent relation name")
+	v, err := vaultcrypto.OpenExistingVault(&config.Config{EncryptionKey: strings.Repeat("ab", 32)})
+	require.NoError(t, err)
+	s := NewProjectConsolidationStore(db, v, nil)
+	census, err := s.Census(t.Context(), "external-parent-fixture")
+	require.NoError(t, err)
+	var native consolidationCensusState
+	require.NoError(t, s.open(census.Reference, "census", &native))
+	var projectRef, childRef, controlRef string
+	for _, row := range native.Rows {
+		switch row.Table {
+		case "memories":
+			var key struct {
+				ID int64 `json:"id"`
+			}
+			require.NoError(t, json.Unmarshal(row.Key, &key))
+			if key.ID == 19201 && row.Column == "project" {
+				projectRef = row.Reference
+			}
+		case "external_fk_child":
+			childRef = row.Reference
+		case "project_fk_control":
+			controlRef = row.Reference
+		}
+	}
+	require.NotEmpty(t, projectRef)
+	require.NotEmpty(t, controlRef)
+	target := uuid.NewString()
+	plan, err := s.Preflight(t.Context(), ConsolidationPreflightRequest{CensusReference: census.Reference, CensusFingerprint: census.Fingerprint, Evidence: []ConsolidationEvidence{{Reference: "urn:engram:proof:external-fixture", Kind: "portable_marker", Group: "urn:engram:group:external-fixture", ProjectID: target, Rows: []string{projectRef}}}})
+	require.NoError(t, err)
+	var childMapping, controlMapping ConsolidationMapping
+	for _, mapping := range plan.Mapping {
+		if mapping.Reference == childRef && childRef != "" {
+			childMapping = mapping
+		}
+		if mapping.Reference == controlRef {
+			controlMapping = mapping
+		}
+	}
+	assert.NotEmpty(t, childRef, "an unenumerated cross-schema parent must not cause a self-linked child to disappear")
+	if childRef != "" {
+		assert.Empty(t, childMapping.ProjectID)
+		assert.NotEmpty(t, childMapping.UnresolvedReference, "the external parent has unknown ownership")
+	}
+	assert.Equal(t, target, controlMapping.ProjectID, "an ordinary project child must still inherit")
+	assert.Empty(t, controlMapping.UnresolvedReference)
+}
+
+func TestProjectConsolidationTypedMemoryBackupVerification(t *testing.T) {
+	sourceDSN, targetDSN := os.Getenv("ENGRAM_SEARCH_PRIVACY_TEST_DSN"), os.Getenv("ENGRAM_B1_CENSUS_TARGET_DSN")
+	if sourceDSN == "" || targetDSN == "" {
+		t.Skip("explicit disposable source and tagged target DSNs are required")
+	}
+	sourceConfig, err := pgx.ParseConfig(sourceDSN)
+	if err != nil {
+		t.Fatal("invalid source fixture configuration; value withheld")
+	}
+	targetConfig, err := pgx.ParseConfig(targetDSN)
+	if err != nil {
+		t.Fatal("invalid target fixture configuration; value withheld")
+	}
+	require.Equal(t, "127.0.0.1", targetConfig.Host)
+	require.Equal(t, sourceConfig.Host, targetConfig.Host)
+	require.Equal(t, sourceConfig.Port, targetConfig.Port)
+	require.Equal(t, sourceConfig.User, targetConfig.User)
+	require.NotEqual(t, sourceConfig.Database, targetConfig.Database)
+	require.True(t, strings.HasPrefix(targetConfig.Database, "b1_census_restore_"))
+	sourceAdmin := stdlib.OpenDB(*sourceConfig)
+	defer sourceAdmin.Close()
+	var sourceOID, sourceOwner, sourceRole int64
+	var sourceSystem string
+	require.NoError(t, sourceAdmin.QueryRowContext(t.Context(), `SELECT d.oid,d.datdba,(SELECT oid FROM pg_roles WHERE rolname=current_user),(SELECT system_identifier::text FROM pg_control_system()) FROM pg_database d WHERE d.datname=current_database()`).Scan(&sourceOID, &sourceOwner, &sourceRole, &sourceSystem))
+	require.Equal(t, sourceOwner, sourceRole, "source fixture role must own the source database")
+	targetAdmin := stdlib.OpenDB(*targetConfig)
+	defer targetAdmin.Close()
+	var targetOID, ownerOID int64
+	var systemID, tag string
+	require.NoError(t, targetAdmin.QueryRowContext(t.Context(), `SELECT d.oid,d.datdba,(SELECT system_identifier::text FROM pg_control_system()),COALESCE(shobj_description(d.oid,'pg_database'),'') FROM pg_database d WHERE d.datname=current_database()`).Scan(&targetOID, &ownerOID, &systemID, &tag))
+	require.Equal(t, os.Getenv("ENGRAM_B1_CENSUS_TARGET_OID"), fmt.Sprint(targetOID))
+	require.Equal(t, sourceRole, ownerOID)
+	require.Equal(t, sourceSystem, systemID)
+	require.NotEqual(t, sourceOID, targetOID)
+	require.NotEqualValues(t, 5, targetOID)
+	require.Equal(t, "b1-census-owned:"+strings.TrimPrefix(targetConfig.Database, "b1_census_restore_"), tag)
+	source, sourceSchema := openMemoryContext191UpgradeDB(t)
+	t.Setenv("ENGRAM_SEARCH_PRIVACY_TEST_DSN", targetDSN)
+	target, targetSchema := openMemoryContext191UpgradeDB(t)
+	t.Setenv("ENGRAM_SEARCH_PRIVACY_TEST_DSN", sourceDSN)
+	targetSQL, err := target.DB()
+	require.NoError(t, err)
+	targetSQL.SetMaxOpenConns(1)
+	require.NoError(t, target.Exec("ALTER SCHEMA "+quoted(targetSchema)+" RENAME TO "+quoted(sourceSchema)).Error)
+	t.Cleanup(func() {
+		require.NoError(t, target.Exec("ALTER SCHEMA "+quoted(sourceSchema)+" RENAME TO "+quoted(targetSchema)).Error)
+	})
+	require.NoError(t, target.Exec("SET search_path TO "+quoted(sourceSchema)).Error)
+	for _, db := range []*gormlib.DB{source, target} {
+		require.NoError(t, db.Exec(`CREATE TABLE projects (id TEXT PRIMARY KEY)`).Error)
+		require.NoError(t, projectConsolidationMigration186().Migrate(db))
+		require.NoError(t, gormigrate.New(db, gormigrate.DefaultOptions, []*gormigrate.Migration{memoryPrincipalsMigration149(), memoryContextMigration191()}).Migrate())
+		require.NoError(t, db.Exec(`CREATE TABLE content_chunks (id BIGSERIAL PRIMARY KEY, memory_id BIGINT NOT NULL REFERENCES memories(id), seq INTEGER NOT NULL, text TEXT NOT NULL DEFAULT '', embedding public.vector(4096), model TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE(memory_id,seq))`).Error)
+	}
+	var fixtureMemories, fixtureUsers int64
+	require.NoError(t, target.Raw(`SELECT count(*) FROM memories WHERE id IN (19101,19102)`).Scan(&fixtureMemories).Error)
+	require.NoError(t, target.Raw(`SELECT count(*) FROM users WHERE id=17`).Scan(&fixtureUsers).Error)
+	require.EqualValues(t, 2, fixtureMemories)
+	require.EqualValues(t, 1, fixtureUsers)
+	for _, statement := range []string{`DELETE FROM memories WHERE id IN (19101,19102)`, `DELETE FROM users WHERE id=17`} {
+		result := target.Exec(statement)
+		require.NoError(t, result.Error)
+	}
+	tables, err := consolidationDataTables(target)
+	require.NoError(t, err)
+	for _, table := range tables {
+		if table.Name == "migrations" {
+			continue
+		}
+		var count int64
+		require.NoError(t, target.Table(table.Name).Count(&count).Error)
+		require.Zero(t, count, "owned target table %s must be empty before verification", table.Name)
+	}
+	var sourceMigrations, targetMigrations string
+	require.NoError(t, source.Raw(`SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text),'[]'::jsonb)::text FROM migrations t`).Scan(&sourceMigrations).Error)
+	require.NoError(t, target.Raw(`SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text),'[]'::jsonb)::text FROM migrations t`).Scan(&targetMigrations).Error)
+	require.Equal(t, sourceMigrations, targetMigrations, "target migration control must match source")
+	sourceSequences, err := consolidationSequences(source)
+	require.NoError(t, err)
+	targetSequences, err := consolidationSequences(target)
+	require.NoError(t, err)
+	require.Equal(t, sourceSequences, targetSequences, "target sequences must initially match source")
+	t.Log("target validated: all non-migration tables empty, migration rows and sequences match")
+	require.NoError(t, source.Exec(`INSERT INTO memories (id, project, content, context_kind, context_principal, context_principal_kind) VALUES
+		(19201, ?, 'project fixture', 'project', '', ''), (19202, '', 'self fixture', 'self', 'agent/fixture', 'agent'), (19203, '', 'global fixture', 'global', '', '')`, memoryContext191Project).Error)
+	require.NoError(t, source.Exec(`INSERT INTO content_chunks (id,memory_id,seq,text,model) VALUES (19201,19201,0,'project','fixture'),(19202,19202,0,'self','fixture'),(19203,19203,0,'global','fixture')`).Error)
+	require.NoError(t, source.Exec(`INSERT INTO memory_revisions (memory_id,version,content,changed_by_principal,changed_by_principal_kind) VALUES (19201,1,'project','agent/fixture','agent'),(19202,1,'self','agent/fixture','agent'),(19203,1,'global','agent/fixture','agent')`).Error)
+	require.NoError(t, source.Exec(`INSERT INTO memory_request_keys (principal_kind,principal,context_kind,project,request_key,request_digest,memory_id) VALUES ('agent','agent/fixture','project',?,'project',?,19201),('agent','agent/fixture','self','','self',?,19202),('agent','agent/fixture','global','','global',?,19203)`, memoryContext191Project, strings.Repeat("a", 64), strings.Repeat("b", 64), strings.Repeat("c", 64)).Error)
+	before := map[string]string{}
+	for _, table := range []string{"memories", "content_chunks", "memory_revisions", "memory_request_keys"} {
+		var value string
+		require.NoError(t, source.Raw("SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text),'[]'::jsonb)::text FROM "+table+" t").Scan(&value).Error)
+		before[table] = value
+	}
+	sourceShape, _, _, err := consolidationSchema(source)
+	require.NoError(t, err)
+	targetShape, _, _, err := consolidationSchema(target)
+	require.NoError(t, err)
+	require.Equal(t, sourceShape, targetShape, "fixture source and target schemas must match before testing backup")
+	t.Log("fixture setup complete: matching schemas and real typed dependent rows")
+	v, err := vaultcrypto.OpenExistingVault(&config.Config{EncryptionKey: strings.Repeat("ab", 32)})
+	require.NoError(t, err)
+	s := NewProjectConsolidationStore(source, v, target)
+	census, err := s.Census(t.Context(), "typed-memory-backup-fixture")
+	require.NoError(t, err)
+	var native consolidationCensusState
+	require.NoError(t, s.open(census.Reference, "census", &native))
+	var projectRef string
+	for _, row := range native.Rows {
+		if row.Table == "memories" && row.Column == "project" {
+			var key struct {
+				ID int64 `json:"id"`
+			}
+			require.NoError(t, json.Unmarshal(row.Key, &key))
+			if key.ID == 19201 {
+				projectRef = row.Reference
+			}
+		}
+	}
+	require.NotEmpty(t, projectRef)
+	projectID := uuid.NewString()
+	plan, err := s.Preflight(t.Context(), ConsolidationPreflightRequest{CensusReference: census.Reference, CensusFingerprint: census.Fingerprint, Evidence: []ConsolidationEvidence{{Reference: "urn:engram:proof:backup-fixture", Kind: "portable_marker", Group: "urn:engram:group:backup-fixture", ProjectID: projectID, Rows: []string{projectRef}}}})
+	require.NoError(t, err)
+	for _, mapping := range plan.Mapping {
+		if mapping.Reference == projectRef {
+			require.Equal(t, projectID, mapping.ProjectID)
+		}
+	}
+	var sealed bytes.Buffer
+	require.NoError(t, s.Backup(t.Context(), plan.Reference, plan.Fingerprint, &sealed), "valid source and plan must produce authenticated backup frames")
+	require.NotZero(t, sealed.Len())
+	t.Log("authenticated source backup produced; exercising VerifyBackup")
+	_, err = s.VerifyBackup(t.Context(), plan.Reference, plan.Fingerprint, bytes.NewReader(sealed.Bytes()))
+	assert.NoError(t, err, "a backup containing non-project memories and their dependents must verify")
+	for table, expected := range before {
+		var after string
+		require.NoError(t, source.Raw("SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text),'[]'::jsonb)::text FROM "+table+" t").Scan(&after).Error)
+		assert.Equal(t, expected, after, "%s source records must remain unchanged", table)
 	}
 }
 

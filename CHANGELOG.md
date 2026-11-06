@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Exclude dependents proven by their complete foreign-key ancestry to belong only to self or global memories from project consolidation, without treating private data as global; retain mixed or unknown ownership as unresolved and preserve project inheritance.
+
 - Add self-memory link create, list and delete HTTP routes with endpoint authorization, directional revision-pinned references and idempotent retry receipts. Memory remains the content owner; links do not grant access. Links use migration 195; an existing provisional `192_memory_links` ledger entry blocks automatic adoption and retains its data for explicit resolution.
 
 - In auth-disabled mode, validate explicit credentials on the scoped typed-memory HTTP routes and accept an existing persisted admin browser session for principal enrollment and keycard issuance. Keep invalid credentials fail-closed and preserve synthetic identity on unrelated and unkeyed routes; disabled authentication does not provide privacy isolation. Disabled-mode gRPC behavior is unchanged.
