@@ -186,14 +186,13 @@ support gets 500 `streaming not supported`. Disconnecting ends the subscription;
 reconnect establishes a new connection. There are no SSE event IDs, Last-Event-ID
 handling, or replay, so clients must refresh relevant state after a gap.
 
-Broadcast write errors or timeouts can remove a client from the broadcaster
-without ending its HTTP handler. If its writer is usable again, the handler can
-still send keepalive comments while no longer receiving broadcasts. Neither a
-keepalive nor an otherwise idle stream proves continued event delivery, and the
-stream provides no explicit signal of this removal. Clients can close and
-reconnect and refresh relevant state, including periodically when appropriate;
-that creates a new subscription but cannot recover events missed in the gap.
-A quiet stream alone does not establish that removal occurred.
+Broadcast write errors or timeouts remove the subscriber and signal the handler
+to end its stream. The handler waits for any in-flight write before returning,
+so a writer that never unblocks can delay termination indefinitely. A timeout
+still lets the broadcaster continue serving other clients; it does not cancel
+the blocked write. Clients should reconnect and refresh relevant state after a
+disconnect; reconnecting cannot recover missed events. A quiet stream alone
+does not establish that delivery is healthy or that removal occurred.
 
 `GET /api/logs` normally returns `application/json`: an array of entries with
 `timestamp`, `level`, `message`, optional `fields`, and `raw`. RFC3339 timestamps
@@ -242,6 +241,12 @@ Authorization: Bearer <token>
 
 `ENGRAM_AUTH_DISABLED=true` supplies a synthetic identity for ordinary operations;
 it is not a browser session and does not pass access-administration reader guards.
+
+`POST /api/auth/setup` requires the operator token and a JSON email and password.
+The password must not exceed 72 bytes after UTF-8 encoding. An overlong password
+returns HTTP 400 with `{"error":"password must not exceed 72 bytes"}`; the
+rejected request does not create a user or complete setup. Unexpected hashing
+failures return HTTP 500.
 
 #### Browser session management (issue 535)
 
