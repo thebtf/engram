@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
 
 	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/config"
@@ -52,13 +53,14 @@ type feature009ProviderCall struct {
 }
 
 type feature009Provider struct {
-	mu      sync.Mutex
-	calls   []*feature009ProviderCall
-	options feature009ProviderOptions
-	prefer  string
-	stop    chan struct{}
-	entered chan struct{}
-	release chan struct{}
+	mu           sync.Mutex
+	calls        []*feature009ProviderCall
+	options      feature009ProviderOptions
+	prefer       string
+	stop         chan struct{}
+	entered      chan struct{}
+	revalidation *feature009RevalidationObserver
+	release      chan struct{}
 }
 
 func (p *feature009Provider) serveHTTP(w http.ResponseWriter, r *http.Request) {
@@ -89,6 +91,9 @@ func (p *feature009Provider) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		p.mu.Unlock()
 	}
 	if r.URL.Path == "/v1/rerank" && p.options.gateReranking {
+		if p.revalidation != nil {
+			p.revalidation.beginRerank()
+		}
 		select {
 		case p.entered <- struct{}{}:
 		default:
@@ -680,11 +685,134 @@ func TestContextSearchProducerSafeIDBoundaryPostgres(t *testing.T) {
 	}
 }
 
+type feature009RevalidationRequestKey struct{}
+
+type feature009RevalidationObserver struct {
+	mu             sync.Mutex
+	started        bool
+	released       bool
+	early          bool
+	after          int
+	clientCtx      context.Context
+	clientDone     chan struct{}
+	clientFinished bool
+	clientCanceled bool
+}
+
+type feature009RerankTransport struct {
+	base     http.RoundTripper
+	observer *feature009RevalidationObserver
+}
+
+func (t feature009RerankTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.URL.Path == "/v1/rerank" {
+		t.observer.mu.Lock()
+		t.observer.clientCtx = req.Context()
+		t.observer.clientDone = make(chan struct{})
+		done := t.observer.clientDone
+		defer close(done)
+		t.observer.mu.Unlock()
+	}
+	return t.base.RoundTrip(req)
+}
+
+func (o *feature009RevalidationObserver) beginRerank() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.started = true
+}
+
+func (o *feature009RevalidationObserver) observeQuery(ctx context.Context) {
+	if ctx.Value(feature009RevalidationRequestKey{}) != true {
+		return
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.started {
+		if o.released {
+			o.after++
+		} else {
+			o.early = true
+		}
+	}
+}
+
+func (o *feature009RevalidationObserver) release(gate chan struct{}) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.clientCanceled = o.clientCtx == nil || o.clientCtx.Err() != nil
+	if o.clientDone == nil {
+		o.clientFinished = true
+	} else {
+		select {
+		case <-o.clientDone:
+			o.clientFinished = true
+		default:
+		}
+	}
+	o.released = true
+	close(gate)
+	o.clientCanceled = o.clientCanceled || o.clientCtx == nil || o.clientCtx.Err() != nil
+	if o.clientDone != nil {
+		select {
+		case <-o.clientDone:
+			o.clientFinished = true
+		default:
+		}
+	}
+}
+
+func TestFeature009RevalidationObserverOrdering(t *testing.T) {
+	ctx := context.WithValue(t.Context(), feature009RevalidationRequestKey{}, true)
+	early := &feature009RevalidationObserver{}
+	early.observeQuery(ctx)
+	early.beginRerank()
+	early.observeQuery(ctx)
+	require.True(t, early.early, "revalidation before release must invalidate the oracle")
+	late := &feature009RevalidationObserver{}
+	late.beginRerank()
+	late.clientCtx = t.Context()
+	late.clientDone = make(chan struct{})
+	late.observeQuery(t.Context())
+	late.release(make(chan struct{}))
+	late.observeQuery(ctx)
+	require.False(t, late.early)
+	require.Equal(t, 1, late.after)
+	require.False(t, late.clientCanceled)
+	require.False(t, late.clientFinished)
+	canceled := &feature009RevalidationObserver{}
+	ctxCanceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	canceled.clientCtx = ctxCanceled
+	canceled.release(make(chan struct{}))
+	require.True(t, canceled.clientCanceled)
+	finished := &feature009RevalidationObserver{clientCtx: t.Context(), clientDone: make(chan struct{})}
+	close(finished.clientDone)
+	finished.release(make(chan struct{}))
+	require.True(t, finished.clientFinished)
+}
+
 func TestContextSearchProducerFinalRevalidationPostgres(t *testing.T) {
 	for _, change := range []string{"acl", "body"} {
 		for _, method := range []string{http.MethodGet, http.MethodPost} {
 			t.Run(change+"/"+method, func(t *testing.T) {
 				f := newFeature009ProducerFixture(t, feature009ProviderOptions{gateReranking: true})
+				observer := &feature009RevalidationObserver{}
+				f.provider.revalidation = observer
+				originalTransport := http.DefaultTransport
+				http.DefaultTransport = feature009RerankTransport{base: originalTransport, observer: observer}
+				t.Cleanup(func() { http.DefaultTransport = originalTransport })
+				callbacks := f.store.DB.Callback().Query()
+				const callbackName = "feature009_final_revalidation_order"
+				require.NoError(t, callbacks.Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+					observer.observeQuery(tx.Statement.Context)
+				}))
+				t.Cleanup(func() { require.NoError(t, callbacks.Remove(callbackName)) })
+				handler := f.server.Config.Handler
+				f.server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					ctx := context.WithValue(r.Context(), feature009RevalidationRequestKey{}, true)
+					handler.ServeHTTP(w, r.WithContext(ctx))
+				})
 				header := "900"
 				ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 				defer cancel()
@@ -732,7 +860,7 @@ func TestContextSearchProducerFinalRevalidationPostgres(t *testing.T) {
 					t.Fatal("reranker finished before the changed state was observed")
 				default:
 				}
-				close(f.provider.release)
+				observer.release(f.provider.release)
 				var x feature009ProducerExchange
 				select {
 				case x = <-result:
@@ -741,6 +869,13 @@ func TestContextSearchProducerFinalRevalidationPostgres(t *testing.T) {
 				}
 				assert.LessOrEqual(t, x.finished.Sub(x.started), 900*time.Millisecond)
 				response := f.decode(t, x, feature009ProducerQuery)
+				observer.mu.Lock()
+				early, after, clientCanceled, clientFinished := observer.early, observer.after, observer.clientCanceled, observer.clientFinished
+				observer.mu.Unlock()
+				require.False(t, clientCanceled, "real reranker client context must remain live through committed mutation and release")
+				require.False(t, clientFinished, "real reranker client transport must remain blocked through committed mutation and release")
+				require.False(t, early, "search queried after reranker entry but before the committed mutation and provider release")
+				require.Positive(t, after, "the marked real search must perform its post-rerank revalidation query")
 				foundUseful := false
 				for _, observation := range response.Observations {
 					id := feature009ProducerID(t, observation)
