@@ -127,8 +127,17 @@ func TestAuthHandlersLifecycle_InvitationSingleUseRace(t *testing.T) {
 			afterUsers, err := env.users.ListUsers()
 			require.NoError(t, err)
 			require.Equal(t, beforeUsers, afterUsers, "rejected registration must not create a user")
-			require.GreaterOrEqual(t, rec.Code, http.StatusBadRequest, rec.Body.String())
-			require.Less(t, rec.Code, http.StatusInternalServerError, rec.Body.String())
+			require.Equal(t, http.StatusBadRequest, rec.Code)
+			require.NotContains(t, rec.Body.String(), tc.password)
+			var response struct {
+				Error string `json:"error"`
+			}
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
+			require.NotContains(t, response.Error, tc.password)
+			message := strings.ToLower(response.Error)
+			require.Contains(t, message, "password")
+			require.Contains(t, message, "72")
+			require.Contains(t, message, "byte")
 		})
 	}
 
