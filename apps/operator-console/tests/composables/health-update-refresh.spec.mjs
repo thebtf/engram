@@ -4,6 +4,7 @@ import test from 'node:test'
 import ts from 'typescript'
 import * as vue from 'vue'
 import * as routing from 'vue-router'
+import { createI18n, useI18n } from 'vue-i18n'
 import { compileScript, compileTemplate, parse } from '@vue/compiler-sfc'
 
 const root = new URL('../../', import.meta.url)
@@ -30,17 +31,21 @@ function evaluate(source, require, globals) {
 function node(tag = '', text = '') { return { tag, text, props: {}, children: [], parent: null, focus() { } } }
 function text(item) { return item.text + item.children.map(text).join(' ') }
 function descendants(item) { return [item, ...item.children.flatMap(descendants)] }
-function fixture(t, update = { available: false }, selfcheck = { overall: 'healthy', components: [] }) {
+function fixture(t, update = { available: false }, selfcheck = { overall: 'healthy', components: [] }, options = {}) {
   const modules = new Map()
   const calls = []
   let config = { memory: { inject_unified: true } }
   let migrations = { engine: 'synthetic-engine', current_version: '17' }
   const scope = vue.effectScope()
   t.after(() => scope.stop())
+  const i18n = options.locale ? createI18n({
+    legacy: false, locale: options.locale, fallbackLocale: false,
+    messages: { [options.locale]: JSON.parse(readFileSync(new URL(`i18n/locales/${options.locale}.json`, root), 'utf8')) },
+  }) : null
   const globals = {
     computed: vue.computed, ref: vue.ref, watch: vue.watch, nextTick: vue.nextTick, onBeforeUnmount: vue.onBeforeUnmount,
     importMeta: { env: { DEV: false } },
-    useI18n: () => ({ t: (key) => key, locale: vue.ref('en') }),
+    useI18n: i18n ? useI18n : () => ({ t: (key) => key, locale: vue.ref('en') }),
     useRoute: () => ({ fullPath: '/health', path: '/health' }),
     fetch: async (path, init = {}) => {
       assert.equal(init.method || 'GET', 'GET', 'the fixture must never perform a writer action')
@@ -67,7 +72,7 @@ function fixture(t, update = { available: false }, selfcheck = { overall: 'healt
     if (name === 'vue-router') return routing
     // Only unrelated browser preference/locale setup is replaced.
     if (name.endsWith('useConsolePreferences')) return preferences
-    if (name.endsWith('i18n.config')) return { locales: [{ code: 'en' }], setLocale() { } }
+    if (name.endsWith('i18n.config')) return { locales: [{ code: options.locale || 'en' }], setLocale() { } }
     if (name.endsWith('operator-config')) return { operatorConfig: { apiBase: '/api' } }
     const url = new URL(`${name}.ts`, new URL('composables/', root))
     return load(url)
@@ -114,16 +119,17 @@ function fixture(t, update = { available: false }, selfcheck = { overall: 'healt
       remove: (item) => { if (item.parent) item.parent.children = item.parent.children.filter(child => child !== item) },
     })
     const app = renderer.createApp(component, props)
+    if (i18n) app.use(i18n)
     for (const name of ['HonestyBadge', 'MutationResultNotice']) app.component(name, { render: () => null })
     app.mount(host)
     t.after(() => app.unmount())
     return host
   }
-  return { state, calls, mount, setUpdate(payload) { update = payload }, setMigrations(payload) { migrations = payload }, setConfig(payload) { config = payload } }
+  return { state, calls, mount, translate: i18n ? i18n.global.t : (key) => key, setUpdate(payload) { update = payload }, setMigrations(payload) { migrations = payload }, setConfig(payload) { config = payload } }
 }
 
-function updateAnswer(host, consumer) {
-  const label = consumer === 'Health' ? 'health.updateAvailable' : 'settings.restart.updateAvailable'
+function updateAnswer(host, consumer, translate = (key) => key) {
+  const label = translate(consumer === 'Health' ? 'health.updateAvailable' : 'settings.restart.updateAvailable')
   if (consumer === 'Health') {
     const row = descendants(host).find(item => item.tag === 'div' && item.children.some(child => child.tag === 'span' && text(child) === label))
     assert.ok(row, 'actual compiled Health update row must render')
@@ -205,8 +211,8 @@ function deferred() {
   return { promise, resolve }
 }
 
-function refreshControl(host, consumer) {
-  const label = consumer === 'Health' ? 'health.refresh' : 'settings.refresh'
+function refreshControl(host, consumer, translate = (key) => key) {
+  const label = translate(consumer === 'Health' ? 'health.refresh' : 'settings.refresh')
   const buttons = descendants(host).filter(item => item.tag === 'button' && text(item).trim() === label)
   assert.equal(buttons.length, 1, 'the actual consumer must expose one matching read-only Refresh control')
   assert.equal(typeof buttons[0].props.onClick, 'function', 'Refresh must retain its actual compiled handler')
@@ -449,4 +455,134 @@ for (const [boundary, selfcheck] of [
     assert.ok(message.length > 0, `live ${boundary} components status must contain readable content`)
     assert.match(message, /\bhealth\.state\.(?:unknown|notLoaded)\b/, `live ${boundary} components status must communicate unknown or not-loaded state through localized content`)
   })
+}
+
+function updateRegion(host, consumer, translate) {
+  const label = translate(consumer === 'Health' ? 'health.update' : 'settings.restart.updateAvailable')
+  const anchor = descendants(host).find(item => consumer === 'Health'
+    ? item.tag === 'h2' && text(item).trim() === label
+    : item.tag === 'p' && text(item).includes(label))
+  assert.ok(anchor, `${consumer}: update region must render`)
+  let region = anchor.parent
+  while (region && region.tag !== (consumer === 'Health' ? 'article' : 'section')) region = region.parent
+  assert.ok(region, `${consumer}: update region must have its own container`)
+  return region
+}
+
+function updateNotices(region) {
+  return descendants(region).filter(item => ['status', 'alert'].includes(item.props.role)
+    || ['polite', 'assertive'].includes(item.props['aria-live']))
+    .map(item => text(item).trim())
+}
+
+for (const consumer of ['Health', 'Settings']) {
+  for (const [failure, payload, diagnosisKey] of [
+    ['domain failure', { available: false, error: 'private provider detail' }, null],
+    ['HTTP 503', () => Response.json({ error: 'private provider detail' }, { status: 503 }), 'errors.diagnosis.server-unavailable'],
+    ['HTTP 401', () => Response.json({ error: 'private provider detail' }, { status: 401 }), 'errors.diagnosis.unauthorized'],
+    ['HTTP 403', () => Response.json({ error: 'private provider detail' }, { status: 403 }), 'errors.diagnosis.forbidden'],
+  ]) test(`${consumer}: ${failure} is accessible and clears after refresh`, async (t) => {
+    const f = fixture(t, { available: true }, undefined, { locale: 'en' })
+    await f.state.refresh()
+    const host = consumer === 'Health' ? f.mount('pages/health.vue') : f.mount('components/SettingsModal.vue', { open: true, activeTab: 'actions' })
+    await vue.nextTick()
+    f.setUpdate(payload)
+    await refreshControl(host, consumer, f.translate).props.onClick()
+    await vue.nextTick()
+    const failed = {
+      kind: f.state.updateCheckState.value.kind,
+      answer: updateAnswer(host, consumer, f.translate),
+      notices: updateNotices(updateRegion(host, consumer, f.translate)),
+      rawVisible: text(host).includes('private provider detail'),
+      disabled: Boolean(refreshControl(host, consumer, f.translate).props.disabled),
+    }
+    f.setUpdate({ available: false })
+    await refreshControl(host, consumer, f.translate).props.onClick()
+    await vue.nextTick()
+    const recovered = {
+      kind: f.state.updateCheckState.value.kind,
+      answer: updateAnswer(host, consumer, f.translate),
+      notices: updateNotices(updateRegion(host, consumer, f.translate)),
+      disabled: Boolean(refreshControl(host, consumer, f.translate).props.disabled),
+    }
+    t.diagnostic(JSON.stringify({ consumer, failure, failed, recovered }))
+    const issues = []
+    if (failed.kind !== 'error' || failed.answer !== '—') issues.push('failed availability must remain unknown')
+    if (!failed.notices.length) issues.push('update failure needs an accessible notice')
+    for (const notice of failed.notices) {
+      if (!notice || /\b(?:health|settings|errors)\.[\w.-]+/.test(notice)) issues.push('notice must contain translated user-visible text')
+      if (diagnosisKey && !notice.includes(f.translate(diagnosisKey))) issues.push(`notice must explain ${diagnosisKey}`)
+      if (!diagnosisKey && !/update/i.test(notice)) issues.push('domain failure must explain the unavailable update check')
+    }
+    if (failed.rawVisible || failed.disabled) issues.push('provider detail must remain private and Refresh enabled')
+    if (recovered.kind !== 'live' || recovered.answer !== f.translate('common.no') || recovered.notices.length || recovered.disabled) issues.push('successful refresh must clear the failure and show the actual answer')
+    assert.equal(f.calls.filter(path => path === '/api/update/check').length, 3)
+    assert.deepEqual(issues, [], `${consumer}: ${failure} must be explained accessibly and clear on success`)
+  })
+}
+
+function runtimeFailurePresentation(host, translate) {
+  const settingsPrefix = translate('settings.state.error', { message: 'SENTINEL' }).split('SENTINEL')[0]
+  const updateLabel = 'Update check'
+  const diagnosis = translate('errors.diagnosis.forbidden')
+  return {
+    settingsErrors: descendants(host).filter(item => item.tag === 'div' && item.children.every(child => !child.tag) && text(item).trim().startsWith(settingsPrefix)).map(item => text(item).trim()),
+    updateAlerts: descendants(host).filter(item => item.props.role === 'alert' && text(item).includes(updateLabel) && text(item).includes(diagnosis)).map(item => text(item).trim()),
+  }
+}
+
+for (const configFails of [false, true]) {
+  test(`Settings Runtime: update HTTP 403 has its own accessible alert with config ${configFails ? 'unavailable' : 'loaded'}`, async (t) => {
+    const f = fixture(t, () => Response.json({ error: 'private update detail' }, { status: 403 }), undefined, { locale: 'en' })
+    if (configFails) f.setConfig(() => Response.json({ error: 'private config detail' }, { status: 503 }))
+    await f.state.refresh()
+    const host = f.mount('components/SettingsModal.vue', { open: true, activeTab: 'runtime' })
+    await vue.nextTick()
+    const actual = runtimeFailurePresentation(host, f.translate)
+    t.diagnostic(JSON.stringify({ configFails, actual }))
+    assert.deepEqual({ settingsErrorCount: actual.settingsErrors.length, updateAlerts: actual.updateAlerts }, {
+      settingsErrorCount: configFails ? 1 : 0,
+      updateAlerts: [`Update check: ${f.translate('errors.diagnosis.forbidden')}`],
+    }, 'Runtime must independently report a settings load failure and an accessible localized update failure')
+  })
+}
+
+test('Settings Runtime: update recovery clears only its alert while config remains unavailable', async (t) => {
+  const f = fixture(t, () => Response.json({ error: 'private update detail' }, { status: 403 }), undefined, { locale: 'en' })
+  f.setConfig(() => Response.json({ error: 'private config detail' }, { status: 503 }))
+  await f.state.refresh()
+  const host = f.mount('components/SettingsModal.vue', { open: true, activeTab: 'runtime' })
+  await vue.nextTick()
+  const failed = runtimeFailurePresentation(host, f.translate)
+  f.setUpdate({ available: false })
+  await f.state.refresh()
+  await vue.nextTick()
+  const recovered = runtimeFailurePresentation(host, f.translate)
+  t.diagnostic(JSON.stringify({ failed, recovered }))
+  assert.equal(failed.settingsErrors.length, 1, 'the config failure must remain visible as a localized settings error')
+  assert.deepEqual({ failed, recovered }, {
+    failed: { settingsErrors: failed.settingsErrors, updateAlerts: [`Update check: ${f.translate('errors.diagnosis.forbidden')}`] },
+    recovered: { settingsErrors: failed.settingsErrors, updateAlerts: [] },
+  }, 'successful update refresh must clear its alert without hiding or changing the continuing config failure')
+})
+
+for (const [locale, label, misleading] of [
+  ['en', 'Update check', 'Update available'],
+  ['ru', 'Проверка обновлений', 'Доступно обновление'],
+  ['zh', '更新检查', '有可用更新'],
+]) {
+  for (const surface of ['Health', 'Settings Actions', 'Settings Runtime']) {
+    test(`${surface}: ${locale} update failure uses a neutral alert label`, async (t) => {
+      const f = fixture(t, () => Response.json({ error: 'private provider detail' }, { status: 403 }), undefined, { locale })
+      await f.state.refresh()
+      const host = surface === 'Health'
+        ? f.mount('pages/health.vue')
+        : f.mount('components/SettingsModal.vue', { open: true, activeTab: surface === 'Settings Actions' ? 'actions' : 'runtime' })
+      await vue.nextTick()
+      const alerts = descendants(host).filter(item => item.props.role === 'alert').map(item => text(item).trim())
+      assert.deepEqual(alerts, [`${label}: ${f.translate('errors.diagnosis.forbidden')}`])
+      assert.ok(alerts.every(alert => !alert.includes(misleading)), 'an unknown result must not assert an update is available')
+      if (surface !== 'Settings Runtime') assert.equal(updateAnswer(host, surface === 'Health' ? 'Health' : 'Settings', f.translate), '—')
+    })
+  }
 }

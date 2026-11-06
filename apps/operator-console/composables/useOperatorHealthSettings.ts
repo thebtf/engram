@@ -14,15 +14,21 @@ let sharedHealthSettingsRefreshing: SharedRef<boolean> | undefined
 let sharedHealthSettingsRefreshRevision = 0
 
 import type { ComputedRef } from 'vue'
-import type { OperatorLoadState } from './useOperatorApi'
+import type { OperatorLoadState, OperatorSourceError } from './useOperatorApi'
 import { executeMutation, type MutationResult } from './useApi'
 import {
   endpointEvidence,
   errorState,
   loadOperatorJson,
+  operatorDiagnosisKey,
   operatorFetchResponse,
   pendingState,
 } from './useOperatorApi'
+
+export function updateCheckDiagnosisKey(error: OperatorSourceError): string {
+  return error.category === 'invalid-response' ? 'health.updateCheckUnavailable' : operatorDiagnosisKey(error)
+}
+
 function submitMutation<TIntent>(action: string, intent: TIntent, path: string, init: RequestInit): Promise<MutationResult<TIntent>> {
   return executeMutation(
     { requestId: crypto.randomUUID(), action, intent },
@@ -237,6 +243,7 @@ export function useOperatorHealthSettings(): {
   restartRequired: ComputedRef<boolean>
   pending: ComputedRef<boolean>
   error: ComputedRef<string | null>
+  nonUpdateError: ComputedRef<OperatorSourceError | null>
   refresh: () => Promise<void>
   saveConfig: (patch: ApiConfigPatch) => Promise<MutationResult<ApiConfigPatch>>
   restartServer: () => Promise<MutationResult<undefined>>
@@ -350,12 +357,14 @@ export function useOperatorHealthSettings(): {
     updateCheck.value,
     migrations.value,
   ].some((state) => state.kind === 'pending'))
-  const error = computed(() => {
+  function firstError(excludeUpdateCheck = false): OperatorSourceError | null {
     for (const state of [selfcheck.value, ready.value, config.value, flags.value, vnext.value, vector.value, updateStatus.value, updateCheck.value, migrations.value]) {
-      if (state.kind === 'error') return state.error.message
+      if (state.kind === 'error' && (!excludeUpdateCheck || state !== updateCheck.value)) return state.error
     }
     return null
-  })
+  }
+  const error = computed(() => firstError()?.message ?? null)
+  const nonUpdateError = computed(() => firstError(true))
 
   async function loadUpdateCheck(): Promise<OperatorLoadState<ApiUpdateCheck>> {
     const state = await loadOperatorJson<ApiUpdateCheck>('/api/update/check', { source: 'update-check' })
@@ -449,6 +458,7 @@ export function useOperatorHealthSettings(): {
     restartRequired,
     pending,
     error,
+    nonUpdateError,
     refresh,
     saveConfig,
     restartServer,
