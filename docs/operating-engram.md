@@ -752,7 +752,7 @@ Live row references use a separate Vault-derived domain from historical census r
 
 For an explicit lineage version write, invalid retained provenance returns HTTP 409 with `DOCUMENT_PROVENANCE_INVALID`; unavailable verification returns HTTP 503 with `DOCUMENT_PROVENANCE_UNAVAILABLE`. MCP `docs` create reports the corresponding code as a tool error. Neither refusal inserts a version.
 
-Path-only create refuses a successor to a retained document with HTTP 409 or an MCP tool error. Read or list the selected document, then retry the original version write with both its `document_id` and `expected_version`. New documents and ordinary path-only updates without retained membership remain supported.
+Path-only create refuses a successor to a retained document with HTTP 409 or an MCP tool error. If the project is a legacy selector, first resolve it through `GET /api/projects/resolve?legacy_id=...` and use the returned canonical UUID. Read or list the selected document, then retry the original version write with both its `document_id` and `expected_version`. New documents and ordinary path-only updates without retained membership remain supported.
 
 For an alias-aware comment, send `project`, the exact history-row `document_id`, and its positive `expected_version` together to `POST /api/documents/comment`; use the same three values as query parameters for `GET /api/documents/comments`. The version identifies the selected immutable history row, not necessarily the latest. A mismatched or no-longer-authorized row is refused; supplying an invalid scope never falls back to an unscoped ID read.
 

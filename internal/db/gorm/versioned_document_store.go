@@ -92,10 +92,17 @@ func (s *VersionedDocumentStore) Create(
 
 	var docID int64
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if projectidentity.ValidProjectID(project) {
+		if projectidentity.ValidProjectID(project) || (project != "" && tx.Dialector.Name() == "postgres") {
 			if err := tx.Exec(`LOCK TABLE project_consolidation_memberships, project_consolidation_redirects IN SHARE MODE`).Error; err != nil {
 				return err
 			}
+		}
+		if project != "" && !projectidentity.ValidProjectID(project) && tx.Dialector.Name() == "postgres" {
+			var effective string
+			if err := tx.Raw(`SELECT engram_consolidation_scope(?)`, project).Scan(&effective).Error; err != nil {
+				return err
+			}
+			project = effective
 		}
 		if err := ensureLogicalProjectForWrite(ctx, tx, project); err != nil {
 			return err

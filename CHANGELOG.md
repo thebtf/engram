@@ -7,12 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Refuse path-only successors of retained documents with actionable lineage recovery; explicit version writes continue to validate and derive Vault-backed provenance. Preserve strict pre-Apply snapshots while allowing cosmetic label changes during reconciliation of newly recorded alias operations; legacy receipts remain strict.
-
-- Restrict automatic correction candidates to visible native project membership before pagination, and recheck mutation authority under transaction locks before supersession. Read aliases do not grant correction authority.
-
-- Correct Windows short-path project recovery while keeping marker discovery inside the canonical worktree; preserve raw caller and marker-target fingerprint bytes.
-
 - Regenerate the API through the maintained worker target using canonical local Go package directories and Swag 1.16.6, with real producer errors stopping the build. Correct existing context search/inject/session-start annotations without changing handlers; document the shared GET/POST conditional-query limitation. The actual producer and server build pass, with 40 named schema checks and all 76 references resolved; that producer checkpoint established compile-only retained-reader oracle provenance, with later native query proof recorded separately, and installed/release acceptance remains separate.
 
 - Add retained catalog `families` metadata with kind, technical table, saved membership-occurrence count and declared/separate/metadata-only reader boundary. Preserve every group, opaque reference, safe label and reason without payload previews, readable-record totals, availability or historical ownership assignment. This descriptor change does not provide cross-group record discovery or installed-consumer acceptance.
@@ -53,6 +47,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [7.0.26] - 2026-11-06
 
 ### Fixed
+
+- Refuse path-only successors of retained documents with actionable lineage recovery; explicit version writes continue to validate and derive Vault-backed provenance. Preserve strict pre-Apply snapshots while allowing cosmetic label changes during reconciliation of newly recorded alias operations; legacy receipts remain strict.
+- Restrict automatic correction candidates to visible native project membership before pagination, and recheck mutation authority under transaction locks before supersession. Read aliases do not grant correction authority.
+- Correct Windows short-path project recovery while keeping marker discovery inside the canonical worktree; preserve raw caller and marker-target fingerprint bytes.
 
 - Correct the stats API contract for conditional project and database fields, response media types, and readiness errors without changing handler behavior.
 - Return a JSON 400 for registration passwords exceeding bcrypt's 72-byte limit without consuming the invitation or creating a user.

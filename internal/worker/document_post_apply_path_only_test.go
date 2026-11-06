@@ -168,6 +168,7 @@ func TestPostApplyRetainedDocumentPathOnlyPostgres(t *testing.T) {
 		rec := httpCreate(map[string]any{"project": legacy, "path": docs[3].Path, "content": "legacy http must not insert"})
 		assert.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
 		assert.Contains(t, rec.Body.String(), "document_id and expected_version")
+		assert.Contains(t, rec.Body.String(), "/api/projects/resolve?legacy_id=")
 		v2, m2 := counts(docs[3].Path)
 		assert.Equal(t, v, v2)
 		assert.Equal(t, m, m2)
@@ -184,6 +185,7 @@ func TestPostApplyRetainedDocumentPathOnlyPostgres(t *testing.T) {
 		if assert.NotNil(t, response.Error) {
 			assert.Equal(t, -32000, response.Error.Code)
 			assert.Contains(t, response.Error.Message, "document_id and expected_version")
+			assert.Contains(t, response.Error.Message, "/api/projects/resolve?legacy_id=")
 		}
 		v2, m2 := counts(docs[4].Path)
 		assert.Equal(t, v, v2)

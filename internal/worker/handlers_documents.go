@@ -786,7 +786,7 @@ func (s *Service) handleCreateDocument(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if errors.Is(err, gormdb.ErrDocumentVersionStale) || errors.Is(err, gormdb.ErrDocumentLineageAmbiguous) {
-			writeDocumentError(w, http.StatusConflict, "document lineage or version conflict; read or list the selected document, supply both document_id and expected_version, and retry the original version write")
+			writeDocumentError(w, http.StatusConflict, "document lineage or version conflict; resolve a legacy project using /api/projects/resolve?legacy_id=... to its canonical UUID, read or list the selected document, supply both document_id and expected_version, and retry the original version write")
 			return
 		}
 		if errors.Is(err, gormdb.ErrKnowledgeProjectForbidden) || errors.Is(err, gormlib.ErrRecordNotFound) {

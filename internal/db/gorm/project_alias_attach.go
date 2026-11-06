@@ -89,7 +89,7 @@ func aliasSources(req ProjectAliasAttachRequest) []string {
 }
 
 // aliasSnapshots binds project identity and every related redirect, not content rows.
-func aliasSnapshots(tx *gormlib.DB, req ProjectAliasAttachRequest) (string, string, error) {
+func aliasSnapshots(tx *gormlib.DB, req ProjectAliasAttachRequest, excludeDisplayName ...bool) (string, string, error) {
 	sources := aliasSources(req)
 	ids := append([]string{req.Target}, sources...)
 	var count int64
@@ -100,7 +100,11 @@ func aliasSnapshots(tx *gormlib.DB, req ProjectAliasAttachRequest) (string, stri
 		return "", "", consolidationHold("STALE_REFERENCE")
 	}
 	var projects, redirects string
-	if err := tx.Raw(`SELECT COALESCE(jsonb_agg(to_jsonb(p)-'last_heartbeat' ORDER BY p.id),'[]'::jsonb)::text FROM projects p WHERE p.id IN ?`, ids).Scan(&projects).Error; err != nil {
+	projectJSON := "to_jsonb(p)-'last_heartbeat'"
+	if len(excludeDisplayName) != 0 && excludeDisplayName[0] {
+		projectJSON += "-'display_name'"
+	}
+	if err := tx.Raw(`SELECT COALESCE(jsonb_agg(`+projectJSON+` ORDER BY p.id),'[]'::jsonb)::text FROM projects p WHERE p.id IN ?`, ids).Scan(&projects).Error; err != nil {
 		return "", "", err
 	}
 	if err := tx.Raw(`SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.selector,r.session_id),'[]'::jsonb)::text FROM project_consolidation_redirects r WHERE r.selector IN ? OR r.project_id IN ?`, ids, sources).Scan(&redirects).Error; err != nil {
@@ -237,16 +241,12 @@ func aliasAudit(tx *gormlib.DB, action, actor, reason string, receipt ProjectAli
 
 func aliasAppliedStillCurrent(tx *gormlib.DB, receipt ProjectAliasReceipt) error {
 	req := ProjectAliasAttachRequest{Target: receipt.Target, Aliases: receipt.Aliases, Reason: "reconcile"}
-	projects, _, err := aliasSnapshots(tx, req)
+	projects, _, err := aliasSnapshots(tx, req, receipt.ReconciliationSnapshot != "")
 	if err != nil {
 		return err
 	}
 	expected := receipt.ProjectSnapshot
 	if receipt.ReconciliationSnapshot != "" {
-		projects, err = aliasReconciliationSnapshot(tx, req)
-		if err != nil {
-			return err
-		}
 		expected = receipt.ReconciliationSnapshot
 	}
 	if projects != expected {

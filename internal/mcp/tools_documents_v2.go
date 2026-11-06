@@ -78,7 +78,7 @@ func (s *Server) handleDocCreate(ctx context.Context, args json.RawMessage) (str
 			}
 		}
 		if errors.Is(err, gormpkg.ErrDocumentLineageAmbiguous) || errors.Is(err, gormpkg.ErrDocumentVersionStale) {
-			return "", fmt.Errorf("doc_create: document lineage or version conflict; read or list the selected document, supply both document_id and expected_version, and retry the original version write: %w", err)
+			return "", fmt.Errorf("doc_create: document lineage or version conflict; resolve a legacy project using /api/projects/resolve?legacy_id=... to its canonical UUID, read or list the selected document, supply both document_id and expected_version, and retry the original version write: %w", err)
 		}
 		return "", fmt.Errorf("doc_create: %w", err)
 	}
