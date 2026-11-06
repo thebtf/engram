@@ -60,6 +60,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Prevent automatic recall and session feedback from rewriting historical non-UUID selectors while preserving UUID-backed and project-free bookkeeping and private-read auditing.
 - Recover name-only callers from active primary-origin bindings without modifying their marker or cache; reconcile unknown bootstrap outcomes without replaying a mutation.
 - Provide expected-state-checked administrator UUID aliases and scoped document lineages without changing native rows or broadening mutation grants. Keep independent same-path documents addressable by authorized IDs with stale-version refusal.
+- Preserve an existing global target-self redirect when explicitly attaching UUID aliases; bind its complete baseline through reconciliation and conditional rollback, and retain alias-aware reads without admitting conflicting chains.
 - Scope catalog and document UI actions to verified project context and existing authorized lineage.
 
 ## [7.0.25] - 2026-11-06

@@ -375,6 +375,10 @@ Administrators explicitly attach confirmed UUID aliases through
 `POST /api/projects/consolidation/aliases/rollback`. See
 [Explicit project aliases](../operating-engram.md#explicit-project-aliases) for
 request and response semantics, database identity limits and unknown-outcome handling.
+An existing global target-to-itself redirect is retained as sealed expected
+state, not replaced or deleted. Changed baseline or operation-owned redirects
+refuse active reconciliation and conditional inverse; session-scoped and other
+conflicting redirects are not admitted as that baseline.
 
 #### Bounded retained-record discovery
 

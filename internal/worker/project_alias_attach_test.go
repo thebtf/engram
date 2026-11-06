@@ -516,8 +516,8 @@ func TestProjectAliasAttachPreservesTargetSelfRedirect(t *testing.T) {
 		t.Fatal("invalid migration186 fixture DSN")
 	}
 	require.True(t, cfg.Host == "127.0.0.1" || cfg.Host == "localhost" || cfg.Host == "::1")
-	const prefix = "engram_migration186_scope_test_"
-	require.True(t, strings.HasPrefix(cfg.Database, prefix) && ((strings.HasSuffix(cfg.Database, "_source") && len(cfg.Database) > len(prefix)+len("_source")) || cfg.Database == "engram_migration186_scope_test_01a1ac04_parity"))
+	const prefix, suffix = "engram_migration186_scope_test_", "_source"
+	require.True(t, strings.HasPrefix(cfg.Database, prefix) && strings.HasSuffix(cfg.Database, suffix) && len(cfg.Database) > len(prefix)+len(suffix))
 	require.True(t, cfg.RuntimeParams["search_path"] == "" || cfg.RuntimeParams["search_path"] == "public")
 	require.Empty(t, cfg.Fallbacks)
 	backing := openWorkerUCIContextCompositionStore(t)
@@ -598,6 +598,13 @@ func TestProjectAliasAttachPreservesTargetSelfRedirect(t *testing.T) {
 	witness(target, 0, http.StatusOK)
 	witness(source, 1, http.StatusOK)
 	witness(target, 1, http.StatusNotFound)
+	require.NoError(t, db.Exec(`INSERT INTO project_consolidation_redirects(selector,session_id,project_id,plan_fingerprint) VALUES (?, 'session-conflict', ?, ?)`, target, target, priorPlan.Fingerprint).Error)
+	require.Equal(t, http.StatusConflict, call(http.MethodPost, base+"/prepare", request).Code, "a session-scoped self redirect is not the global baseline")
+	require.NoError(t, db.Exec(`DELETE FROM project_consolidation_redirects WHERE selector = ? AND session_id = 'session-conflict'`, target).Error)
+	require.NoError(t, db.Exec(`INSERT INTO project_consolidation_redirects(selector,session_id,project_id,plan_fingerprint) VALUES (?, '', ?, ?)`, source, source, priorPlan.Fingerprint).Error)
+	require.Equal(t, http.StatusConflict, call(http.MethodPost, base+"/prepare", request).Code, "a source-self redirect must not be converted")
+	require.NoError(t, db.Exec(`DELETE FROM project_consolidation_redirects WHERE selector = ? AND session_id = ''`, source).Error)
+	require.Equal(t, beforeRedirect, baseline())
 	stale := prepare()
 	require.Equal(t, beforeRedirect, baseline())
 	require.NoError(t, db.Exec(`UPDATE project_consolidation_redirects SET plan_fingerprint = ? WHERE selector = ? AND session_id = ''`, "changed-baseline", target).Error)
@@ -620,6 +627,30 @@ func TestProjectAliasAttachPreservesTargetSelfRedirect(t *testing.T) {
 	witness(source, 0, http.StatusOK)
 	witness(source, 1, http.StatusOK)
 	rollback := gormdb.ProjectAliasRollbackRequest{ApplyKey: apply.IdempotencyKey, IdempotencyKey: uuid.NewString()}
+	require.NoError(t, db.Exec(`UPDATE project_consolidation_redirects SET plan_fingerprint = ? WHERE selector = ? AND session_id = ''`, "active-baseline-drift", target).Error)
+	require.Equal(t, http.StatusConflict, call(http.MethodPost, base+"/apply", apply).Code, "replay must reject changed baseline")
+	require.Equal(t, http.StatusConflict, call(http.MethodGet, base+"/status?idempotency_key="+apply.IdempotencyKey, nil).Code, "status must reject changed baseline")
+	require.Equal(t, http.StatusConflict, call(http.MethodPost, base+"/rollback", rollback).Code, "inverse must reject changed baseline")
+	var sourceCount int64
+	require.NoError(t, db.Raw(`SELECT count(*) FROM project_consolidation_redirects WHERE selector = ? AND session_id = '' AND project_id = ? AND plan_fingerprint = ?`, source, target, plan.Fingerprint).Scan(&sourceCount).Error)
+	require.EqualValues(t, 1, sourceCount, "refused inverse must retain the operation redirect")
+	require.NoError(t, db.Exec(`UPDATE project_consolidation_redirects SET plan_fingerprint = ? WHERE selector = ? AND session_id = ''`, priorPlan.Fingerprint, target).Error)
+	legacyTarget, legacySource := uuid.NewString(), uuid.NewString()
+	for _, id := range []string{legacyTarget, legacySource} {
+		require.NoError(t, db.Create(&gormdb.Project{ID: id}).Error)
+	}
+	legacyRequest := gormdb.ProjectAliasAttachRequest{Target: legacyTarget, Aliases: []gormdb.ProjectAliasExpected{{Source: legacySource}}, Reason: "legacy empty baseline"}
+	legacyPrepare := call(http.MethodPost, base+"/prepare", legacyRequest)
+	require.Equal(t, http.StatusOK, legacyPrepare.Code)
+	var legacyPlan gormdb.ProjectAliasPlan
+	require.NoError(t, json.Unmarshal(legacyPrepare.Body.Bytes(), &legacyPlan))
+	legacyApply := gormdb.ProjectAliasApplyRequest{PlanReference: legacyPlan.Reference, PlanFingerprint: legacyPlan.Fingerprint, IdempotencyKey: uuid.NewString()}
+	require.Equal(t, http.StatusOK, call(http.MethodPost, base+"/apply", legacyApply).Code)
+	require.NoError(t, db.Exec(`UPDATE project_consolidation_operations SET receipt = receipt - 'redirect_snapshot' WHERE idempotency_key = ?`, legacyApply.IdempotencyKey).Error)
+	require.Equal(t, http.StatusOK, call(http.MethodGet, base+"/status?idempotency_key="+legacyApply.IdempotencyKey, nil).Code)
+	legacyRollback := gormdb.ProjectAliasRollbackRequest{ApplyKey: legacyApply.IdempotencyKey, IdempotencyKey: uuid.NewString()}
+	require.Equal(t, http.StatusOK, call(http.MethodPost, base+"/rollback", legacyRollback).Code)
+	require.Equal(t, beforeRedirect, baseline())
 	require.Equal(t, http.StatusOK, call(http.MethodPost, base+"/rollback", rollback).Code)
 	require.Equal(t, beforeRedirect, baseline())
 	require.Equal(t, http.StatusOK, call(http.MethodPost, base+"/rollback", rollback).Code)

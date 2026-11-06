@@ -39,16 +39,17 @@ type ProjectAliasRollbackRequest struct {
 	IdempotencyKey string `json:"idempotency_key"`
 }
 type ProjectAliasReceipt struct {
-	Kind            string                 `json:"kind"`
-	Status          string                 `json:"status"`
-	IdempotencyKey  string                 `json:"idempotency_key"`
-	ApplyKey        string                 `json:"apply_key,omitempty"`
-	PlanFingerprint string                 `json:"plan_fingerprint"`
-	Target          string                 `json:"target"`
-	Aliases         []ProjectAliasExpected `json:"aliases"`
-	Database        string                 `json:"database"`
-	ProjectSnapshot string                 `json:"project_snapshot"`
-	Actor           string                 `json:"actor"`
+	Kind             string                 `json:"kind"`
+	Status           string                 `json:"status"`
+	IdempotencyKey   string                 `json:"idempotency_key"`
+	ApplyKey         string                 `json:"apply_key,omitempty"`
+	PlanFingerprint  string                 `json:"plan_fingerprint"`
+	Target           string                 `json:"target"`
+	Aliases          []ProjectAliasExpected `json:"aliases"`
+	Database         string                 `json:"database"`
+	ProjectSnapshot  string                 `json:"project_snapshot"`
+	RedirectSnapshot string                 `json:"redirect_snapshot,omitempty"`
+	Actor            string                 `json:"actor"`
 }
 type projectAliasPlanState struct {
 	Request          ProjectAliasAttachRequest
@@ -122,7 +123,7 @@ func aliasPlanFingerprint(state projectAliasPlanState) string {
 	}{state.Request, state.Database, state.ProjectSnapshot, state.RedirectSnapshot})
 }
 
-// PrepareProjectAliases is read-only; an empty redirect set is part of the sealed expected state.
+// PrepareProjectAliases seals the related redirects, permitting only a global target-self baseline.
 func (s *ProjectConsolidationStore) PrepareProjectAliases(ctx context.Context, request ProjectAliasAttachRequest) (ProjectAliasPlan, error) {
 	if err := s.available(); err != nil {
 		return ProjectAliasPlan{}, err
@@ -142,7 +143,12 @@ func (s *ProjectConsolidationStore) PrepareProjectAliases(ctx context.Context, r
 		if e != nil {
 			return e
 		}
-		if state.RedirectSnapshot != structuralDigest("[]") {
+		var conflicts int64
+		sources := aliasSources(req)
+		if err := tx.Raw(`SELECT count(*) FROM project_consolidation_redirects WHERE (selector IN ? OR selector = ? OR project_id IN ?) AND NOT (selector = ? AND session_id = '' AND project_id = ?)`, sources, req.Target, sources, req.Target, req.Target).Scan(&conflicts).Error; err != nil {
+			return err
+		}
+		if conflicts != 0 {
 			return consolidationHold("CONFLICTING_MEMBERSHIP")
 		}
 		return nil
@@ -229,14 +235,22 @@ func aliasAppliedStillCurrent(tx *gormlib.DB, receipt ProjectAliasReceipt) error
 		return consolidationHold("STALE_PLAN")
 	}
 	sources := aliasSources(req)
-	var all, exact int64
-	if err := tx.Raw(`SELECT count(*) FROM project_consolidation_redirects WHERE selector IN ? OR selector = ? OR project_id IN ?`, sources, req.Target, sources).Scan(&all).Error; err != nil {
-		return err
-	}
+	var exact int64
 	if err := tx.Raw(`SELECT count(*) FROM project_consolidation_redirects WHERE selector IN ? AND session_id = '' AND project_id = ? AND plan_fingerprint = ?`, sources, req.Target, receipt.PlanFingerprint).Scan(&exact).Error; err != nil {
 		return err
 	}
-	if all != int64(len(sources)) || exact != all {
+	if exact != int64(len(sources)) {
+		return consolidationHold("STALE_PLAN")
+	}
+	var baseline string
+	if err := tx.Raw(`SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.selector,r.session_id),'[]'::jsonb)::text FROM project_consolidation_redirects r WHERE (r.selector IN ? OR r.selector = ? OR r.project_id IN ?) AND NOT (r.selector IN ? AND r.session_id = '' AND r.project_id = ? AND r.plan_fingerprint = ?)`, sources, req.Target, sources, sources, req.Target, receipt.PlanFingerprint).Scan(&baseline).Error; err != nil {
+		return err
+	}
+	expected := receipt.RedirectSnapshot
+	if expected == "" {
+		expected = structuralDigest("[]")
+	}
+	if structuralDigest(baseline) != expected {
 		return consolidationHold("STALE_PLAN")
 	}
 	return nil
@@ -301,7 +315,7 @@ func (s *ProjectConsolidationStore) ApplyProjectAliases(ctx context.Context, req
 				return err
 			}
 		}
-		result = ProjectAliasReceipt{Kind: "project-alias-v1", Status: "applied", IdempotencyKey: request.IdempotencyKey, PlanFingerprint: state.Fingerprint, Target: state.Request.Target, Aliases: state.Request.Aliases, Database: database, ProjectSnapshot: state.ProjectSnapshot, Actor: actor}
+		result = ProjectAliasReceipt{Kind: "project-alias-v1", Status: "applied", IdempotencyKey: request.IdempotencyKey, PlanFingerprint: state.Fingerprint, Target: state.Request.Target, Aliases: state.Request.Aliases, Database: database, ProjectSnapshot: state.ProjectSnapshot, RedirectSnapshot: state.RedirectSnapshot, Actor: actor}
 		if err := aliasRecord(tx, request.IdempotencyKey, state.ID, state.Fingerprint, result); err != nil {
 			return err
 		}
@@ -399,23 +413,11 @@ func (s *ProjectConsolidationStore) RollbackProjectAliases(ctx context.Context, 
 		if rolled != 0 {
 			return consolidationHold("REPLAY_CONFLICT")
 		}
-		req := ProjectAliasAttachRequest{Target: applied.Target, Aliases: applied.Aliases, Reason: "rollback"}
-		projects, _, err := aliasSnapshots(tx, req)
-		if err != nil {
+		if err := aliasAppliedStillCurrent(tx, applied); err != nil {
 			return err
 		}
-		if projects != applied.ProjectSnapshot {
-			return consolidationHold("STALE_PLAN")
-		}
-		sources := aliasSources(req)
-		var count int64
-		if err := tx.Raw(`SELECT count(*) FROM project_consolidation_redirects WHERE selector IN ? OR selector = ? OR project_id IN ?`, sources, req.Target, sources).Scan(&count).Error; err != nil {
-			return err
-		}
-		if count != int64(len(sources)) {
-			return consolidationHold("STALE_PLAN")
-		}
-		deleted := tx.Exec(`DELETE FROM project_consolidation_redirects WHERE selector IN ? AND session_id = '' AND project_id = ? AND plan_fingerprint = ?`, sources, req.Target, applied.PlanFingerprint)
+		sources := aliasSources(ProjectAliasAttachRequest{Aliases: applied.Aliases})
+		deleted := tx.Exec(`DELETE FROM project_consolidation_redirects WHERE selector IN ? AND session_id = '' AND project_id = ? AND plan_fingerprint = ?`, sources, applied.Target, applied.PlanFingerprint)
 		if deleted.Error != nil {
 			return deleted.Error
 		}
