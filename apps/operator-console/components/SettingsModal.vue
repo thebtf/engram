@@ -5,6 +5,7 @@ import { DOMAIN_OWNER_KINDS, DOMAIN_OWNER_MODES, useOperatorDomainRegistry } fro
 import type { DomainRegistryDraft, OperatorMemoryDomain } from '../composables/useOperatorDomainRegistry'
 import { useModelRegistryState, useModelsState } from '../composables/useMockData'
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { updateCheckDiagnosisKey } from '../composables/useOperatorHealthSettings'
 
 type SettingsTabKind = 'general' | 'access' | 'models' | 'runtime' | 'actions' | 'domains' | 'client' | 'dead' | 'mustbuild'
 type SettingsTabClass = 'live' | 'mustbuild' | 'stale'
@@ -36,7 +37,7 @@ const {
   configPendingRestart,
   restartRequired,
   pending,
-  error,
+  nonUpdateError,
   refresh,
   saveConfig,
   restartServer,
@@ -627,7 +628,8 @@ onBeforeUnmount(() => {
 
               <template v-else-if="selectedTab.kind === 'runtime'">
                 <div v-if="pending" class="state pending">{{ t('settings.state.pending') }}</div>
-                <div v-if="error" class="state error">{{ t('settings.state.error', { message: error }) }}</div>
+                <div v-if="nonUpdateError" class="state error">{{ t('settings.state.error', { message: nonUpdateError.message }) }}</div>
+                <p v-if="updateCheckState.kind === 'error'" class="state error" role="alert">{{ t('health.updateCheckLabel') }}: {{ t(updateCheckDiagnosisKey(updateCheckState.error)) }}</p>
                 <div v-if="restartRequired" class="state restart">{{ t('settings.state.restartRequired') }}</div>
                 <div v-if="configPendingRestart.length" class="pending-restart-list">
                   <div v-for="item in configPendingRestart" :key="item.field" class="pending-restart-row">
@@ -723,6 +725,7 @@ onBeforeUnmount(() => {
                     · {{ t('settings.restart.updateAvailable') }}:
                     <code>{{ updateCheckState.kind === 'live' ? (updateCheckState.data?.available ? t('common.yes') : t('common.no')) : '—' }}</code>
                   </p>
+                  <p v-if="updateCheckState.kind === 'error'" class="state error" role="alert">{{ t('health.updateCheckLabel') }}: {{ t(updateCheckDiagnosisKey(updateCheckState.error)) }}</p>
                   <MutationResultNotice :result="restartResult" :recheck-label="t('settings.refresh')" @recheck="recheckMutations" />
                   <MutationResultNotice :result="updateRestartResult" :recheck-label="t('settings.refresh')" @recheck="recheckMutations" />
                 </section>
