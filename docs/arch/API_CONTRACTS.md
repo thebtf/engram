@@ -207,6 +207,12 @@ are removed with a hard-deleted parent. Neither the revision endpoint nor global
 context grants access by itself. Synthetic auth-disabled identity is not a
 registered keycard.
 
+Explicit-principal queries filter inaccessible cards before pagination. The
+`hidden_count` field is `null` when the number of inaccessible cards is unknown;
+it is not a count of matching private cards. This applies to the HTTP principal
+query and its MCP query and principal-scoped brief projections. Authorized
+administrative private widening remains subject to durable audit.
+
 `POST /api/memories/{id}/transition` takes a JSON object with required `action`:
 `suppress` changes active to flagged, `unsuppress` changes flagged to active, and
 `archive` changes active or flagged to archived without erasure. Optional query

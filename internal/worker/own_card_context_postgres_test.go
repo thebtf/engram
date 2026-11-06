@@ -597,7 +597,7 @@ func (f *ownCardContextFixture) testDefaultSharedSelfIsolation(t *testing.T) {
 	assert.Equal(t, created.Tags, ownerQueryResult.Items[0].Tags)
 	assert.Equal(t, owner.identity.Principal, ownerQueryResult.Items[0].OwnerPrincipal)
 	assert.Equal(t, owner.identity.PrincipalKind, ownerQueryResult.Items[0].OwnerPrincipalKind)
-	assert.Zero(t, ownerQueryResult.HiddenCount)
+	assert.Nil(t, ownerQueryResult.HiddenCount)
 	for _, tc := range []struct {
 		name string
 		card ownCardContextCredential
@@ -624,7 +624,7 @@ func (f *ownCardContextFixture) testDefaultSharedSelfIsolation(t *testing.T) {
 					var result principalMemoryQueryResponse
 					require.NoError(t, json.Unmarshal(queried.Body.Bytes(), &result))
 					assert.Empty(t, result.Items, "principal query must not return self record IDs or metadata across canonical owners")
-					assert.Zero(t, result.HiddenCount, "principal query must not reveal an inaccessible self record through hidden_count")
+					assert.Nil(t, result.HiddenCount, "inaccessible self record counts are unknown")
 				}
 			})
 			beforeDenied := f.state(t)
