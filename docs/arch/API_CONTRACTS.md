@@ -353,6 +353,8 @@ but a subsequent update check may overwrite that in-memory status before it is
 read through `GET /api/update/status`. No update is started in this case. An
 unavailable update keeps the existing `success: false` response; an update with
 an asset continues in the background. Status does not promise crash durability.
+The generic manual update command is not guaranteed to work when the same
+platform artifact is absent.
 
 ### Knowledge readers
 

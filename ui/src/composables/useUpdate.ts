@@ -28,6 +28,7 @@ export function useUpdate() {
   // Two separate intervals: one for background availability checks,
   // one for polling in-progress update status at 1 Hz.
   let statusPollId: ReturnType<typeof setInterval> | null = null
+  let statusGeneration = 0
   let periodicCheckId: ReturnType<typeof setInterval> | null = null
 
   // Ask the server whether a newer release is available.
@@ -68,10 +69,13 @@ export function useUpdate() {
 
   // Fetch the current update state (downloading / verifying / done / error).
   const fetchStatus = async (): Promise<void> => {
+    const generation = statusGeneration
     try {
       const res = await fetch('/api/update/status')
       if (!res.ok) return
-      updateStatus.value = await res.json()
+      const status: UpdateStatus = await res.json()
+      if (generation !== statusGeneration) return
+      updateStatus.value = status
       // Terminal states: stop polling so we don't hammer the endpoint once
       // the update has finished (or failed).
       const { state } = updateStatus.value
@@ -92,6 +96,7 @@ export function useUpdate() {
   }
 
   function stopStatusPolling(): void {
+    statusGeneration++
     if (statusPollId !== null) {
       clearInterval(statusPollId)
       statusPollId = null
