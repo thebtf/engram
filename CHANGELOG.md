@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Honor optional positive `X-Engram-Budget-Ms` remaining-work budgets on GET/POST `/api/context/search` without extending inherited deadlines, overflowing duration conversion, or adding a global 500ms cap. Preserve ordinary no-header provider behavior; bound optional reranking inside explicit budgets so authorized lexical fallback and final ACL/version/body-digest revalidation retain processing time. Add truthful optional memory/behavioral-rule `source_ref` metadata, distinguish mutable row versions from body identity, and preserve exact legacy numeric observation IDs even beyond JavaScript's safe-integer range.
 
+- Remove the fixed Swagger host so the UI uses the documentation's serving origin; older deployments retain their existing schema until updated.
+
+- Keep long statistics values within their metric columns so adjacent values remain readable, without changing the displayed precision or unknown-versus-zero semantics.
+
 - Regenerate the API through the maintained worker target using canonical local Go package directories and Swag 1.16.6, with real producer errors stopping the build. Correct existing context search/inject/session-start annotations without changing handlers; document the shared GET/POST conditional-query limitation. The actual producer and server build pass, with 40 named schema checks and all 76 references resolved; that producer checkpoint established compile-only retained-reader oracle provenance, with later native query proof recorded separately, and installed/release acceptance remains separate.
 
 - Add retained catalog `families` metadata with kind, technical table, saved membership-occurrence count and declared/separate/metadata-only reader boundary. Preserve every group, opaque reference, safe label and reason without payload previews, readable-record totals, availability or historical ownership assignment. This descriptor change does not provide cross-group record discovery or installed-consumer acceptance.
