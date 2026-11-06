@@ -172,7 +172,7 @@ const healthIcon = (name: string) => {
           </Button>
         </div>
         <p v-else-if="updateStatus.state === 'error'" class="text-sm text-destructive">
-          {{ t.system.updateFailed }}
+          {{ updateStatus.error || t.system.updateFailed }}
         </p>
         <p v-else class="text-sm text-muted-foreground">{{ t.system.upToDate }}</p>
       </CardContent>

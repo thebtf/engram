@@ -48,6 +48,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Report an available update with no platform asset as a terminal updater error and return `success: false` instead of claiming the update started. The legacy UI honors the refusal without polling and displays the returned error.
+
 - Refuse path-only successors of retained documents with actionable lineage recovery; explicit version writes continue to validate and derive Vault-backed provenance. Preserve strict pre-Apply snapshots while allowing cosmetic label changes during reconciliation of newly recorded alias operations; legacy receipts remain strict.
 - Restrict automatic correction candidates to visible native project membership before pagination, and recheck mutation authority under transaction locks before supersession. Read aliases do not grant correction authority.
 - Correct Windows short-path project recovery while keeping marker discovery inside the canonical worktree; preserve raw caller and marker-target fingerprint bytes.
