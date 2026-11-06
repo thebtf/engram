@@ -7,6 +7,14 @@
 
 Repository-only procedure or CI corrections reach `main` through normal review and Actions; they do not require a new product version/tag or consumer binary release unless their accepted scope changes a shipped surface. Source-only scope does not waive required PR rules or proof for the changed procedure.
 
+## Work and release convergence
+
+This cycle applies to every Engram lane within its assigned scope. Audit actual code and behavior, then prioritize an independently useful, coherent front of work. Define its outcome and proportionate specification, implement it, and complete code review, relevant tests and smoke of the actual changed paths before opening a PR. Integrate the reviewed PR into `main`; when delivery is in scope, complete the applicable release and ordinary-consumer proof. Repeat for substantial known findings within the assigned scope. A worktree alone is not delivery; avoid both ceremony after every single edit and multi-day batches left unintegrated. Preserve actual branch protection, authority and safety requirements.
+
+Before implementation, use SpecKit for medium or large work: a new capability or a material multi-component, domain, API or data-contract change. In OMP, the existing entrypoints are `/speckit.specify`, `/speckit.plan` and `/speckit.tasks`, backed by `.omp/commands/` and the project `.specify/` templates and scripts. Use an applicable accepted spec for routine repairs; update it when the scope materially changes. Do not split material work artificially to evade the spec requirement or restart active work already covered by an accepted spec. For example, a new cross-component memory contract requires SpecKit; a localized correction to a clear existing error message needs only a short plan and focused proof, not a full new SpecKit cycle.
+
+For a qualifying [availability emergency](#availability-emergency), deliver the smallest safe restoration cut under that exception. Do not delay it for retrospective SpecKit work, unrelated review comments or the normal pre-PR review and general test waits that the exception permits deferring. Record and complete the deferred work afterward; the exception does not waive its restoration, safety, authority or platform-enforced conditions.
+
 <a id="emergency-client-release"></a>
 
 ## Availability emergency
@@ -111,7 +119,7 @@ The Go/PostgreSQL check scope is owned by [the test workflow, lines 47–94](../
 Changes to safety or data contracts still require focused real-PostgreSQL evidence for the affected behavior, including applicable authorization, privacy, atomicity, rollback and cleanup negatives, plus the accepted ordinary-consumer proof. Record actual skips and their scope: a DB skip is not proof of DB behavior. Selecting the prescribed checks does not relabel an earlier diagnostic FAIL as PASS, waive required platform/migration gates, or excuse an independent safety blocker or an accepted-behavior blocker under Release Convergence.
 
 Prevent duplicate push-and-PR work for identical bytes. A changed SHA defines a new candidate identity, not a universal invalidation of prior results. Before expensive validation, compare each gate's test inputs, tool/environment inputs, analysis identity and release artifact bytes under its validated evidence contract; record which checks remain valid and run the affected ones. Never relabel a prior receipt, assume cross-worktree equivalence, or reuse proof for changed inputs. Complete applicable pre-release validation after source freeze; a qualifying [availability emergency](#availability-emergency) may defer only its expressly allowed nonblocking tail. Sonar follows working delivery under the post-release policy, not as a reason to rerun unaffected suites. A changed image/tag input cannot inherit an earlier `final-image-set.json`; the accepted three-image set, security scans, runtime and migration proofs stay mandatory where applicable.
-For ordinary PRs, configure required checks only from checks that ordinary PRs emit; dispatch-only `test / windows-latest`, `test / macos-14`, and `migrations / clean-db chain` cannot be required ordinary-PR statuses. Read the actual branch rules and PR status instead of assuming a bot comment or dispatch-only status is mandatory; the protocol's PR approval requirement applies to normal releases, subject to the qualifying availability-emergency exception.
+For ordinary PRs, configure required checks only from checks that ordinary PRs emit; dispatch-only `test / windows-latest`, `test / macos-15`, and `migrations / clean-db chain` cannot be required ordinary-PR statuses. Read the actual branch rules and PR status instead of assuming a bot comment or dispatch-only status is mandatory; the protocol's PR approval requirement applies to normal releases, subject to the qualifying availability-emergency exception.
 
 ### Latest-promotion journal recovery
 
@@ -223,8 +231,8 @@ a separate reviewed security change, not an operator-side escape hatch.
 
 ## Publish / Smoke / Handoff
 
-- Create an annotated tag and push it to origin.
-- Verify the tag exists remotely.
+- For each new release, create and push an annotated `vX.Y.Z` tag and a retained `release/vX.Y.Z` branch at the exact released commit. Verify the remote branch commit and the peeled annotated tag commit both equal that commit, and verify the tag is annotated. Preserve both refs after delivery: never advance, reuse or rewrite a release snapshot branch or move a published tag. Resolve a collision rather than overwriting an existing ref; do not blindly create branches for historical releases.
+- Release snapshot branches are retained release records, not ephemeral candidate or work branches. Dispose of a spent work branch only under the existing preservation and cleanup rules; never apply that cleanup to a retained release snapshot.
 - Verify the GitHub release workflow succeeds for the tag.
 - For an OpenClaw package release, verify the `plugin-publish` workflow, `npm view openclaw-engram@X.Y.Z version`, and both package/descriptor version sources before declaring publication complete.
 - For rollout, verify deployed `server` version and at least one server/client MCP smoke before declaring deployment complete.

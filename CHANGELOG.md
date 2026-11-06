@@ -46,16 +46,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Use registered canonical UUIDs and authenticated caller project context in MCP fixtures without weakening default-deny, privacy or pre-mutation rejection guards. Reuse 119 prior PASS plus one exact retry PASS after the context fix, not 120 fresh PASS or installed acceptance.
 - Seed the isolated operator-code fixture with a registered canonical project UUID while preserving five queue candidates, published/no-view checks and redacted provisioning errors.
 
-## [7.0.25] - 2026-11-05
+## [7.0.26] - 2026-11-06
 
 ### Fixed
 
-- Recover an absent trusted hook client after a transient acquisition failure: eligible callbacks trigger coalesced, backoff-limited background preparation, while execution still requires verified bytes. Bootstrap failures retain a safe typed diagnostic; this does not establish the cause of any particular installed-session warning.
 - Apply authoritative canonical membership to memory search, list, vector and graph reads before ranking and limits, preserving privacy and refusing invalid selectors without reassigning historical records.
 - Prevent automatic recall and session feedback from rewriting historical non-UUID selectors while preserving UUID-backed and project-free bookkeeping and private-read auditing.
 - Recover name-only callers from active primary-origin bindings without modifying their marker or cache; reconcile unknown bootstrap outcomes without replaying a mutation.
 - Provide expected-state-checked administrator UUID aliases and scoped document lineages without changing native rows or broadening mutation grants. Keep independent same-path documents addressable by authorized IDs with stale-version refusal.
 - Scope catalog and document UI actions to verified project context and existing authorized lineage.
+
+## [7.0.25] - 2026-11-06
+
+### Fixed
+
+- Recover an absent trusted hook client after a transient acquisition failure: eligible callbacks trigger coalesced, backoff-limited background preparation, while execution still requires verified bytes. Bootstrap failures retain a safe typed diagnostic; this does not establish the cause of any particular installed-session warning.
 
 ## [7.0.24] - 2026-11-05
 
