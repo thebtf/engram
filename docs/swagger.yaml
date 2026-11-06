@@ -3990,16 +3990,25 @@ paths:
       - Sessions
   /v1/models:
     get:
-      description: OpenAI-compatibility shim. Embedding pipeline removed in v5; always
-        returns {"object":"list","data":[]}.
+      description: |-
+        OpenAI-compatibility shim. Embedding pipeline removed in v5; always returns {"object":"list","data":[]}.
+        When authentication is enabled, supply X-Auth-Token, Authorization: Bearer, or an authorized session cookie. Authentication is not required when explicitly disabled. The ApiKeyAuth security scheme represents X-Auth-Token only.
+        Success is application/json; authentication rejection is text/plain. Swagger 2 lists media types for the whole operation, not per status.
       produces:
       - application/json
+      - text/plain
       responses:
         "200":
           description: Always returns empty data array; no real model entries
           schema:
             additionalProperties: true
             type: object
+        "401":
+          description: unauthorized
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
       summary: 'Compatibility: empty models list (no embeddings in v5)'
       tags:
       - System
