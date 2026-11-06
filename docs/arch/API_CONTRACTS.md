@@ -201,12 +201,14 @@ precedence over cookies; omit them to use the browser session. HMAC-only
 sessions do not qualify for enrollment. In auth-disabled mode those two POSTs
 recognize a persisted session, not an HMAC-only session. A validated keycard
 for the enrolled pair can omit both `project` and `context` on
-`POST /api/memories` to create a self-owned card. `X-Engram-Identity` selects a
-typed context; it does not authenticate.
-`source_agent` is provenance,
-not owner authority. The optional context object is `{"kind":"self"}`,
-`{"kind":"project"}`, or `{"kind":"global"}`. Project context requires an
-existing canonical `project`; self and global require the project to be absent.
+`POST /api/memories` to create a self-owned card. Presence of
+`X-Engram-Identity` opts into typed handling; its value neither selects a
+context nor authenticates the caller. With selectors omitted, typed handling
+selects self. The optional context object is `{"kind":"self"}`,
+`{"kind":"project"}`, or `{"kind":"global"}`. Explicit project context
+requires an existing canonical project UUID in `project`; self and global
+require `project` to be absent. Global must be selected explicitly.
+`source_agent` is provenance, not owner authority.
 Invalid, empty, repeated or conflicting selectors do not fall back to self.
 Self ownership is independent of the visibility tier; global defaults to
 principal-private. Explicit workstation-private scope remains bound to the
@@ -222,12 +224,16 @@ retry to the authenticated principal, owning context and project. An equivalent
 retry returns the existing active record; a changed command or retired target
 returns 409. Without a key a repeated create is not automatically idempotent.
 
-`GET /api/memories/{id}` reads a visible card in its selected context. With no
-selector or identity opt-in, an enrolled client defaults to self; other callers
-retain the legacy missing-project 400. Explicit self requests still require an
-enrolled client, and invalid explicit selectors never fall back. To revise,
-send `PATCH /api/memories/{id}` with `{"version":N,"content":"..."}` and the
-same context selection. The owner must be authorized to manage the current card.
+`GET /api/memories/{id}` reads a visible card in its selected context. For GET
+and typed PATCH, an enrolled client with omitted selectors selects self;
+`?context=global` selects global, and
+`?context=project&project=<canonicalUUID>` selects project. With no selector
+or identity opt-in, a valid client keycard without an enrolled memory principal
+receives 403; a caller without a keycard retains the legacy missing-project 400.
+Explicit self requests still require an enrolled client, and invalid explicit
+selectors never fall back. To revise, send `PATCH /api/memories/{id}` with
+`{"version":N,"content":"..."}` and the same context selection. The owner must
+be authorized to manage the current card.
 Project aliases support reads only; a project-context revision requires the card's
 unique native canonical membership and revalidates it under the mutation locks.
 The version must match; a stale version returns 409. After an uncertain outcome,

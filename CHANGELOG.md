@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Return 403 for a valid keycard without an enrolled memory principal on selector-free memory reads; preserve the legacy missing-project response for callers without a keycard.
+
 - Enforce current domain ownership policy on typed memory revisions: reject mode records a denial and returns 403 without revising; an audit failure leaves the card unchanged; warn mode permits the revision with its warning and audit status. Document the response in the generated API schema.
 
 - In auth-disabled mode, validate explicit credentials on the scoped typed-memory HTTP routes and accept an existing persisted admin browser session for principal enrollment and keycard issuance. Keep invalid credentials fail-closed and preserve synthetic identity on unrelated and unkeyed routes; disabled authentication does not provide privacy isolation. Disabled-mode gRPC behavior is unchanged.

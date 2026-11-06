@@ -247,7 +247,10 @@ func (s *Service) handleContextMemoryRead(w http.ResponseWriter, r *http.Request
 	}
 	owning, err := s.resolveMemoryOwningContext(r, kind, contextSupplied, project, projectSupplied)
 	if !projectSupplied && !contextSupplied && !explicitIdentity && errors.Is(err, gormdb.ErrMemoryPrincipalRequired) {
-		return false
+		identity, ok := auth.IdentityFrom(r.Context())
+		if !ok || identity.Source != auth.SourceClient || identity.KeycardID == "" {
+			return false
+		}
 	}
 	if err != nil {
 		writeMemoryContextError(w, err)
