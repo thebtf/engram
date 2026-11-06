@@ -67,12 +67,15 @@ not the empty-list message. Pending and unavailable states have localized in-car
 status or alert text; errors use only the typed diagnosis, not raw server or provider
 payload. Only an explicit live empty components array says the server returned no
 components (EN/RU/ZH). Live rows, neighboring evidence and refresh/retry guards stay
-unchanged. Failed update checks show an accessible localized explanation beside the
-Health and Settings result, using a safe diagnosis rather than provider details.
-HTTP 401 and 403 remain distinct; a successful refresh clears the notice and shows
-the actual availability. Independent errors remain visible. The focused compiled
-consumer tests use synthetic responses and do not establish browser, installed or
-release acceptance. Other explanatory error-copy work remains open under #477.
+unchanged. When the protected UI remains accessible, non-401 update-check errors
+show an accessible localized explanation beside the Health and Settings result,
+using a safe diagnosis rather than provider details. A successful Refresh can clear
+the notice and show the actual availability; independent errors remain visible.
+A current, non-aborted update-check HTTP 401 locks the shared shell, hides protected
+content including Settings, and offers localized sign-in; HTTP 403 does not itself
+lock the shell. Standalone component tests use synthetic responses and do not mount
+the full shell, so their inline 401 result is not full-app behavior.
+Other explanatory error-copy work remains open under #477.
 
 ## Project knowledge journey (2026-10-11)
 
