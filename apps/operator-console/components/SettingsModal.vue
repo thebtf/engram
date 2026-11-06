@@ -37,7 +37,6 @@ const {
   configPendingRestart,
   restartRequired,
   pending,
-  error,
   nonUpdateError,
   refresh,
   saveConfig,
@@ -45,11 +44,6 @@ const {
   restartAfterUpdate,
   configSaveEvidence,
 } = useOperatorHealthSettings()
-const displayError = computed(() => {
-  if (nonUpdateError.value) return nonUpdateError.value.message
-  const update = updateCheckState.value
-  return update.kind === 'error' ? t(updateCheckDiagnosisKey(update.error)) : error.value
-})
 const {
   domainState,
   domains,
@@ -634,7 +628,8 @@ onBeforeUnmount(() => {
 
               <template v-else-if="selectedTab.kind === 'runtime'">
                 <div v-if="pending" class="state pending">{{ t('settings.state.pending') }}</div>
-                <div v-if="error" class="state error">{{ t('settings.state.error', { message: displayError }) }}</div>
+                <div v-if="nonUpdateError" class="state error">{{ t('settings.state.error', { message: nonUpdateError.message }) }}</div>
+                <p v-if="updateCheckState.kind === 'error'" class="state error" role="alert">{{ t('health.updateCheckLabel') }}: {{ t(updateCheckDiagnosisKey(updateCheckState.error)) }}</p>
                 <div v-if="restartRequired" class="state restart">{{ t('settings.state.restartRequired') }}</div>
                 <div v-if="configPendingRestart.length" class="pending-restart-list">
                   <div v-for="item in configPendingRestart" :key="item.field" class="pending-restart-row">
@@ -730,7 +725,7 @@ onBeforeUnmount(() => {
                     · {{ t('settings.restart.updateAvailable') }}:
                     <code>{{ updateCheckState.kind === 'live' ? (updateCheckState.data?.available ? t('common.yes') : t('common.no')) : '—' }}</code>
                   </p>
-                  <p v-if="updateCheckState.kind === 'error'" class="state error" role="alert">{{ t('health.updateAvailable') }}: {{ t(updateCheckDiagnosisKey(updateCheckState.error)) }}</p>
+                  <p v-if="updateCheckState.kind === 'error'" class="state error" role="alert">{{ t('health.updateCheckLabel') }}: {{ t(updateCheckDiagnosisKey(updateCheckState.error)) }}</p>
                   <MutationResultNotice :result="restartResult" :recheck-label="t('settings.refresh')" @recheck="recheckMutations" />
                   <MutationResultNotice :result="updateRestartResult" :recheck-label="t('settings.refresh')" @recheck="recheckMutations" />
                 </section>

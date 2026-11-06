@@ -124,7 +124,7 @@ const migrationMessage = computed(() => {
             <strong>{{ vnextState.kind === 'live' ? vnextState.data.noise_ratio ?? '—' : '—' }}</strong>
           </div>
         </div>
-        <p v-if="updateCheckState.kind === 'error'" class="state error" role="alert">{{ t('health.updateAvailable') }}: {{ t(updateCheckDiagnosisKey(updateCheckState.error)) }}</p>
+        <p v-if="updateCheckState.kind === 'error'" class="state error" role="alert">{{ t('health.updateCheckLabel') }}: {{ t(updateCheckDiagnosisKey(updateCheckState.error)) }}</p>
       </article>
 
       <article class="card">

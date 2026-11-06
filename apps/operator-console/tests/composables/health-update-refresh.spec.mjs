@@ -520,3 +520,69 @@ for (const consumer of ['Health', 'Settings']) {
     assert.deepEqual(issues, [], `${consumer}: ${failure} must be explained accessibly and clear on success`)
   })
 }
+
+function runtimeFailurePresentation(host, translate) {
+  const settingsPrefix = translate('settings.state.error', { message: 'SENTINEL' }).split('SENTINEL')[0]
+  const updateLabel = 'Update check'
+  const diagnosis = translate('errors.diagnosis.forbidden')
+  return {
+    settingsErrors: descendants(host).filter(item => item.tag === 'div' && item.children.every(child => !child.tag) && text(item).trim().startsWith(settingsPrefix)).map(item => text(item).trim()),
+    updateAlerts: descendants(host).filter(item => item.props.role === 'alert' && text(item).includes(updateLabel) && text(item).includes(diagnosis)).map(item => text(item).trim()),
+  }
+}
+
+for (const configFails of [false, true]) {
+  test(`Settings Runtime: update HTTP 403 has its own accessible alert with config ${configFails ? 'unavailable' : 'loaded'}`, async (t) => {
+    const f = fixture(t, () => Response.json({ error: 'private update detail' }, { status: 403 }), undefined, { locale: 'en' })
+    if (configFails) f.setConfig(() => Response.json({ error: 'private config detail' }, { status: 503 }))
+    await f.state.refresh()
+    const host = f.mount('components/SettingsModal.vue', { open: true, activeTab: 'runtime' })
+    await vue.nextTick()
+    const actual = runtimeFailurePresentation(host, f.translate)
+    t.diagnostic(JSON.stringify({ configFails, actual }))
+    assert.deepEqual({ settingsErrorCount: actual.settingsErrors.length, updateAlerts: actual.updateAlerts }, {
+      settingsErrorCount: configFails ? 1 : 0,
+      updateAlerts: [`Update check: ${f.translate('errors.diagnosis.forbidden')}`],
+    }, 'Runtime must independently report a settings load failure and an accessible localized update failure')
+  })
+}
+
+test('Settings Runtime: update recovery clears only its alert while config remains unavailable', async (t) => {
+  const f = fixture(t, () => Response.json({ error: 'private update detail' }, { status: 403 }), undefined, { locale: 'en' })
+  f.setConfig(() => Response.json({ error: 'private config detail' }, { status: 503 }))
+  await f.state.refresh()
+  const host = f.mount('components/SettingsModal.vue', { open: true, activeTab: 'runtime' })
+  await vue.nextTick()
+  const failed = runtimeFailurePresentation(host, f.translate)
+  f.setUpdate({ available: false })
+  await f.state.refresh()
+  await vue.nextTick()
+  const recovered = runtimeFailurePresentation(host, f.translate)
+  t.diagnostic(JSON.stringify({ failed, recovered }))
+  assert.equal(failed.settingsErrors.length, 1, 'the config failure must remain visible as a localized settings error')
+  assert.deepEqual({ failed, recovered }, {
+    failed: { settingsErrors: failed.settingsErrors, updateAlerts: [`Update check: ${f.translate('errors.diagnosis.forbidden')}`] },
+    recovered: { settingsErrors: failed.settingsErrors, updateAlerts: [] },
+  }, 'successful update refresh must clear its alert without hiding or changing the continuing config failure')
+})
+
+for (const [locale, label, misleading] of [
+  ['en', 'Update check', 'Update available'],
+  ['ru', 'Проверка обновлений', 'Доступно обновление'],
+  ['zh', '更新检查', '有可用更新'],
+]) {
+  for (const surface of ['Health', 'Settings Actions', 'Settings Runtime']) {
+    test(`${surface}: ${locale} update failure uses a neutral alert label`, async (t) => {
+      const f = fixture(t, () => Response.json({ error: 'private provider detail' }, { status: 403 }), undefined, { locale })
+      await f.state.refresh()
+      const host = surface === 'Health'
+        ? f.mount('pages/health.vue')
+        : f.mount('components/SettingsModal.vue', { open: true, activeTab: surface === 'Settings Actions' ? 'actions' : 'runtime' })
+      await vue.nextTick()
+      const alerts = descendants(host).filter(item => item.props.role === 'alert').map(item => text(item).trim())
+      assert.deepEqual(alerts, [`${label}: ${f.translate('errors.diagnosis.forbidden')}`])
+      assert.ok(alerts.every(alert => !alert.includes(misleading)), 'an unknown result must not assert an update is available')
+      if (surface !== 'Settings Runtime') assert.equal(updateAnswer(host, surface === 'Health' ? 'Health' : 'Settings', f.translate), '—')
+    })
+  }
+}
