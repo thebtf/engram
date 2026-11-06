@@ -16,7 +16,7 @@ import (
 // @Tags System
 // @Produce json,text/event-stream
 // @Security ApiKeyAuth
-// @Param token query string false "Authentication token alternative; avoid exposing credentials in URLs"
+// @Security StreamQueryToken
 // @Param lines query int false "Snapshot count (default 100, max 10000); ignored when following"
 // @Param level query string false "Minimum level: trace, debug, info, warn, error, fatal, panic; unknown values pass through"
 // @Param query query string false "Case-insensitive search of redacted message and raw log"

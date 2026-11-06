@@ -240,7 +240,7 @@ const KeepaliveInterval = 25 * time.Second
 // @Tags System
 // @Produce text/event-stream
 // @Security ApiKeyAuth
-// @Param token query string false "Authentication token alternative; avoid exposing credentials in URLs"
+// @Security StreamQueryToken
 // @Success 200 {string} string "SSE stream of JSON data frames and comment keepalives"
 // @Failure 401 {string} string "unauthorized"
 // @Failure 403 {string} string "keycard class forbidden on this route"

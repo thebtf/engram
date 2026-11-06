@@ -1211,6 +1211,9 @@ const docTemplate = `{
                 "security": [
                     {
                         "ApiKeyAuth": []
+                    },
+                    {
+                        "StreamQueryToken": []
                     }
                 ],
                 "description": "Sends a connected object and live JSON event objects; a concurrent broadcast can arrive before the connected object. SSE comment keepalives occur every 25 seconds. No event IDs or replay are provided; reconnecting starts a new stream.\nAvailable before database readiness, subject to authentication and rate limiting. A query token is supported for browser SSE clients.",
@@ -1221,14 +1224,6 @@ const docTemplate = `{
                     "System"
                 ],
                 "summary": "Stream dashboard events",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Authentication token alternative; avoid exposing credentials in URLs",
-                        "name": "token",
-                        "in": "query"
-                    }
-                ],
                 "responses": {
                     "200": {
                         "description": "SSE stream of JSON data frames and comment keepalives",
@@ -1478,6 +1473,9 @@ const docTemplate = `{
                 "security": [
                     {
                         "ApiKeyAuth": []
+                    },
+                    {
+                        "StreamQueryToken": []
                     }
                 ],
                 "description": "Without follow=true, returns a JSON array of recent matching entries. Only the exact value true enables SSE; follow ignores lines and sends only new entries after subscription, starting with a connected comment. Slow subscribers can miss entries; reconnecting does not replay them.\nBoth modes apply level and case-insensitive query filters and browser-session redaction. Available before database readiness, subject to authentication and rate limiting. Swagger 2 cannot express the query-dependent 200 response shape; see docs/arch/API_CONTRACTS.md.",
@@ -1490,12 +1488,6 @@ const docTemplate = `{
                 ],
                 "summary": "Get log entries or follow new entries",
                 "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Authentication token alternative; avoid exposing credentials in URLs",
-                        "name": "token",
-                        "in": "query"
-                    },
                     {
                         "type": "integer",
                         "description": "Snapshot count (default 100, max 10000); ignored when following",
@@ -5904,6 +5896,12 @@ const docTemplate = `{
             "type": "apiKey",
             "name": "X-Auth-Token",
             "in": "header"
+        },
+        "StreamQueryToken": {
+            "description": "Alternative for streaming endpoints; headers take precedence and URL credentials can leak.",
+            "type": "apiKey",
+            "name": "token",
+            "in": "query"
         }
     }
 }`
