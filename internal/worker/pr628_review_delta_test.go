@@ -72,7 +72,10 @@ func TestResolveUUIDAgreesWithCanonicalReaders(t *testing.T) {
 			var canonical string
 			require.NoError(t, db.Raw(`SELECT `+projectscope.CanonicalReadProjectSQL("?"), a, a).Scan(&canonical).Error)
 			rec := call("/api/projects/resolve?legacy_id=" + a)
-			if rec.Code == http.StatusNotFound && canonical == a {
+			if mode == "session_conflict" {
+				require.Equal(t, a, canonical)
+				require.Equal(t, http.StatusNotFound, rec.Code)
+				require.Equal(t, http.StatusNotFound, call(fmt.Sprintf("/api/memories/%d?project=%s", memory.ID, a)).Code)
 				return
 			}
 			require.Equal(t, http.StatusOK, rec.Code)
@@ -91,4 +94,34 @@ func TestResolveUUIDAgreesWithCanonicalReaders(t *testing.T) {
 			require.Equal(t, want, read.Code)
 		})
 	}
+	t.Run("removed_selector", func(t *testing.T) {
+		source, target := uuid.NewString(), uuid.NewString()
+		for _, id := range []string{source, target} {
+			require.NoError(t, db.Create(&gormdb.Project{ID: id}).Error)
+		}
+		require.NoError(t, db.Exec(`INSERT INTO project_consolidation_redirects(selector,session_id,project_id,plan_fingerprint) VALUES (?, '', ?, 'fixture')`, source, target).Error)
+		require.NoError(t, db.Exec(`UPDATE projects SET removed_at = now() WHERE id = ?`, source).Error)
+		rec := call("/api/projects/resolve?legacy_id=" + source)
+		if rec.Code == http.StatusOK {
+			var response struct {
+				Status    string `json:"status"`
+				ProjectID string `json:"project_id"`
+			}
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
+			require.NotEqual(t, "resolved", response.Status)
+			require.Empty(t, response.ProjectID)
+		}
+	})
+	t.Run("historical_session_selector", func(t *testing.T) {
+		target := uuid.NewString()
+		require.NoError(t, db.Create(&gormdb.Project{ID: target}).Error)
+		require.NoError(t, db.Exec(`INSERT INTO project_consolidation_redirects(selector,session_id,project_id,plan_fingerprint) VALUES ('historical-fixture', ?, ?, 'fixture')`, documentSelectionTestSession, target).Error)
+		rec := call("/api/projects/resolve?legacy_id=historical-fixture")
+		require.Equal(t, http.StatusOK, rec.Code)
+		var response struct {
+			ProjectID string `json:"project_id"`
+		}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
+		require.Equal(t, target, response.ProjectID)
+	})
 }

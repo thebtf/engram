@@ -302,7 +302,7 @@ func ResolveLogicalProject(ctx context.Context, cwd string, bootstrap func(conte
 // name-only root using only its authenticated primary-origin binding.
 func ResolveLogicalProjectForBackend(ctx context.Context, cwd, serverURL, token string) (Project, error) {
 	project, err := ResolveLogicalProject(ctx, cwd, HTTPBootstrap(serverURL, token))
-	if ProjectErrorCode(err) != "PROJECT_CONTEXT_REQUIRED" {
+	if ProjectErrorCode(err) != "PROJECT_CONTEXT_REQUIRED" || serverURL == "" {
 		return project, err
 	}
 	return resolveNameOnlyOrigin(ctx, cwd, serverURL, token, err)

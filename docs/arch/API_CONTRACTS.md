@@ -349,6 +349,11 @@ This server always emits `logical_groups` as an array, including `[]` when no
 groups exist. Older servers may omit it; an already feature-aware client must not
 silently downgrade if it disappears. The relation is not an authorization grant.
 
+For `GET /api/projects/resolve?legacy_id=...`, an existing active UUID uses
+the same safe global alias projection as knowledge readers; chains and
+conflicting redirects do not select an intermediate project. Non-UUID
+historical selectors retain their legacy/session resolution semantics.
+
 `PATCH /api/projects/{id}` changes only the stored label of an existing active,
 non-removed canonical UUID. It requires the server's operator/admin identity;
 read-only and read-write client keycards cannot mutate this server-wide metadata.
