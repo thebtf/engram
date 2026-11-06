@@ -201,6 +201,48 @@ func TestAuthHandlersLifecycle_SetupCreatesOnlyOneInitialAdmin(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, count, "initial-admin setup requires an empty test database")
 
+	for _, tc := range []struct {
+		name     string
+		password string
+	}{
+		{name: "ascii 73 bytes", password: strings.Repeat("a", 73)},
+		{name: "ascii incident 75 bytes", password: strings.Repeat("a", 75)},
+		{name: "utf8 73 bytes", password: strings.Repeat("é", 36) + "a"},
+		{name: "utf8 74 bytes", password: strings.Repeat("é", 37)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload, err := json.Marshal(map[string]string{"email": "overlong@example.com", "password": tc.password})
+			require.NoError(t, err)
+			req := httptest.NewRequest(http.MethodPost, "/api/auth/setup", bytes.NewReader(payload))
+			req.Header.Set("X-Auth-Token", "operator-token")
+			rec := httptest.NewRecorder()
+			env.handlers.handleSetup(rec, req)
+
+			count, err := env.users.CountUsers()
+			require.NoError(t, err)
+			require.Zero(t, count, "rejected setup must not create a user")
+			needed := httptest.NewRecorder()
+			env.handlers.handleSetupNeeded(needed, httptest.NewRequest(http.MethodGet, "/api/auth/setup-needed", nil))
+			require.Equal(t, http.StatusOK, needed.Code)
+			var setupState struct {
+				Needed bool `json:"needed"`
+			}
+			require.NoError(t, json.Unmarshal(needed.Body.Bytes(), &setupState))
+			require.True(t, setupState.Needed, "rejected setup must remain incomplete")
+
+			require.GreaterOrEqual(t, rec.Code, 400)
+			require.Less(t, rec.Code, 500)
+			require.Contains(t, rec.Header().Get("Content-Type"), "application/json")
+			var response struct {
+				Error string `json:"error"`
+			}
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
+			require.Contains(t, strings.ToLower(response.Error), "password")
+			require.Contains(t, response.Error, "72")
+			require.NotContains(t, rec.Body.String(), tc.password)
+		})
+	}
+
 	prefix := fmt.Sprintf("zz-initial-admin-race-%d", time.Now().UnixNano())
 	emails := []string{prefix + "-a@example.com", prefix + "-b@example.com"}
 
@@ -218,7 +260,11 @@ func TestAuthHandlersLifecycle_SetupCreatesOnlyOneInitialAdmin(t *testing.T) {
 		wg.Add(1)
 		go func(idx int, email string) {
 			defer wg.Done()
-			req := httptest.NewRequest(http.MethodPost, "/api/auth/setup", strings.NewReader(fmt.Sprintf(`{"email":%q,"password":"password-123"}`, email)))
+			password := strings.Repeat("a", 72)
+			if idx == 0 {
+				password = strings.Repeat("é", 36)
+			}
+			req := httptest.NewRequest(http.MethodPost, "/api/auth/setup", strings.NewReader(fmt.Sprintf(`{"email":%q,"password":%q}`, email, password)))
 			req.Header.Set("X-Auth-Token", "operator-token")
 			rec := httptest.NewRecorder()
 			env.handlers.handleSetup(rec, req)
