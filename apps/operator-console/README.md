@@ -20,6 +20,15 @@ accepted product contract requires it. Reuse tokens, accessibility, secret handl
 honest-state patterns; do not preserve a page, mock seam, route, label, or disabled control
 only because it appears in an earlier design snapshot.
 
+The candidate queue loads bounded windows of up to 100 rows and navigates local
+pages within each window. A continuation-capable server can provide the next
+window; previous-window history is bounded to 20 cursors. Counts and the “All”
+page-size option describe loaded rows, not the matching corpus. A full response
+from a legacy server without a continuation field may be incomplete. Select all
+applies only to the visible page; an individual action submits only its clicked
+candidate as an explicit selection. Refresh or a scope change clears selection.
+The walk reflects live data, not a snapshot or an authoritative total.
+
 ## Design and promotion boundary
 
 OpenDesign authoring is private `.od/` and is not tracked or reconstructed here. Promotion
