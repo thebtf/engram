@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	vaultcrypto "github.com/thebtf/engram/internal/crypto"
 	"github.com/thebtf/engram/internal/projectidentity"
 
 	"gorm.io/gorm"
@@ -53,12 +54,18 @@ func (VersionedDocumentComment) TableName() string { return "versioned_document_
 // VersionedDocumentStore provides CRUD operations for versioned documents
 // and their associated comments (migration 051 schema).
 type VersionedDocumentStore struct {
-	db *gorm.DB
+	db    *gorm.DB
+	vault *vaultcrypto.Vault
 }
 
 // NewVersionedDocumentStore creates a new VersionedDocumentStore backed by the given Store.
 func NewVersionedDocumentStore(store *Store) *VersionedDocumentStore {
 	return &VersionedDocumentStore{db: store.DB}
+}
+
+// NewVersionedDocumentStoreWithVault enables authenticated retained-version writes.
+func NewVersionedDocumentStoreWithVault(store *Store, vault *vaultcrypto.Vault) *VersionedDocumentStore {
+	return &VersionedDocumentStore{db: store.DB, vault: vault}
 }
 
 // versionedDocHashContent returns the SHA-256 hex digest of the given string.
@@ -162,7 +169,10 @@ func (s *VersionedDocumentStore) Create(
 	return docID, nil
 }
 
-var ErrDocumentVersionStale = errors.New("document version is stale")
+var (
+	ErrDocumentVersionStale          = errors.New("document version is stale")
+	ErrDocumentProvenanceUnavailable = errors.New("DOCUMENT_PROVENANCE_UNAVAILABLE")
+)
 
 // CreateVersionForLineage reauthorizes an issued row and binds the new version
 // to its native UUID lineage under the same transaction as insertion.
@@ -178,7 +188,10 @@ func (s *VersionedDocumentStore) CreateVersionForLineage(ctx context.Context, pa
 	}
 	var id int64
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Exec(`LOCK TABLE project_consolidation_memberships, project_consolidation_redirects, projects IN SHARE MODE`).Error; err != nil {
+		if err := tx.Exec(`LOCK TABLE project_consolidation_memberships IN SHARE ROW EXCLUSIVE MODE`).Error; err != nil {
+			return err
+		}
+		if err := tx.Exec(`LOCK TABLE project_consolidation_redirects, projects IN SHARE MODE`).Error; err != nil {
 			return err
 		}
 		q, err := canonicalProjectRows(ctx, tx.Model(&VersionedDocument{}), project, "versioned_documents", "d")
@@ -223,9 +236,34 @@ func (s *VersionedDocumentStore) CreateVersionForLineage(ctx context.Context, pa
 		if anchor.Version != expectedVersion || maxVersion != expectedVersion {
 			return ErrDocumentVersionStale
 		}
+		var parents []ConsolidationMembership
+		if err := tx.Where("table_name = ? AND row_key->>'id' = ? AND field_path = ?::jsonb", "versioned_documents", fmt.Sprint(anchor.ID), `["project"]`).Find(&parents).Error; err != nil {
+			return err
+		}
+		var membershipOwner *ProjectConsolidationStore
+		if len(parents) != 0 {
+			if len(parents) != 1 || parents[0].ProjectID == nil {
+				return ErrKnowledgeProjectForbidden
+			}
+			if s.vault == nil {
+				return ErrDocumentProvenanceUnavailable
+			}
+			membershipOwner = NewProjectConsolidationStore(tx, s.vault, nil)
+			if err := membershipOwner.available(); err != nil {
+				return err
+			}
+			if err := membershipOwner.validateMembershipEvidence(tx, parents[0]); err != nil {
+				return err
+			}
+		}
 		doc := VersionedDocument{Path: path, Project: anchor.Project, Version: maxVersion + 1, Content: content, ContentHash: versionedDocHashContent(content), DocType: docType, Metadata: metadata, Author: author}
 		if err := tx.Create(&doc).Error; err != nil {
 			return err
+		}
+		if membershipOwner != nil {
+			if err := membershipOwner.writeLiveDocumentMembership(tx, parents[0], doc); err != nil {
+				return err
+			}
 		}
 		id = doc.ID
 		return nil

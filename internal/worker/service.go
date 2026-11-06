@@ -1100,8 +1100,17 @@ func (s *Service) initializeAsync() {
 	// Create chunking manager for document ingestion
 	chunkManager := s.createChunkManager()
 
-	// Create versioned document store for collaborative document MCP tools (migration 051).
-	versionedDocumentStore := gorm.NewVersionedDocumentStore(store)
+	// The same Vault authenticates retained document membership derivations.
+	vault, vaultErr := s.getVault()
+	if vaultErr != nil {
+		s.setInitError(fmt.Errorf("shared reader vault key unavailable: %w", vaultErr))
+		return
+	}
+	if vault == nil {
+		s.setInitError(errors.New("shared reader vault key unavailable"))
+		return
+	}
+	versionedDocumentStore := gorm.NewVersionedDocumentStoreWithVault(store, vault)
 	booksStore := gorm.NewBooksStore(store)
 	// Single-container startup has not launched the retired book writer. The
 	// residual transition is idempotent and preserves documents/provenance.
@@ -1296,17 +1305,6 @@ func (s *Service) initializeAsync() {
 	s.operatorCollectionAdapter = operatorCollectionAdapter
 	s.queueCandidateSelectionHandler = queueCandidateSelectionHandler
 	s.initMu.Unlock()
-
-	// Catalog and retained readers need the shared Vault even when CodeIntel is disabled.
-	vault, vaultErr := s.getVault()
-	if vaultErr != nil {
-		s.setInitError(fmt.Errorf("shared reader vault key unavailable: %w", vaultErr))
-		return
-	}
-	if vault == nil {
-		s.setInitError(errors.New("shared reader vault key unavailable"))
-		return
-	}
 
 	// Compose UCI after settings resolution and shared embedding initialization,
 	// before MCP or gRPC transports can expose its application.

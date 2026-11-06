@@ -68,6 +68,15 @@ func (s *Server) handleDocCreate(ctx context.Context, args json.RawMessage) (str
 		id, err = s.versionedDocumentStore.Create(ctx, path, project, content, docType, metadata, author)
 	}
 	if err != nil {
+		if hasID {
+			var refusal *gormpkg.ConsolidationError
+			if errors.As(err, &refusal) && refusal.Code == "PROJECT_ADOPTION_STALE_MAPPING" {
+				return "", fmt.Errorf("DOCUMENT_PROVENANCE_INVALID: %w", err)
+			}
+			if errors.Is(err, gormpkg.ErrDocumentProvenanceUnavailable) {
+				return "", gormpkg.ErrDocumentProvenanceUnavailable
+			}
+		}
 		return "", fmt.Errorf("doc_create: %w", err)
 	}
 
