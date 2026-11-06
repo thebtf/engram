@@ -77,6 +77,9 @@ func (s *Server) handleDocCreate(ctx context.Context, args json.RawMessage) (str
 				return "", gormpkg.ErrDocumentProvenanceUnavailable
 			}
 		}
+		if errors.Is(err, gormpkg.ErrDocumentLineageAmbiguous) || errors.Is(err, gormpkg.ErrDocumentVersionStale) {
+			return "", fmt.Errorf("doc_create: document lineage or version conflict; read or list the selected document, supply both document_id and expected_version, and retry the original version write: %w", err)
+		}
 		return "", fmt.Errorf("doc_create: %w", err)
 	}
 

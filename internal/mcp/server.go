@@ -827,7 +827,7 @@ func (s *Server) primaryTools() []Tool {
 		},
 		{
 			Name:        "docs",
-			Description: "Versioned documents and collections. docs(action=ingest) stores the full content-addressed body with collection, path, title, and hash metadata; document chunking, embeddings, and search is unavailable. Actions: create, read, list, history, comment, collections, documents, get_doc, remove, ingest. Action required.",
+			Description: "Versioned documents and collections. To update a retained document, read or list the selected document, then supply both document_id and expected_version to create. docs(action=ingest) stores the full content-addressed body with collection, path, title, and hash metadata; document chunking, embeddings, and search is unavailable. Actions: create, read, list, history, comment, collections, documents, get_doc, remove, ingest. Action required.",
 			tier:        tierUseful,
 			InputSchema: map[string]any{
 				"type":     "object",

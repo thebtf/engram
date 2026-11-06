@@ -39,17 +39,18 @@ type ProjectAliasRollbackRequest struct {
 	IdempotencyKey string `json:"idempotency_key"`
 }
 type ProjectAliasReceipt struct {
-	Kind             string                 `json:"kind"`
-	Status           string                 `json:"status"`
-	IdempotencyKey   string                 `json:"idempotency_key"`
-	ApplyKey         string                 `json:"apply_key,omitempty"`
-	PlanFingerprint  string                 `json:"plan_fingerprint"`
-	Target           string                 `json:"target"`
-	Aliases          []ProjectAliasExpected `json:"aliases"`
-	Database         string                 `json:"database"`
-	ProjectSnapshot  string                 `json:"project_snapshot"`
-	RedirectSnapshot string                 `json:"redirect_snapshot,omitempty"`
-	Actor            string                 `json:"actor"`
+	Kind                   string                 `json:"kind"`
+	Status                 string                 `json:"status"`
+	IdempotencyKey         string                 `json:"idempotency_key"`
+	ApplyKey               string                 `json:"apply_key,omitempty"`
+	PlanFingerprint        string                 `json:"plan_fingerprint"`
+	Target                 string                 `json:"target"`
+	Aliases                []ProjectAliasExpected `json:"aliases"`
+	Database               string                 `json:"database"`
+	ProjectSnapshot        string                 `json:"project_snapshot"`
+	ReconciliationSnapshot string                 `json:"reconciliation_snapshot,omitempty"`
+	RedirectSnapshot       string                 `json:"redirect_snapshot,omitempty"`
+	Actor                  string                 `json:"actor"`
 }
 type projectAliasPlanState struct {
 	Request          ProjectAliasAttachRequest
@@ -114,6 +115,15 @@ func aliasSnapshots(tx *gormlib.DB, req ProjectAliasAttachRequest) (string, stri
 		}
 	}
 	return structuralDigest(projects), structuralDigest(redirects), nil
+}
+
+func aliasReconciliationSnapshot(tx *gormlib.DB, req ProjectAliasAttachRequest) (string, error) {
+	ids := append([]string{req.Target}, aliasSources(req)...)
+	var projects string
+	if err := tx.Raw(`SELECT COALESCE(jsonb_agg(to_jsonb(p)-'last_heartbeat'-'display_name' ORDER BY p.id),'[]'::jsonb)::text FROM projects p WHERE p.id IN ?`, ids).Scan(&projects).Error; err != nil {
+		return "", err
+	}
+	return structuralDigest(projects), nil
 }
 
 func aliasPlanFingerprint(state projectAliasPlanState) string {
@@ -231,7 +241,15 @@ func aliasAppliedStillCurrent(tx *gormlib.DB, receipt ProjectAliasReceipt) error
 	if err != nil {
 		return err
 	}
-	if projects != receipt.ProjectSnapshot {
+	expected := receipt.ProjectSnapshot
+	if receipt.ReconciliationSnapshot != "" {
+		projects, err = aliasReconciliationSnapshot(tx, req)
+		if err != nil {
+			return err
+		}
+		expected = receipt.ReconciliationSnapshot
+	}
+	if projects != expected {
 		return consolidationHold("STALE_PLAN")
 	}
 	sources := aliasSources(req)
@@ -246,11 +264,11 @@ func aliasAppliedStillCurrent(tx *gormlib.DB, receipt ProjectAliasReceipt) error
 	if err := tx.Raw(`SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.selector,r.session_id),'[]'::jsonb)::text FROM project_consolidation_redirects r WHERE (r.selector IN ? OR r.selector = ? OR r.project_id IN ?) AND NOT (r.selector IN ? AND r.session_id = '' AND r.project_id = ? AND r.plan_fingerprint = ?)`, sources, req.Target, sources, sources, req.Target, receipt.PlanFingerprint).Scan(&baseline).Error; err != nil {
 		return err
 	}
-	expected := receipt.RedirectSnapshot
-	if expected == "" {
-		expected = structuralDigest("[]")
+	expectedRedirects := receipt.RedirectSnapshot
+	if expectedRedirects == "" {
+		expectedRedirects = structuralDigest("[]")
 	}
-	if structuralDigest(baseline) != expected {
+	if structuralDigest(baseline) != expectedRedirects {
 		return consolidationHold("STALE_PLAN")
 	}
 	return nil
@@ -310,12 +328,16 @@ func (s *ProjectConsolidationStore) ApplyProjectAliases(ctx context.Context, req
 		if projects != state.ProjectSnapshot || redirects != state.RedirectSnapshot {
 			return consolidationHold("STALE_PLAN")
 		}
+		reconciliationSnapshot, err := aliasReconciliationSnapshot(tx, state.Request)
+		if err != nil {
+			return err
+		}
 		for _, alias := range state.Request.Aliases {
 			if err := tx.Exec(`INSERT INTO project_consolidation_redirects(selector,session_id,project_id,plan_fingerprint) VALUES (?, '', ?, ?)`, alias.Source, state.Request.Target, state.Fingerprint).Error; err != nil {
 				return err
 			}
 		}
-		result = ProjectAliasReceipt{Kind: "project-alias-v1", Status: "applied", IdempotencyKey: request.IdempotencyKey, PlanFingerprint: state.Fingerprint, Target: state.Request.Target, Aliases: state.Request.Aliases, Database: database, ProjectSnapshot: state.ProjectSnapshot, RedirectSnapshot: state.RedirectSnapshot, Actor: actor}
+		result = ProjectAliasReceipt{Kind: "project-alias-v1", Status: "applied", IdempotencyKey: request.IdempotencyKey, PlanFingerprint: state.Fingerprint, Target: state.Request.Target, Aliases: state.Request.Aliases, Database: database, ProjectSnapshot: state.ProjectSnapshot, ReconciliationSnapshot: reconciliationSnapshot, RedirectSnapshot: state.RedirectSnapshot, Actor: actor}
 		if err := aliasRecord(tx, request.IdempotencyKey, state.ID, state.Fingerprint, result); err != nil {
 			return err
 		}

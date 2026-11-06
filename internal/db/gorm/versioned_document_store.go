@@ -121,6 +121,16 @@ func (s *VersionedDocumentStore) Create(
 			if visibleNative != int64(len(existing)) {
 				return ErrKnowledgeProjectForbidden
 			}
+			if len(existing) != 0 {
+				var retained int64
+				if err := tx.Table("project_consolidation_memberships AS m").Joins("JOIN versioned_documents AS d ON m.row_key->>'id' = CAST(d.id AS text)").
+					Where("m.table_name = ? AND m.field_path = ?::jsonb AND d.path = ? AND d.project = ?", "versioned_documents", `["project"]`, path, project).Count(&retained).Error; err != nil {
+					return err
+				}
+				if retained != 0 {
+					return ErrDocumentLineageAmbiguous
+				}
+			}
 			if len(existing) == 0 {
 				scoped, err = canonicalProjectRows(ctx, tx.Model(&VersionedDocument{}), project, "versioned_documents", "d")
 				if err != nil {

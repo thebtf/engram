@@ -128,7 +128,10 @@ func TestPostApplyRetainedDocumentPathOnlyPostgres(t *testing.T) {
 	t.Run("http_path_only_refused", func(t *testing.T) {
 		v, m := counts(docs[0].Path)
 		rec := httpCreate(map[string]any{"project": b, "path": docs[0].Path, "content": "must not insert"})
-		assert.NotEqual(t, http.StatusCreated, rec.Code, rec.Body.String())
+		assert.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+		assert.Contains(t, rec.Body.String(), "document lineage or version conflict")
+		assert.Contains(t, rec.Body.String(), "document_id and expected_version")
+		t.Logf("HTTP refusal status=%d body=%s", rec.Code, rec.Body.String())
 		v2, m2 := counts(docs[0].Path)
 		assert.Equal(t, v, v2)
 		assert.Equal(t, m, m2)
@@ -139,7 +142,12 @@ func TestPostApplyRetainedDocumentPathOnlyPostgres(t *testing.T) {
 		require.NoError(t, e)
 		response := mcpServer.HandleRequest(auth.WithIdentity(t.Context(), admin), &mcp.Request{JSONRPC: "2.0", ID: 1, Method: "tools/call", Params: params})
 		require.NotNil(t, response)
-		assert.NotNil(t, response.Error)
+		if assert.NotNil(t, response.Error) {
+			assert.Equal(t, -32000, response.Error.Code)
+			assert.Contains(t, response.Error.Message, "document lineage or version conflict")
+			assert.Contains(t, response.Error.Message, "document_id and expected_version")
+			t.Logf("MCP refusal code=%d message=%s", response.Error.Code, response.Error.Message)
+		}
 		v2, m2 := counts(docs[1].Path)
 		assert.Equal(t, v, v2)
 		assert.Equal(t, m, m2)
@@ -153,6 +161,11 @@ func TestPostApplyRetainedDocumentPathOnlyPostgres(t *testing.T) {
 		require.Equal(t, http.StatusCreated, explicit.Code, explicit.Body.String())
 		v, m := counts(docs[2].Path)
 		assert.EqualValues(t, 2, v)
+		var successor gormdb.VersionedDocument
+		require.NoError(t, db.Where("path = ? AND version = ?", docs[2].Path, 2).Take(&successor).Error)
+		assert.Equal(t, b, successor.Project)
+		assert.Equal(t, "authenticated successor", successor.Content)
+		t.Logf("explicit successor project=%s version=%d, versions=%d memberships=%d", successor.Project, successor.Version, v, m)
 		assert.EqualValues(t, 2, m)
 	})
 }
