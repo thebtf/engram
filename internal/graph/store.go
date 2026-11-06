@@ -2,7 +2,6 @@ package graph
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -58,9 +57,9 @@ type Edge struct {
 	NodeTargetID *int64 `gorm:"column:node_target_id" json:"node_target_id,omitempty"`
 }
 
-// MarshalJSON preserves each instant while making a representable UTC instant
-// encodable when its local offset crosses JSON's four-digit year boundary.
-func (e Edge) MarshalJSON() ([]byte, error) {
+// EdgeForJSON normalizes an output edge in place while preserving instants.
+// Boundary-crossing local years become UTC; a SupersededAt pointee is not mutated.
+func EdgeForJSON(e *Edge) {
 	jsonTime := func(value time.Time) time.Time {
 		if value.Year() < 0 || value.Year() > 9999 {
 			return value.UTC()
@@ -70,12 +69,10 @@ func (e Edge) MarshalJSON() ([]byte, error) {
 	e.ValidFrom = jsonTime(e.ValidFrom)
 	e.ValidUntil = jsonTime(e.ValidUntil)
 	e.CreatedAt = jsonTime(e.CreatedAt)
-	if e.SupersededAt != nil {
-		value := jsonTime(*e.SupersededAt)
+	if e.SupersededAt != nil && (e.SupersededAt.Year() < 0 || e.SupersededAt.Year() > 9999) {
+		value := e.SupersededAt.UTC()
 		e.SupersededAt = &value
 	}
-	type edgeJSON Edge
-	return json.Marshal(edgeJSON(e))
 }
 
 func (Edge) TableName() string { return "knowledge_edges" }
