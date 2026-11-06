@@ -79,6 +79,7 @@ type uciInstalledAcceptanceRequest struct {
 	Version                   string
 	InstallHarnessVersion     string
 	CandidateSourceRoot       string
+	CandidateArtifacts        map[string]uciInstallHarnessCommand
 	InstallRoot               string
 	FixtureRoot               string
 	LocalStateRoot            string
@@ -542,7 +543,22 @@ func (runtime *uciInstalledAcceptanceRuntime) setupRootsAndAuthority(ctx context
 	if err := os.Mkdir(runtime.request.LocalStateRoot, 0o700); err != nil {
 		return fmt.Errorf("create installed acceptance local state root: %w", err)
 	}
-	candidates, err := uciBuildInstalledAcceptanceCandidates(ctx, runtime.request.CandidateSourceRoot, filepath.Join(runtime.request.FixtureRoot, "candidate-build"))
+	candidates := runtime.request.CandidateArtifacts
+	var err error
+	if candidates == nil {
+		candidates, err = uciBuildInstalledAcceptanceCandidates(ctx, runtime.request.CandidateSourceRoot, filepath.Join(runtime.request.FixtureRoot, "candidate-build"))
+	} else {
+		for _, role := range []string{"server", "daemon", "parser"} {
+			candidate, ok := candidates[role]
+			if !ok || !filepath.IsAbs(candidate.Executable) {
+				return fmt.Errorf("installed acceptance %s artifact requires an absolute path", role)
+			}
+			info, statErr := os.Stat(candidate.Executable)
+			if statErr != nil || !info.Mode().IsRegular() {
+				return fmt.Errorf("installed acceptance %s artifact is not a regular file", role)
+			}
+		}
+	}
 	if err != nil {
 		return err
 	}
