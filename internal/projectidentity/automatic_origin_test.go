@@ -10,6 +10,28 @@ import (
 	"testing"
 )
 
+func TestNameOnlyWithoutBackendPreservesContextRequired(t *testing.T) {
+	root := t.TempDir()
+	gitLogical(t, root, "init", "--quiet", "--template=")
+	gitLogical(t, root, "remote", "add", "origin", "https://example.test/Fixture/Repo.git")
+	marker := filepath.Join(root, ".engram-project")
+	original := []byte(`{"name":"Existing"}`)
+	if err := os.WriteFile(marker, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	project, err := ResolveLogicalProjectForBackend(t.Context(), root, "", "")
+	if project != (Project{}) || ProjectErrorCode(err) != "PROJECT_CONTEXT_REQUIRED" {
+		t.Errorf("empty backend must preserve context-required: project=%+v code=%s", project, ProjectErrorCode(err))
+	}
+	after, readErr := os.ReadFile(marker)
+	if readErr != nil || string(after) != string(original) {
+		t.Fatalf("name marker changed: %v", readErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, ".git", "engram-project.json")); !os.IsNotExist(statErr) {
+		t.Fatalf("unexpected bootstrap cache: %v", statErr)
+	}
+}
+
 func TestAutomaticOriginResolution(t *testing.T) {
 	const id = "11111111-1111-4111-8111-111111111111"
 	for _, tc := range []struct {
