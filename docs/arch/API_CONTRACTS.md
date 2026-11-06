@@ -135,6 +135,16 @@ derives local Go package directories from the server dependency graph, puts
 enabled and dependency parsing disabled. Package discovery and generation
 errors stop the build; generated files must not be patched by hand.
 
+`GET /v1/models` is an OpenAI-compatibility endpoint that returns an empty
+model list. It is available before database readiness, but is not exempt from
+token authentication. When authentication is enabled, use `X-Auth-Token`,
+`Authorization: Bearer`, or an authorized `engram_session` or `engram_auth`
+session cookie. No credential is required when authentication is explicitly
+disabled. The Swagger `ApiKeyAuth` scheme represents only `X-Auth-Token`; it
+cannot express these alternatives or the deployment-dependent requirement.
+The successful response is JSON; authentication rejection is a plain-text 401.
+Swagger 2 lists response media types for the whole operation, not per status.
+
 `GET /api/stats` returns uptime, session and queue activity, retrieval statistics,
 readiness, and runtime memory statistics. `database` is present when the store is
 initialized; `project` and `projectObservations` are present only when a nonempty
