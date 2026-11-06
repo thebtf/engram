@@ -243,6 +243,12 @@ Authorization: Bearer <token>
 `ENGRAM_AUTH_DISABLED=true` supplies a synthetic identity for ordinary operations;
 it is not a browser session and does not pass access-administration reader guards.
 
+`POST /api/auth/setup` requires the operator token and a JSON email and password.
+The password must not exceed 72 bytes after UTF-8 encoding. An overlong password
+returns HTTP 400 with `{"error":"password must not exceed 72 bytes"}`; the
+rejected request does not create a user or complete setup. Unexpected hashing
+failures return HTTP 500.
+
 #### Browser session management (issue 535)
 
 The private `sessions.id` remains the `engram_auth` HttpOnly cookie credential.
