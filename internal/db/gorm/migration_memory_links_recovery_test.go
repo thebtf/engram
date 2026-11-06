@@ -10,13 +10,13 @@ import (
 )
 
 func memoryLinksRecoveryRunner(db *gormlib.DB) *gormigrate.Gormigrate {
-	return gormigrate.New(db, gormigrate.DefaultOptions, []*gormigrate.Migration{memoryLinksMigration192()})
+	return gormigrate.New(db, gormigrate.DefaultOptions, []*gormigrate.Migration{memoryLinksMigration195()})
 }
 
 func memoryLinksRecoveryMarker(t *testing.T, db *gormlib.DB) int64 {
 	t.Helper()
 	var count int64
-	require.NoError(t, db.Raw(`SELECT count(*) FROM migrations WHERE id = ?`, memoryLinksMigration192().ID).Scan(&count).Error)
+	require.NoError(t, db.Raw(`SELECT count(*) FROM migrations WHERE id = ?`, memoryLinksMigration195().ID).Scan(&count).Error)
 	return count
 }
 
@@ -27,10 +27,12 @@ func memoryLinksRecoverySnapshot(t *testing.T, db *gormlib.DB, query string) str
 	return value
 }
 
-const memoryLinksRecoveryRows = `SELECT COALESCE(jsonb_agg(to_jsonb(l) ORDER BY id), '[]'::jsonb)::text FROM memory_links l`
-const memoryLinksRecoveryReceipts = `SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY principal_kind, principal, request_key), '[]'::jsonb)::text FROM memory_link_receipts r`
-const memoryLinksRecoveryConstraints = `SELECT COALESCE(jsonb_agg(jsonb_build_array(c.conrelid::regclass::text, c.conname, c.contype::text, pg_get_constraintdef(c.oid)) ORDER BY c.conrelid::regclass::text, c.conname), '[]'::jsonb)::text FROM pg_constraint c WHERE c.conrelid IN (to_regclass('memory_links'), to_regclass('memory_link_receipts'))`
-const memoryLinksRecoveryIndexes = `SELECT COALESCE(jsonb_agg(jsonb_build_array(c.relname, i.relname, ix.indisunique, pg_get_indexdef(i.oid)) ORDER BY c.relname, i.relname), '[]'::jsonb)::text FROM pg_index ix JOIN pg_class c ON c.oid = ix.indrelid JOIN pg_class i ON i.oid = ix.indexrelid WHERE c.oid IN (to_regclass('memory_links'), to_regclass('memory_link_receipts'))`
+const (
+	memoryLinksRecoveryRows        = `SELECT COALESCE(jsonb_agg(to_jsonb(l) ORDER BY id), '[]'::jsonb)::text FROM memory_links l`
+	memoryLinksRecoveryReceipts    = `SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY principal_kind, principal, request_key), '[]'::jsonb)::text FROM memory_link_receipts r`
+	memoryLinksRecoveryConstraints = `SELECT COALESCE(jsonb_agg(jsonb_build_array(c.conrelid::regclass::text, c.conname, c.contype::text, pg_get_constraintdef(c.oid)) ORDER BY c.conrelid::regclass::text, c.conname), '[]'::jsonb)::text FROM pg_constraint c WHERE c.conrelid IN (to_regclass('memory_links'), to_regclass('memory_link_receipts'))`
+	memoryLinksRecoveryIndexes     = `SELECT COALESCE(jsonb_agg(jsonb_build_array(c.relname, i.relname, ix.indisunique, pg_get_indexdef(i.oid)) ORDER BY c.relname, i.relname), '[]'::jsonb)::text FROM pg_index ix JOIN pg_class c ON c.oid = ix.indrelid JOIN pg_class i ON i.oid = ix.indexrelid WHERE c.oid IN (to_regclass('memory_links'), to_regclass('memory_link_receipts'))`
+)
 
 func memoryLinksRecoverySeedLink(t *testing.T, db *gormlib.DB) {
 	t.Helper()
@@ -72,7 +74,7 @@ func TestMemoryLinksMigrationRecoveryPostgres(t *testing.T) {
 		indexes := memoryLinksRecoverySnapshot(t, db, memoryLinksRecoveryIndexes)
 		identities := memoryLinksRecoverySnapshot(t, db, `SELECT jsonb_build_array('memory_links'::regclass::oid, 'memory_link_receipts'::regclass::oid, 'memory_links_id_seq'::regclass::oid)::text`)
 		seq := memoryLinksRecoverySnapshot(t, db, `SELECT jsonb_build_array(last_value, is_called)::text FROM memory_links_id_seq`)
-		require.NoError(t, db.Exec(`DELETE FROM migrations WHERE id = ?`, memoryLinksMigration192().ID).Error)
+		require.NoError(t, db.Exec(`DELETE FROM migrations WHERE id = ?`, memoryLinksMigration195().ID).Error)
 		require.Zero(t, memoryLinksRecoveryMarker(t, db))
 		require.NoError(t, memoryLinksRecoveryRunner(db).Migrate(), "restart after DDL and before marker must preserve retained data")
 		require.EqualValues(t, 1, memoryLinksRecoveryMarker(t, db))
@@ -82,6 +84,32 @@ func TestMemoryLinksMigrationRecoveryPostgres(t *testing.T) {
 		require.Equal(t, indexes, memoryLinksRecoverySnapshot(t, db, memoryLinksRecoveryIndexes))
 		require.Equal(t, identities, memoryLinksRecoverySnapshot(t, db, `SELECT jsonb_build_array('memory_links'::regclass::oid, 'memory_link_receipts'::regclass::oid, 'memory_links_id_seq'::regclass::oid)::text`))
 		require.Equal(t, seq, memoryLinksRecoverySnapshot(t, db, `SELECT jsonb_build_array(last_value, is_called)::text FROM memory_links_id_seq`))
+	})
+
+	t.Run("provisional_192_marker_refuses_adoption", func(t *testing.T) {
+		db, _ := openMemoryContext191UpgradeDB(t)
+		require.NoError(t, memoryLinksRecoveryRunner(db).Migrate())
+		memoryLinksRecoverySeedLink(t, db)
+		require.NoError(t, db.Exec(`INSERT INTO memory_link_receipts (principal_kind, principal, request_key, request_digest, link_id) VALUES ('agent','agent/recovery','retry-key','original-digest',7123)`).Error)
+		require.NoError(t, db.Exec(`DELETE FROM migrations WHERE id = ?`, memoryLinksMigration195().ID).Error)
+		require.NoError(t, db.Exec(`INSERT INTO migrations (id) VALUES ('192_memory_links')`).Error)
+		rows := memoryLinksRecoverySnapshot(t, db, memoryLinksRecoveryRows)
+		receipts := memoryLinksRecoverySnapshot(t, db, memoryLinksRecoveryReceipts)
+		ledger := memoryLinksRecoverySnapshot(t, db, `SELECT jsonb_agg(id ORDER BY id)::text FROM migrations`)
+		identities := memoryLinksRecoverySnapshot(t, db, `SELECT jsonb_build_array('memory_links'::regclass::oid, 'memory_link_receipts'::regclass::oid, 'memory_links_id_seq'::regclass::oid)::text`)
+		require.ErrorContains(t, memoryLinksRecoveryRunner(db).Migrate(), "provisional 192_memory_links is recorded")
+		require.Zero(t, memoryLinksRecoveryMarker(t, db))
+		require.Equal(t, ledger, memoryLinksRecoverySnapshot(t, db, `SELECT jsonb_agg(id ORDER BY id)::text FROM migrations`))
+		require.Equal(t, rows, memoryLinksRecoverySnapshot(t, db, memoryLinksRecoveryRows))
+		require.Equal(t, receipts, memoryLinksRecoverySnapshot(t, db, memoryLinksRecoveryReceipts))
+		require.Equal(t, identities, memoryLinksRecoverySnapshot(t, db, `SELECT jsonb_build_array('memory_links'::regclass::oid, 'memory_link_receipts'::regclass::oid, 'memory_links_id_seq'::regclass::oid)::text`))
+	})
+
+	t.Run("other_192_marker_does_not_block", func(t *testing.T) {
+		db, _ := openMemoryContext191UpgradeDB(t)
+		require.NoError(t, db.Exec(`INSERT INTO migrations (id) VALUES ('192_issue_attribution')`).Error)
+		require.NoError(t, memoryLinksRecoveryRunner(db).Migrate())
+		require.EqualValues(t, 1, memoryLinksRecoveryMarker(t, db))
 	})
 
 	t.Run("incompatible_object_fails_closed", func(t *testing.T) {

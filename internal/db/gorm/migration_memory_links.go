@@ -67,12 +67,18 @@ func memoryLinksCompareMetadata(tx *gormlib.DB, query string, actualArgs, expect
 	return nil
 }
 
-// 192 is provisional until integration reconciles the target migration ledger.
-func memoryLinksMigration192() *gormigrate.Migration {
+func memoryLinksMigration195() *gormigrate.Migration {
 	return &gormigrate.Migration{
-		ID: "192_memory_links",
+		ID: "195_memory_links",
 		Migrate: func(db *gormlib.DB) error {
 			return db.Transaction(func(tx *gormlib.DB) error {
+				var oldMarker int64
+				if err := tx.Raw(`SELECT count(*) FROM migrations WHERE id = ?`, "192_memory_links").Scan(&oldMarker).Error; err != nil {
+					return fmt.Errorf("migration 195 inspect legacy memory links marker: %w", err)
+				}
+				if oldMarker != 0 {
+					return fmt.Errorf("migration 195 refused: provisional 192_memory_links is recorded; retain its data and resolve migration ownership")
+				}
 				var schema string
 				if err := tx.Raw(`SELECT quote_ident(current_schema())`).Scan(&schema).Error; err != nil {
 					return err
@@ -95,7 +101,7 @@ func memoryLinksMigration192() *gormigrate.Migration {
 				}
 				for _, statement := range statements {
 					if err := tx.Exec(statement).Error; err != nil {
-						return fmt.Errorf("migration 192 memory links: %w", err)
+						return fmt.Errorf("migration 195 memory links: %w", err)
 					}
 				}
 				for _, relation := range []string{links, receipts} {
@@ -134,7 +140,7 @@ func memoryLinksMigration192() *gormigrate.Migration {
 			})
 		},
 		Rollback: func(*gormlib.DB) error {
-			return fmt.Errorf("migration 192 rollback refused: retain memory links and retry receipts")
+			return fmt.Errorf("migration 195 rollback refused: retain memory links and retry receipts")
 		},
 	}
 }

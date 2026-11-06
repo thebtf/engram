@@ -16,7 +16,7 @@ func TestMemoryLinksMigrationRejectUnloggedPostgres(t *testing.T) {
 		require.NoError(t, db.Exec(`UPDATE memory_links SET removed_at = '2025-01-02T03:04:05Z' WHERE id = 7123`).Error)
 		require.NoError(t, db.Exec(`INSERT INTO memory_link_receipts (principal_kind, principal, request_key, request_digest, link_id) VALUES ('agent','agent/recovery','retained-key','retained-digest',7123)`).Error)
 		require.NoError(t, db.Exec(`ALTER TABLE memory_link_receipts SET UNLOGGED`).Error)
-		require.NoError(t, db.Exec(`DELETE FROM migrations WHERE id = ?`, memoryLinksMigration192().ID).Error)
+		require.NoError(t, db.Exec(`DELETE FROM migrations WHERE id = ?`, memoryLinksMigration195().ID).Error)
 		require.Zero(t, memoryLinksRecoveryMarker(t, db))
 		rows := memoryLinksRecoverySnapshot(t, db, memoryLinksRecoveryRows)
 		receipts := memoryLinksRecoverySnapshot(t, db, memoryLinksRecoveryReceipts)
