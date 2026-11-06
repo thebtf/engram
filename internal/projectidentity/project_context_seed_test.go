@@ -11,7 +11,10 @@ import (
 
 func TestApprovedProjectSeedBindings(t *testing.T) {
 	root := t.TempDir()
-	storage := t.TempDir()
+	storage, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	marker := []byte(`{"id":"abcdef","name":"synthetic"}`)
 	v2 := []byte(`{"fixture":"v2"}`)
 	for name, value := range map[string][]byte{".engram-project": marker, ".engram-project-v2.json": v2} {
