@@ -189,6 +189,8 @@ function Reset-Scenario([switch]$WithSources)
   $global:registryWrites = [System.Collections.Generic.List[object]]::new()
   $global:patchHistory = [System.Collections.Generic.List[object]]::new()
   $global:postFault = 'none'
+  $global:canonicalizeRun = $false
+  $global:getFault = 'none'
   $global:patchFault = 'none'
   $global:patchFaults = [System.Collections.Generic.List[string]]::new()
   $global:patchFaultSummary = ''
@@ -324,7 +326,17 @@ function global:gh
     if ($global:failNextJournalRead)
     { $global:failNextJournalRead=$false; $global:LASTEXITCODE=1; return 'journal reread failed'
     }
-    return ($global:runs[$Matches[1]] | ConvertTo-Json -Compress -Depth 14)
+    $run = $global:runs[$Matches[1]]
+    if ($global:getFault -cne 'none')
+    {
+      $run = [ordered]@{} + $run
+      if ($global:getFault -ceq 'wrong-id')
+      { $run.id = '42'
+      } else
+      { $run.details_url = $global:getFault
+      }
+    }
+    return ($run | ConvertTo-Json -Compress -Depth 14)
   }
   $inputIndex = [array]::IndexOf($Arguments, '--input')
   if ($inputIndex -lt 0)
@@ -334,7 +346,11 @@ function global:gh
   if ($request -match '--method POST')
   {
     $global:createCount++
+    Assert-That ([string]$body.details_url -ceq $global:details) 'POST must retain the requested workflow URL'
     $run = [ordered]@{ id='41'; name=$body.name; head_sha=$body.head_sha; external_id=$body.external_id; details_url=$body.details_url; status=$body.status; conclusion=$null; output=$body.output }
+    if ($global:canonicalizeRun)
+    { $run.details_url = 'https://github.com/thebtf/engram/runs/41'
+    }
     $global:runs['41'] = $run
     switch ($global:postFault)
     {
@@ -491,6 +507,72 @@ Assert-That (-not $workflow.Contains('Remove-CreatedLatestTag') -and -not $recov
 $global:scenarioCount = 0
 try
 {
+  Reset-Scenario -WithSources; $global:scenarioCount++; $global:canonicalizeRun = $true
+  $id = Invoke-Gate -Mode EnsureJournal | Select-Object -Last 1
+  Assert-That ([string]$id -ceq '41' -and $global:createCount -eq 1) 'canonical POST readback must accept the exact new check-run ID without retry'
+  Assert-That ([string](Get-Journal).details_url -ceq 'https://github.com/thebtf/engram/runs/41') 'mock must return the canonical check-run URL'
+  Assert-That ([string](Get-JournalSnapshot).run.details_url -ceq $global:details) 'snapshot identity must retain the requested workflow URL'
+  Assert-That ([string](Invoke-Gate -Mode Discover -RecoveryHandoff | Select-Object -Last 1) -ceq '41') 'GET list must rediscover canonical URL'
+  Invoke-Gate -Mode Reconcile -RecoveryHandoff | Out-Null
+  Assert-Terminal -Outcome 'failed_before_write' -Conclusion 'failure'; Assert-NoUnsafeMutation
+  Remove-Scenario
+
+  foreach ($url in @('https://evil.example/thebtf/engram/runs/41','https://github.com/other/engram/runs/41','https://github.com/thebtf/other/runs/41','https://github.com/thebtf/engram/runs/42','https://github.com/thebtf/engram/runs/41/extra','https://github.com/thebtf/engram/runs/41?x=1'))
+  {
+    Reset-Scenario; $global:scenarioCount++
+    Seed-Journal (New-Snapshot -Phase 'pre_promotion' -Outcome 'pending')
+    (Get-Journal).details_url = $url
+    Expect-GateFailure { Invoke-Gate -Mode Discover -RecoveryHandoff } "GET list must reject foreign or non-exact URL: $url"
+    Assert-NoUnsafeMutation
+    Remove-Scenario
+  }
+
+  foreach ($fault in @('wrong-id','https://github.com/thebtf/engram/runs/42'))
+  {
+    Reset-Scenario; $global:scenarioCount++; $global:canonicalizeRun = $true
+    Invoke-Gate -Mode EnsureJournal | Out-Null
+    $global:getFault = $fault
+    Expect-GateFailure { Invoke-Gate -Mode Reconcile -RecoveryHandoff } "GET check-run readback must reject $fault"
+    Assert-NoUnsafeMutation
+    Remove-Scenario
+  }
+
+  foreach ($fault in @('duplicate','wrong-sha','wrong-name','wrong-external','invalid-id'))
+  {
+    Reset-Scenario; $global:scenarioCount++; $global:canonicalizeRun = $true
+    Invoke-Gate -Mode EnsureJournal | Out-Null
+    switch ($fault)
+    {
+      'duplicate'
+      { $global:runs['42'] = [ordered]@{} + (Get-Journal); $global:runs['42'].id = '42'; $global:runs['42'].details_url = 'https://github.com/thebtf/engram/runs/42'
+      }
+      'wrong-sha'
+      { (Get-Journal).head_sha = '9' * 40 -join ''
+      }
+      'wrong-name'
+      { (Get-Journal).name = 'not-the-journal'
+      }
+      'wrong-external'
+      { (Get-Journal).external_id = 'latest-promotion:8675309:4'
+      }
+      'invalid-id'
+      { (Get-Journal).id = 'invalid'
+      }
+    }
+    Expect-GateFailure { Invoke-Gate -Mode Discover -RecoveryHandoff } "GET list must reject $fault"
+    Assert-NoUnsafeMutation
+    Remove-Scenario
+  }
+
+  Reset-Scenario; $global:scenarioCount++
+  $snapshot = New-Snapshot -Phase 'pre_promotion' -Outcome 'pending'
+  $snapshot.run.details_url = 'https://github.com/thebtf/engram/runs/41'
+  Seed-Journal $snapshot
+  (Get-Journal).details_url = 'https://github.com/thebtf/engram/runs/41'
+  Invoke-Gate -Mode Reconcile -RecoveryHandoff | Out-Null
+  Assert-Terminal -Outcome 'contradiction' -Conclusion 'failure'; Assert-NoUnsafeMutation
+  Remove-Scenario
+
   foreach ($postFault in @('lost','invalid-id'))
   {
     Reset-Scenario -WithSources; $global:scenarioCount++; $global:postFault=$postFault
@@ -829,8 +911,8 @@ try
   Assert-That ($global:registryWrites.Count -eq 1) 'one Reconcile must survive a transient post-PATCH reread failure and rollback exactly once'
   Remove-Scenario
 
-  Assert-That ($global:scenarioCount -eq 50) "expected 50 bounded recovery scenarios, got $($global:scenarioCount)"
-  "PASS: successor E journal matrix proves distinct workflow/release heads, terminal metadata closure, bounded ambiguous PATCH reread recovery, rollback failure-snapshot replay, rollback write-before-journal replay, API guard failures, uncertain writes, and completed second-pass idempotence; scenarios=$($global:scenarioCount)"
+  Assert-That ($global:scenarioCount -eq 65) "expected 65 bounded recovery scenarios, got $($global:scenarioCount)"
+  "PASS: successor E journal matrix proves canonical check-run URL readbacks, adversarial URL and metadata rejection, terminal metadata closure, bounded ambiguous PATCH reread recovery, rollback replay, API guard failures, uncertain writes, and completed idempotence; scenarios=$($global:scenarioCount)"
 } finally
 {
   if ($null -ne (Get-Variable temp -Scope Global -ErrorAction SilentlyContinue))
