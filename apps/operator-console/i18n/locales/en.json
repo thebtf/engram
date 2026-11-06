@@ -723,9 +723,9 @@
       "body": "Every action goes through the server state machine; when VNEXT_F is off, the page shows an honest gated state."
     },
     "metrics": {
-      "pending": "waiting for decision",
-      "promotable": "promotion targets",
-      "lowConfidence": "low confidence"
+      "pending": "waiting for decision · loaded",
+      "promotable": "promotion targets · loaded",
+      "lowConfidence": "low confidence · loaded"
     },
     "filters": {
       "project": "Queue project",
@@ -733,7 +733,7 @@
       "unscoped": "unscoped"
     },
     "actions": {
-      "selectAll": "Select all",
+      "selectAll": "Select visible page",
       "clearSelection": "Clear selection",
       "refresh": "Refresh",
       "promote": "Promote",
@@ -746,16 +746,16 @@
         "supersede": "Confirm supersede"
       }
     },
-    "countInFilter": "{shown} candidates · {selected} selected",
+    "countInFilter": "{shown} loaded candidates · {selected} selected on page",
     "rowsLabel": "Rows",
-    "allRows": "All",
-    "pageRange": "{from}–{to} of {total}",
+    "allRows": "All loaded",
+    "pageRange": "{from}–{to} of {total} loaded",
     "pagination": {
-      "first": "Go to first page",
+      "first": "Go to first loaded page",
       "previous": "Go to previous page",
-      "current": "Current page {page}",
+      "current": "Current loaded page {page}",
       "next": "Go to next page",
-      "last": "Go to last page"
+      "last": "Go to last loaded page"
     },
     "aria": {
       "toggleCandidate": "Select candidate {id}",
@@ -770,15 +770,18 @@
       "recurrence": "{count} recurrence | {count} recurrences"
     },
     "state": {
+      "legacyTruncated": "This list may be incomplete: the server does not report continuation.",
+      "more": "More candidates are available.",
+      "exhausted": "No more candidates were available at this read.",
       "pending": "Loading candidate queue…",
       "error": "Failed to load candidate queue: {message}",
-      "empty": "The selected project has no candidates awaiting review.",
+      "empty": "There are no candidates in this loaded window.",
       "gated": "Queue is disabled by flag {flag}.",
       "retry": "Retry"
     },
     "empty": {
-      "title": "Queue is empty",
-      "body": "There are no candidates for the selected project right now."
+      "title": "Loaded window is empty",
+      "body": "There are no candidates in this loaded window."
     },
     "detail": {
       "title": "Candidate #{id}",

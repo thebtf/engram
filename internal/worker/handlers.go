@@ -247,9 +247,13 @@ func (s *Service) requireReady(next http.Handler) http.Handler {
 // handleListModels godoc
 // @Summary Compatibility: empty models list (no embeddings in v5)
 // @Description OpenAI-compatibility shim. Embedding pipeline removed in v5; always returns {"object":"list","data":[]}.
+// @Description When authentication is enabled, supply X-Auth-Token, Authorization: Bearer, or an authorized session cookie. Authentication is not required when explicitly disabled. The ApiKeyAuth security scheme represents X-Auth-Token only.
+// @Description Success is application/json; authentication rejection is text/plain. Swagger 2 lists media types for the whole operation, not per status.
 // @Tags System
-// @Produce json
+// @Produce json,plain
+// @Security ApiKeyAuth
 // @Success 200 {object} map[string]interface{} "Always returns empty data array; no real model entries"
+// @Failure 401 {string} string "unauthorized"
 // @Router /v1/models [get]
 func (s *Service) handleListModels(w http.ResponseWriter, _ *http.Request) {
 	type response struct {

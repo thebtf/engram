@@ -4471,9 +4471,15 @@ const docTemplate = `{
         },
         "/v1/models": {
             "get": {
-                "description": "OpenAI-compatibility shim. Embedding pipeline removed in v5; always returns {\"object\":\"list\",\"data\":[]}.",
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "OpenAI-compatibility shim. Embedding pipeline removed in v5; always returns {\"object\":\"list\",\"data\":[]}.\nWhen authentication is enabled, supply X-Auth-Token, Authorization: Bearer, or an authorized session cookie. Authentication is not required when explicitly disabled. The ApiKeyAuth security scheme represents X-Auth-Token only.\nSuccess is application/json; authentication rejection is text/plain. Swagger 2 lists media types for the whole operation, not per status.",
                 "produces": [
-                    "application/json"
+                    "application/json",
+                    "text/plain"
                 ],
                 "tags": [
                     "System"
@@ -4485,6 +4491,12 @@ const docTemplate = `{
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "unauthorized",
+                        "schema": {
+                            "type": "string"
                         }
                     }
                 }

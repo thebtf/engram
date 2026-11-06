@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Recover an existing native Source from the actual Git cwd without a caller-supplied locator or historical View/index binding. Permit explicit Go-to-current-semantic promotion through a new immutable checkout registration profile while retaining implicit Go replay, Source/project authorization, semantic-to-Go refusal and old profiles/artifacts/Views. Document the verified installed-parser and outside-callback preparation path; this repair does not claim loaded-host or useful 500ms delivery acceptance.
 
 - Honor optional positive `X-Engram-Budget-Ms` remaining-work budgets on GET/POST `/api/context/search` without extending inherited deadlines, overflowing duration conversion, or adding a global 500ms cap. Preserve ordinary no-header provider behavior; bound optional reranking inside explicit budgets so authorized lexical fallback and final ACL/version/body-digest revalidation retain processing time. Add truthful optional memory/behavioral-rule `source_ref` metadata, distinguish mutable row versions from body identity, and preserve exact legacy numeric observation IDs even beyond JavaScript's safe-integer range.
+
+- Add cursor-ready candidate queue navigation and warn when a full legacy response may be truncated; this does not add backend continuation support.
+
 - Exercise cross-profile embedding reuse through two publicly registered worktrees of one Source using the installed artifact harness and a synthetic loopback provider.
 
 
