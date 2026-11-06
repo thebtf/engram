@@ -83,16 +83,20 @@ func collectTaskProviders(work context.Context, codeProvider func(context.Contex
 
 	code := taskcontext.Closed("deadline_exceeded", "DEADLINE_EXCEEDED")
 	knowledge := &taskcontext.Knowledge{MemoryStatus: "deadline_exceeded", NoteStatus: "deadline_exceeded", RuleStatus: "deadline_exceeded", Items: []taskcontext.Evidence{}}
+	var memoryItems, noteItems, ruleItems []taskcontext.Evidence
 	codePending, knowledgePending := true, 3
 	acceptKnowledge := func(result taskKnowledgeResult) {
-		if result.kind == "memory" {
+		switch result.kind {
+		case "memory":
 			knowledge.MemoryStatus = result.status
-		} else if result.kind == "note" {
+			memoryItems = result.items
+		case "note":
 			knowledge.NoteStatus = result.status
-		} else if result.kind == "rule" {
+			noteItems = result.items
+		case "rule":
 			knowledge.RuleStatus = result.status
+			ruleItems = result.items
 		}
-		knowledge.Items = append(knowledge.Items, result.items...)
 	}
 	for codePending || knowledgePending > 0 {
 		select {
@@ -122,5 +126,8 @@ func collectTaskProviders(work context.Context, codeProvider func(context.Contex
 			codePending = false
 		}
 	}
+	knowledge.Items = append(knowledge.Items, memoryItems...)
+	knowledge.Items = append(knowledge.Items, noteItems...)
+	knowledge.Items = append(knowledge.Items, ruleItems...)
 	return code, knowledge
 }
