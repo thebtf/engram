@@ -44,6 +44,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Use registered canonical UUIDs and authenticated caller project context in MCP fixtures without weakening default-deny, privacy or pre-mutation rejection guards. Reuse 119 prior PASS plus one exact retry PASS after the context fix, not 120 fresh PASS or installed acceptance.
 - Seed the isolated operator-code fixture with a registered canonical project UUID while preserving five queue candidates, published/no-view checks and redacted provisioning errors.
 
+## [7.0.25] - 2026-11-06
+
+### Fixed
+
+- Recover an absent trusted hook client after a transient acquisition failure: eligible callbacks trigger coalesced, backoff-limited background preparation, while execution still requires verified bytes. Bootstrap failures retain a safe typed diagnostic; this does not establish the cause of any particular installed-session warning.
+
 ## [7.0.24] - 2026-11-05
 
 ### Fixed

@@ -2213,8 +2213,8 @@ test("register-only registers an installed plugin without installation side effe
     fs.writeFileSync(marketplacesFile, "{\"unrelated\":\"marketplaces\"}\n");
     fs.writeFileSync(path.join(fakeBin, "node"), `#!/usr/bin/env bash
 node_path=${shellQuote(process.execPath)}
-if command -v wslpath >/dev/null 2>&1; then node_path=$(wslpath -u "$node_path")
-elif command -v cygpath >/dev/null 2>&1; then node_path=$(cygpath -u "$node_path")
+if [[ "$node_path" != /* ]] && command -v wslpath >/dev/null 2>&1; then node_path=$(wslpath -u "$node_path")
+elif [[ "$node_path" != /* ]] && command -v cygpath >/dev/null 2>&1; then node_path=$(cygpath -u "$node_path")
 fi
 exec "$node_path" "$@"
 `, { mode: 0o755 });
@@ -2437,8 +2437,8 @@ test("release readback retries until the private draft is visible", () => {
     fs.mkdirSync(fakeBin, { recursive: true });
     fs.writeFileSync(path.join(fakeBin, "node"), `#!/usr/bin/env bash
 node_path=${shellQuote(process.execPath)}
-if command -v wslpath >/dev/null 2>&1; then node_path=$(wslpath -u "$node_path")
-elif command -v cygpath >/dev/null 2>&1; then node_path=$(cygpath -u "$node_path")
+if [[ "$node_path" != /* ]] && command -v wslpath >/dev/null 2>&1; then node_path=$(wslpath -u "$node_path")
+elif [[ "$node_path" != /* ]] && command -v cygpath >/dev/null 2>&1; then node_path=$(cygpath -u "$node_path")
 fi
 exec "$node_path" "$@"
 `, { mode: 0o755 });
