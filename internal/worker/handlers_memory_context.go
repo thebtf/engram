@@ -246,6 +246,9 @@ func (s *Service) handleContextMemoryRead(w http.ResponseWriter, r *http.Request
 		kind = contexts[0]
 	}
 	owning, err := s.resolveMemoryOwningContext(r, kind, contextSupplied, project, projectSupplied)
+	if !projectSupplied && !contextSupplied && !explicitIdentity && errors.Is(err, gormdb.ErrMemoryPrincipalRequired) {
+		return false
+	}
 	if err != nil {
 		writeMemoryContextError(w, err)
 		return true

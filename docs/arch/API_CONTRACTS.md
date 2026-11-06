@@ -186,7 +186,10 @@ retry to the authenticated principal, owning context and project. An equivalent
 retry returns the existing active record; a changed command or retired target
 returns 409. Without a key a repeated create is not automatically idempotent.
 
-`GET /api/memories/{id}` reads a visible card in its selected context. To revise,
+`GET /api/memories/{id}` reads a visible card in its selected context. With no
+selector or identity opt-in, an enrolled client defaults to self; other callers
+retain the legacy missing-project 400. Explicit self requests still require an
+enrolled client, and invalid explicit selectors never fall back. To revise,
 send `PATCH /api/memories/{id}` with `{"version":N,"content":"..."}` and the
 same context selection. The owner must be authorized to manage the current card.
 Project aliases support reads only; a project-context revision requires the card's
