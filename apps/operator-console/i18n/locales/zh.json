@@ -1845,6 +1845,8 @@
     "flagsByArea": "按区域的 flag",
     "updateState": "Update 状态",
     "updateAvailable": "有可用更新",
+    "updateCheckLabel": "更新检查",
+    "updateCheckUnavailable": "无法确定是否有可用更新。请尝试刷新。",
     "idle": "空闲",
     "vectorUnavailable": "向量层不可用",
     "noise": "噪声",

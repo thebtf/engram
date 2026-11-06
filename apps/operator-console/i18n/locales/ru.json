@@ -1876,6 +1876,8 @@
     "flagsByArea": "Флаги по областям",
     "updateState": "Статус update",
     "updateAvailable": "Доступно обновление",
+    "updateCheckLabel": "Проверка обновлений",
+    "updateCheckUnavailable": "Не удалось определить, доступно ли обновление. Попробуйте обновить данные.",
     "idle": "ожидание",
     "vectorUnavailable": "векторный слой недоступен",
     "noise": "Шум",

@@ -8,7 +8,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - Correct Windows short-path project recovery while keeping marker discovery inside the canonical worktree; preserve raw caller and marker-target fingerprint bytes.
-- Return a JSON 400 for setup passwords exceeding bcrypt's 72-byte limit, without creating an initial user or exposing the password.
 
 - Regenerate the API through the maintained worker target using canonical local Go package directories and Swag 1.16.6, with real producer errors stopping the build. Correct existing context search/inject/session-start annotations without changing handlers; document the shared GET/POST conditional-query limitation. The actual producer and server build pass, with 40 named schema checks and all 76 references resolved; that producer checkpoint established compile-only retained-reader oracle provenance, with later native query proof recorded separately, and installed/release acceptance remains separate.
 
@@ -50,6 +49,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [7.0.26] - 2026-11-06
 
 ### Fixed
+
+- Return a JSON 400 for setup passwords exceeding bcrypt's 72-byte limit, without creating an initial user or exposing the password.
+- Explain non-401 update-check failures accessibly in Health and Settings with localized, safe diagnoses while preserving unknown availability; a successful Refresh can clear the notice. A current update-check 401 instead locks protected UI and offers sign-in.
+- Close removed SSE subscriber streams safely after in-flight writes finish; prevent queued writes from using a released response and preserve the non-replay and blocked-writer limitations.
 
 - Apply authoritative canonical membership to memory search, list, vector and graph reads before ranking and limits, preserving privacy and refusing invalid selectors without reassigning historical records.
 - Prevent automatic recall and session feedback from rewriting historical non-UUID selectors while preserving UUID-backed and project-free bookkeeping and private-read auditing.
