@@ -506,6 +506,134 @@ func TestProjectAliasAttachHTTP(t *testing.T) {
 	}
 }
 
+func TestProjectAliasAttachPreservesTargetSelfRedirect(t *testing.T) {
+	dsn := os.Getenv("DATABASE_DSN")
+	if dsn == "" {
+		t.Skip("migration186 PostgreSQL fixture DSN is not set")
+	}
+	cfg, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal("invalid migration186 fixture DSN")
+	}
+	require.True(t, cfg.Host == "127.0.0.1" || cfg.Host == "localhost" || cfg.Host == "::1")
+	const prefix = "engram_migration186_scope_test_"
+	require.True(t, strings.HasPrefix(cfg.Database, prefix) && ((strings.HasSuffix(cfg.Database, "_source") && len(cfg.Database) > len(prefix)+len("_source")) || cfg.Database == "engram_migration186_scope_test_01a1ac04_parity"))
+	require.True(t, cfg.RuntimeParams["search_path"] == "" || cfg.RuntimeParams["search_path"] == "public")
+	require.Empty(t, cfg.Fallbacks)
+	backing := openWorkerUCIContextCompositionStore(t)
+	db := backing.DB
+	target, source := uuid.NewString(), uuid.NewString()
+	for _, id := range []string{target, source} {
+		require.NoError(t, db.Create(&gormdb.Project{ID: id, DisplayName: sql.NullString{String: "alias witness", Valid: true}}).Error)
+	}
+	memories := []gormdb.Memory{
+		{Project: target, Content: "target witness", Status: "active", PrivacyScope: "project", Version: 1},
+		{Project: source, Content: "source witness", Status: "active", PrivacyScope: "project", Version: 1},
+	}
+	for i := range memories {
+		require.NoError(t, db.Create(&memories[i]).Error)
+	}
+	baseline := func() string {
+		t.Helper()
+		var row string
+		require.NoError(t, db.Raw(`SELECT row_to_json(r)::text FROM project_consolidation_redirects r WHERE selector = ? AND session_id = ''`, target).Row().Scan(&row))
+		return row
+	}
+	native := func(id int64) string {
+		t.Helper()
+		var row string
+		require.NoError(t, db.Raw(`SELECT row_to_json(m)::text FROM memories m WHERE id = ?`, id).Row().Scan(&row))
+		return row
+	}
+	service := &Service{store: backing, sessionStore: gormdb.NewSessionStore(backing), memoryStore: gormdb.NewMemoryStore(backing), vault: newTestVault(t)}
+	router := chi.NewRouter()
+	const base = "/api/projects/consolidation/aliases"
+	router.Post(base+"/prepare", service.handleProjectAliasPrepare)
+	router.Post(base+"/apply", service.handleProjectAliasApply)
+	router.Get(base+"/status", service.handleProjectAliasStatus)
+	router.Post(base+"/rollback", service.handleProjectAliasRollback)
+	router.Get("/api/memories/{id}", service.handleGetMemoryByID)
+	admin := auth.SessionForBrowserUser("admin", 41)
+	call := func(method, path string, body any) *httptest.ResponseRecorder {
+		t.Helper()
+		var payload []byte
+		if body != nil {
+			var err error
+			payload, err = json.Marshal(body)
+			require.NoError(t, err)
+		}
+		req := httptest.NewRequest(method, path, bytes.NewReader(payload))
+		req = req.WithContext(auth.WithIdentity(req.Context(), admin))
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec
+	}
+	priorRequest := gormdb.ProjectAliasAttachRequest{Target: target, Aliases: []gormdb.ProjectAliasExpected{{Source: source}}, Reason: "baseline provenance fixture"}
+	priorPrepare := call(http.MethodPost, base+"/prepare", priorRequest)
+	require.Equal(t, http.StatusOK, priorPrepare.Code)
+	var priorPlan gormdb.ProjectAliasPlan
+	require.NoError(t, json.Unmarshal(priorPrepare.Body.Bytes(), &priorPlan))
+	require.NoError(t, db.Exec(`INSERT INTO project_consolidation_redirects(selector,session_id,project_id,plan_fingerprint) VALUES (?, '', ?, ?)`, target, target, priorPlan.Fingerprint).Error)
+	beforeRedirect := baseline()
+	beforeTarget, beforeSource := native(memories[0].ID), native(memories[1].ID)
+	request := gormdb.ProjectAliasAttachRequest{Target: target, Aliases: []gormdb.ProjectAliasExpected{{Source: source}}, Reason: "existing target self redirect"}
+	prepare := func() gormdb.ProjectAliasPlan {
+		t.Helper()
+		rec := call(http.MethodPost, base+"/prepare", request)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("prepare must accept a pre-existing global target-self redirect: status=%d conflicting_membership=%t", rec.Code, strings.Contains(rec.Body.String(), "PROJECT_ADOPTION_CONFLICTING_MEMBERSHIP"))
+		}
+		var plan gormdb.ProjectAliasPlan
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &plan))
+		return plan
+	}
+	witness := func(project string, index int, status int) {
+		t.Helper()
+		rec := call(http.MethodGet, fmt.Sprintf("/api/memories/%d?project=%s", memories[index].ID, project), nil)
+		require.Equal(t, status, rec.Code)
+		if status == http.StatusOK {
+			require.True(t, strings.Contains(rec.Body.String(), memories[index].Content))
+		}
+	}
+	witness(target, 0, http.StatusOK)
+	witness(source, 1, http.StatusOK)
+	witness(target, 1, http.StatusNotFound)
+	stale := prepare()
+	require.Equal(t, beforeRedirect, baseline())
+	require.NoError(t, db.Exec(`UPDATE project_consolidation_redirects SET plan_fingerprint = ? WHERE selector = ? AND session_id = ''`, "changed-baseline", target).Error)
+	staleApply := gormdb.ProjectAliasApplyRequest{PlanReference: stale.Reference, PlanFingerprint: stale.Fingerprint, IdempotencyKey: uuid.NewString()}
+	require.Equal(t, http.StatusConflict, call(http.MethodPost, base+"/apply", staleApply).Code, "baseline drift must invalidate the prepared plan")
+	require.NoError(t, db.Exec(`UPDATE project_consolidation_redirects SET plan_fingerprint = ? WHERE selector = ? AND session_id = ''`, priorPlan.Fingerprint, target).Error)
+	require.Equal(t, beforeRedirect, baseline())
+	plan := prepare()
+	require.Equal(t, beforeRedirect, baseline())
+	apply := gormdb.ProjectAliasApplyRequest{PlanReference: plan.Reference, PlanFingerprint: plan.Fingerprint, IdempotencyKey: uuid.NewString()}
+	require.Equal(t, http.StatusOK, call(http.MethodPost, base+"/apply", apply).Code)
+	require.Equal(t, beforeRedirect, baseline())
+	require.Equal(t, http.StatusOK, call(http.MethodPost, base+"/apply", apply).Code, "same-key replay must reconcile")
+	require.Equal(t, beforeRedirect, baseline())
+	rec := call(http.MethodGet, base+"/status?idempotency_key="+apply.IdempotencyKey, nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.True(t, strings.Contains(rec.Body.String(), "applied"))
+	require.Equal(t, beforeRedirect, baseline())
+	witness(target, 1, http.StatusOK)
+	witness(source, 0, http.StatusOK)
+	witness(source, 1, http.StatusOK)
+	rollback := gormdb.ProjectAliasRollbackRequest{ApplyKey: apply.IdempotencyKey, IdempotencyKey: uuid.NewString()}
+	require.Equal(t, http.StatusOK, call(http.MethodPost, base+"/rollback", rollback).Code)
+	require.Equal(t, beforeRedirect, baseline())
+	require.Equal(t, http.StatusOK, call(http.MethodPost, base+"/rollback", rollback).Code)
+	rec = call(http.MethodGet, base+"/status?idempotency_key="+apply.IdempotencyKey, nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.True(t, strings.Contains(rec.Body.String(), "rolled_back"))
+	require.Equal(t, beforeRedirect, baseline())
+	witness(target, 0, http.StatusOK)
+	witness(source, 1, http.StatusOK)
+	witness(target, 1, http.StatusNotFound)
+	require.Equal(t, beforeTarget, native(memories[0].ID))
+	require.Equal(t, beforeSource, native(memories[1].ID))
+}
+
 func TestProjectAliasHTTPErrorSemantics(t *testing.T) {
 	for _, tc := range []struct {
 		err    error
