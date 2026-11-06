@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Set `Content-Type: application/json` on successful 201 responses for setup, registration, invitation creation, and Vault credential creation.
 
+- Explain non-401 update-check failures accessibly in Health and Settings with localized, safe diagnoses while preserving unknown availability; a successful Refresh can clear the notice. A current update-check 401 instead locks protected UI and offers sign-in.
+
 - Return a JSON 400 for setup passwords exceeding bcrypt's 72-byte limit, without creating an initial user or exposing the password.
 
 - Regenerate the API through the maintained worker target using canonical local Go package directories and Swag 1.16.6, with real producer errors stopping the build. Correct existing context search/inject/session-start annotations without changing handlers; document the shared GET/POST conditional-query limitation. The actual producer and server build pass, with 40 named schema checks and all 76 references resolved; that producer checkpoint established compile-only retained-reader oracle provenance, with later native query proof recorded separately, and installed/release acceptance remains separate.

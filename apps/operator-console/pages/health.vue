@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { operatorDiagnosisKey } from '../composables/useOperatorApi'
+import { updateCheckDiagnosisKey } from '../composables/useOperatorHealthSettings'
 
 const { t } = useI18n()
 const {
@@ -16,7 +17,7 @@ const {
   embeddingMetrics,
   migrationMetrics,
   pending,
-  error,
+  nonUpdateError,
   refresh,
 } = useOperatorHealthSettings()
 
@@ -43,7 +44,7 @@ const migrationMessage = computed(() => {
     </header>
 
     <div v-if="pending" class="state pending">{{ t('health.state.pending') }}</div>
-    <div v-if="error" class="state error">{{ t('health.state.error', { message: error }) }}</div>
+    <div v-if="nonUpdateError" class="state error">{{ t('health.state.error', { message: nonUpdateError.message }) }}</div>
 
     <section class="hero">
       <div>
@@ -123,6 +124,7 @@ const migrationMessage = computed(() => {
             <strong>{{ vnextState.kind === 'live' ? vnextState.data.noise_ratio ?? '—' : '—' }}</strong>
           </div>
         </div>
+        <p v-if="updateCheckState.kind === 'error'" class="state error" role="alert">{{ t('health.updateCheckLabel') }}: {{ t(updateCheckDiagnosisKey(updateCheckState.error)) }}</p>
       </article>
 
       <article class="card">

@@ -67,12 +67,15 @@ not the empty-list message. Pending and unavailable states have localized in-car
 status or alert text; errors use only the typed diagnosis, not raw server or provider
 payload. Only an explicit live empty components array says the server returned no
 components (EN/RU/ZH). Live rows, neighboring evidence and refresh/retry guards stay
-unchanged. `health-update-refresh.spec.mjs` covers 30 cases through the actual
-compiled consumers: the original 24 update/refresh cases, including delayed
-responses and overlap, four component-state cases and two missing/null cases.
-Full Health C1 and Settings explanatory error-copy presentation remain open under
-#477. This slice does not resolve Vue #493 or establish populated local-Docker
-browser, installed or release acceptance.
+unchanged. When the protected UI remains accessible, non-401 update-check errors
+show an accessible localized explanation beside the Health and Settings result,
+using a safe diagnosis rather than provider details. A successful Refresh can clear
+the notice and show the actual availability; independent errors remain visible.
+A current, non-aborted update-check HTTP 401 locks the shared shell, hides protected
+content including Settings, and offers localized sign-in; HTTP 403 does not itself
+lock the shell. Standalone component tests use synthetic responses and do not mount
+the full shell, so their inline 401 result is not full-app behavior.
+Other explanatory error-copy work remains open under #477.
 
 ## Project knowledge journey (2026-10-11)
 
