@@ -186,6 +186,27 @@ retry to the authenticated principal, owning context and project. An equivalent
 retry returns the existing active record; a changed command or retired target
 returns 409. Without a key a repeated create is not automatically idempotent.
 
+`GET /api/memories/principal` without `principal` searches the enrolled
+authenticated keycard's self context; it does not include that principal's project,
+global or legacy records. `context=self` is optional, but an explicit `project`,
+another context, `principal_kind` without `principal`, or an empty `principal`
+does not select self. An explicit principal retains the existing principal-query
+contract when `context` is omitted; `context` with an explicit principal is
+unsupported and returns 400. For self, a nonempty `q` is bounded to 1024 UTF-8
+bytes and 64 distinct lexical terms of at least two characters; exceeding either
+bound returns 400 rather than truncating. Punctuation-only and multiword questions
+consisting only of common boilerplate return 400. A single term is searched
+literally, even when it is a common word. For multiword questions, common English
+and Russian function words and Russian locating verbs are omitted before matching.
+Matching terms rank by their lengths, with recency as a tie-breaker; this is
+literal substring matching,
+not semantic search. Omit `q` to browse. Results contain stable memory IDs; use
+the ordinary card-read endpoint for full context, revision and provenance.
+Principal, domain and privacy restrictions are applied before pagination; the
+`hidden_count` compatibility field does not count inaccessible rows, because
+that count could disclose their existence. Explicit admin private widening still
+requires its durable audit before returning the record.
+
 `GET /api/memories/{id}` reads a visible card in its selected context. With no
 selector or identity opt-in, an enrolled client defaults to self; other callers
 retain the legacy missing-project 400. Explicit self requests still require an

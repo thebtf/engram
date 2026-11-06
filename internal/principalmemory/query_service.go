@@ -50,6 +50,8 @@ func NewPrincipalMemoryQueryService(store PrincipalMemoryStore, audit AuditLogge
 
 type PrincipalMemoryQueryRequest struct {
 	Project            string
+	SelfContextOnly    bool
+	RankQueryTerms     bool
 	Caller             PrincipalRef
 	CallerIsAdmin      bool
 	OwnerPrincipal     string
@@ -193,17 +195,22 @@ func (s *PrincipalMemoryQueryService) Query(ctx context.Context, req PrincipalMe
 		}
 	}
 	queryOpts := gormdb.ListOptions{
-		ContextCaller:      contextCaller,
-		OwnerPrincipal:     strings.TrimSpace(req.OwnerPrincipal),
-		OwnerPrincipalKind: strings.TrimSpace(strings.ToLower(req.OwnerPrincipalKind)),
-		ContentContains:    strings.TrimSpace(req.Query),
-		ContentContainsAny: normalizeQueryTerms(req.QueryTerms),
-		IDs:                req.IDs,
-		IncludeSuperseded:  req.IncludeSuperseded,
-		IncludeExpired:     req.IncludeExpired,
-		AgentVisibility:    strings.TrimSpace(req.AgentVisibility),
-		Domain:             strings.TrimSpace(req.Domain),
-		Limit:              principalQueryFetchLimit(limit),
+		ContextCaller:              contextCaller,
+		SelfContextOnly:            req.SelfContextOnly,
+		RankContentTerms:           req.RankQueryTerms,
+		EnforcePrincipalPolicy:     true,
+		PrincipalCaller:            scope.KeycardContext{Principal: req.Caller.Principal, PrincipalKind: req.Caller.PrincipalKind},
+		AllowCrossPrincipalPrivate: req.CallerIsAdmin && req.IncludePrivate,
+		OwnerPrincipal:             strings.TrimSpace(req.OwnerPrincipal),
+		OwnerPrincipalKind:         strings.TrimSpace(strings.ToLower(req.OwnerPrincipalKind)),
+		ContentContains:            strings.TrimSpace(req.Query),
+		ContentContainsAny:         normalizeQueryTerms(req.QueryTerms),
+		IDs:                        req.IDs,
+		IncludeSuperseded:          req.IncludeSuperseded,
+		IncludeExpired:             req.IncludeExpired,
+		AgentVisibility:            strings.TrimSpace(req.AgentVisibility),
+		Domain:                     strings.TrimSpace(req.Domain),
+		Limit:                      principalQueryFetchLimit(limit),
 	}
 	result := principalMemoryQueryResult(req, limit)
 	offset := req.Offset
@@ -243,16 +250,13 @@ func (s *PrincipalMemoryQueryService) Query(ctx context.Context, req PrincipalMe
 				CallerIsAdmin: req.CallerIsAdmin,
 			})
 			if !decision.Allowed {
-				result.HiddenCount++
 				continue
 			}
 			if !s.domainReadAllowed(req, mem) {
-				result.HiddenCount++
 				continue
 			}
 			if decision.AuditRequired {
 				if !req.IncludePrivate {
-					result.HiddenCount++
 					continue
 				}
 				if err := s.logPrivateRead(ctx, req, mem); err != nil {

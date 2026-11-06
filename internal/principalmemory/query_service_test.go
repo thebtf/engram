@@ -61,7 +61,7 @@ func TestPrincipalMemoryQueryService_FiltersHiddenRowsAndKeepsBoundedShape(t *te
 	assert.Equal(t, "principal_memory_query", result.Audit.Action)
 	assert.False(t, result.Audit.Durable)
 	require.Len(t, result.Items, 1, "visible output must be bounded by request limit")
-	assert.Equal(t, 2, result.HiddenCount)
+	assert.Zero(t, result.HiddenCount, "unauthorized rows must not be counted")
 	assert.Equal(t, "not_required", result.AuditStatus)
 	assert.Equal(t, int64(102), result.Items[0].ID)
 	assert.Equal(t, "agent/alice", result.Items[0].OwnerPrincipal)
@@ -73,7 +73,7 @@ func TestPrincipalMemoryQueryService_FiltersHiddenRowsAndKeepsBoundedShape(t *te
 	assert.Equal(t, "agent/alice", store.opts.OwnerPrincipal)
 	assert.Equal(t, "agent", store.opts.OwnerPrincipalKind)
 	assert.Empty(t, store.opts.Domain)
-	assert.GreaterOrEqual(t, store.opts.Limit, 2, "service may over-fetch to compute hidden_count but must bound output")
+	assert.GreaterOrEqual(t, store.opts.Limit, 2, "service must bound visible output")
 }
 
 func TestPrincipalMemoryQueryService_PagesPastHiddenRows(t *testing.T) {
@@ -116,7 +116,7 @@ func TestPrincipalMemoryQueryService_PagesPastHiddenRows(t *testing.T) {
 	require.NotNil(t, result)
 	require.Len(t, result.Items, 1)
 	assert.Equal(t, int64(501), result.Items[0].ID)
-	assert.Equal(t, 51, result.HiddenCount)
+	assert.Zero(t, result.HiddenCount, "unauthorized rows must not be counted")
 	require.Len(t, store.calls, 2, "service must continue paging when a full hidden batch does not fill the visible limit")
 	assert.Equal(t, 0, store.calls[0].Offset)
 	assert.Equal(t, 51, store.calls[1].Offset)
@@ -149,7 +149,7 @@ func TestPrincipalMemoryQueryService_HidesDomainOwnedRowsFromMismatchedCaller(t 
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Empty(t, result.Items)
-	assert.Equal(t, 1, result.HiddenCount)
+	assert.Zero(t, result.HiddenCount, "unauthorized domain rows must not be counted")
 }
 
 func TestPrincipalMemoryQueryService_AdminPrivateWideningRequiresAudit(t *testing.T) {
@@ -229,7 +229,7 @@ func TestPrincipalMemoryQueryService_AdminPrivateWideningMustBeExplicit(t *testi
 	require.NotNil(t, result)
 	require.Len(t, result.Items, 1)
 	assert.Equal(t, int64(252), result.Items[0].ID)
-	assert.Equal(t, 1, result.HiddenCount)
+	assert.Zero(t, result.HiddenCount, "private rows without explicit widening must not be counted")
 	assert.Equal(t, AuditStatusNotRequired, result.AuditStatus)
 	assert.False(t, result.Audit.Durable)
 	assert.Empty(t, audit.entries, "no durable private-read audit should be written when private widening was not explicitly requested")

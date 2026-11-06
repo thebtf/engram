@@ -936,7 +936,12 @@ func (s *MemoryStore) ListVisiblePage(ctx context.Context, project, query string
 //
 // T017a (engram vNext Milestone F TG3): store-level extension prerequisite.
 type ListOptions struct {
-	ContextCaller scope.KeycardContext
+	ContextCaller              scope.KeycardContext
+	SelfContextOnly            bool
+	RankContentTerms           bool
+	EnforcePrincipalPolicy     bool
+	PrincipalCaller            scope.KeycardContext
+	AllowCrossPrincipalPrivate bool
 	// ContentContains, when non-empty, adds a case-insensitive content
 	// substring predicate. Callers may still apply richer tag/content matching in
 	// memory, but recall(action="search") can keep its content-only predicate in
@@ -1044,6 +1049,17 @@ func (s *MemoryStore) ListPrincipalMemory(ctx context.Context, project string, o
 	args = append(args, typedArgs...)
 	predicate := "((m.context_kind = 'legacy' AND " + scope.MemoryPrivacyAccessSQL + ") OR (m.context_kind <> 'legacy' AND (" + typedSQL + ")))"
 	q = q.Model(&Memory{}).Table("memories AS m").Where(predicate, args...)
+	if opts.SelfContextOnly {
+		q = q.Where("m.context_kind = ? AND m.context_principal = ? AND m.context_principal_kind = ?", models.MemoryContextSelf, opts.ContextCaller.Principal, opts.ContextCaller.PrincipalKind)
+	}
+	if opts.EnforcePrincipalPolicy {
+		caller, kind := strings.TrimSpace(opts.PrincipalCaller.Principal), strings.ToLower(strings.TrimSpace(opts.PrincipalCaller.PrincipalKind))
+		q = q.Where(`m.context_kind <> 'legacy' OR (
+			LOWER(TRIM(m.owner_principal_kind)) IN ('human','agent','service')
+			AND (LOWER(TRIM(m.agent_visibility)) IN ('', 'shared') OR (LOWER(TRIM(m.agent_visibility)) = 'private' AND ((? <> '' AND TRIM(m.owner_principal) = ? AND LOWER(TRIM(m.owner_principal_kind)) = ?) OR ?)))
+			AND (TRIM(m.domain) = '' OR (? <> '' AND TRIM(m.owner_principal) = ? AND LOWER(TRIM(m.owner_principal_kind)) = ?)))`,
+			caller, caller, kind, opts.AllowCrossPrincipalPrivate, caller, caller, kind)
+	}
 	if project = strings.TrimSpace(project); project != "" {
 		projectPredicate, projectArgs := projectscope.MemoryPredicate("m", project)
 		q = q.Where(projectPredicate, projectArgs...)
@@ -1083,10 +1099,20 @@ func applyCurrentMemoryValidity(q *gorm.DB) *gorm.DB {
 
 func findMemoryRows(q *gorm.DB, opts ListOptions) ([]*models.Memory, error) {
 	q = applyMemoryListOptions(q, opts)
+	if opts.RankContentTerms && len(opts.ContentContainsAny) > 0 {
+		parts := make([]string, 0, len(opts.ContentContainsAny))
+		args := make([]any, 0, len(opts.ContentContainsAny))
+		for _, term := range opts.ContentContainsAny {
+			parts = append(parts, fmt.Sprintf("CASE WHEN LOWER(content) LIKE ? ESCAPE '\\' THEN %d ELSE 0 END", len([]rune(term))))
+			args = append(args, "%"+escapeSQLLike(strings.ToLower(term))+"%")
+		}
+		q = q.Clauses(clause.OrderBy{Expression: clause.Expr{SQL: "(" + strings.Join(parts, " + ") + ") DESC, created_at DESC, id DESC", Vars: args}})
+	} else {
+		q = q.Order("created_at DESC, id DESC")
+	}
 
 	var rows []Memory
-	err := q.Order("created_at DESC, id DESC").
-		Limit(normalizeMemoryListLimit(opts.Limit)).
+	err := q.Limit(normalizeMemoryListLimit(opts.Limit)).
 		Offset(normalizeMemoryListOffset(opts.Offset)).
 		Find(&rows).Error
 	if err != nil {
