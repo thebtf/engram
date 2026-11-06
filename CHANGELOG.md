@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Show an error instead of indefinite update progress when the legacy UI receives a non-success HTTP response to an update request.
+
 - Add cursor-ready candidate queue navigation and warn when a full legacy response may be truncated; this does not add backend continuation support.
 
 - Exercise cross-profile embedding reuse through two publicly registered worktrees of one Source using the installed artifact harness and a synthetic loopback provider.

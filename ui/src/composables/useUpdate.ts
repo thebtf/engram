@@ -50,6 +50,13 @@ export function useUpdate() {
     isUpdating.value = true
     try {
       const res = await fetch('/api/update/apply', { method: 'POST' })
+      if (!res.ok) {
+        const message = `Update request failed (HTTP ${res.status})`
+        stopStatusPolling()
+        updateStatus.value = { state: 'error', progress: 0, message, error: message }
+        isUpdating.value = false
+        return
+      }
       if (res.ok) {
         const result: unknown = await res.json()
         if (typeof result === 'object' && result !== null && 'success' in result && result.success === false) {
