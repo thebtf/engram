@@ -117,6 +117,17 @@ derives local Go package directories from the server dependency graph, puts
 enabled and dependency parsing disabled. Package discovery and generation
 errors stop the build; generated files must not be patched by hand.
 
+`GET /api/stats` returns uptime, session and queue activity, retrieval statistics,
+readiness, and runtime memory statistics. `database` is present when the store is
+initialized; `project` and `projectObservations` are present only when a nonempty
+project is supplied and its count lookup succeeds; `rateLimiter` is present when
+configured. A nonempty `project` scopes retrieval and the conditional project
+fields only; other statistics remain global. With no project, retrieval counters
+are summed across tracked projects. This response does not contain vector-cache
+or graph fields. A successful response is JSON; invalid project validation returns
+plain-text 400, and the readiness gate returns plain-text 503 when not ready.
+Swagger 2 lists response media types for the whole operation, not per status.
+
 Context GET and POST operations have separate annotations on real routed handlers;
 the GET entry points delegate to the same implementation without changing request
 semantics. GET requires `project` in the query string, and context search also

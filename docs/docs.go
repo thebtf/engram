@@ -3768,9 +3768,10 @@ const docTemplate = `{
                         "ApiKeyAuth": []
                     }
                 ],
-                "description": "Returns comprehensive worker statistics including uptime, memory, database health, vector cache, graph, and rate limiter stats.",
+                "description": "Returns uptime, session, queue, retrieval, readiness, and runtime memory statistics. Database health is included when the store is initialized; project and projectObservations are included when a nonempty project is supplied and its count lookup succeeds; rateLimiter is included when configured. The project parameter scopes retrieval and the conditional project fields only; other statistics are global. A successful response is JSON; 400 and 503 errors are plain text. Swagger 2 produces applies to the whole operation, not individual statuses.",
                 "produces": [
-                    "application/json"
+                    "application/json",
+                    "text/plain"
                 ],
                 "tags": [
                     "Analytics"
@@ -3779,7 +3780,7 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Filter stats by project",
+                        "description": "Scope retrieval and conditional project fields by project",
                         "name": "project",
                         "in": "query"
                     }
@@ -3793,7 +3794,13 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "bad request",
+                        "description": "Invalid project (plain text)",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "Service not ready (plain text)",
                         "schema": {
                             "type": "string"
                         }
