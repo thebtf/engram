@@ -2040,12 +2040,13 @@ const docTemplate = `{
                         "ApiKeyAuth": []
                     }
                 ],
-                "description": "Requires the authenticated owner and current version. Omit context and project for enrolled self; project context requires the card's unique native canonical membership, not a read alias, and self/global must omit project. Legacy rows return 404 without changing their context or history. A stale version returns 409; after an uncertain outcome read the current card before retrying. The prior body and audit are retained atomically.",
+                "description": "Requires the authenticated owner and current version. Omit context and project for enrolled self; project context requires the card's unique native canonical membership, not a read alias, and self/global must omit project. Legacy rows return 404 without changing their context or history. A stale version returns 409; after an uncertain outcome read the current card before retrying. The current domain write policy applies: reject mode records a denial audit and returns 403 without a revision; an audit failure does not mutate the card. Warn mode records an audit and allows the revision with domain_warning and domain_audit_status. The prior body and update audit are retained atomically. Success is JSON and errors are plain text; Swagger 2 lists media types for the whole operation.",
                 "consumes": [
                     "application/json"
                 ],
                 "produces": [
-                    "application/json"
+                    "application/json",
+                    "text/plain"
                 ],
                 "tags": [
                     "Memories"
@@ -2090,7 +2091,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/models.Memory"
+                            "$ref": "#/definitions/worker.reviseMemoryContextResponse"
                         }
                     },
                     "400": {
@@ -2106,7 +2107,7 @@ const docTemplate = `{
                         }
                     },
                     "403": {
-                        "description": "principal context access denied",
+                        "description": "principal context access denied or domain write rejected",
                         "schema": {
                             "type": "string"
                         }
@@ -2124,7 +2125,7 @@ const docTemplate = `{
                         }
                     },
                     "500": {
-                        "description": "internal error",
+                        "description": "internal error; domain audit failure does not mutate the card",
                         "schema": {
                             "type": "string"
                         }
@@ -5196,6 +5197,17 @@ const docTemplate = `{
                 "NotComputable"
             ]
         },
+        "principalmemory.DomainWriteWarning": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                }
+            }
+        },
         "reviewpacket.CandidateAuditPolicy": {
             "type": "object",
             "properties": {
@@ -6167,6 +6179,168 @@ const docTemplate = `{
                 "version": {
                     "type": "integer",
                     "minimum": 1
+                }
+            }
+        },
+        "worker.reviseMemoryContextResponse": {
+            "type": "object",
+            "properties": {
+                "access_count": {
+                    "type": "integer"
+                },
+                "agent_visibility": {
+                    "type": "string",
+                    "enum": [
+                        "private",
+                        "shared"
+                    ]
+                },
+                "author": {
+                    "$ref": "#/definitions/models.MemoryAuthor"
+                },
+                "citation_count": {
+                    "type": "integer"
+                },
+                "confidence": {
+                    "type": "number"
+                },
+                "consecutive_citation_count": {
+                    "type": "integer"
+                },
+                "content": {
+                    "type": "string"
+                },
+                "context": {
+                    "$ref": "#/definitions/models.MemoryContext"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "defeasibility": {
+                    "type": "string"
+                },
+                "deleted_at": {
+                    "type": "string"
+                },
+                "domain": {
+                    "type": "string"
+                },
+                "domain_audit_status": {
+                    "type": "string"
+                },
+                "domain_warning": {
+                    "$ref": "#/definitions/principalmemory.DomainWriteWarning"
+                },
+                "edited_by": {
+                    "type": "string"
+                },
+                "epistemic_type": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "importance_base": {
+                    "type": "number"
+                },
+                "injection_count": {
+                    "type": "integer"
+                },
+                "last_confirmed": {
+                    "type": "string"
+                },
+                "last_retrieved_at": {
+                    "type": "string"
+                },
+                "owner_principal": {
+                    "description": "OwnerPrincipal is server-derived from the authenticated identity, never\nfrom caller-supplied payload fields.",
+                    "type": "string"
+                },
+                "owner_principal_kind": {
+                    "type": "string",
+                    "enum": [
+                        "human",
+                        "agent",
+                        "service"
+                    ]
+                },
+                "privacy_scope": {
+                    "description": "PrivacyScope is one of 'private' | 'project' | 'shared' | 'global'.\nAdded by migration 125 (TG1 / T001+T002). DEFAULT 'project' for legacy rows.\nBackward-compat: see spec.md §FR-F1 REVISE — the legacy ` + "`" + `scope:*` + "`" + ` tag + MCP\nresponse synthesis surface remains active for 2 minor versions (until v6.7.0)\nper RI-F2.",
+                    "type": "string",
+                    "enum": [
+                        "private",
+                        "project",
+                        "shared",
+                        "global"
+                    ]
+                },
+                "project": {
+                    "type": "string"
+                },
+                "promotion_target": {
+                    "type": "string"
+                },
+                "recurrence_count": {
+                    "type": "integer"
+                },
+                "retrievability": {
+                    "type": "number"
+                },
+                "review_after": {
+                    "type": "string"
+                },
+                "source_agent": {
+                    "type": "string"
+                },
+                "source_sessions": {
+                    "description": "SourceSessions lists every session_id that wrote or confirmed this memory.\nAdded by migration 125 (TG1 / T001+T002) as TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[].\nConsumed by internal/scope/filter.Resolve for private-scope visibility checks\nper spec §FR-F1 CHK005-ADDED keycard identity invariant.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "source_workstation_id": {
+                    "description": "SourceWorkstationID is the writing keycard's workstation identifier\n(api_tokens.id for SourceClient writers). Added by migration 130 (TG1 /\nT001b + T003b, AMEND 2026-05-25). Empty string is the \"unknown\nworkstation\" sentinel — pre-existing rows + flag-OFF writes carry empty.\nConsumed by scope.Resolve ScopePrivate for the keycard identity\ninvariant per spec §FR-F1 AMEND 2026-05-25 decision tree.",
+                    "type": "string"
+                },
+                "stability": {
+                    "type": "number"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "superseded_by": {
+                    "type": "integer"
+                },
+                "supersedes_id": {
+                    "type": "integer"
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "tier": {
+                    "type": "string"
+                },
+                "ts_alpha": {
+                    "type": "number"
+                },
+                "ts_beta": {
+                    "type": "number"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "valid_from": {
+                    "type": "string"
+                },
+                "valid_until": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "integer"
                 }
             }
         },

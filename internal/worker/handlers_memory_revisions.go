@@ -24,6 +24,12 @@ type reviseMemoryContextRequest struct {
 	Version int    `json:"version" binding:"required" minimum:"1"`
 }
 
+type reviseMemoryContextResponse struct {
+	*models.Memory
+	DomainWarning     *principalmemory.DomainWriteWarning `json:"domain_warning,omitempty"`
+	DomainAuditStatus string                              `json:"domain_audit_status,omitempty"`
+}
+
 type memoryContextHistoryResponse struct {
 	Revisions []gormdb.MemoryRevision `json:"revisions"`
 }
@@ -55,22 +61,22 @@ func (s *Service) memoryRevisionSelector(r *http.Request) (int64, models.MemoryC
 
 // handleReviseMemoryContext godoc
 // @Summary Revise a typed memory card
-// @Description Requires the authenticated owner and current version. Omit context and project for enrolled self; project context requires the card's unique native canonical membership, not a read alias, and self/global must omit project. Legacy rows return 404 without changing their context or history. A stale version returns 409; after an uncertain outcome read the current card before retrying. The current domain write policy applies; rejection is audited and returns 403, while warn mode allows the revision with a warning and audit. The prior body and update audit are retained atomically.
+// @Description Requires the authenticated owner and current version. Omit context and project for enrolled self; project context requires the card's unique native canonical membership, not a read alias, and self/global must omit project. Legacy rows return 404 without changing their context or history. A stale version returns 409; after an uncertain outcome read the current card before retrying. The current domain write policy applies: reject mode records a denial audit and returns 403 without a revision; an audit failure does not mutate the card. Warn mode records an audit and allows the revision with domain_warning and domain_audit_status. The prior body and update audit are retained atomically. Success is JSON and errors are plain text; Swagger 2 lists media types for the whole operation.
 // @Tags Memories
 // @Accept json
-// @Produce json
+// @Produce json,plain
 // @Security ApiKeyAuth
 // @Param id path int true "Memory ID"
 // @Param context query string false "Owning context; omission selects self unless project is supplied" Enums(self,project,global)
 // @Param project query string false "Existing canonical project UUID; required for project and forbidden for self/global"
 // @Param body body reviseMemoryContextRequest true "Current version and replacement content"
-// @Success 200 {object} models.Memory
+// @Success 200 {object} reviseMemoryContextResponse
 // @Failure 400 {string} string "invalid selector, content or version"
 // @Failure 401 {string} string "authentication or explicit keycard validation failed"
-// @Failure 403 {string} string "principal context access denied"
+// @Failure 403 {string} string "principal context access denied or domain write rejected"
 // @Failure 404 {string} string "context or manageable active typed card not found"
 // @Failure 409 {string} string "stale version; read current card to reconcile"
-// @Failure 500 {string} string "internal error"
+// @Failure 500 {string} string "internal error; domain audit failure does not mutate the card"
 // @Failure 503 {string} string "memory store unavailable"
 // @Router /api/memories/{id} [patch]
 func (s *Service) handleReviseMemoryContext(w http.ResponseWriter, r *http.Request) {

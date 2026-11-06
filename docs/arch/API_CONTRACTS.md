@@ -233,6 +233,13 @@ unique native canonical membership and revalidates it under the mutation locks.
 The version must match; a stale version returns 409. After an uncertain outcome,
 read the current card and reconcile before deciding whether to retry. A successful
 revision keeps the ID, atomically captures the previous body and increments version.
+The current domain write policy also applies to typed revisions. A cross-owner
+write in reject mode records a denial audit and returns 403 without creating a
+revision. If the required domain audit fails, the card is not mutated. In warn
+mode, a cross-owner write is audited and the revision proceeds; its response
+includes `domain_warning` and `domain_audit_status`. These fields are omitted
+when there is no warning. The success response is JSON; errors are plain text.
+Swagger 2 lists media types for the whole operation, not per status.
 The newly captured body is subject to the current redaction rules, so it is not
 necessarily a byte-exact historical copy. Existing stored history is not rewritten.
 When an embedding provider and store are configured, revision starts an asynchronous
