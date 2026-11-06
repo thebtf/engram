@@ -111,7 +111,25 @@ func TestHumanVaultHTTPStoreIsolation(t *testing.T) {
 	require.NoError(t, err)
 	defer pool.Close()
 	pool.SetMaxOpenConns(2)
-	require.NoError(t, db.WithContext(ctx).AutoMigrate(&gormdb.Credential{}, &gormdb.Issue{}, &gormdb.IssueComment{}, &gormdb.ConsolidationMembership{}))
+	require.NoError(t, db.WithContext(ctx).AutoMigrate(&gormdb.Project{}, &gormdb.Credential{}, &gormdb.Issue{}, &gormdb.IssueComment{}, &gormdb.ConsolidationMembership{}))
+	for _, statement := range []string{
+		`CREATE TABLE project_consolidation_backups (
+		 backup_id UUID PRIMARY KEY, plan_id UUID NOT NULL, plan_fingerprint TEXT NOT NULL,
+		 ciphertext BYTEA NOT NULL, restore_identity TEXT NOT NULL, restore_snapshot TEXT NOT NULL,
+		 restore_verified_at TIMESTAMPTZ NOT NULL)`,
+		`CREATE TABLE project_consolidation_frames (
+		 backup_id UUID NOT NULL REFERENCES project_consolidation_backups(backup_id) ON DELETE RESTRICT,
+		 ordinal BIGINT NOT NULL CHECK(ordinal>=0), ciphertext BYTEA NOT NULL CHECK(octet_length(ciphertext)<=524288),
+		 PRIMARY KEY(backup_id,ordinal))`,
+		`CREATE TABLE project_consolidation_operations (
+		 idempotency_key UUID PRIMARY KEY, operation_id UUID NOT NULL UNIQUE, plan_id UUID NOT NULL,
+		 plan_fingerprint TEXT NOT NULL, receipt JSONB NOT NULL, completed_at TIMESTAMPTZ NOT NULL)`,
+		`CREATE TABLE project_consolidation_redirects (
+		 selector TEXT NOT NULL, session_id TEXT NOT NULL DEFAULT '', project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE RESTRICT,
+		 plan_fingerprint TEXT NOT NULL, PRIMARY KEY(selector,session_id))`,
+	} {
+		require.NoError(t, db.WithContext(ctx).Exec(statement).Error)
+	}
 	private := t.TempDir()
 	key := make([]byte, 32)
 	_, err = rand.Read(key)
@@ -151,6 +169,9 @@ func TestHumanVaultHTTPStoreIsolation(t *testing.T) {
 		require.NoError(t, requestErr)
 		defer response.Body.Close()
 		require.Equal(t, expected, response.StatusCode)
+		if method == http.MethodPost && path == "/api/vault/credentials" && expected == http.StatusCreated {
+			require.Equal(t, "application/json", response.Header.Get("Content-Type"))
+		}
 		if expected >= 400 {
 			return nil
 		}

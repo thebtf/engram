@@ -50,6 +50,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Set `Content-Type: application/json` on successful 201 responses for setup, registration, invitation creation, and Vault credential creation.
+
 - Return a JSON 400 for setup passwords exceeding bcrypt's 72-byte limit, without creating an initial user or exposing the password.
 - Explain non-401 update-check failures accessibly in Health and Settings with localized, safe diagnoses while preserving unknown availability; a successful Refresh can clear the notice. A current update-check 401 instead locks protected UI and offers sign-in.
 - Close removed SSE subscriber streams safely after in-flight writes finish; prevent queued writes from using a released response and preserve the non-replay and blocked-writer limitations.
