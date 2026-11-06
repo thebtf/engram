@@ -83,7 +83,8 @@ function writeZip(archiveRoot, archivePath, entries) {
   fs.writeFileSync(archivePath, Buffer.concat([...records, directory, end]));
 }
 
-function buildArchive(archiveRoot, archivePath, entries = ["engram-server", "package.json", "extensions/engram-memory.mjs", "scripts/task-context-worker.js"]) {
+const archiveEntries = ["engram-server", "package.json", "extensions/engram-memory.mjs", "scripts/task-context-worker.js", "hooks/user-prompt.js", "scripts/run-engram.js"];
+function buildArchive(archiveRoot, archivePath, entries = archiveEntries) {
   if (archivePath.endsWith(".tar.gz")) {
     run("tar", ["-czf", archivePath, "-C", archiveRoot, ...entries]);
   } else {
@@ -96,10 +97,13 @@ function createFixture() {
   const dist = path.join(temporary, "dist");
   fs.mkdirSync(path.join(archiveRoot, "extensions"), { recursive: true });
   fs.mkdirSync(path.join(archiveRoot, 'scripts'));
+  fs.mkdirSync(path.join(archiveRoot, 'hooks'));
   fs.mkdirSync(dist);
   fs.copyFileSync(manifestPath, path.join(archiveRoot, "package.json"));
   fs.copyFileSync(extensionPath, path.join(archiveRoot, "extensions", "engram-memory.mjs"));
   fs.copyFileSync(workerPath, path.join(archiveRoot, 'scripts', 'task-context-worker.js'));
+  fs.copyFileSync(path.join(root, 'plugin/engram/hooks/user-prompt.js'), path.join(archiveRoot, 'hooks/user-prompt.js'));
+  fs.copyFileSync(path.join(root, 'plugin/engram/scripts/run-engram.js'), path.join(archiveRoot, 'scripts/run-engram.js'));
   fs.writeFileSync(path.join(archiveRoot, "engram-server"), `#!/usr/bin/env bash
 if [[ -n "\${NO_COLOR:-}" ]]; then
   printf 'INF Starting engram server version=v${version}\\n' >&2
@@ -267,6 +271,22 @@ test('server-plugin archive gate requires exact task-context worker bytes in all
     const changed = gate(fixture.dist);
     assert.notEqual(changed.status, 0);
     assert.match(`${changed.stderr}\n${changed.stdout}`, /task-context worker differs/);
+  } finally {
+    fs.rmSync(fixture.temporary, { recursive: true, force: true });
+  }
+});
+
+test('server-plugin archive gate rejects missing extension dependencies', () => {
+  const fixture = createFixture();
+  try {
+    buildExpectedMatrix(fixture);
+    const archive = path.join(fixture.dist, expectedArchives()[2]);
+    for (const missing of ['hooks/user-prompt.js', 'scripts/run-engram.js']) {
+      buildArchive(fixture.archiveRoot, archive, archiveEntries.filter(entry => entry !== missing));
+      const result = gate(fixture.dist);
+      assert.notEqual(result.status, 0);
+      assert.ok(`${result.stderr}\n${result.stdout}`.includes(`canonical ${missing}`));
+    }
   } finally {
     fs.rmSync(fixture.temporary, { recursive: true, force: true });
   }

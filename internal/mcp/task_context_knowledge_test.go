@@ -36,6 +36,10 @@ func TestTaskEvidencePreservesSourceAndFragmentHashes(t *testing.T) {
 
 func TestTaskContextAdmissionWithoutCodeAndNativeGuard(t *testing.T) {
 	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "false")
+	withoutProvider := NewServer(ServerOptions{Version: "test"})
+	for _, tool := range withoutProvider.ListTools() {
+		require.NotEqual(t, "codebase_task_context", tool.Name, "ordinary servers must not advertise an unavailable provider")
+	}
 	server := NewServer(ServerOptions{Version: "test"})
 	server.SetMemoryStore(&dbgorm.MemoryStore{})
 	found := false

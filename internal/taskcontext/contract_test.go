@@ -81,3 +81,28 @@ func TestTaskContextFrameRetainsBoundedKnowledge(t *testing.T) {
 	require.NotEqual(t, hash, got.Knowledge.Items[0].ContentHash)
 	require.Equal(t, content, response.Knowledge.Items[0].Content, "encoding must not mutate its input")
 }
+
+func TestTaskContextFramePrefersKnowledgeOverEmptyCode(t *testing.T) {
+	content := strings.Repeat("é", 2000)
+	digest := sha256.Sum256([]byte(content))
+	hash := hex.EncodeToString(digest[:])
+	items := uci.QueryItems{}
+	response := Closed("ok", "OK")
+	response.CodeStatus, response.CodeReason = "empty", "NO_MATCH"
+	response.Packet = &Packet{Search: uci.QueryResponse{Items: &items}}
+	response.Knowledge = &Knowledge{MemoryStatus: "ok", NoteStatus: "empty", RuleStatus: "empty", Items: []Evidence{{Kind: "memory", ID: 42, Content: content, ContentHash: hash, SourceHash: hash}}}
+	raw, err := Encode(response, 1024)
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(raw), 1024)
+	var got Response
+	require.NoError(t, json.Unmarshal(raw, &got))
+	require.NoError(t, got.Validate())
+	require.Equal(t, "ok", got.Status)
+	require.Equal(t, "empty", got.CodeStatus)
+	require.Equal(t, "NO_MATCH", got.CodeReason)
+	require.Nil(t, got.Packet)
+	require.Len(t, got.Knowledge.Items, 1)
+	require.True(t, got.Knowledge.Items[0].Excerpt)
+	require.Equal(t, hash, got.Knowledge.Items[0].SourceHash)
+	require.Equal(t, content, response.Knowledge.Items[0].Content)
+}

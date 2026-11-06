@@ -1014,7 +1014,7 @@ func (s *Server) buildToolsList(req *Request, catalogOnly bool) *Response {
 	if catalogOnly || codeIntelEnabled() && s.hasCodebaseGraphApplication() {
 		tools = append(tools, codebaseGraphTool())
 	}
-	if s.hasTaskContextProvider() {
+	if catalogOnly || s.hasTaskContextProvider() {
 		tools = append(tools, codebaseTaskContextTool())
 	}
 

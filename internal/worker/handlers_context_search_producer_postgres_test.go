@@ -695,6 +695,18 @@ func TestContextSearchProducerFinalRevalidationPostgres(t *testing.T) {
 				case <-ctx.Done():
 					t.Fatal("real authenticated HTTP search did not reach the controlled reranker")
 				}
+				var rerankCall *feature009ProviderCall
+				for _, call := range f.provider.since(0) {
+					if call.path == "/v1/rerank" {
+						rerankCall = call
+					}
+				}
+				require.NotNil(t, rerankCall)
+				select {
+				case <-rerankCall.done:
+					t.Fatal("reranker finished before the concurrent change")
+				default:
+				}
 				current, err := f.memories.Get(t.Context(), f.primary.ID)
 				require.NoError(t, err)
 				if change == "acl" {
@@ -708,8 +720,18 @@ func TestContextSearchProducerFinalRevalidationPostgres(t *testing.T) {
 					current, err = f.memories.Update(t.Context(), current)
 					require.NoError(t, err)
 				}
+				select {
+				case <-rerankCall.done:
+					t.Fatal("reranker finished before the concurrent change completed")
+				default:
+				}
 				// Only the controlled concurrent writer may change this state.
 				beforeReturn := f.state(t)
+				select {
+				case <-rerankCall.done:
+					t.Fatal("reranker finished before the changed state was observed")
+				default:
+				}
 				close(f.provider.release)
 				var x feature009ProducerExchange
 				select {

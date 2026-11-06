@@ -77,7 +77,7 @@ extract_entry() {
 
 for archive in "${archives[@]}"; do
   mapfile -t entries < <(archive_entries "$archive")
-  for entry in package.json extensions/engram-memory.mjs scripts/task-context-worker.js; do
+  for entry in package.json extensions/engram-memory.mjs scripts/task-context-worker.js hooks/user-prompt.js scripts/run-engram.js; do
     matches=0
     for candidate in "${entries[@]}"; do
       if [[ "$candidate" == "$entry" ]]; then

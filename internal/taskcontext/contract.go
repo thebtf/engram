@@ -161,6 +161,9 @@ func Encode(response Response, limit int) ([]byte, error) {
 		knowledge.Items = append([]Evidence(nil), knowledge.Items...)
 		response.Knowledge = &knowledge
 	}
+	if response.Packet != nil && response.CodeStatus == "empty" && response.Knowledge != nil && len(response.Knowledge.Items) > 0 {
+		response.Packet = nil
+	}
 	if response.Packet != nil {
 		withoutKnowledge := response
 		withoutKnowledge.Knowledge = nil

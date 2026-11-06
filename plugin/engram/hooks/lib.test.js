@@ -703,7 +703,7 @@ test('UserPromptSubmit reaches its handler without pre-resolving identity; other
  for (const [event, expected] of [['UserPromptSubmit', 0], ['PreToolUse', 1]]) {
   const child = spawnSync(process.execPath, ['-e', program, path.join(__dirname, '../scripts/run-engram.js'), path.join(__dirname, 'lib.js'), event], {
    encoding: 'utf8', input: JSON.stringify({ cwd: '/actual/root', session_id: 'prompt-budget' }),
-   env: { ...process.env, ENGRAM_QUIET: '0', ENGRAM_INTERNAL: '0', ENGRAM_URL: 'http://fixture.invalid' }, timeout: NODE_CHILD_TIMEOUT_MS,
+   env: { ...process.env, ENGRAM_QUIET: '0', ENGRAM_INTERNAL: '0', ENGRAM_URL: 'http://fixture.invalid', ENGRAM_CLIENT_INSTANCE_ID: 'fixture-client' }, timeout: NODE_CHILD_TIMEOUT_MS,
   });
   assert.equal(child.status, 0, child.stderr);
   const response = JSON.parse(child.stdout);

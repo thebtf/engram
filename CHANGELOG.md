@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Preserve bounded knowledge when an empty code packet exceeds the shared frame budget; keep correction and segmentation capture alive through successful prompt return and quiet mode. Include the native task schema in the explicitly unverified offline catalog and check packaged extension dependencies.
+
 - Reuse the persisted client installation identity read-only for prompt context, mask diagnostic secrets before presentation, and suppress repeated evidence independently of transient exposure references. Preserve original evidence hashes and distinguish redacted display text from source. Update the startup fixture for native knowledge delivery.
 
 - Recover an existing native Source from the actual Git cwd without a caller-supplied locator or historical View/index binding. Permit explicit Go-to-current-semantic promotion through a new immutable checkout registration profile while retaining implicit Go replay, Source/project authorization, semantic-to-Go refusal and old profiles/artifacts/Views. Document the verified installed-parser and outside-callback preparation path; this repair does not claim loaded-host or useful 500ms delivery acceptance.

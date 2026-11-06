@@ -59,10 +59,22 @@ function errorStatus(error, signal, deadlineAt) {
   return 'unavailable';
 }
 
-function scheduleSupportHooks(project, session, query, requestPost, budget, options) {
-  const send = (route, body) => { void Promise.resolve().then(() => requestPost(route, body, budget, options)).catch(() => { }); };
-  send('/api/hooks/segment-check', { project, session_id: session, prompt_text: query });
-  if (detectCorrection(query)) send('/api/hooks/correction', { project, session_id: session, user_message: query });
+function scheduleSupportHooks(project, session, query, requestPost, deadlineAt, options) {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  const remaining = deadlineAt - Date.now();
+  if (remaining <= 0 || options.signal?.aborted) return;
+  const timer = setTimeout(abort, remaining);
+  options.signal?.addEventListener('abort', abort, { once: true });
+  if (options.signal?.aborted) abort();
+  const send = (route, body) => Promise.resolve().then(() => {
+    const budget = deadlineAt - Date.now();
+    if (budget <= 0 || controller.signal.aborted) return;
+    return requestPost(route, body, budget, { ...options, signal: controller.signal });
+  }).catch(() => { });
+  const pending = [send('/api/hooks/segment-check', { project, session_id: session, prompt_text: query })];
+  if (detectCorrection(query)) pending.push(send('/api/hooks/correction', { project, session_id: session, user_message: query }));
+  void Promise.all(pending).finally(() => { clearTimeout(timer); options.signal?.removeEventListener('abort', abort); });
 }
 
 function eligiblePrompt(facts) {
@@ -149,7 +161,8 @@ async function requestPromptContext(facts = {}, options = {}) {
     deliveryIdentity.push(project);
     const context = formatNativeTaskContext(native, config.token);
     check();
-    if (context.content && !config.quiet && options.supportHooks) scheduleSupportHooks(project, facts.session, query, options.requestPost ?? lib.requestPost, Math.max(1, deadlineAt - Date.now()), { signal: controller.signal, serverURL: config.serverURL, token: config.token, maxResponseBytes: 65536 });
+    if (options.supportHooks) scheduleSupportHooks(project, facts.session, query, options.requestPost ?? lib.requestPost, deadlineAt, { signal: options.signal, serverURL: config.serverURL, token: config.token, maxResponseBytes: 65536 });
+    if (config.quiet) return result('skipped', stage);
     return { ...context, native_status: native.status, knowledge_status: native.knowledge ? 'native' : 'unavailable', ...(context.content ? { evidenceIdentity: evidenceIdentity(native) } : {}) };
   })().catch(error => ({ ...result(errorStatus(error, controller.signal, deadlineAt), stage), ...(/HOOK_CLIENT_UNAVAILABLE|resolved client failed final integrity verification/.test(error?.message ?? '') ? { code: 'HOOK_CLIENT_UNAVAILABLE' } : {}) }));
   try {
