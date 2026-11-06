@@ -7,8 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Keep multiword task questions out of the automatic single-query code fast path and return `EXPLICIT_SEARCH_REQUIRED`; ordinary explicit same-View code search remains available with its existing coverage and fallback behavior. This does not claim a useful natural-language result or loaded-host acceptance.
-
 - Recover an existing native Source from the actual Git cwd without a caller-supplied locator or historical View/index binding. Permit explicit Go-to-current-semantic promotion through a new immutable checkout registration profile while retaining implicit Go replay, Source/project authorization, semantic-to-Go refusal and old profiles/artifacts/Views. Document the verified installed-parser and outside-callback preparation path; this repair does not claim loaded-host or useful 500ms delivery acceptance.
 
 - Honor optional positive `X-Engram-Budget-Ms` remaining-work budgets on GET/POST `/api/context/search` without extending inherited deadlines, overflowing duration conversion, or adding a global 500ms cap. Preserve ordinary no-header provider behavior; bound optional reranking inside explicit budgets so authorized lexical fallback and final ACL/version/body-digest revalidation retain processing time. Add truthful optional memory/behavioral-rule `source_ref` metadata, distinguish mutable row versions from body identity, and preserve exact legacy numeric observation IDs even beyond JavaScript's safe-integer range.
