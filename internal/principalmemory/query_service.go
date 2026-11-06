@@ -115,7 +115,7 @@ type PrincipalMemoryQueryResult struct {
 	Project       string                     `json:"project,omitempty"`
 	Domain        string                     `json:"domain,omitempty"`
 	Items         []PrincipalMemoryQueryItem `json:"items"`
-	HiddenCount   int                        `json:"hidden_count"`
+	HiddenCount   *int                       `json:"hidden_count"`
 	Audit         PrincipalMemoryQueryAudit  `json:"audit"`
 	AuditStatus   string                     `json:"audit_status"`
 }

@@ -80,6 +80,23 @@ function session(t, identity = () => Response.json(verifiedUser), knowledgeFetch
   return { shell, api, calls, storage, dependency, mutation: load('useApi'), loginStatus: (status) => { loginStatus = status }, logoutStatus: (status) => { logoutStatus = status }, projectStatus: (status) => { projectStatus = status }, protectDiagnostics: () => { protectedDiagnostics = true } }
 }
 
+test('principal hidden count preserves unknown and numeric values', async (t) => {
+  for (const [field, expected] of [[{ hidden_count: null }, null], [{}, null], [{ hidden_count: 0 }, 0], [{ hidden_count: 7 }, 7]]) {
+    const consumer = session(t, undefined, (url) => url.pathname === '/api/memories/principal'
+      ? Response.json({ principal: 'agent/test', principal_kind: 'agent', items: [], ...field })
+      : undefined)
+    const effect = vue.effectScope()
+    t.after(() => effect.stop())
+    const surface = effect.run(() => consumer.dependency('./useOperatorMemoryLab').useOperatorPrincipalMemorySurface(vue.ref(projectID)))
+    assert.equal(surface.loadState.value.data.hiddenCount, null)
+    surface.scope.value.principal = 'agent/test'
+    surface.scope.value.project = 'all'
+    await surface.refresh()
+    assert.equal(surface.loadState.value.kind, 'empty')
+    assert.equal(surface.loadState.value.data.hiddenCount, expected)
+  }
+})
+
 function assertNoIdentity(info, posture) {
   assert.equal(info.authPosture, posture)
   assert.equal(info.authenticated, false)

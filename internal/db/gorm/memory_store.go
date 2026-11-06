@@ -1053,12 +1053,10 @@ func (s *MemoryStore) ListPrincipalMemory(ctx context.Context, project string, o
 		q = q.Where("m.context_kind = ? AND m.context_principal = ? AND m.context_principal_kind = ?", models.MemoryContextSelf, opts.ContextCaller.Principal, opts.ContextCaller.PrincipalKind)
 	}
 	if opts.EnforcePrincipalPolicy {
-		caller, kind := strings.TrimSpace(opts.PrincipalCaller.Principal), strings.ToLower(strings.TrimSpace(opts.PrincipalCaller.PrincipalKind))
-		q = q.Where(`m.context_kind <> 'legacy' OR (
-			LOWER(TRIM(m.owner_principal_kind)) IN ('human','agent','service')
-			AND (LOWER(TRIM(m.agent_visibility)) IN ('', 'shared') OR (LOWER(TRIM(m.agent_visibility)) = 'private' AND ((? <> '' AND TRIM(m.owner_principal) = ? AND LOWER(TRIM(m.owner_principal_kind)) = ?) OR ?)))
-			AND (TRIM(m.domain) = '' OR (? <> '' AND TRIM(m.owner_principal) = ? AND LOWER(TRIM(m.owner_principal_kind)) = ?)))`,
-			caller, caller, kind, opts.AllowCrossPrincipalPrivate, caller, caller, kind)
+		caller := strings.TrimSpace(opts.PrincipalCaller.Principal)
+		kind := strings.ToLower(strings.TrimSpace(opts.PrincipalCaller.PrincipalKind))
+		principalSQL := scope.MemoryPrincipalAccessSQL
+		q = q.Where("m.context_kind <> 'legacy' OR (LOWER(TRIM(m.owner_principal_kind)) IN ('human','agent','service') AND (("+principalSQL+") OR (? AND LOWER(TRIM(m.agent_visibility)) = 'private' AND TRIM(m.domain) = '')))", caller, kind, caller, kind, caller, kind, caller, kind, opts.AllowCrossPrincipalPrivate)
 	}
 	if project = strings.TrimSpace(project); project != "" {
 		projectPredicate, projectArgs := projectscope.MemoryPredicate("m", project)

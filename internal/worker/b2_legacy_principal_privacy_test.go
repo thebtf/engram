@@ -71,7 +71,7 @@ func TestB2LegacyPrincipalPrivacyHTTP(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(page.body), &shared))
 	require.Len(t, shared.Items, 1, "newer private rows must not consume the retrieval budget")
 	assert.EqualValues(t, sharedID, shared.Items[0].ID)
-	assert.Zero(t, shared.HiddenCount)
+	assert.Nil(t, shared.HiddenCount)
 
 	master := f.tokenAuth.Token()
 	f.tokenAuth.SetValidator(auth.NewValidator(master, nil))
