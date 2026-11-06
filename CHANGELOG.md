@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Require native project membership under mutation locks when revising a typed project card; a read alias does not grant write authority.
 
+- Add cursor-ready candidate queue navigation and warn when a full legacy response may be truncated; this does not add backend continuation support.
+
 - Exercise cross-profile embedding reuse through two publicly registered worktrees of one Source using the installed artifact harness and a synthetic loopback provider.
 
 - Allow the installed dirty-worktree acceptance scenario to use the same explicit released-artifact inputs as the public-consumer test, retaining source-build defaults. Bind parser fixtures to the semantic profile and observe watcher transitions through selected Views without inventing unavailable run IDs.
