@@ -5,6 +5,7 @@ import (
 	"database/sql"
 
 	"github.com/lib/pq"
+	"github.com/thebtf/engram/internal/db/projectscope"
 	"github.com/thebtf/engram/internal/projectidentity"
 	gormlib "gorm.io/gorm"
 )
@@ -30,13 +31,18 @@ func canonicalIssueRoleSQL(field string) string {
 	 AND m.field_path='["` + field + `"]'::jsonb AND m.row_key->>'id'=issues.id::text)`
 }
 
+// readIssueRoleSQL is a presentation projection, never mutation authority.
+func readIssueRoleSQL(field string) string {
+	return projectscope.CanonicalReadProjectSQL(canonicalIssueRoleSQL(field))
+}
+
 func (s *IssueStore) ProjectRoles(ctx context.Context, ids []int64) (map[int64]IssueProjectRoles, error) {
 	result := make(map[int64]IssueProjectRoles, len(ids))
 	if len(ids) == 0 {
 		return result, nil
 	}
 	var rows []IssueProjectRoles
-	err := s.db.WithContext(ctx).Table("issues").Select("issues.id,"+canonicalIssueRoleSQL("source_project")+" AS source_project_id,"+canonicalIssueRoleSQL("target_project")+" AS target_project_id").Where("issues.id = ANY(?)", pq.Array(ids)).Scan(&rows).Error
+	err := s.db.WithContext(ctx).Table("issues").Select("issues.id,"+readIssueRoleSQL("source_project")+" AS source_project_id,"+readIssueRoleSQL("target_project")+" AS target_project_id").Where("issues.id = ANY(?)", pq.Array(ids)).Scan(&rows).Error
 	if err != nil {
 		return nil, err
 	}
@@ -62,7 +68,8 @@ func (s *IssueStore) GetIssueForProject(ctx context.Context, id int64, project s
 			return ErrIssueNotFound
 		}
 		var count int64
-		if err := tx.Table("issues").Where("id=? AND ("+canonicalIssueRoleSQL("source_project")+"=? OR "+canonicalIssueRoleSQL("target_project")+"=?)", id, project, project).Count(&count).Error; err != nil {
+		predicate := projectscope.MembershipPredicate("issues", "source_project") + " OR " + projectscope.MembershipPredicate("issues", "target_project")
+		if err := tx.Table("issues").Where("id=? AND ("+predicate+")", id, project, "issues", "issues", project, project, "issues", "issues", project).Count(&count).Error; err != nil {
 			return err
 		}
 		if count != 1 {

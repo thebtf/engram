@@ -95,11 +95,12 @@ func InspectProjectMarker(ctx context.Context, cwd string) (ProjectMarkerState, 
 	}
 	targetRoot := root
 	if common != "" {
-		relative, relErr := filepath.Rel(gitRoot, root)
-		if relErr != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
-			return ProjectMarkerState{}, logicalError("PROJECT_CONTEXT_REQUIRED")
-		}
+		canonicalRoot := canonicalPath(gitRoot)
 		for candidate := root; ; candidate = filepath.Dir(candidate) {
+			relative, relErr := filepath.Rel(canonicalRoot, canonicalPath(candidate))
+			if relErr != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+				return ProjectMarkerState{}, logicalError("PROJECT_CONTEXT_REQUIRED")
+			}
 			_, exists, readErr := readRecoveryMarker(filepath.Join(candidate, anchorFilenameV3))
 			if readErr != nil {
 				return ProjectMarkerState{}, readErr

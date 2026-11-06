@@ -11,6 +11,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 
+	"github.com/thebtf/engram/internal/db/projectscope"
 	"github.com/thebtf/engram/internal/scope"
 )
 
@@ -245,6 +246,9 @@ func (s *Store) FindSimilarForProject(ctx context.Context, project string, query
 	}
 
 	vec := pgvector.NewVector(queryVec)
+	projectSQL, projectArgs := projectscope.MemoryPredicate("m", project)
+	args := append([]any{vec}, projectArgs...)
+	args = append(args, vec, threshold, vec, limit)
 	var results []SimilarResult
 	// JOIN to memories to enforce project scope — content_chunks has no project column.
 	// The memories.status, deleted_at, and validity-window filters are applied here to
@@ -259,7 +263,7 @@ func (s *Store) FindSimilarForProject(ctx context.Context, project string, query
         FROM content_chunks cc
         JOIN memories m ON m.id = cc.memory_id
         WHERE cc.embedding IS NOT NULL
-          AND m.project    = ?
+          AND (`+projectSQL+`)
           AND m.status     = 'active'
           AND m.deleted_at IS NULL
           AND (m.valid_from  IS NULL OR m.valid_from  <= NOW())
@@ -267,7 +271,7 @@ func (s *Store) FindSimilarForProject(ctx context.Context, project string, query
           AND 1 - (cc.embedding <=> ?::vector) >= ?
         ORDER BY cc.embedding <=> ?::vector
         LIMIT ?
-    `, vec, project, vec, threshold, vec, limit).Scan(&results).Error
+    `, args...).Scan(&results).Error
 	if err != nil {
 		return nil, fmt.Errorf("find similar for project %q: %w", project, err)
 	}
@@ -291,14 +295,15 @@ func (s *Store) FindSimilarForSearch(ctx context.Context, project string, queryV
 		threshold = 0.7
 	}
 	predicate, accessArgs := scope.MemoryReadAccessSQL(access)
-	args := []any{project}
+	projectSQL, projectArgs := projectscope.MemoryPredicate("m", project)
+	args := append([]any{}, projectArgs...)
 	args = append(args, accessArgs...)
 	args = append(args, pgvector.NewVector(queryVec), threshold, limit)
 	var results []SimilarResult
 	err := s.db.WithContext(ctx).Raw(`
 		WITH authorized AS MATERIALIZED (
 			SELECT m.id, m.version FROM memories m
-			WHERE m.project = ? AND m.status = 'active' AND m.deleted_at IS NULL
+			WHERE (`+projectSQL+`) AND m.status = 'active' AND m.deleted_at IS NULL
 			  AND (m.valid_from IS NULL OR m.valid_from <= NOW())
 			  AND (m.valid_until IS NULL OR m.valid_until >= NOW())
 			  AND (`+predicate+`)

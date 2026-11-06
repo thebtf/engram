@@ -28,7 +28,6 @@ type memoryBriefArgs struct {
 
 // handleGetMemoryBrief returns a compact memory context for sub-agent delegation briefs.
 func (s *Server) handleGetMemoryBrief(ctx context.Context, args json.RawMessage) (string, error) {
-
 	if s.memoryStore == nil {
 		return "", fmt.Errorf("memory store not available")
 	}
@@ -53,8 +52,11 @@ func (s *Server) handleGetMemoryBrief(ctx context.Context, args json.RawMessage)
 	if memoryBriefUsesPrincipalScope(a) {
 		return s.handlePrincipalMemoryBrief(ctx, a)
 	}
+	if err := s.memoryStore.CheckCanonicalProject(ctx, a.Project); err != nil {
+		return "", err
+	}
 
-	raw, err := s.memoryStore.ListForInjection(ctx, a.Project, a.Limit*3)
+	raw, err := s.memoryStore.ListForInjectionForSearch(ctx, a.Project, a.Limit*3, briefMemoryAccess(ctx))
 	if err != nil {
 		return "", fmt.Errorf("list memories: %w", err)
 	}
@@ -264,19 +266,21 @@ func truncateBriefContent(content string) string {
 // filterInjectionByScope applies the shared memory visibility predicate to a
 // slice of injection candidates. ENGRAM_VNEXT_F_ENABLED gates only the legacy
 // privacy_scope layer; principal-private rows are filtered fail-safe.
-func filterInjectionByScope(ctx context.Context, mems []*models.Memory) []*models.Memory {
+func briefMemoryAccess(ctx context.Context) scope.MemoryReadAccess {
 	caller := scope.KeycardContext{}
 	if id, ok := auth.IdentityFrom(ctx); ok {
 		caller.WorkstationID = id.WorkstationID()
 		caller.Principal = id.Principal
 		caller.PrincipalKind = string(id.PrincipalKind)
 	}
-	opts := scope.MemoryVisibilityOptions{
-		ApplyPrivacyScope: true,
-	}
+	return scope.MemoryReadAccess{Caller: caller, Visibility: scope.MemoryVisibilityOptions{ApplyPrivacyScope: true}}
+}
+
+func filterInjectionByScope(ctx context.Context, mems []*models.Memory) []*models.Memory {
+	access := briefMemoryAccess(ctx)
 	visible := make([]*models.Memory, 0, len(mems))
 	for _, mem := range mems {
-		if scope.ResolveMemory(caller, mem, opts) {
+		if scope.ResolveMemory(access.Caller, mem, access.Visibility) {
 			visible = append(visible, mem)
 		}
 	}

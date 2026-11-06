@@ -13,6 +13,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
+	"github.com/thebtf/engram/internal/db/projectscope"
 	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/pkg/models"
 )
@@ -206,6 +207,40 @@ type ProjectDescriptor struct {
 	DisplayName         string  `json:"name"`
 	StoredDisplayName   *string `json:"display_name" binding:"required" extensions:"x-nullable"`
 	RepositoryQualifier string  `json:"repository_qualifier,omitempty"`
+}
+
+type LogicalProjectGroup struct {
+	PrimaryProjectID string   `json:"primary_project_id"`
+	AliasProjectIDs  []string `json:"alias_project_ids"`
+}
+
+// LogicalProjectGroups only groups selectable descriptors through the same
+// validated global UUID read projection used by knowledge readers.
+func (s *SessionStore) LogicalProjectGroups(ctx context.Context, visible []ProjectDescriptor) ([]LogicalProjectGroup, error) {
+	allowed := make(map[string]bool, len(visible))
+	for _, item := range visible {
+		allowed[item.ID] = true
+	}
+	var rows []struct {
+		ID               string
+		PrimaryProjectID string
+	}
+	if err := liveKnowledgeProjects(s.db.WithContext(ctx)).Select("projects.id, " + projectscope.CanonicalReadProjectSQL("projects.id") + " AS primary_project_id").Order("projects.id ASC").Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	groups := make(map[string][]string)
+	for _, row := range rows {
+		if row.ID != row.PrimaryProjectID && allowed[row.ID] && allowed[row.PrimaryProjectID] {
+			groups[row.PrimaryProjectID] = append(groups[row.PrimaryProjectID], row.ID)
+		}
+	}
+	result := make([]LogicalProjectGroup, 0, len(groups))
+	for _, row := range rows {
+		if aliases := groups[row.ID]; len(aliases) != 0 {
+			result = append(result, LogicalProjectGroup{PrimaryProjectID: row.ID, AliasProjectIDs: aliases})
+		}
+	}
+	return result, nil
 }
 
 func liveKnowledgeProjects(q *gorm.DB) *gorm.DB {

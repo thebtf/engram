@@ -7,17 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Report an available update with no platform asset as a terminal updater error and return `success: false` instead of claiming the update started. The legacy UI honors the refusal without polling and displays the returned error.
-
-- Return a JSON 400 for registration passwords exceeding bcrypt's 72-byte limit without consuming the invitation or creating a user.
-
-- Preserve graph edge instants in JSON when a local offset crosses the four-digit year boundary, while retaining ordinary offsets and out-of-range UTC errors.
-- Set `Content-Type: application/json` on successful 201 responses for setup, registration, invitation creation, and Vault credential creation.
-
-- Explain non-401 update-check failures accessibly in Health and Settings with localized, safe diagnoses while preserving unknown availability; a successful Refresh can clear the notice. A current update-check 401 instead locks protected UI and offers sign-in.
-
-- Return a JSON 400 for setup passwords exceeding bcrypt's 72-byte limit, without creating an initial user or exposing the password.
-
 - Regenerate the API through the maintained worker target using canonical local Go package directories and Swag 1.16.6, with real producer errors stopping the build. Correct existing context search/inject/session-start annotations without changing handlers; document the shared GET/POST conditional-query limitation. The actual producer and server build pass, with 40 named schema checks and all 76 references resolved; that producer checkpoint established compile-only retained-reader oracle provenance, with later native query proof recorded separately, and installed/release acceptance remains separate.
 
 - Add retained catalog `families` metadata with kind, technical table, saved membership-occurrence count and declared/separate/metadata-only reader boundary. Preserve every group, opaque reference, safe label and reason without payload previews, readable-record totals, availability or historical ownership assignment. This descriptor change does not provide cross-group record discovery or installed-consumer acceptance.
@@ -54,6 +43,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Isolate canonical GORM/gRPC fixtures, bound their pools and await caller-owned audit writes before schema cleanup; retain restore guards and public data. Reuse focused retention/audit/gRPC proofs; the earlier 37-PASS run remains preservation FAIL (audit rows 37→40), followed by seven focused PASS with 40→40 preservation. Canonical continuity fixtures now migrate once per isolated parent (17→6), preserving every assertion and the unchanged 12m budget; reuse 22 focused lifecycle PASS plus three hash-bound slot CRUD/migration PASS from the earlier incomplete timeout run, not a full-suite or installed-acceptance claim.
 - Use registered canonical UUIDs and authenticated caller project context in MCP fixtures without weakening default-deny, privacy or pre-mutation rejection guards. Reuse 119 prior PASS plus one exact retry PASS after the context fix, not 120 fresh PASS or installed acceptance.
 - Seed the isolated operator-code fixture with a registered canonical project UUID while preserving five queue candidates, published/no-view checks and redacted provisioning errors.
+
+## [7.0.26] - 2026-11-06
+
+### Fixed
+
+- Report an available update with no platform asset as a terminal updater error and return `success: false` instead of claiming the update started. The legacy UI honors the refusal without polling and displays the returned error.
+
+- Refuse path-only successors of retained documents with actionable lineage recovery; explicit version writes continue to validate and derive Vault-backed provenance. Preserve strict pre-Apply snapshots while allowing cosmetic label changes during reconciliation of newly recorded alias operations; legacy receipts remain strict.
+- Restrict automatic correction candidates to visible native project membership before pagination, and recheck mutation authority under transaction locks before supersession. Read aliases do not grant correction authority.
+- Correct Windows short-path project recovery while keeping marker discovery inside the canonical worktree; preserve raw caller and marker-target fingerprint bytes.
+
+- Correct the stats API contract for conditional project and database fields, response media types, and readiness errors without changing handler behavior.
+- Return a JSON 400 for registration passwords exceeding bcrypt's 72-byte limit without consuming the invitation or creating a user.
+- Preserve graph edge instants in JSON when a local offset crosses the four-digit year boundary, while retaining ordinary offsets and out-of-range UTC errors.
+
+- Set `Content-Type: application/json` on successful 201 responses for setup, registration, invitation creation, and Vault credential creation.
+
+- Return a JSON 400 for setup passwords exceeding bcrypt's 72-byte limit, without creating an initial user or exposing the password.
+- Explain non-401 update-check failures accessibly in Health and Settings with localized, safe diagnoses while preserving unknown availability; a successful Refresh can clear the notice. A current update-check 401 instead locks protected UI and offers sign-in.
+- Close removed SSE subscriber streams safely after in-flight writes finish; prevent queued writes from using a released response and preserve the non-replay and blocked-writer limitations.
+
+- Apply authoritative canonical membership to memory search, list, vector and graph reads before ranking and limits, preserving privacy and refusing invalid selectors without reassigning historical records.
+- Prevent automatic recall and session feedback from rewriting historical non-UUID selectors while preserving UUID-backed and project-free bookkeeping and private-read auditing.
+- Recover name-only callers from active primary-origin bindings without modifying their marker or cache; reconcile unknown bootstrap outcomes without replaying a mutation.
+- Preserve `PROJECT_CONTEXT_REQUIRED` for an unconfigured backend and align active UUID resolution with the safe global reader scope without changing historical non-UUID resolution.
+- Provide expected-state-checked administrator UUID aliases and scoped document lineages without changing native rows or broadening mutation grants. Keep independent same-path documents addressable by authorized IDs with stale-version refusal.
+- Preserve an existing global target-self redirect when explicitly attaching UUID aliases; bind its complete baseline through reconciliation and conditional rollback, and retain alias-aware reads without admitting conflicting chains.
+- Scope catalog and document UI actions to verified project context and existing authorized lineage.
 
 ## [7.0.25] - 2026-11-06
 

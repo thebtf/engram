@@ -5,9 +5,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
+
+	vaultcrypto "github.com/thebtf/engram/internal/crypto"
+	"github.com/thebtf/engram/internal/projectidentity"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -50,12 +54,18 @@ func (VersionedDocumentComment) TableName() string { return "versioned_document_
 // VersionedDocumentStore provides CRUD operations for versioned documents
 // and their associated comments (migration 051 schema).
 type VersionedDocumentStore struct {
-	db *gorm.DB
+	db    *gorm.DB
+	vault *vaultcrypto.Vault
 }
 
 // NewVersionedDocumentStore creates a new VersionedDocumentStore backed by the given Store.
 func NewVersionedDocumentStore(store *Store) *VersionedDocumentStore {
 	return &VersionedDocumentStore{db: store.DB}
+}
+
+// NewVersionedDocumentStoreWithVault enables authenticated retained-version writes.
+func NewVersionedDocumentStoreWithVault(store *Store, vault *vaultcrypto.Vault) *VersionedDocumentStore {
+	return &VersionedDocumentStore{db: store.DB, vault: vault}
 }
 
 // versionedDocHashContent returns the SHA-256 hex digest of the given string.
@@ -82,6 +92,18 @@ func (s *VersionedDocumentStore) Create(
 
 	var docID int64
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if projectidentity.ValidProjectID(project) || (project != "" && tx.Dialector.Name() == "postgres") {
+			if err := tx.Exec(`LOCK TABLE project_consolidation_memberships, project_consolidation_redirects IN SHARE MODE`).Error; err != nil {
+				return err
+			}
+		}
+		if project != "" && !projectidentity.ValidProjectID(project) && tx.Dialector.Name() == "postgres" {
+			var effective string
+			if err := tx.Raw(`SELECT engram_consolidation_scope(?)`, project).Scan(&effective).Error; err != nil {
+				return err
+			}
+			project = effective
+		}
 		if err := ensureLogicalProjectForWrite(ctx, tx, project); err != nil {
 			return err
 		}
@@ -93,6 +115,42 @@ func (s *VersionedDocumentStore) Create(
 			Where("path = ? AND project = ?", path, project).
 			Find(&existing).Error; err != nil {
 			return fmt.Errorf("lock rows: %w", err)
+		}
+		if projectidentity.ValidProjectID(project) {
+			scoped, err := canonicalProjectRows(ctx, tx.Model(&VersionedDocument{}), project, "versioned_documents", "d")
+			if err != nil {
+				return err
+			}
+			var visibleNative int64
+			if err := scoped.Where("d.path = ? AND d.project = ?", path, project).Count(&visibleNative).Error; err != nil {
+				return err
+			}
+			if visibleNative != int64(len(existing)) {
+				return ErrKnowledgeProjectForbidden
+			}
+			if len(existing) != 0 {
+				var retained int64
+				if err := tx.Table("project_consolidation_memberships AS m").Joins("JOIN versioned_documents AS d ON m.row_key->>'id' = CAST(d.id AS text)").
+					Where("m.table_name = ? AND m.field_path = ?::jsonb AND d.path = ? AND d.project = ?", "versioned_documents", `["project"]`, path, project).Count(&retained).Error; err != nil {
+					return err
+				}
+				if retained != 0 {
+					return ErrDocumentLineageAmbiguous
+				}
+			}
+			if len(existing) == 0 {
+				scoped, err = canonicalProjectRows(ctx, tx.Model(&VersionedDocument{}), project, "versioned_documents", "d")
+				if err != nil {
+					return err
+				}
+				var otherLineages int64
+				if err := scoped.Where("d.path = ?", path).Count(&otherLineages).Error; err != nil {
+					return err
+				}
+				if otherLineages != 0 {
+					return ErrDocumentLineageAmbiguous
+				}
+			}
 		}
 
 		// Determine next version atomically within the transaction.
@@ -128,10 +186,164 @@ func (s *VersionedDocumentStore) Create(
 	return docID, nil
 }
 
+var (
+	ErrDocumentVersionStale          = errors.New("document version is stale")
+	ErrDocumentProvenanceUnavailable = errors.New("DOCUMENT_PROVENANCE_UNAVAILABLE")
+)
+
+// CreateVersionForLineage reauthorizes an issued row and binds the new version
+// to its native UUID lineage under the same transaction as insertion.
+func (s *VersionedDocumentStore) CreateVersionForLineage(ctx context.Context, path, project, content, docType, metadata, author string, anchorID int64, expectedVersion int) (int64, error) {
+	if anchorID <= 0 || expectedVersion <= 0 || !projectidentity.ValidProjectID(project) {
+		return 0, ErrDocumentVersionStale
+	}
+	if docType == "" {
+		docType = "markdown"
+	}
+	if metadata == "" {
+		metadata = "{}"
+	}
+	var id int64
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec(`LOCK TABLE project_consolidation_memberships IN SHARE ROW EXCLUSIVE MODE`).Error; err != nil {
+			return err
+		}
+		if err := tx.Exec(`LOCK TABLE project_consolidation_redirects, projects IN SHARE MODE`).Error; err != nil {
+			return err
+		}
+		q, err := canonicalProjectRows(ctx, tx.Model(&VersionedDocument{}), project, "versioned_documents", "d")
+		if err != nil {
+			return err
+		}
+		var anchor VersionedDocument
+		if err := q.Where("d.id = ? AND d.path = ?", anchorID, path).Take(&anchor).Error; err != nil {
+			return err
+		}
+		if !projectidentity.ValidProjectID(anchor.Project) {
+			return ErrDocumentVersionStale
+		}
+		var active int64
+		if err := liveKnowledgeProjects(tx).Where("id = ?", anchor.Project).Count(&active).Error; err != nil {
+			return err
+		}
+		if active != 1 {
+			return ErrDocumentVersionStale
+		}
+		var native []VersionedDocument
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("path = ? AND project = ?", path, anchor.Project).Find(&native).Error; err != nil {
+			return err
+		}
+		visible, err := canonicalProjectRows(ctx, tx.Model(&VersionedDocument{}), project, "versioned_documents", "d")
+		if err != nil {
+			return err
+		}
+		var visibleCount int64
+		if err := visible.Where("d.path = ? AND d.project = ?", path, anchor.Project).Count(&visibleCount).Error; err != nil {
+			return err
+		}
+		if visibleCount != int64(len(native)) {
+			return ErrKnowledgeProjectForbidden
+		}
+		maxVersion := 0
+		for _, row := range native {
+			if row.Version > maxVersion {
+				maxVersion = row.Version
+			}
+		}
+		if anchor.Version != expectedVersion || maxVersion != expectedVersion {
+			return ErrDocumentVersionStale
+		}
+		var parents []ConsolidationMembership
+		if err := tx.Where("table_name = ? AND row_key->>'id' = ? AND field_path = ?::jsonb", "versioned_documents", fmt.Sprint(anchor.ID), `["project"]`).Find(&parents).Error; err != nil {
+			return err
+		}
+		var membershipOwner *ProjectConsolidationStore
+		if len(parents) != 0 {
+			if len(parents) != 1 || parents[0].ProjectID == nil {
+				return ErrKnowledgeProjectForbidden
+			}
+			if s.vault == nil {
+				return ErrDocumentProvenanceUnavailable
+			}
+			membershipOwner = NewProjectConsolidationStore(tx, s.vault, nil)
+			if err := membershipOwner.available(); err != nil {
+				return err
+			}
+			if err := membershipOwner.validateMembershipEvidence(tx, parents[0]); err != nil {
+				return err
+			}
+		}
+		doc := VersionedDocument{Path: path, Project: anchor.Project, Version: maxVersion + 1, Content: content, ContentHash: versionedDocHashContent(content), DocType: docType, Metadata: metadata, Author: author}
+		if err := tx.Create(&doc).Error; err != nil {
+			return err
+		}
+		if membershipOwner != nil {
+			if err := membershipOwner.writeLiveDocumentMembership(tx, parents[0], doc); err != nil {
+				return err
+			}
+		}
+		id = doc.ID
+		return nil
+	})
+	return id, err
+}
+
+var ErrDocumentLineageAmbiguous = errors.New("document path has multiple native lineages")
+
+// documentLineageQuery chooses only an authorized lineage; an exact row ID can
+// disambiguate independent native histories without trusting a caller-supplied origin.
+func (s *VersionedDocumentStore) documentLineageQuery(ctx context.Context, path, project string, anchorID int64) (*gorm.DB, error) {
+	q, err := canonicalProjectRows(ctx, s.db.Model(&VersionedDocument{}), project, "versioned_documents", "d")
+	if err != nil {
+		return nil, err
+	}
+	type lineage struct{ NativeProject string }
+	var rows []lineage
+	selectLineages := func(nativeOnly bool) error {
+		base, err := canonicalProjectRows(ctx, s.db.Model(&VersionedDocument{}), project, "versioned_documents", "d")
+		if err != nil {
+			return err
+		}
+		selected := base.Select("DISTINCT d.project AS native_project").Where("d.path = ?", path)
+		if anchorID > 0 {
+			selected = selected.Where("d.id = ?", anchorID)
+		}
+		if nativeOnly {
+			selected = selected.Where("d.project = ?", project)
+		}
+		return selected.Limit(2).Scan(&rows).Error
+	}
+	if anchorID == 0 {
+		if err := selectLineages(true); err != nil {
+			return nil, err
+		}
+	}
+	if anchorID > 0 || len(rows) == 0 {
+		if err := selectLineages(false); err != nil {
+			return nil, err
+		}
+	}
+	if len(rows) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	if len(rows) != 1 {
+		return nil, ErrDocumentLineageAmbiguous
+	}
+	q, err = canonicalProjectRows(ctx, s.db.Model(&VersionedDocument{}), project, "versioned_documents", "d")
+	if err != nil {
+		return nil, err
+	}
+	return q.Where("d.path = ? AND d.project = ?", path, rows[0].NativeProject), nil
+}
+
 // ReadLatest returns the highest-versioned document for the given path+project.
 // Returns gorm.ErrRecordNotFound if no document exists.
 func (s *VersionedDocumentStore) ReadLatest(ctx context.Context, path, project string) (*VersionedDocument, error) {
-	q, err := canonicalProjectRows(ctx, s.db.Model(&VersionedDocument{}), project, "versioned_documents", "d")
+	return s.ReadLatestForLineage(ctx, path, project, 0)
+}
+
+func (s *VersionedDocumentStore) ReadLatestForLineage(ctx context.Context, path, project string, anchorID int64) (*VersionedDocument, error) {
+	q, err := s.documentLineageQuery(ctx, path, project, anchorID)
 	if err != nil {
 		return nil, err
 	}
@@ -150,7 +362,11 @@ func (s *VersionedDocumentStore) ReadLatest(ctx context.Context, path, project s
 // ReadVersion returns the document at the exact version specified.
 // Returns gorm.ErrRecordNotFound if no matching row exists.
 func (s *VersionedDocumentStore) ReadVersion(ctx context.Context, path, project string, version int) (*VersionedDocument, error) {
-	q, err := canonicalProjectRows(ctx, s.db.Model(&VersionedDocument{}), project, "versioned_documents", "d")
+	return s.ReadVersionForLineage(ctx, path, project, version, 0)
+}
+
+func (s *VersionedDocumentStore) ReadVersionForLineage(ctx context.Context, path, project string, version int, anchorID int64) (*VersionedDocument, error) {
+	q, err := s.documentLineageQuery(ctx, path, project, anchorID)
 	if err != nil {
 		return nil, err
 	}
@@ -183,7 +399,7 @@ func (s *VersionedDocumentStore) List(ctx context.Context, project, docType, pat
 	if err != nil {
 		return nil, err
 	}
-	latest := q.Select("d.*, ROW_NUMBER() OVER (PARTITION BY path ORDER BY version DESC, id DESC) AS version_rank")
+	latest := q.Select("d.*, ROW_NUMBER() OVER (PARTITION BY d.path, d.project ORDER BY d.version DESC, d.id DESC) AS version_rank")
 	q = s.db.WithContext(ctx).Table("(?) AS latest", latest).Where("version_rank = 1")
 	if docType != "" {
 		q = q.Where("doc_type = ?", docType)
@@ -214,7 +430,7 @@ func (s *VersionedDocumentStore) ListPage(ctx context.Context, project string, d
 	if err != nil {
 		return nil, 0, err
 	}
-	latest := q.Select("id, path, project, version, doc_type, author, created_at, ROW_NUMBER() OVER (PARTITION BY path ORDER BY version DESC, id DESC) AS version_rank")
+	latest := q.Select("d.id, d.path, d.project, d.version, d.doc_type, d.author, d.created_at, ROW_NUMBER() OVER (PARTITION BY d.path, d.project ORDER BY d.version DESC, d.id DESC) AS version_rank")
 	q = s.db.WithContext(ctx).Table("(?) AS latest", latest).Where("version_rank = 1")
 	if len(docTypes) != 0 {
 		q = q.Where("doc_type IN ?", docTypes)
@@ -245,8 +461,15 @@ func (s *VersionedDocumentStore) ListPage(ctx context.Context, project string, d
 // ordered by version descending (newest first).
 // limit <= 0 means no row limit.
 func (s *VersionedDocumentStore) GetHistory(ctx context.Context, path, project string, limit int) ([]VersionedDocument, error) {
-	query, err := canonicalProjectRows(ctx, s.db.Model(&VersionedDocument{}), project, "versioned_documents", "d")
+	return s.GetHistoryForLineage(ctx, path, project, limit, 0)
+}
+
+func (s *VersionedDocumentStore) GetHistoryForLineage(ctx context.Context, path, project string, limit int, anchorID int64) ([]VersionedDocument, error) {
+	query, err := s.documentLineageQuery(ctx, path, project, anchorID)
 	if err != nil {
+		if anchorID == 0 && errors.Is(err, gorm.ErrRecordNotFound) {
+			return []VersionedDocument{}, nil
+		}
 		return nil, err
 	}
 	query = query.Where("path = ?", path).Order("version DESC, id DESC")

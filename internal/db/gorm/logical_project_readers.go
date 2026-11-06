@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/thebtf/engram/internal/db/projectscope"
 	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/pkg/models"
@@ -30,8 +31,16 @@ const browserCodeProjectMembershipJoin = `LEFT JOIN LATERAL (
 ) membership ON TRUE`
 
 // An inventoried occurrence overrides its historical selector. Uninventoried
-// current rows belong only to their exact UUID, never to an alias bucket.
+// UUID rows may also be read through an explicit, unambiguous alias group.
 func canonicalProjectRows(ctx context.Context, db *gormlib.DB, project, table, alias string) (*gormlib.DB, error) {
+	return canonicalProjectRowsWithPredicate(ctx, db, project, table, alias, projectscope.MembershipPredicate(alias, "project"))
+}
+
+func canonicalNativeProjectRows(ctx context.Context, db *gormlib.DB, project, table, alias string) (*gormlib.DB, error) {
+	return canonicalProjectRowsWithPredicate(ctx, db, project, table, alias, projectscope.NativeMembershipPredicate(alias, "project"))
+}
+
+func canonicalProjectRowsWithPredicate(ctx context.Context, db *gormlib.DB, project, table, alias, predicate string) (*gormlib.DB, error) {
 	if !projectidentity.ValidProjectID(project) {
 		return nil, ErrKnowledgeProjectForbidden
 	}
@@ -46,17 +55,11 @@ func canonicalProjectRows(ctx context.Context, db *gormlib.DB, project, table, a
 		return nil, fmt.Errorf("unsupported content table")
 	}
 	q := db.WithContext(ctx).Table(table + " AS " + alias)
-	return q.Where(canonicalProjectMembershipPredicate(alias, "project"), project, table, table, project), nil
+	return q.Where(predicate, project, table, table, project), nil
 }
 
 func canonicalProjectMembershipPredicate(alias, field string) string {
-	return `((` + alias + `.` + field + ` = ? AND NOT EXISTS (SELECT 1 FROM project_consolidation_memberships membership
- WHERE membership.table_name = ? AND membership.field_path = '["` + field + `"]' AND membership.row_key->>'id' = CAST(` + alias + `.id AS text))) OR EXISTS
- (SELECT 1 FROM project_consolidation_memberships membership WHERE membership.table_name = ? AND membership.field_path = '["` + field + `"]'
- AND membership.row_key->>'id' = CAST(` + alias + `.id AS text) AND membership.project_id = ?
- AND NOT EXISTS (SELECT 1 FROM project_consolidation_memberships conflict
- WHERE conflict.table_name = membership.table_name AND conflict.row_key = membership.row_key AND conflict.field_path = membership.field_path
- AND (conflict.project_id IS NULL OR conflict.project_id <> membership.project_id))))`
+	return projectscope.MembershipPredicate(alias, field)
 }
 
 func RetainedContentIDs(rows []ConsolidationMembership) ([]int64, error) {

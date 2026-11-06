@@ -261,6 +261,36 @@ test('a delayed mapping cannot overwrite a newer canonical route, including chan
   assert.equal(context.selectionPending.value, false)
 })
 
+test('catalog refresh invalidates an in-flight resolver for the unchanged legacy route', async t => {
+  let releaseOld, releaseCatalog, started, catalogCalls = 0, resolverCalls = 0
+  const oldStarted = new Promise(resolve => { started = resolve })
+  const oldResolution = new Promise(resolve => { releaseOld = resolve })
+  const newCatalog = new Promise(resolve => { releaseCatalog = resolve })
+  const route = '/memory?project=slow&memory=501&q=original'
+  const { context, router } = await mount(t, route, async url => {
+    if (url.pathname === '/api/projects') return ++catalogCalls === 1 ? catalog : newCatalog
+    if (url.searchParams.get('legacy_id') === 'slow') {
+      if (++resolverCalls === 1) { started(); await oldResolution; return { status: 'resolved', project_id: A, name: 'Same name' } }
+      return { status: 'resolved', project_id: B, name: 'Same name' }
+    }
+    return usual(url)
+  })
+  await oldStarted
+  const refresh = context.refresh()
+  releaseOld()
+  await tick(); await tick()
+  assert.equal(context.project.value, '', 'The old resolution cannot rebind while the refreshed catalog is pending')
+  assert.equal(context.selectionPending.value, true)
+  assert.equal(router.currentRoute.value.fullPath, route, 'The stale resolver cannot rewrite the unchanged route')
+  releaseCatalog(catalog)
+  await refresh; await tick(); await tick()
+  assert.equal(context.project.value, B)
+  assert.equal(router.currentRoute.value.query.project, B)
+  assert.equal(router.currentRoute.value.query.memory, '501')
+  assert.equal(router.currentRoute.value.query.q, 'original')
+  assert.equal(context.selectionPending.value, false)
+})
+
 test('retained reader decodes canonical Go content pages without page provenance', async (t) => {
   const reference = `urn:engram:migration:unresolved:${'a'.repeat(64)}`
   const examples = [

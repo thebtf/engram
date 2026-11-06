@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/thebtf/engram/internal/db/projectscope"
 	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/pkg/models"
 	"gorm.io/gorm"
@@ -14,11 +15,32 @@ func (s *MemoryStore) memorySearchQuery(ctx context.Context, project string, acc
 	if project == "" {
 		return nil, fmt.Errorf("project: must not be empty")
 	}
+	predicate, args := projectscope.MemoryPredicate("m", project)
 	q := s.db.WithContext(ctx).Model(&Memory{}).Table("memories AS m").
-		Where("m.project = ? AND m.status = 'active' AND m.deleted_at IS NULL", project).
+		Where(predicate, args...).Where("m.status = 'active' AND m.deleted_at IS NULL").
 		Where("m.valid_from IS NULL OR m.valid_from <= NOW()").
 		Where("m.valid_until IS NULL OR m.valid_until >= NOW()")
 	return memoryReaderPrivacy(q, access.Caller, access.Visibility), nil
+}
+
+// CheckCanonicalProject applies the same selector validation as GetVisible.
+func (s *MemoryStore) CheckCanonicalProject(ctx context.Context, project string) error {
+	_, err := canonicalProjectRows(ctx, s.db.Model(&Memory{}), project, "memories", "m")
+	return err
+}
+
+// ListMemoryPageForSearch uses the caller-aware SQL reader when available.
+// Legacy injected pagers retain their existing post-filtering contract.
+func ListMemoryPageForSearch(ctx context.Context, pager interface {
+	ListWithOffset(context.Context, string, int, int) ([]*models.Memory, error)
+}, project string, limit, offset int, access scope.MemoryReadAccess,
+) ([]*models.Memory, error) {
+	if authorized, ok := pager.(interface {
+		ListWithFiltersForSearch(context.Context, string, ListOptions, scope.MemoryReadAccess) ([]*models.Memory, error)
+	}); ok {
+		return authorized.ListWithFiltersForSearch(ctx, project, ListOptions{Limit: limit, Offset: offset}, access)
+	}
+	return pager.ListWithOffset(ctx, project, limit, offset)
 }
 
 // ListForSearch applies caller policy before the bounded Tier0 candidate pool.
@@ -27,7 +49,8 @@ func (s *MemoryStore) ListForSearch(ctx context.Context, project string, limit i
 	if err != nil {
 		return nil, err
 	}
-	return findRecoveryMemoryRows(q.Order("m.created_at DESC, m.id DESC").Limit(normalizeMemoryListLimit(limit)))
+	rows, err := findRecoveryMemoryRows(q.Order("m.created_at DESC, m.id DESC").Limit(normalizeMemoryListLimit(limit)))
+	return projectMemoryRows(rows, project), err
 }
 
 // SearchFTSForSearch keeps both passes inside caller policy. The returned set
@@ -75,6 +98,7 @@ func (s *MemoryStore) GetByRefsForSearch(ctx context.Context, project string, re
 	}
 	byID := make(map[int64]*models.Memory, len(rows))
 	for _, memory := range rows {
+		memory.Project = project
 		byID[memory.ID] = memory
 	}
 	result := make([]*models.Memory, 0, len(rows))

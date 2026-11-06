@@ -22,6 +22,15 @@ definitions:
     - CollectionSelectionExplicit
     - CollectionSelectionPage
     - CollectionSelectionFrozenFilter
+  gorm.LogicalProjectGroup:
+    properties:
+      alias_project_ids:
+        items:
+          type: string
+        type: array
+      primary_project_id:
+        type: string
+    type: object
   gorm.ProjectDescriptor:
     properties:
       display_name:
@@ -815,6 +824,10 @@ definitions:
       items:
         items:
           $ref: '#/definitions/gorm.ProjectDescriptor'
+        type: array
+      logical_groups:
+        items:
+          $ref: '#/definitions/gorm.LogicalProjectGroup'
         type: array
       unresolved:
         items:
