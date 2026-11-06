@@ -11,8 +11,11 @@ Shared runtime: `plugin/engram/hooks/lib.js`
 
 ## Automatic Lifecycle Model
 
-`SessionStart` and `UserPromptSubmit` inject relevant context. `Stop` submits the
-session transcript for citation and session processing. The registered `SessionEnd`
+`SessionStart` and `UserPromptSubmit` inject relevant context. `Stop` submits
+assistant text extracted from the session transcript for citation and session
+processing; the text may be truncated. If no transcript path is available and
+both session ID and project are present, it attempts to post a minimal event with
+empty assistant text; the request can fail. The registered `SessionEnd`
 hook can request a retired outcome-propagation endpoint; its handler does not
 record or propagate an outcome on the current server. Tool results are not captured
 automatically. Use the MCP `store` and `recall` tools for deliberate memory
@@ -26,7 +29,7 @@ operations.
 |---|---|---|
 | `session-start.js` | `SessionStart` | Context injection |
 | `user-prompt.js` | `UserPromptSubmit` | Context injection |
-| `stop.js` | `Stop` | Transcript submission for citation and session processing |
+| `stop.js` | `Stop` | Submits extracted assistant text (possibly truncated) for citation and session processing |
 | `session-end.js` | `SessionEnd` | Attempts retired outcome callback; its handler returns HTTP 410 |
 | `pre-compact.js` | `PreCompact` | Reinject request |
 
@@ -246,11 +249,16 @@ vars.
 }
 ```
 
-`agent_output_text` is extracted from the JSONL transcript by collecting lines
-where `role === "assistant"` (or `type === "assistant"`). The hook handles both
-the nested shape `{"type":"assistant","message":{"role":"assistant","content":[...]}}` used
-by current Claude Code and flat shapes from older versions. Content is capped at
-500 KB (`MAX_OUTPUT_BYTES`); truncated payloads include a `[truncated]` suffix.
+`agent_output_text` concatenates text extracted from assistant records in the JSONL
+transcript. The hook handles both the nested shape
+`{"type":"assistant","message":{"role":"assistant","content":[...]}}` used
+by current Claude Code and flat shapes from older versions. The hook counts UTF-8
+bytes of extracted source text against `MAX_OUTPUT_BYTES` (512 KiB) and may
+truncate that text. It does not count the newlines inserted between parts or the
+`[truncated]` suffix, so the final field is not strictly capped at 512 KiB. If no
+transcript path is available and both session ID and project are present, the hook
+attempts a minimal POST with empty `agent_output_text`; the request can fail. A
+transcript read failure also results in empty text.
 
 **Output:** Always `""`. `Stop` is not in `HOOKS_WITH_EVENT_NAME`, so
 `additionalContext` would be dropped by `lib.writeResponse` anyway. Delivery is
@@ -258,7 +266,7 @@ purely via the POST request.
 
 The server's asynchronous citation processing looks up an outcome already recorded
 for the session and, when the feedback updater is available, applies
-outcome-modulated feedback. Transcript submission does not itself record an
+outcome-modulated feedback. Submitting assistant text does not itself record an
 outcome. A caller may explicitly record a real observed outcome with the MCP
 `feedback` tool using `action="outcome"`, the actual supported `session_id`, and
 `outcome` (`success`, `partial`, `failure`, or `abandoned`); `reason` is optional.
@@ -266,7 +274,7 @@ This is a separate operation, not an automatic result of `Stop` or `SessionEnd`.
 
 **Crash-safety:** `handleStop` attempts to delete the pending marker created by
 `session-start.js` near its start. Successful deletion shows that marker cleanup
-was reached, not that the transcript was delivered or the whole session completed.
+was reached, not that the assistant text was delivered or the whole session completed.
 
 **Error handling:** All failures (transcript read, POST) are logged to stderr and
 swallowed. The hook always exits 0.
@@ -378,7 +386,7 @@ returns `""`; `lib.RunHook` then writes `{ "continue": true }` without
 `hookSpecificOutput`. If the session ID is missing, it logs that it is skipping
 and makes no request. The hook's `propagate-outcome fired` log is emitted only
 when the request helper returns successfully; it is not proof of outcome recording.
-This compatibility-temporary callback is separate from the `Stop` transcript
+This compatibility-temporary callback is separate from the `Stop` assistant-text
 path and from explicit MCP outcome feedback.
 
 ### `subagent-stop.js` — `SubagentStop`
