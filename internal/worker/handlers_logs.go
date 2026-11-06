@@ -10,16 +10,23 @@ import (
 )
 
 // handleGetLogs godoc
-// @Summary Get log entries
-// @Description Returns log entries as JSON snapshot or SSE stream (follow mode). Supports level filtering and text search.
+// @Summary Get log entries or follow new entries
+// @Description Without follow=true, returns a JSON array of recent matching entries. Only the exact value true enables SSE; follow ignores lines and sends only new entries after subscription, starting with a connected comment. Slow subscribers can miss entries; reconnecting does not replay them.
+// @Description Both modes apply level and case-insensitive query filters and browser-session redaction. Available before database readiness, subject to authentication and rate limiting. Swagger 2 cannot express the query-dependent 200 response shape; see docs/arch/API_CONTRACTS.md.
+// @Description Success is application/json for snapshots or text/event-stream for follow; pre-stream http.Error responses are text/plain. Swagger 2 lists media types at operation scope, not per status or query value.
 // @Tags System
-// @Produce json
+// @Produce json,text/event-stream,plain
 // @Security ApiKeyAuth
-// @Param lines query int false "Number of entries (default 100, max 10000)"
-// @Param level query string false "Minimum log level: trace, debug, info, warn, error, fatal"
-// @Param query query string false "Case-insensitive text search"
-// @Param follow query bool false "If true, switches to SSE streaming mode"
-// @Success 200 {array} object
+// @Security StreamQueryToken
+// @Param lines query int false "Snapshot count (default 100, max 10000); ignored when following"
+// @Param level query string false "Minimum level: trace, debug, info, warn, error, fatal, panic; unknown values pass through"
+// @Param query query string false "Case-insensitive search of redacted message and raw log"
+// @Param follow query string false "Only the exact value true enables SSE"
+// @Success 200 "JSON snapshot array or SSE stream, depending on follow"
+// @Failure 401 {string} string "unauthorized"
+// @Failure 403 {string} string "keycard class forbidden on this route"
+// @Failure 429 {string} string "rate limit exceeded"
+// @Failure 500 {string} string "streaming not supported or authentication store unavailable"
 // @Failure 503 {string} string "log buffer not initialized"
 // @Router /api/logs [get]
 func (s *Service) handleGetLogs(w http.ResponseWriter, r *http.Request) {

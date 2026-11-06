@@ -28,6 +28,10 @@ var SourceCommit string
 // @securityDefinitions.apikey ApiKeyAuth
 // @in header
 // @name X-Auth-Token
+// @securityDefinitions.apikey StreamQueryToken
+// @in query
+// @name token
+// @description Alternative for streaming endpoints; headers take precedence and URL credentials can leak.
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "repair-project-partitions" {
 		os.Exit(runProjectPartitionRepair(os.Args[2:]))
