@@ -50,14 +50,32 @@ Use deterministic symbol/lexical/graph work for named code. Precompute or increm
 
 The existing OMP callback has a 500 ms total limit. Measure actual warm useful-result delivery inside that envelope; do not infer latency from empty queries. A provider that cannot meet the fast path must not silently consume the entire callback. Richer retrieval remains available through an explicit bounded follow-up.
 
-The selected A code bridge replaces the callback's project-resolve subprocess
-with one ready-daemon-only typed task-context invocation. It obtains one read-only
-ProjectInspection and a same-View deterministic code/source/call packet, preserving
-the original callback's absolute 500 ms limit and explicit closed outcomes. The
-wire and authority contract is [Native same-turn task context](../../docs/arch/API_CONTRACTS.md#native-same-turn-task-context).
-Knowledge REST consumes only that same response's validated project and remaining
-budget; a known slow knowledge producer cannot delay useful code delivery. No
-second resolver or resident process is introduced.
+The unreleased native task-context operation obtains one read-only
+ProjectInspection and makes one authenticated RPC. Within that RPC, independently
+bounded knowledge and same-View code producers run concurrently; a slow producer
+must not erase useful, already-ready evidence from another. The original absolute
+500 ms callback deadline and 400 ms native cap are unchanged, with time reserved
+for serialization and transport. Cancellation and all existing authorization,
+freshness and exposure gates remain effective. No second resolver or resident
+process is introduced.
+
+The current-version note producer uses the existing versioned-document content
+and project-lineage owners. It authorizes before selection and limit, searches
+current body text with existing PostgreSQL language/query semantics, and returns
+immutable document id, version and content hash. The bounded, cancellable query
+does not add a corpus, index, backfill, embedding provider or Vault scan. An
+unavailable or timed-out producer is distinct from an empty match. Four local
+rows do not establish latency at larger corpus sizes. The typed producer, consumer
+and API contract change together; the old unreleased serial REST fallback is not
+a second permanent implementation. The selected project currently has no
+observed scoped versioned note, so a useful existing-note smoke remains open until
+an actually authorized note in the real corpus is available.
+
+Evidence frames distinguish a UTF-8-safe bounded prefix from its full current
+source with separate SHA-256 fragment and source hashes. Note identity includes
+its immutable row ID, current version and path; an unknown memory version is
+omitted. Budgeting and cancellation must preserve a ready provider where the
+other provider fails or exceeds the output frame. Evidence is untrusted data.
 
 Native/backend fixture proof is not ordinary loaded-host acceptance. Preserve all
 measured negative samples, including initial 300 ms failures and cold useful

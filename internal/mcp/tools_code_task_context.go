@@ -59,7 +59,7 @@ func (server *Server) hasCodebaseTaskContextApplication() bool {
 	return ok
 }
 
-func (server *Server) handleCodebaseTaskContext(parent context.Context, raw json.RawMessage) (string, error) {
+func (server *Server) handleTaskCodeProvider(parent context.Context, raw json.RawMessage) (string, error) {
 	if !codeIntelEnabled() || !server.hasCodebaseTaskContextApplication() {
 		return "", errors.New("unknown tool: codebase_task_context")
 	}

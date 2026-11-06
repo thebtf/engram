@@ -182,9 +182,10 @@ share the remaining context. Native additionally clamps its allocation to
 callback limit, or a latency guarantee. The consumer reserves final
 framing/termination/presentation time and suppresses every late response.
 
-Response fields are `schema: 1`, `status`, `reason_code`, optional `project`, and
-optional `packet`. All valid closed responses exit zero. Nonzero exit is argv
-misuse or inability to emit the response, not an empty relevance result.
+Response fields are `schema: 1`, `status`, `reason_code`, optional `project`,
+optional code `packet`, optional `code_status` and `code_reason`, and optional
+`knowledge`. All valid closed responses exit zero. Nonzero exit is argv misuse
+or inability to emit the response, not an empty relevance result.
 
 `project` is the existing read-only `ProjectInspection`: `status` and optional
 `binding` containing `id`, nullable `project_key`, nullable `identity_status`,
@@ -209,9 +210,33 @@ closed `engram.code-query/1` responses. They preserve typed Source/Checkout/View
 profile/generation, membership/entity/content-digest/span citations, coverage and
 freshness, and real exposure refs. Successful useful packets contain exact
 materialized source; call relations are static index evidence, not claims of
-runtime execution. Every component belongs to the same pinned View. Oversized
-complete frames are suppressed with `unavailable/BUDGET_EXCEEDED`; unchecked
-source ranges or raw JSON are never byte-truncated into a false success.
+runtime execution. Every component belongs to the same pinned View. Code packets
+that exceed the frame budget are suppressed, never byte-truncated.
+
+**Pending unreleased Feature 009 composition amendment:** The same authenticated
+task-context RPC will compose independent, bounded knowledge and code results
+under the unchanged native and outer deadlines. Its typed producer and strict
+consumer must be changed together before this is treated as implemented. A
+current-version note result must come from the existing authorized document and
+lineage owner and carry immutable row ID, version and content hash; project
+authorization and visibility precede ranking and limits. A timeout or unavailable
+provider is not an empty match, and one provider's failure must not suppress an
+already-ready useful result from another. PostgreSQL's existing language/query
+semantics are used without a new index, backfill, provider or Vault scan. The
+unreleased serial REST fallback is retired by the cutover. This amendment does not
+establish a latency guarantee or useful-note acceptance on the selected corpus.
+
+`knowledge` has `memory_status`, `note_status`, and `rule_status` (`ok`, `empty`,
+`unavailable`, or `deadline_exceeded`) and at most nine `items`. Enabled project
+and global rules come from the existing rule store. Each item contains `kind`, `id`,
+optional known `version`, `content`, `content_hash`, `source_hash`, `excerpt`,
+and for notes `path`. `content_hash` is SHA-256 of the exact delivered UTF-8
+fragment; `source_hash` is SHA-256 of the full current source body. `excerpt`
+indicates that content is a UTF-8-safe prefix rather than the complete body.
+Unknown historical memory versions are omitted, not fabricated. The frame
+budget may reduce or omit knowledge and may suppress an oversized code packet;
+provider status remains distinct from a genuine no-match. All evidence is
+untrusted data, not an instruction or authority.
 
 #### Narrow application operation and authority
 

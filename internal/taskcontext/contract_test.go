@@ -3,6 +3,8 @@ package taskcontext
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -58,4 +60,24 @@ func TestTaskContextWireRejectsMalformedAndBoundsWholeFrame(t *testing.T) {
 	require.Error(t, closed.Validate())
 	response.Packet = nil
 	require.Error(t, response.Validate(), "ok without useful released evidence must fail closed")
+}
+
+func TestTaskContextFrameRetainsBoundedKnowledge(t *testing.T) {
+	content := strings.Repeat("é", 2000)
+	digest := sha256.Sum256([]byte(content))
+	hash := hex.EncodeToString(digest[:])
+	response := Closed("ok", "OK")
+	response.Knowledge = &Knowledge{MemoryStatus: "empty", NoteStatus: "ok", RuleStatus: "empty", Items: []Evidence{{Kind: "note", ID: 42, Version: 2, Path: "approved.md", Content: content, ContentHash: hash, SourceHash: hash}}}
+	raw, err := Encode(response, 1024)
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(raw), 1024)
+	var got Response
+	require.NoError(t, json.Unmarshal(raw, &got))
+	require.NoError(t, got.Validate())
+	require.Equal(t, "ok", got.Status)
+	require.Len(t, got.Knowledge.Items, 1)
+	require.True(t, got.Knowledge.Items[0].Excerpt)
+	require.Equal(t, hash, got.Knowledge.Items[0].SourceHash)
+	require.NotEqual(t, hash, got.Knowledge.Items[0].ContentHash)
+	require.Equal(t, content, response.Knowledge.Items[0].Content, "encoding must not mutate its input")
 }

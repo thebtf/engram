@@ -4,6 +4,8 @@ package taskcontext
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -39,12 +41,33 @@ type Packet struct {
 	Calls  *uci.QueryResponse `json:"calls,omitempty"`
 }
 
+type Evidence struct {
+	Kind        string `json:"kind"`
+	ID          int64  `json:"id"`
+	Version     int    `json:"version,omitempty"`
+	ContentHash string `json:"content_hash"`
+	SourceHash  string `json:"source_hash"`
+	Excerpt     bool   `json:"excerpt"`
+	Path        string `json:"path,omitempty"`
+	Content     string `json:"content"`
+}
+
+type Knowledge struct {
+	MemoryStatus string     `json:"memory_status"`
+	NoteStatus   string     `json:"note_status"`
+	RuleStatus   string     `json:"rule_status"`
+	Items        []Evidence `json:"items"`
+}
+
 type Response struct {
 	Schema     int                                `json:"schema"`
 	Status     string                             `json:"status"`
 	ReasonCode string                             `json:"reason_code"`
 	Project    *projectidentity.ProjectInspection `json:"project,omitempty"`
 	Packet     *Packet                            `json:"packet,omitempty"`
+	Knowledge  *Knowledge                         `json:"knowledge,omitempty"`
+	CodeStatus string                             `json:"code_status,omitempty"`
+	CodeReason string                             `json:"code_reason,omitempty"`
 }
 
 func Closed(status, reason string) Response {
@@ -128,20 +151,81 @@ func Decode(input io.Reader, target any) error {
 
 // Encode bounds the final JSON frame, not just its source excerpt.
 func Encode(response Response, limit int) ([]byte, error) {
-	raw, err := json.Marshal(response)
-	if err != nil {
-		return nil, err
+	marshal := func(value Response) ([]byte, error) { return json.Marshal(value) }
+	raw, err := marshal(response)
+	if err != nil || len(raw)+1 <= limit {
+		return append(raw, '\n'), err
 	}
-	if len(raw)+1 > limit {
-		response.Packet = nil
-		response.Status, response.ReasonCode = "unavailable", "BUDGET_EXCEEDED"
-		raw, err = json.Marshal(response)
-		if err != nil {
-			return nil, err
+	if response.Knowledge != nil {
+		knowledge := *response.Knowledge
+		knowledge.Items = append([]Evidence(nil), knowledge.Items...)
+		response.Knowledge = &knowledge
+	}
+	if response.Packet != nil {
+		withoutKnowledge := response
+		withoutKnowledge.Knowledge = nil
+		codeOnly, codeErr := marshal(withoutKnowledge)
+		if codeErr == nil && len(codeOnly)+1 <= limit {
+			response = withoutKnowledge
+			if response.CodeStatus != "" {
+				response.Status, response.ReasonCode = response.CodeStatus, response.CodeReason
+			}
+		} else {
+			response.Packet = nil
+			response.CodeStatus, response.CodeReason = "unavailable", "BUDGET_EXCEEDED"
 		}
-		if len(raw)+1 > limit {
-			raw, err = json.Marshal(Closed("unavailable", "BUDGET_EXCEEDED"))
+	}
+	if response.Knowledge != nil {
+		for len(response.Knowledge.Items) > 0 {
+			response.Status, response.ReasonCode = "ok", "OK"
+			raw, err = marshal(response)
+			if err != nil || len(raw)+1 <= limit {
+				return append(raw, '\n'), err
+			}
+			items := response.Knowledge.Items
+			if len(items) > 1 {
+				response.Knowledge.Items = items[:len(items)-1]
+				kind := items[len(items)-1].Kind
+				found := false
+				for _, item := range response.Knowledge.Items {
+					found = found || item.Kind == kind
+				}
+				if !found && kind == "memory" {
+					response.Knowledge.MemoryStatus = "unavailable"
+				}
+				if !found && kind == "note" {
+					response.Knowledge.NoteStatus = "unavailable"
+				}
+				if !found && kind == "rule" {
+					response.Knowledge.RuleStatus = "unavailable"
+				}
+				continue
+			}
+			item := &items[0]
+			if len(item.Content) < 32 {
+				break
+			}
+			fragment := item.Content[:len(item.Content)/2]
+			for !utf8.ValidString(fragment) {
+				fragment = fragment[:len(fragment)-1]
+			}
+			if strings.TrimSpace(fragment) == "" {
+				break
+			}
+			item.Content, item.Excerpt = fragment, true
+			digest := sha256.Sum256([]byte(fragment))
+			item.ContentHash = hex.EncodeToString(digest[:])
 		}
+	}
+	if response.Packet != nil {
+		raw, err = marshal(response)
+		if err != nil || len(raw)+1 <= limit {
+			return append(raw, '\n'), err
+		}
+	}
+	raw, err = marshal(Closed("unavailable", "BUDGET_EXCEEDED"))
+	if err == nil && len(raw)+1 > limit {
+		return nil, errors.New("task context output limit too small")
 	}
 	return append(raw, '\n'), err
 }

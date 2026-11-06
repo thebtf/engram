@@ -2,7 +2,11 @@ package taskcontext
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/thebtf/engram/internal/uci"
 )
@@ -13,6 +17,7 @@ type locatorKey struct{}
 func WithNativeLocator(ctx context.Context, locator string) context.Context {
 	return context.WithValue(ctx, locatorKey{}, locator)
 }
+
 func NativeLocator(ctx context.Context) string {
 	value, _ := ctx.Value(locatorKey{}).(string)
 	return value
@@ -65,8 +70,36 @@ func (response Response) Validate() error {
 	if response.Project != nil && response.Project.Validate() != nil {
 		return invalid
 	}
+	if response.Knowledge != nil {
+		if len(response.Knowledge.Items) > 9 {
+			return invalid
+		}
+		counts := map[string]int{"memory": 0, "note": 0, "rule": 0}
+		for _, item := range response.Knowledge.Items {
+			if _, ok := counts[item.Kind]; !ok || item.ID < 1 || item.ID > 9007199254740991 || item.Version < 0 || (item.Kind == "note" && item.Version == 0) || len(item.Content) > 4000 || len(item.Path) > 4096 || !utf8.ValidString(item.Content) || !utf8.ValidString(item.Path) || strings.TrimSpace(item.Content) == "" || (item.Kind == "note" && item.Path == "") {
+				return invalid
+			}
+			digest := sha256.Sum256([]byte(item.Content))
+			if item.ContentHash != hex.EncodeToString(digest[:]) {
+				return invalid
+			}
+			sourceHash, err := hex.DecodeString(item.SourceHash)
+			if err != nil || len(sourceHash) != sha256.Size || (!item.Excerpt && item.SourceHash != item.ContentHash) {
+				return invalid
+			}
+			counts[item.Kind]++
+		}
+		for kind, state := range map[string]string{"memory": response.Knowledge.MemoryStatus, "note": response.Knowledge.NoteStatus, "rule": response.Knowledge.RuleStatus} {
+			if state != "ok" && state != "empty" && state != "unavailable" && state != "deadline_exceeded" {
+				return invalid
+			}
+			if (state == "ok") != (counts[kind] > 0) {
+				return invalid
+			}
+		}
+	}
 	if response.Packet == nil {
-		if response.Status == "ok" {
+		if response.Status == "ok" && (response.Knowledge == nil || len(response.Knowledge.Items) == 0) {
 			return invalid
 		}
 		return nil
@@ -93,7 +126,7 @@ func (response Response) Validate() error {
 			return invalid
 		}
 	}
-	if response.Status == "ok" && (response.Packet.Source == nil || response.Packet.Source.Items == nil || len(*response.Packet.Source.Items) == 0) {
+	if (response.CodeStatus == "ok" || (response.CodeStatus == "" && response.Status == "ok")) && (response.Packet.Source == nil || response.Packet.Source.Items == nil || len(*response.Packet.Source.Items) == 0) {
 		return invalid
 	}
 	return nil
