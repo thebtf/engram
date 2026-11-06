@@ -11,7 +11,10 @@ import (
 	gormlib "gorm.io/gorm"
 )
 
-var ErrMemoryVersionConflict = errors.New("memory version conflict")
+var (
+	ErrMemoryVersionConflict = errors.New("memory version conflict")
+	ErrMemoryRevisionDenied  = errors.New("memory revision denied")
+)
 
 type MemoryRevision struct {
 	MemoryID               int64     `json:"memory_id" gorm:"primaryKey"`
@@ -28,11 +31,14 @@ func (MemoryRevision) TableName() string { return "memory_revisions" }
 // memory body in one transaction. The caller reconciles a stale version by read.
 // redactHistory runs inside the transaction on the prior body; nil preserves it
 // unchanged and does not enforce redaction.
-func (s *MemoryStore) ReviseInContext(ctx context.Context, id int64, owning models.MemoryContext, project string, caller scope.KeycardContext, expectedVersion int, content string, redactHistory func(string) (string, error)) (*models.Memory, error) {
+// A guard denial commits only its audit and returns ErrMemoryRevisionDenied;
+// a guard error rolls back the transaction.
+func (s *MemoryStore) ReviseInContext(ctx context.Context, id int64, owning models.MemoryContext, project string, caller scope.KeycardContext, expectedVersion int, content string, redactHistory func(string) (string, error), guard func(context.Context, *gormlib.DB, *models.Memory) (bool, error)) (*models.Memory, error) {
 	if expectedVersion <= 0 || content == "" {
 		return nil, fmt.Errorf("version and content are required")
 	}
 	var result *models.Memory
+	denied := false
 	err := s.db.WithContext(ctx).Transaction(func(tx *gormlib.DB) error {
 		// Match consolidation's relation order before locking the target memory.
 		if err := tx.Exec(`LOCK TABLE "audit_log", "content_chunks", "memories" IN ROW EXCLUSIVE MODE`).Error; err != nil {
@@ -58,6 +64,16 @@ func (s *MemoryStore) ReviseInContext(ctx context.Context, id int64, owning mode
 		}
 		if current.Version != expectedVersion {
 			return ErrMemoryVersionConflict
+		}
+		if guard != nil {
+			allowed, err := guard(ctx, tx, current)
+			if err != nil {
+				return err
+			}
+			if !allowed {
+				denied = true
+				return nil
+			}
 		}
 		priorContent := current.Content
 		if redactHistory != nil {
@@ -86,6 +102,9 @@ func (s *MemoryStore) ReviseInContext(ctx context.Context, id int64, owning mode
 		result, err = memoryInContext(ctx, tx, id, owning, project, caller, false)
 		return err
 	})
+	if err == nil && denied {
+		return nil, ErrMemoryRevisionDenied
+	}
 	return result, err
 }
 

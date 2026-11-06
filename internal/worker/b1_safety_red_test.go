@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -235,6 +236,134 @@ func TestB1TypedDomainAuditFailureRollsBack(t *testing.T) {
 	var receipts int64
 	require.NoError(t, f.store.DB.Table("memory_request_keys").Where("request_key = ?", payload["request_key"]).Count(&receipts).Error)
 	assert.Zero(t, receipts)
+}
+
+func TestB1TypedRevisionDomainPolicyPostgres(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		mode          string
+		ownerIsWriter bool
+		failAudit     bool
+		status        int
+		warnAudit     int64
+		rejectAudit   int64
+	}{
+		{name: "reject_after_reassignment", mode: gormdb.DomainOwnerModeReject, status: http.StatusForbidden, rejectAudit: 1},
+		{name: "reject_audit_failure", mode: gormdb.DomainOwnerModeReject, failAudit: true, status: http.StatusInternalServerError},
+		{name: "current_domain_owner", mode: gormdb.DomainOwnerModeReject, ownerIsWriter: true, status: http.StatusOK},
+		{name: "cross_owner_off", mode: gormdb.DomainOwnerModeOff, status: http.StatusOK},
+		{name: "cross_owner_warn", mode: gormdb.DomainOwnerModeWarn, status: http.StatusOK, warnAudit: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newOwnCardContextFixture(t, false)
+			writer := f.registered(t, "domain-revision-writer")
+			other := f.registered(t, "domain-revision-other")
+			domains := gormdb.NewDomainOwnerStore(f.store)
+			f.service.domainRegistryService = principalmemory.NewDomainRegistryService(domains, f.service.auditStore)
+			domain := "revision-domain-" + uuid.NewString()
+			payload := ownCardContextPayload("domain revision original")
+			payload["domain"] = domain
+			created := f.create(t, writer, payload)
+			f.assertTyped(t, created, writer.identity, "self", "")
+			assert.Equal(t, domain, created.Domain)
+			assert.Equal(t, "active", created.Status)
+			path := "/api/memories/" + strconv.FormatInt(created.ID, 10)
+			current := ownCardContextDecode(t, f.call(t, http.MethodPatch, path, map[string]any{"version": created.Version, "content": "domain revision current"}, writer.caller()), http.StatusOK)
+			chunk := embedding.Chunk{MemoryID: current.ID, Text: current.Content, Model: "synthetic", Embedding: pgvector.NewVector(b1Vector(0))}
+			stored, err := embedding.NewStore(f.store.DB).StoreChunksForVersion(t.Context(), current.ID, current.Version, []embedding.Chunk{chunk})
+			require.NoError(t, err)
+			require.True(t, stored)
+			owner := other.identity
+			if tc.ownerIsWriter {
+				owner = writer.identity
+			}
+			_, err = domains.Upsert(t.Context(), &gormdb.DomainOwner{Domain: domain, OwnerPrincipal: owner.Principal, OwnerPrincipalKind: owner.PrincipalKind, Mode: tc.mode})
+			require.NoError(t, err)
+			type snapshot struct{ memory, history, chunks, audit string }
+			snapshotFor := func() snapshot {
+				t.Helper()
+				var state snapshot
+				require.NoError(t, f.store.DB.Raw(`SELECT to_jsonb(m)::text FROM memories m WHERE id = ?`, current.ID).Scan(&state.memory).Error)
+				require.NoError(t, f.store.DB.Raw(`SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.version)::text, '[]') FROM memory_revisions r WHERE r.memory_id = ?`, current.ID).Scan(&state.history).Error)
+				require.NoError(t, f.store.DB.Raw(`SELECT COALESCE(jsonb_agg(to_jsonb(c) ORDER BY c.id)::text, '[]') FROM content_chunks c WHERE c.memory_id = ?`, current.ID).Scan(&state.chunks).Error)
+				require.NoError(t, f.store.DB.Raw(`SELECT COALESCE(jsonb_agg(to_jsonb(a) ORDER BY a.id)::text, '[]') FROM audit_log a WHERE a.memory_id = ? AND a.action = 'update'`, current.ID).Scan(&state.audit).Error)
+				return state
+			}
+			before := snapshotFor()
+			require.NotEqual(t, "[]", before.history)
+			require.NotEqual(t, "[]", before.chunks)
+			require.NotEqual(t, "[]", before.audit)
+			if tc.failAudit {
+				name := "b1_revision_domain_audit_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+				t.Cleanup(func() {
+					assert.NoError(t, f.store.DB.Exec("DROP TRIGGER IF EXISTS "+name+" ON audit_log").Error)
+					assert.NoError(t, f.store.DB.Exec("DROP FUNCTION IF EXISTS "+name+"()").Error)
+				})
+				require.NoError(t, f.store.DB.Exec("CREATE FUNCTION "+name+"() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic domain rejection audit failure'; END; $$").Error)
+				require.NoError(t, f.store.DB.Exec("CREATE TRIGGER "+name+" BEFORE INSERT ON audit_log FOR EACH ROW WHEN (NEW.action = 'principal_memory_domain_write_reject') EXECUTE FUNCTION "+name+"()").Error)
+			}
+			patch := map[string]any{"version": current.Version, "content": "domain revision attempted"}
+			var response *httptest.ResponseRecorder
+			var status int
+			if tc.name == "reject_after_reassignment" {
+				server := httptest.NewServer(f.service.router)
+				t.Cleanup(server.Close)
+				transport := &http.Transport{Proxy: nil}
+				t.Cleanup(transport.CloseIdleConnections)
+				client := &http.Client{Transport: transport, Timeout: 10 * time.Second}
+				encoded, err := json.Marshal(patch)
+				require.NoError(t, err)
+				request, err := http.NewRequest(http.MethodPatch, server.URL+path, bytes.NewReader(encoded))
+				require.NoError(t, err)
+				request.Header.Set("Content-Type", "application/json")
+				request.Header.Set("X-Engram-Identity", "keycard")
+				request.Header.Set("Authorization", "Bearer "+writer.token)
+				result, err := client.Do(request)
+				require.NoError(t, err)
+				status = result.StatusCode
+				require.NoError(t, result.Body.Close())
+			} else {
+				response = f.call(t, http.MethodPatch, path, patch, writer.caller())
+				status = response.Code
+			}
+			assert.Equal(t, tc.status, status, "domain policy must govern the current card revision")
+			after := snapshotFor()
+			if tc.status != http.StatusOK {
+				assert.Equal(t, before, after, "denial must preserve the card, prior history, chunks and update audits")
+			} else {
+				var persisted gormdb.Memory
+				require.NoError(t, f.store.DB.First(&persisted, current.ID).Error)
+				assert.Equal(t, "domain revision attempted", persisted.Content)
+				var body struct {
+					DomainWarning     *principalmemory.DomainWriteWarning `json:"domain_warning"`
+					DomainAuditStatus string                              `json:"domain_audit_status"`
+				}
+				require.NoError(t, json.Unmarshal(response.Body.Bytes(), &body))
+				if tc.warnAudit != 0 {
+					require.NotNil(t, body.DomainWarning)
+					assert.Equal(t, principalmemory.DomainWriteWarningCrossOwner, body.DomainWarning.Code)
+					assert.Equal(t, principalmemory.AuditStatusWritten, body.DomainAuditStatus)
+				} else {
+					assert.Nil(t, body.DomainWarning)
+				}
+				assert.Equal(t, current.Version+1, persisted.Version)
+				assert.NotEqual(t, before.history, after.history)
+				assert.Equal(t, "[]", after.chunks)
+				assert.NotEqual(t, before.audit, after.audit)
+			}
+			for _, audit := range []struct {
+				action, reason string
+				want           int64
+			}{
+				{principalmemory.AuditActionDomainWriteReject, principalmemory.AuditReasonDomainCrossOwnerReject, tc.rejectAudit},
+				{principalmemory.AuditActionDomainWriteWarn, principalmemory.AuditReasonDomainCrossOwnerWarn, tc.warnAudit},
+			} {
+				var count int64
+				require.NoError(t, f.store.DB.Table("audit_log").Where("action = ? AND reason = ? AND actor = ?", audit.action, audit.reason, writer.identity.Principal).Count(&count).Error)
+				assert.Equal(t, audit.want, count, "domain decision audit")
+			}
+		})
+	}
 }
 
 func TestB1LegacyTypedPatchRefused(t *testing.T) {
@@ -483,7 +612,7 @@ func TestB1ConsolidationRelationLockOrderPostgres(t *testing.T) {
 				if tc.revise {
 					caller := scope.KeycardContext{Principal: owner.identity.Principal, PrincipalKind: owner.identity.PrincipalKind, WorkstationID: owner.id}
 					owning := models.MemoryContext{Kind: models.MemoryContextSelf, Principal: caller.Principal, PrincipalKind: caller.PrincipalKind}
-					_, err := f.service.memoryStore.ReviseInContext(ctx, card.ID, owning, "", caller, card.Version, "relation lock revised", nil)
+					_, err := f.service.memoryStore.ReviseInContext(ctx, card.ID, owning, "", caller, card.Version, "relation lock revised", nil, nil)
 					operationDone <- err
 					return
 				}
