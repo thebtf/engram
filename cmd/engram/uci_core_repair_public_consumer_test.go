@@ -37,15 +37,7 @@ func TestUCICoreRepairPublicRegistrationSubprocess(t *testing.T) {
 		t.Skip("the existing installed subprocess lifecycle requires native Windows")
 	}
 	request := uciInstalledAcceptanceConfiguredRequest(t)
-	artifactEnv := map[string]string{"server": "ENGRAM_UCI_TEST_SERVER_ARTIFACT", "daemon": "ENGRAM_UCI_TEST_CLIENT_ARTIFACT", "parser": "ENGRAM_UCI_TEST_PARSER_ARTIFACT"}
-	for role, name := range artifactEnv {
-		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
-			if request.CandidateArtifacts == nil {
-				request.CandidateArtifacts = make(map[string]uciInstallHarnessCommand)
-			}
-			request.CandidateArtifacts[role] = uciInstallHarnessCommand{Executable: value}
-		}
-	}
+	uciInstalledAcceptanceUseArtifactEnv(&request)
 	request.OperationTimeout = 5 * time.Minute
 	request.Fixture.SharedSymbol = "CoreRepairOversizedCitation"
 	request.Fixture.PrimarySource = "package fixture\n\nfunc CoreRepairOversizedCitation() string { return \"" +
@@ -294,6 +286,10 @@ func uciCoreRepairKeycard(t *testing.T, ctx context.Context, authority *uciInsta
 }
 
 func uciCoreRepairEmbeddingProvider(t *testing.T) (uciInstalledAcceptanceEmbeddingProvider, *atomic.Int64) {
+	return uciCoreRepairEmbeddingProviderObserved(t, nil)
+}
+
+func uciCoreRepairEmbeddingProviderObserved(t *testing.T, observe func([]string)) (uciInstalledAcceptanceEmbeddingProvider, *atomic.Int64) {
 	t.Helper()
 	key, err := uciInstalledAcceptanceKeycard()
 	if err != nil {
@@ -317,6 +313,9 @@ func uciCoreRepairEmbeddingProvider(t *testing.T) (uciInstalledAcceptanceEmbeddi
 			t.Error("candidate embedding request has invalid model, dimension, or synthetic inputs")
 			http.Error(w, "invalid local fixture request", http.StatusBadRequest)
 			return
+		}
+		if observe != nil {
+			observe(request.Input)
 		}
 		type item struct {
 			Object    string    `json:"object"`
