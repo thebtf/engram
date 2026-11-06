@@ -151,6 +151,39 @@ Unavailable embeddings degrade to text retrieval; memory-store lookup failures
 return HTTP 500, not an empty successful search. REST retains its observation-shaped
 response and audit-only source-session attribution without MCP memory mutations.
 
+### Typed memory cards
+
+In authenticated mode a persisted browser-admin session can enroll an existing
+canonical principal/kind pair using `POST /api/auth/principals`. A validated
+keycard for that pair can omit both `project` and `context` on
+`POST /api/memories` to create a self-owned card. `source_agent` is provenance,
+not owner authority. The optional context object is `{"kind":"self"}`,
+`{"kind":"project"}`, or `{"kind":"global"}`. Project context requires an
+existing canonical `project`; self and global require the project to be absent.
+Invalid, empty, repeated or conflicting selectors do not fall back to self.
+Self ownership is independent of the visibility tier; global defaults to
+principal-private. Explicit workstation-private scope remains bound to the
+writing keycard even when another credential has the same principal.
+
+An optional nonempty `request_key` (at most 1024 UTF-8 bytes) scopes a create
+retry to the authenticated principal, owning context and project. An equivalent
+retry returns the existing active record; a changed command or retired target
+returns 409. Without a key a repeated create is not automatically idempotent.
+
+`GET /api/memories/{id}` reads a visible card in its selected context. To revise,
+send `PATCH /api/memories/{id}` with `{"version":N,"content":"..."}` and the
+same context selection. The owner must be authorized to manage the current card.
+The version must match; a stale version returns 409. After an uncertain outcome,
+read the current card and reconcile before deciding whether to retry. A successful
+revision keeps the ID, atomically retains the previous body and increments version.
+`GET /api/memories/{id}/revisions` returns retained previous bodies after checking
+current-card access, in ascending version order. `after_version` selects versions
+strictly above its nonnegative value; `limit` defaults to 50 and accepts 1–100.
+It does not invent revisions for earlier legacy edits; the
+current body remains on the ordinary read. Retained revisions are removed with a
+hard-deleted parent. Neither the revision endpoint nor global context grants
+access by itself. Synthetic auth-disabled identity is not a registered keycard.
+
 `POST /api/memories/{id}/transition` takes a JSON object with required `action`:
 `suppress` changes active to flagged, `unsuppress` changes flagged to active, and
 `archive` changes active or flagged to archived without erasure. Optional query

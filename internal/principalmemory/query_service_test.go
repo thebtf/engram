@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
 )
@@ -365,6 +366,20 @@ func (f *statusFilteringPrincipalMemoryStore) ListPrincipalMemory(_ context.Cont
 		result = append(result, row)
 	}
 	return result, nil
+}
+
+func TestPrincipalMemoryQueryService_SharedGlobalMockCannotAssertEnrollment(t *testing.T) {
+	store := &fakePrincipalMemoryStore{rows: []*models.Memory{{
+		ID: 901, Content: "must not leak", OwnerPrincipal: "agent/alice", OwnerPrincipalKind: "agent",
+		AgentVisibility: models.AgentVisibilityShared, Context: &models.MemoryContext{Kind: models.MemoryContextGlobal},
+	}}}
+	service := NewPrincipalMemoryQueryService(store, nil)
+	ctx := auth.WithIdentity(context.Background(), auth.ClientWithPrincipal("read-only", "keycard", "agent/bob", auth.PrincipalKindAgent))
+	result, err := service.Query(ctx, PrincipalMemoryQueryRequest{
+		Caller: PrincipalRef{Principal: "agent/bob", PrincipalKind: "agent"}, OwnerPrincipal: "agent/alice", OwnerPrincipalKind: "agent",
+	})
+	require.NoError(t, err)
+	require.Empty(t, result.Items)
 }
 
 type fakePrincipalMemoryStore struct {

@@ -20,6 +20,7 @@ import (
 	"gorm.io/gorm/clause"
 
 	"github.com/thebtf/engram/internal/auditcontext"
+	"github.com/thebtf/engram/internal/db/projectscope"
 	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/pkg/models"
 )
@@ -213,7 +214,10 @@ func validateMemoryForCreate(mem *models.Memory) error {
 	if mem == nil {
 		return fmt.Errorf("memory must not be nil")
 	}
-	if mem.Project == "" {
+	if err := validateMemoryContext(mem); err != nil {
+		return err
+	}
+	if mem.Project == "" && memoryContextKind(mem) != models.MemoryContextSelf && memoryContextKind(mem) != models.MemoryContextGlobal {
 		return fmt.Errorf("memory.Project must not be empty")
 	}
 	if mem.Content == "" {
@@ -297,6 +301,7 @@ func memoryRowForCreate(mem *models.Memory, now time.Time, includeLifecycle bool
 			row.Defeasibility = mem.Defeasibility
 		}
 	}
+	copyMemoryContext(row, mem)
 	return row
 }
 
@@ -341,9 +346,10 @@ func copyPrincipalMemoryFields(row *Memory, mem *models.Memory) {
 	}
 	visibility := strings.TrimSpace(mem.AgentVisibility)
 	if visibility == "" {
-		// Preserve existing team-visible behavior for owned writes; CR-004 will
-		// add principal-aware recall filtering for explicit private memories.
 		visibility = models.AgentVisibilityShared
+		if memoryContextKind(mem) == models.MemoryContextGlobal {
+			visibility = models.AgentVisibilityPrivate
+		}
 	}
 
 	row.OwnerPrincipal = owner
@@ -470,10 +476,7 @@ func createMemoryWithLifecycleTx(ctx context.Context, tx *gorm.DB, mem *models.M
 }
 
 func createMemoryRowForProjectTx(ctx context.Context, tx *gorm.DB, row *Memory) error {
-	if err := ensureLogicalProjectForWrite(ctx, tx, row.Project); err != nil {
-		return err
-	}
-	return tx.WithContext(ctx).Create(row).Error
+	return createMemoryContextRowTx(ctx, tx, row)
 }
 
 // CreateWithLifecycleIfTagAbsent inserts a lifecycle memory only when no active
@@ -923,6 +926,7 @@ func (s *MemoryStore) ListVisiblePage(ctx context.Context, project, query string
 //
 // T017a (engram vNext Milestone F TG3): store-level extension prerequisite.
 type ListOptions struct {
+	ContextCaller scope.KeycardContext
 	// ContentContains, when non-empty, adds a case-insensitive content
 	// substring predicate. Callers may still apply richer tag/content matching in
 	// memory, but recall(action="search") can keep its content-only predicate in
@@ -1013,8 +1017,14 @@ func (s *MemoryStore) ListPrincipalMemory(ctx context.Context, project string, o
 	}
 
 	q := basePrincipalMemoryQuery(s.db.WithContext(ctx), opts)
+	typedSQL, typedArgs := scope.MemoryReadAccessSQL(scope.MemoryReadAccess{Caller: opts.ContextCaller, Visibility: scope.MemoryVisibilityOptions{ApplyPrivacyScope: true}})
+	args := []any{opts.ContextCaller.WorkstationID, opts.ContextCaller.WorkstationID, opts.ContextCaller.SessionID, opts.ContextCaller.SessionID}
+	args = append(args, typedArgs...)
+	predicate := "((m.context_kind = 'legacy' AND " + scope.MemoryPrivacyAccessSQL + ") OR (m.context_kind <> 'legacy' AND (" + typedSQL + ")))"
+	q = q.Model(&Memory{}).Table("memories AS m").Where(predicate, args...)
 	if project = strings.TrimSpace(project); project != "" {
-		q = q.Where("project = ?", project)
+		projectPredicate, projectArgs := projectscope.MemoryPredicate("m", project)
+		q = q.Where(projectPredicate, projectArgs...)
 	}
 
 	result, err := findMemoryRows(q, opts)
@@ -1023,6 +1033,9 @@ func (s *MemoryStore) ListPrincipalMemory(ctx context.Context, project string, o
 			return nil, fmt.Errorf("list principal memories: %w", err)
 		}
 		return nil, fmt.Errorf("list principal memories for project %q: %w", project, err)
+	}
+	if project != "" {
+		result = projectMemoryRows(result, project)
 	}
 	return result, nil
 }
@@ -1061,6 +1074,13 @@ func findMemoryRows(q *gorm.DB, opts ListOptions) ([]*models.Memory, error) {
 		result[i] = memoryRowToModel(&rows[i])
 	}
 	return result, nil
+}
+
+func projectMemoryRows(rows []*models.Memory, project string) []*models.Memory {
+	for _, row := range rows {
+		row.Project = project
+	}
+	return rows
 }
 
 func applyMemoryListOptions(q *gorm.DB, opts ListOptions) *gorm.DB {
@@ -1252,9 +1272,12 @@ func (s *MemoryStore) updateMemoryTx(ctx context.Context, tx *gorm.DB, mem *mode
 		"version":      gorm.Expr("version + 1"),
 	}
 
+	// Typed cards may only be revised through an atomic history-writing path.
+	// The database predicate prevents a stale caller from overwriting one.
 	result := tx.WithContext(ctx).
 		Model(&Memory{}).
 		Where("id = ? AND deleted_at IS NULL", mem.ID).
+		Where("context_kind = ?", models.MemoryContextLegacy).
 		Updates(updates)
 	if result.Error != nil {
 		return nil, fmt.Errorf("update memory id=%d: %w", mem.ID, result.Error)
@@ -1571,6 +1594,7 @@ func memoryRowToModel(row *Memory) *models.Memory {
 		m.SourceWorkstationID = row.SourceWorkstationID
 		m.SourceSessions = []string(row.SourceSessions)
 	}
+	attachMemoryContext(m, row)
 	return m
 }
 
@@ -2223,7 +2247,11 @@ func restoreRawUpdates(mem *models.Memory) map[string]any {
 	if sourceSessions == nil {
 		sourceSessions = pq.StringArray{}
 	}
+	contextKind, contextPrincipal, contextPrincipalKind := restoreMemoryContext(mem)
 	return map[string]any{
+		"context_kind":               contextKind,
+		"context_principal":          contextPrincipal,
+		"context_principal_kind":     contextPrincipalKind,
 		"project":                    mem.Project,
 		"content":                    mem.Content,
 		"tags":                       models.JSONStringArray(mem.Tags),
@@ -2276,24 +2304,9 @@ func restoreRawUpdates(mem *models.Memory) map[string]any {
 // RestoreRaw is intended exclusively for Rollback (internal/bulkops) — do not use
 // for normal update workflows.
 func (s *MemoryStore) RestoreRaw(ctx context.Context, mem *models.Memory) error {
-	if mem == nil {
-		return fmt.Errorf("restoreRaw: memory must not be nil")
-	}
-	if mem.ID == 0 {
-		return fmt.Errorf("restoreRaw: memory ID must be non-zero")
-	}
-	result := s.db.WithContext(ctx).
-		Unscoped().
-		Model(&Memory{}).
-		Where("id = ?", mem.ID).
-		Updates(restoreRawUpdates(mem))
-	if result.Error != nil {
-		return fmt.Errorf("restoreRaw memory id=%d: %w", mem.ID, result.Error)
-	}
-	if result.RowsAffected == 0 {
-		return fmt.Errorf("restoreRaw memory id=%d: row not found", mem.ID)
-	}
-	return nil
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return s.RestoreRawTx(ctx, tx, mem)
+	})
 }
 
 // RestoreRawTx is the transactional variant of RestoreRaw.
@@ -2306,10 +2319,31 @@ func (s *MemoryStore) RestoreRawTx(ctx context.Context, tx *gorm.DB, mem *models
 	if mem.ID == 0 {
 		return fmt.Errorf("restoreRawTx: memory ID must be non-zero")
 	}
+	contextKind, contextPrincipal, contextPrincipalKind := restoreMemoryContext(mem)
+	if contextKind != models.MemoryContextLegacy {
+		var current Memory
+		if err := tx.WithContext(ctx).Unscoped().Select("content", "version").Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND context_kind = ? AND context_principal = ? AND context_principal_kind = ?", mem.ID, contextKind, contextPrincipal, contextPrincipalKind).
+			First(&current).Error; err != nil {
+			return fmt.Errorf("restoreRawTx memory id=%d: %w", mem.ID, err)
+		}
+		if current.Content != mem.Content || mem.Version <= 0 || mem.Version > current.Version {
+			return fmt.Errorf("restoreRawTx memory id=%d: typed content or version conflict", mem.ID)
+		}
+		var revision MemoryRevision
+		err := tx.WithContext(ctx).Select("version").Where("memory_id = ? AND version >= ?", mem.ID, mem.Version).Take(&revision).Error
+		if err == nil {
+			return fmt.Errorf("restoreRawTx memory id=%d: typed revision conflict", mem.ID)
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("restoreRawTx memory id=%d: check typed revisions: %w", mem.ID, err)
+		}
+	}
 	result := tx.WithContext(ctx).
 		Unscoped().
 		Model(&Memory{}).
 		Where("id = ?", mem.ID).
+		Where("context_kind = ? AND context_principal = ? AND context_principal_kind = ?", contextKind, contextPrincipal, contextPrincipalKind).
 		Updates(restoreRawUpdates(mem))
 	if result.Error != nil {
 		return fmt.Errorf("restoreRawTx memory id=%d: %w", mem.ID, result.Error)
@@ -2360,6 +2394,7 @@ func (s *MemoryStore) ListAllActive(ctx context.Context, batchSize int, offset i
 	var rows []Memory
 	err := s.db.WithContext(ctx).
 		Where("status = 'active' AND deleted_at IS NULL").
+		Where("context_kind IN ('legacy','project')").
 		Order("id ASC").
 		Limit(batchSize).
 		Offset(offset).

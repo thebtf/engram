@@ -1979,6 +1979,7 @@ func (s *Service) setupRoutes() {
 		r.Get("/api/auth/tokens", s.handleListTokens)
 		r.Post("/api/auth/tokens", s.handleCreateToken)
 		r.Delete("/api/auth/tokens/{id}", s.handleRevokeToken)
+		r.Post("/api/auth/principals", s.handleEnrollMemoryPrincipal)
 
 		// Vault routes
 		r.Get("/api/vault/credentials", s.handleListCredentials)
@@ -2008,6 +2009,8 @@ func (s *Service) setupRoutes() {
 		r.Post("/api/memory/review-packets/{packetID}/apply", s.handleApplyMemoryReviewPacketAction)
 		r.Post("/api/memories/suppress", s.handleSuppressMemories)
 		r.Get("/api/memories/{id}/audit", s.handleGetMemoryAudit)
+		r.Get("/api/memories/{id}/revisions", s.handleMemoryContextHistory)
+		r.Patch("/api/memories/{id}", s.handleReviseMemoryContext)
 		r.Post("/api/memories/{id}/suppress", s.handleSuppressMemoryByID)
 		r.Post("/api/memories/{id}/transition", s.handleTransitionMemoryByID)
 		r.Get("/api/memories/{id}", s.handleGetMemoryByID)

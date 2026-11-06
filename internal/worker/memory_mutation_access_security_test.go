@@ -55,6 +55,16 @@ func (d memoryMutationSQLiteDriver) Open(name string) (driver.Conn, error) {
 	return memoryMutationSQLiteConn{conn}, nil
 }
 
+func (c memoryMutationSQLiteConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
+	if opts.Isolation != driver.IsolationLevel(sql.LevelDefault) && opts.Isolation != driver.IsolationLevel(sql.LevelReadCommitted) {
+		return nil, fmt.Errorf("unsupported SQLite fixture isolation")
+	}
+	if tx, ok := c.Conn.(driver.ConnBeginTx); ok {
+		return tx.BeginTx(ctx, driver.TxOptions{ReadOnly: opts.ReadOnly})
+	}
+	return c.Conn.Begin()
+}
+
 var (
 	memoryMutationAliasSQL   = regexp.MustCompile(`COALESCE\(legacy_ids, ARRAY\[\]::TEXT\[\]\) @> ARRAY\[(\$[0-9]+)\]::TEXT\[\]`)
 	memoryMutationSessionSQL = regexp.MustCompile(`(\$[0-9]+) = ANY\(m\.source_sessions\)`)
@@ -67,6 +77,7 @@ func (c memoryMutationSQLiteConn) Prepare(query string) (driver.Stmt, error) {
 	case `LOCK TABLE "audit_log" IN ROW EXCLUSIVE MODE`, `LOCK TABLE "memories" IN ROW SHARE MODE`, `LOCK TABLE "project_consolidation_memberships" IN SHARE MODE`:
 		query = "SELECT 1"
 	}
+	query = strings.TrimSuffix(strings.TrimSuffix(query, ` FOR UPDATE OF "m"`), ` FOR SHARE OF "m"`)
 	query = strings.TrimSuffix(strings.TrimSuffix(query, " FOR UPDATE"), " FOR SHARE")
 	query = memoryMutationAliasSQL.ReplaceAllString(query, `memory_mutation_has_session(legacy_ids, $1)`)
 	query = memoryMutationSessionSQL.ReplaceAllString(query, `memory_mutation_has_session(m.source_sessions, $1)`)
@@ -156,10 +167,14 @@ func memoryMutationSQLiteDB(t *testing.T) *gorm.DB {
 			if field.PrimaryKey {
 				kind += " PRIMARY KEY"
 			}
+			if parsed.Table == "memories" && field.DBName == "context_kind" {
+				kind += " DEFAULT 'legacy'"
+			}
 			columns = append(columns, fmt.Sprintf("%q %s", field.DBName, kind))
 		}
 		require.NoError(t, db.Exec(fmt.Sprintf("CREATE TABLE %q (%s)", parsed.Table, strings.Join(columns, ","))).Error)
 	}
+	require.NoError(t, db.Exec(`CREATE TABLE memory_principals (principal_kind TEXT NOT NULL, principal TEXT NOT NULL, enrolled_by INTEGER NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (principal_kind, principal))`).Error)
 	return db
 }
 

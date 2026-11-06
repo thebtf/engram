@@ -166,10 +166,14 @@ func knowledgeSQLiteDB(t *testing.T) *gorm.DB {
 			if field.PrimaryKey {
 				kind += " PRIMARY KEY"
 			}
+			if parsed.Table == "memories" && field.DBName == "context_kind" {
+				kind += " DEFAULT 'legacy'"
+			}
 			columns = append(columns, fmt.Sprintf("%q %s", field.DBName, kind))
 		}
 		require.NoError(t, db.Exec(fmt.Sprintf("CREATE TABLE %q (%s)", parsed.Table, strings.Join(columns, ","))).Error)
 	}
+	require.NoError(t, db.Exec(`CREATE TABLE memory_principals (principal_kind TEXT NOT NULL, principal TEXT NOT NULL, enrolled_by INTEGER NOT NULL, PRIMARY KEY (principal_kind, principal))`).Error)
 	require.NoError(t, db.Exec("PRAGMA case_sensitive_like = ON").Error)
 	return db
 }

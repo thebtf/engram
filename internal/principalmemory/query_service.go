@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/pkg/models"
@@ -185,7 +186,14 @@ func (s *PrincipalMemoryQueryService) Query(ctx context.Context, req PrincipalMe
 		}
 	}
 
+	contextCaller := scope.KeycardContext{}
+	if identity, ok := auth.IdentityFrom(ctx); ok && identity.Source == auth.SourceClient && identity.KeycardID != "" {
+		if principal, kind, owned := identity.MemoryOwner(); owned {
+			contextCaller = scope.KeycardContext{Principal: principal, PrincipalKind: kind, WorkstationID: identity.WorkstationID()}
+		}
+	}
 	queryOpts := gormdb.ListOptions{
+		ContextCaller:      contextCaller,
 		OwnerPrincipal:     strings.TrimSpace(req.OwnerPrincipal),
 		OwnerPrincipalKind: strings.TrimSpace(strings.ToLower(req.OwnerPrincipalKind)),
 		ContentContains:    strings.TrimSpace(req.Query),
@@ -214,6 +222,19 @@ func (s *PrincipalMemoryQueryService) Query(ctx context.Context, req PrincipalMe
 		for _, mem := range rows {
 			if mem == nil {
 				continue
+			}
+			if mem.Context != nil {
+				// Only this store applies typed visibility and enrollment before pagination.
+				_, trusted := s.store.(*gormdb.MemoryStore)
+				caller := normalizePrincipalRef(req.Caller)
+				if !trusted || caller.Principal != contextCaller.Principal || caller.PrincipalKind != contextCaller.PrincipalKind || contextCaller.WorkstationID == "" {
+					continue
+				}
+				if !scope.ResolveMemory(contextCaller, mem, scope.MemoryVisibilityOptions{ApplyPrivacyScope: true}) {
+					if mem.Context.Kind != models.MemoryContextGlobal || mem.AgentVisibility != models.AgentVisibilityShared {
+						continue
+					}
+				}
 			}
 			decision := s.policy.Decide(PrincipalAccessRequest{
 				Caller:        req.Caller,
