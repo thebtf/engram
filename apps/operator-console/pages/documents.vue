@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { isCatalogProject, useOperatorProjectContext, projectName, safeNavigation } from '../composables/useOperatorProjectContext'
+import { documentScopeUncertain, isCatalogProject, useOperatorProjectContext, projectName, safeNavigation, supportsDocumentLineage, validDocumentID } from '../composables/useOperatorProjectContext'
 import { useOperatorDocuments, type DocumentExportArtifact } from '../composables/useOperatorDocuments'
-import { operatorApiUrl, operatorDiagnosisKey } from '../composables/useOperatorApi'
+import { authGeneration, operatorApiUrl, operatorDiagnosisKey, operatorUnauthorizedRevision } from '../composables/useOperatorApi'
 const { t, locale } = useI18n()
 const route = useRoute()
 const router = useRouter()
@@ -17,6 +17,9 @@ const types = computed(() => { const value = safeNavigation(route.query, route.f
 const hasTypes = computed(() => types.value.length > 0)
 const requestedPath = computed(() => typeof route.query.path === 'string' ? route.query.path : '')
 const documentProject = computed(() => project.value === 'all' && typeof route.query.docProject === 'string' ? route.query.docProject : project.value)
+const requestedDocumentID = computed(() => route.query.document_id)
+const lineageUnavailable = computed(() => documentScopeUncertain(documentProject.value) || (requestedDocumentID.value !== undefined && (!validDocumentID(requestedDocumentID.value) || !supportsDocumentLineage(documentProject.value))))
+const lineageActionsUnavailable = computed(() => documentScopeUncertain(documentProject.value))
 const page = computed(() => Math.max(1, Number.parseInt(String(route.query.page || '1'), 10) || 1))
 const pageSize = computed(() => [10, 20, 50].includes(Number(route.query.size)) ? Number(route.query.size) : 20)
 const draft = ref(typeof route.query.draftQ === 'string' ? route.query.draftQ : query.value)
@@ -33,7 +36,7 @@ const mutationResult = ref<Awaited<ReturnType<typeof docs.addComment>> | Awaited
 const detailHeading = ref<HTMLElement | null>(null)
 let generation = 0
 let exportGeneration = 0
-watch([project, documentProject, requestedPath, primaryVersion, () => primaryDocument.value?.id, () => primaryState.value.kind], () => {
+watch([project, documentProject, requestedPath, requestedDocumentID, primaryVersion, authGeneration, operatorUnauthorizedRevision, () => primaryDocument.value?.id, () => primaryState.value.kind], () => {
   exportGeneration += 1
   exportArtifact.value = null
 }, { flush: 'sync' })
@@ -43,7 +46,7 @@ const pageRows = filtered
 
 function updateQuery(values: Record<string, string | string[] | undefined>) {
   if (context.selectionPending.value || (!isCatalogProject(project.value) && project.value !== 'all')) return
-  return router.push({ path: '/documents', query: { ...route.query, project: project.value || undefined, ...values } })
+  return router.push({ path: '/documents', query: { ...route.query, project: project.value || undefined, ...values, ...('path' in values && values.path === undefined ? { document_id: undefined } : {}) } })
 }
 function addType() {
   const value = typeDraft.value
@@ -69,13 +72,14 @@ async function readDetail() {
   clearDocumentDetail()
   compareOpen.value = false
   exportArtifact.value = null
+  mutationResult.value = null
   const targetProject = documentProject.value
-  if (!path || !scope || !isCatalogProject(targetProject) || context.selectionPending.value) return
+  if (!path || !scope || !isCatalogProject(targetProject) || context.selectionPending.value || lineageUnavailable.value) return
   await nextTick()
   if (current !== generation) return
   detailHeading.value?.focus()
   detailHeading.value?.scrollIntoView({ block: 'start' })
-  await openDocument({ id: '', path, project: targetProject, docType: '', author: '', createdAt: '', age: '', version: 0 })
+  await openDocument({ id: validDocumentID(requestedDocumentID.value) ? requestedDocumentID.value : '', path, project: targetProject, docType: '', author: '', createdAt: '', age: '', version: 0 }, requestedDocumentID.value === undefined)
   if (current !== generation || requestedPath.value !== path || project.value !== scope) return
   const version = Number(route.query.version)
   if (Number.isSafeInteger(version) && version > 0) await selectPrimaryVersion(version)
@@ -85,7 +89,7 @@ async function readDetail() {
   await nextTick()
   detailHeading.value?.focus()
 }
-watch([requestedPath, documentProject, context.selectionPending, scopeError], () => { commentDraft.value = ''; lineStart.value = ''; lineEnd.value = ''; actionError.value = ''; void readDetail() }, { immediate: true, flush: 'sync' })
+watch([requestedPath, requestedDocumentID, documentProject, context.selectionPending, scopeError, lineageUnavailable], () => { commentDraft.value = ''; lineStart.value = ''; lineEnd.value = ''; actionError.value = ''; void readDetail() }, { immediate: true, flush: 'sync' })
 watch(() => route.query.version, (value) => { const version = Number(value); if (Number.isSafeInteger(version) && version > 0) void selectPrimaryVersion(version) })
 watch(() => route.query.compare, (value) => {
   const version = Number(value)
@@ -105,7 +109,7 @@ onBeforeUnmount(() => {
 
 async function closeDetail() {
   const path = requestedPath.value
-  await updateQuery({ path: undefined, docProject: undefined, version: undefined, compare: undefined })
+  await updateQuery({ path: undefined, document_id: undefined, docProject: undefined, version: undefined, compare: undefined })
   await nextTick()
   const buttons = document.querySelectorAll<HTMLElement>('[data-document-path]')
   for (const button of buttons) if (button.dataset.documentPath === path) { button.focus(); break }
@@ -118,26 +122,29 @@ async function compare() {
 
 async function comment() {
   const content = commentDraft.value.trim()
-  if (!content || busy.value || !primaryDocument.value || context.selectionPending.value || scopeError.value) return
+  if (!content || busy.value || !primaryDocument.value || context.selectionPending.value || scopeError.value || lineageActionsUnavailable.value) return
   const start = lineStart.value ? Number(lineStart.value) : undefined
   const end = lineEnd.value ? Number(lineEnd.value) : undefined
   if ((start !== undefined && (!Number.isSafeInteger(start) || start <= 0)) || (end !== undefined && (!Number.isSafeInteger(end) || end <= 0)) || (start !== undefined && end !== undefined && end < start)) { actionError.value = t('documents.comments.invalidRange'); return }
   const scope = project.value
   const path = requestedPath.value
+  const lineage = requestedDocumentID.value
   const version = primaryVersion.value
+  const auth = authGeneration.value
+  const unauthorized = operatorUnauthorizedRevision.value
   busy.value = true
   try {
     const result = await docs.addComment({ content, author: 'operator-console', lineStart: start, lineEnd: end })
-    if (project.value !== scope || requestedPath.value !== path || primaryVersion.value !== version) return
+    if (project.value !== scope || requestedPath.value !== path || requestedDocumentID.value !== lineage || primaryVersion.value !== version || authGeneration.value !== auth || operatorUnauthorizedRevision.value !== unauthorized) return
     mutationResult.value = result
     if (result.kind === 'committed_verified') { commentDraft.value = ''; lineStart.value = ''; lineEnd.value = ''; if (version) await selectPrimaryVersion(version) }
-  } catch { if (project.value === scope && requestedPath.value === path) actionError.value = t('knowledge.actionFailed') }
+  } catch { if (project.value === scope && requestedPath.value === path && requestedDocumentID.value === lineage && authGeneration.value === auth && operatorUnauthorizedRevision.value === unauthorized) actionError.value = t('knowledge.actionFailed') }
   finally { busy.value = false }
 }
 
 async function exportDocument() {
   const doc = primaryDocument.value
-  if (!doc || busy.value || context.selectionPending.value || scopeError.value) return
+  if (!doc || busy.value || context.selectionPending.value || scopeError.value || lineageActionsUnavailable.value) return
   const attempt = ++exportGeneration
   exportArtifact.value = null
   busy.value = true
@@ -175,13 +182,18 @@ function time(value?: string) {
         <fieldset class="type-filters" aria-describedby="document-type-help"><legend>{{ t('knowledge.documentTypes') }}</legend><p id="document-type-help">{{ t('knowledge.typeGrouping') }} {{ t('knowledge.literalDocumentTypes') }}</p><div class="type-chips"><button class="btn" type="button" :aria-pressed="!hasTypes" data-document-type="any" @click="updateQuery({ docType: undefined, page: '1', path: undefined, docProject: undefined, version: undefined, compare: undefined })">{{ t('knowledge.anyType') }}</button><button v-for="(type, index) in types" :key="index" class="btn" type="button" :aria-label="t('knowledge.removeType', { type: type || t('knowledge.invalidType') })" :data-document-type-index="index" @click="removeType(index)">{{ type || t('knowledge.invalidType') }} ×</button></div><div class="type-entry"><label><span>{{ t('knowledge.docType') }}</span><input v-model="typeDraft" list="document-type-examples" autocomplete="off" data-testid="document-type-entry" @keydown.enter.prevent="addType" /></label><datalist id="document-type-examples"><option value="markdown" /><option value="text" /></datalist><button class="btn" type="button" :disabled="!typeDraft" data-testid="document-type-add" @click="addType">{{ t('knowledge.addType') }}</button></div></fieldset>
       </form>
       <div v-if="documentsState.kind === 'pending'" class="state" role="status">{{ t('knowledge.loading') }}</div>
-      <div v-else-if="documentsState.kind === 'error'" class="state error" role="status"><p>{{ t(documentsState.error.source === 'document-types' ? 'knowledge.invalidDocumentTypes' : operatorDiagnosisKey(documentsState.error)) }}</p><button class="btn" @click="refresh">{{ t('knowledge.retry') }}</button><details><summary>{{ t('knowledge.technical') }}</summary>{{ documentsState.error.message }}</details></div>
+      <div v-else-if="documentsState.kind === 'error'" class="state error" role="status"><p>{{ t(documentsState.error.source === 'document-types' ? 'knowledge.invalidDocumentTypes' : operatorDiagnosisKey(documentsState.error)) }}</p><button
+          v-if="project === 'all' && context.logicalGroupsInvalid.value && documentsState.error.source !== 'document-types'"
+          class="btn" data-testid="retry-project-catalog" @click="context.refresh">{{ t('knowledge.retry')
+          }}</button><button v-else class="btn" @click="refresh">{{ t('knowledge.retry') }}</button><details><summary>{{ t('knowledge.technical') }}</summary>{{ documentsState.error.message }}</details></div>
       <p v-if="project === 'all'" class="state">{{ t('knowledge.allOrder') }}</p>
       <p v-if="documentsState.kind === 'gated'" class="state" role="status">{{ t('knowledge.allReadHelp') }}</p>
       <div class="docs-workspace" :class="{ 'detail-open': requestedPath }">
         <section class="docs-list" :aria-label="t('knowledge.documentResults')">
           <div class="list-head"><span role="status">{{ total === null ? t('knowledge.unknown') : t('knowledge.matches', { count: total }) }}</span><label><span>{{ t('knowledge.perPage') }}</span><select :value="pageSize" @change="updateQuery({ size: ($event.target as HTMLSelectElement).value, page: '1', path: undefined })"><option :value="10">10</option><option :value="20">20</option><option :value="50">50</option></select></label></div>
-          <button v-for="doc in pageRows" :key="`${doc.project}:${doc.path}`" class="doc-row" :class="{ active: requestedPath === doc.path && documentProject === doc.project }" :aria-pressed="requestedPath === doc.path && documentProject === doc.project" :data-document-path="doc.path" @click="updateQuery({ path: doc.path, docProject: project === 'all' ? doc.project : undefined, version: undefined, compare: undefined })"><strong>{{ doc.path }}</strong><span>{{ t('knowledge.version') }} {{ doc.version }} · {{ doc.docType }} · {{ doc.author || t('knowledge.notRecorded') }} · {{ time(doc.createdAt) }}<template v-if="project === 'all'"> · {{ projectName(doc.project) }}</template></span></button>
+          <button v-for="doc in pageRows" :key="validDocumentID(doc.id) ? `${doc.project}:${doc.id}` : `${doc.project}:${doc.path}`" class="doc-row" :class="{ active: requestedPath === doc.path && documentProject === doc.project && (requestedDocumentID === undefined || requestedDocumentID === doc.id) }" :aria-pressed="requestedPath === doc.path && documentProject === doc.project && (requestedDocumentID === undefined || requestedDocumentID === doc.id)" :data-document-path="doc.path" @click="updateQuery({ path: doc.path, document_id: documentScopeUncertain(doc.project) ? '' : supportsDocumentLineage(doc.project) ? (validDocumentID(doc.id) ? doc.id : '') : undefined, docProject: project === 'all' ? doc.project : undefined, version: undefined, compare: undefined })"><strong>{{ doc.path }}</strong><span
+              v-if="validDocumentID(doc.id) && pageRows.filter(row => row.project === doc.project && row.path === doc.path).length > 1">
+              · #{{ doc.id }}</span><span>{{ t('knowledge.version') }} {{ doc.version }} · {{ doc.docType }} · {{ doc.author || t('knowledge.notRecorded') }} · {{ time(doc.createdAt) }}<template v-if="project === 'all'"> · {{ projectName(doc.project) }}</template></span></button>
           <div v-if="documentsState.kind === 'empty'" class="empty" data-testid="documents-empty">
             <h2>{{ t(total && page > 1 ? 'knowledge.pageEmpty' : query || prefix || hasTypes ? 'knowledge.noMatches' : 'knowledge.noDocuments') }}</h2><p>{{ t(query || prefix || hasTypes ? 'knowledge.noDocumentMatchesHelp' : 'knowledge.noDocumentsHelp') }}</p>
             <button v-if="total && page > 1" class="btn" @click="updateQuery({ page: '1', path: undefined })">{{ t('knowledge.firstPage') }}</button>
@@ -194,6 +206,12 @@ function time(value?: string) {
           <button class="btn back" @click="closeDetail">{{ t('knowledge.backResults') }}</button>
           <h2 id="document-reader-heading" ref="detailHeading" tabindex="-1">{{ requestedPath }}</h2>
           <p v-if="documentProject === 'all'">{{ t('knowledge.chooseRecordProject') }}</p>
+          <div v-else-if="lineageUnavailable" class="state error" role="status">{{
+            t(documentScopeUncertain(documentProject) ? 'projectCatalog.lineageScopeUncertain' :
+              'projectCatalog.lineageUnsupported') }}
+            <button v-if="documentScopeUncertain(documentProject)" class="btn" data-testid="retry-project-catalog"
+              @click="context.refresh">{{ t('knowledge.retry') }}</button>
+          </div>
           <p v-else-if="primaryState.kind === 'pending'" role="status">{{ t('knowledge.loading') }}</p>
           <div v-else-if="primaryState.kind === 'error'" class="state error" role="status"><p>{{ t(operatorDiagnosisKey(primaryState.error)) }}</p><button class="btn" @click="readDetail">{{ t('knowledge.retry') }}</button><details><summary>{{ t('knowledge.technical') }}</summary>{{ primaryState.error.message }}</details></div>
           <template v-else-if="primaryDocument">
@@ -201,7 +219,7 @@ function time(value?: string) {
             <pre class="document-content" data-testid="document-content">{{ primaryDocument.content }}</pre>
             <section><h3>{{ t('knowledge.origin') }}</h3><dl><dt>{{ t('knowledge.project') }}</dt><dd>{{ projectName(documentProject) }}</dd><dt>{{ t('knowledge.author') }}</dt><dd>{{ primaryDocument.author || t('knowledge.notRecorded') }}</dd><dt>{{ t('knowledge.created') }}</dt><dd>{{ time(primaryDocument.createdAt) }}</dd><dt>{{ t('documents.compare.metaType') }}</dt><dd>{{ primaryDocument.docType }}</dd></dl><RouterLink :to="context.to('/memory')">{{ t('knowledge.openMemory') }}</RouterLink></section>
           </template>
-          <section v-if="documentProject && documentProject !== 'all'" class="history">
+          <section v-if="documentProject && documentProject !== 'all' && !lineageUnavailable" class="history">
             <h3>{{ t('knowledge.history') }}</h3>
             <p v-if="historyState.kind === 'pending'" role="status">{{ t('knowledge.loading') }}</p>
             <div v-else-if="historyState.kind === 'error'" class="state error"><p>{{ t(operatorDiagnosisKey(historyState.error)) }}</p><button class="btn" @click="readDetail">{{ t('knowledge.retry') }}</button></div>
@@ -215,14 +233,15 @@ function time(value?: string) {
               <template v-else-if="secondaryDocument"><p v-if="primaryDocument">{{ t(primaryDocument.contentHash === secondaryDocument.contentHash ? 'documents.summary.compareSame' : 'documents.summary.compareDifferent', { left: primaryDocument.version, right: secondaryDocument.version }) }}</p><pre class="document-content">{{ secondaryDocument.content }}</pre></template>
             </div>
           </section>
-          <template v-if="primaryDocument">
+          <template v-if="primaryDocument && !lineageUnavailable">
             <details class="technical"><summary>{{ t('knowledge.technical') }}</summary><dl><dt>ID</dt><dd>{{ primaryDocument.id }}</dd><dt>{{ t('knowledge.projectIdentity') }}</dt><dd>{{ documentProject }}</dd><dt>{{ t('documents.compare.metaHash') }}</dt><dd><code>{{ primaryDocument.contentHash }}</code></dd></dl><pre class="metadata">{{ primaryDocument.metadata }}</pre></details>
             <section class="comments"><h3>{{ t('documents.comments.title') }}</h3><p>{{ t('documents.comments.threadFor', { version: primaryVersion }) }}</p>
-              <p v-if="commentsState.kind === 'pending'" role="status">{{ t('knowledge.loading') }}</p><div v-else-if="commentsState.kind === 'error'" class="state error"><p>{{ t(operatorDiagnosisKey(commentsState.error)) }}</p><button class="btn" @click="selectPrimaryVersion(primaryDocument.version)">{{ t('knowledge.retry') }}</button></div><p v-else-if="!comments.length">{{ t('documents.comments.emptyBody') }}</p>
+              <p v-if="lineageActionsUnavailable" role="status">{{ t('projectCatalog.lineageActionsUnavailable') }}</p>
+              <p v-else-if="commentsState.kind === 'pending'" role="status">{{ t('knowledge.loading') }}</p><div v-else-if="commentsState.kind === 'error'" class="state error"><p>{{ t(operatorDiagnosisKey(commentsState.error)) }}</p><button class="btn" @click="selectPrimaryVersion(primaryDocument.version)">{{ t('knowledge.retry') }}</button></div><p v-else-if="!comments.length">{{ t('documents.comments.emptyBody') }}</p>
               <ol v-else><li v-for="entry in comments" :key="entry.id"><strong>{{ entry.author || t('knowledge.notRecorded') }}</strong><time>{{ time(entry.createdAt) }}</time><p>{{ entry.content }}</p><span v-if="entry.lineStart">{{ t('documents.comments.lineRange', { start: entry.lineStart, end: entry.lineEnd || entry.lineStart }) }}</span></li></ol>
-              <form v-if="history.some((entry) => entry.version === primaryVersion)" class="comment-form" @submit.prevent="comment"><label><span>{{ t('documents.comments.contentLabel') }}</span><textarea v-model="commentDraft" rows="3" /></label><details><summary>{{ t('knowledge.commentLines') }}</summary><div class="line-range"><label><span>{{ t('documents.comments.lineStart') }}</span><input v-model="lineStart" type="number" min="1" step="1" /></label><label><span>{{ t('documents.comments.lineEnd') }}</span><input v-model="lineEnd" type="number" min="1" step="1" /></label></div></details><button class="btn" :disabled="busy || !commentDraft.trim()">{{ t('documents.comments.submit') }}</button></form>
+              <form v-if="!lineageActionsUnavailable && history.some((entry) => entry.version === primaryVersion)" class="comment-form" @submit.prevent="comment"><label><span>{{ t('documents.comments.contentLabel') }}</span><textarea v-model="commentDraft" rows="3" /></label><details><summary>{{ t('knowledge.commentLines') }}</summary><div class="line-range"><label><span>{{ t('documents.comments.lineStart') }}</span><input v-model="lineStart" type="number" min="1" step="1" /></label><label><span>{{ t('documents.comments.lineEnd') }}</span><input v-model="lineEnd" type="number" min="1" step="1" /></label></div></details><button class="btn" :disabled="busy || !commentDraft.trim()">{{ t('documents.comments.submit') }}</button></form>
             </section>
-            <details><summary>{{ t('knowledge.documentActions') }}</summary><button class="btn" :disabled="busy" @click="exportDocument" data-testid="document-export">{{ t('documents.actions.export') }}</button><a v-if="exportArtifact && mutationResult?.kind === 'committed_verified'" class="btn" :href="operatorApiUrl(exportArtifact.downloadUrl)" :download="exportArtifact.filename" data-testid="document-export-download">{{ t('documents.actions.download') }}</a></details>
+            <details><summary>{{ t('knowledge.documentActions') }}</summary><button class="btn" :disabled="busy || lineageActionsUnavailable" @click="exportDocument" data-testid="document-export">{{ t('documents.actions.export') }}</button><a v-if="exportArtifact && mutationResult?.kind === 'committed_verified'" class="btn" :href="operatorApiUrl(exportArtifact.downloadUrl)" :download="exportArtifact.filename" data-testid="document-export-download">{{ t('documents.actions.download') }}</a></details>
           </template>
         </article>
       </div>

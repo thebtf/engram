@@ -25,7 +25,7 @@ func CanonicalReadProjectSQL(value string) string {
  AND redirect.project_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
  AND redirect.project_id <> '00000000-0000-0000-0000-000000000000'
  AND NOT EXISTS (SELECT 1 FROM project_consolidation_redirects disagreement WHERE disagreement.selector = redirect.selector AND disagreement.project_id <> redirect.project_id)
- AND NOT EXISTS (SELECT 1 FROM project_consolidation_redirects chain WHERE chain.selector = redirect.project_id OR chain.project_id = redirect.selector)), ` + value + `)`
+ AND NOT EXISTS (SELECT 1 FROM project_consolidation_redirects chain WHERE (chain.selector = redirect.project_id AND NOT (chain.session_id = '' AND chain.selector = chain.project_id)) OR chain.project_id = redirect.selector)), ` + value + `)`
 }
 
 // MembershipPredicate expands reads without changing mutation authority or

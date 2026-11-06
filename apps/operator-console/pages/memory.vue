@@ -202,7 +202,10 @@ function time(value?: string) {
         <RouterLink :to="{ ...context.to('/search'), query: { ...context.to('/search').query, q: query || undefined } }">{{ t('knowledge.contextSearch') }}</RouterLink>
       </form>
       <div v-if="pending" class="state" role="status">{{ t('knowledge.loading') }}</div>
-      <div v-else-if="loadState.kind === 'error'" class="state error" role="status"><span>{{ t(loadState.error.source === 'memory-types' ? 'knowledge.invalidMemoryTypes' : operatorDiagnosisKey(loadState.error)) }}</span><button class="btn" @click="refresh">{{ t('knowledge.retry') }}</button><details><summary>{{ t('knowledge.technical') }}</summary>{{ loadState.error.message }}</details></div>
+      <div v-else-if="loadState.kind === 'error'" class="state error" role="status"><span>{{ t(loadState.error.source === 'memory-types' ? 'knowledge.invalidMemoryTypes' : operatorDiagnosisKey(loadState.error)) }}</span><button
+          v-if="project === 'all' && context.logicalGroupsInvalid.value && loadState.error.source !== 'memory-types'"
+          class="btn" data-testid="retry-project-catalog" @click="context.refresh">{{ t('knowledge.retry')
+          }}</button><button v-else class="btn" @click="refresh">{{ t('knowledge.retry') }}</button><details><summary>{{ t('knowledge.technical') }}</summary>{{ loadState.error.message }}</details></div>
       <div v-if="project === 'all'" class="state">{{ t('knowledge.allOrder') }}</div>
       <p v-if="loadState.kind === 'gated'" class="state" role="status">{{ t('knowledge.allReadHelp') }}</p>
       <div class="knowledge-workspace" :class="{ 'detail-open': openId }">

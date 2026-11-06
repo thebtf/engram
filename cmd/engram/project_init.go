@@ -68,7 +68,7 @@ func runProjectCommand(args []string, out io.Writer) error {
 		}
 		return json.NewEncoder(out).Encode(inspection)
 	}
-	project, err := projectidentity.ResolveLogicalProject(ctx, *root, projectidentity.HTTPBootstrap(serverURL, os.Getenv("ENGRAM_TOKEN")))
+	project, err := projectidentity.ResolveLogicalProjectForBackend(ctx, *root, serverURL, os.Getenv("ENGRAM_TOKEN"))
 	if err != nil {
 		_ = json.NewEncoder(out).Encode(map[string]string{"code": projectidentity.ProjectErrorCode(err), "guidance": projectidentity.RecoveryGuidance(projectidentity.ProjectErrorCode(err))})
 		return err

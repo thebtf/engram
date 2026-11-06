@@ -1,6 +1,6 @@
 import { computed, onBeforeUnmount, ref as sharedRef, type Ref as SharedRef } from 'vue'
 import { startedLoads } from './useConsolePreferences'
-import { isCatalogProject, loadKnowledgePage, safeNavigation, type OperatorKnowledgePage } from './useOperatorProjectContext'
+import { documentScopeUncertain, isCatalogProject, loadKnowledgePage, safeNavigation, supportsDocumentLineage, validDocumentID, type OperatorKnowledgePage } from './useOperatorProjectContext'
 import { useRoute } from 'vue-router'
 
 let sharedDocumentsPageDocuments: SharedRef<OperatorDocumentSummary[]> | undefined
@@ -23,11 +23,13 @@ import type { OperatorLoadState } from './useOperatorApi'
 import { parseOperatorSelectionSnapshot, type OperatorSelection } from './useOperatorSelection'
 import { executeMutation, type MutationResult } from './useApi'
 import {
+  authGeneration,
   emptyState,
   endpointEvidence,
   errorState,
   liveState,
   OperatorFetchError,
+  operatorUnauthorizedRevision,
   operatorFetchResponse,
   operatorFetchJson,
   pendingState,
@@ -379,7 +381,7 @@ export function useOperatorDocuments(projectContext?: Ref<string>): {
   pending: ComputedRef<boolean>
   error: ComputedRef<string | null>
   refresh: () => Promise<void>
-  openDocument: (doc: OperatorDocumentSummary) => Promise<void>
+  openDocument: (doc: OperatorDocumentSummary, allowPathOnly?: boolean) => Promise<void>
   selectPrimaryVersion: (version: number) => Promise<void>
   selectSecondaryVersion: (version: number) => Promise<void>
   addComment: (input: DocumentCommentInput) => Promise<MutationResult<DocumentCommentInput>>
@@ -433,6 +435,7 @@ export function useOperatorDocuments(projectContext?: Ref<string>): {
   let secondaryGeneration = 0
   let commentsGeneration = 0
   let documentProject = ''
+  let documentID = ''
   let listRequest: AbortController | undefined
   const total = sharedRef<number | null>(null)
   const hasMore = sharedRef(false)
@@ -443,6 +446,7 @@ export function useOperatorDocuments(projectContext?: Ref<string>): {
     secondaryGeneration += 1
     commentsGeneration += 1
     selectedPath.value = ''
+    documentID = ''
     primaryVersion.value = null
     secondaryVersion.value = null
     primaryDocumentValue.value = null
@@ -468,9 +472,10 @@ export function useOperatorDocuments(projectContext?: Ref<string>): {
     const detail = detailGeneration
     const isCurrent = () => detail === detailGeneration && project === documentProject && path === selectedPath.value
       && generation === (source === 'documents-read-primary' ? primaryGeneration : secondaryGeneration)
-    const endpoint = version === null
-      ? `/api/documents/read?path=${encodeURIComponent(path)}&project=${encodeURIComponent(project)}`
-      : `/api/documents/read?path=${encodeURIComponent(path)}&project=${encodeURIComponent(project)}&version=${version}`
+    const params = new URLSearchParams({ path, project })
+    if (documentID) params.set('document_id', documentID)
+    if (version !== null) params.set('version', String(version))
+    const endpoint = `/api/documents/read?${params}`
     const evidence = endpointEvidence(endpoint, source)
     if (version === null && source === 'documents-read-secondary') {
       valueRef.value = null
@@ -507,6 +512,11 @@ export function useOperatorDocuments(projectContext?: Ref<string>): {
   async function refreshCommentsForVersion(version: number | null) {
     const generation = ++commentsGeneration
     const detail = detailGeneration
+    if (documentScopeUncertain(documentProject)) {
+      replaceArray(comments.value, [])
+      commentsStateValue.value = { kind: 'gated', evidence: commentsEvidence, flag: 'scoped-document-comments', reason: 'Project-scoped document comments are unavailable.', updatedAt: new Date().toISOString(), data: [] }
+      return
+    }
     const versionEntry = history.value.find((row) => row.version === version)
     if (!versionEntry?.id) {
       replaceArray(comments.value, [])
@@ -514,7 +524,14 @@ export function useOperatorDocuments(projectContext?: Ref<string>): {
       return
     }
 
-    const endpoint = `/api/documents/comments?document_id=${encodeURIComponent(versionEntry.id)}`
+    if (!validDocumentID(versionEntry.id) || !Number.isSafeInteger(version) || !version || version < 1) {
+      replaceArray(comments.value, [])
+      commentsStateValue.value = { kind: 'gated', evidence: commentsEvidence, flag: 'document-version', reason: 'A valid document version is required.', updatedAt: new Date().toISOString(), data: [] }
+      return
+    }
+    const params = new URLSearchParams({ document_id: versionEntry.id })
+    if (supportsDocumentLineage(documentProject)) { params.set('project', documentProject); params.set('expected_version', String(version)) }
+    const endpoint = `/api/documents/comments?${params}`
     const evidence = endpointEvidence(endpoint, 'documents-comments')
     replaceArray(comments.value, [])
     commentsStateValue.value = pendingState(evidence, [])
@@ -549,7 +566,9 @@ export function useOperatorDocuments(projectContext?: Ref<string>): {
     }
 
     selectedPath.value = path
-    const endpoint = `/api/documents/history?path=${encodeURIComponent(path)}&project=${encodeURIComponent(project)}`
+    const params = new URLSearchParams({ path, project })
+    if (documentID) params.set('document_id', documentID)
+    const endpoint = `/api/documents/history?${params}`
     const evidence = endpointEvidence(endpoint, 'documents-history')
     historyStateValue.value = pendingState(evidence, history.value)
 
@@ -587,11 +606,14 @@ export function useOperatorDocuments(projectContext?: Ref<string>): {
     }
   }
 
-  async function openDocument(doc: OperatorDocumentSummary) {
+  async function openDocument(doc: OperatorDocumentSummary, allowPathOnly = false) {
     clearDocumentDetail()
     const project = doc.project
     if (!isCatalogProject(project) || (selectedProject.value !== 'all' && selectedProject.value !== project)) return
+    if (documentScopeUncertain(project)) throw new TypeError('The document project scope is uncertain')
+    if (supportsDocumentLineage(project) && !validDocumentID(doc.id) && !allowPathOnly) throw new TypeError('A valid document lineage is required')
     documentProject = project
+    documentID = supportsDocumentLineage(project) && validDocumentID(doc.id) ? doc.id : ''
     selectedPath.value = doc.path
     const generation = detailGeneration
     await loadVersionDocument(doc.path, project, null, primaryStateValue, primaryDocumentValue, 'documents-read-primary')
@@ -683,16 +705,19 @@ export function useOperatorDocuments(projectContext?: Ref<string>): {
 
   async function addComment(input: DocumentCommentInput) {
     if (!isCatalogProject(documentProject)) throw new TypeError('A catalog document project is required')
+    if (documentScopeUncertain(documentProject)) throw new TypeError('Scoped document actions are unavailable')
     const currentVersionEntry = history.value.find((entry) => entry.version === primaryVersion.value)
     if (!currentVersionEntry?.id) {
       throw new Error('No document version selected for comments')
     }
+    if (!validDocumentID(currentVersionEntry.id) || !primaryVersion.value || (selectedProject.value !== 'all' && selectedProject.value !== documentProject)) throw new TypeError('A valid scoped document version is required')
 
     return executeMutation(
       { requestId: crypto.randomUUID(), action: 'document-comment', intent: input },
       operatorFetchResponse('/api/documents/comment', {
         ...jsonInit('POST', {
           document_id: Number(currentVersionEntry.id),
+          ...(supportsDocumentLineage(documentProject) ? { project: documentProject, expected_version: primaryVersion.value } : {}),
           author: input.author || 'operator-console',
           content: input.content,
           line_start: input.lineStart,
@@ -706,17 +731,33 @@ export function useOperatorDocuments(projectContext?: Ref<string>): {
 
   async function runDocumentSelectionOperation(input: DocumentSelectionOperationInput): Promise<DocumentSelectionOperationResult> {
     if (!isCatalogProject(documentProject)) throw new TypeError('A catalog document project is required')
+    if (documentScopeUncertain(documentProject)) throw new TypeError('Scoped document actions are unavailable')
     if (!Number.isSafeInteger(input.target.documentId) || input.target.documentId < 1 || !Number.isSafeInteger(input.target.version) || input.target.version < 1) {
       throw new TypeError('Documents export target is invalid')
     }
+    const scope = documentProject
+    const selectedScope = selectedProject.value
+    const path = selectedPath.value
+    const lineage = documentID
+    const detail = detailGeneration
+    const primary = primaryGeneration
+    const location = route.fullPath
+    const auth = authGeneration.value
+    const unauthorized = operatorUnauthorizedRevision.value
+    const scoped = supportsDocumentLineage(scope)
+    const current = () => isCatalogProject(scope) && !documentScopeUncertain(scope) && supportsDocumentLineage(scope) === scoped && documentProject === scope && selectedProject.value === selectedScope && (selectedScope === 'all' || selectedScope === scope) && selectedPath.value === path && documentID === lineage && detailGeneration === detail && primaryGeneration === primary && route.fullPath === location && authGeneration.value === auth && operatorUnauthorizedRevision.value === unauthorized && primaryVersion.value === input.target.version && primaryDocumentValue.value?.id === String(input.target.documentId) && primaryDocumentValue.value?.version === input.target.version
+    if (!current()) throw new TypeError('The selected document target is no longer current')
     const selectionRequestId = crypto.randomUUID()
     const selection = parseDocumentSelection(await operatorFetchJson<unknown>('/api/documents/selection', documentOperationInit({
       domain: 'documents',
+      ...(scoped ? { project: scope } : {}),
       selection: { kind: 'explicit', targets: [{ id: String(input.target.documentId), expected_version: input.target.version }] },
     }, selectionRequestId), 'documents-selection'))
+    if (!current()) throw new TypeError('The selected document target changed during selection')
+    if (selection.kind !== 'explicit' || selection.targets.length !== 1 || selection.targets[0].id !== String(input.target.documentId) || selection.targets[0].expectedVersion !== input.target.version) throw new TypeError('The document selection target does not match')
     const requestId = crypto.randomUUID()
     const request = { requestId, action: `document-${input.action}`, intent: input }
-    const body = { request_id: requestId, action: input.action, selection: documentOperationSelectionPayload(selection) }
+    const body = { request_id: requestId, action: input.action, ...(scoped ? { project: scope } : {}), selection: documentOperationSelectionPayload(selection) }
     let response: Response
     try {
       response = await operatorFetchResponse('/api/documents', { ...documentOperationInit(body, requestId), credentials: 'include' })

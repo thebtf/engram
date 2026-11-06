@@ -36,6 +36,11 @@ func (s *MemoryStore) ReviseInContext(ctx context.Context, id int64, owning mode
 		if err := tx.Exec(`LOCK TABLE "audit_log", "content_chunks", "memories" IN ROW EXCLUSIVE MODE`).Error; err != nil {
 			return err
 		}
+		if owning.Kind == models.MemoryContextProject {
+			if err := lockMemoryMutationAuthority(ctx, tx, map[int64]string{id: project}); err != nil {
+				return err
+			}
+		}
 		current, err := memoryInContext(ctx, tx, id, owning, project, caller, true)
 		if err != nil {
 			return err

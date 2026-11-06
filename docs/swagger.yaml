@@ -22,6 +22,15 @@ definitions:
     - CollectionSelectionExplicit
     - CollectionSelectionPage
     - CollectionSelectionFrozenFilter
+  gorm.LogicalProjectGroup:
+    properties:
+      alias_project_ids:
+        items:
+          type: string
+        type: array
+      primary_project_id:
+        type: string
+    type: object
   gorm.MemoryRevision:
     properties:
       changed_at:
@@ -875,6 +884,10 @@ definitions:
       items:
         items:
           $ref: '#/definitions/gorm.ProjectDescriptor'
+        type: array
+      logical_groups:
+        items:
+          $ref: '#/definitions/gorm.LogicalProjectGroup'
         type: array
       unresolved:
         items:
@@ -2425,11 +2438,11 @@ paths:
       consumes:
       - application/json
       description: Requires the authenticated owner and current version. Omit context
-        and project for enrolled self; project context requires one existing canonical
-        project and self/global must omit project. Legacy rows return 404 without
-        changing their context or history. A stale version returns 409; after an uncertain
-        outcome read the current card before retrying. The prior body and audit are
-        retained atomically.
+        and project for enrolled self; project context requires the card's unique
+        native canonical membership, not a read alias, and self/global must omit project.
+        Legacy rows return 404 without changing their context or history. A stale
+        version returns 409; after an uncertain outcome read the current card before
+        retrying. The prior body and audit are retained atomically.
       parameters:
       - description: Memory ID
         in: path

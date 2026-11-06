@@ -1,15 +1,16 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { useOperatorProjectContext, localizedProjectChoiceLabel, loadKnowledgePage } from '../composables/useOperatorProjectContext'
+import { documentScopeUncertain, useOperatorProjectContext, localizedProjectChoiceLabel, loadKnowledgePage, supportsDocumentLineage, validDocumentID } from '../composables/useOperatorProjectContext'
 import { operatorDiagnosisKey, toOperatorSourceError, type OperatorSourceError } from '../composables/useOperatorApi'
 const { t } = useI18n()
 const projectChoiceLabel = (id: string) => localizedProjectChoiceLabel(id, t)
 const context = useOperatorProjectContext()
-const { project, projects, unresolved, pending, error, selectionPending, selectionError } = context
+const { project, projects, unresolved, projectSections, pending, error, selectionPending, selectionError } = context
 const projectQuery = ref('')
 const visibleProjects = computed(() => projects.value.filter((id) => `${projectChoiceLabel(id)} ${id}`.toLocaleLowerCase().includes(projectQuery.value.toLocaleLowerCase())))
+const visibleSections = computed(() => projectSections.value.map(section => ({ ...section, ids: section.ids.filter(id => visibleProjects.value.includes(id)) })).filter(section => section.ids.length))
 const recentMemories = ref<Array<{ id: number; project: string; content: string }>>([])
-const recentDocuments = ref<Array<{ path: string; project: string; version: number; author: string }>>([])
+const recentDocuments = ref<Array<{ id?: number; path: string; project: string; version: number; author: string }>>([])
 const memoryTotal = ref<number | null>(null)
 const documentTotal = ref<number | null>(null)
 const homeError = ref<OperatorSourceError | null>(null)
@@ -60,9 +61,12 @@ onBeforeUnmount(() => { generation += 1; request?.abort() })
       <div v-else-if="error" role="status"><p>{{ t(operatorDiagnosisKey(error)) }}</p><button class="btn" @click="context.refresh">{{ t('knowledge.retry') }}</button></div>
       <p v-else-if="!projects.length">{{ t('knowledge.noProjects') }}</p>
       <p v-else-if="!visibleProjects.length">{{ t('knowledge.noProjectMatch') }}</p>
-      <ul v-else class="project-list">
-        <li v-for="id in visibleProjects" :key="id"><button @click="context.select(id)"><strong>{{ projectChoiceLabel(id) }}</strong></button></li>
-      </ul>
+      <template v-else v-for="section in visibleSections" :key="section.key">
+        <h2 v-if="section.label">{{ section.label }}</h2>
+        <ul class="project-list">
+          <li v-for="id in section.ids" :key="id"><button @click="context.select(id)"><strong>{{ projectChoiceLabel(id) }}</strong></button></li>
+        </ul>
+      </template>
       <button class="btn" @click="context.select('all')">{{ t('knowledge.browseAll') }}</button>
       <RouterLink :to="context.to('/code')" data-testid="overview-workspace-entry">{{ t('nav.items.code') }}</RouterLink><p>{{ t('knowledge.codeScope') }}</p>
     </section>
@@ -78,7 +82,9 @@ onBeforeUnmount(() => { generation += 1; request?.abort() })
         <div v-else-if="homeError" role="status"><p>{{ t(operatorDiagnosisKey(homeError)) }}</p><RouterLink :to="context.to('/memory')">{{ t('knowledge.openMemory') }}</RouterLink></div>
         <template v-else>
           <section><h2>{{ t('knowledge.recentMemory') }}</h2><p>{{ memoryTotal === null ? t('knowledge.unknown') : t('knowledge.matches', { count: memoryTotal }) }}</p><p v-if="memoryTotal === 0">{{ t('knowledge.noMemoryHelp') }}</p><RouterLink v-for="memory in recentMemories" :key="memory.id" :to="{ path: '/memory', query: { project, memory: String(memory.id) } }">{{ memory.content }}</RouterLink></section>
-          <section><h2>{{ t('knowledge.recentDocuments') }}</h2><p>{{ documentTotal === null ? t('knowledge.unknown') : t('knowledge.matches', { count: documentTotal }) }}</p><p v-if="documentTotal === 0">{{ t('knowledge.noDocumentsHelp') }}</p><RouterLink v-for="doc in recentDocuments" :key="doc.path" :to="{ path: '/documents', query: { project, path: doc.path } }"><strong>{{ doc.path }}</strong><span>{{ t('knowledge.version') }} {{ doc.version }} · {{ doc.author || t('knowledge.notRecorded') }}</span></RouterLink></section>
+          <section><h2>{{ t('knowledge.recentDocuments') }}</h2><p>{{ documentTotal === null ? t('knowledge.unknown') : t('knowledge.matches', { count: documentTotal }) }}</p><p v-if="documentTotal === 0">{{ t('knowledge.noDocumentsHelp') }}</p><RouterLink v-for="doc in recentDocuments" :key="validDocumentID(String(doc.id)) ? `${doc.project}:${doc.id}` : `${doc.project}:${doc.path}`" :to="{ path: '/documents', query: { project, path: doc.path, ...(documentScopeUncertain(doc.project) ? { document_id: '' } : supportsDocumentLineage(doc.project) ? { document_id: validDocumentID(String(doc.id)) ? String(doc.id) : '' } : {}) } }"><strong>{{ doc.path }}</strong><span
+                v-if="validDocumentID(String(doc.id)) && recentDocuments.filter(row => row.project === doc.project && row.path === doc.path).length > 1">
+                · #{{ doc.id }}</span><span>{{ t('knowledge.version') }} {{ doc.version }} · {{ doc.author || t('knowledge.notRecorded') }}</span></RouterLink></section>
         </template>
       </section>
       <section class="destinations">

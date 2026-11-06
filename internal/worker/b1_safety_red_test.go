@@ -408,3 +408,97 @@ func TestB1ConsolidationRelationLockOrderPostgres(t *testing.T) {
 		})
 	}
 }
+
+func TestB1TypedProjectRedirectReadDoesNotGrantRevisionPostgres(t *testing.T) {
+	f := newOwnCardContextFixture(t, false)
+	owner := f.registered(t, "redirect-authority")
+	alias, selected, other := f.project(t), f.project(t), f.project(t)
+	create := func(content string) ownCardContextRecord {
+		t.Helper()
+		payload := ownCardContextPayload(content)
+		payload["project"] = alias
+		payload["context"] = map[string]any{"kind": "project"}
+		return f.create(t, owner, payload)
+	}
+	card := create("redirect original body")
+	conflict := create("conflicting membership secret body")
+	path := func(id int64, project string) string {
+		return "/api/memories/" + strconv.FormatInt(id, 10) + "?project=" + project
+	}
+	patch := func(t *testing.T, id int64, project string, version int, content string) *httptest.ResponseRecorder {
+		return f.call(t, http.MethodPatch, path(id, project), map[string]any{"version": version, "content": content}, owner.caller())
+	}
+	first := ownCardContextDecode(t, patch(t, card.ID, alias, card.Version, "redirect current body"), http.StatusOK)
+	require.Equal(t, card.Version+1, first.Version)
+	vectors := embedding.NewStore(f.store.DB)
+	for _, row := range []ownCardContextRecord{first, conflict} {
+		require.NoError(t, vectors.StoreChunks(t.Context(), []embedding.Chunk{{MemoryID: row.ID, Text: row.Content, Model: "synthetic", Embedding: pgvector.NewVector(b1Vector(0))}}))
+	}
+	require.NoError(t, f.store.DB.Exec(`INSERT INTO project_consolidation_redirects(selector, session_id, project_id, plan_fingerprint) VALUES (?, '', ?, ?)`, alias, selected, "synthetic-b1-read-alias").Error)
+
+	type snapshot struct {
+		memory, history, audit, chunks string
+	}
+	snapshotFor := func(t *testing.T, id int64) snapshot {
+		t.Helper()
+		var state snapshot
+		require.NoError(t, f.store.DB.Raw(`SELECT to_jsonb(m)::text FROM memories m WHERE id = ?`, id).Scan(&state.memory).Error)
+		require.NoError(t, f.store.DB.Raw(`SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.version)::text, '[]') FROM memory_revisions r WHERE r.memory_id = ?`, id).Scan(&state.history).Error)
+		require.NoError(t, f.store.DB.Raw(`SELECT COALESCE(jsonb_agg(to_jsonb(a) ORDER BY a.id)::text, '[]') FROM audit_log a WHERE a.memory_id = ?`, id).Scan(&state.audit).Error)
+		require.NoError(t, f.store.DB.Raw(`SELECT COALESCE(jsonb_agg(to_jsonb(c) ORDER BY c.id)::text, '[]') FROM content_chunks c WHERE c.memory_id = ?`, id).Scan(&state.chunks).Error)
+		return state
+	}
+
+	t.Run("redirected_read_and_denied_revision", func(t *testing.T) {
+		read := ownCardContextDecode(t, f.call(t, http.MethodGet, path(card.ID, selected), nil, owner.caller()), http.StatusOK)
+		require.Equal(t, first.ID, read.ID)
+		require.Equal(t, first.Content, read.Content)
+		require.Equal(t, first.Version, read.Version)
+		before := snapshotFor(t, card.ID)
+		require.NotEqual(t, "[]", before.history, "fixture must retain a prior revision")
+		require.NotEqual(t, "[]", before.audit, "fixture must retain an audit")
+		require.NotEqual(t, "[]", before.chunks, "fixture must retain a vector")
+		denied := patch(t, card.ID, selected, first.Version, "unauthorized alias revision")
+		require.Equal(t, http.StatusNotFound, denied.Code)
+		missing := patch(t, card.ID+1000000, selected, first.Version, "unauthorized alias revision")
+		require.Equal(t, http.StatusNotFound, missing.Code)
+		assert.Equal(t, missing.Body.String(), denied.Body.String(), "refusal must not reveal the card")
+		assert.NotContains(t, denied.Body.String(), first.Content)
+		assert.Equal(t, before, snapshotFor(t, card.ID), "alias refusal must preserve body, version, history, audit and chunks")
+	})
+
+	t.Run("native_authority_still_revises", func(t *testing.T) {
+		updated := ownCardContextDecode(t, patch(t, card.ID, alias, first.Version, "native authority revised"), http.StatusOK)
+		assert.Equal(t, card.ID, updated.ID)
+		assert.Equal(t, first.Version+1, updated.Version)
+		assert.Equal(t, "native authority revised", updated.Content)
+		var persisted gormdb.Memory
+		require.NoError(t, f.store.DB.First(&persisted, card.ID).Error)
+		assert.Equal(t, alias, persisted.Project, "read projection must not replace native project")
+		var chunks int64
+		require.NoError(t, f.store.DB.Table("content_chunks").Where("memory_id = ?", card.ID).Count(&chunks).Error)
+		assert.Zero(t, chunks, "successful native revision invalidates obsolete vectors")
+	})
+
+	t.Run("conflicting_memberships_fail_closed", func(t *testing.T) {
+		for i, project := range []string{alias, other} {
+			project := project
+			require.NoError(t, f.store.DB.Create(&gormdb.ConsolidationMembership{
+				Reference: fmt.Sprintf("urn:engram:b1:revision-conflict:%s:%d", uuid.NewString(), i), Table: "memories",
+				RowKey: gormdb.JSONRaw(fmt.Sprintf(`{"id":%d}`, conflict.ID)), FieldPath: gormdb.JSONRaw(`["project"]`),
+				ProjectID: &project, PlanFingerprint: "synthetic-b1-revision-conflict",
+			}).Error)
+		}
+		before := snapshotFor(t, conflict.ID)
+		read := f.call(t, http.MethodGet, path(conflict.ID, alias), nil, owner.caller())
+		require.Equal(t, http.StatusNotFound, read.Code)
+		denied := patch(t, conflict.ID, alias, conflict.Version, "conflicting membership revision")
+		require.Equal(t, http.StatusNotFound, denied.Code)
+		missing := patch(t, conflict.ID+1000000, alias, conflict.Version, "conflicting membership revision")
+		require.Equal(t, http.StatusNotFound, missing.Code)
+		assert.Equal(t, missing.Body.String(), denied.Body.String())
+		assert.NotContains(t, read.Body.String(), conflict.Content)
+		assert.NotContains(t, denied.Body.String(), conflict.Content)
+		assert.Equal(t, before, snapshotFor(t, conflict.ID), "conflicting membership must not mutate the card or its derived state")
+	})
+}

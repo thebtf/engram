@@ -48,7 +48,7 @@ func (s *Service) memoryRevisionSelector(r *http.Request) (int64, models.MemoryC
 
 // handleReviseMemoryContext godoc
 // @Summary Revise a typed memory card
-// @Description Requires the authenticated owner and current version. Omit context and project for enrolled self; project context requires one existing canonical project and self/global must omit project. Legacy rows return 404 without changing their context or history. A stale version returns 409; after an uncertain outcome read the current card before retrying. The prior body and audit are retained atomically.
+// @Description Requires the authenticated owner and current version. Omit context and project for enrolled self; project context requires the card's unique native canonical membership, not a read alias, and self/global must omit project. Legacy rows return 404 without changing their context or history. A stale version returns 409; after an uncertain outcome read the current card before retrying. The prior body and audit are retained atomically.
 // @Tags Memories
 // @Accept json
 // @Produce json

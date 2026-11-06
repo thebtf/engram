@@ -137,6 +137,26 @@ func TestHybridTG3_IncludeSuperseded_StructuredError_T022b(t *testing.T) {
 		"error must name the unsupported parameter")
 }
 
+func TestRecallMemory_ValidationBeforeCanonicalProject(t *testing.T) {
+	srv := NewServer(ServerOptions{Version: "test"})
+	srv.memoryStore = nonNilMemoryStore()
+	for _, tc := range []struct {
+		name string
+		args map[string]any
+		want string
+	}{
+		{"invalid scopes", map[string]any{"include_scopes": []string{"invalid"}}, "invalid_include_scopes"},
+		{"invalid principals", map[string]any{"include_principals": []map[string]any{{"principal": " ", "principal_kind": "agent"}}}, "principal is required"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.args["query"] = "test query"
+			tc.args["project"] = "test-project"
+			_, err := srv.handleRecallMemory(context.Background(), mustJSON(t, tc.args))
+			require.ErrorContains(t, err, tc.want)
+		})
+	}
+}
+
 // TestHybridTG3_IncludeSuperseded_False_NoError_T022c verifies that
 // include_superseded=false (the default) does NOT trigger the structured error
 // in hybrid mode — only include_superseded=true is rejected.

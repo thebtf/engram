@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -235,7 +236,10 @@ func buildContractDispatcherWithClientInstanceID(t *testing.T, grpcAddr, clientI
 	pl := lifecycle.New(reg, slog.Default())
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	storageDir := t.TempDir()
+	storageDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if err := pl.Start(ctx, func(_ string) module.ModuleDeps {
 		return module.ModuleDeps{

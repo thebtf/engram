@@ -213,7 +213,7 @@ func listVisibleSessionStartMemories(
 		if batchLimit <= 0 {
 			break
 		}
-		batch, err := store.ListWithOffset(ctx, project, batchLimit, offset)
+		batch, err := dbgorm.ListMemoryPageForSearch(ctx, store, project, batchLimit, offset, scope.MemoryReadAccess{Caller: caller, Visibility: opts})
 		if err != nil {
 			return nil, err
 		}
@@ -469,7 +469,7 @@ func buildSessionStartMetaSummary(ctx context.Context, store sessionStartMemoryP
 		if batchLimit <= 0 {
 			break
 		}
-		batch, err := store.ListWithOffset(ctx, project, batchLimit, offset)
+		batch, err := dbgorm.ListMemoryPageForSearch(ctx, store, project, batchLimit, offset, scope.MemoryReadAccess{Caller: caller, Visibility: opts})
 		if err != nil {
 			return nil, err
 		}

@@ -27,6 +27,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/db/sqlitetest"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/internal/worker/sse"
@@ -74,7 +75,7 @@ func (c memoryMutationSQLiteConn) Prepare(query string) (driver.Stmt, error) {
 	// SQLite cannot certify relation locks; only these production statements
 	// are lowered. The isolated PostgreSQL cases own their serialization proof.
 	switch query {
-	case `LOCK TABLE "audit_log" IN ROW EXCLUSIVE MODE`, `LOCK TABLE "memories" IN ROW SHARE MODE`, `LOCK TABLE "project_consolidation_memberships" IN SHARE MODE`:
+	case `LOCK TABLE "audit_log" IN ROW EXCLUSIVE MODE`, `LOCK TABLE "memories" IN ROW SHARE MODE`, `LOCK TABLE "project_consolidation_memberships" IN SHARE MODE`, `LOCK TABLE "audit_log", "content_chunks", "memories" IN ROW EXCLUSIVE MODE`:
 		query = "SELECT 1"
 	}
 	query = strings.TrimSuffix(strings.TrimSuffix(query, ` FOR UPDATE OF "m"`), ` FOR SHARE OF "m"`)
@@ -93,6 +94,10 @@ func (c memoryMutationSQLiteConn) Prepare(query string) (driver.Stmt, error) {
 	query = strings.ReplaceAll(query, "jsonb_typeof(tags)", "json_type(tags)")
 	query = strings.ReplaceAll(query, "'[]'::jsonb", "'[]'")
 	query = strings.ReplaceAll(query, "AS literal_tag(value)", "AS literal_tag")
+	query, err := sqlitetest.MembershipSQL(query)
+	if err != nil {
+		return nil, err
+	}
 	return c.Conn.Prepare(query)
 }
 
@@ -175,6 +180,8 @@ func memoryMutationSQLiteDB(t *testing.T) *gorm.DB {
 		require.NoError(t, db.Exec(fmt.Sprintf("CREATE TABLE %q (%s)", parsed.Table, strings.Join(columns, ","))).Error)
 	}
 	require.NoError(t, db.Exec(`CREATE TABLE memory_principals (principal_kind TEXT NOT NULL, principal TEXT NOT NULL, enrolled_by INTEGER NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (principal_kind, principal))`).Error)
+	require.NoError(t, db.Exec(`CREATE TABLE content_chunks (memory_id INTEGER NOT NULL)`).Error)
+	require.NoError(t, db.Exec(sqlitetest.RedirectSchema).Error)
 	return db
 }
 

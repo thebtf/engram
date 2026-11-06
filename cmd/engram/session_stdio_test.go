@@ -25,6 +25,7 @@ import (
 
 	"github.com/thebtf/engram/internal/auth"
 	dbstore "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/db/sqlitetest"
 	"github.com/thebtf/engram/internal/grpcserver"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/projectidentity"
@@ -112,6 +113,9 @@ func newMemoryTestBackend(t *testing.T) *memoryTestBackend {
 		if err := db.Exec(fmt.Sprintf("CREATE TABLE %q (%s)", parsed.Table, strings.Join(columns, ","))).Error; err != nil {
 			t.Fatal(err)
 		}
+	}
+	if err := db.Exec(sqlitetest.RedirectSchema).Error; err != nil {
+		t.Fatal(err)
 	}
 	for _, project := range []string{memoryTestProjectA, memoryTestProjectB} {
 		if err := db.Create(&dbstore.Project{ID: project}).Error; err != nil {

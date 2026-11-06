@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/lib/pq"
+	"github.com/thebtf/engram/internal/db/projectscope"
 	"github.com/thebtf/engram/internal/scope"
 )
 
@@ -22,14 +23,15 @@ func (s *Store) NeighborsForSearch(ctx context.Context, project string, seeds, e
 		limit = 20
 	}
 	predicate, accessArgs := scope.MemoryReadAccessSQL(access)
-	args := []any{project}
+	projectSQL, projectArgs := projectscope.MemoryPredicate("m", project)
+	args := append([]any{}, projectArgs...)
 	args = append(args, accessArgs...)
 	args = append(args, pq.Array(seeds), pq.Array(exclude), limit)
 	var refs []scope.MemoryRef
 	err := s.db.WithContext(ctx).Raw(`
 		WITH authorized AS MATERIALIZED (
 			SELECT m.id, m.version FROM memories m
-			WHERE m.project = ? AND m.status = 'active' AND m.deleted_at IS NULL
+			WHERE (`+projectSQL+`) AND m.status = 'active' AND m.deleted_at IS NULL
 			  AND (m.valid_from IS NULL OR m.valid_from <= NOW())
 			  AND (m.valid_until IS NULL OR m.valid_until >= NOW())
 			  AND (`+predicate+`)

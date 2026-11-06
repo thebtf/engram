@@ -2040,7 +2040,7 @@ const docTemplate = `{
                         "ApiKeyAuth": []
                     }
                 ],
-                "description": "Requires the authenticated owner and current version. Omit context and project for enrolled self; project context requires one existing canonical project and self/global must omit project. Legacy rows return 404 without changing their context or history. A stale version returns 409; after an uncertain outcome read the current card before retrying. The prior body and audit are retained atomically.",
+                "description": "Requires the authenticated owner and current version. Omit context and project for enrolled self; project context requires the card's unique native canonical membership, not a read alias, and self/global must omit project. Legacy rows return 404 without changing their context or history. A stale version returns 409; after an uncertain outcome read the current card before retrying. The prior body and audit are retained atomically.",
                 "consumes": [
                     "application/json"
                 ],
@@ -4835,6 +4835,20 @@ const docTemplate = `{
                 "CollectionSelectionFrozenFilter"
             ]
         },
+        "gorm.LogicalProjectGroup": {
+            "type": "object",
+            "properties": {
+                "alias_project_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "primary_project_id": {
+                    "type": "string"
+                }
+            }
+        },
         "gorm.MemoryRevision": {
             "type": "object",
             "properties": {
@@ -6087,6 +6101,12 @@ const docTemplate = `{
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/gorm.ProjectDescriptor"
+                    }
+                },
+                "logical_groups": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/gorm.LogicalProjectGroup"
                     }
                 },
                 "unresolved": {

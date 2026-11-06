@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/db/sqlitetest"
 	"github.com/thebtf/engram/pkg/models"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/driver/postgres"
@@ -81,6 +82,10 @@ func (c knowledgeSQLiteConn) Prepare(query string) (driver.Stmt, error) {
 		query = strings.ReplaceAll(query, "r.ordinality", "(CAST(r.key AS INTEGER) + 1)")
 		query = strings.Replace(query, "jsonb_array_elements($1::jsonb) WITH ORDINALITY AS r(value, ordinality)", "json_each($1) AS r", 1)
 		query = strings.Replace(query, "s.source_id::text", "s.source_id", 1)
+	}
+	query, err := sqlitetest.MembershipSQL(query)
+	if err != nil {
+		return nil, err
 	}
 	return c.Conn.Prepare(query)
 }
@@ -174,6 +179,7 @@ func knowledgeSQLiteDB(t *testing.T) *gorm.DB {
 		require.NoError(t, db.Exec(fmt.Sprintf("CREATE TABLE %q (%s)", parsed.Table, strings.Join(columns, ","))).Error)
 	}
 	require.NoError(t, db.Exec(`CREATE TABLE memory_principals (principal_kind TEXT NOT NULL, principal TEXT NOT NULL, enrolled_by INTEGER NOT NULL, PRIMARY KEY (principal_kind, principal))`).Error)
+	require.NoError(t, db.Exec(sqlitetest.RedirectSchema).Error)
 	require.NoError(t, db.Exec("PRAGMA case_sensitive_like = ON").Error)
 	return db
 }
@@ -302,7 +308,8 @@ func runKnowledgeReadersHTTP(t *testing.T, db *gorm.DB, sqliteFixture bool) {
 	documents[0].Project, documents[0].Version = "legacy-reader-alias", 2
 	require.NoError(t, db.CreateInBatches(&documents, 100).Error)
 	require.NoError(t, db.Create(&gormdb.VersionedDocument{Project: projectA, Path: documents[1].Path, Version: 1, DocType: "markdown", Author: "history-only-needle", Content: "old", ContentHash: "old", Metadata: "{}", CreatedAt: now.Add(-time.Hour)}).Error)
-	require.NoError(t, db.Create(&gormdb.VersionedDocument{Project: projectA, Path: documents[0].Path, Version: 1, DocType: "text", Author: "old-alias-history", Content: "old alias version", ContentHash: "old", Metadata: "{}", CreatedAt: now.Add(-time.Hour)}).Error)
+	canonicalSamePath := gormdb.VersionedDocument{Project: projectA, Path: documents[0].Path, Version: 1, DocType: "text", Author: "old-alias-history", Content: "old alias version", ContentHash: "old", Metadata: "{}", CreatedAt: now.Add(-time.Hour)}
+	require.NoError(t, db.Create(&canonicalSamePath).Error)
 	require.NoError(t, db.Create(&gormdb.VersionedDocument{Project: projectB, Path: "notes/other.md", Version: 1, DocType: "markdown", Author: "reader-fixture", Content: "other", ContentHash: "other", Metadata: "{}", CreatedAt: now}).Error)
 	require.NoError(t, db.Create(&gormdb.VersionedDocument{Project: "legacy-document-only", Path: "only-document.md", Version: 1, DocType: "markdown", Author: "fixture", Content: "document-only registered project", ContentHash: "fixture", Metadata: "{}", CreatedAt: now}).Error)
 	for _, selector := range []string{"ambiguous-reader-alias", removed, "dead-owner-alias", "unregistered-orphan"} {
@@ -553,18 +560,26 @@ func runKnowledgeReadersHTTP(t *testing.T, db *gorm.DB, sqliteFixture bool) {
 	var documentPage documentListResponse
 	documentURL := "/api/documents?project=" + projectA + "&path_prefix=notes%2F"
 	get(documentURL+"&limit=500", tokenA, 200, &documentPage)
-	require.EqualValues(t, 501, documentPage.Total)
+	require.EqualValues(t, 502, documentPage.Total)
 	require.Len(t, documentPage.Items, 500)
 	require.True(t, documentPage.HasMore)
 	require.Equal(t, documents[500].ID, documentPage.Items[0].ID)
 	get(documentURL+"&limit=500&offset=500", tokenA, 200, &documentPage)
-	require.EqualValues(t, 501, documentPage.Total)
+	require.EqualValues(t, 502, documentPage.Total)
+	require.Len(t, documentPage.Items, 2)
 	require.Equal(t, projectA, documentPage.Items[0].Project)
-	require.Len(t, documentPage.Items, 1)
+	require.Equal(t, projectA, documentPage.Items[1].Project)
 	require.Equal(t, documents[0].ID, documentPage.Items[0].ID)
+	require.Equal(t, canonicalSamePath.ID, documentPage.Items[1].ID)
+	legacyListID, canonicalListID := documentPage.Items[0].ID, documentPage.Items[1].ID
 	require.False(t, documentPage.HasMore)
-	get(documentURL+"&offset=501", tokenA, 200, &documentPage)
-	require.EqualValues(t, 501, documentPage.Total)
+	get(documentURL+"&offset=501&limit=1", tokenA, 200, &documentPage)
+	require.EqualValues(t, 502, documentPage.Total)
+	require.Len(t, documentPage.Items, 1)
+	require.Equal(t, canonicalListID, documentPage.Items[0].ID)
+	require.False(t, documentPage.HasMore)
+	get(documentURL+"&offset=502", tokenA, 200, &documentPage)
+	require.EqualValues(t, 502, documentPage.Total)
 	require.Empty(t, documentPage.Items)
 	require.NotNil(t, documentPage.Items)
 	require.False(t, documentPage.HasMore)
@@ -579,25 +594,32 @@ func runKnowledgeReadersHTTP(t *testing.T, db *gorm.DB, sqliteFixture bool) {
 	}
 	for _, types := range []string{"doc_type=markdown&doc_type=text", "doc_type=text&doc_type=markdown&doc_type=text"} {
 		get(documentURL+"&"+types+"&limit=500", tokenA, 200, &documentPage)
-		require.EqualValues(t, 501, documentPage.Total, "latest-type OR before count/page")
+		require.EqualValues(t, 502, documentPage.Total, "latest-type OR before count/page")
 		require.Len(t, documentPage.Items, 500)
 		require.True(t, documentPage.HasMore)
 		get(documentURL+"&"+types+"&limit=500&offset=500", tokenA, 200, &documentPage)
-		require.Len(t, documentPage.Items, 1)
-		require.EqualValues(t, 501, documentPage.Total)
+		require.Len(t, documentPage.Items, 2)
+		require.Equal(t, legacyListID, documentPage.Items[0].ID)
+		require.Equal(t, canonicalListID, documentPage.Items[1].ID)
+		require.EqualValues(t, 502, documentPage.Total)
 		require.False(t, documentPage.HasMore)
 		get(documentURL+"&"+types+"&query="+url.QueryEscape(`100%_SAFE\route`), tokenA, 200, &documentPage)
-		require.EqualValues(t, 1, documentPage.Total, "type OR AND literal query/path prefix")
+		require.EqualValues(t, 2, documentPage.Total, "type OR AND literal query/path prefix")
+		require.Len(t, documentPage.Items, 2)
+		require.Equal(t, legacyListID, documentPage.Items[0].ID)
+		require.Equal(t, canonicalListID, documentPage.Items[1].ID)
 		get(documentURL+"&"+types+"&query=history-only-needle", tokenA, 200, &documentPage)
 		require.Zero(t, documentPage.Total, "matching old version is never admitted by type OR")
 	}
 	get(documentURL+"&doc_type=text", tokenA, 200, &documentPage)
-	require.EqualValues(t, 1, documentPage.Total)
+	require.EqualValues(t, 2, documentPage.Total)
+	require.Len(t, documentPage.Items, 2)
 	require.Equal(t, documents[1].ID, documentPage.Items[0].ID)
+	require.Equal(t, canonicalListID, documentPage.Items[1].ID)
 	get(documentURL+strings.Repeat("&doc_type=markdown", 6), tokenA, 200, &documentPage)
 	require.EqualValues(t, 500, documentPage.Total)
 	get(documentURL+"&doc_type="+url.QueryEscape("\u2003text\u00a0")+"&doc_type=text", tokenA, 200, &documentPage)
-	require.EqualValues(t, 1, documentPage.Total, "Unicode trimming precedes valid-value dedup")
+	require.EqualValues(t, 2, documentPage.Total, "Unicode trimming precedes valid-value dedup")
 	for _, types := range []string{"doc_type=", "doc_type=markdown&doc_type=", "doc_type=text&doc_type=%20", "doc_type=text&doc_type=%00", "doc_type=text&doc_type=%FF", "doc_type=text&doc_type=%", "doc_type=text&doc_type=" + strings.Repeat("x", 129), "doc_type=" + url.QueryEscape(strings.Repeat("я", 65)), strings.TrimPrefix(strings.Repeat("&doc_type=text", 7), "&")} {
 		get(documentURL+"&"+types, tokenA, 400, nil)
 	}
@@ -622,11 +644,20 @@ func runKnowledgeReadersHTTP(t *testing.T, db *gorm.DB, sqliteFixture bool) {
 	require.EqualValues(t, 1, documentPage.Total)
 	require.Equal(t, "html", documentPage.Items[0].DocType)
 	get(documentURL+"&query="+url.QueryEscape(`100%_SAFE\route`), tokenA, 200, &documentPage)
-	require.EqualValues(t, 1, documentPage.Total)
-	require.Equal(t, documents[0].ID, documentPage.Items[0].ID)
+	require.EqualValues(t, 2, documentPage.Total)
+	require.Len(t, documentPage.Items, 2)
+	require.Equal(t, legacyListID, documentPage.Items[0].ID)
+	require.Equal(t, canonicalListID, documentPage.Items[1].ID)
 	get("/api/documents?project="+projectA+"&path_prefix="+url.QueryEscape(`notes/100%_safe\`), tokenA, 200, &documentPage)
+	require.EqualValues(t, 2, documentPage.Total)
+	require.Len(t, documentPage.Items, 2)
+	require.Equal(t, legacyListID, documentPage.Items[0].ID)
+	require.Equal(t, canonicalListID, documentPage.Items[1].ID)
+	get(documentURL+"&query=old-alias-history", tokenA, 200, &documentPage)
 	require.EqualValues(t, 1, documentPage.Total)
-	for _, query := range []string{"history-only-needle", "old-alias-history", "body-only-secret-needle", "metadata-only-secret-needle", "' OR 1=1 --", "excluded"} {
+	require.Len(t, documentPage.Items, 1)
+	require.Equal(t, canonicalListID, documentPage.Items[0].ID)
+	for _, query := range []string{"history-only-needle", "body-only-secret-needle", "metadata-only-secret-needle", "' OR 1=1 --", "excluded"} {
 		get(documentURL+"&query="+url.QueryEscape(query), tokenA, 200, &documentPage)
 		require.Zero(t, documentPage.Total, query)
 	}
@@ -640,11 +671,31 @@ func runKnowledgeReadersHTTP(t *testing.T, db *gorm.DB, sqliteFixture bool) {
 	get("/api/documents/read?project="+projectA+"&path="+url.QueryEscape(documents[1].Path), tokenA, 200, &read)
 	require.Equal(t, 2, read.Version)
 	require.Equal(t, "body-only-secret-needle", read.Content)
-	get("/api/documents/read?project="+projectA+"&path="+url.QueryEscape(documents[0].Path), tokenA, 200, &read)
+	sharedPath := url.QueryEscape(documents[0].Path)
+	readURL := "/api/documents/read?project=" + projectA + "&path=" + sharedPath
+	get(readURL, tokenA, 200, &read)
 	require.Equal(t, projectA, read.Project)
-	get("/api/documents/read?project="+projectA+"&path="+url.QueryEscape(documents[0].Path)+"&version=1", tokenA, 200, &read)
-	require.Equal(t, projectA, read.Project)
+	require.Equal(t, canonicalListID, read.ID, "path-only selects the native canonical lineage")
+	require.Equal(t, 1, read.Version)
 	require.Equal(t, "old alias version", read.Content)
+	get(readURL+"&version=1", tokenA, 200, &read)
+	require.Equal(t, canonicalListID, read.ID)
+	for _, tc := range []struct {
+		id      int64
+		version int
+		content string
+	}{{canonicalListID, 1, "old alias version"}, {legacyListID, 2, "body-only-secret-needle"}} {
+		anchor := fmt.Sprintf("&document_id=%d", tc.id)
+		get(readURL+anchor, tokenA, 200, &read)
+		require.Equal(t, projectA, read.Project)
+		require.Equal(t, tc.id, read.ID)
+		require.Equal(t, tc.version, read.Version)
+		require.Equal(t, tc.content, read.Content)
+		get(readURL+anchor+fmt.Sprintf("&version=%d", tc.version), tokenA, 200, &read)
+		require.Equal(t, tc.id, read.ID)
+	}
+	get(fmt.Sprintf("%s&document_id=%d&version=1", readURL, legacyListID), tokenA, 404, nil)
+	get(fmt.Sprintf("%s&document_id=%d&version=2", readURL, canonicalListID), tokenA, 404, nil)
 	get("/api/documents/read?project="+projectA+"&path="+url.QueryEscape(documents[0].Path)+"&version=3", tokenA, 404, nil)
 	get("/api/documents/read?project="+projectA+"&path="+url.QueryEscape(documents[0].Path)+"&version=0", tokenA, 400, nil)
 	get("/api/documents/read?project="+projectB+"&path="+url.QueryEscape(documents[0].Path), tokenA, 404, nil)
@@ -654,17 +705,43 @@ func runKnowledgeReadersHTTP(t *testing.T, db *gorm.DB, sqliteFixture bool) {
 	require.Equal(t, "legacy-reader-alias", rawProject, "read must not rewrite stored provenance")
 	require.NoError(t, db.Model(&gormdb.VersionedDocument{}).Where("id = ?", documents[0].ID).Pluck("project", &rawProject).Error)
 	require.Equal(t, "legacy-reader-alias", rawProject)
+	require.NoError(t, db.Model(&gormdb.VersionedDocument{}).Where("id = ?", canonicalListID).Pluck("project", &rawProject).Error)
+	require.Equal(t, projectA, rawProject)
 	var history documentHistoryResponse
 	get("/api/documents/history?project="+projectA+"&path="+url.QueryEscape(documents[1].Path), tokenA, 200, &history)
 	require.Equal(t, 2, history.Count)
 	require.Equal(t, 2, history.Versions[0].Version)
-	get("/api/documents/history?project="+projectA+"&path="+url.QueryEscape(documents[0].Path), tokenA, 200, &history)
-	require.Equal(t, 2, history.Count)
+	historyURL := "/api/documents/history?project=" + projectA + "&path=" + sharedPath
+	get(historyURL, tokenA, 200, &history)
 	require.Equal(t, projectA, history.Project)
+	require.Equal(t, 1, history.Count)
+	require.Equal(t, canonicalListID, history.Versions[0].ID)
+	for _, tc := range []struct {
+		id      int64
+		version int
+		author  string
+	}{{canonicalListID, 1, "old-alias-history"}, {legacyListID, 2, "reader-fixture"}} {
+		get(fmt.Sprintf("%s&document_id=%d", historyURL, tc.id), tokenA, 200, &history)
+		require.Equal(t, projectA, history.Project)
+		require.Equal(t, 1, history.Count)
+		require.Len(t, history.Versions, 1)
+		require.Equal(t, tc.id, history.Versions[0].ID)
+		require.Equal(t, tc.version, history.Versions[0].Version)
+		require.Equal(t, tc.author, history.Versions[0].Author)
+	}
 	get("/api/documents/history?project="+projectB+"&path="+url.QueryEscape(documents[0].Path), tokenA, 200, &history)
 	require.Zero(t, history.Count)
 	get("/api/documents/history?project="+projectA+"&path=notes%2Fexcluded.md", tokenA, 200, &history)
 	require.Zero(t, history.Count)
+	for _, endpoint := range []string{"/api/documents/read", "/api/documents/history"} {
+		for _, id := range []int64{legacyListID, canonicalListID} {
+			anchor := fmt.Sprintf("&document_id=%d", id)
+			get(endpoint+"?project="+projectB+"&path="+sharedPath+anchor, tokenA, 404, nil)
+			get(endpoint+"?project="+projectA+"&path=notes%2Fother.md"+anchor, tokenA, 404, nil)
+			get(endpoint+"?project="+projectA+"&path="+sharedPath+anchor, tokenHAP, 403, nil)
+			get(endpoint+"?project="+projectA+"&path="+sharedPath+anchor, "", 401, nil)
+		}
+	}
 	for _, endpoint := range []string{"/api/documents/read", "/api/documents/history"} {
 		for _, selector := range []string{removed, merged, "legacy-reader-alias", "unregistered-orphan"} {
 			status := 403

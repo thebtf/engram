@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/lib/pq"
+	"github.com/thebtf/engram/internal/db/sqlitetest"
 	"modernc.org/sqlite"
 )
 
@@ -33,6 +34,10 @@ func (c memoryTestSQLiteConn) Prepare(query string) (driver.Stmt, error) {
 	}
 	query = strings.TrimSuffix(strings.TrimSuffix(query, " FOR UPDATE"), " FOR SHARE")
 	query = memoryTestSessionSQL.ReplaceAllString(query, `memory_test_has_session(m.source_sessions, $1)`)
+	query, err := sqlitetest.MembershipSQL(query)
+	if err != nil {
+		return nil, err
+	}
 	return c.Conn.Prepare(query)
 }
 

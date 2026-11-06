@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/db/projectscope"
 	"github.com/thebtf/engram/internal/projectidentity"
 )
 
@@ -154,33 +155,45 @@ func (s *Service) handleResolveLogicalProject(w http.ResponseWriter, r *http.Req
 	}
 	selector := params.Get("legacy_id")
 	if projectidentity.ValidProjectID(selector) {
-		exists, err := s.sessionStore.CanonicalProjectExists(r.Context(), selector)
+		var id string
+		err := s.store.DB.WithContext(r.Context()).Model(&gormdb.Project{}).
+			Where("projects.id = ? AND projects.removed_at IS NULL AND (projects.identity_status IS NULL OR projects.identity_status = 'active')", selector).
+			Select(projectscope.CanonicalReadProjectSQL("projects.id")).Scan(&id).Error
 		if err != nil {
 			writeRetainedProjectError(w, err)
 			return
 		}
-		if exists {
-			writeJSON(w, map[string]string{"status": "resolved", "project_id": selector, "name": s.getProjectDisplayName(r.Context(), selector)})
-			return
+		sessionID, _ := operatorCodeSessionID(r)
+		if _, legacyErr := store.ResolveLegacy(r.Context(), selector, sessionID); legacyErr != nil {
+			var refusal *gormdb.ConsolidationError
+			if !errors.As(legacyErr, &refusal) || refusal.Code != "PROJECT_ADOPTION_UNRESOLVED_MEMBERSHIP" {
+				writeRetainedProjectError(w, legacyErr)
+				return
+			}
 		}
-	}
-	sessionID, _ := operatorCodeSessionID(r)
-	id, err := store.ResolveLegacy(r.Context(), selector, sessionID)
-	if err == nil {
-		exists, lookupErr := s.sessionStore.CanonicalProjectExists(r.Context(), id)
-		if lookupErr != nil {
-			writeRetainedProjectError(w, lookupErr)
-			return
-		}
-		if exists {
+		if id != "" {
 			writeJSON(w, map[string]string{"status": "resolved", "project_id": id, "name": s.getProjectDisplayName(r.Context(), id)})
 			return
 		}
 	} else {
-		var refusal *gormdb.ConsolidationError
-		if !errors.As(err, &refusal) {
-			writeRetainedProjectError(w, err)
-			return
+		sessionID, _ := operatorCodeSessionID(r)
+		id, err := store.ResolveLegacy(r.Context(), selector, sessionID)
+		if err == nil {
+			exists, lookupErr := s.sessionStore.CanonicalProjectExists(r.Context(), id)
+			if lookupErr != nil {
+				writeRetainedProjectError(w, lookupErr)
+				return
+			}
+			if exists {
+				writeJSON(w, map[string]string{"status": "resolved", "project_id": id, "name": s.getProjectDisplayName(r.Context(), id)})
+				return
+			}
+		} else {
+			var refusal *gormdb.ConsolidationError
+			if !errors.As(err, &refusal) || refusal.Code != "PROJECT_ADOPTION_UNRESOLVED_MEMBERSHIP" {
+				writeRetainedProjectError(w, err)
+				return
+			}
 		}
 	}
 	unresolved, err := store.LegacyUnresolved(r.Context(), selector)

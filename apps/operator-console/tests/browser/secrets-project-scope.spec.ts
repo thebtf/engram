@@ -228,3 +228,72 @@ test('Vault project_id echo cannot verify a different same-name project', async 
   await expect(page.getByTestId('mutation-result')).toHaveAttribute('data-kind', 'committed_verification_pending')
   await expect(page.locator('.create-card input[type="password"]')).toHaveValue('')
 })
+
+for (const transition of ['scope-change', 'catalog-error', 'auth-error'] as const) {
+  test(`Vault verified delete never publishes a stale result after ${transition} during refresh`, async ({ page }) => {
+    let deleted = false
+    const catalogGate = Promise.withResolvers<void>()
+    const catalogRequest = Promise.withResolvers<void>()
+    await page.route('**/api/projects', async route => {
+      if (!deleted) return route.continue()
+      catalogRequest.resolve()
+      await catalogGate.promise
+      if (transition === 'auth-error') return route.fulfill({ status: 401, json: { error: 'synthetic expired session' } })
+      if (transition === 'catalog-error') return route.fulfill({ status: 503, json: { error: 'synthetic catalog unavailable' } })
+      return route.continue()
+    })
+    await page.route('**/api/vault/credentials', route => route.fulfill({ json: deleted ? [] : [{ id: 9, name: 'global-token', project_id: null, scope: 'global' }] }))
+    await page.route('**/api/vault/credentials/global-token?**', async route => {
+      expect(route.request().method()).toBe('DELETE')
+      const url = new URL(route.request().url())
+      expect(url.searchParams.get('scope')).toBe('global')
+      expect(url.searchParams.get('project')).toBeNull()
+      deleted = true
+      await route.fulfill({ json: { operation_state: 'completed', readback: { authoritative: true, kind: 'current', current_state: { deleted: true, name: 'global-token', project_id: null } } } })
+    })
+    await page.goto(`/secrets?project=${betaProject}`)
+    await expect(page.getByTestId('secret-row-9')).toBeVisible()
+    await page.getByTestId('secret-delete-9').click()
+    await page.getByTestId('secret-delete-9').click()
+    await catalogRequest.promise
+    const authResponse = transition === 'auth-error' ? page.waitForResponse(response => new URL(response.url()).pathname === '/api/projects' && response.status() === 401) : null
+    if (transition === 'scope-change') await page.getByTestId('project-context-select').selectOption(alphaProject)
+    catalogGate.resolve()
+    if (transition === 'scope-change') {
+      await expect(page.getByTestId('project-context-select')).toHaveValue(alphaProject)
+      await expect(page.getByTestId('secret-create-project')).toHaveValue(alphaProject)
+    } else if (transition === 'catalog-error') await expect(page.locator('.statebar[data-state="error"]').first()).toBeVisible()
+    else { await authResponse; await expect(page.locator('.session-recovery').first()).toBeVisible() }
+    await expect(page.getByTestId('mutation-result')).toHaveCount(0)
+  })
+}
+
+test('Vault verified create remains visible after same-scope catalog refresh settles', async ({ page }) => {
+  let created = false
+  const catalogGate = Promise.withResolvers<void>()
+  const catalogRequest = Promise.withResolvers<void>()
+  await page.route('**/api/projects', async route => {
+    if (!created) return route.continue()
+    catalogRequest.resolve()
+    await catalogGate.promise
+    return route.continue()
+  })
+  await page.route('**/api/vault/credentials', async route => {
+    if (route.request().method() === 'POST') {
+      created = true
+      return route.fulfill({ json: { operation_state: 'completed', readback: { authoritative: true, kind: 'current', current_state: { id: 99, name: 'fixture-token', project_id: betaProject, scope: 'project' } } } })
+    }
+    return route.fulfill({ json: created ? [{ id: 99, name: 'fixture-token', project_id: betaProject, scope: 'project' }] : [] })
+  })
+  await page.goto(`/secrets?project=${betaProject}`)
+  await expect(page.getByTestId('secret-create-project')).toHaveValue(betaProject)
+  await page.locator('.create-card input:not([type="password"])').fill('fixture-token')
+  await page.locator('.create-card input[type="password"]').fill('synthetic-test-value')
+  await page.locator('.create-card button.primary').click()
+  await catalogRequest.promise
+  await expect(page.getByTestId('secret-create-project')).toHaveValue('')
+  catalogGate.resolve()
+  await expect(page.getByTestId('secret-create-project')).toHaveValue(betaProject)
+  await expect(page.getByTestId('secret-row-99')).toBeVisible()
+  await expect(page.getByTestId('mutation-result')).toHaveAttribute('data-kind', 'committed_verified')
+})
