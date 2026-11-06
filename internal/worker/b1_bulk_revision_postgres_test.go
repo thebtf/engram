@@ -77,7 +77,7 @@ func TestB1TypedRestoreSerializesWithRevisionPostgres(t *testing.T) {
 	reviseResult := make(chan error, 1)
 	go func() { restoreResult <- store.RestoreRaw(context.Background(), snapshot) }()
 	go func() {
-		_, err := store.ReviseInContext(context.Background(), created.ID, owning, "", caller, created.Version, "restore race revised")
+		_, err := store.ReviseInContext(context.Background(), created.ID, owning, "", caller, created.Version, "restore race revised", nil)
 		reviseResult <- err
 	}()
 	var blocked int64

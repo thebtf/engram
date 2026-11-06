@@ -234,7 +234,10 @@ func (s *PrincipalMemoryQueryService) Query(ctx context.Context, req PrincipalMe
 				// Only this store applies typed visibility and enrollment before pagination.
 				_, trusted := s.store.(*gormdb.MemoryStore)
 				caller := normalizePrincipalRef(req.Caller)
-				if !trusted || caller.Principal != contextCaller.Principal || caller.PrincipalKind != contextCaller.PrincipalKind || contextCaller.WorkstationID == "" {
+				if !trusted {
+					continue
+				}
+				if mem.Context.Kind != models.MemoryContextProject && (caller.Principal != contextCaller.Principal || caller.PrincipalKind != contextCaller.PrincipalKind || contextCaller.WorkstationID == "") {
 					continue
 				}
 				if !scope.ResolveMemory(contextCaller, mem, scope.MemoryVisibilityOptions{ApplyPrivacyScope: true}) {

@@ -118,6 +118,11 @@ func Backfill(ctx context.Context, db *gorm.DB, client *Client, store *Store, ba
 			continue
 		}
 		if storedCount == 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(5 * time.Second):
+			}
 			continue
 		}
 		if rec != nil {

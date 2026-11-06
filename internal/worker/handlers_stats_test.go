@@ -187,6 +187,7 @@ func TestHandleStatsVnext_EmbeddingFieldCompiles(t *testing.T) {
 // TestEmbeddingTelemetry_JSONShape asserts that embeddingTelemetry marshals all
 // expected fields and that last_embed_error is omitted when nil.
 func TestEmbeddingTelemetry_JSONShape(t *testing.T) {
+	success, failure := int64(100), int64(2)
 	tel := embeddingTelemetry{
 		CoverageStats: embedding.CoverageStats{
 			EmbeddingStats: embedding.EmbeddingStats{
@@ -198,8 +199,8 @@ func TestEmbeddingTelemetry_JSONShape(t *testing.T) {
 			ActiveMemoryCount: 20,
 			EmbeddingCoverage: 0.5,
 		},
-		EmbedSuccessCount: 100,
-		EmbedFailureCount: 2,
+		EmbedSuccessCount: &success,
+		EmbedFailureCount: &failure,
 		LastEmbedError:    nil, // no error — must be omitted
 	}
 
@@ -231,8 +232,9 @@ func TestEmbeddingTelemetry_JSONShape(t *testing.T) {
 // is included in the JSON output when set.
 func TestEmbeddingTelemetry_LastEmbedErrorPresent(t *testing.T) {
 	ts := time.Now().UTC()
+	failure := int64(1)
 	tel := embeddingTelemetry{
-		EmbedFailureCount: 1,
+		EmbedFailureCount: &failure,
 		LastEmbedError: &embedding.EmbedError{
 			At:         ts,
 			StatusCode: 429,
@@ -257,5 +259,31 @@ func TestEmbeddingTelemetry_LastEmbedErrorPresent(t *testing.T) {
 	}
 	if errObj["status_code"].(float64) != 429 {
 		t.Errorf("status_code = %v, want 429", errObj["status_code"])
+	}
+}
+
+func TestEmbeddingTelemetryMeasuredZeroAndUnavailable(t *testing.T) {
+	zero := int64(0)
+	for _, tc := range []struct {
+		name    string
+		value   *int64
+		present bool
+	}{{"measured", &zero, true}, {"unavailable", nil, false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := json.Marshal(embeddingTelemetry{EmbedSuccessCount: tc.value, EmbedFailureCount: tc.value})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]any
+			if err := json.Unmarshal(data, &fields); err != nil {
+				t.Fatal(err)
+			}
+			for _, key := range []string{"embed_success_count", "embed_failure_count"} {
+				value, ok := fields[key]
+				if ok != tc.present || (ok && value != float64(0)) {
+					t.Fatalf("%s = %v, present %v", key, value, ok)
+				}
+			}
+		})
 	}
 }

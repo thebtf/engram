@@ -422,6 +422,9 @@ func (s *ProjectConsolidationStore) census(tx *gormlib.DB, sourceVersion string)
 				if column.TableName != table.Name {
 					continue
 				}
+				if table.Name == "memories" && column.ColumnName == "context_kind" {
+					continue
+				}
 				raw, present := object[column.ColumnName]
 				if !present {
 					continue

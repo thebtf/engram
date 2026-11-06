@@ -18,8 +18,8 @@ import (
 // process-lifetime backfill counters sourced from BackfillRecorder.
 type embeddingTelemetry struct {
 	embedding.CoverageStats
-	EmbedSuccessCount int64                 `json:"embed_success_count,omitempty"`
-	EmbedFailureCount int64                 `json:"embed_failure_count,omitempty"`
+	EmbedSuccessCount *int64                `json:"embed_success_count,omitempty"`
+	EmbedFailureCount *int64                `json:"embed_failure_count,omitempty"`
 	LastEmbedError    *embedding.EmbedError `json:"last_embed_error,omitempty"`
 }
 
@@ -271,8 +271,8 @@ func (s *Service) handleStatsVnext(w http.ResponseWriter, r *http.Request) {
 			}
 			if embRec != nil && statsPrivileged(ctx) {
 				succ, fail, lastErr := embRec.Snapshot()
-				tel.EmbedSuccessCount = succ
-				tel.EmbedFailureCount = fail
+				tel.EmbedSuccessCount = &succ
+				tel.EmbedFailureCount = &fail
 				if !lastErr.At.IsZero() {
 					tel.LastEmbedError = &lastErr
 				}

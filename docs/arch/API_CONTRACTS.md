@@ -181,6 +181,11 @@ Self ownership is independent of the visibility tier; global defaults to
 principal-private. Explicit workstation-private scope remains bound to the
 writing keycard even when another credential has the same principal.
 
+REST create and revision apply builtin and configured operator redaction before
+storing content. If redaction removes the full body, the request is refused;
+a refused revision does not advance the version or create history. Nonempty
+whitespace-only input remains accepted when no rule removes it.
+
 An optional nonempty `request_key` (at most 1024 UTF-8 bytes) scopes a create
 retry to the authenticated principal, owning context and project. An equivalent
 retry returns the existing active record; a changed command or retired target
@@ -217,7 +222,11 @@ Project aliases support reads only; a project-context revision requires the card
 unique native canonical membership and revalidates it under the mutation locks.
 The version must match; a stale version returns 409. After an uncertain outcome,
 read the current card and reconcile before deciding whether to retry. A successful
-revision keeps the ID, atomically retains the previous body and increments version.
+revision keeps the ID, atomically captures the previous body and increments version.
+The newly captured body is subject to the current redaction rules, so it is not
+necessarily a byte-exact historical copy. Existing stored history is not rewritten.
+When an embedding provider and store are configured, revision starts an asynchronous
+re-embedding attempt; provider errors or empty vectors do not establish a retry.
 `GET /api/memories/{id}/revisions` returns retained previous bodies after checking
 current-card access, in ascending version order. `after_version` selects versions
 strictly above its nonnegative value; `limit` defaults to 50 and accepts 1–100.
