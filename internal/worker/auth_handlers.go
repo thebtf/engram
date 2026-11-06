@@ -473,6 +473,10 @@ func (h *AuthHandlers) handleSetup(w http.ResponseWriter, r *http.Request) {
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcryptCost)
 	if err != nil {
+		if errors.Is(err, bcrypt.ErrPasswordTooLong) {
+			writeAuthJSONError(w, http.StatusBadRequest, "password must not exceed 72 bytes")
+			return
+		}
 		log.Error().Err(err).Msg("auth: bcrypt failed during setup")
 		writeAuthJSONError(w, http.StatusInternalServerError, "internal error")
 		return
