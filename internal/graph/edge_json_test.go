@@ -15,7 +15,9 @@ func TestEdgeJSONBoundaryPreservesInstantAndErrors(t *testing.T) {
 	edge := Edge{ValidFrom: localBoundary, ValidUntil: localBoundary, CreatedAt: localBoundary, SupersededAt: &localBoundary}
 	_, err := json.Marshal(edge)
 	require.Error(t, err, "raw Edge JSON must keep its existing behavior")
-	encoded, err := json.Marshal(EdgeForJSON(edge))
+	output := edge
+	EdgeForJSON(&output)
+	encoded, err := json.Marshal(output)
 	require.NoError(t, err)
 	var decoded Edge
 	require.NoError(t, json.Unmarshal(encoded, &decoded))
@@ -26,11 +28,15 @@ func TestEdgeJSONBoundaryPreservesInstantAndErrors(t *testing.T) {
 	require.Equal(t, 10000, edge.SupersededAt.Year(), "normalization must not mutate the pointed-to time")
 
 	ordinary := time.Date(2026, 4, 5, 6, 7, 8, 0, plusThree)
-	encoded, err = json.Marshal(EdgeForJSON(Edge{ValidUntil: ordinary, SupersededAt: &ordinary}))
+	output = Edge{ValidUntil: ordinary, SupersededAt: &ordinary}
+	EdgeForJSON(&output)
+	encoded, err = json.Marshal(output)
 	require.NoError(t, err)
 	require.Contains(t, string(encoded), `"valid_until":"2026-04-05T06:07:08+03:00"`)
 	require.Contains(t, string(encoded), `"superseded_at":"2026-04-05T06:07:08+03:00"`)
 
-	_, err = json.Marshal(EdgeForJSON(Edge{ValidUntil: time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)}))
+	output = Edge{ValidUntil: time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)}
+	EdgeForJSON(&output)
+	_, err = json.Marshal(output)
 	require.Error(t, err, "an instant outside JSON's UTC range must remain an error")
 }

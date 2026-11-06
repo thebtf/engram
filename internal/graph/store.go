@@ -57,9 +57,9 @@ type Edge struct {
 	NodeTargetID *int64 `gorm:"column:node_target_id" json:"node_target_id,omitempty"`
 }
 
-// EdgeForJSON preserves instants while making boundary-crossing local years
-// representable when their UTC instant is within JSON's four-digit range.
-func EdgeForJSON(e Edge) Edge {
+// EdgeForJSON normalizes an output edge in place while preserving instants.
+// Boundary-crossing local years become UTC; a SupersededAt pointee is not mutated.
+func EdgeForJSON(e *Edge) {
 	jsonTime := func(value time.Time) time.Time {
 		if value.Year() < 0 || value.Year() > 9999 {
 			return value.UTC()
@@ -73,7 +73,6 @@ func EdgeForJSON(e Edge) Edge {
 		value := e.SupersededAt.UTC()
 		e.SupersededAt = &value
 	}
-	return e
 }
 
 func (Edge) TableName() string { return "knowledge_edges" }
