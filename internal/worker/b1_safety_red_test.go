@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,12 +21,172 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/docs"
+	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/internal/principalmemory"
+	"github.com/thebtf/engram/internal/redaction"
 	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/pkg/models"
 )
+
+func TestB1MemoryRedactionRules(t *testing.T) {
+	rules, err := redaction.CompileRules([]redaction.Rule{{ID: "fixture", Pattern: "sensitivefixture", Replacement: ""}})
+	require.NoError(t, err)
+	svc := &Service{redactionRules: rules}
+	secret := "api_key=" + strings.Repeat("z", 36)
+	result, err := svc.redactMemoryContent("keep " + secret + " sensitivefixture")
+	require.NoError(t, err)
+	assert.NotContains(t, result, secret)
+	assert.NotContains(t, result, "sensitivefixture")
+	_, err = svc.redactMemoryContent("sensitivefixture")
+	require.ErrorIs(t, err, redaction.ErrContentFullyRedacted)
+}
+
+func TestB1PrincipalQueryProjectSharedSessionAndPrivateDenial(t *testing.T) {
+	f := newOwnCardContextFixture(t, false)
+	owner, shared, project := b1ProjectCard(t, f, "shared project query fixture")
+	payload := ownCardContextPayload("private project query fixture")
+	payload["project"] = project
+	payload["context"] = map[string]any{"kind": "project"}
+	payload["agent_visibility"] = models.AgentVisibilityPrivate
+	private := f.create(t, owner, payload)
+	for _, identity := range []auth.Identity{auth.Admin(), auth.Session("admin")} {
+		ctx := auth.WithIdentity(t.Context(), identity)
+		result, err := f.service.principalMemoryQueryService.Query(ctx, principalmemory.PrincipalMemoryQueryRequest{
+			Project: project, Caller: principalmemory.PrincipalRef{Principal: owner.identity.Principal, PrincipalKind: owner.identity.PrincipalKind},
+			OwnerPrincipal: owner.identity.Principal, OwnerPrincipalKind: owner.identity.PrincipalKind,
+		})
+		require.NoError(t, err)
+		var ids []int64
+		for _, item := range result.Items {
+			ids = append(ids, item.ID)
+		}
+		assert.Contains(t, ids, shared.ID)
+		assert.NotContains(t, ids, private.ID, "request-supplied principal must not grant private access")
+	}
+	path := "/api/memories/principal?" + url.Values{
+		"project": {project}, "principal": {owner.identity.Principal},
+		"principal_kind": {owner.identity.PrincipalKind}, "include_private": {"true"},
+	}.Encode()
+	for name, caller := range map[string]ownCardContextCaller{"master": {token: f.master}, "session": f.admin} {
+		t.Run(name, func(t *testing.T) {
+			response := f.call(t, http.MethodGet, path, nil, caller)
+			require.Equal(t, http.StatusOK, response.Code)
+			var body struct {
+				Items []struct {
+					ID int64 `json:"id"`
+				} `json:"items"`
+			}
+			require.NoError(t, json.Unmarshal(response.Body.Bytes(), &body))
+			var ids []int64
+			for _, item := range body.Items {
+				ids = append(ids, item.ID)
+			}
+			assert.Contains(t, ids, shared.ID)
+			assert.NotContains(t, ids, private.ID)
+		})
+	}
+}
+
+func TestB1BackfillInvalidDimensionsWaitsAndCancels(t *testing.T) {
+	f := newOwnCardContextFixture(t, false)
+	b1ProjectCard(t, f, "invalid dimension synthetic input")
+	var calls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		var input struct {
+			Input []string `json:"input"`
+		}
+		if json.NewDecoder(r.Body).Decode(&input) != nil {
+			http.Error(w, "invalid", http.StatusBadRequest)
+			return
+		}
+		data := make([]map[string]any, len(input.Input))
+		for i := range data {
+			data[i] = map[string]any{"index": i, "embedding": []float32{1}}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+	}))
+	defer server.Close()
+	t.Setenv("ENGRAM_EMBEDDING_URL", server.URL)
+	t.Setenv("ENGRAM_EMBEDDING_API_KEY", "")
+	client, err := embedding.NewClient()
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(t.Context(), 250*time.Millisecond)
+	defer cancel()
+	err = embedding.Backfill(ctx, f.store.DB, client, embedding.NewStore(f.store.DB), 50, nil)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.EqualValues(t, 1, calls.Load(), "invalid vectors must not spin against the provider")
+}
+
+func TestB1RESTCreateRevisionRedaction(t *testing.T) {
+	f := newOwnCardContextFixture(t, false)
+	owner := f.registered(t, "redaction")
+	rules, err := redaction.CompileRules([]redaction.Rule{{ID: "synthetic", Pattern: "sensitivefixture", Replacement: ""}})
+	require.NoError(t, err)
+	f.service.redactionRules = rules
+	secret := "api_key=" + strings.Repeat("z", 36)
+	card := f.create(t, owner, ownCardContextPayload("first "+secret+" sensitivefixture"))
+	assert.NotContains(t, card.Content, secret)
+	assert.NotContains(t, card.Content, "sensitivefixture")
+	require.NoError(t, f.store.DB.Model(&gormdb.Memory{}).Where("id = ?", card.ID).Update("content", "old raw "+secret+" sensitivefixture").Error)
+	path := "/api/memories/" + strconv.FormatInt(card.ID, 10)
+	updated := ownCardContextDecode(t, f.call(t, http.MethodPatch, path, map[string]any{"version": card.Version, "content": "second " + secret + " sensitivefixture"}, owner.caller()), http.StatusOK)
+	assert.NotContains(t, updated.Content, secret)
+	assert.NotContains(t, updated.Content, "sensitivefixture")
+	refused := f.call(t, http.MethodPatch, path, map[string]any{"version": updated.Version, "content": "sensitivefixture"}, owner.caller())
+	assert.Equal(t, http.StatusBadRequest, refused.Code)
+	var current gormdb.Memory
+	require.NoError(t, f.store.DB.First(&current, card.ID).Error)
+	assert.Equal(t, updated.Version, current.Version)
+	assert.Equal(t, updated.Content, current.Content)
+	var history []gormdb.MemoryRevision
+	require.NoError(t, f.store.DB.Where("memory_id = ?", card.ID).Find(&history).Error)
+	require.Len(t, history, 1)
+	assert.NotContains(t, history[0].Content, secret)
+	assert.NotContains(t, history[0].Content, "sensitivefixture")
+	assert.Equal(t, http.StatusBadRequest, f.call(t, http.MethodPost, "/api/memories", ownCardContextPayload("sensitivefixture"), owner.caller()).Code)
+	require.NoError(t, f.store.DB.Model(&gormdb.Memory{}).Where("id = ?", card.ID).Update("content", "sensitivefixture").Error)
+	refusedPrior := f.call(t, http.MethodPatch, path, map[string]any{"version": updated.Version, "content": "replacement"}, owner.caller())
+	assert.Equal(t, http.StatusBadRequest, refusedPrior.Code)
+	require.NoError(t, f.store.DB.First(&current, card.ID).Error)
+	assert.Equal(t, updated.Version, current.Version)
+	assert.Equal(t, "sensitivefixture", current.Content)
+	whitespace := f.create(t, owner, ownCardContextPayload(" \t "))
+	assert.Equal(t, " \t ", whitespace.Content)
+	whitespacePath := "/api/memories/" + strconv.FormatInt(whitespace.ID, 10)
+	whitespaceUpdated := ownCardContextDecode(t, f.call(t, http.MethodPatch, whitespacePath, map[string]any{"version": whitespace.Version, "content": "  \n"}, owner.caller()), http.StatusOK)
+	assert.Equal(t, "  \n", whitespaceUpdated.Content)
+	assert.Equal(t, whitespace.Version+1, whitespaceUpdated.Version)
+}
+
+func TestB1RevisionReembedsWithoutStartupBackfill(t *testing.T) {
+	f := newOwnCardContextFixture(t, false)
+	owner, card, project := b1ProjectCard(t, f, "original synthetic embedding")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var input struct {
+			Input []string `json:"input"`
+		}
+		if json.NewDecoder(r.Body).Decode(&input) != nil || len(input.Input) != 1 || input.Input[0] != "revised synthetic embedding" {
+			http.Error(w, "unexpected synthetic input", http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": []any{map[string]any{"index": 0, "embedding": b1Vector(1)}}})
+	}))
+	defer server.Close()
+	t.Setenv("ENGRAM_EMBEDDING_URL", server.URL)
+	t.Setenv("ENGRAM_EMBEDDING_API_KEY", "")
+	client, err := embedding.NewClient()
+	require.NoError(t, err)
+	f.service.embeddingClient = client
+	f.service.embeddingStore = embedding.NewStore(f.store.DB)
+	b1Patch(t, f, owner, card, project, "revised synthetic embedding")
+	require.Eventually(t, func() bool {
+		found, err := f.service.embeddingStore.FindSimilarForProject(t.Context(), project, b1Vector(1), 10, .9)
+		return err == nil && len(found) == 1 && found[0].Text == "revised synthetic embedding"
+	}, 5*time.Second, 20*time.Millisecond)
+}
 
 func TestB1RejectedTypedWriteAudit(t *testing.T) {
 	f := newOwnCardContextFixture(t, false)
@@ -321,7 +483,7 @@ func TestB1ConsolidationRelationLockOrderPostgres(t *testing.T) {
 				if tc.revise {
 					caller := scope.KeycardContext{Principal: owner.identity.Principal, PrincipalKind: owner.identity.PrincipalKind, WorkstationID: owner.id}
 					owning := models.MemoryContext{Kind: models.MemoryContextSelf, Principal: caller.Principal, PrincipalKind: caller.PrincipalKind}
-					_, err := f.service.memoryStore.ReviseInContext(ctx, card.ID, owning, "", caller, card.Version, "relation lock revised")
+					_, err := f.service.memoryStore.ReviseInContext(ctx, card.ID, owning, "", caller, card.Version, "relation lock revised", nil)
 					operationDone <- err
 					return
 				}

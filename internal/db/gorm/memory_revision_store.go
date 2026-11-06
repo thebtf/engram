@@ -26,7 +26,9 @@ func (MemoryRevision) TableName() string { return "memory_revisions" }
 
 // ReviseInContext retains the prior content and advances the single current
 // memory body in one transaction. The caller reconciles a stale version by read.
-func (s *MemoryStore) ReviseInContext(ctx context.Context, id int64, owning models.MemoryContext, project string, caller scope.KeycardContext, expectedVersion int, content string) (*models.Memory, error) {
+// redactHistory runs inside the transaction on the prior body; nil preserves it
+// unchanged and does not enforce redaction.
+func (s *MemoryStore) ReviseInContext(ctx context.Context, id int64, owning models.MemoryContext, project string, caller scope.KeycardContext, expectedVersion int, content string, redactHistory func(string) (string, error)) (*models.Memory, error) {
 	if expectedVersion <= 0 || content == "" {
 		return nil, fmt.Errorf("version and content are required")
 	}
@@ -57,7 +59,14 @@ func (s *MemoryStore) ReviseInContext(ctx context.Context, id int64, owning mode
 		if current.Version != expectedVersion {
 			return ErrMemoryVersionConflict
 		}
-		previous := MemoryRevision{MemoryID: id, Version: current.Version, Content: current.Content, ChangedByPrincipal: caller.Principal, ChangedByPrincipalKind: caller.PrincipalKind, ChangedAt: time.Now().UTC()}
+		priorContent := current.Content
+		if redactHistory != nil {
+			priorContent, err = redactHistory(priorContent)
+			if err != nil {
+				return err
+			}
+		}
+		previous := MemoryRevision{MemoryID: id, Version: current.Version, Content: priorContent, ChangedByPrincipal: caller.Principal, ChangedByPrincipalKind: caller.PrincipalKind, ChangedAt: time.Now().UTC()}
 		if err := tx.Create(&previous).Error; err != nil {
 			return err
 		}

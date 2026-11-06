@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Apply builtin and configured redaction to REST memory creates and revisions, including newly captured prior bodies; refuse fully redacted content without advancing history. Preserve nonempty whitespace-only input and leave existing history unchanged. Invalidate stale revision vectors and attempt re-embedding asynchronously when configured, without claiming provider-error retry. Prevent invalid backfill vectors from spinning; preserve scoped private-query and telemetry filtering, and exclude memory context metadata from consolidation selectors while retaining project membership.
+
 - Require native project membership under mutation locks when revising a typed project card; a read alias does not grant write authority.
 
 - Regenerate the API through the maintained worker target using canonical local Go package directories and Swag 1.16.6, with real producer errors stopping the build. Correct existing context search/inject/session-start annotations without changing handlers; document the shared GET/POST conditional-query limitation. The actual producer and server build pass, with 40 named schema checks and all 76 references resolved; that producer checkpoint established compile-only retained-reader oracle provenance, with later native query proof recorded separately, and installed/release acceptance remains separate.

@@ -24,7 +24,9 @@ import (
 	dbgorm "github.com/thebtf/engram/internal/db/gorm"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/principalmemory"
+	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/internal/projectidentity"
+	"github.com/thebtf/engram/internal/redaction"
 	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/pkg/models"
 )
@@ -138,6 +140,17 @@ func applyPrincipalMemoryMetadataREST(ctx context.Context, mem *models.Memory, a
 	return nil
 }
 
+func (s *Service) redactMemoryContent(content string) (string, error) {
+	if privacy.ContainsSecrets(content) {
+		content = privacy.RedactSecrets(content)
+	}
+	s.initMu.RLock()
+	rules := s.redactionRules
+	s.initMu.RUnlock()
+	scrubbed, _, err := redaction.ScrubCompiled(content, rules)
+	return scrubbed, err
+}
+
 // handleStoreMemoryExplicit godoc
 // @Summary Create a memory in self, project or explicit global context
 // @Description With a validated principal-bound client keycard, omit both context and project for enrolled self; an existing canonical project selects project; explicit context.kind=global requires project omission and enrollment. Context accepts only a kind field (self, project, global). Empty/null/invalid/conflicting selectors fail without fallback or project creation. Typed commands require a client keycard; a no-opt-in legacy project write remains supported.
@@ -185,6 +198,11 @@ func (s *Service) handleStoreMemoryExplicit(w http.ResponseWriter, r *http.Reque
 	}
 	if req.Content == "" {
 		http.Error(w, "content is required", http.StatusBadRequest)
+		return
+	}
+	req.Content, err = s.redactMemoryContent(req.Content)
+	if err != nil || req.Content == "" {
+		http.Error(w, "content fully redacted", http.StatusBadRequest)
 		return
 	}
 	mem := &models.Memory{Project: req.Project, Content: req.Content, Tags: req.Tags, SourceAgent: req.SourceAgent}

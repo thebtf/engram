@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -8,7 +9,11 @@ import (
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/pgvector/pgvector-go"
+	"github.com/rs/zerolog/log"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/embedding"
+	"github.com/thebtf/engram/internal/redaction"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -81,14 +86,45 @@ func (s *Service) handleReviseMemoryContext(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "content and positive version are required", http.StatusBadRequest)
 		return
 	}
-	updated, err := s.memoryStore.ReviseInContext(r.Context(), id, owning, project, memoryVisibilityCaller(r.Context(), ""), request.Version, request.Content)
+	request.Content, err = s.redactMemoryContent(request.Content)
+	if err != nil || request.Content == "" {
+		http.Error(w, "content fully redacted", http.StatusBadRequest)
+		return
+	}
+	updated, err := s.memoryStore.ReviseInContext(r.Context(), id, owning, project, memoryVisibilityCaller(r.Context(), ""), request.Version, request.Content, s.redactMemoryContent)
 	if err != nil {
+		if errors.Is(err, redaction.ErrContentFullyRedacted) {
+			http.Error(w, "content fully redacted", http.StatusBadRequest)
+			return
+		}
 		if errors.Is(err, gormdb.ErrMemoryVersionConflict) {
 			http.Error(w, "memory version conflict; read current version to reconcile", http.StatusConflict)
 			return
 		}
 		writeMemoryContextError(w, err)
 		return
+	}
+	s.initMu.RLock()
+	embClient, embStore := s.embeddingClient, s.embeddingStore
+	s.initMu.RUnlock()
+	if embClient != nil && embStore != nil {
+		go func(memory *models.Memory) {
+			ctx := context.Background()
+			vectors, err := embClient.Embed(ctx, []string{memory.Content})
+			if err != nil {
+				log.Error().Err(err).Int64("memory_id", memory.ID).Msg("revision embedding failed")
+				return
+			}
+			if len(vectors) == 0 || len(vectors[0]) == 0 {
+				return
+			}
+			_, err = embStore.StoreChunksForVersion(ctx, memory.ID, memory.Version, []embedding.Chunk{{
+				MemoryID: memory.ID, Text: memory.Content, Model: embClient.Model(), Embedding: pgvector.NewVector(vectors[0]),
+			}})
+			if err != nil {
+				log.Error().Err(err).Int64("memory_id", memory.ID).Msg("revision embedding store failed")
+			}
+		}(updated)
 	}
 	writeJSON(w, jsonSafeMemory(updated))
 }

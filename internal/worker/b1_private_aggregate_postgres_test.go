@@ -86,6 +86,14 @@ func TestB1PrivateProcessTelemetryPostgres(t *testing.T) {
 	f.service.embeddingStore = embedding.NewStore(f.store.DB)
 	recorder := &embedding.BackfillRecorder{}
 	f.service.embeddingRecorder = recorder
+	adminResponse := f.call(t, http.MethodGet, "/api/stats/vnext", nil, f.admin)
+	require.Equal(t, http.StatusOK, adminResponse.Code)
+	var adminBody map[string]any
+	require.NoError(t, json.Unmarshal(adminResponse.Body.Bytes(), &adminBody))
+	adminEmbedding, ok := adminBody["embedding"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, float64(0), adminEmbedding["embed_success_count"])
+	assert.Equal(t, float64(0), adminEmbedding["embed_failure_count"])
 	read := func() (map[string]any, string) {
 		t.Helper()
 		response := f.call(t, http.MethodGet, "/api/stats/vnext", nil, reader.caller())
