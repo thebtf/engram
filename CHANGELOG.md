@@ -7,9 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Normalize CRLF only in bounded task queries; budget redacted, escaped knowledge and code within the existing output cap; capture corrections and segments using verified local or available native project identity within a separate bounded budget; and require packaged prompt runtime dependencies and source-matching prompt/launcher bytes in the archive gate.
+
+- Assemble ready prompt knowledge in declared provider order, preserving each provider's ranking regardless of completion timing and keeping bounded-frame trimming stable for unchanged evidence.
+
+- Preserve bounded knowledge when an empty code packet exceeds the shared frame budget; keep correction and segmentation capture alive through successful prompt return and quiet mode. Include the native task schema in the explicitly unverified offline catalog and check packaged extension dependencies.
+
+- Reuse the persisted client installation identity read-only for prompt context, mask diagnostic secrets before presentation, and suppress repeated evidence independently of transient exposure references. Preserve original evidence hashes and distinguish redacted display text from source. Update the startup fixture for native knowledge delivery.
+
+- Recover an existing native Source from the actual Git cwd without a caller-supplied locator or historical View/index binding. Permit explicit Go-to-current-semantic promotion through a new immutable checkout registration profile while retaining implicit Go replay, Source/project authorization, semantic-to-Go refusal and old profiles/artifacts/Views. Document the verified installed-parser and outside-callback preparation path; this repair does not claim loaded-host or useful 500ms delivery acceptance.
+
+- Honor optional positive `X-Engram-Budget-Ms` remaining-work budgets on GET/POST `/api/context/search` without extending inherited deadlines, overflowing duration conversion, or adding a global 500ms cap. Preserve ordinary no-header provider behavior; bound optional reranking inside explicit budgets so authorized lexical fallback and final ACL/version/body-digest revalidation retain processing time. Add truthful optional memory/behavioral-rule `source_ref` metadata, distinguish mutable row versions from body identity, and preserve exact legacy numeric observation IDs even beyond JavaScript's safe-integer range.
+
 - Add cursor-ready candidate queue navigation and warn when a full legacy response may be truncated; this does not add backend continuation support.
 
 - Exercise cross-profile embedding reuse through two publicly registered worktrees of one Source using the installed artifact harness and a synthetic loopback provider.
+
 
 - Allow the installed dirty-worktree acceptance scenario to use the same explicit released-artifact inputs as the public-consumer test, retaining source-build defaults. Bind parser fixtures to the semantic profile and observe watcher transitions through selected Views without inventing unavailable run IDs.
 

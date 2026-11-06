@@ -4,6 +4,7 @@ set -euo pipefail
 
 source_manifest="plugin/engram/package.json"
 source_extension="plugin/engram/extensions/engram-memory.mjs"
+source_worker="plugin/engram/scripts/task-context-worker.js"
 dist="dist"
 version=""
 while [[ $# -gt 0 ]]; do
@@ -15,7 +16,7 @@ while [[ $# -gt 0 ]]; do
 done
 version="${version#v}"
 
-[[ -n "$version" && -f "$source_manifest" && -f "$source_extension" && -d "$dist" ]] \
+[[ -n "$version" && -f "$source_manifest" && -f "$source_extension" && -f "$source_worker" && -d "$dist" ]] \
   || { echo 'release version, source OMP payload, or split dist is missing' >&2; exit 1; }
 
 work_dir="$(mktemp -d)"
@@ -76,7 +77,7 @@ extract_entry() {
 
 for archive in "${archives[@]}"; do
   mapfile -t entries < <(archive_entries "$archive")
-  for entry in package.json extensions/engram-memory.mjs; do
+  for entry in package.json bootstrap-targets.json parser-targets.json extensions/engram-memory.mjs hooks/lib.js hooks/session-start.js hooks/user-prompt.js scripts/bootstrap-policy.js scripts/client-instance.js scripts/ensure-binary.js scripts/run-engram.js scripts/task-context-worker.js; do
     matches=0
     for candidate in "${entries[@]}"; do
       if [[ "$candidate" == "$entry" ]]; then
@@ -93,6 +94,13 @@ for archive in "${archives[@]}"; do
   validate_manifest "$manifest"
   cmp -s "$source_manifest" "$manifest" || { echo "archive OMP package manifest differs from tagged source: $archive" >&2; exit 1; }
   cmp -s "$source_extension" "$extension" || { echo "archive OMP extension differs from tagged source: $archive" >&2; exit 1; }
+  worker="$work_dir/task-context-worker.js"
+  extract_entry "$archive" scripts/task-context-worker.js "$worker"
+  cmp -s "$source_worker" "$worker" || { echo "archive task-context worker differs from tagged source: $archive" >&2; exit 1; }
+  for entry in hooks/user-prompt.js scripts/run-engram.js; do
+    extract_entry "$archive" "$entry" "$work_dir/$(basename "$entry")"
+    cmp -s "plugin/engram/$entry" "$work_dir/$(basename "$entry")" || { echo "archive $entry differs from tagged source: $archive" >&2; exit 1; }
+  done
   if [[ "${archive##*/}" == "engram_${version}_linux_amd64.tar.gz" ]]; then
     matches=0
     for candidate in "${entries[@]}"; do

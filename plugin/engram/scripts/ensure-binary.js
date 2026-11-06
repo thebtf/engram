@@ -107,7 +107,7 @@ function isInside(root, candidate) {
   return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
 }
 
-function assertSafeDirectory(root) {
+function assertSafeDirectory(root, create = true) {
   const absolute = path.resolve(root);
   const parsed = path.parse(absolute);
   let current = parsed.root;
@@ -116,6 +116,7 @@ function assertSafeDirectory(root) {
     let stat;
     try { stat = fs.lstatSync(current); } catch (error) {
       if (error.code !== "ENOENT") fail(`cannot inspect ${current}: ${error.message}`);
+      if (!create) fail('HOOK_CLIENT_UNAVAILABLE');
       fs.mkdirSync(current);
       stat = fs.lstatSync(current);
     }
@@ -124,17 +125,18 @@ function assertSafeDirectory(root) {
   return fs.realpathSync.native(absolute);
 }
 
-function objectRoots(pluginData) {
-  const bin = assertSafeDirectory(path.join(pluginData, "bin"));
-  const objects = assertSafeDirectory(path.join(bin, "objects", "sha256"));
-  const staging = assertSafeDirectory(path.join(bin, "staging"));
-  const quarantine = assertSafeDirectory(path.join(bin, "quarantine"));
+function objectRoots(pluginData, options = {}) {
+  const create = options.check !== true;
+  const bin = assertSafeDirectory(path.join(pluginData, "bin"), create);
+  const objects = assertSafeDirectory(path.join(bin, "objects", "sha256"), create);
+  const staging = create ? assertSafeDirectory(path.join(bin, "staging")) : path.join(bin, "staging");
+  const quarantine = create ? assertSafeDirectory(path.join(bin, "quarantine")) : path.join(bin, "quarantine");
   return { bin, objects, staging, quarantine };
 }
 
-function objectPath(roots, target) {
+function objectPath(roots, target, options = {}) {
   const digestDir = path.join(roots.objects, target.sha256);
-  assertSafeDirectory(digestDir);
+  assertSafeDirectory(digestDir, options.check !== true);
   const candidate = path.join(digestDir, target.asset);
   if (!isInside(roots.objects, candidate)) fail("object path escapes object store");
   return candidate;
@@ -176,7 +178,7 @@ function quarantineObject(filePath, roots, target) {
 
 function verifyObject(roots, target, quarantine = true, options = {}) {
   checkAcquisition(options);
-  const candidate = objectPath(roots, target);
+  const candidate = objectPath(roots, target, options);
   try {
     if (hashFile(candidate, target, roots.objects, options)) return candidate;
     if (fs.existsSync(candidate) && quarantine) quarantineObject(candidate, roots, target);
@@ -342,12 +344,13 @@ async function acquire(roots, target, options) {
 
 async function resolveForLaunch(options = {}) {
   options = { ...options, deadlineAt: options.deadlineAt ?? (options.timeoutMs === undefined ? undefined : Date.now() + options.timeoutMs) };
+  if (options.check === true) options = { ...options, acquire: false, parserTarget: null };
   checkAcquisition(options);
   const pluginRoot = options.pluginRoot || process.env.PLUGIN_ROOT || process.env.CLAUDE_PLUGIN_ROOT;
   const pluginData = options.pluginData || process.env.PLUGIN_DATA || process.env.CLAUDE_PLUGIN_DATA;
   if (!pluginRoot || !pluginData) fail("plugin root and plugin data are required");
   const policy = options.policy || loadPolicy(pluginRoot, options);
-  const roots = objectRoots(pluginData);
+  const roots = objectRoots(pluginData, options);
   const candidates = [policy.target.desired, ...(options.acquire === false ? [] : [policy.target.predecessor])].filter(Boolean);
   let lastError;
   for (const target of candidates) {

@@ -725,7 +725,7 @@ const docTemplate = `{
                         "ApiKeyAuth": []
                     }
                 ],
-                "description": "Searches observations using shared vector and text retrieval (FTS plus literal content/tag matches), optional configured cross-encoder reranking, and existing clustering. Unavailable embeddings degrade to text search; query expansion is not performed. Memory-store lookup failures return HTTP 500 rather than an empty success. JSON bodies are ignored; use POST for large prompts.",
+                "description": "Searches observations using shared vector and text retrieval (FTS plus literal content/tag matches), optional configured cross-encoder reranking, and existing clustering. Unavailable embeddings degrade to text search; query expansion is not performed. Memory-store lookup failures return HTTP 500 rather than an empty success. JSON bodies are ignored; use POST for large prompts.\nOptional X-Engram-Budget-Ms is a positive int64 remaining processing budget: it only shortens the existing deadline, rejects malformed/nonpositive/overflow values with HTTP 400, and reserves provider time for authorized lexical fallback and final ACL/version/body-digest checks. Absent keeps existing deadline/provider behavior; there is no global 500ms cap.\nobservations and always_inject may include source_ref with kind (memory or behavioral_rule), a positive JS-safe id matching the observation id, optional nonnegative JS-safe record_version (mutable row state, not body revision), and optional lowercase SHA-256 of the exact stored UTF-8 body. Source-less or unsafe-ID observations omit source_ref; legacy numeric observation ids remain exact.",
                 "produces": [
                     "application/json"
                 ],
@@ -781,6 +781,13 @@ const docTemplate = `{
                         "description": "Number of results (default 50, max 200)",
                         "name": "limit",
                         "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "format": "int64",
+                        "description": "Positive remaining processing budget in milliseconds; never extends the existing deadline",
+                        "name": "X-Engram-Budget-Ms",
+                        "in": "header"
                     }
                 ],
                 "responses": {
@@ -792,7 +799,7 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "project and query required",
+                        "description": "project/query invalid or budget header invalid",
                         "schema": {
                             "type": "string"
                         }
@@ -811,7 +818,7 @@ const docTemplate = `{
                         "ApiKeyAuth": []
                     }
                 ],
-                "description": "Searches observations using shared vector and text retrieval (FTS plus literal content/tag matches), optional configured cross-encoder reranking, and existing clustering. Unavailable embeddings degrade to text search; query expansion is not performed. Memory-store lookup failures return HTTP 500 rather than an empty success. A nonempty project and query are each required in the query string or JSON body. Nonempty JSON fields override query parameters; session_id overrides even when empty. Invalid or absent JSON falls back to query parameters.",
+                "description": "Searches observations using shared vector and text retrieval (FTS plus literal content/tag matches), optional configured cross-encoder reranking, and existing clustering. Unavailable embeddings degrade to text search; query expansion is not performed. Memory-store lookup failures return HTTP 500 rather than an empty success. A nonempty project and query are each required in the query string or JSON body. Nonempty JSON fields override query parameters; session_id overrides even when empty. Invalid or absent JSON falls back to query parameters.\nOptional X-Engram-Budget-Ms is a positive int64 remaining processing budget: it only shortens the existing deadline, rejects malformed/nonpositive/overflow values with HTTP 400, and reserves provider time for authorized lexical fallback and final ACL/version/body-digest checks. Absent keeps existing deadline/provider behavior; there is no global 500ms cap.\nobservations and always_inject may include source_ref with kind (memory or behavioral_rule), a positive JS-safe id matching the observation id, optional nonnegative JS-safe record_version (mutable row state, not body revision), and optional lowercase SHA-256 of the exact stored UTF-8 body. Source-less or unsafe-ID observations omit source_ref; legacy numeric observation ids remain exact.",
                 "consumes": [
                     "application/json"
                 ],
@@ -876,6 +883,13 @@ const docTemplate = `{
                         "schema": {
                             "type": "object"
                         }
+                    },
+                    {
+                        "type": "integer",
+                        "format": "int64",
+                        "description": "Positive remaining processing budget in milliseconds; never extends the existing deadline",
+                        "name": "X-Engram-Budget-Ms",
+                        "in": "header"
                     }
                 ],
                 "responses": {
@@ -887,7 +901,7 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "project and query required",
+                        "description": "project/query invalid or budget header invalid",
                         "schema": {
                             "type": "string"
                         }

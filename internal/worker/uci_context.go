@@ -508,6 +508,7 @@ func composeUCIContext(
 	if err != nil {
 		return nil, fmt.Errorf("create UCI MCP context application: %w", err)
 	}
+	contextApplication.SetNativeGitLookup(contextStore.LookupNativeGit)
 	contextApplication.SetLocalGitRegistration(func(ctx context.Context, caller uci.ResolveContextInput, sourceID, label, locator string, parserBundle *bool) (uci.RegisteredCheckoutSelector, error) {
 		available, err := verifiedUCIParserBundle(ctx)
 		if err != nil {

@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import cp from 'node:child_process';
 import crypto from 'node:crypto';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import fs from 'node:fs';
 import { createRequire, register } from 'node:module';
 import os from 'node:os';
@@ -39,6 +41,7 @@ async function exerciseDefaultFactory(mode) {
   const version = '7.0.7';
   const targets = Object.fromEntries(Object.entries(TARGET_ASSETS).map(([key, asset]) => [key, { version, asset, size: bytes.length, sha256 }]));
   const policy = parsePolicy(JSON.stringify(createPolicy(version, targets)), version);
+  fs.writeFileSync(path.join(root, 'client-instance-id'), `engram-${'a'.repeat(32)}\n`);
   const roots = objectRoots(root), object = objectPath(roots, policy.target.desired);
   if (mode === 'warm') fs.writeFileSync(object, bytes);
   const project = '11111111-1111-4111-8111-111111111111';
@@ -79,11 +82,38 @@ async function exerciseDefaultFactory(mode) {
         effects.projectExecutions++;
         assert.equal(file, object);
         assert.equal(hashFile(file, policy.target.desired, roots.objects), true, 'only verified bytes may reach execution');
-        assert.deepEqual(args, ['project', 'resolve', '--root', root, '--json']);
+        assert.deepEqual(args, ['project', 'resolve', '--root', root, '--json', ...(options.check === true ? ['--check'] : [])]);
         executions.push({ args, timeout: execOptions.timeout });
-        callback(null, JSON.stringify({ project_id: project }));
+        callback(null, JSON.stringify(options.check === true ? { status: 'resolved', binding: { id: project, match: 'portable_marker' } } : { project_id: project }));
       },
     }).then(context => { readiness = 'trusted'; return context; });
+  };
+  const realTaskContext = launcher.requestTaskContext;
+  launcher.requestTaskContext = (facts, options) => {
+    effects.projectResolutions++;
+    assert.notEqual(readiness, 'pending');
+    return realTaskContext(facts, {
+      ...options, pluginRoot: root, pluginData: root, resolve: verify,
+      createTaskContextWorker(_entry, execution) {
+        effects.projectExecutions++;
+        const work = execution.workerData;
+        assert.equal(work.path, object);
+        assert.equal(hashFile(work.path, policy.target.desired, roots.objects), true);
+        assert.equal(work.cwd, root);
+        assert.ok(work.deadlineAt > Date.now());
+        executions.push({ args: ['task-context', '--json'], timeout: work.deadlineAt - Date.now() });
+        const request = JSON.parse(work.input);
+        assert.equal(request.schema, 1);
+        assert.equal(request.max_bytes, 8000);
+        const content = 'Do not remove the recovery backup.';
+        const digest = crypto.createHash('sha256').update(content).digest('hex');
+        const response = { schema: 1, status: 'ok', reason_code: 'OK', project: { status: 'resolved', binding: { id: project, match: 'portable_marker' } }, knowledge: { memory_status: 'ok', note_status: 'empty', rule_status: 'empty', items: [{ kind: 'memory', id: 42, content, content_hash: digest, source_hash: digest, excerpt: false }] } };
+        const worker = new EventEmitter();
+        worker.stdout = new PassThrough(); worker.stderr = new PassThrough(); worker.postMessage = () => { };
+        queueMicrotask(() => { const bytes = Buffer.from(JSON.stringify(response) + '\n'); worker.emit('message', { type: 'closed', ok: true, bytes: Uint8Array.from(bytes).buffer }); worker.emit('exit', 0); });
+        return worker;
+      },
+    }).then(response => { if (response.project?.status === 'resolved') readiness = 'trusted'; return response; });
   };
   globalThis.fetch = async (url, options) => {
     url = new URL(url);
@@ -94,11 +124,9 @@ async function exerciseDefaultFactory(mode) {
     assert.equal(options.method, 'POST');
     const body = JSON.parse(options.body);
     assert.equal(body.project, project);
-    assert.ok(['/api/context/session-start', '/api/hooks/ambient-candidates'].includes(url.pathname));
+    assert.equal(url.pathname, '/api/context/session-start');
     requests.push({ route: url.pathname, body });
-    return new Response(JSON.stringify(url.pathname === '/api/context/session-start'
-      ? { memories: [{ content: 'trusted startup fixture memory' }] }
-      : { additional_context: 'trusted startup fixture ambient' }));
+    return new Response(JSON.stringify({ memories: [{ content: 'trusted startup fixture memory' }] }));
   };
   const singleton = Object.freeze({
     register(name, callback) {
@@ -162,17 +190,17 @@ async function exerciseDefaultFactory(mode) {
       assert.equal(settled.readiness, 'trusted');
       assert.equal(settled.effects.projectResolutions, 2);
       assert.equal(settled.effects.projectExecutions, 2);
-      assert.equal(settled.effects.backendRequests, 2);
+      assert.equal(settled.effects.backendRequests, 1);
       assert.equal(sent.length, 1);
       assert.match(sent[0].message.content, /trusted startup fixture memory/);
       assert.deepEqual(sent[0].options, { deliverAs: 'nextTurn' });
-      assert.equal(result.message.content, 'trusted startup fixture ambient');
+      assert.match(result.message.content, /Do not remove the recovery backup\./);
       assert.deepEqual(executions.map((item, index) => item.timeout > 0 && item.timeout <= (index === 0 ? 5000 : 500)), [true, true]);
       fs.writeFileSync(object, Buffer.alloc(bytes.length));
       assert.equal(await callbacks('after-tamper'), undefined);
       afterTamper = snapshot();
       assert.equal(afterTamper.effects.projectExecutions, 2, 'tampered bytes must not execute');
-      assert.equal(afterTamper.effects.backendRequests, 2, 'tampering must not request more context');
+      assert.equal(afterTamper.effects.backendRequests, 1, 'tampering must not request more context');
       assert.equal(afterTamper.sent, 1, 'tampering must not replay enrichment');
     } else {
       assert.equal(settled.readiness, 'failed');
@@ -185,11 +213,11 @@ async function exerciseDefaultFactory(mode) {
         const recovered = await callbacks('after-verified-cache');
         afterRecovery = snapshot();
         assert.equal(afterRecovery.readiness, 'trusted', 'only successful real trusted resolution may admit enrichment');
-        assert.deepEqual(afterRecovery.effects, { ...held.effects, projectResolutions: 4, projectExecutions: 2, backendRequests: 2 });
+        assert.deepEqual(afterRecovery.effects, { ...held.effects, projectResolutions: 4, projectExecutions: 2, backendRequests: 1 });
         assert.equal(sent.length, 1);
         assert.match(sent[0].message.content, /trusted startup fixture memory/);
         assert.deepEqual(sent[0].options, { deliverAs: 'nextTurn' });
-        assert.equal(recovered.message.content, 'trusted startup fixture ambient');
+        assert.match(recovered.message.content, /Do not remove the recovery backup\./);
         assert.deepEqual(executions.map((item, index) => item.timeout > 0 && item.timeout <= (index === 0 ? 5000 : 500)), [true, true]);
       }
     }

@@ -767,6 +767,7 @@ func TestReadOnlyToolAllowed_DispatchAndActionInventory(t *testing.T) {
 		{"rule_governance_snapshots", `{}`},
 		{"rule_governance_usefulness", `{}`},
 		{"codebase_search", `{}`},
+		{"codebase_task_context", `{}`},
 		{"codebase_status", `{}`},
 		{"codebase_context", `{"action":"resolve"}`},
 		{"codebase_read", `{}`},
