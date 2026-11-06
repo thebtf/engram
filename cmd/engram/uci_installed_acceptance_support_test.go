@@ -536,6 +536,18 @@ func (runtime *uciInstalledAcceptanceRuntime) closeAuthority(daemonExited bool, 
 	}
 }
 
+func uciInstalledAcceptanceUseArtifactEnv(request *uciInstalledAcceptanceRequest) {
+	artifactEnv := map[string]string{"server": "ENGRAM_UCI_TEST_SERVER_ARTIFACT", "daemon": "ENGRAM_UCI_TEST_CLIENT_ARTIFACT", "parser": "ENGRAM_UCI_TEST_PARSER_ARTIFACT"}
+	for role, name := range artifactEnv {
+		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+			if request.CandidateArtifacts == nil {
+				request.CandidateArtifacts = make(map[string]uciInstallHarnessCommand)
+			}
+			request.CandidateArtifacts[role] = uciInstallHarnessCommand{Executable: value}
+		}
+	}
+}
+
 func (runtime *uciInstalledAcceptanceRuntime) setupRootsAndAuthority(ctx context.Context) error {
 	if err := os.Mkdir(runtime.request.FixtureRoot, 0o700); err != nil {
 		return fmt.Errorf("create installed acceptance fixture root: %w", err)
@@ -1498,7 +1510,7 @@ func uciPrepareInstalledAcceptanceAuthority(ctx context.Context, dsn string, wor
 		authority.checkouts[client] = checkout
 	}
 	authority.profile, err = contexts.CreateProfile(ctx, gormdb.CreateProfileInput{
-		ParserBundleDigest:   parserBundleDigest,
+		ParserBundleDigest:   string(uci.TreeSitterSemanticContractDigest()),
 		ResolverRevision:     "uci-installed-resolver-v1",
 		ChunkerRevision:      "uci-installed-chunker-v1",
 		IgnorePolicyDigest:   uciInstalledAcceptanceSHA256Prefix + uciInstalledAcceptanceStringDigest("uci-installed-ignore-policy-v1"),
@@ -1733,8 +1745,8 @@ func uciInstalledAcceptanceEnvironment(request uciInstalledAcceptanceRequest, au
 	if authority == nil || authority.token == nil || authority.profile == nil || authority.rawToken == "" || authority.scopedDSN == "" {
 		return nil, nil, errors.New("installed acceptance authority environment is incomplete")
 	}
-	if authority.profile.ParserBundleDigest != parserBundleDigest {
-		return nil, nil, errors.New("installed acceptance parser profile digest does not match runtime contract")
+	if authority.profile.ParserBundleDigest != string(uci.TreeSitterSemanticContractDigest()) {
+		return nil, nil, errors.New("installed acceptance parser profile digest does not match semantic contract")
 	}
 	parserExecutable, err := uciInstalledAcceptancePhysicalPath(parserExecutable)
 	if err != nil {
@@ -2729,8 +2741,8 @@ func uciRequireInstalledAcceptanceParserCanaryForClient(ctx context.Context, aut
 		checkout.CheckoutID,
 		uciInstalledAcceptanceParserCanaryRelativePath,
 		string(uci.TreeSitterLanguageTypeScript),
-		parserBundleDigest,
-		parserBundleDigest,
+		string(uci.TreeSitterSemanticContractDigest()),
+		string(uci.TreeSitterSemanticContractDigest()),
 		contentDigest,
 	).Scan(&count).Error; err != nil {
 		return nil, fmt.Errorf("inspect installed parser canary publication: %w", err)
@@ -2906,8 +2918,19 @@ func uciInstalledAcceptanceStatusPublication(status uciInstalledAcceptanceStatus
 }
 
 func uciInstalledAcceptanceQuiescentPublication(status uciInstalledAcceptanceStatus, barrier uciInstalledAcceptancePublication) (uciInstalledAcceptancePublication, error) {
-	if status.status != "idle" || status.error != "" || status.freshness == nil || status.freshness.pendingChanges == nil || *status.freshness.pendingChanges != 0 {
-		return uciInstalledAcceptancePublication{}, errors.New("installed standard MCP status is not a clean zero-pending idle observation")
+	selectedView := status.status == "" && status.runID == "" && status.context != nil && status.context.viewID == barrier.viewID && status.context.generation == barrier.generation
+	if selectedView {
+		status.runID = barrier.runID
+	}
+	if (!selectedView && status.status != "idle") || status.error != "" || status.freshness == nil || status.freshness.pendingChanges == nil || *status.freshness.pendingChanges != 0 {
+		pending, freshness := "absent", "absent"
+		if status.freshness != nil {
+			freshness = status.freshness.state
+			if status.freshness.pendingChanges != nil {
+				pending = fmt.Sprint(*status.freshness.pendingChanges)
+			}
+		}
+		return uciInstalledAcceptancePublication{}, fmt.Errorf("installed standard MCP status is not a clean zero-pending idle observation: status=%s freshness=%s pending=%s error_present=%t", status.status, freshness, pending, status.error != "")
 	}
 	if status.runID == "" || status.context == nil || status.context.sourceID != barrier.sourceID || status.context.checkoutID != barrier.checkoutID || status.context.profileID != barrier.profileID {
 		return uciInstalledAcceptancePublication{}, errors.New("installed standard MCP status advanced outside the selected source, checkout, or profile")
@@ -2965,6 +2988,9 @@ func uciWaitForInstalledAcceptanceQuiescence(ctx context.Context, client *uciIns
 
 func uciInstalledAcceptanceObserveQuiescence(status uciInstalledAcceptanceStatus, barrier, candidate uciInstalledAcceptancePublication, observations int) (uciInstalledAcceptancePublication, int, bool, error) {
 	if status.status == "running" {
+		return uciInstalledAcceptancePublication{}, 0, false, nil
+	}
+	if status.status == "" && status.freshness != nil && status.freshness.state == "catching_up" {
 		return uciInstalledAcceptancePublication{}, 0, false, nil
 	}
 	publication, err := uciInstalledAcceptanceQuiescentPublication(status, barrier)
@@ -3953,7 +3979,7 @@ func uciWaitForInstalledAcceptanceRestartQuiescence(
 }
 
 func uciInstalledAcceptanceRestartQuiescenceObservation(status uciInstalledAcceptanceStatus, expected, candidate uciInstalledAcceptancePublication, observations int) (uciInstalledAcceptancePublication, int, bool, error) {
-	if status.status != "idle" || status.context == nil || status.freshness == nil || status.freshness.state != "observed_current" || status.freshness.pendingChanges == nil || *status.freshness.pendingChanges != 0 {
+	if (status.status != "idle" && status.status != "") || status.context == nil || status.freshness == nil || status.freshness.state != "observed_current" || status.freshness.pendingChanges == nil || *status.freshness.pendingChanges != 0 {
 		return uciInstalledAcceptancePublication{}, 0, false, nil
 	}
 	publication := uciInstalledAcceptancePublication{
@@ -4122,7 +4148,7 @@ func (state *uciInstalledAcceptanceRestartState) captureBaseline(ctx context.Con
 	}
 	for _, client := range []string{uciInstalledAcceptanceClientA, uciInstalledAcceptanceClientB} {
 		publication, found := state.input.publications[client]
-		if !found || state.input.selections[client].contextHandle == "" || publication.sourceID == "" || publication.checkoutID == "" || publication.viewID == "" || publication.profileID == "" || publication.generation < 1 || publication.runID == "" {
+		if !found || state.input.selections[client].contextHandle == "" || publication.sourceID == "" || publication.checkoutID == "" || publication.viewID == "" || publication.profileID == "" || publication.generation < 1 {
 			return errors.New("installed acceptance restart selected publication is incomplete")
 		}
 		observation, found := result.Observations[client]
@@ -4503,7 +4529,7 @@ func uciExerciseInstalledAcceptanceWatcher(ctx context.Context, input uciInstall
 		return nil, fmt.Errorf("write installed acceptance watcher A v2 source: %w", err)
 	}
 	restorePending = true
-	afterUpdateA, err := uciWaitForInstalledAcceptanceWatcherState(ctx, first, firstSelection, primaryBefore, updatedCallee, fixture.RelativePath, true)
+	afterUpdateA, err := uciWaitForInstalledAcceptanceSelectedWatcher(ctx, first, authority, &firstSelection, primaryBefore, updatedCallee, fixture.RelativePath)
 	if err != nil {
 		return nil, err
 	}
@@ -4546,7 +4572,7 @@ func uciExerciseInstalledAcceptanceWatcher(ctx context.Context, input uciInstall
 		return nil, fmt.Errorf("restore installed acceptance watcher A v1 source: %w", err)
 	}
 	restorePending = false
-	afterRestoreA, err := uciWaitForInstalledAcceptanceWatcherState(ctx, first, firstSelection, afterUpdateA, fixture.PrimaryCallee, fixture.RelativePath, true)
+	afterRestoreA, err := uciWaitForInstalledAcceptanceSelectedWatcher(ctx, first, authority, &firstSelection, afterUpdateA, fixture.PrimaryCallee, fixture.RelativePath)
 	if err != nil {
 		return nil, err
 	}
@@ -4715,6 +4741,57 @@ func uciInstalledAcceptanceWatcherProjectionDigests(ctx context.Context, authori
 		edgeValues = append(edgeValues, edge.EdgeKey, edge.SourcePath, edge.SourceArtifact, edge.SourceSymbol, edge.TargetPath, edge.TargetArtifact, edge.TargetSymbol, edge.Relation, edge.EvidenceKind, edge.ResolverRevision, edge.EvidenceJSON, edge.ResolutionState)
 	}
 	return uciInstalledReceiptDigestStrings(membershipValues...), uciInstalledReceiptDigestStrings(edgeValues...), nil
+}
+
+func uciInstalledAcceptanceSelectedViewTransition(status uciInstalledAcceptanceStatus, previous uciInstalledAcceptancePublication) (uciInstalledAcceptancePublication, bool, error) {
+	if status.error != "" {
+		return uciInstalledAcceptancePublication{}, false, errors.New("installed watcher selected View status has an error")
+	}
+	if status.context == nil {
+		return uciInstalledAcceptancePublication{}, false, nil
+	}
+	current := status.context
+	if current.sourceID != previous.sourceID || current.checkoutID != previous.checkoutID || current.profileID != previous.profileID {
+		return uciInstalledAcceptancePublication{}, false, errors.New("installed watcher selected View has the wrong scope")
+	}
+	if current.viewID == "" || current.viewID == previous.viewID || current.generation <= previous.generation || status.freshness == nil || status.freshness.state != "observed_current" || status.freshness.pendingChanges == nil || *status.freshness.pendingChanges != 0 {
+		return uciInstalledAcceptancePublication{}, false, nil
+	}
+	return uciInstalledAcceptancePublication{sourceID: current.sourceID, checkoutID: current.checkoutID, profileID: current.profileID, viewID: current.viewID, generation: current.generation, freshnessState: status.freshness.state, evidenceRecorder: status.evidenceRecorder.state}, true, nil
+}
+
+func uciWaitForInstalledAcceptanceSelectedWatcher(ctx context.Context, client *uciInstalledAcceptanceMCPClient, authority *uciInstalledAcceptanceAuthority, selection *uciInstalledAcceptanceSelection, previous uciInstalledAcceptancePublication, functionName, relativePath string) (uciInstalledAcceptancePublication, error) {
+	ticker := time.NewTicker(uciInstalledAcceptanceQuiescencePollInterval)
+	defer ticker.Stop()
+	for {
+		current, err := uciSelectInstalledAcceptanceCheckout(ctx, client, uciInstalledAcceptanceClientA, authority)
+		if err != nil {
+			return uciInstalledAcceptancePublication{}, err
+		}
+		status, err := uciInstalledAcceptanceStatusForSelection(ctx, client, current)
+		if err != nil {
+			return uciInstalledAcceptancePublication{}, err
+		}
+		publication, ready, err := uciInstalledAcceptanceSelectedViewTransition(status, previous)
+		if err != nil {
+			return uciInstalledAcceptancePublication{}, err
+		}
+		if ready {
+			err = uciRequireInstalledAcceptanceWatcherCanary(ctx, client, current, publication, functionName, relativePath, true)
+			if err == nil {
+				*selection = current
+				return publication, nil
+			}
+			if !errors.Is(err, errUCIInstalledAcceptanceWatcherCanaryMissing) {
+				return uciInstalledAcceptancePublication{}, err
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return uciInstalledAcceptancePublication{}, fmt.Errorf("wait for selected watcher View: %w", ctx.Err())
+		case <-ticker.C:
+		}
+	}
 }
 
 // uciWaitForInstalledAcceptanceWatcherRun polls the normal installed status
@@ -4988,13 +5065,16 @@ func uciInstalledAcceptanceValidateWatcherCanaryPresent(response uci.QueryRespon
 }
 
 func uciInstalledAcceptancePublicationEvidenceFor(publication uciInstalledAcceptancePublication) uciInstalledAcceptancePublicationEvidence {
-	return uciInstalledAcceptancePublicationEvidence{
+	result := uciInstalledAcceptancePublicationEvidence{
 		SourceDigest:   uciInstalledAcceptanceStringDigest(publication.sourceID),
 		CheckoutDigest: uciInstalledAcceptanceStringDigest(publication.checkoutID),
 		ViewDigest:     uciInstalledAcceptanceStringDigest(publication.viewID),
-		RunDigest:      uciInstalledAcceptanceStringDigest(publication.runID),
 		Generation:     publication.generation,
 		FreshnessState: publication.freshnessState,
 		BarrierState:   publication.barrierState,
 	}
+	if publication.runID != "" {
+		result.RunDigest = uciInstalledAcceptanceStringDigest(publication.runID)
+	}
+	return result
 }

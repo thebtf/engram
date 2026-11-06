@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Allow the installed dirty-worktree acceptance scenario to use the same explicit released-artifact inputs as the public-consumer test, retaining source-build defaults. Bind parser fixtures to the semantic profile and observe watcher transitions through selected Views without inventing unavailable run IDs.
+
 - Remove the fixed Swagger host so the UI uses the documentation's serving origin; older deployments retain their existing schema until updated.
 
 - Keep long statistics values within their metric columns so adjacent values remain readable, without changing the displayed precision or unknown-versus-zero semantics.
