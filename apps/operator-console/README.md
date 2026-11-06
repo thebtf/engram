@@ -67,12 +67,12 @@ not the empty-list message. Pending and unavailable states have localized in-car
 status or alert text; errors use only the typed diagnosis, not raw server or provider
 payload. Only an explicit live empty components array says the server returned no
 components (EN/RU/ZH). Live rows, neighboring evidence and refresh/retry guards stay
-unchanged. `health-update-refresh.spec.mjs` covers 30 cases through the actual
-compiled consumers: the original 24 update/refresh cases, including delayed
-responses and overlap, four component-state cases and two missing/null cases.
-Full Health C1 and Settings explanatory error-copy presentation remain open under
-#477. This slice does not resolve Vue #493 or establish populated local-Docker
-browser, installed or release acceptance.
+unchanged. Failed update checks show an accessible localized explanation beside the
+Health and Settings result, using a safe diagnosis rather than provider details.
+HTTP 401 and 403 remain distinct; a successful refresh clears the notice and shows
+the actual availability. Independent errors remain visible. The focused compiled
+consumer tests use synthetic responses and do not establish browser, installed or
+release acceptance. Other explanatory error-copy work remains open under #477.
 
 ## Project knowledge journey (2026-10-11)
 

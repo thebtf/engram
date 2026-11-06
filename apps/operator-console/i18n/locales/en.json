@@ -1872,6 +1872,7 @@
     "flagsByArea": "Flags by area",
     "updateState": "Update state",
     "updateAvailable": "Update available",
+    "updateCheckUnavailable": "Could not determine whether an update is available. Try refreshing.",
     "idle": "idle",
     "vectorUnavailable": "vector unavailable",
     "noise": "Noise",
