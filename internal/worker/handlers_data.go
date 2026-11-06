@@ -218,8 +218,9 @@ func (s *Service) handleGetObservations(w http.ResponseWriter, r *http.Request) 
 }
 
 type projectListResponse struct {
-	Items      []gorm.ProjectDescriptor `json:"items"`
-	Unresolved []gorm.UnresolvedProject `json:"unresolved"`
+	Items         []gorm.ProjectDescriptor   `json:"items"`
+	Unresolved    []gorm.UnresolvedProject   `json:"unresolved"`
+	LogicalGroups []gorm.LogicalProjectGroup `json:"logical_groups"`
 }
 
 // handleGetProjects godoc
@@ -275,7 +276,15 @@ func (s *Service) handleGetProjects(w http.ResponseWriter, r *http.Request) {
 		writeRetainedProjectError(w, err)
 		return
 	}
-	writeJSON(w, projectListResponse{Items: projects, Unresolved: unresolved})
+	groups, err := s.sessionStore.LogicalProjectGroups(r.Context(), projects)
+	if err != nil {
+		writeDocumentError(w, http.StatusInternalServerError, "project read unavailable")
+		return
+	}
+	if groups == nil {
+		groups = []gorm.LogicalProjectGroup{}
+	}
+	writeJSON(w, projectListResponse{Items: projects, Unresolved: unresolved, LogicalGroups: groups})
 }
 
 // handleGetTypes godoc
@@ -318,13 +327,14 @@ func (s *Service) handleGetModels(w http.ResponseWriter, _ *http.Request) {
 
 // handleGetStats godoc
 // @Summary Get worker statistics
-// @Description Returns comprehensive worker statistics including uptime, memory, database health, vector cache, graph, and rate limiter stats.
+// @Description Returns uptime, session, queue, retrieval, readiness, and runtime memory statistics. Database health is included when the store is initialized; project and projectObservations are included when a nonempty project is supplied and its count lookup succeeds; rateLimiter is included when configured. The project parameter scopes retrieval and the conditional project fields only; other statistics are global. A successful response is JSON; 400 and 503 errors are plain text. Swagger 2 produces applies to the whole operation, not individual statuses.
 // @Tags Analytics
-// @Produce json
+// @Produce json,plain
 // @Security ApiKeyAuth
-// @Param project query string false "Filter stats by project"
+// @Param project query string false "Scope retrieval and conditional project fields by project"
 // @Success 200 {object} map[string]interface{}
-// @Failure 400 {string} string "bad request"
+// @Failure 400 {string} string "Invalid project (plain text)"
+// @Failure 503 {string} string "Service not ready (plain text)"
 // @Router /api/stats [get]
 func (s *Service) handleGetStats(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")

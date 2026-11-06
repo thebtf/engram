@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/thebtf/engram/internal/config"
 	pb "github.com/thebtf/engram/proto/engram/v1"
@@ -74,18 +75,21 @@ func TestProxyHandleTool_ReReadsMarkerInsteadOfSessionOrLegacyCache(t *testing.T
 
 func TestProxyTools_InitializeCarriesNoProjectAuthority(t *testing.T) {
 	srv := &mockEngramServer{initResp: &pb.InitializeResponse{Tools: []*pb.ToolDefinition{
-		{Name: "recall"}, {Name: "codebase_context"},
+		{Name: "recall", InputSchemaJson: []byte(`{"type":"object"}`)}, {Name: "codebase_context", InputSchemaJson: []byte(`{"type":"object"}`)},
 	}}}
 	_, mod, project := buildContractDispatcher(t, startMockGRPC(t, srv))
+	notifier := &discoveryNotifier{notifications: make(chan string, 1)}
+	mod.SetNotifier(notifier)
 	project.Cwd = filepath.Join(t.TempDir(), "missing-client-directory")
 	project.Env[config.EnvClaudeSessionID] = "private-host-session"
 
-	tools, err := mod.ProxyTools(t.Context(), project)
-	if err != nil {
+	if _, err := mod.ProxyTools(t.Context(), project); err != nil {
 		t.Fatal(err)
 	}
-	if len(tools) != 2 || tools[0].Name != "recall" || tools[1].Name != "codebase_context" {
-		t.Fatalf("unscoped discovery filtered the backend catalog: %#v", tools)
+	select {
+	case <-notifier.notifications:
+	case <-time.After(5 * time.Second):
+		t.Fatal("unscoped discovery did not complete")
 	}
 	srv.mu.Lock()
 	defer srv.mu.Unlock()

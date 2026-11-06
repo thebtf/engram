@@ -276,7 +276,7 @@ func (s *scopedWriteLintMemoryStore) List(ctx context.Context, project string, l
 		if currentLimit <= 0 {
 			break
 		}
-		batch, err := s.pager.ListWithOffset(ctx, project, currentLimit, offset)
+		batch, err := gormdb.ListMemoryPageForSearch(ctx, s.pager, project, currentLimit, offset, scope.MemoryReadAccess{Caller: s.caller, Visibility: s.opts})
 		if err != nil {
 			return nil, err
 		}
@@ -1665,6 +1665,9 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 	if !includePrincipalsSet {
 		return s.handleRecallMemoryHybrid(ctx, m, query, project, format, limit, obsType, tags, caller, visibilityOpts, tg3Active, tg3ConfidenceMin, tg3IncludeSuperseded, tg3IncludeRationale)
 	}
+	if err := s.memoryStore.CheckCanonicalProject(ctx, project); err != nil {
+		return "", err
+	}
 	// ── legacy List-based path with shared visibility filtering ─
 
 	queryLower := strings.ToLower(query)
@@ -1691,12 +1694,12 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 		const batchSize = 500
 		offset := 0
 		for len(filtered) < limit {
-			batch, err := s.memoryStore.ListWithFilters(ctx, project, gormdb.ListOptions{
+			batch, err := s.memoryStore.ListWithFiltersForSearch(ctx, project, gormdb.ListOptions{
 				ConfidenceMin:     tg3ConfidenceMin,
 				IncludeSuperseded: tg3IncludeSuperseded,
 				Limit:             batchSize,
 				Offset:            offset,
-			})
+			}, scope.MemoryReadAccess{Caller: caller, Visibility: visibilityOpts})
 			if err != nil {
 				return "", fmt.Errorf("recall_memory: %w", err)
 			}
@@ -1723,7 +1726,7 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 		const batchSize = 500
 		offset := 0
 		for len(filtered) < limit {
-			batch, err := s.memoryStore.ListWithOffset(ctx, project, batchSize, offset)
+			batch, err := s.memoryStore.ListWithFiltersForSearch(ctx, project, gormdb.ListOptions{Limit: batchSize, Offset: offset}, scope.MemoryReadAccess{Caller: caller, Visibility: visibilityOpts})
 			if err != nil {
 				return "", fmt.Errorf("recall_memory: %w", err)
 			}
@@ -1766,7 +1769,12 @@ func (s *Server) handleRecallMemory(ctx context.Context, args json.RawMessage) (
 						fields["stability"] = newStability
 					}
 				}
-				_ = s.memoryStore.UpdateLifecycleFields(context.Background(), mem.ID, fields)
+				updated, err := s.memoryStore.UpdateRecallBookkeeping(context.Background(), mem.ID, fields)
+				if err != nil {
+					log.Warn().Err(err).Int64("memory_id", mem.ID).Msg("recall bookkeeping failed")
+				} else if !updated {
+					log.Debug().Int64("memory_id", mem.ID).Msg("recall bookkeeping skipped for retained historical selector")
+				}
 			}
 		}()
 	}
@@ -1981,6 +1989,29 @@ func (s *Server) handleRecallMemoryHybrid(
 			}
 		}
 	}()
+	if tg3Active && tg3IncludeSuperseded {
+		recovery := map[string]any{
+			"action": "search", "project": project, "query": query, "limit": limit,
+			"include_superseded": true, "confidence_min": tg3ConfidenceMin,
+		}
+		if caller.SessionID != "" {
+			recovery["session_id"] = caller.SessionID
+		}
+		if scopes := coerceStringSlice(m["include_scopes"]); len(scopes) > 0 {
+			recovery["include_scopes"] = scopes
+		}
+		if tg3IncludeRationale {
+			recovery["include_rationale"] = true
+		}
+		arguments, err := json.Marshal(recovery)
+		if err != nil {
+			return "", fmt.Errorf("%w; use read-only recall(action=\"search\") with the same project and caller identity; recovery arguments could not be encoded: %v", memorysearch.ErrIncludeSuperseded, err)
+		}
+		return "", &recallHistoryRecoveryError{arguments: arguments}
+	}
+	if err := s.memoryStore.CheckCanonicalProject(ctx, project); err != nil {
+		return "", err
+	}
 	explain := coerceBool(m["explain"], false)
 	var graphStore retrieval.GraphStoreInterface
 	if s.graphStore != nil {
@@ -2009,26 +2040,6 @@ func (s *Server) handleRecallMemoryHybrid(
 		return "", err
 	}
 	if err != nil {
-		if errors.Is(err, memorysearch.ErrIncludeSuperseded) {
-			recovery := map[string]any{
-				"action": "search", "project": project, "query": query, "limit": limit,
-				"include_superseded": true, "confidence_min": tg3ConfidenceMin,
-			}
-			if caller.SessionID != "" {
-				recovery["session_id"] = caller.SessionID
-			}
-			if scopes := coerceStringSlice(m["include_scopes"]); len(scopes) > 0 {
-				recovery["include_scopes"] = scopes
-			}
-			if tg3IncludeRationale {
-				recovery["include_rationale"] = true
-			}
-			arguments, marshalErr := json.Marshal(recovery)
-			if marshalErr != nil {
-				return "", fmt.Errorf("%w; use read-only recall(action=\"search\") with the same project and caller identity; recovery arguments could not be encoded: %v", err, marshalErr)
-			}
-			return "", &recallHistoryRecoveryError{arguments: arguments}
-		}
 		return "", fmt.Errorf("recall_memory %w", err)
 	}
 	scored, explanations := searchResult.Matches, searchResult.Explanations
@@ -2132,7 +2143,12 @@ func (s *Server) handleRecallMemoryHybrid(
 						fields["stability"] = newStability
 					}
 				}
-				_ = s.memoryStore.UpdateLifecycleFields(context.Background(), ri.id, fields)
+				updated, err := s.memoryStore.UpdateRecallBookkeeping(context.Background(), ri.id, fields)
+				if err != nil {
+					log.Warn().Err(err).Int64("memory_id", ri.id).Msg("recall bookkeeping failed")
+				} else if !updated {
+					log.Debug().Int64("memory_id", ri.id).Msg("recall bookkeeping skipped for retained historical selector")
+				}
 			}
 		}()
 	}

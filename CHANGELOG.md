@@ -48,6 +48,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Use registered canonical UUIDs and authenticated caller project context in MCP fixtures without weakening default-deny, privacy or pre-mutation rejection guards. Reuse 119 prior PASS plus one exact retry PASS after the context fix, not 120 fresh PASS or installed acceptance.
 - Seed the isolated operator-code fixture with a registered canonical project UUID while preserving five queue candidates, published/no-view checks and redacted provisioning errors.
 
+## [7.0.26] - 2026-11-06
+
+### Fixed
+
+- Report an available update with no platform asset as a terminal updater error and return `success: false` instead of claiming the update started. The legacy UI honors the refusal without polling and displays the returned error.
+
+- Refuse path-only successors of retained documents with actionable lineage recovery; explicit version writes continue to validate and derive Vault-backed provenance. Preserve strict pre-Apply snapshots while allowing cosmetic label changes during reconciliation of newly recorded alias operations; legacy receipts remain strict.
+- Restrict automatic correction candidates to visible native project membership before pagination, and recheck mutation authority under transaction locks before supersession. Read aliases do not grant correction authority.
+- Correct Windows short-path project recovery while keeping marker discovery inside the canonical worktree; preserve raw caller and marker-target fingerprint bytes.
+
+- Correct the stats API contract for conditional project and database fields, response media types, and readiness errors without changing handler behavior.
+- Return a JSON 400 for registration passwords exceeding bcrypt's 72-byte limit without consuming the invitation or creating a user.
+- Preserve graph edge instants in JSON when a local offset crosses the four-digit year boundary, while retaining ordinary offsets and out-of-range UTC errors.
+
+- Set `Content-Type: application/json` on successful 201 responses for setup, registration, invitation creation, and Vault credential creation.
+
+- Return a JSON 400 for setup passwords exceeding bcrypt's 72-byte limit, without creating an initial user or exposing the password.
+- Explain non-401 update-check failures accessibly in Health and Settings with localized, safe diagnoses while preserving unknown availability; a successful Refresh can clear the notice. A current update-check 401 instead locks protected UI and offers sign-in.
+- Close removed SSE subscriber streams safely after in-flight writes finish; prevent queued writes from using a released response and preserve the non-replay and blocked-writer limitations.
+
+- Apply authoritative canonical membership to memory search, list, vector and graph reads before ranking and limits, preserving privacy and refusing invalid selectors without reassigning historical records.
+- Prevent automatic recall and session feedback from rewriting historical non-UUID selectors while preserving UUID-backed and project-free bookkeeping and private-read auditing.
+- Recover name-only callers from active primary-origin bindings without modifying their marker or cache; reconcile unknown bootstrap outcomes without replaying a mutation.
+- Preserve `PROJECT_CONTEXT_REQUIRED` for an unconfigured backend and align active UUID resolution with the safe global reader scope without changing historical non-UUID resolution.
+- Provide expected-state-checked administrator UUID aliases and scoped document lineages without changing native rows or broadening mutation grants. Keep independent same-path documents addressable by authorized IDs with stale-version refusal.
+- Preserve an existing global target-self redirect when explicitly attaching UUID aliases; bind its complete baseline through reconciliation and conditional rollback, and retain alias-aware reads without admitting conflicting chains.
+- Scope catalog and document UI actions to verified project context and existing authorized lineage.
+
+## [7.0.25] - 2026-11-06
+
+### Fixed
+
+- Recover an absent trusted hook client after a transient acquisition failure: eligible callbacks trigger coalesced, backoff-limited background preparation, while execution still requires verified bytes. Bootstrap failures retain a safe typed diagnostic; this does not establish the cause of any particular installed-session warning.
+
+## [7.0.24] - 2026-11-05
+
+### Fixed
+
+- Prevent in-flight session-start and ambient callbacks from delivering context after the OMP extension is torn down.
+- Remove unused system OpenSSL and zlib runtime packages from the server and operator-console image bases while retaining the supported Node runtime and its C++ dependencies; final image scans and runtime acceptance remain required.
+- Clarify recovery guidance for bounded 4096-byte marker reads and exact UTF-8 path hashing while keeping the rendered refusal within its 3072-byte budget and preserving existing identity and privacy safeguards.
+
+## [7.0.23] - 2026-11-05
+
+### Fixed
+
+- Keep the direct OMP marketplace on an immutable published plugin while the next package is prepared. Promote that pointer only after the maintained helper verifies the published stable tag, exact commit and client/parser asset metadata, through the existing reviewed catalog-only PR route.
+- Expose the exact nullable stored project label alongside the existing catalog presentation name, and allow operators to conditionally update or restore it on an existing active canonical project. Preserve project identity and retained history; reject stale preconditions.
+- Omit unnecessary project chooser UUID hints for distinctive displayed labels while preserving qualifiers, collision disambiguation and full selected identities. Disambiguate labels matching the active locale's all-projects, choose-project or browse-all controls across the selector, Home and Projects.
+
+## [7.0.22] - 2026-11-05
+
+### Fixed
+
+- Deliver the local MCP, PostgreSQL startup and existing-project recovery fixes staged for the unpublished v7.0.21 cut. Preserve existing project identities, authorization, retained data and unknown mutation outcomes.
+- Correct the direct `golang.org/x/net` requirement without changing its version or dependency checksums, and run the existing module-tidiness hook before creating another immutable release tag.
+- Align recovery and image-runtime verification with read-only portable markers, supported recovery guidance and transient database startup retries, while retaining fail-closed conflict, readiness and terminal-error controls.
+
+## [7.0.21] - 2026-11-05
+
+### Fixed
+
+- Recover the same backend process when PostgreSQL starts late after a transient connection failure, including temporary DNS failures. Retry connection establishment only; run database migrations and startup effects once after connection, preserve terminal authentication/configuration errors, and honor cancellation.
+- Return prompt gRPC unavailable responses before the fully initialized, authentication-wired service is ready instead of leaving MCP calls waiting for a permanently absent server. The same local MCP client can discover tools while the database is down and read its existing issue after PostgreSQL returns or disconnects and returns again.
+- Include the maintained shared MCP guidance in the ordinary local mux initialization response, while keeping remote tool availability dependent on actual discovery rather than a static promise.
+- Recover existing logical-project context locally from current authorized historical/origin evidence or fresh caller-scoped choices. Return host-guarded marker actions and resume only the original safe read; preserve existing UUIDs, shared files, authorization and unknown mutation outcomes without reassigning history.
+- Read bounded project catalogs containing large retained-history envelopes without treating unrelated metadata size or ordinary local-clone origins as a veto on existing identity recovery. Preserve strict remote-bootstrap normalization and portable project UUIDs across paths, hosts and worktrees.
+- Keep the native module's retained tool schemas explicitly unverified when configuration or backend discovery is unavailable, while calls continue to fail closed until their requirements are satisfied.
+
+## [7.0.20] - 2026-11-04
+
+### Fixed
+
+- Keep configured local MCP discovery available during backend outages and reconnect discovery when the backend returns, without replaying writes with unknown outcomes. On Windows, fail closed when attesting and gracefully replacing the exact known markerless v7.0.19 daemon. Installed-client acceptance remains unproved.
+
+## [7.0.19] - 2026-11-03
+
+Source/review: [PR #610](https://github.com/thebtf/engram/pull/610).
+
+### Fixed
+
+- Separate browser-session management and auth-audit correlation from the private HttpOnly cookie credential (issue 535). Add transactional migration 190 with one deterministic public-handle column, unique lookup index and old-writer compatibility trigger; preserve cookie/PK/lifecycle and historical audit rows. Use safe handles for session JSON, list/drilldown/revoke, recursive historical auth-state projection and browser-only Operator Code audit provenance, while preserving all access guards, raw tab authorization and SDK/agent correlation. Project scoped browser-session credential material from historical in-memory log snapshot and live SSE responses, preserving SDK/agent correlation and harmless diagnostics without deleting buffered records; text-query matching uses the safe projection, and query filtering precedes the snapshot tail limit. This is not general secret detection. Refuse destructive schema rollback; compatibility with older writers is not a safe rollback to an older credential-exposing binary. Source changes do not claim installed or release acceptance.
+- Authorize legacy MCP lifecycle metadata and mutations with the existing caller/project, principal/domain and workstation/session privacy policy (issue 536). Deny hidden IDs before materializing metadata or changing fields; keep tier changes and promotion history in the same authorized transaction, including history-write rollback. Preserve read-only controls, authorized owner/shared use and the session-memory tool surface.
+
 ## [7.0.18] - 2026-11-03
 
 ### Fixed

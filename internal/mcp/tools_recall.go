@@ -221,6 +221,9 @@ func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (stri
 		// returning zero rows (the project param is required by List).
 		return `{"memories":[],"count":0,"note":"project parameter is required for memory search"}`, nil
 	}
+	if err := s.memoryStore.CheckCanonicalProject(ctx, project); err != nil {
+		return "", err
+	}
 
 	query = strings.TrimSpace(query)
 	queryLower := strings.ToLower(query)
@@ -307,13 +310,13 @@ func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (stri
 		const batchSize = 500
 		offset := 0
 		for len(results) < limit {
-			batch, err := s.memoryStore.ListWithFilters(ctx, project, gormdb.ListOptions{
+			batch, err := s.memoryStore.ListWithFiltersForSearch(ctx, project, gormdb.ListOptions{
 				ContentContains:   query,
 				ConfidenceMin:     tg3ConfidenceMin,
 				IncludeSuperseded: tg3IncludeSuperseded,
 				Limit:             batchSize,
 				Offset:            offset,
-			})
+			}, scope.MemoryReadAccess{Caller: caller, Visibility: visibilityOpts})
 			if err != nil {
 				return "", fmt.Errorf("recall search tg3: %w", err)
 			}
@@ -352,11 +355,11 @@ func (s *Server) handleRecallSearch(ctx context.Context, m map[string]any) (stri
 		const batchSize = 500
 		offset := 0
 		for len(results) < limit {
-			batch, err := s.memoryStore.ListWithFilters(ctx, project, gormdb.ListOptions{
+			batch, err := s.memoryStore.ListWithFiltersForSearch(ctx, project, gormdb.ListOptions{
 				ContentContains: query,
 				Limit:           batchSize,
 				Offset:          offset,
-			})
+			}, scope.MemoryReadAccess{Caller: caller, Visibility: visibilityOpts})
 			if err != nil {
 				return "", fmt.Errorf("recall search: %w", err)
 			}

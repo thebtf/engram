@@ -1,16 +1,20 @@
 const fs = require("node:fs");
 const path = require("node:path");
-const { loadParserTarget } = require("../plugin/engram/scripts/ensure-binary.js");
+const { loadParserTarget, parseParserTarget } = require("../plugin/engram/scripts/ensure-binary.js");
 const { parsePolicy, validatePolicy } = require("../plugin/engram/scripts/bootstrap-policy.js");
 
-function verifyReleaseAssets(rawPolicy, releases, tag) {
+function verifyReleaseAssets(rawPolicy, releases, tag, options = {}) {
   if (typeof tag !== "string" || !tag.startsWith("v")) throw new Error("malformed bootstrap policy or release tag mismatch");
   let policy;
   try { policy = typeof rawPolicy === "string" ? parsePolicy(rawPolicy, tag.slice(1)) : validatePolicy(rawPolicy, tag.slice(1)); } catch { throw new Error("malformed bootstrap policy or release tag mismatch"); }
-  const expected = [...Object.values(policy.targets).map(({ desired }) => desired), loadParserTarget(path.join(__dirname, "../plugin/engram"), policy.package_version, "win32-x64")];
+  const parser = options.parserPolicy === undefined
+    ? loadParserTarget(path.join(__dirname, "../plugin/engram"), policy.package_version, "win32-x64")
+    : parseParserTarget(options.parserPolicy, policy.package_version, "win32-x64");
+  const expected = [...Object.values(policy.targets).map(({ desired }) => desired), parser];
   const matches = Array.isArray(releases) ? releases.filter((release) => release && release.tag_name === tag) : [];
-  if (matches.length !== 1 || !Number.isSafeInteger(matches[0].id) || matches[0].draft !== true || !Array.isArray(matches[0].assets)) {
-    throw new Error("expected exactly one private draft release");
+  const expectedDraft = options.published === true ? false : true;
+  if (matches.length !== 1 || !Number.isSafeInteger(matches[0].id) || matches[0].draft !== expectedDraft || (options.published === true && (matches[0].prerelease !== false || typeof matches[0].published_at !== "string" || !Number.isFinite(Date.parse(matches[0].published_at)))) || !Array.isArray(matches[0].assets)) {
+    throw new Error(options.published === true ? "expected exactly one published stable release" : "expected exactly one private draft release");
   }
   for (const item of expected) {
     const assets = matches[0].assets.filter((asset) => asset && asset.name === item.asset);

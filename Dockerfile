@@ -83,19 +83,11 @@ RUN CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -tags
  -ldflags "-s -w" \
  -o /out/engram ./cmd/engram
 
-# --- Shared Debian security package overlay ---
-FROM node:22-bookworm-slim@sha256:53ada149d435c38b14476cb57e4a7da73c15595aba79bd6971b547ceb6d018bf AS openssl-runtime
-ARG TARGETARCH
-ADD --checksum=sha256:ff16bc048bcd7d1b256094450b79c77947d8e76fe2a24bd99b91021d591fa074 https://security.debian.org/debian-security/pool/updates/main/o/openssl/libssl3t64_3.5.7-1~deb13u3_amd64.deb /tmp/libssl3t64.deb
-RUN test "$TARGETARCH" = amd64 \
- && dpkg-deb --extract /tmp/libssl3t64.deb /out \
- && dpkg-deb --control /tmp/libssl3t64.deb /tmp/libssl3t64-control \
- && install -D -m 0644 /tmp/libssl3t64-control/control /out/var/lib/dpkg/status.d/libssl3t64 \
- && install -D -m 0644 /tmp/libssl3t64-control/md5sums /out/var/lib/dpkg/status.d/libssl3t64.md5sums
+# Preserve the exact supported Node runtime and its C++ runtime dependencies.
+FROM gcr.io/distroless/nodejs22-debian13@sha256:412a5f8fce490bcff01fc2a73ec43bb62071e1b71dd847eeacaae7b8ecef1dc1 AS node-runtime
 
 # --- Server image ---
-FROM gcr.io/distroless/base-debian13@sha256:0ebad3510af52aefe45045cc01b07564570be4feecf8d9f93d3a05d1b5f2f93b AS server
-COPY --from=openssl-runtime /out/ /
+FROM gcr.io/distroless/base-nossl-debian13@sha256:e6b0f82595aa1edde72c8054de7a9dca30f0f8f54820c37a167c0ddfc21c5c67 AS server
 
 COPY --from=builder --chown=65532:65532 --chmod=0755 /out/engram-server /usr/local/bin/engram-server
 COPY --from=builder --chown=65532:65532 --chmod=0755 /out/engram-healthcheck /usr/local/bin/engram-healthcheck
@@ -115,8 +107,14 @@ USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/engram-server"]
 
 # --- Operator console image ---
-FROM gcr.io/distroless/nodejs22-debian13@sha256:412a5f8fce490bcff01fc2a73ec43bb62071e1b71dd847eeacaae7b8ecef1dc1 AS operator-console
-COPY --from=openssl-runtime /out/ /
+FROM gcr.io/distroless/base-nossl-debian13@sha256:e6b0f82595aa1edde72c8054de7a9dca30f0f8f54820c37a167c0ddfc21c5c67 AS operator-console
+COPY --from=node-runtime /nodejs/ /nodejs/
+COPY --from=node-runtime /usr/lib/x86_64-linux-gnu/libstdc++.so.6* /usr/lib/x86_64-linux-gnu/
+COPY --from=node-runtime /usr/lib/x86_64-linux-gnu/libgcc_s.so.1 /usr/lib/x86_64-linux-gnu/
+COPY --from=node-runtime /var/lib/dpkg/status.d/libstdc++6* /var/lib/dpkg/status.d/
+COPY --from=node-runtime /var/lib/dpkg/status.d/libgcc-s1* /var/lib/dpkg/status.d/
+COPY --from=node-runtime /var/lib/dpkg/status.d/gcc-14-base* /var/lib/dpkg/status.d/
+ENTRYPOINT ["/nodejs/bin/node"]
 
 WORKDIR /app
 

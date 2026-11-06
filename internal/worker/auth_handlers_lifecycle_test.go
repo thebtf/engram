@@ -98,15 +98,58 @@ func TestAuthHandlersLifecycle_InvitationSingleUseRace(t *testing.T) {
 	require.NoError(t, err)
 
 	code := invitePrefix + "-code"
-	_, err = env.invitations.CreateInvitation(code, admin.ID, "", gormdb.DashboardRoleOperator, time.Now().UTC().Add(2*time.Hour))
+	invitation, err := env.invitations.CreateInvitation(code, admin.ID, "", gormdb.DashboardRoleOperator, time.Now().UTC().Add(2*time.Hour))
+	require.NoError(t, err)
+	beforeInvitation, err := env.invitations.GetInvitationByID(invitation.ID)
+	require.NoError(t, err)
+	beforeUsers, err := env.users.ListUsers()
 	require.NoError(t, err)
 
+	for _, tc := range []struct {
+		name     string
+		password string
+	}{
+		{name: "ascii 73 bytes", password: strings.Repeat("a", 73)},
+		{name: "utf8 73 bytes", password: strings.Repeat("é", 36) + "a"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload, err := json.Marshal(map[string]string{
+				"email": userPrefix + "-a@example.com", "password": tc.password, "invitation": code,
+			})
+			require.NoError(t, err)
+			req := httptest.NewRequest(http.MethodPost, "/api/auth/register", bytes.NewReader(payload))
+			rec := httptest.NewRecorder()
+			env.handlers.handleRegister(rec, req)
+
+			afterInvitation, err := env.invitations.GetInvitationByID(invitation.ID)
+			require.NoError(t, err)
+			require.Equal(t, beforeInvitation, afterInvitation, "rejected registration must not change the invitation")
+			afterUsers, err := env.users.ListUsers()
+			require.NoError(t, err)
+			require.Equal(t, beforeUsers, afterUsers, "rejected registration must not create a user")
+			require.Equal(t, http.StatusBadRequest, rec.Code)
+			require.NotContains(t, rec.Body.String(), tc.password)
+			var response struct {
+				Error string `json:"error"`
+			}
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
+			require.NotContains(t, response.Error, tc.password)
+			message := strings.ToLower(response.Error)
+			require.Contains(t, message, "password")
+			require.Contains(t, message, "72")
+			require.Contains(t, message, "byte")
+		})
+	}
+
+	password := strings.Repeat("é", 36)
+
 	payloads := [][]byte{
-		[]byte(fmt.Sprintf(`{"email":"%s-a@example.com","password":"password-123","invitation":"%s"}`, userPrefix, code)),
-		[]byte(fmt.Sprintf(`{"email":"%s-b@example.com","password":"password-123","invitation":"%s"}`, userPrefix, code)),
+		[]byte(fmt.Sprintf(`{"email":"%s-a@example.com","password":"%s","invitation":"%s"}`, userPrefix, password, code)),
+		[]byte(fmt.Sprintf(`{"email":"%s-b@example.com","password":"%s","invitation":"%s"}`, userPrefix, password, code)),
 	}
 	statuses := make([]int, len(payloads))
 	bodies := make([]string, len(payloads))
+	contentTypes := make([]string, len(payloads))
 	start := make(chan struct{})
 	var wg sync.WaitGroup
 	for i := range payloads {
@@ -119,6 +162,7 @@ func TestAuthHandlersLifecycle_InvitationSingleUseRace(t *testing.T) {
 			env.handlers.handleRegister(rec, req)
 			statuses[idx] = rec.Code
 			bodies[idx] = rec.Body.String()
+			contentTypes[idx] = rec.Result().Header.Get("Content-Type")
 		}(i)
 	}
 	close(start)
@@ -128,6 +172,7 @@ func TestAuthHandlersLifecycle_InvitationSingleUseRace(t *testing.T) {
 	for i, status := range statuses {
 		if status == http.StatusCreated {
 			successes++
+			require.Equal(t, "application/json", contentTypes[i])
 			continue
 		}
 		if status != http.StatusConflict && status != http.StatusForbidden {
@@ -201,6 +246,48 @@ func TestAuthHandlersLifecycle_SetupCreatesOnlyOneInitialAdmin(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, count, "initial-admin setup requires an empty test database")
 
+	for _, tc := range []struct {
+		name     string
+		password string
+	}{
+		{name: "ascii 73 bytes", password: strings.Repeat("a", 73)},
+		{name: "ascii incident 75 bytes", password: strings.Repeat("a", 75)},
+		{name: "utf8 73 bytes", password: strings.Repeat("é", 36) + "a"},
+		{name: "utf8 74 bytes", password: strings.Repeat("é", 37)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload, err := json.Marshal(map[string]string{"email": "overlong@example.com", "password": tc.password})
+			require.NoError(t, err)
+			req := httptest.NewRequest(http.MethodPost, "/api/auth/setup", bytes.NewReader(payload))
+			req.Header.Set("X-Auth-Token", "operator-token")
+			rec := httptest.NewRecorder()
+			env.handlers.handleSetup(rec, req)
+
+			count, err := env.users.CountUsers()
+			require.NoError(t, err)
+			require.Zero(t, count, "rejected setup must not create a user")
+			needed := httptest.NewRecorder()
+			env.handlers.handleSetupNeeded(needed, httptest.NewRequest(http.MethodGet, "/api/auth/setup-needed", nil))
+			require.Equal(t, http.StatusOK, needed.Code)
+			var setupState struct {
+				Needed bool `json:"needed"`
+			}
+			require.NoError(t, json.Unmarshal(needed.Body.Bytes(), &setupState))
+			require.True(t, setupState.Needed, "rejected setup must remain incomplete")
+
+			require.GreaterOrEqual(t, rec.Code, 400)
+			require.Less(t, rec.Code, 500)
+			require.Contains(t, rec.Header().Get("Content-Type"), "application/json")
+			var response struct {
+				Error string `json:"error"`
+			}
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
+			require.Contains(t, strings.ToLower(response.Error), "password")
+			require.Contains(t, response.Error, "72")
+			require.NotContains(t, rec.Body.String(), tc.password)
+		})
+	}
+
 	prefix := fmt.Sprintf("zz-initial-admin-race-%d", time.Now().UnixNano())
 	emails := []string{prefix + "-a@example.com", prefix + "-b@example.com"}
 
@@ -213,17 +300,23 @@ func TestAuthHandlersLifecycle_SetupCreatesOnlyOneInitialAdmin(t *testing.T) {
 
 	statuses := make([]int, len(emails))
 	bodies := make([]string, len(emails))
+	contentTypes := make([]string, len(emails))
 	var wg sync.WaitGroup
 	for i, email := range emails {
 		wg.Add(1)
 		go func(idx int, email string) {
 			defer wg.Done()
-			req := httptest.NewRequest(http.MethodPost, "/api/auth/setup", strings.NewReader(fmt.Sprintf(`{"email":%q,"password":"password-123"}`, email)))
+			password := strings.Repeat("a", 72)
+			if idx == 0 {
+				password = strings.Repeat("é", 36)
+			}
+			req := httptest.NewRequest(http.MethodPost, "/api/auth/setup", strings.NewReader(fmt.Sprintf(`{"email":%q,"password":%q}`, email, password)))
 			req.Header.Set("X-Auth-Token", "operator-token")
 			rec := httptest.NewRecorder()
 			env.handlers.handleSetup(rec, req)
 			statuses[idx] = rec.Code
 			bodies[idx] = rec.Body.String()
+			contentTypes[idx] = rec.Result().Header.Get("Content-Type")
 		}(i, email)
 	}
 	for range emails {
@@ -237,6 +330,7 @@ func TestAuthHandlersLifecycle_SetupCreatesOnlyOneInitialAdmin(t *testing.T) {
 		switch status {
 		case http.StatusCreated:
 			successes++
+			require.Equal(t, "application/json", contentTypes[i])
 			require.Contains(t, bodies[i], `"user"`)
 			require.NotContains(t, bodies[i], "password")
 		case http.StatusConflict:
@@ -317,6 +411,7 @@ func TestAuthHandlersLifecycle_AccessCreateInvitationAcceptsDashboardAdminCookie
 	rec := httptest.NewRecorder()
 	env.handlers.handleAccessCreateInvitation(rec, req)
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	require.Equal(t, "application/json", rec.Result().Header.Get("Content-Type"))
 	var payload struct {
 		Invitation gormdb.AccessInvitationView `json:"invitation"`
 	}
@@ -325,6 +420,22 @@ func TestAuthHandlersLifecycle_AccessCreateInvitationAcceptsDashboardAdminCookie
 	require.Equal(t, adminEmail, payload.Invitation.CreatedByEmail)
 	require.Equal(t, inviteEmail, payload.Invitation.Email)
 	require.NotEmpty(t, payload.Invitation.Code, "create is the only bounded code reveal")
+
+	legacyEmail := fmt.Sprintf("zz-legacy-invite-%d@example.com", time.Now().UnixNano())
+	legacyReq := requestWithRoute(http.MethodPost, "/api/admin/invitations", []byte(fmt.Sprintf(`{"email":%q,"role":"operator"}`, legacyEmail)), authpkg.Session("admin"), nil)
+	legacyReq = legacyReq.WithContext(context.WithValue(legacyReq.Context(), authRoleKey{}, gormdb.DashboardRoleAdmin))
+	legacyReq.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: session.ID})
+	legacyRec := httptest.NewRecorder()
+	env.handlers.handleCreateInvitation(legacyRec, legacyReq)
+	require.Equal(t, http.StatusCreated, legacyRec.Code, legacyRec.Body.String())
+	require.Equal(t, "application/json", legacyRec.Result().Header.Get("Content-Type"))
+	var legacyPayload struct {
+		Code  string `json:"code"`
+		Email string `json:"email"`
+	}
+	require.NoError(t, json.Unmarshal(legacyRec.Body.Bytes(), &legacyPayload))
+	require.NotEmpty(t, legacyPayload.Code)
+	require.Equal(t, legacyEmail, legacyPayload.Email)
 }
 
 func TestAuthHandlersLifecycle_AccessCreateInvitationRejectsRetiredAuthentikHeaderWithoutCookie(t *testing.T) {

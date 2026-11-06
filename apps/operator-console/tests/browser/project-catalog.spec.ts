@@ -8,8 +8,8 @@ const BETA = '55555555-5555-4555-8555-555555555555'
 test('catalog choices retain equal names as different UUIDs and omit unresolved references', async ({ page }) => {
   await page.goto('/')
   const selector = page.getByTestId('project-context-select')
-  await expect(selector.locator(`option[value="${ALPHA}"]`)).toHaveText(`Alpha · examples/alpha · ${ALPHA.slice(0, 8)}`)
-  await expect(selector.locator(`option[value="${BETA}"]`)).toHaveText(`Alpha · examples/beta · ${BETA.slice(0, 8)}`)
+  await expect(selector.locator(`option[value="${ALPHA}"]`)).toHaveText('Alpha · examples/alpha')
+  await expect(selector.locator(`option[value="${BETA}"]`)).toHaveText('Alpha · examples/beta')
   await expect(selector.locator('option[value="retained-legacy-fixture"]')).toHaveCount(0)
   await selector.selectOption(ALPHA)
   await expect(selector).toHaveValue(ALPHA)

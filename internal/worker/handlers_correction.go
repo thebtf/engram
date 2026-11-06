@@ -10,6 +10,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/auditcontext"
+	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/internal/writegate"
 	"github.com/thebtf/engram/pkg/models"
 	"gorm.io/gorm"
@@ -20,12 +22,12 @@ type correctionRequest struct {
 	Project     string `json:"project"`
 	UserMessage string `json:"user_message"`
 	actor       string
+	caller      scope.KeycardContext
 }
 
 // handleCorrection processes user correction signals from the UserPromptSubmit hook.
 // Finds similar memories via Jaccard and auto-supersedes the stale one.
 func (s *Service) handleCorrection(w http.ResponseWriter, r *http.Request) {
-
 	var req correctionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
@@ -33,6 +35,7 @@ func (s *Service) handleCorrection(w http.ResponseWriter, r *http.Request) {
 	}
 	req.UserMessage = strings.TrimSpace(req.UserMessage)
 	req.actor = auditcontext.Actor(r.Context())
+	req.caller = memoryVisibilityCaller(r.Context(), req.SessionID)
 	if req.Project == "" || req.UserMessage == "" {
 		http.Error(w, "project and user_message required", http.StatusBadRequest)
 		return
@@ -68,7 +71,7 @@ func (s *Service) processCorrectionAsync(req correctionRequest) {
 	if memStore == nil {
 		return
 	}
-	existing, err := memStore.List(ctx, req.Project, 100)
+	existing, err := memStore.ListCorrectionCandidates(ctx, req.Project, req.caller, 100)
 	if err != nil {
 		log.Error().Err(err).Str("project", req.Project).Msg("correction: list failed")
 		return
@@ -85,7 +88,8 @@ func (s *Service) processCorrectionAsync(req correctionRequest) {
 	newMem := &models.Memory{Project: req.Project, Content: req.UserMessage, SourceAgent: "user_correction", Tags: []string{"user_correction", "supersedes"}, SupersedesID: &similarID, EpistemicType: "guidance"}
 	var created *models.Memory
 	now := time.Now().UTC()
-	err = memStore.GetDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	access := gormdb.MemoryMutationAccess{Project: req.Project, Caller: req.caller, RequireCanonicalProject: true}
+	err = memStore.WithAuthorizedMemories(ctx, []int64{similarID}, access, func(tx *gorm.DB, _ map[int64]*models.Memory) error {
 		var err error
 		created, err = memStore.CreateWithLifecycleTx(ctx, tx, newMem)
 		if err != nil {

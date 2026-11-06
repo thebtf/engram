@@ -28,6 +28,7 @@ export function useUpdate() {
   // Two separate intervals: one for background availability checks,
   // one for polling in-progress update status at 1 Hz.
   let statusPollId: ReturnType<typeof setInterval> | null = null
+  let statusGeneration = 0
   let periodicCheckId: ReturnType<typeof setInterval> | null = null
 
   // Ask the server whether a newer release is available.
@@ -49,7 +50,17 @@ export function useUpdate() {
     isUpdating.value = true
     try {
       const res = await fetch('/api/update/apply', { method: 'POST' })
-      if (res.ok) startStatusPolling()
+      if (res.ok) {
+        const result: unknown = await res.json()
+        if (typeof result === 'object' && result !== null && 'success' in result && result.success === false) {
+          const message = 'message' in result && typeof result.message === 'string' ? result.message : ''
+          stopStatusPolling()
+          updateStatus.value = { state: 'error', progress: 0, message, error: message }
+          isUpdating.value = false
+          return
+        }
+        startStatusPolling()
+      }
     } catch (err) {
       console.error('[Update] Apply failed:', err)
       isUpdating.value = false
@@ -58,10 +69,13 @@ export function useUpdate() {
 
   // Fetch the current update state (downloading / verifying / done / error).
   const fetchStatus = async (): Promise<void> => {
+    const generation = statusGeneration
     try {
       const res = await fetch('/api/update/status')
       if (!res.ok) return
-      updateStatus.value = await res.json()
+      const status: UpdateStatus = await res.json()
+      if (generation !== statusGeneration) return
+      updateStatus.value = status
       // Terminal states: stop polling so we don't hammer the endpoint once
       // the update has finished (or failed).
       const { state } = updateStatus.value
@@ -82,6 +96,7 @@ export function useUpdate() {
   }
 
   function stopStatusPolling(): void {
+    statusGeneration++
     if (statusPollId !== null) {
       clearInterval(statusPollId)
       statusPollId = null

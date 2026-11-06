@@ -29,6 +29,7 @@ import (
 // Production admission, peer binding, locking and readiness are not stubbed.
 func TestOrdinaryShimRecoversAfterAcknowledgedSuccessorIsAbsent(t *testing.T) {
 	root, current := os.Getenv("ENGRAM_TEST_MISSING_ROOT"), os.Getenv("ENGRAM_TEST_MISSING_CURRENT")
+	prior := os.Getenv("ENGRAM_TEST_MISSING_V7019")
 	if root == "" || current == "" {
 		t.Skip("requires private missing-successor allocation and current executable")
 	}
@@ -94,8 +95,11 @@ func TestOrdinaryShimRecoversAfterAcknowledgedSuccessorIsAbsent(t *testing.T) {
 	}
 	expectedImage := hex.EncodeToString(expectedHash.Sum(nil))
 
-	for _, scenario := range []string{"compatible-current-not-stolen", "pingable-lower-not-ready", "ack-exit-no-successor", "reappearing-lower-after-exit"} {
+	for _, scenario := range []string{"compatible-current-not-stolen", "compatible-current-markers-missing", "markerless-v7019-replaced", "pingable-lower-not-ready", "ack-exit-no-successor", "reappearing-lower-after-exit"} {
 		t.Run(scenario, func(t *testing.T) {
+			if scenario == "markerless-v7019-replaced" && prior == "" {
+				t.Skip("requires the private exact v7.0.19 release image")
+			}
 			version := "v7.0.3"
 			if scenario == "compatible-current-not-stolen" {
 				version = daemonVersion
@@ -131,6 +135,9 @@ func TestOrdinaryShimRecoversAfterAcknowledgedSuccessorIsAbsent(t *testing.T) {
 					}
 				}
 				observed := append(tree.ObservedPIDsForExecutable(receiver), tree.ObservedPIDsForExecutable(current)...)
+				if prior != "" {
+					observed = append(observed, tree.ObservedPIDsForExecutable(prior)...)
+				}
 				if err := uciCleanupInstallHarness(tree, processes); err != nil {
 					t.Error(err)
 				}
@@ -148,6 +155,153 @@ func TestOrdinaryShimRecoversAfterAcknowledgedSuccessorIsAbsent(t *testing.T) {
 					t.Logf("CLOSURE scenario=%s owned_pids=%v control_unavailable=true", scenario, observed)
 				}
 			})
+			if scenario == "compatible-current-markers-missing" || scenario == "markerless-v7019-replaced" {
+				ownerExe, ownerVersion, ownerHash := current, daemonVersion, expectedImage
+				if scenario == "markerless-v7019-replaced" {
+					if !filepath.IsAbs(prior) {
+						t.Fatal("v7.0.19 fixture path must be absolute")
+					}
+					ownerExe, ownerVersion, ownerHash = filepath.Clean(prior), "v7.0.19", "2ea844169dcb7dcfa77f732e4883629035c79043625626c1b52ce675e3487897"
+					file, err := os.Open(ownerExe)
+					if err != nil {
+						t.Fatal(err)
+					}
+					info, statErr := file.Stat()
+					digest := sha256.New()
+					_, hashErr := io.Copy(digest, file)
+					if err := errors.Join(statErr, hashErr, file.Close()); err != nil {
+						t.Fatal(err)
+					}
+					if info.Size() != 23260160 || hex.EncodeToString(digest.Sum(nil)) != ownerHash {
+						t.Fatal("fixture is not the attested v7.0.19 release image")
+					}
+				}
+				owner, err := uciStartInstalledHarnessComponent(tree, uciInstallHarnessComponent{role: "markerless-owner", installedExecutable: ownerExe}, os.Environ(), root, true)
+				if owner != nil {
+					processes = append(processes, owner)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(tree.fallback) != 0 || tree.completionPort == 0 {
+					t.Fatal("required private Windows job containment/observation unavailable")
+				}
+				client, err := newUCIInstalledAcceptanceMCPClient("markerless-owner", owner)
+				if err != nil {
+					t.Fatal(err)
+				}
+				startup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				_, _, err = client.call(startup, "initialize", map[string]any{"protocolVersion": "2025-11-25", "capabilities": map[string]any{}, "clientInfo": map[string]string{"name": "markerless-owner", "version": "1"}})
+				if err != nil {
+					t.Fatalf("private daemon initialization: %v", err)
+				}
+				pid, err := uciWaitForInstalledAcceptanceDaemonPID(startup, os.TempDir(), ownerExe)
+				if err != nil {
+					t.Fatal(err)
+				}
+				before, found := readMuxcoreDaemonStatusIdentity(control)
+				markerPath := control + ".marker.json"
+				legacyPath := muxcoreLegacyDaemonVersionPathForMarker(markerPath)
+				marker, markerErr := readMuxcoreDaemonVersionMarker(markerPath)
+				legacyBytes, legacyErr := readMuxcoreMarkerFile(legacyPath)
+				var legacy legacyMuxcoreDaemonVersionMarker
+				if legacyErr == nil {
+					legacyErr = decodeStrictJSON(legacyBytes, &legacy)
+				}
+				peer, peerErr := missingSuccessorPeer(control)
+				if !found || before.PID != pid || peerErr != nil || peer != pid || markerErr != nil || marker.PID != pid || marker.DaemonGeneration != before.DaemonGeneration || marker.ProductVersion != ownerVersion || marker.DaemonCompatEpoch != muxcoreDaemonCompatEpoch || !strings.EqualFold(marker.Exe, ownerExe) || legacyErr != nil || legacy.PID != pid || legacy.Version != ownerVersion || !strings.EqualFold(legacy.Exe, ownerExe) {
+					t.Fatalf("private daemon and both markers do not correlate: status=%+v peer=%d peerErr=%v marker=%+v markerErr=%v legacy=%+v legacyErr=%v", before, peer, peerErr, marker, markerErr, legacy, legacyErr)
+				}
+				image, err := liveProcessImageIdentity(pid)
+				if err != nil {
+					t.Fatal(err)
+				}
+				imageErr := sameLegacyProcessExecutable(ownerExe, image)
+				liveHash := sha256.New()
+				_, hashErr := io.Copy(liveHash, image.File)
+				if err := errors.Join(imageErr, hashErr, image.Close()); err != nil {
+					t.Fatal(err)
+				}
+				if observed := hex.EncodeToString(liveHash.Sum(nil)); observed != ownerHash {
+					t.Fatalf("private daemon image SHA256=%s want=%s", observed, ownerHash)
+				}
+				markerBytes, err := os.ReadFile(markerPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, entry := range []struct {
+					path     string
+					original []byte
+				}{{markerPath, markerBytes}, {legacyPath, legacyBytes}} {
+					live, ok := readMuxcoreDaemonStatusIdentity(control)
+					peer, err := missingSuccessorPeer(control)
+					currentBytes, readErr := readMuxcoreMarkerFile(entry.path)
+					if !ok || live != before || err != nil || peer != pid || readErr != nil || string(currentBytes) != string(entry.original) {
+						t.Fatalf("private daemon or marker changed before removal: status=%+v peer=%d error=%v markerErr=%v", live, peer, err, readErr)
+					}
+					if err := os.Remove(entry.path); err != nil {
+						t.Fatal(err)
+					}
+				}
+				for _, path := range []string{markerPath, legacyPath} {
+					if _, err := os.Lstat(path); !os.IsNotExist(err) {
+						t.Fatalf("marker remains present: %s: %v", path, err)
+					}
+				}
+				caller, err := uciStartInstalledHarnessComponent(tree, uciInstallHarnessComponent{role: "markerless-caller", installedExecutable: current}, os.Environ(), root, true)
+				if caller != nil {
+					processes = append(processes, caller)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				second, err := newUCIInstalledAcceptanceMCPClient("markerless-caller", caller)
+				if err != nil {
+					t.Fatal(err)
+				}
+				timeout := 5 * time.Second
+				if scenario == "markerless-v7019-replaced" {
+					timeout = 60 * time.Second
+				}
+				ctx, stop := context.WithTimeout(context.Background(), timeout)
+				defer stop()
+				_, _, initializeErr := second.call(ctx, "initialize", map[string]any{"protocolVersion": "2025-11-25", "capabilities": map[string]any{}, "clientInfo": map[string]string{"name": "markerless-caller", "version": "1"}})
+				after, ok := readMuxcoreDaemonStatusIdentity(control)
+				peer, peerErr = missingSuccessorPeer(control)
+				if scenario == "markerless-v7019-replaced" {
+					currentMarker, markerErr := readMuxcoreDaemonVersionMarker(markerPath)
+					if initializeErr != nil || !ok || after.PID == before.PID || after.DaemonGeneration == before.DaemonGeneration || peerErr != nil || peer != after.PID || markerErr != nil || currentMarker.PID != after.PID || currentMarker.DaemonGeneration != after.DaemonGeneration || currentMarker.ProductVersion != daemonVersion || !strings.EqualFold(currentMarker.Exe, current) {
+						t.Fatalf("v7.0.19 was not replaced by current daemon: err=%v before=%+v after=%+v peer=%d peerErr=%v markerErr=%v", initializeErr, before, after, peer, peerErr, markerErr)
+					}
+					older, err := uciStartInstalledHarnessComponent(tree, uciInstallHarnessComponent{role: "older-client-after-replacement", installedExecutable: ownerExe}, os.Environ(), root, true)
+					if older != nil {
+						processes = append(processes, older)
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					oldClient, err := newUCIInstalledAcceptanceMCPClient("older-after-replacement", older)
+					if err != nil {
+						t.Fatal(err)
+					}
+					_, _, err = oldClient.call(ctx, "initialize", map[string]any{"protocolVersion": "2025-11-25", "capabilities": map[string]any{}, "clientInfo": map[string]string{"name": "older-after-replacement", "version": "1"}})
+					final, live := readMuxcoreDaemonStatusIdentity(control)
+					if err != nil || !live || final != after {
+						t.Fatalf("older client failed to attach to current daemon: err=%v final=%+v expected=%+v", err, final, after)
+					}
+				} else {
+					if initializeErr != nil || !ok || after != before || peerErr != nil || peer != pid {
+						t.Fatalf("verified markerless compatible daemon was not safely admitted: err=%v before=%+v after=%+v peer=%d peerErr=%v", initializeErr, before, after, peer, peerErr)
+					}
+					for _, path := range []string{markerPath, legacyPath} {
+						if _, err := os.Lstat(path); !os.IsNotExist(err) {
+							t.Fatalf("marker unexpectedly appeared: %s: %v", path, err)
+						}
+					}
+				}
+				return
+			}
 			component := uciInstallHarnessComponent{role: "missing-successor-receiver", installedExecutable: receiver, command: uciInstallHarnessCommand{Args: []string{"-test.run=^TestMissingSuccessorReceiverProcess$", "-test.v"}}}
 			process, err := uciStartInstalledHarnessComponent(tree, component, append(os.Environ(), "ENGRAM_TEST_MISSING_RECEIVER=1"), root, false)
 			if process != nil {

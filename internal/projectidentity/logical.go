@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -30,8 +31,12 @@ type BootstrapRequest struct {
 }
 
 type LogicalError struct {
-	Code     string
-	legacyID string
+	Code               string
+	legacyID           string
+	legacyMarkerPath   string
+	legacyMarkerDigest string
+	nameMarkerPath     string
+	nameMarkerDigest   string
 }
 
 func (e *LogicalError) Error() string {
@@ -205,6 +210,8 @@ func ResolveLogicalProject(ctx context.Context, cwd string, bootstrap func(conte
 		return Project{}, err
 	}
 	// A nested portable marker is an explicit boundary. A subdirectory alone is not.
+	nameOnly := false
+	var nameMarkerPath, nameMarkerDigest string
 	for candidate := selected; ; candidate = filepath.Dir(candidate) {
 		marker, present, err := readLogicalMarker(filepath.Join(candidate, anchorFilenameV3), true)
 		if err != nil {
@@ -212,9 +219,32 @@ func ResolveLogicalProject(ctx context.Context, cwd string, bootstrap func(conte
 		}
 		if present && marker.ProjectID != "" {
 			if common != "" && samePath(candidate, root) {
-				return pinLogicalCache(common, marker)
+				cached, present, err := readLogicalMarker(filepath.Join(common, "engram-project.json"), false)
+				if err != nil {
+					return Project{}, err
+				}
+				if present && cached.ProjectID != marker.ProjectID {
+					return Project{}, logicalError("PROJECT_IDENTITY_CONFLICT")
+				}
 			}
 			return marker, nil
+		}
+		if present {
+			if common == "" || !samePath(candidate, root) {
+				return Project{}, logicalError("PROJECT_CONTEXT_REQUIRED")
+			}
+			nameMarkerPath = filepath.Join(candidate, anchorFilenameV3)
+			raw, exists, readErr := readRecoveryMarker(nameMarkerPath)
+			if readErr != nil || !exists {
+				return Project{}, logicalError("PROJECT_SELECTION_STALE")
+			}
+			again, _, parseErr := parseLogicalMarker(raw, true)
+			if parseErr != nil || again != marker {
+				return Project{}, logicalError("PROJECT_SELECTION_STALE")
+			}
+			nameMarkerDigest = markerEvidenceDigest(raw)
+			nameOnly = true
+			break
 		}
 		if common != "" && samePath(candidate, root) || filepath.Dir(candidate) == candidate {
 			break
@@ -230,6 +260,9 @@ func ResolveLogicalProject(ctx context.Context, cwd string, bootstrap func(conte
 	}
 	if present && cached.ProjectID != "" {
 		return cached, nil
+	}
+	if nameOnly {
+		return Project{}, &LogicalError{Code: "PROJECT_CONTEXT_REQUIRED", nameMarkerPath: nameMarkerPath, nameMarkerDigest: nameMarkerDigest}
 	}
 	if bootstrap == nil {
 		return Project{}, logicalError("PROJECT_CONTEXT_REQUIRED")
@@ -267,6 +300,216 @@ func ResolveLogicalProject(ctx context.Context, cwd string, bootstrap func(conte
 	return project, nil
 }
 
+// ResolveLogicalProjectForBackend preserves ordinary resolution and recovers a
+// name-only root using only its authenticated primary-origin binding.
+func ResolveLogicalProjectForBackend(ctx context.Context, cwd, serverURL, token string) (Project, error) {
+	project, err := ResolveLogicalProject(ctx, cwd, HTTPBootstrap(serverURL, token))
+	if ProjectErrorCode(err) != "PROJECT_CONTEXT_REQUIRED" || serverURL == "" {
+		return project, err
+	}
+	return resolveNameOnlyOrigin(ctx, cwd, serverURL, token, err)
+}
+
+func resolveNameOnlyOrigin(ctx context.Context, cwd, serverURL, token string, originalErr error) (Project, error) {
+	var initial *LogicalError
+	if !errors.As(originalErr, &initial) || initial.nameMarkerDigest == "" {
+		return Project{}, originalErr
+	}
+	state, err := InspectProjectMarker(ctx, cwd)
+	if err != nil {
+		return Project{}, err
+	}
+	if !state.Present || state.LegacyID != "" || state.PinnedID != "" || state.CacheID != "" || state.RepositoryLocator == "" {
+		return Project{}, originalErr
+	}
+	selected, err := filepath.Abs(cwd)
+	if err != nil {
+		return Project{}, originalErr
+	}
+	gitRoot, common, err := logicalProjectDirectories(ctx, selected)
+	if err != nil {
+		return Project{}, err
+	}
+	markerPath := filepath.Clean(filepath.Join(selected, filepath.FromSlash(state.Target)))
+	if markerPath != filepath.Clean(initial.nameMarkerPath) || state.MarkerDigest != initial.nameMarkerDigest {
+		return Project{}, logicalError("PROJECT_SELECTION_STALE")
+	}
+	if common == "" || !samePath(filepath.Dir(markerPath), gitRoot) {
+		return Project{}, originalErr
+	}
+	callerInfo, err := os.Stat(selected)
+	if err != nil || !callerInfo.IsDir() {
+		return Project{}, logicalError("PROJECT_SELECTION_STALE")
+	}
+	commonInfo, err := os.Stat(common)
+	if err != nil || !commonInfo.IsDir() {
+		return Project{}, logicalError("PROJECT_SELECTION_STALE")
+	}
+	raw, present, err := readRecoveryMarker(markerPath)
+	if err != nil || !present || markerEvidenceDigest(raw) != state.MarkerDigest {
+		return Project{}, logicalError("PROJECT_SELECTION_STALE")
+	}
+	marker, _, err := parseLogicalMarker(raw, true)
+	if err != nil || marker.ProjectID != "" {
+		return Project{}, originalErr
+	}
+	cachePath := filepath.Join(common, "engram-project.json")
+	if _, exists, err := readRecoveryMarker(cachePath); err != nil {
+		return Project{}, err
+	} else if exists {
+		return Project{}, originalErr
+	}
+	revalidate := func() error {
+		current, err := InspectProjectMarker(ctx, cwd)
+		if err != nil {
+			return err
+		}
+		caller, statErr := os.Stat(selected)
+		root, currentCommon, gitErr := logicalProjectDirectories(ctx, selected)
+		commonNow, commonErr := os.Stat(common)
+		if current != state || statErr != nil || !os.SameFile(callerInfo, caller) || gitErr != nil || root != gitRoot || currentCommon != common || commonErr != nil || !os.SameFile(commonInfo, commonNow) {
+			return logicalError("PROJECT_SELECTION_STALE")
+		}
+		return nil
+	}
+	inspection, err := resolveRepositoryInspection(ctx, serverURL, token, state.RepositoryLocator)
+	if err != nil {
+		return Project{}, err
+	}
+	if err := revalidate(); err != nil {
+		return Project{}, err
+	}
+	active := func(value ProjectInspection) (Project, bool) {
+		b := value.Binding
+		if value.Status != "resolved" || b == nil || (b.Match != "manual_alias" && b.Match != "git_remote") || b.ProjectKey == nil || *b.ProjectKey != b.ID || b.IdentityStatus == nil || *b.IdentityStatus != "active" {
+			return Project{}, false
+		}
+		return Project{ProjectID: b.ID}, true
+	}
+	if project, ok := active(inspection); ok {
+		return project, nil
+	}
+	if inspection.Status == "resolved" {
+		return Project{}, originalErr
+	}
+	if inspection.Status != "unbound" {
+		return Project{}, logicalError("PROJECT_IDENTITY_CONFLICT")
+	}
+	v2Path := filepath.Join(gitRoot, ".engram-project-v2.json")
+	if _, exists, err := readRecoveryMarker(v2Path); err != nil {
+		return Project{}, err
+	} else if exists {
+		return Project{}, originalErr
+	}
+	if err := revalidate(); err != nil {
+		return Project{}, err
+	}
+	created, bootstrapErr := HTTPBootstrap(serverURL, token)(ctx, BootstrapRequest{RepositoryLocator: state.RepositoryLocator, Name: marker.Name})
+	if bootstrapErr != nil && ProjectErrorCode(bootstrapErr) != "PROJECT_RESOLUTION_UNAVAILABLE" {
+		return Project{}, bootstrapErr
+	}
+	if err := revalidate(); err != nil {
+		return Project{}, err
+	}
+	if _, exists, err := readRecoveryMarker(v2Path); err != nil {
+		return Project{}, err
+	} else if exists {
+		return Project{}, logicalError("PROJECT_SELECTION_STALE")
+	}
+	confirmed, err := resolveRepositoryInspection(ctx, serverURL, token, state.RepositoryLocator)
+	if err != nil {
+		return Project{}, err
+	}
+	project, ok := active(confirmed)
+	if !ok {
+		if bootstrapErr != nil {
+			return Project{}, bootstrapErr
+		}
+		return Project{}, logicalError("PROJECT_IDENTITY_CONFLICT")
+	}
+	if bootstrapErr == nil && project.ProjectID != created.ProjectID {
+		return Project{}, logicalError("PROJECT_IDENTITY_CONFLICT")
+	}
+	if err := revalidate(); err != nil {
+		return Project{}, err
+	}
+	return project, nil
+}
+
+// ResolveAutomaticHistoricalProject only reads a verified historical mapping.
+// It never changes identity files or forwards the caller's operation.
+func ResolveAutomaticHistoricalProject(ctx context.Context, cwd, serverURL, token string, initialErr error) (Project, error) {
+	var initial *LogicalError
+	if !errors.As(initialErr, &initial) || initial.Code != "PROJECT_MIGRATION_REQUIRED" {
+		return Project{}, logicalError("PROJECT_SELECTION_STALE")
+	}
+	if initial.legacyID == "" || initial.legacyMarkerDigest == "" {
+		return Project{}, initialErr
+	}
+	endpoint, err := url.Parse(serverURL)
+	if err != nil || endpoint.User != nil || endpoint.Host == "" || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+		return Project{}, logicalError("PROJECT_RESOLUTION_UNAVAILABLE")
+	}
+	before, err := InspectProjectMarker(ctx, cwd)
+	if err != nil {
+		return Project{}, err
+	}
+	if before.LegacyID != initial.legacyID || before.MarkerDigest != initial.legacyMarkerDigest {
+		return Project{}, logicalError("PROJECT_SELECTION_STALE")
+	}
+	selected, err := filepath.Abs(cwd)
+	if err != nil {
+		return Project{}, logicalError("PROJECT_CONTEXT_REQUIRED")
+	}
+	if filepath.Clean(filepath.Join(selected, filepath.FromSlash(before.Target))) != filepath.Clean(initial.legacyMarkerPath) {
+		return Project{}, logicalError("PROJECT_SELECTION_STALE")
+	}
+	callerInfo, err := os.Stat(selected)
+	if err != nil || !callerInfo.IsDir() {
+		return Project{}, logicalError("PROJECT_SELECTION_STALE")
+	}
+	gitRoot, common, err := logicalProjectDirectories(ctx, selected)
+	if err != nil {
+		return Project{}, err
+	}
+	var commonInfo os.FileInfo
+	if common != "" {
+		commonInfo, err = os.Stat(common)
+		if err != nil || !commonInfo.IsDir() {
+			return Project{}, logicalError("PROJECT_SELECTION_STALE")
+		}
+	}
+	project, resolved, err := ResolveHistoricalProject(ctx, serverURL, token, before.LegacyID)
+	if err != nil {
+		return Project{}, err
+	}
+	if !resolved {
+		return Project{}, logicalError("PROJECT_MIGRATION_REQUIRED")
+	}
+	after, err := InspectProjectMarker(ctx, cwd)
+	if err != nil {
+		return Project{}, err
+	}
+	currentCaller, statErr := os.Stat(selected)
+	currentRoot, currentCommon, gitErr := logicalProjectDirectories(ctx, selected)
+	if statErr != nil || !os.SameFile(callerInfo, currentCaller) || gitErr != nil || gitRoot != currentRoot || common != currentCommon {
+		return Project{}, logicalError("PROJECT_SELECTION_STALE")
+	}
+	if common != "" {
+		currentInfo, err := os.Stat(common)
+		if err != nil || !os.SameFile(commonInfo, currentInfo) {
+			return Project{}, logicalError("PROJECT_SELECTION_STALE")
+		}
+	}
+	if before != after {
+		return Project{}, logicalError("PROJECT_SELECTION_STALE")
+	}
+	if after.CacheID != "" && after.CacheID != project.ProjectID {
+		return Project{}, logicalError("PROJECT_IDENTITY_CONFLICT")
+	}
+	return project, nil
+}
+
 func logicalProjectDirectories(ctx context.Context, selected string) (string, string, error) {
 	if root, common, ok := nativeGitDirectoriesFor(ctx, selected); ok {
 		return root, common, nil
@@ -296,17 +539,20 @@ func logicalProjectDirectories(ctx context.Context, selected string) (string, st
 }
 
 func readLogicalMarker(path string, allowLegacyMarker bool) (Project, bool, error) {
-	info, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return Project{}, false, nil
+	raw, present, err := readRecoveryMarker(path)
+	if err != nil || !present {
+		return Project{}, present, err
 	}
-	if err != nil || !info.Mode().IsRegular() || info.Size() > 4096 {
-		return Project{}, true, logicalError("PROJECT_IDENTITY_INVALID")
+	project, markerPresent, parseErr := parseLogicalMarker(raw, allowLegacyMarker)
+	var legacy *LogicalError
+	if errors.As(parseErr, &legacy) && legacy.Code == "PROJECT_MIGRATION_REQUIRED" {
+		legacy.legacyMarkerPath = path
+		legacy.legacyMarkerDigest = markerEvidenceDigest(raw)
 	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return Project{}, true, logicalError("PROJECT_RESOLUTION_UNAVAILABLE")
-	}
+	return project, markerPresent, parseErr
+}
+
+func parseLogicalMarker(raw []byte, allowLegacyMarker bool) (Project, bool, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
 		return Project{}, true, logicalError("PROJECT_IDENTITY_INVALID")
@@ -507,20 +753,22 @@ func HTTPBootstrap(serverURL, token string) func(context.Context, BootstrapReque
 		if err != nil {
 			return Project{}, err
 		}
-		request, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(serverURL, "/")+"/api/projects/bootstrap", bytes.NewReader(raw))
-		if err != nil {
+		endpoint, err := url.Parse(strings.TrimRight(serverURL, "/") + "/api/projects/bootstrap")
+		if err != nil || endpoint.User != nil || endpoint.Host == "" || endpoint.RawQuery != "" || endpoint.Fragment != "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") {
 			return Project{}, logicalError("PROJECT_RESOLUTION_UNAVAILABLE")
 		}
-		request.Header.Set("Content-Type", "application/json")
-		if token != "" {
-			request.Header.Set("Authorization", "Bearer "+token)
-		}
-		response, err := http.DefaultClient.Do(request)
+		ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		response, release, err := projectRecoveryRequest(ctx, endpoint, token, http.MethodPost, bytes.NewReader(raw))
 		if err != nil {
-			return Project{}, logicalError("PROJECT_RESOLUTION_UNAVAILABLE")
+			return Project{}, err
 		}
+		defer release()
 		defer response.Body.Close()
 		if response.StatusCode != http.StatusOK {
+			if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {
+				return Project{}, projectRecoveryStatusError(response.StatusCode)
+			}
 			var body struct {
 				Code string `json:"code"`
 			}
@@ -532,8 +780,19 @@ func HTTPBootstrap(serverURL, token string) func(context.Context, BootstrapReque
 			}
 			return Project{}, logicalError("PROJECT_RESOLUTION_UNAVAILABLE")
 		}
+		body, err := io.ReadAll(io.LimitReader(response.Body, 4097))
+		if err != nil || len(body) > 4096 || !utf8.Valid(body) {
+			return Project{}, logicalError("PROJECT_RESOLUTION_UNAVAILABLE")
+		}
+		check := json.NewDecoder(bytes.NewReader(body))
+		if !skipRecoveryCatalogValue(check, 0, true) {
+			return Project{}, logicalError("PROJECT_IDENTITY_INVALID")
+		}
+		if _, err := check.Token(); err != io.EOF {
+			return Project{}, logicalError("PROJECT_IDENTITY_INVALID")
+		}
 		var project Project
-		decoder := json.NewDecoder(io.LimitReader(response.Body, 4096))
+		decoder := json.NewDecoder(bytes.NewReader(body))
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&project); err != nil {
 			return Project{}, logicalError("PROJECT_IDENTITY_INVALID")

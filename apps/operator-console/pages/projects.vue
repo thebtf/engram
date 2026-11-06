@@ -1,16 +1,18 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { useOperatorProjectContext, projectName, projectChoiceLabel } from '../composables/useOperatorProjectContext'
+import { useOperatorProjectContext, projectName, localizedProjectChoiceLabel } from '../composables/useOperatorProjectContext'
 import { useOperatorProjects } from '../composables/useOperatorProjects'
 import { operatorDiagnosisKey } from '../composables/useOperatorApi'
 const { t } = useI18n()
+const projectChoiceLabel = (id: string) => localizedProjectChoiceLabel(id, t)
 const route = useRoute()
 const router = useRouter()
 const context = useOperatorProjectContext()
-const { project, projects, unresolved, pending: catalogPending, error: projectError, selectionPending, selectionError } = context
+const { project, projects, unresolved, projectSections, pending: catalogPending, error: projectError, selectionPending, selectionError } = context
 const { sessions, selectedSession, sessionsState, detailState, pending, refresh, openProject, openSession, openSessionByID, deleteProject } = useOperatorProjects(project)
 const search = ref('')
 const visibleProjects = computed(() => projects.value.filter((id) => `${projectChoiceLabel(id)} ${id}`.toLocaleLowerCase().includes(search.value.toLocaleLowerCase())))
+const visibleSections = computed(() => projectSections.value.map(section => ({ ...section, ids: section.ids.filter(id => visibleProjects.value.includes(id)) })).filter(section => section.ids.length))
 const archiveInput = ref('')
 const archiveBusy = ref(false)
 const mutationResult = ref<Awaited<ReturnType<typeof deleteProject>> | null>(null)
@@ -47,7 +49,10 @@ async function archive() {
     <div v-if="selectionError" role="alert"><p>{{ t('projectCatalog.unknownProject') }} {{ t(operatorDiagnosisKey(selectionError)) }}</p><button class="btn" @click="context.refresh">{{ t('knowledge.retry') }}</button></div>
     <RouterLink v-if="unresolved.length" to="/projects/unresolved">{{ t('projectCatalog.groupDiscovery') }} ({{ unresolved.length }})</RouterLink>
     <div class="project-workspace">
-      <section class="project-list"><label><span>{{ t('knowledge.findProject') }}</span><input v-model="search" type="search" /></label><p v-if="catalogPending" role="status">{{ t('knowledge.loading') }}</p><p v-else-if="!projectError && !projects.length">{{ t('knowledge.noProjects') }}</p><p v-else-if="!projectError && !visibleProjects.length">{{ t('knowledge.noProjectMatch') }}</p><button v-for="id in visibleProjects" :key="id" class="project-row" :aria-pressed="project === id" :data-testid="`project-row-${id}`" @click="context.select(id)"><strong>{{ projectChoiceLabel(id) }}</strong></button><button class="btn" @click="context.select('all')">{{ t('knowledge.browseAll') }}</button></section>
+      <section class="project-list"><label><span>{{ t('knowledge.findProject') }}</span><input v-model="search" type="search" /></label><p v-if="catalogPending" role="status">{{ t('knowledge.loading') }}</p><p v-else-if="!projectError && !projects.length">{{ t('knowledge.noProjects') }}</p><p v-else-if="!projectError && !visibleProjects.length">{{ t('knowledge.noProjectMatch') }}</p><template
+          v-for="section in visibleSections" :key="section.key">
+          <h3 v-if="section.label">{{ section.label }}</h3><button v-for="id in section.ids" :key="id" class="project-row" :aria-pressed="project === id" :data-testid="`project-row-${id}`" @click="context.select(id)"><strong>{{ projectChoiceLabel(id) }}</strong></button>
+        </template><button class="btn" @click="context.select('all')">{{ t('knowledge.browseAll') }}</button></section>
       <section v-if="project" class="project-content">
         <h2>{{ project === 'all' ? t('knowledge.allProjects') : projectChoiceLabel(project) }}</h2>
         <nav class="project-links"><RouterLink :to="context.to('/memory')">{{ t('nav.items.memory') }}</RouterLink><RouterLink :to="context.to('/documents')">{{ t('nav.items.documents') }}</RouterLink><RouterLink :to="context.to('/code')">{{ t('nav.items.code') }}</RouterLink><RouterLink :to="context.to('/')">{{ t('nav.items.overview') }}</RouterLink></nav>

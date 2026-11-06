@@ -213,7 +213,10 @@ func TestLatestPromotionJournalContract(t *testing.T) {
 func TestOperatorConsoleRuntimeTargetContract(t *testing.T) {
 	repo := repositoryRoot(t)
 	requireFileContains(t, filepath.Join(repo, "Dockerfile"),
-		"gcr.io/distroless/nodejs22-debian13@sha256:412a5f8fce490bcff01fc2a73ec43bb62071e1b71dd847eeacaae7b8ecef1dc1",
+		"gcr.io/distroless/nodejs22-debian13@sha256:412a5f8fce490bcff01fc2a73ec43bb62071e1b71dd847eeacaae7b8ecef1dc1 AS node-runtime",
+		"gcr.io/distroless/base-nossl-debian13@sha256:e6b0f82595aa1edde72c8054de7a9dca30f0f8f54820c37a167c0ddfc21c5c67 AS operator-console",
+		"COPY --from=node-runtime /nodejs/ /nodejs/",
+		"ENTRYPOINT [\"/nodejs/bin/node\"]",
 		"ENGRAM_OPERATOR_API_TARGET=http://server:37777",
 		"CMD [\".output/server/index.mjs\"]",
 		"http://127.0.0.1:3000/api/ready",
@@ -337,7 +340,7 @@ func TestServerImageContract(t *testing.T) {
 		verifyDockerReleaseRefFreshnessGuard(t, repo)
 	})
 	requireFileContains(t, filepath.Join(repo, "Dockerfile"),
-		"gcr.io/distroless/base-debian13@sha256:0ebad3510af52aefe45045cc01b07564570be4feecf8d9f93d3a05d1b5f2f93b",
+		"gcr.io/distroless/base-nossl-debian13@sha256:e6b0f82595aa1edde72c8054de7a9dca30f0f8f54820c37a167c0ddfc21c5c67 AS server",
 		"HOME=/var/lib/engram",
 		"http://127.0.0.1:37777/api/ready",
 		"VERSION must be canonical SemVer or sha-<40 lowercase hex>",
@@ -405,8 +408,12 @@ func TestServerImageContract(t *testing.T) {
 	waitNotHealthy(t, failedServer, 60*time.Second)
 	failedURL := mappedURL(t, failedServer, "37777/tcp")
 	failedHealth := requireHTTP(t, failedURL+"/health", http.StatusOK)
-	if !bytes.Contains(failedHealth, []byte(`"status":"error"`)) {
-		t.Fatalf("failed initialization liveness must remain 200/error, got %q", failedHealth)
+	if !bytes.Contains(failedHealth, []byte(`"status":"starting"`)) {
+		t.Fatalf("transient database outage liveness must remain 200/starting, got %q", failedHealth)
+	}
+	failedReady := requireHTTP(t, failedURL+"/api/ready", http.StatusServiceUnavailable)
+	if !strings.Contains(string(failedReady), "service initializing") {
+		t.Fatalf("transient database outage must remain semantically unready, got %q", failedReady)
 	}
 
 	for _, fixture := range []struct {

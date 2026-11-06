@@ -240,7 +240,7 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	run := func() {
+	run := func(offline bool) {
 		command := exec.CommandContext(ctx, binary)
 		command.Dir = root
 		command.Env = env
@@ -265,7 +265,11 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 		scanner := bufio.NewScanner(stdout)
 		scanner.Buffer(make([]byte, 64*1024), 16<<20)
 		encoder := json.NewEncoder(stdin)
-		for _, method := range []string{"initialize", "tools/list"} {
+		methods := []string{"initialize", "tools/list"}
+		if offline {
+			methods = methods[:1]
+		}
+		for _, method := range methods {
 			params := map[string]any{}
 			if method == "initialize" {
 				params = map[string]any{"protocolVersion": "2025-11-25", "capabilities": map[string]any{}, "clientInfo": map[string]string{"name": "direct-fixture", "version": "1"}}
@@ -275,11 +279,17 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 			}
 			response := make(chan []byte, 1)
 			go func() {
-				if scanner.Scan() {
-					response <- append([]byte(nil), scanner.Bytes()...)
-				} else {
-					response <- nil
+				for scanner.Scan() {
+					raw := append([]byte(nil), scanner.Bytes()...)
+					var frame struct {
+						ID json.RawMessage `json:"id"`
+					}
+					if json.Unmarshal(raw, &frame) == nil && string(frame.ID) == `"`+method+`"` {
+						response <- raw
+						return
+					}
 				}
+				response <- nil
 			}()
 			select {
 			case raw := <-response:
@@ -290,6 +300,19 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 				if len(raw) == 0 || json.Unmarshal(raw, &frame) != nil || len(frame.Error) != 0 || len(frame.Result) == 0 {
 					finish()
 					t.Fatalf("%s failed: response %s stderr %s", method, raw, stderr.String())
+				}
+				if method == "initialize" {
+					var initialized struct {
+						Instructions string `json:"instructions"`
+					}
+					if err := json.Unmarshal(frame.Result, &initialized); err != nil {
+						t.Fatal(err)
+					}
+					for _, want := range []string{"Use available injected evidence before repeating discovery", "not before every task or file edit", "Routine task completion requires neither a memory write nor feedback", "native caller's verified canonical project", "PROJECT_MIGRATION_REQUIRED"} {
+						if !strings.Contains(initialized.Instructions, want) {
+							t.Fatalf("initialize omitted %q (backend unavailable: %t)", want, offline)
+						}
+					}
 				}
 				if method == "tools/list" {
 					var listed struct {
@@ -317,23 +340,27 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 		}
 	}
 	var first string
-	for range 2 {
-		run()
+	for client := 0; client < 2; client++ {
+		run(false)
 		id, err := os.ReadFile(filepath.Join(state, "installation", "client-instance-id"))
 		if err != nil || !strings.HasPrefix(string(id), "engram-") {
 			t.Fatalf("direct installation identity absent: %v", err)
 		}
-		select {
-		case request := <-discovery.requests:
-			if request.GetProject() != "" || request.GetClientName() != "engram-daemon" || request.GetClientVersion() == "" {
-				t.Fatalf("direct Initialize was not unscoped capability discovery: %s", request)
+		if client == 0 {
+			select {
+			case request := <-discovery.requests:
+				if request.GetProject() != "" || request.GetClientName() != "engram-daemon" || request.GetClientVersion() == "" {
+					t.Fatalf("direct Initialize was not unscoped capability discovery: %s", request)
+				}
+			case <-time.After(15 * time.Second):
+				t.Fatal("direct client did not send Initialize to fixture")
 			}
-		default:
-			t.Fatal("direct client did not send Initialize to fixture")
 		}
 		if first != "" && string(id) != first {
 			t.Fatalf("direct client restart changed identity")
 		}
 		first = string(id)
 	}
+	fixture.Stop()
+	run(true)
 }

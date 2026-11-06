@@ -45,6 +45,17 @@ type Module struct {
 	v3ClientInstanceID          string
 	registrationParserAvailable bool
 	deps                        module.ModuleDeps
+	refreshMu                   sync.Mutex
+	refreshCtx                  context.Context
+	refreshCancel               context.CancelFunc
+	refreshWG                   sync.WaitGroup
+	refreshing                  map[advisorProofKey]map[string]bool
+	liveCatalog                 map[advisorProofKey][]module.ToolDef
+	notifier                    muxcore.Notifier
+	projectChoicesMu            sync.Mutex
+	projectChoices              map[string]projectChoiceEvidence
+	projectReadBindings         map[string]projectChoiceEvidence
+	projectPendingReads         map[string]projectChoiceEvidence
 
 	preparedIndexMu            sync.RWMutex
 	preparedIndex              PreparedIndexCollaborator
@@ -56,6 +67,7 @@ var (
 	_ module.EngramModule        = (*Module)(nil)
 	_ module.ProjectLifecycle    = (*Module)(nil)
 	_ module.ProjectRemovalAware = (*Module)(nil)
+	_ module.ToolProvider        = (*Module)(nil)
 	_ module.ProxyToolProvider   = (*Module)(nil)
 )
 
@@ -99,6 +111,15 @@ func (m *Module) Name() string { return moduleName }
 // initialisation — gRPC connections are dialled lazily on first use.
 // Implements module.EngramModule.
 func (m *Module) Init(_ context.Context, deps module.ModuleDeps) error {
+	m.refreshMu.Lock()
+	parent := deps.DaemonCtx
+	if parent == nil {
+		parent = context.Background()
+	}
+	m.refreshCtx, m.refreshCancel = context.WithCancel(parent)
+	m.refreshing = make(map[advisorProofKey]map[string]bool)
+	m.liveCatalog = make(map[advisorProofKey][]module.ToolDef)
+	m.refreshMu.Unlock()
 	m.deps = deps
 	if deps.Logger != nil {
 		deps.Logger.Info("engramcore module initialised",
@@ -107,6 +128,13 @@ func (m *Module) Init(_ context.Context, deps module.ModuleDeps) error {
 		)
 	}
 	return nil
+}
+
+// SetNotifier receives muxcore's scoped notification sink.
+func (m *Module) SetNotifier(notifier muxcore.Notifier) {
+	m.refreshMu.Lock()
+	m.notifier = notifier
+	m.refreshMu.Unlock()
 }
 
 // Shutdown closes all pooled gRPC connections. Implements module.EngramModule.
@@ -118,6 +146,12 @@ func (m *Module) Shutdown(_ context.Context) error {
 	m.preparedIndexMu.Lock()
 	m.shuttingDown = true
 	m.preparedIndexMu.Unlock()
+	m.refreshMu.Lock()
+	if m.refreshCancel != nil {
+		m.refreshCancel()
+	}
+	m.refreshMu.Unlock()
+	m.refreshWG.Wait()
 	m.pool.closeAll()
 	m.advisorProofs.clear()
 	if m.deps.Logger != nil {

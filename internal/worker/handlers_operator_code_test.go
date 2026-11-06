@@ -21,6 +21,7 @@ import (
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/uci"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func TestOperatorCodeHTTPAdapter_ReleasesFiveBoundEndpoints(t *testing.T) {
@@ -537,8 +538,8 @@ func TestOperatorCodeHTTPAdapter_BindsReleasedReadsToBrowserSession(t *testing.T
 				testCase.invoke(adapter, recorder, request)
 
 				require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
-				require.Equal(t, []string{"browser-session-41"}, fixture.app.sourceSessions)
-				require.Equal(t, []string{"browser-session-41"}, fixture.recorder.sourceSessions)
+				require.Equal(t, []string{gormdb.BrowserSessionPublicHandle("browser-session-41")}, fixture.app.sourceSessions)
+				require.Equal(t, []string{gormdb.BrowserSessionPublicHandle("browser-session-41")}, fixture.recorder.sourceSessions)
 			})
 		}
 	}
@@ -555,7 +556,99 @@ func TestOperatorCodeHTTPAdapter_UsesAuthenticatedSessionContext(t *testing.T) {
 	adapter.HandleSearch(recorder, request)
 
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
-	require.Equal(t, []string{authentikBrowserSessionID(41)}, fixture.app.sourceSessions)
+	require.Equal(t, []string{gormdb.BrowserSessionPublicHandle(authentikBrowserSessionID(41))}, fixture.app.sourceSessions)
+}
+
+func TestOperatorCodeHTTPAdapter_AuditCorrelationUsesBrowserCookieProvenance(t *testing.T) {
+	const masterToken = "operator-code-audit-master-test-only"
+	credential := strings.Repeat("c", 64)
+	trustedBrowserSession := strings.Repeat("d", 64)
+	clientToken := auth.TokenRawPrefix + strings.Repeat("a", auth.TokenBodyLen)
+	clientHash, err := bcrypt.GenerateFromPassword([]byte(clientToken), bcrypt.MinCost)
+	require.NoError(t, err)
+	for _, testCase := range []struct {
+		name   string
+		source auth.Source
+	}{
+		{name: "master_bearer_with_browser_cookie", source: auth.SourceMaster},
+		{name: "client_keycard_with_browser_cookie", source: auth.SourceClient},
+		{name: "db_browser_context", source: auth.SourceSession},
+		{name: "auth_disabled_context", source: auth.SourceAuthDisabled},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Setenv("ENGRAM_AUTH_DISABLED", "false")
+			if testCase.source == auth.SourceAuthDisabled {
+				t.Setenv("ENGRAM_AUTH_DISABLED", "true")
+			}
+			adapter, fixture := newOperatorCodeHTTPTestAdapter(t)
+			request := httptest.NewRequest(http.MethodGet, "/api/operator/code/grants", nil)
+			request.Header.Set(operatorCodeRequestIDHeader, "mixed-auth-audit-request")
+			request.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: credential})
+			selectedSession := credential
+			if testCase.source == auth.SourceSession {
+				selectedSession = trustedBrowserSession
+				ctx := withAuthenticatedBrowserSession(request.Context(), trustedBrowserSession)
+				request = request.WithContext(auth.WithIdentity(ctx, fixture.identity))
+			} else {
+				request.Header.Set("Authorization", "Bearer "+masterToken)
+				if testCase.source == auth.SourceClient {
+					request.Header.Set("Authorization", "Bearer "+clientToken)
+				}
+			}
+			if testCase.source == auth.SourceAuthDisabled {
+				selectedSession = "local-code-document"
+			}
+			called := false
+			handler := http.HandlerFunc(func(w http.ResponseWriter, authenticated *http.Request) {
+				called = true
+				identity, found := auth.IdentityFrom(authenticated.Context())
+				require.True(t, found)
+				require.Equal(t, testCase.source, identity.Source)
+				decoded, guarded, ok := adapter.decodeEmptyEnvelope(w, authenticated, "operator-code-grant-choices", http.MethodGet)
+				require.True(t, ok, "the actual authenticated envelope must reach its audit-context boundary")
+				require.True(t, decoded.sessionID == selectedSession, "decoding must retain actual cookie/trusted-context provenance or the AuthDisabled synthetic session")
+				if identity.Source == auth.SourceMaster || identity.Source == auth.SourceClient {
+					_, browser := identity.SessionBrowserSubject()
+					require.False(t, browser)
+					body := `{"tab_binding_id":"` + operatorCodeHTTPTestBindingID + `","document_proof":"proof-current","query":"Fixture"}`
+					search := httptest.NewRequest(http.MethodPost, "/api/operator/code", bytes.NewBufferString(body))
+					search.Header = authenticated.Header.Clone()
+					search = search.WithContext(authenticated.Context())
+					denied := httptest.NewRecorder()
+					adapter.HandleSearch(denied, search)
+					require.Equal(t, http.StatusForbidden, denied.Code)
+					require.Empty(t, denied.Body.String())
+					require.Zero(t, fixture.grants.checks, "nonbrowser authorization must stop before grant lookup")
+					require.Zero(t, fixture.app.searchCalls)
+					require.Empty(t, fixture.recorder.inputs)
+					t.Log("counterevidence: actual adapter denies nonbrowser release before grant lookup/application/exposure; no persisted leakage is established")
+				}
+				correlation := auditcontext.SourceSession(guarded.Context())
+				isCredential := correlation == credential || correlation == trustedBrowserSession
+				t.Logf("source=%s decoded=true cookie_credential_in_audit_context=%t", identity.Source, isCredential)
+				require.False(t, isCredential, "browser-cookie credentials must not enter audit correlation, even when bearer/keycard authentication wins")
+				want := "local-code-document"
+				if identity.Source != auth.SourceAuthDisabled {
+					want = gormdb.BrowserSessionPublicHandle(selectedSession)
+				}
+				require.Equal(t, want, correlation)
+				require.True(t, decoded.sessionID == selectedSession, "audit projection must not rewrite private authorization identity")
+			})
+			recorder := httptest.NewRecorder()
+			if testCase.source == auth.SourceSession {
+				handler.ServeHTTP(recorder, request)
+			} else {
+				tokenAuth, err := NewTokenAuth(masterToken)
+				require.NoError(t, err)
+				tokenAuth.SetValidator(auth.NewValidator(masterToken, knowledgeFixtureTokens{{
+					ID: "synthetic-code-audit-keycard", Scope: "read-write", TokenHash: string(clientHash),
+					TokenPrefix: clientToken[len(auth.TokenRawPrefix) : len(auth.TokenRawPrefix)+auth.TokenPrefixLen],
+				}}))
+				tokenAuth.Middleware(handler).ServeHTTP(recorder, request)
+			}
+			require.True(t, called, "real credential precedence must reach the decoder; a middleware rejection is not the privacy oracle")
+		})
+	}
 }
 
 func TestOperatorCodeHTTPAdapter_UsesGrantedSourceRealmForRelease(t *testing.T) {
@@ -767,7 +860,7 @@ func TestOperatorCodeHTTPAdapter_IndexIntentAcknowledgementIsNotCompletion(t *te
 	require.Equal(t, lateCompleted.ID, lateResponse["intent_ref"])
 	require.Equal(t, string(uci.IndexIntentSubmitted), lateResponse["state"])
 	operatorCodeHTTPTestRequireSafeIndexIntentResponse(t, lateReplay.Body.String(), false, fixture)
-	require.Equal(t, []string{"browser-session-41", "browser-session-41", "browser-session-41"}, fixture.app.indexSubmitSessions)
+	require.Equal(t, []string{gormdb.BrowserSessionPublicHandle("browser-session-41"), gormdb.BrowserSessionPublicHandle("browser-session-41"), gormdb.BrowserSessionPublicHandle("browser-session-41")}, fixture.app.indexSubmitSessions)
 
 	completed := operatorCodeHTTPTestIndexIntent(fixture.ref, "completed-status", uci.IndexIntentReindex, uci.IndexIntentCompleted)
 	fixture.app.indexIntents = map[string]uci.IndexIntent{completed.ID: completed}
@@ -782,7 +875,7 @@ func TestOperatorCodeHTTPAdapter_IndexIntentAcknowledgementIsNotCompletion(t *te
 	require.Equal(t, float64(completed.ResultView.Generation), result["generation"])
 	operatorCodeHTTPTestRequireSafeIndexIntentResponse(t, status.Body.String(), true, fixture)
 	require.Empty(t, fixture.recorder.inputs, "code_index_result is non-content release only")
-	require.Equal(t, []string{"browser-session-41"}, fixture.app.indexGetSessions)
+	require.Equal(t, []string{gormdb.BrowserSessionPublicHandle("browser-session-41")}, fixture.app.indexGetSessions)
 }
 
 func TestOperatorCodeHTTPAdapter_NoViewIndexIntentReauthorizesWithoutPin(t *testing.T) {
@@ -906,7 +999,7 @@ func TestOperatorCodeHTTPAdapter_IndexIntentIdempotencyAndRetry(t *testing.T) {
 		require.Equal(t, http.StatusConflict, replayedRetry.Code, replayedRetry.Body.String())
 		require.Empty(t, replayedRetry.Body.String())
 		require.Equal(t, 1, fixture.app.indexRetryExecutions)
-		require.Equal(t, []string{"browser-session-41", "browser-session-41"}, fixture.app.indexRetrySessions)
+		require.Equal(t, []string{gormdb.BrowserSessionPublicHandle("browser-session-41"), gormdb.BrowserSessionPublicHandle("browser-session-41")}, fixture.app.indexRetrySessions)
 	})
 
 	t.Run("completed retry return is a contract failure", func(t *testing.T) {
@@ -919,7 +1012,7 @@ func TestOperatorCodeHTTPAdapter_IndexIntentIdempotencyAndRetry(t *testing.T) {
 		adapter.HandleIndexIntentRetry(recorder, operatorCodeHTTPTestIndexIntentRetryRequest(t, unavailable.ID, fixture.identity))
 		require.Equal(t, http.StatusServiceUnavailable, recorder.Code, recorder.Body.String())
 		require.Empty(t, recorder.Body.String())
-		require.Equal(t, []string{"browser-session-41"}, fixture.app.indexRetrySessions)
+		require.Equal(t, []string{gormdb.BrowserSessionPublicHandle("browser-session-41")}, fixture.app.indexRetrySessions)
 	})
 }
 
@@ -1104,7 +1197,7 @@ func TestOperatorCodeHTTPAdapter_GrantEmptyEnvelopeIsCanonical(t *testing.T) {
 			identity, guarded, ok := adapter.decodeEmptyEnvelope(recorder, request, testCase.endpoint, testCase.method)
 			require.True(t, ok, recorder.Body.String())
 			require.Equal(t, operatorCodeRequestDigest(testCase.endpoint, nil), identity.digest)
-			require.Equal(t, "browser-session-41", auditcontext.SourceSession(guarded.Context()))
+			require.Equal(t, gormdb.BrowserSessionPublicHandle("browser-session-41"), auditcontext.SourceSession(guarded.Context()))
 
 			invalid := operatorCodeHTTPTestRequest(t, `{}`, fixture.identity)
 			invalid.Method = testCase.method
@@ -1149,7 +1242,7 @@ func TestOperatorCodeHTTPAdapter_GrantHandlersCarryAuditBreadcrumb(t *testing.T)
 	revokeRecorder := httptest.NewRecorder()
 	adapter.HandleGrantRevoke(revokeRecorder, revoke)
 	require.Equal(t, http.StatusOK, revokeRecorder.Code, revokeRecorder.Body.String())
-	require.Equal(t, []string{"browser-session-41", "browser-session-41", "browser-session-41", "browser-session-41", "browser-session-41"}, onboarding.sessions)
+	require.Equal(t, []string{gormdb.BrowserSessionPublicHandle("browser-session-41"), gormdb.BrowserSessionPublicHandle("browser-session-41"), gormdb.BrowserSessionPublicHandle("browser-session-41"), gormdb.BrowserSessionPublicHandle("browser-session-41"), gormdb.BrowserSessionPublicHandle("browser-session-41")}, onboarding.sessions)
 }
 
 type operatorCodeGrantBreadcrumbApplication struct {

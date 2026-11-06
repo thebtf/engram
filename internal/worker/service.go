@@ -859,11 +859,14 @@ func (s *Service) initializeAsync() {
 	}
 
 	// Open the PostgreSQL connection pool and run pending schema migrations.
-	store, err := gorm.NewStore(gorm.Config{
+	store, err := gorm.NewStoreWhenAvailable(s.ctx, gorm.Config{
 		DSN:      s.config.DatabaseDSN,
 		MaxConns: s.config.DatabaseMaxConns,
 	})
 	if err != nil {
+		if s.ctx.Err() != nil {
+			return
+		}
 		s.setInitError(fmt.Errorf("init database: %w", err))
 		return
 	}
@@ -1097,8 +1100,17 @@ func (s *Service) initializeAsync() {
 	// Create chunking manager for document ingestion
 	chunkManager := s.createChunkManager()
 
-	// Create versioned document store for collaborative document MCP tools (migration 051).
-	versionedDocumentStore := gorm.NewVersionedDocumentStore(store)
+	// The same Vault authenticates retained document membership derivations.
+	vault, vaultErr := s.getVault()
+	if vaultErr != nil {
+		s.setInitError(fmt.Errorf("shared reader vault key unavailable: %w", vaultErr))
+		return
+	}
+	if vault == nil {
+		s.setInitError(errors.New("shared reader vault key unavailable"))
+		return
+	}
+	versionedDocumentStore := gorm.NewVersionedDocumentStoreWithVault(store, vault)
 	booksStore := gorm.NewBooksStore(store)
 	// Single-container startup has not launched the retired book writer. The
 	// residual transition is idempotent and preserves documents/provenance.
@@ -1293,17 +1305,6 @@ func (s *Service) initializeAsync() {
 	s.operatorCollectionAdapter = operatorCollectionAdapter
 	s.queueCandidateSelectionHandler = queueCandidateSelectionHandler
 	s.initMu.Unlock()
-
-	// Catalog and retained readers need the shared Vault even when CodeIntel is disabled.
-	vault, vaultErr := s.getVault()
-	if vaultErr != nil {
-		s.setInitError(fmt.Errorf("shared reader vault key unavailable: %w", vaultErr))
-		return
-	}
-	if vault == nil {
-		s.setInitError(errors.New("shared reader vault key unavailable"))
-		return
-	}
 
 	// Compose UCI after settings resolution and shared embedding initialization,
 	// before MCP or gRPC transports can expose its application.
@@ -1912,11 +1913,16 @@ func (s *Service) setupRoutes() {
 		r.Get("/api/projects/unresolved/{reference}/history", s.handleRetainedProjectHistory)
 		r.Get("/api/projects/unresolved/{reference}/code", s.handleRetainedProjectCode)
 		r.Get("/api/projects/consolidation/census", s.handleProjectConsolidationCensus)
+		r.Post("/api/projects/consolidation/aliases/prepare", s.handleProjectAliasPrepare)
+		r.Post("/api/projects/consolidation/aliases/apply", s.handleProjectAliasApply)
+		r.Get("/api/projects/consolidation/aliases/status", s.handleProjectAliasStatus)
+		r.Post("/api/projects/consolidation/aliases/rollback", s.handleProjectAliasRollback)
 		r.Post("/api/projects/consolidation/preflight", s.handleProjectConsolidationPreflight)
 		r.Post("/api/projects/consolidation/backup", s.handleProjectConsolidationBackup)
 		r.Post("/api/projects/consolidation/verify-backup", s.handleProjectConsolidationVerifyBackup)
 		r.Post("/api/projects/consolidation/dry-run", s.handleProjectConsolidationDryRun)
 		r.Post("/api/projects/consolidation/apply", s.handleProjectConsolidationApply)
+		r.Patch("/api/projects/{id}", s.handlePatchProjectLabel)
 		r.Delete("/api/projects/{id}", s.handleDeleteProject)
 		r.Get("/api/stats", s.handleGetStats)
 		r.Get("/api/stats/retrieval", s.handleGetRetrievalStats)
@@ -2360,25 +2366,9 @@ func (s *Service) Start() error {
 		// Without this, the gRPC client blocks waiting for the server preface and
 		// the connection times out. For TLS, ALPN handles HTTP/2 negotiation, but
 		// SendSettings is harmless there — it works correctly for both modes.
-		// The gRPC server may not be ready yet (initializeAsync sets s.grpcServer),
-		// so we start Serve() in a goroutine that waits for the server to appear.
+		// Reject RPCs until the fully initialized, auth-wired server is available.
 		grpcL := m.MatchWithWriters(cmux.HTTP2MatchHeaderFieldPrefixSendSettings("content-type", "application/grpc"))
-		go func() {
-			// Wait for initializeAsync to create the gRPC server.
-			s.initMu.RLock()
-			for s.grpcServer == nil {
-				s.initMu.RUnlock()
-				time.Sleep(100 * time.Millisecond)
-				s.initMu.RLock()
-			}
-			grpcSrv := s.grpcServer
-			s.initMu.RUnlock()
-
-			log.Info().Msg("gRPC server ready, serving on cmux")
-			if err := grpcSrv.Serve(grpcL); err != nil {
-				log.Error().Err(err).Msg("gRPC server error")
-			}
-		}()
+		go s.serveGRPCWhenReady(grpcL)
 
 		// All other connections (HTTP/1.1, HTTP/2 non-gRPC) go to the HTTP server.
 		httpL := m.Match(cmux.Any())

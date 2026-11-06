@@ -5,9 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"slices"
+	"sync"
 	"time"
 
 	"github.com/thebtf/engram/internal/config"
+	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/module"
 	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/internal/uci"
@@ -15,6 +18,7 @@ import (
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -22,56 +26,144 @@ const proxyToolsDiscoveryTimeout = 30 * time.Second
 
 const projectIdentityResolutionRefusedMessage = "project identity resolution refused"
 
-// ProxyTools fetches the dynamic tool set from the engram server via a gRPC
-// Initialize handshake. Implements module.ProxyToolProvider per FR-11a.
-//
-// Ported verbatim from cmd/engram/main.go handleToolsList v4.2.0 — the
-// translation from pb.ToolDefinition to module.ToolDef preserves the exact
-// shape the CC client expects.
-//
-// Missing both supported server URL variables is intentional offline mode and
-// remains eligible for a static Loom-only response. Once either backend URL is
-// configured, every identity, connection, or Initialize failure fails loud.
+var (
+	offlineCatalogOnce sync.Once
+	offlineCatalog     []module.ToolDef
+	offlineCatalogErr  error
+)
+
+// ProxyTools returns local schemas without waiting for authenticated discovery.
 func (m *Module) ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]module.ToolDef, error) {
-	serverURL, err := m.requireServerURL(p)
-	if err != nil {
-		// No configured server URL is the intentional offline contract: the
-		// dispatcher may still return static Loom tools.
-		return nil, err
-	}
-	token := m.envFor(p, config.EnvWorkstationToken)
-	discoveryCtx, cancel := context.WithTimeout(ctx, proxyToolsDiscoveryTimeout)
-	defer cancel()
-
-	conn, err := m.pool.getOrDialGRPC(serverURL, token)
-	if err != nil {
-		return nil, &module.RequiredProxyToolsError{Cause: fmt.Errorf("gRPC connect: %w", err)}
-	}
-	client := pb.NewEngramServiceClient(conn)
-
-	// The catalogue is independent of local project state.
-	request := &pb.InitializeRequest{ClientName: "engram-daemon", ClientVersion: daemonClientVersion}
-	resp, err := client.Initialize(discoveryCtx, request, grpc.WaitForReady(true))
-	if err != nil {
-		return nil, &module.RequiredProxyToolsError{Cause: fmt.Errorf("gRPC Initialize: %w", err)}
-	}
-
-	tools := make([]module.ToolDef, 0, len(resp.Tools))
-	for _, t := range resp.Tools {
-		tools = append(tools, module.ToolDef{
-			Name:        t.Name,
-			Description: t.Description,
-			InputSchema: t.InputSchemaJson,
-		})
-	}
-	// The proof becomes usable only after the existing response validation and
-	// complete tools-list projection above have succeeded. Empty is the
-	// old-server-compatible case; malformed non-empty values fail closed.
-	if err := m.advisorProofs.record(serverURL, token, resp.GetAuthenticatedSubjectProofSha256()); err != nil {
+	if err := ctx.Err(); err != nil {
 		return nil, &module.RequiredProxyToolsError{Cause: err}
 	}
+	fallback, err := supportedOfflineTools()
+	if err != nil {
+		return nil, err
+	}
+	serverURL, err := m.requireServerURL(p)
+	if err != nil {
+		return slices.Clone(fallback), nil
+	}
+	token := m.envFor(p, config.EnvWorkstationToken)
+	key, err := advisorProofKeyFor(serverURL, token)
+	if err != nil {
+		return slices.Clone(fallback), nil
+	}
+	m.refreshMu.Lock()
+	live := slices.Clone(m.liveCatalog[key])
+	m.refreshMu.Unlock()
+	m.refreshDiscovery(serverURL, token, p.ID)
+	known := make(map[string]bool, len(live))
+	for i := range live {
+		live[i].Description = "Previously discovered remote schema; current availability and authorization are unverified. " + live[i].Description
+		known[live[i].Name] = true
+	}
+	for _, tool := range fallback {
+		if !known[tool.Name] {
+			live = append(live, tool)
+		}
+	}
+	return live, nil
+}
 
-	return tools, nil
+func supportedOfflineTools() ([]module.ToolDef, error) {
+	offlineCatalogOnce.Do(func() {
+		for _, tool := range mcp.SupportedToolCatalog() {
+			schema, err := json.Marshal(tool.InputSchema)
+			if err != nil {
+				offlineCatalogErr = &module.RequiredProxyToolsError{Cause: err}
+				return
+			}
+			offlineCatalog = append(offlineCatalog, module.ToolDef{Name: tool.Name, Description: "Local schema only; remote support and authorization are unverified and must be checked by the backend. " + tool.Description, InputSchema: schema})
+		}
+	})
+	return offlineCatalog, offlineCatalogErr
+}
+
+func (m *Module) refreshDiscovery(serverURL, token, projectID string) {
+	key, err := advisorProofKeyFor(serverURL, token)
+	if err != nil {
+		return
+	}
+	m.refreshMu.Lock()
+	if m.refreshCtx == nil || m.refreshCtx.Err() != nil {
+		m.refreshMu.Unlock()
+		return
+	}
+	projects := m.refreshing[key]
+	if projects == nil {
+		if len(m.refreshing) >= maxAdvisorSubjectProofCacheItems {
+			m.refreshMu.Unlock()
+			return
+		}
+		projects = make(map[string]bool)
+		m.refreshing[key] = projects
+	}
+	if projects[projectID] || len(projects) >= maxAdvisorSubjectProofCacheItems {
+		m.refreshMu.Unlock()
+		return
+	}
+	projects[projectID] = true
+	ctx := m.refreshCtx
+	m.refreshWG.Add(1)
+	m.refreshMu.Unlock()
+	go func() {
+		defer m.refreshWG.Done()
+		defer func() {
+			m.refreshMu.Lock()
+			delete(m.refreshing[key], projectID)
+			if len(m.refreshing[key]) == 0 {
+				delete(m.refreshing, key)
+			}
+			m.refreshMu.Unlock()
+		}()
+		delay := time.Second
+		for ctx.Err() == nil {
+			conn, err := m.pool.getOrDialGRPC(serverURL, token)
+			if err == nil {
+				callCtx, cancel := context.WithTimeout(ctx, proxyToolsDiscoveryTimeout)
+				resp, callErr := pb.NewEngramServiceClient(conn).Initialize(callCtx, &pb.InitializeRequest{ClientName: "engram-daemon", ClientVersion: daemonClientVersion}, grpc.WaitForReady(true))
+				cancel()
+				if callErr == nil {
+					tools := make([]module.ToolDef, 0, len(resp.Tools))
+					valid := true
+					for _, tool := range resp.Tools {
+						if tool == nil || tool.Name == "" || !json.Valid(tool.InputSchemaJson) {
+							valid = false
+							break
+						}
+						tools = append(tools, module.ToolDef{Name: tool.Name, Description: tool.Description, InputSchema: tool.InputSchemaJson})
+					}
+					if valid && m.advisorProofs.record(serverURL, token, resp.GetAuthenticatedSubjectProofSha256()) == nil {
+						m.refreshMu.Lock()
+						if _, exists := m.liveCatalog[key]; exists || len(m.liveCatalog) < maxAdvisorSubjectProofCacheItems {
+							m.liveCatalog[key] = tools
+						}
+						notifier := m.notifier
+						m.refreshMu.Unlock()
+						if notifier != nil {
+							_ = notifier.Notify(projectID, []byte(`{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}`))
+						}
+						delay = time.Second
+						for conn.GetState() == connectivity.Ready && conn.WaitForStateChange(ctx, connectivity.Ready) {
+						}
+					}
+				}
+			}
+			_ = m.advisorProofs.record(serverURL, token, nil)
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			if delay < 8*time.Second {
+				delay *= 2
+			}
+		}
+	}()
 }
 
 // ProxyHandleTool forwards a tools/call request to the engram server via
@@ -168,9 +260,25 @@ func (m *Module) proxyToolCallContext(ctx context.Context, project muxcore.Proje
 	if err != nil {
 		return nil, err
 	}
-	resolved, err := projectidentity.ResolveLogicalProject(ctx, project.Cwd,
-		projectidentity.HTTPBootstrap(serverURL, m.envFor(project, config.EnvWorkstationToken)))
+	resolved, err := projectidentity.ResolveLogicalProjectForBackend(ctx, project.Cwd, serverURL, m.envFor(project, config.EnvWorkstationToken))
+	originalErr := err
+	if projectidentity.ProjectErrorCode(err) == "PROJECT_MIGRATION_REQUIRED" {
+		resolved, err = projectidentity.ResolveAutomaticHistoricalProject(ctx, project.Cwd, serverURL, m.envFor(project, config.EnvWorkstationToken), err)
+	}
 	if err != nil {
+		if code := projectidentity.ProjectErrorCode(err); request.ToolName == "recall_memory" && (code == "PROJECT_IDENTITY_CONFLICT" || code == "PROJECT_MIGRATION_REQUIRED") {
+			id, bindingErr := m.conflictSafeRead(ctx, project, serverURL, m.envFor(project, config.EnvWorkstationToken), request.ArgumentsJson)
+			if bindingErr != nil {
+				return nil, projectIdentityRefusal(bindingErr, project.Cwd)
+			}
+			if id != "" {
+				request.Project = id
+				return ctx, nil
+			}
+			if projectidentity.ProjectErrorCode(originalErr) == "PROJECT_MIGRATION_REQUIRED" && code == "PROJECT_IDENTITY_CONFLICT" {
+				err = originalErr
+			}
+		}
 		return nil, projectIdentityRefusal(err, project.Cwd)
 	}
 	request.Project = resolved.ProjectID

@@ -18,7 +18,7 @@ func TestProcessCorrectionAsyncClearsContinuitySlotWithSupersession(t *testing.T
 	t.Setenv("ENGRAM_CONTINUITY_SLOT_ENABLED", "true")
 	t.Setenv("ENGRAM_VNEXT_ENABLED", "true")
 
-	store := openIntegrationStore(t)
+	store := openWorkerUCIContextCompositionStore(t)
 	ctx := context.Background()
 	project := uuid.NewString()
 	require.NoError(t, store.DB.Create(&gormdb.Project{ID: project}).Error)

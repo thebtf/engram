@@ -69,6 +69,18 @@ There is no historical startup-flag alternative to this public hybrid enum.
 
 Admin-gated families (candidates, governance, bulk ops) are additionally enforced at the handler level regardless of advertisement.
 
+`lifecycle` exact-ID reads (`info`, `decay_preview`) use ordinary reader
+caller/project, principal/domain and workstation privacy authority before loading
+metadata. Like recall without an explicit `session_id` argument, these reads do
+not narrow visibility with transport session metadata; lifecycle has no such
+argument. Mutations retain guarded by-ID manage authority, including the context
+session restriction when present. Hidden and absent IDs return the same tool
+error without lifecycle metadata or an existence signal. Read-only callers may
+read authorized metadata but cannot mutate. Tier validation, changes and
+promotion history run in one authorized transaction; a history-write failure
+rolls back the tier change. `sleep_status` remains content-free. Lifecycle is not
+forwarded by `--session-memory`.
+
 #### `know_about` Response Shape
 
 `know_about` is a content-free discovery tool. It accepts a required `topic`, an
@@ -264,6 +276,17 @@ derives local Go package directories from the server dependency graph, puts
 enabled and dependency parsing disabled. Package discovery and generation
 errors stop the build; generated files must not be patched by hand.
 
+`GET /api/stats` returns uptime, session and queue activity, retrieval statistics,
+readiness, and runtime memory statistics. `database` is present when the store is
+initialized; `project` and `projectObservations` are present only when a nonempty
+project is supplied and its count lookup succeeds; `rateLimiter` is present when
+configured. A nonempty `project` scopes retrieval and the conditional project
+fields only; other statistics remain global. With no project, retrieval counters
+are summed across tracked projects. This response does not contain vector-cache
+or graph fields. A successful response is JSON; invalid project validation returns
+plain-text 400, and the readiness gate returns plain-text 503 when not ready.
+Swagger 2 lists response media types for the whole operation, not per status.
+
 Context GET and POST operations have separate annotations on real routed handlers;
 the GET entry points delegate to the same implementation without changing request
 semantics. GET requires `project` in the query string, and context search also
@@ -307,6 +330,75 @@ denied IDs return 404; state/version conflicts return 409 with transaction rollb
 Success returns `{id, action, status, version, project}`. A transport failure can
 leave the outcome unknown and must not be retried automatically.
 
+### Live events and logs
+
+`GET /api/events` and `GET /api/logs` are registered before the database-ready
+gate, but ordinary authentication and per-client rate limiting still apply when
+enabled. Authentication accepts `X-Auth-Token`, `Authorization: Bearer <token>`,
+or the `token` query parameter, in that order, before supported session cookies.
+A supplied invalid token does not fall back to a cookie. Query credentials can
+leak through URLs; prefer headers or an authenticated cookie when available.
+Auth-disabled mode supplies the usual synthetic identity. Before the validator is
+wired, a supplied token can receive 401 even though the routes are pre-ready.
+Unauthorized requests receive plain-text 401; disallowed keycard classes receive
+403; rate limiting can return 429. Authentication-store failure can return 500.
+These `http.Error` responses are `text/plain; charset=utf-8`, occur before the
+stream starts, and do not imply DB readiness.
+
+`GET /api/events` returns `text/event-stream`. On connection the handler writes
+`data: {"type":"connected","clientId":"client-<number>"}\n\n`; the ID is
+connection-local, not a replay cursor. Registration occurs before that write, so
+a concurrent broadcast can arrive first. Other `data: <JSON>\n\n` frames carry
+live dashboard events, whose fields depend on the event type (for example,
+`session` or `processing_status`). The server sends `: keepalive\n\n` comments
+every 25 seconds. Comments are not application events. A writer without flushing
+support gets 500 `streaming not supported`. Disconnecting ends the subscription;
+reconnect establishes a new connection. There are no SSE event IDs, Last-Event-ID
+handling, or replay, so clients must refresh relevant state after a gap.
+
+Broadcast write errors or timeouts remove the subscriber and signal the handler
+to end its stream. The handler waits for any in-flight write before returning,
+so a writer that never unblocks can delay termination indefinitely. A timeout
+still lets the broadcaster continue serving other clients; it does not cancel
+the blocked write. Clients should reconnect and refresh relevant state after a
+disconnect; reconnecting cannot recover missed events. A quiet stream alone
+does not establish that delivery is healthy or that removal occurred.
+
+`GET /api/logs` normally returns `application/json`: an array of entries with
+`timestamp`, `level`, `message`, optional `fields`, and `raw`. RFC3339 timestamps
+are converted to Unix seconds; numeric timestamps are retained as integers and
+missing or unparseable timestamps may be zero. Entries are chronological, oldest
+first. `lines` defaults to 100;
+positive integers are capped at 10000, while invalid, zero, or negative values
+use the default. It limits the most recent matching records in the in-memory ring;
+an empty result is `[]`.
+
+Only `follow=true` (exact, case-sensitive value) selects `text/event-stream`.
+It ignores `lines`, subscribes to new entries without an initial snapshot, and
+first writes `: connected\n\n`. Each matching new entry is a JSON log entry in a
+`data: <JSON>\n\n` frame. There is no periodic follow-mode keepalive. The
+subscriber queue holds 64 entries and drops new entries when full; disconnect or
+reconnect has no replay or event cursor. Clients can fetch a new snapshot to
+resynchronize, but that is not an atomic handoff and cannot guarantee gap-free
+delivery. A missing log buffer returns 503; a follow response whose writer cannot
+flush returns 500 `streaming not supported`.
+
+Both log modes support `level` as a minimum severity (`trace`, `debug`, `info`,
+`warn`, `error`, `fatal`, `panic`); unknown requested or entry levels pass the
+filter. `query` is a case-insensitive substring search of the projected message
+and raw log, after scoped browser-session redaction. Filtering precedes the
+snapshot limit. Projection covers identified browser-session fields, messages,
+and raw data, including retained records; it is not a general secret scrubber.
+The endpoint does not require the access-administration session-admin guard.
+
+Swagger 2 cannot represent response media types per status or different 200
+schemas based on `follow` for the same operation. Both operations list `text/plain`
+alongside their success media types at operation scope; that does not mean a
+successful stream is plain text. The logs operation does not claim a single 200
+schema; this section specifies the conditional
+contract. `internal/worker/sse/broadcaster.go`, `handlers_logs.go`,
+`internal/logbuf/ring.go`, and `middleware.go` own these behaviors.
+
 ### Authentication (v6)
 
 Two-tier token model:
@@ -317,7 +409,80 @@ Two-tier token model:
 Authorization: Bearer <token>
 ```
 
-Bypass: `ENGRAM_AUTH_SKIP_LOCAL=true` skips auth for RFC 1918 addresses.
+`ENGRAM_AUTH_DISABLED=true` supplies a synthetic identity for ordinary operations;
+it is not a browser session and does not pass access-administration reader guards.
+
+`POST /api/auth/setup` requires the operator token and a JSON email and password.
+The password must not exceed 72 bytes after UTF-8 encoding. An overlong password
+returns HTTP 400 with `{"error":"password must not exceed 72 bytes"}`; the
+rejected request does not create a user or complete setup. Unexpected hashing
+failures return HTTP 500.
+
+`POST /api/auth/register` also rejects passwords exceeding 72 UTF-8 bytes with
+HTTP 400 and `{"error":"password must not exceed 72 bytes"}`. The rejected
+request does not create a user or consume the invitation. Unexpected hashing
+failures return HTTP 500.
+
+#### Browser session management (issue 535)
+
+The private `sessions.id` remains the `engram_auth` HttpOnly cookie credential.
+Cookie authentication, expiry, revocation and logout continue to use that private
+value. It is never a management selector or an `AuthSession` JSON ID.
+
+| Method | Path | Session identity contract |
+|--------|------|---------------------------|
+| `POST` | `/api/auth/user-login` | Issues the credential only in the cookie; records safe audit correlation. |
+| `POST` | `/api/auth/user-logout` | Revokes the cookie's session and clears that cookie; existing origin/idempotency checks remain. |
+| `GET` | `/api/access/sessions` | `sessions[].id` is a stable public handle. `include_revoked=true` also includes expired/revoked rows. |
+| `GET` | `/api/access/users/{id}` | Session IDs and browser-auth audit references use the same public handles. |
+| `GET` | `/api/access/log` | Historical and new browser-auth states expose safe correlation, not credentials. |
+| `POST` | `/api/access/sessions/{id}/revoke` | Accepts only the public handle; credential and unknown selectors return 404 without mutation. Success repeats the handle. |
+
+All seven access GET templates (`providers`, `invitations`, `users`, `users/{id}`,
+`roles`, `sessions`, `log`) retain their session-admin guard. Master/client keycards
+and synthetic auth-disabled identities do not pass it. Existing HMAC session-admin
+read admission remains; revocation additionally requires the current enabled DB
+admin cookie. A public handle never authenticates as a cookie. Refresh an old
+Access view before revoking; cached credential selectors are not accepted as a
+compatibility route.
+
+Migration `190_browser_session_public_handle` adds one `sessions.public_handle`
+TEXT column and the unique `idx_sessions_public_handle` index. Its value is
+`bsh1_` followed by lowercase SHA-256 of the exact UTF-8 bytes of
+`engram/browser-session-management/v1:` plus the stored credential. No trimming or
+case folding occurs. The transform relies on random credential entropy; it does
+not strengthen weak values. The original credential/PK and all lifecycle fields
+are retained. Backfill and owned DDL run in an explicit transaction and refuse
+incompatible retained handles or index state; collisions fail rather than select
+another handle. A BEFORE INSERT / UPDATE OF id, public_handle trigger computes
+the same value for old SQL writers. No mapping table or expression-index
+immutability assertion is involved. Reapplication is idempotent. Destructive down
+migration is refused and retains the additive schema. Old-writer compatibility
+does **not** make an older credential-exposing binary a safe behavioral rollback.
+
+New `auth_login` and `auth_session_revoked` events write safe handles. Their
+historical before/after states are projected recursively without rewriting stored
+audit rows, including orphan references whose session rows no longer exist.
+Representable metadata is retained; non-object JSON is safely wrapped instead of
+echoed as raw text. Browser-specific Operator Code audit provenance uses the same
+handle while tab/chooser/authorization identity remains private and cookie-bound.
+SDK/agent session IDs, generic source-session attribution and their APIs are not
+converted into browser handles.
+
+The separate `GET /api/logs` JSON snapshot and `GET /api/logs?follow=true` SSE
+stream apply scoped browser-session projection to matching log fields, messages
+and raw JSON. Browser-session management paths are normalized for logging, and
+identified browser credentials in browser-auth diagnostics are hidden. Existing
+historical in-memory records are projected on read, not deleted or rewritten;
+SSE projects queued/new entries before serialization. Text `query` matching uses
+the safe projected message/raw JSON, not hidden credential bytes. Snapshot query
+filtering also precedes the latest-`lines` limit; existing level filtering and
+chronological ordering remain. Ordinary log-route authentication is unchanged;
+this route does not acquire the access-administration session-admin guard.
+SDK/agent session correlation and unrelated harmless diagnostic fields remain.
+This is scoped browser-session projection, not general secret detection or a
+guarantee that arbitrary application logs contain no other secrets.
+
 
 ### Core Endpoints
 
@@ -339,21 +504,72 @@ Bypass: `ENGRAM_AUTH_SKIP_LOCAL=true` skips auth for RFC 1918 addresses.
 | `POST` | `/api/tokens` | Create worker keycard. |
 | `DELETE` | `/api/tokens/:id` | Revoke token. |
 
+For `POST /api/update/apply`, an available update without an asset URL for the
+current platform returns HTTP 200 with `success: false` and an error message.
+The synchronous response is authoritative for this refusal. The updater
+initially records an `error` status with the existing manual update command,
+but a subsequent update check may overwrite that in-memory status before it is
+read through `GET /api/update/status`. No update is started in this case. An
+unavailable update keeps the existing `success: false` response; an update with
+an asset continues in the background. Status does not promise crash durability.
+The generic manual update command is not guaranteed to work when the same
+platform artifact is absent.
+
 ### Knowledge readers
 
-`GET /api/projects` returns `{items:[{project_id,name,repository_qualifier?}],unresolved:[{reference,name,reason,reader_kinds}]}`.
+`GET /api/projects` returns `{items:[{project_id,name,display_name,repository_qualifier?}],unresolved:[{reference,name,reason,reader_kinds}],logical_groups:[{primary_project_id,alias_project_ids}]}`.
 `items` contains live canonical `projects` rows, not session labels or legacy
 selectors. `project_id` is the canonical UUID; `name` is a human label that falls
-back to `Registered project` when missing or blank. The optional
+back to `Registered project` when missing or blank. `display_name` is always
+present and is the exact stored string or JSON null, without that fallback. The optional
 `repository_qualifier` is a normalized repository locator. Duplicate labels remain
 distinct UUIDs. Existing ordinary authenticated readers retain their server-wide project
 scope. HAP project/legacy credentials remain forbidden by the existing route
 policy. The catalog response is `private, no-store`, never publicly cached.
+This server always emits `logical_groups` as an array, including `[]` when no
+groups exist. Older servers may omit it; an already feature-aware client must not
+silently downgrade if it disappears. The relation is not an authorization grant.
+
+For `GET /api/projects/resolve?legacy_id=...`, an existing active UUID uses
+the same safe global alias projection as knowledge readers; chains and
+conflicting redirects do not select an intermediate project. Non-UUID
+historical selectors retain their legacy/session resolution semantics.
+
+`PATCH /api/projects/{id}` changes only the stored label of an existing active,
+non-removed canonical UUID. It requires the server's operator/admin identity;
+read-only and read-write client keycards cannot mutate this server-wide metadata.
+The existing auth-disabled mode uses its synthetic admin identity. The JSON object
+must contain exactly `display_name` and `expected_display_name`, each either a
+string or null. Both fields must be present; an empty string is distinct from
+null. Strings are limited to 255 Unicode code points and cannot contain control
+characters; the request body is limited to 4096 bytes. Use the catalog's exact
+`display_name` as the precondition, never its presentation `name`.
+
+The server locks the live row and atomically compares the stored nullable value
+before changing it. Success returns HTTP 200 with `project_id` and the stored
+`display_name`; 409 means the value is stale, and 404 means the project is missing
+or inactive. Invalid input is 400, oversized bodies are 413, and unauthorized
+callers are denied. The same conditional operation can restore a prior null,
+empty or valid string value; it does not create projects or reassign history.
+Historical labels containing control characters cannot be supplied as a
+precondition, so this endpoint refuses their rename rather than prevent rollback.
 
 `unresolved` describes retained data owners without a canonical project assignment.
 Each entry has an opaque `reference`, display `name`, `reason`, and `reader_kinds`
 identifying retained `memory`, `document`, `issue` or `code` data. This metadata
 neither verifies retained content nor grants reader access.
+
+Administrators explicitly attach confirmed UUID aliases through
+`POST /api/projects/consolidation/aliases/prepare`,
+`POST /api/projects/consolidation/aliases/apply`,
+`GET /api/projects/consolidation/aliases/status` and
+`POST /api/projects/consolidation/aliases/rollback`. See
+[Explicit project aliases](../operating-engram.md#explicit-project-aliases) for
+request and response semantics, database identity limits and unknown-outcome handling.
+An existing global target-to-itself redirect is retained as sealed expected
+state, not replaced or deleted. Changed baseline or operation-owned redirects
+refuse active reconciliation and conditional inverse; session-scoped and other
+conflicting redirects are not admitted as that baseline.
 
 #### Bounded retained-record discovery
 
@@ -461,8 +677,8 @@ unrestricted; one value is the scalar subset. Each parameter accepts at most
 six raw values before deduplication and validates every value, including later
 ones. Blank/control/malformed UTF-8 values are 400. Document values retain the
 128-byte raw UTF-8 bound and Unicode whitespace trimming; comma-containing
-types are literal values, not CSV. Types apply after latest-version-per-path
-selection, so matching only an older version never admits the document.
+types are literal values, not CSV. Types apply after latest-version selection per
+native `(project,path)` lineage, so matching only an older version never admits it.
 
 `GET /api/memories/:id?project=<exact live canonical ID>` requires the same
 fresh project authorization and uniquely owned alias set before loading the ID.
@@ -482,15 +698,34 @@ Audit validation errors (invalid ID, malformed query, missing/invalid project or
 limit) use plain-text 400 bodies; project authorization uses a JSON error object
 with status 403, matching the existing OpenAPI response schemas.
 
-Documents select the latest version of each path **before** filtering. Search is
+Documents select the latest version of each native `(project,path)` lineage
+**before** filtering, without merging independent same-path histories. Search is
 limited to public list metadata (`path`, `doc_type`, `author`), not content,
 arbitrary JSON metadata or secrets. `doc_type` (128 bytes) and literal
 `path_prefix` (4096 bytes) remain supported; ordering is `created_at DESC, id DESC`.
-Document content/version/history shapes and comments are unchanged. Content,
-version and history reads use the same exact live canonical project and lawful
-stored alias set as list/count. The current document schema has no independent
+Content and history reads use the same exact live canonical project and lawful
+read scope as list/count. The current document schema has no independent
 principal/privacy ACL: its reader boundary is the existing authenticated
 project-reader scope.
+
+`GET /api/documents/read` and `/api/documents/history` accept an optional positive
+`document_id` query parameter issued by list to select a lineage for the requested
+`project` and `path`; read also accepts its existing optional `version`. Without
+an ID, the requested native lineage wins, then a single authorized lineage;
+ambiguity returns 409. A version-write `POST /api/documents` may supply positive
+`document_id` and `expected_version` together to bind the latest version of that
+lineage; stale, foreign or mismatched targets are refused.
+
+`POST /api/documents/comment` and `GET /api/documents/comments` require
+`document_id`; scoped calls additionally supply `project` and positive
+`expected_version` together, identifying the exact selected history row, not
+necessarily the latest. For scoped export, selection snapshot/current requests
+and `POST /api/documents` with `action: export` carry `project`; explicit
+selection targets carry `id` and `expected_version`. Execution and the unchanged
+`/api/documents/exports/{id}` download reauthorize stored targets. Authenticated
+legacy calls omitting project retain their existing server-wide ID-addressed
+branch; a supplied scope that fails does not fall back to it. See the linked
+operator guidance for the complete contracts and no-replay boundary.
 
 Missing/blank project or invalid parameters: 400. Noncanonical, missing, removed
 project or forbidden credential: nondisclosing 403. Authentication remains 401;
@@ -499,14 +734,13 @@ Offsets are stable only while the dataset is unchanged, not snapshot/cursor
 tokens. An explicit UI “All projects” context uses descriptor IDs; empty project
 never widens server reads and does not trigger an automatic content scan.
 
-Stored legacy TEXT projects are readable only when the live canonical row's
-existing `legacy_ids` maps each selector uniquely back to that same ID. Aliases
-claimed by another, removed or merged project are excluded. Canonical descriptors
-come from `projects`, including memory-only/document-only registered projects,
-not from sessions or label grouping. Unregistered orphan TEXT rows have no lawful
-catalog ID and remain untouched; this reader cannot register or infer one.
-No orphan endpoint, migration, raw-selector fallback or automatic registration
-is introduced. Existing authorized data diagnostics are separate from this API.
+For memory and document rows, authoritative consolidation membership overrides
+the native project selector; conflicting or unassigned memberships fail closed.
+Without membership, native project matching applies. Confirmed unambiguous,
+active UUID redirects expand the logical read scope without changing write
+authority or stored provenance. Canonical descriptors come from `projects`,
+not from session labels or inferred name grouping. Unregistered orphan TEXT rows
+without authoritative membership remain outside these canonical readers.
 
 For real-API preview, compose this backend with the UI envelope consumers and an
 existing authorized database. No migration, provider or identity onboarding is
@@ -586,13 +820,6 @@ automatically; use MCP `store` and `recall` for deliberate memory operations.
 
 ## Response Format
 
-All HTTP API responses are JSON. Serialization via `github.com/goccy/go-json`.
-
-Error responses:
-```json
-{
-  "error": "human-readable message"
-}
-```
-
-No internal error details are exposed in HTTP responses (logged server-side only).
+HTTP endpoints use different response formats. Many return JSON; the streaming
+endpoints above return SSE, and some errors are plain text. Consult each endpoint
+rather than assuming a uniform success or error envelope.

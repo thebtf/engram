@@ -13,6 +13,9 @@
     "back": "返回",
     "unknownProject": "项目不可用或归属尚未确定。",
     "unavailable": "项目目录不可用。请重试加载项目。",
+    "lineageUnsupported": "此文档链接需要受支持且已验证的项目组。请返回文档列表。",
+    "lineageActionsUnavailable": "在支持按项目范围验证操作之前，项目组的评论和导出不可用。",
+    "lineageScopeUncertain": "由于项目组元数据不一致，文档暂不可用。请重新加载项目目录。",
     "ambiguousName": "名称相同；名称不能确定项目归属。",
     "selectionRequired": "请先从目录中选择项目。",
     "loading": "正在加载目录并确定项目…",
@@ -296,7 +299,8 @@
       "request-rejected": "Engram 服务器拒绝了此请求。",
       "server-unavailable": "Engram 服务器不可用。",
       "unreachable": "无法连接到 Engram 服务器。",
-      "invalid-response": "Engram 服务器返回了无法读取的响应。"
+      "invalid-response": "Engram 服务器返回了无法读取的响应。",
+      "document-lineage-ambiguous": "多个文档使用此路径。请返回列表并选择一个文档。"
     }
   },
   "switchRow": {
@@ -1841,6 +1845,8 @@
     "flagsByArea": "按区域的 flag",
     "updateState": "Update 状态",
     "updateAvailable": "有可用更新",
+    "updateCheckLabel": "更新检查",
+    "updateCheckUnavailable": "无法确定是否有可用更新。请尝试刷新。",
     "idle": "空闲",
     "vectorUnavailable": "向量层不可用",
     "noise": "噪声",

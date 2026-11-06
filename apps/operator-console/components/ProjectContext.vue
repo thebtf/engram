@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { useOperatorProjectContext, projectName, projectChoiceLabel } from '../composables/useOperatorProjectContext'
+import { useOperatorProjectContext, projectName, localizedProjectChoiceLabel } from '../composables/useOperatorProjectContext'
 import { operatorDiagnosisKey } from '../composables/useOperatorApi'
 const { t } = useI18n()
+const projectChoiceLabel = (id: string) => localizedProjectChoiceLabel(id, t)
 const route = useRoute()
 const context = useOperatorProjectContext()
-const { project, projects, descriptors, unresolved, pending, error, selectionPending, selectionError } = context
+const { project, projects, descriptors, unresolved, projectSections, pending, error, selectionPending, selectionError } = context
 const showRetainedGroups = computed(() => !['/', '/projects', '/projects/unresolved'].includes(route.path.replace(/\/+$/, '').toLowerCase() || '/'))
 function select(event: Event) { if (event.target instanceof HTMLSelectElement) void context.select(event.target.value) }
 </script>
@@ -16,7 +17,12 @@ function select(event: Event) { if (event.target instanceof HTMLSelectElement) v
       <span>{{ t('knowledge.contextProject') }}</span>
       <select :value="project" :aria-label="t('knowledge.contextProject')" :disabled="pending && !projects.length" @change="select" data-testid="project-context-select">
         <option value="" disabled>{{ t('knowledge.chooseProject') }}</option>
-        <option v-for="id in projects" :key="id" :value="id">{{ projectChoiceLabel(id) }}</option>
+        <template v-for="section in projectSections" :key="section.key">
+          <option v-for="id in section.label ? [] : section.ids" :key="id" :value="id">{{ projectChoiceLabel(id) }}</option>
+          <optgroup v-if="section.label" :label="section.label">
+            <option v-for="id in section.ids" :key="id" :value="id">{{ projectChoiceLabel(id) }}</option>
+          </optgroup>
+        </template>
         <option value="all">{{ t('knowledge.allProjects') }}</option>
       </select>
     </label>

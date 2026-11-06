@@ -574,7 +574,7 @@ func (s *DomainOwnerStore) listAccessInvitations(ctx context.Context, limit int,
 }
 
 type accessSessionRow struct {
-	ID               string     `gorm:"column:id"`
+	PublicHandle     string     `gorm:"column:public_handle"`
 	UserID           int64      `gorm:"column:user_id"`
 	UserEmail        string     `gorm:"column:user_email"`
 	UserRole         string     `gorm:"column:user_role"`
@@ -596,7 +596,7 @@ func (s *DomainOwnerStore) listAccessSessions(ctx context.Context, limit int, us
 	q := s.db.WithContext(ctx).
 		Table("sessions AS s").
 		Select(`
-			s.id,
+			s.public_handle,
 			s.user_id,
 			u.email AS user_email,
 			u.role AS user_role,
@@ -623,7 +623,7 @@ func (s *DomainOwnerStore) listAccessSessions(ctx context.Context, limit int, us
 	result := make([]AccessSessionView, 0, len(rows))
 	for _, row := range rows {
 		result = append(result, AccessSessionView{
-			ID:               row.ID,
+			ID:               row.PublicHandle,
 			UserID:           row.UserID,
 			UserEmail:        row.UserEmail,
 			UserRole:         row.UserRole,
@@ -662,14 +662,18 @@ func (s *DomainOwnerStore) queryAccessAudit(ctx context.Context, limit int, targ
 	}
 	result := make([]AccessAuditEntry, 0, len(rows))
 	for _, row := range rows {
+		decode := decodeAuditJSON
+		if row.Action == "auth_login" || row.Action == "auth_session_revoked" {
+			decode = decodeBrowserSessionAuditJSON
+		}
 		result = append(result, AccessAuditEntry{
 			ID:          row.ID,
 			Action:      row.Action,
 			Actor:       row.Actor,
 			Reason:      row.Reason,
 			CreatedAt:   row.CreatedAt,
-			BeforeState: redactInvitationCode(decodeAuditJSON(row.BeforeState)),
-			AfterState:  redactInvitationCode(decodeAuditJSON(row.AfterState)),
+			BeforeState: redactInvitationCode(decode(row.BeforeState)),
+			AfterState:  redactInvitationCode(decode(row.AfterState)),
 		})
 	}
 	return result, nil
@@ -719,6 +723,70 @@ func decodeAuditJSON(raw *json.RawMessage) map[string]any {
 		return map[string]any{"raw": string(*raw), "decode_error": err.Error()}
 	}
 	return out
+}
+
+func decodeBrowserSessionAuditJSON(raw *json.RawMessage) map[string]any {
+	if raw == nil || len(*raw) == 0 {
+		return nil
+	}
+	var value any
+	if err := json.Unmarshal(*raw, &value); err != nil {
+		// Do not echo malformed bytes or a decoder's input-bearing error.
+		return map[string]any{"state_redacted": true}
+	}
+	_, scalarSession := value.(string)
+	value = projectBrowserSessionAuditValue(value, scalarSession)
+	if value == nil {
+		return nil
+	}
+	if state, ok := value.(map[string]any); ok {
+		return state
+	}
+	return map[string]any{"value": value}
+}
+
+func projectBrowserSessionAuditValue(value any, sessionReference bool) any {
+	switch value := value.(type) {
+	case map[string]any:
+		for key, child := range value {
+			reference := strings.EqualFold(key, "session_id")
+			if _, scalar := child.(string); scalar && !reference {
+				continue
+			}
+			value[key] = projectBrowserSessionAuditValue(child, reference)
+		}
+		return value
+	case []any:
+		for i, child := range value {
+			value[i] = projectBrowserSessionAuditValue(child, sessionReference)
+		}
+		return value
+	case string:
+		if value == "" || ValidBrowserSessionPublicHandle(value) {
+			return value
+		}
+		// Known browser audit fields also cover short historical IDs. Bare
+		// generated credentials in scalar/array legacy states need no row lookup.
+		if sessionReference || browserSessionCredentialShape(value) {
+			return BrowserSessionPublicHandle(value)
+		}
+		return value
+	default:
+		return value
+	}
+}
+
+func browserSessionCredentialShape(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for i := range value {
+		c := value[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
+			return false
+		}
+	}
+	return true
 }
 
 func invitationStatusFromFields(usedAt, revokedAt *time.Time, expiresAt time.Time) string {

@@ -4,6 +4,7 @@ package logbuf
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -117,32 +118,55 @@ func (rb *RingBuffer) Write(p []byte) (int, error) {
 // Entries are returned in chronological order (oldest first).
 func (rb *RingBuffer) Snapshot(n int, minLevel string, query string) []LogEntry {
 	rb.mu.Lock()
-	defer rb.mu.Unlock()
-
 	if rb.size == 0 {
+		rb.mu.Unlock()
 		return nil
 	}
+	if query == "" {
+		limit := rb.size
+		if n > 0 && n < limit {
+			limit = n
+		}
+		entries := make([]LogEntry, 0, limit)
+		for i := 0; i < rb.size && len(entries) < limit; i++ {
+			entry := rb.entries[(rb.head-1-i+rb.capacity)%rb.capacity]
+			if minLevel != "" && !LevelAtLeast(entry.Level, minLevel) {
+				continue
+			}
+			entries = append(entries, entry)
+		}
+		rb.mu.Unlock()
 
-	// Collect all entries in chronological order
-	all := make([]LogEntry, 0, rb.size)
+		slices.Reverse(entries)
+		for i := range entries {
+			entries[i] = RedactBrowserSessionEntry(entries[i])
+		}
+		return entries
+	}
+
+	all := make([]LogEntry, rb.size)
 	start := (rb.head - rb.size + rb.capacity) % rb.capacity
-	for i := 0; i < rb.size; i++ {
-		idx := (start + i) % rb.capacity
-		e := rb.entries[idx]
+	for i := range all {
+		all[i] = rb.entries[(start+i)%rb.capacity]
+	}
+	rb.mu.Unlock()
 
-		if minLevel != "" && !LevelAtLeast(e.Level, minLevel) {
+	matched := all[:0]
+	for _, entry := range all {
+		if minLevel != "" && !LevelAtLeast(entry.Level, minLevel) {
 			continue
 		}
-		if query != "" && !EntryMatchesQuery(e, query) {
+		entry = RedactBrowserSessionEntry(entry)
+		if query != "" && !EntryMatchesQuery(entry, query) {
 			continue
 		}
-		all = append(all, e)
+		matched = append(matched, entry)
 	}
 
-	if n <= 0 || n > len(all) {
-		return all
+	if n <= 0 || n > len(matched) {
+		return matched
 	}
-	return all[len(all)-n:]
+	return matched[len(matched)-n:]
 }
 
 // Subscribe returns a channel that receives new log entries and an unsubscribe function.
@@ -190,7 +214,7 @@ func LevelAtLeast(entryLevel, minLevel string) bool {
 	return ep >= mp
 }
 
-// EntryMatchesQuery returns true if any of the entry's text fields contain the query (case-insensitive).
+// EntryMatchesQuery searches a safely projected entry's message and raw JSON (case-insensitive).
 func EntryMatchesQuery(e LogEntry, query string) bool {
 	q := strings.ToLower(query)
 	if strings.Contains(strings.ToLower(e.Message), q) {

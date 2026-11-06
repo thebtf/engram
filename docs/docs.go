@@ -1220,6 +1220,59 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/events": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    },
+                    {
+                        "StreamQueryToken": []
+                    }
+                ],
+                "description": "Sends a connected object and live JSON event objects; a concurrent broadcast can arrive before the connected object. SSE comment keepalives occur every 25 seconds. No event IDs or replay are provided; reconnecting starts a new stream.\nAvailable before database readiness, subject to authentication and rate limiting. A query token is supported for browser SSE clients.\nA failed or timed-out broadcast removes the subscriber and ends its stream once any in-flight write finishes. A permanently blocked writer can delay stream termination. Reconnect and refresh state; missed events cannot be replayed.\nSuccess is text/event-stream; pre-stream http.Error responses are text/plain. Swagger 2 lists media types at operation scope, not per status.",
+                "produces": [
+                    "text/event-stream",
+                    "text/plain"
+                ],
+                "tags": [
+                    "System"
+                ],
+                "summary": "Stream dashboard events",
+                "responses": {
+                    "200": {
+                        "description": "SSE stream of JSON data frames and comment keepalives",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "keycard class forbidden on this route",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "429": {
+                        "description": "rate limit exceeded",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "streaming not supported or authentication store unavailable",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/api/events/ingest": {
             "post": {
                 "security": [
@@ -1435,50 +1488,73 @@ const docTemplate = `{
                 "security": [
                     {
                         "ApiKeyAuth": []
+                    },
+                    {
+                        "StreamQueryToken": []
                     }
                 ],
-                "description": "Returns log entries as JSON snapshot or SSE stream (follow mode). Supports level filtering and text search.",
+                "description": "Without follow=true, returns a JSON array of recent matching entries. Only the exact value true enables SSE; follow ignores lines and sends only new entries after subscription, starting with a connected comment. Slow subscribers can miss entries; reconnecting does not replay them.\nBoth modes apply level and case-insensitive query filters and browser-session redaction. Available before database readiness, subject to authentication and rate limiting. Swagger 2 cannot express the query-dependent 200 response shape; see docs/arch/API_CONTRACTS.md.\nSuccess is application/json for snapshots or text/event-stream for follow; pre-stream http.Error responses are text/plain. Swagger 2 lists media types at operation scope, not per status or query value.",
                 "produces": [
-                    "application/json"
+                    "application/json",
+                    "text/event-stream",
+                    "text/plain"
                 ],
                 "tags": [
                     "System"
                 ],
-                "summary": "Get log entries",
+                "summary": "Get log entries or follow new entries",
                 "parameters": [
                     {
                         "type": "integer",
-                        "description": "Number of entries (default 100, max 10000)",
+                        "description": "Snapshot count (default 100, max 10000); ignored when following",
                         "name": "lines",
                         "in": "query"
                     },
                     {
                         "type": "string",
-                        "description": "Minimum log level: trace, debug, info, warn, error, fatal",
+                        "description": "Minimum level: trace, debug, info, warn, error, fatal, panic; unknown values pass through",
                         "name": "level",
                         "in": "query"
                     },
                     {
                         "type": "string",
-                        "description": "Case-insensitive text search",
+                        "description": "Case-insensitive search of redacted message and raw log",
                         "name": "query",
                         "in": "query"
                     },
                     {
-                        "type": "boolean",
-                        "description": "If true, switches to SSE streaming mode",
+                        "type": "string",
+                        "description": "Only the exact value true enables SSE",
                         "name": "follow",
                         "in": "query"
                     }
                 ],
                 "responses": {
                     "200": {
-                        "description": "OK",
+                        "description": "JSON snapshot array or SSE stream, depending on follow"
+                    },
+                    "401": {
+                        "description": "unauthorized",
                         "schema": {
-                            "type": "array",
-                            "items": {
-                                "type": "object"
-                            }
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "keycard class forbidden on this route",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "429": {
+                        "description": "rate limit exceeded",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "streaming not supported or authentication store unavailable",
+                        "schema": {
+                            "type": "string"
                         }
                     },
                     "503": {
@@ -2800,6 +2876,93 @@ const docTemplate = `{
                         }
                     }
                 }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Requires an operator/admin identity, a canonical project UUID, and both display_name and expected_display_name as string or null. The expected value is the exact stored value from the project catalog, not its presentation name.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Projects"
+                ],
+                "summary": "Conditionally update a project's stored display label",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Canonical project UUID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "display_name and expected_display_name",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/worker.projectLabelPatchSchema"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "invalid request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "operator access required",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "project not found or inactive",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "409": {
+                        "description": "stored label changed",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "413": {
+                        "description": "request body too large",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
             }
         },
         "/api/ready": {
@@ -3619,9 +3782,10 @@ const docTemplate = `{
                         "ApiKeyAuth": []
                     }
                 ],
-                "description": "Returns comprehensive worker statistics including uptime, memory, database health, vector cache, graph, and rate limiter stats.",
+                "description": "Returns uptime, session, queue, retrieval, readiness, and runtime memory statistics. Database health is included when the store is initialized; project and projectObservations are included when a nonempty project is supplied and its count lookup succeeds; rateLimiter is included when configured. The project parameter scopes retrieval and the conditional project fields only; other statistics are global. A successful response is JSON; 400 and 503 errors are plain text. Swagger 2 produces applies to the whole operation, not individual statuses.",
                 "produces": [
-                    "application/json"
+                    "application/json",
+                    "text/plain"
                 ],
                 "tags": [
                     "Analytics"
@@ -3630,7 +3794,7 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Filter stats by project",
+                        "description": "Scope retrieval and conditional project fields by project",
                         "name": "project",
                         "in": "query"
                     }
@@ -3644,7 +3808,13 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "bad request",
+                        "description": "Invalid project (plain text)",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "Service not ready (plain text)",
                         "schema": {
                             "type": "string"
                         }
@@ -4352,9 +4522,30 @@ const docTemplate = `{
                 "CollectionSelectionFrozenFilter"
             ]
         },
-        "gorm.ProjectDescriptor": {
+        "gorm.LogicalProjectGroup": {
             "type": "object",
             "properties": {
+                "alias_project_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "primary_project_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "gorm.ProjectDescriptor": {
+            "type": "object",
+            "required": [
+                "display_name"
+            ],
+            "properties": {
+                "display_name": {
+                    "type": "string",
+                    "x-nullable": true
+                },
                 "name": {
                     "type": "string"
                 },
@@ -5485,6 +5676,23 @@ const docTemplate = `{
                 }
             }
         },
+        "worker.projectLabelPatchSchema": {
+            "type": "object",
+            "required": [
+                "display_name",
+                "expected_display_name"
+            ],
+            "properties": {
+                "display_name": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "expected_display_name": {
+                    "type": "string",
+                    "x-nullable": true
+                }
+            }
+        },
         "worker.projectListResponse": {
             "type": "object",
             "properties": {
@@ -5492,6 +5700,12 @@ const docTemplate = `{
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/gorm.ProjectDescriptor"
+                    }
+                },
+                "logical_groups": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/gorm.LogicalProjectGroup"
                     }
                 },
                 "unresolved": {
@@ -5725,6 +5939,12 @@ const docTemplate = `{
             "type": "apiKey",
             "name": "X-Auth-Token",
             "in": "header"
+        },
+        "StreamQueryToken": {
+            "description": "Alternative for streaming endpoints; headers take precedence and URL credentials can leak.",
+            "type": "apiKey",
+            "name": "token",
+            "in": "query"
         }
     }
 }`

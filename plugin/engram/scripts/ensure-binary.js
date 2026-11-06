@@ -64,9 +64,9 @@ function loadPolicy(pluginRoot, options = {}) {
   return parsePolicy(text, packageVersion, options.platformKey || platformKey(options.platform, options.arch));
 }
 
-function loadParserTarget(pluginRoot, packageVersion, key) {
+function parseParserTarget(text, packageVersion, key) {
   let policy;
-  try { policy = JSON.parse(fs.readFileSync(path.join(pluginRoot, "parser-targets.json"), "utf8")); }
+  try { policy = JSON.parse(text); }
   catch (error) { fail(`could not read parser policy: ${error.message}`); }
   if (policy.schema_version !== 1 || policy.package_version !== packageVersion ||
     Object.keys(policy).sort().join() !== "package_version,schema_version,targets" ||
@@ -80,6 +80,13 @@ function loadParserTarget(pluginRoot, packageVersion, key) {
     !Number.isSafeInteger(target.size) || target.size < 1 || target.size > MAX_OBJECT_BYTES ||
     !/^[a-f0-9]{64}$/.test(target.sha256)) fail("parser target is invalid");
   return Object.freeze(target);
+}
+
+function loadParserTarget(pluginRoot, packageVersion, key) {
+  let text;
+  try { text = fs.readFileSync(path.join(pluginRoot, "parser-targets.json"), "utf8"); }
+  catch (error) { fail(`could not read parser policy: ${error.message}`); }
+  return parseParserTarget(text, packageVersion, key);
 }
 
 async function installParser(roots, clientPath, target, options = {}) {
@@ -386,5 +393,5 @@ module.exports = {
   BootstrapError, DOWNLOAD_DEADLINE_MS, MAX_OBJECT_BYTES, MAX_REDIRECTS, TARGET_ASSETS,
   assertSafeDirectory, hashFile, importLegacy, loadPolicy, objectPath, objectRoots, parsePolicy,
   platformKey, prefetch, publishStage, requestStream, resolveForLaunch, verifyObject,
-  downloadObject, loadParserTarget, installParser,
+  downloadObject, loadParserTarget, parseParserTarget, installParser,
 };

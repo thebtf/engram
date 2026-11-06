@@ -62,7 +62,8 @@ func (Invitation) TableName() string { return "invitations" }
 
 // AuthSession represents an authenticated dashboard session.
 type AuthSession struct {
-	ID               string     `gorm:"primaryKey;size:64" json:"id"`
+	ID               string     `gorm:"primaryKey;size:64" json:"-"`
+	PublicHandle     string     `gorm:"column:public_handle;type:text;not null" json:"id"`
 	UserID           int64      `gorm:"not null" json:"user_id"`
 	CreatedAt        time.Time  `gorm:"not null" json:"created_at"`
 	ExpiresAt        time.Time  `gorm:"not null" json:"expires_at"`

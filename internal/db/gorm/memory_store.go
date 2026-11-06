@@ -20,6 +20,7 @@ import (
 	"gorm.io/gorm/clause"
 
 	"github.com/thebtf/engram/internal/auditcontext"
+	"github.com/thebtf/engram/internal/db/projectscope"
 	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/pkg/models"
 )
@@ -637,6 +638,16 @@ func (s *MemoryStore) List(ctx context.Context, project string, limit int) ([]*m
 	return result, nil
 }
 
+// ListCorrectionCandidates limits automatic correction to manageable native members.
+func (s *MemoryStore) ListCorrectionCandidates(ctx context.Context, project string, caller scope.KeycardContext, limit int) ([]*models.Memory, error) {
+	q, err := canonicalNativeProjectRows(ctx, s.db.Model(&Memory{}), project, "memories", "m")
+	if err != nil {
+		return nil, err
+	}
+	q = memoryReaderPrivacy(baseMemoryListQuery(q), caller, scope.MemoryVisibilityOptions{ApplyPrivacyScope: true})
+	return findMemoryRows(q, ListOptions{Limit: limit})
+}
+
 func (s *MemoryStore) visibleKnowledgeQuery(ctx context.Context, project string, caller scope.KeycardContext, opts scope.MemoryVisibilityOptions) (*gorm.DB, error) {
 	q, err := canonicalProjectRows(ctx, s.db.Model(&Memory{}), project, "memories", "m")
 	if err != nil {
@@ -685,7 +696,7 @@ func (s *MemoryStore) mutationVisibleQuery(ctx context.Context, tx *gorm.DB, acc
 	}
 	// Resolve the catalog using a clean transaction query, before adding the
 	// memory alias and privacy predicates to the content query.
-	query, err := canonicalProjectRows(ctx, tx.Model(&Memory{}), access.Project, "memories", "m")
+	query, err := canonicalNativeProjectRows(ctx, tx.Model(&Memory{}), access.Project, "memories", "m")
 	if err != nil {
 		if errors.Is(err, ErrKnowledgeProjectForbidden) {
 			return nil, gorm.ErrRecordNotFound
@@ -695,9 +706,32 @@ func (s *MemoryStore) mutationVisibleQuery(ctx context.Context, tx *gorm.DB, acc
 	return memoryReaderPrivacy(query.Where("m.deleted_at IS NULL"), access.Caller, scope.MemoryVisibilityOptions{ApplyPrivacyScope: true}), nil
 }
 
+// GetAuthorized scopes an exact-ID read before materialization using the
+// adapter's existing visibility and optional project authority, without manage
+// checks or mutation locks. The caller selects its own read-session semantics.
+func (s *MemoryStore) GetAuthorized(ctx context.Context, id int64, access MemoryMutationAccess) (*models.Memory, error) {
+	query := memoryMutationVisibleQuery(ctx, s.db, access.Caller)
+	if access.Project != "" || access.RequireCanonicalProject {
+		var err error
+		query, err = s.mutationVisibleQuery(ctx, s.db, access)
+		if err != nil {
+			return nil, err
+		}
+	}
+	var row Memory
+	if err := query.Where("m.id = ?", id).Take(&row).Error; err != nil {
+		return nil, err
+	}
+	memory := memoryRowToModel(&row)
+	if access.RequireCanonicalProject {
+		memory.Project = access.Project
+	}
+	return memory, nil
+}
+
 func memoryMutationCanonicalProject(ctx context.Context, tx *gorm.DB, id int64) (string, error) {
 	member := tx.WithContext(ctx).Table("memories AS m").Select("1").Where("m.id = ?", id).
-		Where(canonicalProjectMembershipPredicate("m", "project"), clause.Column{Table: "p", Name: "id"}, "memories", "memories", clause.Column{Table: "p", Name: "id"})
+		Where(projectscope.NativeMembershipPredicate("m", "project"), clause.Column{Table: "p", Name: "id"}, "memories", "memories", clause.Column{Table: "p", Name: "id"})
 	var projects []string
 	if err := tx.WithContext(ctx).Table("projects AS p").Where("p.removed_at IS NULL AND (p.identity_status IS NULL OR p.identity_status = 'active')").
 		Where("EXISTS (?)", member).Limit(2).Pluck("p.id", &projects).Error; err != nil {
@@ -962,18 +996,30 @@ type ListOptions struct {
 // T017a: anti-stub guarantee — replacing the body with the original List
 // returns no rows for IncludeSuperseded=true test cases.
 func (s *MemoryStore) ListWithFilters(ctx context.Context, project string, opts ListOptions) ([]*models.Memory, error) {
+	return s.listWithFilters(ctx, project, opts, nil)
+}
+
+// ListWithFiltersForSearch applies caller visibility before pagination.
+func (s *MemoryStore) ListWithFiltersForSearch(ctx context.Context, project string, opts ListOptions, access scope.MemoryReadAccess) ([]*models.Memory, error) {
+	return s.listWithFilters(ctx, project, opts, &access)
+}
+
+func (s *MemoryStore) listWithFilters(ctx context.Context, project string, opts ListOptions, access *scope.MemoryReadAccess) ([]*models.Memory, error) {
 	if project == "" {
 		return nil, fmt.Errorf("project: must not be empty")
 	}
 
-	q := baseMemoryListQuery(s.db.WithContext(ctx)).
-		Where("project = ?", project)
+	predicate, args := projectscope.MemoryPredicate("m", project)
+	q := baseMemoryListQuery(s.db.WithContext(ctx).Model(&Memory{}).Table("memories AS m")).Where(predicate, args...)
+	if access != nil {
+		q = memoryReaderPrivacy(q, access.Caller, access.Visibility)
+	}
 
 	result, err := findMemoryRows(q, opts)
 	if err != nil {
 		return nil, fmt.Errorf("list memories with filters for project %q: %w", project, err)
 	}
-	return result, nil
+	return projectMemoryRows(result, project), nil
 }
 
 // ListPrincipalMemory returns rows using the principal-memory query seam.
@@ -989,10 +1035,12 @@ func (s *MemoryStore) ListPrincipalMemory(ctx context.Context, project string, o
 		return nil, fmt.Errorf("owner_principal must not be empty when project is empty")
 	}
 
-	q := basePrincipalMemoryQuery(s.db.WithContext(ctx), opts)
+	q := s.db.WithContext(ctx)
 	if project = strings.TrimSpace(project); project != "" {
-		q = q.Where("project = ?", project)
+		predicate, args := projectscope.MemoryPredicate("m", project)
+		q = q.Model(&Memory{}).Table("memories AS m").Where(predicate, args...)
 	}
+	q = basePrincipalMemoryQuery(q, opts)
 
 	result, err := findMemoryRows(q, opts)
 	if err != nil {
@@ -1000,6 +1048,9 @@ func (s *MemoryStore) ListPrincipalMemory(ctx context.Context, project string, o
 			return nil, fmt.Errorf("list principal memories: %w", err)
 		}
 		return nil, fmt.Errorf("list principal memories for project %q: %w", project, err)
+	}
+	if project != "" {
+		result = projectMemoryRows(result, project)
 	}
 	return result, nil
 }
@@ -1038,6 +1089,13 @@ func findMemoryRows(q *gorm.DB, opts ListOptions) ([]*models.Memory, error) {
 		result[i] = memoryRowToModel(&rows[i])
 	}
 	return result, nil
+}
+
+func projectMemoryRows(rows []*models.Memory, project string) []*models.Memory {
+	for _, row := range rows {
+		row.Project = project
+	}
+	return rows
 }
 
 func applyMemoryListOptions(q *gorm.DB, opts ListOptions) *gorm.DB {
@@ -1146,8 +1204,9 @@ func (s *MemoryStore) ListWithOffset(ctx context.Context, project string, limit 
 	// at INSERT time. If we compare against a Go-side time.Now() captured before
 	// the SELECT, a just-inserted row's valid_from can be fractionally newer than
 	// the Go clock value, causing the row to be excluded from the first List call.
-	err := s.db.WithContext(ctx).
-		Where("project = ? AND status = 'active' AND deleted_at IS NULL", project).
+	predicate, args := projectscope.MemoryPredicate("m", project)
+	err := s.db.WithContext(ctx).Model(&Memory{}).Table("memories AS m").
+		Where(predicate, args...).Where("status = 'active' AND deleted_at IS NULL").
 		Where("valid_from IS NULL OR valid_from <= NOW()").
 		Where("valid_until IS NULL OR valid_until >= NOW()").
 		Order("created_at DESC, id DESC").
@@ -1160,6 +1219,7 @@ func (s *MemoryStore) ListWithOffset(ctx context.Context, project string, limit 
 	result := make([]*models.Memory, len(rows))
 	for i := range rows {
 		result[i] = memoryRowToModel(&rows[i])
+		result[i].Project = project
 	}
 	return result, nil
 }
@@ -1168,6 +1228,15 @@ func (s *MemoryStore) ListWithOffset(ctx context.Context, project string, limit 
 // importance_base DESC, created_at DESC — suitable for context injection.
 // project must not be empty. limit defaults to 50 when <= 0.
 func (s *MemoryStore) ListForInjection(ctx context.Context, project string, limit int) ([]*models.Memory, error) {
+	return s.listForInjection(ctx, project, limit, nil)
+}
+
+// ListForInjectionForSearch applies caller visibility before importance ordering and limit.
+func (s *MemoryStore) ListForInjectionForSearch(ctx context.Context, project string, limit int, access scope.MemoryReadAccess) ([]*models.Memory, error) {
+	return s.listForInjection(ctx, project, limit, &access)
+}
+
+func (s *MemoryStore) listForInjection(ctx context.Context, project string, limit int, access *scope.MemoryReadAccess) ([]*models.Memory, error) {
 	if project == "" {
 		return nil, fmt.Errorf("project must not be empty")
 	}
@@ -1176,10 +1245,14 @@ func (s *MemoryStore) ListForInjection(ctx context.Context, project string, limi
 	}
 
 	var rows []Memory
-	q := s.db.WithContext(ctx).
-		Where("project = ? AND status = 'active' AND deleted_at IS NULL", project).
+	predicate, args := projectscope.MemoryPredicate("m", project)
+	q := s.db.WithContext(ctx).Model(&Memory{}).Table("memories AS m").
+		Where(predicate, args...).Where("m.status = 'active' AND m.deleted_at IS NULL").
 		Where("valid_from IS NULL OR valid_from <= NOW()").
 		Where("valid_until IS NULL OR valid_until >= NOW()")
+	if access != nil {
+		q = memoryReaderPrivacy(q, access.Caller, access.Visibility)
+	}
 
 	{
 		q = q.Where("tier != 'working'").
@@ -1195,6 +1268,7 @@ func (s *MemoryStore) ListForInjection(ctx context.Context, project string, limi
 	result := make([]*models.Memory, len(rows))
 	for i := range rows {
 		result[i] = memoryRowToModel(&rows[i])
+		result[i].Project = project
 	}
 	return result, nil
 }
@@ -1380,6 +1454,43 @@ func (s *MemoryStore) UpdateLifecycleFieldsTx(ctx context.Context, tx *gorm.DB, 
 	return nil
 }
 
+// retainedLegacyBookkeeping identifies selectors the UPDATE trigger may rebind.
+// Membership is deliberately not consulted: it can change after an authorized read.
+const retainedLegacyBookkeeping = `(memories.project <> '' AND NOT (
+	memories.project ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+	AND memories.project <> '00000000-0000-0000-0000-000000000000'))`
+
+// UpdateRecallBookkeeping skips non-empty legacy selectors whose UPDATE might
+// rebind the native project. The returned bool reports whether it wrote.
+func (s *MemoryStore) UpdateRecallBookkeeping(ctx context.Context, id int64, fields map[string]any) (bool, error) {
+	if id == 0 || fields == nil {
+		return false, fmt.Errorf("memory id and fields are required")
+	}
+	for field := range fields {
+		if field != "access_count" && field != "last_retrieved_at" && field != "stability" {
+			return false, fmt.Errorf("unsupported recall bookkeeping field %q", field)
+		}
+	}
+	fields["updated_at"] = time.Now().UTC()
+	result := s.db.WithContext(ctx).Model(&Memory{}).Where("id = ? AND deleted_at IS NULL", id).
+		Where("NOT " + retainedLegacyBookkeeping).Updates(fields)
+	if result.Error != nil {
+		return false, fmt.Errorf("update recall bookkeeping memory id=%d: %w", id, result.Error)
+	}
+	if result.RowsAffected != 0 {
+		return true, nil
+	}
+	var skipped int64
+	if err := s.db.WithContext(ctx).Model(&Memory{}).Where("id = ? AND deleted_at IS NULL", id).
+		Where(retainedLegacyBookkeeping).Count(&skipped).Error; err != nil {
+		return false, fmt.Errorf("check recall bookkeeping memory id=%d: %w", id, err)
+	}
+	if skipped != 0 {
+		return false, nil
+	}
+	return false, fmt.Errorf("update recall bookkeeping memory id=%d: %w", id, gorm.ErrRecordNotFound)
+}
+
 // IncrementInjectionCount atomically increments injection_count for a memory.
 func (s *MemoryStore) IncrementInjectionCount(ctx context.Context, id int64) error {
 	return s.db.WithContext(ctx).Model(&Memory{}).
@@ -1404,12 +1515,14 @@ func (s *MemoryStore) BatchIncrementCited(ctx context.Context, ids []int64) erro
 // separately at session-end by BatchIncrementUncited (cited memories take ts_alpha
 // via BatchIncrementCited instead) — incrementing ts_beta here too would double-count.
 // A nil/empty id slice is a no-op.
+// Non-empty historical non-UUID selectors are skipped because the update trigger
+// could rewrite their native project; UUID-backed and project-free rows still increment.
 func (s *MemoryStore) BatchIncrementInjected(ctx context.Context, ids []int64) error {
 	if len(ids) == 0 {
 		return nil
 	}
 	return s.db.WithContext(ctx).Exec(
-		"UPDATE memories SET injection_count = injection_count + 1, updated_at = now() WHERE id = ANY(?) AND deleted_at IS NULL",
+		"UPDATE memories SET injection_count = injection_count + 1, updated_at = now() WHERE id = ANY(?) AND deleted_at IS NULL AND NOT "+retainedLegacyBookkeeping,
 		pq.Array(ids),
 	).Error
 }
@@ -1473,7 +1586,7 @@ func (s *MemoryStore) BatchIncrementCitedN(ctx context.Context, ids []int64, n, 
 			importance_base = LEAST(1.0, GREATEST(importance_base,
 				importance_base + (importance_base * ln(2.0 + citation_count) - importance_base) * ?)),
 			updated_at = now()
-		WHERE id = ANY(?)`,
+		WHERE id = ANY(?) AND NOT `+retainedLegacyBookkeeping,
 		n, importanceFactor, pq.Array(ids),
 	).Error
 }
@@ -1482,7 +1595,7 @@ func (s *MemoryStore) BatchIncrementCitedN(ctx context.Context, ids []int64, n, 
 // citation counter for the given memory IDs.
 func (s *MemoryStore) BatchIncrementUncitedN(ctx context.Context, ids []int64, n float64) error {
 	return s.db.WithContext(ctx).Exec(
-		"UPDATE memories SET ts_beta = ts_beta + ?, consecutive_citation_count = 0, updated_at = now() WHERE id = ANY(?)",
+		"UPDATE memories SET ts_beta = ts_beta + ?, consecutive_citation_count = 0, updated_at = now() WHERE id = ANY(?) AND NOT "+retainedLegacyBookkeeping,
 		n, pq.Array(ids),
 	).Error
 }
@@ -1490,7 +1603,7 @@ func (s *MemoryStore) BatchIncrementUncitedN(ctx context.Context, ids []int64, n
 // BatchIncrementViolated applies a strong ts_beta penalty for violated memories.
 func (s *MemoryStore) BatchIncrementViolated(ctx context.Context, ids []int64, n float64) error {
 	return s.db.WithContext(ctx).Exec(
-		"UPDATE memories SET ts_beta = ts_beta + ?, updated_at = now() WHERE id = ANY(?)",
+		"UPDATE memories SET ts_beta = ts_beta + ?, updated_at = now() WHERE id = ANY(?) AND NOT "+retainedLegacyBookkeeping,
 		n, pq.Array(ids),
 	).Error
 }
@@ -2005,7 +2118,8 @@ func (s *MemoryStore) searchLiteralWithAccess(ctx context.Context, project, quer
 	if project == "" {
 		return nil, fmt.Errorf("SearchLiteralWithOffset: project must not be empty")
 	}
-	q := baseMemoryListQuery(s.db.WithContext(ctx)).Where("project = ?", project)
+	predicate, args := projectscope.MemoryPredicate("m", project)
+	q := baseMemoryListQuery(s.db.WithContext(ctx).Model(&Memory{}).Table("memories AS m")).Where(predicate, args...)
 	if access != nil {
 		var err error
 		q, err = s.memorySearchQuery(ctx, project, *access)
@@ -2029,7 +2143,7 @@ func (s *MemoryStore) searchLiteralWithAccess(ctx context.Context, project, quer
 	if err != nil {
 		return nil, fmt.Errorf("SearchLiteralWithOffset project=%q: %w", project, err)
 	}
-	return rows, nil
+	return projectMemoryRows(rows, project), nil
 }
 
 // Recovery reads retain matching content while projecting undecodable tags as empty.
@@ -2089,6 +2203,7 @@ func (s *MemoryStore) searchFTSPageWithAccess(ctx context.Context, project, quer
 	if offset < 0 {
 		offset = 0
 	}
+	projectSQL, projectArgs := projectscope.MemoryPredicate("m", project)
 	accessSQL := "TRUE"
 	var accessArgs []any
 	if access != nil {
@@ -2101,7 +2216,7 @@ func (s *MemoryStore) searchFTSPageWithAccess(ctx context.Context, project, quer
 		)
 		SELECT m.*
 		FROM   memories m, parsed
-		WHERE  m.project    = ?
+		WHERE (` + projectSQL + `)
 		AND    m.status     = 'active'
 		AND    m.deleted_at IS NULL
 		AND   (m.valid_from IS NULL OR m.valid_from <= NOW())
@@ -2116,7 +2231,7 @@ func (s *MemoryStore) searchFTSPageWithAccess(ctx context.Context, project, quer
 		OFFSET ?
 	`
 	var rows []Memory
-	args := []any{query, query, project}
+	args := append([]any{query, query}, projectArgs...)
 	args = append(args, accessArgs...)
 	args = append(args, limit, offset)
 	err := s.db.WithContext(ctx).Raw(ftsQuerySQL, args...).Scan(&rows).Error
@@ -2126,6 +2241,7 @@ func (s *MemoryStore) searchFTSPageWithAccess(ctx context.Context, project, quer
 	result := make([]*models.Memory, len(rows))
 	for i := range rows {
 		result[i] = memoryRowToModel(&rows[i])
+		result[i].Project = project
 	}
 	return result, nil
 }
@@ -2143,8 +2259,9 @@ func (s *MemoryStore) GetByIDs(ctx context.Context, project string, ids []int64)
 	}
 	// Use SQL NOW() to avoid clock-skew with freshly-inserted rows whose
 	// valid_from is set by DB DEFAULT now() (same rationale as ListWithOffset).
-	rows, err := findRecoveryMemoryRows(s.db.WithContext(ctx).
-		Where("id = ANY(?) AND project = ? AND status = 'active' AND deleted_at IS NULL", pq.Array(ids), project).
+	predicate, args := projectscope.MemoryPredicate("m", project)
+	rows, err := findRecoveryMemoryRows(s.db.WithContext(ctx).Model(&Memory{}).Table("memories AS m").
+		Where(predicate, args...).Where("m.id = ANY(?) AND m.status = 'active' AND m.deleted_at IS NULL", pq.Array(ids)).
 		Where("valid_from IS NULL OR valid_from <= NOW()").
 		Where("valid_until IS NULL OR valid_until >= NOW()"))
 	if err != nil {
@@ -2153,6 +2270,7 @@ func (s *MemoryStore) GetByIDs(ctx context.Context, project string, ids []int64)
 	// Rebuild in original id order.
 	byID := make(map[int64]*models.Memory, len(rows))
 	for _, memory := range rows {
+		memory.Project = project
 		byID[memory.ID] = memory
 	}
 	result := make([]*models.Memory, 0, len(ids))

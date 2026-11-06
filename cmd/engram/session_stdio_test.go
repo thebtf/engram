@@ -25,6 +25,7 @@ import (
 
 	"github.com/thebtf/engram/internal/auth"
 	dbstore "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/db/sqlitetest"
 	"github.com/thebtf/engram/internal/grpcserver"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/projectidentity"
@@ -68,13 +69,14 @@ var memoryTestSQLite sync.Once
 func newMemoryTestBackend(t *testing.T) *memoryTestBackend {
 	t.Helper()
 	memoryTestSQLite.Do(func() {
+		registerMemoryTestSQLite(t)
 		if err := sqlite.RegisterScalarFunction("now", 0, func(*sqlite.FunctionContext, []driver.Value) (driver.Value, error) {
 			return time.Now().UTC().Format("2006-01-02 15:04:05"), nil
 		}); err != nil {
 			t.Fatal(err)
 		}
 	})
-	sqlDB, err := sql.Open("sqlite", ":memory:")
+	sqlDB, err := sql.Open("memory-test-sqlite", ":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +87,7 @@ func newMemoryTestBackend(t *testing.T) *memoryTestBackend {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, model := range []any{dbstore.Memory{}} {
+	for _, model := range []any{dbstore.Memory{}, dbstore.Project{}, dbstore.ConsolidationMembership{}} {
 		parsed, err := schema.Parse(model, &sync.Map{}, schema.NamingStrategy{})
 		if err != nil {
 			t.Fatal(err)
@@ -109,6 +111,14 @@ func newMemoryTestBackend(t *testing.T) *memoryTestBackend {
 			columns = append(columns, fmt.Sprintf("%q %s", field.DBName, kind))
 		}
 		if err := db.Exec(fmt.Sprintf("CREATE TABLE %q (%s)", parsed.Table, strings.Join(columns, ","))).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Exec(sqlitetest.RedirectSchema).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, project := range []string{memoryTestProjectA, memoryTestProjectB} {
+		if err := db.Create(&dbstore.Project{ID: project}).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -379,18 +389,21 @@ func memoryTestInitialize(t *testing.T, client *memoryTestClient) {
 	if !ok {
 		t.Fatalf("missing inventory: %v", response)
 	}
-	found := false
+	found, recovery := false, false
 	for _, tool := range tools {
 		name := tool.(map[string]any)["name"].(string)
 		if name == "recall" {
 			found = true
 		}
-		if !sessionMemoryTool(name) {
+		if name == "project_context" {
+			recovery = true
+		}
+		if !sessionMemoryTool(name) && name != "project_context" {
 			t.Fatalf("non-memory tool advertised: %s", name)
 		}
 	}
-	if !found {
-		t.Fatal("real recall not advertised")
+	if !found || !recovery {
+		t.Fatal("memory recall or its local project recovery is not advertised")
 	}
 }
 
@@ -578,11 +591,11 @@ func TestSessionMemoryTransport(t *testing.T) {
 	if raw, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build actual CLI: %v: %s", err, raw)
 	}
-	rootA := memoryTestRepository(t, scratch, "a", memoryTestProjectA)
-	rootB := memoryTestRepository(t, scratch, "b", memoryTestProjectB)
-	installationA, installationB := filepath.Join(scratch, "install-a"), filepath.Join(scratch, "install-b")
 	for _, flag := range []string{"true", "false"} {
 		t.Run("privacy_flag_"+flag, func(t *testing.T) {
+			rootA := memoryTestRepository(t, scratch, "a-"+flag, memoryTestProjectA)
+			rootB := memoryTestRepository(t, scratch, "b-"+flag, memoryTestProjectB)
+			installationA, installationB := filepath.Join(scratch, "install-a-"+flag), filepath.Join(scratch, "install-b-"+flag)
 			t.Setenv("ENGRAM_VNEXT_F_ENABLED", flag)
 			backend := newMemoryTestBackend(t)
 			a := startMemoryTestClient(t, binary, rootA, installationA, backend.url, memoryTestTokenA)
@@ -596,13 +609,16 @@ func TestSessionMemoryTransport(t *testing.T) {
 			memoryTestRecall(t, b, memoryTestProjectB, memoryTestProjectA, []int64{92001, 92002})
 			t.Logf("actual CLI initialize/list/recall: A=%v B=[92001 92002], flag=%s; foreign principal/domain excluded", wantA, flag)
 			for _, binding := range []struct{ root, project string }{{rootA, memoryTestProjectA}, {rootB, memoryTestProjectB}} {
-				raw, err := os.ReadFile(filepath.Join(binding.root, ".git", "engram-project.json"))
+				cache := filepath.Join(binding.root, ".git", "engram-project.json")
+				if _, err := os.Lstat(cache); !os.IsNotExist(err) {
+					t.Fatalf("portable marker read unexpectedly wrote common cache: %v", err)
+				}
+				raw, err := json.Marshal(projectidentity.Project{ProjectID: binding.project})
 				if err != nil {
 					t.Fatal(err)
 				}
-				var cached projectidentity.Project
-				if err := json.Unmarshal(raw, &cached); err != nil || cached.ProjectID != binding.project {
-					t.Fatalf("common-dir cache %s: project=%+v error=%v", binding.root, cached, err)
+				if err := os.WriteFile(cache, raw, 0o600); err != nil {
+					t.Fatal(err)
 				}
 			}
 			if err := os.Remove(filepath.Join(rootA, ".engram-project")); err != nil {
@@ -612,8 +628,25 @@ func TestSessionMemoryTransport(t *testing.T) {
 			for _, token := range []string{"", "invalid-local-fixture-token"} {
 				denied := startMemoryTestClient(t, binary, rootA, installationA, backend.url, token)
 				denied.call(t, 1, "initialize", nil)
-				if !memoryTestRefused(denied.call(t, 2, "tools/list", nil)) {
-					t.Fatal("bad auth discovered memory")
+				listed := denied.call(t, 2, "tools/list", nil)
+				if memoryTestRefused(listed) {
+					t.Fatalf("local memory catalog unavailable: %v", listed)
+				}
+				tools, ok := memoryTestUnwrap(listed)["tools"].([]any)
+				if !ok {
+					t.Fatalf("local memory catalog missing: %v", listed)
+				}
+				found := false
+				for _, raw := range tools {
+					tool, ok := raw.(map[string]any)
+					if !ok || tool["name"] != "recall" {
+						continue
+					}
+					description, _ := tool["description"].(string)
+					found = strings.Contains(description, "remote support and authorization are unverified")
+				}
+				if !found {
+					t.Fatalf("local recall schema did not disclose unverified authorization: %v", listed)
 				}
 				if !memoryTestRefused(denied.call(t, 3, "tools/call", map[string]any{"name": "recall", "arguments": map[string]any{"query": ""}})) {
 					t.Fatal("bad auth read memory")

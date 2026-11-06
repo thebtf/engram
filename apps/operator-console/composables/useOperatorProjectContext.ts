@@ -8,14 +8,28 @@ export interface OperatorUnresolvedProject {
   reference: string; name: string; reason: string; reader_kinds: OperatorRetainedReaderKind[]
   families?: Array<{ kind: string; table_name: string; membership_count: number; reader_support: 'declared' | 'separate' | 'metadata_only' }>
 }
-export interface OperatorProjectCatalog { items: OperatorProjectDescriptor[]; unresolved: OperatorUnresolvedProject[] }
+export interface OperatorLogicalGroup { primary_project_id: string; alias_project_ids: string[] }
+export interface OperatorProjectCatalog { items: OperatorProjectDescriptor[]; unresolved: OperatorUnresolvedProject[]; logicalGroups: OperatorLogicalGroup[]; logicalGroupsPresent: boolean; logicalGroupsInvalid: boolean; uncertainDocumentProjects: string[] }
 export type OperatorProjectResolution = { status: 'resolved'; project_id: string; name: string } | { status: 'unresolved'; reference: string; reason: string }
 export interface OperatorKnowledgePage<T> { items: T[]; total: number; offset: number; limit: number; has_more: boolean }
 
 const project = ref('')
 const descriptors = ref<OperatorProjectDescriptor[]>([])
 const unresolved = ref<OperatorUnresolvedProject[]>([])
+const logicalGroups = ref<OperatorLogicalGroup[]>([])
+const logicalGroupsInvalid = ref(false)
+const documentCapabilityActive = ref(false)
+let documentCapabilityObserved = false
+let documentCapabilityUncertain = false
+const uncertainDocumentProjects = ref<string[]>([])
 const projects = computed(() => descriptors.value.map((row) => row.project_id))
+const projectSections = computed(() => {
+  const used = new Set(logicalGroups.value.flatMap(group => [group.primary_project_id, ...group.alias_project_ids]))
+  const sections: Array<{ key: string; label: string; ids: string[] }> = logicalGroups.value.map(group => ({ key: group.primary_project_id, label: projectChoiceLabel(group.primary_project_id), ids: [group.primary_project_id, ...group.alias_project_ids] }))
+  const remaining = projects.value.filter(id => !used.has(id))
+  if (remaining.length) sections.push({ key: 'ungrouped', label: '', ids: remaining })
+  return sections
+})
 const pending = ref(false)
 const error = ref<OperatorSourceError | null>(null)
 const selectionPending = ref(false)
@@ -32,7 +46,7 @@ let lastResolvedLocation: string | undefined
 let stopSelectionWatch: (() => void) | undefined
 const selectionScope = effectScope(true)
 
-const navigationFields: Record<string, true> = Object.fromEntries(['project', 'q', 'filter', 'epistemic_type', 'page', 'size', 'allRead', 'memory', 'memoryProject', 'from', 'searchQuery', 'focusMemory', 'path', 'docProject', 'pathPrefix', 'path_prefix', 'docType', 'version', 'compare', 'session', 'draftQ', 'draftPrefix', 'draftType', 'principal', 'principalKind', 'principalProject', 'principalDomain', 'principalVisibility', 'principalPrivate'].map((key) => [key, true]))
+const navigationFields: Record<string, true> = Object.fromEntries(['project', 'q', 'filter', 'epistemic_type', 'page', 'size', 'allRead', 'memory', 'memoryProject', 'from', 'searchQuery', 'focusMemory', 'path', 'document_id', 'docProject', 'pathPrefix', 'path_prefix', 'docType', 'version', 'compare', 'session', 'draftQ', 'draftPrefix', 'draftType', 'principal', 'principalKind', 'principalProject', 'principalDomain', 'principalVisibility', 'principalPrivate'].map((key) => [key, true]))
 export function safeNavigation(query: LocationQuery, fullPath?: string): LocationQuery {
   const safe: LocationQuery = Object.fromEntries(Object.entries(query).filter(([key, value]) => Object.hasOwn(navigationFields, key) && (typeof value === 'string' || value === null || (Array.isArray(value) && value.every((item) => typeof item === 'string' || item === null)))))
   const start = fullPath?.indexOf('?') ?? -1
@@ -113,7 +127,40 @@ export function parseProjectCatalog(payload: unknown): OperatorProjectCatalog {
     }
     return { reference: row.reference, name: row.name, reason: row.reason, reader_kinds, ...(families === undefined ? {} : { families }) }
   })
-  return { items, unresolved: retained }
+  const candidates: OperatorLogicalGroup[] = []
+  let logicalGroupsInvalid = false
+  const implicated = new Set<string>()
+  if (Object.hasOwn(payload, 'logical_groups')) {
+    if (!Array.isArray(payload.logical_groups)) { logicalGroupsInvalid = true; for (const id of ids) implicated.add(id) }
+    else for (const group of payload.logical_groups) {
+      if (!object(group) || !isProjectUUID(group.primary_project_id) || !ids.has(group.primary_project_id) || !Array.isArray(group.alias_project_ids) || !group.alias_project_ids.length || group.alias_project_ids.some((id: unknown) => !isProjectUUID(id) || !ids.has(id)) || new Set([group.primary_project_id, ...group.alias_project_ids]).size !== group.alias_project_ids.length + 1) {
+        logicalGroupsInvalid = true
+        const mentioned = object(group) ? [group.primary_project_id, ...(Array.isArray(group.alias_project_ids) ? group.alias_project_ids : [])] : []
+        let identified = false
+        for (const id of mentioned) if (typeof id === 'string' && ids.has(id)) { implicated.add(id); identified = true }
+        if (!identified) for (const id of ids) implicated.add(id)
+        continue
+      }
+      candidates.push({ primary_project_id: group.primary_project_id, alias_project_ids: group.alias_project_ids })
+    }
+  }
+  const counts = new Map<string, number>()
+  for (const group of candidates) for (const id of [group.primary_project_id, ...group.alias_project_ids]) counts.set(id, (counts.get(id) || 0) + 1)
+  for (const group of candidates) if ([group.primary_project_id, ...group.alias_project_ids].some(id => (counts.get(id) || 0) > 1)) for (const id of [group.primary_project_id, ...group.alias_project_ids]) implicated.add(id)
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const group of candidates) {
+      const members = [group.primary_project_id, ...group.alias_project_ids]
+      if (members.some(id => implicated.has(id))) for (const id of members) if (!implicated.has(id)) { implicated.add(id); changed = true }
+    }
+  }
+  const logicalGroups = candidates.filter(group => {
+    const valid = [group.primary_project_id, ...group.alias_project_ids].every(id => counts.get(id) === 1 && !implicated.has(id))
+    if (!valid) logicalGroupsInvalid = true
+    return valid
+  })
+  return { items, unresolved: retained, logicalGroups, logicalGroupsPresent: Object.hasOwn(payload, 'logical_groups'), logicalGroupsInvalid, uncertainDocumentProjects: [...implicated] }
 }
 
 export function parseProjectResolution(payload: unknown): OperatorProjectResolution {
@@ -135,17 +182,42 @@ export function catalogProjectName(id: string, items: OperatorProjectDescriptor[
 }
 
 export function projectName(id: string) { return catalogProjectName(id, descriptors.value) }
-export function projectChoiceLabel(id: string): string {
+export function projectChoiceLabel(id: string, reservedLabels: readonly string[] = []): string {
   const row = descriptors.value.find((item) => item.project_id === id)
   if (!row) return id
-  const qualifier = row.repository_qualifier ? ` · ${row.repository_qualifier}` : ''
-  const needsIdentity = !row.repository_qualifier || descriptors.value.some((item) => item.project_id !== id && item.name === row.name)
-  if (!needsIdentity) return `${row.name}${qualifier}`
+  const display = row.repository_qualifier ? `${row.name} · ${row.repository_qualifier}` : row.name
+  const visibleLabel = display.replace(/[ \t\r\n\f]+/g, ' ').replace(/^ | $/g, '')
+  const reserved = reservedLabels.map((label) => label.replace(/[ \t\r\n\f]+/g, ' ').replace(/^ | $/g, ''))
+  const needsIdentity = reserved.includes(visibleLabel) || (visibleLabel === 'Registered project' && !row.repository_qualifier) || descriptors.value.some((item) => {
+    if (item.project_id === id) return false
+    const itemLabel = item.repository_qualifier ? `${item.name} · ${item.repository_qualifier}` : item.name
+    return itemLabel.replace(/[ \t\r\n\f]+/g, ' ').replace(/^ | $/g, '') === visibleLabel
+  })
+  if (!needsIdentity) return display
   const prefix = id.slice(0, 8)
-  const collision = descriptors.value.some((item) => item.project_id !== id && item.project_id.slice(0, 8).toLowerCase() === prefix.toLowerCase())
-  return `${row.name}${qualifier} · ${collision ? id : prefix}`
+  const normalizedPrefix = prefix.toLowerCase()
+  const otherLabels = new Set<string>(reserved)
+  let collision = false
+  for (const item of descriptors.value) {
+    if (item.project_id === id) continue
+    const itemLabel = item.repository_qualifier ? `${item.name} · ${item.repository_qualifier}` : item.name
+    otherLabels.add(itemLabel.replace(/[ \t\r\n\f]+/g, ' ').replace(/^ | $/g, ''))
+    if (item.project_id.slice(0, 8).toLowerCase() === normalizedPrefix) collision = true
+  }
+  let result = `${display} · ${collision ? id : prefix}`
+  if (otherLabels.has(result.replace(/[ \t\r\n\f]+/g, ' ').replace(/^ | $/g, ''))) result = `${display} · ${id}`
+  for (let i = 0; i < otherLabels.size && otherLabels.has(result.replace(/[ \t\r\n\f]+/g, ' ').replace(/^ | $/g, '')); i++) {
+    result += ` · ${id}`
+  }
+  return result
+}
+export function localizedProjectChoiceLabel(id: string, translate: (key: string) => string): string {
+  return projectChoiceLabel(id, [translate('knowledge.allProjects'), translate('knowledge.chooseProject'), translate('knowledge.browseAll')])
 }
 export function isCatalogProject(id: string): boolean { return projects.value.includes(id) }
+export function supportsDocumentLineage(id: string): boolean { return documentCapabilityActive.value && isCatalogProject(id) && !documentScopeUncertain(id) }
+export function documentScopeUncertain(id: string): boolean { return uncertainDocumentProjects.value.includes(id) }
+export function validDocumentID(value: unknown): value is string { return typeof value === 'string' && /^[1-9]\d*$/.test(value) && Number.isSafeInteger(Number(value)) }
 
 function knownProjectQuery(query: LocationQuery): boolean {
   return ['project', 'memoryProject', 'docProject', 'principalProject'].every((key) => {
@@ -162,6 +234,9 @@ export function operatorProjectReturnTo(value: unknown, router: Router, original
 
 function refreshProjects(): Promise<void> {
   const generation = ++catalogGeneration
+  selectionGeneration += 1
+  project.value = ''
+  selectionPending.value = true
   pending.value = true
   error.value = null
   catalogRequest = (async () => {
@@ -170,10 +245,21 @@ function refreshProjects(): Promise<void> {
       if (generation !== catalogGeneration) return
       descriptors.value = catalog.items.sort((a, b) => a.name.localeCompare(b.name) || (a.repository_qualifier || '').localeCompare(b.repository_qualifier || '') || a.project_id.localeCompare(b.project_id))
       unresolved.value = catalog.unresolved
+      const missingAfterUncertain = !catalog.logicalGroupsPresent && (documentCapabilityObserved || documentCapabilityUncertain)
+      if (catalog.logicalGroupsPresent && !catalog.logicalGroupsInvalid) { documentCapabilityObserved = true; documentCapabilityUncertain = false }
+      else if (catalog.logicalGroupsInvalid || missingAfterUncertain) documentCapabilityUncertain = true
+      logicalGroups.value = catalog.logicalGroups
+      logicalGroupsInvalid.value = catalog.logicalGroupsInvalid || missingAfterUncertain
+      uncertainDocumentProjects.value = missingAfterUncertain || (catalog.logicalGroupsInvalid && !documentCapabilityObserved) ? catalog.items.map(item => item.project_id) : catalog.uncertainDocumentProjects
+      documentCapabilityActive.value = documentCapabilityObserved && catalog.logicalGroupsPresent
     } catch (cause) {
       if (generation !== catalogGeneration) return
       descriptors.value = []
       unresolved.value = []
+      logicalGroups.value = []
+      logicalGroupsInvalid.value = false
+      uncertainDocumentProjects.value = []
+      documentCapabilityActive.value = false
       error.value = toOperatorSourceError(cause, { source: 'project-context', path: '/api/projects', method: 'GET' })
       if (cause instanceof TypeError) error.value.category = 'invalid-response'
     } finally {
@@ -218,7 +304,9 @@ export async function loadKnowledgePage<T extends { project?: string }>(endpoint
   if (!scope) return { items: [], total: 0, offset, limit, has_more: false }
   await ensureCatalog()
   if (scope !== 'all' && !isCatalogProject(scope)) throw new TypeError('Knowledge reader requires a catalog project')
-  const catalogIDs = [...projects.value]
+  if (scope === 'all' && logicalGroupsInvalid.value) throw new TypeError('Invalid logical project grouping')
+  const aliases = new Set(logicalGroups.value.flatMap(group => group.alias_project_ids))
+  const catalogIDs = projects.value.filter(id => !aliases.has(id))
   const read = async (id: string, from: number, size: number) => {
     const scoped = new URLSearchParams(params)
     scoped.set('project', id)
@@ -337,5 +425,5 @@ export function useOperatorProjectContext() {
     return router.push({ path, query })
   }
   const label = computed(() => project.value ? projectName(project.value) : '')
-  return { project, projects, descriptors, unresolved, pending, error, selectionPending, selectionError, label, refresh: refreshProjects, select, to, remember, isCatalogProject, resolveCatalogProject }
+  return { project, projects, descriptors, unresolved, projectSections, logicalGroupsInvalid, pending, error, selectionPending, selectionError, label, refresh: refreshProjects, select, to, remember, isCatalogProject, resolveCatalogProject }
 }

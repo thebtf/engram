@@ -8,8 +8,10 @@ import (
 	"net"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/thebtf/engram/internal/config"
+	modulepkg "github.com/thebtf/engram/internal/module"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
 	"google.golang.org/grpc"
@@ -29,7 +31,7 @@ func (s *advisorProofTestServer) Initialize(_ context.Context, _ *pb.InitializeR
 	proof := bytes.Clone(s.initializeProof)
 	s.mu.Unlock()
 	return &pb.InitializeResponse{
-		Tools:                           []*pb.ToolDefinition{{Name: "recall", Description: "fixture"}},
+		Tools:                           []*pb.ToolDefinition{{Name: "recall", Description: "fixture", InputSchemaJson: []byte(`{"type":"object"}`)}},
 		AuthenticatedSubjectProofSha256: proof,
 	}, nil
 }
@@ -45,6 +47,7 @@ type advisorProofFixture struct {
 	serverURL string
 	module    *Module
 	proof     advisorSubjectProof
+	notifier  *discoveryNotifier
 	env       map[string]string
 }
 
@@ -58,12 +61,18 @@ func newAdvisorProofFixture(t *testing.T) *advisorProofFixture {
 		config.EnvWorkstationToken: advisorFixtureToken,
 	}
 	module := NewModule()
-	t.Cleanup(module.pool.closeAll)
+	if err := module.Init(context.Background(), modulepkg.ModuleDeps{}); err != nil {
+		t.Fatal(err)
+	}
+	notifier := &discoveryNotifier{notifications: make(chan string, 8)}
+	module.SetNotifier(notifier)
+	t.Cleanup(func() { _ = module.Shutdown(context.Background()) })
 	return &advisorProofFixture{
 		server:    server,
 		serverURL: serverURL,
 		module:    module,
 		proof:     advisorSubjectProof(proof),
+		notifier:  notifier,
 		env:       cloneAdvisorEnv(env),
 	}
 }
@@ -103,6 +112,11 @@ func (f *advisorProofFixture) requireProxyTools(t *testing.T, projectID, cwd str
 	if err := f.proxyTools(projectID, cwd); err != nil {
 		t.Fatalf("ProxyTools: %v", err)
 	}
+	select {
+	case <-f.notifier.notifications:
+	case <-time.After(5 * time.Second):
+		t.Fatal("advisor discovery did not complete")
+	}
 }
 
 func TestProxyToolsCachesOnlyAcceptedInitializeSubjectProof(t *testing.T) {
@@ -122,9 +136,26 @@ func TestProxyToolsCachesOnlyAcceptedInitializeSubjectProof(t *testing.T) {
 		t.Fatalf("empty old-server proof remained cached ok=%t err=%v", ok, err)
 	}
 
+	fixture.server.setInitializeProof(fixture.proof[:])
+	fixture.requireProxyTools(t, "project-three", t.TempDir())
 	fixture.server.setInitializeProof([]byte("malformed"))
-	if err := fixture.proxyTools("project-three", t.TempDir()); err == nil {
-		t.Fatal("ProxyTools accepted malformed non-empty subject proof")
+	if err := fixture.proxyTools("project-four", t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		_, _, ok, err = fixture.module.advisorProofs.lookup(fixture.serverURL, advisorFixtureToken)
+		if err != nil || !ok {
+			break
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal("malformed proof did not invalidate cached proof")
+		case <-ticker.C:
+		}
 	}
 	_, _, ok, err = fixture.module.advisorProofs.lookup(fixture.serverURL, advisorFixtureToken)
 	if err != nil || ok {

@@ -5,9 +5,11 @@ const { buildSessionStartContext } = require('../hooks/session-start.js');
 const { requestPromptContext } = require('../hooks/user-prompt.js');
 const { DOWNLOAD_DEADLINE_MS } = require('../scripts/ensure-binary.js');
 const { prepareHookClient } = require('../scripts/run-engram.js');
+const { BootstrapError } = require('../scripts/bootstrap-policy.js');
 const { version: pluginVersion } = require('../package.json');
 const readinessCodes = new Set(['HOOK_CLIENT_UNAVAILABLE', 'ABORT_ERR', 'PROJECT_RESOLUTION_ABORTED', 'PROJECT_RESOLUTION_DEADLINE_EXCEEDED']);
 const hiddenContextLimit = 12000;
+const recoveryBackoffMs = 5000;
 
 function stringField(...values) {
   return values.find(value => typeof value === 'string' && value !== '') || '';
@@ -33,13 +35,13 @@ export function createEngramMemoryExtension(options = {}) {
   const isQuiet = options.isQuiet ?? lib.isQuietMode;
   const prepare = options.prepareHookClient ?? prepareHookClient;
   const diagnostic = options.onDiagnostic ?? (message => process.stderr.write(`[engram] ${message}\n`));
-  let readiness, firstFailure, disposed = false;
+  let readiness, firstFailure, disposed = false, recovery, recoveryController, nextRecoveryAt = 0;
   const warned = new Set();
   const delivered = new Set();
   let activePrompt;
   const unavailable = (stage = 'prepare', error, kind = 'readiness') => {
     if (!firstFailure) {
-      const code = readinessCodes.has(error?.code) ? error.code : readinessCodes.has(error?.message) ? error.message : 'UNKNOWN';
+      const code = readinessCodes.has(error?.code) ? error.code : readinessCodes.has(error?.message) ? error.message : error instanceof BootstrapError ? 'BOOTSTRAP_ERROR' : 'UNKNOWN';
       firstFailure = { stage, code };
     }
     const warningKind = disposed ? 'disposed' : kind;
@@ -47,9 +49,28 @@ export function createEngramMemoryExtension(options = {}) {
     warned.add(warningKind);
     const hint = disposed || readiness === 'skipped'
       ? 'Start a fresh ordinary session.'
-      : 'The next qualified callback will automatically recheck the verified local cache.';
+      : 'A qualified callback will recheck the verified local cache and request bounded background recovery if needed.';
     diagnostic(`Trusted hook client readiness unavailable (stage=${firstFailure.stage} code=${firstFailure.code} plugin=${pluginVersion}); ${hint}`);
   };
+  function recoverClient() {
+    if (disposed || recovery || Date.now() < nextRecoveryAt) return;
+    nextRecoveryAt = Date.now() + recoveryBackoffMs;
+    recoveryController = new AbortController();
+    const controller = recoveryController;
+    const deadlineAt = Date.now() + DOWNLOAD_DEADLINE_MS;
+    const timer = setTimeout(() => controller.abort(), DOWNLOAD_DEADLINE_MS);
+    recovery = Promise.resolve().then(() => prepare({ signal: controller.signal, deadlineAt, timeoutMs: DOWNLOAD_DEADLINE_MS }))
+      .then(() => {
+        if (!disposed && !controller.signal.aborted) readiness = 'ready';
+      }, error => {
+        nextRecoveryAt = Date.now() + recoveryBackoffMs;
+        if (!disposed) unavailable('prepare', error);
+      }).finally(() => {
+        clearTimeout(timer);
+        recoveryController = undefined;
+        recovery = undefined;
+      });
+  }
 
   async function message(event, ctx, timeoutMs, ambient) {
     const callbackDeadlineAt = ambient ? Date.now() + timeoutMs : undefined;
@@ -78,7 +99,10 @@ export function createEngramMemoryExtension(options = {}) {
           requestTaskContext: options.requestTaskContext,
           requestPost,
         });
-        if (outcome.code === 'HOOK_CLIENT_UNAVAILABLE') unavailable('prepare', { code: outcome.code });
+        if (outcome.code === 'HOOK_CLIENT_UNAVAILABLE') {
+          unavailable('prepare', { code: outcome.code });
+          recoverClient();
+        }
         return disposed || controller.signal.aborted || activePrompt !== controller || Date.now() >= callbackDeadlineAt || !outcome.content ? null : hiddenMessage(outcome.content);
       } finally {
         if (activePrompt === controller) activePrompt = undefined;
@@ -103,11 +127,15 @@ export function createEngramMemoryExtension(options = {}) {
         Math.max(1, deadline - Date.now()),
         { signal: controller.signal, serverURL: config.serverURL, token: config.token },
       );
+      if (disposed) return null;
       const content = buildSessionStartContext(payload, context.Project, { maxLength: hiddenContextLimit });
       if (controller.signal.aborted || Date.now() >= deadline || typeof content !== 'string' || !content || Buffer.byteLength(content) > hiddenContextLimit) return null;
       return hiddenMessage(content);
     } catch (error) {
-      if (/HOOK_CLIENT_UNAVAILABLE|resolved client failed final integrity verification/.test(error?.message ?? '')) unavailable('prepare', error);
+      if (/HOOK_CLIENT_UNAVAILABLE|resolved client failed final integrity verification/.test(error?.message ?? '')) {
+        unavailable('prepare', error);
+        recoverClient();
+      }
       return null;
     } finally { clearTimeout(timer); }
   }
@@ -148,6 +176,8 @@ export function createEngramMemoryExtension(options = {}) {
         activePrompt?.abort();
         delivered.clear();
         controller.abort();
+        recoveryController?.abort();
+        await recovery?.catch(() => { });
         await preparation?.catch(() => { });
       });
       preparation = (async () => {

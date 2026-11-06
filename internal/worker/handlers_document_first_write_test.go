@@ -166,7 +166,8 @@ func TestDocumentFirstWriteHTTPPostgres(t *testing.T) {
 	t.Run("ordinary_catalog_contains_exact_project", func(t *testing.T) {
 		var catalog projectListResponse
 		call(t, http.MethodGet, "/api/projects", nil, http.StatusOK, &catalog)
-		require.Contains(t, catalog.Items, gormdb.ProjectDescriptor{ID: project, DisplayName: "Registered project"})
+		label := "Registered project"
+		require.Contains(t, catalog.Items, gormdb.ProjectDescriptor{ID: project, DisplayName: label, StoredDisplayName: &label})
 		require.Empty(t, catalog.Unresolved)
 	})
 

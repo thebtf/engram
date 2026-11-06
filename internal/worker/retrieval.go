@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	dbgorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/memorysearch"
 	"github.com/thebtf/engram/internal/retrieval"
 	"github.com/thebtf/engram/internal/scope"
@@ -304,7 +305,7 @@ func (s *Service) searchFallbackObservations(ctx context.Context, query string, 
 			offset := 0
 			var visible []*models.Memory
 			for len(visible) < fetchLimit {
-				batch, err := lister.ListWithOffset(ctx, scopeFilter.Project, batchSize, offset)
+				batch, err := dbgorm.ListMemoryPageForSearch(ctx, lister, scopeFilter.Project, batchSize, offset, scope.MemoryReadAccess{Caller: callerCtx, Visibility: visibilityOpts})
 				if err != nil {
 					return nil, err
 				}
@@ -331,7 +332,7 @@ func (s *Service) searchFallbackObservations(ctx context.Context, query string, 
 			offset := 0
 			var visible []*models.Memory
 			for len(visible) < fetchLimit {
-				batch, err := lister.ListWithOffset(ctx, scopeFilter.Project, batchSize, offset)
+				batch, err := dbgorm.ListMemoryPageForSearch(ctx, lister, scopeFilter.Project, batchSize, offset, scope.MemoryReadAccess{Caller: callerCtx, Visibility: visibilityOpts})
 				if err != nil {
 					return nil, err
 				}

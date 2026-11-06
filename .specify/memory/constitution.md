@@ -1,6 +1,7 @@
 <!--
 Sync Impact Report
-- Current amendment: 6.0.0 -> 7.0.0 (MAJOR change to governing delivery ordering), effective 2026-11-02 by explicit product direction. Ordinary task-context usefulness and generic external clients' own linked knowledge follow their real provider dependencies; full Feature 011 and Book Context are not blanket predecessors. Clarify canonical external-client context and authored knowledge relations without a hosted assistant, new IAM, second content authority, or restored graph editor. Revalidate Feature 009 spec/plan/acceptance, Feature 010 ordering, architecture rationale, Decisions 18–22, and the affected current task/checklist pointers. Preserve all current data/authorization/release boundaries, including the 6.0.0 post-release Sonar timing policy. Documentation adoption does not claim any runtime, migration, private isolation, or installed acceptance.
+- Current amendment: 7.0.0 -> 7.1.0 (MINOR recovery-scope amendment). Authority: native main USER directives on 2026-11-04 at 17:35:04Z (message prefix b75affa3) and 17:36:05Z (80adf21f) require an urgent release to restore a broken service before subsequent remarks; the Engram Part 3 directive also requires accepted work to converge into current main. Align accepted-behavior finding classification with the bounded outcome in XI and scoped evidence in XIII. Unchanged defects in untouched, unrelated behavior retain an owner without automatically expanding an installed-service recovery; normal releases retain supported-path regression obligations. For a qualifying availability emergency, the release protocol defines the cut-specific restoration and safety blockers, deferrals and applicable mandatory conditions. Synchronize AGENTS.md and docs/RELEASE-PROTOCOL.md, including reviewed-PR integration ownership and safe primary-checkout convergence; review affected references for an unqualified all-defects release veto. No supported-platform, authorization, privacy, production data-preservation, review, scan, migration, rollback or rollout guarantee is removed. This documentation correction claims no runtime or installed acceptance.
+- Historical amendment: 6.0.0 -> 7.0.0 (MAJOR change to governing delivery ordering), effective 2026-11-02 by explicit product direction. Ordinary task-context usefulness and generic external clients' own linked knowledge follow their real provider dependencies; full Feature 011 and Book Context are not blanket predecessors. Clarify canonical external-client context and authored knowledge relations without a hosted assistant, new IAM, second content authority, or restored graph editor. Revalidate Feature 009 spec/plan/acceptance, Feature 010 ordering, architecture rationale, Decisions 18–22, and the affected current task/checklist pointers. Preserve all current data/authorization/release boundaries, including the 6.0.0 post-release Sonar timing policy. Documentation adoption does not claim any runtime, migration, private isolation, or installed acceptance.
 - Historical amendment: 5.0.0 -> 6.0.0, documentation alignment required by the operator's 2026-10-09 Sonar-post-release decision and 2026-10-10 AGENTS correction mandate. Deliver the working release after applicable functional/security/integrity proof; analyze the exact released candidate afterward without a Sonar merge/tag/publication veto. Confirmed substantial defects route to a corrective patch. AGENTS.md and docs/RELEASE-PROTOCOL.md are aligned; older Sonar timing predicates in recovery specs/tasks/checklists are superseded, not proof of a current campaign or waiver of their other obligations. No implementation, runtime, release, CI or scanner effects are part of this amendment.
 - Historical amendment: 4.0.0 -> 5.0.0 (MAJOR release-gate availability relaxation), effective 2026-09-26 by operator directive. It allowed unavailable Sonar to be recorded as `SKIPPED_UNAVAILABLE / NOT_PROVEN` without blocking other delivery; actual results and remaining obligations stayed intact. Its availability-only timing rule is superseded by the post-release amendment above.
 - Adopted version change: 3.0.0 -> 4.0.0 (MAJOR relaxation of one governing release gate), effective 2026-09-25. The existing candidate was already 3.0.0; 1.0.0 -> 2.0.0 would downgrade it.
@@ -104,8 +105,12 @@ reconciliation, task-aware retrieval, exposure, outcome recording, migration, ro
 installed behavior. Hashes, manifests, route existence, flags, or mocked green surfaces alone do
 not establish product acceptance.
 Apply these evidence obligations to the accepted slice and affected dependencies, together with
-all mandatory regression/security/release checks. They MUST NOT silently add unrelated product
-domains to every release. Test doubles prove their stated layer, not installed end-to-end behavior.
+mandatory regression/security/release checks, subject to the qualifying availability-emergency
+exception in the release protocol. Platform-enforced requirements, explicit unsafe-effect
+approvals, and security, data and required-restoration-path blockers remain binding. Deferred
+review and tests remain pending, not passed. Normal release gates remain unchanged. These
+obligations MUST NOT silently add unrelated product domains to every release. Test doubles prove
+their stated layer, not installed end-to-end behavior.
 
 ### XIV. Recover Outcomes Without Resurrecting Demolished Implementations
 The historical demolition establishes evidence about obsolete implementations, not a permanent
@@ -146,11 +151,18 @@ contracts.
   dispositions; unavailable or incomplete analysis is `NOT_PROVEN`, never PASS or zero findings.
   Availability, numeric Quality Gate and issue count MUST NOT veto merge/tag/publication
   or create a release Ask. Confirmed substantial defects MUST route to a corrective patch.
-  Concrete known security, data-integrity or accepted-behavior defects retain their independent
-  safety boundary; this policy does not authorize shipping a known unsafe change.
+  Concrete known security and data-integrity defects retain their independent safety boundary.
+  Classify accepted-behavior findings under the release protocol's bounded recovery rule and XIII:
+  for normal releases, a defect in a required path or a new/worsened supported-path regression
+  blocks. For a qualifying availability emergency, the protocol defines the cut-specific
+  restoration and safety blockers, permitted deferrals and applicable mandatory conditions.
+  An unchanged defect in untouched, unrelated behavior may remain owned follow-up only when
+  deferral does not worsen release safety or violate a mandatory condition. This policy does not
+  authorize shipping a known unsafe change.
   Do not alter thresholds, scope or scanner exceptions, suppress findings or relabel historical
   failures to manufacture green. All other functional, Docker/image, supported-platform,
-  migration, recovery and rollout obligations in the release protocol remain in force.
+  migration, recovery and rollout obligations in the release protocol remain in force, subject
+  to its qualifying availability-emergency exception.
 - A destructive contraction occurs only after backup or export, migration receipts, zero-drift
   observation, compatibility sunset, and rollback boundary evidence exist.
 
@@ -167,4 +179,4 @@ or removes a governing principle; a MINOR version adds or materially expands one
 clarifies without changing meaning. Every release and implementation review MUST check conformance
 to this constitution, preserve evidence of any exception, and reject scope expansion by workaround.
 
-**Version**: 7.0.0 (effective 2026-11-02; product contract amendment) | **Ratified**: 2026-08-21 | **Last Amended**: 2026-11-02
+**Version**: 7.1.0 (2026-11-04; recovery-scope amendment) | **Ratified**: 2026-08-21 | **Last Amended**: 2026-11-04

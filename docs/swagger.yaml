@@ -22,14 +22,28 @@ definitions:
     - CollectionSelectionExplicit
     - CollectionSelectionPage
     - CollectionSelectionFrozenFilter
+  gorm.LogicalProjectGroup:
+    properties:
+      alias_project_ids:
+        items:
+          type: string
+        type: array
+      primary_project_id:
+        type: string
+    type: object
   gorm.ProjectDescriptor:
     properties:
+      display_name:
+        type: string
+        x-nullable: true
       name:
         type: string
       project_id:
         type: string
       repository_qualifier:
         type: string
+    required:
+    - display_name
     type: object
   gorm.UnresolvedProject:
     properties:
@@ -793,11 +807,27 @@ definitions:
       total_injections:
         type: integer
     type: object
+  worker.projectLabelPatchSchema:
+    properties:
+      display_name:
+        type: string
+        x-nullable: true
+      expected_display_name:
+        type: string
+        x-nullable: true
+    required:
+    - display_name
+    - expected_display_name
+    type: object
   worker.projectListResponse:
     properties:
       items:
         items:
           $ref: '#/definitions/gorm.ProjectDescriptor'
+        type: array
+      logical_groups:
+        items:
+          $ref: '#/definitions/gorm.LogicalProjectGroup'
         type: array
       unresolved:
         items:
@@ -1780,6 +1810,43 @@ paths:
       summary: List current documents for one canonical project
       tags:
       - Documents
+  /api/events:
+    get:
+      description: |-
+        Sends a connected object and live JSON event objects; a concurrent broadcast can arrive before the connected object. SSE comment keepalives occur every 25 seconds. No event IDs or replay are provided; reconnecting starts a new stream.
+        Available before database readiness, subject to authentication and rate limiting. A query token is supported for browser SSE clients.
+        A failed or timed-out broadcast removes the subscriber and ends its stream once any in-flight write finishes. A permanently blocked writer can delay stream termination. Reconnect and refresh state; missed events cannot be replayed.
+        Success is text/event-stream; pre-stream http.Error responses are text/plain. Swagger 2 lists media types at operation scope, not per status.
+      produces:
+      - text/event-stream
+      - text/plain
+      responses:
+        "200":
+          description: SSE stream of JSON data frames and comment keepalives
+          schema:
+            type: string
+        "401":
+          description: unauthorized
+          schema:
+            type: string
+        "403":
+          description: keycard class forbidden on this route
+          schema:
+            type: string
+        "429":
+          description: rate limit exceeded
+          schema:
+            type: string
+        "500":
+          description: streaming not supported or authentication store unavailable
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      - StreamQueryToken: []
+      summary: Stream dashboard events
+      tags:
+      - System
   /api/events/ingest:
     post:
       consumes:
@@ -1921,41 +1988,59 @@ paths:
       - Instincts
   /api/logs:
     get:
-      description: Returns log entries as JSON snapshot or SSE stream (follow mode).
-        Supports level filtering and text search.
+      description: |-
+        Without follow=true, returns a JSON array of recent matching entries. Only the exact value true enables SSE; follow ignores lines and sends only new entries after subscription, starting with a connected comment. Slow subscribers can miss entries; reconnecting does not replay them.
+        Both modes apply level and case-insensitive query filters and browser-session redaction. Available before database readiness, subject to authentication and rate limiting. Swagger 2 cannot express the query-dependent 200 response shape; see docs/arch/API_CONTRACTS.md.
+        Success is application/json for snapshots or text/event-stream for follow; pre-stream http.Error responses are text/plain. Swagger 2 lists media types at operation scope, not per status or query value.
       parameters:
-      - description: Number of entries (default 100, max 10000)
+      - description: Snapshot count (default 100, max 10000); ignored when following
         in: query
         name: lines
         type: integer
-      - description: 'Minimum log level: trace, debug, info, warn, error, fatal'
+      - description: 'Minimum level: trace, debug, info, warn, error, fatal, panic;
+          unknown values pass through'
         in: query
         name: level
         type: string
-      - description: Case-insensitive text search
+      - description: Case-insensitive search of redacted message and raw log
         in: query
         name: query
         type: string
-      - description: If true, switches to SSE streaming mode
+      - description: Only the exact value true enables SSE
         in: query
         name: follow
-        type: boolean
+        type: string
       produces:
       - application/json
+      - text/event-stream
+      - text/plain
       responses:
         "200":
-          description: OK
+          description: JSON snapshot array or SSE stream, depending on follow
+        "401":
+          description: unauthorized
           schema:
-            items:
-              type: object
-            type: array
+            type: string
+        "403":
+          description: keycard class forbidden on this route
+          schema:
+            type: string
+        "429":
+          description: rate limit exceeded
+          schema:
+            type: string
+        "500":
+          description: streaming not supported or authentication store unavailable
+          schema:
+            type: string
         "503":
           description: log buffer not initialized
           schema:
             type: string
       security:
       - ApiKeyAuth: []
-      summary: Get log entries
+      - StreamQueryToken: []
+      summary: Get log entries or follow new entries
       tags:
       - System
   /api/memories:
@@ -2721,6 +2806,66 @@ paths:
       summary: Soft-delete a project
       tags:
       - Projects
+    patch:
+      consumes:
+      - application/json
+      description: Requires an operator/admin identity, a canonical project UUID,
+        and both display_name and expected_display_name as string or null. The expected
+        value is the exact stored value from the project catalog, not its presentation
+        name.
+      parameters:
+      - description: Canonical project UUID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: display_name and expected_display_name
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/worker.projectLabelPatchSchema'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: invalid request
+          schema:
+            type: string
+        "401":
+          description: unauthorized
+          schema:
+            type: string
+        "403":
+          description: operator access required
+          schema:
+            type: string
+        "404":
+          description: project not found or inactive
+          schema:
+            type: string
+        "409":
+          description: stored label changed
+          schema:
+            type: string
+        "413":
+          description: request body too large
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Conditionally update a project's stored display label
+      tags:
+      - Projects
   /api/projects/unresolved/{reference}/content:
     get:
       description: Validates the complete selected reference/kind group, then reads
@@ -3399,15 +3544,22 @@ paths:
       - Sessions
   /api/stats:
     get:
-      description: Returns comprehensive worker statistics including uptime, memory,
-        database health, vector cache, graph, and rate limiter stats.
+      description: Returns uptime, session, queue, retrieval, readiness, and runtime
+        memory statistics. Database health is included when the store is initialized;
+        project and projectObservations are included when a nonempty project is supplied
+        and its count lookup succeeds; rateLimiter is included when configured. The
+        project parameter scopes retrieval and the conditional project fields only;
+        other statistics are global. A successful response is JSON; 400 and 503 errors
+        are plain text. Swagger 2 produces applies to the whole operation, not individual
+        statuses.
       parameters:
-      - description: Filter stats by project
+      - description: Scope retrieval and conditional project fields by project
         in: query
         name: project
         type: string
       produces:
       - application/json
+      - text/plain
       responses:
         "200":
           description: OK
@@ -3415,7 +3567,11 @@ paths:
             additionalProperties: true
             type: object
         "400":
-          description: bad request
+          description: Invalid project (plain text)
+          schema:
+            type: string
+        "503":
+          description: Service not ready (plain text)
           schema:
             type: string
       security:
@@ -3860,5 +4016,11 @@ securityDefinitions:
   ApiKeyAuth:
     in: header
     name: X-Auth-Token
+    type: apiKey
+  StreamQueryToken:
+    description: Alternative for streaming endpoints; headers take precedence and
+      URL credentials can leak.
+    in: query
+    name: token
     type: apiKey
 swagger: "2.0"
