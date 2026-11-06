@@ -76,11 +76,18 @@ func (b *Broadcaster) AddClient(w http.ResponseWriter) (*Client, error) {
 // RemoveClient unregisters the client and signals its Done channel.
 func (b *Broadcaster) RemoveClient(client *Client) {
 	b.mu.Lock()
-	delete(b.clients, client.ID)
+	if b.clients[client.ID] == client {
+		delete(b.clients, client.ID)
+	}
+	if client.Done != nil {
+		select {
+		case <-client.Done:
+		default:
+			close(client.Done)
+		}
+	}
 	n := len(b.clients)
 	b.mu.Unlock()
-
-	close(client.Done)
 
 	log.Debug().
 		Str("clientId", client.ID).
@@ -94,18 +101,16 @@ func (b *Broadcaster) removeClientByID(id string) {
 	c, found := b.clients[id]
 	if found {
 		delete(b.clients, id)
+		if c.Done != nil {
+			select {
+			case <-c.Done:
+			default:
+				close(c.Done)
+			}
+		}
 	}
 	n := len(b.clients)
 	b.mu.Unlock()
-
-	if found && c.Done != nil {
-		select {
-		case <-c.Done:
-			// Already closed
-		default:
-			close(c.Done)
-		}
-	}
 
 	log.Debug().
 		Str("clientId", id).
@@ -193,6 +198,11 @@ func (b *Broadcaster) writeToClient(client *Client, message string, deadCh chan<
 		}
 		client.WriteMu.Lock()
 		defer client.WriteMu.Unlock()
+		select {
+		case <-client.Done:
+			return
+		default:
+		}
 		_, err := client.Writer.Write([]byte(message))
 		if err != nil {
 			log.Debug().
@@ -226,13 +236,27 @@ func (b *Broadcaster) ClientCount() int {
 	return len(b.clients)
 }
 
-// HandleSSE handles an SSE connection request.
-// KeepaliveInterval is how often the SSE handler sends a comment-line keepalive
-// to each connected client. Without this, HTTP WriteTimeout (60s) will close
-// idle SSE connections, causing the dashboard banner to flap. 25s keeps well
-// under any reasonable write timeout while being invisible to the client.
+// KeepaliveInterval is how often the SSE handler sends a comment-line keepalive.
+// These comments help prevent idle intermediaries from closing the connection;
+// they do not extend an absolute HTTP server write deadline.
 const KeepaliveInterval = 25 * time.Second
 
+// HandleSSE streams live dashboard events; frames contain JSON in SSE data fields.
+// @Summary Stream dashboard events
+// @Description Sends a connected object and live JSON event objects; a concurrent broadcast can arrive before the connected object. SSE comment keepalives occur every 25 seconds. No event IDs or replay are provided; reconnecting starts a new stream.
+// @Description Available before database readiness, subject to authentication and rate limiting. A query token is supported for browser SSE clients.
+// @Description A failed or timed-out broadcast removes the subscriber and ends its stream once any in-flight write finishes. A permanently blocked writer can delay stream termination. Reconnect and refresh state; missed events cannot be replayed.
+// @Description Success is text/event-stream; pre-stream http.Error responses are text/plain. Swagger 2 lists media types at operation scope, not per status.
+// @Tags System
+// @Produce text/event-stream,plain
+// @Security ApiKeyAuth
+// @Security StreamQueryToken
+// @Success 200 {string} string "SSE stream of JSON data frames and comment keepalives"
+// @Failure 401 {string} string "unauthorized"
+// @Failure 403 {string} string "keycard class forbidden on this route"
+// @Failure 429 {string} string "rate limit exceeded"
+// @Failure 500 {string} string "streaming not supported or authentication store unavailable"
+// @Router /api/events [get]
 func (b *Broadcaster) HandleSSE(w http.ResponseWriter, r *http.Request) {
 	// Set SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -248,16 +272,33 @@ func (b *Broadcaster) HandleSSE(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer b.RemoveClient(client)
+	defer func() {
+		b.RemoveClient(client)
+		// Join any in-flight write before the handler releases the ResponseWriter.
+		// Writers queued on WriteMu check Done before touching it.
+		client.WriteMu.Lock()
+		client.WriteMu.Unlock()
+	}()
 
-	// Send initial connection message
+	// Send initial connection message unless a broadcast already removed us.
 	client.WriteMu.Lock()
-	fmt.Fprintf(w, "data: {\"type\":\"connected\",\"clientId\":\"%s\"}\n\n", client.ID)
-	client.Flusher.Flush()
+	select {
+	case <-client.Done:
+		client.WriteMu.Unlock()
+		return
+	default:
+	}
+	_, err = fmt.Fprintf(w, "data: {\"type\":\"connected\",\"clientId\":\"%s\"}\n\n", client.ID)
+	if err == nil {
+		client.Flusher.Flush()
+	}
 	client.WriteMu.Unlock()
+	if err != nil {
+		return
+	}
 
-	// Keepalive ticker: SSE comment lines (`: ping\n\n`) are ignored by clients
-	// but keep the HTTP write path active, preventing WriteTimeout-driven closes.
+	// SSE comment lines are ignored by clients but keep the connection active.
+	// They cannot reset an absolute HTTP server write deadline.
 	ticker := time.NewTicker(KeepaliveInterval)
 	defer ticker.Stop()
 
@@ -265,8 +306,16 @@ func (b *Broadcaster) HandleSSE(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-client.Done:
+			return
 		case <-ticker.C:
 			client.WriteMu.Lock()
+			select {
+			case <-client.Done:
+				client.WriteMu.Unlock()
+				return
+			default:
+			}
 			if _, werr := fmt.Fprint(w, ": keepalive\n\n"); werr != nil {
 				client.WriteMu.Unlock()
 				return

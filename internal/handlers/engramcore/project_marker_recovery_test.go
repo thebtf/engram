@@ -200,8 +200,12 @@ func markerRecoveryExistingProjectSameSession(t *testing.T, unresolved bool) {
 	}
 	assertMarkerActionGuidance(t, projectidentity.RecoveryGuidance("PROJECT_MIGRATION_REQUIRED"))
 	original := json.RawMessage(`{"query":"existing-memory-sentinel"}`)
-	if raw, ok := call(3, "recall_memory", original); ok {
-		t.Fatalf("pre-repair memory read must be held: %s", raw)
+	raw, ok := call(3, "recall_memory", original)
+	if unresolved && ok {
+		t.Fatalf("unresolved historical membership must be held: %s", raw)
+	}
+	if !unresolved && (!ok || !strings.Contains(string(raw), "existing-memory-sentinel")) {
+		t.Fatalf("unique historical mapping must resume the original read: %s", raw)
 	}
 	if !unresolved {
 		direct, ok := call(31, "project_context", json.RawMessage(`{"action":"repair"}`))
@@ -247,8 +251,12 @@ func markerRecoveryExistingProjectSameSession(t *testing.T, unresolved bool) {
 	backend.mu.Lock()
 	before := len(backend.calls)
 	backend.mu.Unlock()
-	if before != 0 {
-		t.Fatal("held read or choices reached backend as a tool call")
+	wantBefore := 1
+	if unresolved {
+		wantBefore = 0
+	}
+	if before != wantBefore {
+		t.Fatal("unexpected tool call during initial read or choices")
 	}
 	if raw, err := os.ReadFile(retained); err != nil || string(raw) != "existing data" {
 		t.Fatal("discovery or choices modified retained historical data")
@@ -354,8 +362,12 @@ func markerRecoveryExistingProjectSameSession(t *testing.T, unresolved bool) {
 	if backend.legacyReads == 0 || backend.invalidHTTP != 0 {
 		t.Fatalf("repair must use authenticated historical lookup and read-only resolution, lookups=%d reads=%d rejected=%d", backend.legacyReads, backend.reads, backend.invalidHTTP)
 	}
-	if len(backend.calls) != 2 || len(backend.auth) != 2 {
-		t.Fatalf("resumed read was not forwarded exactly once: calls=%d", len(backend.calls))
+	wantCalls := 3
+	if unresolved {
+		wantCalls = 2
+	}
+	if len(backend.calls) != wantCalls || len(backend.auth) != wantCalls {
+		t.Fatalf("each successful read must be forwarded once: calls=%d", len(backend.calls))
 	}
 	for i, request := range backend.calls {
 		if request.GetProject() != markerRecoveryID || request.GetToolName() != "recall_memory" || request.GetSessionId() != "synthetic-marker-recovery-session" || string(request.GetArgumentsJson()) != string(original) || backend.auth[i] != "Bearer "+markerRecoveryToken {

@@ -4,6 +4,7 @@ package sse
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -30,15 +31,16 @@ func newRecWriter() *recWriter {
 	return &recWriter{hdr: make(http.Header), status: http.StatusOK}
 }
 
-func (r *recWriter) Header() http.Header                { return r.hdr }
-func (r *recWriter) WriteHeader(code int)               { r.status = code }
-func (r *recWriter) Flush()                             {} // no-op: satisfies http.Flusher
+func (r *recWriter) Header() http.Header  { return r.hdr }
+func (r *recWriter) WriteHeader(code int) { r.status = code }
+func (r *recWriter) Flush()               {} // no-op: satisfies http.Flusher
 func (r *recWriter) Write(b []byte) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.buf = append(r.buf, b...)
 	return len(b), nil
 }
+
 func (r *recWriter) body() string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -48,7 +50,7 @@ func (r *recWriter) body() string {
 // failWriter returns an error on every Write call.
 type failWriter struct{ hdr http.Header }
 
-func newFailWriter() *failWriter { return &failWriter{hdr: make(http.Header)} }
+func newFailWriter() *failWriter          { return &failWriter{hdr: make(http.Header)} }
 func (f *failWriter) Header() http.Header { return f.hdr }
 func (f *failWriter) WriteHeader(int)     {}
 func (f *failWriter) Flush()              {}
@@ -80,9 +82,9 @@ func (b *blockWriter) Write(data []byte) (int, error) {
 // Used to test the "streaming not supported" error path.
 type plainWriter struct{ hdr http.Header }
 
-func (p *plainWriter) Header() http.Header            { return p.hdr }
-func (p *plainWriter) Write(b []byte) (int, error)    { return len(b), nil }
-func (p *plainWriter) WriteHeader(int)                {}
+func (p *plainWriter) Header() http.Header         { return p.hdr }
+func (p *plainWriter) Write(b []byte) (int, error) { return len(b), nil }
+func (p *plainWriter) WriteHeader(int)             {}
 
 // ---------------------------------------------------------------------------
 // Construction
@@ -227,7 +229,7 @@ func TestRemoveClientByID_RemovesRegistered(t *testing.T) {
 func TestRemoveClientByID_AlreadyClosedDone_NoPanic(t *testing.T) {
 	b := NewBroadcaster()
 	c, _ := b.AddClient(newRecWriter())
-	close(c.Done) // pre-close
+	close(c.Done)            // pre-close
 	b.removeClientByID(c.ID) // must not panic (double-close guard)
 	if b.ClientCount() != 0 {
 		t.Fatalf("expected 0, got %d", b.ClientCount())
@@ -364,6 +366,7 @@ func TestBroadcast_WriterError_ClientMarkedDead(t *testing.T) {
 	default:
 		t.Error("dead client's Done channel should be closed")
 	}
+	b.RemoveClient(c) // Handler cleanup must not panic after broadcast removes the client.
 }
 
 func TestBroadcast_UnmarshalableData_NoSend(t *testing.T) {
@@ -743,7 +746,6 @@ func TestHandleSSE_ClientRemovedOnContextDone(t *testing.T) {
 
 	// Close the response body to signal disconnect to the server
 	resp.Body.Close()
-	srv.Close()
 
 	deadline = time.Now().Add(500 * time.Millisecond)
 	for time.Now().Before(deadline) {
@@ -754,5 +756,33 @@ func TestHandleSSE_ClientRemovedOnContextDone(t *testing.T) {
 	}
 	if b.ClientCount() != 0 {
 		t.Errorf("client must be removed after disconnect, got %d", b.ClientCount())
+	}
+
+	// Removing a subscriber must end its HTTP stream without closing the client.
+	httpClient := &http.Client{Timeout: 2 * time.Second}
+	resp, err = httpClient.Get(srv.URL) //nolint:noctx
+	if err != nil {
+		t.Fatalf("second HTTP GET failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	b.mu.RLock()
+	var id string
+	for clientID := range b.clients {
+		id = clientID
+	}
+	count := len(b.clients)
+	b.mu.RUnlock()
+	if count != 1 {
+		t.Fatalf("expected 1 client before server removal, got %d", count)
+	}
+	b.removeClientByID(id)
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("stream did not reach EOF after server removal: %v", err)
+	}
+	if !strings.Contains(string(body), `"type":"connected"`) {
+		t.Errorf("expected connected message before EOF, got %q", body)
 	}
 }
