@@ -111,11 +111,12 @@ a tool error.
 `engram-server` serves HTTP via chi router on :37777 (cmux multiplexed with gRPC).
 
 The generated [Swagger schema](../swagger.json) is maintained in the repository.
-On a running server, [`/api/docs`](/api/docs) redirects to the
-[Swagger UI](/api/docs/index.html), which serves its schema at
-[`/api/docs/doc.json`](/api/docs/doc.json). These routes are subject to global
-authentication when configured. The schema has conditional limitations described
-below and should not be treated as a complete description of every API behavior.
+On a running server, `/api/docs` redirects to the Swagger UI at
+`/api/docs/index.html`, which serves its schema at `/api/docs/doc.json`.
+These routes are subject to global authentication when configured. For the
+runtime product version, use `/api/version` rather than the schema's
+`info.version`. The schema has conditional limitations described below and
+should not be treated as a complete description of every API behavior.
 
 `make worker` regenerates `docs/docs.go`, `docs/swagger.json`, and
 `docs/swagger.yaml` with Swag 1.16.6 before building the server. The producer
