@@ -212,6 +212,27 @@ retry to the authenticated principal, owning context and project. An equivalent
 retry returns the existing active record; a changed command or retired target
 returns 409. Without a key a repeated create is not automatically idempotent.
 
+Self-memory cards can be linked with `POST /api/memories/{source_id}/links`.
+Supply `target_id`, `relation` (`related_to` or `references`), an optional
+`target_version` for `references`, an optional `request_key`, and an optional
+`source_session_id` as untrusted provenance. Both endpoints must be active and
+accessible to the enrolled keycard principal. `related_to` is unordered and
+cannot carry a revision pin; `references` is directional and its target version
+distinguishes assertions. A new link returns 201; an existing assertion returns
+200 with its original author and provenance. A key is scoped to the canonical
+principal and normalized assertion. Reuse for another assertion, or replay after
+removal, returns 409. A duplicate under another key also gets a receipt.
+
+`GET /api/memories/{source_id}/links` returns `links` and `next_cursor`; pass
+the cursor as `cursor` to continue. `limit` defaults to 50 and ranges from 1
+to 100. Authorization and active endpoint status filter results before the
+page limit. `DELETE /api/memory-links/{link_id}` removes an assertion; restoring
+an inactive endpoint can reveal an unremoved link, but does not restore a
+removed link. Links do not grant access. Workstation-private restrictions
+continue to apply across keycards. Auth-disabled mode is not privacy isolation,
+even though these routes validate an explicitly supplied keycard. Document and
+other-record link endpoints are not part of this slice.
+
 `GET /api/memories/principal` without `principal` searches the enrolled
 authenticated keycard's self context; it does not include that principal's project,
 global or legacy records. `context=self` is optional, but an explicit `project`,
