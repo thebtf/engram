@@ -27,13 +27,25 @@ const uciCoreRepairWindowBytes = int64(8_192)
 // Run only after freezing the combined candidate, from that candidate's root:
 // ENGRAM_UCI_INSTALLED_TEST_DATABASE_DSN=<disposable loopback test DSN>
 // go test ./cmd/engram -run '^TestUCICoreRepairPublicRegistrationSubprocess$' -count=1 -v -timeout=10m
-// This reuses the installed harness's Windows process tree, candidate builds,
-// isolated PostgreSQL schema, and cleanup; no installed profile is accessed.
+// By default this builds candidates from source. To use released artifacts,
+// set all three absolute paths: ENGRAM_UCI_TEST_SERVER_ARTIFACT,
+// ENGRAM_UCI_TEST_CLIENT_ARTIFACT, and ENGRAM_UCI_TEST_PARSER_ARTIFACT.
+// The Windows harness uses an isolated PostgreSQL schema and cleans up;
+// no installed profile is accessed.
 func TestUCICoreRepairPublicRegistrationSubprocess(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("the existing installed subprocess lifecycle requires native Windows")
 	}
 	request := uciInstalledAcceptanceConfiguredRequest(t)
+	artifactEnv := map[string]string{"server": "ENGRAM_UCI_TEST_SERVER_ARTIFACT", "daemon": "ENGRAM_UCI_TEST_CLIENT_ARTIFACT", "parser": "ENGRAM_UCI_TEST_PARSER_ARTIFACT"}
+	for role, name := range artifactEnv {
+		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+			if request.CandidateArtifacts == nil {
+				request.CandidateArtifacts = make(map[string]uciInstallHarnessCommand)
+			}
+			request.CandidateArtifacts[role] = uciInstallHarnessCommand{Executable: value}
+		}
+	}
 	request.OperationTimeout = 5 * time.Minute
 	request.Fixture.SharedSymbol = "CoreRepairOversizedCitation"
 	request.Fixture.PrimarySource = "package fixture\n\nfunc CoreRepairOversizedCitation() string { return \"" +
@@ -58,6 +70,8 @@ func TestUCICoreRepairPublicRegistrationSubprocess(t *testing.T) {
 		installed.cleanup(&cleanupErr)
 		if cleanupErr != nil {
 			t.Errorf("clean focused public consumer fixture: %v", cleanupErr)
+		} else {
+			t.Logf("cleanup: process_tree_closed=%t install_removed=%t fixture_removed=%t local_state_removed=%t", result.Cleanup.ProcessTreeClosed, result.Cleanup.InstallRootRemoved, result.Cleanup.FixtureRootRemoved, result.Cleanup.LocalStateRootRemoved)
 		}
 	})
 	if err := installed.setupRootsAndAuthority(ctx); err != nil {
@@ -94,6 +108,10 @@ func TestUCICoreRepairPublicRegistrationSubprocess(t *testing.T) {
 		t.Fatal("public consumer did not use distinct candidate server and stdio-daemon processes")
 	}
 	uciInstalledAcceptanceRequireArtifacts(t, result)
+	t.Logf("processes: test=%d server=%d stdio=%d daemon=%d", os.Getpid(), result.Processes.ServerPID, client.process.command.Process.Pid, daemonPID)
+	for _, role := range []string{"server", "daemon", "parser"} {
+		t.Logf("artifact %s: input=%s sha256=%s installed_sha256=%s", role, installed.candidates[role].Executable, result.Artifacts[role].CandidateSHA256, result.Artifacts[role].InstalledSHA256)
+	}
 
 	selection, checkout := uciCoreRepairRegisterHumanCheckout(t, ctx, installed, client)
 	indexPayload, err := client.Tool(ctx, "codebase_index", map[string]any{
@@ -146,6 +164,7 @@ func TestUCICoreRepairPublicRegistrationSubprocess(t *testing.T) {
 	if citation == nil {
 		t.Fatal("actual public search omitted a citation larger than 8192 bytes; fixture is not #514 proof")
 	}
+	t.Logf("oversized citation: bytes=%d synthetic_source_bytes=%d", citation.Span.ByteEnd-citation.Span.ByteStart, len(request.Fixture.PrimarySource))
 	if providerCalls.Load() == 0 {
 		t.Fatal("candidate made no observed request to the deterministic loopback embedding provider")
 	}
@@ -167,6 +186,7 @@ func TestUCICoreRepairPublicRegistrationSubprocess(t *testing.T) {
 				t.Fatal("completion probe omitted its exact-retry or append-failure observation")
 			}
 		}
+		t.Logf("completion observations: U42=%s U45=%s", evidence["U42"].Digest, evidence["U45"].Digest)
 	})
 	ownerAfter, err := gormdb.NewUCIContextStore(installed.authority.store.GetDB()).GetCheckout(ctx, checkout.CheckoutID)
 	if err != nil || ownerAfter.OwnerPrincipal != humanPrincipal {
@@ -246,6 +266,7 @@ func uciCoreRepairReadWindows(t *testing.T, ctx context.Context, client *uciInst
 			!utf8.ValidString(item.Excerpt) || item.Excerpt != source[item.Span.ByteStart:item.Span.ByteEnd] {
 			t.Fatal("bounded indexed_span read changed citation identity, digest, byte bounds, or stored UTF-8 content")
 		}
+		t.Logf("bounded read: start=%d end=%d returned_bytes=%d", item.Span.ByteStart, item.Span.ByteEnd, len(item.Excerpt))
 		cursor = item.Span.ByteEnd
 	}
 }
