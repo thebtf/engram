@@ -20,6 +20,11 @@ import (
 )
 
 func TestAutomaticOriginRecoveryProxy(t *testing.T) {
+	testAutomaticOriginRecoveryProxy(t, func(path string) string { return path })
+}
+
+func testAutomaticOriginRecoveryProxy(t *testing.T, callerPath func(string) string) {
+	t.Helper()
 	t.Setenv("ENGRAM_TLS_CA", "")
 	handler := &observedRecoveryHandler{anchorDiscoveryHandler: anchorDiscoveryHandler{server: mcp.NewServer(mcp.ServerOptions{Version: "origin-test"})}}
 	grpcServer, _ := grpcserver.New(handler, auth.NewValidator(markerRecoveryToken, nil))
@@ -43,6 +48,7 @@ func TestAutomaticOriginRecoveryProxy(t *testing.T) {
 	}), &http2.Server{}))
 	t.Cleanup(func() { grpcServer.Stop(); backend.Close() })
 	_, mod, caller := buildContractDispatcher(t, "")
+	caller.Cwd = callerPath(caller.Cwd)
 	caller.Env[config.EnvServerURL] = backend.URL
 	caller.Env[config.EnvWorkstationToken] = markerRecoveryToken
 	caller.Env[config.EnvClaudeSessionID] = "origin-session"

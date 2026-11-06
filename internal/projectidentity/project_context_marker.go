@@ -95,7 +95,7 @@ func InspectProjectMarker(ctx context.Context, cwd string) (ProjectMarkerState, 
 	}
 	targetRoot := root
 	if common != "" {
-		relative, relErr := filepath.Rel(gitRoot, root)
+		relative, relErr := filepath.Rel(canonicalPath(gitRoot), canonicalPath(root))
 		if relErr != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
 			return ProjectMarkerState{}, logicalError("PROJECT_CONTEXT_REQUIRED")
 		}
