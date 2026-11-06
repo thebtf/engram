@@ -1795,7 +1795,7 @@ paths:
       description: |-
         Sends a connected object and live JSON event objects; a concurrent broadcast can arrive before the connected object. SSE comment keepalives occur every 25 seconds. No event IDs or replay are provided; reconnecting starts a new stream.
         Available before database readiness, subject to authentication and rate limiting. A query token is supported for browser SSE clients.
-        A timed-out or failed broadcast may remove a subscriber without closing its HTTP stream; keepalives do not prove event delivery. Clients can reconnect and refresh state, but cannot replay gaps.
+        A failed or timed-out broadcast removes the subscriber and ends its stream once any in-flight write finishes. A permanently blocked writer can delay stream termination. Reconnect and refresh state; missed events cannot be replayed.
         Success is text/event-stream; pre-stream http.Error responses are text/plain. Swagger 2 lists media types at operation scope, not per status.
       produces:
       - text/event-stream
