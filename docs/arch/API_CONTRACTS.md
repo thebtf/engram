@@ -345,6 +345,17 @@ guarantee that arbitrary application logs contain no other secrets.
 | `POST` | `/api/tokens` | Create worker keycard. |
 | `DELETE` | `/api/tokens/:id` | Revoke token. |
 
+For `POST /api/update/apply`, an available update without an asset URL for the
+current platform returns HTTP 200 with `success: false` and an error message.
+The synchronous response is authoritative for this refusal. The updater
+initially records an `error` status with the existing manual update command,
+but a subsequent update check may overwrite that in-memory status before it is
+read through `GET /api/update/status`. No update is started in this case. An
+unavailable update keeps the existing `success: false` response; an update with
+an asset continues in the background. Status does not promise crash durability.
+The generic manual update command is not guaranteed to work when the same
+platform artifact is absent.
+
 ### Knowledge readers
 
 `GET /api/projects` returns `{items:[{project_id,name,display_name,repository_qualifier?}],unresolved:[{reference,name,reason,reader_kinds}]}`.

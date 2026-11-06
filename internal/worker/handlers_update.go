@@ -56,6 +56,14 @@ func (s *Service) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if info.DownloadURL == "" {
+		err := s.updater.ApplyUpdate(s.ctx, info)
+		writeJSON(w, map[string]any{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
 
 	// Run the download + replace in the background so this request returns immediately.
 	// s.wg tracks in-flight goroutines for graceful shutdown.
