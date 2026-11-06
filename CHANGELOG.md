@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Return a JSON 400 for registration passwords exceeding bcrypt's 72-byte limit without consuming the invitation or creating a user.
+
 - Set `Content-Type: application/json` on successful 201 responses for setup, registration, invitation creation, and Vault credential creation.
 
 - Return a JSON 400 for setup passwords exceeding bcrypt's 72-byte limit, without creating an initial user or exposing the password.
