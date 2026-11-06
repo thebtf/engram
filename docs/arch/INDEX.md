@@ -12,6 +12,9 @@ comments, or a surviving symbol as proof that a feature is active.
 4. [Architecture rationale](architecture.md) — durable decisions and tombstones.
 5. [Current surface ledger](current-surface.json) — machine-readable claims,
    feature gates, and a source-derived Vue page inventory.
+6. [API contracts](API_CONTRACTS.md) — interface guide and source-backed behavior notes.
+7. [Swagger schema](../swagger.json) — generated HTTP API reference; see the
+   API guide for conditional behavior and schema limitations.
 
 The canonical architecture diagram is in the README. Keeping one diagram avoids
 parallel descriptions drifting apart.

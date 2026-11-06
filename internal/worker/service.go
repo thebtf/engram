@@ -24,6 +24,7 @@ import (
 	"github.com/soheilhy/cmux"
 	httpSwagger "github.com/swaggo/http-swagger"
 
+	"github.com/thebtf/engram/docs"
 	"github.com/thebtf/engram/internal/auditcontext"
 	"github.com/thebtf/engram/internal/auth"
 	booksdomain "github.com/thebtf/engram/internal/books"
@@ -1773,7 +1774,7 @@ func (s *Service) setupRoutes() {
 
 	// OpenAPI docs (read-only spec; protected by global auth middleware if ENGRAM_AUTH_ADMIN_TOKEN is set)
 	s.router.Get("/api/docs", http.RedirectHandler("/api/docs/index.html", http.StatusMovedPermanently).ServeHTTP)
-	s.router.Get("/api/docs/*", httpSwagger.WrapHandler)
+	s.router.Get("/api/docs/*", httpSwagger.Handler(httpSwagger.InstanceName(docs.ServingInstance)))
 
 	// Admin/management routes — authentication applied globally via setupMiddleware.
 	// Grouped for logical organization; no additional middleware needed.

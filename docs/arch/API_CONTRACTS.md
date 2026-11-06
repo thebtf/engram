@@ -1,6 +1,6 @@
 # API Contracts
 
-MCP tools, HTTP endpoints, gRPC services, and hook interfaces for engram v6.
+MCP tools, HTTP endpoints, gRPC services, and hook interfaces for Engram.
 
 ---
 
@@ -109,6 +109,24 @@ a tool error.
 ## HTTP API (:37777)
 
 `engram-server` serves HTTP via chi router on :37777 (cmux multiplexed with gRPC).
+
+The generated [Swagger schema](../swagger.json) is maintained in the repository.
+On a running server, `/api/docs` redirects to the Swagger UI at
+`/api/docs/index.html`, which serves its schema at `/api/docs/doc.json`.
+The server's token authentication middleware exempts the `/api/docs` prefix.
+The current source does not fix a host or scheme in the schema: Swagger UI uses
+the origin serving the documentation. This requires the documentation and API
+to be reachable at that origin; reverse-proxy path rewriting is not covered.
+Older deployments, including the observed 7.0.26 installation, may still declare
+`localhost:37777`, causing Try it out to target the reader's machine. Check the
+served `/api/docs/doc.json` before use and use the intended server address for
+API calls when it declares that host. A source change does not update a deployment.
+For the runtime product version, use `/api/version` rather than the schema's
+`info.version`. The schema has conditional limitations described below and
+should not be treated as a complete description of every API behavior.
+
+The server embeds the generated `swagger.json` and registers it as the Swagger
+UI document; it does not serve Swag's Go template, which emits an empty `host`.
 
 `make worker` regenerates `docs/docs.go`, `docs/swagger.json`, and
 `docs/swagger.yaml` with Swag 1.16.6 before building the server. The producer
