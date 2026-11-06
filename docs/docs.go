@@ -164,7 +164,7 @@ const docTemplate = `{
         },
         "/api/auth/principals": {
             "post": {
-                "description": "In authenticated mode, enroll a canonical principal/kind pair using the persisted engram_auth browser cookie for an enabled admin user. The persisted user and session are revalidated under transaction locks. Supplied bearer or X-Auth-Token credentials take precedence over cookies; HMAC sessions, master tokens, keycards and synthetic identities cannot enroll. Auth-disabled middleware supplies a synthetic identity. Omitted/empty principal_kind defaults to human; valid kinds are human, agent, service. Issuing a keycard does not enroll or backfill its principal, and enrollment may precede issuance. Creates no user, credential, project or memory; returns the canonical pair with 201 for first enrollment or 200 if already enrolled.",
+                "description": "Enroll a canonical principal/kind pair using the persisted engram_auth browser cookie for an enabled admin user, including in auth-disabled mode. The persisted user and session are revalidated under transaction locks. Supplied bearer or X-Auth-Token credentials take precedence over cookies; HMAC sessions, master tokens, keycards and synthetic identities cannot enroll. Auth-disabled mode does not provide privacy isolation or credential-free bootstrap. Omitted/empty principal_kind defaults to human; valid kinds are human, agent, service. Issuing a keycard does not enroll or backfill its principal, and enrollment may precede issuance. Creates no user, credential, project or memory; returns the canonical pair with 201 for first enrollment or 200 if already enrolled.",
                 "consumes": [
                     "application/json"
                 ],
@@ -1737,7 +1737,7 @@ const docTemplate = `{
                         "ApiKeyAuth": []
                     }
                 ],
-                "description": "With a validated principal-bound client keycard, omit both context and project for enrolled self; an existing canonical project selects project; explicit context.kind=global requires project omission and enrollment. Context accepts only a kind field (self, project, global). Empty/null/invalid/conflicting selectors fail without fallback or project creation. Typed commands require a client keycard; a no-opt-in legacy project write remains supported.\nIn authenticated mode, use a principal-bound client keycard as the bearer credential. X-Engram-Identity is a context-selection marker, not an authentication credential. Auth-disabled mode supplies a synthetic identity and does not establish keycard identity. Author/owner and workstation derive from authenticated identity, not source_agent or session_id. Self/project default agent_visibility=shared; self ownership still isolates principals. Global defaults agent_visibility=private; explicit shared does not bypass domain or privacy_scope checks.\nOptional request_key is a nonempty string of at most 1024 UTF-8 bytes, scoped by canonical principal kind/principal, context kind and project. Equivalent normalized commands replay the currently accessible active record with 200; first creation returns 201. Changed commands or retired/missing/inaccessible replay targets return 409 without overwrite, duplicate or resurrection. Body and retry receipt commit atomically; omission is not idempotent. See the operating guide for the independent privacy_scope and workstation restrictions.",
+                "description": "With a validated principal-bound client keycard, omit both context and project for enrolled self; an existing canonical project selects project; explicit context.kind=global requires project omission and enrollment. Context accepts only a kind field (self, project, global). Empty/null/invalid/conflicting selectors fail without fallback or project creation. Typed commands require a client keycard; a no-opt-in legacy project write remains supported.\nUse a principal-bound client keycard as the bearer credential. X-Engram-Identity is a context-selection marker, not an authentication credential. In auth-disabled mode, explicit credentials are validated on the selected HTTP routes while unkeyed requests retain a synthetic identity; this mode is not a privacy-isolation boundary. Author/owner and workstation derive from authenticated identity, not source_agent or session_id. Self/project default agent_visibility=shared; with authentication enabled, self ownership remains scoped to its principal even when visibility is shared. Global defaults agent_visibility=private; explicit shared does not bypass domain or privacy_scope checks.\nOptional request_key is a nonempty string of at most 1024 UTF-8 bytes, scoped by canonical principal kind/principal, context kind and project. Equivalent normalized commands replay the currently accessible active record with 200; first creation returns 201. Changed commands or retired/missing/inaccessible replay targets return 409 without overwrite, duplicate or resurrection. Body and retry receipt commit atomically; omission is not idempotent. See the operating guide for the independent privacy_scope and workstation restrictions.",
                 "consumes": [
                     "application/json"
                 ],
@@ -6397,11 +6397,11 @@ const docTemplate = `{
 // SwaggerInfo holds exported Swagger Info so clients can modify it
 var SwaggerInfo = &swag.Spec{
 	Version:          "1.0.0",
-	Host:             "localhost:37777",
+	Host:             "",
 	BasePath:         "/",
 	Schemes:          []string{},
 	Title:            "Engram API",
-	Description:      "Persistent shared memory infrastructure for AI agents. Stores memories + behavioral rules + credentials in PostgreSQL. REST API over HTTP; MCP tools are served via stdio client proxy only (server-side MCP HTTP transports removed in v5). Note: the host below is the default for local development; set ENGRAM_LISTEN_ADDR to change the listen address in production.",
+	Description:      "Persistent shared memory infrastructure for AI agents. Stores memories + behavioral rules + credentials in PostgreSQL. REST API over HTTP; MCP tools are served via stdio client proxy only (server-side MCP HTTP transports removed in v5).",
 	InfoInstanceName: "swagger",
 	SwaggerTemplate:  docTemplate,
 	LeftDelim:        "{{",

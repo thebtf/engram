@@ -24,6 +24,7 @@ import (
 	"github.com/soheilhy/cmux"
 	httpSwagger "github.com/swaggo/http-swagger"
 
+	"github.com/thebtf/engram/docs"
 	"github.com/thebtf/engram/internal/auditcontext"
 	"github.com/thebtf/engram/internal/auth"
 	booksdomain "github.com/thebtf/engram/internal/books"
@@ -1039,11 +1040,12 @@ func (s *Service) initializeAsync() {
 		// (wireVnextF is called after wireVnextStores sets s.graphStore).
 	}
 
-	// Wire token store into auth middleware for client token lookups.
-	// Also wire the shared *auth.Validator (constructed below alongside the
-	// gRPC server) so HTTP and gRPC share one validation chain (FR-2).
+	// HTTP needs the DB-backed validator even in disabled mode for the
+	// narrowly scoped routes that recognize explicit credentials.
+	httpValidator := auth.NewValidator(config.GetWorkerToken(), tokenStore)
 	if s.tokenAuth != nil {
 		s.tokenAuth.SetTokenStore(tokenStore)
+		s.tokenAuth.SetValidator(httpValidator)
 	}
 
 	// Wire email/password auth stores into TokenAuth middleware and create AuthHandlers.
@@ -1365,21 +1367,12 @@ func (s *Service) initializeAsync() {
 	// Wire gRPC server: create adapter over mcpServer and register with the server.
 	// initMu protects s.grpcServer — the cmux goroutine polls for it.
 	//
-	// Auth (FR-2 / Plan ADR-002): build the shared *auth.Validator from the
-	// operator key (server-host env) and the freshly-constructed tokenStore,
-	// then pass it to grpcserver.New. The same validator backs the HTTP
-	// middleware in Phase 3; until then HTTP keeps its inline check.
-	//
-	// Pass nil validator when ENGRAM_AUTH_DISABLED is the deliberate
-	// operator choice (mirrors the empty-token branch the previous code took).
+	// Disabled mode keeps its existing nil gRPC validator and realm; only
+	// HTTP recognizes explicit credentials on its selected routes.
 	adapter := &mcpHandlerAdapter{mcpServer: mcpServer}
 	var grpcValidator *auth.Validator
 	if !authDisabledFromEnv() {
-		grpcValidator = auth.NewValidator(config.GetWorkerToken(), tokenStore)
-	}
-	// Share the validator with the HTTP middleware (FR-2: symmetric validation).
-	if s.tokenAuth != nil && grpcValidator != nil {
-		s.tokenAuth.SetValidator(grpcValidator)
+		grpcValidator = httpValidator
 	}
 	grpcSrv, grpcInternalSrv := grpcserver.New(adapter, grpcValidator)
 	grpcInternalSrv.SetUCICompletionRecorder(adapter)
@@ -1781,7 +1774,7 @@ func (s *Service) setupRoutes() {
 
 	// OpenAPI docs (read-only spec; protected by global auth middleware if ENGRAM_AUTH_ADMIN_TOKEN is set)
 	s.router.Get("/api/docs", http.RedirectHandler("/api/docs/index.html", http.StatusMovedPermanently).ServeHTTP)
-	s.router.Get("/api/docs/*", httpSwagger.WrapHandler)
+	s.router.Get("/api/docs/*", httpSwagger.Handler(httpSwagger.InstanceName(docs.ServingInstance)))
 
 	// Admin/management routes — authentication applied globally via setupMiddleware.
 	// Grouped for logical organization; no additional middleware needed.

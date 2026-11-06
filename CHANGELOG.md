@@ -7,9 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- In auth-disabled mode, validate explicit credentials on the scoped typed-memory HTTP routes and accept an existing persisted admin browser session for principal enrollment and keycard issuance. Keep invalid credentials fail-closed and preserve synthetic identity on unrelated and unkeyed routes; disabled authentication does not provide privacy isolation. Disabled-mode gRPC behavior is unchanged.
+
 - Apply builtin and configured redaction to REST memory creates and revisions, including newly captured prior bodies; refuse fully redacted content without advancing history. Preserve nonempty whitespace-only input and leave existing history unchanged. Invalidate stale revision vectors and attempt re-embedding asynchronously when configured, without claiming provider-error retry. Prevent invalid backfill vectors from spinning; preserve scoped private-query and telemetry filtering, and exclude memory context metadata from consolidation selectors while retaining project membership.
 
 - Require native project membership under mutation locks when revising a typed project card; a read alias does not grant write authority.
+
+- Remove the fixed Swagger host so the UI uses the documentation's serving origin; older deployments retain their existing schema until updated.
+
+- Keep long statistics values within their metric columns so adjacent values remain readable, without changing the displayed precision or unknown-versus-zero semantics.
 
 - Regenerate the API through the maintained worker target using canonical local Go package directories and Swag 1.16.6, with real producer errors stopping the build. Correct existing context search/inject/session-start annotations without changing handlers; document the shared GET/POST conditional-query limitation. The actual producer and server build pass, with 40 named schema checks and all 76 references resolved; that producer checkpoint established compile-only retained-reader oracle provenance, with later native query proof recorded separately, and installed/release acceptance remains separate.
 

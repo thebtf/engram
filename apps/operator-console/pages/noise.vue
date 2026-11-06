@@ -252,6 +252,7 @@ const {
 
 .stats dd {
   margin-bottom: 0;
+  overflow-wrap: anywhere;
 }
 
 .card p {

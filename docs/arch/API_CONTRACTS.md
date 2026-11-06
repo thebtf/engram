@@ -1,6 +1,6 @@
 # API Contracts
 
-MCP tools, HTTP endpoints, gRPC services, and hook interfaces for engram v6.
+MCP tools, HTTP endpoints, gRPC services, and hook interfaces for Engram.
 
 ---
 
@@ -110,6 +110,24 @@ a tool error.
 
 `engram-server` serves HTTP via chi router on :37777 (cmux multiplexed with gRPC).
 
+The generated [Swagger schema](../swagger.json) is maintained in the repository.
+On a running server, `/api/docs` redirects to the Swagger UI at
+`/api/docs/index.html`, which serves its schema at `/api/docs/doc.json`.
+The server's token authentication middleware exempts the `/api/docs` prefix.
+The current source does not fix a host or scheme in the schema: Swagger UI uses
+the origin serving the documentation. This requires the documentation and API
+to be reachable at that origin; reverse-proxy path rewriting is not covered.
+Older deployments, including the observed 7.0.26 installation, may still declare
+`localhost:37777`, causing Try it out to target the reader's machine. Check the
+served `/api/docs/doc.json` before use and use the intended server address for
+API calls when it declares that host. A source change does not update a deployment.
+For the runtime product version, use `/api/version` rather than the schema's
+`info.version`. The schema has conditional limitations described below and
+should not be treated as a complete description of every API behavior.
+
+The server embeds the generated `swagger.json` and registers it as the Swagger
+UI document; it does not serve Swag's Go template, which emits an empty `host`.
+
 `make worker` regenerates `docs/docs.go`, `docs/swagger.json`, and
 `docs/swagger.yaml` with Swag 1.16.6 before building the server. The producer
 derives local Go package directories from the server dependency graph, puts
@@ -164,14 +182,17 @@ response and audit-only source-session attribution without MCP memory mutations.
 
 ### Typed memory cards
 
-In authenticated mode an enabled admin with a persisted `engram_auth` browser
-session can enroll an existing canonical principal/kind pair using
-`POST /api/auth/principals`. Bearer and `X-Auth-Token` credentials take precedence
-over cookies; omit them to use the browser session. HMAC-only sessions do not
-qualify. Auth-disabled middleware supplies a synthetic identity, not an authenticated
-keycard or persisted browser session. A validated keycard for the enrolled pair can
-omit both `project` and `context` on `POST /api/memories` to create a self-owned
-card. `X-Engram-Identity` selects a typed context; it does not authenticate.
+An enabled admin with a persisted `engram_auth` browser session can enroll an
+existing canonical principal/kind pair using `POST /api/auth/principals` and
+issue a keycard using `POST /api/auth/tokens`, including in auth-disabled mode
+when such an account and session already exist. This does not establish a
+credential-free bootstrap path. Bearer and `X-Auth-Token` credentials take
+precedence over cookies; omit them to use the browser session. HMAC-only
+sessions do not qualify for enrollment. In auth-disabled mode those two POSTs
+recognize a persisted session, not an HMAC-only session. A validated keycard
+for the enrolled pair can omit both `project` and `context` on
+`POST /api/memories` to create a self-owned card. `X-Engram-Identity` selects a
+typed context; it does not authenticate.
 `source_agent` is provenance,
 not owner authority. The optional context object is `{"kind":"self"}`,
 `{"kind":"project"}`, or `{"kind":"global"}`. Project context requires an
@@ -236,6 +257,16 @@ existing paths. The current body remains on the ordinary read. Retained revision
 are removed with a hard-deleted parent. Neither the revision endpoint nor global
 context grants access by itself. Synthetic auth-disabled identity is not a
 registered keycard.
+
+With authentication disabled, explicit bearer or `X-Auth-Token` credentials are
+validated on `POST /api/memories`, `GET` and `PATCH /api/memories/{id}`, and
+`GET /api/memories/{id}/revisions` for numeric IDs. A rejected credential does
+not fall back to a cookie or the synthetic identity; token-store failures fail
+closed. HAP and read-only restrictions still apply. Unkeyed requests, other
+routes, and `/api/auth/me` retain their existing synthetic identity behavior.
+Disabled authentication does **not** provide privacy isolation: other routes
+may still admit synthetic administrative access. Do not use this mode as a
+security boundary between users or principals.
 
 Explicit-principal queries filter inaccessible cards before pagination. The
 `hidden_count` field is `null` when the number of inaccessible cards is unknown;
