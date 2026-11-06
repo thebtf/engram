@@ -183,7 +183,7 @@ project; it does not trigger a second resolver process or reuse another request'
 
 Closed statuses are `ok`, `empty`, `not_ready`, `stale`, `context_required`,
 `forbidden`, `unavailable`, and `deadline_exceeded`. Closed uppercase reasons
-include `OK`, `NO_MATCH`, `DAEMON_NOT_READY`, `OPERATION_NOT_READY`,
+include `OK`, `NO_MATCH`, `EXPLICIT_SEARCH_REQUIRED`, `DAEMON_NOT_READY`, `OPERATION_NOT_READY`,
 `INSTALLATION_NOT_READY`, `CONTEXT_REQUIRED`, `CONTEXT_MISMATCH`,
 `PROJECT_CONTEXT_REQUIRED`, `PROJECT_CONTEXT_MISMATCH`,
 `REGISTRATION_PROFILE_UNBOUND`, `CHECKOUT_OFFLINE`, `INDEX_CATCHING_UP`,
@@ -224,10 +224,16 @@ refuses closed; missing profile/View is not_ready; offline/catching-up/retired
 state is explicit. No registration, profile/catalog update, indexing, parser
 acquisition, default binding or per-prompt context-handle registry entry is created.
 
-The application directly composes deterministic exact-name/path or lexical
-QueryService, exact VersionedReadService and bounded callers/callees GraphService.
-It deliberately does not enter general SearchCodebase's semantic-provider
-selection or any embedding/LLM provider. Richer semantic work remains explicit.
+The automatic task code path uses deterministic exact-name/path or lexical
+QueryService only for a single whitespace-free query. Multiword task questions
+return `unavailable/EXPLICIT_SEARCH_REQUIRED` without claiming a match or an
+empty search. Use the ordinary `codebase_context` list/selection workflow to
+select the authenticated intended checkout and its published View, then call
+`codebase_search` explicitly with the original question. Search can fall back
+to literal lexical matching when same-View semantic coverage is incomplete;
+that fallback is not semantic success or a guarantee of useful results.
+Successful fast-path retrieval composes exact VersionedReadService and bounded
+callers/callees GraphService. It does not invoke an embedding or LLM provider.
 
 Each actual search, versioned source read and graph sub-result uses its existing
 exposure category and the existing UCI release gate. These are genuine

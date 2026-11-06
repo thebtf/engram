@@ -12,6 +12,12 @@ import (
 	"github.com/thebtf/engram/internal/uci"
 )
 
+func TestTaskContextExplicitSearchRequiredIsValid(t *testing.T) {
+	response := Closed("unavailable", "EXPLICIT_SEARCH_REQUIRED")
+	require.NoError(t, response.Validate())
+	require.Nil(t, response.Packet)
+}
+
 func TestTaskContextWireClampsWithoutExtendingParent(t *testing.T) {
 	start := time.Now()
 	request := Request{Schema: 1, HostSessionID: "host", Query: "Alpha", DeadlineUnixMS: 9_007_199_254_740_991, MaxBytes: 1 << 30}

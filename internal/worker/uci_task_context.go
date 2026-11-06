@@ -20,6 +20,9 @@ func (application *UCIApplication) TaskCodebase(ctx context.Context, authorized 
 	}
 	mode := uci.QueryModeFTS
 	query := strings.TrimSpace(request.Query)
+	if strings.IndexFunc(query, unicode.IsSpace) >= 0 {
+		return packet, taskcontext.Refuse("unavailable", "EXPLICIT_SEARCH_REQUIRED")
+	}
 	if strings.Contains(query, "/") && !strings.ContainsAny(query, " \t\n") {
 		mode = uci.QueryModeExactRelativePath
 	} else if strings.IndexFunc(query, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' }) < 0 {

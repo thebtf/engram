@@ -58,6 +58,10 @@ wire and authority contract is [Native same-turn task context](../../docs/arch/A
 Knowledge REST consumes only that same response's validated project and remaining
 budget; a known slow knowledge producer cannot delay useful code delivery. No
 second resolver or resident process is introduced.
+Multiword task questions require explicit `codebase_context` selection and
+`codebase_search` rather than the automatic literal code query. A lexical-only
+or empty explicit result is not evidence of semantic coverage or task usefulness.
+
 
 Native/backend fixture proof is not ordinary loaded-host acceptance. Preserve all
 measured negative samples, including initial 300 ms failures and cold useful

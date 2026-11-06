@@ -17,6 +17,23 @@ import (
 	"github.com/thebtf/engram/internal/uci"
 )
 
+func TestUCITaskContextRequiresExplicitSearchForMultiwordTasks(t *testing.T) {
+	for _, query := range []string{
+		"How should Engram preserve canonical project identity across linked worktrees without treating a logical project as code-source authority?",
+		"How should a client retry a failed connection?",
+		"project\u00a0identity",
+	} {
+		t.Run(query, func(t *testing.T) {
+			ctx := mcp.ContextWithSession(t.Context(), "task-context-test")
+			var application UCIApplication
+			packet, err := application.TaskCodebase(ctx, uci.AuthorizedContext{}, taskcontext.Request{Query: query})
+			require.Error(t, err)
+			require.Equal(t, taskcontext.Closed("unavailable", "EXPLICIT_SEARCH_REQUIRED"), taskcontext.FromError(ctx, err))
+			require.Nil(t, packet.Source)
+		})
+	}
+}
+
 func TestUCITaskContextPacketIsReleasedFromOneReadOnlyView(t *testing.T) {
 	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
 	store := openWorkerUCIContextCompositionStore(t)

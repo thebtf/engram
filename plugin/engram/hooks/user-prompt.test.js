@@ -290,6 +290,28 @@ test('native transport supplies one absolute work deadline with a thirty millise
   t.diagnostic(JSON.stringify({ originalOuter: outer, suppliedWork: expectedWork, reserveMs: outer - expectedWork }));
 });
 
+test('native transport preserves explicit-search-required reason', async t => {
+  const { requestTaskContext } = require('../scripts/run-engram.js');
+  const { Worker } = require('node:worker_threads');
+  const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-explicit-search-'));
+  let workerClosed;
+  t.after(async () => { await workerClosed; fs.rmSync(root, { recursive: true, force: true }); });
+  fs.writeFileSync(path.join(root, 'task-context'), `process.stdin.resume();process.stdin.on('end',()=>process.stdout.write(JSON.stringify({schema:1,status:'unavailable',reason_code:'EXPLICIT_SEARCH_REQUIRED'})+'\\n'));`);
+  const outcome = await requestTaskContext({ ...facts, cwd: root }, {
+    deadlineAt: Date.now() + 500, maxBytes: 8000,
+    resolve: async () => ({ path: process.execPath, target: {} }),
+    roots: () => ({ objects: root }), hash: () => true,
+    createTaskContextWorker(entry, execution) {
+      const worker = new Worker(entry, execution);
+      workerClosed = new Promise(resolve => worker.once('exit', resolve));
+      return worker;
+    },
+  });
+  assert.equal(outcome.status, 'unavailable');
+  assert.equal(outcome.reason_code, 'EXPLICIT_SEARCH_REQUIRED');
+});
+
 test('expired framing or dedup cannot deliver a packet or retain its delivery digest', async t => {
   for (const stage of ['framing', 'dedup']) await t.test(stage, async t => {
     let now = 1000;
