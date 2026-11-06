@@ -1262,6 +1262,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	if s.embeddingClient != nil && s.embeddingStore != nil {
 		memID := created.ID
 		memContent := created.Content
+		memVersion := created.Version
 		embClient := s.embeddingClient
 		embStore := s.embeddingStore
 		go func() {
@@ -1281,9 +1282,13 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 				Embedding: pgvector.NewVector(vectors[0]),
 				Model:     embClient.Model(),
 			}
-			if storeErr := embStore.StoreChunks(gCtx, []embedding.Chunk{chunk}); storeErr != nil {
+			stored, storeErr := embStore.StoreChunksForVersion(gCtx, memID, memVersion, []embedding.Chunk{chunk})
+			if storeErr != nil {
 				log.Error().Err(storeErr).Int64("memory_id", memID).Msg("async embedding store failed")
-				return // don't run cosine check if store failed
+				return
+			}
+			if !stored {
+				return
 			}
 			// Async cosine duplicate guard
 			writegate.CheckCosine(gCtx, memID, memContent, embClient, embStore, s.memoryStore)

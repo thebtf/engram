@@ -98,12 +98,54 @@ func TestAuthHandlersLifecycle_InvitationSingleUseRace(t *testing.T) {
 	require.NoError(t, err)
 
 	code := invitePrefix + "-code"
-	_, err = env.invitations.CreateInvitation(code, admin.ID, "", gormdb.DashboardRoleOperator, time.Now().UTC().Add(2*time.Hour))
+	invitation, err := env.invitations.CreateInvitation(code, admin.ID, "", gormdb.DashboardRoleOperator, time.Now().UTC().Add(2*time.Hour))
+	require.NoError(t, err)
+	beforeInvitation, err := env.invitations.GetInvitationByID(invitation.ID)
+	require.NoError(t, err)
+	beforeUsers, err := env.users.ListUsers()
 	require.NoError(t, err)
 
+	for _, tc := range []struct {
+		name     string
+		password string
+	}{
+		{name: "ascii 73 bytes", password: strings.Repeat("a", 73)},
+		{name: "utf8 73 bytes", password: strings.Repeat("é", 36) + "a"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload, err := json.Marshal(map[string]string{
+				"email": userPrefix + "-a@example.com", "password": tc.password, "invitation": code,
+			})
+			require.NoError(t, err)
+			req := httptest.NewRequest(http.MethodPost, "/api/auth/register", bytes.NewReader(payload))
+			rec := httptest.NewRecorder()
+			env.handlers.handleRegister(rec, req)
+
+			afterInvitation, err := env.invitations.GetInvitationByID(invitation.ID)
+			require.NoError(t, err)
+			require.Equal(t, beforeInvitation, afterInvitation, "rejected registration must not change the invitation")
+			afterUsers, err := env.users.ListUsers()
+			require.NoError(t, err)
+			require.Equal(t, beforeUsers, afterUsers, "rejected registration must not create a user")
+			require.Equal(t, http.StatusBadRequest, rec.Code)
+			require.NotContains(t, rec.Body.String(), tc.password)
+			var response struct {
+				Error string `json:"error"`
+			}
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
+			require.NotContains(t, response.Error, tc.password)
+			message := strings.ToLower(response.Error)
+			require.Contains(t, message, "password")
+			require.Contains(t, message, "72")
+			require.Contains(t, message, "byte")
+		})
+	}
+
+	password := strings.Repeat("é", 36)
+
 	payloads := [][]byte{
-		[]byte(fmt.Sprintf(`{"email":"%s-a@example.com","password":"password-123","invitation":"%s"}`, userPrefix, code)),
-		[]byte(fmt.Sprintf(`{"email":"%s-b@example.com","password":"password-123","invitation":"%s"}`, userPrefix, code)),
+		[]byte(fmt.Sprintf(`{"email":"%s-a@example.com","password":"%s","invitation":"%s"}`, userPrefix, password, code)),
+		[]byte(fmt.Sprintf(`{"email":"%s-b@example.com","password":"%s","invitation":"%s"}`, userPrefix, password, code)),
 	}
 	statuses := make([]int, len(payloads))
 	bodies := make([]string, len(payloads))

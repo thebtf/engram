@@ -264,7 +264,11 @@ func (u *Updater) storeCache(info *UpdateInfo) {
 // The update is applied to all known install directories (primary + cache).
 func (u *Updater) ApplyUpdate(ctx context.Context, info *UpdateInfo) error {
 	if !info.Available || info.DownloadURL == "" {
-		return fmt.Errorf("no update available or download URL missing")
+		err := fmt.Errorf("no update available or download URL missing")
+		if info.Available {
+			u.setError(err)
+		}
+		return err
 	}
 
 	tmpDir, err := os.MkdirTemp("", "engram-update-*")

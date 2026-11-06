@@ -117,6 +117,17 @@ derives local Go package directories from the server dependency graph, puts
 enabled and dependency parsing disabled. Package discovery and generation
 errors stop the build; generated files must not be patched by hand.
 
+`GET /api/stats` returns uptime, session and queue activity, retrieval statistics,
+readiness, and runtime memory statistics. `database` is present when the store is
+initialized; `project` and `projectObservations` are present only when a nonempty
+project is supplied and its count lookup succeeds; `rateLimiter` is present when
+configured. A nonempty `project` scopes retrieval and the conditional project
+fields only; other statistics remain global. With no project, retrieval counters
+are summed across tracked projects. This response does not contain vector-cache
+or graph fields. A successful response is JSON; invalid project validation returns
+plain-text 400, and the readiness gate returns plain-text 503 when not ready.
+Swagger 2 lists response media types for the whole operation, not per status.
+
 Context GET and POST operations have separate annotations on real routed handlers;
 the GET entry points delegate to the same implementation without changing request
 semantics. GET requires `project` in the query string, and context search also
@@ -153,10 +164,15 @@ response and audit-only source-session attribution without MCP memory mutations.
 
 ### Typed memory cards
 
-In authenticated mode a persisted browser-admin session can enroll an existing
-canonical principal/kind pair using `POST /api/auth/principals`. A validated
-keycard for that pair can omit both `project` and `context` on
-`POST /api/memories` to create a self-owned card. `source_agent` is provenance,
+In authenticated mode an enabled admin with a persisted `engram_auth` browser
+session can enroll an existing canonical principal/kind pair using
+`POST /api/auth/principals`. Bearer and `X-Auth-Token` credentials take precedence
+over cookies; omit them to use the browser session. HMAC-only sessions do not
+qualify. Auth-disabled middleware supplies a synthetic identity, not an authenticated
+keycard or persisted browser session. A validated keycard for the enrolled pair can
+omit both `project` and `context` on `POST /api/memories` to create a self-owned
+card. `X-Engram-Identity` selects a typed context; it does not authenticate.
+`source_agent` is provenance,
 not owner authority. The optional context object is `{"kind":"self"}`,
 `{"kind":"project"}`, or `{"kind":"global"}`. Project context requires an
 existing canonical `project`; self and global require the project to be absent.
@@ -179,10 +195,12 @@ revision keeps the ID, atomically retains the previous body and increments versi
 `GET /api/memories/{id}/revisions` returns retained previous bodies after checking
 current-card access, in ascending version order. `after_version` selects versions
 strictly above its nonnegative value; `limit` defaults to 50 and accepts 1–100.
-It does not invent revisions for earlier legacy edits; the
-current body remains on the ordinary read. Retained revisions are removed with a
-hard-deleted parent. Neither the revision endpoint nor global context grants
-access by itself. Synthetic auth-disabled identity is not a registered keycard.
+Typed PATCH refuses legacy project rows with 404 rather than creating incomplete
+revision history. Existing legacy reads and edits remain available through their
+existing paths. The current body remains on the ordinary read. Retained revisions
+are removed with a hard-deleted parent. Neither the revision endpoint nor global
+context grants access by itself. Synthetic auth-disabled identity is not a
+registered keycard.
 
 `POST /api/memories/{id}/transition` takes a JSON object with required `action`:
 `suppress` changes active to flagged, `unsuppress` changes flagged to active, and
@@ -281,6 +299,11 @@ returns HTTP 400 with `{"error":"password must not exceed 72 bytes"}`; the
 rejected request does not create a user or complete setup. Unexpected hashing
 failures return HTTP 500.
 
+`POST /api/auth/register` also rejects passwords exceeding 72 UTF-8 bytes with
+HTTP 400 and `{"error":"password must not exceed 72 bytes"}`. The rejected
+request does not create a user or consume the invitation. Unexpected hashing
+failures return HTTP 500.
+
 #### Browser session management (issue 535)
 
 The private `sessions.id` remains the `engram_auth` HttpOnly cookie credential.
@@ -361,6 +384,17 @@ guarantee that arbitrary application logs contain no other secrets.
 | `GET` | `/api/tokens` | List API tokens. |
 | `POST` | `/api/tokens` | Create worker keycard. |
 | `DELETE` | `/api/tokens/:id` | Revoke token. |
+
+For `POST /api/update/apply`, an available update without an asset URL for the
+current platform returns HTTP 200 with `success: false` and an error message.
+The synchronous response is authoritative for this refusal. The updater
+initially records an `error` status with the existing manual update command,
+but a subsequent update check may overwrite that in-memory status before it is
+read through `GET /api/update/status`. No update is started in this case. An
+unavailable update keeps the existing `success: false` response; an update with
+an asset continues in the background. Status does not promise crash durability.
+The generic manual update command is not guaranteed to work when the same
+platform artifact is absent.
 
 ### Knowledge readers
 

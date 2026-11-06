@@ -25,6 +25,7 @@ var (
 	ErrMemoryRequestRetired      = errors.New("request_key identifies a retired or missing memory")
 	ErrMemoryRequestForbidden    = errors.New("request_key memory is not accessible")
 	ErrMemoryEnrollmentForbidden = errors.New("a current persisted browser-admin session is required")
+	ErrMemoryCreateDenied        = errors.New("memory create denied")
 )
 
 type memoryPrincipal struct {
@@ -284,8 +285,10 @@ func memoryCommandDigest(mem *models.Memory) (string, error) {
 }
 
 // CreateInContext commits the body and optional retry receipt together. The
-// first-write guard reuses adapter domain authorization, after retry reconciliation.
-func (s *MemoryStore) CreateInContext(ctx context.Context, mem *models.Memory, caller scope.KeycardContext, requestKey string, guard func(context.Context, *gormlib.DB) error) (*models.Memory, bool, error) {
+// first-write guard runs after retry reconciliation. A false guard result commits
+// its audit without creating a body or receipt and returns ErrMemoryCreateDenied
+// after commit; a guard or commit error is returned instead.
+func (s *MemoryStore) CreateInContext(ctx context.Context, mem *models.Memory, caller scope.KeycardContext, requestKey string, guard func(context.Context, *gormlib.DB) (bool, error)) (*models.Memory, bool, error) {
 	if err := validateMemoryForCreate(mem); err != nil {
 		return nil, false, err
 	}
@@ -308,6 +311,7 @@ func (s *MemoryStore) CreateInContext(ctx context.Context, mem *models.Memory, c
 	}
 	var result *models.Memory
 	replayed := false
+	denied := false
 	err = s.db.WithContext(ctx).Transaction(func(tx *gormlib.DB) error {
 		if requestKey != "" {
 			key := advisoryLockKey("memory-request-key/v1", caller.PrincipalKind, caller.Principal, mem.Context.Kind, mem.Project, requestKey)
@@ -341,8 +345,13 @@ func (s *MemoryStore) CreateInContext(ctx context.Context, mem *models.Memory, c
 			}
 		}
 		if guard != nil {
-			if err := guard(ctx, tx); err != nil {
+			allowed, err := guard(ctx, tx)
+			if err != nil {
 				return err
+			}
+			if !allowed {
+				denied = true
+				return nil
 			}
 		}
 		row := memoryRowForCreate(mem, time.Now().UTC(), false)
@@ -361,5 +370,8 @@ func (s *MemoryStore) CreateInContext(ctx context.Context, mem *models.Memory, c
 		result = memoryRowToModel(row)
 		return nil
 	}, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err == nil && denied {
+		return nil, false, ErrMemoryCreateDenied
+	}
 	return result, replayed, err
 }

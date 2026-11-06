@@ -32,11 +32,18 @@ func (s *MemoryStore) ReviseInContext(ctx context.Context, id int64, owning mode
 	}
 	var result *models.Memory
 	err := s.db.WithContext(ctx).Transaction(func(tx *gormlib.DB) error {
+		// Match consolidation's relation order before locking the target memory.
+		if err := tx.Exec(`LOCK TABLE "audit_log", "content_chunks", "memories" IN ROW EXCLUSIVE MODE`).Error; err != nil {
+			return err
+		}
 		current, err := memoryInContext(ctx, tx, id, owning, project, caller, true)
 		if err != nil {
 			return err
 		}
 		if current.OwnerPrincipal != caller.Principal || current.OwnerPrincipalKind != caller.PrincipalKind || !scope.ResolveMemoryManage(caller, current) {
+			return gormlib.ErrRecordNotFound
+		}
+		if current.Context == nil || current.Context.Kind == models.MemoryContextLegacy {
 			return gormlib.ErrRecordNotFound
 		}
 		if current.Status != "active" {
@@ -55,6 +62,9 @@ func (s *MemoryStore) ReviseInContext(ctx context.Context, id int64, owning mode
 		}
 		if updated.RowsAffected != 1 {
 			return ErrMemoryVersionConflict
+		}
+		if err := tx.Exec("DELETE FROM content_chunks WHERE memory_id = ?", id).Error; err != nil {
+			return err
 		}
 		if err := NewAuditStore(tx).Log(ctx, AuditLogEntry{MemoryID: &id, Action: "update", Actor: caller.Principal, SourceSessionID: caller.SessionID}); err != nil {
 			return err

@@ -12,6 +12,15 @@ import (
 	"github.com/thebtf/engram/pkg/models"
 )
 
+type reviseMemoryContextRequest struct {
+	Content string `json:"content" binding:"required" minLength:"1"`
+	Version int    `json:"version" binding:"required" minimum:"1"`
+}
+
+type memoryContextHistoryResponse struct {
+	Revisions []gormdb.MemoryRevision `json:"revisions"`
+}
+
 func (s *Service) memoryRevisionSelector(r *http.Request) (int64, models.MemoryContext, string, error) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil || id <= 0 {
@@ -37,6 +46,26 @@ func (s *Service) memoryRevisionSelector(r *http.Request) (int64, models.MemoryC
 	return id, owning, project, err
 }
 
+// handleReviseMemoryContext godoc
+// @Summary Revise a typed memory card
+// @Description Requires the authenticated owner and current version. Omit context and project for enrolled self; project context requires one existing canonical project and self/global must omit project. Legacy rows return 404 without changing their context or history. A stale version returns 409; after an uncertain outcome read the current card before retrying. The prior body and audit are retained atomically.
+// @Tags Memories
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path int true "Memory ID"
+// @Param context query string false "Owning context; omission selects self unless project is supplied" Enums(self,project,global)
+// @Param project query string false "Existing canonical project UUID; required for project and forbidden for self/global"
+// @Param body body reviseMemoryContextRequest true "Current version and replacement content"
+// @Success 200 {object} models.Memory
+// @Failure 400 {string} string "invalid selector, content or version"
+// @Failure 401 {string} string "authentication or explicit keycard validation failed"
+// @Failure 403 {string} string "principal context access denied"
+// @Failure 404 {string} string "context or manageable active typed card not found"
+// @Failure 409 {string} string "stale version; read current card to reconcile"
+// @Failure 500 {string} string "internal error"
+// @Failure 503 {string} string "memory store unavailable"
+// @Router /api/memories/{id} [patch]
 func (s *Service) handleReviseMemoryContext(w http.ResponseWriter, r *http.Request) {
 	if s.memoryStore == nil {
 		http.Error(w, "memory store unavailable", http.StatusServiceUnavailable)
@@ -47,10 +76,7 @@ func (s *Service) handleReviseMemoryContext(w http.ResponseWriter, r *http.Reque
 		writeMemoryContextError(w, err)
 		return
 	}
-	var request struct {
-		Content string `json:"content"`
-		Version int    `json:"version"`
-	}
+	var request reviseMemoryContextRequest
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil || request.Content == "" || request.Version <= 0 {
 		http.Error(w, "content and positive version are required", http.StatusBadRequest)
 		return
@@ -67,6 +93,25 @@ func (s *Service) handleReviseMemoryContext(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, jsonSafeMemory(updated))
 }
 
+// handleMemoryContextHistory godoc
+// @Summary Read retained prior versions of a typed memory card
+// @Description Current-card context and privacy checks apply before prior bodies are returned. Omit context and project for enrolled self; project context requires one existing canonical project and self/global must omit project. Results contain prior versions in ascending order; the current body is read separately.
+// @Tags Memories
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path int true "Memory ID"
+// @Param context query string false "Owning context; omission selects self unless project is supplied" Enums(self,project,global)
+// @Param project query string false "Existing canonical project UUID; required for project and forbidden for self/global"
+// @Param after_version query int false "Return versions strictly greater than this nonnegative value" minimum(0)
+// @Param limit query int false "Maximum prior versions; default 50, range 1..100" minimum(1) maximum(100)
+// @Success 200 {object} memoryContextHistoryResponse
+// @Failure 400 {string} string "invalid selector or revision page"
+// @Failure 401 {string} string "authentication or explicit keycard validation failed"
+// @Failure 403 {string} string "principal context access denied"
+// @Failure 404 {string} string "context or visible card not found"
+// @Failure 500 {string} string "internal error"
+// @Failure 503 {string} string "memory store unavailable"
+// @Router /api/memories/{id}/revisions [get]
 func (s *Service) handleMemoryContextHistory(w http.ResponseWriter, r *http.Request) {
 	if s.memoryStore == nil {
 		http.Error(w, "memory store unavailable", http.StatusServiceUnavailable)

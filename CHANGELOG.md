@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Preserve the graph edge timestamp instant during JSON serialization when a database-returned offset crosses the four-digit year boundary.
+- Report an available update with no platform asset as a terminal updater error and return `success: false` instead of claiming the update started. The legacy UI honors the refusal without polling and displays the returned error.
+
+- Return a JSON 400 for registration passwords exceeding bcrypt's 72-byte limit without consuming the invitation or creating a user.
+
+- Preserve graph edge instants in JSON when a local offset crosses the four-digit year boundary, while retaining ordinary offsets and out-of-range UTC errors.
 
 - Set `Content-Type: application/json` on successful 201 responses for setup, registration, invitation creation, and Vault credential creation.
 

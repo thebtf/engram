@@ -21,10 +21,9 @@ func TestEdgeJSONBoundaryPreservesInstantAndErrors(t *testing.T) {
 	require.NoError(t, err)
 	var decoded Edge
 	require.NoError(t, json.Unmarshal(encoded, &decoded))
-	require.True(t, decoded.ValidFrom.Equal(boundary))
-	require.True(t, decoded.ValidUntil.Equal(boundary))
-	require.True(t, decoded.CreatedAt.Equal(boundary))
-	require.True(t, decoded.SupersededAt.Equal(boundary))
+	for _, value := range []time.Time{decoded.ValidFrom, decoded.ValidUntil, decoded.CreatedAt, *decoded.SupersededAt} {
+		require.True(t, value.Equal(boundary), "serialization must preserve the stored instant")
+	}
 	require.Equal(t, 10000, edge.ValidUntil.Year(), "normalization must not mutate the original edge")
 	require.Equal(t, 10000, edge.SupersededAt.Year(), "normalization must not mutate the pointed-to time")
 

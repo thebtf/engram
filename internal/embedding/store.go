@@ -218,6 +218,78 @@ func (s *Store) StoreChunks(ctx context.Context, chunks []Chunk) error {
 	return s.db.WithContext(ctx).Create(&valid).Error
 }
 
+// StoreChunksForVersion installs valid chunks only while the source version is current.
+// It returns false if the memory is stale or deleted, or no valid chunks remain.
+func (s *Store) StoreChunksForVersion(ctx context.Context, memoryID int64, version int, chunks []Chunk) (bool, error) {
+	versioned := make([]versionedChunk, 0, len(chunks))
+	for _, chunk := range chunks {
+		if chunk.MemoryID != memoryID {
+			return false, fmt.Errorf("store chunks: memory ID mismatch")
+		}
+		versioned = append(versioned, versionedChunk{chunk: chunk, version: version})
+	}
+	count, err := s.storeVersionedChunks(ctx, versioned)
+	return count > 0, err
+}
+
+type versionedChunk struct {
+	chunk   Chunk
+	version int
+}
+
+// Lock memories in ID order to serialize installation with revisions without
+// holding a transaction open during embedding or deadlocking concurrent batches.
+func (s *Store) storeVersionedChunks(ctx context.Context, chunks []versionedChunk) (int, error) {
+	ids := make([]int64, 0, len(chunks))
+	for _, c := range chunks {
+		if got := len(c.chunk.Embedding.Slice()); got != EmbeddingDim {
+			log.Error().Int64("memory_id", c.chunk.MemoryID).Int("got_dim", got).Int("expected_dim", EmbeddingDim).Msg("store chunks: embedding dimension mismatch, dropping chunk")
+			continue
+		}
+		ids = append(ids, c.chunk.MemoryID)
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	count := 0
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Consolidation locks content_chunks before memories.
+		if err := tx.Exec(`LOCK TABLE "content_chunks" IN ROW EXCLUSIVE MODE`).Error; err != nil {
+			return err
+		}
+		var rows []struct {
+			ID      int64
+			Version int
+		}
+		if err := tx.Raw("SELECT id, version FROM memories WHERE id IN ? AND deleted_at IS NULL ORDER BY id FOR UPDATE", ids).Scan(&rows).Error; err != nil {
+			return err
+		}
+		versions := make(map[int64]int, len(rows))
+		for _, row := range rows {
+			versions[row.ID] = row.Version
+		}
+		valid := make([]Chunk, 0, len(chunks))
+		for _, c := range chunks {
+			current, ok := versions[c.chunk.MemoryID]
+			if ok && current == c.version && len(c.chunk.Embedding.Slice()) == EmbeddingDim {
+				valid = append(valid, c.chunk)
+			}
+		}
+		if len(valid) == 0 {
+			return nil
+		}
+		if err := tx.Create(&valid).Error; err != nil {
+			return err
+		}
+		count = len(valid)
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 // SimilarResult holds a memory ID and its cosine similarity score.
 type SimilarResult struct {
 	MemoryID      int64   `json:"memory_id"`

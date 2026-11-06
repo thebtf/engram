@@ -162,6 +162,76 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/auth/principals": {
+            "post": {
+                "description": "In authenticated mode, enroll a canonical principal/kind pair using the persisted engram_auth browser cookie for an enabled admin user. The persisted user and session are revalidated under transaction locks. Supplied bearer or X-Auth-Token credentials take precedence over cookies; HMAC sessions, master tokens, keycards and synthetic identities cannot enroll. Auth-disabled middleware supplies a synthetic identity. Omitted/empty principal_kind defaults to human; valid kinds are human, agent, service. Issuing a keycard does not enroll or backfill its principal, and enrollment may precede issuance. Creates no user, credential, project or memory; returns the canonical pair with 201 for first enrollment or 200 if already enrolled.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Auth"
+                ],
+                "summary": "Deliberately enroll an existing canonical principal for own memory",
+                "parameters": [
+                    {
+                        "description": "Existing canonical principal pair",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/worker.memoryPrincipalEnrollmentRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Already enrolled",
+                        "schema": {
+                            "$ref": "#/definitions/models.MemoryAuthor"
+                        }
+                    },
+                    "201": {
+                        "description": "New enrollment",
+                        "schema": {
+                            "$ref": "#/definitions/models.MemoryAuthor"
+                        }
+                    },
+                    "400": {
+                        "description": "invalid JSON, empty principal or invalid principal_kind",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "authentication required",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "current persisted browser admin required",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "principal enrollment failed",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "memory store unavailable",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/api/auth/tokens": {
             "get": {
                 "security": [
@@ -1667,7 +1737,7 @@ const docTemplate = `{
                         "ApiKeyAuth": []
                     }
                 ],
-                "description": "Creates a new memory entry for the given project.",
+                "description": "With a validated principal-bound client keycard, omit both context and project for enrolled self; an existing canonical project selects project; explicit context.kind=global requires project omission and enrollment. Context accepts only a kind field (self, project, global). Empty/null/invalid/conflicting selectors fail without fallback or project creation. Typed commands require a client keycard; a no-opt-in legacy project write remains supported.\nIn authenticated mode, use a principal-bound client keycard as the bearer credential. X-Engram-Identity is a context-selection marker, not an authentication credential. Auth-disabled mode supplies a synthetic identity and does not establish keycard identity. Author/owner and workstation derive from authenticated identity, not source_agent or session_id. Self/project default agent_visibility=shared; self ownership still isolates principals. Global defaults agent_visibility=private; explicit shared does not bypass domain or privacy_scope checks.\nOptional request_key is a nonempty string of at most 1024 UTF-8 bytes, scoped by canonical principal kind/principal, context kind and project. Equivalent normalized commands replay the currently accessible active record with 200; first creation returns 201. Changed commands or retired/missing/inaccessible replay targets return 409 without overwrite, duplicate or resurrection. Body and retry receipt commit atomically; omission is not idempotent. See the operating guide for the independent privacy_scope and workstation restrictions.",
                 "consumes": [
                     "application/json"
                 ],
@@ -1677,27 +1747,69 @@ const docTemplate = `{
                 "tags": [
                     "Memories"
                 ],
-                "summary": "Store an explicit memory note",
+                "summary": "Create a memory in self, project or explicit global context",
                 "parameters": [
                     {
-                        "description": "Memory to store",
+                        "description": "Memory content is required; project, context and request_key are optional; omit project for self/global. request_key is nonempty and limited to 1024 UTF-8 bytes, not characters.",
                         "name": "body",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/worker.storeMemoryRequest"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/worker.storeMemoryRequest"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "context": {
+                                            "$ref": "#/definitions/worker.storeMemoryContextSchema"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     }
                 ],
                 "responses": {
+                    "200": {
+                        "description": "Equivalent request_key replay of the current active memory",
+                        "schema": {
+                            "$ref": "#/definitions/models.Memory"
+                        }
+                    },
                     "201": {
-                        "description": "Created",
+                        "description": "New memory; domain warning fields may also be present",
                         "schema": {
                             "$ref": "#/definitions/models.Memory"
                         }
                     },
                     "400": {
-                        "description": "bad request",
+                        "description": "invalid body, selector, request_key or privacy metadata",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "authentication or explicit keycard validation failed",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "principal context, domain write or keycard mutation denied",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "canonical project not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "409": {
+                        "description": "request_key conflict or retired/missing/inaccessible target",
                         "schema": {
                             "type": "string"
                         }
@@ -1790,7 +1902,7 @@ const docTemplate = `{
                         "ApiKeyAuth": []
                     }
                 ],
-                "description": "Returns one nondeleted memory in the exact live canonical project, with the existing read privacy policy applied before the ID lookup.",
+                "description": "Returns a nondeleted memory only after exact owning-context and ordinary privacy/domain checks. With a principal-bound client keycard, omit context and project for enrolled self; use one project UUID for project, or context=global without project for enrolled global. An explicit context is one of self, project, global; self/global must omit project entirely. Invalid, empty, repeated or conflicting typed selectors fail without fallback. Typed responses include context and authenticated author; global affiliation alone grants no read access. No-opt-in requests with only project retain the existing canonical-project reader.",
                 "produces": [
                     "application/json"
                 ],
@@ -1807,11 +1919,21 @@ const docTemplate = `{
                         "required": true
                     },
                     {
+                        "enum": [
+                            "self",
+                            "project",
+                            "global"
+                        ],
                         "type": "string",
-                        "description": "Existing canonical project ID",
+                        "description": "Exact owning context; omission selects self unless project is supplied",
+                        "name": "context",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "One existing canonical project UUID; required for context=project, forbidden for self/global",
                         "name": "project",
-                        "in": "query",
-                        "required": true
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -1822,19 +1944,19 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "invalid id or project",
+                        "description": "Invalid memory ID or typed context/project selector returns text; no-opt-in legacy project reader parameter errors return documentErrorResponse JSON"
+                    },
+                    "401": {
+                        "description": "authentication or explicit keycard validation failed",
                         "schema": {
                             "type": "string"
                         }
                     },
                     "403": {
-                        "description": "project read forbidden",
-                        "schema": {
-                            "$ref": "#/definitions/worker.documentErrorResponse"
-                        }
+                        "description": "Typed principal-context denial returns text; no-opt-in legacy project authorization or store denial returns documentErrorResponse JSON"
                     },
                     "404": {
-                        "description": "not found",
+                        "description": "context or visible nondeleted record not found",
                         "schema": {
                             "type": "string"
                         }
@@ -1906,6 +2028,109 @@ const docTemplate = `{
                     },
                     "503": {
                         "description": "service unavailable",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Requires the authenticated owner and current version. Omit context and project for enrolled self; project context requires one existing canonical project and self/global must omit project. Legacy rows return 404 without changing their context or history. A stale version returns 409; after an uncertain outcome read the current card before retrying. The prior body and audit are retained atomically.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Memories"
+                ],
+                "summary": "Revise a typed memory card",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Memory ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "enum": [
+                            "self",
+                            "project",
+                            "global"
+                        ],
+                        "type": "string",
+                        "description": "Owning context; omission selects self unless project is supplied",
+                        "name": "context",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Existing canonical project UUID; required for project and forbidden for self/global",
+                        "name": "project",
+                        "in": "query"
+                    },
+                    {
+                        "description": "Current version and replacement content",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/worker.reviseMemoryContextRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.Memory"
+                        }
+                    },
+                    "400": {
+                        "description": "invalid selector, content or version",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "authentication or explicit keycard validation failed",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "principal context access denied",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "context or manageable active typed card not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "409": {
+                        "description": "stale version; read current card to reconcile",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "memory store unavailable",
                         "schema": {
                             "type": "string"
                         }
@@ -1983,6 +2208,108 @@ const docTemplate = `{
                     },
                     "503": {
                         "description": "service unavailable",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/memories/{id}/revisions": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Current-card context and privacy checks apply before prior bodies are returned. Omit context and project for enrolled self; project context requires one existing canonical project and self/global must omit project. Results contain prior versions in ascending order; the current body is read separately.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Memories"
+                ],
+                "summary": "Read retained prior versions of a typed memory card",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Memory ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "enum": [
+                            "self",
+                            "project",
+                            "global"
+                        ],
+                        "type": "string",
+                        "description": "Owning context; omission selects self unless project is supplied",
+                        "name": "context",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Existing canonical project UUID; required for project and forbidden for self/global",
+                        "name": "project",
+                        "in": "query"
+                    },
+                    {
+                        "minimum": 0,
+                        "type": "integer",
+                        "description": "Return versions strictly greater than this nonnegative value",
+                        "name": "after_version",
+                        "in": "query"
+                    },
+                    {
+                        "maximum": 100,
+                        "minimum": 1,
+                        "type": "integer",
+                        "description": "Maximum prior versions; default 50, range 1..100",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/worker.memoryContextHistoryResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "invalid selector or revision page",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "authentication or explicit keycard validation failed",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "principal context access denied",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "context or visible card not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "memory store unavailable",
                         "schema": {
                             "type": "string"
                         }
@@ -3768,9 +4095,10 @@ const docTemplate = `{
                         "ApiKeyAuth": []
                     }
                 ],
-                "description": "Returns comprehensive worker statistics including uptime, memory, database health, vector cache, graph, and rate limiter stats.",
+                "description": "Returns uptime, session, queue, retrieval, readiness, and runtime memory statistics. Database health is included when the store is initialized; project and projectObservations are included when a nonempty project is supplied and its count lookup succeeds; rateLimiter is included when configured. The project parameter scopes retrieval and the conditional project fields only; other statistics are global. A successful response is JSON; 400 and 503 errors are plain text. Swagger 2 produces applies to the whole operation, not individual statuses.",
                 "produces": [
-                    "application/json"
+                    "application/json",
+                    "text/plain"
                 ],
                 "tags": [
                     "Analytics"
@@ -3779,7 +4107,7 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Filter stats by project",
+                        "description": "Scope retrieval and conditional project fields by project",
                         "name": "project",
                         "in": "query"
                     }
@@ -3793,7 +4121,13 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "bad request",
+                        "description": "Invalid project (plain text)",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "Service not ready (plain text)",
                         "schema": {
                             "type": "string"
                         }
@@ -4501,6 +4835,29 @@ const docTemplate = `{
                 "CollectionSelectionFrozenFilter"
             ]
         },
+        "gorm.MemoryRevision": {
+            "type": "object",
+            "properties": {
+                "changed_at": {
+                    "type": "string"
+                },
+                "changed_by_principal": {
+                    "type": "string"
+                },
+                "changed_by_principal_kind": {
+                    "type": "string"
+                },
+                "content": {
+                    "type": "string"
+                },
+                "memory_id": {
+                    "type": "integer"
+                },
+                "version": {
+                    "type": "integer"
+                }
+            }
+        },
         "gorm.ProjectDescriptor": {
             "type": "object",
             "required": [
@@ -4634,6 +4991,9 @@ const docTemplate = `{
                         "shared"
                     ]
                 },
+                "author": {
+                    "$ref": "#/definitions/models.MemoryAuthor"
+                },
                 "citation_count": {
                     "type": "integer"
                 },
@@ -4645,6 +5005,9 @@ const docTemplate = `{
                 },
                 "content": {
                     "type": "string"
+                },
+                "context": {
+                    "$ref": "#/definitions/models.MemoryContext"
                 },
                 "created_at": {
                     "type": "string"
@@ -4768,6 +5131,31 @@ const docTemplate = `{
                 },
                 "version": {
                     "type": "integer"
+                }
+            }
+        },
+        "models.MemoryAuthor": {
+            "type": "object",
+            "properties": {
+                "principal": {
+                    "type": "string"
+                },
+                "principal_kind": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.MemoryContext": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string"
+                },
+                "principal": {
+                    "type": "string"
+                },
+                "principal_kind": {
+                    "type": "string"
                 }
             }
         },
@@ -5530,6 +5918,17 @@ const docTemplate = `{
                 }
             }
         },
+        "worker.memoryContextHistoryResponse": {
+            "type": "object",
+            "properties": {
+                "revisions": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/gorm.MemoryRevision"
+                    }
+                }
+            }
+        },
         "worker.memoryListResponse": {
             "type": "object",
             "properties": {
@@ -5550,6 +5949,29 @@ const docTemplate = `{
                 },
                 "total": {
                     "type": "integer"
+                }
+            }
+        },
+        "worker.memoryPrincipalEnrollmentRequest": {
+            "type": "object",
+            "required": [
+                "principal"
+            ],
+            "properties": {
+                "principal": {
+                    "description": "Principal is trimmed and must remain nonempty after trimming.",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "principal_kind": {
+                    "description": "PrincipalKind is trimmed; omission or an empty trimmed value defaults to human.",
+                    "type": "string",
+                    "enum": [
+                        "",
+                        "human",
+                        "agent",
+                        "service"
+                    ]
                 }
             }
         },
@@ -5699,6 +6121,23 @@ const docTemplate = `{
                 }
             }
         },
+        "worker.reviseMemoryContextRequest": {
+            "type": "object",
+            "required": [
+                "content",
+                "version"
+            ],
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "version": {
+                    "type": "integer",
+                    "minimum": 1
+                }
+            }
+        },
         "worker.sessionEndRequest": {
             "type": "object",
             "properties": {
@@ -5765,8 +6204,28 @@ const docTemplate = `{
                 }
             }
         },
+        "worker.storeMemoryContextSchema": {
+            "type": "object",
+            "required": [
+                "kind"
+            ],
+            "properties": {
+                "kind": {
+                    "description": "Kind is required when context is supplied; the object accepts no other fields at runtime.",
+                    "type": "string",
+                    "enum": [
+                        "self",
+                        "project",
+                        "global"
+                    ]
+                }
+            }
+        },
         "worker.storeMemoryRequest": {
             "type": "object",
+            "required": [
+                "content"
+            ],
             "properties": {
                 "agent_visibility": {
                     "type": "string",
@@ -5776,7 +6235,8 @@ const docTemplate = `{
                     ]
                 },
                 "content": {
-                    "type": "string"
+                    "type": "string",
+                    "minLength": 1
                 },
                 "domain": {
                     "type": "string"
@@ -5786,7 +6246,13 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "project": {
-                    "type": "string"
+                    "type": "string",
+                    "minLength": 1
+                },
+                "request_key": {
+                    "description": "RequestKey is optional; when supplied it must be nonempty and at most 1024 UTF-8 bytes.\nOpenAPI string maxLength counts characters, so the byte limit remains descriptive.",
+                    "type": "string",
+                    "minLength": 1
                 },
                 "session_id": {
                     "description": "T004 — caller session for SourceSessions",

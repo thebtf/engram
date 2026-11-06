@@ -141,7 +141,7 @@ func applyPrincipalMemoryMetadataREST(ctx context.Context, mem *models.Memory, a
 // handleStoreMemoryExplicit godoc
 // @Summary Create a memory in self, project or explicit global context
 // @Description With a validated principal-bound client keycard, omit both context and project for enrolled self; an existing canonical project selects project; explicit context.kind=global requires project omission and enrollment. Context accepts only a kind field (self, project, global). Empty/null/invalid/conflicting selectors fail without fallback or project creation. Typed commands require a client keycard; a no-opt-in legacy project write remains supported.
-// @Description Send X-Engram-Identity: keycard and Authorization: Bearer with the principal-bound keycard for explicit HTTP identity in either auth mode; there is no master, cookie or synthetic fallback. Author/owner and workstation derive from validated identity, not source_agent or session_id. Self/project default agent_visibility=shared; self ownership still isolates principals. Global defaults agent_visibility=private; explicit shared does not bypass domain or privacy_scope checks.
+// @Description In authenticated mode, use a principal-bound client keycard as the bearer credential. X-Engram-Identity is a context-selection marker, not an authentication credential. Auth-disabled mode supplies a synthetic identity and does not establish keycard identity. Author/owner and workstation derive from authenticated identity, not source_agent or session_id. Self/project default agent_visibility=shared; self ownership still isolates principals. Global defaults agent_visibility=private; explicit shared does not bypass domain or privacy_scope checks.
 // @Description Optional request_key is a nonempty string of at most 1024 UTF-8 bytes, scoped by canonical principal kind/principal, context kind and project. Equivalent normalized commands replay the currently accessible active record with 200; first creation returns 201. Changed commands or retired/missing/inaccessible replay targets return 409 without overwrite, duplicate or resurrection. Body and retry receipt commit atomically; omission is not idempotent. See the operating guide for the independent privacy_scope and workstation restrictions.
 // @Tags Memories
 // @Accept json
@@ -223,29 +223,32 @@ func (s *Service) handleStoreMemoryExplicit(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var domainDecision *principalmemory.DomainWriteDecision
-	guard := func(ctx context.Context, tx *gormlib.DB) error {
+	guard := func(ctx context.Context, tx *gormlib.DB) (bool, error) {
 		var err error
 		domainDecision, err = s.checkDomainWriteREST(ctx, tx, mem, req.SessionID)
+		if errors.Is(err, principalmemory.ErrDomainWriteRejected) && domainDecision != nil && !domainDecision.Allowed && domainDecision.AuditStatus == principalmemory.AuditStatusWritten {
+			return false, nil
+		}
 		if err != nil {
-			return err
+			return false, err
 		}
-		if domainDecision != nil && !domainDecision.Allowed {
-			return principalmemory.ErrDomainWriteRejected
-		}
-		return nil
+		return domainDecision == nil || domainDecision.Allowed, nil
 	}
 	var created *models.Memory
 	replayed := false
 	if mem.Context == nil {
-		err = guard(r.Context(), nil)
-		if err == nil {
+		allowed, guardErr := guard(r.Context(), nil)
+		err = guardErr
+		if err == nil && allowed {
 			created, err = s.memoryStore.CreateForExistingProject(r.Context(), mem)
+		} else if err == nil {
+			err = principalmemory.ErrDomainWriteRejected
 		}
 	} else {
 		created, replayed, err = s.memoryStore.CreateInContext(r.Context(), mem, memoryVisibilityCaller(r.Context(), ""), requestKey, guard)
 	}
 	if err != nil {
-		if errors.Is(err, principalmemory.ErrDomainWriteRejected) {
+		if errors.Is(err, principalmemory.ErrDomainWriteRejected) || errors.Is(err, gormdb.ErrMemoryCreateDenied) {
 			http.Error(w, "domain write rejected", http.StatusForbidden)
 			return
 		}
