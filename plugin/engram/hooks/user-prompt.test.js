@@ -76,6 +76,21 @@ test('native knowledge redacts secrets without losing negation or Unicode', () =
   assert.doesNotMatch(formatted.content, /fixture-secret/);
 });
 
+test('quoted diagnostics are masked before JSON serialization without changing provenance', () => {
+  const response = nativeKnowledge(), item = response.knowledge.items[0];
+  const text = 'НЕ удалять 😀 password = "synth-one"; {"password": "synth-two"} DATABASE_DSN=postgres://u:synth-three@host/db API_KEY="synth-four" master_key=synth-five vault_key="synth-six" token=\'synth-seven\'';
+  item.content = text;
+  item.content_hash = require('node:crypto').createHash('sha256').update(text).digest('hex'); item.source_hash = item.content_hash;
+  response.packet = nativeResponse().packet;
+  response.code_status = 'ok';
+  response.packet.search.items[0].excerpt = text;
+  const output = prompt.formatNativeTaskContext(response).content;
+  for (const value of ['synth-one', 'synth-two', 'synth-three', 'synth-four', 'synth-five', 'synth-six', 'synth-seven']) assert.equal(output.includes(value), false);
+  assert.match(output, /НЕ удалять 😀/);
+  assert.ok(output.includes(item.content_hash));
+  assert.match(output, /hashes identify the original evidence/);
+});
+
 test('note fragments retain distinct source and content hashes and escaped path', () => {
   const response = nativeKnowledge();
   const item = response.knowledge.items[0];
@@ -143,15 +158,51 @@ test('native no-match does not start serial REST knowledge', async () => {
 
 test('composed delivery dedup changes with credentials, topic and native generation', async () => {
   const delivered = new Set();
-  let token = 'one-principal', generation = 9;
-  const deps = { delivered, runtimeConfig: async () => ({ serverURL: 'http://fixture', token }), requestTaskContext: async () => { const response = nativeResponse(); response.packet.search.contexts[0].generation = generation; return response; } };
-  assert.equal((await prompt.requestPromptContext(facts, deps)).status, 'delivered');
+  let token = 'one-principal', generation = 9, calls = 0, suffix = '';
+  const deps = { delivered, runtimeConfig: async () => ({ serverURL: 'http://fixture', token }), requestTaskContext: async () => { const response = nativeResponse(); response.packet.search.contexts[0].generation = generation; response.packet.search.exposure.exposure_ref = `exposure-native-${++calls}`; response.packet.search.items[0].excerpt += suffix; return response; } };
+  const first = await prompt.requestPromptContext(facts, deps);
+  assert.equal(first.status, 'delivered');
+  assert.match(first.content, /exposure-native-1/);
   assert.equal((await prompt.requestPromptContext(facts, deps)).status, 'unchanged');
   token = 'another-principal';
   assert.equal((await prompt.requestPromptContext(facts, deps)).status, 'delivered');
   generation++;
   assert.equal((await prompt.requestPromptContext(facts, deps)).status, 'delivered');
+  suffix = ' changed';
+  assert.equal((await prompt.requestPromptContext(facts, deps)).status, 'delivered');
+  assert.equal((await prompt.requestPromptContext({ ...facts, cwd: '/other/worktree' }, deps)).status, 'delivered');
   assert.equal((await prompt.requestPromptContext({ ...facts, prompt: 'another topic' }, deps)).status, 'delivered');
+});
+
+test('native prompt uses existing plugin installation identity without creating one', async t => {
+  const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+  const { EventEmitter } = require('node:events'), { PassThrough } = require('node:stream');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-prompt-identity-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ server_url: 'http://fixture', api_token: 'synthetic-token' }));
+  const id = 'engram-' + 'a'.repeat(32);
+  const identityFile = path.join(root, 'client-instance-id');
+  fs.writeFileSync(identityFile, id + '\n');
+  const { requestTaskContext } = require('../scripts/run-engram.js');
+  let seen;
+  const options = {
+    pluginData: root, env: { ENGRAM_URL: 'http://fixture', ENGRAM_TOKEN: 'synthetic-token' }, resolve: async () => ({ path: process.execPath, target: {} }), roots: () => ({ objects: root }), hash: () => true,
+    createTaskContextWorker(_entry, execution) {
+      seen = execution.workerData.env.ENGRAM_CLIENT_INSTANCE_ID;
+      const worker = new EventEmitter(); worker.stdout = new PassThrough(); worker.stderr = new PassThrough(); worker.postMessage = () => { };
+      queueMicrotask(() => { const bytes = Buffer.from('{"schema":1,"status":"not_ready","reason_code":"DAEMON_NOT_READY"}\n'); worker.emit('message', { type: 'closed', ok: true, bytes: Uint8Array.from(bytes).buffer }); worker.emit('exit', 0); });
+      return worker;
+    }
+  };
+  assert.equal((await requestTaskContext({ ...facts, cwd: root }, options)).reason_code, 'DAEMON_NOT_READY');
+  assert.equal(seen, id);
+  fs.unlinkSync(identityFile); seen = 'not-called';
+  assert.equal((await requestTaskContext({ ...facts, cwd: root }, options)).reason_code, 'INSTALLATION_NOT_READY');
+  assert.equal(seen, 'not-called');
+  assert.equal(fs.existsSync(identityFile), false);
+  fs.writeFileSync(identityFile, id + '\n');
+  await requestTaskContext({ ...facts, cwd: root }, options);
+  assert.equal(seen, id);
 });
 
 test('single outer prompt deadline cancels uncooperative native work without a fallback process', async () => {
@@ -181,6 +232,7 @@ test('native transport supplies one absolute work deadline with a thirty millise
   let executions = 0;
   const outcome = await requestTaskContext({ ...facts, cwd: root }, {
     deadlineAt: outer, maxBytes: 8000,
+    env: { ...process.env, ENGRAM_CLIENT_INSTANCE_ID: 'fixture-client' },
     resolve: async options => { assert.equal(options.deadlineAt, expectedWork); await new Promise(resolve => setTimeout(resolve, 50)); return { path: process.execPath, target: {} }; },
     roots: () => ({ objects: __dirname }), hash: () => true,
     createTaskContextWorker(entry, execution) {
@@ -206,7 +258,7 @@ test('expired framing or dedup cannot deliver a packet or retain its delivery di
     const native = nativeResponse(), delivered = new Set(), stringify = JSON.stringify;
     t.mock.method(JSON, 'stringify', (value, ...args) => {
       const encoded = stringify(value, ...args);
-      if (stage === 'framing' ? value === native.packet : Array.isArray(value) && value[1] === facts.cwd) now = 1501;
+      if (stage === 'framing' ? value?.search?.schema === 'engram.code-query/1' : Array.isArray(value) && value[1] === facts.cwd) now = 1501;
       return encoded;
     });
     const outcome = await prompt.requestPromptContext(facts, { delivered, runtimeConfig: dependencies().runtimeConfig, requestTaskContext: async () => native });
@@ -228,6 +280,7 @@ test('reserved native timeout closes its real hung process within the original f
   t.after(async () => { await workerClosed; fs.rmSync(root, { recursive: true, force: true }); });
   const outcome = await requestTaskContext({ ...facts, cwd: root }, {
     deadlineAt: outer,
+    env: { ...process.env, ENGRAM_CLIENT_INSTANCE_ID: 'fixture-client' },
     resolve: async () => ({ path: process.execPath, target: {} }), roots: () => ({ objects: root }), hash: () => true,
     createTaskContextWorker(entry, execution) {
       timings.workerAtMs = performance.now() - started;

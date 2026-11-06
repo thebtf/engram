@@ -9,7 +9,7 @@ const fs = require("fs");
 const os = require("os");
 const crypto = require('node:crypto');
 const { DOWNLOAD_DEADLINE_MS, hashFile, loadPolicy, objectRoots, resolveForLaunch } = require("./ensure-binary.js");
-const { installationClientInstanceID } = require("./client-instance.js");
+const { installationClientInstanceID, readInstallationClientInstanceID } = require("./client-instance.js");
 
 const STARTUP_DIAGNOSTIC_LOG_MAX_BYTES = 128 * 1024;
 const TASK_CONTEXT_COMPLETION_RESERVE_MS = 30;
@@ -272,9 +272,16 @@ async function requestTaskContext(facts = {}, options = {}) {
   const resolved = await resolveClient({ ...options, pluginRoot, pluginData, signal: controller.signal, deadlineAt, timeoutMs: remaining(), acquire: false, check: true }, true);
   remaining();
   if (!path.isAbsolute(resolved.path)) throw new Error('TASK_CONTEXT_STOPPED');
+  const env = childEnvForEngram(options.env || process.env);
+  const identityKeys = ['ENGRAM_CLIENT_INSTANCE_ID', 'CLAUDE_PLUGIN_OPTION_client_instance_id', 'CLAUDE_PLUGIN_OPTION_CLIENT_INSTANCE_ID', 'ENGRAM_CLAUDE_USERCONFIG_CLIENT_INSTANCE_ID'];
+  const configuredIdentity = identityKeys.map(key => env[key]).find(isConfiguredValue);
+  const configFile = readEngramConfigFile(resolveConfigFilePath(pluginData));
+  const identity = configuredIdentity?.trim() || configFile?.client_instance_id || readInstallationClientInstanceID(pluginData);
+  if (!identity) return closed('not_ready', 'INSTALLATION_NOT_READY');
+  env.ENGRAM_CLIENT_INSTANCE_ID = identity;
   const stdout = await executeTaskContextProcess({
    path: resolved.path, cwd: facts.cwd,
-   env: childEnvForEngram(options.env || process.env), input, deadlineAt, maxBytes,
+   env, input, deadlineAt, maxBytes,
   }, { signal: controller.signal, createTaskContextWorker: options.createTaskContextWorker });
   remaining();
   if (Buffer.byteLength(stdout) > maxBytes) return closed('unavailable', 'BUDGET_EXCEEDED');

@@ -6,35 +6,35 @@ const path = require("node:path");
 const test = require("node:test");
 
 const {
-  appendStartupDiagnosticLog,
-  childEnvForEngram,
-  configuredEnvValue,
-  describeConfigFile,
-  describeEnvValue,
-  formatStartupDiagnostic,
-  inferCodexPluginDataDir,
-  isConfiguredValue,
-  readEngramConfigFile,
-  resolveConfigFilePath,
-  resolvePluginData,
-  resolvePluginRoot,
-  resolveAndSpawn,
-  prepareHookClient,
-  resolveLogicalProject,
-  spawnFailureMessage,
-  trimStartupDiagnosticLog,
+ appendStartupDiagnosticLog,
+ childEnvForEngram,
+ configuredEnvValue,
+ describeConfigFile,
+ describeEnvValue,
+ formatStartupDiagnostic,
+ inferCodexPluginDataDir,
+ isConfiguredValue,
+ readEngramConfigFile,
+ resolveConfigFilePath,
+ resolvePluginData,
+ resolvePluginRoot,
+ resolveAndSpawn,
+ prepareHookClient,
+ resolveLogicalProject,
+ spawnFailureMessage,
+ trimStartupDiagnosticLog,
 } = require("./run-engram.js");
 
 
 test("installed-style launcher forwards tokenless and configured credentials to the trusted client", () => {
-  const pluginData = fs.mkdtempSync(path.join(os.tmpdir(), "engram-tokenless-launch-"));
-  const explicitConfig = path.join(pluginData, "explicit.json");
-  fs.writeFileSync(path.join(pluginData, "config.json"), JSON.stringify({ server_url: "http://127.0.0.1:37777", api_token: "engram_plugin_fixture_secret" }));
-  fs.writeFileSync(explicitConfig, JSON.stringify({ server_url: "http://127.0.0.1:37777", api_token: "engram_file_fixture_secret" }));
-  try {
-    const wrapper = path.join(__dirname, "run-engram.js");
-    const binaryResolver = path.join(__dirname, "ensure-binary.js");
-    const fixture = `
+ const pluginData = fs.mkdtempSync(path.join(os.tmpdir(), "engram-tokenless-launch-"));
+ const explicitConfig = path.join(pluginData, "explicit.json");
+ fs.writeFileSync(path.join(pluginData, "config.json"), JSON.stringify({ server_url: "http://127.0.0.1:37777", api_token: "engram_plugin_fixture_secret" }));
+ fs.writeFileSync(explicitConfig, JSON.stringify({ server_url: "http://127.0.0.1:37777", api_token: "engram_file_fixture_secret" }));
+ try {
+  const wrapper = path.join(__dirname, "run-engram.js");
+  const binaryResolver = path.join(__dirname, "ensure-binary.js");
+  const fixture = `
       const child = require("node:child_process");
       child.spawnSync = (command, args, options) => {
         const token = options.env.ENGRAM_TOKEN;
@@ -51,721 +51,721 @@ test("installed-style launcher forwards tokenless and configured credentials to 
       } };
       require(${JSON.stringify(wrapper)}).main();
     `;
-    for (const [name, env, expected] of [
-      ["absent", { ENGRAM_CONFIG_FILE: path.join(pluginData, "absent.json") }, "absent"],
-      ["plugin data", {}, "plugin"],
-      ["explicit file", { ENGRAM_CONFIG_FILE: explicitConfig }, "file"],
-      ["environment", { ENGRAM_CONFIG_FILE: explicitConfig, ENGRAM_TOKEN: "engram_env_fixture_secret" }, "env"],
-    ]) {
-      const result = spawnSync(process.execPath, ["-e", fixture], {
-        encoding: "utf8",
-        env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, PLUGIN_DATA: pluginData, ENGRAM_URL: "http://127.0.0.1:37777", ENGRAM_CLIENT_INSTANCE_ID: "fixture-client", ...env },
-      });
-      assert.equal(result.status, 0, `${name}: ${result.stderr}`);
-      assert.deepEqual(JSON.parse(result.stdout), { url: "http://127.0.0.1:37777", tokenSource: expected }, name);
-      assert.doesNotMatch(result.stderr, /FATAL|engram_(env|file|plugin)_fixture_secret/, name);
-    }
-  } finally {
-    fs.rmSync(pluginData, { recursive: true, force: true });
+  for (const [name, env, expected] of [
+   ["absent", { ENGRAM_CONFIG_FILE: path.join(pluginData, "absent.json") }, "absent"],
+   ["plugin data", {}, "plugin"],
+   ["explicit file", { ENGRAM_CONFIG_FILE: explicitConfig }, "file"],
+   ["environment", { ENGRAM_CONFIG_FILE: explicitConfig, ENGRAM_TOKEN: "engram_env_fixture_secret" }, "env"],
+  ]) {
+   const result = spawnSync(process.execPath, ["-e", fixture], {
+    encoding: "utf8",
+    env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, PLUGIN_DATA: pluginData, ENGRAM_URL: "http://127.0.0.1:37777", ENGRAM_CLIENT_INSTANCE_ID: "fixture-client", ...env },
+   });
+   assert.equal(result.status, 0, `${name}: ${result.stderr}`);
+   assert.deepEqual(JSON.parse(result.stdout), { url: "http://127.0.0.1:37777", tokenSource: expected }, name);
+   assert.doesNotMatch(result.stderr, /FATAL|engram_(env|file|plugin)_fixture_secret/, name);
   }
+ } finally {
+  fs.rmSync(pluginData, { recursive: true, force: true });
+ }
 });
 
 test("Claude MCP config launches wrapper via CLAUDE_PLUGIN_ROOT interpolation", () => {
-  // Claude Code interpolates ${CLAUDE_PLUGIN_ROOT} but does NOT resolve
-  // relative args against the plugin root, so the Claude variant keeps the
-  // interpolated absolute path. .claude-plugin/plugin.json points here.
-  const manifestPath = path.resolve(__dirname, "..", ".claude-plugin", "plugin.json");
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-  assert.equal(manifest.mcpServers, "./claude/.mcp.json");
+ // Claude Code interpolates ${CLAUDE_PLUGIN_ROOT} but does NOT resolve
+ // relative args against the plugin root, so the Claude variant keeps the
+ // interpolated absolute path. .claude-plugin/plugin.json points here.
+ const manifestPath = path.resolve(__dirname, "..", ".claude-plugin", "plugin.json");
+ const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+ assert.equal(manifest.mcpServers, "./claude/.mcp.json");
 
-  const mcpPath = path.resolve(__dirname, "..", "claude", ".mcp.json");
-  const payload = JSON.parse(fs.readFileSync(mcpPath, "utf8"));
-  const server = payload.mcpServers.engram;
+ const mcpPath = path.resolve(__dirname, "..", "claude", ".mcp.json");
+ const payload = JSON.parse(fs.readFileSync(mcpPath, "utf8"));
+ const server = payload.mcpServers.engram;
 
-  assert.equal(server.command, "node");
-  assert.deepEqual(server.args, ["${CLAUDE_PLUGIN_ROOT}/scripts/run-engram.js"]);
+ assert.equal(server.command, "node");
+ assert.deepEqual(server.args, ["${CLAUDE_PLUGIN_ROOT}/scripts/run-engram.js"]);
 });
 
 test("MCP configs never interpolate user_config in an env block", () => {
-  // Regression guard: ${user_config.*} inside a plugin .mcp.json env block
-  // makes Claude Code silently skip spawning the MCP server
-  // (anthropics/claude-code#51573). userConfig values reach plugin
-  // subprocesses as CLAUDE_PLUGIN_OPTION_<KEY> instead.
-  for (const rel of ["../.mcp.json", "../claude/.mcp.json"]) {
-    const mcpPath = path.resolve(__dirname, rel);
-    const raw = fs.readFileSync(mcpPath, "utf8");
-    assert.doesNotMatch(raw, /\$\{user_config\./, `user_config leak in ${rel}`);
+ // Regression guard: ${user_config.*} inside a plugin .mcp.json env block
+ // makes Claude Code silently skip spawning the MCP server
+ // (anthropics/claude-code#51573). userConfig values reach plugin
+ // subprocesses as CLAUDE_PLUGIN_OPTION_<KEY> instead.
+ for (const rel of ["../.mcp.json", "../claude/.mcp.json"]) {
+  const mcpPath = path.resolve(__dirname, rel);
+  const raw = fs.readFileSync(mcpPath, "utf8");
+  assert.doesNotMatch(raw, /\$\{user_config\./, `user_config leak in ${rel}`);
 
-    const payload = JSON.parse(raw);
-    const server = payload.mcpServers.engram;
-    assert.equal(server.env, undefined, `env block present in ${rel}`);
-    assert.ok(server.env_vars.includes("ENGRAM_URL"), `ENGRAM_URL missing in ${rel}`);
-    assert.ok(server.env_vars.includes("ENGRAM_TOKEN"), `ENGRAM_TOKEN missing in ${rel}`);
-  }
+  const payload = JSON.parse(raw);
+  const server = payload.mcpServers.engram;
+  assert.equal(server.env, undefined, `env block present in ${rel}`);
+  assert.ok(server.env_vars.includes("ENGRAM_URL"), `ENGRAM_URL missing in ${rel}`);
+  assert.ok(server.env_vars.includes("ENGRAM_TOKEN"), `ENGRAM_TOKEN missing in ${rel}`);
+ }
 });
 
 test("OMP manifest resolves its script from the plugin root independently of the host cwd", () => {
-  const repoRoot = path.resolve(__dirname, "..", "..", "..");
-  const readJson = (...segments) => JSON.parse(fs.readFileSync(path.join(repoRoot, ...segments), "utf8"));
-  const claudePlugin = readJson("plugin", "engram", ".claude-plugin", "plugin.json");
-  const ompPlugin = readJson("plugin", "engram", ".omp-plugin", "plugin.json");
-  const codexPlugin = readJson("plugin", "engram", ".codex-plugin", "plugin.json");
-  const rootPlugin = readJson(".claude-plugin", "plugin.json");
-  const claudeMarketplace = readJson(".claude-plugin", "marketplace.json");
-  const ompMarketplace = readJson(".omp-plugin", "marketplace.json");
+ const repoRoot = path.resolve(__dirname, "..", "..", "..");
+ const readJson = (...segments) => JSON.parse(fs.readFileSync(path.join(repoRoot, ...segments), "utf8"));
+ const claudePlugin = readJson("plugin", "engram", ".claude-plugin", "plugin.json");
+ const ompPlugin = readJson("plugin", "engram", ".omp-plugin", "plugin.json");
+ const codexPlugin = readJson("plugin", "engram", ".codex-plugin", "plugin.json");
+ const rootPlugin = readJson(".claude-plugin", "plugin.json");
+ const claudeMarketplace = readJson(".claude-plugin", "marketplace.json");
+ const ompMarketplace = readJson(".omp-plugin", "marketplace.json");
 
-  assert.match(claudePlugin.version, /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/);
-  assert.equal(ompPlugin.version, claudePlugin.version);
-  const ompServer = ompPlugin.mcpServers.engram;
-  assert.equal(Object.hasOwn(ompServer, "cwd"), false);
-  assert.deepEqual(ompServer, {
-    type: "stdio",
-    command: "node",
-    args: ["${OMP_PLUGIN_ROOT}/scripts/run-engram.js"],
-    timeout: 720000,
-  });
-  const ompArgs = expandMcpArgsForTest(ompServer.args, path.resolve(repoRoot, "plugin", "engram"));
-  assert.deepEqual(ompArgs.map(path.normalize), [path.join(repoRoot, "plugin", "engram", "scripts", "run-engram.js")]);
-  assert.equal(rootPlugin.version, claudePlugin.version);
-  assert.equal(codexPlugin.version, claudePlugin.version);
-  assert.equal(claudeMarketplace.version, claudePlugin.version);
-  assert.equal(claudeMarketplace.plugins[0].version, claudePlugin.version);
-  assert.equal(ompMarketplace.plugins[0].version, ompMarketplace.version);
-  assert.equal(ompMarketplace.plugins[0].source.ref, `v${ompMarketplace.version}`);
-  assert.equal(ompMarketplace.plugins[0].source.source, "git-subdir");
-  assert.equal(ompMarketplace.plugins[0].source.path, "plugin/engram");
-  assert.match(ompMarketplace.plugins[0].source.sha, /^[0-9a-f]{40}$/);
+ assert.match(claudePlugin.version, /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/);
+ assert.equal(ompPlugin.version, claudePlugin.version);
+ const ompServer = ompPlugin.mcpServers.engram;
+ assert.equal(Object.hasOwn(ompServer, "cwd"), false);
+ assert.deepEqual(ompServer, {
+  type: "stdio",
+  command: "node",
+  args: ["${OMP_PLUGIN_ROOT}/scripts/run-engram.js"],
+  timeout: 720000,
+ });
+ const ompArgs = expandMcpArgsForTest(ompServer.args, path.resolve(repoRoot, "plugin", "engram"));
+ assert.deepEqual(ompArgs.map(path.normalize), [path.join(repoRoot, "plugin", "engram", "scripts", "run-engram.js")]);
+ assert.equal(rootPlugin.version, claudePlugin.version);
+ assert.equal(codexPlugin.version, claudePlugin.version);
+ assert.equal(claudeMarketplace.version, claudePlugin.version);
+ assert.equal(claudeMarketplace.plugins[0].version, claudePlugin.version);
+ assert.equal(ompMarketplace.plugins[0].version, ompMarketplace.version);
+ assert.equal(ompMarketplace.plugins[0].source.ref, `v${ompMarketplace.version}`);
+ assert.equal(ompMarketplace.plugins[0].source.source, "git-subdir");
+ assert.equal(ompMarketplace.plugins[0].source.path, "plugin/engram");
+ assert.match(ompMarketplace.plugins[0].source.sha, /^[0-9a-f]{40}$/);
 });
 
 test("Claude MCP config preserves host argv via the package-root wrapper path", () => {
-  const mcpPath = path.resolve(__dirname, "..", "claude", ".mcp.json");
-  const payload = JSON.parse(fs.readFileSync(mcpPath, "utf8"));
-  const args = expandMcpArgsForTest(payload.mcpServers.engram.args, path.resolve(__dirname, ".."));
-  assert.deepEqual(args.map(path.normalize), [path.resolve(__dirname, "..", "scripts", "run-engram.js")]);
+ const mcpPath = path.resolve(__dirname, "..", "claude", ".mcp.json");
+ const payload = JSON.parse(fs.readFileSync(mcpPath, "utf8"));
+ const args = expandMcpArgsForTest(payload.mcpServers.engram.args, path.resolve(__dirname, ".."));
+ assert.deepEqual(args.map(path.normalize), [path.resolve(__dirname, "..", "scripts", "run-engram.js")]);
 });
 
 test("OMP marketplace wrapper fails closed from project cwd with simulated host package-root expansion", () => {
-  const pluginRoot = path.resolve(__dirname, "..");
-  const project = fs.mkdtempSync(path.join(os.tmpdir(), "engram-omp-project-"));
-  try {
-    const config = JSON.parse(fs.readFileSync(path.join(pluginRoot, ".omp-plugin", "plugin.json"), "utf8")).mcpServers.engram;
-    const args = config.args.map((arg) => arg.replace("${OMP_PLUGIN_ROOT}", pluginRoot.replaceAll("\\", "/")));
-    const result = spawnSync(config.command, args, {
-      cwd: project,
-      encoding: "utf8",
-      env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, PLUGIN_DATA: project, ENGRAM_CONFIG_FILE: path.join(project, "absent.json") },
-    });
-    assert.equal(result.status, 1, result.error?.message || result.stderr);
-    assert.match(result.stderr, /FATAL: ENGRAM_URL is empty/);
-    assert.match(result.stderr, /Config file checked: .*absent\.json/);
-  } finally {
-    fs.rmSync(project, { recursive: true, force: true });
-  }
+ const pluginRoot = path.resolve(__dirname, "..");
+ const project = fs.mkdtempSync(path.join(os.tmpdir(), "engram-omp-project-"));
+ try {
+  const config = JSON.parse(fs.readFileSync(path.join(pluginRoot, ".omp-plugin", "plugin.json"), "utf8")).mcpServers.engram;
+  const args = config.args.map((arg) => arg.replace("${OMP_PLUGIN_ROOT}", pluginRoot.replaceAll("\\", "/")));
+  const result = spawnSync(config.command, args, {
+   cwd: project,
+   encoding: "utf8",
+   env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, PLUGIN_DATA: project, ENGRAM_CONFIG_FILE: path.join(project, "absent.json") },
+  });
+  assert.equal(result.status, 1, result.error?.message || result.stderr);
+  assert.match(result.stderr, /FATAL: ENGRAM_URL is empty/);
+  assert.match(result.stderr, /Config file checked: .*absent\.json/);
+ } finally {
+  fs.rmSync(project, { recursive: true, force: true });
+ }
 });
 
 test("Codex setup emits one absolute launcher without a package cwd contribution", () => {
-  const pluginRoot = path.resolve(__dirname, "..");
-  const manifest = JSON.parse(fs.readFileSync(path.join(pluginRoot, ".codex-plugin", "plugin.json"), "utf8"));
-  assert.equal(manifest.mcpServers, undefined);
-  const wrapper = path.join(__dirname, "run-engram.js");
-  const result = spawnSync(process.execPath, [wrapper, 'codex-config'], { encoding: 'utf8' });
-  assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /^\[mcp_servers\.engram\]/);
-  const args = JSON.parse(result.stdout.split('\n').find(line => line.startsWith('args = ')).slice(7));
-  assert.deepEqual(args, [wrapper]);
-  assert.doesNotMatch(result.stdout, /cwd\s*=/);
+ const pluginRoot = path.resolve(__dirname, "..");
+ const manifest = JSON.parse(fs.readFileSync(path.join(pluginRoot, ".codex-plugin", "plugin.json"), "utf8"));
+ assert.equal(manifest.mcpServers, undefined);
+ const wrapper = path.join(__dirname, "run-engram.js");
+ const result = spawnSync(process.execPath, [wrapper, 'codex-config'], { encoding: 'utf8' });
+ assert.equal(result.status, 0, result.stderr);
+ assert.match(result.stdout, /^\[mcp_servers\.engram\]/);
+ const args = JSON.parse(result.stdout.split('\n').find(line => line.startsWith('args = ')).slice(7));
+ assert.deepEqual(args, [wrapper]);
+ assert.doesNotMatch(result.stdout, /cwd\s*=/);
 });
 
 test("infers Codex plugin data dir from installed cache root", () => {
-  const codexHome = path.join(os.tmpdir(), "codex-home");
-  const pluginRoot = path.join(
-    codexHome,
-    "plugins",
-    "cache",
-    "engram-marketplace",
-    "engram",
-    "6.4.4"
-  );
+ const codexHome = path.join(os.tmpdir(), "codex-home");
+ const pluginRoot = path.join(
+  codexHome,
+  "plugins",
+  "cache",
+  "engram-marketplace",
+  "engram",
+  "6.4.4"
+ );
 
-  assert.equal(
-    inferCodexPluginDataDir(pluginRoot),
-    path.join(codexHome, "plugins", "data", "engram-marketplace-engram")
-  );
+ assert.equal(
+  inferCodexPluginDataDir(pluginRoot),
+  path.join(codexHome, "plugins", "data", "engram-marketplace-engram")
+ );
 });
 
 test("infers OMP plugin data dir from installed cache root", () => {
-  const ompHome = path.join(os.tmpdir(), "omp-home");
-  const pluginRoot = path.join(
-    ompHome,
-    "plugins",
-    "cache",
-    "plugins",
-    "engram___engram___6.47.0"
-  );
+ const ompHome = path.join(os.tmpdir(), "omp-home");
+ const pluginRoot = path.join(
+  ompHome,
+  "plugins",
+  "cache",
+  "plugins",
+  "engram___engram___6.47.0"
+ );
 
-  assert.equal(
-    inferCodexPluginDataDir(pluginRoot),
-    path.join(ompHome, "plugins", "data", "engram-engram")
-  );
+ assert.equal(
+  inferCodexPluginDataDir(pluginRoot),
+  path.join(ompHome, "plugins", "data", "engram-engram")
+ );
 });
 
 test("OMP cache root without a plugin slot fails open", () => {
-  const ompCacheRoot = path.join(os.tmpdir(), "omp-home", "plugins", "cache", "plugins");
-  assert.equal(inferCodexPluginDataDir(ompCacheRoot), "");
+ const ompCacheRoot = path.join(os.tmpdir(), "omp-home", "plugins", "cache", "plugins");
+ assert.equal(inferCodexPluginDataDir(ompCacheRoot), "");
 });
 
 test("explicit plugin data env takes precedence over inferred Codex path", () => {
-  const previousPluginData = process.env.PLUGIN_DATA;
-  const previousClaudePluginData = process.env.CLAUDE_PLUGIN_DATA;
-  const explicit = path.join(os.tmpdir(), "explicit-engram-data");
+ const previousPluginData = process.env.PLUGIN_DATA;
+ const previousClaudePluginData = process.env.CLAUDE_PLUGIN_DATA;
+ const explicit = path.join(os.tmpdir(), "explicit-engram-data");
 
-  try {
-    process.env.PLUGIN_DATA = explicit;
-    delete process.env.CLAUDE_PLUGIN_DATA;
+ try {
+  process.env.PLUGIN_DATA = explicit;
+  delete process.env.CLAUDE_PLUGIN_DATA;
 
-    const pluginRoot = path.join(
-      os.tmpdir(),
-      "plugins",
-      "cache",
-      "engram-marketplace",
-      "engram",
-      "6.4.4"
-    );
+  const pluginRoot = path.join(
+   os.tmpdir(),
+   "plugins",
+   "cache",
+   "engram-marketplace",
+   "engram",
+   "6.4.4"
+  );
 
-    assert.equal(resolvePluginData(pluginRoot), explicit);
-  } finally {
-    restoreEnv("PLUGIN_DATA", previousPluginData);
-    restoreEnv("CLAUDE_PLUGIN_DATA", previousClaudePluginData);
-  }
+  assert.equal(resolvePluginData(pluginRoot), explicit);
+ } finally {
+  restoreEnv("PLUGIN_DATA", previousPluginData);
+  restoreEnv("CLAUDE_PLUGIN_DATA", previousClaudePluginData);
+ }
 });
 
 test("Claude plugin data env takes precedence when PLUGIN_DATA is absent", () => {
-  const previousPluginData = process.env.PLUGIN_DATA;
-  const previousClaudePluginData = process.env.CLAUDE_PLUGIN_DATA;
-  const explicit = path.join(os.tmpdir(), "explicit-claude-engram-data");
+ const previousPluginData = process.env.PLUGIN_DATA;
+ const previousClaudePluginData = process.env.CLAUDE_PLUGIN_DATA;
+ const explicit = path.join(os.tmpdir(), "explicit-claude-engram-data");
 
-  try {
-    delete process.env.PLUGIN_DATA;
-    process.env.CLAUDE_PLUGIN_DATA = explicit;
+ try {
+  delete process.env.PLUGIN_DATA;
+  process.env.CLAUDE_PLUGIN_DATA = explicit;
 
-    const pluginRoot = path.join(
-      os.tmpdir(),
-      "plugins",
-      "cache",
-      "engram-marketplace",
-      "engram",
-      "6.4.4"
-    );
+  const pluginRoot = path.join(
+   os.tmpdir(),
+   "plugins",
+   "cache",
+   "engram-marketplace",
+   "engram",
+   "6.4.4"
+  );
 
-    assert.equal(resolvePluginData(pluginRoot), explicit);
-  } finally {
-    restoreEnv("PLUGIN_DATA", previousPluginData);
-    restoreEnv("CLAUDE_PLUGIN_DATA", previousClaudePluginData);
-  }
+  assert.equal(resolvePluginData(pluginRoot), explicit);
+ } finally {
+  restoreEnv("PLUGIN_DATA", previousPluginData);
+  restoreEnv("CLAUDE_PLUGIN_DATA", previousClaudePluginData);
+ }
 });
 
 test("falls back to plugin-local data dir outside Codex cache layout", () => {
-  const previousPluginData = process.env.PLUGIN_DATA;
-  const previousClaudePluginData = process.env.CLAUDE_PLUGIN_DATA;
+ const previousPluginData = process.env.PLUGIN_DATA;
+ const previousClaudePluginData = process.env.CLAUDE_PLUGIN_DATA;
 
-  try {
-    delete process.env.PLUGIN_DATA;
-    delete process.env.CLAUDE_PLUGIN_DATA;
+ try {
+  delete process.env.PLUGIN_DATA;
+  delete process.env.CLAUDE_PLUGIN_DATA;
 
-    const pluginRoot = path.join(os.tmpdir(), "engram-plugin-root");
+  const pluginRoot = path.join(os.tmpdir(), "engram-plugin-root");
 
-    assert.equal(resolvePluginData(pluginRoot), path.join(pluginRoot, ".data"));
-  } finally {
-    restoreEnv("PLUGIN_DATA", previousPluginData);
-    restoreEnv("CLAUDE_PLUGIN_DATA", previousClaudePluginData);
-  }
+  assert.equal(resolvePluginData(pluginRoot), path.join(pluginRoot, ".data"));
+ } finally {
+  restoreEnv("PLUGIN_DATA", previousPluginData);
+  restoreEnv("CLAUDE_PLUGIN_DATA", previousClaudePluginData);
+ }
 });
 
 test("reports spawnSync launch errors instead of treating them as exit status", () => {
-  const message = spawnFailureMessage(
-    { error: new Error("access denied"), status: null, signal: null },
-    "engram exec"
-  );
+ const message = spawnFailureMessage(
+  { error: new Error("access denied"), status: null, signal: null },
+  "engram exec"
+ );
 
-  assert.equal(message, "[engram] engram exec failed: access denied\n");
+ assert.equal(message, "[engram] engram exec failed: access denied\n");
 });
 
 test("reports signal termination from spawnSync results", () => {
-  const message = spawnFailureMessage(
-    { error: undefined, status: null, signal: "SIGTERM" },
-    "ensure-binary"
-  );
+ const message = spawnFailureMessage(
+  { error: undefined, status: null, signal: "SIGTERM" },
+  "ensure-binary"
+ );
 
-  assert.equal(message, "[engram] ensure-binary terminated by signal SIGTERM\n");
+ assert.equal(message, "[engram] ensure-binary terminated by signal SIGTERM\n");
 });
 
 test("does not report spawn failure for normal numeric exit status", () => {
-  const message = spawnFailureMessage(
-    { error: undefined, status: 2, signal: null },
-    "ensure-binary"
-  );
+ const message = spawnFailureMessage(
+  { error: undefined, status: 2, signal: null },
+  "ensure-binary"
+ );
 
-  assert.equal(message, "");
+ assert.equal(message, "");
 });
 
 test("startup diagnostic classifies env values without leaking token contents", () => {
-  const diagnostic = formatStartupDiagnostic({
-    ENGRAM_URL: " http://example.test:37777 ",
-    ENGRAM_TOKEN: "engram_secret_keycard_value",
-    ENGRAM_SERVER_URL: "",
-    ENGRAM_CLAUDE_USERCONFIG_URL: "${user_config.server_url}",
-    CLAUDE_PLUGIN_OPTION_api_token: "engram_secret_keycard_value",
-    CLAUDE_PLUGIN_OPTION_SERVER_URL: "https://uppercase.example.test/mcp",
-    CLAUDE_PLUGIN_OPTION_API_TOKEN: "engram_uppercase_secret",
-    ENGRAM_CONFIG_FILE: "/tmp/engram-config.json",
-  });
+ const diagnostic = formatStartupDiagnostic({
+  ENGRAM_URL: " http://example.test:37777 ",
+  ENGRAM_TOKEN: "engram_secret_keycard_value",
+  ENGRAM_SERVER_URL: "",
+  ENGRAM_CLAUDE_USERCONFIG_URL: "${user_config.server_url}",
+  CLAUDE_PLUGIN_OPTION_api_token: "engram_secret_keycard_value",
+  CLAUDE_PLUGIN_OPTION_SERVER_URL: "https://uppercase.example.test/mcp",
+  CLAUDE_PLUGIN_OPTION_API_TOKEN: "engram_uppercase_secret",
+  ENGRAM_CONFIG_FILE: "/tmp/engram-config.json",
+ });
 
-  assert.match(diagnostic, /ENGRAM_URL=present\(len=25\)/);
-  assert.match(diagnostic, /ENGRAM_TOKEN=redacted\(len=27\)/);
-  assert.match(diagnostic, /ENGRAM_SERVER_URL=empty/);
-  assert.match(diagnostic, /ENGRAM_CLAUDE_USERCONFIG_URL=placeholder/);
-  assert.match(diagnostic, /CLAUDE_PLUGIN_OPTION_api_token=redacted\(len=27\)/);
-  assert.match(diagnostic, /CLAUDE_PLUGIN_OPTION_SERVER_URL=present\(len=34\)/);
-  assert.match(diagnostic, /CLAUDE_PLUGIN_OPTION_API_TOKEN=redacted\(len=23\)/);
-  assert.match(diagnostic, /ENGRAM_CONFIG_FILE=present\(len=23\)/);
-  assert.doesNotMatch(diagnostic, /engram_uppercase_secret/);
-  assert.doesNotMatch(diagnostic, /engram_secret_keycard_value/);
+ assert.match(diagnostic, /ENGRAM_URL=present\(len=25\)/);
+ assert.match(diagnostic, /ENGRAM_TOKEN=redacted\(len=27\)/);
+ assert.match(diagnostic, /ENGRAM_SERVER_URL=empty/);
+ assert.match(diagnostic, /ENGRAM_CLAUDE_USERCONFIG_URL=placeholder/);
+ assert.match(diagnostic, /CLAUDE_PLUGIN_OPTION_api_token=redacted\(len=27\)/);
+ assert.match(diagnostic, /CLAUDE_PLUGIN_OPTION_SERVER_URL=present\(len=34\)/);
+ assert.match(diagnostic, /CLAUDE_PLUGIN_OPTION_API_TOKEN=redacted\(len=23\)/);
+ assert.match(diagnostic, /ENGRAM_CONFIG_FILE=present\(len=23\)/);
+ assert.doesNotMatch(diagnostic, /engram_uppercase_secret/);
+ assert.doesNotMatch(diagnostic, /engram_secret_keycard_value/);
 });
 
 test("wrapper falls back to CLAUDE_PLUGIN_OPTION userConfig env names", () => {
-  const previousToken = process.env.ENGRAM_TOKEN;
-  const previousOption = process.env.CLAUDE_PLUGIN_OPTION_api_token;
+ const previousToken = process.env.ENGRAM_TOKEN;
+ const previousOption = process.env.CLAUDE_PLUGIN_OPTION_api_token;
 
-  try {
-    delete process.env.ENGRAM_TOKEN;
-    process.env.CLAUDE_PLUGIN_OPTION_api_token = "engram_from_user_config";
+ try {
+  delete process.env.ENGRAM_TOKEN;
+  process.env.CLAUDE_PLUGIN_OPTION_api_token = "engram_from_user_config";
 
-    assert.equal(
-      configuredEnvValue("ENGRAM_TOKEN", "CLAUDE_PLUGIN_OPTION_api_token"),
-      "engram_from_user_config"
-    );
+  assert.equal(
+   configuredEnvValue("ENGRAM_TOKEN", "CLAUDE_PLUGIN_OPTION_api_token"),
+   "engram_from_user_config"
+  );
 
-    process.env.ENGRAM_TOKEN = "engram_explicit_env_wins";
-    assert.equal(
-      configuredEnvValue("ENGRAM_TOKEN", "CLAUDE_PLUGIN_OPTION_api_token"),
-      "engram_explicit_env_wins"
-    );
-  } finally {
-    restoreEnv("ENGRAM_TOKEN", previousToken);
-    restoreEnv("CLAUDE_PLUGIN_OPTION_api_token", previousOption);
-  }
+  process.env.ENGRAM_TOKEN = "engram_explicit_env_wins";
+  assert.equal(
+   configuredEnvValue("ENGRAM_TOKEN", "CLAUDE_PLUGIN_OPTION_api_token"),
+   "engram_explicit_env_wins"
+  );
+ } finally {
+  restoreEnv("ENGRAM_TOKEN", previousToken);
+  restoreEnv("CLAUDE_PLUGIN_OPTION_api_token", previousOption);
+ }
 });
 
 test("child environment drops the server-only operator token", () => {
-  assert.deepEqual(
-    childEnvForEngram({
-      ENGRAM_AUTH_ADMIN_TOKEN: "operator-secret",
-      ENGRAM_TOKEN: "worker-keycard",
-      ENGRAM_URL: "https://engram.example.test/mcp",
-    }),
-    {
-      ENGRAM_TOKEN: "worker-keycard",
-      ENGRAM_URL: "https://engram.example.test/mcp",
-    }
-  );
+ assert.deepEqual(
+  childEnvForEngram({
+   ENGRAM_AUTH_ADMIN_TOKEN: "operator-secret",
+   ENGRAM_TOKEN: "worker-keycard",
+   ENGRAM_URL: "https://engram.example.test/mcp",
+  }),
+  {
+   ENGRAM_TOKEN: "worker-keycard",
+   ENGRAM_URL: "https://engram.example.test/mcp",
+  }
+ );
 });
 
 
 test("HAP-01B inherited credentials are stripped when config is absent", () => {
-  const child = childEnvForEngram({
-    ENGRAM_TOKEN: "base-keycard",
-    ENGRAM_HAP_01B_RELAY_ENABLED: "true",
-    ENGRAM_HAP_01B_RELAY_REVISION: "omp-hap-01b/1",
-    ENGRAM_HAP_01B_LEGACY_DIRECT_ENFORCEMENT: "true",
-    ENGRAM_HAP_01B_ADAPTER_SHA256: "a".repeat(64),
-    ENGRAM_HAP_01B_REGISTRATION_TOKEN: `engram_${"b".repeat(32)}`,
-    engram_auth_admin_token: "lowercase-operator-secret",
-    Engram_Hap_01B_Relay_Revision: "mixed-case-stale",
-    ENGRAM_HAP_01B_UNRECOGNIZED: "unknown-stale",
-    ENGRAM_HAP_01B_PROJECT_TOKENS_JSON: "{}",
-  });
+ const child = childEnvForEngram({
+  ENGRAM_TOKEN: "base-keycard",
+  ENGRAM_HAP_01B_RELAY_ENABLED: "true",
+  ENGRAM_HAP_01B_RELAY_REVISION: "omp-hap-01b/1",
+  ENGRAM_HAP_01B_LEGACY_DIRECT_ENFORCEMENT: "true",
+  ENGRAM_HAP_01B_ADAPTER_SHA256: "a".repeat(64),
+  ENGRAM_HAP_01B_REGISTRATION_TOKEN: `engram_${"b".repeat(32)}`,
+  engram_auth_admin_token: "lowercase-operator-secret",
+  Engram_Hap_01B_Relay_Revision: "mixed-case-stale",
+  ENGRAM_HAP_01B_UNRECOGNIZED: "unknown-stale",
+  ENGRAM_HAP_01B_PROJECT_TOKENS_JSON: "{}",
+ });
 
-  assert.deepEqual(child, { ENGRAM_TOKEN: "base-keycard" });
+ assert.deepEqual(child, { ENGRAM_TOKEN: "base-keycard" });
 });
 
 
 test("resolvePluginRoot ignores unresolved placeholder values", () => {
-  const previousPluginRoot = process.env.PLUGIN_ROOT;
-  const previousClaudePluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
+ const previousPluginRoot = process.env.PLUGIN_ROOT;
+ const previousClaudePluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
 
-  try {
-    process.env.PLUGIN_ROOT = "${PLUGIN_ROOT}";
-    process.env.CLAUDE_PLUGIN_ROOT = "${CLAUDE_PLUGIN_ROOT}";
-    assert.equal(resolvePluginRoot(), path.resolve(__dirname, ".."));
+ try {
+  process.env.PLUGIN_ROOT = "${PLUGIN_ROOT}";
+  process.env.CLAUDE_PLUGIN_ROOT = "${CLAUDE_PLUGIN_ROOT}";
+  assert.equal(resolvePluginRoot(), path.resolve(__dirname, ".."));
 
-    delete process.env.PLUGIN_ROOT;
-    process.env.CLAUDE_PLUGIN_ROOT = path.join(os.tmpdir(), "engram-plugin-root");
-    assert.equal(resolvePluginRoot(), process.env.CLAUDE_PLUGIN_ROOT);
-  } finally {
-    restoreEnv("PLUGIN_ROOT", previousPluginRoot);
-    restoreEnv("CLAUDE_PLUGIN_ROOT", previousClaudePluginRoot);
-  }
+  delete process.env.PLUGIN_ROOT;
+  process.env.CLAUDE_PLUGIN_ROOT = path.join(os.tmpdir(), "engram-plugin-root");
+  assert.equal(resolvePluginRoot(), process.env.CLAUDE_PLUGIN_ROOT);
+ } finally {
+  restoreEnv("PLUGIN_ROOT", previousPluginRoot);
+  restoreEnv("CLAUDE_PLUGIN_ROOT", previousClaudePluginRoot);
+ }
 });
 
 test("describeEnvValue reports missing and placeholder states", () => {
-  assert.equal(describeEnvValue("MISSING", {}), "MISSING=missing");
-  assert.equal(
-    describeEnvValue("PLACEHOLDER", { PLACEHOLDER: "${secret.value}" }, true),
-    "PLACEHOLDER=placeholder"
-  );
+ assert.equal(describeEnvValue("MISSING", {}), "MISSING=missing");
+ assert.equal(
+  describeEnvValue("PLACEHOLDER", { PLACEHOLDER: "${secret.value}" }, true),
+  "PLACEHOLDER=placeholder"
+ );
 });
 
 test("appendStartupDiagnosticLog writes bounded plugin-data log", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-startup-log-"));
-  appendStartupDiagnosticLog(dir, "[engram] startup env: ENGRAM_TOKEN=redacted(len=10)", new Date("2026-06-03T18:00:00Z"));
+ const dir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-startup-log-"));
+ appendStartupDiagnosticLog(dir, "[engram] startup env: ENGRAM_TOKEN=redacted(len=10)", new Date("2026-06-03T18:00:00Z"));
 
-  const logPath = path.join(dir, "logs", "startup-env.log");
-  const content = fs.readFileSync(logPath, "utf8");
-  assert.match(content, /2026-06-03T18:00:00\.000Z pid=\d+ \[engram\] startup env:/);
-  assert.doesNotMatch(content, /secret/);
+ const logPath = path.join(dir, "logs", "startup-env.log");
+ const content = fs.readFileSync(logPath, "utf8");
+ assert.match(content, /2026-06-03T18:00:00\.000Z pid=\d+ \[engram\] startup env:/);
+ assert.doesNotMatch(content, /secret/);
 });
 
 test("trimStartupDiagnosticLog keeps complete log entries after truncation", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-trim-log-"));
-  const logPath = path.join(dir, "startup-env.log");
+ const dir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-trim-log-"));
+ const logPath = path.join(dir, "startup-env.log");
 
-  fs.writeFileSync(
-    logPath,
-    [
-      "2026-06-03T18:00:00.000Z pid=1 [engram] startup env: ENGRAM_URL=present(len=26)",
-      "2026-06-03T18:00:01.000Z pid=2 [engram] startup env: ENGRAM_URL=present(len=26)",
-      "2026-06-03T18:00:02.000Z pid=3 [engram] startup env: ENGRAM_URL=present(len=26)",
-    ].join("\n") + "\n",
-    "utf8"
-  );
+ fs.writeFileSync(
+  logPath,
+  [
+   "2026-06-03T18:00:00.000Z pid=1 [engram] startup env: ENGRAM_URL=present(len=26)",
+   "2026-06-03T18:00:01.000Z pid=2 [engram] startup env: ENGRAM_URL=present(len=26)",
+   "2026-06-03T18:00:02.000Z pid=3 [engram] startup env: ENGRAM_URL=present(len=26)",
+  ].join("\n") + "\n",
+  "utf8"
+ );
 
-  trimStartupDiagnosticLog(logPath, 220);
+ trimStartupDiagnosticLog(logPath, 220);
 
-  const content = fs.readFileSync(logPath, "utf8");
-  assert.match(content, /^2026-06-03T18:00:02\.000Z pid=3 /);
+ const content = fs.readFileSync(logPath, "utf8");
+ assert.match(content, /^2026-06-03T18:00:02\.000Z pid=3 /);
 });
 
 // ── Config file credential tests ─────────────────────────────────────────────
 
 test("config file is read when env vars are absent", () => {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-cfg-read-"));
-  const cfPath = path.join(tmpDir, "config.json");
-  fs.writeFileSync(cfPath, JSON.stringify({ server_url: "http://cfg-server:37777", api_token: "engram_cftoken" }), "utf8");
+ const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-cfg-read-"));
+ const cfPath = path.join(tmpDir, "config.json");
+ fs.writeFileSync(cfPath, JSON.stringify({ server_url: "http://cfg-server:37777", api_token: "engram_cftoken" }), "utf8");
 
-  try {
-    const result = readEngramConfigFile(cfPath);
-    assert.ok(result !== null, "expected non-null result for valid config file");
-    assert.equal(result.server_url, "http://cfg-server:37777");
-    assert.equal(result.api_token, "engram_cftoken");
-  } finally {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  }
+ try {
+  const result = readEngramConfigFile(cfPath);
+  assert.ok(result !== null, "expected non-null result for valid config file");
+  assert.equal(result.server_url, "http://cfg-server:37777");
+  assert.equal(result.api_token, "engram_cftoken");
+ } finally {
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+ }
 });
 
 test("env var wins over config file value", () => {
-  // isConfiguredValue returns true for a real env value, so the env-wins
-  // branch must be taken before touching the file.
-  assert.equal(isConfiguredValue("http://env-wins:37777"), true, "env value is configured");
-  // A placeholder value is NOT configured — file would win for that case.
-  assert.equal(isConfiguredValue("${user_config.server_url}"), false, "placeholder is not configured");
-  // Empty string is NOT configured.
-  assert.equal(isConfiguredValue(""), false, "empty string is not configured");
-  // Absent (undefined) is NOT configured.
-  assert.equal(isConfiguredValue(undefined), false, "undefined is not configured");
+ // isConfiguredValue returns true for a real env value, so the env-wins
+ // branch must be taken before touching the file.
+ assert.equal(isConfiguredValue("http://env-wins:37777"), true, "env value is configured");
+ // A placeholder value is NOT configured — file would win for that case.
+ assert.equal(isConfiguredValue("${user_config.server_url}"), false, "placeholder is not configured");
+ // Empty string is NOT configured.
+ assert.equal(isConfiguredValue(""), false, "empty string is not configured");
+ // Absent (undefined) is NOT configured.
+ assert.equal(isConfiguredValue(undefined), false, "undefined is not configured");
 });
 
 test("malformed JSON in config file returns null (silent skip)", () => {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-cfg-bad-"));
-  const cfPath = path.join(tmpDir, "config.json");
-  fs.writeFileSync(cfPath, "{ this is not valid json", "utf8");
+ const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-cfg-bad-"));
+ const cfPath = path.join(tmpDir, "config.json");
+ fs.writeFileSync(cfPath, "{ this is not valid json", "utf8");
 
-  try {
-    const result = readEngramConfigFile(cfPath);
-    assert.strictEqual(result, null, "expected null for malformed JSON");
-  } finally {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  }
+ try {
+  const result = readEngramConfigFile(cfPath);
+  assert.strictEqual(result, null, "expected null for malformed JSON");
+ } finally {
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+ }
 });
 
 test("non-object JSON in config file returns null (array root)", () => {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-cfg-arr-"));
-  const cfPath = path.join(tmpDir, "config.json");
-  fs.writeFileSync(cfPath, JSON.stringify(["not", "an", "object"]), "utf8");
+ const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-cfg-arr-"));
+ const cfPath = path.join(tmpDir, "config.json");
+ fs.writeFileSync(cfPath, JSON.stringify(["not", "an", "object"]), "utf8");
 
-  try {
-    const result = readEngramConfigFile(cfPath);
-    assert.strictEqual(result, null, "expected null for array root");
-  } finally {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  }
+ try {
+  const result = readEngramConfigFile(cfPath);
+  assert.strictEqual(result, null, "expected null for array root");
+ } finally {
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+ }
 });
 
 test("ENGRAM_CONFIG_FILE env override controls config file path", () => {
-  const previousCfgFile = process.env.ENGRAM_CONFIG_FILE;
-  const previousPluginData = process.env.PLUGIN_DATA;
-  const previousClaudePluginData = process.env.CLAUDE_PLUGIN_DATA;
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-cfg-env-"));
-  const customPath = path.join(tmpDir, "custom-config.json");
+ const previousCfgFile = process.env.ENGRAM_CONFIG_FILE;
+ const previousPluginData = process.env.PLUGIN_DATA;
+ const previousClaudePluginData = process.env.CLAUDE_PLUGIN_DATA;
+ const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-cfg-env-"));
+ const customPath = path.join(tmpDir, "custom-config.json");
 
-  try {
-    process.env.ENGRAM_CONFIG_FILE = customPath;
-    delete process.env.PLUGIN_DATA;
-    delete process.env.CLAUDE_PLUGIN_DATA;
+ try {
+  process.env.ENGRAM_CONFIG_FILE = customPath;
+  delete process.env.PLUGIN_DATA;
+  delete process.env.CLAUDE_PLUGIN_DATA;
 
-    const resolved = resolveConfigFilePath(/* pluginData= */ "");
-    assert.equal(resolved, customPath, "ENGRAM_CONFIG_FILE must take priority");
-  } finally {
-    restoreEnv("ENGRAM_CONFIG_FILE", previousCfgFile);
-    restoreEnv("PLUGIN_DATA", previousPluginData);
-    restoreEnv("CLAUDE_PLUGIN_DATA", previousClaudePluginData);
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  }
+  const resolved = resolveConfigFilePath(/* pluginData= */ "");
+  assert.equal(resolved, customPath, "ENGRAM_CONFIG_FILE must take priority");
+ } finally {
+  restoreEnv("ENGRAM_CONFIG_FILE", previousCfgFile);
+  restoreEnv("PLUGIN_DATA", previousPluginData);
+  restoreEnv("CLAUDE_PLUGIN_DATA", previousClaudePluginData);
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+ }
 });
 
 test("config file path uses pluginData/config.json when that file exists and ENGRAM_CONFIG_FILE is absent", () => {
-  const previousCfgFile = process.env.ENGRAM_CONFIG_FILE;
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-plugin-data-test-"));
-  const cfPath = path.join(tmpDir, "config.json");
-  fs.writeFileSync(cfPath, JSON.stringify({ server_url: "http://test:37777", api_token: "tok" }), "utf8");
+ const previousCfgFile = process.env.ENGRAM_CONFIG_FILE;
+ const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-plugin-data-test-"));
+ const cfPath = path.join(tmpDir, "config.json");
+ fs.writeFileSync(cfPath, JSON.stringify({ server_url: "http://test:37777", api_token: "tok" }), "utf8");
 
-  try {
-    delete process.env.ENGRAM_CONFIG_FILE;
-    const resolved = resolveConfigFilePath(tmpDir);
-    assert.equal(resolved, cfPath, "must pick pluginData/config.json when the file exists");
-  } finally {
-    restoreEnv("ENGRAM_CONFIG_FILE", previousCfgFile);
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  }
+ try {
+  delete process.env.ENGRAM_CONFIG_FILE;
+  const resolved = resolveConfigFilePath(tmpDir);
+  assert.equal(resolved, cfPath, "must pick pluginData/config.json when the file exists");
+ } finally {
+  restoreEnv("ENGRAM_CONFIG_FILE", previousCfgFile);
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+ }
 });
 
 test("config file path falls back to ~/.engram/config.json when pluginData config is absent", () => {
-  const previousCfgFile = process.env.ENGRAM_CONFIG_FILE;
-  const emptyTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-plugin-data-empty-"));
+ const previousCfgFile = process.env.ENGRAM_CONFIG_FILE;
+ const emptyTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-plugin-data-empty-"));
 
-  try {
-    delete process.env.ENGRAM_CONFIG_FILE;
-    // pluginData is set but config.json does not exist inside it — should fall to home
-    const resolved = resolveConfigFilePath(emptyTmpDir);
-    assert.equal(resolved, path.join(os.homedir(), ".engram", "config.json"),
-      "must fall through to home dir when pluginData/config.json is absent");
-  } finally {
-    restoreEnv("ENGRAM_CONFIG_FILE", previousCfgFile);
-    fs.rmSync(emptyTmpDir, { recursive: true, force: true });
-  }
+ try {
+  delete process.env.ENGRAM_CONFIG_FILE;
+  // pluginData is set but config.json does not exist inside it — should fall to home
+  const resolved = resolveConfigFilePath(emptyTmpDir);
+  assert.equal(resolved, path.join(os.homedir(), ".engram", "config.json"),
+   "must fall through to home dir when pluginData/config.json is absent");
+ } finally {
+  restoreEnv("ENGRAM_CONFIG_FILE", previousCfgFile);
+  fs.rmSync(emptyTmpDir, { recursive: true, force: true });
+ }
 });
 
 test("config file path falls back to ~/.engram/config.json when pluginData is absent", () => {
-  const previousCfgFile = process.env.ENGRAM_CONFIG_FILE;
+ const previousCfgFile = process.env.ENGRAM_CONFIG_FILE;
 
-  try {
-    delete process.env.ENGRAM_CONFIG_FILE;
-    const resolved = resolveConfigFilePath("");
-    assert.equal(resolved, path.join(os.homedir(), ".engram", "config.json"));
-  } finally {
-    restoreEnv("ENGRAM_CONFIG_FILE", previousCfgFile);
-  }
+ try {
+  delete process.env.ENGRAM_CONFIG_FILE;
+  const resolved = resolveConfigFilePath("");
+  assert.equal(resolved, path.join(os.homedir(), ".engram", "config.json"));
+ } finally {
+  restoreEnv("ENGRAM_CONFIG_FILE", previousCfgFile);
+ }
 });
 
 test("startup diagnostic config_file field does not expose token contents", () => {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-cfg-diag-"));
-  const cfPath = path.join(tmpDir, "config.json");
-  const secretToken = "engram_supersecret_keycard_abc123def456";
-  fs.writeFileSync(cfPath, JSON.stringify({ server_url: "http://diag-server:37777", api_token: secretToken }), "utf8");
+ const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-cfg-diag-"));
+ const cfPath = path.join(tmpDir, "config.json");
+ const secretToken = "engram_supersecret_keycard_abc123def456";
+ fs.writeFileSync(cfPath, JSON.stringify({ server_url: "http://diag-server:37777", api_token: secretToken }), "utf8");
 
-  try {
-    const cfData = readEngramConfigFile(cfPath);
-    const cfDesc = describeConfigFile(cfPath, cfData);
+ try {
+  const cfData = readEngramConfigFile(cfPath);
+  const cfDesc = describeConfigFile(cfPath, cfData);
 
-    assert.match(cfDesc, /config_file=present/, "must report config_file=present when file is valid");
-    assert.doesNotMatch(cfDesc, new RegExp(secretToken), "token must not appear in config_file descriptor");
-    assert.doesNotMatch(cfDesc, /supersecret/, "token must not appear in config_file descriptor (substring)");
-  } finally {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  }
+  assert.match(cfDesc, /config_file=present/, "must report config_file=present when file is valid");
+  assert.doesNotMatch(cfDesc, new RegExp(secretToken), "token must not appear in config_file descriptor");
+  assert.doesNotMatch(cfDesc, /supersecret/, "token must not appear in config_file descriptor (substring)");
+ } finally {
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+ }
 });
 
 test("startup diagnostic config_file=missing when file does not exist", () => {
-  const nonexistentPath = path.join(os.tmpdir(), "engram-cfg-no-such-file.json");
-  const cfDesc = describeConfigFile(nonexistentPath, null);
-  assert.match(cfDesc, /config_file=missing/, "must report config_file=missing for absent file");
-  assert.match(cfDesc, new RegExp(nonexistentPath.replace(/\\/g, "\\\\")), "must include path in missing descriptor");
+ const nonexistentPath = path.join(os.tmpdir(), "engram-cfg-no-such-file.json");
+ const cfDesc = describeConfigFile(nonexistentPath, null);
+ assert.match(cfDesc, /config_file=missing/, "must report config_file=missing for absent file");
+ assert.match(cfDesc, new RegExp(nonexistentPath.replace(/\\/g, "\\\\")), "must include path in missing descriptor");
 });
 
 test("startup diagnostic config_file=malformed when file exists but contains invalid JSON", () => {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-cfg-malformed-diag-"));
-  const cfPath = path.join(tmpDir, "config.json");
-  fs.writeFileSync(cfPath, "{ invalid json", "utf8");
-  try {
-    const cfData = readEngramConfigFile(cfPath);
-    const cfDesc = describeConfigFile(cfPath, cfData);
-    assert.match(cfDesc, /config_file=malformed/, "must report config_file=malformed for invalid JSON");
-    assert.match(cfDesc, new RegExp(cfPath.replace(/\\/g, "\\\\")), "must include path in malformed descriptor");
-  } finally {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  }
+ const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-cfg-malformed-diag-"));
+ const cfPath = path.join(tmpDir, "config.json");
+ fs.writeFileSync(cfPath, "{ invalid json", "utf8");
+ try {
+  const cfData = readEngramConfigFile(cfPath);
+  const cfDesc = describeConfigFile(cfPath, cfData);
+  assert.match(cfDesc, /config_file=malformed/, "must report config_file=malformed for invalid JSON");
+  assert.match(cfDesc, new RegExp(cfPath.replace(/\\/g, "\\\\")), "must include path in malformed descriptor");
+ } finally {
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+ }
 });
 test("rehashes the resolved object before one spawn and reports spawn failure without fallback", async () => {
-  const events = [];
-  const target = { size: 1, sha256: "a".repeat(64) };
-  await assert.rejects(
-    resolveAndSpawn({
-      pluginRoot: "root",
-      pluginData: "data",
-      args: ["serve"],
-      env: { ENGRAM_CLIENT_INSTANCE_ID: "fixture-client" },
-      resolve: async () => { events.push("resolve"); return { path: "trusted-object", target }; },
-      roots: () => ({ objects: "objects" }),
-      hash: (candidate, actual, root) => { events.push(`hash:${candidate}:${actual.sha256}:${root}`); return true; },
-      spawnSync: (command) => { events.push(`spawn:${command}`); return { error: new Error("permission denied"), status: null }; },
-    }),
-    /engram exec failed: permission denied/
-  );
-  assert.deepEqual(events, ["resolve", `hash:trusted-object:${target.sha256}:objects`, "spawn:trusted-object"]);
+ const events = [];
+ const target = { size: 1, sha256: "a".repeat(64) };
+ await assert.rejects(
+  resolveAndSpawn({
+   pluginRoot: "root",
+   pluginData: "data",
+   args: ["serve"],
+   env: { ENGRAM_CLIENT_INSTANCE_ID: "fixture-client" },
+   resolve: async () => { events.push("resolve"); return { path: "trusted-object", target }; },
+   roots: () => ({ objects: "objects" }),
+   hash: (candidate, actual, root) => { events.push(`hash:${candidate}:${actual.sha256}:${root}`); return true; },
+   spawnSync: (command) => { events.push(`spawn:${command}`); return { error: new Error("permission denied"), status: null }; },
+  }),
+  /engram exec failed: permission denied/
+ );
+ assert.deepEqual(events, ["resolve", `hash:trusted-object:${target.sha256}:objects`, "spawn:trusted-object"]);
 });
 
 test("final rehash failure prevents spawn of resolved bytes", async () => {
-  let spawned = false;
-  await assert.rejects(resolveAndSpawn({
-    pluginRoot: "root", pluginData: "data", args: [], env: {},
-    resolve: async () => ({ path: "tampered", target: { size: 1, sha256: "b".repeat(64) } }),
-    roots: () => ({ objects: "objects" }), hash: () => false,
-    spawnSync: () => { spawned = true; return { status: 0 }; },
-  }), /final integrity verification/);
-  assert.equal(spawned, false);
+ let spawned = false;
+ await assert.rejects(resolveAndSpawn({
+  pluginRoot: "root", pluginData: "data", args: [], env: {},
+  resolve: async () => ({ path: "tampered", target: { size: 1, sha256: "b".repeat(64) } }),
+  roots: () => ({ objects: "objects" }), hash: () => false,
+  spawnSync: () => { spawned = true; return { status: 0 }; },
+ }), /final integrity verification/);
+ assert.equal(spawned, false);
 });
 
 test("Go-only launch retains an installation-scoped identity and does not claim a parser", async () => {
-  const pluginData = fs.mkdtempSync(path.join(os.tmpdir(), "engram-go-only-start-"));
-  try {
-    const environments = [];
-    for (let attempt = 0; attempt < 2; attempt++) {
-      assert.equal(await resolveAndSpawn({
-        pluginRoot: "root", pluginData, args: [],
-        env: { ENGRAM_UCI_PARSER_EXECUTABLE: "foreign", ENGRAM_UCI_PARSER_BUNDLE_DIGEST: "foreign" },
-        resolve: async () => ({ path: "client", target: { sha256: "b".repeat(64) }, parserTarget: null }),
-        roots: () => ({ objects: "objects" }), hash: () => true,
-        spawnSync: (_, __, options) => { environments.push(options.env); return { status: 0 }; },
-      }), 0);
-    }
-    assert.match(environments[0].ENGRAM_CLIENT_INSTANCE_ID, /^engram-[0-9a-f]{32}$/);
-    assert.equal(environments[1].ENGRAM_CLIENT_INSTANCE_ID, environments[0].ENGRAM_CLIENT_INSTANCE_ID);
-    assert.equal(environments[0].ENGRAM_UCI_PARSER_EXECUTABLE, undefined);
-    assert.equal(environments[0].ENGRAM_UCI_PARSER_BUNDLE_DIGEST, undefined);
-  } finally {
-    fs.rmSync(pluginData, { recursive: true, force: true });
+ const pluginData = fs.mkdtempSync(path.join(os.tmpdir(), "engram-go-only-start-"));
+ try {
+  const environments = [];
+  for (let attempt = 0; attempt < 2; attempt++) {
+   assert.equal(await resolveAndSpawn({
+    pluginRoot: "root", pluginData, args: [],
+    env: { ENGRAM_UCI_PARSER_EXECUTABLE: "foreign", ENGRAM_UCI_PARSER_BUNDLE_DIGEST: "foreign" },
+    resolve: async () => ({ path: "client", target: { sha256: "b".repeat(64) }, parserTarget: null }),
+    roots: () => ({ objects: "objects" }), hash: () => true,
+    spawnSync: (_, __, options) => { environments.push(options.env); return { status: 0 }; },
+   }), 0);
   }
+  assert.match(environments[0].ENGRAM_CLIENT_INSTANCE_ID, /^engram-[0-9a-f]{32}$/);
+  assert.equal(environments[1].ENGRAM_CLIENT_INSTANCE_ID, environments[0].ENGRAM_CLIENT_INSTANCE_ID);
+  assert.equal(environments[0].ENGRAM_UCI_PARSER_EXECUTABLE, undefined);
+  assert.equal(environments[0].ENGRAM_UCI_PARSER_BUNDLE_DIGEST, undefined);
+ } finally {
+  fs.rmSync(pluginData, { recursive: true, force: true });
+ }
 });
 
 test("hooks and daemon use the same persisted identity without manual configuration", () => {
-  const pluginData = fs.mkdtempSync(path.join(os.tmpdir(), "engram-hook-install-"));
-  const keys = ["PLUGIN_DATA", "ENGRAM_URL", "ENGRAM_TOKEN", "ENGRAM_CLIENT_INSTANCE_ID", "ENGRAM_CONFIG_FILE"];
-  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
-  try {
-    process.env.PLUGIN_DATA = pluginData;
-    process.env.ENGRAM_URL = "http://127.0.0.1:1";
-    process.env.ENGRAM_TOKEN = "engram_test";
-    delete process.env.ENGRAM_CLIENT_INSTANCE_ID;
-    process.env.ENGRAM_CONFIG_FILE = path.join(pluginData, "missing-config.json");
-    const fromHook = require("../hooks/lib.js").getEngramConfig().clientInstanceID;
-    assert.match(fromHook, /^engram-[0-9a-f]{32}$/);
-    assert.equal(fs.readFileSync(path.join(pluginData, "client-instance-id"), "utf8"), `${fromHook}\n`);
-    assert.equal(require("./client-instance.js").installationClientInstanceID(pluginData), fromHook);
-    fs.writeFileSync(path.join(pluginData, "client-instance-id"), "bad\n");
-    assert.throws(() => require("./client-instance.js").installationClientInstanceID(pluginData), /identity is invalid/);
-  } finally {
-    for (const key of keys) restoreEnv(key, previous[key]);
-    fs.rmSync(pluginData, { recursive: true, force: true });
-  }
+ const pluginData = fs.mkdtempSync(path.join(os.tmpdir(), "engram-hook-install-"));
+ const keys = ["PLUGIN_DATA", "ENGRAM_URL", "ENGRAM_TOKEN", "ENGRAM_CLIENT_INSTANCE_ID", "ENGRAM_CONFIG_FILE"];
+ const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+ try {
+  process.env.PLUGIN_DATA = pluginData;
+  process.env.ENGRAM_URL = "http://127.0.0.1:1";
+  process.env.ENGRAM_TOKEN = "engram_test";
+  delete process.env.ENGRAM_CLIENT_INSTANCE_ID;
+  process.env.ENGRAM_CONFIG_FILE = path.join(pluginData, "missing-config.json");
+  const fromHook = require("../hooks/lib.js").getEngramConfig().clientInstanceID;
+  assert.match(fromHook, /^engram-[0-9a-f]{32}$/);
+  assert.equal(fs.readFileSync(path.join(pluginData, "client-instance-id"), "utf8"), `${fromHook}\n`);
+  assert.equal(require("./client-instance.js").installationClientInstanceID(pluginData), fromHook);
+  fs.writeFileSync(path.join(pluginData, "client-instance-id"), "bad\n");
+  assert.throws(() => require("./client-instance.js").installationClientInstanceID(pluginData), /identity is invalid/);
+ } finally {
+  for (const key of keys) restoreEnv(key, previous[key]);
+  fs.rmSync(pluginData, { recursive: true, force: true });
+ }
 });
 
 test("verified parser identity reaches daemon without inherited parser overrides", async () => {
-  const digest = `sha256:${"a".repeat(64)}`;
-  const calls = [];
-  const status = await resolveAndSpawn({
-    pluginRoot: "root", pluginData: "data", args: ["serve"],
-    env: { SYSTEMROOT: "C:\\Windows", SECRET: "not-for-parser", ENGRAM_CLIENT_INSTANCE_ID: "fixture-client", ENGRAM_UCI_PARSER_EXECUTABLE: "foreign" },
-    resolve: async () => ({ path: "client", target: { sha256: "b".repeat(64) }, parserPath: "parser", parserTarget: { sha256: "c".repeat(64) } }),
-    roots: () => ({ objects: "objects" }), hash: () => true,
-    spawnSync: (file, args, options) => {
-      calls.push({ file, args, options });
-      return file === "parser" ? { status: 0, stdout: `${digest}\n` } : { status: 0 };
-    },
-  });
-  assert.equal(status, 0);
-  assert.deepEqual(calls[0].options.env, { SYSTEMROOT: "C:\\Windows" });
-  assert.equal(calls[1].options.env.ENGRAM_UCI_PARSER_BUNDLE_DIGEST, digest);
-  assert.equal(calls[1].options.env.ENGRAM_UCI_PARSER_EXECUTABLE, "parser");
+ const digest = `sha256:${"a".repeat(64)}`;
+ const calls = [];
+ const status = await resolveAndSpawn({
+  pluginRoot: "root", pluginData: "data", args: ["serve"],
+  env: { SYSTEMROOT: "C:\\Windows", SECRET: "not-for-parser", ENGRAM_CLIENT_INSTANCE_ID: "fixture-client", ENGRAM_UCI_PARSER_EXECUTABLE: "foreign" },
+  resolve: async () => ({ path: "client", target: { sha256: "b".repeat(64) }, parserPath: "parser", parserTarget: { sha256: "c".repeat(64) } }),
+  roots: () => ({ objects: "objects" }), hash: () => true,
+  spawnSync: (file, args, options) => {
+   calls.push({ file, args, options });
+   return file === "parser" ? { status: 0, stdout: `${digest}\n` } : { status: 0 };
+  },
+ });
+ assert.equal(status, 0);
+ assert.deepEqual(calls[0].options.env, { SYSTEMROOT: "C:\\Windows" });
+ assert.equal(calls[1].options.env.ENGRAM_UCI_PARSER_BUNDLE_DIGEST, digest);
+ assert.equal(calls[1].options.env.ENGRAM_UCI_PARSER_EXECUTABLE, "parser");
 });
 
 test("hook preparation is client-only and verify-only project callbacks refuse missing or tampered CAS before exec", async () => {
-  const crypto = require("node:crypto");
-  const { createPolicy, TARGET_ASSETS } = require("./bootstrap-policy.js");
-  const { hashFile, objectPath, objectRoots, parsePolicy, resolveForLaunch } = require("./ensure-binary.js");
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "engram-hook-readiness-"));
-  const bytes = Buffer.from("trusted hook readiness client");
-  const sha256 = crypto.createHash("sha256").update(bytes).digest("hex"), version = "7.0.6";
-  const targets = Object.fromEntries(Object.entries(TARGET_ASSETS).map(([key, asset]) => [key, { version, asset, size: bytes.length, sha256 }]));
-  const policy = parsePolicy(JSON.stringify(createPolicy(version, targets)), version);
-  const roots = objectRoots(root), object = objectPath(roots, policy.target.desired);
-  let requests = 0, executions = 0;
-  const resolve = options => resolveForLaunch({ ...options, policy, request() { requests++; throw new Error("fixture forbids network"); } });
-  try {
-    fs.writeFileSync(object, bytes);
-    assert.equal(await prepareHookClient({ pluginRoot: root, pluginData: root, resolve }), undefined);
-    assert.equal(hashFile(object, policy.target.desired, roots.objects), true);
-    assert.equal(fs.existsSync(path.join(path.dirname(object), "parser")), false);
-    assert.equal(fs.existsSync(path.join(root, "client-instance-id")), false);
-    for (const mode of ["missing", "tampered"]) {
-      if (mode === "missing") fs.unlinkSync(object);
-      else { const tampered = Buffer.from(bytes); tampered[0] ^= 1; fs.writeFileSync(object, tampered); }
-      await assert.rejects(resolveLogicalProject(root, {
-        pluginRoot: root, pluginData: root, acquire: false, timeoutMs: 5000, resolve,
-        execFile() { executions++; throw new Error("untrusted client must not execute"); },
-      }), /HOOK_CLIENT_UNAVAILABLE/);
-    }
-    fs.writeFileSync(object, bytes);
-    await assert.rejects(prepareHookClient({
-      pluginRoot: root, pluginData: root, resolve: async options => {
-        const trusted = await resolve(options);
-        fs.writeFileSync(object, Buffer.alloc(bytes.length));
-        return trusted;
-      }
-    }), /final integrity verification/);
-    assert.equal(requests, 0);
-    assert.equal(executions, 0);
-    assert.deepEqual(fs.readdirSync(roots.staging), []);
-  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+ const crypto = require("node:crypto");
+ const { createPolicy, TARGET_ASSETS } = require("./bootstrap-policy.js");
+ const { hashFile, objectPath, objectRoots, parsePolicy, resolveForLaunch } = require("./ensure-binary.js");
+ const root = fs.mkdtempSync(path.join(os.tmpdir(), "engram-hook-readiness-"));
+ const bytes = Buffer.from("trusted hook readiness client");
+ const sha256 = crypto.createHash("sha256").update(bytes).digest("hex"), version = "7.0.6";
+ const targets = Object.fromEntries(Object.entries(TARGET_ASSETS).map(([key, asset]) => [key, { version, asset, size: bytes.length, sha256 }]));
+ const policy = parsePolicy(JSON.stringify(createPolicy(version, targets)), version);
+ const roots = objectRoots(root), object = objectPath(roots, policy.target.desired);
+ let requests = 0, executions = 0;
+ const resolve = options => resolveForLaunch({ ...options, policy, request() { requests++; throw new Error("fixture forbids network"); } });
+ try {
+  fs.writeFileSync(object, bytes);
+  assert.equal(await prepareHookClient({ pluginRoot: root, pluginData: root, resolve }), undefined);
+  assert.equal(hashFile(object, policy.target.desired, roots.objects), true);
+  assert.equal(fs.existsSync(path.join(path.dirname(object), "parser")), false);
+  assert.equal(fs.existsSync(path.join(root, "client-instance-id")), false);
+  for (const mode of ["missing", "tampered"]) {
+   if (mode === "missing") fs.unlinkSync(object);
+   else { const tampered = Buffer.from(bytes); tampered[0] ^= 1; fs.writeFileSync(object, tampered); }
+   await assert.rejects(resolveLogicalProject(root, {
+    pluginRoot: root, pluginData: root, acquire: false, timeoutMs: 5000, resolve,
+    execFile() { executions++; throw new Error("untrusted client must not execute"); },
+   }), /HOOK_CLIENT_UNAVAILABLE/);
+  }
+  fs.writeFileSync(object, bytes);
+  await assert.rejects(prepareHookClient({
+   pluginRoot: root, pluginData: root, resolve: async options => {
+    const trusted = await resolve(options);
+    fs.writeFileSync(object, Buffer.alloc(bytes.length));
+    return trusted;
+   }
+  }), /final integrity verification/);
+  assert.equal(requests, 0);
+  assert.equal(executions, 0);
+  assert.deepEqual(fs.readdirSync(roots.staging), []);
+ } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 function restoreEnv(key, value) {
-  if (value === undefined) {
-    delete process.env[key];
-    return;
-  }
-  process.env[key] = value;
+ if (value === undefined) {
+  delete process.env[key];
+  return;
+ }
+ process.env[key] = value;
 }
 
 
 function expandMcpArgsForTest(args, pluginRoot) {
-  return args.map((arg) => arg.replaceAll("${CLAUDE_PLUGIN_ROOT}", pluginRoot.replaceAll("\\", "/")).replaceAll("${OMP_PLUGIN_ROOT}", pluginRoot.replaceAll("\\", "/")));
+ return args.map((arg) => arg.replaceAll("${CLAUDE_PLUGIN_ROOT}", pluginRoot.replaceAll("\\", "/")).replaceAll("${OMP_PLUGIN_ROOT}", pluginRoot.replaceAll("\\", "/")));
 }
 
 
 test("context recovery preserves native project code and fixed guidance through the installed launcher", async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "engram-recovery-forward-"));
-  const guidance = "Use project resolve --root <actual-root> --json --check; preserve marker/cache";
-  try {
-    await assert.rejects(resolveLogicalProject(root, {
-      pluginRoot: path.resolve(__dirname, ".."), pluginData: root,
-      resolve: async () => ({ path: "trusted-fixture-client", target: {} }),
-      roots: () => ({ objects: root }), hash: () => true,
-      execFile(file, args, options, callback) {
-        assert.equal(file, "trusted-fixture-client");
-        assert.deepEqual(args, ["project", "resolve", "--root", root, "--json"]);
-        callback(new Error("native held operation"), JSON.stringify({ code: "PROJECT_MIGRATION_REQUIRED", guidance }));
-      },
-    }), error => error.code === "PROJECT_MIGRATION_REQUIRED" && error.guidance === guidance && error.message.includes(guidance));
-  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+ const root = fs.mkdtempSync(path.join(os.tmpdir(), "engram-recovery-forward-"));
+ const guidance = "Use project resolve --root <actual-root> --json --check; preserve marker/cache";
+ try {
+  await assert.rejects(resolveLogicalProject(root, {
+   pluginRoot: path.resolve(__dirname, ".."), pluginData: root,
+   resolve: async () => ({ path: "trusted-fixture-client", target: {} }),
+   roots: () => ({ objects: root }), hash: () => true,
+   execFile(file, args, options, callback) {
+    assert.equal(file, "trusted-fixture-client");
+    assert.deepEqual(args, ["project", "resolve", "--root", root, "--json"]);
+    callback(new Error("native held operation"), JSON.stringify({ code: "PROJECT_MIGRATION_REQUIRED", guidance }));
+   },
+  }), error => error.code === "PROJECT_MIGRATION_REQUIRED" && error.guidance === guidance && error.message.includes(guidance));
+ } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 test('task context launcher uses one ready-only stdin worker and closed UTF-8 responses', async t => {
@@ -790,7 +790,7 @@ test('task context launcher uses one ready-only stdin worker and closed UTF-8 re
    deadlineAt: Date.now() + 500, maxBytes: 8000,
    resolve: async options => { assert.equal(options.acquire, false); assert.equal(options.check, true); assert.equal(options.parserTarget, null); return { path: process.execPath, target: {} }; },
    roots: () => ({ objects: root }), hash: () => true,
-   env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ENGRAM_TOKEN: 'fixture-private', ENGRAM_AUTH_ADMIN_TOKEN: 'fixture-forbidden' },
+   env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ENGRAM_CLIENT_INSTANCE_ID: 'fixture-client', ENGRAM_TOKEN: 'fixture-private', ENGRAM_AUTH_ADMIN_TOKEN: 'fixture-forbidden' },
    createTaskContextWorker(file, options) {
     executions++;
     assert.equal(path.basename(file), 'task-context-worker.js');
@@ -822,6 +822,7 @@ test('task context cancellation reaps its only child before worker exit and expi
  t.after(async () => { await workerClosed; fs.rmSync(root, { recursive: true, force: true }); });
  const options = {
   signal: controller.signal, deadlineAt: Date.now() + 500,
+  env: { ...process.env, ENGRAM_CLIENT_INSTANCE_ID: 'fixture-client' },
   resolve: async () => ({ path: process.execPath, target: {} }), roots: () => ({ objects: root }), hash: () => true,
   createTaskContextWorker(file, options) {
    executions++;
