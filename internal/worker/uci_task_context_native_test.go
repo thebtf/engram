@@ -69,6 +69,56 @@ func TestUCITaskContextNativeIndependentKnowledgeAndCode(t *testing.T) {
 	})
 }
 
+func TestUCITaskContextNativeKnowledgeWithoutRegisteredView(t *testing.T) {
+	runNativeTaskContextFixture(t, func(t *testing.T, fixture joinedNativeFixture) {
+		third := filepath.Join(fixture.root, "unregistered")
+		git := exec.Command("git", "-C", fixture.first, "worktree", "add", "--quiet", "--detach", third, "HEAD")
+		output, err := git.CombinedOutput()
+		require.NoError(t, err, "create unregistered caller worktree: %s", output)
+		_, locator, err := projectidentity.NativeGitContext(t.Context(), third)
+		require.NoError(t, err)
+		var registered int64
+		require.NoError(t, fixture.store.GetDB().Model(&gormstore.UCICheckout{}).Where("locator_ref = ?", locator).Count(&registered).Error)
+		require.Zero(t, registered, "caller must have no registered checkout or published view")
+
+		const body = "Preserve the synthetic backup before changing Alpha 😀"
+		rules := gormstore.NewBehavioralRulesStore(fixture.store)
+		rule, err := rules.Create(t.Context(), &models.BehavioralRule{Project: &fixture.project, Content: body, Priority: 10})
+		require.NoError(t, err)
+		fixture.server.SetBehavioralRulesStore(rules)
+		before := taskContextCatalogSnapshot(t, fixture.store.GetDB())
+		request := taskcontext.Request{Schema: 1, HostSessionID: "missing-view-fixture", Query: "Alpha", DeadlineUnixMS: time.Now().Add(470 * time.Millisecond).UnixMilli(), MaxBytes: 8000}
+		raw, err := json.Marshal(request)
+		require.NoError(t, err)
+		command := exec.Command(fixture.binary, "task-context", "--json")
+		command.Dir, command.Env, command.Stdin = third, fixture.environment, bytes.NewReader(raw)
+		var stderr bytes.Buffer
+		command.Stderr = &stderr
+		output, err = command.Output()
+		require.NoError(t, err, "native stderr=%s", stderr.String())
+		var response taskcontext.Response
+		require.NoError(t, json.Unmarshal(output, &response))
+		require.NoError(t, response.Validate(), "response=%s", output)
+		require.Equal(t, "ok", response.Status, "response=%s", output)
+		require.Equal(t, "context_required", response.CodeStatus, "response=%s", output)
+		require.Equal(t, "CONTEXT_REQUIRED", response.CodeReason, "response=%s", output)
+		require.Nil(t, response.Packet)
+		require.NotNil(t, response.Knowledge)
+		require.Equal(t, "ok", response.Knowledge.RuleStatus)
+		require.Len(t, response.Knowledge.Items, 1)
+		item := response.Knowledge.Items[0]
+		digest := sha256.Sum256([]byte(body))
+		require.Equal(t, "rule", item.Kind)
+		require.Equal(t, rule.ID, item.ID)
+		require.Equal(t, body, item.Content)
+		require.Equal(t, hex.EncodeToString(digest[:]), item.ContentHash)
+		require.Equal(t, hex.EncodeToString(digest[:]), item.SourceHash)
+		require.False(t, item.Excerpt)
+		require.Equal(t, before, taskContextCatalogSnapshot(t, fixture.store.GetDB()), "task request registered or indexed code")
+		t.Log("native CLI/daemon/gRPC/MCP/isolated PG: exact authorized rule survives missing caller view; catalog unchanged")
+	})
+}
+
 func runNativeTaskContextFixture(t *testing.T, consume func(*testing.T, joinedNativeFixture)) {
 	binary := os.Getenv("ENGRAM_TASK_CONTEXT_TEST_BINARY")
 	if binary == "" {
