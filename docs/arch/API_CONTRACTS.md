@@ -164,14 +164,17 @@ response and audit-only source-session attribution without MCP memory mutations.
 
 ### Typed memory cards
 
-In authenticated mode an enabled admin with a persisted `engram_auth` browser
-session can enroll an existing canonical principal/kind pair using
-`POST /api/auth/principals`. Bearer and `X-Auth-Token` credentials take precedence
-over cookies; omit them to use the browser session. HMAC-only sessions do not
-qualify. Auth-disabled middleware supplies a synthetic identity, not an authenticated
-keycard or persisted browser session. A validated keycard for the enrolled pair can
-omit both `project` and `context` on `POST /api/memories` to create a self-owned
-card. `X-Engram-Identity` selects a typed context; it does not authenticate.
+An enabled admin with a persisted `engram_auth` browser session can enroll an
+existing canonical principal/kind pair using `POST /api/auth/principals` and
+issue a keycard using `POST /api/auth/tokens`, including in auth-disabled mode
+when such an account and session already exist. This does not establish a
+credential-free bootstrap path. Bearer and `X-Auth-Token` credentials take
+precedence over cookies; omit them to use the browser session. HMAC-only
+sessions do not qualify for enrollment. In auth-disabled mode those two POSTs
+recognize a persisted session, not an HMAC-only session. A validated keycard
+for the enrolled pair can omit both `project` and `context` on
+`POST /api/memories` to create a self-owned card. `X-Engram-Identity` selects a
+typed context; it does not authenticate.
 `source_agent` is provenance,
 not owner authority. The optional context object is `{"kind":"self"}`,
 `{"kind":"project"}`, or `{"kind":"global"}`. Project context requires an
@@ -215,6 +218,16 @@ existing paths. The current body remains on the ordinary read. Retained revision
 are removed with a hard-deleted parent. Neither the revision endpoint nor global
 context grants access by itself. Synthetic auth-disabled identity is not a
 registered keycard.
+
+With authentication disabled, explicit bearer or `X-Auth-Token` credentials are
+validated on `POST /api/memories`, `GET` and `PATCH /api/memories/{id}`, and
+`GET /api/memories/{id}/revisions` for numeric IDs. A rejected credential does
+not fall back to a cookie or the synthetic identity; token-store failures fail
+closed. HAP and read-only restrictions still apply. Unkeyed requests, other
+routes, and `/api/auth/me` retain their existing synthetic identity behavior.
+Disabled authentication does **not** provide privacy isolation: other routes
+may still admit synthetic administrative access. Do not use this mode as a
+security boundary between users or principals.
 
 Explicit-principal queries filter inaccessible cards before pagination. The
 `hidden_count` field is `null` when the number of inaccessible cards is unknown;

@@ -164,7 +164,7 @@ const docTemplate = `{
         },
         "/api/auth/principals": {
             "post": {
-                "description": "In authenticated mode, enroll a canonical principal/kind pair using the persisted engram_auth browser cookie for an enabled admin user. The persisted user and session are revalidated under transaction locks. Supplied bearer or X-Auth-Token credentials take precedence over cookies; HMAC sessions, master tokens, keycards and synthetic identities cannot enroll. Auth-disabled middleware supplies a synthetic identity. Omitted/empty principal_kind defaults to human; valid kinds are human, agent, service. Issuing a keycard does not enroll or backfill its principal, and enrollment may precede issuance. Creates no user, credential, project or memory; returns the canonical pair with 201 for first enrollment or 200 if already enrolled.",
+                "description": "Enroll a canonical principal/kind pair using the persisted engram_auth browser cookie for an enabled admin user, including in auth-disabled mode. The persisted user and session are revalidated under transaction locks. Supplied bearer or X-Auth-Token credentials take precedence over cookies; HMAC sessions, master tokens, keycards and synthetic identities cannot enroll. Auth-disabled mode does not provide privacy isolation or credential-free bootstrap. Omitted/empty principal_kind defaults to human; valid kinds are human, agent, service. Issuing a keycard does not enroll or backfill its principal, and enrollment may precede issuance. Creates no user, credential, project or memory; returns the canonical pair with 201 for first enrollment or 200 if already enrolled.",
                 "consumes": [
                     "application/json"
                 ],
