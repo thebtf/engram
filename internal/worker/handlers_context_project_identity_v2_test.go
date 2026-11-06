@@ -95,11 +95,22 @@ func TestSwaggerServedSchemaUsesDocumentationOrigin(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &spec); err != nil {
 		t.Fatal(err)
 	}
-	if host, ok := spec["host"]; ok && host != "" {
-		t.Fatalf("schema fixes host to %v, rather than using its serving origin", host)
+	if host, ok := spec["host"]; ok {
+		t.Fatalf("schema must omit host, got %v", host)
 	}
 	if schemes, ok := spec["schemes"].([]any); ok && len(schemes) != 0 {
 		t.Fatalf("schema fixes schemes to %v, rather than using its serving origin", schemes)
+	}
+	data, err := os.ReadFile("../../docs/swagger.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var published map[string]any
+	if err := json.Unmarshal(data, &published); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(spec, published) {
+		t.Fatal("served schema differs from generated swagger.json")
 	}
 }
 

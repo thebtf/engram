@@ -125,6 +125,9 @@ For the runtime product version, use `/api/version` rather than the schema's
 `info.version`. The schema has conditional limitations described below and
 should not be treated as a complete description of every API behavior.
 
+The server embeds the generated `swagger.json` and registers it as the Swagger
+UI document; it does not serve Swag's Go template, which emits an empty `host`.
+
 `make worker` regenerates `docs/docs.go`, `docs/swagger.json`, and
 `docs/swagger.yaml` with Swag 1.16.6 before building the server. The producer
 derives local Go package directories from the server dependency graph, puts
