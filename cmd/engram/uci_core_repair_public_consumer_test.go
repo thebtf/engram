@@ -37,15 +37,7 @@ func TestUCICoreRepairPublicRegistrationSubprocess(t *testing.T) {
 		t.Skip("the existing installed subprocess lifecycle requires native Windows")
 	}
 	request := uciInstalledAcceptanceConfiguredRequest(t)
-	artifactEnv := map[string]string{"server": "ENGRAM_UCI_TEST_SERVER_ARTIFACT", "daemon": "ENGRAM_UCI_TEST_CLIENT_ARTIFACT", "parser": "ENGRAM_UCI_TEST_PARSER_ARTIFACT"}
-	for role, name := range artifactEnv {
-		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
-			if request.CandidateArtifacts == nil {
-				request.CandidateArtifacts = make(map[string]uciInstallHarnessCommand)
-			}
-			request.CandidateArtifacts[role] = uciInstallHarnessCommand{Executable: value}
-		}
-	}
+	uciInstalledAcceptanceUseArtifactEnv(&request)
 	request.OperationTimeout = 5 * time.Minute
 	request.Fixture.SharedSymbol = "CoreRepairOversizedCitation"
 	request.Fixture.PrimarySource = "package fixture\n\nfunc CoreRepairOversizedCitation() string { return \"" +
