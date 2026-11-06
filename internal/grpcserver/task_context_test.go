@@ -32,9 +32,8 @@ func TestTaskContextRetainsNativeRPCGuards(t *testing.T) {
 	correlation, ok := auditcontext.NewUCIRequestCorrelation(json.RawMessage("7"))
 	require.True(t, ok)
 	caller = metadata.NewIncomingContext(caller, metadata.Pairs(taskcontext.LocatorMetadataKey, "file:///fixture/native-worktree", auditcontext.UCIRequestCorrelationMetadataKey, correlation.MetadataValue()))
-	withoutProject := *request
-	withoutProject.Project = ""
-	_, err = server.CallTool(caller, &withoutProject)
+	withoutProject := &pb.CallToolRequest{ToolName: request.ToolName, ArgumentsJson: request.ArgumentsJson, SessionId: request.SessionId}
+	_, err = server.CallTool(caller, withoutProject)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err), "project-free task request was admitted")
 	noauth := auth.WithIdentity(caller, auth.AuthDisabled())
 	_, err = server.CallTool(noauth, request)
