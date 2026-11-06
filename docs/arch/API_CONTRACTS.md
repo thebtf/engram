@@ -248,6 +248,11 @@ returns HTTP 400 with `{"error":"password must not exceed 72 bytes"}`; the
 rejected request does not create a user or complete setup. Unexpected hashing
 failures return HTTP 500.
 
+`POST /api/auth/register` also rejects passwords exceeding 72 UTF-8 bytes with
+HTTP 400 and `{"error":"password must not exceed 72 bytes"}`. The rejected
+request does not create a user or consume the invitation. Unexpected hashing
+failures return HTTP 500.
+
 #### Browser session management (issue 535)
 
 The private `sessions.id` remains the `engram_auth` HttpOnly cookie credential.
