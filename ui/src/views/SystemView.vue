@@ -20,7 +20,7 @@ import {
 
 const { health, loading: healthLoading, refresh: refreshHealth } = useHealth()
 const { stats } = useStats()
-const { updateInfo, updateStatus, isUpdating, applyUpdate } = useUpdate()
+const { updateInfo, updateStatus, isUpdating, applyUpdate, statusSnapshot, isRecheckingStatus, recheckStatus } = useUpdate()
 const { t } = useUiI18n()
 
 const maintenanceStats = ref<{ last_maintenance?: string } | null>(null)
@@ -171,9 +171,18 @@ const healthIcon = (name: string) => {
             {{ isRestarting ? t.system.restarting : t.system.restart }}
           </Button>
         </div>
-        <p v-else-if="updateStatus.state === 'error'" class="text-sm text-destructive">
-          {{ updateStatus.httpStatus !== undefined ? `${t.system.updateFailed} (HTTP ${updateStatus.httpStatus})` : updateStatus.error || t.system.updateFailed }}
-        </p>
+        <div v-else-if="updateStatus.state === 'error'" class="space-y-2 text-sm text-destructive">
+          <p>
+          {{ updateStatus.httpStatus !== undefined ? `${t.app.updateRequestFailed} (HTTP ${updateStatus.httpStatus})` : updateStatus.error || t.system.updateFailed }}
+          </p>
+          <template v-if="updateStatus.httpStatus !== undefined">
+            <p>{{ t.app.updateSnapshotWarning }}</p>
+            <p aria-live="polite">{{ t.app.updateSnapshotLabel }}: {{ t.app.updateSnapshotStates[statusSnapshot] }}</p>
+            <Button size="sm" variant="outline" :disabled="isRecheckingStatus" @click="recheckStatus()">
+              {{ isRecheckingStatus ? t.app.updateSnapshotChecking : t.app.updateSnapshotRecheck }}
+            </Button>
+          </template>
+        </div>
         <p v-else class="text-sm text-muted-foreground">{{ t.system.upToDate }}</p>
       </CardContent>
     </Card>
