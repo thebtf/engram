@@ -4,7 +4,7 @@ const lib = require('../hooks/lib.js');
 const { buildSessionStartContext } = require('../hooks/session-start.js');
 const { requestPromptContext } = require('../hooks/user-prompt.js');
 const { DOWNLOAD_DEADLINE_MS } = require('../scripts/ensure-binary.js');
-const { prepareHookClient } = require('../scripts/run-engram.js');
+const { prepareHookClient, appendStartupDiagnosticLog, resolvePluginRoot, resolvePluginData } = require('../scripts/run-engram.js');
 const { BootstrapError } = require('../scripts/bootstrap-policy.js');
 const { version: pluginVersion } = require('../package.json');
 const readinessCodes = new Set(['HOOK_CLIENT_UNAVAILABLE', 'ABORT_ERR', 'PROJECT_RESOLUTION_ABORTED', 'PROJECT_RESOLUTION_DEADLINE_EXCEEDED']);
@@ -34,7 +34,9 @@ export function createEngramMemoryExtension(options = {}) {
   const runtimeConfig = options.resolveEngramRuntimeConfig ?? lib.resolveEngramRuntimeConfig;
   const isQuiet = options.isQuiet ?? lib.isQuietMode;
   const prepare = options.prepareHookClient ?? prepareHookClient;
-  const diagnostic = options.onDiagnostic ?? (message => process.stderr.write(`[engram] ${message}\n`));
+  const diagnostic = options.onDiagnostic ?? (message => {
+    try { appendStartupDiagnosticLog(resolvePluginData(resolvePluginRoot()), `[engram] ${message}`); } catch { }
+  });
   let readiness, firstFailure, disposed = false, recovery, recoveryController, nextRecoveryAt = 0;
   const warned = new Set();
   const delivered = new Set();
