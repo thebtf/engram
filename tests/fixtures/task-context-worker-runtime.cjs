@@ -34,7 +34,7 @@ async function main() {
     signal: controller.signal, deadlineAt: Date.now() + 500, maxBytes: 8000,
     resolve: async () => ({ path: binary, target }),
     roots: () => ({ objects: path.dirname(binary) }),
-    env: { PATH: process.env.PATH, SYSTEMROOT: process.env.SystemRoot || process.env.SYSTEMROOT, TEMP: os.tmpdir(), TMP: os.tmpdir() },
+    env: { PATH: process.env.PATH, SYSTEMROOT: process.env.SystemRoot || process.env.SYSTEMROOT, TEMP: os.tmpdir(), TMP: os.tmpdir(), ENGRAM_CLIENT_INSTANCE_ID: 'fixture-client' },
     createTaskContextWorker(entry, options) {
      factoryCalls++;
      assert.deepEqual(options.env, {});

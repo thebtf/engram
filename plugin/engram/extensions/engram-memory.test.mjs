@@ -63,20 +63,21 @@ test('OMP automatic callbacks use current root and one UUID without identity reg
   assert.equal(calls.some(call => 'project_descriptor' in call.body || 'sessionCapability' in call.body), false);
 });
 
-test('OMP passes its own policy binding to preparation, session and typed ambient context', async () => {
-  const binding = () => ({}), seen = [];
+test('OMP passes the instance policy to preparation, session and typed ambient', async () => {
+  const hookPolicy = () => ({}), seen = [];
   const { adapter } = extension({
-    hookPolicy: binding,
-    prepareHookClient: async options => { seen.push(['prepare', options.hookPolicy]); },
-    resolveHookProjectContext: async (cwd, options) => { seen.push(['session', options.hookPolicy]); return { Project: projects[cwd] }; },
-    requestTaskContext: async (facts, options) => { seen.push(['ambient', options.hookPolicy]); return knowledgeResponse(projects[facts.cwd]); },
+    hookPolicy,
+    prepareHookClient: async options => { seen.push(options.hookPolicy); },
+    resolveHookProjectContext: async (_cwd, options) => { seen.push(options.hookPolicy); return { Project: projects['/session/a'] }; },
+    requestTaskContext: async (_facts, options) => { seen.push(options.hookPolicy); return knowledgeResponse(projects['/session/a']); },
   });
   const handlers = new Map();
-  await adapter.install({ on: (name, fn) => handlers.set(name, fn), sendMessage: () => { } });
+  await adapter.install({ on: (name, fn) => handlers.set(name, fn), sendMessage() { } });
   await new Promise(resolve => setImmediate(resolve));
-  assert.ok(await adapter.sessionStartMessage({ cwd: '/session/a', sessionId: 'session' }, {}));
-  assert.ok(await adapter.ambientMessage({ cwd: '/session/a', sessionId: 'session', prompt: 'Find relevant context' }, {}));
-  assert.deepEqual(seen, [['prepare', binding], ['session', binding], ['ambient', binding]]);
+  await handlers.get('session_start')({ cwd: '/session/a', sessionId: 'a' }, {});
+  const result = await handlers.get('before_agent_start')({ cwd: '/session/a', sessionId: 'a', prompt: 'Inspect backup' }, {});
+  assert.ok(result?.message);
+  assert.deepEqual(seen, [hookPolicy, hookPolicy, hookPolicy]);
 });
 
 test('OMP binding shares one background preparation across repeated installation and early callbacks', async t => {

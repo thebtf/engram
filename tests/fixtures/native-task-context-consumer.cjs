@@ -193,9 +193,9 @@ async function invoke(command) {
     worker_operation_elapsed_ms: trace.workerElapsedMs, worker_threads: trace.workerThreads,
     processes: trace.processes, rest_requests: trace.restRequests, rest_budget_ms: trace.restBudgetMs,
     outer_deadline_unix_ms: trace.outerDeadline, wire_deadline_unix_ms: trace.wireDeadline,
-    native_status: trace.native?.status, native_reason: trace.native?.reason_code,
     code_status: trace.native?.code_status, code_reason: trace.native?.code_reason,
     memory_status: trace.native?.knowledge?.memory_status, note_status: trace.native?.knowledge?.note_status,
+    native_status: trace.native?.status, native_reason: trace.native?.reason_code,
     useful: !!packet, packet, callback_content: message?.content,
   });
   active = undefined;

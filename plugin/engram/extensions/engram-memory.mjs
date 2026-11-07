@@ -89,7 +89,6 @@ export function createEngramMemoryExtension(options = {}) {
       activePrompt = controller;
       try {
         const outcome = await requestPromptContext({ ...facts, prompt }, {
-          hookPolicy: options.hookPolicy,
           signal: controller.signal, delivered, deadlineAt: callbackDeadlineAt,
           runtimeConfig: async options => {
             const config = await runtimeConfig(options);
@@ -100,6 +99,7 @@ export function createEngramMemoryExtension(options = {}) {
             return config;
           },
           requestTaskContext: options.requestTaskContext,
+          hookPolicy: options.hookPolicy,
           requestPost,
         });
         if (outcome.code === 'HOOK_CLIENT_UNAVAILABLE') {
@@ -119,8 +119,8 @@ export function createEngramMemoryExtension(options = {}) {
       if (!config.serverURL || config.quiet || controller.signal.aborted || Date.now() >= deadline) return null;
       if (disposed || readiness === 'skipped') { unavailable('config', undefined, ambient ? 'ambient' : 'session'); return null; }
       const context = await resolveContext(facts.cwd, {
-        hookPolicy: options.hookPolicy,
         signal: controller.signal, deadlineAt: deadline, timeoutMs: Math.max(1, deadline - Date.now()), acquire: false,
+        hookPolicy: options.hookPolicy,
         env: { ...process.env, ENGRAM_URL: config.serverURL, ENGRAM_TOKEN: config.token },
       });
       if (disposed || controller.signal.aborted || Date.now() >= deadline) return null;

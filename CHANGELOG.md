@@ -7,9 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Retain each loaded hook instance's last valid package policy after its package root is retired, while revalidating present roots and preserving native-client integrity checks for typed task context and session callbacks.
-- Retain the loaded package's native task-context worker entry for the hook instance, preserving per-request verification and cancellation when a package update retires its old root.
-
 - Bound PostgreSQL task-note search without JIT compilation overhead; preserve caller transaction settings and cancellation with bounded savepoint recovery, and keep per-read savepoint controls out of the shared prepared-statement cache. Retain existing project authorization, ranking and deadlines.
 
 - Exclude dependents proven by their complete foreign-key ancestry to belong only to self or global memories from project consolidation, without treating private data as global; retain mixed or unknown ownership as unresolved and preserve project inheritance.
@@ -54,6 +51,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Remove the fixed Swagger host so the UI uses the documentation's serving origin; older deployments retain their existing schema until updated.
 
 - Keep long statistics values within their metric columns so adjacent values remain readable, without changing the displayed precision or unknown-versus-zero semantics.
+
+- Prevent legacy principal queries from disclosing inaccessible match counts or workstation-private memories; apply principal, domain and workstation visibility before pagination and represent unknown hidden counts as null.
+
+- Upgrade `golang.org/x/net` to v0.62.0 to address CVE-2026-78661 in its HTML parser and update its required transitive dependencies.
+
+- Retain validated bootstrap metadata for each loaded OMP hook when its own package directory is retired during an upgrade. Recheck present policy changes and verify client bytes on every use; malformed or mismatched current policy still fails closed.
+- Retain the loaded package's native task-context worker entry for the hook instance, preserving per-request verification and cancellation when a package update retires its old root.
 
 - Regenerate the API through the maintained worker target using canonical local Go package directories and Swag 1.16.6, with real producer errors stopping the build. Correct existing context search/inject/session-start annotations without changing handlers; document the shared GET/POST conditional-query limitation. The actual producer and server build pass, with 40 named schema checks and all 76 references resolved; that producer checkpoint established compile-only retained-reader oracle provenance, with later native query proof recorded separately, and installed/release acceptance remains separate.
 
