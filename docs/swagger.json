@@ -2230,7 +2230,7 @@
                         "ApiKeyAuth": []
                     }
                 ],
-                "description": "Requires an explicitly validated keycard with an enrolled canonical principal; project and context query parameters are forbidden. The requested card must be active and visible; only links with two active visible endpoints are returned, with workstation-private restrictions applied before pagination. related_to is returned from either endpoint; references only from its source. Links do not grant access. Auth-disabled mode is not privacy isolation. Results are ordered by link ID; next_cursor is the last returned link ID when more results exist, otherwise null. Pass it as cursor to continue. target_version is null when unpinned; source_session_id is untrusted caller-supplied provenance.",
+                "description": "Requires an explicitly validated keycard with an enrolled canonical principal; project and context query parameters are forbidden. The requested card must be active and visible; only links with two active visible endpoints are returned, with workstation-private restrictions applied before pagination. related_to is returned from either endpoint; references only from its source. Links do not grant access. Auth-disabled mode is not privacy isolation. Results are ordered by link ID; next_cursor is the last returned link ID when more results exist, otherwise null. Pass it as cursor to continue. Pages have a 1 MiB encoded-size budget and may be shorter than limit; an existing oversized first row is returned intact as a singleton. target_version is null when unpinned; source_session_id is untrusted caller-supplied provenance.",
                 "produces": [
                     "application/json"
                 ],
@@ -2314,7 +2314,7 @@
                         "ApiKeyAuth": []
                     }
                 ],
-                "description": "Requires an explicitly validated keycard with an enrolled canonical principal; project and context query parameters are forbidden. Both cards must be active and manageable by this keycard; workstation-private restrictions apply and links grant no access. Auth-disabled mode is not privacy isolation. The source and target must differ. related_to is unordered and cannot have a non-null target_version; references is directional and may pin a positive current or retained target revision. An omitted or null target_version leaves the link unpinned. Omit request_key or supply a nonempty JSON string of at most 1024 UTF-8 bytes; null is invalid. Keys are scoped to the canonical principal and normalized assertion. A duplicate assertion returns 200 with its original author and untrusted source_session_id provenance, including when another key is supplied; a key reused for another assertion or a removed link returns 409. New assertions return 201. source_session_id is caller-supplied untrusted provenance, not identity.",
+                "description": "Requires an explicitly validated keycard with an enrolled canonical principal; project and context query parameters are forbidden. Both cards must be active and manageable by this keycard; workstation-private restrictions apply and links grant no access. Auth-disabled mode is not privacy isolation. The source and target must differ. related_to is unordered and cannot have a non-null target_version; references is directional and may pin a positive current or retained target revision. An omitted or null target_version leaves the link unpinned. Omit request_key or supply a nonempty JSON string of at most 1024 UTF-8 bytes; null is invalid. Keys are scoped to the canonical principal and normalized assertion. A duplicate assertion returns 200 with its original author and untrusted source_session_id provenance, including when another key is supplied; a key reused for another assertion or a removed link returns 409. New assertions return 201. source_session_id is optional caller-supplied untrusted provenance, not identity, and is limited to 1024 UTF-8 bytes.",
                 "consumes": [
                     "application/json"
                 ],
@@ -6228,7 +6228,8 @@
                     }
                 },
                 "next_cursor": {
-                    "type": "integer"
+                    "type": "integer",
+                    "x-nullable": true
                 }
             }
         },
@@ -6258,7 +6259,8 @@
                 },
                 "target_version": {
                     "type": "integer",
-                    "minimum": 1
+                    "minimum": 1,
+                    "x-nullable": true
                 }
             }
         },
@@ -6288,7 +6290,8 @@
                     "type": "integer"
                 },
                 "target_version": {
-                    "type": "integer"
+                    "type": "integer",
+                    "x-nullable": true
                 }
             }
         },

@@ -405,6 +405,55 @@ func TestProjectConsolidationExternalMemoryParent(t *testing.T) {
 	assert.Empty(t, controlMapping.UnresolvedReference)
 }
 
+func TestProjectConsolidationEmbeddingSharedProfileAndUnknownParent(t *testing.T) {
+	db, _ := openMemoryContext191UpgradeDB(t)
+	require.NoError(t, db.Exec(`CREATE TABLE projects (id TEXT PRIMARY KEY)`).Error)
+	require.NoError(t, projectConsolidationMigration186().Migrate(db))
+	require.NoError(t, db.Exec(`CREATE TABLE sources (source_id UUID PRIMARY KEY, project_id TEXT NOT NULL)`).Error)
+	require.NoError(t, db.Exec(`CREATE TABLE ci_embedding_profiles (embedding_profile_id UUID PRIMARY KEY)`).Error)
+	require.NoError(t, db.Exec(`CREATE TABLE ci_embeddings (embedding_id UUID PRIMARY KEY, source_id UUID NOT NULL REFERENCES sources(source_id), embedding_profile_id UUID NOT NULL REFERENCES ci_embedding_profiles(embedding_profile_id))`).Error)
+	external := "embedding_external_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	require.NoError(t, db.Exec("CREATE SCHEMA "+quoted(external)).Error)
+	t.Cleanup(func() { require.NoError(t, db.Exec("DROP SCHEMA "+quoted(external)+" CASCADE").Error) })
+	require.NoError(t, db.Exec("CREATE TABLE "+quoted(external)+`.unknown_parent (id UUID PRIMARY KEY)`).Error)
+	require.NoError(t, db.Exec(`CREATE TABLE ci_unknown_embedding (id UUID PRIMARY KEY, source_id UUID NOT NULL REFERENCES sources(source_id), external_id UUID NOT NULL REFERENCES `+quoted(external)+`.unknown_parent(id))`).Error)
+	source, profile, unknown, embedding, control := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
+	require.NoError(t, db.Exec(`INSERT INTO sources VALUES (?, ?)`, source, memoryContext191Project).Error)
+	require.NoError(t, db.Exec(`INSERT INTO ci_embedding_profiles VALUES (?)`, profile).Error)
+	require.NoError(t, db.Exec(`INSERT INTO ci_embeddings VALUES (?, ?, ?)`, embedding, source, profile).Error)
+	require.NoError(t, db.Exec("INSERT INTO "+quoted(external)+`.unknown_parent VALUES (?)`, unknown).Error)
+	require.NoError(t, db.Exec(`INSERT INTO ci_unknown_embedding VALUES (?, ?, ?)`, control, source, unknown).Error)
+	v, err := vaultcrypto.OpenExistingVault(&config.Config{EncryptionKey: strings.Repeat("ab", 32)})
+	require.NoError(t, err)
+	s := NewProjectConsolidationStore(db, v, nil)
+	census, err := s.Census(t.Context(), "embedding-shared-profile-fixture")
+	require.NoError(t, err)
+	var native consolidationCensusState
+	require.NoError(t, s.open(census.Reference, "census", &native))
+	refs := map[string]string{}
+	for _, row := range native.Rows {
+		if row.Table == "sources" && row.Column == "project_id" || row.Table == "ci_embeddings" || row.Table == "ci_unknown_embedding" {
+			refs[row.Table] = row.Reference
+		}
+	}
+	for _, name := range []string{"sources", "ci_embeddings", "ci_unknown_embedding"} {
+		require.NotEmpty(t, refs[name], "fixture row %s must be inventoried", name)
+	}
+	target := uuid.NewString()
+	plan, err := s.Preflight(t.Context(), ConsolidationPreflightRequest{CensusReference: census.Reference, CensusFingerprint: census.Fingerprint, Evidence: []ConsolidationEvidence{{Reference: "urn:engram:proof:embedding", Kind: "portable_marker", Group: "urn:engram:group:embedding", ProjectID: target, Rows: []string{refs["sources"]}}}})
+	require.NoError(t, err)
+	mappings := map[string]ConsolidationMapping{}
+	for _, mapping := range plan.Mapping {
+		mappings[mapping.Reference] = mapping
+	}
+	shared := mappings[refs["ci_embeddings"]]
+	assert.Equal(t, target, shared.ProjectID, "source-scoped embedding must inherit despite its shared profile")
+	assert.Empty(t, shared.UnresolvedReference)
+	unsafe := mappings[refs["ci_unknown_embedding"]]
+	assert.Empty(t, unsafe.ProjectID)
+	assert.NotEmpty(t, unsafe.UnresolvedReference, "a genuinely external unknown parent must remain unresolved")
+}
+
 func TestProjectConsolidationTypedMemoryBackupVerification(t *testing.T) {
 	sourceDSN, targetDSN := os.Getenv("ENGRAM_SEARCH_PRIVACY_TEST_DSN"), os.Getenv("ENGRAM_B1_CENSUS_TARGET_DSN")
 	if sourceDSN == "" || targetDSN == "" {

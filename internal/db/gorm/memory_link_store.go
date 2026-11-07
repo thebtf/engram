@@ -3,6 +3,7 @@ package gorm
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -81,7 +82,7 @@ func lockSelfLinkEndpoints(ctx context.Context, tx *gormlib.DB, owning models.Me
 }
 
 func (s *MemoryStore) CreateSelfLink(ctx context.Context, owning models.MemoryContext, caller scope.KeycardContext, source, target int64, relation string, version *int, key, session string) (MemoryLink, bool, error) {
-	if source <= 0 || target <= 0 || source == target || (relation != "related_to" && relation != "references") || (version != nil && (*version <= 0 || relation != "references")) || len(key) > 1024 {
+	if source <= 0 || target <= 0 || source == target || (relation != "related_to" && relation != "references") || (version != nil && (*version <= 0 || relation != "references")) || len(key) > 1024 || len(session) > 1024 {
 		return MemoryLink{}, false, fmt.Errorf("invalid link")
 	}
 	if relation == "related_to" && source > target {
@@ -166,6 +167,7 @@ func (s *MemoryStore) CreateSelfLink(ctx context.Context, owning models.MemoryCo
 
 func (s *MemoryStore) ListSelfLinks(ctx context.Context, owning models.MemoryContext, caller scope.KeycardContext, source, after int64, limit int) ([]MemoryLink, *int64, error) {
 	rows := make([]MemoryLink, 0)
+	var next *int64
 	err := s.db.WithContext(ctx).Transaction(func(tx *gormlib.DB) error {
 		m, err := memoryInContext(ctx, tx, source, owning, "", caller, false)
 		if err != nil {
@@ -175,16 +177,34 @@ func (s *MemoryStore) ListSelfLinks(ctx context.Context, owning models.MemoryCon
 			return gormlib.ErrRecordNotFound
 		}
 		visible := memoryReaderPrivacy(tx.Model(&Memory{}).Table("memories AS m").Select("m.id").Where("m.context_kind = ? AND m.project = '' AND m.context_principal_kind = ? AND m.context_principal = ? AND m.deleted_at IS NULL AND m.status = 'active'", owning.Kind, owning.PrincipalKind, owning.Principal), caller, scope.MemoryVisibilityOptions{ApplyPrivacyScope: true})
-		return tx.Where("removed_at IS NULL AND id > ? AND (source_id = ? OR (relation = 'related_to' AND target_id = ?))", after, source, source).Where("source_id IN (?) AND target_id IN (?)", visible, visible).Order("id ASC").Limit(limit + 1).Find(&rows).Error
-	})
+		var candidates []struct {
+			ID        int64
+			ByteBound int64
+		}
+		// JSON escaping can expand one input byte to six; reserve fixed envelope and numeric-field overhead per row.
+		query := tx.Model(&MemoryLink{}).Where("removed_at IS NULL AND id > ? AND (source_id = ? OR (relation = 'related_to' AND target_id = ?))", after, source, source).Where("source_id IN (?) AND target_id IN (?)", visible, visible)
+		if err := query.Select("id, 256 + 6 * (octet_length(relation)::bigint + octet_length(author_principal_kind)::bigint + octet_length(author_principal)::bigint + octet_length(source_session_id)::bigint) AS byte_bound").Order("id ASC").Limit(limit + 1).Scan(&candidates).Error; err != nil {
+			return err
+		}
+		ids := make([]int64, 0, limit)
+		var size int64
+		for _, candidate := range candidates {
+			if len(ids) == limit || (len(ids) > 0 && size+candidate.ByteBound > 1<<20) {
+				cursor := ids[len(ids)-1]
+				next = &cursor
+				break
+			}
+			ids = append(ids, candidate.ID)
+			size += candidate.ByteBound
+		}
+		if len(ids) == 0 {
+			return nil
+		}
+		// The repeatable-read snapshot binds these IDs and the authorization and sizes checked above to the loaded rows.
+		return tx.Where("id IN ?", ids).Order("id ASC").Find(&rows).Error
+	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
 	if err != nil {
 		return nil, nil, err
-	}
-	var next *int64
-	if len(rows) > limit {
-		rows = rows[:limit]
-		n := rows[len(rows)-1].ID
-		next = &n
 	}
 	return rows, next, nil
 }

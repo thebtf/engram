@@ -182,6 +182,7 @@ Project default: `auto_private_patch_minor` for reviewed PRs and active-goal mil
 - `internal/version/version.go` stores the daemon/server version with `v` prefix.
 - `plugin/engram/.claude-plugin/plugin.json` stores the same version without `v`.
 - `plugin/engram/.codex-plugin/plugin.json` stores the same version without `v`.
+- `plugin/engram/.omp-plugin/plugin.json`, root `.claude-plugin/plugin.json`, and root `.claude-plugin/marketplace.json` (`version` and `plugins[0].version`) use the same source package version without `v`. The root Claude marketplace descriptor is a source input; external marketplace sync follows publication. The root `.omp-plugin/marketplace.json` instead tracks the last published direct OMP release and advances only after publication.
 - `plugin/openclaw-engram/package.json`, `plugin/openclaw-engram/openclaw.plugin.json`, and the runtime plugin definition in `plugin/openclaw-engram/src/index.ts` use the same version as the main Engram release, without `v`; OpenClaw has no separate version line. Previously published versions remain historical releases.
 - Every OpenClaw source change that triggers the publish workflow must advance that package version beyond the registry version; equality is a failed release gate, not a no-op.
 - Release jobs never rewrite source or version pins after a tag is created. Exact pins make a release reproducible; they do not prove that a published image remains fresh against newly disclosed vulnerabilities.
