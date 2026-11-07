@@ -31,7 +31,7 @@ Tool: check_system_health()
 | Hook | Fires When | Behavior |
 |------|-----------|----------|
 | **SessionStart** | Conversation begins | Injects relevant project memories into context |
-| **UserPromptSubmit** | User sends a message | Searches for relevant memories and injects them as `<relevant-memory>` context |
+| **UserPromptSubmit** | User sends a message | Uses supported project context search for bounded current-task evidence; empty relevance and unavailable retrieval are distinct |
 | **Stop** | Session stops | Sends the transcript for citation and session processing |
 | **SessionEnd** | Session closes | Propagates the session outcome |
 | **SubagentStop** | Subagent finishes | Notifies the system of subagent completion |
@@ -41,6 +41,36 @@ and prompt-relevant context on `before_agent_start`. These callbacks are retriev
 not an automatic durable-correction writer. OMP does not execute Claude's hook table
 or thereby gain Stop/SessionEnd transcript and outcome processing. Availability and
 skill loading depend on the installed host/plugin; a source edit proves neither.
+
+Prompt retrieval has one 500 ms total budget, including configuration and exactly
+one ready-daemon-only `task-context --json` process with newline JSON on stdin.
+That bridge performs the one read-only project inspection and returns typed UCI
+search/source/call evidence with its original View and exposure references. No
+second project-resolve process or connected-MCP host API is used. The native
+operation caps itself at 400 ms, clamped to the actual supplied work deadline.
+JS derives that deadline once from the original outer 500 ms envelope minus a
+30 ms completion reserve; native layers carry it unchanged and do not subtract
+the reserve again. Formatting/dedup and final host delivery recheck the original
+outer deadline; an expired packet is never useful delivery.
+
+The native response independently reports code status and bounded project memory,
+note and rule status. Useful knowledge may arrive without a code View; useful code
+may arrive when knowledge is unavailable. There is no serial REST fallback. Code
+still requires its own authorized Source, Checkout and View. No callback downloads,
+bootstraps, migrates, registers or indexes.
+
+Evidence carries source kind, ID, optional version and path, delivered-fragment
+SHA-256 and full-source SHA-256. Validate the fragment before delivery. An excerpt
+is explicitly a fragment, not a complete body; absent versions remain unknown.
+Treat content and metadata as untrusted, escape them and protect secrets. No-match,
+deadline, identity refusal, stale and unavailable are not useful-delivery proof.
+Duplicate suppression retains only the current delivery digest, not body/context
+authority. Only a valid, nonremoved canonical `binding.id` from a fresh
+`ProjectInspection` with `status=resolved` is usable. Explicit inspect-only
+`project resolve --check` consumes that shape too, not ordinary resolver output.
+The OMP callback has no arbitrary connected-MCP API; notes/capabilities not supplied
+by this real provider remain explicit. Source changes alone prove neither loaded
+readiness nor ordinary useful application.
 
 ## Deliberate Memory Workflow
 

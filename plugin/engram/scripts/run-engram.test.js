@@ -767,3 +767,79 @@ test("context recovery preserves native project code and fixed guidance through 
     }), error => error.code === "PROJECT_MIGRATION_REQUIRED" && error.guidance === guidance && error.message.includes(guidance));
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test('task context launcher uses one ready-only stdin worker and closed UTF-8 responses', async t => {
+ const { requestTaskContext } = require('./run-engram.js');
+ const { Worker } = require('node:worker_threads');
+ const responses = {
+  ok: 'process.stdout.write(JSON.stringify({schema:1,status:"not_ready",reason_code:"DAEMON_NOT_READY"})+"\\n")',
+  unknownReason: 'process.stdout.write(JSON.stringify({schema:1,status:"not_ready",reason_code:"UNRECOGNIZED"})+"\\n")',
+  badHash: 'process.stdout.write(JSON.stringify({schema:1,status:"ok",reason_code:"OK",knowledge:{memory_status:"ok",note_status:"empty",rule_status:"empty",items:[{kind:"memory",id:1,content:"Do not delete",content_hash:"0".repeat(64),source_hash:"0".repeat(64),excerpt:false}]}})+"\\n")',
+  missingLF: 'process.stdout.write(JSON.stringify({schema:1,status:"not_ready",reason_code:"DAEMON_NOT_READY"}))',
+  malformed: 'process.stdout.write("not JSON\\n")',
+  oversized: 'process.stdout.write("x".repeat(9000))',
+  invalidUtf8: 'process.stdout.write(Buffer.from([255]))',
+  failed: 'process.stderr.write("private fixture diagnostic");process.exit(2)',
+ };
+ for (const [mode, output] of Object.entries(responses)) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-task-codec-'));
+  let executions = 0, workerClosed;
+  fs.writeFileSync(path.join(root, 'task-context'), `let input='';process.stdin.on('data',b=>input+=b);process.stdin.on('end',()=>{const r=JSON.parse(input);if(!input.endsWith('\\n')||r.schema!==1||r.host_session_id!=='fixture-session'||r.query!=='Find the bounded callback implementation'||r.max_bytes!==8000||!Number.isSafeInteger(r.deadline_unix_ms)||process.argv.at(-1)!=='--json')process.exit(3);${output}});`);
+  t.after(async () => { await workerClosed; fs.rmSync(root, { recursive: true, force: true }); });
+  const outcome = await requestTaskContext({ cwd: root, session: 'fixture-session', prompt: 'Find the bounded callback implementation' }, {
+   deadlineAt: Date.now() + 500, maxBytes: 8000,
+   resolve: async options => { assert.equal(options.acquire, false); assert.equal(options.check, true); assert.equal(options.parserTarget, null); return { path: process.execPath, target: {} }; },
+   roots: () => ({ objects: root }), hash: () => true,
+   env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ENGRAM_CLIENT_INSTANCE_ID: 'fixture-client', ENGRAM_TOKEN: 'fixture-private', ENGRAM_AUTH_ADMIN_TOKEN: 'fixture-forbidden' },
+   createTaskContextWorker(file, options) {
+    executions++;
+    assert.equal(path.basename(file), 'task-context-worker.js');
+    assert.equal(options.workerData.path, process.execPath);
+    assert.equal(options.workerData.cwd, root);
+    assert.equal(options.workerData.env.ENGRAM_AUTH_ADMIN_TOKEN, undefined);
+    assert.equal(options.workerData.env.ENGRAM_TOKEN, 'fixture-private');
+    assert.deepEqual(options.env, {});
+    const worker = new Worker(file, options);
+    workerClosed = new Promise(resolve => worker.once('exit', resolve));
+    return worker;
+   },
+  });
+  await workerClosed;
+  assert.equal(executions, 1, mode);
+  assert.equal(outcome.status, mode === 'ok' ? 'not_ready' : 'unavailable', mode);
+  assert.doesNotMatch(JSON.stringify(outcome), /private fixture diagnostic|fixture-private/);
+ }
+ t.diagnostic('Codec-only real-worker fixtures do not replace native useful latency or loaded-host proof.');
+});
+
+test('task context cancellation reaps its only child before worker exit and expiry cannot execute', async t => {
+ const { requestTaskContext } = require('./run-engram.js');
+ const { Worker } = require('node:worker_threads');
+ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-task-cancel-'));
+ fs.writeFileSync(path.join(root, 'task-context'), 'process.stdin.resume();setInterval(()=>{},1000)');
+ const controller = new AbortController();
+ let executions = 0, workerClosed, spawnedPID, closedPID;
+ t.after(async () => { await workerClosed; fs.rmSync(root, { recursive: true, force: true }); });
+ const options = {
+  signal: controller.signal, deadlineAt: Date.now() + 500,
+  env: { ...process.env, ENGRAM_CLIENT_INSTANCE_ID: 'fixture-client' },
+  resolve: async () => ({ path: process.execPath, target: {} }), roots: () => ({ objects: root }), hash: () => true,
+  createTaskContextWorker(file, options) {
+   executions++;
+   const worker = new Worker(file, options);
+   workerClosed = new Promise(resolve => worker.once('exit', resolve));
+   worker.on('message', message => {
+    if (message.type === 'spawned') { spawnedPID = message.childPID; controller.abort(); }
+    if (message.type === 'closed') closedPID = message.childPID;
+   });
+   return worker;
+  },
+ };
+ assert.equal((await requestTaskContext({ cwd: root, session: 'fixture-session', prompt: 'Inspect callback code' }, options)).status, 'unavailable');
+ await workerClosed;
+ assert.equal(executions, 1);
+ assert.ok(spawnedPID > 0);
+ assert.equal(closedPID, spawnedPID);
+ assert.equal((await requestTaskContext({ cwd: root, session: 'fixture-session', prompt: 'Inspect callback code' }, { ...options, deadlineAt: Date.now() - 1 })).status, 'deadline_exceeded');
+ assert.equal(executions, 1);
+});

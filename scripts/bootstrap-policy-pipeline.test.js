@@ -1796,7 +1796,7 @@ function writeZip(archiveRoot, archivePath, entries) {
 }
 
 function buildServerArchive(archiveRoot, archivePath) {
-  const entries = ["engram-server", "package.json", "extensions/engram-memory.mjs", "bootstrap-targets.json", "parser-targets.json"];
+  const entries = ["engram-server", "package.json", "extensions/engram-memory.mjs", "bootstrap-targets.json", "parser-targets.json", "scripts/task-context-worker.js", "hooks/user-prompt.js", "scripts/run-engram.js"];
   if (archivePath.endsWith(".tar.gz")) {
     const archived = spawnSync("tar", ["-czf", archivePath, "-C", archiveRoot, ...entries], { encoding: "utf8" });
     assert.equal(archived.status, 0, archived.stderr);
@@ -1915,6 +1915,9 @@ test("generator check mode and combined artifact gate accept only the shared tar
     fs.writeFileSync(path.join(dist, "uci-parser-windows-amd64.exe"), "parser-windows-amd64");
     const archiveRoot = path.join(temp, "archive");
     fs.mkdirSync(path.join(archiveRoot, "extensions"), { recursive: true });
+    fs.mkdirSync(path.join(archiveRoot, "scripts"));
+    fs.mkdirSync(path.join(archiveRoot, "hooks"));
+    for (const file of ["scripts/task-context-worker.js", "hooks/user-prompt.js", "scripts/run-engram.js"]) fs.copyFileSync(path.join(root, "plugin/engram", file), path.join(archiveRoot, file));
     fs.writeFileSync(path.join(archiveRoot, "engram-server"), `#!/usr/bin/env bash\nprintf 'INF Starting engram server version=v${currentVersion}\\n' >&2\nexit 1\n`, { mode: 0o755 });
     fs.copyFileSync(path.join(root, "plugin", "engram", "package.json"), path.join(archiveRoot, "package.json"));
     fs.copyFileSync(path.join(root, "plugin", "engram", "extensions", "engram-memory.mjs"), path.join(archiveRoot, "extensions", "engram-memory.mjs"));

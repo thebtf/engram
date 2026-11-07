@@ -119,12 +119,45 @@ func TestUCIInstalledAcceptanceBarrierResultRetriesRunningStates(t *testing.T) {
 	}
 }
 
+func TestUCIInstalledSelectedWatcherTransition(t *testing.T) {
+	previous := uciInstalledAcceptancePublication{sourceID: "source", checkoutID: "checkout", profileID: "profile", viewID: "old", generation: 3}
+	for _, item := range []struct {
+		name, body  string
+		ready, fail bool
+	}{
+		{"unchanged", `{"context":{"source_id":"source","checkout_id":"checkout","profile_id":"profile","view_id":"old","generation":3},"freshness":{"state":"observed_current","pending_changes":0}}`, false, false},
+		{"same generation", `{"context":{"source_id":"source","checkout_id":"checkout","profile_id":"profile","view_id":"new","generation":3},"freshness":{"state":"observed_current","pending_changes":0}}`, false, false},
+		{"catching up", `{"context":{"source_id":"source","checkout_id":"checkout","profile_id":"profile","view_id":"new","generation":4},"freshness":{"state":"catching_up","pending_changes":null}}`, false, false},
+		{"pending", `{"context":{"source_id":"source","checkout_id":"checkout","profile_id":"profile","view_id":"new","generation":4},"freshness":{"state":"observed_current","pending_changes":1}}`, false, false},
+		{"wrong scope", `{"context":{"source_id":"source","checkout_id":"other","profile_id":"profile","view_id":"new","generation":4},"freshness":{"state":"observed_current","pending_changes":0}}`, false, true},
+		{"new current", `{"context":{"source_id":"source","checkout_id":"checkout","profile_id":"profile","view_id":"new","generation":4},"freshness":{"state":"observed_current","pending_changes":0}}`, true, false},
+	} {
+		t.Run(item.name, func(t *testing.T) {
+			status, err := uciDecodeInstalledAcceptanceStatus(json.RawMessage(item.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			publication, ready, err := uciInstalledAcceptanceSelectedViewTransition(status, previous)
+			if ready != item.ready || (err != nil) != item.fail {
+				t.Fatalf("ready=%t error=%v", ready, err)
+			}
+			if ready && (publication.viewID != "new" || publication.generation != 4 || publication.runID != "" || publication.barrierState != "") {
+				t.Fatalf("invalid publication: %+v", publication)
+			}
+		})
+	}
+}
+
 func TestUCIInstalledStandardClientsKeepDirtyViewsIsolated(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("native Windows installed standard-client acceptance")
 	}
 
 	request := uciInstalledAcceptanceConfiguredRequest(t)
+	uciInstalledAcceptanceUseArtifactEnv(&request)
+	provider, providerCalls := uciCoreRepairEmbeddingProvider(t)
+	request.EmbeddingProvider = &provider
+	t.Setenv("ENGRAM_EMBEDDING_DIMENSIONS", "1536")
 	uciInstalledAcceptanceRequireCleanup(t, request)
 
 	ctx, cancel := context.WithTimeout(context.Background(), request.OperationTimeout+5*time.Second)
@@ -160,6 +193,24 @@ func TestUCIInstalledStandardClientsKeepDirtyViewsIsolated(t *testing.T) {
 	uciInstalledAcceptanceRequireRefusals(t, result)
 	uciInstalledAcceptanceRequireRecorderBehavior(t, result)
 	uciInstalledAcceptanceRequireWatcherIsolation(t, request, result)
+	for _, item := range []struct {
+		name     string
+		snapshot uciInstalledAcceptanceWatcherSnapshot
+	}{
+		{"A initial", result.Watcher.InitialA},
+		{"A changed", result.Watcher.UpdatedA},
+		{"A restored", result.Watcher.RestoredA},
+		{"B initial", result.Watcher.InitialB},
+		{"B after change", result.Watcher.UpdatedB},
+		{"B after restore", result.Watcher.RestoredB},
+	} {
+		t.Logf("watcher %s: view=%s generation=%d bytes=%s search=%s graph=%s read=%s", item.name, item.snapshot.Publication.ViewDigest, item.snapshot.Publication.Generation, item.snapshot.BytesDigest, item.snapshot.SearchDigest, item.snapshot.GraphDigest, item.snapshot.ReadDigest)
+	}
+	t.Logf("processes: %+v; simultaneous_ab=%t; raw_service_calls=%d", result.Processes, result.SimultaneousAB, result.RawServiceCallCount)
+	t.Logf("synthetic embedding provider requests=%d", providerCalls.Load())
+	for role, artifact := range result.Artifacts {
+		t.Logf("artifact %s: candidate_sha256=%s installed_sha256=%s", role, artifact.CandidateSHA256, artifact.InstalledSHA256)
+	}
 	uciInstalledAcceptanceRequireRestartContinuity(t, request, result)
 
 	if !result.Cleanup.ProcessTreeClosed ||
@@ -560,8 +611,7 @@ func uciInstalledAcceptanceRequireWatcherIsolation(t *testing.T, request uciInst
 		writeA.SourceDigest != initialA.SourceDigest || writeA.CheckoutDigest != initialA.CheckoutDigest || writeA.ViewDigest == initialA.ViewDigest ||
 		deleteA.SourceDigest != initialA.SourceDigest || deleteA.CheckoutDigest != initialA.CheckoutDigest || deleteA.ViewDigest == writeA.ViewDigest ||
 		writeA.Generation < 2 || deleteA.Generation <= writeA.Generation ||
-		writeA.FreshnessState != "observed_current" || writeA.BarrierState != "satisfied" ||
-		deleteA.FreshnessState != "observed_current" || deleteA.BarrierState != "satisfied" {
+		writeA.FreshnessState != "observed_current" || deleteA.FreshnessState != "observed_current" {
 		t.Fatal("installed watcher did not publish isolated A v1-to-v2 and restored-v1 Views")
 	}
 	if writeB.SourceDigest != initialB.SourceDigest || writeB.CheckoutDigest != initialB.CheckoutDigest || writeB.ViewDigest != initialB.ViewDigest ||
@@ -574,9 +624,9 @@ func uciInstalledAcceptanceRequireWatcherIsolation(t *testing.T, request uciInst
 	requireSnapshot := func(name string, snapshot uciInstalledAcceptanceWatcherSnapshot, source, callee string) {
 		t.Helper()
 		publication := snapshot.Publication
-		if publication.SourceDigest == "" || publication.CheckoutDigest == "" || publication.ViewDigest == "" || publication.RunDigest == "" || publication.Generation < 1 || publication.FreshnessState != "observed_current" ||
+		if publication.SourceDigest == "" || publication.CheckoutDigest == "" || publication.ViewDigest == "" || publication.Generation < 1 || publication.FreshnessState != "observed_current" ||
 			snapshot.BytesDigest != uciInstalledAcceptanceDigest(source) || snapshot.SearchDigest != snapshot.BytesDigest || snapshot.ReadDigest != snapshot.BytesDigest || snapshot.GraphDigest != uciInstalledAcceptanceDigest(callee) ||
-			!uciInstalledAcceptanceIsSHA256(publication.SourceDigest) || !uciInstalledAcceptanceIsSHA256(publication.CheckoutDigest) || !uciInstalledAcceptanceIsSHA256(publication.ViewDigest) || !uciInstalledAcceptanceIsSHA256(publication.RunDigest) ||
+			!uciInstalledAcceptanceIsSHA256(publication.SourceDigest) || !uciInstalledAcceptanceIsSHA256(publication.CheckoutDigest) || !uciInstalledAcceptanceIsSHA256(publication.ViewDigest) || (publication.RunDigest != "" && !uciInstalledAcceptanceIsSHA256(publication.RunDigest)) ||
 			!uciInstalledAcceptanceIsSHA256(snapshot.BytesDigest) || !uciInstalledAcceptanceIsSHA256(snapshot.HeadDigest) || !uciInstalledAcceptanceIsSHA256(snapshot.TreeDigest) || !uciInstalledAcceptanceIsSHA256(snapshot.MembershipDigest) || !uciInstalledAcceptanceIsSHA256(snapshot.EdgesDigest) {
 			t.Fatalf("installed watcher %s snapshot is not exact redacted source, View, Git, membership, and edge evidence", name)
 		}

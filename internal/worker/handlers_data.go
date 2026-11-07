@@ -12,6 +12,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/internal/operability"
 	"github.com/thebtf/engram/pkg/models"
 )
@@ -566,7 +567,15 @@ func (s *Service) handleVectorMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	stats, err := embStore.Stats(r.Context())
+	var stats embedding.EmbeddingStats
+	var err error
+	if statsPrivileged(r.Context()) {
+		stats, err = embStore.Stats(r.Context())
+	} else {
+		var scoped embedding.CoverageStats
+		scoped, err = embStore.StatsForAccess(r.Context(), statsMemoryAccess(r.Context()))
+		stats = scoped.EmbeddingStats
+	}
 	if err != nil {
 		http.Error(w, "embedding stats unavailable: "+err.Error(), http.StatusInternalServerError)
 		return

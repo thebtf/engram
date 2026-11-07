@@ -719,7 +719,7 @@ function principalMemoryResponse(url) {
       project,
       domain,
       items: [],
-      hidden_count: 0,
+      hidden_count: null,
       audit: { durable: false, action: 'principal_memory_query' },
       audit_status: 'not_required',
     }
@@ -754,7 +754,7 @@ function principalMemoryResponse(url) {
     project,
     domain,
     items: visible,
-    hidden_count: rows.length - visible.length,
+    hidden_count: null,
     audit: { durable: false, action: 'principal_memory_query' },
     audit_status: 'not_required',
   }

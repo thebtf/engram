@@ -1014,6 +1014,9 @@ func (s *Server) buildToolsList(req *Request, catalogOnly bool) *Response {
 	if catalogOnly || codeIntelEnabled() && s.hasCodebaseGraphApplication() {
 		tools = append(tools, codebaseGraphTool())
 	}
+	if catalogOnly || s.hasTaskContextProvider() {
+		tools = append(tools, codebaseTaskContextTool())
+	}
 
 	// Ambient fallback polling — advertise only when the S3 flag is on and the queue seam is wired.
 	if catalogOnly || ambientHintsEnabledFromEnv() && s.hintQueue != nil {
@@ -1226,6 +1229,7 @@ var readOnlyToolAllowlist = map[string]map[string]struct{}{
 	"codebase_read":                nil,
 	"codebase_graph":               nil,
 	"codebase_status":              nil,
+	"codebase_task_context":        nil,
 	"recall": {
 		"search": {},
 	},
@@ -1417,6 +1421,8 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 	case "bulk_supersede":
 		return s.handleBulkSupersede(ctx, args)
 	// Code intelligence tools (CR-006).
+	case "codebase_task_context":
+		return s.handleCodebaseTaskContext(ctx, args)
 	case "codebase_search":
 		return s.handleCodebaseSearch(ctx, args)
 	case "codebase_status":

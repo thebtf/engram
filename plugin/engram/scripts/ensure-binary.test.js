@@ -400,3 +400,14 @@ test("verify-only resolution accepts exact desired CAS but never imports or down
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   }
 });
+
+test('read-only project inspection never creates missing cache directories or imports a client', async () => {
+  const root = tempRoot();
+  try {
+    await assert.rejects(resolveForLaunch({
+      pluginRoot: root, pluginData: root, policy: selected(), parserTarget: null, acquire: false, check: true,
+      request() { assert.fail('read-only inspection cannot download'); },
+    }), /HOOK_CLIENT_UNAVAILABLE/);
+    assert.equal(fs.existsSync(path.join(root, 'bin')), false);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

@@ -7,18 +7,23 @@ const { assertSafeDirectory } = require("./ensure-binary.js");
 
 const identityPattern = /^engram-[0-9a-f]{32}\n$/;
 
+function readInstallationClientInstanceID(pluginData) {
+ if (!fs.existsSync(pluginData)) return '';
+ const directory = assertSafeDirectory(pluginData, false);
+ const destination = path.join(directory, 'client-instance-id');
+ let stat;
+ try { stat = fs.lstatSync(destination); }
+ catch (error) { if (error.code === 'ENOENT') return ''; throw error; }
+ if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== 40) throw new Error('installed client identity is invalid');
+ const value = fs.readFileSync(destination, 'utf8');
+ if (!identityPattern.test(value)) throw new Error('installed client identity is invalid');
+ return value.trim();
+}
+
 function installationClientInstanceID(pluginData) {
  const directory = assertSafeDirectory(pluginData);
- const destination = path.join(directory, "client-instance-id");
- function readIdentity() {
-  let stat;
-  try { stat = fs.lstatSync(destination); }
-  catch (error) { if (error.code === "ENOENT") return ""; throw error; }
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== 40) throw new Error("installed client identity is invalid");
-  const value = fs.readFileSync(destination, "utf8");
-  if (!identityPattern.test(value)) throw new Error("installed client identity is invalid");
-  return value.trim();
- }
+ const destination = path.join(directory, 'client-instance-id');
+ const readIdentity = () => readInstallationClientInstanceID(directory);
  const existing = readIdentity();
  if (existing) return existing;
  const staged = path.join(directory, `client-instance-id.${process.pid}.${crypto.randomBytes(16).toString("hex")}.tmp`);
@@ -32,4 +37,4 @@ function installationClientInstanceID(pluginData) {
  }
 }
 
-module.exports = { installationClientInstanceID };
+module.exports = { installationClientInstanceID, readInstallationClientInstanceID };

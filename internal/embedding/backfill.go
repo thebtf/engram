@@ -55,10 +55,11 @@ func Backfill(ctx context.Context, db *gorm.DB, client *Client, store *Store, ba
 		type memRow struct {
 			ID      int64
 			Content string
+			Version int
 		}
 		var rows []memRow
 		if err := db.WithContext(ctx).Raw(
-			"SELECT id, content FROM memories WHERE id IN ? AND deleted_at IS NULL", memoryIDs,
+			"SELECT id, content, version FROM memories WHERE id IN ? AND deleted_at IS NULL", memoryIDs,
 		).Scan(&rows).Error; err != nil {
 			return fmt.Errorf("backfill: load content: %w", err)
 		}
@@ -86,26 +87,25 @@ func Backfill(ctx context.Context, db *gorm.DB, client *Client, store *Store, ba
 			continue
 		}
 
-		// Build chunks. The vector-dimension guard lives in StoreChunks (the single
-		// write chokepoint to content_chunks), so a wrong-sized vector is dropped there
-		// with a logged warning rather than failing the whole vector(EmbeddingDim) batch.
-		chunks := make([]Chunk, 0, len(rows))
+		chunks := make([]versionedChunk, 0, len(rows))
 		for i, r := range rows {
-			if i < len(vectors) && len(vectors[i]) > 0 {
-				chunks = append(chunks, Chunk{
-					MemoryID:  r.ID,
-					Seq:       0,
-					Text:      r.Content,
-					Embedding: pgvector.NewVector(vectors[i]),
-					Model:     client.Model(),
-				})
+			if i >= len(vectors) || len(vectors[i]) == 0 {
+				continue
 			}
+			chunks = append(chunks, versionedChunk{version: r.Version, chunk: Chunk{
+				MemoryID:  r.ID,
+				Seq:       0,
+				Text:      r.Content,
+				Embedding: pgvector.NewVector(vectors[i]),
+				Model:     client.Model(),
+			}})
 		}
 		if len(chunks) == 0 {
 			log.Warn().Int("batch_size", len(texts)).Msg("backfill: no valid chunks produced, skipping batch")
 			continue
 		}
-		if err := store.StoreChunks(ctx, chunks); err != nil {
+		storedCount, err := store.storeVersionedChunks(ctx, chunks)
+		if err != nil {
 			log.Error().Err(err).Msg("backfill: store chunks failed")
 			if rec != nil {
 				rec.RecordFailure(0, err.Error())
@@ -117,11 +117,18 @@ func Backfill(ctx context.Context, db *gorm.DB, client *Client, store *Store, ba
 			}
 			continue
 		}
-
-		if rec != nil {
-			rec.RecordSuccess(len(chunks))
+		if storedCount == 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(5 * time.Second):
+			}
+			continue
 		}
-		processed += len(chunks)
+		if rec != nil {
+			rec.RecordSuccess(storedCount)
+		}
+		processed += storedCount
 		if processed%100 == 0 || len(memoryIDs) < batchSize {
 			log.Info().Int("processed", processed).Msg("backfill: progress")
 		}

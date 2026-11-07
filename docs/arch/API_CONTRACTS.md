@@ -1,6 +1,6 @@
 # API Contracts
 
-MCP tools, HTTP endpoints, gRPC services, and hook interfaces for engram v6.
+MCP tools, HTTP endpoints, gRPC services, and hook interfaces for Engram.
 
 ---
 
@@ -64,6 +64,7 @@ There is no historical startup-flag alternative to this public hybrid enum.
 | Rule governance | `rule_governance_health`, `rule_governance_queue`, `rule_governance_snapshots`, `rule_governance_transition`, `rule_governance_pin_snapshot`, `rule_governance_rollback`, `rule_governance_usefulness` | rule-governance read store wired (`usefulness` also needs injection telemetry) | v6.29 (RG-3) |
 | Bulk ops | `bulk_promote`, `bulk_delete`, `bulk_supersede` | ordinary v7 runtime; admin authorization still required | v6 (Milestone-F) |
 | Code intelligence | `codebase_search` | `ENGRAM_CODE_INTEL_ENABLED=true` AND code chunk store wired | v6.13 (CR-006 code-intel) |
+| Native same-turn code context | `codebase_task_context` | `ENGRAM_CODE_INTEL_ENABLED=true` AND native task application wired | Feature009 A |
 | V7 meta-memory discovery | `know_about` plus session-start `meta_summary` | deferred; startup activation retired, historical data retained | v6.38 (ENG-V7-S2) |
 
 Admin-gated families (candidates, governance, bulk ops) are additionally enforced at the handler level regardless of advertisement.
@@ -104,11 +105,212 @@ content-bearing aliases such as `content`, `body`, `raw_content`, `narrative`,
 or `snippet`. A valid topic with no matches returns the empty packet above, not
 a tool error.
 
+### Native existing-Source registration and parser recovery
+
+Source/Checkout preparation is an explicit operation outside the same-turn
+callback. A fresh `codebase_context(action="list")` identifies authorized
+published contexts; a readable historical View does not confer registration or
+indexing authority. Establish the intended existing Source, not merely a matching
+display label, before registering another owned Git checkout.
+
+In the native client, `{"action":"register","source_id":"<existing authorized Source UUID>"}`
+derives the canonical locator from the actual process cwd through the existing
+sanitized Git owner. It does not require the historical View's index binding or
+accept a caller-invented root. The server still checks the active Git Source's
+realm, principal ownership and canonical project before attaching/replaying the
+workstation/locator checkout. This explicit SourceID path cannot allocate a new
+Source. Direct server registration still requires an explicit canonical locator.
+`source_label` is reserved for deliberate new-Source onboarding; it is not a
+fallback for a denied existing Source. Omitted selectors or an owned
+`context_handle` retain their existing index-capable binding contract.
+
+For JS/TS/TSX extraction, the daemon needs its supported, verified installed
+parser at the canonical CLI sibling (`parser/parser.exe` on Windows) and matching
+bundle identity. The existing `ENGRAM_UCI_PARSER_EXECUTABLE` and
+`ENGRAM_UCI_PARSER_BUNDLE_DIGEST` are daemon-startup inputs, not MCP arguments or
+per-prompt overrides. A missing/unavailable parser is not repaired by changing
+project identity or silently downgrading the profile. The installation owner uses
+normal verified delivery and supported identity-checked daemon lifecycle.
+
+After compatible parser startup, explicitly register that same Source/current
+cwd with `parser_bundle:true` to promote an existing Go checkout to the current
+semantic profile. The existing owner creates a new immutable analysis profile
+and changes only this checkout's registration profile for its next complete
+publication. Source, Checkout and incarnation remain unchanged; old Go profiles,
+artifacts and pinned/current old Views are not rewritten or replaced by
+registration. Implicit replay preserves Go even when a parser becomes available;
+explicit semantic-to-Go downgrade remains refused.
+
+Inspect the returned registered context, then use its own same-client handle for
+`codebase_status`, one authorized `codebase_index` run, and its bounded status
+barrier. A new profile, accepted job or no-View handle is not a published usable
+View. `PERMISSION_DENIED` from Source registration remains a refusal: do not
+borrow credentials/installation IDs, choose another Source/label, reset a project
+UUID or bypass the catalog. The automatic task-context operation below remains
+SELECT-only and never performs this recovery itself.
+
+### Native same-turn task context
+
+The native client provides `engram task-context --json`. The verified executable
+is launched with the actual host callback cwd. It reads one bounded JSON stdin
+request and emits one JSON response plus LF. Prompt text, credentials, locators
+and IPC tokens are never command-line arguments. The command is registered before
+installation creation, daemon reconciliation, stale-binary cleanup or daemon startup.
+
+Request fields are closed:
+
+| Field | Contract |
+| --- | --- |
+| `schema` | Integer `1`. |
+| `host_session_id` | Nonempty actual host session string, at most 256 UTF-8 bytes; correlation input, never a UCI transport session or access grant. |
+| `query` | Nonempty task query, at most 16 KiB UTF-8. |
+| `deadline_unix_ms` | Positive integer absolute work deadline, at most JavaScript's maximum safe integer. |
+| `max_bytes` | Nonnegative integer final-frame budget; zero selects 16 KiB. Internal clamp: 1–32 KiB. |
+
+The entire stdin frame is at most 20 KiB. Duplicate/unknown fields, null fields,
+invalid UTF-8, extra JSON values and malformed values fail closed without echoing
+input. No locator, borrowed context handle, project selector or arbitrary tool
+name is accepted in this request.
+
+The callback keeps its original absolute 500 ms deadline. Its one native-work
+deadline is `min(originalOuterDeadline, callbackEntry + 500 ms) - 30 ms`. That
+exact work deadline is sent on stdin and is not extended at any later stage.
+Native CLI, daemon proxy, authenticated CallTool, UCI/SQL and exposure stages
+share the remaining context. Native additionally clamps its allocation to
+400 ms from its own entry. The 400 ms partition was selected after measured
+300 ms failures; it is not a new startup variable, an extension of the 500 ms
+callback limit, or a latency guarantee. The consumer reserves final
+framing/termination/presentation time and suppresses every late response.
+
+Response fields are `schema: 1`, `status`, `reason_code`, optional `project`,
+optional code `packet`, optional `code_status` and `code_reason`, and optional
+`knowledge`. All valid closed responses exit zero. Nonzero exit is argv misuse
+or inability to emit the response, not an empty relevance result.
+
+`project` is the existing read-only `ProjectInspection`: `status` and optional
+`binding` containing `id`, nullable `project_key`, nullable `identity_status`,
+`match`, and optional `removed`. A canonical project is usable only when inspection
+is resolved and `binding.id` is a valid canonical UUID. A code failure retains
+independently obtained inspection metadata. Missing/incompatible daemon can omit
+project; it does not trigger a second resolver process or reuse another request's identity.
+
+Closed statuses are `ok`, `empty`, `not_ready`, `stale`, `context_required`,
+`forbidden`, `unavailable`, and `deadline_exceeded`. Closed uppercase reasons
+include `OK`, `NO_MATCH`, `DAEMON_NOT_READY`, `OPERATION_NOT_READY`,
+`INSTALLATION_NOT_READY`, `CONTEXT_REQUIRED`, `CONTEXT_MISMATCH`,
+`PROJECT_CONTEXT_REQUIRED`, `PROJECT_CONTEXT_MISMATCH`,
+`REGISTRATION_PROFILE_UNBOUND`, `CHECKOUT_OFFLINE`, `INDEX_CATCHING_UP`,
+`VIEW_RETIRED`, `PERMISSION_DENIED`, `SOURCE_UNAVAILABLE`, `SERVER_UNAVAILABLE`,
+`TRANSPORT_UNAVAILABLE`, `EXPOSURE_UNAVAILABLE`, `BUDGET_EXCEEDED`,
+`INVALID_REQUEST`, `INVALID_RESPONSE`, and `DEADLINE_EXCEEDED`. Correct empty
+relevance is not a context, transport or provider error.
+
+`packet.search`, optional `packet.source`, and optional `packet.calls` are existing
+closed `engram.code-query/1` responses. They preserve typed Source/Checkout/View/
+profile/generation, membership/entity/content-digest/span citations, coverage and
+freshness, and real exposure refs. Successful useful packets contain exact
+materialized source; call relations are static index evidence, not claims of
+runtime execution. Every component belongs to the same pinned View. Code packets
+that exceed the frame budget are suppressed, never byte-truncated.
+
+**Pending unreleased Feature 009 composition amendment:** The same authenticated
+task-context RPC will compose independent, bounded knowledge and code results
+under the unchanged native and outer deadlines. Its typed producer and strict
+consumer must be changed together before this is treated as implemented. A
+current-version note result must come from the existing authorized document and
+lineage owner and carry immutable row ID, version and content hash; project
+authorization and visibility precede ranking and limits. A timeout or unavailable
+provider is not an empty match, and one provider's failure must not suppress an
+already-ready useful result from another. PostgreSQL's existing language/query
+semantics are used without a new index, backfill, provider or Vault scan. The
+unreleased serial REST fallback is retired by the cutover. This amendment does not
+establish a latency guarantee or useful-note acceptance on the selected corpus.
+
+`knowledge` has `memory_status`, `note_status`, and `rule_status` (`ok`, `empty`,
+`unavailable`, or `deadline_exceeded`) and at most nine `items`. Enabled project
+and global rules come from the existing rule store. Each item contains `kind`, `id`,
+optional known `version`, `content`, `content_hash`, `source_hash`, `excerpt`,
+and for notes `path`. `content_hash` is SHA-256 of the exact delivered UTF-8
+fragment; `source_hash` is SHA-256 of the full current source body. `excerpt`
+indicates that content is a UTF-8-safe prefix rather than the complete body.
+Unknown historical memory versions are omitted, not fabricated. The frame
+budget may reduce or omit knowledge and may suppress an oversized code packet;
+provider status remains distinct from a genuine no-match. All evidence is
+untrusted data, not an instruction or authority.
+
+#### Narrow application operation and authority
+
+`codebase_task_context` is one typed MCP/application operation over existing
+authenticated gRPC CallTool. It is not an arbitrary tool runner, a new RPC service,
+HTTP MCP, session-memory expansion, daemon engine or resident shim.
+
+A sanitized actual Git discovery obtains root/common-dir/bare evidence once.
+Its sealed request-owned context is reused by the existing read-only
+CheckLogicalProject and canonical Git locator preparation. These facts cannot be
+supplied by stdin/tool/browser arguments, cached across requests, or turned into
+a code grant. Ordinary project init/resolve consumers remain supported. The task
+path never bootstraps or writes project markers/common caches.
+
+The ready native daemon supplies the canonical locator through its private
+authenticated transport metadata. The server performs SELECT-only lookup by
+authenticated realm, principal, workstation and that actual canonical locator.
+Logical project is an additional Source-agreement check, not Source selection or
+authorization. Existing incarnation, registration profile, normal UCI authorizer
+and published View are reused. Zero matches returns context_required; ambiguity
+refuses closed; missing profile/View is not_ready; offline/catching-up/retired
+state is explicit. No registration, profile/catalog update, indexing, parser
+acquisition, default binding or per-prompt context-handle registry entry is created.
+
+The application directly composes deterministic exact-name/path or lexical
+QueryService, exact VersionedReadService and bounded callers/callees GraphService.
+It deliberately does not enter general SearchCodebase's semantic-provider
+selection or any embedding/LLM provider. Richer semantic work remains explicit.
+
+Each actual search, versioned source read and graph sub-result uses its existing
+exposure category and the existing UCI release gate. These are genuine
+sub-operations, not tool-name aliases. Explicit pinned refs are reauthorized before
+release; existing durable non-content receipts must succeed before any result body
+is emitted. No second receipt writer or pre-exposure response bypass exists.
+Ordinary admission/auth/exposure audit writes remain allowed and observable; this
+contract never promises literally zero PostgreSQL writes. Domain, identity,
+Source/Checkout/profile/catalog/index data do not mutate on the task path.
+
+Only an already-ready compatible exact daemon can be joined. The existing
+installation namespace/owner-sharing identity, peer PID and generation fencing,
+control admission, token-first IPC and MCP initialization are retained.
+SessionHandler dispatch is in-process; the operation does not launch an upstream
+subprocess. Missing installation state is not_ready, never create-on-missing.
+Unsupported/old daemon or operation is not_ready and is not upgraded, restarted,
+reconciled or retried by this feature.
+
+Parent abort closes only request-owned stdin/IPC/process resources. Muxcore
+Session.Done propagates cancellation through the native handler to RPC/SQL; the
+server also enforces the absolute deadline. notifications/cancelled alone is not
+relied upon. The shared daemon and pool survive cancellation.
+
 ---
 
 ## HTTP API (:37777)
 
 `engram-server` serves HTTP via chi router on :37777 (cmux multiplexed with gRPC).
+
+The generated [Swagger schema](../swagger.json) is maintained in the repository.
+On a running server, `/api/docs` redirects to the Swagger UI at
+`/api/docs/index.html`, which serves its schema at `/api/docs/doc.json`.
+The server's token authentication middleware exempts the `/api/docs` prefix.
+The current source does not fix a host or scheme in the schema: Swagger UI uses
+the origin serving the documentation. This requires the documentation and API
+to be reachable at that origin; reverse-proxy path rewriting is not covered.
+Older deployments, including the observed 7.0.26 installation, may still declare
+`localhost:37777`, causing Try it out to target the reader's machine. Check the
+served `/api/docs/doc.json` before use and use the intended server address for
+API calls when it declares that host. A source change does not update a deployment.
+For the runtime product version, use `/api/version` rather than the schema's
+`info.version`. The schema has conditional limitations described below and
+should not be treated as a complete description of every API behavior.
+
+The server embeds the generated `swagger.json` and registers it as the Swagger
+UI document; it does not serve Swag's Go template, which emits an empty `host`.
 
 `make worker` regenerates `docs/docs.go`, `docs/swagger.json`, and
 `docs/swagger.yaml` with Swag 1.16.6 before building the server. The producer
@@ -116,6 +318,16 @@ derives local Go package directories from the server dependency graph, puts
 `cmd/engram-server` first, and parses `main.go` with internal-package parsing
 enabled and dependency parsing disabled. Package discovery and generation
 errors stop the build; generated files must not be patched by hand.
+
+`GET /v1/models` is an OpenAI-compatibility endpoint that returns an empty
+model list. It is available before database readiness, but is not exempt from
+token authentication. When authentication is enabled, use `X-Auth-Token`,
+`Authorization: Bearer`, or an authorized `engram_session` or `engram_auth`
+session cookie. No credential is required when authentication is explicitly
+disabled. The Swagger `ApiKeyAuth` scheme represents only `X-Auth-Token`; it
+cannot express these alternatives or the deployment-dependent requirement.
+The successful response is JSON; authentication rejection is a plain-text 401.
+Swagger 2 lists response media types for the whole operation, not per status.
 
 `GET /api/stats` returns uptime, session and queue activity, retrieval statistics,
 readiness, and runtime memory statistics. `database` is present when the store is
@@ -161,6 +373,92 @@ content/tag matches, with configured cross-encoder reranking and no query expans
 Unavailable embeddings degrade to text retrieval; memory-store lookup failures
 return HTTP 500, not an empty successful search. REST retains its observation-shaped
 response and audit-only source-session attribution without MCP memory mutations.
+
+### Typed memory cards
+
+An enabled admin with a persisted `engram_auth` browser session can enroll an
+existing canonical principal/kind pair using `POST /api/auth/principals` and
+issue a keycard using `POST /api/auth/tokens`, including in auth-disabled mode
+when such an account and session already exist. This does not establish a
+credential-free bootstrap path. Bearer and `X-Auth-Token` credentials take
+precedence over cookies; omit them to use the browser session. HMAC-only
+sessions do not qualify for enrollment. In auth-disabled mode those two POSTs
+recognize a persisted session, not an HMAC-only session. A validated keycard
+for the enrolled pair can omit both `project` and `context` on
+`POST /api/memories` to create a self-owned card. Presence of
+`X-Engram-Identity` opts into typed handling; its value neither selects a
+context nor authenticates the caller. With selectors omitted, typed handling
+selects self. The optional context object is `{"kind":"self"}`,
+`{"kind":"project"}`, or `{"kind":"global"}`. Explicit project context
+requires an existing canonical project UUID in `project`; self and global
+require `project` to be absent. Global must be selected explicitly.
+`source_agent` is provenance, not owner authority.
+Invalid, empty, repeated or conflicting selectors do not fall back to self.
+Self ownership is independent of the visibility tier; global defaults to
+principal-private. Explicit workstation-private scope remains bound to the
+writing keycard even when another credential has the same principal.
+
+REST create and revision apply builtin and configured operator redaction before
+storing content. If redaction removes the full body, the request is refused;
+a refused revision does not advance the version or create history. Nonempty
+whitespace-only input remains accepted when no rule removes it.
+
+An optional nonempty `request_key` (at most 1024 UTF-8 bytes) scopes a create
+retry to the authenticated principal, owning context and project. An equivalent
+retry returns the existing active record; a changed command or retired target
+returns 409. Without a key a repeated create is not automatically idempotent.
+
+`GET /api/memories/{id}` reads a visible card in its selected context. For GET
+and typed PATCH, an enrolled client with omitted selectors selects self;
+`?context=global` selects global, and
+`?context=project&project=<canonicalUUID>` selects project. With no selector
+or identity opt-in, a valid client keycard without an enrolled memory principal
+receives 403; a caller without a keycard retains the legacy missing-project 400.
+Explicit self requests still require an enrolled client, and invalid explicit
+selectors never fall back. To revise, send `PATCH /api/memories/{id}` with
+`{"version":N,"content":"..."}` and the same context selection. The owner must
+be authorized to manage the current card.
+Project aliases support reads only; a project-context revision requires the card's
+unique native canonical membership and revalidates it under the mutation locks.
+The version must match; a stale version returns 409. After an uncertain outcome,
+read the current card and reconcile before deciding whether to retry. A successful
+revision keeps the ID, atomically captures the previous body and increments version.
+The current domain write policy also applies to typed revisions. A cross-owner
+write in reject mode records a denial audit and returns 403 without creating a
+revision. If the required domain audit fails, the card is not mutated. In warn
+mode, a cross-owner write is audited and the revision proceeds; its response
+includes `domain_warning` and `domain_audit_status`. These fields are omitted
+when there is no warning. The success response is JSON; errors are plain text.
+Swagger 2 lists media types for the whole operation, not per status.
+The newly captured body is subject to the current redaction rules, so it is not
+necessarily a byte-exact historical copy. Existing stored history is not rewritten.
+When an embedding provider and store are configured, revision starts an asynchronous
+re-embedding attempt; provider errors or empty vectors do not establish a retry.
+`GET /api/memories/{id}/revisions` returns retained previous bodies after checking
+current-card access, in ascending version order. `after_version` selects versions
+strictly above its nonnegative value; `limit` defaults to 50 and accepts 1–100.
+Typed PATCH refuses legacy project rows with 404 rather than creating incomplete
+revision history. Existing legacy reads and edits remain available through their
+existing paths. The current body remains on the ordinary read. Retained revisions
+are removed with a hard-deleted parent. Neither the revision endpoint nor global
+context grants access by itself. Synthetic auth-disabled identity is not a
+registered keycard.
+
+With authentication disabled, explicit bearer or `X-Auth-Token` credentials are
+validated on `POST /api/memories`, `GET` and `PATCH /api/memories/{id}`, and
+`GET /api/memories/{id}/revisions` for numeric IDs. A rejected credential does
+not fall back to a cookie or the synthetic identity; token-store failures fail
+closed. HAP and read-only restrictions still apply. Unkeyed requests, other
+routes, and `/api/auth/me` retain their existing synthetic identity behavior.
+Disabled authentication does **not** provide privacy isolation: other routes
+may still admit synthetic administrative access. Do not use this mode as a
+security boundary between users or principals.
+
+Explicit-principal queries filter inaccessible cards before pagination. The
+`hidden_count` field is `null` when the number of inaccessible cards is unknown;
+it is not a count of matching private cards. This applies to the HTTP principal
+query and its MCP query and principal-scoped brief projections. Authorized
+administrative private widening remains subject to durable audit.
 
 `POST /api/memories/{id}/transition` takes a JSON object with required `action`:
 `suppress` changes active to flagged, `unsuppress` changes flagged to active, and

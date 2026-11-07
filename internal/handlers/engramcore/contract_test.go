@@ -435,7 +435,7 @@ func TestContract_ToolsList_OfflineWithoutURLReturnsLocalCatalog(t *testing.T) {
 			assertJSONEqual(t, tool.Name+" schema", tool.InputSchema, schema)
 		}
 	}
-	for _, name := range []string{"loom_submit", "loom_get", "loom_list", "loom_cancel", "project_context", "recall_memory", "recall", "store"} {
+	for _, name := range []string{"loom_submit", "loom_get", "loom_list", "loom_cancel", "project_context", "recall_memory", "recall", "store", "codebase_task_context"} {
 		if !seen[name] {
 			t.Errorf("offline catalog missing %q", name)
 		}
