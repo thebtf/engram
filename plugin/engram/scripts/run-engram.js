@@ -3,13 +3,45 @@
 // Used as plugin MCP command to handle Windows .exe suffix and path resolution.
 
 const { execFile, spawnSync } = require("child_process");
+const { Worker } = require('node:worker_threads');
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
+const crypto = require('node:crypto');
 const { DOWNLOAD_DEADLINE_MS, hashFile, loadPolicy, objectRoots, resolveForLaunch } = require("./ensure-binary.js");
-const { installationClientInstanceID } = require("./client-instance.js");
+const { installationClientInstanceID, readInstallationClientInstanceID } = require("./client-instance.js");
 
 const STARTUP_DIAGNOSTIC_LOG_MAX_BYTES = 128 * 1024;
+const TASK_CONTEXT_COMPLETION_RESERVE_MS = 30;
+const TASK_CONTEXT_STATUSES = new Set(['ok', 'empty', 'not_ready', 'stale', 'context_required', 'forbidden', 'unavailable', 'deadline_exceeded']);
+const TASK_CONTEXT_REASONS = new Set([
+ 'OK', 'NO_MATCH', 'INSTALLATION_NOT_READY', 'DAEMON_NOT_READY', 'OPERATION_NOT_READY',
+ 'CONTEXT_REQUIRED', 'CONTEXT_MISMATCH', 'PROJECT_CONTEXT_REQUIRED', 'PROJECT_CONTEXT_MISMATCH',
+ 'PERMISSION_DENIED', 'SOURCE_UNAVAILABLE', 'VIEW_RETIRED', 'CHECKOUT_OFFLINE', 'INDEX_CATCHING_UP',
+ 'REGISTRATION_PROFILE_UNBOUND', 'SERVER_UNAVAILABLE', 'TRANSPORT_UNAVAILABLE', 'EXPOSURE_UNAVAILABLE',
+ 'BUDGET_EXCEEDED', 'INVALID_REQUEST', 'INVALID_RESPONSE', 'DEADLINE_EXCEEDED',
+]);
+
+function validTaskContextResponse(response) {
+ if (!response || typeof response !== 'object' || Array.isArray(response) || response.schema !== 1 ||
+  !TASK_CONTEXT_STATUSES.has(response.status) || !TASK_CONTEXT_REASONS.has(response.reason_code) ||
+  Object.keys(response).some(key => !['schema', 'status', 'reason_code', 'project', 'packet', 'knowledge', 'code_status', 'code_reason'].includes(key))) return false;
+ if (response.code_status !== undefined && !TASK_CONTEXT_STATUSES.has(response.code_status)) return false;
+ if (response.code_reason !== undefined && !TASK_CONTEXT_REASONS.has(response.code_reason)) return false;
+ const knowledge = response.knowledge;
+ if (knowledge !== undefined) {
+  if (!knowledge || typeof knowledge !== 'object' || Array.isArray(knowledge) || Object.keys(knowledge).some(k => !['memory_status', 'note_status', 'rule_status', 'items'].includes(k)) || !Array.isArray(knowledge.items) || knowledge.items.length > 9) return false;
+  const counts = { memory: 0, note: 0, rule: 0 };
+  for (const item of knowledge.items) {
+   if (!item || typeof item !== 'object' || Array.isArray(item) || Object.keys(item).some(k => !['kind', 'id', 'version', 'content_hash', 'source_hash', 'excerpt', 'path', 'content'].includes(k)) || !Object.hasOwn(counts, item.kind) || !Number.isSafeInteger(item.id) || item.id < 1 || (item.version !== undefined && (!Number.isSafeInteger(item.version) || item.version < 1)) || (item.kind === 'note' && (!item.version || !item.path)) || typeof item.content !== 'string' || !item.content.trim() || Buffer.byteLength(item.content) > 4000 || Buffer.from(item.content).toString('utf8') !== item.content || (item.path !== undefined && (typeof item.path !== 'string' || Buffer.byteLength(item.path) > 4096 || Buffer.from(item.path).toString('utf8') !== item.path)) || typeof item.excerpt !== 'boolean' || !/^[0-9a-f]{64}$/.test(item.content_hash ?? '') || !/^[0-9a-f]{64}$/.test(item.source_hash ?? '')) return false;
+   if (crypto.createHash('sha256').update(item.content, 'utf8').digest('hex') !== item.content_hash || (!item.excerpt && item.source_hash !== item.content_hash)) return false;
+   counts[item.kind]++;
+  }
+  for (const kind of Object.keys(counts)) if (!['ok', 'empty', 'unavailable', 'deadline_exceeded'].includes(knowledge[`${kind}_status`]) || (knowledge[`${kind}_status`] === 'ok') !== (counts[kind] > 0)) return false;
+ }
+ if (response.status === 'ok' && !response.packet && !knowledge?.items.length) return false;
+ return true;
+}
 
 async function main() {
  if (process.argv[2] === 'codex-config') {
@@ -94,10 +126,10 @@ async function resolveClient(options, projectOnly = false) {
  const resolved = await (options.resolve || resolveForLaunch)({
   pluginRoot: options.pluginRoot, pluginData: options.pluginData, policy,
   signal: options.signal, timeoutMs: options.timeoutMs, deadlineAt: options.deadlineAt,
-  acquire: options.acquire,
+  acquire: options.acquire, check: options.check,
   ...(projectOnly ? { parserTarget: null } : {}),
  });
- if (!(options.hash || hashFile)(resolved.path, resolved.target, (options.roots || objectRoots)(options.pluginData).objects, options)) {
+ if (!(options.hash || hashFile)(resolved.path, resolved.target, (options.roots || objectRoots)(options.pluginData, options).objects, options)) {
   throw new Error("resolved client failed final integrity verification");
  }
  return resolved;
@@ -127,7 +159,7 @@ async function resolveLogicalProject(root, options = {}) {
  if (options.signal?.aborted) throw new Error('PROJECT_RESOLUTION_ABORTED');
  if (remaining <= 0) throw new Error('PROJECT_RESOLUTION_DEADLINE_EXCEEDED');
  const raw = await new Promise((resolve, reject) => {
-  (options.execFile || execFile)(resolved.path, ['project', 'resolve', '--root', root, '--json'], {
+  (options.execFile || execFile)(resolved.path, ['project', 'resolve', '--root', root, '--json', ...(options.check === true ? ['--check'] : [])], {
    env: childEnvForEngram(options.env || process.env), encoding: 'utf8', windowsHide: true,
    timeout: remaining, maxBuffer: 4096, signal: options.signal,
   }, (error, stdout) => {
@@ -147,10 +179,130 @@ async function resolveLogicalProject(root, options = {}) {
  if (options.deadlineAt !== undefined && Date.now() >= options.deadlineAt) throw new Error('PROJECT_RESOLUTION_DEADLINE_EXCEEDED');
  let project;
  try { project = JSON.parse(raw); } catch { throw new Error('PROJECT_CLIENT_UPGRADE_REQUIRED'); }
+ if (options.check === true) {
+  project = { project_id: projectFromInspection(project) };
+ }
  if (!project || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(project.project_id) ||
   project.project_id === '00000000-0000-0000-0000-000000000000' ||
   (project.name !== undefined && typeof project.name !== 'string')) throw new Error('PROJECT_IDENTITY_INVALID');
  return { project_id: project.project_id, ...(project.name !== undefined ? { name: project.name } : {}) };
+}
+
+function projectFromInspection(inspection) {
+ if (inspection?.status === 'conflict') throw new Error('PROJECT_IDENTITY_CONFLICT');
+ if (inspection?.status !== 'resolved') throw new Error(inspection?.status === 'migration_required' ? 'PROJECT_MIGRATION_REQUIRED' : 'PROJECT_CONTEXT_REQUIRED');
+ const binding = inspection.binding;
+ if (!binding || binding.removed === true ||
+  !['manual_alias', 'git_remote', 'portable_marker', 'common_dir_cache'].includes(binding.match) ||
+  (binding.identity_status != null && binding.identity_status !== 'active') ||
+  (binding.project_key != null && binding.project_key !== binding.id) ||
+  !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(binding.id ?? '') ||
+  binding.id === '00000000-0000-0000-0000-000000000000') throw new Error('PROJECT_IDENTITY_INVALID');
+ return binding.id;
+}
+
+function executeTaskContextProcess(data, { signal, createTaskContextWorker } = {}) {
+ return new Promise((resolve, reject) => {
+  if (signal?.aborted || Date.now() >= data.deadlineAt) return reject(new Error('TASK_CONTEXT_STOPPED'));
+  const cancellation = new SharedArrayBuffer(4);
+  let worker, result, settled = false;
+  const fail = () => { if (!settled) { settled = true; reject(new Error('TASK_CONTEXT_STOPPED')); } };
+  const cancel = () => {
+   Atomics.store(new Int32Array(cancellation), 0, 1);
+   try { worker?.postMessage('cancel'); } catch { }
+   fail();
+  };
+  signal?.addEventListener('abort', cancel, { once: true });
+  try {
+   worker = (createTaskContextWorker || ((file, options) => new Worker(file, options)))(path.join(__dirname, 'task-context-worker.js'), {
+    env: {}, execArgv: [], stdout: true, stderr: true,
+    workerData: { schema: 1, ...data, cancellation },
+   });
+  } catch {
+   signal?.removeEventListener('abort', cancel);
+   fail();
+   return;
+  }
+  worker.stdout.resume();
+  worker.stderr.resume();
+  worker.on('message', message => { if (message?.type === 'closed') result = message; });
+  worker.once('error', cancel);
+  worker.once('exit', code => {
+   signal?.removeEventListener('abort', cancel);
+   if (settled) return;
+   if (signal?.aborted || Date.now() >= data.deadlineAt || code !== 0 || result?.ok !== true ||
+    !(result.bytes instanceof ArrayBuffer) || result.bytes.byteLength > data.maxBytes) return fail();
+   settled = true;
+   resolve(Buffer.from(result.bytes));
+  });
+  // Do not terminate/unref the worker when the callback expires. Its listener
+  // owns cancellation until even a blocked spawn returns and its child closes.
+  if (signal?.aborted || Date.now() >= data.deadlineAt) cancel();
+ });
+}
+
+async function requestTaskContext(facts = {}, options = {}) {
+ const closed = (status, reason_code) => ({ schema: 1, status, reason_code });
+ const now = Date.now();
+ const deadlineAt = Math.min(Number.isSafeInteger(options.deadlineAt) ? options.deadlineAt : now + 500, now + 500) - TASK_CONTEXT_COMPLETION_RESERVE_MS;
+ if (deadlineAt <= now) return closed('deadline_exceeded', 'DEADLINE_EXCEEDED');
+ if (typeof facts.cwd !== 'string' || !path.isAbsolute(facts.cwd) || typeof facts.prompt !== 'string' || !facts.prompt.trim() ||
+  Buffer.byteLength(facts.prompt) > 16384 || Buffer.from(facts.prompt).toString('utf8') !== facts.prompt ||
+  typeof facts.session !== 'string' || !/^[^\s\p{Cc}/\\@]{1,256}$/u.test(facts.session)) return closed('unavailable', 'INVALID_REQUEST');
+ const maxBytes = Math.max(1024, Math.min(32768, Number.isSafeInteger(options.maxBytes) ? options.maxBytes : 16384));
+ const input = JSON.stringify({ schema: 1, host_session_id: facts.session, query: facts.prompt, deadline_unix_ms: deadlineAt, max_bytes: maxBytes }) + '\n';
+ if (Buffer.byteLength(input) > 20480) return closed('unavailable', 'BUDGET_EXCEEDED');
+ const controller = new AbortController();
+ const abort = () => controller.abort();
+ let onAbort, deadlineExpired = false;
+ const stopped = new Promise(resolve => {
+  onAbort = () => resolve(closed(deadlineExpired || Date.now() >= deadlineAt ? 'deadline_exceeded' : 'unavailable', deadlineExpired || Date.now() >= deadlineAt ? 'DEADLINE_EXCEEDED' : 'CANCELLED'));
+  controller.signal.addEventListener('abort', onAbort, { once: true });
+ });
+ const timer = setTimeout(() => { deadlineExpired = true; abort(); }, Math.max(1, deadlineAt - Date.now()));
+ options.signal?.addEventListener('abort', abort, { once: true });
+ if (options.signal?.aborted) abort();
+ const remaining = () => {
+  if (controller.signal.aborted || Date.now() >= deadlineAt) throw new Error('TASK_CONTEXT_STOPPED');
+  return Math.max(1, deadlineAt - Date.now());
+ };
+ const operation = (async () => {
+  const pluginRoot = options.pluginRoot || resolvePluginRoot();
+  const pluginData = options.pluginData || resolvePluginData(pluginRoot);
+  remaining();
+  const resolved = await resolveClient({ ...options, pluginRoot, pluginData, signal: controller.signal, deadlineAt, timeoutMs: remaining(), acquire: false, check: true }, true);
+  remaining();
+  if (!path.isAbsolute(resolved.path)) throw new Error('TASK_CONTEXT_STOPPED');
+  const env = childEnvForEngram(options.env || process.env);
+  const identityKeys = ['ENGRAM_CLIENT_INSTANCE_ID', 'CLAUDE_PLUGIN_OPTION_client_instance_id', 'CLAUDE_PLUGIN_OPTION_CLIENT_INSTANCE_ID', 'ENGRAM_CLAUDE_USERCONFIG_CLIENT_INSTANCE_ID'];
+  const configuredIdentity = identityKeys.map(key => env[key]).find(isConfiguredValue);
+  const configFile = readEngramConfigFile(resolveConfigFilePath(pluginData));
+  const identity = configuredIdentity?.trim() || configFile?.client_instance_id || readInstallationClientInstanceID(pluginData);
+  if (!identity) return closed('not_ready', 'INSTALLATION_NOT_READY');
+  env.ENGRAM_CLIENT_INSTANCE_ID = identity;
+  const stdout = await executeTaskContextProcess({
+   path: resolved.path, cwd: facts.cwd,
+   env, input, deadlineAt, maxBytes,
+  }, { signal: controller.signal, createTaskContextWorker: options.createTaskContextWorker });
+  remaining();
+  if (Buffer.byteLength(stdout) > maxBytes) return closed('unavailable', 'BUDGET_EXCEEDED');
+  const text = new TextDecoder('utf-8', { fatal: true }).decode(stdout);
+  const response = JSON.parse(text);
+  if (!text.endsWith('\n') || !validTaskContextResponse(response)) return closed('unavailable', 'INVALID_RESPONSE');
+  if (response.project?.status === 'resolved') projectFromInspection(response.project);
+  remaining();
+  return response;
+ })().catch(error => {
+  const timedOut = deadlineExpired || Date.now() >= deadlineAt || (error?.killed === true && error.code === null && error.signal === 'SIGTERM');
+  return closed(timedOut ? 'deadline_exceeded' : 'unavailable', timedOut ? 'DEADLINE_EXCEEDED' : 'CLIENT_UNAVAILABLE');
+ });
+ try { return await Promise.race([operation, stopped]); }
+ finally {
+  clearTimeout(timer);
+  options.signal?.removeEventListener('abort', abort);
+  controller.signal.removeEventListener('abort', onAbort);
+  controller.abort();
+ }
 }
 
 async function resolveAndSpawn(options) {
@@ -444,6 +596,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+ TASK_CONTEXT_COMPLETION_RESERVE_MS,
  main,
  childEnvForEngram,
  configuredEnvValue,
@@ -460,6 +613,9 @@ module.exports = {
  resolvePluginRoot,
  resolveAndSpawn,
  resolveLogicalProject,
+ projectFromInspection,
+ validTaskContextResponse,
+ requestTaskContext,
  prepareHookClient,
  resolveHostRoot,
  codexMcpConfig,

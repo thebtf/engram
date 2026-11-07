@@ -114,6 +114,9 @@ func newMemoryTestBackend(t *testing.T) *memoryTestBackend {
 			t.Fatal(err)
 		}
 	}
+	if err := db.Exec(`CREATE TABLE memory_principals (principal_kind TEXT NOT NULL, principal TEXT NOT NULL, enrolled_by INTEGER NOT NULL, PRIMARY KEY (principal_kind, principal))`).Error; err != nil {
+		t.Fatal(err)
+	}
 	if err := db.Exec(sqlitetest.RedirectSchema).Error; err != nil {
 		t.Fatal(err)
 	}

@@ -92,7 +92,7 @@ interface ApiPrincipalMemoryQueryResponse {
   project?: string
   domain?: string
   items?: ApiPrincipalMemoryItem[]
-  hidden_count?: number
+  hidden_count?: number | null
   audit?: ApiPrincipalMemoryAudit
   audit_status?: string
 }
@@ -135,7 +135,7 @@ export interface OperatorPrincipalMemorySummary {
   project: string
   domain: string
   items: OperatorPrincipalMemoryItem[]
-  hiddenCount: number
+  hiddenCount: number | null
   auditStatus: string
   audit: {
     durable: boolean
@@ -376,7 +376,7 @@ function emptyPrincipalSummary(scope: PrincipalMemoryScope): OperatorPrincipalMe
     project: normalized.project,
     domain: normalized.domain,
     items: [],
-    hiddenCount: 0,
+    hiddenCount: null,
     auditStatus: 'not_required',
     audit: { durable: false, action: 'principal_memory_query' },
     source: 'principal-memory-query',
@@ -450,7 +450,7 @@ function mapPrincipalMemoryResponse(
     project: normalizedScope.project,
     domain: normalizedScope.domain,
     items,
-    hiddenCount: typeof response.hidden_count === 'number' ? response.hidden_count : 0,
+    hiddenCount: typeof response.hidden_count === 'number' ? response.hidden_count : null,
     auditStatus: clean(response.audit_status) || 'not_required',
     audit: {
       durable: Boolean(response.audit?.durable),

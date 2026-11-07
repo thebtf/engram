@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -13,26 +12,12 @@ import (
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/graph"
 	"github.com/thebtf/engram/pkg/models"
-
-	"gorm.io/driver/postgres"
-	gormlib "gorm.io/gorm"
-	_ "modernc.org/sqlite"
 )
 
 func TestGraphToolFlagOffPreservesPrivateEndpointAuthority(t *testing.T) {
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "false")
-	sqlDB, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = sqlDB.Close() })
-	sqlDB.SetMaxOpenConns(1)
-	db, err := gormlib.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gormlib.Config{DisableAutomaticPing: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := graphFixtureDB(t)
 	for _, statement := range []string{
-		`CREATE TABLE memories (id INTEGER PRIMARY KEY, project TEXT, content TEXT, privacy_scope TEXT, source_workstation_id TEXT, deleted_at DATETIME)`,
 		`INSERT INTO memories (id, project, content, privacy_scope, source_workstation_id) VALUES (99, 'graph', 'public', 'project', ''), (100, 'graph', 'private', 'private', 'other')`,
 		`CREATE TABLE knowledge_edges (id INTEGER PRIMARY KEY, source_id INTEGER, target_id INTEGER, node_source_id INTEGER, node_target_id INTEGER, source_type TEXT, target_type TEXT, edge_type TEXT, weight REAL, reasoning TEXT, source_session_id TEXT, valid_from DATETIME, valid_until DATETIME, created_at DATETIME, superseded_at DATETIME)`,
 		`INSERT INTO knowledge_edges (id, source_id, target_id, node_target_id, source_type, target_type, edge_type, weight, reasoning, created_at) VALUES
@@ -146,23 +131,11 @@ func TestGraphToolRetainsNodeTypeReaderFilter(t *testing.T) {
 
 func TestGraphToolNodeTypeFilterWithFlagOffAndWiredStore(t *testing.T) {
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "false")
-	sqlDB, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = sqlDB.Close() })
-	sqlDB.SetMaxOpenConns(1)
-	db, err := gormlib.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gormlib.Config{DisableAutomaticPing: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := graphFixtureDB(t)
 	if err := db.Exec(`CREATE TABLE knowledge_edges (id INTEGER PRIMARY KEY, source_id INTEGER, target_id INTEGER, node_source_id INTEGER, node_target_id INTEGER, source_type TEXT, target_type TEXT, edge_type TEXT, weight REAL, reasoning TEXT, source_session_id TEXT, valid_from DATETIME, valid_until DATETIME, created_at DATETIME, superseded_at DATETIME)`).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Exec(`INSERT INTO knowledge_edges (id, node_source_id, target_id, source_type, target_type, edge_type, weight, created_at) VALUES (1, 10, 99, 'node', 'memory', 'related_to', 1, CURRENT_TIMESTAMP), (2, 20, 99, 'node', 'memory', 'related_to', 1, CURRENT_TIMESTAMP)`).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Exec(`CREATE TABLE memories (id INTEGER PRIMARY KEY, project TEXT, content TEXT, privacy_scope TEXT, source_workstation_id TEXT, deleted_at DATETIME)`).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Exec(`INSERT INTO memories (id, project, content, privacy_scope, source_workstation_id) VALUES (99, 'graph', 'visible', 'project', '')`).Error; err != nil {
@@ -190,18 +163,8 @@ func TestGraphToolNodeTypeFilterWithFlagOffAndWiredStore(t *testing.T) {
 
 func TestGraphToolGetEdgesHidesPrivateAndInaccessibleEndpoints(t *testing.T) {
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
-	sqlDB, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = sqlDB.Close() })
-	sqlDB.SetMaxOpenConns(1)
-	db, err := gormlib.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gormlib.Config{DisableAutomaticPing: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := graphFixtureDB(t)
 	for _, statement := range []string{
-		`CREATE TABLE memories (id INTEGER PRIMARY KEY, project TEXT, content TEXT, privacy_scope TEXT, source_workstation_id TEXT, deleted_at DATETIME)`,
 		`INSERT INTO memories (id, project, content, privacy_scope, source_workstation_id) VALUES (99, 'graph', 'visible', 'project', ''), (100, 'graph', 'hidden', 'private', 'other')`,
 		`CREATE TABLE knowledge_edges (id INTEGER PRIMARY KEY, source_id INTEGER, target_id INTEGER, node_source_id INTEGER, node_target_id INTEGER, source_type TEXT, target_type TEXT, edge_type TEXT, weight REAL, reasoning TEXT, source_session_id TEXT, valid_from DATETIME, valid_until DATETIME, created_at DATETIME, superseded_at DATETIME)`,
 		`INSERT INTO knowledge_edges (id, source_id, target_id, node_source_id, node_target_id, source_type, target_type, edge_type, weight, reasoning, created_at) VALUES
@@ -253,18 +216,8 @@ func TestGraphToolGetEdgesHidesPrivateAndInaccessibleEndpoints(t *testing.T) {
 
 func TestGraphToolTraversalPrunesPrivateIntermediariesAndKeepsPublicNodes(t *testing.T) {
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
-	sqlDB, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = sqlDB.Close() })
-	sqlDB.SetMaxOpenConns(1)
-	db, err := gormlib.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gormlib.Config{DisableAutomaticPing: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := graphFixtureDB(t)
 	for _, statement := range []string{
-		`CREATE TABLE memories (id INTEGER PRIMARY KEY, project TEXT, content TEXT, privacy_scope TEXT, source_workstation_id TEXT, deleted_at DATETIME)`,
 		`INSERT INTO memories (id, project, content, privacy_scope, source_workstation_id) VALUES (1, 'graph', 'start', 'project', ''), (2, 'graph', 'hidden', 'private', 'other'), (3, 'graph', 'target', 'project', ''), (4, 'graph', 'via', 'project', ''), (5, 'graph', 'via two', 'project', ''), (6, 'graph', 'descendant', 'project', ''), (7, 'graph', 'descendant two', 'project', '')`,
 		`CREATE TABLE knowledge_edges (id INTEGER PRIMARY KEY, source_id INTEGER, target_id INTEGER, node_source_id INTEGER, node_target_id INTEGER, source_type TEXT, target_type TEXT, edge_type TEXT, weight REAL, reasoning TEXT, source_session_id TEXT, valid_from DATETIME, valid_until DATETIME, created_at DATETIME, superseded_at DATETIME)`,
 		`INSERT INTO knowledge_edges (id, source_id, target_id, node_target_id, source_type, target_type, edge_type, weight, created_at) VALUES

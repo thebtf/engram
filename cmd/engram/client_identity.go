@@ -15,6 +15,14 @@ import (
 // directClientInstanceID uses the same installation identity file and atomic
 // publish protocol as the plugin launcher. No checkout or CWD enters this ID.
 func directClientInstanceID() (string, error) {
+	return resolveDirectClientInstanceID(true)
+}
+
+func existingDirectClientInstanceID() (string, error) {
+	return resolveDirectClientInstanceID(false)
+}
+
+func resolveDirectClientInstanceID(create bool) (string, error) {
 	if explicit := os.Getenv("ENGRAM_CLIENT_INSTANCE_ID"); explicit != "" {
 		if !validDirectClientInstanceID(explicit) {
 			return "", errors.New("explicit client instance ID is invalid")
@@ -41,6 +49,9 @@ func directClientInstanceID() (string, error) {
 		current = filepath.Join(current, part)
 		stat, err := os.Lstat(current)
 		if errors.Is(err, os.ErrNotExist) {
+			if !create {
+				return "", errors.New("installation identity is not ready")
+			}
 			if err = os.Mkdir(current, 0o700); errors.Is(err, os.ErrExist) {
 				stat, err = os.Lstat(current)
 			} else if err == nil {
@@ -93,6 +104,9 @@ func directClientInstanceID() (string, error) {
 	existing, err := readIdentity()
 	if err != nil || existing != "" {
 		return existing, err
+	}
+	if !create {
+		return "", errors.New("installation identity is not ready")
 	}
 	random := make([]byte, 32)
 	if _, err := rand.Read(random); err != nil {
