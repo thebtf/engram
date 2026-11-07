@@ -2,11 +2,18 @@ package mcp
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/require"
+	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
+	_ "modernc.org/sqlite"
 )
 
 func TestIssuesRejectWrongStructuredFieldTypesBeforeMutation(t *testing.T) {
@@ -66,4 +73,72 @@ func TestIssuesGetSelectorIsStrictAndLossless(t *testing.T) {
 		require.Error(t, err, raw)
 		require.Empty(t, out, raw)
 	}
+}
+
+func TestIssueCreateRecoveryIdentifiesKnownRolesAndPreservesAmbiguity(t *testing.T) {
+	const canonical = "b42c9854-bf02-4d1b-867d-a2a096f9e4d0"
+	const refusal = "PROJECT_ADOPTION_UNRESOLVED_MEMBERSHIP"
+	for _, tc := range []struct {
+		name, source, target string
+		want, avoid          []string
+		wantInsert           bool
+	}{
+		{"target", canonical, "private-target", []string{"target_project", "canonical", "authorized", "legacy_id", "name", "adopt"}, []string{"project_context", "private-target"}, false},
+		{"source", "private-source", canonical, []string{"source_project", "project_context", "repair", "marker", "hash"}, []string{"private-source"}, false},
+		{"store", canonical, canonical, []string{"source_project", "target_project", "does not identify", "unknown", "replay"}, []string{"private-source", "private-target"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sqlDB, err := sql.Open("sqlite", ":memory:")
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = sqlDB.Close() })
+			db, err := gorm.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gorm.Config{DisableAutomaticPing: true, SkipDefaultTransaction: true})
+			require.NoError(t, err)
+			require.NoError(t, db.Callback().Row().Before("gorm:row").Register("test:empty-redirects", func(tx *gorm.DB) {
+				tx.Statement.SQL.Reset()
+				tx.Statement.SQL.WriteString("SELECT '' WHERE 0")
+				tx.Statement.Vars = nil
+			}))
+			inserts := 0
+			require.NoError(t, db.Callback().Create().Before("gorm:create").Register("test:refuse-insert", func(tx *gorm.DB) {
+				inserts++
+				tx.AddError(&pgconn.PgError{Code: "P0001", Message: refusal})
+			}))
+			server := NewServer(ServerOptions{})
+			server.SetIssueStore(gormdb.NewIssueStore(db))
+			ctx := auth.WithIdentity(contextWithProject(context.Background(), tc.source), auth.Admin())
+			out, err := callIssueAction(t, server, ctx, map[string]any{"action": "create", "title": "recovery", "target_project": tc.target})
+			require.Empty(t, out)
+			require.ErrorContains(t, err, refusal)
+			for _, part := range tc.want {
+				require.Contains(t, strings.ToLower(err.Error()), strings.ToLower(part))
+			}
+			for _, part := range tc.avoid {
+				require.NotContains(t, err.Error(), part)
+			}
+			if tc.wantInsert {
+				require.Equal(t, 1, inserts)
+				var pgErr *pgconn.PgError
+				require.ErrorAs(t, err, &pgErr)
+				require.Equal(t, refusal, pgErr.Message)
+			} else {
+				require.Zero(t, inserts)
+				var hold *gormdb.ConsolidationError
+				require.ErrorAs(t, err, &hold)
+				require.Equal(t, refusal, hold.Code)
+			}
+		})
+	}
+}
+
+func TestIssueSchemaExplainsExactProjectFilters(t *testing.T) {
+	properties := issuesToolSchema()["properties"].(map[string]any)
+	for _, field := range []string{"project", "source_project"} {
+		description := strings.ToLower(properties[field].(map[string]any)["description"].(string))
+		require.Contains(t, description, "exact")
+		require.Contains(t, description, "not name resolution")
+		require.Contains(t, description, "do not prove no canonical issues")
+	}
+	description := properties["target_project"].(map[string]any)["description"].(string)
+	require.Contains(t, description, "canonical project UUID")
+	require.Contains(t, description, "authorized target")
 }

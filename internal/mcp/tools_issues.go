@@ -3,10 +3,13 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/lib/pq"
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/projectidentity"
@@ -29,7 +32,7 @@ func issuesToolSchema() map[string]any {
 			},
 			"project": map[string]any{
 				"type":        "string",
-				"description": "Optional compatibility argument on mutations; it never establishes actor identity, which comes from the native caller's verified canonical project. For list: optional target-project filter; get needs only id. Never change this argument to bypass an identity hold.",
+				"description": "Optional compatibility argument on mutations; it never establishes actor identity, which comes from the native caller's verified canonical project. For list: exact target-project filter, not name resolution; zero legacy-label results do not prove no canonical issues. get needs only id.",
 			},
 			"title": map[string]any{
 				"type":        "string",
@@ -37,7 +40,7 @@ func issuesToolSchema() map[string]any {
 			},
 			"target_project": map[string]any{
 				"type":        "string",
-				"description": "REQUIRED_FOR: create. Which project the issue is FOR (where it will be injected at session start).",
+				"description": "REQUIRED_FOR: create. Existing canonical project UUID for the issue's target. Confirm the authorized target independently; do not choose by display name.",
 			},
 			"id": map[string]any{
 				"type":        "integer",
@@ -71,7 +74,7 @@ func issuesToolSchema() map[string]any {
 			},
 			"source_project": map[string]any{
 				"type":        "string",
-				"description": "OPTIONAL_FOR: list. Filter to show only issues YOU created.",
+				"description": "OPTIONAL_FOR: list. Exact source-project filter, not name resolution; zero legacy-label results do not prove no canonical issues.",
 			},
 			"source_agent": map[string]any{
 				"type":        "string",
@@ -240,6 +243,22 @@ func (s *Server) authorizeIssueSourceMutation(ctx context.Context, id int64) (bo
 	return isOperator, nil
 }
 
+func issueAdoptionRefusal(err error) bool {
+	var hold *gormdb.ConsolidationError
+	var pgErr *pgconn.PgError
+	var pqErr *pq.Error
+	code := ""
+	switch {
+	case errors.As(err, &hold):
+		code = hold.Code
+	case errors.As(err, &pgErr) && pgErr.Code == "P0001":
+		code = pgErr.Message
+	case errors.As(err, &pqErr) && pqErr.Code == "P0001":
+		code = pqErr.Message
+	}
+	return code == "PROJECT_ADOPTION_UNRESOLVED_MEMBERSHIP" || code == "PROJECT_ADOPTION_CONFLICTING_MEMBERSHIP"
+}
+
 func (s *Server) handleIssueCreate(ctx context.Context, m map[string]any) (string, error) {
 	title, present, err := optionalStringArg(m, "title")
 	if err != nil {
@@ -284,6 +303,9 @@ func (s *Server) handleIssueCreate(ctx context.Context, m map[string]any) (strin
 	if targetProject != "" {
 		targetProject, err = s.issueStore.ResolveProject(ctx, targetProject)
 		if err != nil {
+			if issueAdoptionRefusal(err) {
+				return "", fmt.Errorf("target_project resolution failed; use an independently confirmed, authorized existing canonical target UUID, or resolve the exact verified legacy ID with authenticated GET /api/projects/resolve?legacy_id=<URI-encoded-exact-id>. Do not select by name or adopt unresolved membership: %w", err)
+			}
 			return "", err
 		}
 	}
@@ -293,6 +315,9 @@ func (s *Server) handleIssueCreate(ctx context.Context, m map[string]any) (strin
 	}
 	sourceProject, err := s.issueSourceProject(ctx)
 	if err != nil {
+		if issueAdoptionRefusal(err) {
+			return "", fmt.Errorf("source_project (native caller) resolution failed; use project_context(action=\"repair\") and, if needed, project_context(action=\"choices\"). Follow its marker and caller-root hash preconditions; do not guess or adopt unresolved membership: %w", err)
+		}
 		return "", err
 	}
 	if isOperator {
@@ -319,6 +344,9 @@ func (s *Server) handleIssueCreate(ctx context.Context, m map[string]any) (strin
 
 	id, err := s.issueStore.CreateIssue(ctx, issue)
 	if err != nil {
+		if issueAdoptionRefusal(err) {
+			return "", fmt.Errorf("create issue: storage refusal does not identify whether source_project or target_project failed; preserve identity and data, and never replay a mutation with an unknown outcome: %w", err)
+		}
 		return "", fmt.Errorf("create issue: %w", err)
 	}
 
