@@ -11,8 +11,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -29,6 +31,7 @@ import (
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/db/sqlitetest"
 	"github.com/thebtf/engram/internal/mcp"
+	"github.com/thebtf/engram/internal/principalmemory"
 	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/internal/worker/sse"
 	"github.com/thebtf/engram/pkg/models"
@@ -341,6 +344,193 @@ func (f *memoryMutationSecurityFixture) seed(t *testing.T, token, privacy, visib
 	require.NotEmpty(t, row.SourceWorkstationID)
 	require.Equal(t, visibility, row.AgentVisibility)
 	return row
+}
+
+func TestLegacyPrincipalQueryPrivateWorkstationSQLite(t *testing.T) {
+	legacyPrincipalQueryPrivateWorkstation(t, memoryMutationSQLiteDB(t))
+}
+
+func TestLegacyPrincipalQueryPrivateWorkstationPostgres(t *testing.T) {
+	legacyPrincipalQueryPrivateWorkstation(t, memoryMutationPostgresDB(t))
+}
+
+func legacyPrincipalQueryPrivateWorkstation(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	f := newMemoryMutationSecurityFixture(t, db)
+	f.service.principalMemoryQueryService = principalmemory.NewPrincipalMemoryQueryService(f.service.memoryStore, f.service.auditStore)
+	private := f.seed(t, f.tokenA, "private", "shared", "")
+	server := httptest.NewServer(f.service.router)
+	t.Cleanup(server.Close)
+	query := func(token string, values url.Values) principalMemoryQueryResponse {
+		t.Helper()
+		values.Set("principal", "agent/synthetic-security-a")
+		values.Set("principal_kind", "agent")
+		req := f.request(t, context.Background(), http.MethodGet, server.URL+"/api/memories/principal?"+values.Encode(), token, nil)
+		req.RequestURI = ""
+		response, err := server.Client().Do(req)
+		require.NoError(t, err)
+		defer response.Body.Close()
+		body, err := io.ReadAll(response.Body)
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, response.StatusCode, string(body))
+		var result principalMemoryQueryResponse
+		require.NoError(t, json.Unmarshal(body, &result))
+		return result
+	}
+	values := func() url.Values { return url.Values{"project": {f.project}, "q": {private.Content}} }
+	owner := query(f.tokenA, values())
+	require.Len(t, owner.Items, 1)
+	require.Equal(t, private.ID, owner.Items[0].ID)
+	for label, token := range map[string]string{"same-principal-other-workstation": f.tokenA2, "other-principal": f.tokenB} {
+		for _, withProject := range []bool{true, false} {
+			params := values()
+			params.Set("session_id", "synthetic-security-session")
+			if !withProject {
+				params.Del("project")
+			}
+			result := query(token, params)
+			if len(result.Items) != 0 {
+				t.Errorf("%s with project=%v received %d workstation-private items; want none", label, withProject, len(result.Items))
+			}
+		}
+	}
+	withoutIdentity, err := f.service.principalMemoryQueryService.Query(context.Background(), principalmemory.PrincipalMemoryQueryRequest{
+		Caller:         principalmemory.PrincipalRef{Principal: "agent/synthetic-security-a", PrincipalKind: "agent"},
+		OwnerPrincipal: "agent/synthetic-security-a", OwnerPrincipalKind: "agent", Query: private.Content,
+		SourceSessionID: "synthetic-security-session",
+	})
+	require.NoError(t, err)
+	require.Empty(t, withoutIdentity.Items)
+	for _, privacy := range []string{"project", "shared", "global"} {
+		visible := f.seed(t, f.tokenA, privacy, "shared", "")
+		result := query(f.tokenB, url.Values{"q": {visible.Content}})
+		require.Len(t, result.Items, 1, privacy)
+		require.Equal(t, visible.ID, result.Items[0].ID, privacy)
+	}
+	visible := f.seed(t, f.tokenA, "project", "shared", "")
+	require.NoError(t, db.Exec("UPDATE memories SET content = ? WHERE id = ?", private.Content, visible.ID).Error)
+	for range 52 {
+		hidden := f.seed(t, f.tokenA2, "private", "shared", "")
+		require.NoError(t, db.Exec("UPDATE memories SET content = ? WHERE id = ?", private.Content, hidden.ID).Error)
+	}
+	first := values()
+	first.Set("limit", "1")
+	page := query(f.tokenA, first)
+	require.Len(t, page.Items, 1)
+	require.Equal(t, visible.ID, page.Items[0].ID, "foreign workstation rows must not consume limit")
+	second := values()
+	second.Set("limit", "1")
+	second.Set("offset", "1")
+	page = query(f.tokenA, second)
+	require.Len(t, page.Items, 1)
+	require.Equal(t, private.ID, page.Items[0].ID, "offset counts only accessible rows")
+	master := f.tokenAuth.Token()
+	f.tokenAuth.SetValidator(auth.NewValidator(master, nil))
+	adminValues := values()
+	adminValues.Set("include_private", "true")
+	adminValues.Set("session_id", "synthetic-security-session")
+	admin := query(master, adminValues)
+	for _, item := range admin.Items {
+		require.NotEqual(t, private.ID, item.ID, "admin widening must not bypass workstation privacy")
+	}
+}
+
+func TestLegacyPrincipalQueryPrivateMatchIndistinguishableSQLite(t *testing.T) {
+	legacyPrincipalQueryPrivacy(t, memoryMutationSQLiteDB(t), true)
+}
+
+func TestLegacyPrincipalQueryPrivateMatchIndistinguishablePostgres(t *testing.T) {
+	legacyPrincipalQueryPrivacy(t, memoryMutationPostgresDB(t), false)
+}
+
+func legacyPrincipalQueryPrivacy(t *testing.T, db *gorm.DB, includeInvalidVisibility bool) {
+	t.Helper()
+	f := newMemoryMutationSecurityFixture(t, db)
+	f.service.principalMemoryQueryService = principalmemory.NewPrincipalMemoryQueryService(f.service.memoryStore, f.service.auditStore)
+	server := httptest.NewServer(f.service.router)
+	t.Cleanup(server.Close)
+	const marker = "syntheticuniquemarigold"
+	const privateID = 912345
+	add := func(id int, visibility, domain string) {
+		t.Helper()
+		require.NoError(t, db.Exec(`INSERT INTO memories (id, project, content, tags, status, privacy_scope, source_workstation_id, source_sessions, owner_principal, owner_principal_kind, agent_visibility, domain, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?)`,
+			id, f.project, marker, "[]", "active", "project", "synthetic-workstation-a", "{}", "agent/synthetic-security-a", "agent", visibility, domain, 1).Error)
+	}
+	add(privateID, "private", "")
+	query := func(token, term string, widen bool, offset ...string) memoryMutationHTTPResult {
+		t.Helper()
+		values := url.Values{"principal": {"agent/synthetic-security-a"}, "principal_kind": {"agent"}, "q": {term}, "limit": {"1"}}
+		if widen {
+			values.Set("include_private", "true")
+		}
+		if len(offset) > 0 {
+			values.Set("offset", offset[0])
+		}
+		req := f.request(t, context.Background(), http.MethodGet, server.URL+"/api/memories/principal?"+values.Encode(), token, nil)
+		req.RequestURI = ""
+		response, err := server.Client().Do(req)
+		require.NoError(t, err)
+		defer response.Body.Close()
+		body, err := io.ReadAll(response.Body)
+		require.NoError(t, err)
+		return memoryMutationHTTPResult{status: response.StatusCode, body: string(body)}
+	}
+	decode := func(response memoryMutationHTTPResult) (principalMemoryQueryResponse, map[string]any) {
+		t.Helper()
+		require.Equal(t, http.StatusOK, response.status, response.body)
+		var result principalMemoryQueryResponse
+		require.NoError(t, json.Unmarshal([]byte(response.body), &result))
+		var wire map[string]any
+		require.NoError(t, json.Unmarshal([]byte(response.body), &wire))
+		require.Contains(t, wire, "hidden_count")
+		return result, wire
+	}
+	owner, _ := decode(query(f.tokenA, marker, false))
+	require.Len(t, owner.Items, 1)
+	require.EqualValues(t, privateID, owner.Items[0].ID)
+	require.Contains(t, []int{http.StatusUnauthorized, http.StatusForbidden}, query("", marker, false).status)
+	matchResponse := query(f.tokenB, marker, false)
+	missResponse := query(f.tokenB, "syntheticuniquenotpresent", false)
+	match, matchWire := decode(matchResponse)
+	miss, missWire := decode(missResponse)
+	require.Empty(t, match.Items)
+	require.Empty(t, miss.Items)
+	require.NotContains(t, matchResponse.body, marker)
+	require.NotContains(t, matchResponse.body, "synthetic-workstation-a")
+	require.Equal(t, http.StatusForbidden, query(f.tokenB, marker, true).status)
+	require.Nil(t, matchWire["hidden_count"])
+	require.Nil(t, missWire["hidden_count"])
+	require.Equal(t, missWire["hidden_count"], matchWire["hidden_count"], "inaccessible matches must not affect hidden_count")
+	require.JSONEq(t, missResponse.body, matchResponse.body, "inaccessible matches must not affect response metadata")
+	const sharedID = privateID + 1
+	add(sharedID, "shared", "")
+	add(sharedID+1, "shared", "")
+	add(sharedID+2, "shared", "foreign-domain")
+	if includeInvalidVisibility {
+		add(sharedID+55, "invalid", "")
+	}
+	for i := range 52 {
+		add(sharedID+3+i, "private", "")
+	}
+	page, _ := decode(query(f.tokenB, marker, false))
+	require.Len(t, page.Items, 1)
+	require.EqualValues(t, sharedID+1, page.Items[0].ID, "private and foreign-domain rows must not consume the SQL limit")
+	secondPage, _ := decode(query(f.tokenB, marker, false, "1"))
+	require.Len(t, secondPage.Items, 1)
+	require.EqualValues(t, sharedID, secondPage.Items[0].ID, "offset must count only visible rows")
+	master := f.tokenAuth.Token()
+	f.tokenAuth.SetValidator(auth.NewValidator(master, nil))
+	admin, _ := decode(query(master, marker, true))
+	require.Len(t, admin.Items, 1)
+	require.Equal(t, "written", admin.AuditStatus)
+	require.True(t, admin.Audit.Durable)
+	var audits int64
+	require.NoError(t, db.Table("audit_log").Where("memory_id = ? AND action = ?", admin.Items[0].ID, "principal_memory_private_read").Count(&audits).Error)
+	require.EqualValues(t, 1, audits)
+	f.service.principalMemoryQueryService = principalmemory.NewPrincipalMemoryQueryService(f.service.memoryStore, nil)
+	failed := query(master, marker, true)
+	require.Equal(t, http.StatusInternalServerError, failed.status)
+	require.NotContains(t, failed.body, marker)
 }
 
 func memoryMutationSlot(target gormdb.Memory) gormdb.ContinuitySlot {

@@ -36,7 +36,6 @@ func TestGetMemoryBrief_PrincipalScopedResponseAndRequest(t *testing.T) {
 			PrincipalKind: "agent",
 			Project:       "project-a",
 			Domain:        "memory-lab",
-			HiddenCount:   1,
 			AuditStatus:   principalmemory.AuditStatusNotRequired,
 			Audit: principalmemory.PrincipalMemoryQueryAudit{
 				Action: principalmemory.AuditActionQuery,
@@ -90,7 +89,7 @@ func TestGetMemoryBrief_PrincipalScopedResponseAndRequest(t *testing.T) {
 	require.Equal(t, "memory-lab", scope["domain"])
 	require.Equal(t, "principal_query", scope["source"])
 	require.Equal(t, "live", scope["freshness"])
-	require.Equal(t, float64(1), scope["hidden_count"])
+	require.Nil(t, scope["hidden_count"])
 	require.Equal(t, principalmemory.AuditStatusNotRequired, scope["audit_status"])
 
 	memories := body["memories"].([]any)

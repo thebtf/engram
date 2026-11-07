@@ -74,7 +74,6 @@ func TestQueryPrincipalMemory_ResponseAndValidation(t *testing.T) {
 				PrincipalKind: "human",
 				Project:       "project-a",
 				Domain:        "operator-console",
-				HiddenCount:   1,
 				AuditStatus:   principalmemory.AuditStatusNotRequired,
 				Audit: principalmemory.PrincipalMemoryQueryAudit{
 					Action: "principal_memory_query",
@@ -103,7 +102,7 @@ func TestQueryPrincipalMemory_ResponseAndValidation(t *testing.T) {
 		require.Equal(t, "human", body["principal_kind"])
 		require.Equal(t, "project-a", body["project"])
 		require.Equal(t, "operator-console", body["domain"])
-		require.Equal(t, float64(1), body["hidden_count"])
+		require.Nil(t, body["hidden_count"])
 		require.Equal(t, principalmemory.AuditStatusNotRequired, body["audit_status"])
 		audit := body["audit"].(map[string]any)
 		require.Equal(t, "principal_memory_query", audit["action"])
