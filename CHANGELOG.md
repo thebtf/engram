@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Add self-memory link create, list and delete HTTP routes with endpoint authorization, directional revision-pinned references and idempotent retry receipts. Memory remains the content owner; links do not grant access. Links use migration 195; an existing provisional `192_memory_links` ledger entry blocks automatic adoption and retains its data for explicit resolution.
 
-- Keep OMP background hook readiness diagnostics out of the terminal renderer; retain sanitized diagnostics in the existing bounded plugin-data startup log without changing trusted-client recovery.
+- Correct the Claude Code adapter guide: the registered SessionEnd callback targets a retired handler, while outcome recording is an explicit MCP feedback operation distinct from Stop transcript processing.
 
 - Return 403 for a valid keycard without an enrolled memory principal on selector-free memory reads; preserve the legacy missing-project response for callers without a keycard.
 
@@ -82,6 +82,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Isolate canonical GORM/gRPC fixtures, bound their pools and await caller-owned audit writes before schema cleanup; retain restore guards and public data. Reuse focused retention/audit/gRPC proofs; the earlier 37-PASS run remains preservation FAIL (audit rows 37→40), followed by seven focused PASS with 40→40 preservation. Canonical continuity fixtures now migrate once per isolated parent (17→6), preserving every assertion and the unchanged 12m budget; reuse 22 focused lifecycle PASS plus three hash-bound slot CRUD/migration PASS from the earlier incomplete timeout run, not a full-suite or installed-acceptance claim.
 - Use registered canonical UUIDs and authenticated caller project context in MCP fixtures without weakening default-deny, privacy or pre-mutation rejection guards. Reuse 119 prior PASS plus one exact retry PASS after the context fix, not 120 fresh PASS or installed acceptance.
 - Seed the isolated operator-code fixture with a registered canonical project UUID while preserving five queue candidates, published/no-view checks and redacted provisioning errors.
+
+## [7.0.27] - 2026-11-07
+
+### Fixed
+
+- Keep OMP background hook readiness diagnostics out of the terminal renderer; retain sanitized diagnostics in the existing bounded plugin-data startup log without changing trusted-client recovery.
 
 ## [7.0.26] - 2026-11-06
 
