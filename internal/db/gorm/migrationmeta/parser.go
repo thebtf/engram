@@ -215,6 +215,30 @@ func (s *Schema) Table(name string) (TableInfo, bool) {
 func (s *Schema) processMigrateBody(fset *token.FileSet, migration MigrationInfo, body *ast.BlockStmt) {
 	ast.Inspect(body, func(node ast.Node) bool {
 		switch n := node.(type) {
+		case *ast.BinaryExpr:
+			if n.Op != token.ADD {
+				return true
+			}
+			prefix, ok := literalString(n.X)
+			if !ok || !strings.EqualFold(strings.Join(strings.Fields(prefix), " "), "CREATE TABLE IF NOT EXISTS") {
+				return true
+			}
+			ident, ok := n.Y.(*ast.Ident)
+			if !ok || ident.Obj == nil {
+				return true
+			}
+			assignment, ok := ident.Obj.Decl.(*ast.AssignStmt)
+			if !ok || len(assignment.Lhs) != 1 || len(assignment.Rhs) != 1 {
+				return true
+			}
+			qualified, ok := assignment.Rhs[0].(*ast.BinaryExpr)
+			if !ok || qualified.Op != token.ADD {
+				return true
+			}
+			suffix, ok := literalString(qualified.Y)
+			if ok && strings.HasPrefix(suffix, ".") {
+				s.recordSQL(migration, prefix+strings.TrimPrefix(suffix, "."), fset.Position(n.Pos()).Line)
+			}
 		case *ast.BasicLit:
 			if n.Kind != token.STRING {
 				return true
@@ -415,6 +439,9 @@ func extractCreateTables(sql string) []string {
 	tables := make([]string, 0, len(matches))
 	for _, match := range matches {
 		if len(match) > 1 {
+			if strings.EqualFold(match[1], "if") {
+				continue
+			}
 			if table := NormalizeIdentifier(match[1]); table != "" {
 				tables = append(tables, table)
 			}

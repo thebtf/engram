@@ -56,7 +56,7 @@ Generated from registered migrations in `internal/db/gorm/`.
 
 Migration count: **181**.
 
-Live table count: **93**.
+Live table count: **94**.
 
 | Table | Creating migration |
 | --- | --- |
@@ -152,5 +152,6 @@ Live table count: **93**.
 | `memory_principals` | `191_memory_owning_context` |
 | `memory_request_keys` | `191_memory_owning_context` |
 | `memory_revisions` | `191_memory_owning_context` |
-| `if` | `195_memory_links` |
+| `memory_link_receipts` | `195_memory_links` |
+| `memory_links` | `195_memory_links` |
 <!-- END GENERATED TABLES -->

@@ -57,3 +57,26 @@ func TestParseSource_IgnoresCommentedDDL(t *testing.T) {
 	_, blockCommented := schema.Table("commented_block_table")
 	require.False(t, blockCommented, "/* */ commented CREATE TABLE must be ignored")
 }
+
+func TestParseSourceGuardedSchemaQualifiedTables(t *testing.T) {
+	src := []byte(`package gorm
+var _ = []*Migration{{ID: "195_links", Migrate: func(tx *DB) error {
+	var schema string
+	links := schema + ".memory_links"
+	receipts := schema + ".memory_link_receipts"
+	statements := []string{
+		"CREATE TABLE IF NOT EXISTS " + links + " " + definition,
+		"CREATE TABLE IF NOT EXISTS " + receipts + " " + definition,
+		` + "`CREATE TABLE IF NOT EXISTS \"public\".\"quoted_table\" (id INT)`" + `,
+	}
+	return nil
+}}}`)
+	schema, err := ParseSource("migrations.go", src)
+	require.NoError(t, err)
+	for _, name := range []string{"memory_links", "memory_link_receipts", "quoted_table"} {
+		_, found := schema.Table(name)
+		require.True(t, found, "missing table %s", name)
+	}
+	_, found := schema.Table("if")
+	require.False(t, found, "incomplete DDL must not create a keyword table")
+}
