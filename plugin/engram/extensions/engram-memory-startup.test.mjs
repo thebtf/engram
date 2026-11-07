@@ -247,41 +247,211 @@ async function exerciseDefaultFactory(mode) {
   if (failure) throw failure;
 }
 
-if (process.argv[2] === '--startup-worker') {
-  try { await exerciseDefaultFactory(process.argv[3]); }
-  catch (error) { console.error(error.stack); process.exitCode = 1; }
-} else {
-  for (const mode of ['trusted', 'warm', 'rejected', 'corrupt', 'cancelled', 'terminal-noise', 'terminal-noise-unwritable']) {
-    test(mode.startsWith('terminal-noise') ? `OMP default factory emits no raw terminal output during failed readiness and recovery (${mode})` : `OMP default factory registers during held ${mode === 'warm' ? 'warm' : 'cold'} readiness and preserves ${mode} execution guards`, t => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'HOOK-TERMINAL-startup-'));
-      const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => ['SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATH', 'PATHEXT', 'SYSTEMDRIVE'].includes(key.toUpperCase())));
-      for (const key of ['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TMP', 'TEMP']) env[key] = root;
-      Object.assign(env, { ENGRAM_STARTUP_FIXTURE_ROOT: root, ENGRAM_URL: 'http://startup-fixture.invalid', ENGRAM_CONFIG_FILE: path.join(root, 'absent-config.json'), ENGRAM_DATA_DIR: root });
-      env.PLUGIN_DATA = root;
-      if (mode === 'terminal-noise-unwritable') {
-        env.PLUGIN_DATA = path.join(root, 'not-a-directory');
-        fs.writeFileSync(env.PLUGIN_DATA, 'controlled diagnostic write failure');
-      } else if (mode === 'terminal-noise') {
-        fs.mkdirSync(path.join(root, 'logs'));
-        fs.writeFileSync(path.join(root, 'logs', 'startup-env.log'), 'x\n'.repeat(128 * 1024));
-      }
-      let result;
-      try {
-        result = cp.spawnSync(process.execPath, [fileURLToPath(import.meta.url), '--startup-worker', mode], {
-          cwd: fileURLToPath(new URL('../../../', import.meta.url)), env, encoding: 'utf8', windowsHide: true, timeout: 10000, maxBuffer: 1024 * 1024,
-        });
-      } finally { fs.rmSync(root, { recursive: true, force: true }); }
-      t.diagnostic(JSON.stringify({ mode, nativeExit: result.status, signal: result.signal, error: result.error?.message ?? null, fixtureRemoved: !fs.existsSync(root) }));
-      t.diagnostic(result.stdout);
-      assert.ifError(result.error);
-      assert.equal(result.status, 0, result.stderr || result.stdout);
-      if (mode.startsWith('terminal-noise')) {
-        const lines = result.stdout.trimEnd().split('\n');
-        assert.equal(lines.length, 1, 'only the worker result protocol may appear on stdout');
-        assert.ok(lines[0].startsWith('STARTUP_CAUSAL_RESULT '));
-        t.diagnostic(`worker stderr: ${JSON.stringify(result.stderr)}`);
-        assert.equal(result.stderr, '', 'background readiness, recovery and disposal must not write raw terminal output');
-      }
-    });
+async function exercisePackageLifetime(mode) {
+  const require = createRequire(import.meta.url);
+  const fixture = process.env.ENGRAM_STARTUP_FIXTURE_ROOT;
+  const packageRoot = path.join(fixture, 'old-package');
+  const pluginData = path.join(fixture, 'shared-data');
+  const sourceRoot = fileURLToPath(new URL('../', import.meta.url));
+  const files = ['package.json', '.omp-plugin/plugin.json', 'extensions/engram-memory.mjs',
+    'hooks/lib.js', 'hooks/session-start.js', 'hooks/user-prompt.js',
+    'scripts/run-engram.js', 'scripts/ensure-binary.js', 'scripts/bootstrap-policy.js', 'scripts/client-instance.js'];
+  for (const name of files) {
+    const destination = path.join(packageRoot, name);
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    fs.copyFileSync(path.join(sourceRoot, name), destination);
+  }
+  fs.mkdirSync(pluginData, { recursive: true });
+  process.env.PLUGIN_DATA = pluginData;
+  const fixtureRequire = createRequire(path.join(packageRoot, 'package.json'));
+  const { createPolicy, TARGET_ASSETS } = fixtureRequire('./scripts/bootstrap-policy.js');
+  const { objectRoots, objectPath, hashFile, parsePolicy } = fixtureRequire('./scripts/ensure-binary.js');
+  const bytes = Buffer.from('controlled trusted startup client, never executable');
+  const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
+  const version = fixtureRequire('./package.json').version;
+  const targets = Object.fromEntries(Object.entries(TARGET_ASSETS).map(([key, asset]) => [key, { version, asset, size: bytes.length, sha256 }]));
+  const rawPolicy = createPolicy(version, targets);
+  const policyPath = path.join(packageRoot, 'bootstrap-targets.json');
+  fs.writeFileSync(policyPath, JSON.stringify(rawPolicy));
+  const policy = parsePolicy(JSON.stringify(rawPolicy), version);
+  const roots = objectRoots(pluginData), object = objectPath(roots, policy.target.desired);
+  fs.writeFileSync(object, bytes);
+  const entryPath = path.join(packageRoot, 'extensions/engram-memory.mjs');
+  const entrySHA256 = crypto.createHash('sha256').update(fs.readFileSync(entryPath)).digest('hex');
+  const launcherSHA256 = crypto.createHash('sha256').update(fs.readFileSync(path.join(packageRoot, 'scripts/run-engram.js'))).digest('hex');
+  const effects = { executions: 0, requests: 0, network: 0, unexpectedProcesses: 0 };
+  const project = '11111111-1111-4111-8111-111111111111';
+  for (const name of ['exec', 'execSync', 'execFileSync', 'spawn', 'spawnSync', 'fork']) {
+    cp[name] = () => { effects.unexpectedProcesses++; throw new Error('unexpected native process'); };
+  }
+  cp.execFile = (file, args, options, callback) => {
+    assert.equal(file, object);
+    assert.equal(hashFile(file, policy.target.desired, roots.objects), true);
+    assert.deepEqual(args, ['project', 'resolve', '--root', fixture, '--json']);
+    effects.executions++;
+    callback(null, JSON.stringify({ project_id: project }));
+  };
+  for (const [module, names] of [['node:http', ['request', 'get']], ['node:https', ['request', 'get']], ['node:net', ['connect', 'createConnection']], ['node:tls', ['connect']]]) {
+    for (const name of names) require(module)[name] = () => { effects.network++; throw new Error('unexpected network'); };
+  }
+  globalThis.fetch = async (url, options) => {
+    assert.equal(hashFile(object, policy.target.desired, roots.objects), true);
+    assert.equal(JSON.parse(options.body).project, project);
+    effects.requests++;
+    return new Response(JSON.stringify(new URL(url).pathname === '/api/context/session-start'
+      ? { memories: [{ content: 'trusted startup fixture memory' }] }
+      : { additional_context: 'trusted startup fixture ambient' }));
+  };
+  const lib = fixtureRequire('./hooks/lib.js');
+  const launcher = fixtureRequire('./scripts/run-engram.js');
+  const realPrepare = launcher.prepareHookClient;
+  const prepareEntered = deferred();
+  let preparation;
+  launcher.prepareHookClient = options => {
+    preparation = realPrepare(options);
+    prepareEntered.resolve();
+    return preparation;
+  };
+  const realResolve = lib.resolveHookProjectContext;
+  let verifyOnlyCalls = 0;
+  lib.resolveHookProjectContext = (cwd, options) => {
+    assert.equal(options.acquire, false, 'foreground project resolution must never acquire');
+    verifyOnlyCalls++;
+    return realResolve(cwd, options);
+  };
+  const realConfig = lib.resolveEngramRuntimeConfig;
+  const gate = deferred(), entered = deferred();
+  let configCalls = 0;
+  lib.resolveEngramRuntimeConfig = async options => {
+    if (++configCalls === 1) { entered.resolve(); await gate.promise; }
+    return realConfig(options);
+  };
+  const handlers = new Map(), sent = [], registrations = new Map();
+  const singleton = { register(name, callback) { registrations.set(name, callback); return () => registrations.delete(name); } };
+  const key = 'engram.startup.fixture.lifetime';
+  globalThis[Symbol.for(key)] = singleton;
+  const hostURL = `data:text/javascript,${encodeURIComponent(`export const postmortem = globalThis[Symbol.for(${JSON.stringify(key)})];`)}`;
+  register(`data:text/javascript,${encodeURIComponent(`export function resolve(specifier, context, nextResolve) {
+    if (specifier === '@oh-my-pi/pi-utils') return { url: ${JSON.stringify(hostURL)}, shortCircuit: true };
+    if (specifier.startsWith('@oh-my-pi/pi-utils/')) throw new Error('unregistered host subpath');
+    return nextResolve(specifier, context);
+  }`)}`);
+  try {
+    const actual = await import(new URL(`file:///${entryPath.replaceAll('\\', '/')}`).href);
+    await actual.default({ on(name, callback) { handlers.set(name, callback); }, sendMessage(message) { sent.push(message); } });
+    await entered.promise;
+    assert.deepEqual([...handlers.keys()], ['session_start', 'before_agent_start']);
+    assert.equal(hashFile(object, policy.target.desired, roots.objects), true);
+    if (mode === 'retired') fs.rmSync(packageRoot, { recursive: true });
+    gate.resolve();
+    await prepareEntered.promise;
+    const preparationResult = await preparation.then(() => 'ready', error => error.name);
+    await turn();
+    if (mode === 'corrupt') fs.writeFileSync(object, Buffer.alloc(bytes.length));
+    if (mode === 'revoked') {
+      rawPolicy.revoked_sha256.push(sha256);
+      fs.writeFileSync(policyPath, JSON.stringify(rawPolicy));
+    }
+    await handlers.get('session_start')({ cwd: fixture, sessionId: 'lifetime-session' }, {});
+    const ambient = await handlers.get('before_agent_start')({ cwd: fixture, sessionId: 'lifetime-session', prompt: 'fixture prompt' }, {});
+    for (let i = 0; i < 4; i++) await turn();
+    const logPath = path.join(pluginData, 'logs', 'startup-env.log');
+    const log = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : '';
+    console.log(`LIFETIME_RESULT ${JSON.stringify({
+      mode, entrySHA256, launcherSHA256, clientSHA256: sha256,
+      packageRetired: !fs.existsSync(packageRoot), trustedCAS: hashFile(object, policy.target.desired, roots.objects),
+      effects, sent: sent.map(message => message.content), ambient: ambient?.message?.content ?? null,
+      preparationResult, verifyOnlyCalls, bootstrapDiagnostic: log.includes('stage=prepare code=BOOTSTRAP_ERROR'), registrations: registrations.size
+    })}`);
+  } finally {
+    gate.resolve();
+    for (const cleanup of registrations.values()) await cleanup();
+    delete globalThis[Symbol.for(key)];
   }
 }
+
+if (process.argv[2] === '--lifetime-worker') {
+  try { await exercisePackageLifetime(process.argv[3]); }
+  catch (error) { console.error(error.stack); process.exitCode = 1; }
+} else
+  if (process.argv[2] === '--startup-worker') {
+    try { await exerciseDefaultFactory(process.argv[3]); }
+    catch (error) { console.error(error.stack); process.exitCode = 1; }
+  } else {
+    test('loaded package lifetime retains trusted context after fixture retirement', t => {
+      const buildRoot = process.env.ENGRAM_STARTUP_TEST_OUTPUT_ROOT || os.tmpdir();
+      const root = fs.mkdtempSync(path.join(buildRoot, 'hook-lifetime-01a15ebb-'));
+      const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => ['SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATH', 'PATHEXT', 'SYSTEMDRIVE'].includes(key.toUpperCase())));
+      for (const key of ['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TMP', 'TEMP']) env[key] = root;
+      Object.assign(env, { ENGRAM_URL: 'http://startup-fixture.invalid', ENGRAM_CONFIG_FILE: path.join(root, 'absent-config.json') });
+      const results = {};
+      try {
+        for (const mode of ['intact', 'corrupt', 'revoked', 'retired']) {
+          const fixture = path.join(root, mode);
+          fs.mkdirSync(fixture);
+          const result = cp.spawnSync(process.execPath, [fileURLToPath(import.meta.url), '--lifetime-worker', mode], {
+            cwd: fileURLToPath(new URL('../../../', import.meta.url)), env: { ...env, ENGRAM_STARTUP_FIXTURE_ROOT: fixture },
+            encoding: 'utf8', windowsHide: true, timeout: 10000, maxBuffer: 1024 * 1024,
+          });
+          assert.ifError(result.error);
+          assert.equal(result.status, 0, result.stderr || result.stdout);
+          assert.equal(result.stderr, '', 'no raw terminal output');
+          assert.match(result.stdout, /^LIFETIME_RESULT [^\n]+\n$/);
+          results[mode] = JSON.parse(result.stdout.slice('LIFETIME_RESULT '.length));
+          t.diagnostic(JSON.stringify(results[mode]));
+        }
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+        t.diagnostic(`fixtureRemoved=${!fs.existsSync(root)}`);
+      }
+      for (const mode of ['intact', 'retired']) {
+        assert.equal(results[mode].trustedCAS, true);
+        assert.deepEqual(results[mode].effects, { executions: 2, requests: 2, network: 0, unexpectedProcesses: 0 });
+        assert.match(results[mode].sent[0], /trusted startup fixture memory/, `${mode} must deliver useful same-instance context`);
+        assert.equal(results[mode].ambient, 'trusted startup fixture ambient');
+      }
+      for (const mode of ['corrupt', 'revoked']) {
+        assert.equal(results[mode].verifyOnlyCalls, 2);
+        assert.equal(results[mode].effects.executions, 0);
+        assert.equal(results[mode].effects.requests, 0);
+        assert.equal(results[mode].effects.unexpectedProcesses, 0);
+        assert.deepEqual(results[mode].sent, []);
+        assert.equal(results[mode].ambient, null);
+      }
+      assert.equal(results.retired.packageRetired, true);
+      assert.equal(results.intact.packageRetired, false);
+    });
+    for (const mode of ['trusted', 'warm', 'rejected', 'corrupt', 'cancelled', 'terminal-noise', 'terminal-noise-unwritable']) {
+      test(mode.startsWith('terminal-noise') ? `OMP default factory emits no raw terminal output during failed readiness and recovery (${mode})` : `OMP default factory registers during held ${mode === 'warm' ? 'warm' : 'cold'} readiness and preserves ${mode} execution guards`, t => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'HOOK-TERMINAL-startup-'));
+        const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => ['SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATH', 'PATHEXT', 'SYSTEMDRIVE'].includes(key.toUpperCase())));
+        for (const key of ['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TMP', 'TEMP']) env[key] = root;
+        Object.assign(env, { ENGRAM_STARTUP_FIXTURE_ROOT: root, ENGRAM_URL: 'http://startup-fixture.invalid', ENGRAM_CONFIG_FILE: path.join(root, 'absent-config.json'), ENGRAM_DATA_DIR: root });
+        env.PLUGIN_DATA = root;
+        if (mode === 'terminal-noise-unwritable') {
+          env.PLUGIN_DATA = path.join(root, 'not-a-directory');
+          fs.writeFileSync(env.PLUGIN_DATA, 'controlled diagnostic write failure');
+        } else if (mode === 'terminal-noise') {
+          fs.mkdirSync(path.join(root, 'logs'));
+          fs.writeFileSync(path.join(root, 'logs', 'startup-env.log'), 'x\n'.repeat(128 * 1024));
+        }
+        let result;
+        try {
+          result = cp.spawnSync(process.execPath, [fileURLToPath(import.meta.url), '--startup-worker', mode], {
+            cwd: fileURLToPath(new URL('../../../', import.meta.url)), env, encoding: 'utf8', windowsHide: true, timeout: 10000, maxBuffer: 1024 * 1024,
+          });
+        } finally { fs.rmSync(root, { recursive: true, force: true }); }
+        t.diagnostic(JSON.stringify({ mode, nativeExit: result.status, signal: result.signal, error: result.error?.message ?? null, fixtureRemoved: !fs.existsSync(root) }));
+        t.diagnostic(result.stdout);
+        assert.ifError(result.error);
+        assert.equal(result.status, 0, result.stderr || result.stdout);
+        if (mode.startsWith('terminal-noise')) {
+          const lines = result.stdout.trimEnd().split('\n');
+          assert.equal(lines.length, 1, 'only the worker result protocol may appear on stdout');
+          assert.ok(lines[0].startsWith('STARTUP_CAUSAL_RESULT '));
+          t.diagnostic(`worker stderr: ${JSON.stringify(result.stderr)}`);
+          assert.equal(result.stderr, '', 'background readiness, recovery and disposal must not write raw terminal output');
+        }
+      });
+    }
+  }
