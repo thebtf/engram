@@ -47,6 +47,32 @@ type principalMemoryQueryItem struct {
 	CreatedAt          time.Time `json:"created_at"`
 }
 
+// handlePrincipalMemoryQuery searches principal-owned memories.
+// @Summary Search or browse principal memories
+// @Description Omit principal to search the enrolled authenticated keycard's self context only, excluding project, global and legacy records. Self requires an enrolled keycard; context may be omitted or exactly self, while project and principal_kind must be absent. An empty principal is not omission. With an explicit principal, context is unsupported and principal_kind defaults to human.
+// @Description Self q is literal case-insensitive content substring search, not semantic search. It accepts at most 1024 UTF-8 bytes and 64 distinct letter-or-digit terms of at least two characters. Multiple terms are OR-matched; common English and Russian function words and Russian locating verbs are omitted, and matches rank by term lengths with recency as tie-breaker. A single term is searched literally. A nonempty q with no usable terms returns 400. Omit q to browse. Explicit-principal q instead matches the whole trimmed string as a content substring.
+// @Description Authorization, principal, domain and privacy restrictions apply before pagination. hidden_count is null and does not disclose inaccessible records. Cross-principal private widening requires admin and durable audit. Success is JSON; errors are plain text. Authentication accepts X-Auth-Token or a bearer token. Auth-disabled mode is not a privacy boundary and this route does not specially validate an explicit keycard in that mode.
+// @Tags Memories
+// @Produce json,plain
+// @Security ApiKeyAuth
+// @Param principal query string false "Principal to query; omit for enrolled self; empty is invalid"
+// @Param principal_kind query string false "Explicit principal kind; defaults to human, forbidden for self" Enums(human,agent,service)
+// @Param context query string false "Only self is supported, and only when principal is omitted" Enums(self)
+// @Param project query string false "Project filter for explicit principal; forbidden for self"
+// @Param q query string false "Content query; omit to browse; self search is lexical"
+// @Param domain query string false "Domain filter"
+// @Param visibility query string false "Visibility filter; defaults to all" Enums(all,private,shared)
+// @Param include_private query bool false "Request private rows; cross-principal access requires admin and durable audit"
+// @Param limit query int false "Positive page size; defaults to 50; values above 500 are capped at 500" minimum(1)
+// @Param offset query int false "Non-negative result offset; defaults to 0" minimum(0)
+// @Param session_id query string false "Optional audit provenance"
+// @Success 200 {object} principalMemoryQueryResponse "Visible results and audit metadata; use card read for full context and revision"
+// @Failure 400 {string} string "Invalid selectors, query or pagination"
+// @Failure 401 {string} string "Authentication required"
+// @Failure 403 {string} string "Self requires an enrolled keycard or cross-principal private access is denied"
+// @Failure 500 {string} string "Query or required audit failed"
+// @Failure 503 {string} string "Query service or self context unavailable"
+// @Router /api/memories/principal [get]
 func (s *Service) handlePrincipalMemoryQuery(w http.ResponseWriter, r *http.Request) {
 	queryService := s.currentPrincipalMemoryQueryService()
 	if queryService == nil {

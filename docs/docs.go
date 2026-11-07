@@ -1843,6 +1843,145 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/memories/principal": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Omit principal to search the enrolled authenticated keycard's self context only, excluding project, global and legacy records. Self requires an enrolled keycard; context may be omitted or exactly self, while project and principal_kind must be absent. An empty principal is not omission. With an explicit principal, context is unsupported and principal_kind defaults to human.\nSelf q is literal case-insensitive content substring search, not semantic search. It accepts at most 1024 UTF-8 bytes and 64 distinct letter-or-digit terms of at least two characters. Multiple terms are OR-matched; common English and Russian function words and Russian locating verbs are omitted, and matches rank by term lengths with recency as tie-breaker. A single term is searched literally. A nonempty q with no usable terms returns 400. Omit q to browse. Explicit-principal q instead matches the whole trimmed string as a content substring.\nAuthorization, principal, domain and privacy restrictions apply before pagination. hidden_count is null and does not disclose inaccessible records. Cross-principal private widening requires admin and durable audit. Success is JSON; errors are plain text. Authentication accepts X-Auth-Token or a bearer token. Auth-disabled mode is not a privacy boundary and this route does not specially validate an explicit keycard in that mode.",
+                "produces": [
+                    "application/json",
+                    "text/plain"
+                ],
+                "tags": [
+                    "Memories"
+                ],
+                "summary": "Search or browse principal memories",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Principal to query; omit for enrolled self; empty is invalid",
+                        "name": "principal",
+                        "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "human",
+                            "agent",
+                            "service"
+                        ],
+                        "type": "string",
+                        "description": "Explicit principal kind; defaults to human, forbidden for self",
+                        "name": "principal_kind",
+                        "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "self"
+                        ],
+                        "type": "string",
+                        "description": "Only self is supported, and only when principal is omitted",
+                        "name": "context",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Project filter for explicit principal; forbidden for self",
+                        "name": "project",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Content query; omit to browse; self search is lexical",
+                        "name": "q",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Domain filter",
+                        "name": "domain",
+                        "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "all",
+                            "private",
+                            "shared"
+                        ],
+                        "type": "string",
+                        "description": "Visibility filter; defaults to all",
+                        "name": "visibility",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Request private rows; cross-principal access requires admin and durable audit",
+                        "name": "include_private",
+                        "in": "query"
+                    },
+                    {
+                        "minimum": 1,
+                        "type": "integer",
+                        "description": "Positive page size; defaults to 50; values above 500 are capped at 500",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "minimum": 0,
+                        "type": "integer",
+                        "description": "Non-negative result offset; defaults to 0",
+                        "name": "offset",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Optional audit provenance",
+                        "name": "session_id",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Visible results and audit metadata; use card read for full context and revision",
+                        "schema": {
+                            "$ref": "#/definitions/worker.principalMemoryQueryResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid selectors, query or pagination",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Authentication required",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Self requires an enrolled keycard or cross-principal private access is denied",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Query or required audit failed",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "Query service or self context unavailable",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/api/memories/suppress": {
             "post": {
                 "security": [
@@ -5466,6 +5605,17 @@ const docTemplate = `{
                 }
             }
         },
+        "principalmemory.PrincipalMemoryQueryAudit": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string"
+                },
+                "durable": {
+                    "type": "boolean"
+                }
+            }
+        },
         "reviewpacket.CandidateAuditPolicy": {
             "type": "object",
             "properties": {
@@ -6413,6 +6563,76 @@ const docTemplate = `{
                 },
                 "unrecorded_sessions": {
                     "type": "integer"
+                }
+            }
+        },
+        "worker.principalMemoryQueryItem": {
+            "type": "object",
+            "properties": {
+                "agent_visibility": {
+                    "type": "string"
+                },
+                "confidence": {
+                    "type": "number"
+                },
+                "content": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "domain": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "owner_principal": {
+                    "type": "string"
+                },
+                "owner_principal_kind": {
+                    "type": "string"
+                },
+                "project": {
+                    "type": "string"
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "worker.principalMemoryQueryResponse": {
+            "type": "object",
+            "properties": {
+                "audit": {
+                    "$ref": "#/definitions/principalmemory.PrincipalMemoryQueryAudit"
+                },
+                "audit_status": {
+                    "type": "string"
+                },
+                "domain": {
+                    "type": "string"
+                },
+                "hidden_count": {
+                    "type": "integer"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/worker.principalMemoryQueryItem"
+                    }
+                },
+                "principal": {
+                    "type": "string"
+                },
+                "principal_kind": {
+                    "type": "string"
+                },
+                "project": {
+                    "type": "string"
                 }
             }
         },
