@@ -454,6 +454,68 @@ func TestProjectConsolidationEmbeddingSharedProfileAndUnknownParent(t *testing.T
 	assert.NotEmpty(t, unsafe.UnresolvedReference, "a genuinely external unknown parent must remain unresolved")
 }
 
+func TestProjectConsolidationNullableIndependentParents(t *testing.T) {
+	db, _ := openMemoryContext191UpgradeDB(t)
+	require.NoError(t, db.Exec(`CREATE TABLE projects (id TEXT PRIMARY KEY)`).Error)
+	require.NoError(t, projectConsolidationMigration186().Migrate(db))
+	require.NoError(t, db.Exec(`CREATE TABLE sources (source_id UUID PRIMARY KEY, project_id TEXT NOT NULL)`).Error)
+	require.NoError(t, db.Exec(`CREATE TABLE ci_checkouts (checkout_id UUID PRIMARY KEY, source_id UUID NOT NULL REFERENCES sources(source_id), UNIQUE (source_id, checkout_id))`).Error)
+	require.NoError(t, db.Exec(`CREATE TABLE ci_parse_artifacts (artifact_id UUID PRIMARY KEY, source_id UUID NOT NULL, UNIQUE (source_id, artifact_id))`).Error)
+	require.NoError(t, db.Exec(`CREATE TABLE ci_memberships (membership_id UUID PRIMARY KEY, source_id UUID NOT NULL, checkout_id UUID NOT NULL, artifact_id UUID, FOREIGN KEY (source_id, checkout_id) REFERENCES ci_checkouts(source_id, checkout_id), FOREIGN KEY (source_id, artifact_id) REFERENCES ci_parse_artifacts(source_id, artifact_id))`).Error)
+	external := "membership_external_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	require.NoError(t, db.Exec("CREATE SCHEMA "+quoted(external)).Error)
+	t.Cleanup(func() { require.NoError(t, db.Exec("DROP SCHEMA "+quoted(external)+" CASCADE").Error) })
+	require.NoError(t, db.Exec("CREATE TABLE "+quoted(external)+`.unknown_parent (id UUID PRIMARY KEY)`).Error)
+	require.NoError(t, db.Exec(`CREATE TABLE ci_unknown_memberships (id UUID PRIMARY KEY, source_id UUID NOT NULL, checkout_id UUID NOT NULL, external_id UUID REFERENCES `+quoted(external)+`.unknown_parent(id), FOREIGN KEY (source_id, checkout_id) REFERENCES ci_checkouts(source_id, checkout_id))`).Error)
+	source, checkout, artifact, empty, populated, unknown, control, nullControl := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
+	require.NoError(t, db.Exec(`INSERT INTO sources VALUES (?, ?)`, source, memoryContext191Project).Error)
+	require.NoError(t, db.Exec(`INSERT INTO ci_checkouts VALUES (?, ?)`, checkout, source).Error)
+	require.NoError(t, db.Exec(`INSERT INTO ci_parse_artifacts VALUES (?, ?)`, artifact, source).Error)
+	require.NoError(t, db.Exec(`INSERT INTO ci_memberships VALUES (?, ?, ?, NULL), (?, ?, ?, ?)`, empty, source, checkout, populated, source, checkout, artifact).Error)
+	require.NoError(t, db.Exec("INSERT INTO "+quoted(external)+`.unknown_parent VALUES (?)`, unknown).Error)
+	require.NoError(t, db.Exec(`INSERT INTO ci_unknown_memberships VALUES (?, ?, ?, ?), (?, ?, ?, NULL)`, control, source, checkout, unknown, nullControl, source, checkout).Error)
+	v, err := vaultcrypto.OpenExistingVault(&config.Config{EncryptionKey: strings.Repeat("ab", 32)})
+	require.NoError(t, err)
+	s := NewProjectConsolidationStore(db, v, nil)
+	census, err := s.Census(t.Context(), "nullable-independent-parent-fixture")
+	require.NoError(t, err)
+	var native consolidationCensusState
+	require.NoError(t, s.open(census.Reference, "census", &native))
+	refs := map[string]string{}
+	for _, row := range native.Rows {
+		if row.Table == "sources" && row.Column == "project_id" {
+			refs["source"] = row.Reference
+		}
+		if row.Table == "ci_memberships" || row.Table == "ci_unknown_memberships" {
+			var key map[string]string
+			require.NoError(t, json.Unmarshal(row.Key, &key))
+			id := key["membership_id"]
+			if id == "" {
+				id = key["id"]
+			}
+			refs[id] = row.Reference
+		}
+	}
+	for _, id := range []string{"source", empty, populated, control, nullControl} {
+		require.NotEmpty(t, refs[id], "fixture row must be inventoried")
+	}
+	target := uuid.NewString()
+	plan, err := s.Preflight(t.Context(), ConsolidationPreflightRequest{CensusReference: census.Reference, CensusFingerprint: census.Fingerprint, Evidence: []ConsolidationEvidence{{Reference: "urn:engram:proof:nullable-independent", Kind: "portable_marker", Group: "urn:engram:group:nullable-independent", ProjectID: target, Rows: []string{refs["source"]}}}})
+	require.NoError(t, err)
+	mappings := map[string]ConsolidationMapping{}
+	for _, mapping := range plan.Mapping {
+		mappings[mapping.Reference] = mapping
+	}
+	for _, id := range []string{empty, nullControl} {
+		mapping := mappings[refs[id]]
+		assert.Equal(t, target, mapping.ProjectID, "NULL optional FK supplies no conflicting parent")
+		assert.Empty(t, mapping.UnresolvedReference)
+	}
+	unknownMapping := mappings[refs[control]]
+	assert.Empty(t, unknownMapping.ProjectID)
+	assert.NotEmpty(t, unknownMapping.UnresolvedReference, "non-NULL external parent remains unknown")
+}
+
 func TestProjectConsolidationTypedMemoryBackupVerification(t *testing.T) {
 	sourceDSN, targetDSN := os.Getenv("ENGRAM_SEARCH_PRIVACY_TEST_DSN"), os.Getenv("ENGRAM_B1_CENSUS_TARGET_DSN")
 	if sourceDSN == "" || targetDSN == "" {
