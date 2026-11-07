@@ -4,9 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
@@ -63,6 +67,11 @@ func TestB1RegisteredPrincipalProjectFreeCard(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(read.body), &readCard))
 	require.Equal(t, card.ID, readCard.ID)
 	require.Equal(t, card.Content, readCard.Content)
+	identityHeader := f.request(t, context.Background(), http.MethodGet, path, f.tokenA, nil)
+	identityHeader.Header.Set("X-Engram-Identity", "global")
+	headerRead := f.serve(identityHeader)
+	require.Equal(t, http.StatusOK, headerRead.status, headerRead.body)
+	require.Contains(t, headerRead.body, card.Content, "header value must not select global context")
 	denied := f.serve(f.request(t, context.Background(), http.MethodGet, path, f.tokenB, nil))
 	require.Contains(t, []int{http.StatusForbidden, http.StatusNotFound}, denied.status)
 	require.NotContains(t, denied.body, card.Content)
@@ -71,11 +80,28 @@ func TestB1RegisteredPrincipalProjectFreeCard(t *testing.T) {
 	require.NotContains(t, invalid.body, card.Content)
 	require.NoError(t, db.Exec(`DELETE FROM memory_principals WHERE principal = ?`, "agent/synthetic-security-b").Error)
 	legacy := f.serve(f.request(t, context.Background(), http.MethodGet, path, f.tokenB, nil))
-	require.Equal(t, http.StatusBadRequest, legacy.status, "unregistered no-opt-in reads retain the legacy project requirement")
+	assert.Equal(t, http.StatusForbidden, legacy.status, "a valid unregistered keycard without selectors must be denied: %s", legacy.body)
 	require.NotContains(t, legacy.body, card.Content)
+	t.Run("http_listener_unenrolled_keycard", func(t *testing.T) {
+		server := httptest.NewServer(f.service.router)
+		defer server.Close()
+		request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, server.URL+path, nil)
+		require.NoError(t, err)
+		request.Header.Set("Authorization", "Bearer "+f.tokenB)
+		response, err := server.Client().Do(request)
+		require.NoError(t, err)
+		defer response.Body.Close()
+		body, err := io.ReadAll(response.Body)
+		require.NoError(t, err)
+		require.Equal(t, http.StatusForbidden, response.StatusCode, string(body))
+		require.NotContains(t, string(body), card.Content)
+	})
 	explicit := f.serve(f.request(t, context.Background(), http.MethodGet, path+"?context=self", f.tokenB, nil))
 	require.Equal(t, http.StatusForbidden, explicit.status, "explicit self requires enrollment")
 	require.NotContains(t, explicit.body, card.Content)
+	invalidCredential := f.serve(f.request(t, context.Background(), http.MethodGet, path, "invalid-synthetic-key", nil))
+	require.Equal(t, http.StatusUnauthorized, invalidCredential.status)
+	require.NotContains(t, invalidCredential.body, card.Content)
 	invalidContext := f.serve(f.request(t, context.Background(), http.MethodGet, path+"?context=invalid", f.tokenA, nil))
 	require.Equal(t, http.StatusBadRequest, invalidContext.status)
 	require.NotContains(t, invalidContext.body, card.Content)
@@ -109,6 +135,19 @@ func TestB1RegisteredPrincipalProjectFreeCard(t *testing.T) {
 	require.Len(t, prior.Revisions, 1)
 	require.Equal(t, card.Version, prior.Revisions[0].Version)
 	require.Equal(t, card.Content, prior.Revisions[0].Content)
+	t.Run("no_keycard_legacy_read", func(t *testing.T) {
+		t.Setenv("ENGRAM_AUTH_DISABLED", "true")
+		noAuth, err := NewTokenAuth("")
+		require.NoError(t, err)
+		f.service.router = chi.NewRouter()
+		f.service.router.Use(noAuth.Middleware)
+		f.service.setupRoutes()
+		request := f.request(t, context.Background(), http.MethodGet, path, "", nil)
+		request.Header.Del("Authorization")
+		response := f.serve(request)
+		require.Equal(t, http.StatusBadRequest, response.status, response.body)
+		require.NotContains(t, response.body, card.Content)
+	})
 }
 
 func TestB1TypedRawUpdateRetainsHistory(t *testing.T) {

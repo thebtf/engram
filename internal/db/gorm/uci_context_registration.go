@@ -244,7 +244,7 @@ func localGitRegistrationProfileForReplay(tx *gorm.DB, checkout *UCICheckout, di
 	if !explicit && profile.ParserBundleDigest == string(localGitGoProfileDigest()) {
 		return profile.ProfileID, nil
 	}
-	if digest != uci.TreeSitterSemanticContractDigest() || profile.ParserBundleDigest == string(localGitGoProfileDigest()) {
+	if digest != uci.TreeSitterSemanticContractDigest() {
 		return "", uci.NewContextError(uci.ContextMismatch, nil)
 	}
 	// Keep the prior profile and its pinned Views immutable; only this checkout

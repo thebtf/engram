@@ -4,6 +4,11 @@ import { isCatalogProject, useOperatorProjectContext } from './useOperatorProjec
 
 let sharedCandidateQueueRows: SharedRef<OperatorCandidate[]> | undefined
 let sharedCandidateQueueProjects: SharedRef<string[]> | undefined
+let queueGeneration = 0
+let queueRequest: AbortController | undefined
+const queueCursors = sharedRef<Array<string | null>>([null])
+const queueWindow = sharedRef(0)
+const queueNext = sharedRef<string | null | undefined>(undefined)
 export const candidateQueueState = sharedRef<OperatorLoadState<OperatorCandidate[]>>(pendingState(endpointEvidence('/api/memory/candidates?project={project}&status=pending&limit=100', 'candidate-queue', { flag: 'ENGRAM_VNEXT_F_ENABLED' }), []))
 
 import type { ComputedRef, Ref } from 'vue'
@@ -12,6 +17,7 @@ import { executeMutation, type MutationResult } from './useApi'
 import type { OperatorSelection } from './useOperatorSelection'
 import { parseOperatorSelectionSnapshot } from './useOperatorSelection'
 import {
+  authGeneration,
   emptyState,
   endpointEvidence,
   errorState,
@@ -61,6 +67,7 @@ interface ApiCandidateListResponse {
   project?: string
   status?: string
   limit?: number
+  next_cursor?: unknown
 }
 
 export interface OperatorCandidate {
@@ -222,13 +229,18 @@ function startOnce(key: string, run: () => Promise<void>) {
   }
 }
 
-export function useOperatorQueue(): {
+export function useOperatorQueue({ autoLoad = true }: { autoLoad?: boolean } = {}): {
   rows: OperatorCandidate[]
   projects: string[]
   selectedProject: Ref<string>
   loadState: ComputedRef<OperatorLoadState<OperatorCandidate[]>>
   pending: ComputedRef<boolean>
   error: ComputedRef<string | null>
+  nextCursor: ComputedRef<string | null | undefined>
+  hasPreviousWindow: ComputedRef<boolean>
+  nextWindow: () => Promise<void>
+  previousWindow: () => Promise<void>
+  invalidate: () => void
   refresh: () => Promise<void>
   promoteCandidate: (id: string) => Promise<MutationResult<CandidateActionIntent, CandidateActionCurrentState>>
   rejectCandidate: (id: string, reason?: string) => Promise<MutationResult<CandidateActionIntent, CandidateActionCurrentState>>
@@ -247,16 +259,20 @@ export function useOperatorQueue(): {
   const pending = computed(() => state.value.kind === 'pending')
   const error = computed(() => state.value.kind === 'error' ? state.value.error.message : null)
 
-  let generation = 0
-  async function refresh() {
-    const current = ++generation
+  async function loadWindow(cursor: string | null, windowIndex: number, history: Array<string | null>) {
+    queueRequest?.abort()
+    const controller = new AbortController()
+    queueRequest = controller
+    const current = ++queueGeneration
     const project = selectedProject.value
+    const auth = authGeneration.value
+    const isCurrent = () => current === queueGeneration && project === selectedProject.value && auth === authGeneration.value
     replaceArray(rowsState.value, [])
     state.value = pendingState(evidence, rowsState.value)
     if (context.selectionPending.value || context.selectionError.value || context.error.value || !project || (project !== 'all' && !isCatalogProject(project))) { state.value = gatedState(evidence, 'project-selection', 'Choose a catalog project before reading candidates.', []); return }
     try {
-      const flags = await operatorFetchJson<ApiFlags>('/api/flags', undefined, 'candidate-flags')
-      if (current !== generation || project !== selectedProject.value) return
+      const flags = await operatorFetchJson<ApiFlags>('/api/flags', { signal: controller.signal }, 'candidate-flags')
+      if (!isCurrent()) return
       if (flags.flags?.[QUEUE_FLAG] !== true) {
         replaceArray(rowsState.value, [])
         state.value = gatedState(evidence, QUEUE_FLAG, 'Candidate review queue is disabled by the vNext-F feature flag.', rowsState.value)
@@ -265,22 +281,32 @@ export function useOperatorQueue(): {
 
       replaceArray(projectsState.value, [QUEUE_ALL_PROJECTS, ...context.projects.value])
       const apiProject = project === 'all' ? QUEUE_ALL_PROJECTS_API : project
-      const path = `/api/memory/candidates?project=${encodeURIComponent(apiProject)}&status=${QUEUE_STATUS}&limit=${QUEUE_LIMIT}`
-      const payload = await operatorFetchJson<ApiCandidateListResponse>(path, undefined, 'candidate-queue')
-      if (current !== generation || project !== selectedProject.value) return
-      const rows = parseCandidatePayload(payload, path)
+      const basePath = `/api/memory/candidates?project=${encodeURIComponent(apiProject)}&status=${QUEUE_STATUS}&limit=${QUEUE_LIMIT}`
+      const path = cursor === null ? basePath : `${basePath}&cursor=${encodeURIComponent(cursor)}`
+      const payload = await operatorFetchJson<ApiCandidateListResponse>(path, { signal: controller.signal }, 'candidate-queue')
+      if (!isCurrent()) return
+      const rows = parseCandidatePayload(payload, basePath)
+      const next = payload.next_cursor
+      if (Object.prototype.hasOwnProperty.call(payload, 'next_cursor') && next !== null && (typeof next !== 'string' || !next.length)) {
+        const message = 'Invalid candidate continuation'
+        throw new OperatorFetchError(message, { message, category: 'invalid-response', source: 'candidate-queue', path: basePath, method: 'GET', retryable: false })
+      }
       if (project !== 'all' && rows.some((row) => row.affectedProjects.some((id) => !isCatalogProject(id)))) throw new TypeError('Candidate project identity mismatch')
+      queueCursors.value = history
+      queueWindow.value = windowIndex
+      queueNext.value = typeof next === 'string' ? next : next === null ? null : undefined
       replaceArray(rowsState.value, rows)
       state.value = rows.length
         ? liveState(evidence, rowsState.value)
         : emptyState(evidence, rowsState.value)
     } catch (nextError) {
-      if (current !== generation || project !== selectedProject.value) return
-      const mapped = toOperatorSourceError(nextError, {
+      if (!isCurrent()) return
+      const original = toOperatorSourceError(nextError, {
         source: 'candidate-queue',
         path: evidence.endpoint,
         method: 'GET',
       })
+      const mapped = cursor === null ? original : { ...original, message: 'Candidate continuation request failed', path: evidence.endpoint }
       state.value = errorState(evidence, mapped, {
         source: 'candidate-queue',
         run: async () => {
@@ -289,6 +315,37 @@ export function useOperatorQueue(): {
         },
       }, rowsState.value)
     }
+  }
+
+  function invalidate() {
+    queueGeneration++
+    queueRequest?.abort()
+    queueRequest = undefined
+    queueCursors.value = [null]
+    queueWindow.value = 0
+    queueNext.value = undefined
+    replaceArray(rowsState.value, [])
+    state.value = pendingState(evidence, rowsState.value)
+  }
+
+  async function refresh() {
+    queueCursors.value = [null]
+    queueWindow.value = 0
+    queueNext.value = undefined
+    await loadWindow(null, 0, [null])
+  }
+
+  async function nextWindow() {
+    const cursor = queueNext.value
+    if (typeof cursor !== 'string' || pending.value) return
+    const history = [...queueCursors.value.slice(0, queueWindow.value + 1), cursor].slice(-20)
+    await loadWindow(cursor, history.length - 1, history)
+  }
+
+  async function previousWindow() {
+    if (queueWindow.value <= 0 || pending.value) return
+    const index = queueWindow.value - 1
+    await loadWindow(queueCursors.value[index], index, queueCursors.value)
   }
 
   async function runCandidateAction(id: string, action: CandidateAction, reason?: string): Promise<MutationResult<CandidateActionIntent, CandidateActionCurrentState>> {
@@ -350,8 +407,8 @@ export function useOperatorQueue(): {
     return runCandidateAction(id, 'supersede')
   }
 
-  startOnce('candidate-queue', refresh)
-  onBeforeUnmount(() => { generation += 1 })
+  if (autoLoad) startOnce('candidate-queue', refresh)
+  onBeforeUnmount(() => { queueGeneration++; queueRequest?.abort(); queueRequest = undefined })
 
   return {
     rows: rowsState.value,
@@ -360,6 +417,11 @@ export function useOperatorQueue(): {
     loadState,
     pending,
     error,
+    nextCursor: computed(() => queueNext.value),
+    hasPreviousWindow: computed(() => queueWindow.value > 0),
+    nextWindow,
+    previousWindow,
+    invalidate,
     refresh,
     promoteCandidate,
     rejectCandidate,

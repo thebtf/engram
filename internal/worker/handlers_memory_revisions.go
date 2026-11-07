@@ -13,13 +13,21 @@ import (
 	"github.com/rs/zerolog/log"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/embedding"
+	"github.com/thebtf/engram/internal/principalmemory"
 	"github.com/thebtf/engram/internal/redaction"
 	"github.com/thebtf/engram/pkg/models"
+	gormlib "gorm.io/gorm"
 )
 
 type reviseMemoryContextRequest struct {
 	Content string `json:"content" binding:"required" minLength:"1"`
 	Version int    `json:"version" binding:"required" minimum:"1"`
+}
+
+type reviseMemoryContextResponse struct {
+	*models.Memory
+	DomainWarning     *principalmemory.DomainWriteWarning `json:"domain_warning,omitempty"`
+	DomainAuditStatus string                              `json:"domain_audit_status,omitempty"`
 }
 
 type memoryContextHistoryResponse struct {
@@ -53,22 +61,22 @@ func (s *Service) memoryRevisionSelector(r *http.Request) (int64, models.MemoryC
 
 // handleReviseMemoryContext godoc
 // @Summary Revise a typed memory card
-// @Description Requires the authenticated owner and current version. Omit context and project for enrolled self; project context requires the card's unique native canonical membership, not a read alias, and self/global must omit project. Legacy rows return 404 without changing their context or history. A stale version returns 409; after an uncertain outcome read the current card before retrying. The prior body and audit are retained atomically.
+// @Description Requires the authenticated owner and current version. Omit context and project for enrolled self; project context requires the card's unique native canonical membership, not a read alias, and self/global must omit project. Legacy rows return 404 without changing their context or history. A stale version returns 409; after an uncertain outcome read the current card before retrying. The current domain write policy applies: reject mode records a denial audit and returns 403 without a revision; an audit failure does not mutate the card. Warn mode records an audit and allows the revision with domain_warning and domain_audit_status. The prior body and update audit are retained atomically. Success is JSON and errors are plain text; Swagger 2 lists media types for the whole operation.
 // @Tags Memories
 // @Accept json
-// @Produce json
+// @Produce json,plain
 // @Security ApiKeyAuth
 // @Param id path int true "Memory ID"
 // @Param context query string false "Owning context; omission selects self unless project is supplied" Enums(self,project,global)
 // @Param project query string false "Existing canonical project UUID; required for project and forbidden for self/global"
 // @Param body body reviseMemoryContextRequest true "Current version and replacement content"
-// @Success 200 {object} models.Memory
+// @Success 200 {object} reviseMemoryContextResponse
 // @Failure 400 {string} string "invalid selector, content or version"
 // @Failure 401 {string} string "authentication or explicit keycard validation failed"
-// @Failure 403 {string} string "principal context access denied"
+// @Failure 403 {string} string "principal context access denied or domain write rejected"
 // @Failure 404 {string} string "context or manageable active typed card not found"
 // @Failure 409 {string} string "stale version; read current card to reconcile"
-// @Failure 500 {string} string "internal error"
+// @Failure 500 {string} string "internal error; domain audit failure does not mutate the card"
 // @Failure 503 {string} string "memory store unavailable"
 // @Router /api/memories/{id} [patch]
 func (s *Service) handleReviseMemoryContext(w http.ResponseWriter, r *http.Request) {
@@ -91,8 +99,25 @@ func (s *Service) handleReviseMemoryContext(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "content fully redacted", http.StatusBadRequest)
 		return
 	}
-	updated, err := s.memoryStore.ReviseInContext(r.Context(), id, owning, project, memoryVisibilityCaller(r.Context(), ""), request.Version, request.Content, s.redactMemoryContent)
+	caller := memoryVisibilityCaller(r.Context(), "")
+	var domainDecision *principalmemory.DomainWriteDecision
+	guard := func(ctx context.Context, tx *gormlib.DB, current *models.Memory) (bool, error) {
+		var err error
+		domainDecision, err = s.checkDomainWriteREST(ctx, tx, current, caller.SessionID)
+		if errors.Is(err, principalmemory.ErrDomainWriteRejected) && domainDecision != nil && !domainDecision.Allowed && domainDecision.AuditStatus == principalmemory.AuditStatusWritten {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		return domainDecision == nil || domainDecision.Allowed, nil
+	}
+	updated, err := s.memoryStore.ReviseInContext(r.Context(), id, owning, project, caller, request.Version, request.Content, s.redactMemoryContent, guard)
 	if err != nil {
+		if errors.Is(err, gormdb.ErrMemoryRevisionDenied) {
+			http.Error(w, "domain write rejected", http.StatusForbidden)
+			return
+		}
 		if errors.Is(err, redaction.ErrContentFullyRedacted) {
 			http.Error(w, "content fully redacted", http.StatusBadRequest)
 			return
@@ -126,7 +151,7 @@ func (s *Service) handleReviseMemoryContext(w http.ResponseWriter, r *http.Reque
 			}
 		}(updated)
 	}
-	writeJSON(w, jsonSafeMemory(updated))
+	writeStoreMemoryResponse(w, updated, domainDecision)
 }
 
 // handleMemoryContextHistory godoc

@@ -2,11 +2,14 @@
 import { computed, ref, watch } from 'vue'
 import { resolvePageSize, usePersistentPageSize } from '../composables/usePersistentPageSize'
 import { useOperatorQueue, type OperatorCandidate } from '../composables/useOperatorQueue'
+import { authGeneration, operatorDiagnosisKey } from '../composables/useOperatorApi'
+import { useOperatorShellStatus } from '../composables/useOperatorShell'
 import { isCatalogProject, projectName, useOperatorProjectContext } from '../composables/useOperatorProjectContext'
 
 type CandidateAction = 'promote' | 'reject' | 'supersede'
 
 const { t } = useI18n()
+const shell = useOperatorShellStatus()
 const context = useOperatorProjectContext()
 const scopeError = computed(() => context.selectionError.value || context.error.value)
 const {
@@ -15,13 +18,20 @@ const {
   loadState,
   pending,
   error,
-  refresh,
+  refresh: refreshQueue,
+  nextCursor,
+  hasPreviousWindow,
+  nextWindow,
+  previousWindow,
+  invalidate,
   promoteCandidate,
   rejectCandidate,
   supersedeCandidate,
-} = useOperatorQueue()
+} = useOperatorQueue({ autoLoad: false })
 
 const page = ref(1)
+let navigationEpoch = 0
+let awaitingAuthRecovery = false
 const { pageSize, pageSizeOptions } = usePersistentPageSize('engram.operatorConsole.queue.pageSize', 10)
 const openId = ref<string | null>(null)
 const selected = ref<Record<string, boolean>>({})
@@ -46,6 +56,7 @@ const opened = computed(() => rows.find((candidate) => candidate.id === openId.v
 const promotedTargetCount = computed(() => rows.filter((candidate) => candidate.target !== 'none').length)
 const lowConfidenceCount = computed(() => rows.filter((candidate) => candidate.confidence !== null && candidate.confidence < 0.75).length)
 const statebarKind = computed(() => error.value ? 'error' : pending.value ? 'pending' : loadState.value.kind)
+const queueErrorMessage = computed(() => loadState.value.kind === 'error' ? t(operatorDiagnosisKey(loadState.value.error)) : '')
 const queueHonesty = computed(() => loadState.value.kind === 'gated' ? 'dormant' : 'live')
 
 watch([pageSize, () => rows.length], () => {
@@ -53,7 +64,11 @@ watch([pageSize, () => rows.length], () => {
 })
 
 watch(pageSize, () => {
+  navigationEpoch++
   page.value = 1
+  selected.value = {}
+  openId.value = null
+  confirm.value = null
 })
 
 watch([selectedProject, context.selectionPending, scopeError], () => {
@@ -66,14 +81,64 @@ watch([selectedProject, context.selectionPending, scopeError], () => {
   void refresh()
 }, { immediate: true, flush: 'sync' })
 
+watch(authGeneration, () => {
+  awaitingAuthRecovery = true
+  navigationEpoch++
+  page.value = 1
+  openId.value = null
+  selected.value = {}
+  confirm.value = null
+  mutationResult.value = null
+  notice.value = null
+  invalidate()
+}, { flush: 'sync' })
+
+watch(() => shell.info.value.authPosture, (posture, previous) => {
+  if ((posture === 'authenticated' || posture === 'auth-disabled') && posture !== previous) {
+    awaitingAuthRecovery = false
+    void refresh()
+  }
+})
+
 watch(openId, () => {
   confirm.value = null
 })
 
 function selectAll() {
-  const next = { ...selected.value }
-  rows.forEach((candidate) => { next[candidate.id] = true })
-  selected.value = next
+  selected.value = Object.fromEntries(pageRows.value.map((candidate) => [candidate.id, true]))
+}
+
+function refresh() {
+  navigationEpoch++
+  selected.value = {}
+  page.value = 1
+  if (awaitingAuthRecovery) return Promise.resolve()
+  return refreshQueue()
+}
+
+watch(page, () => { selected.value = {}; openId.value = null; confirm.value = null }, { flush: 'sync' })
+
+async function goNext() {
+  if (page.value < pageCount.value) { page.value++; return }
+  if (typeof nextCursor.value !== 'string') return
+  selected.value = {}
+  openId.value = null
+  confirm.value = null
+  page.value = 1
+  await nextWindow()
+}
+
+async function goPrevious() {
+  if (page.value > 1) { page.value--; return }
+  if (!hasPreviousWindow.value) return
+  selected.value = {}
+  openId.value = null
+  confirm.value = null
+  const epoch = ++navigationEpoch
+  const project = selectedProject.value
+  const auth = authGeneration.value
+  await previousWindow()
+  if (epoch === navigationEpoch && project === selectedProject.value && auth === authGeneration.value && !error.value) page.value = pageCount.value
 }
 
 function clearSelected() {
@@ -223,11 +288,23 @@ async function runAction(candidate: OperatorCandidate, action: CandidateAction) 
         </label>
         <span class="cnt">{{ t('queue.pageRange', { from: pageRange.from, to: pageRange.to, total: rows.length }) }}</span>
         <button class="pg" :aria-label="t('queue.pagination.first')" :disabled="page <= 1" @click="page = 1">«</button>
-        <button class="pg" :aria-label="t('queue.pagination.previous')" :disabled="page <= 1" @click="page--">‹</button>
+        <button class="pg" :aria-label="t('queue.pagination.previous')"
+          :disabled="pending || (page <= 1 && !hasPreviousWindow)" @click="goPrevious">‹</button>
         <button class="pg on" :aria-label="t('queue.pagination.current', { page })" aria-current="page">{{ page }}</button>
-        <button class="pg" :aria-label="t('queue.pagination.next')" :disabled="page >= pageCount" @click="page++">›</button>
-        <button class="pg" :aria-label="t('queue.pagination.last')" :disabled="page >= pageCount" @click="page = pageCount">»</button>
+        <button class="pg" :aria-label="t('queue.pagination.next')"
+          :disabled="pending || (page >= pageCount && typeof nextCursor !== 'string')" @click="goNext">›</button>
+        <button class="pg" :aria-label="t('queue.pagination.last')" :disabled="page >= pageCount"
+          @click="page = pageCount">»</button>
       </div>
+    </section>
+    <section v-if="!pending && !error && loadState.kind === 'live' && nextCursor === undefined && rows.length === 100"
+      class="statebar" role="status">
+      {{ t('queue.state.legacyTruncated') }}
+    </section>
+    <section
+      v-if="!pending && !error && (loadState.kind === 'live' || loadState.kind === 'empty') && nextCursor !== undefined"
+      class="statebar" role="status">
+      {{ t(typeof nextCursor === 'string' ? 'queue.state.more' : 'queue.state.exhausted') }}
     </section>
 
     <section v-if="notice" class="statebar" :data-state="notice.kind" data-testid="queue-notice">
@@ -240,12 +317,16 @@ async function runAction(candidate: OperatorCandidate, action: CandidateAction) 
       <span>{{ scopeError ? t('queue.state.error', { message: scopeError.message }) : t('queue.state.pending') }}</span>
       <button v-if="scopeError" class="tbtn" @click="context.refresh">{{ t('queue.state.retry') }}</button>
     </section>
-    <section v-if="pending || error || loadState.kind === 'empty' || loadState.kind === 'gated'" class="statebar" :data-state="statebarKind">
+    <section v-if="pending || error || loadState.kind === 'empty' || loadState.kind === 'gated'" class="statebar"
+      :data-state="statebarKind">
       <span v-if="pending">{{ t('queue.state.pending') }}</span>
-      <span v-else-if="error">{{ t('queue.state.error', { message: error }) }}</span>
+      <span v-else-if="error">{{ t('queue.state.error', { message: queueErrorMessage }) }}</span>
       <span v-else-if="loadState.kind === 'empty'">{{ t('queue.state.empty') }}</span>
-      <span v-else-if="loadState.kind === 'gated'">{{ t(loadState.flag === 'project-selection' ? 'projectCatalog.selectionRequired' : 'queue.state.gated', { flag: loadState.evidence.flag || 'VNEXT_F' }) }}</span>
-      <button v-if="error" class="tbtn" @click="refresh">{{ t('queue.state.retry') }}</button>
+      <span v-else-if="loadState.kind === 'gated'">{{ t(loadState.flag === 'project-selection' ?
+        'projectCatalog.selectionRequired' : 'queue.state.gated', { flag: loadState.evidence.flag || 'VNEXT_F' })
+        }}</span>
+      <button v-if="loadState.kind === 'error' && loadState.error.retryable" class="tbtn" @click="refresh">{{
+        t('queue.state.retry') }}</button>
     </section>
 
     <div class="area-body" :class="{ 'detail-open': opened }">
@@ -304,7 +385,7 @@ async function runAction(candidate: OperatorCandidate, action: CandidateAction) 
           </div>
         </article>
 
-        <div v-if="!pageRows.length" class="empty" data-testid="queue-empty">
+        <div v-if="loadState.kind === 'empty'" class="empty" data-testid="queue-empty">
           <b>{{ t('queue.empty.title') }}</b>
           <span>{{ t('queue.empty.body') }}</span>
         </div>

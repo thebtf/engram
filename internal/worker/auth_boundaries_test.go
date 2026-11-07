@@ -102,7 +102,7 @@ func TestAuthBoundaryMeCredentialParity(t *testing.T) {
 		{name: "anonymous", want: http.StatusUnauthorized},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			for _, path := range []string{"/api/flags", "/api/auth/me"} {
+			for _, path := range []string{"/api/flags", "/api/auth/me", "/v1/models"} {
 				req := httptest.NewRequest(http.MethodGet, path, nil)
 				req.RemoteAddr = "192.0.2.1:443"
 				if tc.header != "" {

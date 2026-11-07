@@ -604,7 +604,8 @@ async function request(method, endpoint, body, timeoutMs = 10000, options = {}) 
  const controller = new AbortController();
  const externalSignal = options && options.signal;
  const abort = () => controller.abort();
- const timer = setTimeout(abort, timeoutMs);
+ const timeout = options.processingBudgetMs !== undefined && Number.isSafeInteger(options.deadlineAt) ? Math.min(timeoutMs, Math.max(1, options.deadlineAt - Date.now())) : timeoutMs;
+ const timer = setTimeout(abort, timeout);
 
  try {
   if (externalSignal && externalSignal.aborted) {
@@ -616,6 +617,12 @@ async function request(method, endpoint, body, timeoutMs = 10000, options = {}) 
   if (externalSignal) externalSignal.addEventListener('abort', abort, { once: true });
 
   const headers = buildRequestHeaders(body !== undefined, options.token, hookRequestID(options));
+  if (options.processingBudgetMs !== undefined) {
+   if (!Number.isSafeInteger(options.processingBudgetMs) || options.processingBudgetMs <= 0) throw new Error('Invalid processing budget');
+   const budget = Math.floor(Math.min(options.processingBudgetMs, timeoutMs, Number.isSafeInteger(options.deadlineAt) ? options.deadlineAt - Date.now() : Infinity));
+   if (budget <= 0) { controller.abort(); throw abortError(); }
+   headers['X-Engram-Budget-Ms'] = String(budget);
+  }
   const response = await fetch(url, {
    method,
    headers,
@@ -623,6 +630,30 @@ async function request(method, endpoint, body, timeoutMs = 10000, options = {}) 
    signal: controller.signal,
   });
 
+  if (Number.isSafeInteger(options.maxResponseBytes) && options.maxResponseBytes > 0) {
+   if (!response.ok) {
+    await response.body?.cancel();
+    throw Object.assign(new Error(`HTTP ${response.status}`), { status: response.status });
+   }
+   const reader = response.body?.getReader();
+   if (!reader) throw new Error('Response body unavailable');
+   const decoder = new TextDecoder('utf-8', { fatal: true });
+   let bytes = 0, boundedText = '';
+   try {
+    for (; ;) {
+     const chunk = await reader.read();
+     if (chunk.done) break;
+     bytes += chunk.value.byteLength;
+     if (bytes > options.maxResponseBytes) throw new Error('Response exceeds byte budget');
+     boundedText += decoder.decode(chunk.value, { stream: true });
+    }
+    boundedText += decoder.decode();
+    return JSON.parse(boundedText);
+   } catch (error) {
+    await reader.cancel().catch(() => { });
+    throw error;
+   } finally { reader.releaseLock(); }
+  }
   const text = await response.text();
   if (!response.ok) {
    throw new Error(`HTTP ${response.status} ${response.statusText}: ${text}`);
@@ -669,7 +700,7 @@ async function RunHook(hookName, handler) {
  // process. Each hook runs in its own Node process so env changes from
  // session-start.js do not carry over. This ensures config-file-only setups
  // (e.g. ~/.engram/config.json for Codex ≥0.139) work in all hook handlers.
- const runtimeEnv = getEngramConfig();
+ const runtimeEnv = hookName === 'UserPromptSubmit' ? {} : getEngramConfig();
 
  let rawInput = '';
  let input = {};
@@ -693,7 +724,7 @@ async function RunHook(hookName, handler) {
    HookEventName: typeof input.hook_event_name === 'string' ? input.hook_event_name : hookName,
    RawInput: rawInput,
   };
-  if (hookName !== 'SessionStart' || runtimeEnv.serverURL) {
+  if (hookName !== 'UserPromptSubmit' && (hookName !== 'SessionStart' || runtimeEnv.serverURL)) {
    Object.assign(context, await resolveHookProjectContext(cwd));
   }
   const additionalContext =

@@ -293,3 +293,52 @@ func TestB2KnowledgeLinksPostgres(t *testing.T) {
 		require.Equal(t, before, f.state(t))
 	})
 }
+
+func TestB2LinksOrdinaryHTTPConsumer(t *testing.T) {
+	f := newOwnCardContextFixture(t, false)
+	owner := f.registered(t, "tcp-owner")
+	other := f.registered(t, "tcp-other")
+	server := httptest.NewServer(f.service.router)
+	t.Cleanup(server.Close)
+	client := server.Client()
+	call := func(method, path string, payload any, caller ownCardContextCaller, status int, result any) {
+		t.Helper()
+		req := ownCardContextRequest(t, method, path, payload, caller)
+		req.URL.Scheme = "http"
+		req.URL.Host = server.Listener.Addr().String()
+		req.Host = req.URL.Host
+		req.RequestURI = ""
+		resp, err := client.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		require.Equal(t, status, resp.StatusCode)
+		if result != nil {
+			require.NoError(t, json.NewDecoder(resp.Body).Decode(result))
+		}
+	}
+	projects := f.state(t).projects
+	var first, second ownCardContextRecord
+	call(http.MethodPost, "/api/memories", ownCardContextPayload("The battery is in the blue locker."), owner.caller(), http.StatusCreated, &first)
+	call(http.MethodPost, "/api/memories", ownCardContextPayload("The blue locker opens with the silver key."), owner.caller(), http.StatusCreated, &second)
+	require.NotEqual(t, first.ID, second.ID)
+	key := uuid.NewString()
+	payload := map[string]any{"target_id": second.ID, "relation": "references", "target_version": second.Version, "request_key": key}
+	path := b2MemoryLinksPath(first.ID)
+	var link, replay b2Link
+	call(http.MethodPost, path, payload, owner.caller(), http.StatusCreated, &link)
+	call(http.MethodPost, path, payload, owner.caller(), http.StatusOK, &replay)
+	require.Equal(t, link, replay)
+	call(http.MethodGet, path, nil, other.caller(), http.StatusNotFound, nil)
+	var page b2LinkPage
+	call(http.MethodGet, path, nil, owner.caller(), http.StatusOK, &page)
+	require.Len(t, page.Links, 1)
+	require.Equal(t, second.ID, page.Links[0].TargetID)
+	var target ownCardContextRecord
+	call(http.MethodGet, "/api/memories/"+strconv.FormatInt(page.Links[0].TargetID, 10), nil, owner.caller(), http.StatusOK, &target)
+	require.Equal(t, second.Content, target.Content)
+	call(http.MethodDelete, "/api/memory-links/"+b2LinkID(t, link), nil, owner.caller(), http.StatusNoContent, nil)
+	call(http.MethodPost, path, payload, owner.caller(), http.StatusConflict, nil)
+	call(http.MethodGet, path, nil, owner.caller(), http.StatusOK, &page)
+	require.Empty(t, page.Links)
+	require.Equal(t, projects, f.state(t).projects)
+}

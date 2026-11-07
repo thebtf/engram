@@ -736,7 +736,7 @@ func uciValidateInstalledReceiptWatcher(watcher UCIInstalledReceiptWatcher, cont
 		}
 	}
 	primary, linked := contexts[0], contexts[1]
-	if watcher.AfterWriteA.SourceDigest != primary.SourceDigest || watcher.AfterWriteA.CheckoutDigest != primary.CheckoutDigest || watcher.AfterWriteA.ViewDigest == primary.ViewDigest || watcher.AfterDeleteA.SourceDigest != primary.SourceDigest || watcher.AfterDeleteA.CheckoutDigest != primary.CheckoutDigest || watcher.AfterDeleteA.ViewDigest == watcher.AfterWriteA.ViewDigest || watcher.AfterWriteA.Generation < 2 || watcher.AfterDeleteA.Generation <= watcher.AfterWriteA.Generation || watcher.AfterWriteA.BarrierState != "satisfied" || watcher.AfterDeleteA.BarrierState != "satisfied" {
+	if watcher.AfterWriteA.SourceDigest != primary.SourceDigest || watcher.AfterWriteA.CheckoutDigest != primary.CheckoutDigest || watcher.AfterWriteA.ViewDigest == primary.ViewDigest || watcher.AfterDeleteA.SourceDigest != primary.SourceDigest || watcher.AfterDeleteA.CheckoutDigest != primary.CheckoutDigest || watcher.AfterDeleteA.ViewDigest == watcher.AfterWriteA.ViewDigest || watcher.AfterWriteA.Generation < 2 || watcher.AfterDeleteA.Generation <= watcher.AfterWriteA.Generation {
 		return fmt.Errorf("UCI installed receipt watcher A write-delete evidence is incomplete")
 	}
 	if watcher.AfterWriteB.SourceDigest != linked.SourceDigest || watcher.AfterWriteB.CheckoutDigest != linked.CheckoutDigest || watcher.AfterWriteB.ViewDigest != linked.ViewDigest || watcher.AfterDeleteB != watcher.AfterWriteB || watcher.AfterWriteB.Generation < 1 || watcher.AfterWriteB.BarrierState != uciInstalledReceiptNotObserved {
@@ -784,7 +784,7 @@ func uciValidateInstalledReceiptRestart(restart UCIInstalledReceiptRestart, init
 }
 
 func uciValidateInstalledReceiptPublication(publication UCIInstalledReceiptPublication) error {
-	if !uciInstalledReceiptValidSHA256(publication.SourceDigest) || !uciInstalledReceiptValidSHA256(publication.CheckoutDigest) || !uciInstalledReceiptValidSHA256(publication.ViewDigest) || !uciInstalledReceiptValidSHA256(publication.RunDigest) || publication.Generation < 1 || publication.FreshnessState != "observed_current" || (publication.BarrierState != "satisfied" && publication.BarrierState != uciInstalledReceiptNotObserved) {
+	if !uciInstalledReceiptValidSHA256(publication.SourceDigest) || !uciInstalledReceiptValidSHA256(publication.CheckoutDigest) || !uciInstalledReceiptValidSHA256(publication.ViewDigest) || (publication.RunDigest != "" && !uciInstalledReceiptValidSHA256(publication.RunDigest)) || publication.Generation < 1 || publication.FreshnessState != "observed_current" || (publication.BarrierState != "satisfied" && publication.BarrierState != uciInstalledReceiptNotObserved) {
 		return fmt.Errorf("UCI installed receipt publication evidence is incomplete")
 	}
 	return nil
