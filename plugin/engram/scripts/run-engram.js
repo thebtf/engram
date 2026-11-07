@@ -21,6 +21,7 @@ const taskContextWorkerSource = (() => {
 })();
 
 const STARTUP_DIAGNOSTIC_LOG_MAX_BYTES = 128 * 1024;
+const PROJECT_CHECK_DEADLINE_MS = 15000;
 const TASK_CONTEXT_COMPLETION_RESERVE_MS = 30;
 const TASK_CONTEXT_STATUSES = new Set(['ok', 'empty', 'not_ready', 'stale', 'context_required', 'forbidden', 'unavailable', 'deadline_exceeded']);
 const TASK_CONTEXT_REASONS = new Set([
@@ -186,7 +187,7 @@ async function resolveLogicalProject(root, options = {}) {
  const pluginRoot = options.pluginRoot || resolvePluginRoot();
  const pluginData = options.pluginData || resolvePluginData(pluginRoot);
  const resolved = await resolveClient({ ...options, pluginRoot, pluginData }, true);
- const remaining = options.deadlineAt === undefined ? 15000 : options.deadlineAt - Date.now();
+ const remaining = options.deadlineAt === undefined ? PROJECT_CHECK_DEADLINE_MS : options.deadlineAt - Date.now();
  if (options.signal?.aborted) throw new Error('PROJECT_RESOLUTION_ABORTED');
  if (remaining <= 0) throw new Error('PROJECT_RESOLUTION_DEADLINE_EXCEEDED');
  const raw = await new Promise((resolve, reject) => {
@@ -339,7 +340,22 @@ async function requestTaskContext(facts = {}, options = {}) {
 
 async function resolveAndSpawn(options) {
  const projectOnly = options.args?.[0] === 'project';
- const resolved = await resolveClient(options, projectOnly);
+ let check = false;
+ if (projectOnly && options.args?.[1] === 'resolve') {
+  for (let i = 2; i < options.args.length; i++) {
+   const arg = options.args[i];
+   if (arg === '--' || !arg.startsWith('-') || arg === '-') break;
+   const match = /^--?([^=]+)(?:=(.*))?$/.exec(arg);
+   if (!match) break;
+   const [, name, value] = match;
+   if (name === 'root') { if (value === undefined) i++; continue; }
+   if (name !== 'check' && name !== 'json') break;
+   if (value !== undefined && !/^(?:1|t|T|true|TRUE|True|0|f|F|false|FALSE|False)$/.test(value)) break;
+   if (name === 'check') check = value === undefined || /^(?:1|t|T|true|TRUE|True)$/.test(value);
+  }
+ }
+ const deadlineAt = check ? Date.now() + PROJECT_CHECK_DEADLINE_MS : undefined;
+ const resolved = await resolveClient(check ? { ...options, check: true, acquire: false, deadlineAt } : options, projectOnly);
  const hash = options.hash || hashFile;
  const roots = options.roots || objectRoots;
  const env = { ...options.env };
@@ -362,8 +378,10 @@ async function resolveAndSpawn(options) {
   env.ENGRAM_UCI_PARSER_EXECUTABLE = resolved.parserPath;
   env.ENGRAM_UCI_PARSER_BUNDLE_DIGEST = probe.stdout.trim();
  }
+ const remaining = check ? deadlineAt - Date.now() : undefined;
+ if (check && remaining <= 0) throw new Error('PROJECT_RESOLUTION_DEADLINE_EXCEEDED');
  const result = (options.spawnSync || spawnSync)(resolved.path, options.args || [], {
-  stdio: "inherit", env, cwd: options.cwd || resolveHostRoot(env),
+  stdio: "inherit", env, cwd: options.cwd || resolveHostRoot(env), ...(check ? { timeout: remaining } : {}),
  });
  const failure = spawnFailureMessage(result, "engram exec");
  if (failure) throw new Error(failure.trim());

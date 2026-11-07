@@ -27,6 +27,78 @@ const {
 } = require("./run-engram.js");
 
 
+for (const mode of ["missing", "corrupt"]) {
+ test(`project resolve --check preserves ${mode} client cache without acquisition`, () => {
+  const crypto = require("node:crypto");
+  const { createPolicy, TARGET_ASSETS } = require("./bootstrap-policy.js");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "engram-cli-readonly-"));
+  const plugin = path.join(root, "plugin"), data = path.join(root, "data");
+  const bytes = Buffer.from("verified legacy fixture; never executable");
+  const sha256 = crypto.createHash("sha256").update(bytes).digest("hex"), version = "7.0.27";
+  const targets = Object.fromEntries(Object.entries(TARGET_ASSETS).map(([key, asset]) => [key, { version, asset, size: bytes.length, sha256 }]));
+  const target = targets[`${process.platform}-${process.arch}`];
+  try {
+   fs.mkdirSync(path.join(plugin, ".omp-plugin"), { recursive: true });
+   fs.writeFileSync(path.join(plugin, ".omp-plugin", "plugin.json"), JSON.stringify({ version }));
+   fs.writeFileSync(path.join(plugin, "bootstrap-targets.json"), JSON.stringify(createPolicy(version, targets)));
+   fs.mkdirSync(path.join(data, "bin"), { recursive: true });
+   fs.writeFileSync(path.join(data, "bin", process.platform === "win32" ? "engram.exe" : "engram"), bytes);
+   if (mode === "corrupt") {
+    const directory = path.join(data, "bin", "objects", "sha256", sha256);
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(path.join(directory, target.asset), Buffer.alloc(bytes.length));
+   }
+   const snapshot = dir => Object.fromEntries(fs.readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+    const name = path.join(dir, entry.name);
+    return entry.isDirectory() ? [[name, "directory"], ...Object.entries(snapshot(name))] : [[name, fs.readFileSync(name).toString("hex")]];
+   }));
+   const before = snapshot(data);
+   const result = spawnSync(process.execPath, [path.join(__dirname, "run-engram.js"), "project", "resolve", "--root", root, "--json", "--check"], {
+    cwd: root, encoding: "utf8", timeout: 5000,
+    env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, PLUGIN_ROOT: plugin, PLUGIN_DATA: data, ENGRAM_CONFIG_FILE: path.join(root, "missing.json") },
+   });
+   assert.deepEqual(snapshot(data), before, "check must not import, create, or quarantine cache objects");
+   assert.equal(result.status, 1, result.error?.message || result.stderr);
+   assert.match(result.stderr, /HOOK_CLIENT_UNAVAILABLE/);
+   const checked = spawnSync(process.execPath, [path.join(__dirname, "run-engram.js"), "project", "resolve", "--root", root, "--json", "-check=TRUE", "--check=false", "--check=1"], {
+    cwd: root, encoding: "utf8", timeout: 5000,
+    env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, PLUGIN_ROOT: plugin, PLUGIN_DATA: data, ENGRAM_CONFIG_FILE: path.join(root, "missing.json") },
+   });
+   assert.equal(checked.status, 1, checked.error?.message || checked.stderr);
+   assert.match(checked.stderr, /HOOK_CLIENT_UNAVAILABLE/);
+   assert.deepEqual(snapshot(data), before);
+   const ordinaryArgs = [
+    ["--root", root, "--json", "--check", "--check=false"],
+    ["--root", "--check", "--json"],
+    ["--root", root, "--json", "--", "--check"],
+    ["--root", root, "--json", "positional", "--check"],
+   ];
+   for (const [index, args] of ordinaryArgs.entries()) {
+    const ordinaryData = path.join(root, `ordinary-${index}`);
+    fs.mkdirSync(path.join(ordinaryData, "bin"), { recursive: true });
+    fs.writeFileSync(path.join(ordinaryData, "bin", process.platform === "win32" ? "engram.exe" : "engram"), bytes);
+    const ordinary = spawnSync(process.execPath, [path.join(__dirname, "run-engram.js"), "project", "resolve", ...args], {
+     cwd: root, encoding: "utf8", timeout: 5000,
+     env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, PLUGIN_ROOT: plugin, PLUGIN_DATA: ordinaryData, ENGRAM_CONFIG_FILE: path.join(root, "missing.json") },
+    });
+    assert.equal(ordinary.error, undefined, ordinary.error?.message);
+    assert.deepEqual(fs.readFileSync(path.join(ordinaryData, "bin", "objects", "sha256", sha256, target.asset)), bytes, `ordinary arguments ${index} must retain acquisition`);
+   }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+ });
+}
+
+test("project check terminates a stalled native execution within its existing deadline", async () => {
+ const started = Date.now();
+ await assert.rejects(resolveAndSpawn({
+  pluginRoot: "root", pluginData: "data", args: ["project", "resolve", "--json", "--check"], env: process.env,
+  resolve: async () => ({ path: process.execPath, target: {} }),
+  roots: () => ({ objects: "objects" }), hash: () => true,
+  spawnSync: (command, _args, options) => spawnSync(command, ["-e", "setInterval(() => {}, 1000)"], options),
+ }), /engram exec failed/);
+ assert.ok(Date.now() - started < 20000, "stalled execution must not outlive the check deadline");
+});
+
 test("installed-style launcher forwards tokenless and configured credentials to the trusted client", () => {
   const pluginData = fs.mkdtempSync(path.join(os.tmpdir(), "engram-tokenless-launch-"));
   const explicitConfig = path.join(pluginData, "explicit.json");
