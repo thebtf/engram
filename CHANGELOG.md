@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Retain each loaded hook instance's last valid package policy after its package root is retired, while revalidating present roots and preserving native-client integrity checks for typed task context and session callbacks.
+
 - Bound PostgreSQL task-note search without JIT compilation overhead; preserve caller transaction settings and cancellation with bounded savepoint recovery, and keep per-read savepoint controls out of the shared prepared-statement cache. Retain existing project authorization, ranking and deadlines.
 
 - Exclude dependents proven by their complete foreign-key ancestry to belong only to self or global memories from project consolidation, without treating private data as global; retain mixed or unknown ownership as unresolved and preserve project inheritance.

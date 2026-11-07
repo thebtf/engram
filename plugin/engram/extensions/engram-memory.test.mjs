@@ -63,6 +63,22 @@ test('OMP automatic callbacks use current root and one UUID without identity reg
   assert.equal(calls.some(call => 'project_descriptor' in call.body || 'sessionCapability' in call.body), false);
 });
 
+test('OMP passes its own policy binding to preparation, session and typed ambient context', async () => {
+  const binding = () => ({}), seen = [];
+  const { adapter } = extension({
+    hookPolicy: binding,
+    prepareHookClient: async options => { seen.push(['prepare', options.hookPolicy]); },
+    resolveHookProjectContext: async (cwd, options) => { seen.push(['session', options.hookPolicy]); return { Project: projects[cwd] }; },
+    requestTaskContext: async (facts, options) => { seen.push(['ambient', options.hookPolicy]); return knowledgeResponse(projects[facts.cwd]); },
+  });
+  const handlers = new Map();
+  await adapter.install({ on: (name, fn) => handlers.set(name, fn), sendMessage: () => { } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.ok(await adapter.sessionStartMessage({ cwd: '/session/a', sessionId: 'session' }, {}));
+  assert.ok(await adapter.ambientMessage({ cwd: '/session/a', sessionId: 'session', prompt: 'Find relevant context' }, {}));
+  assert.deepEqual(seen, [['prepare', binding], ['session', binding], ['ambient', binding]]);
+});
+
 test('OMP binding shares one background preparation across repeated installation and early callbacks', async t => {
   let finishPreparation, preparations = 0, configurations = 0, registrations = 0;
   const preparation = new Promise(resolve => { finishPreparation = resolve; });
