@@ -129,6 +129,17 @@ func TestPlanProducedRetainedDocumentVersionScope(t *testing.T) {
 	}
 	_, err = documents.ReadLatestForLineage(ctx, original.Path, a, newID)
 	assert.True(t, errors.Is(err, gormlib.ErrRecordNotFound), "native project A must not acquire the new version: %v", err)
+	searched, err := documents.SearchTaskContext(ctx, b, "version", 3)
+	require.NoError(t, err)
+	require.Len(t, searched, 1)
+	require.Equal(t, newID, searched[0].ID, "search must select the authorized current lineage")
+	require.Equal(t, "new version body", searched[0].Content)
+	searched, err = documents.SearchTaskContext(ctx, a, "version", 3)
+	require.NoError(t, err)
+	require.Empty(t, searched, "native project cannot search the reassigned lineage")
+	searched, err = documents.SearchTaskContext(ctx, b, "historical", 3)
+	require.NoError(t, err)
+	require.Empty(t, searched, "superseded bodies cannot match")
 	newCensus, err := reader.Census(ctx, "synthetic-live-version-validation")
 	require.NoError(t, err)
 	var newState consolidationCensusState

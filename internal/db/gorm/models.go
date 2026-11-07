@@ -348,16 +348,19 @@ func (ModelSetting) TableName() string { return "model_settings" }
 // statements.  GORM will only write columns that are present in the struct, so omitting the
 // search_vector field here is the correct approach.
 type Memory struct {
-	Project         string                 `gorm:"type:text;not null;index:idx_memories_project_created,priority:1,where:deleted_at IS NULL" json:"project"`
-	Content         string                 `gorm:"type:text;not null" json:"content"`
-	Tags            models.JSONStringArray `gorm:"type:jsonb;not null;default:'[]'" json:"tags"`
-	SourceAgent     string                 `gorm:"type:text" json:"source_agent,omitempty"`
-	EditedBy        string                 `gorm:"type:text" json:"edited_by,omitempty"`
-	Status          string                 `gorm:"type:text;default:'active'" json:"status"`
-	Tier            string                 `gorm:"type:text;default:'episodic'" json:"tier"`
-	EpistemicType   string                 `gorm:"type:text;default:'observation'" json:"epistemic_type"`
-	Defeasibility   string                 `gorm:"type:text;default:'slow'" json:"defeasibility"`
-	PromotionTarget string                 `gorm:"type:text;default:'none'" json:"promotion_target"`
+	ContextKind          string                 `gorm:"type:text;not null;default:'legacy'" json:"context_kind"`
+	ContextPrincipal     string                 `gorm:"type:text;not null;default:''" json:"context_principal"`
+	ContextPrincipalKind string                 `gorm:"type:text;not null;default:''" json:"context_principal_kind"`
+	Project              string                 `gorm:"type:text;not null;index:idx_memories_project_created,priority:1,where:deleted_at IS NULL" json:"project"`
+	Content              string                 `gorm:"type:text;not null" json:"content"`
+	Tags                 models.JSONStringArray `gorm:"type:jsonb;not null;default:'[]'" json:"tags"`
+	SourceAgent          string                 `gorm:"type:text" json:"source_agent,omitempty"`
+	EditedBy             string                 `gorm:"type:text" json:"edited_by,omitempty"`
+	Status               string                 `gorm:"type:text;default:'active'" json:"status"`
+	Tier                 string                 `gorm:"type:text;default:'episodic'" json:"tier"`
+	EpistemicType        string                 `gorm:"type:text;default:'observation'" json:"epistemic_type"`
+	Defeasibility        string                 `gorm:"type:text;default:'slow'" json:"defeasibility"`
+	PromotionTarget      string                 `gorm:"type:text;default:'none'" json:"promotion_target"`
 	// T002 + T001b + T003b (engram vNext Milestone F TG1): privacy metadata persisted
 	// to migration-125 (privacy_scope + source_sessions[]) and migration-130
 	// (source_workstation_id) columns. Without these fields, values set by the MCP

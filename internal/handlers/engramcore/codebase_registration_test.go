@@ -169,31 +169,57 @@ func TestNativeCodebaseRegistrationRefusesUnavailableGitAndAmbiguousInputs(t *te
 	require.Empty(t, server.callRequestsSnapshot())
 }
 
-func TestNativeCodebaseRegistrationRejectsUnboundSourceIDInAutoLocatorMode(t *testing.T) {
-	server := &uciIndexAdapterGRPCServer{call: func(_ context.Context, _ *pb.CallToolRequest) (*pb.CallToolResponse, error) {
-		return &pb.CallToolResponse{ContentJson: []byte(`{"binding_kind":"checkout","context_handle":"server-checkout","context":null}`)}, nil
-	}}
+func TestNativeCodebaseRegistrationExplicitSourceUsesActualGitWithoutIndexBinding(t *testing.T) {
+	root := daemonV3Repository(t)
+	markerPath := filepath.Join(root, ".engram-project")
+	marker, err := os.ReadFile(markerPath)
+	require.NoError(t, err)
+	selected := filepath.Join(root, "nested", "source with spaces")
+	require.NoError(t, os.MkdirAll(selected, 0o755))
+	physicalRoot, err := filepath.EvalSymlinks(root)
+	require.NoError(t, err)
+	locatorRoot := filepath.ToSlash(physicalRoot)
+	if runtime.GOOS == "windows" {
+		locatorRoot = "/" + locatorRoot
+	}
+	expectedLocator := (&url.URL{Scheme: "file", Path: locatorRoot}).String()
 	mod := NewModuleWithClientInstanceID("fixture-daemon-install")
 	t.Cleanup(mod.pool.closeAll)
-	project := uciClientTestProject(startUCIIndexAdapterGRPC(t, server))
-	project.Cwd = daemonV3Repository(t)
-	ctx := auditcontext.WithUCITransportSession(context.Background(), "native-unbound-source-session")
-	const otherSourceID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-	automatic := json.RawMessage(`{"action":"register","source_id":"` + otherSourceID + `"}`)
-	_, err := mod.ProxyHandleTool(ctx, project, "codebase_context", automatic)
-	var moduleErr *module.ModuleError
-	require.ErrorAs(t, err, &moduleErr)
-	require.Equal(t, "CONTEXT_MISMATCH", moduleErr.Code)
-	require.Empty(t, server.bindRequestsSnapshot())
-	require.Empty(t, server.callRequestsSnapshot(), "an otherwise valid local Git root must not authorize a caller-supplied Source")
+	project := uciClientTestProject("")
+	project.Cwd = selected
+	t.Setenv(config.EnvServerURL, "")
+	t.Setenv(config.EnvServerURLAlt, "")
+	t.Setenv("GIT_DIR", filepath.Join(t.TempDir(), "foreign.git"))
+	t.Setenv("GIT_WORK_TREE", t.TempDir())
+	ctx := auditcontext.WithUCITransportSession(context.Background(), "native-explicit-source-session")
+	const sourceID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 
-	// Explicit locator registration keeps the existing server-owned contract.
-	project.Cwd = daemonV3Repository(t)
-	explicit := json.RawMessage(`{"action":"register","source_id":"` + otherSourceID + `","locator":"file:///private/worktree"}`)
-	_, err = mod.ProxyHandleTool(ctx, project, "codebase_context", explicit)
-	require.NoError(t, err)
-	require.Empty(t, server.bindRequestsSnapshot())
-	calls := server.callRequestsSnapshot()
-	require.Len(t, calls, 1)
-	require.Equal(t, []byte(explicit), calls[0].GetArgumentsJson())
+	t.Run("actual Git root without server or historical View", func(t *testing.T) {
+		prepared, err := mod.prepareNativeCodebaseRegistration(ctx, project, json.RawMessage(`{"action":"register","source_id":"`+sourceID+`"}`))
+		require.NoError(t, err, "an explicit Source selects the normal registration front door, not an old View/index binding")
+		var args nativeCodebaseRegistrationArgs
+		require.NoError(t, json.Unmarshal(prepared, &args))
+		require.Equal(t, "register", args.Action)
+		require.NotNil(t, args.SourceID)
+		require.Equal(t, sourceID, *args.SourceID)
+		require.NotNil(t, args.Locator)
+		require.Equal(t, expectedLocator, *args.Locator)
+		require.Nil(t, args.SourceLabel)
+		require.Nil(t, args.ContextHandle)
+		after, err := os.ReadFile(markerPath)
+		require.NoError(t, err)
+		require.Equal(t, marker, after)
+	})
+	t.Run("caller cancellation is not replaced by a selector error", func(t *testing.T) {
+		cancelled, cancel := context.WithCancel(ctx)
+		cancel()
+		_, err := mod.prepareNativeCodebaseRegistration(cancelled, project, json.RawMessage(`{"action":"register","source_id":"`+sourceID+`"}`))
+		require.ErrorIs(t, err, context.Canceled)
+	})
+	t.Run("explicit locator remains server-authorized input", func(t *testing.T) {
+		explicit := json.RawMessage(`{"action":"register","source_id":"` + sourceID + `","locator":"file:///fixture/explicit-worktree"}`)
+		prepared, err := mod.prepareNativeCodebaseRegistration(ctx, project, explicit)
+		require.NoError(t, err)
+		require.Equal(t, []byte(explicit), []byte(prepared))
+	})
 }

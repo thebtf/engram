@@ -255,6 +255,133 @@ func TestRegisterLocalGitParserProfileAdmitsCrossHostSemanticArtifact(t *testing
 	require.ErrorContains(t, err, "artifact profile does not match authorized profile")
 }
 
+func TestRegisterLocalGitExplicitSemanticPromotionPreservesGoPublishedView(t *testing.T) {
+	t.Run("semantic downgrade remains refused", func(t *testing.T) {
+		db, store := openUCIContextMigrationStore(t)
+		parser := true
+		input := RegisterLocalGitInput{ProjectID: registrationProject(t, db), AuthRealm: "client", Principal: "browser-user/41", WorkstationID: "keycard-41", SourceLabel: "semantic-control", Locator: "file:///fixture/semantic-control", ParserBundle: &parser}
+		registered, err := store.RegisterLocalGit(context.Background(), input)
+		require.NoError(t, err)
+		input.SourceID, input.SourceLabel = registered.SourceID, ""
+		goOnly := false
+		input.ParserBundle = &goOnly
+		_, err = store.RegisterLocalGit(context.Background(), input)
+		var mismatch *uci.ContextError
+		require.ErrorAs(t, err, &mismatch)
+		require.Equal(t, uci.ContextMismatch, mismatch.Code())
+		input.ParserBundle = nil
+		replayed, err := store.RegisterLocalGit(context.Background(), input)
+		require.NoError(t, err)
+		require.Equal(t, registered, replayed)
+		var profile UCIAnalysisProfile
+		require.NoError(t, db.Where("profile_id = ?", registered.ProfileID).First(&profile).Error)
+		require.Equal(t, string(uci.TreeSitterSemanticContractDigest()), profile.ParserBundleDigest)
+	})
+
+	fixture := openUCIPublicationFixture(t)
+	ctx := context.Background()
+	goDigest := string(localGitGoProfileDigest())
+	require.NoError(t, fixture.db.Model(&UCIAnalysisProfile{}).Where("profile_id = ?", fixture.profile.ProfileID).Update("parser_bundle_digest", goDigest).Error)
+	fixture.profile.ParserBundleDigest = goDigest
+	require.NoError(t, fixture.db.Model(&UCICheckout{}).Where("checkout_id = ?", fixture.checkout.CheckoutID).Update("registration_profile_id", fixture.profile.ProfileID).Error)
+	projectID := registrationProject(t, fixture.db)
+	otherProjectID := registrationProject(t, fixture.db)
+	require.NoError(t, fixture.db.Model(&UCISource{}).Where("source_id = ?", fixture.source.SourceID).Update("project_id", projectID).Error)
+	oldArtifact := fixture.admitArtifact(t, fixture.source.SourceID, "go-parent", "func Existing() {}\n", UCIParseArtifactComplete)
+	memberships := []uci.IndexMembership{uciPublicationPresentMembership("existing.go", oldArtifact)}
+	edges := []uci.IndexEdgeReplacement{{SourcePath: "existing.go"}}
+	draft := newUCIPublicationDraft([]uci.IndexPart{uciPublicationPart([]uciPublicationArtifact{oldArtifact}, memberships, nil, edges)}, memberships, edges)
+	caller := fixture.caller("go-profile-owner")
+	_, pinned := fixture.publish(t, fixture.publisher, caller, fixture.publishInput("go-profile-parent", fixture.checkout, fixture.profile.ProfileID, nil, uci.IndexManifestFull, uci.IndexJobInitial, draft))
+	var originalProfile UCIAnalysisProfile
+	require.NoError(t, fixture.db.Where("profile_id = ?", fixture.profile.ProfileID).First(&originalProfile).Error)
+	originalView, err := fixture.context.GetView(ctx, pinned.Context.ViewID)
+	require.NoError(t, err)
+	input := RegisterLocalGitInput{ProjectID: projectID, AuthRealm: fixture.realm, Principal: fixture.principal, WorkstationID: fixture.checkout.WorkstationID, SourceID: fixture.source.SourceID, Locator: fixture.checkout.LocatorRef}
+
+	implicit := input
+	implicit.DefaultParserBundle = true
+	unchanged, err := fixture.context.RegisterLocalGit(ctx, implicit)
+	require.NoError(t, err)
+	require.Equal(t, fixture.profile.ProfileID, unchanged.ProfileID, "parser availability alone must not promote an existing Go checkout")
+	parser := true
+	for _, invalid := range []RegisterLocalGitInput{func() RegisterLocalGitInput {
+		foreign := input
+		foreign.Principal = "foreign-profile-owner"
+		return foreign
+	}(), func() RegisterLocalGitInput {
+		foreign := input
+		foreign.AuthRealm = "foreign-profile-realm"
+		return foreign
+	}(), func() RegisterLocalGitInput {
+		foreign := input
+		foreign.ProjectID = otherProjectID
+		return foreign
+	}()} {
+		invalid.ParserBundle = &parser
+		_, err := fixture.context.RegisterLocalGit(ctx, invalid)
+		require.Error(t, err, "explicit parser promotion cannot grant Source, realm, owner or project authority")
+	}
+	beforePromotion, err := fixture.context.GetCheckout(ctx, fixture.checkout.CheckoutID)
+	require.NoError(t, err)
+	require.NotNil(t, beforePromotion.RegistrationProfileID)
+	require.Equal(t, fixture.profile.ProfileID, *beforePromotion.RegistrationProfileID)
+	current, err := fixture.context.GetCurrentView(ctx, fixture.checkout.CheckoutID)
+	require.NoError(t, err)
+	require.Equal(t, pinned.Context.ViewID, current.ViewID)
+
+	var sourceBaseline, checkoutBaseline, profileBaseline, viewBaseline int64
+	require.NoError(t, fixture.db.Model(&UCISource{}).Count(&sourceBaseline).Error)
+	require.NoError(t, fixture.db.Model(&UCICheckout{}).Count(&checkoutBaseline).Error)
+	require.NoError(t, fixture.db.Model(&UCIAnalysisProfile{}).Count(&profileBaseline).Error)
+	require.NoError(t, fixture.db.Model(&UCIView{}).Count(&viewBaseline).Error)
+
+	promotion := input
+	promotion.ParserBundle = &parser
+	updated, err := fixture.context.RegisterLocalGit(ctx, promotion)
+	require.NoError(t, err, "an explicit qualified semantic request must recover this same existing Go checkout")
+	require.Equal(t, fixture.source.SourceID, updated.SourceID)
+	require.Equal(t, fixture.checkout.CheckoutID, updated.CheckoutID)
+	require.Equal(t, fixture.checkout.IncarnationID, updated.IncarnationID)
+	require.NotEqual(t, fixture.profile.ProfileID, updated.ProfileID)
+	var semantic UCIAnalysisProfile
+	require.NoError(t, fixture.db.Where("profile_id = ?", updated.ProfileID).First(&semantic).Error)
+	require.Equal(t, string(uci.TreeSitterSemanticContractDigest()), semantic.ParserBundleDigest)
+	var preserved UCIAnalysisProfile
+	require.NoError(t, fixture.db.Where("profile_id = ?", originalProfile.ProfileID).First(&preserved).Error)
+	require.Equal(t, originalProfile, preserved)
+	oldView, err := fixture.context.GetView(ctx, pinned.Context.ViewID)
+	require.NoError(t, err)
+	require.Equal(t, originalView, oldView)
+	current, err = fixture.context.GetCurrentView(ctx, fixture.checkout.CheckoutID)
+	require.NoError(t, err)
+	require.Equal(t, pinned.Context.ViewID, current.ViewID, "registration must not replace a published View")
+	require.Equal(t, originalProfile.ProfileID, current.ProfileID)
+	var artifact UCIParseArtifact
+	require.NoError(t, fixture.db.Where("artifact_id = ?", oldArtifact.Artifact.ArtifactID).First(&artifact).Error)
+	require.Equal(t, goDigest, artifact.ExtractionProfileDigest)
+
+	downgrade := input
+	goOnly := false
+	downgrade.ParserBundle = &goOnly
+	_, err = fixture.context.RegisterLocalGit(ctx, downgrade)
+	var contextErr *uci.ContextError
+	require.ErrorAs(t, err, &contextErr)
+	require.Equal(t, uci.ContextMismatch, contextErr.Code(), "explicit semantic-to-Go downgrade must remain refused")
+	replayed, err := fixture.context.RegisterLocalGit(ctx, implicit)
+	require.NoError(t, err)
+	require.Equal(t, updated, replayed)
+	var sourceCount, checkoutCount, profileCount, viewCount int64
+	require.NoError(t, fixture.db.Model(&UCISource{}).Count(&sourceCount).Error)
+	require.NoError(t, fixture.db.Model(&UCICheckout{}).Count(&checkoutCount).Error)
+	require.NoError(t, fixture.db.Model(&UCIAnalysisProfile{}).Count(&profileCount).Error)
+	require.NoError(t, fixture.db.Model(&UCIView{}).Count(&viewCount).Error)
+	require.EqualValues(t, sourceBaseline, sourceCount)
+	require.EqualValues(t, checkoutBaseline, checkoutCount)
+	require.EqualValues(t, profileBaseline+1, profileCount)
+	require.EqualValues(t, viewBaseline, viewCount)
+}
+
 func TestRegisterLocalGitGoOnlyProfileStagesNativeArtifactAndView(t *testing.T) {
 	db, store := openUCIContextMigrationStore(t)
 	ctx := context.Background()
@@ -469,12 +596,10 @@ func TestRegisterLocalGitTwoDirtyWorktreesOwnerIsolation(t *testing.T) {
 	require.NotEmpty(t, artifact.Definitions)
 	require.Equal(t, goProfile.ParserBundleDigest, string(artifact.Profile.ExtractionProfileDigest))
 	parserRequest := owner
-	parserBundle := true
-	parserRequest.ParserBundle = &parserBundle
-	_, err = store.RegisterLocalGit(ctx, parserRequest)
-	var profileMismatch *uci.ContextError
-	require.ErrorAs(t, err, &profileMismatch)
-	require.Equal(t, uci.ContextMismatch, profileMismatch.Code())
+	parserRequest.DefaultParserBundle = true
+	implicitParserReplay, err := store.RegisterLocalGit(ctx, parserRequest)
+	require.NoError(t, err)
+	require.Equal(t, first, implicitParserReplay, "installed parser availability must not silently promote the existing Go profile")
 	replayed, err := store.RegisterLocalGit(ctx, owner)
 	require.NoError(t, err, "lost first response must recover the original registration")
 	require.Equal(t, first, replayed)
@@ -506,6 +631,9 @@ func TestRegisterLocalGitTwoDirtyWorktreesOwnerIsolation(t *testing.T) {
 	require.Equal(t, first.SourceID, second.SourceID)
 	require.NotEqual(t, first.CheckoutID, second.CheckoutID)
 	require.NotEqual(t, first.IncarnationID, second.IncarnationID)
+	parserBundle := true
+	parserRequest.ParserBundle = &parserBundle
+	parserRequest.DefaultParserBundle = false
 	parserRequest.SourceID, parserRequest.SourceLabel, parserRequest.Locator = first.SourceID, "", locator(filepath.Join(root, "parser"))
 	parserCheckout, err := store.RegisterLocalGit(ctx, parserRequest)
 	require.NoError(t, err)
@@ -530,6 +658,7 @@ func TestRegisterLocalGitTwoDirtyWorktreesOwnerIsolation(t *testing.T) {
 	replayedAutomatic, err := store.RegisterLocalGit(ctx, defaultParser)
 	require.NoError(t, err)
 	require.Equal(t, automatic, replayedAutomatic)
+	var profileMismatch *uci.ContextError
 	explicitGo := false
 	defaultParser.ParserBundle = &explicitGo
 	_, err = store.RegisterLocalGit(ctx, defaultParser)

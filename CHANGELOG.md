@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Return 403 for a valid keycard without an enrolled memory principal on selector-free memory reads; preserve the legacy missing-project response for callers without a keycard.
+
+- Enforce current domain ownership policy on typed memory revisions: reject mode records a denial and returns 403 without revising; an audit failure leaves the card unchanged; warn mode permits the revision with its warning and audit status. Document the response in the generated API schema.
+
+- In auth-disabled mode, validate explicit credentials on the scoped typed-memory HTTP routes and accept an existing persisted admin browser session for principal enrollment and keycard issuance. Keep invalid credentials fail-closed and preserve synthetic identity on unrelated and unkeyed routes; disabled authentication does not provide privacy isolation. Disabled-mode gRPC behavior is unchanged.
+
+- Apply builtin and configured redaction to REST memory creates and revisions, including newly captured prior bodies; refuse fully redacted content without advancing history. Preserve nonempty whitespace-only input and leave existing history unchanged. Invalidate stale revision vectors and attempt re-embedding asynchronously when configured, without claiming provider-error retry. Prevent invalid backfill vectors from spinning; preserve scoped private-query and telemetry filtering, and exclude memory context metadata from consolidation selectors while retaining project membership.
+
+- Require native project membership under mutation locks when revising a typed project card; a read alias does not grant write authority.
+
+- Normalize CRLF only in bounded task queries; budget redacted, escaped knowledge and code within the existing output cap; capture corrections and segments using verified local or available native project identity within a separate bounded budget; and require packaged prompt runtime dependencies and source-matching prompt/launcher bytes in the archive gate.
+
+- Assemble ready prompt knowledge in declared provider order, preserving each provider's ranking regardless of completion timing and keeping bounded-frame trimming stable for unchanged evidence.
+
+- Preserve bounded knowledge when an empty code packet exceeds the shared frame budget; keep correction and segmentation capture alive through successful prompt return and quiet mode. Include the native task schema in the explicitly unverified offline catalog and check packaged extension dependencies.
+
+- Reuse the persisted client installation identity read-only for prompt context, mask diagnostic secrets before presentation, and suppress repeated evidence independently of transient exposure references. Preserve original evidence hashes and distinguish redacted display text from source. Update the startup fixture for native knowledge delivery.
+
+- Recover an existing native Source from the actual Git cwd without a caller-supplied locator or historical View/index binding. Permit explicit Go-to-current-semantic promotion through a new immutable checkout registration profile while retaining implicit Go replay, Source/project authorization, semantic-to-Go refusal and old profiles/artifacts/Views. Document the verified installed-parser and outside-callback preparation path; this repair does not claim loaded-host or useful 500ms delivery acceptance.
+
+- Honor optional positive `X-Engram-Budget-Ms` remaining-work budgets on GET/POST `/api/context/search` without extending inherited deadlines, overflowing duration conversion, or adding a global 500ms cap. Preserve ordinary no-header provider behavior; bound optional reranking inside explicit budgets so authorized lexical fallback and final ACL/version/body-digest revalidation retain processing time. Add truthful optional memory/behavioral-rule `source_ref` metadata, distinguish mutable row versions from body identity, and preserve exact legacy numeric observation IDs even beyond JavaScript's safe-integer range.
+
+- Add cursor-ready candidate queue navigation and warn when a full legacy response may be truncated; this does not add backend continuation support.
+
+- Exercise cross-profile embedding reuse through two publicly registered worktrees of one Source using the installed artifact harness and a synthetic loopback provider.
+
+
+- Allow the installed dirty-worktree acceptance scenario to use the same explicit released-artifact inputs as the public-consumer test, retaining source-build defaults. Bind parser fixtures to the semantic profile and observe watcher transitions through selected Views without inventing unavailable run IDs.
+
+- Remove the fixed Swagger host so the UI uses the documentation's serving origin; older deployments retain their existing schema until updated.
+
+- Keep long statistics values within their metric columns so adjacent values remain readable, without changing the displayed precision or unknown-versus-zero semantics.
+
 - Regenerate the API through the maintained worker target using canonical local Go package directories and Swag 1.16.6, with real producer errors stopping the build. Correct existing context search/inject/session-start annotations without changing handlers; document the shared GET/POST conditional-query limitation. The actual producer and server build pass, with 40 named schema checks and all 76 references resolved; that producer checkpoint established compile-only retained-reader oracle provenance, with later native query proof recorded separately, and installed/release acceptance remains separate.
 
 - Add retained catalog `families` metadata with kind, technical table, saved membership-occurrence count and declared/separate/metadata-only reader boundary. Preserve every group, opaque reference, safe label and reason without payload previews, readable-record totals, availability or historical ownership assignment. This descriptor change does not provide cross-group record discovery or installed-consumer acceptance.
