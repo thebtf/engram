@@ -126,6 +126,31 @@ func TestIssueCreateRecoveryIdentifiesKnownRolesAndPreservesAmbiguity(t *testing
 				require.ErrorAs(t, err, &hold)
 				require.Equal(t, refusal, hold.Code)
 			}
+			inserts = 0
+			params, err := json.Marshal(map[string]any{"name": "issues", "arguments": map[string]any{"action": "create", "title": "recovery", "target_project": tc.target}})
+			require.NoError(t, err)
+			response := server.HandleRequest(ctx, &Request{JSONRPC: "2.0", ID: 1, Method: "tools/call", Params: params})
+			encoded, err := json.Marshal(response)
+			require.NoError(t, err)
+			var wire struct {
+				Error struct {
+					Data    string `json:"data"`
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			require.NoError(t, json.Unmarshal(encoded, &wire))
+			require.Equal(t, refusal, wire.Error.Data)
+			for _, part := range tc.want {
+				require.Contains(t, strings.ToLower(wire.Error.Message), strings.ToLower(part))
+			}
+			for _, part := range tc.avoid {
+				require.NotContains(t, wire.Error.Message, part)
+			}
+			if tc.wantInsert {
+				require.Equal(t, 1, inserts)
+			} else {
+				require.Zero(t, inserts)
+			}
 		})
 	}
 }

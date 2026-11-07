@@ -1164,6 +1164,7 @@ func (s *Server) handleToolsCall(ctx context.Context, req *Request) *Response {
 		var contextError *uci.ContextError
 		var projectError *projectidentity.LogicalError
 		var historyError *recallHistoryRecoveryError
+		var issueRecovery *issueRecoveryError
 		if errors.As(err, &contextError) {
 			code := string(contextError.Code())
 			data = code
@@ -1172,6 +1173,8 @@ func (s *Server) handleToolsCall(ctx context.Context, req *Request) *Response {
 			}
 		} else if errors.As(err, &projectError) {
 			data = projectError.Code
+		} else if errors.As(err, &issueRecovery) {
+			data = issueRecovery.code
 		} else if errors.As(err, &historyError) {
 			data = map[string]any{
 				"code": "INCLUDE_SUPERSEDED_UNSUPPORTED",

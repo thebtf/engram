@@ -243,7 +243,15 @@ func (s *Server) authorizeIssueSourceMutation(ctx context.Context, id int64) (bo
 	return isOperator, nil
 }
 
-func issueAdoptionRefusal(err error) bool {
+type issueRecoveryError struct {
+	err  error
+	code string
+}
+
+func (e *issueRecoveryError) Error() string { return e.err.Error() }
+func (e *issueRecoveryError) Unwrap() error { return e.err }
+
+func issueAdoptionRefusal(err error) string {
 	var hold *gormdb.ConsolidationError
 	var pgErr *pgconn.PgError
 	var pqErr *pq.Error
@@ -256,7 +264,10 @@ func issueAdoptionRefusal(err error) bool {
 	case errors.As(err, &pqErr) && pqErr.Code == "P0001":
 		code = pqErr.Message
 	}
-	return code == "PROJECT_ADOPTION_UNRESOLVED_MEMBERSHIP" || code == "PROJECT_ADOPTION_CONFLICTING_MEMBERSHIP"
+	if code == "PROJECT_ADOPTION_UNRESOLVED_MEMBERSHIP" || code == "PROJECT_ADOPTION_CONFLICTING_MEMBERSHIP" {
+		return code
+	}
+	return ""
 }
 
 func (s *Server) handleIssueCreate(ctx context.Context, m map[string]any) (string, error) {
@@ -303,8 +314,8 @@ func (s *Server) handleIssueCreate(ctx context.Context, m map[string]any) (strin
 	if targetProject != "" {
 		targetProject, err = s.issueStore.ResolveProject(ctx, targetProject)
 		if err != nil {
-			if issueAdoptionRefusal(err) {
-				return "", fmt.Errorf("target_project resolution failed; use an independently confirmed, authorized existing canonical target UUID, or resolve the exact verified legacy ID with authenticated GET /api/projects/resolve?legacy_id=<URI-encoded-exact-id>. Do not select by name or adopt unresolved membership: %w", err)
+			if code := issueAdoptionRefusal(err); code != "" {
+				return "", &issueRecoveryError{code: code, err: fmt.Errorf("target_project resolution failed; use an independently confirmed, authorized existing canonical target UUID, or resolve the exact verified legacy ID with authenticated GET /api/projects/resolve?legacy_id=<URI-encoded-exact-id>. Do not select by name or adopt unresolved membership: %w", err)}
 			}
 			return "", err
 		}
@@ -315,8 +326,8 @@ func (s *Server) handleIssueCreate(ctx context.Context, m map[string]any) (strin
 	}
 	sourceProject, err := s.issueSourceProject(ctx)
 	if err != nil {
-		if issueAdoptionRefusal(err) {
-			return "", fmt.Errorf("source_project (native caller) resolution failed; use project_context(action=\"repair\") and, if needed, project_context(action=\"choices\"). Follow its marker and caller-root hash preconditions; do not guess or adopt unresolved membership: %w", err)
+		if code := issueAdoptionRefusal(err); code != "" {
+			return "", &issueRecoveryError{code: code, err: fmt.Errorf("source_project (native caller) resolution failed; use project_context(action=\"repair\") and, if needed, project_context(action=\"choices\"). Follow its marker and caller-root hash preconditions; do not guess or adopt unresolved membership: %w", err)}
 		}
 		return "", err
 	}
@@ -344,8 +355,8 @@ func (s *Server) handleIssueCreate(ctx context.Context, m map[string]any) (strin
 
 	id, err := s.issueStore.CreateIssue(ctx, issue)
 	if err != nil {
-		if issueAdoptionRefusal(err) {
-			return "", fmt.Errorf("create issue: storage refusal does not identify whether source_project or target_project failed; preserve identity and data, and never replay a mutation with an unknown outcome: %w", err)
+		if code := issueAdoptionRefusal(err); code != "" {
+			return "", &issueRecoveryError{code: code, err: fmt.Errorf("create issue: storage refusal does not identify whether source_project or target_project failed; preserve identity and data, and never replay a mutation with an unknown outcome: %w", err)}
 		}
 		return "", fmt.Errorf("create issue: %w", err)
 	}
