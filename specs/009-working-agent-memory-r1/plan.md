@@ -241,9 +241,17 @@ Expose save/read/revise/find through the supported client path. For uncertainty 
 
 ### Deliver usable links
 
-Add the narrow knowledge-relation use case: related_to and directed references, bounded ordinary neighbor lookup, remove, provenance, and revision-sensitive references. Reuse an applicable existing relation owner after source verification; do not assume historical graph readers supply a writer.
+**D2 caller-first decision:** Add a dedicated, narrow owner for user-authored memory-link records and receipts. Memory remains the sole card-body owner. Do not reopen the retired graph writer: `knowledge_edges` lacks revision pins, active logical uniqueness, and bounded authorization-before-limit; historical generic traversal has different direction and visibility semantics.
 
-Check both endpoints before returning or mutating links. Links cannot grant access or rewrite record affiliation. Keep these user-authored assertions distinct from automatic code relations. Do not restore a manual graph editor or broad ontology.
+The first vertical slice serves self-memory cards through HTTP `POST` and `GET /api/memories/{source_id}/links` and `DELETE /api/memory-links/{link_id}`. Derive the enrolled canonical principal from the verified keycard. Create accepts `target_id`, `relation`, optional `target_version` for directed references, optional `request_key`, and optional `source_session_id` as untrusted provenance. Responses include the stable link ID, endpoint IDs, relation, optional version, canonical author, and original `source_session_id`; bounded lists return `links` and `next_cursor`.
+
+Normalize an unordered `related_to` by stable endpoint IDs and reject revision pins for it. `references` is directional; distinct target versions are distinct assertions. A new link returns 201; the same active logical relation returns 200 with its original identity and provenance. Scope keyed receipts by canonical principal kind/principal and normalized operation, including normalized revision pins. Persist a receipt even when a duplicate create is a no-op. A changed payload under the same key conflicts; replay of an original since removed conflicts rather than creating or resurrecting a different link.
+
+Check access and lifecycle for both endpoints before mutation and before applying list limits or cursors. The project-only `WithAuthorizedMemories` wrapper is not self authorization. Acquire stable ascending endpoint locks after the necessary actual table-lock prefix, and preserve workstation-private keycard restrictions. Links never grant access or alter ownership. Hide links with inactive endpoints without exposing their metadata; retain unremoved link records so an explicitly restored endpoint can make them visible after fresh authorization. Explicitly removed links remain removed. Keep these assertions distinct from automatic code relations; do not restore a manual graph editor or add a broad ontology.
+
+Use an additive migration with data-preserving rollback. Select its final number only after B1, Feature012 ordering, and the current target ledger are known; never rewrite an applied migration. Extend only the selected auth-disabled HTTP credential routes for these endpoints; do not change the gRPC realm globally or claim privacy isolation under disabled auth.
+
+Require test-first proof through the real router, including concurrency, retries, authorization, lifecycle, and revision pins, followed by fresh-session natural-query discovery and useful traversal. Versioned-document and other-record link endpoints remain an explicitly unsatisfied portion of AU-07; this slice does not claim their completion. No new IAM, scheduler, or full Feature011 dependency is required.
 
 ### Prove external continuity
 

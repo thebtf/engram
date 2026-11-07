@@ -196,6 +196,10 @@ Compose stack. Important defaults and boundaries:
 
 - PostgreSQL uses the bundled `pgvector/pgvector:pg17` service unless
   `DATABASE_DSN` overrides it.
+  The server's PostgreSQL role also requires the database `TEMPORARY` privilege
+  when applying the self-memory link migration: it creates transaction-local
+  temporary tables to validate retained schema. Without that privilege the
+  migration fails; it does not convert or replace retained link data.
 - `ENGRAM_EMBEDDING_URL` is optional. With no embedding endpoint, recall remains
   available through full-text search rather than a vector tier.
 - `ENGRAM_RERANK_URL` is an optional source-wired recall path, not a default or

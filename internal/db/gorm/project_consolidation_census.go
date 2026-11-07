@@ -29,6 +29,8 @@ type consolidationTable struct {
 
 type consolidationForeignKey struct {
 	TableName, ParentTable string
+	ParentLocal            bool
+	DeleteAction           string
 	Columns, ParentColumns pq.StringArray `gorm:"type:text[]"`
 }
 
@@ -41,12 +43,19 @@ type consolidationRow struct {
 	NativeVersion                                               string
 }
 
+type consolidationOmittedVersion struct {
+	Table         string
+	Key           JSONRaw
+	NativeVersion string
+}
+
 type consolidationCensusState struct {
 	SourceVersion, Database, Snapshot, Schema, Fingerprint string
 	NativeSnapshot                                         string
 	Tables                                                 []consolidationTable
 	Rows                                                   []consolidationRow
 	Gaps                                                   []string
+	ExcludedNative                                         []consolidationOmittedVersion `json:",omitempty"`
 }
 
 type ConsolidationCensus struct {
@@ -107,11 +116,11 @@ func consolidationSchemaProjection(tx *gormlib.DB) (string, []consolidationColum
 		return "", nil, nil, err
 	}
 	var fks []consolidationForeignKey
-	err = tx.Raw(`SELECT cl.relname AS table_name, parent.relname AS parent_table,
+	err = tx.Raw(`SELECT cl.relname AS table_name, parent.relname AS parent_table, pn.nspname=current_schema() AS parent_local, c.confdeltype::text AS delete_action,
 		ARRAY(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY k(num,ord) JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.num ORDER BY k.ord) AS columns,
 		ARRAY(SELECT a.attname::text FROM unnest(c.confkey) WITH ORDINALITY k(num,ord) JOIN pg_attribute a ON a.attrelid=c.confrelid AND a.attnum=k.num ORDER BY k.ord) AS parent_columns
 		FROM pg_constraint c JOIN pg_class cl ON cl.oid=c.conrelid JOIN pg_class parent ON parent.oid=c.confrelid
-		JOIN pg_namespace n ON n.oid=cl.relnamespace WHERE n.nspname=current_schema() AND c.contype='f' ORDER BY cl.relname,c.conname`).Scan(&fks).Error
+		JOIN pg_namespace n ON n.oid=cl.relnamespace JOIN pg_namespace pn ON pn.oid=parent.relnamespace WHERE n.nspname=current_schema() AND c.contype='f' ORDER BY cl.relname,c.conname`).Scan(&fks).Error
 	if err != nil {
 		return "", nil, nil, err
 	}
@@ -348,6 +357,9 @@ func (s *ProjectConsolidationStore) census(tx *gormlib.DB, sourceVersion string)
 		return state, consolidationHold("LARGE_OBJECT_NATIVE_EXPORT_REQUIRED")
 	}
 	byObject := map[string][]int{}
+	nonProject := map[string]bool{}
+	parentObjects := map[string][]string{}
+	incompleteParents := map[string]bool{}
 	for ti := range state.Tables {
 		table := &state.Tables[ti]
 		table.Kind = consolidationDomain(table.Name)
@@ -407,6 +419,8 @@ func (s *ProjectConsolidationStore) census(tx *gormlib.DB, sourceVersion string)
 						return state, consolidationHold("INVENTORY_INCOMPLETE")
 					}
 					if owning == "self" || owning == "global" {
+						state.ExcludedNative = append(state.ExcludedNative, consolidationOmittedVersion{table.Name, keyJSON, version})
+						nonProject[consolidationObjectKey(table.Name, keyJSON)] = true
 						continue
 					}
 				}
@@ -513,23 +527,61 @@ func (s *ProjectConsolidationStore) census(tx *gormlib.DB, sourceVersion string)
 				parent = &state.Tables[i]
 			}
 		}
-		if child == nil || parent == nil {
+		if child == nil {
 			continue
 		}
-		if child.Kind == "independent_view" && fk.ParentTable != "sources" && fk.ParentTable != "ci_checkouts" && fk.ParentTable != "ci_views" {
+		var presentColumns []string
+		for _, name := range fk.Columns {
+			presentColumns = append(presentColumns, "c."+quoted(name)+" IS NOT NULL")
+		}
+		// SET NULL can retain a historical child after its parent was deleted.
+		if fk.DeleteAction == "n" {
+			presentColumns = []string{"TRUE"}
+		}
+		sharedEmbeddingProfile := child.Name == "ci_embeddings" && fk.ParentTable == "ci_embedding_profiles" && len(fk.Columns) == 1 && fk.Columns[0] == "embedding_profile_id" && len(fk.ParentColumns) == 1 && fk.ParentColumns[0] == "embedding_profile_id"
+		if parent == nil || !fk.ParentLocal || (child.Kind == "independent_view" && fk.ParentTable != "sources" && fk.ParentTable != "ci_checkouts" && fk.ParentTable != "ci_views" && !sharedEmbeddingProfile) {
+			rows, err := tx.Raw("SELECT " + consolidationKeySQL(*child, "c") + "::text FROM " + quoted(child.Name) + " c WHERE " + strings.Join(presentColumns, " AND ")).Rows()
+			if err != nil {
+				return state, err
+			}
+			for rows.Next() {
+				var key []byte
+				if err := rows.Scan(&key); err != nil {
+					rows.Close()
+					return state, err
+				}
+				canonical, err := consolidationCanonicalKey(key)
+				if err != nil {
+					rows.Close()
+					return state, err
+				}
+				childKey := consolidationObjectKey(child.Name, []byte(canonical))
+				incompleteParents[childKey] = true
+				for _, i := range byObject[childKey] {
+					if state.Rows[i].Kind == "inherited" {
+						state.Rows[i].Parents = append(state.Rows[i].Parents, s.opaque("untracked-parent", state.Rows[i].Reference))
+					}
+				}
+			}
+			err = rows.Err()
+			rows.Close()
+			if err != nil {
+				return state, err
+			}
 			continue
 		}
 		var conditions []string
 		for i, name := range fk.Columns {
 			conditions = append(conditions, "c."+quoted(name)+"=p."+quoted(fk.ParentColumns[i]))
 		}
-		rows, err := tx.Raw("SELECT " + consolidationKeySQL(*child, "c") + "::text," + consolidationKeySQL(*parent, "p") + "::text FROM " + quoted(child.Name) + " c JOIN " + quoted(parent.Name) + " p ON " + strings.Join(conditions, " AND ")).Rows()
+		rows, err := tx.Raw("SELECT " + consolidationKeySQL(*child, "c") + "::text," + consolidationKeySQL(*parent, "p") + "::text,p.tableoid IS NOT NULL FROM " + quoted(child.Name) + " c LEFT JOIN " + quoted(parent.Name) + " p ON " + strings.Join(conditions, " AND ") + " WHERE " + strings.Join(presentColumns, " AND ")).Rows()
 		if err != nil {
 			return state, err
 		}
 		for rows.Next() {
 			var ck, pk []byte
-			if err := rows.Scan(&ck, &pk); err != nil {
+			var present bool
+			if err := rows.Scan(&ck, &pk, &present); err != nil {
 				rows.Close()
 				return state, err
 			}
@@ -538,12 +590,38 @@ func (s *ProjectConsolidationStore) census(tx *gormlib.DB, sourceVersion string)
 				rows.Close()
 				return state, err
 			}
+			childKey := consolidationObjectKey(child.Name, []byte(canonicalChild))
+			if !present {
+				if len(nonProject) != 0 {
+					parentObjects[childKey] = append(parentObjects[childKey], "")
+				}
+				for _, i := range byObject[childKey] {
+					if state.Rows[i].Kind == "inherited" {
+						state.Rows[i].Parents = append(state.Rows[i].Parents, s.opaque("unknown-parent", childKey))
+					}
+				}
+				continue
+			}
+			if sharedEmbeddingProfile {
+				continue
+			}
 			canonicalParent, err := consolidationCanonicalKey(pk)
 			if err != nil {
 				rows.Close()
 				return state, err
 			}
 			ck, pk = []byte(canonicalChild), []byte(canonicalParent)
+			parentKey := consolidationObjectKey(parent.Name, pk)
+			if len(nonProject) != 0 {
+				parentObjects[childKey] = append(parentObjects[childKey], parentKey)
+			}
+			if nonProject[parentKey] {
+				for _, i := range byObject[childKey] {
+					if state.Rows[i].Kind == "inherited" {
+						state.Rows[i].Parents = append(state.Rows[i].Parents, s.opaque("nonproject-parent", parentKey))
+					}
+				}
+			}
 			for _, pi := range byObject[consolidationObjectKey(parent.Name, pk)] {
 				p := state.Rows[pi]
 				if p.Column != "" && p.Column != "project" && p.Column != "target_project" && !(p.Table == "rule_candidates" && p.Column == "source_project") && !(p.Table == "sources" && p.Column == "project_id") {
@@ -565,6 +643,56 @@ func (s *ProjectConsolidationStore) census(tx *gormlib.DB, sourceVersion string)
 			return state, err
 		}
 	}
+	// Exclude only objects whose complete FK ancestry proves non-project scope.
+	// Unknown, absent, or mixed parents remain in the normal unresolved path.
+	dependents := map[string][]string{}
+	remaining := map[string]int{}
+	for key, parents := range parentObjects {
+		indices := byObject[key]
+		if len(indices) == 0 || incompleteParents[key] {
+			continue
+		}
+		eligible := true
+		for _, i := range indices {
+			if state.Rows[i].Kind != "inherited" {
+				eligible = false
+				break
+			}
+		}
+		if !eligible {
+			continue
+		}
+		remaining[key] = len(parents)
+		for _, parent := range parents {
+			if parent != "" {
+				dependents[parent] = append(dependents[parent], key)
+			}
+		}
+	}
+	queue := make([]string, 0, len(nonProject))
+	for key := range nonProject {
+		queue = append(queue, key)
+	}
+	for i := 0; i < len(queue); i++ {
+		for _, child := range dependents[queue[i]] {
+			remaining[child]--
+			if remaining[child] == 0 && !nonProject[child] {
+				nonProject[child] = true
+				queue = append(queue, child)
+			}
+		}
+	}
+	retained := state.Rows[:0]
+	for _, row := range state.Rows {
+		key := consolidationObjectKey(row.Table, row.Key)
+		if !nonProject[key] {
+			retained = append(retained, row)
+		} else if len(byObject[key]) != 0 {
+			state.ExcludedNative = append(state.ExcludedNative, consolidationOmittedVersion{row.Table, row.Key, row.NativeVersion})
+			delete(byObject, key)
+		}
+	}
+	state.Rows = retained
 	for i := range state.Rows {
 		sort.Strings(state.Rows[i].Parents)
 		state.Rows[i].Parents = compactStrings(state.Rows[i].Parents)
