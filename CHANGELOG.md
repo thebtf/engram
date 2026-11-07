@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Correct the Claude Code adapter guide: the registered SessionEnd callback targets a retired handler, while outcome recording is an explicit MCP feedback operation distinct from Stop transcript processing.
+
 - Prevent legacy principal queries from disclosing inaccessible match counts or workstation-private memories; apply principal, domain and workstation visibility before pagination and represent unknown hidden counts as null.
 
 - Upgrade `golang.org/x/net` to v0.62.0 to address CVE-2026-78661 in its HTML parser and update its required transitive dependencies.
