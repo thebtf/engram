@@ -302,3 +302,51 @@ func TestSelfCardRetirementAccessAndSearch(t *testing.T) {
 		require.NotContains(t, query.body, "selfretirementuniquemarker")
 	})
 }
+
+func TestAuthDisabledSelfArchiveAndSearch(t *testing.T) {
+	db := memoryMutationSQLiteDB(t)
+	f := newMemoryMutationSecurityFixture(t, db)
+	require.NoError(t, db.Exec(`INSERT INTO memory_principals (principal_kind, principal, enrolled_by) VALUES (?, ?, ?), (?, ?, ?)`, "agent", "agent/synthetic-security-a", 1, "agent", "agent/synthetic-security-b", 1).Error)
+	f.service.principalMemoryQueryService = principalmemory.NewPrincipalMemoryQueryService(f.service.memoryStore, f.service.auditStore)
+	f.tokenAuth.authDisabled = true
+	created := f.serve(f.request(t, context.Background(), http.MethodPost, "/api/memories", f.tokenA, map[string]any{"content": "disabledselfuniquemarker"}))
+	require.Equal(t, http.StatusCreated, created.status, created.body)
+	var card struct {
+		ID int64 `json:"id"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(created.body), &card))
+	path := fmt.Sprintf("/api/memories/%d/transition", card.ID)
+	search := "/api/memories/principal?q=disabledselfuniquemarker"
+	t.Run("search", func(t *testing.T) {
+		response := f.serve(f.request(t, context.Background(), http.MethodGet, search, f.tokenA, nil))
+		require.Equal(t, http.StatusOK, response.status, response.body)
+		require.Contains(t, response.body, "disabledselfuniquemarker")
+	})
+	t.Run("denials", func(t *testing.T) {
+		for _, token := range []string{"invalid-synthetic-key", f.tokenB, ""} {
+			req := f.request(t, context.Background(), http.MethodPost, path+"?context=self", token, map[string]any{"action": "archive"})
+			if token == "" {
+				req.Header.Del("Authorization")
+			}
+			response := f.serve(req)
+			if token == "invalid-synthetic-key" {
+				require.Equal(t, http.StatusUnauthorized, response.status)
+			} else {
+				require.Contains(t, []int{http.StatusForbidden, http.StatusNotFound}, response.status)
+			}
+		}
+		response := f.serve(f.request(t, context.Background(), http.MethodGet, search, "invalid-synthetic-key", nil))
+		require.Equal(t, http.StatusUnauthorized, response.status)
+		req := f.request(t, context.Background(), http.MethodGet, search, "", nil)
+		req.Header.Del("Authorization")
+		require.Equal(t, http.StatusForbidden, f.serve(req).status)
+	})
+	t.Run("archive", func(t *testing.T) {
+		response := f.serve(f.request(t, context.Background(), http.MethodPost, path, f.tokenA, map[string]any{"action": "archive"}))
+		require.Equal(t, http.StatusOK, response.status, response.body)
+		require.Contains(t, response.body, `"status":"archived"`)
+		response = f.serve(f.request(t, context.Background(), http.MethodGet, search, f.tokenA, nil))
+		require.Equal(t, http.StatusOK, response.status, response.body)
+		require.NotContains(t, response.body, "disabledselfuniquemarker")
+	})
+}
