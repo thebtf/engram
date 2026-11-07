@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import cp from 'node:child_process';
 import crypto from 'node:crypto';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import fs from 'node:fs';
 import { createRequire, register } from 'node:module';
 import os from 'node:os';
@@ -18,9 +20,10 @@ async function exerciseDefaultFactory(mode) {
   assert.ok(root, 'worker requires its isolated fixture root');
   const effects = { projectResolutions: 0, projectExecutions: 0, backendRequests: 0, nativeProcesses: 0, network: 0, downloads: 0 };
   const registrations = new Map(), handlers = new Map(), sent = [], requests = [], executions = [], unhandled = [];
-  let cleanupRegisters = 0, cleanupUnregisters = 0, cleanupInvocations = 0, readiness = 'pending', factoryState = 'pending';
+  let cleanupRegisters = 0, cleanupUnregisters = 0, cleanupInvocations = 0, readiness = 'pending', factoryState = 'pending', preparationCalls = 0;
   let preparation, installing, preparedSignal, failure, held, afterPreparation, settled, afterTamper, afterRecovery, afterDisposal;
   const gate = deferred(), entered = deferred();
+  const terminalMode = mode.startsWith('terminal-noise');
   const onUnhandled = error => unhandled.push(String(error));
   process.on('unhandledRejection', onUnhandled);
   // Fence real process/network effects before loading the production CJS helpers.
@@ -33,12 +36,13 @@ async function exerciseDefaultFactory(mode) {
   const lib = require('../hooks/lib.js');
   const launcher = require('../scripts/run-engram.js');
   const { hashFile, objectPath, objectRoots, parsePolicy, resolveForLaunch, TARGET_ASSETS } = require('../scripts/ensure-binary.js');
-  const { createPolicy } = require('../scripts/bootstrap-policy.js');
+  const { BootstrapError, createPolicy } = require('../scripts/bootstrap-policy.js');
   const bytes = Buffer.from('controlled trusted startup client, never executable');
   const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
   const version = '7.0.7';
   const targets = Object.fromEntries(Object.entries(TARGET_ASSETS).map(([key, asset]) => [key, { version, asset, size: bytes.length, sha256 }]));
   const policy = parsePolicy(JSON.stringify(createPolicy(version, targets)), version);
+  fs.writeFileSync(path.join(root, 'client-instance-id'), `engram-${'a'.repeat(32)}\n`);
   const roots = objectRoots(root), object = objectPath(roots, policy.target.desired);
   if (mode === 'warm') fs.writeFileSync(object, bytes);
   const project = '11111111-1111-4111-8111-111111111111';
@@ -48,6 +52,10 @@ async function exerciseDefaultFactory(mode) {
   });
   const realPrepare = launcher.prepareHookClient, realResolve = lib.resolveHookProjectContext;
   launcher.prepareHookClient = options => {
+    preparationCalls++;
+    if (terminalMode && preparationCalls > 1) {
+      return realPrepare({ ...options, pluginRoot: root, pluginData: root, resolve: async () => { throw new BootstrapError('controlled recovery secret_fixture\n\x1b[31m'); } });
+    }
     assert.equal(preparation, undefined, 'one preparation per binding');
     assert.ok(options.timeoutMs > 0 && options.timeoutMs <= 360000);
     preparedSignal = options.signal;
@@ -59,6 +67,7 @@ async function exerciseDefaultFactory(mode) {
         entered.resolve();
         try {
           await gate.promise;
+          if (terminalMode) throw new BootstrapError('controlled startup secret_fixture https://private.invalid/?token=token_fixture\n\x1b[31m');
           if (mode === 'rejected') throw new Error('controlled offline readiness failure');
           if (forwarded.signal.aborted) throw new Error('controlled readiness abort');
           if (mode !== 'warm') fs.writeFileSync(object, mode === 'corrupt' ? Buffer.alloc(bytes.length) : bytes);
@@ -79,11 +88,38 @@ async function exerciseDefaultFactory(mode) {
         effects.projectExecutions++;
         assert.equal(file, object);
         assert.equal(hashFile(file, policy.target.desired, roots.objects), true, 'only verified bytes may reach execution');
-        assert.deepEqual(args, ['project', 'resolve', '--root', root, '--json']);
+        assert.deepEqual(args, ['project', 'resolve', '--root', root, '--json', ...(options.check === true ? ['--check'] : [])]);
         executions.push({ args, timeout: execOptions.timeout });
-        callback(null, JSON.stringify({ project_id: project }));
+        callback(null, JSON.stringify(options.check === true ? { status: 'resolved', binding: { id: project, match: 'portable_marker' } } : { project_id: project }));
       },
     }).then(context => { readiness = 'trusted'; return context; });
+  };
+  const realTaskContext = launcher.requestTaskContext;
+  launcher.requestTaskContext = (facts, options) => {
+    effects.projectResolutions++;
+    assert.notEqual(readiness, 'pending');
+    return realTaskContext(facts, {
+      ...options, pluginRoot: root, pluginData: root, resolve: verify,
+      createTaskContextWorker(_entry, execution) {
+        effects.projectExecutions++;
+        const work = execution.workerData;
+        assert.equal(work.path, object);
+        assert.equal(hashFile(work.path, policy.target.desired, roots.objects), true);
+        assert.equal(work.cwd, root);
+        assert.ok(work.deadlineAt > Date.now());
+        executions.push({ args: ['task-context', '--json'], timeout: work.deadlineAt - Date.now() });
+        const request = JSON.parse(work.input);
+        assert.equal(request.schema, 1);
+        assert.equal(request.max_bytes, 8000);
+        const content = 'Do not remove the recovery backup.';
+        const digest = crypto.createHash('sha256').update(content).digest('hex');
+        const response = { schema: 1, status: 'ok', reason_code: 'OK', project: { status: 'resolved', binding: { id: project, match: 'portable_marker' } }, knowledge: { memory_status: 'ok', note_status: 'empty', rule_status: 'empty', items: [{ kind: 'memory', id: 42, content, content_hash: digest, source_hash: digest, excerpt: false }] } };
+        const worker = new EventEmitter();
+        worker.stdout = new PassThrough(); worker.stderr = new PassThrough(); worker.postMessage = () => { };
+        queueMicrotask(() => { const bytes = Buffer.from(JSON.stringify(response) + '\n'); worker.emit('message', { type: 'closed', ok: true, bytes: Uint8Array.from(bytes).buffer }); worker.emit('exit', 0); });
+        return worker;
+      },
+    }).then(response => { if (response.project?.status === 'resolved') readiness = 'trusted'; return response; });
   };
   globalThis.fetch = async (url, options) => {
     url = new URL(url);
@@ -94,11 +130,9 @@ async function exerciseDefaultFactory(mode) {
     assert.equal(options.method, 'POST');
     const body = JSON.parse(options.body);
     assert.equal(body.project, project);
-    assert.ok(['/api/context/session-start', '/api/hooks/ambient-candidates'].includes(url.pathname));
+    assert.equal(url.pathname, '/api/context/session-start');
     requests.push({ route: url.pathname, body });
-    return new Response(JSON.stringify(url.pathname === '/api/context/session-start'
-      ? { memories: [{ content: 'trusted startup fixture memory' }] }
-      : { additional_context: 'trusted startup fixture ambient' }));
+    return new Response(JSON.stringify({ memories: [{ content: 'trusted startup fixture memory' }] }));
   };
   const singleton = Object.freeze({
     register(name, callback) {
@@ -162,17 +196,17 @@ async function exerciseDefaultFactory(mode) {
       assert.equal(settled.readiness, 'trusted');
       assert.equal(settled.effects.projectResolutions, 2);
       assert.equal(settled.effects.projectExecutions, 2);
-      assert.equal(settled.effects.backendRequests, 2);
+      assert.equal(settled.effects.backendRequests, 1);
       assert.equal(sent.length, 1);
       assert.match(sent[0].message.content, /trusted startup fixture memory/);
       assert.deepEqual(sent[0].options, { deliverAs: 'nextTurn' });
-      assert.equal(result.message.content, 'trusted startup fixture ambient');
+      assert.match(result.message.content, /Do not remove the recovery backup\./);
       assert.deepEqual(executions.map((item, index) => item.timeout > 0 && item.timeout <= (index === 0 ? 5000 : 500)), [true, true]);
       fs.writeFileSync(object, Buffer.alloc(bytes.length));
       assert.equal(await callbacks('after-tamper'), undefined);
       afterTamper = snapshot();
       assert.equal(afterTamper.effects.projectExecutions, 2, 'tampered bytes must not execute');
-      assert.equal(afterTamper.effects.backendRequests, 2, 'tampering must not request more context');
+      assert.equal(afterTamper.effects.backendRequests, 1, 'tampering must not request more context');
       assert.equal(afterTamper.sent, 1, 'tampering must not replay enrichment');
     } else {
       assert.equal(settled.readiness, 'failed');
@@ -180,16 +214,20 @@ async function exerciseDefaultFactory(mode) {
         'failed/corrupt cache may be checked read-only but must not execute, fetch or deliver; disposal must not even resolve');
       assert.equal(result, undefined);
       assert.equal(sent.length, 0);
+      if (terminalMode) {
+        await turn();
+        assert.equal(preparationCalls, 2, 'missing trusted cache must trigger one bounded background recovery');
+      }
       if (mode !== 'cancelled') {
         fs.writeFileSync(object, bytes);
         const recovered = await callbacks('after-verified-cache');
         afterRecovery = snapshot();
         assert.equal(afterRecovery.readiness, 'trusted', 'only successful real trusted resolution may admit enrichment');
-        assert.deepEqual(afterRecovery.effects, { ...held.effects, projectResolutions: 4, projectExecutions: 2, backendRequests: 2 });
+        assert.deepEqual(afterRecovery.effects, { ...held.effects, projectResolutions: 4, projectExecutions: 2, backendRequests: 1 });
         assert.equal(sent.length, 1);
         assert.match(sent[0].message.content, /trusted startup fixture memory/);
         assert.deepEqual(sent[0].options, { deliverAs: 'nextTurn' });
-        assert.equal(recovered.message.content, 'trusted startup fixture ambient');
+        assert.match(recovered.message.content, /Do not remove the recovery backup\./);
         assert.deepEqual(executions.map((item, index) => item.timeout > 0 && item.timeout <= (index === 0 ? 5000 : 500)), [true, true]);
       }
     }
@@ -206,6 +244,14 @@ async function exerciseDefaultFactory(mode) {
     assert.equal(cleanupInvocations, 1);
     assert.equal(preparedSignal.aborted, true);
     assert.equal(unhandled.length, 0, 'background rejection must be handled');
+    if (terminalMode && mode !== 'terminal-noise-unwritable') {
+      const log = fs.readFileSync(path.join(root, 'logs', 'startup-env.log'), 'utf8');
+      const diagnostics = log.split('\n').filter(line => line.includes('Trusted hook client readiness unavailable'));
+      assert.equal(diagnostics.length, 2, 'retain bounded preparation and disposal diagnostics');
+      assert.ok(diagnostics.every(line => line.includes(`stage=prepare code=BOOTSTRAP_ERROR plugin=${require('../package.json').version}`)));
+      assert.doesNotMatch(log, /secret_fixture|token_fixture|private\.invalid|\x1b/);
+      assert.ok(Buffer.byteLength(log) <= 2 * 128 * 1024, 'existing startup log retention bound applies');
+    }
     // 7.0.8 replaces callback-admission blocking, never the trusted-execution guard.
     assert.equal(held.factoryState, 'fulfilled', 'default factory must finish while cold preparation is held');
     assert.deepEqual(held.callbacks, ['session_start', 'before_agent_start'], 'register before readiness, execute only after trust');
@@ -220,7 +266,7 @@ async function exerciseDefaultFactory(mode) {
     process.removeListener('unhandledRejection', onUnhandled);
     console.log(`STARTUP_CAUSAL_RESULT ${JSON.stringify({
       mode, entry: fileURLToPath(entry), entrySHA256: crypto.createHash('sha256').update(fs.readFileSync(entry)).digest('hex'),
-      held, afterPreparation, settled, afterTamper, afterRecovery, afterDisposal, executions, requests, effects, cleanupRegisters, cleanupUnregisters, cleanupInvocations,
+      held, afterPreparation, settled, afterTamper, afterRecovery, afterDisposal, executions, requests, effects, preparationCalls, cleanupRegisters, cleanupUnregisters, cleanupInvocations,
       cleanupActive: registrations.size, loaderLifetime: 'isolated-worker', preparationSettled: readiness !== 'pending',
       preparedSignalAborted: preparedSignal?.aborted ?? null, unhandled,
       failure: failure ? { name: failure.name, message: failure.message, code: failure.code ?? null } : null,
@@ -233,12 +279,20 @@ if (process.argv[2] === '--startup-worker') {
   try { await exerciseDefaultFactory(process.argv[3]); }
   catch (error) { console.error(error.stack); process.exitCode = 1; }
 } else {
-  for (const mode of ['trusted', 'warm', 'rejected', 'corrupt', 'cancelled']) {
-    test(`OMP default factory registers during held ${mode === 'warm' ? 'warm' : 'cold'} readiness and preserves ${mode} execution guards`, t => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-default-startup-'));
+  for (const mode of ['trusted', 'warm', 'rejected', 'corrupt', 'cancelled', 'terminal-noise', 'terminal-noise-unwritable']) {
+    test(mode.startsWith('terminal-noise') ? `OMP default factory emits no raw terminal output during failed readiness and recovery (${mode})` : `OMP default factory registers during held ${mode === 'warm' ? 'warm' : 'cold'} readiness and preserves ${mode} execution guards`, t => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'HOOK-TERMINAL-startup-'));
       const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => ['SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATH', 'PATHEXT', 'SYSTEMDRIVE'].includes(key.toUpperCase())));
       for (const key of ['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TMP', 'TEMP']) env[key] = root;
       Object.assign(env, { ENGRAM_STARTUP_FIXTURE_ROOT: root, ENGRAM_URL: 'http://startup-fixture.invalid', ENGRAM_CONFIG_FILE: path.join(root, 'absent-config.json'), ENGRAM_DATA_DIR: root });
+      env.PLUGIN_DATA = root;
+      if (mode === 'terminal-noise-unwritable') {
+        env.PLUGIN_DATA = path.join(root, 'not-a-directory');
+        fs.writeFileSync(env.PLUGIN_DATA, 'controlled diagnostic write failure');
+      } else if (mode === 'terminal-noise') {
+        fs.mkdirSync(path.join(root, 'logs'));
+        fs.writeFileSync(path.join(root, 'logs', 'startup-env.log'), 'x\n'.repeat(128 * 1024));
+      }
       let result;
       try {
         result = cp.spawnSync(process.execPath, [fileURLToPath(import.meta.url), '--startup-worker', mode], {
@@ -249,6 +303,13 @@ if (process.argv[2] === '--startup-worker') {
       t.diagnostic(result.stdout);
       assert.ifError(result.error);
       assert.equal(result.status, 0, result.stderr || result.stdout);
+      if (mode.startsWith('terminal-noise')) {
+        const lines = result.stdout.trimEnd().split('\n');
+        assert.equal(lines.length, 1, 'only the worker result protocol may appear on stdout');
+        assert.ok(lines[0].startsWith('STARTUP_CAUSAL_RESULT '));
+        t.diagnostic(`worker stderr: ${JSON.stringify(result.stderr)}`);
+        assert.equal(result.stderr, '', 'background readiness, recovery and disposal must not write raw terminal output');
+      }
     });
   }
 }

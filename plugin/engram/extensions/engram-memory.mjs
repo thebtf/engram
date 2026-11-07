@@ -2,9 +2,9 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const lib = require('../hooks/lib.js');
 const { buildSessionStartContext } = require('../hooks/session-start.js');
-const { buildAmbientRequest, formatAmbientAdditionalContext } = require('../hooks/user-prompt.js');
+const { requestPromptContext } = require('../hooks/user-prompt.js');
 const { DOWNLOAD_DEADLINE_MS } = require('../scripts/ensure-binary.js');
-const { prepareHookClient } = require('../scripts/run-engram.js');
+const { prepareHookClient, appendStartupDiagnosticLog, resolvePluginRoot, resolvePluginData } = require('../scripts/run-engram.js');
 const { BootstrapError } = require('../scripts/bootstrap-policy.js');
 const { version: pluginVersion } = require('../package.json');
 const readinessCodes = new Set(['HOOK_CLIENT_UNAVAILABLE', 'ABORT_ERR', 'PROJECT_RESOLUTION_ABORTED', 'PROJECT_RESOLUTION_DEADLINE_EXCEEDED']);
@@ -34,9 +34,13 @@ export function createEngramMemoryExtension(options = {}) {
   const runtimeConfig = options.resolveEngramRuntimeConfig ?? lib.resolveEngramRuntimeConfig;
   const isQuiet = options.isQuiet ?? lib.isQuietMode;
   const prepare = options.prepareHookClient ?? prepareHookClient;
-  const diagnostic = options.onDiagnostic ?? (message => process.stderr.write(`[engram] ${message}\n`));
+  const diagnostic = options.onDiagnostic ?? (message => {
+    try { appendStartupDiagnosticLog(resolvePluginData(resolvePluginRoot()), `[engram] ${message}`); } catch { }
+  });
   let readiness, firstFailure, disposed = false, recovery, recoveryController, nextRecoveryAt = 0;
   const warned = new Set();
+  const delivered = new Set();
+  let activePrompt;
   const unavailable = (stage = 'prepare', error, kind = 'readiness') => {
     if (!firstFailure) {
       const code = readinessCodes.has(error?.code) ? error.code : readinessCodes.has(error?.message) ? error.message : error instanceof BootstrapError ? 'BOOTSTRAP_ERROR' : 'UNKNOWN';
@@ -71,6 +75,7 @@ export function createEngramMemoryExtension(options = {}) {
   }
 
   async function message(event, ctx, timeoutMs, ambient) {
+    const callbackDeadlineAt = ambient ? Date.now() + timeoutMs : undefined;
     if (isQuiet()) return null;
     if (readiness === 'pending') return null;
     if (disposed) { unavailable(); return null; }
@@ -78,6 +83,33 @@ export function createEngramMemoryExtension(options = {}) {
     if (!facts) return null;
     const prompt = ambient ? stringField(event?.prompt, event?.userMessage, event?.user_message, ctx?.prompt) : '';
     if (ambient && (!prompt || Buffer.byteLength(prompt) > hiddenContextLimit || Buffer.from(prompt, 'utf8').toString('utf8') !== prompt)) return null;
+    if (ambient) {
+      activePrompt?.abort();
+      const controller = new AbortController();
+      activePrompt = controller;
+      try {
+        const outcome = await requestPromptContext({ ...facts, prompt }, {
+          signal: controller.signal, delivered, deadlineAt: callbackDeadlineAt,
+          runtimeConfig: async options => {
+            const config = await runtimeConfig(options);
+            if (disposed || readiness === 'skipped') {
+              if (config.serverURL && !config.quiet) unavailable('config', undefined, 'ambient');
+              return { ...config, quiet: true };
+            }
+            return config;
+          },
+          requestTaskContext: options.requestTaskContext,
+          requestPost,
+        });
+        if (outcome.code === 'HOOK_CLIENT_UNAVAILABLE') {
+          unavailable('prepare', { code: outcome.code });
+          recoverClient();
+        }
+        return disposed || controller.signal.aborted || activePrompt !== controller || Date.now() >= callbackDeadlineAt || !outcome.content ? null : hiddenMessage(outcome.content);
+      } finally {
+        if (activePrompt === controller) activePrompt = undefined;
+      }
+    }
     const controller = new AbortController();
     const deadline = Date.now() + timeoutMs;
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -92,13 +124,13 @@ export function createEngramMemoryExtension(options = {}) {
       if (disposed || controller.signal.aborted || Date.now() >= deadline) return null;
       if (readiness === 'failed') readiness = 'ready';
       const payload = await requestPost(
-        ambient ? '/api/hooks/ambient-candidates' : '/api/context/session-start',
-        ambient ? buildAmbientRequest(context.Project, facts.session, prompt) : { project: context.Project, session_id: facts.session },
+        '/api/context/session-start',
+        { project: context.Project, session_id: facts.session },
         Math.max(1, deadline - Date.now()),
         { signal: controller.signal, serverURL: config.serverURL, token: config.token },
       );
       if (disposed) return null;
-      const content = ambient ? formatAmbientAdditionalContext(payload) : buildSessionStartContext(payload, context.Project, { maxLength: hiddenContextLimit });
+      const content = buildSessionStartContext(payload, context.Project, { maxLength: hiddenContextLimit });
       if (controller.signal.aborted || Date.now() >= deadline || typeof content !== 'string' || !content || Buffer.byteLength(content) > hiddenContextLimit) return null;
       return hiddenMessage(content);
     } catch (error) {
@@ -143,6 +175,8 @@ export function createEngramMemoryExtension(options = {}) {
       options.registerCleanup?.('engram-client-readiness', async () => {
         disposed = true;
         stage = 'cancelled';
+        activePrompt?.abort();
+        delivered.clear();
         controller.abort();
         recoveryController?.abort();
         await recovery?.catch(() => { });

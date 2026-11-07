@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/pkg/models"
@@ -112,7 +113,7 @@ type PrincipalMemoryQueryResult struct {
 	Project       string                     `json:"project,omitempty"`
 	Domain        string                     `json:"domain,omitempty"`
 	Items         []PrincipalMemoryQueryItem `json:"items"`
-	HiddenCount   int                        `json:"hidden_count"`
+	HiddenCount   *int                       `json:"hidden_count"`
 	Audit         PrincipalMemoryQueryAudit  `json:"audit"`
 	AuditStatus   string                     `json:"audit_status"`
 }
@@ -185,17 +186,27 @@ func (s *PrincipalMemoryQueryService) Query(ctx context.Context, req PrincipalMe
 		}
 	}
 
+	contextCaller := scope.KeycardContext{}
+	if identity, ok := auth.IdentityFrom(ctx); ok && identity.Source == auth.SourceClient && identity.KeycardID != "" {
+		if principal, kind, owned := identity.MemoryOwner(); owned {
+			contextCaller = scope.KeycardContext{Principal: principal, PrincipalKind: kind, WorkstationID: identity.WorkstationID()}
+		}
+	}
 	queryOpts := gormdb.ListOptions{
-		OwnerPrincipal:     strings.TrimSpace(req.OwnerPrincipal),
-		OwnerPrincipalKind: strings.TrimSpace(strings.ToLower(req.OwnerPrincipalKind)),
-		ContentContains:    strings.TrimSpace(req.Query),
-		ContentContainsAny: normalizeQueryTerms(req.QueryTerms),
-		IDs:                req.IDs,
-		IncludeSuperseded:  req.IncludeSuperseded,
-		IncludeExpired:     req.IncludeExpired,
-		AgentVisibility:    strings.TrimSpace(req.AgentVisibility),
-		Domain:             strings.TrimSpace(req.Domain),
-		Limit:              principalQueryFetchLimit(limit),
+		ContextCaller:              contextCaller,
+		EnforcePrincipalPolicy:     true,
+		PrincipalCaller:            scope.KeycardContext{Principal: req.Caller.Principal, PrincipalKind: req.Caller.PrincipalKind},
+		AllowCrossPrincipalPrivate: req.CallerIsAdmin && req.IncludePrivate,
+		OwnerPrincipal:             strings.TrimSpace(req.OwnerPrincipal),
+		OwnerPrincipalKind:         strings.TrimSpace(strings.ToLower(req.OwnerPrincipalKind)),
+		ContentContains:            strings.TrimSpace(req.Query),
+		ContentContainsAny:         normalizeQueryTerms(req.QueryTerms),
+		IDs:                        req.IDs,
+		IncludeSuperseded:          req.IncludeSuperseded,
+		IncludeExpired:             req.IncludeExpired,
+		AgentVisibility:            strings.TrimSpace(req.AgentVisibility),
+		Domain:                     strings.TrimSpace(req.Domain),
+		Limit:                      principalQueryFetchLimit(limit),
 	}
 	result := principalMemoryQueryResult(req, limit)
 	offset := req.Offset
@@ -215,6 +226,22 @@ func (s *PrincipalMemoryQueryService) Query(ctx context.Context, req PrincipalMe
 			if mem == nil {
 				continue
 			}
+			if mem.Context != nil {
+				// Only this store applies typed visibility and enrollment before pagination.
+				_, trusted := s.store.(*gormdb.MemoryStore)
+				caller := normalizePrincipalRef(req.Caller)
+				if !trusted {
+					continue
+				}
+				if mem.Context.Kind != models.MemoryContextProject && (caller.Principal != contextCaller.Principal || caller.PrincipalKind != contextCaller.PrincipalKind || contextCaller.WorkstationID == "") {
+					continue
+				}
+				if !scope.ResolveMemory(contextCaller, mem, scope.MemoryVisibilityOptions{ApplyPrivacyScope: true}) {
+					if mem.Context.Kind != models.MemoryContextGlobal || mem.AgentVisibility != models.AgentVisibilityShared {
+						continue
+					}
+				}
+			}
 			decision := s.policy.Decide(PrincipalAccessRequest{
 				Caller:        req.Caller,
 				Target:        PrincipalRef{Principal: mem.OwnerPrincipal, PrincipalKind: mem.OwnerPrincipalKind},
@@ -222,16 +249,13 @@ func (s *PrincipalMemoryQueryService) Query(ctx context.Context, req PrincipalMe
 				CallerIsAdmin: req.CallerIsAdmin,
 			})
 			if !decision.Allowed {
-				result.HiddenCount++
 				continue
 			}
 			if !s.domainReadAllowed(req, mem) {
-				result.HiddenCount++
 				continue
 			}
 			if decision.AuditRequired {
 				if !req.IncludePrivate {
-					result.HiddenCount++
 					continue
 				}
 				if err := s.logPrivateRead(ctx, req, mem); err != nil {

@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/graph"
-	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -238,8 +238,8 @@ func (s *Service) graphMemoryVisible(ctx context.Context, id int64) bool {
 	if s.memoryStore == nil || id == 0 {
 		return false
 	}
-	mem, err := s.memoryStore.GetForSnapshot(ctx, id)
-	return err == nil && scope.ResolveMemory(memoryVisibilityCaller(ctx, ""), mem, scope.MemoryVisibilityOptions{ApplyPrivacyScope: true})
+	_, err := s.memoryStore.GetAuthorized(ctx, id, gormdb.MemoryMutationAccess{Caller: memoryVisibilityCaller(ctx, "")})
+	return err == nil
 }
 
 func (s *Service) graphNodeVisible(ctx context.Context, id int64) bool {

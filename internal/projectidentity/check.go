@@ -129,6 +129,10 @@ func CheckLogicalProject(ctx context.Context, cwd, serverURL, token string) (Pro
 	if cached.ProjectID != "" {
 		return local(cached, "common_dir_cache"), nil
 	}
+	// Prompt inspection uses existing local identity; explicit checks keep recovery.
+	if _, native := ctx.Value(nativeGitContextKey{}).(nativeGitDirectories); native {
+		return ProjectInspection{}, logicalError("PROJECT_CONTEXT_REQUIRED")
+	}
 	remote, err := anchorGitCommandV3(ctx, root, "remote", "get-url", "origin").Output()
 	if err != nil {
 		return ProjectInspection{}, logicalError("PROJECT_CONTEXT_REQUIRED")

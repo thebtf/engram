@@ -171,10 +171,14 @@ func knowledgeSQLiteDB(t *testing.T) *gorm.DB {
 			if field.PrimaryKey {
 				kind += " PRIMARY KEY"
 			}
+			if parsed.Table == "memories" && field.DBName == "context_kind" {
+				kind += " DEFAULT 'legacy'"
+			}
 			columns = append(columns, fmt.Sprintf("%q %s", field.DBName, kind))
 		}
 		require.NoError(t, db.Exec(fmt.Sprintf("CREATE TABLE %q (%s)", parsed.Table, strings.Join(columns, ","))).Error)
 	}
+	require.NoError(t, db.Exec(`CREATE TABLE memory_principals (principal_kind TEXT NOT NULL, principal TEXT NOT NULL, enrolled_by INTEGER NOT NULL, PRIMARY KEY (principal_kind, principal))`).Error)
 	require.NoError(t, db.Exec(sqlitetest.RedirectSchema).Error)
 	require.NoError(t, db.Exec("PRAGMA case_sensitive_like = ON").Error)
 	return db
@@ -445,7 +449,7 @@ func runKnowledgeReadersHTTP(t *testing.T, db *gorm.DB, sqliteFixture bool) {
 	get(detailURL+projectA, tokenA, 200, &exactMemory)
 	require.Equal(t, projectA, exactMemory.Project)
 	require.Equal(t, memories[0].Content, exactMemory.Content)
-	get(fmt.Sprintf("/api/memories/%d", memories[0].ID), tokenA, 400, nil)
+	get(fmt.Sprintf("/api/memories/%d", memories[0].ID), tokenA, http.StatusForbidden, nil)
 	notFound := get(detailURL+projectB, tokenA, 404, nil)
 	require.Equal(t, notFound, get(detailURL+projectA, tokenB, 404, nil))
 	for _, hiddenID := range hiddenIDs {

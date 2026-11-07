@@ -62,6 +62,7 @@ type UCIContextApplication struct {
 	resolver         *uci.ContextResolver
 	directory        uci.ContextDirectory
 	registerLocalGit LocalGitRegistration
+	lookupNativeGit  NativeGitLookup
 }
 
 // NewUCIContextApplication creates the production MCP context application.
@@ -246,7 +247,7 @@ type codebaseContextSelection struct {
 func codebaseContextTool() Tool {
 	return Tool{
 		Name:        "codebase_context",
-		Description: "Register, resolve, list, or select an authorized codebase context. In the native client, register with source_label and no locator to use the actual owned Git worktree; omit source selectors or pass an owned context_handle only to reuse its intended authorized Source. Then use codebase_index and codebase_status. Handles are client-scoped and opaque. CONTEXT_REQUIRED/CONTEXT_MISMATCH: " + projectidentity.RecoveryGuidance("CONTEXT_REQUIRED") + " PROJECT_MIGRATION_REQUIRED: " + projectidentity.RecoveryGuidance("PROJECT_MIGRATION_REQUIRED"),
+		Description: "Register, resolve, list, or select an authorized codebase context. Native register with an existing authorized source_id and no locator attaches the actual Git cwd to that Source; source_label is for deliberate new-Source onboarding. An owned context_handle or omitted selectors reuse an existing index-capable binding, not authority inferred from a readable historical View. Once the compatible installed parser is ready, explicit parser_bundle=true promotes an existing Go checkout to a new semantic profile for its next complete publication; implicit Go replay and pinned Views remain unchanged. Then use codebase_status/codebase_index outside the prompt callback. Handles are client-scoped. A permission denial is not permission to switch identity or Source. CONTEXT_REQUIRED/CONTEXT_MISMATCH: " + projectidentity.RecoveryGuidance("CONTEXT_REQUIRED") + " PROJECT_MIGRATION_REQUIRED: " + projectidentity.RecoveryGuidance("PROJECT_MIGRATION_REQUIRED"),
 		tier:        tierUseful,
 		InputSchema: map[string]any{
 			"type":                 "object",
@@ -260,7 +261,7 @@ func codebaseContextTool() Tool {
 				},
 				"context_handle": map[string]any{
 					"type":        "string",
-					"description": "Opaque handle returned for this client; select chooses it, native register reuses its server-authorized Source without accepting a user-manufactured source ID",
+					"description": "Opaque handle returned for this client; select chooses it, native register may reuse its index-capable Source binding. A readable historical View alone does not grant registration or indexing authority.",
 				},
 				"space_id": map[string]any{
 					"type":        "string",
@@ -268,11 +269,11 @@ func codebaseContextTool() Tool {
 				},
 				"source_id": map[string]any{
 					"type":        "string",
-					"description": "ContextRef source UUID for action=select",
+					"description": "Existing authorized Source UUID for native action=register; omit locator to derive only the actual Git cwd. Also the ContextRef source UUID for action=select. Server realm/principal/project checks still apply.",
 				},
-				"source_label":  map[string]any{"type": "string", "description": "Human label for a new Git Source; omit source_label/source_id/context_handle in native register to reuse the current server selection"},
-				"locator":       map[string]any{"type": "string", "description": "Private canonical file URI; omit in the native client to derive the real Git root from its current working directory. Direct server registration still requires a locator and source_label or source_id."},
-				"parser_bundle": map[string]any{"type": "boolean", "description": "Explicit parser profile request; omitted selects verified installed Tree-sitter on first registration, native Go otherwise, and preserves existing profiles on replay"},
+				"source_label":  map[string]any{"type": "string", "description": "Human label for deliberate new Git Source onboarding, not recovery from a denied existing Source. Reuse an existing authorized Source through source_id."},
+				"locator":       map[string]any{"type": "string", "description": "Private canonical file URI; omit with source_id or source_label in the native client to derive its actual Git root. Direct server registration still requires this locator and source_label or source_id."},
+				"parser_bundle": map[string]any{"type": "boolean", "description": "After compatible parser startup, explicit true selects a new immutable semantic profile for an existing Go/legacy-parser checkout's next complete publication. Omitted replay preserves Go even when a parser is installed; explicit false cannot downgrade semantic to Go. First registration uses verified installed Tree-sitter when available, native Go otherwise."},
 				"checkout_id": map[string]any{
 					"type":        "string",
 					"description": "ContextRef checkout UUID for action=select",

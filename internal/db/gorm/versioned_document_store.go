@@ -420,6 +420,32 @@ func (s *VersionedDocumentStore) List(ctx context.Context, project, docType, pat
 	return docs, nil
 }
 
+// SearchTaskContext searches authorized current document bodies without a
+// separate projection. Visibility and latest-lineage selection precede ranking
+// and the result limit. The request context bounds the SQL work.
+func (s *VersionedDocumentStore) SearchTaskContext(ctx context.Context, project, query string, limit int) ([]VersionedDocument, error) {
+	if strings.TrimSpace(query) == "" || len(query) > 16<<10 || limit < 1 || limit > 3 {
+		return nil, fmt.Errorf("invalid document task search")
+	}
+	scoped, err := canonicalProjectRows(ctx, s.db.Model(&VersionedDocument{}), project, "versioned_documents", "d")
+	if err != nil {
+		return nil, err
+	}
+	latest := scoped.Select("d.*, ROW_NUMBER() OVER (PARTITION BY d.path, d.project ORDER BY d.version DESC, d.id DESC) AS version_rank")
+	var docs []VersionedDocument
+	err = s.db.WithContext(ctx).Table("(?) AS latest", latest).
+		Where("version_rank = 1").
+		Where("to_tsvector('english', content) @@ COALESCE(NULLIF(websearch_to_tsquery('english', ?), ''::tsquery), plainto_tsquery('english', ?))", query, query).
+		Clauses(clause.OrderBy{Expression: clause.Expr{SQL: "ts_rank_cd(to_tsvector('english', content), COALESCE(NULLIF(websearch_to_tsquery('english', ?), ''::tsquery), plainto_tsquery('english', ?))) DESC, created_at DESC, id DESC", Vars: []any{query, query}}}).Limit(limit).Find(&docs).Error
+	if err != nil {
+		return nil, err
+	}
+	for i := range docs {
+		docs[i].Project = project
+	}
+	return docs, nil
+}
+
 // ListPage searches public metadata on the latest version of each path. Count
 // and page share the same project and filter predicates; content is not loaded.
 func (s *VersionedDocumentStore) ListPage(ctx context.Context, project string, docTypes []string, pathPrefix, query string, limit, offset int) ([]VersionedDocument, int64, error) {
