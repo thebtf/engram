@@ -44,6 +44,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Keep long statistics values within their metric columns so adjacent values remain readable, without changing the displayed precision or unknown-versus-zero semantics.
 
+- Prevent legacy principal queries from disclosing inaccessible match counts or workstation-private memories; apply principal, domain and workstation visibility before pagination and represent unknown hidden counts as null.
+
+- Upgrade `golang.org/x/net` to v0.62.0 to address CVE-2026-78661 in its HTML parser and update its required transitive dependencies.
+
+- Retain validated bootstrap metadata for each loaded OMP hook when its own package directory is retired during an upgrade. Recheck present policy changes and verify client bytes on every use; malformed or mismatched current policy still fails closed.
+- Retain the loaded package's native task-context worker entry for the hook instance, preserving per-request verification and cancellation when a package update retires its old root.
+
 - Regenerate the API through the maintained worker target using canonical local Go package directories and Swag 1.16.6, with real producer errors stopping the build. Correct existing context search/inject/session-start annotations without changing handlers; document the shared GET/POST conditional-query limitation. The actual producer and server build pass, with 40 named schema checks and all 76 references resolved; that producer checkpoint established compile-only retained-reader oracle provenance, with later native query proof recorded separately, and installed/release acceptance remains separate.
 
 - Add retained catalog `families` metadata with kind, technical table, saved membership-occurrence count and declared/separate/metadata-only reader boundary. Preserve every group, opaque reference, safe label and reason without payload previews, readable-record totals, availability or historical ownership assignment. This descriptor change does not provide cross-group record discovery or installed-consumer acceptance.

@@ -3,6 +3,8 @@
 // Test-only consumer for the worker-owned real native/UCI fixture. It selects an
 // observed source-built artifact at the existing resolver seam; production hash,
 // transport, framing and registered callback bodies remain in use.
+const fs = require('node:fs');
+const crypto = require('node:crypto');
 const { Worker } = require('node:worker_threads');
 const { monitorEventLoopDelay, performance } = require('node:perf_hooks');
 const path = require('node:path');
@@ -21,6 +23,7 @@ function requireCondition(condition, message) { if (!condition) throw new Error(
 
 async function initialize(config) {
   setup = config;
+  const workerHash = crypto.createHash('sha256').update(fs.readFileSync(path.join(config.pluginRoot, 'scripts', 'task-context-worker.js'))).digest('hex');
   launcher = require(path.join(config.pluginRoot, 'scripts', 'run-engram.js'));
   lib = require(path.join(config.pluginRoot, 'hooks', 'lib.js'));
   const { prepareHookClient } = launcher;
@@ -56,7 +59,7 @@ async function initialize(config) {
         ...options, ...artifact,
         createTaskContextWorker: (entry, execution) => {
           const data = execution.workerData;
-          requireCondition(entry === path.join(config.pluginRoot, 'scripts', 'task-context-worker.js'), 'unexpected worker entry');
+          requireCondition(execution.eval === true && crypto.createHash('sha256').update(entry).digest('hex') === workerHash, 'worker entry differs from loaded package bytes');
           requireCondition(data.path === config.binary && data.cwd === facts.cwd, 'native path/cwd changed');
           const wire = JSON.parse(data.input);
           requireCondition(Object.keys(wire).sort().join(',') === 'deadline_unix_ms,host_session_id,max_bytes,query,schema', 'unexpected native wire fields');
@@ -170,6 +173,8 @@ async function invoke(command) {
     worker_operation_elapsed_ms: trace.workerElapsedMs, worker_threads: trace.workerThreads,
     processes: trace.processes, rest_requests: trace.restRequests, rest_budget_ms: trace.restBudgetMs,
     outer_deadline_unix_ms: trace.outerDeadline, wire_deadline_unix_ms: trace.wireDeadline,
+    code_status: trace.native?.code_status, code_reason: trace.native?.code_reason,
+    memory_status: trace.native?.knowledge?.memory_status, note_status: trace.native?.knowledge?.note_status,
     native_status: trace.native?.status, native_reason: trace.native?.reason_code,
     useful: !!packet, packet, callback_content: message?.content,
   });
