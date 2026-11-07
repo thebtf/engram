@@ -225,6 +225,12 @@ already-ready useful result from another. PostgreSQL's existing language/query
 semantics are used without a new index, backfill, provider or Vault scan. The
 unreleased serial REST fallback is retired by the cutover. This amendment does not
 establish a latency guarantee or useful-note acceptance on the selected corpus.
+The PostgreSQL note search disables JIT only within its read transaction to avoid
+compilation consuming the task deadline; it restores the caller's setting for a
+nested transaction and retains the same authorization and cancellation rules.
+Nested savepoint recovery has a separate bounded cleanup window; a failed
+rollback or release is returned to the caller, which must not assume that its
+transaction was restored.
 
 `knowledge` has `memory_status`, `note_status`, and `rule_status` (`ok`, `empty`,
 `unavailable`, or `deadline_exceeded`) and at most nine `items`. Enabled project

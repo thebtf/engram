@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	vaultcrypto "github.com/thebtf/engram/internal/crypto"
 	"github.com/thebtf/engram/internal/projectidentity"
 
@@ -427,16 +429,34 @@ func (s *VersionedDocumentStore) SearchTaskContext(ctx context.Context, project,
 	if strings.TrimSpace(query) == "" || len(query) > 16<<10 || limit < 1 || limit > 3 {
 		return nil, fmt.Errorf("invalid document task search")
 	}
-	scoped, err := canonicalProjectRows(ctx, s.db.Model(&VersionedDocument{}), project, "versioned_documents", "d")
-	if err != nil {
-		return nil, err
-	}
-	latest := scoped.Select("d.*, ROW_NUMBER() OVER (PARTITION BY d.path, d.project ORDER BY d.version DESC, d.id DESC) AS version_rank")
 	var docs []VersionedDocument
-	err = s.db.WithContext(ctx).Table("(?) AS latest", latest).
-		Where("version_rank = 1").
-		Where("to_tsvector('english', content) @@ COALESCE(NULLIF(websearch_to_tsquery('english', ?), ''::tsquery), plainto_tsquery('english', ?))", query, query).
-		Clauses(clause.OrderBy{Expression: clause.Expr{SQL: "ts_rank_cd(to_tsvector('english', content), COALESCE(NULLIF(websearch_to_tsquery('english', ?), ''::tsquery), plainto_tsquery('english', ?))) DESC, created_at DESC, id DESC", Vars: []any{query, query}}}).Limit(limit).Find(&docs).Error
+	search := func(tx *gorm.DB) error {
+		var previousJIT string
+		if err := tx.Raw("SHOW jit").Scan(&previousJIT).Error; err != nil {
+			return err
+		}
+		if err := tx.Exec("SET LOCAL jit = off").Error; err != nil {
+			return err
+		}
+		scoped, err := canonicalProjectRows(ctx, tx.Model(&VersionedDocument{}), project, "versioned_documents", "d")
+		if err != nil {
+			return err
+		}
+		latest := scoped.Select("d.*, ROW_NUMBER() OVER (PARTITION BY d.path, d.project ORDER BY d.version DESC, d.id DESC) AS version_rank")
+		if err := tx.Table("(?) AS latest", latest).
+			Where("version_rank = 1").
+			Where("to_tsvector('english', content) @@ COALESCE(NULLIF(websearch_to_tsquery('english', ?), ''::tsquery), plainto_tsquery('english', ?))", query, query).
+			Clauses(clause.OrderBy{Expression: clause.Expr{SQL: "ts_rank_cd(to_tsvector('english', content), COALESCE(NULLIF(websearch_to_tsquery('english', ?), ''::tsquery), plainto_tsquery('english', ?))) DESC, created_at DESC, id DESC", Vars: []any{query, query}}}).Limit(limit).Find(&docs).Error; err != nil {
+			return err
+		}
+		return tx.Exec("SELECT set_config('jit', ?, true)", previousJIT).Error
+	}
+	var err error
+	if _, nested := s.db.Statement.ConnPool.(gorm.TxCommitter); nested {
+		err = taskContextNestedRead(ctx, s.db, search)
+	} else {
+		err = s.db.WithContext(ctx).Transaction(search)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -444,6 +464,31 @@ func (s *VersionedDocumentStore) SearchTaskContext(ctx context.Context, project,
 		docs[i].Project = project
 	}
 	return docs, nil
+}
+
+func taskContextNestedRead(ctx context.Context, db *gorm.DB, read func(*gorm.DB) error) (err error) {
+	name := "task_context_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	if err = db.WithContext(ctx).Exec("SAVEPOINT " + name).Error; err != nil {
+		return err
+	}
+	complete := false
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 400*time.Millisecond)
+		defer cancel()
+		cleanup := db.WithContext(cleanupCtx)
+		if !complete {
+			if rollbackErr := cleanup.Exec("ROLLBACK TO SAVEPOINT " + name).Error; rollbackErr != nil {
+				err = errors.Join(err, fmt.Errorf("task context savepoint rollback failed: %w", rollbackErr))
+				return
+			}
+		}
+		if releaseErr := cleanup.Exec("RELEASE SAVEPOINT " + name).Error; releaseErr != nil {
+			err = errors.Join(err, fmt.Errorf("task context savepoint release failed: %w", releaseErr))
+		}
+	}()
+	err = read(db.WithContext(ctx))
+	complete = err == nil
+	return err
 }
 
 // ListPage searches public metadata on the latest version of each path. Count
