@@ -23,6 +23,8 @@ async function exerciseDefaultFactory(mode) {
   let cleanupRegisters = 0, cleanupUnregisters = 0, cleanupInvocations = 0, readiness = 'pending', factoryState = 'pending', preparationCalls = 0;
   let preparation, installing, preparedSignal, failure, held, afterPreparation, settled, afterTamper, afterRecovery, afterDisposal;
   const gate = deferred(), entered = deferred();
+  const policyLifetime = mode.startsWith('policy-');
+  const packageRoot = path.join(root, 'package');
   const terminalMode = mode.startsWith('terminal-noise');
   const onUnhandled = error => unhandled.push(String(error));
   process.on('unhandledRejection', onUnhandled);
@@ -39,12 +41,18 @@ async function exerciseDefaultFactory(mode) {
   const { BootstrapError, createPolicy } = require('../scripts/bootstrap-policy.js');
   const bytes = Buffer.from('controlled trusted startup client, never executable');
   const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
-  const version = '7.0.7';
+  const version = policyLifetime ? require('../package.json').version : '7.0.7';
   const targets = Object.fromEntries(Object.entries(TARGET_ASSETS).map(([key, asset]) => [key, { version, asset, size: bytes.length, sha256 }]));
   const policy = parsePolicy(JSON.stringify(createPolicy(version, targets)), version);
+  if (policyLifetime) {
+    fs.mkdirSync(path.join(packageRoot, '.omp-plugin'), { recursive: true });
+    fs.writeFileSync(path.join(packageRoot, '.omp-plugin', 'plugin.json'), JSON.stringify({ version }));
+    fs.writeFileSync(path.join(packageRoot, 'bootstrap-targets.json'), JSON.stringify(createPolicy(version, targets)));
+    process.env.PLUGIN_ROOT = packageRoot;
+  }
   fs.writeFileSync(path.join(root, 'client-instance-id'), `engram-${'a'.repeat(32)}\n`);
   const roots = objectRoots(root), object = objectPath(roots, policy.target.desired);
-  if (mode === 'warm') fs.writeFileSync(object, bytes);
+  if (mode === 'warm' || policyLifetime) fs.writeFileSync(object, bytes);
   const project = '11111111-1111-4111-8111-111111111111';
   const verify = options => resolveForLaunch({
     ...options, pluginRoot: root, pluginData: root, policy, parserTarget: null, acquire: false,
@@ -59,22 +67,35 @@ async function exerciseDefaultFactory(mode) {
     assert.equal(preparation, undefined, 'one preparation per binding');
     assert.ok(options.timeoutMs > 0 && options.timeoutMs <= 360000);
     preparedSignal = options.signal;
-    preparation = realPrepare({
-      ...options, pluginRoot: root, pluginData: root,
-      resolve: async forwarded => {
+    if (policyLifetime) {
+      preparation = (async () => {
         const abort = () => gate.resolve();
-        forwarded.signal.addEventListener('abort', abort, { once: true });
+        options.signal.addEventListener('abort', abort, { once: true });
         entered.resolve();
         try {
           await gate.promise;
-          if (terminalMode) throw new BootstrapError('controlled startup secret_fixture https://private.invalid/?token=token_fixture\n\x1b[31m');
-          if (mode === 'rejected') throw new Error('controlled offline readiness failure');
-          if (forwarded.signal.aborted) throw new Error('controlled readiness abort');
-          if (mode !== 'warm') fs.writeFileSync(object, mode === 'corrupt' ? Buffer.alloc(bytes.length) : bytes);
-          return await verify(forwarded);
-        } finally { forwarded.signal.removeEventListener('abort', abort); }
-      },
-    });
+          if (options.signal.aborted) throw new Error('controlled readiness abort');
+          return await realPrepare({ ...options, pluginRoot: packageRoot, pluginData: root });
+        } finally { options.signal.removeEventListener('abort', abort); }
+      })();
+    } else {
+      preparation = realPrepare({
+        ...options, pluginRoot: root, pluginData: root,
+        resolve: async forwarded => {
+          const abort = () => gate.resolve();
+          forwarded.signal.addEventListener('abort', abort, { once: true });
+          entered.resolve();
+          try {
+            await gate.promise;
+            if (terminalMode) throw new BootstrapError('controlled startup secret_fixture https://private.invalid/?token=token_fixture\n\x1b[31m');
+            if (mode === 'rejected') throw new Error('controlled offline readiness failure');
+            if (forwarded.signal.aborted) throw new Error('controlled readiness abort');
+            if (mode !== 'warm') fs.writeFileSync(object, mode === 'corrupt' ? Buffer.alloc(bytes.length) : bytes);
+            return await verify(forwarded);
+          } finally { forwarded.signal.removeEventListener('abort', abort); }
+        },
+      });
+    }
     preparation.then(() => { readiness = 'trusted'; }, () => { readiness = 'failed'; });
     return preparation;
   };
@@ -83,7 +104,7 @@ async function exerciseDefaultFactory(mode) {
     assert.notEqual(readiness, 'pending', 'pending preparation must not resolve a project');
     assert.equal(options.acquire, false, 'short callbacks must remain verify-only');
     return realResolve(cwd, {
-      ...options, pluginRoot: root, pluginData: root, resolve: verify,
+      ...options, pluginRoot: policyLifetime ? packageRoot : root, pluginData: root, ...(policyLifetime ? {} : { resolve: verify }),
       execFile(file, args, execOptions, callback) {
         effects.projectExecutions++;
         assert.equal(file, object);
@@ -99,7 +120,7 @@ async function exerciseDefaultFactory(mode) {
     effects.projectResolutions++;
     assert.notEqual(readiness, 'pending');
     return realTaskContext(facts, {
-      ...options, pluginRoot: root, pluginData: root, resolve: verify,
+      ...options, pluginRoot: policyLifetime ? packageRoot : root, pluginData: root, ...(policyLifetime ? {} : { resolve: verify }),
       createTaskContextWorker(_entry, execution) {
         effects.projectExecutions++;
         const work = execution.workerData;
@@ -177,7 +198,7 @@ async function exerciseDefaultFactory(mode) {
     }).then(() => { factoryState = 'fulfilled'; }, error => { factoryState = 'rejected'; return error; });
     await entered.promise;
     await turn();
-    assert.equal(fs.existsSync(object), mode === 'warm', 'only the warm fixture starts with cached client bytes');
+    assert.equal(fs.existsSync(object), mode === 'warm' || policyLifetime, 'only warm fixtures start with cached client bytes');
     assert.equal(await callbacks('while-held'), undefined);
     held = snapshot();
     assert.deepEqual(held.effects, { projectResolutions: 0, projectExecutions: 0, backendRequests: 0, nativeProcesses: 0, network: 0, downloads: 0 });
@@ -192,7 +213,7 @@ async function exerciseDefaultFactory(mode) {
     assert.equal(afterPreparation.sent, 0, 'preparation completion must not inject hidden context');
     const result = await callbacks('after-settlement');
     settled = snapshot();
-    if (mode === 'trusted' || mode === 'warm') {
+    if (mode === 'trusted' || mode === 'warm' || policyLifetime) {
       assert.equal(settled.readiness, 'trusted');
       assert.equal(settled.effects.projectResolutions, 2);
       assert.equal(settled.effects.projectExecutions, 2);
@@ -202,12 +223,33 @@ async function exerciseDefaultFactory(mode) {
       assert.deepEqual(sent[0].options, { deliverAs: 'nextTurn' });
       assert.match(result.message.content, /Do not remove the recovery backup\./);
       assert.deepEqual(executions.map((item, index) => item.timeout > 0 && item.timeout <= (index === 0 ? 5000 : 500)), [true, true]);
+      if (mode === 'policy-retired') {
+        fs.rmSync(packageRoot, { recursive: true });
+        assert.equal(fs.existsSync(packageRoot), false);
+        const retired = await callbacks('after-package-retirement');
+        assert.equal(sent.length, 2, 'session-start must deliver after package retirement');
+        assert.match(sent[1].message.content, /trusted startup fixture memory/);
+        assert.match(retired?.message.content ?? '', /Do not remove the recovery backup\./);
+        assert.equal(effects.projectExecutions, 4);
+        assert.equal(effects.backendRequests, 2);
+      } else if (policyLifetime) {
+        if (mode === 'policy-invalid') fs.writeFileSync(path.join(packageRoot, 'bootstrap-targets.json'), 'not json');
+        if (mode === 'policy-version') fs.writeFileSync(path.join(packageRoot, '.omp-plugin', 'plugin.json'), JSON.stringify({ version: '0.0.1' }));
+        if (mode === 'policy-changed-target') {
+          const replacement = Object.fromEntries(Object.entries(TARGET_ASSETS).map(([key, asset]) => [key, { version, asset, size: bytes.length, sha256: '0'.repeat(64) }]));
+          fs.writeFileSync(path.join(packageRoot, 'bootstrap-targets.json'), JSON.stringify(createPolicy(version, replacement)));
+        }
+        assert.equal(await callbacks('after-policy-change'), undefined, 'changed or invalid policy must deny prompt delivery');
+        assert.equal(sent.length, 1, 'changed or invalid policy must deny session delivery');
+        assert.equal(effects.projectExecutions, 2, 'no client may execute under changed or invalid policy');
+        assert.equal(effects.backendRequests, 1);
+      }
       fs.writeFileSync(object, Buffer.alloc(bytes.length));
       assert.equal(await callbacks('after-tamper'), undefined);
       afterTamper = snapshot();
-      assert.equal(afterTamper.effects.projectExecutions, 2, 'tampered bytes must not execute');
-      assert.equal(afterTamper.effects.backendRequests, 1, 'tampering must not request more context');
-      assert.equal(afterTamper.sent, 1, 'tampering must not replay enrichment');
+      assert.equal(afterTamper.effects.projectExecutions, mode === 'policy-retired' ? 4 : 2, 'tampered bytes must not execute');
+      assert.equal(afterTamper.effects.backendRequests, mode === 'policy-retired' ? 2 : 1, 'tampering must not request more context');
+      assert.equal(afterTamper.sent, mode === 'policy-retired' ? 2 : 1, 'tampering must not replay enrichment');
     } else {
       assert.equal(settled.readiness, 'failed');
       assert.deepEqual(settled.effects, { ...held.effects, projectResolutions: mode === 'cancelled' ? 0 : 2 },
@@ -342,7 +384,7 @@ if (process.argv[2] === '--package-binding-worker') {
     assert.equal(result.status, 0, result.stderr || result.stdout);
     assert.match(result.stdout, /cache=verified preparation=ok/);
   });
-  for (const mode of ['trusted', 'warm', 'rejected', 'corrupt', 'cancelled', 'terminal-noise', 'terminal-noise-unwritable']) {
+  for (const mode of ['trusted', 'warm', 'rejected', 'corrupt', 'cancelled', 'terminal-noise', 'terminal-noise-unwritable', 'policy-retired', 'policy-invalid', 'policy-changed-target', 'policy-version']) {
     test(mode.startsWith('terminal-noise') ? `OMP default factory emits no raw terminal output during failed readiness and recovery (${mode})` : `OMP default factory registers during held ${mode === 'warm' ? 'warm' : 'cold'} readiness and preserves ${mode} execution guards`, t => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), 'HOOK-TERMINAL-startup-'));
       const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => ['SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATH', 'PATHEXT', 'SYSTEMDRIVE'].includes(key.toUpperCase())));
@@ -362,6 +404,7 @@ if (process.argv[2] === '--package-binding-worker') {
           cwd: fileURLToPath(new URL('../../../', import.meta.url)), env, encoding: 'utf8', windowsHide: true, timeout: 10000, maxBuffer: 1024 * 1024,
         });
       } finally { fs.rmSync(root, { recursive: true, force: true }); }
+      if (mode.startsWith('policy-')) t.diagnostic('Injected worker and backend: does not prove worker-file lifetime or installed host behavior.');
       t.diagnostic(JSON.stringify({ mode, nativeExit: result.status, signal: result.signal, error: result.error?.message ?? null, fixtureRemoved: !fs.existsSync(root) }));
       t.diagnostic(result.stdout);
       assert.ifError(result.error);
