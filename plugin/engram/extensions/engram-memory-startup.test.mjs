@@ -349,7 +349,12 @@ async function exercisePackageVersionBinding() {
   const launcher = require('../scripts/run-engram.js');
   const prepare = launcher.prepareHookClient;
   let preparation;
-  launcher.prepareHookClient = options => (preparation = prepare(options));
+  const entered = deferred();
+  launcher.prepareHookClient = options => {
+    preparation = prepare(options);
+    entered.resolve();
+    return preparation;
+  };
   const key = 'engram.version.fixture.postmortem';
   globalThis[Symbol.for(key)] = { register() { return () => { }; } };
   const hostURL = `data:text/javascript,${encodeURIComponent(`export const postmortem = globalThis[Symbol.for(${JSON.stringify(key)})];`)}`;
@@ -357,8 +362,7 @@ async function exercisePackageVersionBinding() {
   const handlers = new Map();
   const actual = await import(entry.href);
   await actual.default({ on(name, callback) { handlers.set(name, callback); }, sendMessage() { } });
-  for (let i = 0; i < 10 && !preparation; i++) await turn();
-  assert.ok(preparation, 'default factory must prepare the hook client');
+  await entered.promise;
   await preparation;
   assert.ok(handlers.has('session_start'));
   console.log(`PACKAGE_BINDING_RESULT policy=${policy.package_version} cache=verified preparation=ok`);
