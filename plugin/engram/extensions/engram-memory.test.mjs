@@ -63,6 +63,23 @@ test('OMP automatic callbacks use current root and one UUID without identity reg
   assert.equal(calls.some(call => 'project_descriptor' in call.body || 'sessionCapability' in call.body), false);
 });
 
+test('OMP passes the instance policy to preparation, session and typed ambient', async () => {
+  const hookPolicy = () => ({}), seen = [];
+  const { adapter } = extension({
+    hookPolicy,
+    prepareHookClient: async options => { seen.push(options.hookPolicy); },
+    resolveHookProjectContext: async (_cwd, options) => { seen.push(options.hookPolicy); return { Project: projects['/session/a'] }; },
+    requestTaskContext: async (_facts, options) => { seen.push(options.hookPolicy); return knowledgeResponse(projects['/session/a']); },
+  });
+  const handlers = new Map();
+  await adapter.install({ on: (name, fn) => handlers.set(name, fn), sendMessage() { } });
+  await new Promise(resolve => setImmediate(resolve));
+  await handlers.get('session_start')({ cwd: '/session/a', sessionId: 'a' }, {});
+  const result = await handlers.get('before_agent_start')({ cwd: '/session/a', sessionId: 'a', prompt: 'Inspect backup' }, {});
+  assert.ok(result?.message);
+  assert.deepEqual(seen, [hookPolicy, hookPolicy, hookPolicy]);
+});
+
 test('OMP binding shares one background preparation across repeated installation and early callbacks', async t => {
   let finishPreparation, preparations = 0, configurations = 0, registrations = 0;
   const preparation = new Promise(resolve => { finishPreparation = resolve; });

@@ -89,6 +89,21 @@ function nativeKnowledge() {
   return { ...nativeResponse('empty'), status: 'ok', reason_code: 'OK', code_status: 'not_ready', code_reason: 'OPERATION_NOT_READY', knowledge: { memory_status: 'ok', note_status: 'empty', rule_status: 'empty', items: [{ kind: 'memory', id: 42, content, content_hash: digest, source_hash: digest, excerpt: false }] } };
 }
 
+test('typed prompt forwards its loaded hook policy to native and support callers', async () => {
+  const hookPolicy = () => ({});
+  let nativeCalled = false, supportCalled = false;
+  const outcome = await prompt.requestPromptContext(facts, {
+    hookPolicy, supportHooks: true,
+    runtimeConfig: async () => ({ serverURL: 'http://fixture', token: '', quiet: false }),
+    requestTaskContext: async (_facts, options) => { assert.equal(options.hookPolicy, hookPolicy); nativeCalled = true; return nativeKnowledge(); },
+    resolveContext: async (_cwd, options) => { assert.equal(options.hookPolicy, hookPolicy); supportCalled = true; return { Project: project }; },
+    requestPost: async () => ({}),
+  });
+  assert.equal(outcome.status, 'delivered');
+  assert.equal(nativeCalled, true);
+  assert.equal(supportCalled, true);
+});
+
 test('compound knowledge is hash checked and delivers without code or REST', async () => {
   const response = nativeKnowledge();
   const outcome = await prompt.requestPromptContext(facts, { runtimeConfig: dependencies().runtimeConfig, requestTaskContext: async () => response, requestPost: async () => assert.fail('no REST fallback') });

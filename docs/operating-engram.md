@@ -114,6 +114,13 @@ R1 — обычный установленный агент и WebUI выбир�
    Установка пакета меняет файлы на диске, но не уже загруженный JavaScript-код
    `extensions/engram-memory.mjs`. Если нужный пакет уже установлен, не повторяй
    upgrade ради активации hook. Версия пакета и баннер не доказывают загрузку callback.
+   Загруженный hook v7.0.28 или новее сохраняет успешно проверенную bootstrap policy
+   своего package root, если этот каталог удалён при обновлении. Пока каталог доступен,
+   hook заново проверяет текущую policy; неверная или несовпадающая policy блокирует
+   запуск, а client bytes проверяются при каждом использовании. Уже загруженный hook
+   v7.0.27 или старее продолжает читать файлы заново и не получает это исправление
+   при обновлении файлов на диске. Сохранённая policy не загружает новый код: для
+   активации исправленного hook нужна свежая обычная сессия.
 6. Настрой установленный launcher на тот же bare server origin, без `/mcp` и `/sse`.
    Для уже подтверждённого no-auth режима достаточно `server_url` в
    `~/.engram/config.json`; auth-enabled режим требует выданный workstation keycard
@@ -616,6 +623,8 @@ node <installed-plugin-path>/scripts/run-engram.js project resolve --root <actua
 ```
 
 `--check` не вызывает bootstrap, не создаёт UUID/project/alias, не закрепляет marker/cache и не запускает Census/Preflight или migration. Explicit nested marker сохраняет свою границу; outer remote не подменяет его. `null` означает неизвестное значение, не «active». Diagnostic evidence не выдаёт права и не назначает проект.
+Launcher использует только уже проверенный по размеру и SHA-256 cached client. Он не скачивает и не импортирует client, не создаёт каталоги cache и не переносит повреждённый объект в quarantine. Если проверенный client недоступен, команда завершится с ошибкой; сохрани cache для проверки. Launcher проверяет общий бюджет 15 секунд между локальными файловыми операциями и передаёт оставшееся время как timeout native process. Этот бюджет не прерывает файловый вызов, заблокированный в ядре ОС; внешний предел зависит от deadline вызывающего инструмента.
+
 
 **Файловая граница запуска.** Серверный `readOnly` относится к инструменту, а не к запуску MCP-клиента. При bootstrap обычный startup может записать `.engram-project` и common-dir cache `engram-project.json`. Если portable marker уже действителен, отсутствующий производный cache не требует записи для разрешения; существующий конфликтующий cache по-прежнему удерживает операцию. Для осмотра без записи используй установленный `project resolve --root ... --json --check`, показанный выше. После отказа filesystem scope дождись фактического writable-root допуска для этого root перед любым запуском, который может там писать. Не обходи отказ через Eval, shell или другой CLI.
 
@@ -654,6 +663,8 @@ node <installed-plugin-path>/scripts/run-engram.js project resolve --root <actua
 Только если отдельно подтверждена необходимость миграции unresolved исторических данных, нужен разрешённый conservation plan. Существующий admin-путь: `GET /api/projects/consolidation/census?source_version=<exact-source>`, затем `POST /api/projects/consolidation/preflight` со свежими census bindings и структурными evidence. Эти права не возникают из ошибки identity. Backup, физически отдельный restored target, rehearsal и explicit apply authority описаны ниже в разделе миграции. Default dry-run выполняет target transaction с откатом: это не бесплатный read-only запрос.
 
 Native `issues list/get` остаются project-free разрешёнными чтениями. В OpenClaw без caller resolution доступны get и list с явным target/source filter; default inbox сохраняет смысл текущего workspace и при неизвестной identity не превращается в all-project list. Ошибка чтения не означает пустой inbox. Для mutations acting project поступает из проверенного native context; optional compatibility `project` не задаёт actor, а `target_project` остаётся отдельным назначением.
+
+При отказе `issues create` на этапе `target_project` используй независимо подтверждённый разрешённый canonical UUID нужного проекта. Для точного проверенного legacy ID доступен аутентифицированный `GET /api/projects/resolve?legacy_id=<URI-encoded-exact-id>`; имя проекта не подтверждает выбор. При отказе `source_project` восстанавливай native caller через `project_context` и условия marker/hash выше. Не выполняй adoption unresolved membership. Если storage guard не указал роль, не угадывай её; неизвестный результат mutation нельзя повторять без проверки. Фильтры `issues list` сопоставляют точные значения, а не разрешают имена: нулевой результат для legacy label не доказывает отсутствие canonical issues.
 
 Агент в чужом checkout получает обязательные следующие действия из shipped tool descriptions/errors. Для подробностей доступна эта стабильная upstream-ссылка: https://github.com/thebtf/engram/blob/main/docs/operating-engram.md#context-recovery . Локальная копия Engram guide, mutable cache wiki или project-scoped `docs` для восстановления не требуются.
 

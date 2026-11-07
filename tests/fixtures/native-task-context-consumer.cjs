@@ -3,6 +3,8 @@
 // Test-only consumer for the worker-owned real native/UCI fixture. It selects an
 // observed source-built artifact at the existing resolver seam; production hash,
 // transport, framing and registered callback bodies remain in use.
+const fs = require('node:fs');
+const crypto = require('node:crypto');
 const { Worker } = require('node:worker_threads');
 const { monitorEventLoopDelay, performance } = require('node:perf_hooks');
 const path = require('node:path');
@@ -20,7 +22,18 @@ function safeError(error) { return String(error?.message ?? error).replaceAll(pr
 function requireCondition(condition, message) { if (!condition) throw new Error(message); }
 
 async function initialize(config) {
+  if (config.retirePackage) {
+    const source = config.pluginRoot;
+    const disposable = fs.mkdtempSync(path.join(path.dirname(config.pluginData), 'native-package-'));
+    for (const file of ['package.json', 'extensions/engram-memory.mjs', 'hooks/lib.js', 'hooks/session-start.js', 'hooks/user-prompt.js', 'scripts/run-engram.js', 'scripts/ensure-binary.js', 'scripts/bootstrap-policy.js', 'scripts/client-instance.js', 'scripts/task-context-worker.js']) {
+      const target = path.join(disposable, file);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.copyFileSync(path.join(source, file), target);
+    }
+    config.pluginRoot = disposable;
+  }
   setup = config;
+  const workerHash = crypto.createHash('sha256').update(fs.readFileSync(path.join(config.pluginRoot, 'scripts', 'task-context-worker.js'))).digest('hex');
   launcher = require(path.join(config.pluginRoot, 'scripts', 'run-engram.js'));
   lib = require(path.join(config.pluginRoot, 'hooks', 'lib.js'));
   const { prepareHookClient } = launcher;
@@ -56,7 +69,7 @@ async function initialize(config) {
         ...options, ...artifact,
         createTaskContextWorker: (entry, execution) => {
           const data = execution.workerData;
-          requireCondition(entry === path.join(config.pluginRoot, 'scripts', 'task-context-worker.js'), 'unexpected worker entry');
+          requireCondition(execution.eval === true && crypto.createHash('sha256').update(entry).digest('hex') === workerHash, 'worker entry differs from loaded package bytes');
           requireCondition(data.path === config.binary && data.cwd === facts.cwd, 'native path/cwd changed');
           const wire = JSON.parse(data.input);
           requireCondition(Object.keys(wire).sort().join(',') === 'deadline_unix_ms,host_session_id,max_bytes,query,schema', 'unexpected native wire fields');
@@ -74,6 +87,7 @@ async function initialize(config) {
           worker.on('message', message => {
             if (message.type === 'spawned') {
               trace.processes++;
+              trace.childPID = message.childPID;
               emit({ event: 'native_spawned', name: trace.name, pid: message.childPID, deadline_unix_ms: data.deadlineAt });
             }
             if (message.type === 'closed') {
@@ -146,6 +160,11 @@ async function invoke(command) {
     trace.callbackElapsedMs = performance.now() - trace.started;
     message = outcome?.message;
     if (message) packet = materializedPacket(message, trace);
+    if (command.expect === 'useful' && setup.retirePackage) {
+      const knowledge = trace.native?.knowledge?.items ?? [];
+      requireCondition(knowledge.some(item => item.kind === 'memory' && item.content === 'Alpha preserve the synthetic backup 😀'), 'seeded memory was not delivered');
+      requireCondition(knowledge.some(item => item.kind === 'note' && item.content === 'Alpha deployment note for the synthetic backup 😀' && item.version === 1 && item.path === 'runbooks/alpha.md'), 'seeded versioned note was not delivered');
+    }
     if (command.expect === 'useful') requireCondition(!!packet, 'useful source/call packet was not delivered');
     else requireCondition(!message, 'failed/no-match/cancelled callback delivered evidence');
     if (command.expect === 'empty') requireCondition(trace.native?.status === 'empty', 'no-match did not remain an explicit native empty result');
@@ -160,6 +179,10 @@ async function invoke(command) {
       await Promise.race([trace.closed, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('native process did not close within original500ms budget')), left); })]).finally(() => clearTimeout(timer));
     } catch (failure) { error ||= safeError(failure); }
   }
+  if (trace.childPID && trace.closeAt) {
+    try { process.kill(trace.childPID, 0); error ||= 'native child remained alive after worker closure'; }
+    catch (failure) { if (failure.code !== 'ESRCH') error ||= safeError(failure); }
+  }
   const elapsed = (trace.closeAt ?? performance.now()) - trace.started;
   if (elapsed > 500) error ||= 'callback/child termination exceeded original500ms budget';
   emit({
@@ -170,6 +193,8 @@ async function invoke(command) {
     worker_operation_elapsed_ms: trace.workerElapsedMs, worker_threads: trace.workerThreads,
     processes: trace.processes, rest_requests: trace.restRequests, rest_budget_ms: trace.restBudgetMs,
     outer_deadline_unix_ms: trace.outerDeadline, wire_deadline_unix_ms: trace.wireDeadline,
+    code_status: trace.native?.code_status, code_reason: trace.native?.code_reason,
+    memory_status: trace.native?.knowledge?.memory_status, note_status: trace.native?.knowledge?.note_status,
     native_status: trace.native?.status, native_reason: trace.native?.reason_code,
     useful: !!packet, packet, callback_content: message?.content,
   });
@@ -180,9 +205,10 @@ input.on('line', line => {
   let command;
   try { command = JSON.parse(line); } catch { emit({ event: 'error', error: 'invalid fixture control frame' }); return; }
   const operation = command.type === 'setup' ? initialize(command)
-    : command.type === 'invoke' ? invoke(command)
-      : command.type === 'supersede' ? handler({ cwd: setup.first, sessionId: 'joined-cancel', prompt: 'thanks' }, {})
-        : command.type === 'finish' ? Promise.resolve().then(async () => { await cleanup?.(); loopDelay.disable(); input.close(); emit({ event: 'finished' }); })
-          : Promise.reject(new Error('unsupported fixture command'));
+    : command.type === 'retire' ? Promise.resolve().then(() => { requireCondition(setup.retirePackage, 'not an owned disposable package'); fs.rmSync(setup.pluginRoot, { recursive: true }); emit({ event: 'retired', package_absent: !fs.existsSync(setup.pluginRoot) }); })
+      : command.type === 'invoke' ? invoke(command)
+        : command.type === 'supersede' ? handler({ cwd: setup.first, sessionId: 'joined-cancel', prompt: 'thanks' }, {})
+          : command.type === 'finish' ? Promise.resolve().then(async () => { await cleanup?.(); loopDelay.disable(); input.close(); emit({ event: 'finished' }); })
+            : Promise.reject(new Error('unsupported fixture command'));
   Promise.resolve(operation).catch(error => emit({ event: 'error', error: safeError(error) }));
 });

@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - Show a localized error with the HTTP status instead of indefinite update progress when the legacy UI receives a non-success HTTP response to an update request. Offer a GET-only recheck of the current process status; it cannot determine the update outcome or whether retrying is safe.
+
+- Keep `project resolve --check` client selection read-only: require a verified cached client and never acquire or quarantine it. Check the existing 15-second budget between local filesystem operations and pass the remaining time to the native process; a kernel-blocked filesystem call is not preempted by this budget, so the external limit depends on the invoking tool's deadline.
+
+- Bound PostgreSQL task-note search without JIT compilation overhead; preserve caller transaction settings and cancellation with bounded savepoint recovery, and keep per-read savepoint controls out of the shared prepared-statement cache. Retain existing project authorization, ranking and deadlines.
+
+- Exclude dependents proven by their complete foreign-key ancestry to belong only to self or global memories from project consolidation, without treating private data as global; retain mixed or unknown ownership as unresolved and preserve project inheritance.
+
+- Add self-memory link create, list and delete HTTP routes with endpoint authorization, directional references with optional revision pins and idempotent retry receipts. Memory remains the content owner; links do not grant access. Links use migration 195; an existing provisional `192_memory_links` ledger entry blocks automatic adoption and retains its data for explicit resolution.
+
+- Preserve source ownership of CI embeddings with shared profiles while keeping unknown parents unresolved and treating optional NULL foreign keys as absent unless deletion can null the parent; bound new link provenance to 1024 UTF-8 bytes and page link reads by encoded size without truncating existing oversized rows.
+
+- Restore principal-memory reads of workstation-private legacy rows for matching authenticated legacy keycards without principal metadata, without widening typed-card access.
+
 - Correct the Claude Code adapter guide: the registered SessionEnd callback targets a retired handler, while outcome recording is an explicit MCP feedback operation distinct from Stop transcript processing.
 
 - Return 403 for a valid keycard without an enrolled memory principal on selector-free memory reads; preserve the legacy missing-project response for callers without a keycard.
@@ -42,6 +55,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Remove the fixed Swagger host so the UI uses the documentation's serving origin; older deployments retain their existing schema until updated.
 
 - Keep long statistics values within their metric columns so adjacent values remain readable, without changing the displayed precision or unknown-versus-zero semantics.
+
+- Prevent legacy principal queries from disclosing inaccessible match counts or workstation-private memories; apply principal, domain and workstation visibility before pagination and represent unknown hidden counts as null.
+
+- Upgrade `golang.org/x/net` to v0.62.0 to address CVE-2026-78661 in its HTML parser and update its required transitive dependencies.
+
+- Retain validated bootstrap metadata for each loaded OMP hook when its own package directory is retired during an upgrade. Recheck present policy changes and verify client bytes on every use; malformed or mismatched current policy still fails closed.
+- Retain the loaded package's native task-context worker entry for the hook instance, preserving per-request verification and cancellation when a package update retires its old root.
 
 - Regenerate the API through the maintained worker target using canonical local Go package directories and Swag 1.16.6, with real producer errors stopping the build. Correct existing context search/inject/session-start annotations without changing handlers; document the shared GET/POST conditional-query limitation. The actual producer and server build pass, with 40 named schema checks and all 76 references resolved; that producer checkpoint established compile-only retained-reader oracle provenance, with later native query proof recorded separately, and installed/release acceptance remains separate.
 

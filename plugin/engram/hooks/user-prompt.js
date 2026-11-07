@@ -72,7 +72,7 @@ function scheduleSupportHooks(facts, query, config, options, nativeProject, evid
     let project;
     try {
       const resolved = await (options.resolveContext ?? lib.resolveHookProjectContext)(facts.cwd, {
-        acquire: false, check: true, signal: controller.signal, deadlineAt, env,
+        acquire: false, check: true, signal: controller.signal, deadlineAt, env, hookPolicy: options.hookPolicy,
       });
       project = resolved.Project;
     } catch (error) {
@@ -208,7 +208,7 @@ async function requestPromptContext(facts = {}, options = {}) {
     stage = 'native';
     const query = redact(facts.prompt, config.token);
     const nativeWork = Promise.resolve().then(() => (options.requestTaskContext ?? launcher.requestTaskContext)({ ...facts, prompt: query }, {
-      signal: controller.signal, deadlineAt, maxBytes: 8000,
+      signal: controller.signal, deadlineAt, maxBytes: 8000, hookPolicy: options.hookPolicy,
       env: { ...process.env, ENGRAM_URL: config.serverURL, ENGRAM_TOKEN: config.token },
     }));
     if (options.supportHooks) {

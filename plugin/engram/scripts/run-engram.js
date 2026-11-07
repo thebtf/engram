@@ -11,7 +11,17 @@ const crypto = require('node:crypto');
 const { DOWNLOAD_DEADLINE_MS, hashFile, loadPolicy, objectRoots, resolveForLaunch } = require("./ensure-binary.js");
 const { installationClientInstanceID, readInstallationClientInstanceID } = require("./client-instance.js");
 
+// Load only this package's worker once, so a loaded hook survives package retirement.
+const taskContextWorkerSource = (() => {
+ try {
+  const bytes = fs.readFileSync(path.join(__dirname, 'task-context-worker.js'));
+  if (!bytes.length || bytes.length > 256 * 1024) return null;
+  return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+ } catch { return null; }
+})();
+
 const STARTUP_DIAGNOSTIC_LOG_MAX_BYTES = 128 * 1024;
+const PROJECT_CHECK_DEADLINE_MS = 15000;
 const TASK_CONTEXT_COMPLETION_RESERVE_MS = 30;
 const TASK_CONTEXT_STATUSES = new Set(['ok', 'empty', 'not_ready', 'stale', 'context_required', 'forbidden', 'unavailable', 'deadline_exceeded']);
 const TASK_CONTEXT_REASONS = new Set([
@@ -116,10 +126,32 @@ async function main() {
  }
 }
 
+function createHookPolicyBinding(pluginRoot, packageVersion) {
+ const root = path.resolve(pluginRoot);
+ let retained;
+ function current(requestedRoot) {
+  if (path.resolve(requestedRoot) !== root) throw new Error('hook policy root changed');
+  try {
+   const policy = loadPolicy(root);
+   if (policy.package_version !== packageVersion) throw new Error('hook policy package version changed');
+   retained = policy;
+   return policy;
+  } catch (error) {
+   let absent = false;
+   try { fs.lstatSync(root); } catch (statError) { absent = statError.code === 'ENOENT'; }
+   if (absent && retained) return retained;
+   retained = undefined;
+   throw error;
+  }
+ }
+ try { current(root); } catch { }
+ return current;
+}
+
 async function resolveClient(options, projectOnly = false) {
  let policy;
  if (!options.resolve) {
-  policy = loadPolicy(options.pluginRoot);
+  policy = options.hookPolicy ? options.hookPolicy(options.pluginRoot) : loadPolicy(options.pluginRoot);
   // A predecessor may not implement this package's project resolve interface.
   policy = { ...policy, target: { ...policy.target, predecessor: null } };
  }
@@ -155,7 +187,7 @@ async function resolveLogicalProject(root, options = {}) {
  const pluginRoot = options.pluginRoot || resolvePluginRoot();
  const pluginData = options.pluginData || resolvePluginData(pluginRoot);
  const resolved = await resolveClient({ ...options, pluginRoot, pluginData }, true);
- const remaining = options.deadlineAt === undefined ? 15000 : options.deadlineAt - Date.now();
+ const remaining = options.deadlineAt === undefined ? PROJECT_CHECK_DEADLINE_MS : options.deadlineAt - Date.now();
  if (options.signal?.aborted) throw new Error('PROJECT_RESOLUTION_ABORTED');
  if (remaining <= 0) throw new Error('PROJECT_RESOLUTION_DEADLINE_EXCEEDED');
  const raw = await new Promise((resolve, reject) => {
@@ -214,8 +246,9 @@ function executeTaskContextProcess(data, { signal, createTaskContextWorker } = {
   };
   signal?.addEventListener('abort', cancel, { once: true });
   try {
-   worker = (createTaskContextWorker || ((file, options) => new Worker(file, options)))(path.join(__dirname, 'task-context-worker.js'), {
-    env: {}, execArgv: [], stdout: true, stderr: true,
+   if (!taskContextWorkerSource) throw new Error('TASK_CONTEXT_STOPPED');
+   worker = (createTaskContextWorker || ((source, options) => new Worker(source, options)))(taskContextWorkerSource, {
+    eval: true, env: {}, execArgv: [], stdout: true, stderr: true,
     workerData: { schema: 1, ...data, cancellation },
    });
   } catch {
@@ -307,7 +340,22 @@ async function requestTaskContext(facts = {}, options = {}) {
 
 async function resolveAndSpawn(options) {
  const projectOnly = options.args?.[0] === 'project';
- const resolved = await resolveClient(options, projectOnly);
+ let check = false;
+ if (projectOnly && options.args?.[1] === 'resolve') {
+  for (let i = 2; i < options.args.length; i++) {
+   const arg = options.args[i];
+   if (arg === '--' || !arg.startsWith('-') || arg === '-') break;
+   const match = /^--?([^=]+)(?:=(.*))?$/.exec(arg);
+   if (!match) break;
+   const [, name, value] = match;
+   if (name === 'root') { if (value === undefined) i++; continue; }
+   if (name !== 'check' && name !== 'json') break;
+   if (value !== undefined && !/^(?:1|t|T|true|TRUE|True|0|f|F|false|FALSE|False)$/.test(value)) break;
+   if (name === 'check') check = value === undefined || /^(?:1|t|T|true|TRUE|True)$/.test(value);
+  }
+ }
+ const deadlineAt = check ? Date.now() + PROJECT_CHECK_DEADLINE_MS : undefined;
+ const resolved = await resolveClient(check ? { ...options, check: true, acquire: false, deadlineAt } : options, projectOnly);
  const hash = options.hash || hashFile;
  const roots = options.roots || objectRoots;
  const env = { ...options.env };
@@ -330,8 +378,10 @@ async function resolveAndSpawn(options) {
   env.ENGRAM_UCI_PARSER_EXECUTABLE = resolved.parserPath;
   env.ENGRAM_UCI_PARSER_BUNDLE_DIGEST = probe.stdout.trim();
  }
+ const remaining = check ? deadlineAt - Date.now() : undefined;
+ if (check && remaining <= 0) throw new Error('PROJECT_RESOLUTION_DEADLINE_EXCEEDED');
  const result = (options.spawnSync || spawnSync)(resolved.path, options.args || [], {
-  stdio: "inherit", env, cwd: options.cwd || resolveHostRoot(env),
+  stdio: "inherit", env, cwd: options.cwd || resolveHostRoot(env), ...(check ? { timeout: remaining } : {}),
  });
  const failure = spawnFailureMessage(result, "engram exec");
  if (failure) throw new Error(failure.trim());
@@ -616,6 +666,7 @@ module.exports = {
  projectFromInspection,
  validTaskContextResponse,
  requestTaskContext,
+ createHookPolicyBinding,
  prepareHookClient,
  resolveHostRoot,
  codexMcpConfig,

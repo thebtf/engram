@@ -69,6 +69,15 @@ There is no historical startup-flag alternative to this public hybrid enum.
 
 Admin-gated families (candidates, governance, bulk ops) are additionally enforced at the handler level regardless of advertisement.
 
+Explicit-principal queries filter inaccessible principal, domain and legacy
+workstation-private rows before pagination. Workstation identity comes from
+authentication, not the query's `session_id`; admin widening does not bypass
+workstation privacy. `hidden_count` is `null` when the inaccessible count is unknown;
+it is not a count of matching private cards. This applies to the HTTP principal
+query and its MCP query and principal-scoped brief projections. Administrative
+private widening remains subject to durable audit. Clients that also support
+older servers may encounter numeric values and should preserve their meaning.
+
 `lifecycle` exact-ID reads (`info`, `decay_preview`) use ordinary reader
 caller/project, principal/domain and workstation privacy authority before loading
 metadata. Like recall without an explicit `session_id` argument, these reads do
@@ -225,6 +234,14 @@ already-ready useful result from another. PostgreSQL's existing language/query
 semantics are used without a new index, backfill, provider or Vault scan. The
 unreleased serial REST fallback is retired by the cutover. This amendment does not
 establish a latency guarantee or useful-note acceptance on the selected corpus.
+The PostgreSQL note search disables JIT only within its read transaction to avoid
+compilation consuming the task deadline; it restores the caller's setting for a
+nested transaction and retains the same authorization and cancellation rules.
+Nested savepoint recovery has a separate bounded cleanup window; a failed
+rollback or release is returned to the caller, which must not assume that its
+transaction was restored.
+Per-read savepoint controls use the underlying transaction rather than adding
+unique statements to the shared prepared-statement cache.
 
 `knowledge` has `memory_status`, `note_status`, and `rule_status` (`ok`, `empty`,
 `unavailable`, or `deadline_exceeded`) and at most nine `items`. Enabled project
@@ -407,6 +424,51 @@ An optional nonempty `request_key` (at most 1024 UTF-8 bytes) scopes a create
 retry to the authenticated principal, owning context and project. An equivalent
 retry returns the existing active record; a changed command or retired target
 returns 409. Without a key a repeated create is not automatically idempotent.
+
+Self-memory cards can be linked with `POST /api/memories/{source_id}/links`.
+Supply `target_id`, `relation` (`related_to` or `references`), an optional
+`target_version` for `references`, an optional `request_key`, and an optional
+`source_session_id` as untrusted provenance, at most 1024 UTF-8 bytes. Both
+endpoints must be active and accessible to the enrolled keycard principal.
+`related_to` is unordered and cannot carry a revision pin; `references` is
+directional and its target version
+distinguishes assertions. A new link returns 201; an existing assertion returns
+200 with its original author and provenance. A key is scoped to the canonical
+principal and normalized assertion. Reuse for another assertion, or replay after
+removal, returns 409. A duplicate under another key also gets a receipt.
+
+`GET /api/memories/{source_id}/links` returns `links` and `next_cursor`; pass
+the cursor as `cursor` to continue. `limit` defaults to 50 and ranges from 1
+to 100. Authorization and active endpoint status filter results before the
+page limit. Pages have a 1 MiB encoded-size budget and may be shorter than the
+requested limit; an existing oversized first row is returned intact as a singleton.
+`DELETE /api/memory-links/{link_id}` removes an assertion; restoring
+an inactive endpoint can reveal an unremoved link, but does not restore a
+removed link. Links do not grant access. Workstation-private restrictions
+continue to apply across keycards. Auth-disabled mode is not privacy isolation,
+even though these routes validate an explicitly supplied keycard. Document and
+other-record link endpoints are not part of this slice.
+
+`GET /api/memories/principal` without `principal` searches the enrolled
+authenticated keycard's self context; it does not include that principal's project,
+global or legacy records. `context=self` is optional, but an explicit `project`,
+another context, `principal_kind` without `principal`, or an empty `principal`
+does not select self. An explicit principal retains the existing principal-query
+contract when `context` is omitted; `context` with an explicit principal is
+unsupported and returns 400. For self, a nonempty `q` is bounded to 1024 UTF-8
+bytes and 64 distinct lexical terms of at least two characters; exceeding either
+bound returns 400 rather than truncating. Punctuation-only and multiword questions
+consisting only of common boilerplate return 400. A single term is searched
+literally, even when it is a common word. For multiword questions, common English
+and Russian function words and Russian locating verbs are omitted before matching.
+Matching terms rank by their lengths, with recency as a tie-breaker; this is
+literal substring matching,
+not semantic search. Omit `q` to browse. Results contain stable memory IDs; use
+the ordinary card-read endpoint for full context, revision and provenance.
+Principal, domain and privacy restrictions are applied before pagination; the
+`hidden_count` compatibility field does not count inaccessible rows, because
+that count could disclose their existence. Explicit admin private widening still
+requires its durable audit before returning the record.
 
 `GET /api/memories/{id}` reads a visible card in its selected context. For GET
 and typed PATCH, an enrolled client with omitted selectors selects self;

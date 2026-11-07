@@ -50,6 +50,8 @@ func NewPrincipalMemoryQueryService(store PrincipalMemoryStore, audit AuditLogge
 
 type PrincipalMemoryQueryRequest struct {
 	Project            string
+	SelfContextOnly    bool
+	RankQueryTerms     bool
 	Caller             PrincipalRef
 	CallerIsAdmin      bool
 	OwnerPrincipal     string
@@ -187,13 +189,18 @@ func (s *PrincipalMemoryQueryService) Query(ctx context.Context, req PrincipalMe
 	}
 
 	contextCaller := scope.KeycardContext{}
+	legacyWorkstationID := ""
 	if identity, ok := auth.IdentityFrom(ctx); ok && identity.Source == auth.SourceClient && identity.KeycardID != "" {
+		legacyWorkstationID = identity.WorkstationID()
 		if principal, kind, owned := identity.MemoryOwner(); owned {
 			contextCaller = scope.KeycardContext{Principal: principal, PrincipalKind: kind, WorkstationID: identity.WorkstationID()}
 		}
 	}
 	queryOpts := gormdb.ListOptions{
 		ContextCaller:              contextCaller,
+		SelfContextOnly:            req.SelfContextOnly,
+		RankContentTerms:           req.RankQueryTerms,
+		LegacyWorkstationID:        legacyWorkstationID,
 		EnforcePrincipalPolicy:     true,
 		PrincipalCaller:            scope.KeycardContext{Principal: req.Caller.Principal, PrincipalKind: req.Caller.PrincipalKind},
 		AllowCrossPrincipalPrivate: req.CallerIsAdmin && req.IncludePrivate,

@@ -453,6 +453,19 @@ func disabledIdentityRoute(method, path string) (memory, administration bool) {
 			return false, true
 		}
 	}
+	if method == http.MethodDelete {
+		if id, ok := strings.CutPrefix(path, "/api/memory-links/"); ok {
+			parsed, err := strconv.ParseInt(id, 10, 64)
+			return err == nil && parsed > 0, false
+		}
+	}
+	if method == http.MethodPost {
+		if rest, ok := strings.CutPrefix(path, "/api/memories/"); ok {
+			id, suffix, found := strings.Cut(rest, "/")
+			parsed, err := strconv.ParseInt(id, 10, 64)
+			return found && suffix == "links" && err == nil && parsed > 0, false
+		}
+	}
 	if method != http.MethodGet && method != http.MethodPatch {
 		return false, false
 	}
@@ -465,7 +478,7 @@ func disabledIdentityRoute(method, path string) (memory, administration bool) {
 	if err != nil || parsedID <= 0 {
 		return false, false
 	}
-	return !hasSuffix || (method == http.MethodGet && suffix == "revisions"), false
+	return !hasSuffix || (method == http.MethodGet && (suffix == "revisions" || suffix == "links")), false
 }
 
 // Middleware returns HTTP middleware that enforces token authentication.
