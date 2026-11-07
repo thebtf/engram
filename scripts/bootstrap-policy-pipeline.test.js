@@ -1888,7 +1888,7 @@ test("generator check mode and combined artifact gate accept only the shared tar
     const policyPath = path.join(temp, "bootstrap-targets.json");
     const parserPolicyPath = path.join(temp, "parser-targets.json");
     const dist = path.join(temp, "dist");
-    const currentVersion = JSON.parse(fs.readFileSync(path.join(root, "plugin", "engram", "package.json"), "utf8")).version;
+    const currentVersion = currentPolicyVersion;
     fs.mkdirSync(fakeBin, { recursive: true });
     fs.writeFileSync(fakeGo, "#!/usr/bin/env bash\nif [[ $1 == version ]]; then echo 'go version go1.26.10 linux/amd64'; exit 0; fi\nfor arg in \"$@\"; do [[ $arg == ./tools/uci-parser ]] && parser=1; done\nwhile [[ $# -gt 0 ]]; do\n  if [[ $1 == -ldflags ]]; then [[ $2 == *-buildid=* ]] || exit 1; shift 2; continue; fi\n  if [[ $1 == -o ]]; then shift; if [[ ${parser:-0} == 1 ]]; then printf 'parser-windows-amd64' > \"$1\"; else printf '%s-%s' \"$GOOS\" \"$GOARCH\" > \"$1\"; fi; exit 0; fi\n  shift\ndone\nexit 1\n", { mode: 0o755 });
     const fakeCompiler = path.join(fakeBin, "cc");
