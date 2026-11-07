@@ -425,6 +425,13 @@ retry to the authenticated principal, owning context and project. An equivalent
 retry returns the existing active record; a changed command or retired target
 returns 409. Without a key a repeated create is not automatically idempotent.
 
+An enrolled owner keycard can archive its own self card with
+`POST /api/memories/{id}/transition` and `{"action":"archive"}`, omitting
+`project` or explicitly selecting `context=self`. The transition retains the
+body and revisions, advances the version, and excludes the card from active
+self search. An invalid or conflicting selector fails without falling back.
+Project-card transitions retain their existing canonical membership checks.
+
 Self-memory cards can be linked with `POST /api/memories/{source_id}/links`.
 Supply `target_id`, `relation` (`related_to` or `references`), an optional
 `target_version` for `references`, an optional `request_key`, and an optional

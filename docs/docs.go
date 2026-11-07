@@ -2726,7 +2726,7 @@ const docTemplate = `{
                         "ApiKeyAuth": []
                     }
                 ],
-                "description": "Requires a JSON action: suppress changes active to flagged, unsuppress changes flagged to active, and archive changes active or flagged to archived without erasure. The optional project query parameter must occur once with a canonical UUID and only narrows the memory's existing live canonical membership; omission does not bypass caller visibility or domain-manage authorization. Missing or denied memories return 404. State/version conflicts return 409 and roll back the transaction. The receipt contains id, action, resulting status, incremented version and canonical project. An ambiguous transport failure leaves the outcome unknown; do not automatically retry.",
+                "description": "Requires a JSON action: suppress changes active to flagged, unsuppress changes flagged to active, and archive changes active or flagged to archived without erasure. An enrolled owner keycard may archive its own self card with project omitted and context omitted or self; other self actions are not supported. The optional project query parameter must occur once with a canonical UUID and only narrows that existing project membership; omission does not bypass caller visibility or domain-manage authorization. Invalid or conflicting contexts fail without fallback. Missing or denied memories return 404. State/version conflicts return 409 and roll back the transaction. The receipt contains id, action, resulting status, incremented version and project (empty for self). An ambiguous transport failure leaves the outcome unknown; do not automatically retry.",
                 "consumes": [
                     "application/json"
                 ],
@@ -2750,6 +2750,15 @@ const docTemplate = `{
                         "type": "string",
                         "description": "Optional single canonical project UUID; narrows existing membership only",
                         "name": "project",
+                        "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "self"
+                        ],
+                        "type": "string",
+                        "description": "Self archive only; omit or use self without project",
+                        "name": "context",
                         "in": "query"
                     },
                     {
