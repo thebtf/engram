@@ -7,7 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Show an error instead of indefinite update progress when the legacy UI receives a non-success HTTP response to an update request.
+- Show a localized error with the HTTP status instead of indefinite update progress when the legacy UI receives a non-success HTTP response to an update request.
+- Correct the Claude Code adapter guide: the registered SessionEnd callback targets a retired handler, while outcome recording is an explicit MCP feedback operation distinct from Stop transcript processing.
 
 - Return 403 for a valid keycard without an enrolled memory principal on selector-free memory reads; preserve the legacy missing-project response for callers without a keycard.
 

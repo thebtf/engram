@@ -235,7 +235,7 @@ onMounted(() => {
           class="flex items-center gap-2 border-b border-destructive/20 bg-destructive/10 px-4 py-2 text-sm text-destructive"
         >
           <AlertCircle :size="14" />
-          <span>{{ updateStatus.error || t.app.updateFailed }}</span>
+          <span>{{ updateStatus.httpStatus !== undefined ? `${t.app.updateFailed} (HTTP ${updateStatus.httpStatus})` : updateStatus.error || t.app.updateFailed }}</span>
         </div>
 
         <main

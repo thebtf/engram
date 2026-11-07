@@ -13,6 +13,7 @@ export interface UpdateStatus {
   progress: number
   message: string
   error?: string
+  httpStatus?: number
 }
 
 // Background check runs every 30 minutes so the UI can surface available
@@ -51,9 +52,8 @@ export function useUpdate() {
     try {
       const res = await fetch('/api/update/apply', { method: 'POST' })
       if (!res.ok) {
-        const message = `Update request failed (HTTP ${res.status})`
         stopStatusPolling()
-        updateStatus.value = { state: 'error', progress: 0, message, error: message }
+        updateStatus.value = { state: 'error', progress: 0, message: '', httpStatus: res.status }
         isUpdating.value = false
         return
       }
