@@ -662,6 +662,8 @@ node <installed-plugin-path>/scripts/run-engram.js project resolve --root <actua
 
 Native `issues list/get` остаются project-free разрешёнными чтениями. В OpenClaw без caller resolution доступны get и list с явным target/source filter; default inbox сохраняет смысл текущего workspace и при неизвестной identity не превращается в all-project list. Ошибка чтения не означает пустой inbox. Для mutations acting project поступает из проверенного native context; optional compatibility `project` не задаёт actor, а `target_project` остаётся отдельным назначением.
 
+При отказе `issues create` на этапе `target_project` используй независимо подтверждённый разрешённый canonical UUID нужного проекта. Для точного проверенного legacy ID доступен аутентифицированный `GET /api/projects/resolve?legacy_id=<URI-encoded-exact-id>`; имя проекта не подтверждает выбор. При отказе `source_project` восстанавливай native caller через `project_context` и условия marker/hash выше. Не выполняй adoption unresolved membership. Если storage guard не указал роль, не угадывай её; неизвестный результат mutation нельзя повторять без проверки. Фильтры `issues list` сопоставляют точные значения, а не разрешают имена: нулевой результат для legacy label не доказывает отсутствие canonical issues.
+
 Агент в чужом checkout получает обязательные следующие действия из shipped tool descriptions/errors. Для подробностей доступна эта стабильная upstream-ссылка: https://github.com/thebtf/engram/blob/main/docs/operating-engram.md#context-recovery . Локальная копия Engram guide, mutable cache wiki или project-scoped `docs` для восстановления не требуются.
 
 ### Переносимый UUID проекта
