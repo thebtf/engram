@@ -119,3 +119,65 @@ func TestTaskContextDocumentSearchJITBudget(t *testing.T) {
 	require.NoError(t, db.Raw("SHOW jit").Scan(&after).Error)
 	require.Equal(t, poolSetting, after, "cancelled query must not leak settings into the pool")
 }
+
+func TestTaskContextNestedPrecancelPreservesCaller(t *testing.T) {
+	db := openCandidateTestDB(t)
+	tx := db.Begin()
+	require.NoError(t, tx.Error)
+	defer tx.Rollback()
+	project := uuid.NewString()
+	require.NoError(t, tx.Create(&Project{ID: project}).Error)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := NewVersionedDocumentStore(&Store{DB: tx}).SearchTaskContext(ctx, project, "Alpha", 3)
+	require.ErrorIs(t, err, context.Canceled)
+	require.NoError(t, tx.Commit().Error, "pre-cancelled read must not abort caller writes")
+	var count int64
+	require.NoError(t, db.Model(&Project{}).Where("id = ?", project).Count(&count).Error)
+	require.EqualValues(t, 1, count)
+}
+
+func TestTaskContextNestedCleanupBounded(t *testing.T) {
+	db := openCandidateTestDB(t)
+	tx := db.Begin()
+	require.NoError(t, tx.Error)
+	defer tx.Rollback()
+	callbacks := db.Callback().Raw()
+	observed := false
+	require.NoError(t, callbacks.Before("gorm:raw").Register("task-context-stall-release", func(q *gormlib.DB) {
+		if strings.HasPrefix(q.Statement.SQL.String(), "RELEASE SAVEPOINT task_context_") {
+			observed = true
+			q.AddError(q.Session(&gormlib.Session{NewDB: true}).WithContext(q.Statement.Context).Exec("SELECT pg_sleep(2)").Error)
+		}
+	}))
+	defer callbacks.Remove("task-context-stall-release")
+	started := time.Now()
+	err := taskContextNestedRead(t.Context(), tx, func(*gormlib.DB) error { return nil })
+	elapsed := time.Since(started)
+	require.True(t, observed, "the actual release reached the stalled SQL seam")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Less(t, elapsed, 1500*time.Millisecond, "stalled cleanup exceeded its finite bound")
+}
+
+func TestTaskContextNestedRollbackBounded(t *testing.T) {
+	db := openCandidateTestDB(t)
+	tx := db.Begin()
+	require.NoError(t, tx.Error)
+	defer tx.Rollback()
+	callbacks := db.Callback().Raw()
+	observed := false
+	require.NoError(t, callbacks.Before("gorm:raw").Register("task-context-stall-rollback", func(q *gormlib.DB) {
+		if strings.HasPrefix(q.Statement.SQL.String(), "ROLLBACK TO SAVEPOINT task_context_") {
+			observed = true
+			q.AddError(q.Session(&gormlib.Session{NewDB: true}).WithContext(q.Statement.Context).Exec("SELECT pg_sleep(2)").Error)
+		}
+	}))
+	defer callbacks.Remove("task-context-stall-rollback")
+	failure := errors.New("synthetic read failure")
+	started := time.Now()
+	err := taskContextNestedRead(t.Context(), tx, func(*gormlib.DB) error { return failure })
+	require.True(t, observed, "the actual rollback reached the stalled SQL seam")
+	require.ErrorIs(t, err, failure)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Less(t, time.Since(started), 1500*time.Millisecond)
+}

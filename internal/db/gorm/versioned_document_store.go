@@ -468,16 +468,23 @@ func (s *VersionedDocumentStore) SearchTaskContext(ctx context.Context, project,
 
 func taskContextNestedRead(ctx context.Context, db *gorm.DB, read func(*gorm.DB) error) (err error) {
 	name := "task_context_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-	if err = db.WithContext(ctx).SavePoint(name).Error; err != nil {
+	if err = db.WithContext(ctx).Exec("SAVEPOINT " + name).Error; err != nil {
 		return err
 	}
 	complete := false
 	defer func() {
-		cleanup := db.WithContext(context.WithoutCancel(ctx))
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 400*time.Millisecond)
+		defer cancel()
+		cleanup := db.WithContext(cleanupCtx)
 		if !complete {
-			err = errors.Join(err, cleanup.RollbackTo(name).Error)
+			if rollbackErr := cleanup.Exec("ROLLBACK TO SAVEPOINT " + name).Error; rollbackErr != nil {
+				err = errors.Join(err, fmt.Errorf("task context savepoint rollback failed: %w", rollbackErr))
+				return
+			}
 		}
-		err = errors.Join(err, cleanup.Exec("RELEASE SAVEPOINT "+name).Error)
+		if releaseErr := cleanup.Exec("RELEASE SAVEPOINT " + name).Error; releaseErr != nil {
+			err = errors.Join(err, fmt.Errorf("task context savepoint release failed: %w", releaseErr))
+		}
 	}()
 	err = read(db.WithContext(ctx))
 	complete = err == nil
