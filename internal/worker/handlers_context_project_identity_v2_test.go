@@ -195,9 +195,10 @@ func TestSwaggerServedMemoryLinkContract(t *testing.T) {
 	}
 	page := properties("worker.memoryLinkPageSchema")
 	for _, tc := range []struct {
-		name string
+		name  string
 		field map[string]any
 	}{
+		{"request target_version", request["target_version"].(map[string]any)},
 		{"response target_version", link["target_version"].(map[string]any)},
 		{"page next_cursor", page["next_cursor"].(map[string]any)},
 	} {

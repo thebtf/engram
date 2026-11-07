@@ -21,7 +21,7 @@ type createMemoryLinkRequest struct {
 type memoryLinkRequestSchema struct {
 	TargetID        int64  `json:"target_id" binding:"required" minimum:"1"`
 	Relation        string `json:"relation" binding:"required" enums:"related_to,references"`
-	TargetVersion   *int   `json:"target_version" minimum:"1"`
+	TargetVersion   *int   `json:"target_version" minimum:"1" extensions:"x-nullable"`
 	RequestKey      string `json:"request_key"`
 	SourceSessionID string `json:"source_session_id"`
 }
@@ -32,14 +32,14 @@ type memoryLinkResponseSchema struct {
 	SourceID        int64               `json:"source_id"`
 	TargetID        int64               `json:"target_id"`
 	Relation        string              `json:"relation" enums:"related_to,references"`
-	TargetVersion   *int                `json:"target_version"`
+	TargetVersion   *int                `json:"target_version" extensions:"x-nullable"`
 	Author          models.MemoryAuthor `json:"author"`
 	SourceSessionID string              `json:"source_session_id"`
 }
 
 type memoryLinkPageSchema struct {
 	Links      []memoryLinkResponseSchema `json:"links"`
-	NextCursor *int64                     `json:"next_cursor"`
+	NextCursor *int64                     `json:"next_cursor" extensions:"x-nullable"`
 }
 
 func (s *Service) selfLinkContext(w http.ResponseWriter, r *http.Request) (models.MemoryContext, bool) {
@@ -73,7 +73,7 @@ func memoryLinkPathID(r *http.Request) (int64, error) {
 
 // handleCreateMemoryLink godoc
 // @Summary Link two self-memory cards
-// @Description Requires an explicitly validated keycard with an enrolled canonical principal; project and context query parameters are forbidden. Both cards must be active and manageable by this keycard; workstation-private restrictions apply and links grant no access. Auth-disabled mode is not privacy isolation. The source and target must differ. related_to is unordered and cannot have a non-null target_version; references is directional and may pin a positive current or retained target revision. An omitted or null target_version leaves the link unpinned. Omit request_key or supply a nonempty JSON string of at most 1024 UTF-8 bytes; null is invalid. Keys are scoped to the canonical principal and normalized assertion. A duplicate assertion returns 200 with its original author and untrusted source_session_id provenance, including when another key is supplied; a key reused for another assertion or a removed link returns 409. New assertions return 201. source_session_id is caller-supplied untrusted provenance, not identity.
+// @Description Requires an explicitly validated keycard with an enrolled canonical principal; project and context query parameters are forbidden. Both cards must be active and manageable by this keycard; workstation-private restrictions apply and links grant no access. Auth-disabled mode is not privacy isolation. The source and target must differ. related_to is unordered and cannot have a non-null target_version; references is directional and may pin a positive current or retained target revision. An omitted or null target_version leaves the link unpinned. Omit request_key or supply a nonempty JSON string of at most 1024 UTF-8 bytes; null is invalid. Keys are scoped to the canonical principal and normalized assertion. A duplicate assertion returns 200 with its original author and untrusted source_session_id provenance, including when another key is supplied; a key reused for another assertion or a removed link returns 409. New assertions return 201. source_session_id is optional caller-supplied untrusted provenance, not identity, and is limited to 1024 UTF-8 bytes.
 // @Tags Memories
 // @Accept json
 // @Produce json
@@ -110,7 +110,7 @@ func (s *Service) handleCreateMemoryLink(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "invalid request_key", http.StatusBadRequest)
 		return
 	}
-	if request.TargetID <= 0 || request.TargetID == id || (request.Relation != "related_to" && request.Relation != "references") || (request.TargetVersion != nil && (*request.TargetVersion <= 0 || request.Relation != "references")) {
+	if request.TargetID <= 0 || request.TargetID == id || (request.Relation != "related_to" && request.Relation != "references") || (request.TargetVersion != nil && (*request.TargetVersion <= 0 || request.Relation != "references")) || len(request.SourceSessionID) > 1024 {
 		http.Error(w, "invalid link", http.StatusBadRequest)
 		return
 	}
@@ -128,7 +128,7 @@ func (s *Service) handleCreateMemoryLink(w http.ResponseWriter, r *http.Request)
 
 // handleListMemoryLinks godoc
 // @Summary List links for a self-memory card
-// @Description Requires an explicitly validated keycard with an enrolled canonical principal; project and context query parameters are forbidden. The requested card must be active and visible; only links with two active visible endpoints are returned, with workstation-private restrictions applied before pagination. related_to is returned from either endpoint; references only from its source. Links do not grant access. Auth-disabled mode is not privacy isolation. Results are ordered by link ID; next_cursor is the last returned link ID when more results exist, otherwise null. Pass it as cursor to continue. target_version is null when unpinned; source_session_id is untrusted caller-supplied provenance.
+// @Description Requires an explicitly validated keycard with an enrolled canonical principal; project and context query parameters are forbidden. The requested card must be active and visible; only links with two active visible endpoints are returned, with workstation-private restrictions applied before pagination. related_to is returned from either endpoint; references only from its source. Links do not grant access. Auth-disabled mode is not privacy isolation. Results are ordered by link ID; next_cursor is the last returned link ID when more results exist, otherwise null. Pass it as cursor to continue. Pages have a 1 MiB encoded-size budget and may be shorter than limit; an existing oversized first row is returned intact as a singleton. target_version is null when unpinned; source_session_id is untrusted caller-supplied provenance.
 // @Tags Memories
 // @Produce json
 // @Security ApiKeyAuth

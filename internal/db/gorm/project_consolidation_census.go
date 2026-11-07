@@ -529,7 +529,8 @@ func (s *ProjectConsolidationStore) census(tx *gormlib.DB, sourceVersion string)
 		if child == nil {
 			continue
 		}
-		if parent == nil || !fk.ParentLocal || (child.Kind == "independent_view" && fk.ParentTable != "sources" && fk.ParentTable != "ci_checkouts" && fk.ParentTable != "ci_views") {
+		sharedEmbeddingProfile := child.Name == "ci_embeddings" && fk.ParentTable == "ci_embedding_profiles" && len(fk.Columns) == 1 && fk.Columns[0] == "embedding_profile_id" && len(fk.ParentColumns) == 1 && fk.ParentColumns[0] == "embedding_profile_id"
+		if parent == nil || !fk.ParentLocal || (child.Kind == "independent_view" && fk.ParentTable != "sources" && fk.ParentTable != "ci_checkouts" && fk.ParentTable != "ci_views" && !sharedEmbeddingProfile) {
 			incompleteParents[child.Name] = true
 			for i := range state.Rows {
 				if state.Rows[i].Table == child.Name && state.Rows[i].Kind == "inherited" {
@@ -568,6 +569,9 @@ func (s *ProjectConsolidationStore) census(tx *gormlib.DB, sourceVersion string)
 						state.Rows[i].Parents = append(state.Rows[i].Parents, s.opaque("unknown-parent", childKey))
 					}
 				}
+				continue
+			}
+			if sharedEmbeddingProfile {
 				continue
 			}
 			canonicalParent, err := consolidationCanonicalKey(pk)

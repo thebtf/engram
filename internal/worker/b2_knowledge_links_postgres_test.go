@@ -350,15 +350,51 @@ func TestB2LinkSessionProvenanceByteLimit(t *testing.T) {
 	a := f.create(t, owner, ownCardContextPayload("session source"))
 	b := f.create(t, owner, ownCardContextPayload("session target"))
 	c := f.create(t, owner, ownCardContextPayload("oversize target"))
-	session := strings.Repeat("я", 128)
+	d := f.create(t, owner, ownCardContextPayload("short session target"))
+	session := strings.Repeat("😀", 256)
 	payload := map[string]any{"target_id": b.ID, "relation": "references", "source_session_id": session}
 	created := b2DecodeLink(t, f.call(t, http.MethodPost, b2MemoryLinksPath(a.ID), payload, owner.caller()), http.StatusCreated)
 	require.Equal(t, session, created.SourceSessionID, "opaque Unicode provenance must survive exactly")
 	page := b2ListLinks(t, f, a.ID, owner.caller(), 10)
 	require.Len(t, page.Links, 1)
 	require.Equal(t, session, page.Links[0].SourceSessionID)
+	short := strings.Repeat("я", 128)
+	shortPayload := map[string]any{"target_id": d.ID, "relation": "references", "source_session_id": short}
+	shortLink := b2DecodeLink(t, f.call(t, http.MethodPost, b2MemoryLinksPath(a.ID), shortPayload, owner.caller()), http.StatusCreated)
+	require.Equal(t, short, shortLink.SourceSessionID)
 	payload["target_id"] = c.ID
 	payload["source_session_id"] = session + "x"
 	require.Equal(t, http.StatusBadRequest, f.call(t, http.MethodPost, b2MemoryLinksPath(a.ID), payload, owner.caller()).Code, "oversized provenance must not create a row")
-	require.Len(t, b2ListLinks(t, f, a.ID, owner.caller(), 10).Links, 1)
+	require.Len(t, b2ListLinks(t, f, a.ID, owner.caller(), 10).Links, 2)
+}
+
+func TestB2LinkLegacyLargeRowsPageProgress(t *testing.T) {
+	f := newOwnCardContextFixture(t, false)
+	owner := f.registered(t, "legacy-page")
+	source := f.create(t, owner, ownCardContextPayload("legacy source"))
+	links := make([]b2Link, 0, 3)
+	for i := range 3 {
+		target := f.create(t, owner, ownCardContextPayload("legacy target "+strconv.Itoa(i)))
+		links = append(links, b2CreateLink(t, f, source.ID, target.ID, "references", uuid.NewString(), nil, owner.caller(), http.StatusCreated))
+	}
+	large := strings.Repeat("界", 400000)
+	require.NoError(t, f.store.DB.Exec(`UPDATE memory_links SET source_session_id = ? WHERE id = ?`, large, b2LinkID(t, links[0])).Error)
+	path := b2MemoryLinksPath(source.ID) + "?limit=100"
+	first := f.call(t, http.MethodGet, path, nil, owner.caller())
+	require.Equal(t, http.StatusOK, first.Code)
+	var page b2LinkPage
+	require.NoError(t, json.Unmarshal(first.Body.Bytes(), &page))
+	require.Len(t, page.Links, 1, "oversized first row must be a progressing singleton")
+	require.Equal(t, b2LinkID(t, links[0]), b2LinkID(t, page.Links[0]))
+	require.Equal(t, large, page.Links[0].SourceSessionID)
+	var cursor int64
+	require.NoError(t, json.Unmarshal(page.NextCursor, &cursor))
+	require.Positive(t, cursor)
+	second := f.call(t, http.MethodGet, path+"&cursor="+strconv.FormatInt(cursor, 10), nil, owner.caller())
+	require.Equal(t, http.StatusOK, second.Code)
+	require.NoError(t, json.Unmarshal(second.Body.Bytes(), &page))
+	require.Len(t, page.Links, 2)
+	require.Equal(t, b2LinkID(t, links[1]), b2LinkID(t, page.Links[0]))
+	require.Equal(t, b2LinkID(t, links[2]), b2LinkID(t, page.Links[1]))
+	require.JSONEq(t, "null", string(page.NextCursor))
 }
