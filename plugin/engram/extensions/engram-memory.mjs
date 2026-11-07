@@ -4,7 +4,7 @@ const lib = require('../hooks/lib.js');
 const { buildSessionStartContext } = require('../hooks/session-start.js');
 const { buildAmbientRequest, formatAmbientAdditionalContext } = require('../hooks/user-prompt.js');
 const { DOWNLOAD_DEADLINE_MS } = require('../scripts/ensure-binary.js');
-const { prepareHookClient, appendStartupDiagnosticLog, resolvePluginRoot, resolvePluginData } = require('../scripts/run-engram.js');
+const { prepareHookClient, createHookPolicyBinding, appendStartupDiagnosticLog, resolvePluginRoot, resolvePluginData } = require('../scripts/run-engram.js');
 const { BootstrapError } = require('../scripts/bootstrap-policy.js');
 const { version: pluginVersion } = require('../package.json');
 const readinessCodes = new Set(['HOOK_CLIENT_UNAVAILABLE', 'ABORT_ERR', 'PROJECT_RESOLUTION_ABORTED', 'PROJECT_RESOLUTION_DEADLINE_EXCEEDED']);
@@ -59,7 +59,7 @@ export function createEngramMemoryExtension(options = {}) {
     const controller = recoveryController;
     const deadlineAt = Date.now() + DOWNLOAD_DEADLINE_MS;
     const timer = setTimeout(() => controller.abort(), DOWNLOAD_DEADLINE_MS);
-    recovery = Promise.resolve().then(() => prepare({ signal: controller.signal, deadlineAt, timeoutMs: DOWNLOAD_DEADLINE_MS }))
+    recovery = Promise.resolve().then(() => prepare({ signal: controller.signal, deadlineAt, timeoutMs: DOWNLOAD_DEADLINE_MS, hookPolicy: options.hookPolicy }))
       .then(() => {
         if (!disposed && !controller.signal.aborted) readiness = 'ready';
       }, error => {
@@ -89,6 +89,7 @@ export function createEngramMemoryExtension(options = {}) {
       if (disposed || readiness === 'skipped') { unavailable('config', undefined, ambient ? 'ambient' : 'session'); return null; }
       const context = await resolveContext(facts.cwd, {
         signal: controller.signal, deadlineAt: deadline, timeoutMs: Math.max(1, deadline - Date.now()), acquire: false,
+        hookPolicy: options.hookPolicy,
         env: { ...process.env, ENGRAM_URL: config.serverURL, ENGRAM_TOKEN: config.token },
       });
       if (disposed || controller.signal.aborted || Date.now() >= deadline) return null;
@@ -157,7 +158,7 @@ export function createEngramMemoryExtension(options = {}) {
         checkReadinessDeadline();
         if (!config.serverURL || config.quiet) { readiness = 'skipped'; return; }
         stage = 'prepare';
-        await prepare({ signal: controller.signal, deadlineAt, timeoutMs: deadlineAt - Date.now() });
+        await prepare({ signal: controller.signal, deadlineAt, timeoutMs: deadlineAt - Date.now(), hookPolicy: options.hookPolicy });
         checkReadinessDeadline();
       })();
       // Callback admission is immediate; only this binding's trusted readiness admits execution.
@@ -185,7 +186,8 @@ export function createEngramMemoryExtension(options = {}) {
 
 export default async function engramMemory(pi) {
   const { postmortem } = await import('@oh-my-pi/pi-utils');
-  await createEngramMemoryExtension({ registerCleanup: postmortem.register }).install(pi);
+  const hookPolicy = createHookPolicyBinding(resolvePluginRoot(), pluginVersion);
+  await createEngramMemoryExtension({ registerCleanup: postmortem.register, hookPolicy }).install(pi);
 }
 export const sessionStartMessage = (...args) => createEngramMemoryExtension().sessionStartMessage(...args);
 export const ambientMessage = (...args) => createEngramMemoryExtension().ambientMessage(...args);
