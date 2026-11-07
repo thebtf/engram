@@ -18,7 +18,7 @@ import { Loader2, RefreshCw, ArrowUpCircle, CheckCircle, AlertCircle, Search, Su
 const route = useRoute()
 const { authenticated, loading, checkAuth, user } = useAuth()
 const { isReconnecting, reconnectCountdown, isConnected } = useSSE()
-const { updateInfo, updateStatus, isUpdating, applyUpdate } = useUpdate()
+const { updateInfo, updateStatus, isUpdating, applyUpdate, statusSnapshot, isRecheckingStatus, recheckStatus } = useUpdate()
 const { preference, cycleColorMode } = useColorMode()
 const { density, setDensity } = useConsoleDensity()
 const { stats } = useStats()
@@ -235,7 +235,14 @@ onMounted(() => {
           class="flex items-center gap-2 border-b border-destructive/20 bg-destructive/10 px-4 py-2 text-sm text-destructive"
         >
           <AlertCircle :size="14" />
-          <span>{{ updateStatus.error || t.app.updateFailed }}</span>
+          <span>{{ updateStatus.httpStatus !== undefined ? `${t.app.updateRequestFailed} (HTTP ${updateStatus.httpStatus})` : updateStatus.error || t.app.updateFailed }}</span>
+          <div v-if="updateStatus.httpStatus !== undefined" class="flex flex-col items-start gap-2">
+            <p>{{ t.app.updateSnapshotWarning }}</p>
+            <p aria-live="polite">{{ t.app.updateSnapshotLabel }}: {{ t.app.updateSnapshotStates[statusSnapshot] }}</p>
+            <button type="button" class="rounded-lg border border-current px-3 py-1.5 text-xs font-medium disabled:opacity-50" :disabled="isRecheckingStatus" @click="recheckStatus()">
+              {{ isRecheckingStatus ? t.app.updateSnapshotChecking : t.app.updateSnapshotRecheck }}
+            </button>
+          </div>
         </div>
 
         <main

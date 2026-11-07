@@ -74,6 +74,12 @@ export interface UiCatalog {
     restart: string
     restarting: string
     updateFailed: string
+    updateRequestFailed: string
+    updateSnapshotWarning: string
+    updateSnapshotLabel: string
+    updateSnapshotRecheck: string
+    updateSnapshotChecking: string
+    updateSnapshotStates: Record<'unknown' | 'idle' | 'checking' | 'downloading' | 'verifying' | 'applying' | 'done' | 'error', string>
     footerSessionsToday: string
     footerClients: string
     healthLabel: {
@@ -517,6 +523,12 @@ export const messages: Record<SupportedLocale, UiCatalog> = {
       restart: 'Перезапустить',
       restarting: 'Перезапуск...',
       updateFailed: 'Обновление не удалось',
+      updateRequestFailed: 'Не удалось выполнить HTTP-запрос',
+      updateSnapshotWarning: 'Результат запроса неизвестен. Статус относится только к текущему процессу, может быть перезаписан или сброшен после перезапуска и не подтверждает результат запроса. Не повторяйте обновление на основании этого статуса.',
+      updateSnapshotLabel: 'Статус текущего процесса',
+      updateSnapshotRecheck: 'Проверить статус',
+      updateSnapshotChecking: 'Проверка статуса...',
+      updateSnapshotStates: { unknown: 'неизвестен', idle: 'ожидание', checking: 'проверка', downloading: 'загрузка', verifying: 'проверка данных', applying: 'применение', done: 'завершено', error: 'ошибка' },
       footerSessionsToday: 'сессий сегодня',
       footerClients: 'клиентов',
       healthLabel: {
@@ -961,6 +973,12 @@ export const messages: Record<SupportedLocale, UiCatalog> = {
       restart: 'Restart',
       restarting: 'Restarting...',
       updateFailed: 'Update failed',
+      updateRequestFailed: 'HTTP request failed',
+      updateSnapshotWarning: 'The request outcome is unknown. This status is only a snapshot of the current process; it can be overwritten or reset by a restart and does not confirm this request’s outcome. Do not retry the update based on this status.',
+      updateSnapshotLabel: 'Current process status',
+      updateSnapshotRecheck: 'Recheck status',
+      updateSnapshotChecking: 'Checking status...',
+      updateSnapshotStates: { unknown: 'unknown', idle: 'idle', checking: 'checking', downloading: 'downloading', verifying: 'verifying', applying: 'applying', done: 'done', error: 'error' },
       footerSessionsToday: 'sessions today',
       footerClients: 'clients',
       healthLabel: {

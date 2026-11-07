@@ -13,6 +13,7 @@ export interface UpdateStatus {
   progress: number
   message: string
   error?: string
+  httpStatus?: number
 }
 
 // Background check runs every 30 minutes so the UI can surface available
@@ -24,6 +25,8 @@ export function useUpdate() {
   const updateStatus = ref<UpdateStatus>({ state: 'idle', progress: 0, message: '' })
   const isChecking = ref(false)
   const isUpdating = ref(false)
+  const statusSnapshot = ref<UpdateStatus['state'] | 'unknown'>('unknown')
+  const isRecheckingStatus = ref(false)
 
   // Two separate intervals: one for background availability checks,
   // one for polling in-progress update status at 1 Hz.
@@ -50,6 +53,13 @@ export function useUpdate() {
     isUpdating.value = true
     try {
       const res = await fetch('/api/update/apply', { method: 'POST' })
+      if (!res.ok) {
+        stopStatusPolling()
+        statusSnapshot.value = 'unknown'
+        updateStatus.value = { state: 'error', progress: 0, message: '', httpStatus: res.status }
+        isUpdating.value = false
+        return
+      }
       if (res.ok) {
         const result: unknown = await res.json()
         if (typeof result === 'object' && result !== null && 'success' in result && result.success === false) {
@@ -64,6 +74,34 @@ export function useUpdate() {
     } catch (err) {
       console.error('[Update] Apply failed:', err)
       isUpdating.value = false
+    }
+  }
+
+  const recheckStatus = async (): Promise<void> => {
+    if (updateStatus.value.httpStatus === undefined || isRecheckingStatus.value) return
+    const generation = statusGeneration
+    isRecheckingStatus.value = true
+    statusSnapshot.value = 'unknown'
+    try {
+      const res = await fetch('/api/update/status')
+      if (!res.ok) return
+      const data: unknown = await res.json()
+      if (generation !== statusGeneration) return
+      if (typeof data !== 'object' || data === null || !('state' in data)) return
+      switch (data.state) {
+        case 'idle':
+        case 'checking':
+        case 'downloading':
+        case 'verifying':
+        case 'applying':
+        case 'done':
+        case 'error':
+          statusSnapshot.value = data.state
+      }
+    } catch (err) {
+      console.error('[Update] Status recheck failed:', err)
+    } finally {
+      isRecheckingStatus.value = false
     }
   }
 
@@ -134,5 +172,8 @@ export function useUpdate() {
     isUpdating,
     checkForUpdate,
     applyUpdate,
+    statusSnapshot,
+    isRecheckingStatus,
+    recheckStatus,
   }
 }
