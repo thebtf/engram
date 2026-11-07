@@ -24,7 +24,6 @@ async function main() {
   const controller = new AbortController();
   const response = JSON.stringify({ schema: 1, status: 'not_ready', reason_code: 'DAEMON_NOT_READY' }) + '\n';
   fs.writeFileSync(path.join(root, 'task-context'), `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(pidPath)},String(process.pid));let input='';process.stdin.on('data',b=>input+=b);process.stdin.on('end',()=>{if(!input)return;const r=JSON.parse(input);if(process.argv.at(-1)!=='--json'||r.schema!==1||!input.endsWith('\\n'))process.exit(2);if(Date.now()>=r.deadline_unix_ms)return;fs.writeFileSync(${JSON.stringify(productPath)},'started');const emit=()=>{fs.writeFileSync(${JSON.stringify(emittedPath)},'emitted');process.stdout.write(${JSON.stringify(response)});};${mode === 'normal' ? 'emit();' : 'setTimeout(emit,1200);'}});setTimeout(()=>process.exit(3),2000).unref();`);
-  const wrapper = path.join(root, 'worker.cjs');
   let workerClosed, closedMessage, workerCode, children = 0, factoryCalls = 0;
   let beats = 0, maxGap = 0, previousBeat = performance.now();
   const heartbeat = setInterval(() => { const now = performance.now(); maxGap = Math.max(maxGap, now - previousBeat); previousBeat = now; beats++; }, 5);
@@ -41,17 +40,16 @@ async function main() {
      assert.deepEqual(options.env, {});
      assert.equal(options.workerData.path, binary);
      assert.equal(options.workerData.cwd, root);
-     let file = entry;
+     assert.equal(options.eval, true);
+     let prefix = '';
      if (mode === 'expired-worker-start') {
-      fs.writeFileSync(wrapper, `Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,650);require(${JSON.stringify(entry)});`);
-      file = wrapper;
+      prefix = 'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,650);';
      } else if (mode === 'blocking-launch' || mode === 'cancel-during-launch') {
-      fs.writeFileSync(wrapper, `const cp=require('node:child_process');const original=cp.execFile;cp.execFile=(...args)=>{const child=original(...args);Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,650);return child;};require(${JSON.stringify(entry)});`);
-      file = wrapper;
+      prefix = "const cp=require('node:child_process');const original=cp.execFile;cp.execFile=(...args)=>{const child=original(...args);Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,650);return child;};";
      } else if (mode === 'stdin-failure') {
-      fs.writeFileSync(wrapper, `const cp=require('node:child_process');const original=cp.execFile;cp.execFile=(...args)=>{const child=original(...args);child.stdin.end=()=>{throw new Error('owned fixture pipe failure');};return child;};require(${JSON.stringify(entry)});`);
-      file = wrapper;
+      prefix = "const cp=require('node:child_process');const original=cp.execFile;cp.execFile=(...args)=>{const child=original(...args);child.stdin.end=()=>{throw new Error('owned fixture pipe failure');};return child;};";
      }
+     const file = prefix + '\n' + entry;
      const worker = new Worker(file, options);
      workerClosed = new Promise(resolve => worker.once('exit', code => { workerCode = code; resolve(); }));
      worker.on('message', message => { if (message.type === 'spawned') children++; if (message.type === 'closed') closedMessage = message; });

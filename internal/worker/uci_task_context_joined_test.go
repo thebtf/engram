@@ -277,6 +277,13 @@ func runJoinedNativeTaskContextCases(t *testing.T, fixture joinedNativeFixture, 
 		t.Logf("JOINED_LATE pending=0 observed_after_callback_ms=%.3f", float64(time.Since(lateStoppedAt).Microseconds())/1000)
 		require.Equal(t, beforeLate, workerUCIApplicationExposureCount(t, fixture.store.GetDB()))
 	}
+	if selected.retirement {
+		send(map[string]string{"type": "retire"})
+		retired := await("retired", "", time.Second)
+		require.True(t, retired.PackageAbsent, "owned package root was not retired")
+		t.Log("JOINED_RETIRED owned package root absent after successful loaded callback")
+		check("after-retirement", 0, "Alpha", "useful")
+	}
 	if selected.cancellation {
 		setDelay(true)
 		beforeCancel := workerUCIApplicationExposureCount(t, fixture.store.GetDB())
@@ -315,13 +322,6 @@ func runJoinedNativeTaskContextCases(t *testing.T, fixture joinedNativeFixture, 
 		setDelay(false)
 		require.Equal(t, beforeCancel, workerUCIApplicationExposureCount(t, fixture.store.GetDB()))
 		check("next", 0, "Alpha", "useful")
-	}
-	if selected.retirement {
-		send(map[string]string{"type": "retire"})
-		retired := await("retired", "", time.Second)
-		require.True(t, retired.PackageAbsent, "owned package root was not retired")
-		t.Log("JOINED_RETIRED owned package root absent after successful loaded callback and cancellation control")
-		check("after-retirement", 0, "Alpha", "useful")
 	}
 	require.Equal(t, catalogBefore, taskContextCatalogSnapshot(t, fixture.store.GetDB()), "joined callbacks mutated catalog/index state")
 	require.Zero(t, provider.calls.Load())
