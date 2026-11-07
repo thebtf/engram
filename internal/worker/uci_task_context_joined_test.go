@@ -38,6 +38,20 @@ func TestUCITaskContextJoinedWorkerCancellation(t *testing.T) {
 	})
 }
 
+func TestUCITaskContextJoinedRetiredPackage(t *testing.T) {
+	runNativeTaskContextFixture(t, func(t *testing.T, fixture joinedNativeFixture) {
+		memory := gormstore.Memory{Project: fixture.project, Content: "Alpha preserve the synthetic backup 😀", Status: "active", PrivacyScope: "project", Version: 1}
+		require.NoError(t, fixture.store.GetDB().Create(&memory).Error)
+		body := "Alpha deployment note for the synthetic backup 😀"
+		digest := sha256.Sum256([]byte(body))
+		note := gormstore.VersionedDocument{Project: fixture.project, Path: "runbooks/alpha.md", Version: 1, Content: body, ContentHash: hex.EncodeToString(digest[:]), DocType: "markdown", Author: "synthetic"}
+		require.NoError(t, fixture.store.GetDB().Create(&note).Error)
+		fixture.server.SetMemoryStore(gormstore.NewMemoryStore(fixture.store))
+		fixture.server.SetVersionedDocumentStore(gormstore.NewVersionedDocumentStore(fixture.store))
+		runJoinedNativeTaskContextCases(t, fixture, joinedCaseSelection{cancellation: true, retirement: true})
+	})
+}
+
 type joinedNativeFixture struct {
 	binary, root, first, second, project, token, controlPath string
 	environment                                              []string
@@ -52,6 +66,7 @@ type joinedConsumerFrame struct {
 	Event              string              `json:"event"`
 	Name               string              `json:"name"`
 	Failed             bool                `json:"failed"`
+	PackageAbsent      bool                `json:"package_absent"`
 	Error              string              `json:"error"`
 	Useful             bool                `json:"useful"`
 	Processes          int                 `json:"processes"`
@@ -74,7 +89,7 @@ func runJoinedNativeTaskContextBoundary(t *testing.T, fixture joinedNativeFixtur
 	runJoinedNativeTaskContextCases(t, fixture, joinedCaseSelection{initialUseful: true})
 }
 
-type joinedCaseSelection struct{ initialUseful, emptyLate, cancellation bool }
+type joinedCaseSelection struct{ initialUseful, emptyLate, cancellation, retirement bool }
 
 func runJoinedNativeTaskContextCases(t *testing.T, fixture joinedNativeFixture, selected joinedCaseSelection) {
 	t.Helper()
@@ -202,7 +217,7 @@ func runJoinedNativeTaskContextCases(t *testing.T, fixture joinedNativeFixture, 
 		ref := fixture.current.Context
 		contexts = append(contexts, map[string]any{"source_id": ref.SourceID, "checkout_id": ref.CheckoutID, "view_id": ref.ViewID, "generation": ref.Generation, "profile_id": ref.AnalysisProfileID})
 	}
-	send(map[string]any{"type": "setup", "binary": fixture.binary, "sha256": sha, "size": stat.Size(), "pluginRoot": filepath.Join(sourceRoot, "plugin", "engram"), "pluginData": filepath.Join(fixture.root, "installation"), "first": fixture.first, "second": fixture.second, "contexts": contexts})
+	send(map[string]any{"type": "setup", "binary": fixture.binary, "sha256": sha, "size": stat.Size(), "pluginRoot": filepath.Join(sourceRoot, "plugin", "engram"), "pluginData": filepath.Join(fixture.root, "installation"), "first": fixture.first, "second": fixture.second, "contexts": contexts, "retirePackage": selected.retirement})
 	await("ready", "", 5*time.Second)
 	t.Logf("JOINED_INPUT binary_sha256=%s node_pid=%d daemon_pid=%d source_tree=%s trust=production_hashFile_with_owned_artifact_selection host=emulated_registered_callback", sha, command.Process.Pid, fixture.daemonPID, os.Getenv("ENGRAM_TASK_CONTEXT_JOINED_SOURCE_TREE"))
 	check := func(name string, rootIndex int, prompt, expect string) joinedConsumerFrame {
@@ -221,6 +236,9 @@ func runJoinedNativeTaskContextCases(t *testing.T, fixture joinedNativeFixture, 
 			require.Equal(t, fixture.fixtures[rootIndex].current.Context.ViewID, (*frame.Packet.Search.Contexts)[0].ViewID)
 		}
 		return frame
+	}
+	if selected.retirement {
+		check("before-retirement", 0, "Alpha", "useful")
 	}
 	if selected.initialUseful {
 		for _, sample := range []struct {
@@ -258,6 +276,13 @@ func runJoinedNativeTaskContextCases(t *testing.T, fixture joinedNativeFixture, 
 		require.Zero(t, latePending, "late callback left SQL running")
 		t.Logf("JOINED_LATE pending=0 observed_after_callback_ms=%.3f", float64(time.Since(lateStoppedAt).Microseconds())/1000)
 		require.Equal(t, beforeLate, workerUCIApplicationExposureCount(t, fixture.store.GetDB()))
+	}
+	if selected.retirement {
+		send(map[string]string{"type": "retire"})
+		retired := await("retired", "", time.Second)
+		require.True(t, retired.PackageAbsent, "owned package root was not retired")
+		t.Log("JOINED_RETIRED owned package root absent after successful loaded callback")
+		check("after-retirement", 0, "Alpha", "useful")
 	}
 	if selected.cancellation {
 		setDelay(true)

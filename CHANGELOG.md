@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Bound PostgreSQL task-note search without JIT compilation overhead; preserve caller transaction settings and cancellation with bounded savepoint recovery, and keep per-read savepoint controls out of the shared prepared-statement cache. Retain existing project authorization, ranking and deadlines.
+
 - Exclude dependents proven by their complete foreign-key ancestry to belong only to self or global memories from project consolidation, without treating private data as global; retain mixed or unknown ownership as unresolved and preserve project inheritance.
 
 - Add self-memory link create, list and delete HTTP routes with endpoint authorization, directional references with optional revision pins and idempotent retry receipts. Memory remains the content owner; links do not grant access. Links use migration 195; an existing provisional `192_memory_links` ledger entry blocks automatic adoption and retains its data for explicit resolution.
