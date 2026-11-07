@@ -356,6 +356,9 @@ func (s *ProjectConsolidationStore) census(tx *gormlib.DB, sourceVersion string)
 			if column.TableName != table.Name || consolidationMetadataTable(table.Name) {
 				continue
 			}
+			if table.Name == "memories" && column.ColumnName == "context_kind" {
+				projection = append(projection, pq.QuoteLiteral("context_kind"), "to_jsonb(t.context_kind)")
+			}
 			if column.DataType == "jsonb" || column.DataType == "json" {
 				projection = append(projection, pq.QuoteLiteral(column.ColumnName), consolidationJSONProjection("to_jsonb(t."+quoted(column.ColumnName)+")"))
 				if (table.Name == "ci_profiles" && column.ColumnName == "build_context_json") || (table.Name == "versioned_documents" && column.ColumnName == "metadata") {
@@ -396,6 +399,18 @@ func (s *ProjectConsolidationStore) census(tx *gormlib.DB, sourceVersion string)
 				return state, consolidationHold("INVENTORY_INCOMPLETE")
 			}
 			table.Count++
+			if table.Name == "memories" {
+				var owning string
+				if raw, present := object["context_kind"]; present {
+					if json.Unmarshal(raw, &owning) != nil {
+						rows.Close()
+						return state, consolidationHold("INVENTORY_INCOMPLETE")
+					}
+					if owning == "self" || owning == "global" {
+						continue
+					}
+				}
+			}
 			start := len(state.Rows)
 			if consolidationMetadataTable(table.Name) {
 				s.addCensusRow(&state, table.Name, "", "retained_migration_state", keyJSON, nil, "", false)
@@ -405,6 +420,9 @@ func (s *ProjectConsolidationStore) census(tx *gormlib.DB, sourceVersion string)
 			}
 			for _, column := range columns {
 				if column.TableName != table.Name {
+					continue
+				}
+				if table.Name == "memories" && column.ColumnName == "context_kind" {
 					continue
 				}
 				raw, present := object[column.ColumnName]
@@ -675,6 +693,9 @@ func consolidationJSONFields(value any, path []string, active bool) []consolidat
 }
 
 func consolidationFieldRole(table, column string) string {
+	if table == "memory_request_keys" && column == "project" {
+		return ""
+	}
 	for _, role := range consolidationRoles {
 		if role.Table == table && role.Column == column {
 			return role.Kind
@@ -690,11 +711,11 @@ func consolidationDomain(table string) string {
 	switch table {
 	case "project_consolidation_memberships", "project_consolidation_redirects", "project_consolidation_operations", "project_consolidation_backups", "project_consolidation_frames":
 		return "retained_migration_state"
-	case "task_memory_intervention_receipts", "intervention_evidence_policies", "project_merge_audits", "project_merge_audit_sources", "project_resolution_attempts", "project_identity_comparisons":
+	case "memory_principals", "memory_request_keys", "task_memory_intervention_receipts", "intervention_evidence_policies", "project_merge_audits", "project_merge_audit_sources", "project_resolution_attempts", "project_identity_comparisons":
 		return "immutable_audit"
 	case "sources", "space_sources", "legacy_context_aliases", "content_chunks", "knowledge_edges":
 		return "derived_membership"
-	case "audit_log", "memory_versions", "memory_audit_log", "memory_audits", "versioned_document_comments", "issue_comments", "rule_versions", "rule_families", "rule_transition_log", "rule_governance_snapshots", "bulk_op_snapshots", "agent_session_state", "citation_log", "promotion_log", "rule_arbiter_evaluations":
+	case "audit_log", "memory_versions", "memory_revisions", "memory_audit_log", "memory_audits", "versioned_document_comments", "issue_comments", "rule_versions", "rule_families", "rule_transition_log", "rule_governance_snapshots", "bulk_op_snapshots", "agent_session_state", "citation_log", "promotion_log", "rule_arbiter_evaluations":
 		return "durable_history"
 	}
 	if strings.HasPrefix(table, "ci_") || strings.HasPrefix(table, "uci_") {

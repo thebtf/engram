@@ -76,6 +76,23 @@ func ResolveMemory(caller KeycardContext, mem *models.Memory, opts MemoryVisibil
 	if mem == nil {
 		return false
 	}
+	if mem.Context != nil {
+		switch mem.Context.Kind {
+		case models.MemoryContextSelf:
+			if caller.WorkstationID == "" || caller.Principal == "" || caller.PrincipalKind == "" || caller.Principal != mem.Context.Principal || caller.PrincipalKind != mem.Context.PrincipalKind {
+				return false
+			}
+		case models.MemoryContextGlobal:
+			// This pure policy has no registry lookup; a keycard alone does
+			// not establish that another principal is enrolled.
+			if caller.WorkstationID == "" || caller.Principal == "" || caller.PrincipalKind == "" || caller.Principal != mem.OwnerPrincipal || caller.PrincipalKind != mem.OwnerPrincipalKind {
+				return false
+			}
+		case models.MemoryContextProject, models.MemoryContextLegacy:
+		default:
+			return false
+		}
+	}
 	if opts.ApplyPrivacyScope {
 		memScope := NormalizePrivacyScope(mem.PrivacyScope)
 		if len(opts.IncludeScopes) > 0 && !opts.IncludeScopes[memScope] {

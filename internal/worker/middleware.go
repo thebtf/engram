@@ -16,6 +16,7 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -335,9 +336,9 @@ type TokenAuth struct {
 }
 
 // NewTokenAuth creates a new TokenAuth using a provided token.
-// If ENGRAM_AUTH_DISABLED is set, authentication is replaced by a synthetic
-// admin identity for dashboard/operator flows. The identity is deliberately
-// not a browser session, so it cannot manage durable keycards.
+// If ENGRAM_AUTH_DISABLED is set, ordinary dashboard/operator flows use a
+// synthetic admin identity, not a browser session. Selected routes can still
+// validate explicit credentials without changing unrelated disabled-mode flows.
 // Otherwise, authentication will be enforced at startup (see Service.Start).
 func NewTokenAuth(token string) (*TokenAuth, error) {
 	authDisabled := authDisabledFromEnv()
@@ -441,6 +442,32 @@ func (ta *TokenAuth) StatsCh() chan string {
 	return ta.statsCh
 }
 
+// disabledIdentityRoute limits credential recognition to typed-memory operations
+// and the two persisted-session administration operations.
+func disabledIdentityRoute(method, path string) (memory, administration bool) {
+	if method == http.MethodPost {
+		switch path {
+		case "/api/memories":
+			return true, false
+		case "/api/auth/principals", "/api/auth/tokens":
+			return false, true
+		}
+	}
+	if method != http.MethodGet && method != http.MethodPatch {
+		return false, false
+	}
+	rest, ok := strings.CutPrefix(path, "/api/memories/")
+	if !ok {
+		return false, false
+	}
+	id, suffix, hasSuffix := strings.Cut(rest, "/")
+	parsedID, err := strconv.ParseInt(id, 10, 64)
+	if err != nil || parsedID <= 0 {
+		return false, false
+	}
+	return !hasSuffix || (method == http.MethodGet && suffix == "revisions"), false
+}
+
 // Middleware returns HTTP middleware that enforces token authentication.
 // Auth priority: header bearer (validator: master OR client keycard) >
 // HMAC session cookie > DB auth session cookie > 401.
@@ -456,15 +483,23 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 		uStore := ta.userStore
 		ta.mu.RUnlock()
 
-		// Explicit disabled-auth mode retains ordinary admin access without
-		// impersonating a browser session. Keycard handlers therefore reject it.
+		// In disabled mode, only selected routes recognize an explicit bearer or
+		// a persisted browser session. Unkeyed and unrelated requests retain the
+		// synthetic identity; an attempted credential never falls back to it.
 		if authDisabled {
-			next.ServeHTTP(w, r.WithContext(buildAuthCtx(r.Context(), authpkg.AuthDisabled())))
-			return
+			memory, administration := disabledIdentityRoute(r.Method, r.URL.Path)
+			bearer := extractHTTPBearer(r) != "" && (memory || administration)
+			cookie, err := r.Cookie("engram_auth")
+			browser := administration && err == nil && cookie.Value != ""
+			if !bearer && !browser {
+				next.ServeHTTP(w, r.WithContext(buildAuthCtx(r.Context(), authpkg.AuthDisabled())))
+				return
+			}
 		}
 
-		// Skip auth if not configured or path is exempt.
-		if !enabled || exempt {
+		// Skip auth if not configured or path is exempt, except for the
+		// explicitly selected disabled-mode credentials above.
+		if (!enabled && !authDisabled) || exempt {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -546,7 +581,7 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 		}
 
 		// 2. HMAC-signed session cookie (master-token login → admin).
-		if cookieKey != nil {
+		if !authDisabled && cookieKey != nil {
 			cookie, err := r.Cookie(sessionCookieName)
 			if err == nil && cookie.Value != "" {
 				if ta.authenticateSessionCookie(cookie.Value, cookieKey) {

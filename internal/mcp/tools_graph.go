@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
+	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/graph"
-	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -117,9 +117,8 @@ func (s *Server) graphMemoryVisible(ctx context.Context, id int64) bool {
 	if s.memoryStore == nil || id == 0 {
 		return false
 	}
-	// Get omits legacy privacy metadata when F is off; authorization needs the stored fields.
-	mem, err := s.memoryStore.GetForSnapshot(ctx, id)
-	return err == nil && scope.ResolveMemory(writeLintVisibilityCaller(ctx, ""), mem, scope.MemoryVisibilityOptions{ApplyPrivacyScope: true})
+	_, err := s.memoryStore.GetAuthorized(ctx, id, gormdb.MemoryMutationAccess{Caller: writeLintVisibilityCaller(ctx, "")})
+	return err == nil
 }
 
 func (s *Server) graphNodeVisible(ctx context.Context, id int64) bool {

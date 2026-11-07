@@ -13,10 +13,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-gormigrate/gormigrate/v2"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/lib/pq"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/config"
 	vaultcrypto "github.com/thebtf/engram/internal/crypto"
@@ -59,6 +61,75 @@ func TestProjectConsolidationMixedBucketAndEvidenceConflict(t *testing.T) {
 	evidence[0].Kind = "basename"
 	_, err = s.buildMapping(rows, evidence)
 	require.EqualError(t, err, "PROJECT_ADOPTION_INVALID_EVIDENCE")
+}
+
+func TestProjectConsolidationPostMigrationMemoryCensusPlan(t *testing.T) {
+	db, _ := openMemoryContext191UpgradeDB(t)
+	require.NoError(t, db.Exec(`CREATE TABLE projects (id TEXT PRIMARY KEY)`).Error)
+	require.NoError(t, projectConsolidationMigration186().Migrate(db))
+	runner := gormigrate.New(db, gormigrate.DefaultOptions, []*gormigrate.Migration{memoryPrincipalsMigration149(), memoryContextMigration191()})
+	require.NoError(t, runner.Migrate())
+	require.NoError(t, db.Exec(`INSERT INTO memories (id, project, content, context_kind, context_principal, context_principal_kind) VALUES
+		(19201, ?, 'typed project fixture', 'project', '', ''),
+		(19202, '', 'self fixture', 'self', 'agent/fixture', 'agent'),
+		(19203, '', 'global fixture', 'global', '', '')`, memoryContext191Project).Error)
+	v, err := vaultcrypto.OpenExistingVault(&config.Config{EncryptionKey: strings.Repeat("ab", 32)})
+	require.NoError(t, err)
+	s := NewProjectConsolidationStore(db, v, nil)
+	census, err := s.Census(t.Context(), "post-migration-191-fixture")
+	require.NoError(t, err)
+	var native consolidationCensusState
+	require.NoError(t, s.open(census.Reference, "census", &native))
+	refs := map[int64]string{}
+	var contextRefs []string
+	for _, row := range native.Rows {
+		if row.Table != "memories" {
+			continue
+		}
+		var key struct {
+			ID int64 `json:"id"`
+		}
+		require.NoError(t, json.Unmarshal(row.Key, &key))
+		assert.NotEqual(t, int64(19202), key.ID, "self memories are excluded")
+		assert.NotEqual(t, int64(19203), key.ID, "global memories are excluded")
+		assert.NotEqual(t, "context_kind", row.Column)
+		if row.Column == "context_kind" {
+			contextRefs = append(contextRefs, row.Reference)
+		}
+		if (key.ID == 19101 || key.ID == 19201) && row.Column == "project" {
+			require.Equal(t, memoryContext191Project, row.Selector)
+			refs[key.ID] = row.Reference
+		}
+	}
+	require.Len(t, refs, 2, "legacy and typed project memberships remain in the census")
+	target := uuid.NewString()
+	evidenceRows := append([]string{refs[19101], refs[19201]}, contextRefs...)
+	plan, err := s.Preflight(t.Context(), ConsolidationPreflightRequest{CensusReference: census.Reference, CensusFingerprint: census.Fingerprint, Evidence: []ConsolidationEvidence{{Reference: "urn:engram:proof:fixture", Kind: "portable_marker", Group: "urn:engram:group:fixture", ProjectID: target, Rows: evidenceRows}}})
+	require.NoError(t, err)
+	for _, id := range []int64{19101, 19201} {
+		found := false
+		for _, mapping := range plan.Mapping {
+			if mapping.Reference == refs[id] {
+				found = true
+				require.Equal(t, "project", mapping.Role)
+				require.Equal(t, target, mapping.ProjectID)
+			}
+		}
+		require.True(t, found, "project membership must survive preflight")
+	}
+	for _, mapping := range plan.Mapping {
+		if mapping.Family == "memories" {
+			assert.NotEqual(t, "context_kind", mapping.Role)
+		}
+	}
+	state, err := s.plan(plan.Reference, plan.Fingerprint)
+	require.NoError(t, err)
+	bindings, sessions := consolidationRedirectBindings(state)
+	assert.Empty(t, sessions)
+	assert.Contains(t, bindings, consolidationRedirectBinding{Selector: memoryContext191Project, Target: target})
+	for _, binding := range bindings {
+		assert.NotContains(t, []string{"project", "legacy", "self", "global"}, binding.Selector)
+	}
 }
 
 func consolidationFixtureStore(t *testing.T) *streamIntegrityFixture {
@@ -156,6 +227,7 @@ func TestProjectConsolidationRealStoreWorkflow(t *testing.T) {
 		require.NoError(t, json.Unmarshal(row.Key, &key))
 		switch row.Table {
 		case "memories":
+			require.NotEqual(t, "context_kind", row.Column, "internal owning-context metadata must never become a selector")
 			if row.Column == "project" {
 				id := int64(key["id"].(float64))
 				if id == memories[0].ID {

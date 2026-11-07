@@ -211,14 +211,8 @@ func TestHandlersGraphRetainedPathReaderRejectsUnboundedDepth(t *testing.T) {
 
 func TestHandlersGraphTraversalPrunesPrivateIntermediariesAndKeepsPublicNodes(t *testing.T) {
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
-	sqlDB, err := sql.Open("sqlite", ":memory:")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = sqlDB.Close() })
-	sqlDB.SetMaxOpenConns(1)
-	db, err := gormlib.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gormlib.Config{DisableAutomaticPing: true})
-	require.NoError(t, err)
+	db := memoryMutationSQLiteDB(t)
 	for _, statement := range []string{
-		`CREATE TABLE memories (id INTEGER PRIMARY KEY, project TEXT, content TEXT, privacy_scope TEXT, source_workstation_id TEXT, deleted_at DATETIME)`,
 		`INSERT INTO memories (id, project, content, privacy_scope, source_workstation_id) VALUES (1, 'graph', 'start', 'project', ''), (2, 'graph', 'hidden', 'private', 'other'), (3, 'graph', 'target', 'project', ''), (4, 'graph', 'via', 'project', ''), (5, 'graph', 'via two', 'project', ''), (6, 'graph', 'descendant', 'project', ''), (7, 'graph', 'descendant two', 'project', '')`,
 		`CREATE TABLE knowledge_edges (id INTEGER PRIMARY KEY, source_id INTEGER, target_id INTEGER, node_source_id INTEGER, node_target_id INTEGER, source_type TEXT, target_type TEXT, edge_type TEXT, weight REAL, reasoning TEXT, source_session_id TEXT, valid_from DATETIME, valid_until DATETIME, created_at DATETIME, superseded_at DATETIME)`,
 		`INSERT INTO knowledge_edges (id, source_id, target_id, node_target_id, source_type, target_type, edge_type, weight, created_at) VALUES
@@ -234,6 +228,7 @@ func TestHandlersGraphTraversalPrunesPrivateIntermediariesAndKeepsPublicNodes(t 
 	} {
 		require.NoError(t, db.Exec(statement).Error)
 	}
+	require.NoError(t, db.Exec(`UPDATE memories SET agent_visibility = '', owner_principal = '', owner_principal_kind = '', domain = '', source_sessions = '{}'`).Error)
 	service := newGraphTestService(&fakeGraphEdgeStore{store: graph.NewStore(db, nil)}, &fakeGraphNodeStore{nodes: map[int64]models.KnowledgeNode{
 		10: {ID: 10, PrivacyScope: "project"}, 20: {ID: 20, PrivacyScope: "private"},
 	}})
@@ -277,14 +272,8 @@ func TestHandlersGraphTraversalPrunesPrivateIntermediariesAndKeepsPublicNodes(t 
 
 func TestHandlersGraphFlagOffDoesNotExposePrivateEdgesOrPaths(t *testing.T) {
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "false")
-	sqlDB, err := sql.Open("sqlite", ":memory:")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = sqlDB.Close() })
-	sqlDB.SetMaxOpenConns(1)
-	db, err := gormlib.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gormlib.Config{DisableAutomaticPing: true})
-	require.NoError(t, err)
+	db := memoryMutationSQLiteDB(t)
 	for _, statement := range []string{
-		`CREATE TABLE memories (id INTEGER PRIMARY KEY, project TEXT, content TEXT, privacy_scope TEXT, source_workstation_id TEXT, deleted_at DATETIME)`,
 		`INSERT INTO memories (id, project, content, privacy_scope, source_workstation_id) VALUES (1, 'graph', 'public start', 'project', ''), (2, 'graph', 'foreign secret', 'private', 'other-keycard'), (3, 'graph', 'public target', 'project', ''), (4, 'graph', 'own secret', 'private', 'own-keycard')`,
 		`CREATE TABLE knowledge_edges (id INTEGER PRIMARY KEY, source_id INTEGER, target_id INTEGER, node_source_id INTEGER, node_target_id INTEGER, source_type TEXT, target_type TEXT, edge_type TEXT, weight REAL, reasoning TEXT, source_session_id TEXT, valid_from DATETIME, valid_until DATETIME, created_at DATETIME, superseded_at DATETIME)`,
 		`INSERT INTO knowledge_edges (id, source_id, target_id, source_type, target_type, edge_type, weight, reasoning, created_at) VALUES
@@ -295,6 +284,7 @@ func TestHandlersGraphFlagOffDoesNotExposePrivateEdgesOrPaths(t *testing.T) {
 	} {
 		require.NoError(t, db.Exec(statement).Error)
 	}
+	require.NoError(t, db.Exec(`UPDATE memories SET agent_visibility = '', owner_principal = '', owner_principal_kind = '', domain = '', source_sessions = '{}'`).Error)
 	store := graph.NewStore(db, nil)
 	service := newGraphTestService(&fakeGraphEdgeStore{store: store}, &fakeGraphNodeStore{})
 	service.memoryStore = gormdb.NewMemoryStore(&gormdb.Store{DB: db})

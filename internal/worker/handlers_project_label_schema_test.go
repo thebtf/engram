@@ -2,9 +2,13 @@ package worker
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/docs"
 	"gopkg.in/yaml.v3"
@@ -78,4 +82,47 @@ func TestProjectLabelSchemaParity(t *testing.T) {
 			require.Contains(t, descriptor["properties"].(map[string]any), "name")
 		})
 	}
+}
+
+func TestMemoryRevisionAndModelsSchema(t *testing.T) {
+	data, err := os.ReadFile("../../docs/swagger.json")
+	require.NoError(t, err)
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal(data, &doc))
+	service := &Service{router: chi.NewRouter()}
+	service.setupRoutes()
+	server := httptest.NewServer(service.router)
+	t.Cleanup(server.Close)
+	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{Proxy: nil}}
+	defer client.CloseIdleConnections()
+	response, err := client.Get(server.URL + "/api/docs/doc.json")
+	require.NoError(t, err)
+	defer response.Body.Close()
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	var served map[string]any
+	require.NoError(t, json.NewDecoder(response.Body).Decode(&served))
+	require.Equal(t, doc, served)
+	paths := doc["paths"].(map[string]any)
+	patch := paths["/api/memories/{id}"].(map[string]any)["patch"].(map[string]any)
+	description := patch["description"].(string)
+	for _, text := range []string{"denial audit", "403 without a revision", "audit failure does not mutate", "domain_warning", "domain_audit_status"} {
+		require.Contains(t, description, text)
+	}
+	require.ElementsMatch(t, []any{"application/json", "text/plain"}, patch["produces"])
+	responses := patch["responses"].(map[string]any)
+	require.Contains(t, responses["403"].(map[string]any)["description"], "domain write rejected")
+	require.Contains(t, responses["500"].(map[string]any)["description"], "domain audit failure")
+	require.Equal(t, "#/definitions/worker.reviseMemoryContextResponse", responses["200"].(map[string]any)["schema"].(map[string]any)["$ref"])
+	definitions := doc["definitions"].(map[string]any)
+	properties := definitions["worker.reviseMemoryContextResponse"].(map[string]any)["properties"].(map[string]any)
+	require.Contains(t, properties, "id")
+	require.Contains(t, properties, "domain_warning")
+	require.Contains(t, properties, "domain_audit_status")
+	if required, ok := definitions["worker.reviseMemoryContextResponse"].(map[string]any)["required"]; ok {
+		require.NotContains(t, required, "domain_warning")
+		require.NotContains(t, required, "domain_audit_status")
+	}
+	models := paths["/v1/models"].(map[string]any)["get"].(map[string]any)
+	require.Contains(t, models["description"], "Authentication is not required when explicitly disabled")
+	require.Contains(t, models["security"].([]any)[0].(map[string]any), "ApiKeyAuth")
 }
