@@ -19,6 +19,7 @@ const {
   resolvePluginData,
   resolvePluginRoot,
   resolveAndSpawn,
+  createHookPolicyBinding,
   prepareHookClient,
   resolveLogicalProject,
   spawnFailureMessage,
@@ -737,6 +738,50 @@ test("hook preparation is client-only and verify-only project callbacks refuse m
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test("hook policy binding follows current policy and refuses invalid or different package roots", () => {
+  const { createPolicy, TARGET_ASSETS } = require("./bootstrap-policy.js");
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "engram-hook-policy-"));
+  const root = path.join(base, "package"), manifest = path.join(root, ".omp-plugin", "plugin.json");
+  const version = "7.0.27", first = "1".repeat(64), second = "2".repeat(64);
+  const makePolicy = hash => createPolicy(version, Object.fromEntries(Object.entries(TARGET_ASSETS)
+    .map(([key, asset]) => [key, { version, asset, size: 1, sha256: hash }])));
+  const writePackage = policy => {
+    fs.mkdirSync(path.dirname(manifest), { recursive: true });
+    fs.writeFileSync(manifest, JSON.stringify({ version }));
+    fs.writeFileSync(path.join(root, "bootstrap-targets.json"), JSON.stringify(policy));
+  };
+  try {
+    writePackage(makePolicy(first));
+    const binding = createHookPolicyBinding(root, version);
+    assert.equal(binding(root).target.desired.sha256, first);
+    assert.throws(() => binding(path.join(base, "different")), /root changed/);
+    writePackage(makePolicy(second));
+    assert.equal(binding(root).target.desired.sha256, second, "present policy changes take effect");
+    fs.rmSync(root, { recursive: true });
+    assert.equal(binding(root).target.desired.sha256, second, "only the last valid policy survives retirement");
+
+    writePackage(makePolicy(first));
+    const invalidated = createHookPolicyBinding(root, version);
+    fs.writeFileSync(path.join(root, "bootstrap-targets.json"), "not json");
+    assert.throws(() => invalidated(root), /JSON/);
+    fs.rmSync(root, { recursive: true });
+    assert.throws(() => invalidated(root), /manifest is missing/, "invalid current policy clears retained authority");
+
+    writePackage(makePolicy(first));
+    const mismatch = createHookPolicyBinding(root, "7.0.26");
+    assert.throws(() => mismatch(root), /version changed/);
+    fs.rmSync(root, { recursive: true });
+    assert.throws(() => mismatch(root), /manifest is missing/, "wrong-version initial policy is never retained");
+
+    writePackage(makePolicy(first));
+    const missing = createHookPolicyBinding(root, version);
+    fs.unlinkSync(path.join(root, "bootstrap-targets.json"));
+    assert.throws(() => missing(root), /bootstrap policy/, "missing policy in an existing root is not retirement");
+    fs.rmSync(root, { recursive: true });
+    assert.throws(() => missing(root), /manifest is missing/);
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
+
 function restoreEnv(key, value) {
   if (value === undefined) {
     delete process.env[key];
@@ -768,6 +813,28 @@ test("context recovery preserves native project code and fixed guidance through 
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test('missing or invalid packaged task worker fails closed', async () => {
+ const { Worker } = require('node:worker_threads');
+ for (const mode of ['missing', 'invalid-utf8', 'invalid-js']) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-worker-invalid-'));
+  let closed, workers = 0;
+  try {
+   for (const file of ['run-engram.js', 'ensure-binary.js', 'bootstrap-policy.js', 'client-instance.js']) fs.copyFileSync(path.join(__dirname, file), path.join(root, file));
+   if (mode === 'invalid-utf8') fs.writeFileSync(path.join(root, 'task-context-worker.js'), Buffer.from([255]));
+   if (mode === 'invalid-js') fs.writeFileSync(path.join(root, 'task-context-worker.js'), 'const = ;');
+   const launcher = require(path.join(root, 'run-engram.js'));
+   const result = await launcher.requestTaskContext({ cwd: root, session: 'invalid-worker', prompt: 'Inspect callback' }, {
+    deadlineAt: Date.now() + 500, env: { ENGRAM_CLIENT_INSTANCE_ID: 'fixture-client' },
+    resolve: async () => ({ path: process.execPath, target: {} }), roots: () => ({ objects: root }), hash: () => true,
+    createTaskContextWorker(source, options) { workers++; const worker = new Worker(source, options); closed = new Promise(resolve => worker.once('exit', resolve)); return worker; },
+   });
+   if (closed) await closed;
+   assert.deepEqual(result, { schema: 1, status: 'unavailable', reason_code: 'CLIENT_UNAVAILABLE' }, mode);
+   assert.equal(workers, mode === 'invalid-js' ? 1 : 0, mode);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+ }
+});
+
 test('task context launcher uses one ready-only stdin worker and closed UTF-8 responses', async t => {
  const { requestTaskContext } = require('./run-engram.js');
  const { Worker } = require('node:worker_threads');
@@ -793,7 +860,8 @@ test('task context launcher uses one ready-only stdin worker and closed UTF-8 re
    env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ENGRAM_CLIENT_INSTANCE_ID: 'fixture-client', ENGRAM_TOKEN: 'fixture-private', ENGRAM_AUTH_ADMIN_TOKEN: 'fixture-forbidden' },
    createTaskContextWorker(file, options) {
     executions++;
-    assert.equal(path.basename(file), 'task-context-worker.js');
+    assert.equal(options.eval, true);
+    assert.equal(file, fs.readFileSync(path.join(__dirname, 'task-context-worker.js'), 'utf8'));
     assert.equal(options.workerData.path, process.execPath);
     assert.equal(options.workerData.cwd, root);
     assert.equal(options.workerData.env.ENGRAM_AUTH_ADMIN_TOKEN, undefined);

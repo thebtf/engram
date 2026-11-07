@@ -11,6 +11,15 @@ const crypto = require('node:crypto');
 const { DOWNLOAD_DEADLINE_MS, hashFile, loadPolicy, objectRoots, resolveForLaunch } = require("./ensure-binary.js");
 const { installationClientInstanceID, readInstallationClientInstanceID } = require("./client-instance.js");
 
+// Load only this package's worker once, so a loaded hook survives package retirement.
+const taskContextWorkerSource = (() => {
+ try {
+  const bytes = fs.readFileSync(path.join(__dirname, 'task-context-worker.js'));
+  if (!bytes.length || bytes.length > 256 * 1024) return null;
+  return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+ } catch { return null; }
+})();
+
 const STARTUP_DIAGNOSTIC_LOG_MAX_BYTES = 128 * 1024;
 const TASK_CONTEXT_COMPLETION_RESERVE_MS = 30;
 const TASK_CONTEXT_STATUSES = new Set(['ok', 'empty', 'not_ready', 'stale', 'context_required', 'forbidden', 'unavailable', 'deadline_exceeded']);
@@ -116,10 +125,32 @@ async function main() {
  }
 }
 
+function createHookPolicyBinding(pluginRoot, packageVersion) {
+ const root = path.resolve(pluginRoot);
+ let retained;
+ function current(requestedRoot) {
+  if (path.resolve(requestedRoot) !== root) throw new Error('hook policy root changed');
+  try {
+   const policy = loadPolicy(root);
+   if (policy.package_version !== packageVersion) throw new Error('hook policy package version changed');
+   retained = policy;
+   return policy;
+  } catch (error) {
+   let absent = false;
+   try { fs.lstatSync(root); } catch (statError) { absent = statError.code === 'ENOENT'; }
+   if (absent && retained) return retained;
+   retained = undefined;
+   throw error;
+  }
+ }
+ try { current(root); } catch { }
+ return current;
+}
+
 async function resolveClient(options, projectOnly = false) {
  let policy;
  if (!options.resolve) {
-  policy = loadPolicy(options.pluginRoot);
+  policy = options.hookPolicy ? options.hookPolicy(options.pluginRoot) : loadPolicy(options.pluginRoot);
   // A predecessor may not implement this package's project resolve interface.
   policy = { ...policy, target: { ...policy.target, predecessor: null } };
  }
@@ -214,8 +245,9 @@ function executeTaskContextProcess(data, { signal, createTaskContextWorker } = {
   };
   signal?.addEventListener('abort', cancel, { once: true });
   try {
-   worker = (createTaskContextWorker || ((file, options) => new Worker(file, options)))(path.join(__dirname, 'task-context-worker.js'), {
-    env: {}, execArgv: [], stdout: true, stderr: true,
+   if (!taskContextWorkerSource) throw new Error('TASK_CONTEXT_STOPPED');
+   worker = (createTaskContextWorker || ((source, options) => new Worker(source, options)))(taskContextWorkerSource, {
+    eval: true, env: {}, execArgv: [], stdout: true, stderr: true,
     workerData: { schema: 1, ...data, cancellation },
    });
   } catch {
@@ -616,6 +648,7 @@ module.exports = {
  projectFromInspection,
  validTaskContextResponse,
  requestTaskContext,
+ createHookPolicyBinding,
  prepareHookClient,
  resolveHostRoot,
  codexMcpConfig,
