@@ -67,21 +67,35 @@ async function exerciseDefaultFactory(mode) {
     assert.equal(preparation, undefined, 'one preparation per binding');
     assert.ok(options.timeoutMs > 0 && options.timeoutMs <= 360000);
     preparedSignal = options.signal;
-    const prepareOptions = { ...options, pluginRoot: policyLifetime ? packageRoot : root, pluginData: root };
-    const runPreparation = async () => {
-      const abort = () => gate.resolve();
-      options.signal.addEventListener('abort', abort, { once: true });
-      entered.resolve();
-      try {
-        await gate.promise;
-        if (terminalMode) throw new BootstrapError('controlled startup secret_fixture https://private.invalid/?token=token_fixture\n\x1b[31m');
-        if (mode === 'rejected') throw new Error('controlled offline readiness failure');
-        if (options.signal.aborted) throw new Error('controlled readiness abort');
-        if (mode !== 'warm' && !policyLifetime) fs.writeFileSync(object, mode === 'corrupt' ? Buffer.alloc(bytes.length) : bytes);
-        return await realPrepare(policyLifetime ? prepareOptions : { ...prepareOptions, resolve: verify });
-      } finally { options.signal.removeEventListener('abort', abort); }
-    };
-    preparation = runPreparation();
+    if (policyLifetime) {
+      preparation = (async () => {
+        const abort = () => gate.resolve();
+        options.signal.addEventListener('abort', abort, { once: true });
+        entered.resolve();
+        try {
+          await gate.promise;
+          if (options.signal.aborted) throw new Error('controlled readiness abort');
+          return await realPrepare({ ...options, pluginRoot: packageRoot, pluginData: root });
+        } finally { options.signal.removeEventListener('abort', abort); }
+      })();
+    } else {
+      preparation = realPrepare({
+        ...options, pluginRoot: root, pluginData: root,
+        resolve: async forwarded => {
+          const abort = () => gate.resolve();
+          forwarded.signal.addEventListener('abort', abort, { once: true });
+          entered.resolve();
+          try {
+            await gate.promise;
+            if (terminalMode) throw new BootstrapError('controlled startup secret_fixture https://private.invalid/?token=token_fixture\n\x1b[31m');
+            if (mode === 'rejected') throw new Error('controlled offline readiness failure');
+            if (forwarded.signal.aborted) throw new Error('controlled readiness abort');
+            if (mode !== 'warm') fs.writeFileSync(object, mode === 'corrupt' ? Buffer.alloc(bytes.length) : bytes);
+            return await verify(forwarded);
+          } finally { forwarded.signal.removeEventListener('abort', abort); }
+        },
+      });
+    }
     preparation.then(() => { readiness = 'trusted'; }, () => { readiness = 'failed'; });
     return preparation;
   };
