@@ -137,24 +137,35 @@ func TestTaskContextNestedPrecancelPreservesCaller(t *testing.T) {
 	require.EqualValues(t, 1, count)
 }
 
+type taskContextStallingConn struct {
+	gormlib.Tx
+	prefix   string
+	observed bool
+}
+
+func (conn *taskContextStallingConn) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	if strings.HasPrefix(query, conn.prefix) {
+		conn.observed = true
+		if _, err := conn.Tx.ExecContext(ctx, "SELECT pg_sleep(2)"); err != nil {
+			return nil, err
+		}
+	}
+	return conn.Tx.ExecContext(ctx, query, args...)
+}
+
 func TestTaskContextNestedCleanupBounded(t *testing.T) {
 	db := openCandidateTestDB(t)
 	tx := db.Begin()
 	require.NoError(t, tx.Error)
 	defer tx.Rollback()
-	callbacks := db.Callback().Raw()
-	observed := false
-	require.NoError(t, callbacks.Before("gorm:raw").Register("task-context-stall-release", func(q *gormlib.DB) {
-		if strings.HasPrefix(q.Statement.SQL.String(), "RELEASE SAVEPOINT task_context_") {
-			observed = true
-			q.AddError(q.Session(&gormlib.Session{NewDB: true}).WithContext(q.Statement.Context).Exec("SELECT pg_sleep(2)").Error)
-		}
-	}))
-	defer callbacks.Remove("task-context-stall-release")
+	underlying, ok := tx.Statement.ConnPool.(gormlib.Tx)
+	require.True(t, ok)
+	stall := &taskContextStallingConn{Tx: underlying, prefix: "RELEASE SAVEPOINT task_context_"}
+	tx.Statement.ConnPool = stall
 	started := time.Now()
 	err := taskContextNestedRead(t.Context(), tx, func(*gormlib.DB) error { return nil })
 	elapsed := time.Since(started)
-	require.True(t, observed, "the actual release reached the stalled SQL seam")
+	require.True(t, stall.observed, "the actual release reached the stalled SQL seam")
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.Less(t, elapsed, 1500*time.Millisecond, "stalled cleanup exceeded its finite bound")
 }
@@ -164,20 +175,48 @@ func TestTaskContextNestedRollbackBounded(t *testing.T) {
 	tx := db.Begin()
 	require.NoError(t, tx.Error)
 	defer tx.Rollback()
-	callbacks := db.Callback().Raw()
-	observed := false
-	require.NoError(t, callbacks.Before("gorm:raw").Register("task-context-stall-rollback", func(q *gormlib.DB) {
-		if strings.HasPrefix(q.Statement.SQL.String(), "ROLLBACK TO SAVEPOINT task_context_") {
-			observed = true
-			q.AddError(q.Session(&gormlib.Session{NewDB: true}).WithContext(q.Statement.Context).Exec("SELECT pg_sleep(2)").Error)
-		}
-	}))
-	defer callbacks.Remove("task-context-stall-rollback")
+	underlying, ok := tx.Statement.ConnPool.(gormlib.Tx)
+	require.True(t, ok)
+	stall := &taskContextStallingConn{Tx: underlying, prefix: "ROLLBACK TO SAVEPOINT task_context_"}
+	tx.Statement.ConnPool = stall
 	failure := errors.New("synthetic read failure")
 	started := time.Now()
 	err := taskContextNestedRead(t.Context(), tx, func(*gormlib.DB) error { return failure })
-	require.True(t, observed, "the actual rollback reached the stalled SQL seam")
+	require.True(t, stall.observed, "the actual rollback reached the stalled SQL seam")
 	require.ErrorIs(t, err, failure)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.Less(t, time.Since(started), 1500*time.Millisecond)
+}
+
+func TestTaskContextNestedPreparedCacheBounded(t *testing.T) {
+	db := openCandidateTestDB(t).Session(&gormlib.Session{PrepareStmt: true})
+	failure := errors.New("synthetic read failure")
+	for index := range 4 {
+		tx := db.Begin()
+		require.NoError(t, tx.Error)
+		prepared, ok := tx.Statement.ConnPool.(*gormlib.PreparedStmtTX)
+		require.True(t, ok, "must exercise the production GORM prepared transaction")
+		err := taskContextNestedRead(t.Context(), tx, func(*gormlib.DB) error {
+			if index == 3 {
+				return failure
+			}
+			return nil
+		})
+		if index == 3 {
+			require.ErrorIs(t, err, failure)
+		} else {
+			require.NoError(t, err)
+		}
+		require.NoError(t, tx.Rollback().Error)
+		var controls []string
+		for _, key := range prepared.PreparedStmtDB.Stmts.Keys() {
+			if strings.Contains(key, "SAVEPOINT task_context_") {
+				controls = append(controls, key)
+			}
+		}
+		t.Logf("prepared control statements after transaction %d: %d", index+1, len(controls))
+		if index == 3 {
+			require.Empty(t, controls, "per-read savepoint SQL must not enter the shared prepared statement cache")
+		}
+	}
 }

@@ -231,6 +231,8 @@ nested transaction and retains the same authorization and cancellation rules.
 Nested savepoint recovery has a separate bounded cleanup window; a failed
 rollback or release is returned to the caller, which must not assume that its
 transaction was restored.
+Per-read savepoint controls use the underlying transaction rather than adding
+unique statements to the shared prepared-statement cache.
 
 `knowledge` has `memory_status`, `note_status`, and `rule_status` (`ok`, `empty`,
 `unavailable`, or `deadline_exceeded`) and at most nine `items`. Enabled project
