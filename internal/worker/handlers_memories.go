@@ -24,27 +24,33 @@ import (
 	dbgorm "github.com/thebtf/engram/internal/db/gorm"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/principalmemory"
+	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/internal/projectidentity"
+	"github.com/thebtf/engram/internal/redaction"
 	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/pkg/models"
 )
 
 // storeMemoryRequest is the JSON body for POST /api/memories.
 //
-// T004 (engram vNext Milestone F TG1) added the optional `privacy_scope`
-// and `session_id` fields. Both are honored only when ENGRAM_VNEXT_F_ENABLED
-// is "true"; with the flag OFF the request shape is byte-identical to v6.4.x
-// (Go's encoding/json silently drops unknown fields by default, and the
-// existing fields are unchanged).
+// Context accepts only {"kind":"self"}, {"kind":"project"}, or
+// {"kind":"global"}; project presence is significant, including empty/null.
+// PrivacyScope and SessionID retain their existing privacy/provenance meanings.
+// Neither these fields nor SourceAgent grants authenticated owner authority.
 type storeMemoryRequest struct {
-	Project         string   `json:"project"`
-	Content         string   `json:"content"`
-	Tags            []string `json:"tags,omitempty"`
-	SourceAgent     string   `json:"source_agent,omitempty"`
-	PrivacyScope    string   `json:"privacy_scope,omitempty"` // T004 — vNext F, 4-tier enum
-	SessionID       string   `json:"session_id,omitempty"`    // T004 — caller session for SourceSessions
-	AgentVisibility string   `json:"agent_visibility,omitempty" enums:"private,shared"`
-	Domain          string   `json:"domain,omitempty"`
+	Project         string          `json:"project" binding:"optional" minLength:"1"`
+	Content         string          `json:"content" binding:"required" minLength:"1"`
+	Tags            []string        `json:"tags,omitempty"`
+	SourceAgent     string          `json:"source_agent,omitempty"`
+	PrivacyScope    string          `json:"privacy_scope,omitempty"` // T004 — vNext F, 4-tier enum
+	SessionID       string          `json:"session_id,omitempty"`    // T004 — caller session for SourceSessions
+	AgentVisibility string          `json:"agent_visibility,omitempty" enums:"private,shared"`
+	Domain          string          `json:"domain,omitempty"`
+	Context         json.RawMessage `json:"context,omitempty" swaggerignore:"true"`
+	// RequestKey is optional; when supplied it must be nonempty and at most 1024 UTF-8 bytes.
+	// OpenAPI string maxLength counts characters, so the byte limit remains descriptive.
+	RequestKey      json.RawMessage `json:"request_key,omitempty" swaggertype:"string" minLength:"1"`
+	projectSupplied bool
 }
 
 type suppressMemoryRequest struct {
@@ -134,16 +140,34 @@ func applyPrincipalMemoryMetadataREST(ctx context.Context, mem *models.Memory, a
 	return nil
 }
 
+func (s *Service) redactMemoryContent(content string) (string, error) {
+	if privacy.ContainsSecrets(content) {
+		content = privacy.RedactSecrets(content)
+	}
+	s.initMu.RLock()
+	rules := s.redactionRules
+	s.initMu.RUnlock()
+	scrubbed, _, err := redaction.ScrubCompiled(content, rules)
+	return scrubbed, err
+}
+
 // handleStoreMemoryExplicit godoc
-// @Summary Store an explicit memory note
-// @Description Creates a new memory entry for the given project.
+// @Summary Create a memory in self, project or explicit global context
+// @Description With a validated principal-bound client keycard, omit both context and project for enrolled self; an existing canonical project selects project; explicit context.kind=global requires project omission and enrollment. Context accepts only a kind field (self, project, global). Empty/null/invalid/conflicting selectors fail without fallback or project creation. Typed commands require a client keycard; a no-opt-in legacy project write remains supported.
+// @Description Use a principal-bound client keycard as the bearer credential. X-Engram-Identity is a context-selection marker, not an authentication credential. In auth-disabled mode, explicit credentials are validated on the selected HTTP routes while unkeyed requests retain a synthetic identity; this mode is not a privacy-isolation boundary. Author/owner and workstation derive from authenticated identity, not source_agent or session_id. Self/project default agent_visibility=shared; with authentication enabled, self ownership remains scoped to its principal even when visibility is shared. Global defaults agent_visibility=private; explicit shared does not bypass domain or privacy_scope checks.
+// @Description Optional request_key is a nonempty string of at most 1024 UTF-8 bytes, scoped by canonical principal kind/principal, context kind and project. Equivalent normalized commands replay the currently accessible active record with 200; first creation returns 201. Changed commands or retired/missing/inaccessible replay targets return 409 without overwrite, duplicate or resurrection. Body and retry receipt commit atomically; omission is not idempotent. See the operating guide for the independent privacy_scope and workstation restrictions.
 // @Tags Memories
 // @Accept json
 // @Produce json
 // @Security ApiKeyAuth
-// @Param body body storeMemoryRequest true "Memory to store"
-// @Success 201 {object} models.Memory
-// @Failure 400 {string} string "bad request"
+// @Param body body storeMemoryRequest{context=storeMemoryContextSchema} true "Memory content is required; project, context and request_key are optional; omit project for self/global. request_key is nonempty and limited to 1024 UTF-8 bytes, not characters."
+// @Success 201 {object} models.Memory "New memory; domain warning fields may also be present"
+// @Success 200 {object} models.Memory "Equivalent request_key replay of the current active memory"
+// @Failure 400 {string} string "invalid body, selector, request_key or privacy metadata"
+// @Failure 401 {string} string "authentication or explicit keycard validation failed"
+// @Failure 403 {string} string "principal context, domain write or keycard mutation denied"
+// @Failure 404 {string} string "canonical project not found"
+// @Failure 409 {string} string "request_key conflict or retired/missing/inaccessible target"
 // @Failure 503 {string} string "service unavailable"
 // @Failure 500 {string} string "internal error"
 // @Router /api/memories [post]
@@ -152,93 +176,111 @@ func (s *Service) handleStoreMemoryExplicit(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "memory store not available", http.StatusServiceUnavailable)
 		return
 	}
-
 	var req storeMemoryRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON body: "+err.Error(), http.StatusBadRequest)
+		http.Error(w, "invalid memory request", http.StatusBadRequest)
 		return
 	}
-
-	if req.Project == "" {
-		http.Error(w, "project is required", http.StatusBadRequest)
+	kind, contextSupplied, err := memoryRequestContext(req.Context)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	requestKey, err := memoryRequestKey(req.RequestKey)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	owning, err := s.resolveMemoryOwningContext(r, kind, contextSupplied, req.Project, req.projectSupplied)
+	if err != nil {
+		writeMemoryContextError(w, err)
 		return
 	}
 	if req.Content == "" {
 		http.Error(w, "content is required", http.StatusBadRequest)
 		return
 	}
-
-	mem := &models.Memory{
-		Project:     req.Project,
-		Content:     req.Content,
-		Tags:        req.Tags,
-		SourceAgent: req.SourceAgent,
+	req.Content, err = s.redactMemoryContent(req.Content)
+	if err != nil || req.Content == "" {
+		http.Error(w, "content fully redacted", http.StatusBadRequest)
+		return
 	}
-
-	// T004 (engram vNext Milestone F TG1) — populate the new lifecycle/
-	// identity fields when ENGRAM_VNEXT_F_ENABLED=true. With the flag OFF
-	// the new columns get their DB defaults (privacy_scope='project',
-	// source_workstation_id='', source_sessions=ARRAY[]::TEXT[]) and the
-	// response shape stays v6.4.x-identical via the omitempty JSON tags
-	// already on Memory.
-	{
-		if req.PrivacyScope != "" {
-			if !isValidPrivacyScopeREST(req.PrivacyScope) {
-				http.Error(w, "invalid privacy_scope: must be one of private, project, shared, global", http.StatusBadRequest)
-				return
-			}
-			mem.PrivacyScope = req.PrivacyScope
-		}
-		if id, ok := auth.IdentityFrom(r.Context()); ok {
-			mem.SourceWorkstationID = id.WorkstationID()
-		}
-		if req.SessionID != "" {
-			mem.SourceSessions = []string{req.SessionID}
-		}
-		// Codex P1 cycle-5 fix on b5ac7ec: mirror the MCP-side guard
-		// (`internal/mcp/tools_memory.go` private-write check from
-		// `4cb71be`/`b5ac7ec`) on the REST surface so the two paths do
-		// not diverge. scope.Resolve fail-closes private memories whose
-		// source_workstation_id is empty (`internal/scope/filter.go`),
-		// so persisting a private write from a non-SourceClient caller
-		// (master/session, or no identity) would create a permanently-
-		// unreadable row.
-		if mem.PrivacyScope == "private" && mem.SourceWorkstationID == "" {
-			http.Error(w, "invalid privacy_scope: private requires a non-empty workstation identity from a SourceClient keycard (master/session sources cannot write private-scope memories)", http.StatusBadRequest)
+	mem := &models.Memory{Project: req.Project, Content: req.Content, Tags: req.Tags, SourceAgent: req.SourceAgent}
+	if req.PrivacyScope != "" {
+		if !isValidPrivacyScopeREST(req.PrivacyScope) {
+			http.Error(w, "invalid privacy_scope", http.StatusBadRequest)
 			return
 		}
+		mem.PrivacyScope = req.PrivacyScope
 	}
-	if err := applyPrincipalMemoryMetadataREST(r.Context(), mem, req.AgentVisibility, req.Domain); err != nil {
+	identity, hasIdentity := auth.IdentityFrom(r.Context())
+	if hasIdentity {
+		mem.SourceWorkstationID = identity.WorkstationID()
+	}
+	if req.SessionID != "" {
+		mem.SourceSessions = []string{req.SessionID}
+	}
+	if mem.PrivacyScope == "private" && mem.SourceWorkstationID == "" {
+		http.Error(w, "private privacy_scope requires a workstation keycard", http.StatusBadRequest)
+		return
+	}
+	visibility := req.AgentVisibility
+	if owning.Kind == models.MemoryContextGlobal && strings.TrimSpace(visibility) == "" {
+		visibility = models.AgentVisibilityPrivate
+	}
+	if err := applyPrincipalMemoryMetadataREST(r.Context(), mem, visibility, req.Domain); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	domainDecision, err := s.checkDomainWriteREST(r.Context(), mem, req.SessionID)
+	_, explicitIdentity := r.Header["X-Engram-Identity"]
+	typedCommand := owning.Kind != models.MemoryContextProject || contextSupplied || requestKey != "" || explicitIdentity
+	if typedCommand && hasIdentity && identity.Source == auth.SourceClient && identity.KeycardID != "" && mem.OwnerPrincipal != "" {
+		mem.Context = &owning
+	} else if typedCommand {
+		writeMemoryContextError(w, gormdb.ErrMemoryPrincipalRequired)
+		return
+	}
+	var domainDecision *principalmemory.DomainWriteDecision
+	guard := func(ctx context.Context, tx *gormlib.DB) (bool, error) {
+		var err error
+		domainDecision, err = s.checkDomainWriteREST(ctx, tx, mem, req.SessionID)
+		if errors.Is(err, principalmemory.ErrDomainWriteRejected) && domainDecision != nil && !domainDecision.Allowed && domainDecision.AuditStatus == principalmemory.AuditStatusWritten {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		return domainDecision == nil || domainDecision.Allowed, nil
+	}
+	var created *models.Memory
+	replayed := false
+	if mem.Context == nil {
+		allowed, guardErr := guard(r.Context(), nil)
+		err = guardErr
+		if err == nil && allowed {
+			created, err = s.memoryStore.CreateForExistingProject(r.Context(), mem)
+		} else if err == nil {
+			err = principalmemory.ErrDomainWriteRejected
+		}
+	} else {
+		created, replayed, err = s.memoryStore.CreateInContext(r.Context(), mem, memoryVisibilityCaller(r.Context(), ""), requestKey, guard)
+	}
 	if err != nil {
-		if errors.Is(err, principalmemory.ErrDomainWriteRejected) {
-			http.Error(w, err.Error(), http.StatusForbidden)
+		if errors.Is(err, principalmemory.ErrDomainWriteRejected) || errors.Is(err, gormdb.ErrMemoryCreateDenied) {
+			http.Error(w, "domain write rejected", http.StatusForbidden)
 			return
 		}
-		log.Error().Err(err).Str("project", req.Project).Str("domain", mem.Domain).Msg("domain registry check failed")
-		http.Error(w, "domain registry check failed", http.StatusInternalServerError)
+		writeMemoryContextError(w, err)
 		return
 	}
-	if domainDecision != nil && !domainDecision.Allowed {
-		http.Error(w, "domain write rejected", http.StatusForbidden)
-		return
+	w.Header().Set("Content-Type", "application/json")
+	if !replayed {
+		w.WriteHeader(http.StatusCreated)
 	}
-
-	created, err := s.memoryStore.Create(r.Context(), mem)
-	if err != nil {
-		log.Error().Err(err).Str("project", req.Project).Msg("store memory failed")
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusCreated)
 	writeStoreMemoryResponse(w, created, domainDecision)
 }
 
-func (s *Service) checkDomainWriteREST(ctx context.Context, mem *models.Memory, sourceSessionID string) (*principalmemory.DomainWriteDecision, error) {
+func (s *Service) checkDomainWriteREST(ctx context.Context, tx *gormlib.DB, mem *models.Memory, sourceSessionID string) (*principalmemory.DomainWriteDecision, error) {
 	if mem == nil || strings.TrimSpace(mem.Domain) == "" {
 		return nil, nil
 	}
@@ -246,12 +288,17 @@ func (s *Service) checkDomainWriteREST(ctx context.Context, mem *models.Memory, 
 	if svc == nil {
 		return nil, nil
 	}
-	return svc.CheckWrite(ctx, principalmemory.DomainWriteCheckRequest{
-		Project:         mem.Project,
-		Domain:          mem.Domain,
+	request := principalmemory.DomainWriteCheckRequest{
+		Project: mem.Project, Domain: mem.Domain,
 		Writer:          principalmemory.PrincipalRef{Principal: mem.OwnerPrincipal, PrincipalKind: mem.OwnerPrincipalKind},
 		SourceSessionID: strings.TrimSpace(sourceSessionID),
-	})
+	}
+	if native, ok := svc.(interface {
+		CheckWriteTx(context.Context, *gormlib.DB, principalmemory.DomainWriteCheckRequest) (*principalmemory.DomainWriteDecision, error)
+	}); ok && tx != nil {
+		return native.CheckWriteTx(ctx, tx, request)
+	}
+	return svc.CheckWrite(ctx, request)
 }
 
 func (s *Service) currentDomainRegistryService() domainRegistryService {
@@ -555,16 +602,18 @@ func (s *Service) memGetStore() memoryGetStore {
 
 // handleGetMemoryByID godoc
 // @Summary Get a memory note by ID
-// @Description Returns one nondeleted memory in the exact live canonical project, with the existing read privacy policy applied before the ID lookup.
+// @Description Returns a nondeleted memory only after exact owning-context and ordinary privacy/domain checks. With a principal-bound client keycard, omit context and project for enrolled self; use one project UUID for project, or context=global without project for enrolled global. An explicit context is one of self, project, global; self/global must omit project entirely. Invalid, empty, repeated or conflicting typed selectors fail without fallback. Typed responses include context and authenticated author; global affiliation alone grants no read access. No-opt-in requests with only project retain the existing canonical-project reader.
 // @Tags Memories
 // @Produce json
 // @Security ApiKeyAuth
 // @Param id path int true "Memory ID"
-// @Param project query string true "Existing canonical project ID"
+// @Param context query string false "Exact owning context; omission selects self unless project is supplied" Enums(self,project,global)
+// @Param project query string false "One existing canonical project UUID; required for context=project, forbidden for self/global"
 // @Success 200 {object} models.Memory
-// @Failure 400 {string} string "invalid id or project"
-// @Failure 404 {string} string "not found"
-// @Failure 403 {object} documentErrorResponse "project read forbidden"
+// @Failure 400 "Invalid memory ID or typed context/project selector returns text; no-opt-in legacy project reader parameter errors return documentErrorResponse JSON"
+// @Failure 401 {string} string "authentication or explicit keycard validation failed"
+// @Failure 403 "Typed principal-context denial returns text; no-opt-in legacy project authorization or store denial returns documentErrorResponse JSON"
+// @Failure 404 {string} string "context or visible nondeleted record not found"
 // @Failure 503 {string} string "service unavailable"
 // @Failure 500 {string} string "internal error"
 // @Router /api/memories/{id} [get]
@@ -578,6 +627,9 @@ func (s *Service) handleGetMemoryByID(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil || id <= 0 {
 		http.Error(w, "invalid memory id", http.StatusBadRequest)
+		return
+	}
+	if s.handleContextMemoryRead(w, r, id) {
 		return
 	}
 

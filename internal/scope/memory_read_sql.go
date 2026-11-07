@@ -84,13 +84,24 @@ const MemoryPrincipalAccessSQL = `(
 	)
 `
 
+// MemoryContextAccessSQL applies ownership independently of visibility tiers.
+func MemoryContextAccessSQL(caller KeycardContext) (string, []any) {
+	return `(m.context_kind IN ('legacy','project') OR (
+		m.context_kind IN ('self','global')
+		AND ? <> ''
+		AND EXISTS (SELECT 1 FROM memory_principals enrolled WHERE enrolled.principal_kind = ? AND enrolled.principal = ?)
+		AND (m.context_kind = 'global' OR (m.context_principal_kind = ? AND m.context_principal = ?))
+	))`, []any{caller.WorkstationID, caller.PrincipalKind, caller.Principal, caller.PrincipalKind, caller.Principal}
+}
+
 // MemoryReadAccessSQL projects ResolveMemory before ORDER BY/LIMIT or body
 // materialization. All column references use the fixed memories alias m.
 func MemoryReadAccessSQL(access MemoryReadAccess) (string, []any) {
 	caller, opts := access.Caller, access.Visibility
 	principal, kind := strings.TrimSpace(caller.Principal), strings.TrimSpace(caller.PrincipalKind)
-	predicate := "(" + MemoryPrincipalAccessSQL + ")"
-	args := []any{principal, kind, principal, kind, principal, kind, principal, kind}
+	contextSQL, args := MemoryContextAccessSQL(caller)
+	predicate := "(" + contextSQL + ") AND (" + MemoryPrincipalAccessSQL + ")"
+	args = append(args, principal, kind, principal, kind, principal, kind, principal, kind)
 	if opts.ApplyPrivacyScope {
 		predicate += " AND " + MemoryPrivacyAccessSQL
 		args = append(args, caller.WorkstationID, caller.WorkstationID, caller.SessionID, caller.SessionID)

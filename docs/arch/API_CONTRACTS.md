@@ -382,6 +382,134 @@ Unavailable embeddings degrade to text retrieval; memory-store lookup failures
 return HTTP 500, not an empty successful search. REST retains its observation-shaped
 response and audit-only source-session attribution without MCP memory mutations.
 
+### Typed memory cards
+
+An enabled admin with a persisted `engram_auth` browser session can enroll an
+existing canonical principal/kind pair using `POST /api/auth/principals` and
+issue a keycard using `POST /api/auth/tokens`, including in auth-disabled mode
+when such an account and session already exist. This does not establish a
+credential-free bootstrap path. Bearer and `X-Auth-Token` credentials take
+precedence over cookies; omit them to use the browser session. HMAC-only
+sessions do not qualify for enrollment. In auth-disabled mode those two POSTs
+recognize a persisted session, not an HMAC-only session. A validated keycard
+for the enrolled pair can omit both `project` and `context` on
+`POST /api/memories` to create a self-owned card. Presence of
+`X-Engram-Identity` opts into typed handling; its value neither selects a
+context nor authenticates the caller. With selectors omitted, typed handling
+selects self. The optional context object is `{"kind":"self"}`,
+`{"kind":"project"}`, or `{"kind":"global"}`. Explicit project context
+requires an existing canonical project UUID in `project`; self and global
+require `project` to be absent. Global must be selected explicitly.
+`source_agent` is provenance, not owner authority.
+Invalid, empty, repeated or conflicting selectors do not fall back to self.
+Self ownership is independent of the visibility tier; global defaults to
+principal-private. Explicit workstation-private scope remains bound to the
+writing keycard even when another credential has the same principal.
+
+REST create and revision apply builtin and configured operator redaction before
+storing content. If redaction removes the full body, the request is refused;
+a refused revision does not advance the version or create history. Nonempty
+whitespace-only input remains accepted when no rule removes it.
+
+An optional nonempty `request_key` (at most 1024 UTF-8 bytes) scopes a create
+retry to the authenticated principal, owning context and project. An equivalent
+retry returns the existing active record; a changed command or retired target
+returns 409. Without a key a repeated create is not automatically idempotent.
+
+Self-memory cards can be linked with `POST /api/memories/{source_id}/links`.
+Supply `target_id`, `relation` (`related_to` or `references`), an optional
+`target_version` for `references`, an optional `request_key`, and an optional
+`source_session_id` as untrusted provenance. Both endpoints must be active and
+accessible to the enrolled keycard principal. `related_to` is unordered and
+cannot carry a revision pin; `references` is directional and its target version
+distinguishes assertions. A new link returns 201; an existing assertion returns
+200 with its original author and provenance. A key is scoped to the canonical
+principal and normalized assertion. Reuse for another assertion, or replay after
+removal, returns 409. A duplicate under another key also gets a receipt.
+
+`GET /api/memories/{source_id}/links` returns `links` and `next_cursor`; pass
+the cursor as `cursor` to continue. `limit` defaults to 50 and ranges from 1
+to 100. Authorization and active endpoint status filter results before the
+page limit. `DELETE /api/memory-links/{link_id}` removes an assertion; restoring
+an inactive endpoint can reveal an unremoved link, but does not restore a
+removed link. Links do not grant access. Workstation-private restrictions
+continue to apply across keycards. Auth-disabled mode is not privacy isolation,
+even though these routes validate an explicitly supplied keycard. Document and
+other-record link endpoints are not part of this slice.
+
+`GET /api/memories/principal` without `principal` searches the enrolled
+authenticated keycard's self context; it does not include that principal's project,
+global or legacy records. `context=self` is optional, but an explicit `project`,
+another context, `principal_kind` without `principal`, or an empty `principal`
+does not select self. An explicit principal retains the existing principal-query
+contract when `context` is omitted; `context` with an explicit principal is
+unsupported and returns 400. For self, a nonempty `q` is bounded to 1024 UTF-8
+bytes and 64 distinct lexical terms of at least two characters; exceeding either
+bound returns 400 rather than truncating. Punctuation-only and multiword questions
+consisting only of common boilerplate return 400. A single term is searched
+literally, even when it is a common word. For multiword questions, common English
+and Russian function words and Russian locating verbs are omitted before matching.
+Matching terms rank by their lengths, with recency as a tie-breaker; this is
+literal substring matching,
+not semantic search. Omit `q` to browse. Results contain stable memory IDs; use
+the ordinary card-read endpoint for full context, revision and provenance.
+Principal, domain and privacy restrictions are applied before pagination; the
+`hidden_count` compatibility field does not count inaccessible rows, because
+that count could disclose their existence. Explicit admin private widening still
+requires its durable audit before returning the record.
+
+`GET /api/memories/{id}` reads a visible card in its selected context. For GET
+and typed PATCH, an enrolled client with omitted selectors selects self;
+`?context=global` selects global, and
+`?context=project&project=<canonicalUUID>` selects project. With no selector
+or identity opt-in, a valid client keycard without an enrolled memory principal
+receives 403; a caller without a keycard retains the legacy missing-project 400.
+Explicit self requests still require an enrolled client, and invalid explicit
+selectors never fall back. To revise, send `PATCH /api/memories/{id}` with
+`{"version":N,"content":"..."}` and the same context selection. The owner must
+be authorized to manage the current card.
+Project aliases support reads only; a project-context revision requires the card's
+unique native canonical membership and revalidates it under the mutation locks.
+The version must match; a stale version returns 409. After an uncertain outcome,
+read the current card and reconcile before deciding whether to retry. A successful
+revision keeps the ID, atomically captures the previous body and increments version.
+The current domain write policy also applies to typed revisions. A cross-owner
+write in reject mode records a denial audit and returns 403 without creating a
+revision. If the required domain audit fails, the card is not mutated. In warn
+mode, a cross-owner write is audited and the revision proceeds; its response
+includes `domain_warning` and `domain_audit_status`. These fields are omitted
+when there is no warning. The success response is JSON; errors are plain text.
+Swagger 2 lists media types for the whole operation, not per status.
+The newly captured body is subject to the current redaction rules, so it is not
+necessarily a byte-exact historical copy. Existing stored history is not rewritten.
+When an embedding provider and store are configured, revision starts an asynchronous
+re-embedding attempt; provider errors or empty vectors do not establish a retry.
+`GET /api/memories/{id}/revisions` returns retained previous bodies after checking
+current-card access, in ascending version order. `after_version` selects versions
+strictly above its nonnegative value; `limit` defaults to 50 and accepts 1–100.
+Typed PATCH refuses legacy project rows with 404 rather than creating incomplete
+revision history. Existing legacy reads and edits remain available through their
+existing paths. The current body remains on the ordinary read. Retained revisions
+are removed with a hard-deleted parent. Neither the revision endpoint nor global
+context grants access by itself. Synthetic auth-disabled identity is not a
+registered keycard.
+
+With authentication disabled, explicit bearer or `X-Auth-Token` credentials are
+validated on `POST /api/memories`, `GET` and `PATCH /api/memories/{id}`, and
+`GET /api/memories/{id}/revisions` for numeric IDs. A rejected credential does
+not fall back to a cookie or the synthetic identity; token-store failures fail
+closed. HAP and read-only restrictions still apply. Unkeyed requests, other
+routes, and `/api/auth/me` retain their existing synthetic identity behavior.
+Disabled authentication does **not** provide privacy isolation: other routes
+may still admit synthetic administrative access. Do not use this mode as a
+security boundary between users or principals.
+
+Explicit-principal queries filter inaccessible cards before pagination. The
+`hidden_count` field is `null` when the number of inaccessible cards is unknown;
+it is not a count of matching private cards. This applies to the HTTP principal
+query and its MCP query and principal-scoped brief projections. Authorized
+administrative private widening remains subject to durable audit.
+
 `POST /api/memories/{id}/transition` takes a JSON object with required `action`:
 `suppress` changes active to flagged, `unsuppress` changes flagged to active, and
 `archive` changes active or flagged to archived without erasure. Optional query

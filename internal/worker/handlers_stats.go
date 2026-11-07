@@ -1,13 +1,16 @@
 package worker
 
 import (
+	"context"
 	"net/http"
 	"time"
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/internal/operability"
+	"github.com/thebtf/engram/internal/scope"
 )
 
 // embeddingTelemetry is the JSON sub-object surfaced under the "embedding" key
@@ -15,8 +18,8 @@ import (
 // process-lifetime backfill counters sourced from BackfillRecorder.
 type embeddingTelemetry struct {
 	embedding.CoverageStats
-	EmbedSuccessCount int64                 `json:"embed_success_count"`
-	EmbedFailureCount int64                 `json:"embed_failure_count"`
+	EmbedSuccessCount *int64                `json:"embed_success_count,omitempty"`
+	EmbedFailureCount *int64                `json:"embed_failure_count,omitempty"`
 	LastEmbedError    *embedding.EmbedError `json:"last_embed_error,omitempty"`
 }
 
@@ -59,6 +62,15 @@ type vnextStatsResponse struct {
 	Embedding              *embeddingTelemetry      `json:"embedding,omitempty"`
 }
 
+func statsMemoryAccess(ctx context.Context) scope.MemoryReadAccess {
+	return scope.MemoryReadAccess{Caller: memoryVisibilityCaller(ctx, ""), Visibility: scope.MemoryVisibilityOptions{ApplyPrivacyScope: true}}
+}
+
+func statsPrivileged(ctx context.Context) bool {
+	identity, ok := auth.IdentityFrom(ctx)
+	return ok && identity.IsAdmin() && (identity.Source == auth.SourceMaster || identity.Source == auth.SourceSession)
+}
+
 // handleStatsVnext godoc
 // @Summary vNext pipeline metrics
 // @Description Returns injection/citation counts, noise ratio, write-gate memory stats, and embedding telemetry.
@@ -77,21 +89,32 @@ func (s *Service) handleStatsVnext(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "service not ready", http.StatusServiceUnavailable)
 		return
 	}
+	predicate, args := scope.MemoryReadAccessSQL(statsMemoryAccess(ctx))
+	if statsPrivileged(ctx) {
+		predicate, args = "TRUE", nil
+	}
+	visible := `m.deleted_at IS NULL AND (` + predicate + `)`
+	injectionSQL := `SELECT count(*) FROM injection_log i WHERE EXISTS (SELECT 1 FROM memories m WHERE m.id = ANY(i.memory_ids) AND ` + visible + `)`
+	citationSQL := `SELECT count(*) FROM citation_log c JOIN memories m ON m.id = c.memory_id WHERE c.cited = ? AND ` + visible
+	if statsPrivileged(ctx) {
+		injectionSQL = `SELECT count(*) FROM injection_log`
+		citationSQL = `SELECT count(*) FROM citation_log WHERE cited = ?`
+	}
 
 	var injectionCount int64
-	if err := store.DB.WithContext(ctx).Raw(`SELECT count(*) FROM injection_log`).Scan(&injectionCount).Error; err != nil {
+	if err := store.DB.WithContext(ctx).Raw(injectionSQL, args...).Scan(&injectionCount).Error; err != nil {
 		http.Error(w, "failed to query injection_log", http.StatusInternalServerError)
 		return
 	}
 
 	var citationCount int64
-	if err := store.DB.WithContext(ctx).Raw(`SELECT count(*) FROM citation_log WHERE cited = true`).Scan(&citationCount).Error; err != nil {
+	if err := store.DB.WithContext(ctx).Raw(citationSQL, append([]any{true}, args...)...).Scan(&citationCount).Error; err != nil {
 		http.Error(w, "failed to query citation_log (cited)", http.StatusInternalServerError)
 		return
 	}
 
 	var uncitedCount int64
-	if err := store.DB.WithContext(ctx).Raw(`SELECT count(*) FROM citation_log WHERE cited = false`).Scan(&uncitedCount).Error; err != nil {
+	if err := store.DB.WithContext(ctx).Raw(citationSQL, append([]any{false}, args...)...).Scan(&uncitedCount).Error; err != nil {
 		http.Error(w, "failed to query citation_log (uncited)", http.StatusInternalServerError)
 		return
 	}
@@ -114,7 +137,7 @@ func (s *Service) handleStatsVnext(w http.ResponseWriter, r *http.Request) {
 	}
 	var rows []statusRow
 	if err := store.DB.WithContext(ctx).
-		Raw(`SELECT status, count(*) AS count FROM memories WHERE deleted_at IS NULL GROUP BY status`).
+		Raw(`SELECT m.status, count(*) AS count FROM memories m WHERE `+visible+` GROUP BY m.status`, args...).
 		Scan(&rows).Error; err != nil {
 		http.Error(w, "failed to query memories write-gate stats", http.StatusInternalServerError)
 		return
@@ -138,15 +161,15 @@ func (s *Service) handleStatsVnext(w http.ResponseWriter, r *http.Request) {
 	}
 	var rateRows []rateRow
 	if err := store.DB.WithContext(ctx).Raw(`
-		SELECT project,
-		       COALESCE(SUM(citation_count), 0) AS total_citations,
-		       COALESCE(SUM(injection_count), 0) AS total_injections,
+		SELECT m.project,
+		       COALESCE(SUM(m.citation_count), 0) AS total_citations,
+		       COALESCE(SUM(m.injection_count), 0) AS total_injections,
 		       COUNT(*) AS memory_count
-		FROM memories
-		WHERE deleted_at IS NULL AND status != 'flagged'
-		GROUP BY project
-		HAVING COALESCE(SUM(injection_count), 0) > 0
-		ORDER BY project`).Scan(&rateRows).Error; err != nil {
+		FROM memories m
+		WHERE `+visible+` AND m.status != 'flagged'
+		GROUP BY m.project
+		HAVING COALESCE(SUM(m.injection_count), 0) > 0
+		ORDER BY m.project`, args...).Scan(&rateRows).Error; err != nil {
 		log.Debug().Err(err).Msg("stats/vnext: project citation rates unavailable")
 	} else {
 		for _, rr := range rateRows {
@@ -186,7 +209,9 @@ func (s *Service) handleStatsVnext(w http.ResponseWriter, r *http.Request) {
 	// outcome stays usable as sdk_sessions grows; map NULL and '' to "(unrecorded)" in Go.
 	// Postgres scans a NULL outcome into the zero-value "" here, so NULL and '' both arrive as
 	// the empty string and are merged with += into the single "(unrecorded)" bucket.
-	if err := store.DB.WithContext(ctx).Raw(`
+	if !statsPrivileged(ctx) {
+		outcomes = nil
+	} else if err := store.DB.WithContext(ctx).Raw(`
 		SELECT outcome, COUNT(*) AS count
 		FROM sdk_sessions
 		GROUP BY outcome`).Scan(&outcomeRows).Error; err != nil {
@@ -223,9 +248,7 @@ func (s *Service) handleStatsVnext(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Populate embedding telemetry when the embedding store is available.
-	// StatsWithCoverage is used instead of Stats so that embedding_coverage and
-	// active_memory_count are included without a second DB query.
-	// Process-lifetime backfill counters are read from the recorder (nil-safe).
+	// Unattributed process counters are only available to authenticated admins.
 	// Errors are non-fatal: log and leave the field nil so the stats response
 	// always succeeds even when the embedding subsystem is unhealthy.
 	s.initMu.RLock()
@@ -233,16 +256,23 @@ func (s *Service) handleStatsVnext(w http.ResponseWriter, r *http.Request) {
 	embRec := s.embeddingRecorder
 	s.initMu.RUnlock()
 	if embStore != nil {
-		if covStats, err := embStore.StatsWithCoverage(ctx); err != nil {
+		var covStats embedding.CoverageStats
+		var err error
+		if statsPrivileged(ctx) {
+			covStats, err = embStore.StatsWithCoverage(ctx)
+		} else {
+			covStats, err = embStore.StatsForAccess(ctx, statsMemoryAccess(ctx))
+		}
+		if err != nil {
 			log.Debug().Err(err).Msg("stats/vnext: embedding stats unavailable")
 		} else {
 			tel := &embeddingTelemetry{
 				CoverageStats: covStats,
 			}
-			if embRec != nil {
+			if embRec != nil && statsPrivileged(ctx) {
 				succ, fail, lastErr := embRec.Snapshot()
-				tel.EmbedSuccessCount = succ
-				tel.EmbedFailureCount = fail
+				tel.EmbedSuccessCount = &succ
+				tel.EmbedFailureCount = &fail
 				if !lastErr.At.IsZero() {
 					tel.LastEmbedError = &lastErr
 				}

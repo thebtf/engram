@@ -14,6 +14,10 @@ import (
 
 // runMigrations runs all database migrations using gormigrate.
 func runMigrations(db *gorm.DB) error {
+	return runMigrationsTo(db, "")
+}
+
+func runMigrationsTo(db *gorm.DB, target string) error {
 	// Enable pgvector extension before running any migrations.
 	// CREATE EXTENSION IF NOT EXISTS is idempotent.
 	if err := db.Exec("CREATE EXTENSION IF NOT EXISTS vector").Error; err != nil {
@@ -6874,11 +6878,15 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 		memoryPrincipalConstraintsMigration188(),
 		issueProjectWriteScopeMigration189(),
 		browserSessionPublicHandleMigration190(),
+		memoryContextMigration191(),
+		memoryLinksMigration195(),
 	})
+	if target != "" {
+		return m.MigrateTo(target)
+	}
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
 	}
-
 	return nil
 }
 

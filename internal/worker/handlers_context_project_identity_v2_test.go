@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/thebtf/engram/docs"
+	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
 	"gopkg.in/yaml.v3"
 )
@@ -111,6 +112,95 @@ func TestSwaggerServedSchemaUsesDocumentationOrigin(t *testing.T) {
 	}
 	if !reflect.DeepEqual(spec, published) {
 		t.Fatal("served schema differs from generated swagger.json")
+	}
+}
+
+func TestSwaggerServedMemoryLinkContract(t *testing.T) {
+	service := &Service{router: chi.NewRouter()}
+	service.setupRoutes()
+	rec := httptest.NewRecorder()
+	service.router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/docs/doc.json", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("schema status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var spec map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &spec); err != nil {
+		t.Fatal(err)
+	}
+	paths, ok := spec["paths"].(map[string]any)
+	if !ok {
+		t.Fatal("missing paths")
+	}
+	for _, tc := range []struct{ path, method, status, response string }{
+		{"/api/memories/{id}/links", "post", "201", "#/definitions/worker.memoryLinkResponseSchema"},
+		{"/api/memories/{id}/links", "post", "200", "#/definitions/worker.memoryLinkResponseSchema"},
+		{"/api/memories/{id}/links", "get", "200", "#/definitions/worker.memoryLinkPageSchema"},
+		{"/api/memory-links/{id}", "delete", "204", ""},
+	} {
+		path, _ := paths[tc.path].(map[string]any)
+		op, _ := path[tc.method].(map[string]any)
+		responses, _ := op["responses"].(map[string]any)
+		response, ok := responses[tc.status].(map[string]any)
+		if !ok {
+			t.Fatalf("%s %s missing response %s", tc.method, tc.path, tc.status)
+		}
+		if tc.response != "" {
+			schema, _ := response["schema"].(map[string]any)
+			if schema["$ref"] != tc.response {
+				t.Errorf("%s %s response %s schema=%v", tc.method, tc.path, tc.status, schema)
+			}
+		}
+	}
+	definitions := spec["definitions"].(map[string]any)
+	properties := func(name string) map[string]any {
+		t.Helper()
+		definition, ok := definitions[name].(map[string]any)
+		if !ok {
+			t.Fatalf("missing definition %s", name)
+		}
+		return definition["properties"].(map[string]any)
+	}
+	request := properties("worker.memoryLinkRequestSchema")
+	for name, typ := range map[string]string{"target_id": "integer", "relation": "string", "target_version": "integer", "request_key": "string", "source_session_id": "string"} {
+		field, _ := request[name].(map[string]any)
+		if field["type"] != typ {
+			t.Errorf("request %s=%v, want type %s", name, field, typ)
+		}
+	}
+	wire, err := json.Marshal(gormdb.MemoryLink{AuthorPrincipalKind: "human", AuthorPrincipal: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var actual map[string]any
+	if err := json.Unmarshal(wire, &actual); err != nil {
+		t.Fatal(err)
+	}
+	link := properties("worker.memoryLinkResponseSchema")
+	if len(link) != len(actual) {
+		t.Fatalf("link properties=%v, wire=%v", link, actual)
+	}
+	for name := range actual {
+		if _, ok := link[name]; !ok {
+			t.Errorf("wire field %s missing from schema", name)
+		}
+	}
+	author := link["author"].(map[string]any)
+	if author["$ref"] != "#/definitions/models.MemoryAuthor" {
+		t.Errorf("author schema=%v", author)
+	}
+	for name := range actual["author"].(map[string]any) {
+		if _, ok := properties("models.MemoryAuthor")[name]; !ok {
+			t.Errorf("author wire field %s missing from schema", name)
+		}
+	}
+	page := properties("worker.memoryLinkPageSchema")
+	links := page["links"].(map[string]any)
+	items, _ := links["items"].(map[string]any)
+	if links["type"] != "array" || items["$ref"] != "#/definitions/worker.memoryLinkResponseSchema" {
+		t.Errorf("links schema=%v", links)
+	}
+	if cursor, _ := page["next_cursor"].(map[string]any); cursor["type"] != "integer" {
+		t.Errorf("next_cursor schema=%v", cursor)
 	}
 }
 
