@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Display legacy Rules from the bare-array API. The unselected scope shows global rules only; a selected project includes its rules and global rules. Invalid responses surface as errors.
+
 - Keep `project resolve --check` client selection read-only: require a verified cached client and never acquire or quarantine it. Check the existing 15-second budget between local filesystem operations and pass the remaining time to the native process; a kernel-blocked filesystem call is not preempted by this budget, so the external limit depends on the invoking tool's deadline.
 
 - Bound PostgreSQL task-note search without JIT compilation overhead; preserve caller transaction settings and cancellation with bounded savepoint recovery, and keep per-read savepoint controls out of the shared prepared-statement cache. Retain existing project authorization, ranking and deadlines.
