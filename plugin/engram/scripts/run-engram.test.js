@@ -67,6 +67,15 @@ for (const mode of ["missing", "corrupt"]) {
    assert.equal(checked.status, 1, checked.error?.message || checked.stderr);
    assert.match(checked.stderr, /HOOK_CLIENT_UNAVAILABLE/);
    assert.deepEqual(snapshot(data), before);
+   for (const invalid of ["--unknown", "--json=invalid", "--check=invalid"]) {
+    const stopped = spawnSync(process.execPath, [path.join(__dirname, "run-engram.js"), "project", "resolve", "--root", root, "--json", "--check", invalid, "--check=false"], {
+     cwd: root, encoding: "utf8", timeout: 5000,
+     env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, PLUGIN_ROOT: plugin, PLUGIN_DATA: data, ENGRAM_CONFIG_FILE: path.join(root, "missing.json") },
+    });
+    assert.equal(stopped.status, 1, `${invalid}: ${stopped.error?.message || stopped.stderr}`);
+    assert.match(stopped.stderr, /HOOK_CLIENT_UNAVAILABLE/, invalid);
+    assert.deepEqual(snapshot(data), before, `${invalid} must preserve cache`);
+   }
    const ordinaryArgs = [
     ["--root", root, "--json", "--check", "--check=false"],
     ["--root", "--check", "--json"],
