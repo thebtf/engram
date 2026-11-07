@@ -194,6 +194,17 @@ func TestSwaggerServedMemoryLinkContract(t *testing.T) {
 		}
 	}
 	page := properties("worker.memoryLinkPageSchema")
+	for _, tc := range []struct {
+		name string
+		field map[string]any
+	}{
+		{"response target_version", link["target_version"].(map[string]any)},
+		{"page next_cursor", page["next_cursor"].(map[string]any)},
+	} {
+		if tc.field["x-nullable"] != true {
+			t.Errorf("%s must declare x-nullable: true, got %v", tc.name, tc.field)
+		}
+	}
 	links := page["links"].(map[string]any)
 	items, _ := links["items"].(map[string]any)
 	if links["type"] != "array" || items["$ref"] != "#/definitions/worker.memoryLinkResponseSchema" {

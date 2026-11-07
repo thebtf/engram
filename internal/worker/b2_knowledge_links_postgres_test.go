@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -341,4 +342,23 @@ func TestB2LinksOrdinaryHTTPConsumer(t *testing.T) {
 	call(http.MethodGet, path, nil, owner.caller(), http.StatusOK, &page)
 	require.Empty(t, page.Links)
 	require.Equal(t, projects, f.state(t).projects)
+}
+
+func TestB2LinkSessionProvenanceByteLimit(t *testing.T) {
+	f := newOwnCardContextFixture(t, false)
+	owner := f.registered(t, "session-size")
+	a := f.create(t, owner, ownCardContextPayload("session source"))
+	b := f.create(t, owner, ownCardContextPayload("session target"))
+	c := f.create(t, owner, ownCardContextPayload("oversize target"))
+	session := strings.Repeat("я", 128)
+	payload := map[string]any{"target_id": b.ID, "relation": "references", "source_session_id": session}
+	created := b2DecodeLink(t, f.call(t, http.MethodPost, b2MemoryLinksPath(a.ID), payload, owner.caller()), http.StatusCreated)
+	require.Equal(t, session, created.SourceSessionID, "opaque Unicode provenance must survive exactly")
+	page := b2ListLinks(t, f, a.ID, owner.caller(), 10)
+	require.Len(t, page.Links, 1)
+	require.Equal(t, session, page.Links[0].SourceSessionID)
+	payload["target_id"] = c.ID
+	payload["source_session_id"] = session + "x"
+	require.Equal(t, http.StatusBadRequest, f.call(t, http.MethodPost, b2MemoryLinksPath(a.ID), payload, owner.caller()).Code, "oversized provenance must not create a row")
+	require.Len(t, b2ListLinks(t, f, a.ID, owner.caller(), 10).Links, 1)
 }
