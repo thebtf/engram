@@ -5,9 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/principalmemory"
@@ -51,20 +54,87 @@ func (s *Service) handlePrincipalMemoryQuery(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	q := r.URL.Query()
+	q, parseErr := url.ParseQuery(r.URL.RawQuery)
+	if parseErr != nil {
+		http.Error(w, "invalid query parameters", http.StatusBadRequest)
+		return
+	}
+	_, principalSupplied := q["principal"]
+	self := !principalSupplied
 	ownerPrincipal := strings.TrimSpace(q.Get("principal"))
-	if ownerPrincipal == "" {
-		http.Error(w, "principal is required", http.StatusBadRequest)
-		return
-	}
-
 	ownerPrincipalKind := strings.TrimSpace(strings.ToLower(q.Get("principal_kind")))
-	if ownerPrincipalKind == "" {
-		ownerPrincipalKind = "human"
-	}
-	if !auth.IsValidPrincipalKind(auth.PrincipalKind(ownerPrincipalKind)) {
-		http.Error(w, "principal_kind must be one of human, agent, service", http.StatusBadRequest)
-		return
+	var queryTerms []string
+	queryText := strings.TrimSpace(q.Get("q"))
+	if self {
+		contexts, contextSupplied := q["context"]
+		_, projectSupplied := q["project"]
+		_, kindSupplied := q["principal_kind"]
+		if projectSupplied || kindSupplied || (contextSupplied && (len(contexts) != 1 || contexts[0] != "self")) {
+			http.Error(w, "invalid memory context", http.StatusBadRequest)
+			return
+		}
+		if s.memoryStore == nil {
+			http.Error(w, "memory context unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		owning, err := s.resolveMemoryOwningContext(r, models.MemoryContextSelf, true, "", false)
+		if err != nil {
+			writeMemoryContextError(w, err)
+			return
+		}
+		ownerPrincipal, ownerPrincipalKind = owning.Principal, owning.PrincipalKind
+		if len(q.Get("q")) > 1024 {
+			http.Error(w, "query is too long", http.StatusBadRequest)
+			return
+		}
+		if q.Get("q") != "" {
+			seen := make(map[string]struct{})
+			for _, field := range strings.FieldsFunc(queryText, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) }) {
+				term := strings.ToLower(field)
+				if utf8.RuneCountInString(term) < 2 {
+					continue
+				}
+				if _, exists := seen[term]; exists {
+					continue
+				}
+				seen[term] = struct{}{}
+				queryTerms = append(queryTerms, term)
+				if len(queryTerms) > 64 {
+					http.Error(w, "query has too many distinct terms", http.StatusBadRequest)
+					return
+				}
+			}
+			if len(queryTerms) > 1 {
+				filtered := queryTerms[:0]
+				for _, term := range queryTerms {
+					if !selfQuestionStopword(term) {
+						filtered = append(filtered, term)
+					}
+				}
+				queryTerms = filtered
+			}
+			if len(queryTerms) == 0 {
+				http.Error(w, "query has no usable terms", http.StatusBadRequest)
+				return
+			}
+			queryText = ""
+		}
+	} else {
+		if _, contextSupplied := q["context"]; contextSupplied {
+			http.Error(w, "context is unsupported with principal", http.StatusBadRequest)
+			return
+		}
+		if ownerPrincipal == "" {
+			http.Error(w, "principal is required", http.StatusBadRequest)
+			return
+		}
+		if ownerPrincipalKind == "" {
+			ownerPrincipalKind = "human"
+		}
+		if !auth.IsValidPrincipalKind(auth.PrincipalKind(ownerPrincipalKind)) {
+			http.Error(w, "principal_kind must be one of human, agent, service", http.StatusBadRequest)
+			return
+		}
 	}
 
 	visibility, err := parsePrincipalQueryVisibility(q.Get("visibility"))
@@ -92,11 +162,14 @@ func (s *Service) handlePrincipalMemoryQuery(w http.ResponseWriter, r *http.Requ
 	caller, callerIsAdmin := principalQueryCaller(r.Context())
 	result, err := queryService.Query(r.Context(), principalmemory.PrincipalMemoryQueryRequest{
 		Project:            strings.TrimSpace(q.Get("project")),
+		SelfContextOnly:    self,
+		RankQueryTerms:     self && len(queryTerms) > 0,
 		Caller:             caller,
 		CallerIsAdmin:      callerIsAdmin,
 		OwnerPrincipal:     ownerPrincipal,
 		OwnerPrincipalKind: ownerPrincipalKind,
-		Query:              strings.TrimSpace(q.Get("q")),
+		Query:              queryText,
+		QueryTerms:         queryTerms,
 		AgentVisibility:    visibility,
 		IncludePrivate:     includePrivate,
 		Domain:             strings.TrimSpace(q.Get("domain")),
@@ -113,6 +186,23 @@ func (s *Service) handlePrincipalMemoryQuery(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	writeJSON(w, principalMemoryQueryHTTPResponse(result))
+}
+
+func selfQuestionStopword(term string) bool {
+	if _, ok := experienceQueryStopwords[term]; ok {
+		return true
+	}
+	// Common locating verbs add little subject information in multiword questions.
+	switch term {
+	case "находится", "находятся", "находился", "находилась", "расположен", "расположена", "расположено", "расположены", "найти", "искать", "располагается", "располагаются":
+		return true
+	}
+	switch term {
+	case "is", "if", "do", "in", "on", "it", "of", "to", "be", "as", "at", "by", "or", "an",
+		"где", "для", "что", "такое", "как", "когда", "почему", "какой", "какая", "какие", "какое", "кто", "чем", "чего", "чему", "который", "которая", "которые", "это", "этот", "эта", "эти", "его", "её", "их", "мне", "мой", "моя", "мои", "есть", "был", "была", "были", "при", "под", "над", "без", "или", "так":
+		return true
+	}
+	return false
 }
 
 func (s *Service) currentPrincipalMemoryQueryService() principalMemoryQueryService {

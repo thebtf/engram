@@ -2223,6 +2223,185 @@
                 }
             }
         },
+        "/api/memories/{id}/links": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Requires an explicitly validated keycard with an enrolled canonical principal; project and context query parameters are forbidden. The requested card must be active and visible; only links with two active visible endpoints are returned, with workstation-private restrictions applied before pagination. related_to is returned from either endpoint; references only from its source. Links do not grant access. Auth-disabled mode is not privacy isolation. Results are ordered by link ID; next_cursor is the last returned link ID when more results exist, otherwise null. Pass it as cursor to continue. target_version is null when unpinned; source_session_id is untrusted caller-supplied provenance.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Memories"
+                ],
+                "summary": "List links for a self-memory card",
+                "parameters": [
+                    {
+                        "minimum": 1,
+                        "type": "integer",
+                        "description": "Memory ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "maximum": 100,
+                        "minimum": 1,
+                        "type": "integer",
+                        "description": "Page size; defaults to 50",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "minimum": 1,
+                        "type": "integer",
+                        "description": "Positive next_cursor from the preceding page",
+                        "name": "cursor",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/worker.memoryLinkPageSchema"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid selector, ID or page",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Authentication or explicit keycard validation failed",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Enrolled principal required",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Active visible card not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "Memory store unavailable",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Requires an explicitly validated keycard with an enrolled canonical principal; project and context query parameters are forbidden. Both cards must be active and manageable by this keycard; workstation-private restrictions apply and links grant no access. Auth-disabled mode is not privacy isolation. The source and target must differ. related_to is unordered and cannot have a non-null target_version; references is directional and may pin a positive current or retained target revision. An omitted or null target_version leaves the link unpinned. Omit request_key or supply a nonempty JSON string of at most 1024 UTF-8 bytes; null is invalid. Keys are scoped to the canonical principal and normalized assertion. A duplicate assertion returns 200 with its original author and untrusted source_session_id provenance, including when another key is supplied; a key reused for another assertion or a removed link returns 409. New assertions return 201. source_session_id is caller-supplied untrusted provenance, not identity.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Memories"
+                ],
+                "summary": "Link two self-memory cards",
+                "parameters": [
+                    {
+                        "minimum": 1,
+                        "type": "integer",
+                        "description": "Source memory ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Link assertion",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/worker.memoryLinkRequestSchema"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Existing assertion",
+                        "schema": {
+                            "$ref": "#/definitions/worker.memoryLinkResponseSchema"
+                        }
+                    },
+                    "201": {
+                        "description": "New assertion",
+                        "schema": {
+                            "$ref": "#/definitions/worker.memoryLinkResponseSchema"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid selector, ID, JSON, relation, revision or request key",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Authentication or explicit keycard validation failed",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Enrolled principal required",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Active manageable endpoint or target revision not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "409": {
+                        "description": "Request key conflicts or its link was removed",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "Memory store unavailable",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/api/memories/{id}/revisions": {
             "get": {
                 "security": [
@@ -2476,6 +2655,71 @@
                     },
                     "503": {
                         "description": "memory store not available",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/memory-links/{id}": {
+            "delete": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Requires an explicitly validated keycard with an enrolled canonical principal; project and context query parameters are forbidden. Both endpoints must be active and manageable by the keycard and the link must belong to its canonical principal. Workstation-private restrictions apply; auth-disabled mode is not privacy isolation. Removal does not delete either card. An already removed or inaccessible link returns 404; restoring an inactive endpoint does not restore a removed link.",
+                "tags": [
+                    "Memories"
+                ],
+                "summary": "Remove a self-memory link",
+                "parameters": [
+                    {
+                        "minimum": 1,
+                        "type": "integer",
+                        "description": "Link ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "Link removed"
+                    },
+                    "400": {
+                        "description": "Invalid selector or ID",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Authentication or explicit keycard validation failed",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Enrolled principal required",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Link or active manageable endpoint not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "Memory store unavailable",
                         "schema": {
                             "type": "string"
                         }
@@ -5971,6 +6215,80 @@
                     "items": {
                         "$ref": "#/definitions/gorm.MemoryRevision"
                     }
+                }
+            }
+        },
+        "worker.memoryLinkPageSchema": {
+            "type": "object",
+            "properties": {
+                "links": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/worker.memoryLinkResponseSchema"
+                    }
+                },
+                "next_cursor": {
+                    "type": "integer"
+                }
+            }
+        },
+        "worker.memoryLinkRequestSchema": {
+            "type": "object",
+            "required": [
+                "relation",
+                "target_id"
+            ],
+            "properties": {
+                "relation": {
+                    "type": "string",
+                    "enum": [
+                        "related_to",
+                        "references"
+                    ]
+                },
+                "request_key": {
+                    "type": "string"
+                },
+                "source_session_id": {
+                    "type": "string"
+                },
+                "target_id": {
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "target_version": {
+                    "type": "integer",
+                    "minimum": 1
+                }
+            }
+        },
+        "worker.memoryLinkResponseSchema": {
+            "type": "object",
+            "properties": {
+                "author": {
+                    "$ref": "#/definitions/models.MemoryAuthor"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "relation": {
+                    "type": "string",
+                    "enum": [
+                        "related_to",
+                        "references"
+                    ]
+                },
+                "source_id": {
+                    "type": "integer"
+                },
+                "source_session_id": {
+                    "type": "string"
+                },
+                "target_id": {
+                    "type": "integer"
+                },
+                "target_version": {
+                    "type": "integer"
                 }
             }
         },

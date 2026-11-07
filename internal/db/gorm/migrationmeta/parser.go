@@ -67,10 +67,11 @@ var (
 	// sqlCommentPattern strips line (--...) and block (/* ... */) SQL comments so
 	// a commented-out CREATE/DROP TABLE is not parsed as live DDL (PR #271 review,
 	// gemini). Applied to the raw SQL before table extraction.
-	sqlCommentPattern   = regexp.MustCompile(`(?m)--.*$|/\*[\s\S]*?\*/`)
-	createTablePattern  = regexp.MustCompile(`(?is)\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?((?:"[^"]+"|[a-zA-Z_][\w$]*)(?:\.(?:"[^"]+"|[a-zA-Z_][\w$]*))?)`)
-	dropTablePattern    = regexp.MustCompile(`(?is)\bDROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?([^;]+)`)
-	tableConstraintLead = regexp.MustCompile(`(?is)^(?:CONSTRAINT|PRIMARY|FOREIGN|UNIQUE|CHECK|EXCLUDE)\b`)
+	sqlCommentPattern            = regexp.MustCompile(`(?m)--.*$|/\*[\s\S]*?\*/`)
+	createTablePattern           = regexp.MustCompile(`(?is)\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?((?:"[^"]+"|[a-zA-Z_][\w$]*)(?:\.(?:"[^"]+"|[a-zA-Z_][\w$]*))?)`)
+	incompleteCreateTablePattern = regexp.MustCompile(`(?is)\bCREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s*$`)
+	dropTablePattern             = regexp.MustCompile(`(?is)\bDROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?([^;]+)`)
+	tableConstraintLead          = regexp.MustCompile(`(?is)^(?:CONSTRAINT|PRIMARY|FOREIGN|UNIQUE|CHECK|EXCLUDE)\b`)
 )
 
 func ParseFile(path string) (*Schema, error) {
@@ -215,6 +216,30 @@ func (s *Schema) Table(name string) (TableInfo, bool) {
 func (s *Schema) processMigrateBody(fset *token.FileSet, migration MigrationInfo, body *ast.BlockStmt) {
 	ast.Inspect(body, func(node ast.Node) bool {
 		switch n := node.(type) {
+		case *ast.BinaryExpr:
+			if n.Op != token.ADD {
+				return true
+			}
+			prefix, ok := literalString(n.X)
+			if !ok || !strings.EqualFold(strings.Join(strings.Fields(prefix), " "), "CREATE TABLE IF NOT EXISTS") {
+				return true
+			}
+			ident, ok := n.Y.(*ast.Ident)
+			if !ok || ident.Obj == nil {
+				return true
+			}
+			assignment, ok := ident.Obj.Decl.(*ast.AssignStmt)
+			if !ok || len(assignment.Lhs) != 1 || len(assignment.Rhs) != 1 {
+				return true
+			}
+			qualified, ok := assignment.Rhs[0].(*ast.BinaryExpr)
+			if !ok || qualified.Op != token.ADD {
+				return true
+			}
+			suffix, ok := literalString(qualified.Y)
+			if ok && strings.HasPrefix(suffix, ".") {
+				s.recordSQL(migration, prefix+strings.TrimPrefix(suffix, "."), fset.Position(n.Pos()).Line)
+			}
 		case *ast.BasicLit:
 			if n.Kind != token.STRING {
 				return true
@@ -411,7 +436,7 @@ func typeName(expr ast.Expr) string {
 }
 
 func extractCreateTables(sql string) []string {
-	matches := createTablePattern.FindAllStringSubmatch(sql, -1)
+	matches := createTablePattern.FindAllStringSubmatch(incompleteCreateTablePattern.ReplaceAllString(sql, ""), -1)
 	tables := make([]string, 0, len(matches))
 	for _, match := range matches {
 		if len(match) > 1 {

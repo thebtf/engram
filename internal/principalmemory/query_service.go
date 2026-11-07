@@ -50,6 +50,8 @@ func NewPrincipalMemoryQueryService(store PrincipalMemoryStore, audit AuditLogge
 
 type PrincipalMemoryQueryRequest struct {
 	Project            string
+	SelfContextOnly    bool
+	RankQueryTerms     bool
 	Caller             PrincipalRef
 	CallerIsAdmin      bool
 	OwnerPrincipal     string
@@ -194,6 +196,8 @@ func (s *PrincipalMemoryQueryService) Query(ctx context.Context, req PrincipalMe
 	}
 	queryOpts := gormdb.ListOptions{
 		ContextCaller:              contextCaller,
+		SelfContextOnly:            req.SelfContextOnly,
+		RankContentTerms:           req.RankQueryTerms,
 		EnforcePrincipalPolicy:     true,
 		PrincipalCaller:            scope.KeycardContext{Principal: req.Caller.Principal, PrincipalKind: req.Caller.PrincipalKind},
 		AllowCrossPrincipalPrivate: req.CallerIsAdmin && req.IncludePrivate,

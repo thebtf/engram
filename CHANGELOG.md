@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Exclude dependents proven by their complete foreign-key ancestry to belong only to self or global memories from project consolidation, without treating private data as global; retain mixed or unknown ownership as unresolved and preserve project inheritance.
+
+- Add self-memory link create, list and delete HTTP routes with endpoint authorization, directional revision-pinned references and idempotent retry receipts. Memory remains the content owner; links do not grant access. Links use migration 195; an existing provisional `192_memory_links` ledger entry blocks automatic adoption and retains its data for explicit resolution.
+
 - Keep OMP background hook readiness diagnostics out of the terminal renderer; retain sanitized diagnostics in the existing bounded plugin-data startup log without changing trusted-client recovery.
 
 - Return 403 for a valid keycard without an enrolled memory principal on selector-free memory reads; preserve the legacy missing-project response for callers without a keycard.

@@ -783,6 +783,56 @@ definitions:
           $ref: '#/definitions/gorm.MemoryRevision'
         type: array
     type: object
+  worker.memoryLinkPageSchema:
+    properties:
+      links:
+        items:
+          $ref: '#/definitions/worker.memoryLinkResponseSchema'
+        type: array
+      next_cursor:
+        type: integer
+    type: object
+  worker.memoryLinkRequestSchema:
+    properties:
+      relation:
+        enum:
+        - related_to
+        - references
+        type: string
+      request_key:
+        type: string
+      source_session_id:
+        type: string
+      target_id:
+        minimum: 1
+        type: integer
+      target_version:
+        minimum: 1
+        type: integer
+    required:
+    - relation
+    - target_id
+    type: object
+  worker.memoryLinkResponseSchema:
+    properties:
+      author:
+        $ref: '#/definitions/models.MemoryAuthor'
+      id:
+        type: integer
+      relation:
+        enum:
+        - related_to
+        - references
+        type: string
+      source_id:
+        type: integer
+      source_session_id:
+        type: string
+      target_id:
+        type: integer
+      target_version:
+        type: integer
+    type: object
   worker.memoryListResponse:
     properties:
       has_more:
@@ -2705,6 +2755,145 @@ paths:
       summary: Get memory audit history
       tags:
       - Memories
+  /api/memories/{id}/links:
+    get:
+      description: Requires an explicitly validated keycard with an enrolled canonical
+        principal; project and context query parameters are forbidden. The requested
+        card must be active and visible; only links with two active visible endpoints
+        are returned, with workstation-private restrictions applied before pagination.
+        related_to is returned from either endpoint; references only from its source.
+        Links do not grant access. Auth-disabled mode is not privacy isolation. Results
+        are ordered by link ID; next_cursor is the last returned link ID when more
+        results exist, otherwise null. Pass it as cursor to continue. target_version
+        is null when unpinned; source_session_id is untrusted caller-supplied provenance.
+      parameters:
+      - description: Memory ID
+        in: path
+        minimum: 1
+        name: id
+        required: true
+        type: integer
+      - description: Page size; defaults to 50
+        in: query
+        maximum: 100
+        minimum: 1
+        name: limit
+        type: integer
+      - description: Positive next_cursor from the preceding page
+        in: query
+        minimum: 1
+        name: cursor
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/worker.memoryLinkPageSchema'
+        "400":
+          description: Invalid selector, ID or page
+          schema:
+            type: string
+        "401":
+          description: Authentication or explicit keycard validation failed
+          schema:
+            type: string
+        "403":
+          description: Enrolled principal required
+          schema:
+            type: string
+        "404":
+          description: Active visible card not found
+          schema:
+            type: string
+        "500":
+          description: Internal error
+          schema:
+            type: string
+        "503":
+          description: Memory store unavailable
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: List links for a self-memory card
+      tags:
+      - Memories
+    post:
+      consumes:
+      - application/json
+      description: Requires an explicitly validated keycard with an enrolled canonical
+        principal; project and context query parameters are forbidden. Both cards
+        must be active and manageable by this keycard; workstation-private restrictions
+        apply and links grant no access. Auth-disabled mode is not privacy isolation.
+        The source and target must differ. related_to is unordered and cannot have
+        a non-null target_version; references is directional and may pin a positive
+        current or retained target revision. An omitted or null target_version leaves
+        the link unpinned. Omit request_key or supply a nonempty JSON string of at
+        most 1024 UTF-8 bytes; null is invalid. Keys are scoped to the canonical principal
+        and normalized assertion. A duplicate assertion returns 200 with its original
+        author and untrusted source_session_id provenance, including when another
+        key is supplied; a key reused for another assertion or a removed link returns
+        409. New assertions return 201. source_session_id is caller-supplied untrusted
+        provenance, not identity.
+      parameters:
+      - description: Source memory ID
+        in: path
+        minimum: 1
+        name: id
+        required: true
+        type: integer
+      - description: Link assertion
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/worker.memoryLinkRequestSchema'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Existing assertion
+          schema:
+            $ref: '#/definitions/worker.memoryLinkResponseSchema'
+        "201":
+          description: New assertion
+          schema:
+            $ref: '#/definitions/worker.memoryLinkResponseSchema'
+        "400":
+          description: Invalid selector, ID, JSON, relation, revision or request key
+          schema:
+            type: string
+        "401":
+          description: Authentication or explicit keycard validation failed
+          schema:
+            type: string
+        "403":
+          description: Enrolled principal required
+          schema:
+            type: string
+        "404":
+          description: Active manageable endpoint or target revision not found
+          schema:
+            type: string
+        "409":
+          description: Request key conflicts or its link was removed
+          schema:
+            type: string
+        "500":
+          description: Internal error
+          schema:
+            type: string
+        "503":
+          description: Memory store unavailable
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Link two self-memory cards
+      tags:
+      - Memories
   /api/memories/{id}/revisions:
     get:
       description: Current-card context and privacy checks apply before prior bodies
@@ -2931,6 +3120,54 @@ paths:
       security:
       - ApiKeyAuth: []
       summary: Suppress multiple memory notes
+      tags:
+      - Memories
+  /api/memory-links/{id}:
+    delete:
+      description: Requires an explicitly validated keycard with an enrolled canonical
+        principal; project and context query parameters are forbidden. Both endpoints
+        must be active and manageable by the keycard and the link must belong to its
+        canonical principal. Workstation-private restrictions apply; auth-disabled
+        mode is not privacy isolation. Removal does not delete either card. An already
+        removed or inaccessible link returns 404; restoring an inactive endpoint does
+        not restore a removed link.
+      parameters:
+      - description: Link ID
+        in: path
+        minimum: 1
+        name: id
+        required: true
+        type: integer
+      responses:
+        "204":
+          description: Link removed
+        "400":
+          description: Invalid selector or ID
+          schema:
+            type: string
+        "401":
+          description: Authentication or explicit keycard validation failed
+          schema:
+            type: string
+        "403":
+          description: Enrolled principal required
+          schema:
+            type: string
+        "404":
+          description: Link or active manageable endpoint not found
+          schema:
+            type: string
+        "500":
+          description: Internal error
+          schema:
+            type: string
+        "503":
+          description: Memory store unavailable
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Remove a self-memory link
       tags:
       - Memories
   /api/memory/candidates:
