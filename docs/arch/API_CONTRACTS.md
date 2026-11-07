@@ -68,6 +68,15 @@ There is no historical startup-flag alternative to this public hybrid enum.
 
 Admin-gated families (candidates, governance, bulk ops) are additionally enforced at the handler level regardless of advertisement.
 
+Explicit-principal queries filter inaccessible principal, domain and legacy
+workstation-private rows before pagination. Workstation identity comes from
+authentication, not the query's `session_id`; admin widening does not bypass
+workstation privacy. `hidden_count` is `null` when the inaccessible count is unknown;
+it is not a count of matching private cards. This applies to the HTTP principal
+query and its MCP query and principal-scoped brief projections. Administrative
+private widening remains subject to durable audit. Clients that also support
+older servers may encounter numeric values and should preserve their meaning.
+
 `lifecycle` exact-ID reads (`info`, `decay_preview`) use ordinary reader
 caller/project, principal/domain and workstation privacy authority before loading
 metadata. Like recall without an explicit `session_id` argument, these reads do

@@ -934,6 +934,9 @@ func (s *MemoryStore) ListVisiblePage(ctx context.Context, project, query string
 //
 // T017a (engram vNext Milestone F TG3): store-level extension prerequisite.
 type ListOptions struct {
+	EnforcePrincipalPolicy     bool
+	PrincipalCaller            scope.KeycardContext
+	AllowCrossPrincipalPrivate bool
 	// ContentContains, when non-empty, adds a case-insensitive content
 	// substring predicate. Callers may still apply richer tag/content matching in
 	// memory, but recall(action="search") can keep its content-only predicate in
@@ -1039,6 +1042,20 @@ func (s *MemoryStore) ListPrincipalMemory(ctx context.Context, project string, o
 	if project = strings.TrimSpace(project); project != "" {
 		predicate, args := projectscope.MemoryPredicate("m", project)
 		q = q.Model(&Memory{}).Table("memories AS m").Where(predicate, args...)
+	}
+	if opts.EnforcePrincipalPolicy {
+		if project == "" {
+			q = q.Model(&Memory{}).Table("memories AS m")
+		}
+		caller := strings.TrimSpace(opts.PrincipalCaller.Principal)
+		kind := strings.ToLower(strings.TrimSpace(opts.PrincipalCaller.PrincipalKind))
+		q = q.Where(`LOWER(TRIM(m.owner_principal_kind)) IN ('human','agent','service') AND
+			(LOWER(TRIM(COALESCE(m.agent_visibility, ''))) IN ('', 'shared') OR
+			 (LOWER(TRIM(COALESCE(m.agent_visibility, ''))) = 'private' AND ? IN ('human','agent','service') AND
+			  ((? <> '' AND TRIM(m.owner_principal) = ? AND LOWER(TRIM(m.owner_principal_kind)) = ?) OR ?))) AND
+			(TRIM(COALESCE(m.domain, '')) = '' OR (? <> '' AND ? IN ('human','agent','service') AND TRIM(m.owner_principal) = ? AND LOWER(TRIM(m.owner_principal_kind)) = ?))`,
+			kind, caller, caller, kind, opts.AllowCrossPrincipalPrivate, caller, kind, caller, kind)
+		q = q.Where(scope.MemoryPrivacyAccessSQL, opts.PrincipalCaller.WorkstationID, opts.PrincipalCaller.WorkstationID, "", "")
 	}
 	q = basePrincipalMemoryQuery(q, opts)
 

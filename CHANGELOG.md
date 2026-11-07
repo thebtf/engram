@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Prevent legacy principal queries from disclosing inaccessible match counts or workstation-private memories; apply principal, domain and workstation visibility before pagination and represent unknown hidden counts as null.
+
 - Upgrade `golang.org/x/net` to v0.62.0 to address CVE-2026-78661 in its HTML parser and update its required transitive dependencies.
 
 - Regenerate the API through the maintained worker target using canonical local Go package directories and Swag 1.16.6, with real producer errors stopping the build. Correct existing context search/inject/session-start annotations without changing handlers; document the shared GET/POST conditional-query limitation. The actual producer and server build pass, with 40 named schema checks and all 76 references resolved; that producer checkpoint established compile-only retained-reader oracle provenance, with later native query proof recorded separately, and installed/release acceptance remains separate.

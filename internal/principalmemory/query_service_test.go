@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
 )
@@ -278,6 +279,31 @@ func TestPrincipalMemoryQueryService_IncludePrivateNonAdminCrossPrincipalFailsBe
 	require.ErrorIs(t, err, ErrCrossPrincipalPrivateDenied)
 	assert.Nil(t, result)
 	assert.False(t, store.called, "include_private denial must happen before the store query")
+}
+
+func TestPrincipalMemoryQueryService_UsesAuthenticatedWorkstationNotRequestedSession(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		ctx         context.Context
+		workstation string
+	}{
+		{"keycard", auth.WithIdentity(context.Background(), auth.ClientWithPrincipal("read-write", "keycard-a", "agent/alice", auth.PrincipalKindAgent)), "keycard-a"},
+		{"master", auth.WithIdentity(context.Background(), auth.Admin()), ""},
+		{"no identity", context.Background(), ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &fakePrincipalMemoryStore{}
+			svc := NewPrincipalMemoryQueryService(store, &fakeAuditLogger{})
+			_, err := svc.Query(tc.ctx, PrincipalMemoryQueryRequest{
+				Caller:         PrincipalRef{Principal: "agent/alice", PrincipalKind: "agent"},
+				OwnerPrincipal: "agent/alice", OwnerPrincipalKind: "agent", SourceSessionID: "forged-session",
+			})
+			require.NoError(t, err)
+			require.True(t, store.opts.EnforcePrincipalPolicy)
+			require.Equal(t, tc.workstation, store.opts.PrincipalCaller.WorkstationID)
+			require.Empty(t, store.opts.PrincipalCaller.SessionID)
+		})
+	}
 }
 
 func TestPrincipalMemoryQueryService_IDBoundedProjectionIncludesSupersededRows(t *testing.T) {
