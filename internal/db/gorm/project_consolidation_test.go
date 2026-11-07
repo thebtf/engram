@@ -289,7 +289,7 @@ func TestProjectConsolidationNullableIntermediateParent(t *testing.T) {
 	require.NoError(t, db.Exec(`INSERT INTO fixture_descendant VALUES (1,1),(2,2)`).Error)
 	var missing, complete int64
 	require.NoError(t, db.Raw(`SELECT count(*) FILTER (WHERE c.parent_id IS NULL), count(*) FILTER (WHERE p.memory_id=c.memory_id) FROM fixture_child c JOIN memories m ON m.id=c.memory_id LEFT JOIN fixture_parent p ON p.id=c.parent_id`).Row().Scan(&missing, &complete))
-	require.EqualValues(t, 1, missing, "the negative fixture has a real project parent and a NULL intermediate FK")
+	require.EqualValues(t, 1, missing, "the nullable fixture has a real project parent and a NULL intermediate FK")
 	require.EqualValues(t, 1, complete, "the control has both real, project-owned parents")
 	v, err := vaultcrypto.OpenExistingVault(&config.Config{EncryptionKey: strings.Repeat("ab", 32)})
 	require.NoError(t, err)
@@ -324,13 +324,7 @@ func TestProjectConsolidationNullableIntermediateParent(t *testing.T) {
 	for _, mapping := range plan.Mapping {
 		mappings[mapping.Reference] = mapping
 	}
-	for _, key := range []string{"fixture_child:1", "fixture_descendant:1"} {
-		mapping, ok := mappings[refs[key]]
-		require.True(t, ok)
-		assert.Empty(t, mapping.ProjectID, "%s has incomplete FK ancestry", key)
-		assert.NotEmpty(t, mapping.UnresolvedReference, "%s must remain unresolved", key)
-	}
-	for _, key := range []string{"fixture_child:2", "fixture_descendant:2"} {
+	for _, key := range []string{"fixture_child:1", "fixture_descendant:1", "fixture_child:2", "fixture_descendant:2"} {
 		mapping, ok := mappings[refs[key]]
 		require.True(t, ok)
 		assert.Equal(t, project, mapping.ProjectID, "%s has complete project ancestry", key)
@@ -511,6 +505,9 @@ func TestProjectConsolidationNullableIndependentParents(t *testing.T) {
 		assert.Equal(t, target, mapping.ProjectID, "NULL optional FK supplies no conflicting parent")
 		assert.Empty(t, mapping.UnresolvedReference)
 	}
+	populatedMapping := mappings[refs[populated]]
+	assert.Empty(t, populatedMapping.ProjectID)
+	assert.NotEmpty(t, populatedMapping.UnresolvedReference, "non-NULL artifact ancestry remains unresolved")
 	unknownMapping := mappings[refs[control]]
 	assert.Empty(t, unknownMapping.ProjectID)
 	assert.NotEmpty(t, unknownMapping.UnresolvedReference, "non-NULL external parent remains unknown")

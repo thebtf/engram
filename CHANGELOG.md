@@ -9,9 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Exclude dependents proven by their complete foreign-key ancestry to belong only to self or global memories from project consolidation, without treating private data as global; retain mixed or unknown ownership as unresolved and preserve project inheritance.
 
-- Add self-memory link create, list and delete HTTP routes with endpoint authorization, directional revision-pinned references and idempotent retry receipts. Memory remains the content owner; links do not grant access. Links use migration 195; an existing provisional `192_memory_links` ledger entry blocks automatic adoption and retains its data for explicit resolution.
+- Add self-memory link create, list and delete HTTP routes with endpoint authorization, directional references with optional revision pins and idempotent retry receipts. Memory remains the content owner; links do not grant access. Links use migration 195; an existing provisional `192_memory_links` ledger entry blocks automatic adoption and retains its data for explicit resolution.
 
-- Preserve source ownership of CI embeddings with shared profiles while keeping unknown parents unresolved; bound new link provenance to 1024 UTF-8 bytes and page link reads by encoded size without truncating existing oversized rows.
+- Preserve source ownership of CI embeddings with shared profiles while keeping unknown parents unresolved and treating optional NULL foreign keys as absent unless deletion can null the parent; bound new link provenance to 1024 UTF-8 bytes and page link reads by encoded size without truncating existing oversized rows.
 
 - Correct the Claude Code adapter guide: the registered SessionEnd callback targets a retired handler, while outcome recording is an explicit MCP feedback operation distinct from Stop transcript processing.
 

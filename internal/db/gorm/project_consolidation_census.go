@@ -30,6 +30,7 @@ type consolidationTable struct {
 type consolidationForeignKey struct {
 	TableName, ParentTable string
 	ParentLocal            bool
+	DeleteAction           string
 	Columns, ParentColumns pq.StringArray `gorm:"type:text[]"`
 }
 
@@ -115,7 +116,7 @@ func consolidationSchemaProjection(tx *gormlib.DB) (string, []consolidationColum
 		return "", nil, nil, err
 	}
 	var fks []consolidationForeignKey
-	err = tx.Raw(`SELECT cl.relname AS table_name, parent.relname AS parent_table, pn.nspname=current_schema() AS parent_local,
+	err = tx.Raw(`SELECT cl.relname AS table_name, parent.relname AS parent_table, pn.nspname=current_schema() AS parent_local, c.confdeltype::text AS delete_action,
 		ARRAY(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY k(num,ord) JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.num ORDER BY k.ord) AS columns,
 		ARRAY(SELECT a.attname::text FROM unnest(c.confkey) WITH ORDINALITY k(num,ord) JOIN pg_attribute a ON a.attrelid=c.confrelid AND a.attnum=k.num ORDER BY k.ord) AS parent_columns
 		FROM pg_constraint c JOIN pg_class cl ON cl.oid=c.conrelid JOIN pg_class parent ON parent.oid=c.confrelid
@@ -529,13 +530,43 @@ func (s *ProjectConsolidationStore) census(tx *gormlib.DB, sourceVersion string)
 		if child == nil {
 			continue
 		}
+		var presentColumns []string
+		for _, name := range fk.Columns {
+			presentColumns = append(presentColumns, "c."+quoted(name)+" IS NOT NULL")
+		}
+		// SET NULL can retain a historical child after its parent was deleted.
+		if fk.DeleteAction == "n" {
+			presentColumns = []string{"TRUE"}
+		}
 		sharedEmbeddingProfile := child.Name == "ci_embeddings" && fk.ParentTable == "ci_embedding_profiles" && len(fk.Columns) == 1 && fk.Columns[0] == "embedding_profile_id" && len(fk.ParentColumns) == 1 && fk.ParentColumns[0] == "embedding_profile_id"
 		if parent == nil || !fk.ParentLocal || (child.Kind == "independent_view" && fk.ParentTable != "sources" && fk.ParentTable != "ci_checkouts" && fk.ParentTable != "ci_views" && !sharedEmbeddingProfile) {
-			incompleteParents[child.Name] = true
-			for i := range state.Rows {
-				if state.Rows[i].Table == child.Name && state.Rows[i].Kind == "inherited" {
-					state.Rows[i].Parents = append(state.Rows[i].Parents, s.opaque("untracked-parent", state.Rows[i].Reference))
+			rows, err := tx.Raw("SELECT " + consolidationKeySQL(*child, "c") + "::text FROM " + quoted(child.Name) + " c WHERE " + strings.Join(presentColumns, " AND ")).Rows()
+			if err != nil {
+				return state, err
+			}
+			for rows.Next() {
+				var key []byte
+				if err := rows.Scan(&key); err != nil {
+					rows.Close()
+					return state, err
 				}
+				canonical, err := consolidationCanonicalKey(key)
+				if err != nil {
+					rows.Close()
+					return state, err
+				}
+				childKey := consolidationObjectKey(child.Name, []byte(canonical))
+				incompleteParents[childKey] = true
+				for _, i := range byObject[childKey] {
+					if state.Rows[i].Kind == "inherited" {
+						state.Rows[i].Parents = append(state.Rows[i].Parents, s.opaque("untracked-parent", state.Rows[i].Reference))
+					}
+				}
+			}
+			err = rows.Err()
+			rows.Close()
+			if err != nil {
+				return state, err
 			}
 			continue
 		}
@@ -543,7 +574,7 @@ func (s *ProjectConsolidationStore) census(tx *gormlib.DB, sourceVersion string)
 		for i, name := range fk.Columns {
 			conditions = append(conditions, "c."+quoted(name)+"=p."+quoted(fk.ParentColumns[i]))
 		}
-		rows, err := tx.Raw("SELECT " + consolidationKeySQL(*child, "c") + "::text," + consolidationKeySQL(*parent, "p") + "::text,p.tableoid IS NOT NULL FROM " + quoted(child.Name) + " c LEFT JOIN " + quoted(parent.Name) + " p ON " + strings.Join(conditions, " AND ")).Rows()
+		rows, err := tx.Raw("SELECT " + consolidationKeySQL(*child, "c") + "::text," + consolidationKeySQL(*parent, "p") + "::text,p.tableoid IS NOT NULL FROM " + quoted(child.Name) + " c LEFT JOIN " + quoted(parent.Name) + " p ON " + strings.Join(conditions, " AND ") + " WHERE " + strings.Join(presentColumns, " AND ")).Rows()
 		if err != nil {
 			return state, err
 		}
@@ -618,7 +649,7 @@ func (s *ProjectConsolidationStore) census(tx *gormlib.DB, sourceVersion string)
 	remaining := map[string]int{}
 	for key, parents := range parentObjects {
 		indices := byObject[key]
-		if len(indices) == 0 || incompleteParents[state.Rows[indices[0]].Table] {
+		if len(indices) == 0 || incompleteParents[key] {
 			continue
 		}
 		eligible := true
