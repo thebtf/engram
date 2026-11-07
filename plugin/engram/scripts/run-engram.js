@@ -84,10 +84,32 @@ async function main() {
  }
 }
 
+function createHookPolicyBinding(pluginRoot, packageVersion) {
+ const root = path.resolve(pluginRoot);
+ let retained;
+ function current(requestedRoot) {
+  if (path.resolve(requestedRoot) !== root) throw new Error('hook policy root changed');
+  try {
+   const policy = loadPolicy(root);
+   if (policy.package_version !== packageVersion) throw new Error('hook policy package version changed');
+   retained = policy;
+   return policy;
+  } catch (error) {
+   let absent = false;
+   try { fs.lstatSync(root); } catch (statError) { absent = statError.code === 'ENOENT'; }
+   if (absent && retained) return retained;
+   retained = undefined;
+   throw error;
+  }
+ }
+ try { current(root); } catch { }
+ return current;
+}
+
 async function resolveClient(options, projectOnly = false) {
  let policy;
  if (!options.resolve) {
-  policy = loadPolicy(options.pluginRoot);
+  policy = options.hookPolicy ? options.hookPolicy(options.pluginRoot) : loadPolicy(options.pluginRoot);
   // A predecessor may not implement this package's project resolve interface.
   policy = { ...policy, target: { ...policy.target, predecessor: null } };
  }
@@ -460,6 +482,7 @@ module.exports = {
  resolvePluginRoot,
  resolveAndSpawn,
  resolveLogicalProject,
+ createHookPolicyBinding,
  prepareHookClient,
  resolveHostRoot,
  codexMcpConfig,

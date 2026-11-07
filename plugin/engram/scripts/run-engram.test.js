@@ -19,6 +19,7 @@ const {
   resolvePluginData,
   resolvePluginRoot,
   resolveAndSpawn,
+  createHookPolicyBinding,
   prepareHookClient,
   resolveLogicalProject,
   spawnFailureMessage,
@@ -735,6 +736,50 @@ test("hook preparation is client-only and verify-only project callbacks refuse m
     assert.equal(executions, 0);
     assert.deepEqual(fs.readdirSync(roots.staging), []);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("hook policy binding follows current policy and refuses invalid or different package roots", () => {
+  const { createPolicy, TARGET_ASSETS } = require("./bootstrap-policy.js");
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "engram-hook-policy-"));
+  const root = path.join(base, "package"), manifest = path.join(root, ".omp-plugin", "plugin.json");
+  const version = "7.0.27", first = "1".repeat(64), second = "2".repeat(64);
+  const makePolicy = hash => createPolicy(version, Object.fromEntries(Object.entries(TARGET_ASSETS)
+    .map(([key, asset]) => [key, { version, asset, size: 1, sha256: hash }])));
+  const writePackage = policy => {
+    fs.mkdirSync(path.dirname(manifest), { recursive: true });
+    fs.writeFileSync(manifest, JSON.stringify({ version }));
+    fs.writeFileSync(path.join(root, "bootstrap-targets.json"), JSON.stringify(policy));
+  };
+  try {
+    writePackage(makePolicy(first));
+    const binding = createHookPolicyBinding(root, version);
+    assert.equal(binding(root).target.desired.sha256, first);
+    assert.throws(() => binding(path.join(base, "different")), /root changed/);
+    writePackage(makePolicy(second));
+    assert.equal(binding(root).target.desired.sha256, second, "present policy changes take effect");
+    fs.rmSync(root, { recursive: true });
+    assert.equal(binding(root).target.desired.sha256, second, "only the last valid policy survives retirement");
+
+    writePackage(makePolicy(first));
+    const invalidated = createHookPolicyBinding(root, version);
+    fs.writeFileSync(path.join(root, "bootstrap-targets.json"), "not json");
+    assert.throws(() => invalidated(root), /JSON/);
+    fs.rmSync(root, { recursive: true });
+    assert.throws(() => invalidated(root), /manifest is missing/, "invalid current policy clears retained authority");
+
+    writePackage(makePolicy(first));
+    const mismatch = createHookPolicyBinding(root, "7.0.26");
+    assert.throws(() => mismatch(root), /version changed/);
+    fs.rmSync(root, { recursive: true });
+    assert.throws(() => mismatch(root), /manifest is missing/, "wrong-version initial policy is never retained");
+
+    writePackage(makePolicy(first));
+    const missing = createHookPolicyBinding(root, version);
+    fs.unlinkSync(path.join(root, "bootstrap-targets.json"));
+    assert.throws(() => missing(root), /bootstrap policy/, "missing policy in an existing root is not retirement");
+    fs.rmSync(root, { recursive: true });
+    assert.throws(() => missing(root), /manifest is missing/);
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
 
 function restoreEnv(key, value) {
