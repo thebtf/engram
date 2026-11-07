@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "package_version": "7.0.27",
+  "package_version": "7.0.28",
   "targets": {
     "win32-x64": {
-      "version": "7.0.27",
+      "version": "7.0.28",
       "asset": "uci-parser-windows-amd64.exe",
       "size": 7946240,
-      "sha256": "114ae44ea81c20d4ce4452b12331abe2b2094bae4cb4cb49aeae43bac03209ad"
+      "sha256": "6ef95e26584451391ca888d776757030093a705df5d07773144939ea39176339"
     },
     "linux-x64": null,
     "darwin-arm64": null
