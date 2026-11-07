@@ -623,6 +623,8 @@ node <installed-plugin-path>/scripts/run-engram.js project resolve --root <actua
 ```
 
 `--check` не вызывает bootstrap, не создаёт UUID/project/alias, не закрепляет marker/cache и не запускает Census/Preflight или migration. Explicit nested marker сохраняет свою границу; outer remote не подменяет его. `null` означает неизвестное значение, не «active». Diagnostic evidence не выдаёт права и не назначает проект.
+Launcher использует только уже проверенный по размеру и SHA-256 cached client. Он не скачивает и не импортирует client, не создаёт каталоги cache и не переносит повреждённый объект в quarantine. Если проверенный client недоступен, команда завершится с ошибкой; сохрани cache для проверки. Launcher проверяет общий бюджет 15 секунд между локальными файловыми операциями и передаёт оставшееся время как timeout native process. Этот бюджет не прерывает файловый вызов, заблокированный в ядре ОС; внешний предел зависит от deadline вызывающего инструмента.
+
 
 **Файловая граница запуска.** Серверный `readOnly` относится к инструменту, а не к запуску MCP-клиента. При bootstrap обычный startup может записать `.engram-project` и common-dir cache `engram-project.json`. Если portable marker уже действителен, отсутствующий производный cache не требует записи для разрешения; существующий конфликтующий cache по-прежнему удерживает операцию. Для осмотра без записи используй установленный `project resolve --root ... --json --check`, показанный выше. После отказа filesystem scope дождись фактического writable-root допуска для этого root перед любым запуском, который может там писать. Не обходи отказ через Eval, shell или другой CLI.
 

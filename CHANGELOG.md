@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Keep `project resolve --check` client selection read-only: require a verified cached client and never acquire or quarantine it. Check the existing 15-second budget between local filesystem operations and pass the remaining time to the native process; a kernel-blocked filesystem call is not preempted by this budget, so the external limit depends on the invoking tool's deadline.
+
 - Bound PostgreSQL task-note search without JIT compilation overhead; preserve caller transaction settings and cancellation with bounded savepoint recovery, and keep per-read savepoint controls out of the shared prepared-statement cache. Retain existing project authorization, ranking and deadlines.
 
 - Exclude dependents proven by their complete foreign-key ancestry to belong only to self or global memories from project consolidation, without treating private data as global; retain mixed or unknown ownership as unresolved and preserve project inheritance.
