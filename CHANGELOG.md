@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Restore principal-memory reads of workstation-private legacy rows for matching authenticated legacy keycards without principal metadata, without widening typed-card access.
+
 - Return 403 for a valid keycard without an enrolled memory principal on selector-free memory reads; preserve the legacy missing-project response for callers without a keycard.
 
 - Enforce current domain ownership policy on typed memory revisions: reject mode records a denial and returns 403 without revising; an audit failure leaves the card unchanged; warn mode permits the revision with its warning and audit status. Document the response in the generated API schema.

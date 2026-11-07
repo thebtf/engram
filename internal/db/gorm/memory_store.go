@@ -936,7 +936,10 @@ func (s *MemoryStore) ListVisiblePage(ctx context.Context, project, query string
 //
 // T017a (engram vNext Milestone F TG3): store-level extension prerequisite.
 type ListOptions struct {
-	ContextCaller              scope.KeycardContext
+	ContextCaller scope.KeycardContext
+	// LegacyWorkstationID must come from server-authenticated identity, never request parameters.
+	// It applies only to legacy privacy; typed contexts use ContextCaller.
+	LegacyWorkstationID        string
 	EnforcePrincipalPolicy     bool
 	PrincipalCaller            scope.KeycardContext
 	AllowCrossPrincipalPrivate bool
@@ -1043,7 +1046,11 @@ func (s *MemoryStore) ListPrincipalMemory(ctx context.Context, project string, o
 
 	q := s.db.WithContext(ctx)
 	typedSQL, typedArgs := scope.MemoryReadAccessSQL(scope.MemoryReadAccess{Caller: opts.ContextCaller, Visibility: scope.MemoryVisibilityOptions{ApplyPrivacyScope: true}})
-	args := []any{opts.ContextCaller.WorkstationID, opts.ContextCaller.WorkstationID, opts.ContextCaller.SessionID, opts.ContextCaller.SessionID}
+	legacyWorkstationID := opts.LegacyWorkstationID
+	if legacyWorkstationID == "" {
+		legacyWorkstationID = opts.ContextCaller.WorkstationID
+	}
+	args := []any{legacyWorkstationID, legacyWorkstationID, opts.ContextCaller.SessionID, opts.ContextCaller.SessionID}
 	args = append(args, typedArgs...)
 	predicate := "((m.context_kind = 'legacy' AND " + scope.MemoryPrivacyAccessSQL + ") OR (m.context_kind <> 'legacy' AND (" + typedSQL + ")))"
 	q = q.Model(&Memory{}).Table("memories AS m").Where(predicate, args...)
