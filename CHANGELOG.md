@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.1.0] - 2026-11-07
+
+Source: PRs #656, #657, #664, #665, #666 and #667. This candidate includes the accepted own/self memory and linked-card work, bounded task-note search, and project-resolution recovery fixes. It does not claim complete Feature011 or Feature012 acceptance.
+
+## [7.0.28] - 2026-11-07
+
+The published `v7.0.28` source is `be74d290be0690024e9cea0db414165f0ef69bc8`. It retains validated bootstrap metadata for loaded OMP hooks when a package directory is retired, while continuing to verify policy and client bytes. It also corrects the Claude Code adapter guide. The source's original unclassified notes are preserved below; they are not a claim that later changes shipped in v7.0.28.
+
+## Historical unclassified notes
+
+These notes were carried under Unreleased across earlier release cuts. They are retained for provenance, not as a complete or precisely dated release allocation.
+
 - Keep `project resolve --check` client selection read-only: require a verified cached client and never acquire or quarantine it. Check the existing 15-second budget between local filesystem operations and pass the remaining time to the native process; a kernel-blocked filesystem call is not preempted by this budget, so the external limit depends on the invoking tool's deadline.
 
 - Bound PostgreSQL task-note search without JIT compilation overhead; preserve caller transaction settings and cancellation with bounded savepoint recovery, and keep per-read savepoint controls out of the shared prepared-statement cache. Retain existing project authorization, ranking and deadlines.
