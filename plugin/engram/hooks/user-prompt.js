@@ -208,6 +208,7 @@ async function requestPromptContext(facts = {}, options = {}) {
     stage = 'native';
     const query = redact(facts.prompt, config.token);
     const nativeWork = Promise.resolve().then(() => (options.requestTaskContext ?? launcher.requestTaskContext)({ ...facts, prompt: query }, {
+      hookPolicy: options.hookPolicy,
       signal: controller.signal, deadlineAt, maxBytes: 8000,
       env: { ...process.env, ENGRAM_URL: config.serverURL, ENGRAM_TOKEN: config.token },
     }));

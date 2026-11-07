@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Retain each loaded hook instance's last validated, root- and version-bound policy when its package root is retired; revalidate while the root exists and fail closed on invalid policy or client integrity.
+
 - Update `golang.org/x/net` to v0.62.0 and related Go dependencies for security maintenance.
 
 - Correct the Claude Code adapter guide: the registered SessionEnd callback targets a retired handler, while outcome recording is an explicit MCP feedback operation distinct from Stop transcript processing.
