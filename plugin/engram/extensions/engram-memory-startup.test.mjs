@@ -18,9 +18,10 @@ async function exerciseDefaultFactory(mode) {
   assert.ok(root, 'worker requires its isolated fixture root');
   const effects = { projectResolutions: 0, projectExecutions: 0, backendRequests: 0, nativeProcesses: 0, network: 0, downloads: 0 };
   const registrations = new Map(), handlers = new Map(), sent = [], requests = [], executions = [], unhandled = [];
-  let cleanupRegisters = 0, cleanupUnregisters = 0, cleanupInvocations = 0, readiness = 'pending', factoryState = 'pending';
+  let cleanupRegisters = 0, cleanupUnregisters = 0, cleanupInvocations = 0, readiness = 'pending', factoryState = 'pending', preparationCalls = 0;
   let preparation, installing, preparedSignal, failure, held, afterPreparation, settled, afterTamper, afterRecovery, afterDisposal;
   const gate = deferred(), entered = deferred();
+  const terminalMode = mode.startsWith('terminal-noise');
   const onUnhandled = error => unhandled.push(String(error));
   process.on('unhandledRejection', onUnhandled);
   // Fence real process/network effects before loading the production CJS helpers.
@@ -33,7 +34,7 @@ async function exerciseDefaultFactory(mode) {
   const lib = require('../hooks/lib.js');
   const launcher = require('../scripts/run-engram.js');
   const { hashFile, objectPath, objectRoots, parsePolicy, resolveForLaunch, TARGET_ASSETS } = require('../scripts/ensure-binary.js');
-  const { createPolicy } = require('../scripts/bootstrap-policy.js');
+  const { BootstrapError, createPolicy } = require('../scripts/bootstrap-policy.js');
   const bytes = Buffer.from('controlled trusted startup client, never executable');
   const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
   const version = '7.0.7';
@@ -48,6 +49,10 @@ async function exerciseDefaultFactory(mode) {
   });
   const realPrepare = launcher.prepareHookClient, realResolve = lib.resolveHookProjectContext;
   launcher.prepareHookClient = options => {
+    preparationCalls++;
+    if (terminalMode && preparationCalls > 1) {
+      return realPrepare({ ...options, pluginRoot: root, pluginData: root, resolve: async () => { throw new BootstrapError('controlled recovery secret_fixture\n\x1b[31m'); } });
+    }
     assert.equal(preparation, undefined, 'one preparation per binding');
     assert.ok(options.timeoutMs > 0 && options.timeoutMs <= 360000);
     preparedSignal = options.signal;
@@ -59,6 +64,7 @@ async function exerciseDefaultFactory(mode) {
         entered.resolve();
         try {
           await gate.promise;
+          if (terminalMode) throw new BootstrapError('controlled startup secret_fixture https://private.invalid/?token=token_fixture\n\x1b[31m');
           if (mode === 'rejected') throw new Error('controlled offline readiness failure');
           if (forwarded.signal.aborted) throw new Error('controlled readiness abort');
           if (mode !== 'warm') fs.writeFileSync(object, mode === 'corrupt' ? Buffer.alloc(bytes.length) : bytes);
@@ -180,6 +186,10 @@ async function exerciseDefaultFactory(mode) {
         'failed/corrupt cache may be checked read-only but must not execute, fetch or deliver; disposal must not even resolve');
       assert.equal(result, undefined);
       assert.equal(sent.length, 0);
+      if (terminalMode) {
+        await turn();
+        assert.equal(preparationCalls, 2, 'missing trusted cache must trigger one bounded background recovery');
+      }
       if (mode !== 'cancelled') {
         fs.writeFileSync(object, bytes);
         const recovered = await callbacks('after-verified-cache');
@@ -206,6 +216,14 @@ async function exerciseDefaultFactory(mode) {
     assert.equal(cleanupInvocations, 1);
     assert.equal(preparedSignal.aborted, true);
     assert.equal(unhandled.length, 0, 'background rejection must be handled');
+    if (terminalMode && mode !== 'terminal-noise-unwritable') {
+      const log = fs.readFileSync(path.join(root, 'logs', 'startup-env.log'), 'utf8');
+      const diagnostics = log.split('\n').filter(line => line.includes('Trusted hook client readiness unavailable'));
+      assert.equal(diagnostics.length, 2, 'retain bounded preparation and disposal diagnostics');
+      assert.ok(diagnostics.every(line => line.includes(`stage=prepare code=BOOTSTRAP_ERROR plugin=${require('../package.json').version}`)));
+      assert.doesNotMatch(log, /secret_fixture|token_fixture|private\.invalid|\x1b/);
+      assert.ok(Buffer.byteLength(log) <= 2 * 128 * 1024, 'existing startup log retention bound applies');
+    }
     // 7.0.8 replaces callback-admission blocking, never the trusted-execution guard.
     assert.equal(held.factoryState, 'fulfilled', 'default factory must finish while cold preparation is held');
     assert.deepEqual(held.callbacks, ['session_start', 'before_agent_start'], 'register before readiness, execute only after trust');
@@ -220,7 +238,7 @@ async function exerciseDefaultFactory(mode) {
     process.removeListener('unhandledRejection', onUnhandled);
     console.log(`STARTUP_CAUSAL_RESULT ${JSON.stringify({
       mode, entry: fileURLToPath(entry), entrySHA256: crypto.createHash('sha256').update(fs.readFileSync(entry)).digest('hex'),
-      held, afterPreparation, settled, afterTamper, afterRecovery, afterDisposal, executions, requests, effects, cleanupRegisters, cleanupUnregisters, cleanupInvocations,
+      held, afterPreparation, settled, afterTamper, afterRecovery, afterDisposal, executions, requests, effects, preparationCalls, cleanupRegisters, cleanupUnregisters, cleanupInvocations,
       cleanupActive: registrations.size, loaderLifetime: 'isolated-worker', preparationSettled: readiness !== 'pending',
       preparedSignalAborted: preparedSignal?.aborted ?? null, unhandled,
       failure: failure ? { name: failure.name, message: failure.message, code: failure.code ?? null } : null,
@@ -233,12 +251,20 @@ if (process.argv[2] === '--startup-worker') {
   try { await exerciseDefaultFactory(process.argv[3]); }
   catch (error) { console.error(error.stack); process.exitCode = 1; }
 } else {
-  for (const mode of ['trusted', 'warm', 'rejected', 'corrupt', 'cancelled']) {
-    test(`OMP default factory registers during held ${mode === 'warm' ? 'warm' : 'cold'} readiness and preserves ${mode} execution guards`, t => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-default-startup-'));
+  for (const mode of ['trusted', 'warm', 'rejected', 'corrupt', 'cancelled', 'terminal-noise', 'terminal-noise-unwritable']) {
+    test(mode.startsWith('terminal-noise') ? `OMP default factory emits no raw terminal output during failed readiness and recovery (${mode})` : `OMP default factory registers during held ${mode === 'warm' ? 'warm' : 'cold'} readiness and preserves ${mode} execution guards`, t => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'HOOK-TERMINAL-startup-'));
       const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => ['SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATH', 'PATHEXT', 'SYSTEMDRIVE'].includes(key.toUpperCase())));
       for (const key of ['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TMP', 'TEMP']) env[key] = root;
       Object.assign(env, { ENGRAM_STARTUP_FIXTURE_ROOT: root, ENGRAM_URL: 'http://startup-fixture.invalid', ENGRAM_CONFIG_FILE: path.join(root, 'absent-config.json'), ENGRAM_DATA_DIR: root });
+      env.PLUGIN_DATA = root;
+      if (mode === 'terminal-noise-unwritable') {
+        env.PLUGIN_DATA = path.join(root, 'not-a-directory');
+        fs.writeFileSync(env.PLUGIN_DATA, 'controlled diagnostic write failure');
+      } else if (mode === 'terminal-noise') {
+        fs.mkdirSync(path.join(root, 'logs'));
+        fs.writeFileSync(path.join(root, 'logs', 'startup-env.log'), 'x\n'.repeat(128 * 1024));
+      }
       let result;
       try {
         result = cp.spawnSync(process.execPath, [fileURLToPath(import.meta.url), '--startup-worker', mode], {
@@ -249,6 +275,13 @@ if (process.argv[2] === '--startup-worker') {
       t.diagnostic(result.stdout);
       assert.ifError(result.error);
       assert.equal(result.status, 0, result.stderr || result.stdout);
+      if (mode.startsWith('terminal-noise')) {
+        const lines = result.stdout.trimEnd().split('\n');
+        assert.equal(lines.length, 1, 'only the worker result protocol may appear on stdout');
+        assert.ok(lines[0].startsWith('STARTUP_CAUSAL_RESULT '));
+        t.diagnostic(`worker stderr: ${JSON.stringify(result.stderr)}`);
+        assert.equal(result.stderr, '', 'background readiness, recovery and disposal must not write raw terminal output');
+      }
     });
   }
 }
