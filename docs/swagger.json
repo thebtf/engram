@@ -6593,7 +6593,8 @@
                     "type": "array",
                     "items": {
                         "type": "string"
-                    }
+                    },
+                    "x-nullable": true
                 }
             }
         },
@@ -6610,7 +6611,8 @@
                     "type": "string"
                 },
                 "hidden_count": {
-                    "type": "integer"
+                    "type": "integer",
+                    "x-nullable": true
                 },
                 "items": {
                     "type": "array",

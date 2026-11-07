@@ -6600,7 +6600,8 @@ const docTemplate = `{
                     "type": "array",
                     "items": {
                         "type": "string"
-                    }
+                    },
+                    "x-nullable": true
                 }
             }
         },
@@ -6617,7 +6618,8 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "hidden_count": {
-                    "type": "integer"
+                    "type": "integer",
+                    "x-nullable": true
                 },
                 "items": {
                     "type": "array",

@@ -29,7 +29,7 @@ type principalMemoryQueryResponse struct {
 	Project       string                                    `json:"project,omitempty"`
 	Domain        string                                    `json:"domain,omitempty"`
 	Items         []principalMemoryQueryItem                `json:"items"`
-	HiddenCount   *int                                      `json:"hidden_count"`
+	HiddenCount   *int                                      `json:"hidden_count" extensions:"x-nullable"`
 	Audit         principalmemory.PrincipalMemoryQueryAudit `json:"audit"`
 	AuditStatus   string                                    `json:"audit_status"`
 }
@@ -38,7 +38,7 @@ type principalMemoryQueryItem struct {
 	ID                 int64     `json:"id"`
 	Project            string    `json:"project"`
 	Content            string    `json:"content"`
-	Tags               []string  `json:"tags"`
+	Tags               []string  `json:"tags" extensions:"x-nullable"`
 	OwnerPrincipal     string    `json:"owner_principal"`
 	OwnerPrincipalKind string    `json:"owner_principal_kind"`
 	AgentVisibility    string    `json:"agent_visibility"`

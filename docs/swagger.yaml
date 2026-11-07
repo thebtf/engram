@@ -945,6 +945,7 @@ definitions:
         items:
           type: string
         type: array
+        x-nullable: true
     type: object
   worker.principalMemoryQueryResponse:
     properties:
@@ -956,6 +957,7 @@ definitions:
         type: string
       hidden_count:
         type: integer
+        x-nullable: true
       items:
         items:
           $ref: '#/definitions/worker.principalMemoryQueryItem'
