@@ -80,3 +80,10 @@ var _ = []*Migration{{ID: "195_links", Migrate: func(tx *DB) error {
 	_, found := schema.Table("if")
 	require.False(t, found, "incomplete DDL must not create a keyword table")
 }
+
+func TestExtractCreateTablesIncompleteGuardAndIdentifier(t *testing.T) {
+	require.Empty(t, extractCreateTables("CREATE TABLE IF NOT EXISTS "))
+	require.Equal(t, []string{"if"}, extractCreateTables("CREATE TABLE if (id INT)"))
+	require.Equal(t, []string{"if"}, extractCreateTables(`CREATE TABLE IF NOT EXISTS "public"."if" (id INT)`))
+	require.Equal(t, []string{"ordinary"}, extractCreateTables("CREATE TABLE IF NOT EXISTS ordinary (id INT)"))
+}

@@ -67,10 +67,11 @@ var (
 	// sqlCommentPattern strips line (--...) and block (/* ... */) SQL comments so
 	// a commented-out CREATE/DROP TABLE is not parsed as live DDL (PR #271 review,
 	// gemini). Applied to the raw SQL before table extraction.
-	sqlCommentPattern   = regexp.MustCompile(`(?m)--.*$|/\*[\s\S]*?\*/`)
-	createTablePattern  = regexp.MustCompile(`(?is)\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?((?:"[^"]+"|[a-zA-Z_][\w$]*)(?:\.(?:"[^"]+"|[a-zA-Z_][\w$]*))?)`)
-	dropTablePattern    = regexp.MustCompile(`(?is)\bDROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?([^;]+)`)
-	tableConstraintLead = regexp.MustCompile(`(?is)^(?:CONSTRAINT|PRIMARY|FOREIGN|UNIQUE|CHECK|EXCLUDE)\b`)
+	sqlCommentPattern            = regexp.MustCompile(`(?m)--.*$|/\*[\s\S]*?\*/`)
+	createTablePattern           = regexp.MustCompile(`(?is)\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?((?:"[^"]+"|[a-zA-Z_][\w$]*)(?:\.(?:"[^"]+"|[a-zA-Z_][\w$]*))?)`)
+	incompleteCreateTablePattern = regexp.MustCompile(`(?is)\bCREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s*$`)
+	dropTablePattern             = regexp.MustCompile(`(?is)\bDROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?([^;]+)`)
+	tableConstraintLead          = regexp.MustCompile(`(?is)^(?:CONSTRAINT|PRIMARY|FOREIGN|UNIQUE|CHECK|EXCLUDE)\b`)
 )
 
 func ParseFile(path string) (*Schema, error) {
@@ -435,13 +436,10 @@ func typeName(expr ast.Expr) string {
 }
 
 func extractCreateTables(sql string) []string {
-	matches := createTablePattern.FindAllStringSubmatch(sql, -1)
+	matches := createTablePattern.FindAllStringSubmatch(incompleteCreateTablePattern.ReplaceAllString(sql, ""), -1)
 	tables := make([]string, 0, len(matches))
 	for _, match := range matches {
 		if len(match) > 1 {
-			if strings.EqualFold(match[1], "if") {
-				continue
-			}
 			if table := NormalizeIdentifier(match[1]); table != "" {
 				tables = append(tables, table)
 			}
