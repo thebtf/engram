@@ -12,11 +12,17 @@ export interface UpdateRuleInput {
   priority: number
 }
 
+type RuleRequestBody = {
+  content: string
+  priority: number
+  edited_by: string
+}
+
 function apiBase(): string {
   return useRuntimeConfig().public.apiBase
 }
 
-async function apiPost<T>(path: string, body: unknown): Promise<T> {
+async function apiPost<T>(path: string, body: RuleRequestBody & { project: string | undefined }): Promise<T> {
   return $fetch<T>(`${apiBase()}${path}`, {
     method: 'POST',
     body,
@@ -24,7 +30,7 @@ async function apiPost<T>(path: string, body: unknown): Promise<T> {
   })
 }
 
-async function apiPatch<T>(path: string, body: unknown): Promise<T> {
+async function apiPatch<T>(path: string, body: RuleRequestBody): Promise<T> {
   return $fetch<T>(`${apiBase()}${path}`, {
     method: 'PATCH',
     body,

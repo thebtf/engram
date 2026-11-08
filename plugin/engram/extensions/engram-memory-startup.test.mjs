@@ -317,10 +317,77 @@ async function exerciseDefaultFactory(mode) {
   if (failure) throw failure;
 }
 
-if (process.argv[2] === '--startup-worker') {
+async function exercisePackageVersionBinding() {
+  const require = createRequire(import.meta.url);
+  const root = process.env.ENGRAM_STARTUP_FIXTURE_ROOT;
+  const sourceRoot = fileURLToPath(new URL('../', import.meta.url));
+  const { createPolicy, TARGET_ASSETS } = require('../scripts/bootstrap-policy.js');
+  const { loadPolicy, objectPath, objectRoots, hashFile } = require('../scripts/ensure-binary.js');
+  const sourcePolicy = JSON.parse(fs.readFileSync(path.join(sourceRoot, 'bootstrap-targets.json'), 'utf8'));
+  const manifest = JSON.parse(fs.readFileSync(path.join(sourceRoot, '.omp-plugin', 'plugin.json'), 'utf8'));
+  assert.equal(manifest.version, sourcePolicy.package_version, 'ordinary MCP metadata must match policy');
+  fs.mkdirSync(path.join(root, '.omp-plugin'));
+  fs.writeFileSync(path.join(root, '.omp-plugin', 'plugin.json'), JSON.stringify(manifest));
+  let policyText, bytes;
+  if (process.env.ENGRAM_STARTUP_RAW) {
+    policyText = JSON.stringify(sourcePolicy);
+    bytes = fs.readFileSync(process.env.ENGRAM_STARTUP_RAW);
+  } else {
+    bytes = Buffer.from('verified non-executable hook fixture');
+    const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
+    const targets = Object.fromEntries(Object.entries(TARGET_ASSETS).map(([key, asset]) => [key, { version: manifest.version, asset, size: bytes.length, sha256 }]));
+    policyText = JSON.stringify(createPolicy(manifest.version, targets));
+  }
+  fs.writeFileSync(path.join(root, 'bootstrap-targets.json'), policyText);
+  const policy = loadPolicy(root);
+  const roots = objectRoots(root), object = objectPath(roots, policy.target.desired);
+  fs.writeFileSync(object, bytes);
+  assert.equal(hashFile(object, policy.target.desired, roots.objects), true, 'fixture must be a verified cache object');
+  for (const [module, names] of [['node:http', ['request', 'get']], ['node:https', ['request', 'get']], ['node:net', ['connect', 'createConnection']], ['node:tls', ['connect']]]) {
+    for (const name of names) require(module)[name] = () => { throw new Error('unexpected network'); };
+  }
+  const launcher = require('../scripts/run-engram.js');
+  const prepare = launcher.prepareHookClient;
+  let preparation;
+  const entered = deferred();
+  launcher.prepareHookClient = options => {
+    preparation = prepare(options);
+    entered.resolve();
+    return preparation;
+  };
+  const key = 'engram.version.fixture.postmortem';
+  globalThis[Symbol.for(key)] = { register() { return () => { }; } };
+  const hostURL = `data:text/javascript,${encodeURIComponent(`export const postmortem = globalThis[Symbol.for(${JSON.stringify(key)})];`)}`;
+  register(`data:text/javascript,${encodeURIComponent(`export function resolve(specifier, context, nextResolve) { if (specifier === '@oh-my-pi/pi-utils') return { url: ${JSON.stringify(hostURL)}, shortCircuit: true }; return nextResolve(specifier, context); }`)}`);
+  const handlers = new Map();
+  const actual = await import(entry.href);
+  await actual.default({ on(name, callback) { handlers.set(name, callback); }, sendMessage() { } });
+  await entered.promise;
+  await preparation;
+  assert.ok(handlers.has('session_start'));
+  console.log(`PACKAGE_BINDING_RESULT policy=${policy.package_version} cache=verified preparation=ok`);
+}
+
+if (process.argv[2] === '--package-binding-worker') {
+  try { await exercisePackageVersionBinding(); }
+  catch (error) { console.error(error.stack); process.exitCode = 1; }
+} else if (process.argv[2] === '--startup-worker') {
   try { await exerciseDefaultFactory(process.argv[3]); }
   catch (error) { console.error(error.stack); process.exitCode = 1; }
 } else {
+  test('valid MCP metadata admits the default hook factory with a verified cache', t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'HOOK-VERSION-startup-'));
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => ['SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATH', 'PATHEXT', 'SYSTEMDRIVE', 'ENGRAM_STARTUP_RAW'].includes(key.toUpperCase())));
+    for (const key of ['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TMP', 'TEMP']) env[key] = root;
+    Object.assign(env, { PLUGIN_ROOT: root, PLUGIN_DATA: root, ENGRAM_DATA_DIR: root, ENGRAM_STARTUP_FIXTURE_ROOT: root, ENGRAM_URL: 'http://startup-fixture.invalid', ENGRAM_CONFIG_FILE: path.join(root, 'absent-config.json') });
+    let result;
+    try { result = cp.spawnSync(process.execPath, [fileURLToPath(import.meta.url), '--package-binding-worker'], { env, encoding: 'utf8', windowsHide: true, timeout: 10000 }); }
+    finally { fs.rmSync(root, { recursive: true, force: true }); }
+    t.diagnostic(result.stdout);
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.match(result.stdout, /cache=verified preparation=ok/);
+  });
   for (const mode of ['trusted', 'warm', 'rejected', 'corrupt', 'cancelled', 'terminal-noise', 'terminal-noise-unwritable', 'policy-retired', 'policy-invalid', 'policy-changed-target', 'policy-version']) {
     test(mode.startsWith('terminal-noise') ? `OMP default factory emits no raw terminal output during failed readiness and recovery (${mode})` : `OMP default factory registers during held ${mode === 'warm' ? 'warm' : 'cold'} readiness and preserves ${mode} execution guards`, t => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), 'HOOK-TERMINAL-startup-'));
