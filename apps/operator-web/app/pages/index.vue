@@ -3,13 +3,15 @@ import { computed } from 'vue'
 import { useRulesQuery, useSessionsQuery } from '~/composables/useOperatorQueries'
 import { useProjectCatalog } from '~/composables/useProjectCatalog'
 import ProjectCatalogStatus from '~/components/ProjectCatalogStatus.vue'
+import { useOperatorI18n } from '~/composables/useOperatorI18n'
 
+const { t } = useOperatorI18n()
 const { projects, unresolved, selectedProject, selectionPending, selectionError, ready, unresolvedReference } = useProjectCatalog('all')
 const sessionsQuery = useSessionsQuery(selectedProject, ready)
 const rulesQuery = useRulesQuery(selectedProject, ready)
 const projectCount = computed(() => projects.value.length)
 const sessionCount = computed(() => sessionsQuery.data.value?.total ?? 0)
-const ruleCount = computed(() => rulesQuery.data.value?.total ?? 0)
+const ruleCount = computed(() => rulesQuery.data.value?.length ?? 0)
 </script>
 
 <template>
@@ -41,9 +43,10 @@ const ruleCount = computed(() => rulesQuery.data.value?.total ?? 0)
       </div>
 
       <div class="surface-panel p-4">
-        <div class="text-xs uppercase tracking-[0.08em] text-[var(--muted)]">Rules</div>
-        <div class="mono-data mt-3 text-3xl font-semibold">{{ ruleCount }}</div>
-        <div class="mt-2 text-sm text-[var(--fg-2)]">live `GET /api/rules` seam</div>
+        <div class="text-xs uppercase tracking-[0.08em] text-[var(--muted)]">{{ t('rules.loadedRules') }}</div>
+        <div class="mono-data mt-3 text-3xl font-semibold">{{ ready && rulesQuery.isSuccess.value ? ruleCount : '—' }}</div>
+        <div v-if="ready" class="mt-2 text-sm text-[var(--fg-2)]">{{ selectedProject === 'all' ? t('rules.globalOnly') : t('rules.projectAndGlobal') }}</div>
+        <div v-if="ready && rulesQuery.isError.value" class="mt-2 text-sm text-[var(--danger)]">{{ rulesQuery.error.value?.message }}</div>
       </div>
     </div>
 

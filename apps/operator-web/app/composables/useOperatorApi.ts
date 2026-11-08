@@ -34,11 +34,6 @@ export interface Rule {
   updated_at: string
 }
 
-export interface RuleListResponse {
-  rules: Rule[]
-  total: number
-}
-
 export interface Issue {
   id: number
   title: string
@@ -242,12 +237,14 @@ export async function fetchSessions(params: {
 export async function fetchRules(params: {
   project?: string
   limit?: number
-} = {}): Promise<RuleListResponse> {
+} = {}): Promise<Rule[]> {
   const searchParams = new URLSearchParams()
   if (params.project) searchParams.set('project', await resolveProject(params.project))
   if (params.limit !== undefined) searchParams.set('limit', String(params.limit))
   const query = searchParams.toString()
-  return apiGet<RuleListResponse>(`/rules${query ? `?${query}` : ''}`)
+  const response = await apiGet<unknown>(`/rules${query ? `?${query}` : ''}`)
+  if (!Array.isArray(response)) throw new Error('Invalid rules response')
+  return response
 }
 
 export async function fetchIssues(params: {

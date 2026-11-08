@@ -88,7 +88,6 @@ function transport(kind = 'memory', options = {}) {
       return Response.json(rule)
     }
     if (url.pathname === '/api/rules' && method === 'GET') {
-      if (!options.legacyRules) return Response.json({ rules: savedRules, total: savedRules.length })
       if (options.rulesError) return Response.json({ error: 'Rules access refused' }, { status: 403 })
       if ('rulesResponse' in options) return Response.json(options.rulesResponse)
       const project = url.searchParams.get('project')
@@ -213,7 +212,7 @@ test('retained component keeps explicit backend errors visible without successfu
 })
 
 async function mountRules(t, location, options = {}) {
-  const consumer = transport('memory', options)
+  const consumer = transport('memory', { ...options, webRules: true })
   const queryClient = new queryLibrary.QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity }, mutations: { retry: false } } })
   if (!options.catalogError) queryClient.setQueryData(['projects'], catalog)
   const router = routing.createRouter({ history: routing.createMemoryHistory(), routes: [{ path: '/:pathMatch(.*)*', component: { render: () => null } }] })
@@ -251,37 +250,48 @@ async function mountLegacyRules(t, project, options = {}) {
   return { ...consumer, state }
 }
 
-for (const [selection, expected] of [['all', [101]], [A, [101, 102]]]) {
-  test(`rules legacy: ${selection === 'all' ? 'omitted project returns global only' : 'selected project includes global'}`, { skip: queryPrerequisite }, async t => {
-    const mounted = await mountLegacyRules(t, selection, { rules: rulesFixture })
-    const requests = mounted.calls.filter(call => call.url.pathname === '/api/rules' && call.method === 'GET')
-    assert.ok(requests.length, 'consumer must request rules')
-    for (const request of requests) {
-      assert.equal(request.url.searchParams.has('all'), false)
-      if (selection === 'all') assert.equal(request.url.searchParams.has('project'), false)
-      else assert.equal(request.url.searchParams.get('project'), A)
+for (const client of ['web', 'legacy']) {
+  const mount = (t, selection, options) => client === 'web'
+    ? mountRules(t, selection === 'all' ? '/rules' : `/rules?project=${selection}`, options)
+    : mountLegacyRules(t, selection, options)
+  for (const [selection, expected] of [['all', [101]], [A, [101, 102]]]) {
+    test(`rules ${client}: ${selection === 'all' ? 'omitted project returns global only' : 'selected project includes global'}`, { skip: queryPrerequisite }, async t => {
+      const mounted = await mount(t, selection, { rules: rulesFixture })
+      const requests = mounted.calls.filter(call => call.url.pathname === '/api/rules' && call.method === 'GET')
+      assert.ok(requests.length, 'consumer must request rules')
+      for (const request of requests) {
+        assert.equal(request.url.searchParams.has('all'), false)
+        if (selection === 'all') assert.equal(request.url.searchParams.has('project'), false)
+        else assert.equal(request.url.searchParams.get('project'), A)
+      }
+      assert.deepEqual(mounted.state.rules.map(rule => rule.id).sort((a, b) => a - b), expected)
+      if (client === 'web') assert.equal(mounted.state.loadedCount, expected.length)
+    })
+  }
+  for (const rulesResponse of [null, {}, { rules: [], total: 0 }]) {
+    test(`rules ${client}: invalid successful response ${JSON.stringify(rulesResponse)} is an error`, { skip: queryPrerequisite }, async t => {
+      const mounted = await mount(t, A, { rulesResponse })
+      assert.deepEqual(mounted.state.rules, [])
+      if (client === 'web') assert.equal(mounted.state.rulesQuery.isError.value, true)
+      else assert.ok(mounted.state.error)
+    })
+  }
+  test(`rules ${client}: empty response is distinct from HTTP 403`, { skip: queryPrerequisite }, async t => {
+    const empty = await mount(t, A, { rules: [] })
+    const failed = await mount(t, A, { rulesError: true })
+    assert.deepEqual(empty.state.rules, [])
+    assert.deepEqual(failed.state.rules, [])
+    assert.ok(failed.calls.some(call => call.url.pathname === '/api/rules' && call.method === 'GET'))
+    if (client === 'web') {
+      assert.equal(empty.state.rulesQuery.isError.value, false)
+      assert.equal(failed.state.rulesQuery.isError.value, true)
+      assert.equal(failed.state.rulesQuery.error.value?.status, 403)
+    } else {
+      assert.equal(empty.state.error, null)
+      assert.match(failed.state.error, /403/)
     }
-    assert.deepEqual(mounted.state.rules.map(rule => rule.id), expected)
   })
 }
-
-for (const rulesResponse of [null, {}, { rules: [], total: 0 }]) {
-  test(`rules legacy: invalid successful response ${JSON.stringify(rulesResponse)} is an error`, { skip: queryPrerequisite }, async t => {
-    const mounted = await mountLegacyRules(t, A, { rulesResponse })
-    assert.deepEqual(mounted.state.rules, [])
-    assert.ok(mounted.state.error)
-  })
-}
-
-test('rules legacy: empty response is distinct from HTTP 403', { skip: queryPrerequisite }, async t => {
-  const empty = await mountLegacyRules(t, A, { rules: [] })
-  const failed = await mountLegacyRules(t, A, { rulesError: true })
-  assert.deepEqual(empty.state.rules, [])
-  assert.deepEqual(failed.state.rules, [])
-  assert.ok(failed.calls.some(call => call.url.pathname === '/api/rules' && call.method === 'GET'))
-  assert.equal(empty.state.error, null)
-  assert.match(failed.state.error, /403/)
-})
 
 test('legacy unresolved selection does not request global rules', { skip: queryPrerequisite }, async t => {
   const mounted = await mountLegacyRules(t, '')

@@ -14,8 +14,8 @@ const queryClient = useQueryClient()
 
 const { projects, unresolved, selectedProject, selectionPending, selectionError, ready, unresolvedReference, projectName } = useProjectCatalog('all')
 const rulesQuery = useRulesQuery(selectedProject, ready)
-const rules = computed(() => rulesQuery.data.value?.rules ?? [])
-const total = computed(() => rulesQuery.data.value?.total ?? rules.value.length)
+const rules = computed(() => rulesQuery.data.value ?? [])
+const loadedCount = computed(() => rules.value.length)
 
 const createProject = ref('')
 const createContent = ref('')
@@ -187,7 +187,7 @@ function isRuleUpdating(rule: Rule): boolean {
 
         <div class="flex flex-wrap items-center gap-3">
           <div class="mono-data text-sm text-[var(--muted)]">
-            {{ total }} rows
+            {{ ready && rulesQuery.isSuccess.value ? loadedCount : '—' }} {{ t('rules.loadedRows') }}
           </div>
           <button
             type="button"
@@ -202,18 +202,21 @@ function isRuleUpdating(rule: Rule): boolean {
 
       <div class="mb-4 flex flex-wrap gap-3">
         <label class="text-sm text-[var(--fg-2)]">
-          <span class="mr-2">{{ t('common.allProjects') }}</span>
+          <span class="mr-2">{{ t('rules.scope') }}</span>
           <select
             v-model="selectedProject"
             class="rounded-lg border border-[var(--border)] bg-[var(--surface-warm)] px-3 py-2 text-sm text-[var(--fg)]"
           >
-            <option value="all">{{ t('common.allProjects') }}</option>
+            <option value="all">{{ t('rules.globalOnly') }}</option>
             <option v-for="project in projects" :key="project.project_id" :value="project.project_id">
               {{ projectName(project.project_id) }}
             </option>
           </select>
         </label>
       </div>
+      <p v-if="ready" class="mb-4 text-sm text-[var(--fg-2)]">
+        {{ selectedProject === 'all' ? t('rules.globalOnly') : t('rules.projectAndGlobal') }}
+      </p>
       <ProjectCatalogStatus :records="unresolved" :pending="selectionPending" :error="selectionError" :reference="unresolvedReference" />
 
       <div v-if="actionMessage" class="mb-4 rounded-lg border border-[color:rgba(52,211,153,0.35)] bg-[color:rgba(52,211,153,0.12)] px-3 py-2 text-sm text-[var(--success)]">
