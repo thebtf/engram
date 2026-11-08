@@ -69,6 +69,117 @@ There is no historical startup-flag alternative to this public hybrid enum.
 
 Admin-gated families (candidates, governance, bulk ops) are additionally enforced at the handler level regardless of advertisement.
 
+#### UCI graph exploration and exact source reads
+
+Inspect `tools/list` for the live capability. A `context_handle` is local to its
+client session; without one, a call uses that client's current binding. A
+`binding_kind: "checkout"` handle follows the current published View of its
+registered checkout and profile, so the View may advance between calls. A
+`binding_kind: "context"` handle selects a specific View. Both are reauthorized;
+neither is a grant or a promise that a historical View remains available. The
+optional legacy `project` is compatibility evidence, not a context selector.
+
+As a workaround when an authorized same-View search and read are needed, pin the
+View before searching. This does not fix the normal checkout-bound search-to-read
+race:
+
+1. Call `codebase_context` with `{"action":"resolve"}` for the current binding,
+   or `{"action":"list"}` to inspect authorized contexts. Choose the intended
+   Source, Checkout and View explicitly; do not automatically choose a result.
+   If the returned `context` is null, there is no published View to pin.
+2. Call `codebase_context` with `action: "select"` and the flat fields copied
+   from that context: `source_id`, `checkout_id`, `view_id`,
+   `analysis_profile_id`, `generation`, and `space_id` if present. This changes
+   the current client selection. Use the returned `context_handle` only if the
+   response has `binding_kind: "context"` and the intended context. Never invent
+   a handle or mix fields from different contexts.
+3. Pass that same returned handle to search, graph and read in the same client
+   session. If resolution, selection or a later call is refused, stop; a denial
+   is not permission to switch identity or Source. For a `CONTEXT_MISMATCH` on
+   a citation read, the bounded recovery below may apply. Otherwise use the
+   supported context recovery path to establish the intended authorized context.
+
+**Recovering an existing citation after `CONTEXT_MISMATCH`:** This is a
+client-driven recovery, not an automatic fix for the checkout-bound race. It is only
+possible when the original search response contains its complete `contexts`
+entry. Historical View availability and authorization are not guaranteed.
+
+1. If you need to restore the current selection afterward, call
+   `codebase_context` with `action: "resolve"` first and retain the returned
+   `context_handle` for this client. Do not invent or borrow a handle.
+2. From the original search response's `contexts` entry, copy `source_id`,
+   `checkout_id`, `view_id`, `generation`, and `space_id` if present into a
+   `codebase_context` call with `action: "select"`. Copy the entry's `profile_id`
+   as the select argument `analysis_profile_id`. Do not use fields from the
+   citation alone, another response, or a guessed identity. Selection changes
+   this client's default. Use the returned `context_handle` only if
+   `binding_kind` is `"context"` and the returned context matches the original.
+3. If you retained the prior selection, restore it with `action: "select"` and
+   that own `context_handle`; it remains subject to authorization. Then retry
+   `codebase_read` once with the newly returned pinned handle and the original
+   citation unchanged (`ref`, `membership_id`, `span`, and `content_digest`,
+   including `indexed_span` when applicable).
+
+If the original response lacks the complete context, or authorization or the
+original View is unavailable, stop this recovery. Establish an explicitly
+authorized context and run a new search there; use its new citation. Never alter
+the original citation to fit another View, invent identities, or bypass a refusal.
+
+With the pinned handle:
+
+1. Call `codebase_search` with the pinned `context_handle` and a `query`. Select
+   an actual returned `items` entry and retain its `ref`, `membership_id`, `span`, and
+   `content_digest` together. Check that its source and View are the intended
+   ones. Do not synthesize any of these values or copy them from a different hit.
+2. To try to explore that entity, pass the selected item's `ref` as `target`:
+
+   ```json
+   {
+     "action": "explain",
+     "context_handle": "<returned pinned context_handle>",
+     "target": {
+       "source_id": "<copied from items[n].ref.source_id>",
+       "view_id": "<copied from items[n].ref.view_id>",
+       "entity_key": "<copied from items[n].ref.entity_key>"
+     }
+   }
+   ```
+
+   A search hit's `ref` is not guaranteed to resolve as a graph target. For a
+   chunk without a symbol key, search can use `path:ordinal` as its entity key,
+   while graph resolution can use the path alone. Do not derive a graph key by
+   modifying the search ref. A copied ref may have no matching graph target;
+   retain the original search hit for the exact source read below.
+
+   These angle-bracket values are placeholders, not usable IDs. Alternatively,
+   use `name` in place of `entity_key`; exactly one is required. An ambiguous
+   name can return candidates. Graph nodes and edge evidence are static,
+   View-scoped references, not proof of runtime execution.
+3. For an exact source read, use the retained search hit, not a bare graph
+   reference. The graph response's `items` is empty, and its node and edge
+   evidence refs do not supply the membership, span, and digest required by
+   `codebase_read`. If a graph node has no matching search hit, search for it in
+   the same View and compare the returned `ref`; do not assume a match exists.
+   The following is a field-copy template, not executable JSON:
+
+   ```text
+   codebase_read({
+     "context_handle": <returned pinned context_handle>,
+     "ref":            <copy items[n].ref>,
+     "membership_id":  <copy items[n].membership_id>,
+     "span":           <copy items[n].span>,
+     "content_digest": <copy items[n].content_digest>
+   })
+   ```
+
+   Pass the same pinned `context_handle` to the search and read calls.
+   For a citation exceeding 8192 bytes, copy the original span as `indexed_span`
+   and use `span` for a contained window of at most `max_bytes` (maximum 8192),
+   retaining the original line bounds. Use the returned byte end for the next
+   UTF-8-aligned window. `verify_working_copy` returns metadata, not local bytes.
+   Status alone is not a citation; partial results may contain valid hits but
+   do not establish complete coverage. Empty or refused results supply no hit.
+
 Explicit-principal queries filter inaccessible principal, domain and legacy
 workstation-private rows before pagination. Workstation identity comes from
 authentication, not the query's `session_id`; admin widening does not bypass
