@@ -261,3 +261,92 @@ func TestB1PrincipalQuerySharedGlobalEnrollment(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, result.Items)
 }
+
+func TestSelfCardRetirementAccessAndSearch(t *testing.T) {
+	db := memoryMutationSQLiteDB(t)
+	f := newMemoryMutationSecurityFixture(t, db)
+	require.NoError(t, db.Exec(`INSERT INTO memory_principals (principal_kind, principal, enrolled_by) VALUES (?, ?, ?), (?, ?, ?)`, "agent", "agent/synthetic-security-a", 1, "agent", "agent/synthetic-security-b", 1).Error)
+	f.service.principalMemoryQueryService = principalmemory.NewPrincipalMemoryQueryService(f.service.memoryStore, f.service.auditStore)
+	created := f.serve(f.request(t, context.Background(), http.MethodPost, "/api/memories", f.tokenA, map[string]any{"content": "selfretirementuniquemarker"}))
+	require.Equal(t, http.StatusCreated, created.status, created.body)
+	var card struct {
+		ID int64 `json:"id"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(created.body), &card))
+	path := fmt.Sprintf("/api/memories/%d/transition", card.ID)
+	t.Run("denied-selectors-and-foreign-principal", func(t *testing.T) {
+		for _, tc := range []struct {
+			route, token string
+			statuses     []int
+		}{
+			{path, f.tokenB, []int{http.StatusForbidden, http.StatusNotFound}},
+			{path + "?context=invalid", f.tokenA, []int{http.StatusBadRequest, http.StatusNotFound}},
+			{path + "?context=self&project=" + f.project, f.tokenA, []int{http.StatusBadRequest, http.StatusNotFound}},
+		} {
+			response := f.serve(f.request(t, context.Background(), http.MethodPost, tc.route, tc.token, map[string]any{"action": "archive"}))
+			assert.Contains(t, tc.statuses, response.status, response.body)
+		}
+	})
+	t.Run("owner-archives-and-search-excludes", func(t *testing.T) {
+		archived := f.serve(f.request(t, context.Background(), http.MethodPost, path+"?context=self", f.tokenA2, map[string]any{"action": "archive"}))
+		require.Equal(t, http.StatusOK, archived.status, archived.body)
+		var receipt struct {
+			ID     int64  `json:"id"`
+			Status string `json:"status"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(archived.body), &receipt))
+		require.Equal(t, card.ID, receipt.ID)
+		require.Equal(t, "archived", receipt.Status)
+		query := f.serve(f.request(t, context.Background(), http.MethodGet, "/api/memories/principal?q=selfretirementuniquemarker", f.tokenA, nil))
+		require.Equal(t, http.StatusOK, query.status, query.body)
+		require.NotContains(t, query.body, "selfretirementuniquemarker")
+	})
+}
+
+func TestAuthDisabledSelfArchiveAndSearch(t *testing.T) {
+	db := memoryMutationSQLiteDB(t)
+	f := newMemoryMutationSecurityFixture(t, db)
+	require.NoError(t, db.Exec(`INSERT INTO memory_principals (principal_kind, principal, enrolled_by) VALUES (?, ?, ?), (?, ?, ?)`, "agent", "agent/synthetic-security-a", 1, "agent", "agent/synthetic-security-b", 1).Error)
+	f.service.principalMemoryQueryService = principalmemory.NewPrincipalMemoryQueryService(f.service.memoryStore, f.service.auditStore)
+	f.tokenAuth.authDisabled = true
+	created := f.serve(f.request(t, context.Background(), http.MethodPost, "/api/memories", f.tokenA, map[string]any{"content": "disabledselfuniquemarker"}))
+	require.Equal(t, http.StatusCreated, created.status, created.body)
+	var card struct {
+		ID int64 `json:"id"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(created.body), &card))
+	path := fmt.Sprintf("/api/memories/%d/transition", card.ID)
+	search := "/api/memories/principal?q=disabledselfuniquemarker"
+	t.Run("search", func(t *testing.T) {
+		response := f.serve(f.request(t, context.Background(), http.MethodGet, search, f.tokenA, nil))
+		require.Equal(t, http.StatusOK, response.status, response.body)
+		require.Contains(t, response.body, "disabledselfuniquemarker")
+	})
+	t.Run("denials", func(t *testing.T) {
+		for _, token := range []string{"invalid-synthetic-key", f.tokenB, ""} {
+			req := f.request(t, context.Background(), http.MethodPost, path+"?context=self", token, map[string]any{"action": "archive"})
+			if token == "" {
+				req.Header.Del("Authorization")
+			}
+			response := f.serve(req)
+			if token == "invalid-synthetic-key" {
+				require.Equal(t, http.StatusUnauthorized, response.status)
+			} else {
+				require.Contains(t, []int{http.StatusForbidden, http.StatusNotFound}, response.status)
+			}
+		}
+		response := f.serve(f.request(t, context.Background(), http.MethodGet, search, "invalid-synthetic-key", nil))
+		require.Equal(t, http.StatusUnauthorized, response.status)
+		req := f.request(t, context.Background(), http.MethodGet, search, "", nil)
+		req.Header.Del("Authorization")
+		require.Equal(t, http.StatusForbidden, f.serve(req).status)
+	})
+	t.Run("archive", func(t *testing.T) {
+		response := f.serve(f.request(t, context.Background(), http.MethodPost, path, f.tokenA, map[string]any{"action": "archive"}))
+		require.Equal(t, http.StatusOK, response.status, response.body)
+		require.Contains(t, response.body, `"status":"archived"`)
+		response = f.serve(f.request(t, context.Background(), http.MethodGet, search, f.tokenA, nil))
+		require.Equal(t, http.StatusOK, response.status, response.body)
+		require.NotContains(t, response.body, "disabledselfuniquemarker")
+	})
+}
