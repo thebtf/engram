@@ -11,11 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Keep an absent host session absent for issue attribution in the ordinary native path when both shim and daemon support the updated contract; do not borrow a shared daemon's session. Explicit per-call and reported attribution retain their existing precedence and do not grant authority. Both components must be updated.
 
-- Document the model-health configuration snapshot and expose its existing response and error contract in generated Swagger.
+## [7.1.1] - 2026-11-08
+
+Source: PRs #678–#691 and #693, as present in the first-parent release range; #692 is not in that range. This release does not claim Feature012 acceptance.
+
+- Recover cold plugin client and parser acquisition after a 502, 503 or 504 from the official release download with one bounded anonymous GitHub release API lookup. Validate the pinned tag, asset metadata, size and SHA-256 before publishing the staged object; other failures remain closed.
+
+- Restart the operator-web Vault auto-hide period on each successful reveal, even when the credential value is unchanged.
 
 - Embed the source commit in release-image health and version responses when the build supplies it, while retaining SHA-version build compatibility and an empty value when provenance is unavailable.
 
-- Restart the operator-web Vault auto-hide period on each successful reveal, even when the credential value is unchanged.
+- Document the model-health configuration snapshot and its existing response and error contract in generated Swagger.
+
+- Update release promotion authority and procedures, graph navigation and contract documentation, editor/graph exclusions, upgrade guidance, and the published OMP catalog reference.
+
 
 ## [7.1.0] - 2026-11-07
 
