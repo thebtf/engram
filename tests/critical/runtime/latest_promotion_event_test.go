@@ -3,6 +3,8 @@
 package runtime_test
 
 import (
+	"archive/zip"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -85,37 +87,143 @@ func TestLatestPromotionEventAcceptance(t *testing.T) {
 		t.Fatal("release resolution step is missing")
 	}
 	const releaseHead = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	const staleHead = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	const definitionHead = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	repo := repositoryRoot(t)
 	for _, tc := range []struct {
-		name, head  string
+		name, event string
 		wantSuccess bool
 	}{
-		{"matching release head", releaseHead, true},
-		{"stale triggering head", staleHead, false},
+		{"valid different definition head", "workflow_run", true},
+		{"missing artifact", "workflow_run", false},
+		{"expired artifact", "workflow_run", false},
+		{"duplicate artifact", "workflow_run", false},
+		{"wrong repository", "workflow_run", false},
+		{"archive digest mismatch", "workflow_run", false},
+		{"wrong artifact run", "workflow_run", false},
+		{"wrong artifact attempt", "workflow_run", false},
+		{"invalid evidence", "workflow_run", false},
+		{"mismatched release", "workflow_run", false},
+		{"failed publisher", "workflow_run", false},
+		{"independent dispatch", "repository_dispatch", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			// Stub only GitHub's external API; execute the actual workflow step.
-			script := fmt.Sprintf(`function gh {
+			evidence := writePublicationEvidenceFixture(t, repo, releaseHead, "v6.49.4")
+			census := readJSONMap(t, filepath.Join(evidence, "artifact-census.json"))
+			census["artifact_name"] = "engram-release-payload-42-1"
+			writeJSONAt(t, filepath.Join(evidence, "artifact-census.json"), census)
+			if tc.name == "invalid evidence" {
+				if err := os.WriteFile(filepath.Join(evidence, "postgres.trivy.sarif"), []byte("{}"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				runImageGate(t, repo, true, "-Mode", "ValidatePublicationEvidence", "-TrustedOutputRoot", publicationEvidenceTrustedRoot(evidence), "-EvidenceRoot", evidence, "-CredentialDirectoryPath", publicationEvidenceCredentialPath(evidence))
+			}
+			var archive bytes.Buffer
+			zw := zip.NewWriter(&archive)
+			entries, err := os.ReadDir(evidence)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, entry := range entries {
+				data, err := os.ReadFile(filepath.Join(evidence, entry.Name()))
+				if err != nil {
+					t.Fatal(err)
+				}
+				writer, err := zw.Create(entry.Name())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := writer.Write(data); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := zw.Close(); err != nil {
+				t.Fatal(err)
+			}
+			archivePath := filepath.Join(dir, "fixture.zip")
+			if err := os.WriteFile(archivePath, archive.Bytes(), 0600); err != nil {
+				t.Fatal(err)
+			}
+			run := map[string]any{"id": 42, "run_attempt": 2, "name": "Docker Publish", "path": ".github/workflows/docker-publish.yml", "event": "workflow_run", "head_sha": definitionHead, "status": "completed", "conclusion": "success", "repository": map[string]any{"id": 99}, "head_repository": map[string]any{"id": 99}}
+			job := map[string]any{"name": "publish-images", "run_id": 42, "run_attempt": 2, "status": "completed", "conclusion": "success"}
+			artifact := map[string]any{"id": 123, "name": "engram-publication-evidence-42-2", "expired": false, "digest": "sha256:" + sha256Hex(archive.Bytes()), "workflow_run": map[string]any{"id": 42, "head_sha": definitionHead, "repository_id": 99, "head_repository_id": 99}}
+			artifacts := []any{artifact}
+			switch tc.name {
+			case "missing artifact":
+				artifacts = []any{}
+			case "expired artifact":
+				artifact["expired"] = true
+			case "duplicate artifact":
+				artifacts = append(artifacts, artifact)
+			case "wrong repository":
+				artifact["workflow_run"].(map[string]any)["repository_id"] = 98
+			case "archive digest mismatch":
+				artifact["digest"] = "sha256:" + strings.Repeat("f", 64)
+			case "wrong artifact run":
+				artifact["workflow_run"].(map[string]any)["id"] = 41
+			case "wrong artifact attempt":
+				artifact["name"] = "engram-publication-evidence-42-1"
+			case "failed publisher":
+				job["conclusion"] = "failure"
+			}
+			encode := func(v any) string {
+				b, err := json.Marshal(v)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return string(b)
+			}
+			officialHead := releaseHead
+			if tc.name == "mismatched release" {
+				officialHead = definitionHead
+			}
+			script := `function gh {
     $global:LASTEXITCODE = 0
-    if ($args -contains '--paginate') { return '{"jobs":[{"name":"publish-images","run_id":42,"status":"completed","conclusion":"success"}]}' }
+    if ($env:GITHUB_EVENT_NAME -eq 'repository_dispatch' -and $args -notcontains '.tag_name' -and $args -notcontains '.sha') { throw 'dispatch must not inspect publisher evidence' }
+    $call = $args -join ' '
+    if ($call -match '/jobs\?') { return $env:FIXTURE_JOBS }
+    if ($call -match '/artifacts\?') { return $env:FIXTURE_ARTIFACTS }
+    if ($call -match '/attempts/2$') { return $env:FIXTURE_RUN }
     if ($args -contains '.tag_name') { return 'v6.49.4' }
-    if ($args -contains '.sha') { return '%s' }
+    if ($args -contains '.sha') { return $env:FIXTURE_RELEASE_HEAD }
     throw 'unexpected GitHub API call'
 }
-%s`, releaseHead, resolve)
+function Invoke-WebRequest {
+    param($Uri, $Headers, $OutFile)
+    if ($Uri -cne 'https://api.github.com/repos/thebtf/engram/actions/artifacts/123/zip') { throw 'unexpected artifact URI' }
+    Copy-Item -LiteralPath $env:FIXTURE_ARCHIVE -Destination $OutFile
+}
+` + resolve
 			file := filepath.Join(dir, "resolve.ps1")
 			if err := os.WriteFile(file, []byte(script), 0600); err != nil {
 				t.Fatal(err)
 			}
 			cmd := exec.Command("pwsh", "-NoProfile", "-File", file)
-			cmd.Env = append(os.Environ(), "GITHUB_EVENT_NAME=workflow_run", "TRIGGERING_WORKFLOW_NAME=Docker Publish", "TRIGGERING_WORKFLOW_HEAD_SHA="+tc.head, "TRIGGERING_WORKFLOW_RUN_ID=42", "REPOSITORY_NAME=thebtf/engram", "RECEIPT_DIR="+dir)
+			cmd.Dir = repo
+			cmd.Env = append(os.Environ(), "GITHUB_EVENT_NAME="+tc.event, "TRIGGERING_WORKFLOW_NAME=Docker Publish", "TRIGGERING_WORKFLOW_HEAD_SHA="+definitionHead, "TRIGGERING_WORKFLOW_RUN_ID=42", "TRIGGERING_WORKFLOW_RUN_ATTEMPT=2", "EVENT_REPOSITORY_ID=99", "REPOSITORY_NAME=thebtf/engram", "RECEIPT_DIR="+dir, "RUNNER_TEMP="+dir, "GITHUB_API_URL=https://api.github.com", "GH_TOKEN=fixture", "FIXTURE_ARCHIVE="+archivePath, "FIXTURE_RUN="+encode(run), "FIXTURE_JOBS="+encode([]any{map[string]any{"jobs": []any{job}}}), "FIXTURE_ARTIFACTS="+encode([]any{map[string]any{"artifacts": artifacts}}), "FIXTURE_RELEASE_HEAD="+officialHead)
 			output, err := cmd.CombinedOutput()
 			if (err == nil) != tc.wantSuccess {
-				t.Fatalf("release head %s: success=%v, want %v: %s", tc.head, err == nil, tc.wantSuccess, output)
+				t.Fatalf("success=%v, want %v: %s", err == nil, tc.wantSuccess, output)
 			}
-			if !tc.wantSuccess && !strings.Contains(string(output), "does not match triggering workflow_run head") {
-				t.Fatalf("stale head rejected for unexpected reason: %s", output)
+			if !tc.wantSuccess {
+				want := map[string]string{
+					"missing artifact": "missing or ambiguous", "duplicate artifact": "missing or ambiguous", "wrong artifact attempt": "missing or ambiguous",
+					"expired artifact": "metadata is invalid", "wrong artifact run": "metadata is invalid", "wrong repository": "metadata is invalid",
+					"archive digest mismatch": "archive digest mismatch", "invalid evidence": "SARIF is not a zero-finding match",
+					"mismatched release": "does not match validated publisher evidence", "failed publisher": "publish-images job was not completed successfully",
+				}[tc.name]
+				lines := strings.Split(string(output), "\n")
+				for i, line := range lines {
+					lines[i] = strings.TrimPrefix(strings.TrimSpace(line), "|")
+				}
+				normalized := strings.Join(strings.Fields(strings.Join(lines, " ")), " ")
+				if !strings.Contains(normalized, want) {
+					t.Fatalf("wrong rejection, want %q: %s", want, output)
+				}
+			}
+			if _, err := os.Stat(filepath.Join(dir, "release.json")); (err == nil) != tc.wantSuccess {
+				t.Fatalf("unexpected release receipt: %v", err)
 			}
 		})
 	}
