@@ -106,7 +106,7 @@ type codebaseGraphTarget struct {
 func codebaseGraphTool() Tool {
 	return Tool{
 		Name:        "codebase_graph",
-		Description: "Explore bounded static graph evidence within an authorized UCI View. The optional project is compatibility evidence only and never selection authority.",
+		Description: "Explore bounded static graph evidence within an authorized UCI View. For explain, target requires source_id, view_id, and exactly one of entity_key or name. Graph refs are not complete source-read citations; obtain ref, membership_id, span, and content_digest from a same-View codebase_search hit for codebase_read. The optional project is compatibility evidence only and never selection authority.",
 		tier:        tierCore,
 		InputSchema: map[string]any{
 			"type":                 "object",
