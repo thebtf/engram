@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onUnmounted, ref } from 'vue'
 import { useMutation, useQueryClient } from '@tanstack/vue-query'
 import { deleteCredential, fetchCredential } from '~/composables/useOperatorApi'
 import { useVaultOverviewQuery } from '~/composables/useOperatorQueries'
@@ -13,17 +13,29 @@ const vaultQuery = useVaultOverviewQuery()
 const { unresolved, selectionPending, selectionError, unresolvedReference, projectName } = useProjectCatalog('all')
 
 const revealedValues = ref<Record<number, { value: string; expiresAt: number }>>({})
+const revealTimers = new Map<number, ReturnType<typeof setTimeout>>()
+let unmounted = false
 const actionError = ref('')
 const copyFeedback = ref<number | null>(null)
 
 const credentials = computed(() => vaultQuery.data.value?.credentials ?? [])
 const vaultStatus = computed(() => vaultQuery.data.value?.status ?? null)
 
+onUnmounted(() => {
+  unmounted = true
+  for (const timer of revealTimers.values()) clearTimeout(timer)
+  revealTimers.clear()
+  revealedValues.value = {}
+})
+
 async function revealValue(credential: VaultCredential) {
   actionError.value = ''
 
   try {
     const result = await fetchCredential(credential)
+    if (unmounted) return
+    const previousTimer = revealTimers.get(credential.id)
+    if (previousTimer !== undefined) clearTimeout(previousTimer)
     revealedValues.value = {
       ...revealedValues.value,
       [credential.id]: {
@@ -32,14 +44,14 @@ async function revealValue(credential: VaultCredential) {
       },
     }
 
-    setTimeout(() => {
-      const current = revealedValues.value[credential.id]
-      if (current && current.value === result.value) {
-        const next = { ...revealedValues.value }
-        delete next[credential.id]
-        revealedValues.value = next
-      }
+    const timer = setTimeout(() => {
+      if (revealTimers.get(credential.id) !== timer) return
+      revealTimers.delete(credential.id)
+      const next = { ...revealedValues.value }
+      delete next[credential.id]
+      revealedValues.value = next
     }, 30_000)
+    revealTimers.set(credential.id, timer)
   } catch (error) {
     actionError.value = error instanceof Error ? error.message : 'Не удалось раскрыть credential'
   }
@@ -61,6 +73,9 @@ async function copyValue(id: number) {
 const deleteCredentialMutation = useMutation({
   mutationFn: (credential: VaultCredential) => deleteCredential(credential),
   onSuccess: async (_, credential) => {
+    const timer = revealTimers.get(credential.id)
+    if (timer !== undefined) clearTimeout(timer)
+    revealTimers.delete(credential.id)
     const next = { ...revealedValues.value }
     delete next[credential.id]
     revealedValues.value = next
