@@ -33,6 +33,7 @@ COPY . .
 COPY --from=operator-console-build /workspace/apps/operator-console/.output/public/ internal/worker/static/
 
 ARG VERSION
+ARG SOURCE_COMMIT=
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
 
@@ -63,9 +64,18 @@ RUN set -eu; \
 # Build the accepted CGO server. The ldd transcript is retained in the image as
 # auditable proof that every shared-library dependency resolves before the
 # binary crosses into the distroless runtime stage.
-RUN SOURCE_COMMIT=""; \
+RUN set -eu; \
  source_candidate="${VERSION#sha-}"; \
- if [ "$source_candidate" != "$VERSION" ] && printf '%s\n' "$source_candidate" | grep -Eq '^[0-9a-f]{40}$'; then SOURCE_COMMIT="$source_candidate"; fi; \
+ if [ "$source_candidate" != "$VERSION" ]; then \
+ if [ -n "$SOURCE_COMMIT" ] && [ "$SOURCE_COMMIT" != "$source_candidate" ]; then \
+ echo "SOURCE_COMMIT must match sha-VERSION" >&2; exit 64; \
+ fi; \
+ SOURCE_COMMIT="$source_candidate"; \
+ fi; \
+ if [ -n "$SOURCE_COMMIT" ]; then \
+ case "$SOURCE_COMMIT" in *[!0123456789abcdef]*) echo "SOURCE_COMMIT must be 40 lowercase hex characters" >&2; exit 64 ;; esac; \
+ if [ "${#SOURCE_COMMIT}" -ne 40 ]; then echo "SOURCE_COMMIT must be 40 lowercase hex characters" >&2; exit 64; fi; \
+ fi; \
  CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -tags fts5 \
  -ldflags "-X github.com/thebtf/engram/internal/version.Daemon=${VERSION} -X main.SourceCommit=${SOURCE_COMMIT} -s -w" -o /out/engram-server ./cmd/engram-server \
  && ldd /out/engram-server > /out/engram-server.ldd 2>&1 \

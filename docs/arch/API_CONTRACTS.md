@@ -346,6 +346,70 @@ cannot express these alternatives or the deployment-dependent requirement.
 The successful response is JSON; authentication rejection is a plain-text 401.
 Swagger 2 lists response media types for the whole operation, not per status.
 
+### `GET /api/model-health`
+
+This global, read-only snapshot has no request parameters or body. It requires
+database readiness and the ordinary token authentication middleware. When auth
+is enabled, use `X-Auth-Token`, `Authorization: Bearer`, or an authorized
+`engram_session` or `engram_auth` cookie; explicitly disabled authentication
+requires no credential. Swagger's `ApiKeyAuth` describes only `X-Auth-Token`.
+
+The `200` response is `application/json` with `generated_at` (UTC RFC3339),
+`rows` and `summary`. There are three rows, in this order:
+
+| `id` | `role` | `provider` | `endpoint` |
+| --- | --- | --- | --- |
+| `recall/embedder` | `embedding` | `OpenAI-compatible embeddings` | `/v1/embeddings` |
+| `recall/reranker` | `reranker` | `Cohere-compatible rerank` | `/v1/rerank` |
+| `ops/llm` | `llm` | `OpenAI-compatible chat` | `/v1/chat/completions` |
+
+Each row also has string fields `model`, `health`, `source` and `message`, a
+string array `evidence`, and booleans `configured` and `secret_set`. The
+`endpoint` is a fixed API path, not the configured URL. The model name is
+returned as configured or captured by the client; do not put secrets in model
+names. The snapshot omits URL and API-key values and reports key presence via
+`secret_set`; evidence identifies configuration keys and defaults, not their
+values. This is not a blanket redaction guarantee for arbitrary model names or
+error text.
+
+For embedding and reranking, URL and key signals prefer nonblank environment
+values over stored `model_settings` rows; otherwise `source` is `absent`.
+`source` describes the URL signal, not necessarily the model or key source.
+A stored row yields `settings` even when its value is empty. An encrypted row
+is set when it has encrypted bytes; a plaintext row is set when its trimmed
+value is nonempty. `configured` reflects the URL signal. The model prefers a
+nonblank environment value, then a nonencrypted nonblank stored value, then
+`text-embedding` or `bge-reranker`; a nonempty initialized client model takes
+precedence in the response. Evidence lists the corresponding environment or
+settings keys, including absent alternatives and model defaults.
+
+For `ops/llm`, fields come from the startup client: without one, source is
+`absent`, model is `chat-default`, and both booleans are false. With one,
+`source` is the startup URL source (`env` or `settings`), `model` and key
+presence are captured at startup, and `configured` is true. Its evidence is
+`startup client snapshot`; configuration changes require restart.
+
+`health` is `standby` for initialized clients and for an unconfigured URL;
+embedding or reranking is `degraded` when the URL is configured but its client
+is not initialized. The LLM row remains `standby`, including when initialized.
+No provider is contacted: neither `standby` nor an initialized client proves
+upstream availability. `summary` has integer `total`, `ok`, `standby`,
+`degraded`, and `configured` counts. The current builder emits no `ok` rows;
+`ok` is therefore zero, not a count of verified providers.
+
+`401` authentication rejection, `403` HAP keycard route rejection, `503`
+readiness/store-unavailable errors, and `500` errors are `text/plain;
+charset=utf-8` responses, not JSON envelopes. A valid HAP keycard class is not
+allowed on this route and receives `forbidden: HAP keycard class is not allowed
+on this HTTP route`. During bearer validation, an auth store or bcrypt failure
+can produce `500` with `auth store unavailable` before the handler runs. A
+not-ready server reports `service initializing` or `service initialization
+failed: ...`; an uninitialized handler store reports `model health unavailable:
+store not initialized`; a settings-read failure produces `500` with `model
+health unavailable: ` followed by the underlying error. Error details are not
+guaranteed redacted. Swagger 2 lists media types for the whole operation rather
+than individual statuses.
+
 `GET /api/stats` returns uptime, session and queue activity, retrieval statistics,
 readiness, and runtime memory statistics. `database` is present when the store is
 initialized; `project` and `projectObservations` are present only when a nonempty
@@ -694,6 +758,19 @@ guarantee that arbitrary application logs contain no other secrets.
 
 
 ### Core Endpoints
+
+`GET /api/version` and `GET /api/health` include `source_commit` as a string:
+exactly 40 lowercase hexadecimal characters when valid build provenance is
+available, or `""` when it is unavailable or invalid. The JSON response from
+`GET /health` uses the same health handler; HTML requests can receive the
+operator console instead. This field does not establish readiness.
+
+Docker builds accept optional `SOURCE_COMMIT` as a build argument. It must be
+empty or exactly 40 lowercase hexadecimal characters; with a `sha-<commit>`
+VERSION it must match that commit, which is used when the argument is omitted.
+Compose exposes this argument as optional `ENGRAM_SOURCE_COMMIT`. A SemVer build
+without it retains the empty value. Existing images are not changed by this source
+update.
 
 | Method | Path | Description |
 |--------|------|-------------|

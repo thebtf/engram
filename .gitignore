@@ -46,6 +46,7 @@ yarn-error.log*
 # Build artifacts
 dist/
 build/
+/graphify-out/
 *.tar.gz
 *.zip
 
