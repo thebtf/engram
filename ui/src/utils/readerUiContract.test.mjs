@@ -43,6 +43,11 @@ const fixtures = {
     attribution: ['source_project', 'original-source'], historyAttribution: ['author_agent', 'codex'],
   },
 }
+const rulesFixture = [
+  { id: 101, project: null, content: 'Global rule', priority: 0, version: 1 },
+  { id: 102, project: A, content: 'Project A rule', priority: 1, version: 1 },
+  { id: 103, project: B, content: 'Project B rule', priority: 2, version: 1 },
+]
 const tick = async () => { await new Promise(setImmediate); await vue.nextTick() }
 const renderer = vue.createRenderer({
   createElement: () => ({}), createText: () => ({}), createComment: () => ({}),
@@ -82,7 +87,15 @@ function transport(kind = 'memory', options = {}) {
       savedRules.push(rule)
       return Response.json(rule)
     }
-    if (url.pathname === '/api/rules' && method === 'GET') return Response.json({ rules: savedRules, total: savedRules.length })
+    if (url.pathname === '/api/rules' && method === 'GET') {
+      if (!options.webRules) return Response.json({ rules: savedRules, total: savedRules.length })
+      if (options.rulesError) return Response.json({ error: 'Rules access refused' }, { status: 403 })
+      if ('rulesResponse' in options) return Response.json(options.rulesResponse)
+      const project = url.searchParams.get('project')
+      const rules = [...(options.rules ?? []), ...savedRules]
+      const scoped = url.searchParams.get('all') === 'true' ? rules : rules.filter(rule => !rule.project || rule.project === project)
+      return Response.json(scoped.slice(0, Number(url.searchParams.get('limit') || 50)))
+    }
     if (url.pathname === `/api/projects/unresolved/${encodeURIComponent(reference)}/content`) {
       assert.equal(url.searchParams.get('kind'), kind)
       assert.equal(url.searchParams.has('project'), false)
@@ -200,7 +213,7 @@ test('retained component keeps explicit backend errors visible without successfu
 })
 
 async function mountRules(t, location, options = {}) {
-  const consumer = transport('memory', options)
+  const consumer = transport('memory', { ...options, webRules: true })
   const queryClient = new queryLibrary.QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity }, mutations: { retry: false } } })
   if (!options.catalogError) queryClient.setQueryData(['projects'], catalog)
   const router = routing.createRouter({ history: routing.createMemoryHistory(), routes: [{ path: '/:pathMatch(.*)*', component: { render: () => null } }] })
@@ -214,6 +227,40 @@ async function mountRules(t, location, options = {}) {
   await tick()
   return { ...consumer, state, router }
 }
+
+for (const [selection, expected] of [['all', [101]], [A, [101, 102]]]) {
+  test(`rules web: ${selection === 'all' ? 'omitted project returns global only' : 'selected project includes global'}`, { skip: queryPrerequisite }, async t => {
+    const mounted = await mountRules(t, selection === 'all' ? '/rules' : `/rules?project=${selection}`, { rules: rulesFixture })
+    const requests = mounted.calls.filter(call => call.url.pathname === '/api/rules' && call.method === 'GET')
+    assert.ok(requests.length, 'consumer must request rules')
+    for (const request of requests) {
+      assert.equal(request.url.searchParams.has('all'), false)
+      if (selection === 'all') assert.equal(request.url.searchParams.has('project'), false)
+      else assert.equal(request.url.searchParams.get('project'), A)
+    }
+    assert.deepEqual(mounted.state.rules.map(rule => rule.id), expected)
+    assert.equal(mounted.state.loadedCount, expected.length)
+  })
+}
+
+for (const rulesResponse of [null, {}, { rules: [], total: 0 }]) {
+  test(`rules web: invalid successful response ${JSON.stringify(rulesResponse)} is an error`, { skip: queryPrerequisite }, async t => {
+    const mounted = await mountRules(t, `/rules?project=${A}`, { rulesResponse })
+    assert.deepEqual(mounted.state.rules, [])
+    assert.equal(mounted.state.rulesQuery.isError.value, true)
+  })
+}
+
+test('rules web: empty response is distinct from HTTP 403', { skip: queryPrerequisite }, async t => {
+  const empty = await mountRules(t, `/rules?project=${A}`, { rules: [] })
+  const failed = await mountRules(t, `/rules?project=${A}`, { rulesError: true })
+  assert.deepEqual(empty.state.rules, [])
+  assert.deepEqual(failed.state.rules, [])
+  assert.ok(failed.calls.some(call => call.url.pathname === '/api/rules' && call.method === 'GET'))
+  assert.equal(empty.state.rulesQuery.isError.value, false)
+  assert.equal(failed.state.rulesQuery.isError.value, true)
+  assert.equal(failed.state.rulesQuery.error.value?.status, 403)
+})
 
 test('cached catalog initializes Rules scope from selected UUID before first submit', { skip: queryPrerequisite }, async t => {
   const mounted = await mountRules(t, `/rules?project=${A}`)
