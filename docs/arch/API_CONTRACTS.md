@@ -80,7 +80,7 @@ selector. Inspect `tools/list` for the live capability before using these tools.
    returned `items` entry and retain its `ref`, `membership_id`, `span`, and
    `content_digest` together. Check that its source and View are the intended
    ones. Do not synthesize any of these values or copy them from a different hit.
-2. To explore that entity, pass the selected item's `ref` as `target`:
+2. To try to explore that entity, pass the selected item's `ref` as `target`:
 
    ```json
    {
@@ -92,6 +92,12 @@ selector. Inspect `tools/list` for the live capability before using these tools.
      }
    }
    ```
+
+   A search hit's `ref` is not guaranteed to resolve as a graph target. For a
+   chunk without a symbol key, search can use `path:ordinal` as its entity key,
+   while graph resolution can use the path alone. Do not derive a graph key by
+   modifying the search ref. A copied ref may have no matching graph target;
+   retain the original search hit for the exact source read below.
 
    These angle-bracket values are placeholders, not usable IDs. Alternatively,
    use `name` in place of `entity_key`; exactly one is required. An ambiguous
