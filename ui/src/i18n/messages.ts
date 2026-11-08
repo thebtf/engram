@@ -150,6 +150,7 @@ export interface UiCatalog {
     title: string
     subtitle: string
     filterAll: string
+    projectAndGlobal: string
     create: string
     loading: string
     loadError: string
@@ -592,7 +593,8 @@ export const messages: Record<SupportedLocale, UiCatalog> = {
     rules: {
       title: 'Правила поведения',
       subtitle: 'Первый живой slice для правил: list/create/edit/delete через текущий REST bridge без fake enable/disable.',
-      filterAll: 'Все области',
+      filterAll: 'Только глобальные правила',
+      projectAndGlobal: 'Правила выбранного проекта и глобальные правила',
       create: 'Новое правило',
       loading: 'Загружаю правила...',
       loadError: 'Не удалось загрузить правила',
@@ -1036,7 +1038,8 @@ export const messages: Record<SupportedLocale, UiCatalog> = {
     rules: {
       title: 'Behavior Rules',
       subtitle: 'First live rules slice: list/create/edit/delete through the current REST bridge without fake enable/disable.',
-      filterAll: 'All scopes',
+      filterAll: 'Global rules only',
+      projectAndGlobal: 'Selected project and global rules',
       create: 'New rule',
       loading: 'Loading rules...',
       loadError: 'Failed to load rules',
