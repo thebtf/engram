@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -113,7 +114,16 @@ func (s *IssueStore) ListTaskIssues(ctx context.Context, params IssueTaskListPar
 			query = query.Where("status IN ?", params.Statuses)
 		}
 		if params.ResolvedSince != nil {
-			query = query.Where("resolved_at>=?", *params.ResolvedSince)
+			since := *params.ResolvedSince
+			// pgx's binary encoder multiplies Unix seconds by a million, and
+			// PostgreSQL rejects finite timestamps before its Julian-day-zero
+			// minimum (Unix -210866803200). Use exact numeric comparison outside
+			// that safe range while retaining the ordinary indexed predicate.
+			if seconds := since.Unix(); seconds < -210_866_803_200 || seconds > 8_000_000_000_000 {
+				query = query.Where(`CASE WHEN resolved_at = 'infinity'::timestamptz THEN true WHEN resolved_at = '-infinity'::timestamptz THEN false ELSE EXTRACT(EPOCH FROM resolved_at) >= (?::text::numeric + ?::text::numeric / 1000000000) END`, strconv.FormatInt(seconds, 10), strconv.Itoa(since.Nanosecond()))
+			} else {
+				query = query.Where("resolved_at>=?", since)
+			}
 		}
 		if params.OwnerLabel != nil {
 			query = query.Where("owner_label=?", *params.OwnerLabel)
