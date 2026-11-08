@@ -41,7 +41,7 @@ const i18n = createI18n({
 
 // Only the framework boundary is doubled. These callbacks are the production
 // queryFn/mutationFn/onSuccess/onError, not replacement issue implementations.
-function queryBoundary(track) {
+function queryBoundary(track, sharedCache = null) {
   const queries = []
   const mutations = []
   const invalidations = []
@@ -57,8 +57,10 @@ function queryBoundary(track) {
       refetch() {
         const current = ++generation
         const fn = options.value.queryFn
+        const cacheKey = JSON.stringify(options.value.queryKey)
         isFetching.value = true
         return track(Promise.resolve().then(() => fn()).then(result => {
+          if (sharedCache) sharedCache.set(cacheKey, result)
           if (current === generation) { data.value = result; error.value = null }
           return { data: result }
         }, failure => {
@@ -71,6 +73,11 @@ function queryBoundary(track) {
     }
     queries.push(query)
     vue.watch(() => JSON.stringify([options.value.queryKey, options.value.enabled !== false]), () => {
+      if (sharedCache) {
+        const key = JSON.stringify(options.value.queryKey)
+        data.value = sharedCache.get(key)
+        isPending.value = !sharedCache.has(key)
+      }
       if (options.value.enabled !== false) void query.refetch()
     }, { immediate: true, flush: 'sync' })
     return query
@@ -104,7 +111,7 @@ function queryBoundary(track) {
       return Promise.all(queries.filter(query => query.options.value.enabled !== false && queryKey.every((part, index) => query.options.value.queryKey[index] === part)).map(query => query.refetch()))
     },
   }
-  return { useQuery, useMutation, useQueryClient: () => client, queries, mutations, invalidations }
+  return { useQuery, useMutation, useQueryClient: () => client, queries, mutations, invalidations, sharedCache }
 }
 
 function hostNode(tag = '') {
@@ -184,7 +191,194 @@ async function accessEarlierComments(page, ids) {
   assertComments(page, ids)
 }
 
-async function fixture(t) {
+for (const [status, code] of [[401, 'UNAUTHENTICATED'], [403, 'FORBIDDEN'], [404, 'ISSUE_NOT_FOUND']]) {
+  test(`denial ${status}, transient failure and later success never reveal an unbound old draft`, async t => {
+    const f = await fixture(t)
+    const first = partialDetail()
+    f.setDetail(first)
+    let reads = 0
+    f.setResponder(call => {
+      if (call.method === 'PATCH') return json({ error: { code: 'REVISION_CONFLICT', message: 'Conflict' } }, 409)
+      if (call.method !== 'GET' || call.url.pathname !== '/api/issues/701' || call.url.searchParams.get('comments_offset') !== '50') return
+      reads++
+      if (reads <= 2) {
+        const query = f.query.queries.find(item => item.options.value.queryKey[0] === 'issue-detail')
+        assert.ok(query)
+        query.data.value = undefined
+        return reads === 1 ? json({ error: { code, message: 'Denied' } }, status) : json({ error: { code: 'UNAVAILABLE', message: 'Transient' } }, 503)
+      }
+      return json({ ...first, comments: [], comment_count: 50, comments_offset: 50, comments_next_offset: null, comments_complete: true })
+    })
+    const page = await f.mount('[id]')
+    await page.click('Edit')
+    await page.field('Title', 'Private old draft')
+    await page.click('Save edit')
+    assert.equal(f.writes().length, 1)
+    await page.click('Next comments page')
+    assert.doesNotMatch(rawText(page.tree()), /Private old draft|Synthetic task/)
+    await page.click('Read current issue again')
+    assert.doesNotMatch(rawText(page.tree()), /Private old draft|Synthetic task/)
+    await page.click('Read current issue again')
+    assert.equal(reads, 3, 'the final read must be a real successful request')
+    assert.doesNotMatch(rawText(page.tree()), /Private old draft/, 'a 200 cannot reassign an unbound draft')
+    assert.equal(f.writes().length, 1, 'reads never replay the draft')
+  })
+}
+
+test('an observed authentication change hides an unbound old draft after a new read', async t => {
+  const f = await fixture(t)
+  f.setDetail(partialDetail())
+  f.setResponder(call => call.method === 'PATCH' ? json({ error: { code: 'REVISION_CONFLICT', message: 'Conflict' } }, 409) : undefined)
+  const page = await f.mount('[id]')
+  await page.click('Edit')
+  await page.field('Title', 'Private old draft')
+  await page.click('Save edit')
+  f.setAuthState({ phase: 'loading' })
+  f.setAuthState({ phase: 'authenticated', user: { id: 'other-user' }, authDisabled: false })
+  await f.settle()
+  assert.doesNotMatch(rawText(page.tree()), /Private old draft/)
+  assert.equal(f.writes().length, 1)
+})
+
+test('a fresh authorized detail read releases the denial latch when there is no old draft', async t => {
+  const f = await fixture(t)
+  const first = partialDetail()
+  f.setDetail(first)
+  let reads = 0
+  f.setResponder(call => {
+    if (call.method !== 'GET' || call.url.pathname !== '/api/issues/701' || call.url.searchParams.get('comments_offset') !== '50') return
+    reads++
+    if (reads <= 2) {
+      const query = f.query.queries.find(item => item.options.value.queryKey[0] === 'issue-detail')
+      assert.ok(query)
+      query.data.value = undefined
+      return reads === 1 ? json({ error: { code: 'FORBIDDEN', message: 'Denied' } }, 403) : json({ error: { code: 'UNAVAILABLE', message: 'Transient' } }, 503)
+    }
+    return json({ ...first, comments: [], comment_count: 50, comments_offset: 50, comments_next_offset: null, comments_complete: true })
+  })
+  const page = await f.mount('[id]')
+  await page.click('Next comments page')
+  assert.doesNotMatch(rawText(page.tree()), /Synthetic task/)
+  await page.click('Read current issue again')
+  assert.doesNotMatch(rawText(page.tree()), /Synthetic task/)
+  await page.click('Read current issue again')
+  assert.equal(reads, 3)
+  assert.match(page.text(), /Synthetic task/)
+  assert.equal(f.writes().length, 0)
+})
+
+test('a read started before a denial cannot reopen cached detail after a later transient failure', async t => {
+  const f = await fixture(t)
+  const page = await f.mount('[id]')
+  const query = f.query.queries.find(item => item.options.value.queryKey[0] === 'issue-detail')
+  assert.ok(query)
+  let release
+  let reads = 0
+  f.setResponder(call => {
+    if (call.method !== 'GET' || call.url.pathname !== '/api/issues/701') return
+    reads++
+    if (reads === 1) return new Promise(resolve => { release = () => resolve(json(detail())) })
+    if (reads === 2) return json({ error: { code: 'FORBIDDEN', message: 'Denied' } }, 403)
+    return json({ error: { code: 'UNAVAILABLE', message: 'Transient' } }, 503)
+  })
+  const older = query.refetch()
+  await new Promise(setImmediate)
+  assert.equal(typeof release, 'function')
+  await query.refetch()
+  assert.doesNotMatch(rawText(page.tree()), /Synthetic task/)
+  release()
+  await older
+  await query.refetch()
+  await f.settle()
+  assert.equal(reads, 3)
+  assert.doesNotMatch(rawText(page.tree()), /Synthetic task/)
+  assert.equal(f.writes().length, 0)
+})
+
+test('a fresh authorized read shows current issue data without exposing an unbound draft', async t => {
+  const f = await fixture(t)
+  const first = partialDetail()
+  f.setDetail(first)
+  let reads = 0
+  f.setResponder(call => {
+    if (call.method === 'PATCH') return json({ error: { code: 'REVISION_CONFLICT', message: 'Conflict' } }, 409)
+    if (call.method !== 'GET' || call.url.pathname !== '/api/issues/701' || call.url.searchParams.get('comments_offset') !== '50') return
+    if (++reads === 1) {
+      const query = f.query.queries.find(item => item.options.value.queryKey[0] === 'issue-detail')
+      assert.ok(query)
+      query.data.value = undefined
+      return json({ error: { code: 'FORBIDDEN', message: 'Denied' } }, 403)
+    }
+    return json({ ...first, issue: row({ revision: '2', title: 'Newly authorized current issue' }), comments: [], comment_count: 50, comments_offset: 50, comments_next_offset: null, comments_complete: true })
+  })
+  const page = await f.mount('[id]')
+  await page.click('Edit')
+  await page.field('Title', 'Private old draft')
+  await page.click('Save edit')
+  await page.click('Next comments page')
+  assert.doesNotMatch(rawText(page.tree()), /Private old draft|Synthetic task/)
+  await page.click('Read current issue again')
+  assert.equal(reads, 2)
+  assert.match(page.text(), /Newly authorized current issue/)
+  assert.doesNotMatch(rawText(page.tree()), /Private old draft/)
+  assert.equal(f.writes().length, 1)
+})
+
+for (const scenario of ['denial', 'auth change while unmounted']) {
+  test(`shared cached issue stays hidden on remount after ${scenario} until a fresh authorized read`, async t => {
+    const f = await fixture(t, { sharedCache: true })
+    const first = await f.mount('[id]')
+    assert.match(first.text(), /Synthetic task/)
+    const originalQuery = f.query.queries.find(item => item.options.value.queryKey[0] === 'issue-detail')
+    assert.ok(originalQuery)
+    const originalKey = JSON.stringify(originalQuery.options.value.queryKey)
+    const cached = f.query.sharedCache.get(originalKey)
+    assert.equal(cached?.issue.title, 'Synthetic task', 'the shared keyed cache must actually retain the successful response')
+    f.setResponder(call => {
+      if (call.method === 'PATCH') return json({ error: { code: 'REVISION_CONFLICT', message: 'Conflict' } }, 409)
+      if (scenario === 'denial' && call.method === 'GET' && call.url.pathname === '/api/issues/701') return json({ error: { code: 'FORBIDDEN', message: 'Denied' } }, 403)
+    })
+    await first.click('Edit')
+    await first.field('Title', 'Private old remount draft')
+    await first.click('Save edit')
+    assert.equal(f.writes().length, 1)
+    if (scenario === 'denial') {
+      await originalQuery.refetch()
+      await f.settle()
+      assert.doesNotMatch(rawText(first.tree()), /Synthetic task|Private old remount draft/)
+    }
+    first.unmount()
+    if (scenario === 'auth change while unmounted') {
+      f.setAuthState({ phase: 'authenticated', user: { id: 'other-user' }, authDisabled: false })
+    }
+    let release
+    f.setResponder(call => {
+      if (call.method === 'GET' && call.url.pathname === '/api/issues/701') {
+        return new Promise(resolve => { release = () => resolve(json(detail({ issue: row({ revision: '2', title: 'Fresh authorized issue' }) }))) })
+      }
+    })
+    const reopened = await f.mount('[id]', { settleOnMount: false })
+    try {
+      await new Promise(setImmediate)
+      await vue.nextTick()
+      assert.equal(typeof release, 'function', 'the new authorized read must still be pending')
+      const reopenedQuery = f.query.queries.filter(item => item.options.value.queryKey[0] === 'issue-detail').at(-1)
+      assert.ok(reopenedQuery)
+      if (JSON.stringify(reopenedQuery.options.value.queryKey) === originalKey) {
+        assert.equal(reopenedQuery.data.value, cached, 'same-key remount must actually reuse cached data in the fixture')
+      }
+      assert.doesNotMatch(rawText(reopened.tree()), /Synthetic task|Private old remount draft/, 'old cached content must stay hidden before current authorization succeeds')
+    } finally {
+      if (release) release()
+      await f.settle()
+    }
+    assert.match(reopened.text(), /Fresh authorized issue/)
+    assert.doesNotMatch(rawText(reopened.tree()), /Private old remount draft/)
+    assert.equal(f.writes().length, 1, 'remount and reads must not replay the draft')
+  })
+}
+
+async function fixture(t, { sharedCache = false, crypto = globalThis.crypto } = {}) {
   const calls = [], pending = new Set(), violations = [], renderErrors = [], apps = [], modules = new Map()
   let responder = () => undefined
   let issueDetail = detail()
@@ -207,7 +401,7 @@ async function fixture(t) {
   const addedGlobals = Object.entries(browserGlobals).filter(([name]) => !Object.getOwnPropertyDescriptor(globalThis, name))
   for (const [name, value] of addedGlobals) Object.defineProperty(globalThis, name, { configurable: true, value })
   const track = promise => { pending.add(promise); promise.then(() => pending.delete(promise), () => pending.delete(promise)); return promise }
-  const query = queryBoundary(track)
+  const query = queryBoundary(track, sharedCache ? new Map() : null)
   const router = routing.createRouter({ history: routing.createMemoryHistory(), routes: [{ path: '/issues/:id?', component: { render: () => null } }] })
   await router.push({ path: '/issues', query: { project: sourceProject } })
   const $fetch = async (path, options = {}) => {
@@ -238,7 +432,7 @@ async function fixture(t) {
     }
     return data
   }
-  const globals = { useRuntimeConfig: () => ({ public: { apiBase: '/api' } }), $fetch, useRoute: routing.useRoute, useRouter: routing.useRouter, sessionStorage, useState }
+  const globals = { useRuntimeConfig: () => ({ public: { apiBase: '/api' } }), $fetch, useRoute: routing.useRoute, useRouter: routing.useRouter, sessionStorage, useState, crypto }
   function load(url) {
     const key = url.href
     if (modules.has(key)) return modules.get(key)
@@ -275,7 +469,7 @@ async function fixture(t) {
     }
     assert.fail('fixture callbacks did not settle; this is not behavioral RED')
   }
-  async function mount(page) {
+  async function mount(page, { settleOnMount = true } = {}) {
     await router.push({ path: page === 'index' ? '/issues' : '/issues/701', query: { project: sourceProject } })
     const app = renderer.createApp(load(new URL(`pages/issues/${page}.vue`, appRoot)).default)
     app.component('NuxtLink', routing.RouterLink)
@@ -283,9 +477,10 @@ async function fixture(t) {
     app.use(router)
     app.mount(hostNode('root'))
     apps.push(app)
-    await settle()
+    if (settleOnMount) await settle()
     const tree = () => app._instance.subTree
     return {
+      unmount() { app.unmount(); apps.splice(apps.indexOf(app), 1) },
       tree, text: () => text(tree()),
       find: predicate => nodes(tree()).find(predicate),
       hasEnabledAction(label) {
@@ -302,6 +497,11 @@ async function fixture(t) {
         assert.ok(!disabled(button), `Rendered action ${label} is disabled`)
         const handlers = button.props?.onClick
         for (const handler of Array.isArray(handlers) ? handlers : [handlers]) await handler?.({ button: 0, preventDefault() { }, stopPropagation() { } })
+        if (button.type === 'summary') {
+          const disclosure = nodes(tree()).find(node => node.type === 'details' && childrenForDisplay(node).includes(button))
+          assert.ok(disclosure, 'a summary must belong to a visible disclosure')
+          disclosure.props = { ...disclosure.props, open: !disclosure.props?.open }
+        }
         await settle()
       },
       async field(label, value) {
@@ -374,6 +574,60 @@ async function fillCreate(page) {
 }
 function createRequest(fields = {}) { return { title: 'Synthetic pending intent', body: 'Synthetic pending description', source_project: sourceProject, target_project: targetProject, ...fields } }
 
+test('initial issue read failure offers explicit retry and displays only the fresh result', async t => {
+  const f = await fixture(t, { sharedCache: true })
+  f.setDetail(detail({ issue: row({ title: 'Stale issue detail' }) }))
+  let reads = 0
+  f.setResponder(call => {
+    if (call.method === 'GET' && call.url.pathname === '/api/issues/701') {
+      reads++
+      return reads === 1
+        ? json({ error: { code: 'UNAVAILABLE', message: 'Service unavailable' } }, 503)
+        : json(detail({ issue: row({ title: 'Fresh issue after retry' }) }))
+    }
+  })
+  const page = await f.mount('[id]')
+  const alert = page.find(node => node.props?.role === 'alert')
+  assert.ok(alert, 'the first failed read must expose an error')
+  assert.match(text(alert), /UNAVAILABLE/)
+  assert.doesNotMatch(rawText(page.tree()), /Stale issue detail|Fresh issue after retry/)
+  assert.equal(page.hasEnabledAction(/Read current issue again/), true)
+  await page.click('Read current issue again')
+  assert.match(page.text(), /Fresh issue after retry/)
+  assert.doesNotMatch(rawText(page.tree()), /Stale issue detail/)
+  assert.equal(reads, 2, 'only the explicit retry may issue the second read')
+  assert.equal(f.writes().length, 0, 'read recovery must not dispatch a mutation')
+})
+
+test('issue detail works without randomUUID and hides cached data until a fresh remount read', async t => {
+  const f = await fixture(t, { sharedCache: true, crypto: { getRandomValues: values => globalThis.crypto.getRandomValues(values) } })
+  f.setDetail(detail({ issue: row({ title: 'Previously visible issue' }) }))
+  const first = await f.mount('[id]')
+  assert.match(first.text(), /Previously visible issue/)
+  first.unmount()
+
+  let resolveRead, signalStarted
+  const started = new Promise(resolve => { signalStarted = resolve })
+  const pendingRead = new Promise(resolve => { resolveRead = resolve })
+  f.setResponder(call => {
+    if (call.method === 'GET' && call.url.pathname === '/api/issues/701') {
+      signalStarted()
+      return pendingRead
+    }
+  })
+  const reopened = await f.mount('[id]', { settleOnMount: false })
+  try {
+    await started
+    assert.doesNotMatch(rawText(reopened.tree()), /Previously visible issue/)
+  } finally {
+    resolveRead(json(detail({ issue: row({ title: 'Fresh authorized issue' }) })))
+    await f.settle()
+  }
+  assert.match(reopened.text(), /Fresh authorized issue/)
+  assert.doesNotMatch(rawText(reopened.tree()), /Previously visible issue/)
+  assert.equal(f.writes().length, 0, 'mounting and reading must not dispatch a mutation')
+})
+
 test('issue catalog has complete Russian, English and Chinese keys', () => {
   const keys = Object.keys(englishCatalog.issueFlow).sort()
   assert.deepEqual(Object.keys(catalogs.messages.ru.issueFlow).sort(), keys)
@@ -396,6 +650,88 @@ test('issue language selector renders Chinese status and creation controls', asy
   } finally {
     i18n.locale.value = 'en'
   }
+})
+
+test('reconciling a title-only conflict does not revert concurrently changed untouched fields', async t => {
+  const f = await fixture(t)
+  f.setDetail(detail({ issue: row({ revision: '1', body: 'Original body', metadata: { retained: 'original' } }) }))
+  let writes = 0
+  f.setResponder(call => {
+    if (call.method !== 'PATCH') return
+    if (++writes === 1) return json({ error: { code: 'REVISION_CONFLICT', message: 'Conflict' } }, 409)
+    return json({ id: 701, revision: '3', changed: true, comment_id: null, message: 'issue updated' })
+  })
+  const page = await f.mount('[id]')
+  await page.click('Edit')
+  await page.field('Title', 'My title draft')
+  await page.click('Save edit')
+  assert.equal(f.writes().length, 1)
+  assert.equal(f.writes()[0].body.expected_revision, '1')
+  assert.equal(f.writes()[0].body.title, 'My title draft')
+  assert.equal(Object.hasOwn(f.writes()[0].body, 'body'), false)
+  assert.equal(Object.hasOwn(f.writes()[0].body, 'metadata'), false)
+  f.setDetail(detail({ issue: row({ revision: '2', body: 'Concurrent body', metadata: { retained: 'concurrent', extra: true } }) }))
+  await page.click('Read current issue to reconcile')
+  await page.click('Use read revision for retained draft (do not submit)')
+  assert.equal(f.writes().length, 1, 'reading and accepting a revision must not submit')
+  assert.equal(page.fieldValue('Title'), 'My title draft')
+  await page.click('Save edit')
+  assert.equal(f.writes().length, 2)
+  const submitted = f.writes()[1].body
+  assert.equal(submitted.expected_revision, '2')
+  assert.equal(submitted.title, 'My title draft')
+  assert.equal(Object.hasOwn(submitted, 'body'), false, 'untouched concurrent body must not be reverted')
+  assert.equal(Object.hasOwn(submitted, 'metadata'), false, 'untouched concurrent metadata must not be reverted')
+})
+
+for (const collection of ['comments', 'history']) test(`transient ${collection} continuation failure leaves recovery and the losing draft reachable`, async t => {
+  const f = await fixture(t)
+  const first = partialDetail()
+  f.setDetail(first)
+  f.setResponder(call => {
+    if (call.method === 'PATCH') return json({ error: { code: 'REVISION_CONFLICT', message: 'Conflict' } }, 409)
+    if (call.method === 'GET' && call.url.pathname === '/api/issues/701' && call.url.searchParams.get(`${collection}_offset`) === '50') {
+      const query = f.query.queries.find(item => item.options.value.queryKey[0] === 'issue-detail')
+      assert.ok(query, 'the page must use its real detail query')
+      query.data.value = undefined
+      return json({ error: { code: 'UNAVAILABLE', message: 'Transient failure' } }, 503)
+    }
+  })
+  const page = await f.mount('[id]')
+  await page.click('Edit')
+  await page.field('Title', 'Retained recovery draft')
+  await page.click('Save edit')
+  assert.equal(f.writes().length, 1)
+  await page.click(i18n.t('issueFlow.inspectDraft'))
+  assert.match(page.text(), /Retained recovery draft/)
+  await page.click(collection === 'comments' ? 'Next comments page' : 'Next history page')
+  const recover = collection === 'comments' ? /previous comments page|reset|restart/i : /previous history page|reset|restart/i
+  await page.click(i18n.t('issueFlow.inspectDraft'))
+  assert.match(page.text(), /Retained recovery draft/, 'a transient read failure must not hide the retained draft')
+  assert.ok(page.hasEnabledAction(recover), 'an explicit route back to readable data must remain reachable')
+  await page.click(recover)
+  assert.match(page.text(), /Synthetic task/)
+  await page.click(i18n.t('issueFlow.inspectDraft'))
+  assert.match(page.text(), /Retained recovery draft/)
+  assert.equal(f.writes().length, 1, 'continuation recovery must not replay the draft')
+})
+
+test('a forbidden continuation does not expose the previously read issue', async t => {
+  const f = await fixture(t)
+  f.setDetail(partialDetail())
+  f.setResponder(call => {
+    if (call.method === 'GET' && call.url.pathname === '/api/issues/701' && call.url.searchParams.get('comments_offset') === '50') {
+      const query = f.query.queries.find(item => item.options.value.queryKey[0] === 'issue-detail')
+      assert.ok(query)
+      query.data.value = undefined
+      return json({ error: { code: 'FORBIDDEN', message: 'Access revoked' } }, 403)
+    }
+  })
+  const page = await f.mount('[id]')
+  assert.match(page.text(), /Synthetic task/)
+  await page.click('Next comments page')
+  assert.doesNotMatch(page.text(), /Synthetic task/)
+  assert.equal(f.writes().length, 0)
 })
 
 test('active, awaiting-verification and closed filters request distinct states', async t => {

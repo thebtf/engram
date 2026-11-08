@@ -14,23 +14,51 @@ import { formatAbsoluteDate } from '~/utils/formatters'
 import { useProjectCatalog } from '~/composables/useProjectCatalog'
 import ProjectCatalogStatus from '~/components/ProjectCatalogStatus.vue'
 import { useOperatorI18n } from '~/composables/useOperatorI18n'
+import { useOperatorAuth } from '~/composables/useOperatorAuth'
 
 const { t, te } = useOperatorI18n()
 const route = useRoute()
 const router = useRouter()
 const queryClient = useQueryClient()
+const { state: authState } = useOperatorAuth()
 const { projects, unresolved, selectedProject, selectionPending, selectionError, unresolvedReference, projectName } = useProjectCatalog('all')
 const canAct = computed(() => !selectionPending.value && !selectionError.value && projects.value.some(project => project.project_id === selectedProject.value))
 
 const issueId = computed(() => Number(route.params.id))
+const readScope = ref(0)
+const deniedLatch = ref(true)
+const draftQuarantined = ref(false)
+let denialVersion = 0
 const detailPage = ref<IssueDetailPageOptions>({ comments_offset: 0, comments_limit: 50, history_offset: 0, history_limit: 50 })
 watch(issueId, () => {
   detailPage.value = { comments_offset: 0, comments_limit: 50, history_offset: 0, history_limit: 50 }
   commentOffsets.value = []
   historyOffsets.value = []
 }, { flush: 'sync' })
-const issueQuery = useIssueDetailQuery(issueId, detailPage)
-const issue = computed(() => issueQuery.data.value?.issue ?? null)
+const issueQuery = useIssueDetailQuery(issueId, detailPage, {
+  instance: Array.from(crypto.getRandomValues(new Uint32Array(4)), value => value.toString(16).padStart(8, '0')).join(''),
+  scope: readScope,
+  start: () => denialVersion,
+  success: (id, scope, version) => {
+    if (id !== issueId.value || scope !== readScope.value || version !== denialVersion) return false
+    deniedLatch.value = false
+    return true
+  },
+  failure: (id, scope, failure) => {
+    if (id !== issueId.value || scope !== readScope.value) return
+    const error = toIssueApiError(failure)
+    if ([401, 403, 404].includes(error.status ?? 0) || ['UNAUTHENTICATED', 'FORBIDDEN', 'ISSUE_NOT_FOUND'].includes(error.code)) {
+      if (hasPrivateDraft()) draftQuarantined.value = true
+      denialVersion++
+      deniedLatch.value = true
+      reconciliationRead.value = false
+      commentRead.value = false
+    }
+  },
+})
+const readDenied = computed(() => deniedLatch.value)
+const issue = computed(() => readDenied.value ? null : issueQuery.data.value?.issue ?? null)
+const transientReadFailure = computed(() => issueQuery.isError.value && !readDenied.value && toIssueApiError(issueQuery.error.value).outcome === 'unknown')
 const comments = computed(() => issueQuery.data.value?.comments ?? [])
 const history = computed(() => issueQuery.data.value?.history ?? [])
 const commentOffsets = ref<number[]>([])
@@ -117,6 +145,23 @@ const issueMutation = useMutation({
     }
   },
 })
+
+function hasPrivateDraft() {
+  return !!(editing.value || losingDraft.value || reconciledStatus.value || commentNeedsReview.value || issueMutation.isPending.value
+    || newComment.value || commentMetadata.value !== '{}' || statusComment.value || statusCommentMetadata.value !== '{}'
+    || rejectReason.value || showRejectPanel.value || mutationSession.value)
+}
+
+function changeReadScope() {
+  if (hasPrivateDraft()) draftQuarantined.value = true
+  denialVersion++
+  deniedLatch.value = true
+  reconciliationRead.value = false
+  commentRead.value = false
+  readScope.value++
+}
+watch(issueId, changeReadScope, { flush: 'sync' })
+watch([() => authState.value.phase, () => authState.value.user, () => authState.value.authDisabled], changeReadScope, { flush: 'sync' })
 
 const deleteMutation = useMutation({
   retry: false,
@@ -330,6 +375,7 @@ async function readForReconciliation() {
   commentRead.value = false
   const result = await issueQuery.refetch()
   readingCurrent.value = false
+  if (readDenied.value || draftQuarantined.value) return
   if (result.error || !result.data) { actionError.value = safeError(result.error); return }
   reconciliationRead.value = losingDraft.value?.id === result.data.issue.id
   commentRead.value = true
@@ -338,7 +384,19 @@ async function readForReconciliation() {
 function acceptCurrentRevision() {
   if (!reconciliationRead.value || !losingDraft.value || !issue.value || losingDraft.value.id !== issue.value.id || losingDraft.value.source !== selectedProject.value) return
   const retained = losingDraft.value
-  if (retained.kind === 'edit') editBase.value = JSON.parse(JSON.stringify(issue.value))
+  if (retained.kind === 'edit') {
+    const original = retained.base
+    const current = issue.value
+    if (editTitle.value === original.title) editTitle.value = current.title
+    if (editBody.value === (original.body ?? '')) editBody.value = current.body ?? ''
+    if (editPriority.value === original.priority) editPriority.value = current.priority
+    if (editType.value === original.type) editType.value = current.type
+    if (editLabels.value === pretty(original.labels ?? [])) editLabels.value = pretty(current.labels ?? [])
+    if (editMetadata.value === pretty(original.metadata ?? {})) editMetadata.value = pretty(current.metadata ?? {})
+    if (editOwner.value === (original.owner_label ?? '')) editOwner.value = current.owner_label ?? ''
+    if (editRecipient.value === (original.recipient_label ?? '')) editRecipient.value = current.recipient_label ?? ''
+    editBase.value = JSON.parse(JSON.stringify(current))
+  }
   else reconciledStatus.value = { ...retained, base: JSON.parse(JSON.stringify(issue.value)) }
   losingDraft.value = null
   reconciliationRead.value = false
@@ -418,19 +476,39 @@ function confirmDelete() {
           projectName(project.project_id) }}</option>
       </select>
     </label>
-    <label class="block text-sm">{{ t('issueFlow.mutationSession') }}
+    <label v-if="!readDenied && !draftQuarantined" class="block text-sm">{{ t('issueFlow.mutationSession') }}
       <input v-model="mutationSession" :disabled="issueMutation.isPending.value || !!losingDraft || !!reconciledStatus"
         class="ml-2 rounded border p-2" />
       <span class="ml-2 text-xs text-[var(--muted)]">{{ t('issueFlow.sessionHelp') }}</span>
     </label>
     <div class="surface-panel p-5">
-      <div v-if="issueQuery.isPending.value" class="text-sm text-[var(--muted)]">
+      <div v-if="issueQuery.isPending.value || (readDenied && issueQuery.isFetching.value)"
+        class="text-sm text-[var(--muted)]">
         {{ t('issueFlow.loadingIssues') }}
       </div>
       <div v-if="issueQuery.isError.value" role="alert" class="text-sm text-[var(--danger)]">
         {{ safeError(issueQuery.error.value) }}
         <button class="ml-2 rounded border px-3 py-2" :disabled="issueQuery.isFetching.value"
           @click="issueQuery.refetch()">{{ t('issueFlow.readIssueAgain') }}</button>
+        <template v-if="transientReadFailure && !issue">
+          <div v-if="losingDraft && !draftQuarantined" class="mt-3 space-y-2" role="status">
+            <p>{{ t('issueFlow.retainedDraft', { id: losingDraft.id, revision: losingDraft.base.revision }) }}</p>
+            <p>{{ t('issueFlow.draftWarning') }}</p>
+            <details>
+              <summary class="cursor-pointer">{{ t('issueFlow.inspectDraft') }}</summary>
+              <pre class="mt-2 max-h-96 overflow-auto whitespace-pre-wrap break-words text-xs">{{ pretty({
+                base:
+                  losingDraft.base, draft: losingDraft.fields
+              }) }}</pre>
+            </details>
+          </div>
+          <button v-if="commentOffsets.length" class="ml-2 rounded border px-3 py-2"
+            :disabled="issueQuery.isFetching.value" @click="previousComments">{{ t('issueFlow.previousComments')
+            }}</button>
+          <button v-if="historyOffsets.length" class="ml-2 rounded border px-3 py-2"
+            :disabled="issueQuery.isFetching.value" @click="previousHistory">{{ t('issueFlow.previousHistory')
+            }}</button>
+        </template>
       </div>
       <div v-if="issue" class="space-y-5">
         <NuxtLink :to="{ path: '/issues', query: route.query }"
@@ -447,7 +525,7 @@ function confirmDelete() {
           {{ actionMessage }}
         </div>
 
-        <div v-if="losingDraft" class="surface-panel-warm space-y-3 p-4" role="status">
+        <div v-if="losingDraft && !draftQuarantined" class="surface-panel-warm space-y-3 p-4" role="status">
           <h2 class="font-semibold">{{ t('issueFlow.retainedDraft', {
             id: losingDraft.id, revision:
               losingDraft.base.revision
@@ -471,9 +549,10 @@ function confirmDelete() {
             :disabled="!reconciliationRead || !canAct || selectedProject !== losingDraft.source"
             @click="acceptCurrentRevision">{{ t('issueFlow.useRevision') }}</button>
           <button class="ml-2 rounded border px-3 py-2 text-sm" :disabled="!reconciliationRead"
-            @click="acceptReadOutcome">{{ t('issueFlow.discardDraft') }}</button>
+            @click="acceptReadOutcome">{{
+              t('issueFlow.discardDraft') }}</button>
         </div>
-        <div v-if="reconciledStatus" class="surface-panel-warm space-y-3 p-4">
+        <div v-if="reconciledStatus && !draftQuarantined" class="surface-panel-warm space-y-3 p-4">
           <p class="text-sm">{{ t('issueFlow.retainedStatus', {
             revision: reconciledStatus.base.revision, fields:
               pretty(reconciledStatus.fields)
@@ -482,12 +561,13 @@ function confirmDelete() {
             :disabled="!canAct || issueMutation.isPending.value || selectedProject !== reconciledStatus.source"
             @click="resubmitStatus">{{ t('issueFlow.submitStatus') }}</button>
         </div>
-        <div v-if="commentNeedsReview" class="surface-panel-warm space-y-3 p-4" role="status">
+        <div v-if="commentNeedsReview && !draftQuarantined" class="surface-panel-warm space-y-3 p-4" role="status">
           <p class="text-sm">{{ t('issueFlow.commentUnknown') }}</p>
           <button class="rounded border px-3 py-2 text-sm" :disabled="readingCurrent || issueQuery.isFetching.value"
             @click="readForReconciliation">{{ t('issueFlow.readComments') }}</button>
           <button class="ml-2 rounded border px-3 py-2 text-sm" :disabled="!commentRead"
-            @click="releaseCommentReview">{{ t('issueFlow.allowAppend') }}</button>
+            @click="releaseCommentReview">{{
+              t('issueFlow.allowAppend') }}</button>
         </div>
 
         <div class="flex flex-wrap items-start justify-between gap-4">
@@ -519,7 +599,7 @@ function confirmDelete() {
             </p>
           </div>
 
-          <div class="flex flex-wrap gap-2">
+          <div v-if="!draftQuarantined" class="flex flex-wrap gap-2">
             <button
               class="rounded-lg border border-[var(--border)] bg-[var(--surface-warm)] px-3 py-2 text-xs font-semibold text-[var(--fg-2)]"
               :disabled="!canAct || issueMutation.isPending.value || editing || !!losingDraft || !!reconciledStatus || commentNeedsReview"
@@ -565,7 +645,7 @@ function confirmDelete() {
           </div>
         </div>
 
-        <fieldset class="surface-panel-warm space-y-3 p-4"
+        <fieldset v-if="!draftQuarantined" class="surface-panel-warm space-y-3 p-4"
           :disabled="issueMutation.isPending.value || !!losingDraft || !!reconciledStatus || editing || commentNeedsReview">
           <label class="block text-sm">{{ t('issueFlow.statusComment') }}<textarea v-model="statusComment" rows="2"
               class="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm" /></label>
@@ -575,7 +655,7 @@ function confirmDelete() {
           <p class="text-xs text-[var(--muted)]">{{ t('issueFlow.statusHelp') }}</p>
         </fieldset>
 
-        <div v-if="editing" class="surface-panel-warm p-4">
+        <div v-if="editing && !draftQuarantined" class="surface-panel-warm p-4">
           <div class="mb-3 text-xs uppercase tracking-[0.08em] text-[var(--muted)]">
             {{ t('issueFlow.editBase', { revision: editBase?.revision }) }}
           </div>
@@ -622,18 +702,18 @@ function confirmDelete() {
             </div>
 
             <label class="block"><span class="mb-1 block text-xs text-[var(--muted)]">{{ t('issueFlow.labelsJson')
-                }}</span><textarea v-model="editLabels" rows="2"
+            }}</span><textarea v-model="editLabels" rows="2"
                 class="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm" /></label>
             <label class="block"><span class="mb-1 block text-xs text-[var(--muted)]">{{ t('issueFlow.metadataJson')
-                }}</span><textarea v-model="editMetadata" rows="5"
+            }}</span><textarea v-model="editMetadata" rows="5"
                 class="mono-data w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm" /><span
                 class="text-xs text-[var(--muted)]">{{ t('issueFlow.editMetadataHelp') }}</span></label>
             <div class="grid gap-3 sm:grid-cols-2">
               <label class="block"><span class="mb-1 block text-xs text-[var(--muted)]">{{ t('issueFlow.ownerLabel')
-                  }}</span><input v-model="editOwner"
+              }}</span><input v-model="editOwner"
                   class="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm" /></label>
               <label class="block"><span class="mb-1 block text-xs text-[var(--muted)]">{{ t('issueFlow.recipientLabel')
-                  }}</span><input v-model="editRecipient"
+              }}</span><input v-model="editRecipient"
                   class="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm" /></label>
             </div>
             <p class="text-xs text-[var(--muted)]">{{ t('issueFlow.editOwnerHelp') }}</p>
@@ -660,7 +740,7 @@ function confirmDelete() {
           </fieldset>
         </div>
 
-        <div v-if="showRejectPanel" class="surface-panel-warm p-4">
+        <div v-if="showRejectPanel && !draftQuarantined" class="surface-panel-warm p-4">
           <div class="mb-2 text-xs uppercase tracking-[0.08em] text-[var(--danger)]">
             {{ t('issueFlow.rejectHeading') }}
           </div>
@@ -684,7 +764,8 @@ function confirmDelete() {
           </div>
         </div>
 
-        <div v-if="showDeleteConfirm" class="surface-panel-warm border-[color:rgba(248,113,113,0.35)] p-4">
+        <div v-if="showDeleteConfirm && !draftQuarantined"
+          class="surface-panel-warm border-[color:rgba(248,113,113,0.35)] p-4">
           <div class="mb-2 text-sm font-semibold text-[var(--danger)]">
             {{ t('issueFlow.deleteConfirm', { id: issue.id }) }}
           </div>
@@ -774,7 +855,7 @@ function confirmDelete() {
           </div>
 
           <div class="space-y-4">
-            <div class="surface-panel-warm p-4">
+            <div v-if="!draftQuarantined" class="surface-panel-warm p-4">
               <div class="mb-3 text-xs uppercase tracking-[0.08em] text-[var(--muted)]">
                 {{ t('issueFlow.addComment') }}
               </div>

@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/vue-query'
 import type { Ref } from 'vue'
 import {
+  IssueApiError,
   checkForUpdate,
   fetchCredentials,
   fetchConfig,
@@ -101,9 +102,16 @@ export function useIssuesQuery(filters: IssueQueryFilters) {
   })
 }
 
-export function useIssueDetailQuery(issueId: Ref<number>, page?: Ref<IssueDetailPageOptions>) {
+export function useIssueDetailQuery(issueId: Ref<number>, page?: Ref<IssueDetailPageOptions>, guard?: {
+  instance: string
+  scope: Ref<number>
+  start: (id: number, scope: number) => number
+  success: (id: number, scope: number, token: number) => boolean
+  failure: (id: number, scope: number, error: unknown) => void
+}) {
   return useQuery(() => {
     const id = issueId.value
+    const scope = guard?.scope.value ?? 0
     const options = page?.value
     const params: Required<IssueDetailPageOptions> = {
       comments_offset: options?.comments_offset === undefined ? 0 : options.comments_offset,
@@ -112,10 +120,21 @@ export function useIssueDetailQuery(issueId: Ref<number>, page?: Ref<IssueDetail
       history_limit: options?.history_limit === undefined ? 50 : options.history_limit,
     }
     return {
-      queryKey: ['issue-detail', id, 'paged', params],
-      queryFn: () => fetchIssue(id, params),
+      queryKey: ['issue-detail', id, 'paged', params, scope, guard?.instance],
+      queryFn: async () => {
+        const token = guard?.start(id, scope) ?? 0
+        try {
+          const result = await fetchIssue(id, params)
+          if (guard && !guard.success(id, scope, token)) throw new IssueApiError('UNAVAILABLE', 'unknown')
+          return result
+        } catch (error) {
+          guard?.failure(id, scope, error)
+          throw error
+        }
+      },
       enabled: id > 0,
       retry: false,
+      refetchOnMount: 'always' as const,
       staleTime: 15_000,
     }
   })
