@@ -29,7 +29,7 @@ before(async () => {
 after(async () => { const closed = once(server, 'exit'); server.kill(); await closed })
 const tick = async () => { await new Promise(resolve => setTimeout(resolve, 15)); await vue.nextTick() }
 async function until(predicate) { for (let i = 0; i < 100; i++) { if (predicate()) return; await tick() } assert.ok(predicate(), 'Rendered HTTP state did not settle') }
-function node(tag = '', text = '') { return { tag, text, props: {}, children: [], parent: null } }
+function node(tag = '', text = '') { return { tag, text, props: {}, children: [], parent: null, scrollIntoView() { } } }
 const renderer = vue.createRenderer({
   createElement: tag => node(tag), createText: text => node('', text), createComment: () => node(),
   patchProp: (item, key, _previous, value) => { item.props[key] = value },
@@ -50,7 +50,7 @@ const descriptor = parse(readFileSync(join(root, 'pages/issues.vue'), 'utf8')).d
 const script = compileScript(descriptor, { id: 'issue-discovery' })
 const template = compileTemplate({ source: descriptor.template.content, filename: 'issues.vue', id: 'issue-discovery', isTS: true, compilerOptions: { bindingMetadata: script.bindings } })
 assert.deepEqual(template.errors, [])
-async function mount(t, project = 'all') {
+async function mount(t, project = 'all', intercept) {
   const calls = [], errors = [], modules = new Map(), storage = new Map()
   let context, issues
   const globals = {
@@ -59,6 +59,8 @@ async function mount(t, project = 'all') {
     fetch: async (path, init = {}) => {
       const url = new URL(path, origin)
       calls.push({ url, method: init.method || 'GET', credentials: init.credentials })
+      const intercepted = await intercept?.(url, init)
+      if (intercepted) return intercepted
       const response = await fetch(url, init)
       if (response.ok && /^\/api\/issues\/\d+$/.test(url.pathname)) {
         const body = await response.json()
@@ -163,6 +165,54 @@ test('server status filtering and numeric pages use the full matching total, not
   assert.equal(listCalls(state).at(-1).url.searchParams.get('status'), 'closed')
   assert.equal(state.issues.registryTotal.value, 0, 'Resolved records are not closed records')
   assert.equal(rows(state).length, 0)
+})
+
+test('accepting a newer revision does not turn untouched body and metadata into an ordinary save', async t => {
+  const patches = []
+  let revision = '1'
+  const oldBody = 'Original task body'
+  const newBody = 'Concurrent writer body'
+  const oldMetadata = { unknown: { value: 'original' } }
+  const newMetadata = { unknown: { value: 'concurrent' } }
+  const state = await mount(t, A, async (url, init) => {
+    if (url.pathname !== '/api/issues/477') return undefined
+    if ((init.method || 'GET') === 'PATCH') {
+      patches.push(JSON.parse(init.body))
+      revision = '2'
+      return Response.json({ error: { code: 'REVISION_CONFLICT', message: 'Read and reconcile', current_revision: '2' } }, { status: 409 })
+    }
+    if ((init.method || 'GET') !== 'GET') return undefined
+    return Response.json({
+      issue: { id: 477, title: 'Discovery issue 477', revision, body: revision === '1' ? oldBody : newBody, metadata: revision === '1' ? oldMetadata : newMetadata, status: 'open', priority: 'low', type: 'task', labels: [], source_project_id: A, target_project_id: B, project_origin: { source_project: A, target_project: B }, created_at: '2026-10-01T12:00:00Z', updated_at: '2026-10-01T12:00:00Z' },
+      comments: [], history: [], comment_count: 0, history_count: 0, comments_offset: 0, comments_limit: 50, history_offset: 0, history_limit: 50, comments_next_offset: null, history_next_offset: null, comments_complete: true, history_complete: true, comments_oversized: false, history_oversized: false,
+    })
+  })
+  await choose(state, 'issues-project-role', 'source')
+  await click(rows(state).find(row => text(row).includes('Discovery issue 477')))
+  await until(() => state.issues.detail.value?.revision === '1')
+  const title = walk(state.host).find(item => item.props.name === 'issue-title')
+  assert.ok(title, 'The real task title editor is available')
+  title.props['onUpdate:modelValue']('My title edit')
+  await tick()
+  const button = label => walk(state.host).find(item => item.tag === 'button' && text(item).trim() === label)
+  await click(button('Save task content'))
+  await until(() => patches.length === 1)
+  assert.equal(patches[0].expected_revision, '1')
+  assert.equal(patches[0].title, 'My title edit')
+  assert.equal(Object.hasOwn(patches[0], 'body'), false)
+  assert.equal(Object.hasOwn(patches[0], 'metadata'), false)
+  await click(button('Read current issue and retain draft'))
+  await until(() => state.issues.detail.value?.revision === '2')
+  assert.equal(patches.length, 1, 'Reading the winner must not automatically resend the losing edit')
+  await click(button('Use current revision for the next write; keep my draft'))
+  assert.equal(patches.length, 1, 'Accepting the revision must not automatically resend the losing edit')
+  await click(button('Save task content'))
+  await until(() => patches.length === 2)
+  assert.equal(patches[1].expected_revision, '2')
+  assert.equal(patches[1].title, 'My title edit')
+  assert.ok(!Object.hasOwn(patches[1], 'body') || patches[1].body === newBody, 'An untouched body must not overwrite the concurrent update')
+  assert.ok(!Object.hasOwn(patches[1], 'metadata') || JSON.stringify(patches[1].metadata) === JSON.stringify(newMetadata), 'Untouched metadata must not overwrite the concurrent update')
+  assert.equal(state.errors.length, 0)
 })
 
 test('foreign scope changes clear source-owned detail and comments and refuse unrelated detail', async t => {

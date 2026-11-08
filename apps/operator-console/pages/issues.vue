@@ -538,11 +538,8 @@ async function submitEdit(patch: IssueUpdateInput) {
       editNeedsReconciliation.value = false
       await reconcileIssue(id)
       if (activeIssue.value?.id === id) {
+        refreshUntouchedDrafts(base, activeIssue.value)
         editBase.value = activeIssue.value
-        statusDraft.value = activeIssue.value.status
-        priorityDraft.value = activeIssue.value.priority
-        typeDraft.value = activeIssue.value.type
-        labelDraft.value = [...activeIssue.value.labels]
       }
       return true
     }
@@ -557,8 +554,21 @@ async function readLatestIssue() {
   await openIssue(id)
   freshEditRead.value = detailState.value.kind === 'live' && detail.value?.id === id
 }
+function refreshUntouchedDrafts(base: OperatorIssue, current: OperatorIssue) {
+  if (titleDraft.value === base.title) titleDraft.value = current.title
+  if (bodyDraft.value === base.body) bodyDraft.value = current.body
+  if (metadataDraft.value === JSON.stringify(base.metadata, null, 2)) metadataDraft.value = JSON.stringify(current.metadata, null, 2)
+  if (ownerDraft.value === (base.ownerLabel ?? '')) ownerDraft.value = current.ownerLabel ?? ''
+  if (recipientDraft.value === (base.recipientLabel ?? '')) recipientDraft.value = current.recipientLabel ?? ''
+  if (targetSessionDraft.value === (base.targetSession ?? '')) targetSessionDraft.value = current.targetSession ?? ''
+  if (statusDraft.value === base.status) statusDraft.value = current.status
+  if (priorityDraft.value === base.priority) priorityDraft.value = current.priority
+  if (typeDraft.value === base.type) typeDraft.value = current.type
+  if (labelDraft.value.length === base.labels.length && labelDraft.value.every((label, index) => label === base.labels[index])) labelDraft.value = [...current.labels]
+}
 function acceptReadRevision() {
   if (!freshEditRead.value || !activeIssue.value || !editBase.value || activeIssue.value.id !== editBase.value.id) return
+  refreshUntouchedDrafts(editBase.value, activeIssue.value)
   editBase.value = activeIssue.value
   editNeedsReconciliation.value = false
   freshEditRead.value = false
