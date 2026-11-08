@@ -69,6 +69,58 @@ There is no historical startup-flag alternative to this public hybrid enum.
 
 Admin-gated families (candidates, governance, bulk ops) are additionally enforced at the handler level regardless of advertisement.
 
+#### UCI graph exploration and exact source reads
+
+Use an already selected, authorized UCI View in the same client session. The
+optional `context_handle` is client-local; omitting it uses that client's current
+binding. The optional legacy `project` is compatibility evidence, not a context
+selector. Inspect `tools/list` for the live capability before using these tools.
+
+1. Call `codebase_search` with `{"query":"<search text>"}`. Select an actual
+   returned `items` entry and retain its `ref`, `membership_id`, `span`, and
+   `content_digest` together. Check that its source and View are the intended
+   ones. Do not synthesize any of these values or copy them from a different hit.
+2. To explore that entity, pass the selected item's `ref` as `target`:
+
+   ```json
+   {
+     "action": "explain",
+     "target": {
+       "source_id": "<copied from items[n].ref.source_id>",
+       "view_id": "<copied from items[n].ref.view_id>",
+       "entity_key": "<copied from items[n].ref.entity_key>"
+     }
+   }
+   ```
+
+   These angle-bracket values are placeholders, not usable IDs. Alternatively,
+   use `name` in place of `entity_key`; exactly one is required. An ambiguous
+   name can return candidates. Graph nodes and edge evidence are static,
+   View-scoped references, not proof of runtime execution.
+3. For an exact source read, use the retained search hit, not a bare graph
+   reference. The graph response's `items` is empty, and its node and edge
+   evidence refs do not supply the membership, span, and digest required by
+   `codebase_read`. If a graph node has no matching search hit, search for it in
+   the same View and compare the returned `ref`; do not assume a match exists.
+   The following is a field-copy template, not executable JSON:
+
+   ```text
+   codebase_read({
+     "ref":            <copy items[n].ref>,
+     "membership_id":  <copy items[n].membership_id>,
+     "span":           <copy items[n].span>,
+     "content_digest": <copy items[n].content_digest>
+   })
+   ```
+
+   Keep the same client binding or pass its `context_handle` to both calls.
+   For a citation exceeding 8192 bytes, copy the original span as `indexed_span`
+   and use `span` for a contained window of at most `max_bytes` (maximum 8192),
+   retaining the original line bounds. Use the returned byte end for the next
+   UTF-8-aligned window. `verify_working_copy` returns metadata, not local bytes.
+   Status alone is not a citation; partial results may contain valid hits but
+   do not establish complete coverage. Empty or refused results supply no hit.
+
 Explicit-principal queries filter inaccessible principal, domain and legacy
 workstation-private rows before pagination. Workstation identity comes from
 authentication, not the query's `session_id`; admin widening does not bypass
