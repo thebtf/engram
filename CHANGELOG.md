@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Document the model-health configuration snapshot and expose its existing response and error contract in generated Swagger.
+
 - Embed the source commit in release-image health and version responses when the build supplies it, while retaining SHA-version build compatibility and an empty value when provenance is unavailable.
 
 - Restart the operator-web Vault auto-hide period on each successful reveal, even when the credential value is unchanged.

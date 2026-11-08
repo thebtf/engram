@@ -50,6 +50,20 @@ type modelConfigSignal struct {
 	Set      bool
 }
 
+// handleModelHealth godoc
+// @Summary Model configuration and client initialization snapshot
+// @Description Reports configuration and initialized clients, not provider availability; it makes no upstream probes. Health is standby or degraded, not an upstream health verdict. See API_CONTRACTS.md for row and source semantics and redaction limits.
+// @Description Authentication is required when enabled; X-Auth-Token, Bearer, or authorized session cookies are accepted. HAP keycard classes are forbidden on this route. ApiKeyAuth describes only X-Auth-Token. The route requires database readiness.
+// @Description Success is application/json; authentication, readiness, and handler errors are text/plain. Swagger 2 lists media types for the entire operation, not individual statuses.
+// @Tags System
+// @Produce json,plain
+// @Security ApiKeyAuth
+// @Success 200 {object} modelHealthResponse
+// @Failure 401 {string} string "unauthorized"
+// @Failure 403 {string} string "HAP keycard class is not allowed on this route"
+// @Failure 500 {string} string "auth store unavailable or settings read failed"
+// @Failure 503 {string} string "service not ready or store not initialized"
+// @Router /api/model-health [get]
 func (s *Service) handleModelHealth(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
 		http.Error(w, "model health unavailable: store not initialized", http.StatusServiceUnavailable)
