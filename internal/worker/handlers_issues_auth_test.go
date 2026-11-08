@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/issues"
 	"gorm.io/gorm"
 )
 
@@ -59,11 +60,23 @@ func issueHTTPRouteRequest(t *testing.T, method string, id int64, body any, iden
 
 func createIssueHTTPFixture(t *testing.T, store *gormdb.Store, issueStore *gormdb.IssueStore, project, keycard, status string) int64 {
 	t.Helper()
-	id, err := issueStore.CreateIssue(context.Background(), &gormdb.Issue{
-		Title: "HTTP issue auth", SourceProject: project, TargetProject: project,
-		Status: status, Type: "bug", Priority: "medium", CreatorKeycardID: keycard,
-	})
+	identity := auth.Admin()
+	if keycard != "" {
+		identity = auth.Client("read-write", keycard)
+	}
+	ctx := auth.WithIdentity(context.Background(), identity)
+	application := issues.New(issueStore, nil)
+	raw, err := json.Marshal(map[string]any{"title": "HTTP issue auth", "target_project": project, "type": "bug", "priority": "medium"})
 	require.NoError(t, err)
+	created, err := application.Create(ctx, issues.Scope{SourceProject: project}, raw)
+	require.NoError(t, err)
+	id := created.ID
+	if status != "open" {
+		body, marshalErr := json.Marshal(map[string]any{"status": status, "expected_revision": created.Revision})
+		require.NoError(t, marshalErr)
+		_, err = application.Mutate(ctx, issues.Scope{SourceProject: project}, id, body)
+		require.NoError(t, err)
+	}
 	t.Cleanup(func() {
 		store.GetDB().Exec(`DELETE FROM issue_comments WHERE issue_id = ?`, id)
 		store.GetDB().Exec(`DELETE FROM issues WHERE id = ?`, id)

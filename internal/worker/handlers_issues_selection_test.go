@@ -17,6 +17,7 @@ import (
 
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/issues"
 )
 
 func newIssueSelectionHTTPTestService(t *testing.T) (*Service, *gormdb.Store) {
@@ -59,21 +60,21 @@ func TestIssueSelectionHandlers_OverOneHundredIssuesRemainBoundedAndTruthful(t *
 	project := issueActorTestProject
 	const sessionID = "issues-selection-handler-session"
 	identity := auth.SessionForBrowserUser("admin", 41)
+	inserted := store.GetDB().Exec(`INSERT INTO projects(id) VALUES (?) ON CONFLICT (id) DO NOTHING`, project)
+	require.NoError(t, inserted.Error)
+	if inserted.RowsAffected == 1 {
+		t.Cleanup(func() { require.NoError(t, store.GetDB().Exec(`DELETE FROM projects WHERE id=?`, project).Error) })
+	}
+	application := issues.New(service.issueStore, nil)
+	ownerCtx := auth.WithIdentity(ctx, auth.Client("read-write", "issues-selection-owner"))
 
 	ids := make([]int64, 101)
 	for index := range ids {
-		id, err := service.issueStore.CreateIssue(ctx, &gormdb.Issue{
-			Title:            fmt.Sprintf("selection handler %03d", index),
-			Body:             "must-not-appear-in-operation-result",
-			SourceProject:    project,
-			TargetProject:    project,
-			CreatorKeycardID: "issues-selection-owner",
-			Priority:         "medium",
-			Type:             "task",
-			Labels:           []string{"before"},
-		})
+		raw, err := json.Marshal(map[string]any{"title": fmt.Sprintf("selection handler %03d", index), "body": "must-not-appear-in-operation-result", "target_project": project, "priority": "medium", "type": "task", "labels": []string{"before"}})
 		require.NoError(t, err)
-		ids[index] = id
+		created, err := application.Create(ownerCtx, issues.Scope{SourceProject: project}, raw)
+		require.NoError(t, err)
+		ids[index] = created.ID
 	}
 	t.Cleanup(func() {
 		require.NoError(t, store.GetDB().Exec("DELETE FROM collection_selections WHERE subject_user_id = ? AND session_id = ? AND domain = ?", 41, sessionID, issueSelectionDomain).Error)

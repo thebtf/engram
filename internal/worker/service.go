@@ -51,6 +51,7 @@ import (
 	"github.com/thebtf/engram/internal/graph"
 	"github.com/thebtf/engram/internal/grpcserver"
 	"github.com/thebtf/engram/internal/injection"
+	"github.com/thebtf/engram/internal/issues"
 	"github.com/thebtf/engram/internal/llm"
 	"github.com/thebtf/engram/internal/logbuf"
 	"github.com/thebtf/engram/internal/mcp"
@@ -1200,6 +1201,7 @@ func (s *Service) initializeAsync() {
 	wlRedRules := s.redactionRules
 	wlCandidateStore := s.candidateStore
 	s.initMu.RUnlock()
+	mcpServer.SetRedactionRules(wlRedRules)
 	wireVnextF(mcpServer, memoryStore, auditStore, wlTS, graphStore, wlCandidateStore, wlRedRules)
 
 	// TG6 — wire snapshot governance tools into the MCP server (T043/T044).
@@ -1612,11 +1614,19 @@ func (a *mcpHandlerAdapter) HandleToolCall(ctx context.Context, toolName string,
 		return nil, false, errors.New("UCI request correlation is required")
 	}
 
-	params := map[string]any{
-		"name":      toolName,
-		"arguments": json.RawMessage(argsJSON),
+	var paramsJSON []byte
+	var err error
+	if toolName == "issues" {
+		paramsJSON, err = issues.EncodeReceivedObject(map[string]json.RawMessage{
+			"name":      json.RawMessage(`"issues"`),
+			"arguments": argsJSON,
+		})
+	} else {
+		paramsJSON, err = json.Marshal(map[string]any{
+			"name":      toolName,
+			"arguments": json.RawMessage(argsJSON),
+		})
 	}
-	paramsJSON, err := json.Marshal(params)
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to marshal tool call params: %w", err)
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/thebtf/engram/internal/auditcontext"
+	issuecontract "github.com/thebtf/engram/internal/issues/contract"
 )
 
 // Context-key types. Both are unexported as type definitions but exported as
@@ -21,8 +22,6 @@ import (
 // MAY alias auth.RoleKey to its own authRoleKey{} (same Type Identity is not
 // required — both consumers will be migrated together in Phase 3).
 
-type identityKeyType struct{}
-
 // IdentityKey is the canonical context value key for the resolved Identity.
 // Both transports (HTTP middleware, gRPC interceptor) store the entire
 // Identity (Role + Source + KeycardID) under this single key after
@@ -32,7 +31,7 @@ type identityKeyType struct{}
 // The key is unexported as a type but exported as a value singleton so
 // other packages can reach into context.Value directly when an interface
 // boundary makes IdentityFrom inconvenient.
-var IdentityKey = identityKeyType{}
+var IdentityKey = issuecontract.ActorIdentityKey
 
 // WithIdentity returns a new context carrying id under IdentityKey. Intended
 // to be called once per request after Validator.Validate (or after a
