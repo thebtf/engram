@@ -55,8 +55,17 @@ async function mount(t, project = 'all') {
   let context, issues
   const globals = {
     window: { localStorage: { getItem: key => storage.get(key) || null, setItem: (key, value) => storage.set(key, value) } },
-    sessionStorage: { getItem: () => null, setItem() { } }, useI18n, useRoute: routing.useRoute, useRouter: routing.useRouter,
-    fetch: async (path, init = {}) => { const url = new URL(path, origin); calls.push({ url, method: init.method || 'GET', credentials: init.credentials }); return fetch(url, init) },
+    sessionStorage: { getItem: key => storage.get(`tab:${key}`) ?? null, setItem: (key, value) => storage.set(`tab:${key}`, value) }, useI18n, useRoute: routing.useRoute, useRouter: routing.useRouter,
+    fetch: async (path, init = {}) => {
+      const url = new URL(path, origin)
+      calls.push({ url, method: init.method || 'GET', credentials: init.credentials })
+      const response = await fetch(url, init)
+      if (response.ok && /^\/api\/issues\/\d+$/.test(url.pathname)) {
+        const body = await response.json()
+        return Response.json({ history: [], comment_count: body.comments?.length ?? 0, history_count: 0, comments_offset: 0, comments_limit: 50, history_offset: 0, history_limit: 50, comments_next_offset: null, history_next_offset: null, comments_complete: true, history_complete: true, comments_oversized: false, history_oversized: false, ...body, issue: { revision: '1', metadata: {}, ...body.issue } }, { status: response.status })
+      }
+      return response
+    },
   }
   function load(name) {
     if (!modules.has(name)) modules.set(name, evaluate(readFileSync(join(root, `composables/${name}.ts`), 'utf8'), dependency, globals))
@@ -140,15 +149,20 @@ test('visible canonical role choice separates source-owned and incoming issues w
 
 test('server status filtering and numeric pages use the full matching total, not the loaded slice', async t => {
   const state = await mount(t)
-  const closed = walk(state.host).find(row => row.tag === 'button' && row.props.class === 'fchip' && text(row).trim() === 'Closed')
-  await click(closed); await until(() => !state.issues.pending.value)
+  const resolved = walk(state.host).find(row => row.tag === 'button' && row.props.class === 'fchip' && text(row).trim() === 'Done · awaiting verification')
+  await click(resolved); await until(() => !state.issues.pending.value)
   assert.equal(state.issues.registryTotal.value, 251)
   assert.equal(rows(state).length, 10)
   assert.ok(text(state.host).includes('1–10 of 251'))
-  assert.equal(listCalls(state).at(-1).url.searchParams.get('status'), 'resolved,closed')
+  assert.equal(listCalls(state).at(-1).url.searchParams.get('status'), 'resolved')
   await click(next(state)); await until(() => !state.issues.pending.value)
   assert.ok(text(state.host).includes('11–20 of 251'))
   assert.equal(listCalls(state).at(-1).url.searchParams.get('offset'), '10')
+  const closed = walk(state.host).find(row => row.tag === 'button' && row.props.class === 'fchip' && text(row).trim() === 'Closed')
+  await click(closed); await until(() => !state.issues.pending.value)
+  assert.equal(listCalls(state).at(-1).url.searchParams.get('status'), 'closed')
+  assert.equal(state.issues.registryTotal.value, 0, 'Resolved records are not closed records')
+  assert.equal(rows(state).length, 0)
 })
 
 test('foreign scope changes clear source-owned detail and comments and refuse unrelated detail', async t => {

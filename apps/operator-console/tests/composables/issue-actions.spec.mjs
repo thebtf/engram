@@ -12,7 +12,7 @@ const catalog = { items: [selectedProject, issueSourceProject, targetProject].ma
 const explicit = { domain: 'issues', kind: 'explicit', version: 3, targets: [{ id: '7' }, { id: '8' }] }
 const snapshot = { domain: 'issues', kind: 'explicit', selection_version: 3, targets: explicit.targets }
 const tick = async () => { await new Promise(setImmediate); await vue.nextTick() }
-const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
+const json = (body, status = 200) => new Response(JSON.stringify(body?.issue ? { history: [], comment_count: body.comments?.length ?? 0, history_count: 0, comments_offset: 0, comments_limit: 50, history_offset: 0, history_limit: 50, comments_next_offset: null, history_next_offset: null, comments_complete: true, history_complete: true, comments_oversized: false, history_oversized: false, ...body } : body), { status, headers: { 'content-type': 'application/json' } })
 
 function evaluate(file, require, globals = {}) {
   const source = readFileSync(new URL(`../../composables/${file}.ts`, import.meta.url), 'utf8')
@@ -30,7 +30,7 @@ async function mount(t, project = selectedProject) {
   const calls = []
   let respond
   let deleted = false
-  let row = { id: 7, title: 'Synthetic handoff', body: '', status: 'open', priority: 'medium', type: 'task', source_project: issueSourceProject, target_project: targetProject, source_project_id: issueSourceProject, target_project_id: targetProject, project_origin: { source_project: issueSourceProject, target_project: targetProject }, labels: [], created_at: '2026-10-01T12:00:00Z', updated_at: '2026-10-01T12:00:00Z' }
+  let row = { id: 7, revision: '1', metadata: {}, title: 'Synthetic handoff', body: '', status: 'open', priority: 'medium', type: 'task', source_project: issueSourceProject, target_project: targetProject, source_project_id: issueSourceProject, target_project_id: targetProject, project_origin: { source_project: issueSourceProject, target_project: targetProject }, labels: [], created_at: '2026-10-01T12:00:00Z', updated_at: '2026-10-01T12:00:00Z' }
   const comments = []
   const fetch = async (path, init = {}) => {
     const url = new URL(path, 'http://synthetic.invalid')
@@ -255,6 +255,7 @@ test('pending selection and catalog errors cannot dispatch human issue actions d
 
 const migratedIssue = {
   id: 7, title: 'Migrated issue', body: 'Preserved historical issue body', status: 'open', priority: 'medium', type: 'task',
+  revision: '1', metadata: {},
   source_project: 'historical-source-slug', target_project: 'historical-target-slug',
   source_project_id: issueSourceProject, target_project_id: targetProject,
   project_origin: { source_project: 'historical-source-slug', target_project: 'historical-target-slug' },
