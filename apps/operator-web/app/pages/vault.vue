@@ -149,7 +149,7 @@ const deleteCredentialMutation = useMutation({
           <div v-if="revealedValues[credential.id]" class="mb-3 rounded-lg border border-[color:rgba(52,211,153,0.3)] bg-[color:rgba(52,211,153,0.1)] px-3 py-2">
             <div class="flex flex-wrap items-center gap-2">
               <code class="mono-data text-xs text-[var(--success)]">
-                {{ revealedValues[credential.id].value }}
+                {{ revealedValues[credential.id]?.value }}
               </code>
               <button
                 class="rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-xs text-[var(--fg-2)]"

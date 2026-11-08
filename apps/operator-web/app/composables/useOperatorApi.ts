@@ -174,7 +174,7 @@ async function apiGet<T>(path: string): Promise<T> {
   })
 }
 
-async function apiPost<T>(path: string, body: unknown): Promise<T> {
+async function apiPost<T>(path: string, body: Record<string, string | undefined>): Promise<T> {
   return $fetch<T>(`${apiBase()}${path}`, {
     method: 'POST',
     body,
