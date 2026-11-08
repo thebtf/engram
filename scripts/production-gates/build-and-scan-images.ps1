@@ -1932,7 +1932,7 @@ function Assert-FixtureNetworkAvailable {
 
 $environmentNames = @(
     'ENGRAM_SERVER_IMAGE', 'ENGRAM_OPERATOR_IMAGE', 'ENGRAM_POSTGRES_IMAGE', 'ENGRAM_BUILD_VERSION',
-    'ENGRAM_TEST_RESOURCE_PREFIX', 'POSTGRES_PASSWORD', 'ENGRAM_AUTH_DISABLED',
+    'ENGRAM_TEST_RESOURCE_PREFIX', 'ENGRAM_TEST_NETWORK_SUBNET', 'POSTGRES_PASSWORD', 'ENGRAM_AUTH_DISABLED',
     'WORKER_BIND', 'WORKER_PORT', 'OPERATOR_CONSOLE_BIND', 'OPERATOR_CONSOLE_PORT',
     'OPERATOR_CONSOLE_TRUSTED_PROXY_IP', 'OPERATOR_CONSOLE_PUBLIC_ORIGIN',
     'OPERATOR_CONSOLE_NETWORK_SUBNET', 'OPERATOR_CONSOLE_NETWORK_IP_RANGE',
@@ -2130,6 +2130,7 @@ try {
     $env:ENGRAM_POSTGRES_IMAGE = $localImageIds.postgres
     $env:ENGRAM_BUILD_VERSION = $buildVersion
     $env:ENGRAM_TEST_RESOURCE_PREFIX = "$prefix-test"
+    $env:ENGRAM_TEST_NETWORK_SUBNET = '10.240.251.0/24'
 
     Invoke-LoggedNative -File 'go' -Arguments @(
         'test', '-json', '-tags=critical', './tests/critical/runtime',
@@ -2312,7 +2313,7 @@ try {
             pgvector_source_sha256 = '4c33cf053329784ba6d992d05c9588b93789e907a7511f20ff5a5a5b8a0703c1'
             gosu_source = 'https://github.com/tianon/gosu.git#6456aaa0f3c854d199d0f037f068eb97515b7513'
             go_builder = 'golang:1.26.10-bookworm@sha256:5b1f78db1f54cc8cb46e652c51d3f854441c4310a449161b6fe9fb553edab505'
-            node_builder = 'node:22-bookworm-slim@sha256:53ada149d435c38b14476cb57e4a7da73c15595aba79bd6971b547ceb6d018bf'
+            node_builder = 'node:22.22.3-bookworm-slim@sha256:e21fc383b50d5347dc7a9f1cae45b8f4e2f0d39f7ade28e4eef7d2934522b752'
         }
         pinned_packages = [ordered]@{
             libstdcpp6 = '14.2.0-19'
