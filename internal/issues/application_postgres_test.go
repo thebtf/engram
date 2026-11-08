@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/auth"
@@ -37,27 +38,85 @@ const (
 	hiddenSource = "51300000-0000-4000-8000-000000000063"
 )
 
+func issue513FixtureURL(dsn string) (*url.URL, error) {
+	parsed, err := url.Parse(dsn)
+	if err != nil || parsed == nil || (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") ||
+		parsed.Hostname() != "127.0.0.1" || parsed.Port() == "" || parsed.Path != "/issue513_native_synthetic" ||
+		parsed.User == nil || parsed.User.Username() != "issue513_native" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
+		return nil, errors.New("invalid disposable issue fixture target")
+	}
+	if os.Getenv("PGSERVICE") != "" || os.Getenv("PGOPTIONS") != "" {
+		return nil, errors.New("fixture refuses inherited PostgreSQL service or options")
+	}
+	query := parsed.Query()
+	query.Set("sslmode", "disable")
+	query.Set("connect_timeout", "5")
+	query.Set("application_name", "issue513_shared_owner")
+	parsed.RawQuery = query.Encode()
+	cfg, err := pgx.ParseConfig(parsed.String())
+	if err != nil || cfg.Host != "127.0.0.1" || cfg.Port == 0 || cfg.Database != "issue513_native_synthetic" ||
+		cfg.User != "issue513_native" || len(cfg.Fallbacks) != 0 || cfg.RuntimeParams["search_path"] != "" || cfg.RuntimeParams["options"] != "" {
+		return nil, errors.New("invalid effective disposable issue fixture target")
+	}
+	return parsed, nil
+}
+
+func TestIssue513FixtureURLRejectsUnsafeTargets(t *testing.T) {
+	t.Setenv("PGSERVICE", "")
+	t.Setenv("PGOPTIONS", "")
+	valid := "postgres://issue513_native@127.0.0.1:6410/issue513_native_synthetic"
+	_, err := issue513FixtureURL(valid)
+	require.NoError(t, err)
+	for _, dsn := range []string{
+		"postgres://issue513_native@192.0.2.1:6410/issue513_native_synthetic",
+		"postgres://issue513_native@127.0.0.1:6410/other",
+		"postgres://other@127.0.0.1:6410/issue513_native_synthetic",
+		valid + "?host=192.0.2.1",
+		valid + "?dbname=other",
+		valid + "?search_path=public",
+		valid + "?options=-csearch_path%3Dpublic",
+		valid + "?service=other",
+		valid + "?sslmode=prefer",
+	} {
+		_, err := issue513FixtureURL(dsn)
+		require.Error(t, err)
+	}
+	t.Setenv("PGSERVICE", "unexpected")
+	_, err = issue513FixtureURL(valid)
+	require.Error(t, err)
+	t.Setenv("PGSERVICE", "")
+	t.Setenv("PGOPTIONS", "-c search_path=public")
+	_, err = issue513FixtureURL(valid)
+	require.Error(t, err)
+}
+
 func sharedDB(t *testing.T) *gormlib.DB {
 	t.Helper()
-	dsn := os.Getenv("DATABASE_DSN")
-	require.NotEmpty(t, dsn, "this focused proof requires the assigned real database; no skip fallback")
-	parsed, err := url.Parse(dsn)
+	dsn := os.Getenv("ISSUE513_NATIVE_TEST_DSN")
+	if dsn == "" {
+		t.Skip("ISSUE513_NATIVE_TEST_DSN not set; requires an owned disposable local PostgreSQL fixture")
+	}
+	parsed, err := issue513FixtureURL(dsn)
 	require.NoError(t, err)
-	require.Equal(t, "127.0.0.1:65216", parsed.Host, "fixture must stay on the assigned disposable loopback database")
-	require.Contains(t, []string{
-		"/engram_migration186_scope_test_issue513_01a18a3b_source",
-		"/engram_migration186_scope_test_issue513_01a18a3b_restore",
-	}, parsed.Path, "fixture must use one of the two task-owned databases")
-	admin, err := gormlib.Open(postgres.Open(dsn), &gormlib.Config{Logger: logger.Discard})
+	admin, err := gormlib.Open(postgres.Open(parsed.String()), &gormlib.Config{Logger: logger.Discard})
 	require.NoError(t, err)
 	pool, err := admin.DB()
 	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, pool.Close()) })
+	var database, user string
+	require.NoError(t, admin.Raw("SELECT current_database(), current_user").Row().Scan(&database, &user))
+	require.Equal(t, "issue513_native_synthetic", database)
+	require.Equal(t, "issue513_native", user)
+	var vectorReady, vectorscaleSafe bool
+	require.NoError(t, admin.Raw(`SELECT EXISTS (SELECT 1 FROM pg_extension e JOIN pg_namespace n ON n.oid=e.extnamespace WHERE e.extname='vector' AND n.nspname='public'), NOT EXISTS (SELECT 1 FROM pg_available_extensions WHERE name='vectorscale' AND installed_version IS NULL)`).Row().Scan(&vectorReady, &vectorscaleSafe))
+	require.True(t, vectorReady, "fixture requires pgvector already installed in public")
+	require.True(t, vectorscaleSafe, "fixture must not install vectorscale")
+	var publicRelations int64
+	require.NoError(t, admin.Raw(`SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','S','f')`).Scan(&publicRelations).Error)
+	require.Zero(t, publicRelations, "fixture public schema must not contain application relations")
 	schema := "issue513_shared_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	require.NoError(t, admin.Exec("CREATE SCHEMA "+schema).Error)
-	t.Cleanup(func() {
-		assert.NoError(t, admin.Exec("DROP SCHEMA "+schema+" CASCADE").Error)
-		assert.NoError(t, pool.Close())
-	})
+	t.Cleanup(func() { assert.NoError(t, admin.Exec("DROP SCHEMA "+schema+" CASCADE").Error) })
 	query := parsed.Query()
 	query.Set("search_path", schema+",public")
 	query.Set("application_name", "issue513_shared_owner")
@@ -69,6 +128,8 @@ func sharedDB(t *testing.T) *gormlib.DB {
 	var actual string
 	require.NoError(t, db.Raw("SELECT current_schema()").Scan(&actual).Error)
 	require.Equal(t, schema, actual)
+	require.NoError(t, admin.Raw(`SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','S','f')`).Scan(&publicRelations).Error)
+	require.Zero(t, publicRelations, "migrations must not create application relations in public")
 	for _, project := range []string{source, otherSource, hiddenSource} {
 		require.NoError(t, db.Create(&gormdb.Project{ID: project, IdentityStatus: sql.NullString{String: "active", Valid: true}}).Error)
 	}
