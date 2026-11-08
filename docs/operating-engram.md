@@ -840,11 +840,14 @@ Legacy unpaged detail возвращает полный набор коммен�
 
 **Безопасный переход writers и readers**
 
-1. До baseline/backfill проверь окончательный migration registry и независимо
-   проверь фактический ledger каждой цели. Историческая `190_issue_internal_tasks`
-   относится к прежнему источнику; текущий source registry содержит другую
-   migration 190. Additive 196 находится в работе и здесь не объявляется
-   окончательной или применённой.
+1. До baseline/backfill проверь registry исходников выбранной поддерживающей
+   версии и независимо проверь фактический ledger каждой цели. Registry
+   Feature012 включает `192_issue_session_attribution`, `193_issue_internal_tasks`,
+   `194_issue_receipt_payload_v2`, `195_memory_links` и
+   `196_issue_target_session_revision_guard`. Историческая
+   `190_issue_internal_tasks` относится к прежнему источнику; migration 190 в
+   этом registry другая. Регистрация не доказывает применение на какой-либо цели
+   или готовность к cutover.
 2. Останови несовместимые server instances, writers и старые reader sessions и
    pools до изменения схемы. Не считай регистрацию миграции защитой от старого
    writer. Сохрани issues/comments, IDs, связи, содержимое, порядок, timestamps и

@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Document the pending issue #513 resumable-task contract and recovery: actor/source/key-bound retry, revision-checked changes, opaque metadata, bounded detail and fail-safe writer cutover. Historical source and UI checks are not integrated backend, browser acceptance, installation or release; Swagger regeneration awaits integrated backend annotations.
+- Add issue-backed resumable tasks: create and resume a task with actor/source/key-bound replay, refine it with revision-checked edits and preserved drafts, attach opaque metadata, and read bounded comments and history. Preserve existing authorization and privacy, and require a fail-safe writer cutover.
 
 - Correct operator-web Rules and shared request body types, and safely access revealed Vault values when a credential entry is absent.
 - Display operator-web rules from the bare-array API. The unselected scope shows global rules only; a selected project includes its rules and global rules. Counts describe loaded rows, and invalid responses surface as errors.
