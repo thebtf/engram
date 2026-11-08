@@ -207,6 +207,84 @@ func TestIssue513NativeWireReviewRed(t *testing.T) {
 		assert.JSONEq(t, `{"extension":true}`, string(comments[0].Metadata))
 		assert.Equal(t, counts["issue_changes"], issue513IssueDomainCounts(t, service)["issue_changes"])
 	})
+	t.Run("grpc_standalone_comment_metadata_contract", func(t *testing.T) {
+		const reported = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+		const nested = `{"fixture":"f012-comment","opaque":{"step":2,"labels":["amber","blue"]}}`
+		for _, field := range []string{"comment_metadata", "metadata"} {
+			t.Run("accepted_"+field, func(t *testing.T) {
+				id := create(t, "native-comment-metadata-"+field)
+				before, _, err := service.issueStore.GetIssue(t.Context(), id)
+				require.NoError(t, err)
+				counts := issue513IssueDomainCounts(t, service)
+				args, err := json.Marshal(map[string]any{"action": "comment", "id": id, "body": "Synthetic participant proof comment", "session_id": reported, field: json.RawMessage(nested), "format": "json"})
+				require.NoError(t, err)
+				response, err := invokeGRPC(t, args)
+				require.NoError(t, err)
+				result := decodeGRPC(t, response)
+				assert.JSONEq(t, `"1"`, string(result["revision"]))
+				after, comments, err := service.issueStore.GetIssue(t.Context(), id)
+				require.NoError(t, err)
+				after.UpdatedAt = before.UpdatedAt
+				assert.True(t, reflect.DeepEqual(before, after), "standalone comment cannot mutate the parent")
+				require.Len(t, comments, 1)
+				assert.JSONEq(t, nested, string(comments[0].Metadata))
+				assert.Equal(t, "Synthetic participant proof comment", comments[0].Body)
+				assert.Equal(t, reported, comments[0].AuthorSession)
+				assert.Equal(t, "reported", comments[0].AuthorSessionSource)
+				assert.Equal(t, issue513Source, comments[0].AuthorProject)
+				assert.Equal(t, "client:"+identity.KeycardID, issue513ActorReference(comments[0].Actor.Reference))
+				afterCounts := issue513IssueDomainCounts(t, service)
+				assert.Equal(t, counts["issue_comments"]+1, afterCounts["issue_comments"])
+				assert.Equal(t, counts["issue_changes"], afterCounts["issue_changes"])
+			})
+		}
+		for _, tc := range []struct {
+			name   string
+			fields map[string]any
+			code   string
+		}{
+			{"dual_aliases", map[string]any{"metadata": json.RawMessage(nested), "comment_metadata": json.RawMessage(nested)}, "INVALID_ARGUMENT"},
+			{"nonobject_comment_metadata", map[string]any{"comment_metadata": []any{"synthetic"}}, "INVALID_ARGUMENT"},
+			{"nonobject_legacy_metadata", map[string]any{"metadata": []any{"synthetic"}}, "INVALID_ARGUMENT"},
+			{"private_comment_metadata", map[string]any{"comment_metadata": map[string]any{"api_key": strings.Repeat("x", 32)}}, "PRIVACY_REJECTED"},
+			{"private_legacy_metadata", map[string]any{"metadata": map[string]any{"api_key": strings.Repeat("x", 32)}}, "PRIVACY_REJECTED"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				id := create(t, "native-comment-refused-"+tc.name)
+				before, originalComments, err := service.issueStore.GetIssue(t.Context(), id)
+				require.NoError(t, err)
+				counts := issue513IssueDomainCounts(t, service)
+				args := map[string]any{"action": "comment", "id": id, "body": "Synthetic refused comment", "session_id": reported, "format": "json"}
+				for key, value := range tc.fields {
+					args[key] = value
+				}
+				raw, err := json.Marshal(args)
+				require.NoError(t, err)
+				response, err := invokeGRPC(t, raw)
+				require.NoError(t, err)
+				require.NotNil(t, response)
+				require.True(t, response.IsError, "invalid input must be explicitly refused")
+				var failure struct {
+					Data struct {
+						Error struct {
+							Code    string `json:"code"`
+							Message string `json:"message"`
+						} `json:"error"`
+					} `json:"data"`
+				}
+				require.NoError(t, json.Unmarshal(response.ContentJson, &failure))
+				assert.Equal(t, tc.code, failure.Data.Error.Code)
+				if tc.name == "dual_aliases" {
+					assert.Contains(t, failure.Data.Error.Message, "comment_metadata", "ambiguous aliases need an actionable refusal")
+				}
+				after, comments, err := service.issueStore.GetIssue(t.Context(), id)
+				require.NoError(t, err)
+				assert.True(t, reflect.DeepEqual(before, after), "refusal cannot mutate the parent")
+				assert.True(t, reflect.DeepEqual(originalComments, comments), "refusal cannot append a comment")
+				assert.Equal(t, counts, issue513IssueDomainCounts(t, service), "refusal cannot write issue-domain rows")
+			})
+		}
+	})
 	t.Run("ordinary_mux_historical_record_has_safe_rest_guidance", func(t *testing.T) {
 		issue513NativeIPCReviewCase(t, fixture, native, validator)
 	})

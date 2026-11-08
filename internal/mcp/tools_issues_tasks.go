@@ -181,12 +181,12 @@ func (s *Server) executeNativeIssues(ctx context.Context, raw json.RawMessage) (
 			if _, present := members["comment"]; present {
 				return "", nativeIssueArgument("comment")
 			}
-			if _, present := members["comment_metadata"]; present {
-				return "", nativeIssueArgument("comment_metadata")
-			}
 			members["comment"] = members["body"]
 			delete(members, "body")
 			if metadata, present := members["metadata"]; present {
+				if _, both := members["comment_metadata"]; both {
+					return "", nativeIssueArgument("comment_metadata")
+				}
 				members["comment_metadata"] = metadata
 				delete(members, "metadata")
 			}

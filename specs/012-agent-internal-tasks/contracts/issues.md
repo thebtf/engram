@@ -101,6 +101,8 @@ Example: `{expected_revision:"1",body:"Observed recovery; next verify the instal
 
 Standalone comment: native/OpenClaw action=comment with id, body, metadata; REST existing PATCH with comment and comment_metadata only. Nonempty comment body required. Return HTTP 200 data `{id,revision,changed:false,comment_id,message:"issue updated"}`; comments append and do not change issue revision. A supplied expected_revision is honored; absence on comment-only append does not authorize a material edit. Native action=comment rejects submitted title/priority/type/status/labels/owner_label/recipient_label instead of forwarding them as material updates; use action=update for compound material edits. No standalone-comment deduplication is promised.
 
+For native `action=comment`, `comment_metadata` is the explicit object input; legacy `metadata` remains an alias, and supplying both is rejected without a write.
+
 Native/OpenClaw reopen/close retain action names but require expected_revision and current authority. Map reasons/metadata into the same transaction. Existing HTTP acknowledge/selection/delete and internal conditional acknowledgment must participate in shared revision/history or equivalent conditional-state enforcement, not bypass it. Selected material actions carry per-target expected revisions and preserve all-or-nothing/no-content failure semantics of the existing selection API. Keep the existing deletion policy, add no delete capability, and preserve receipt non-resurrection. Legacy timestamp selection input can only resolve a revision after its original binding/timestamp check against the locked row; it cannot refresh a stale draft silently.
 
 ## Errors and safe recovery
