@@ -43,6 +43,11 @@ const fixtures = {
     attribution: ['source_project', 'original-source'], historyAttribution: ['author_agent', 'codex'],
   },
 }
+const rulesFixture = [
+  { id: 101, project: null, content: 'Global rule', priority: 0, version: 1 },
+  { id: 102, project: A, content: 'Project A rule', priority: 1, version: 1 },
+  { id: 103, project: B, content: 'Project B rule', priority: 2, version: 1 },
+]
 const tick = async () => { await new Promise(setImmediate); await vue.nextTick() }
 const renderer = vue.createRenderer({
   createElement: () => ({}), createText: () => ({}), createComment: () => ({}),
@@ -82,7 +87,15 @@ function transport(kind = 'memory', options = {}) {
       savedRules.push(rule)
       return Response.json(rule)
     }
-    if (url.pathname === '/api/rules' && method === 'GET') return Response.json({ rules: savedRules, total: savedRules.length })
+    if (url.pathname === '/api/rules' && method === 'GET') {
+      if (!options.legacyRules) return Response.json({ rules: savedRules, total: savedRules.length })
+      if (options.rulesError) return Response.json({ error: 'Rules access refused' }, { status: 403 })
+      if ('rulesResponse' in options) return Response.json(options.rulesResponse)
+      const project = url.searchParams.get('project')
+      const rules = [...(options.rules ?? []), ...savedRules]
+      const scoped = url.searchParams.get('all') === 'true' ? rules : rules.filter(rule => !rule.project || rule.project === project)
+      return Response.json(scoped.slice(0, Number(url.searchParams.get('limit') || 50)))
+    }
     if (url.pathname === `/api/projects/unresolved/${encodeURIComponent(reference)}/content`) {
       assert.equal(url.searchParams.get('kind'), kind)
       assert.equal(url.searchParams.has('project'), false)
@@ -214,6 +227,67 @@ async function mountRules(t, location, options = {}) {
   await tick()
   return { ...consumer, state, router }
 }
+
+async function mountLegacyRules(t, project, options = {}) {
+  const consumer = transport('memory', { ...options, legacyRules: true })
+  const catalogState = {
+    projects: vue.ref(catalog.items), unresolved: vue.ref(catalog.unresolved), selectedProject: vue.ref(project),
+    selectionPending: vue.ref(false), selectionError: vue.ref(null), unresolvedReference: vue.ref(''),
+    projectName: value => value, refresh: async () => { },
+  }
+  const dependency = name => {
+    if (name === 'vue') return vue
+    if (name.endsWith('/api')) return consumer.ui
+    if (name.endsWith('/useProjectCatalog')) return { useProjectCatalog: () => catalogState }
+    if (name.endsWith('/useAuth')) return { useAuth: () => ({ user: vue.ref(null) }) }
+    if (name.endsWith('/useUiI18n')) return { useUiI18n: () => ({ t: vue.ref({ rules: { loadError: 'Rules unavailable' } }) }) }
+    return {}
+  }
+  const page = component('../views/RulesView.vue', dependency, consumer.globals)
+  const app = renderer.createApp(page)
+  const state = app.mount({}).$.setupState
+  t.after(() => app.unmount())
+  await state.loadRules()
+  return { ...consumer, state }
+}
+
+for (const [selection, expected] of [['all', [101]], [A, [101, 102]]]) {
+  test(`rules legacy: ${selection === 'all' ? 'omitted project returns global only' : 'selected project includes global'}`, { skip: queryPrerequisite }, async t => {
+    const mounted = await mountLegacyRules(t, selection, { rules: rulesFixture })
+    const requests = mounted.calls.filter(call => call.url.pathname === '/api/rules' && call.method === 'GET')
+    assert.ok(requests.length, 'consumer must request rules')
+    for (const request of requests) {
+      assert.equal(request.url.searchParams.has('all'), false)
+      if (selection === 'all') assert.equal(request.url.searchParams.has('project'), false)
+      else assert.equal(request.url.searchParams.get('project'), A)
+    }
+    assert.deepEqual(mounted.state.rules.map(rule => rule.id), expected)
+  })
+}
+
+for (const rulesResponse of [null, {}, { rules: [], total: 0 }]) {
+  test(`rules legacy: invalid successful response ${JSON.stringify(rulesResponse)} is an error`, { skip: queryPrerequisite }, async t => {
+    const mounted = await mountLegacyRules(t, A, { rulesResponse })
+    assert.deepEqual(mounted.state.rules, [])
+    assert.ok(mounted.state.error)
+  })
+}
+
+test('rules legacy: empty response is distinct from HTTP 403', { skip: queryPrerequisite }, async t => {
+  const empty = await mountLegacyRules(t, A, { rules: [] })
+  const failed = await mountLegacyRules(t, A, { rulesError: true })
+  assert.deepEqual(empty.state.rules, [])
+  assert.deepEqual(failed.state.rules, [])
+  assert.ok(failed.calls.some(call => call.url.pathname === '/api/rules' && call.method === 'GET'))
+  assert.equal(empty.state.error, null)
+  assert.match(failed.state.error, /403/)
+})
+
+test('legacy unresolved selection does not request global rules', { skip: queryPrerequisite }, async t => {
+  const mounted = await mountLegacyRules(t, '')
+  assert.deepEqual(mounted.state.rules, [])
+  assert.equal(mounted.calls.filter(call => call.url.pathname === '/api/rules').length, 0)
+})
 
 test('cached catalog initializes Rules scope from selected UUID before first submit', { skip: queryPrerequisite }, async t => {
   const mounted = await mountRules(t, `/rules?project=${A}`)

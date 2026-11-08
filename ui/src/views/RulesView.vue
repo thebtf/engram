@@ -101,7 +101,7 @@ async function loadRules() {
         : { project: selectedProject.value },
     )
     if (generation !== loadGeneration) return
-    rules.value = response.rules ?? []
+    rules.value = response
     if (!rules.value.some(rule => rule.id === selectedRuleId.value)) {
       selectedRuleId.value = rules.value[0]?.id ?? null
     }
@@ -249,6 +249,9 @@ async function handleDelete() {
         </Button>
       </div>
     </div>
+    <p v-if="selectedProject && !selectionPending && !selectionError" class="text-sm text-muted-foreground">
+      {{ selectedProject === 'all' ? t.rules.filterAll : t.rules.projectAndGlobal }}
+    </p>
 
     <Card class="border-dashed">
       <CardContent class="space-y-2 pt-6 text-sm text-muted-foreground">

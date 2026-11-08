@@ -191,23 +191,20 @@ export interface Rule {
  updated_at: string
 }
 
-export interface RuleListResponse {
- rules: Rule[]
- total: number
-}
-
 export async function fetchRules(
  params: {
   project?: string
   limit?: number
  } = {},
  signal?: AbortSignal,
-): Promise<RuleListResponse> {
+): Promise<Rule[]> {
  const searchParams = new URLSearchParams()
  if (params.project) searchParams.set('project', await resolveProject(params.project, signal))
  if (params.limit !== undefined) searchParams.set('limit', String(params.limit))
  const query = searchParams.toString()
- return fetchWithRetry<RuleListResponse>(`${API_BASE}/rules${query ? '?' + query : ''}`, { signal })
+ const response = await fetchWithRetry<unknown>(`${API_BASE}/rules${query ? '?' + query : ''}`, { signal })
+ if (!Array.isArray(response)) throw new Error('Invalid rules response')
+ return response
 }
 
 export async function createRule(

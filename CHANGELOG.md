@@ -13,6 +13,8 @@ Source: PRs #656, #657, #664, #665, #666 and #667. This candidate includes the a
 
 - Permit an enrolled owner to archive a projectless self card through the existing transition API; preserve project membership checks, explicit-context refusals, revision history and active-search exclusion.
 
+- Display legacy Rules from the bare-array API. The unselected scope shows global rules only; a selected project includes its rules and global rules. Invalid responses surface as errors.
+
 ## [7.0.28] - 2026-11-07
 
 The published `v7.0.28` source is `be74d290be0690024e9cea0db414165f0ef69bc8`. It retains validated bootstrap metadata for loaded OMP hooks when a package directory is retired, while continuing to verify policy and client bytes. It also corrects the Claude Code adapter guide. The source's original unclassified notes are preserved below; they are not a claim that later changes shipped in v7.0.28.
