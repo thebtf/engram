@@ -397,14 +397,18 @@ upstream availability. `summary` has integer `total`, `ok`, `standby`,
 `degraded`, and `configured` counts. The current builder emits no `ok` rows;
 `ok` is therefore zero, not a count of verified providers.
 
-`401` authentication rejection, `503` readiness/store-unavailable errors, and
-`500` settings-read errors are `text/plain; charset=utf-8` responses, not JSON
-envelopes. A not-ready server reports `service initializing` or `service
-initialization failed: ...`; an uninitialized handler store reports `model
-health unavailable: store not initialized`; a settings-read failure reports
-`model health unavailable: ` followed by the underlying error. These error
-details are not guaranteed redacted. Swagger 2 lists media types for the whole
-operation rather than individual statuses.
+`401` authentication rejection, `403` HAP keycard route rejection, `503`
+readiness/store-unavailable errors, and `500` errors are `text/plain;
+charset=utf-8` responses, not JSON envelopes. A valid HAP keycard class is not
+allowed on this route and receives `forbidden: HAP keycard class is not allowed
+on this HTTP route`. During bearer validation, an auth store or bcrypt failure
+can produce `500` with `auth store unavailable` before the handler runs. A
+not-ready server reports `service initializing` or `service initialization
+failed: ...`; an uninitialized handler store reports `model health unavailable:
+store not initialized`; a settings-read failure produces `500` with `model
+health unavailable: ` followed by the underlying error. Error details are not
+guaranteed redacted. Swagger 2 lists media types for the whole operation rather
+than individual statuses.
 
 `GET /api/stats` returns uptime, session and queue activity, retrieval statistics,
 readiness, and runtime memory statistics. `database` is present when the store is

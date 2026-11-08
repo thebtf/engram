@@ -3076,7 +3076,7 @@ const docTemplate = `{
                         "ApiKeyAuth": []
                     }
                 ],
-                "description": "Reports configuration and initialized clients, not provider availability; it makes no upstream probes. Health is standby or degraded, not an upstream health verdict. See API_CONTRACTS.md for row and source semantics and redaction limits.\nAuthentication is required when enabled; X-Auth-Token, Bearer, or authorized session cookies are accepted. ApiKeyAuth describes only X-Auth-Token. The route requires database readiness.\nSuccess is application/json; authentication, readiness, and handler errors are text/plain. Swagger 2 lists media types for the entire operation, not individual statuses.",
+                "description": "Reports configuration and initialized clients, not provider availability; it makes no upstream probes. Health is standby or degraded, not an upstream health verdict. See API_CONTRACTS.md for row and source semantics and redaction limits.\nAuthentication is required when enabled; X-Auth-Token, Bearer, or authorized session cookies are accepted. HAP keycard classes are forbidden on this route. ApiKeyAuth describes only X-Auth-Token. The route requires database readiness.\nSuccess is application/json; authentication, readiness, and handler errors are text/plain. Swagger 2 lists media types for the entire operation, not individual statuses.",
                 "produces": [
                     "application/json",
                     "text/plain"
@@ -3098,8 +3098,14 @@ const docTemplate = `{
                             "type": "string"
                         }
                     },
+                    "403": {
+                        "description": "HAP keycard class is not allowed on this route",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
                     "500": {
-                        "description": "settings read failed",
+                        "description": "auth store unavailable or settings read failed",
                         "schema": {
                             "type": "string"
                         }
