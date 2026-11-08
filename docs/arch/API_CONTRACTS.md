@@ -71,13 +71,41 @@ Admin-gated families (candidates, governance, bulk ops) are additionally enforce
 
 #### UCI graph exploration and exact source reads
 
-Use an already selected, authorized UCI View in the same client session. The
-optional `context_handle` is client-local; omitting it uses that client's current
-binding. The optional legacy `project` is compatibility evidence, not a context
-selector. Inspect `tools/list` for the live capability before using these tools.
+Inspect `tools/list` for the live capability. A `context_handle` is local to its
+client session; without one, a call uses that client's current binding. A
+`binding_kind: "checkout"` handle follows the current published View of its
+registered checkout and profile, so the View may advance between calls. A
+`binding_kind: "context"` handle selects a specific View. Both are reauthorized;
+neither is a grant or a promise that a historical View remains available. The
+optional legacy `project` is compatibility evidence, not a context selector.
 
-1. Call `codebase_search` with `{"query":"<search text>"}`. Select an actual
-   returned `items` entry and retain its `ref`, `membership_id`, `span`, and
+As a workaround when an authorized same-View search and read are needed, pin the
+View before searching. This does not fix the normal checkout-bound search-to-read
+race:
+
+1. Call `codebase_context` with `{"action":"resolve"}` for the current binding,
+   or `{"action":"list"}` to inspect authorized contexts. Choose the intended
+   Source, Checkout and View explicitly; do not automatically choose a result.
+   If the returned `context` is null, there is no published View to pin.
+2. Call `codebase_context` with `action: "select"` and the flat fields copied
+   from that context: `source_id`, `checkout_id`, `view_id`,
+   `analysis_profile_id`, `generation`, and `space_id` if present. This changes
+   the current client selection. Use the returned `context_handle` only if the
+   response has `binding_kind: "context"` and the intended context. Never invent
+   a handle or mix fields from different contexts.
+3. Pass that same returned handle to search, graph and read in the same client
+   session. If resolution, selection or a later call is refused, including
+   `CONTEXT_REQUIRED`, `CONTEXT_MISMATCH`, `PERMISSION_DENIED` or `VIEW_RETIRED`,
+   stop. Use the supported context recovery path to establish the intended
+   authorized context; a denial is not permission to switch identity or Source.
+   If the original View is unavailable, obtain another authorized View and repeat
+   the search; never reuse its citation against a different View or bypass the
+   refusal.
+
+With the pinned handle:
+
+1. Call `codebase_search` with the pinned `context_handle` and a `query`. Select
+   an actual returned `items` entry and retain its `ref`, `membership_id`, `span`, and
    `content_digest` together. Check that its source and View are the intended
    ones. Do not synthesize any of these values or copy them from a different hit.
 2. To try to explore that entity, pass the selected item's `ref` as `target`:
@@ -85,6 +113,7 @@ selector. Inspect `tools/list` for the live capability before using these tools.
    ```json
    {
      "action": "explain",
+     "context_handle": "<returned pinned context_handle>",
      "target": {
        "source_id": "<copied from items[n].ref.source_id>",
        "view_id": "<copied from items[n].ref.view_id>",
@@ -112,6 +141,7 @@ selector. Inspect `tools/list` for the live capability before using these tools.
 
    ```text
    codebase_read({
+     "context_handle": <returned pinned context_handle>,
      "ref":            <copy items[n].ref>,
      "membership_id":  <copy items[n].membership_id>,
      "span":           <copy items[n].span>,
@@ -119,7 +149,7 @@ selector. Inspect `tools/list` for the live capability before using these tools.
    })
    ```
 
-   Keep the same client binding or pass its `context_handle` to both calls.
+   Pass the same pinned `context_handle` to the search and read calls.
    For a citation exceeding 8192 bytes, copy the original span as `indexed_span`
    and use `span` for a contained window of at most `max_bytes` (maximum 8192),
    retaining the original line bounds. Use the returned byte end for the next
