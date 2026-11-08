@@ -100,7 +100,7 @@ race:
    supported context recovery path to establish the intended authorized context.
 
 **Recovering an existing citation after `CONTEXT_MISMATCH`:** This is a
-manual recovery, not an automatic fix for the checkout-bound race. It is only
+client-driven recovery, not an automatic fix for the checkout-bound race. It is only
 possible when the original search response contains its complete `contexts`
 entry. Historical View availability and authorization are not guaranteed.
 
