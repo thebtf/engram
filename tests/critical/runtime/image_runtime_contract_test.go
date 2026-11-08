@@ -2706,7 +2706,7 @@ func testPublishedImageScanGate(t *testing.T, repo string) {
 			"-Registry", "ghcr.io",
 			"-Repository", "thebtf/engram",
 			"-ArtifactRoot", "evidence")
-		if !strings.Contains(output, "-NoAllowlist is mandatory") {
+		if !regexp.MustCompile(`(?s)-NoAllowlist is\s+(?:\|\s*)?mandatory`).MatchString(output) {
 			t.Fatalf("published scan did not reject missing no-allowlist guard: %s", output)
 		}
 	})
@@ -2720,7 +2720,7 @@ func testPublishedImageScanGate(t *testing.T, repo string) {
 			"-Repository", "thebtf/engram",
 			"-ArtifactRoot", "evidence",
 			"-NoAllowlist")
-		if !strings.Contains(output, "canonical final vMAJOR.MINOR.PATCH") {
+		if !regexp.MustCompile(`(?s)canonical final\s+(?:\|\s*)?vMAJOR\.MINOR\.PATCH`).MatchString(output) {
 			t.Fatalf("published scan accepted a non-final release version: %s", output)
 		}
 	})
@@ -3298,6 +3298,11 @@ func startServerStack(t *testing.T) stackFixture {
 		postgres:       prefix + "-postgres",
 		server:         prefix + "-server",
 	}
+	networkArgs := []string{"network", "create"}
+	if subnet := strings.TrimSpace(os.Getenv("ENGRAM_TEST_NETWORK_SUBNET")); subnet != "" {
+		networkArgs = append(networkArgs, "--subnet", subnet)
+	}
+	runDocker(t, nil, append(networkArgs, fixture.network)...)
 	t.Cleanup(func() {
 		removeContainer(fixture.server)
 		removeContainer(fixture.postgres)
@@ -3305,7 +3310,6 @@ func startServerStack(t *testing.T) stackFixture {
 		removeVolume(fixture.postgresVolume)
 		removeNetwork(fixture.network)
 	})
-	runDocker(t, nil, "network", "create", fixture.network)
 	runDocker(t, nil, "volume", "create", fixture.postgresVolume)
 	runDocker(t, nil, "volume", "create", fixture.serverVolume)
 	startPostgresContainer(t, fixture.postgres, fixture.network, fixture.postgresVolume)
