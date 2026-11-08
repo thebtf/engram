@@ -20,6 +20,7 @@ coverage.html
 .idea/
 .vscode/
 .claude/
+/PowerShellEditorServices.json
 *.swp
 *.swo
 *~
