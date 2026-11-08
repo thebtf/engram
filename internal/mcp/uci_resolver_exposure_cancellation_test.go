@@ -13,11 +13,13 @@ import (
 
 type cancellationAwareContextCatalog struct {
 	waitForCancelCheckout string
+	entered               chan struct{}
 	*uciCodebaseContextCatalogFake
 }
 
 func (catalog *cancellationAwareContextCatalog) LoadContext(ctx context.Context, ref uci.ContextRef) (uci.ContextRecord, error) {
 	if ref.CheckoutID == catalog.waitForCancelCheckout {
+		close(catalog.entered)
 		<-ctx.Done()
 		return uci.ContextRecord{}, ctx.Err()
 	}
@@ -45,7 +47,7 @@ func (store *blockingExposureStore) AppendExposure(ctx context.Context, record u
 
 func TestUCIDefaultResolverCancellationDuringOtherClientExposure(t *testing.T) {
 	fixture := newUCICodeReadFixture(t)
-	catalog := &cancellationAwareContextCatalog{uciCodebaseContextCatalogFake: fixture.catalog}
+	catalog := &cancellationAwareContextCatalog{uciCodebaseContextCatalogFake: fixture.catalog, entered: make(chan struct{})}
 	fixture.uciCodebaseContextFixture.application.resolver = uci.NewContextResolver(catalog, fixture.authorizer, catalog)
 	fixture.selectContext(t, fixture.clientA, fixture.refA)
 	fixture.selectContext(t, fixture.clientB, fixture.refB)
@@ -97,16 +99,21 @@ func TestUCIDefaultResolverCancellationDuringOtherClientExposure(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(fixture.clientB)
 	defer cancel()
-	started := make(chan struct{})
 	bStarted = true
 	go func() {
-		close(started)
 		_, err := fixture.uciCodebaseContextFixture.application.resolver.Resolve(ctx, uci.ResolveContextInput{
 			ClientSessionID: "mcp-client-b", AuthRealm: uciCodebaseContextTestRealm, Principal: "agent/b",
 		})
 		bDone <- err
 	}()
-	<-started
+	select {
+	case <-catalog.entered:
+	case err := <-bDone:
+		bFinished = true
+		t.Fatalf("client B returned before entering catalog: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("client B did not enter catalog while client A's exposure append was blocked")
+	}
 	cancel()
 	select {
 	case err := <-bDone:

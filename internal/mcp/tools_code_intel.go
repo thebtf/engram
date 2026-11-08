@@ -1066,7 +1066,7 @@ func (s *Server) recordCodebaseExposure(ctx context.Context, epoch uint64, autho
 			return false
 		}
 		receipt, err = s.uciExposureRecorder.Record(ctx, authorized, input)
-		if err == nil && receipt.Validate() == nil && operation == uci.ExposureOperationCodeSearch && (response.Status == uci.QueryStatusOK || response.Status == uci.QueryStatusPartial) && response.Items != nil && len(*response.Items) > 0 {
+		if err == nil && receipt.Validate() == nil && operation == uci.ExposureOperationCodeSearch && (response.Status == uci.QueryStatusOK || response.Status == uci.QueryStatusPartial || response.Status == uci.QueryStatusStale) && response.Items != nil && len(*response.Items) > 0 {
 			candidate := response
 			candidate.Exposure = &receipt
 			if candidate.Validate() == nil {

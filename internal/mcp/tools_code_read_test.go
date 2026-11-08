@@ -45,6 +45,15 @@ type uciCodeReadApplication struct {
 	readCalls    []uciCodeReadCall
 }
 
+type uciCodeReadFreshnessApplication struct {
+	*uciCodeReadApplication
+	freshness uci.QueryFreshness
+}
+
+func (application *uciCodeReadFreshnessApplication) CodebaseFreshness(_ context.Context, _ uci.AuthorizedContext, _ string) (uci.QueryFreshness, error) {
+	return application.freshness, nil
+}
+
 var (
 	_ CodebaseContextApplication      = (*uciCodeReadApplication)(nil)
 	_ CodebaseIntelligenceApplication = (*uciCodeReadApplication)(nil)
@@ -944,10 +953,17 @@ func TestUCICodebaseReadCheckoutSearchAdmission(t *testing.T) {
 	}{
 		{name: "successful hit", status: uci.QueryStatusOK, item: true, allowed: true},
 		{name: "partial hit", status: uci.QueryStatusPartial, item: true, allowed: true},
+		{name: "stale hit", status: uci.QueryStatusStale, item: true, allowed: true},
 		{name: "empty result", status: uci.QueryStatusEmpty},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newUCICheckoutCodeReadFixture(t)
+			var staleFreshness *uci.QueryFreshness
+			if test.status == uci.QueryStatusStale {
+				freshness := uciFreshnessCatchingUp(1, fixture.refA.Generation)
+				staleFreshness = &freshness
+				fixture.server.SetCodebaseContextApplication(&uciCodeReadFreshnessApplication{uciCodeReadApplication: fixture.application, freshness: freshness})
+			}
 			artifact := uciCodeReadArtifactFor(fixture.refA, uciCodeReadTestStoredArtifact, "fixture.StoredVersion")
 			binding := uciCodeIntelCheckoutBinding(fixture.refA, &fixture.refA)
 			fixture.catalog.bindings[fixture.refA.CheckoutID] = binding
@@ -957,7 +973,11 @@ func TestUCICodebaseReadCheckoutSearchAdmission(t *testing.T) {
 			if test.item {
 				hit = &artifact
 			}
-			fixture.application.queryResponses[fixture.refA.CheckoutID] = uciCodeReadQueryResponse(t, fixture.refA, hit, test.status, "", nil, false)
+			applicationStatus := test.status
+			if staleFreshness != nil {
+				applicationStatus = uci.QueryStatusOK
+			}
+			fixture.application.queryResponses[fixture.refA.CheckoutID] = uciCodeReadQueryResponse(t, fixture.refA, hit, applicationStatus, "", nil, false)
 			search := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_search", map[string]any{"context_handle": handle, "query": "StoredVersion"})
 			var result uci.QueryResponse
 			require.NoError(t, json.Unmarshal([]byte(uciCodeIntelToolText(t, search)), &result))
@@ -966,6 +986,21 @@ func TestUCICodebaseReadCheckoutSearchAdmission(t *testing.T) {
 			require.NotNil(t, result.Exposure)
 			require.NotNil(t, result.Items)
 			require.Equal(t, test.item, len(*result.Items) > 0)
+			if staleFreshness != nil {
+				requireUCIFreshnessValue(t, result.Freshness, *staleFreshness)
+			}
+			if test.item {
+				require.Len(t, *result.Items, 1)
+				item := (*result.Items)[0]
+				require.Equal(t, artifact.Ref, item.Ref)
+				require.Equal(t, artifact.MembershipID, item.MembershipID)
+				require.Equal(t, artifact.Span, item.Span)
+				require.Equal(t, artifact.ContentDigest, item.ContentDigest)
+				artifact.Ref = item.Ref
+				artifact.MembershipID = item.MembershipID
+				artifact.Span = item.Span
+				artifact.ContentDigest = item.ContentDigest
+			}
 			advanced := fixture.refA
 			advanced.ViewID = fixture.refB.ViewID
 			advanced.Generation++

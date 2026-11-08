@@ -3,9 +3,21 @@ package uci
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 )
+
+type gateWaitContext struct {
+	context.Context
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (ctx *gateWaitContext) Done() <-chan struct{} {
+	ctx.once.Do(func() { close(ctx.entered) })
+	return ctx.Context.Done()
+}
 
 func TestUCIContextResolverCanceledSelectionDoesNotBind(t *testing.T) {
 	resolver := NewContextResolver(nil, nil, nil)
@@ -53,9 +65,20 @@ func TestUCIContextResolverCanceledReplacementDoesNotBindAfterExposure(t *testin
 		close(release)
 		t.Fatal("exposure did not start")
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	base, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx := &gateWaitContext{Context: base, entered: make(chan struct{})}
 	done := make(chan error, 1)
 	go func() { done <- resolver.bindSelector(ctx, contextResolverTestClientA, selectorB) }()
+	select {
+	case <-ctx.entered:
+	case err := <-done:
+		close(release)
+		t.Fatalf("replacement returned before waiting at the gate: %v", err)
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("replacement did not reach the gate")
+	}
 	cancel()
 	select {
 	case err := <-done:
