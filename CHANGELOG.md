@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Add issue-backed resumable tasks: create and resume a task with actor/source/key-bound replay, refine it with revision-checked edits and preserved drafts, attach opaque metadata, and read bounded comments and history. Preserve existing authorization and privacy, and require a fail-safe writer cutover.
 
+- Keep an absent host session absent for issue attribution in the ordinary native path when both shim and daemon support the updated contract; do not borrow a shared daemon's session. Explicit per-call and reported attribution retain their existing precedence and do not grant authority. Both components must be updated.
+
 - Restart the operator-web Vault auto-hide period on each successful reveal, even when the credential value is unchanged.
 
 ## [7.1.0] - 2026-11-07
