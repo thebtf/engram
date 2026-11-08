@@ -382,7 +382,7 @@ export type IssueDetailRequest = z.input<typeof IssueDetailRequestSchema>;
 
 const IssueSummarySchema = z.object({
  id: IntegerSchema.positive(), revision: IssueRevisionSchema, title: z.string(), status: z.string(), priority: z.string(), type: z.string(),
- source_project: z.string(), target_project: z.string(), source_agent: z.string(), labels: z.array(z.string()),
+ source_project: z.string(), target_project: z.string(), source_agent: z.string(), labels: z.array(z.string()).nullable(),
  owner_label: z.string().nullable(), recipient_label: z.string().nullable(), comment_count: IssueOffsetSchema,
  created_at: z.string(), updated_at: z.string(),
 }).passthrough();

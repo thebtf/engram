@@ -437,6 +437,31 @@ test('issues standalone comment maps metadata without requiring a material revis
   assert.deepEqual(jsonResult(text), response);
 });
 
+test('issues standalone comment forwards advertised comment_metadata without changing task metadata', async t => {
+  const response = { ...updated, changed: false, comment_id: 901 };
+  const f = fixture(t, [{ body: response }]);
+  const metadata = { outcome: { state: 'observed' }, acceptance: ['reviewed'] };
+  const result = await executeJson(f.tool, { action: 'comment', id: 701, body: 'Synthetic append', comment_metadata: metadata });
+  const request = firstRequest(f, 'PATCH', '/api/issues/701');
+  assert.equal(request.body.comment, 'Synthetic append');
+  assert.deepEqual(request.body.comment_metadata, metadata);
+  assert.equal(Object.hasOwn(request.body, 'metadata'), false);
+  assert.deepEqual(result, response);
+});
+
+test('issues standalone comment rejects both metadata aliases without sending private values', async t => {
+  const f = fixture(t);
+  const secret = 'synthetic-private-comment-metadata';
+  const text = await f.tool.execute('ambiguous-comment', {
+    action: 'comment', id: 701, body: 'Synthetic append',
+    metadata: { legacy: secret }, comment_metadata: { current: secret }, format: 'json',
+  });
+  assert.equal(jsonResult(text).error.code, 'INVALID_ARGUMENT');
+  assert.equal(f.requests.length, 0);
+  assert.equal(text.includes(secret), false);
+  assert.equal(JSON.stringify(f.diagnostics).includes(secret), false);
+});
+
 test('issues a supplied standalone-comment revision is honored in the HTTP request', async t => {
   const f = fixture(t, [{ body: { ...updated, changed: false, comment_id: 901 } }]);
   const text = await f.tool.execute('conditional-comment', { action: 'comment', id: 701, body: 'Synthetic conditional append', expected_revision: '2', metadata: {}, format: 'json' });
@@ -452,6 +477,30 @@ test('issues list keeps all AND filters and encodes literal search as query data
   const request = firstRequest(f, 'GET', '/api/issues');
   for (const [field, value] of Object.entries(filters)) assert.equal(request.url.searchParams.get(field === 'target_project' ? 'project' : field), String(value), `Preserve ${field}`);
   assert.deepEqual(jsonResult(text), page);
+});
+
+test('issues list preserves nullable historical labels without rejecting the page', async t => {
+  const page = { issues: [{ ...issue(), labels: null }], total: 1, limit: 20, offset: 0, next_offset: null, project_names: {} };
+  const f = fixture(t, [{ body: page }]);
+  const result = await executeJson(f.tool, { action: 'list', target_project: target });
+  firstRequest(f, 'GET', '/api/issues');
+  assert.deepEqual(result, page);
+});
+
+test('issues detail preserves nullable historical labels without losing comments or history', async t => {
+  const page = detail({ issue: { ...issue(), labels: null }, comments: [comment(901)], comment_count: 1, history: [history(2)], history_count: 1 });
+  const f = fixture(t, [{ body: page }]);
+  const result = await executeJson(f.tool, { action: 'get', id: 701 });
+  firstRequest(f, 'GET', '/api/issues/701');
+  assert.deepEqual(result, page);
+});
+
+test('issues rejects non-string labels rather than treating malformed data as nullable labels', async t => {
+  const page = { issues: [{ ...issue(), labels: ['valid', 42] }], total: 1, limit: 20, offset: 0, next_offset: null, project_names: {} };
+  const f = fixture(t, [{ body: page }]);
+  const result = await executeJson(f.tool, { action: 'list', target_project: target });
+  firstRequest(f, 'GET', '/api/issues');
+  assert.equal(result.error.code, 'UNAVAILABLE');
 });
 
 for (const [input, wire] of [
@@ -692,6 +741,17 @@ test('issues advertised schema exposes the frozen fields, close action and pagin
     { action: 'get', id: 701, comments_limit: 0 }, { action: 'get', id: 701, history_limit: 201 },
     { action: 'get', id: 701, comments_offset: -1 }, { ...createInput, format: 'yaml' },
   ]) assert.equal(Value.Check(schema, params), false, `Advertised schema must reject ${JSON.stringify(params)}`);
+});
+
+test('issues advertises metadata destinations and replacement semantics to the host', t => {
+  const f = fixture(t);
+  const metadata = f.tool.parameters.properties.metadata.description;
+  const commentMetadata = f.tool.parameters.properties.comment_metadata.description;
+  for (const action of ['create', 'update', 'reopen', 'close', 'comment']) assert.match(metadata, new RegExp(`\\b${action}\\b`, 'i'));
+  assert.match(metadata, /replac/i);
+  assert.match(metadata, /task/i);
+  for (const action of ['update', 'reopen', 'close', 'comment']) assert.match(commentMetadata, new RegExp(`\\b${action}\\b`, 'i'));
+  assert.match(commentMetadata, /comment/i);
 });
 
 test('issues project-free reads survive identity hold but writes and default inbox do not substitute caller labels', async t => {
