@@ -352,6 +352,9 @@ func canonicalizeProjectArgument(toolName string, args []byte, canonicalProject 
 	}
 	input, found, err := parseCanonicalProjectArguments(args)
 	if err != nil {
+		if toolName == "issues" {
+			return nil, issues.Failure("INVALID_ARGUMENT")
+		}
 		return nil, err
 	}
 	if !found || input.project == "" || preservesTargetProjectArgument(toolName, input.action) {

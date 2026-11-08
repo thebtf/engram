@@ -202,24 +202,77 @@ func TestCallTool_PreservesExplicitTargetProjectFilters(t *testing.T) {
 }
 
 func TestCallTool_RejectsMalformedActionBeforeProjectExemption(t *testing.T) {
-	for _, action := range []string{`123`, `{}`, `[]`, `null`} {
-		t.Run(action, func(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		args string
+	}{
+		{name: "numeric action", args: `{"action":123,"project":"target-project"}`},
+		{name: "object action", args: `{"action":{},"project":"target-project"}`},
+		{name: "array action", args: `{"action":[],"project":"target-project"}`},
+		{name: "null action", args: `{"action":null,"project":"target-project"}`},
+		{name: "numeric project", args: `{"action":"list","project":42}`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
 			steps := []string{}
 			srv := &Server{handler: identityOrderHandler{steps: &steps}}
+			ctx := auth.WithIdentity(context.Background(), auth.AuthDisabled())
 
-			_, err := srv.CallTool(context.Background(), &pb.CallToolRequest{
+			response, err := srv.CallTool(ctx, &pb.CallToolRequest{
 				ToolName:      "issues",
 				Project:       grpcLogicalProjectID,
-				ArgumentsJson: []byte(`{"action":` + action + `,"project":"target-project"}`),
+				ArgumentsJson: []byte(tt.args),
 			})
-			if status.Code(err) != codes.InvalidArgument {
-				t.Fatalf("status=%v error=%v, want InvalidArgument", status.Code(err), err)
-			}
 			if len(steps) != 0 {
-				t.Fatalf("handler ran with malformed action: %v", steps)
+				t.Fatalf("handler ran with malformed issue arguments: %v", steps)
+			}
+			if err != nil || response == nil || !response.IsError {
+				t.Fatalf("response=%v error=%v, want typed issue error", response, err)
+			}
+			if response.CanonicalProject != grpcLogicalProjectID {
+				t.Fatalf("canonical project=%q, want %q", response.CanonicalProject, grpcLogicalProjectID)
+			}
+			var failure struct {
+				Code int `json:"code"`
+				Data struct {
+					Error struct {
+						Code string `json:"code"`
+					} `json:"error"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(response.ContentJson, &failure); err != nil {
+				t.Fatalf("decode issue error: %v", err)
+			}
+			if failure.Code != -32000 {
+				t.Fatalf("JSON-RPC error code=%d, want -32000", failure.Code)
+			}
+			if failure.Data.Error.Code != "INVALID_ARGUMENT" {
+				t.Fatalf("issue error code=%q, want INVALID_ARGUMENT", failure.Data.Error.Code)
 			}
 		})
 	}
+	t.Run("outer project preconditions retain precedence", func(t *testing.T) {
+		for _, tt := range []struct {
+			name    string
+			project string
+			code    codes.Code
+		}{
+			{name: "invalid", project: "not-a-uuid", code: codes.InvalidArgument},
+			{name: "missing", code: codes.FailedPrecondition},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				steps := []string{}
+				srv := &Server{handler: identityOrderHandler{steps: &steps}}
+				ctx := auth.WithIdentity(context.Background(), auth.AuthDisabled())
+				_, err := srv.CallTool(ctx, &pb.CallToolRequest{
+					ToolName: "issues", Project: tt.project,
+					ArgumentsJson: []byte(`{"action":123,"project":"target-project"}`),
+				})
+				if status.Code(err) != tt.code || len(steps) != 0 {
+					t.Fatalf("status=%v error=%v steps=%v, want %v without handler", status.Code(err), err, steps, tt.code)
+				}
+			})
+		}
+	})
 }
 
 func TestCallTool_PreservesAdminPurgeProjectTarget(t *testing.T) {
