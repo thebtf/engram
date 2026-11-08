@@ -1014,13 +1014,13 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 	latest := readFile(t, latestWorkflowPath)
 	recovery := readFile(t, recoveryWorkflowPath)
 	journalGate := readFile(t, latestScriptPath)
-	testLatestPromotionReleaseRefGuard(t, repo, latest)
+	testLatestPromotionEvidenceGuard(t, latest)
 	latestScript := readFile(t, latestScriptPath)
 	for _, required := range []string{
 		"name: Promote Latest Release Images", "workflow_run:\n    workflows: [\"Docker Publish\"]\n    types: [completed]",
 		"contents: read", "actions: read", "packages: write", "Initialize isolated promotion paths", `"DOCKER_CONFIG=$dockerConfig" | Add-Content -LiteralPath $env:GITHUB_ENV`, `"RECEIPT_DIR=$receiptDir" | Add-Content -LiteralPath $env:GITHUB_ENV`, "path: ${{ env.RECEIPT_DIR }}",
 		"gh api \"repos/$env:REPOSITORY_NAME/releases/latest\" --jq .tag_name", "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
-		"TRIGGERING_WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }}", `gh api --paginate --slurp "repos/$env:REPOSITORY_NAME/actions/runs/$triggeringWorkflowRunID/jobs?per_page=100"`, "Where-Object { $_.name -ceq 'publish-images' }", "if ($publishJobs.Count -ne 1)", "status -cne 'completed'", "conclusion -cne 'success'",
+		"TRIGGERING_WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }}", `gh api --paginate --slurp "repos/$env:REPOSITORY_NAME/actions/runs/$triggeringWorkflowRunID/attempts/$triggeringWorkflowRunAttempt/jobs?per_page=100"`, "Where-Object { $_.name -ceq 'publish-images' }", "if ($publishJobs.Count -ne 1)", "status -cne 'completed'", "conclusion -cne 'success'",
 		"$maxAttempts = 6", "for ($attempt = 1; $attempt -le $maxAttempts; $attempt++)", "Start-Sleep -Seconds $retrySeconds",
 		"ghcr.io/thebtf/engram", "ghcr.io/thebtf/engram-operator-console", "ghcr.io/thebtf/engram-postgres",
 		"org.opencontainers.image.source", "org.opencontainers.image.version", "org.opencontainers.image.revision", "docker login ghcr.io",
@@ -1085,7 +1085,7 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 	if !(waitIndex >= 0 && waitIndex < prewriteIndex && prewriteIndex < loginIndex && loginIndex < promoteIndex) {
 		t.Fatalf("latest promotion must revalidate after immutable inspection and before login: wait=%d prewrite=%d login=%d promote=%d", waitIndex, prewriteIndex, loginIndex, promoteIndex)
 	}
-	publishJobsIndex := strings.Index(latest, `gh api --paginate --slurp "repos/$env:REPOSITORY_NAME/actions/runs/$triggeringWorkflowRunID/jobs?per_page=100"`)
+	publishJobsIndex := strings.Index(latest, `gh api --paginate --slurp "repos/$env:REPOSITORY_NAME/actions/runs/$triggeringWorkflowRunID/attempts/$triggeringWorkflowRunAttempt/jobs?per_page=100"`)
 	if publishJobsIndex < 0 || publishJobsIndex >= loginIndex {
 		t.Fatal("latest promoter must REST-validate the triggering Docker Publish publish-images job before registry login")
 	}
@@ -1228,6 +1228,17 @@ func testLatestPromotionReleaseRefGuard(t *testing.T, repo, workflow string) {
 		if got != trigger.allowed {
 			t.Errorf("freshness guard accepts %s = %t, want %t", trigger.name, got, trigger.allowed)
 		}
+	}
+}
+
+func testLatestPromotionEvidenceGuard(t *testing.T, workflow string) {
+	t.Helper()
+	const freshnessGuard = "if ($env:GITHUB_EVENT_NAME -eq 'workflow_run' -and ($commit -cne [string]$publication.source_commit -or $tag -cne [string]$publication.release_version))"
+	loginIndex := strings.Index(workflow, "Login to GHCR only after immutable provenance inspection")
+	guardIndex := strings.Index(workflow, freshnessGuard)
+	validationIndex := strings.Index(workflow, "-Mode ValidatePublicationEvidence")
+	if validationIndex < 0 || validationIndex >= guardIndex || guardIndex >= loginIndex || strings.Count(workflow, freshnessGuard) != 1 {
+		t.Fatal("latest promoter must compare validated publication evidence to the official release before registry login")
 	}
 }
 
