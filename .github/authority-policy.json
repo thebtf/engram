@@ -19,7 +19,7 @@
   },
   "transition": {
     "consumed_epoch": "authority-0088",
-    "event_base_sha": "78f367ba708919a580a6dc58af3b0a4a826e2bc7"
+    "event_base_sha": "58370655a3d9d536b93b1ade5567aeeedcbccad6"
   },
   "active_epoch": {
     "id": "authority-0089",
