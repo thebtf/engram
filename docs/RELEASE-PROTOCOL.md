@@ -45,6 +45,13 @@ Never replace it with an immutable `@sha256`, `:vX.Y.Z` or `:sha-COMMIT` referen
    and its existing journal/recovery. That owner resolves the official stable
    GitHub release; do not bypass its release selection, provenance checks or
    recoverable three-image promotion.
+   For a `workflow_run`, the promoter binds the successful Docker Publish run
+   and attempt to its unique, unexpired publication-evidence artifact. It checks
+   the archive digest and validates the evidence with the trusted image gate,
+   then matches the official release and immutable image digests to that evidence.
+   The workflow-definition head is not the release candidate. A rerun may use a
+   payload prepared in an earlier attempt; the evidence artifact must still belong
+   to the current publisher attempt. The `repository_dispatch` path is separate.
 2. Read back `latest` and the desired versioned images: require matching manifest
    and config digests and OCI source/version/revision. Retain immutable digests
    for verification, audit and rollback; build/dependency image pins remain
