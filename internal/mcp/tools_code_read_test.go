@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -77,6 +78,19 @@ func newUCICodeReadFixture(t *testing.T) *uciCodeReadFixture {
 		uciCodeIntelCompatibilityFixture: compatibility,
 		application:                      application,
 	}
+}
+
+func newUCICheckoutCodeReadFixture(t *testing.T) *uciCodeReadFixture {
+	t.Helper()
+	fixture := newUCICodeReadFixture(t)
+	fixture.refA.SpaceID = nil
+	fixture.refB.SpaceID = nil
+	fixture.catalog.records[fixture.refA.CheckoutID] = uci.ContextRecord{Ref: fixture.refA, AuthRealm: uciCodebaseContextTestRealm}
+	fixture.catalog.records[fixture.refB.CheckoutID] = uci.ContextRecord{Ref: fixture.refB, AuthRealm: uciCodebaseContextTestRealm}
+	alias := fixture.application.aliases[uciCodeIntelCompatibilityProject]
+	alias.SpaceID = nil
+	fixture.application.aliases[uciCodeIntelCompatibilityProject] = alias
+	return fixture
 }
 
 func TestUCICodebaseReadToolDefinitionIsBoundedAndReadOnly(t *testing.T) {
@@ -313,6 +327,50 @@ func TestUCICodebaseReadDeniesForeignRevokedMismatchedAndPrivateContextsBeforeAp
 	})
 }
 
+func TestUCICodebaseReadSuppressesRevocationOrHandleRemovalBeforeRelease(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		invalidate func(*uciCodeReadFixture, string)
+		code       uci.QueryErrorCode
+		status     uci.QueryResponseStatus
+	}{
+		{
+			name: "authorization revoked after read",
+			invalidate: func(fixture *uciCodeReadFixture, _ string) {
+				fixture.authorizer.allowed["agent/a"][fixture.refA.CheckoutID] = false
+			},
+			code:   uci.QueryErrorPermissionDenied,
+			status: uci.QueryStatusForbidden,
+		},
+		{
+			name: "handle removed after read",
+			invalidate: func(fixture *uciCodeReadFixture, handle string) {
+				fixture.server.codebaseContextMu.Lock()
+				if client := fixture.server.codebaseContextHandles["mcp-client-a"]; client != nil {
+					fixture.server.codebaseContextRemoveEntry(client, handle)
+				}
+				fixture.server.codebaseContextMu.Unlock()
+			},
+			code:   uci.QueryErrorContextMismatch,
+			status: uci.QueryStatusContextRequired,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newUCICodeReadFixture(t)
+			artifact := uciCodeReadArtifactFor(fixture.refA, uciCodeReadTestStoredArtifact, "fixture.StoredVersion")
+			handle := fixture.selectContext(t, fixture.clientA, fixture.refA)
+			fixture.application.readResponse = func(_ uci.AuthorizedContext, _ CodebaseReadInput) (uci.QueryResponse, error) {
+				test.invalidate(fixture, handle)
+				return uciCodeReadQueryResponse(t, fixture.refA, &artifact, uci.QueryStatusOK, "", nil, false), nil
+			}
+			response := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_read", uciCodeReadArguments(handle, artifact))
+			requireUCICodeReadSuppressed(t, response, test.status, test.code, fixture, artifact.Excerpt)
+			require.Len(t, fixture.application.readCalls, 1)
+			assert.Zero(t, fixture.exposureStore.exposureCount())
+		})
+	}
+}
+
 func TestUCICodebaseReadCheckoutWithoutViewFailsClosedWithoutExposure(t *testing.T) {
 	fixture := newUCICodeReadFixture(t)
 	artifact := uciCodeReadArtifactFor(fixture.refA, uciCodeReadTestStoredArtifact, "fixture.StoredVersion")
@@ -529,6 +587,90 @@ func TestUCICodebaseReadRejectsUnclosedOrInexactApplicationResponses(t *testing.
 			require.Len(t, fixture.application.readCalls, 1)
 		})
 	}
+}
+
+func TestUCICodebaseReadCheckoutViewAdvancesDuringRead(t *testing.T) {
+	fixture := newUCICheckoutCodeReadFixture(t)
+	artifact := uciCodeReadArtifactFor(fixture.refA, uciCodeReadTestStoredArtifact, "fixture.StoredVersion")
+	oldBinding := uciCodeIntelCheckoutBinding(fixture.refA, &fixture.refA)
+	fixture.catalog.bindings[fixture.refA.CheckoutID] = oldBinding
+	fixture.catalog.historicalBindings = map[string]uci.IndexBinding{fixture.refA.ViewID: oldBinding}
+	handle := fixture.selectCheckout(t, fixture.clientA, oldBinding)
+	fixture.application.queryResponses[fixture.refA.CheckoutID] = uciCodeReadQueryResponse(t, fixture.refA, &artifact, uci.QueryStatusOK, "", nil, false)
+	search := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_search", map[string]any{"context_handle": handle, "query": "StoredVersion"})
+	var searched uci.QueryResponse
+	require.NoError(t, json.Unmarshal([]byte(uciCodeIntelToolText(t, search)), &searched))
+	require.NoError(t, searched.Validate())
+	require.Equal(t, uci.QueryStatusOK, searched.Status)
+	require.NotNil(t, searched.Exposure)
+	require.NotNil(t, searched.Items)
+	require.Len(t, *searched.Items, 1)
+	require.Equal(t, artifact.Ref, (*searched.Items)[0].Ref)
+
+	advanced := fixture.refA
+	advanced.ViewID = fixture.refB.ViewID
+	advanced.Generation++
+	fixture.application.readResponse = func(authorized uci.AuthorizedContext, _ CodebaseReadInput) (uci.QueryResponse, error) {
+		require.Equal(t, fixture.refA.ViewID, authorized.Ref().ViewID)
+		fixture.catalog.bindings[fixture.refA.CheckoutID] = uciCodeIntelCheckoutBinding(advanced, &advanced)
+		return uciCodeReadQueryResponse(t, fixture.refA, &artifact, uci.QueryStatusOK, "", nil, false), nil
+	}
+	before := fixture.exposureStore.exposureCount()
+	response := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_read", uciCodeReadArguments(handle, artifact))
+	requireUCICodeReadResponse(t, response, fixture.refA, artifact, "", nil)
+	require.Equal(t, before+1, fixture.exposureStore.exposureCount())
+}
+
+func TestUCICodebaseReadCheckoutSearchCannotOutliveRevocation(t *testing.T) {
+	fixture := newUCICheckoutCodeReadFixture(t)
+	artifact := uciCodeReadArtifactFor(fixture.refA, uciCodeReadTestStoredArtifact, "fixture.StoredVersion")
+	binding := uciCodeIntelCheckoutBinding(fixture.refA, &fixture.refA)
+	fixture.catalog.bindings[fixture.refA.CheckoutID] = binding
+	handle := fixture.selectCheckout(t, fixture.clientA, binding)
+	fixture.application.queryResponses[fixture.refA.CheckoutID] = uciCodeReadQueryResponse(t, fixture.refA, &artifact, uci.QueryStatusOK, "", nil, false)
+	search := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_search", map[string]any{"context_handle": handle, "query": "StoredVersion"})
+	var searched uci.QueryResponse
+	require.NoError(t, json.Unmarshal([]byte(uciCodeIntelToolText(t, search)), &searched))
+	require.NoError(t, searched.Validate())
+	require.NotNil(t, searched.Exposure)
+	fixture.application.readResponse = func(_ uci.AuthorizedContext, _ CodebaseReadInput) (uci.QueryResponse, error) {
+		fixture.authorizer.allowed["agent/a"][fixture.refA.CheckoutID] = false
+		return uciCodeReadQueryResponse(t, fixture.refA, &artifact, uci.QueryStatusOK, "", nil, false), nil
+	}
+	before := fixture.exposureStore.exposureCount()
+	response := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_read", uciCodeReadArguments(handle, artifact))
+	requireUCICodeReadSuppressed(t, response, uci.QueryStatusForbidden, uci.QueryErrorPermissionDenied, fixture, artifact.Excerpt)
+	require.Len(t, fixture.application.readCalls, 1)
+	require.Equal(t, before, fixture.exposureStore.exposureCount())
+}
+
+func TestUCICodebaseReadEvictedCheckoutHandleCannotReuseSearchProvenance(t *testing.T) {
+	fixture := newUCICheckoutCodeReadFixture(t)
+	artifact := uciCodeReadArtifactFor(fixture.refA, uciCodeReadTestStoredArtifact, "fixture.StoredVersion")
+	binding := uciCodeIntelCheckoutBinding(fixture.refA, &fixture.refA)
+	fixture.catalog.bindings[fixture.refA.CheckoutID] = binding
+	handle := fixture.selectCheckout(t, fixture.clientA, binding)
+	fixture.application.queryResponses[fixture.refA.CheckoutID] = uciCodeReadQueryResponse(t, fixture.refA, &artifact, uci.QueryStatusOK, "", nil, false)
+	search := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_search", map[string]any{"context_handle": handle, "query": "StoredVersion"})
+	var searched uci.QueryResponse
+	require.NoError(t, json.Unmarshal([]byte(uciCodeIntelToolText(t, search)), &searched))
+	require.NoError(t, searched.Validate())
+	require.NotNil(t, searched.Exposure)
+	for i := range codebaseContextMaxHandlesPerClient {
+		ref := fixture.refA
+		ref.ViewID = fmt.Sprintf("40000000-0000-4000-8000-%012x", i+100)
+		ref.Generation += int64(i + 1)
+		fixture.catalog.records[ref.CheckoutID] = uci.ContextRecord{Ref: ref, AuthRealm: uciCodebaseContextTestRealm}
+		fixture.catalog.bindings[ref.CheckoutID] = uciCodeIntelCheckoutBinding(ref, &ref)
+		fixture.selectContext(t, fixture.clientA, ref)
+	}
+	fixture.catalog.records[fixture.refA.CheckoutID] = uci.ContextRecord{Ref: fixture.refA, AuthRealm: uciCodebaseContextTestRealm}
+	fixture.catalog.bindings[fixture.refA.CheckoutID] = binding
+	before := fixture.exposureStore.exposureCount()
+	response := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_read", uciCodeReadArguments(handle, artifact))
+	requireUCICodeReadSuppressed(t, response, uci.QueryStatusContextRequired, uci.QueryErrorContextMismatch, fixture, artifact.Excerpt)
+	require.Equal(t, before, fixture.exposureStore.exposureCount())
+	require.Empty(t, fixture.application.readCalls)
 }
 
 func uciCodeReadArtifactFor(ref uci.ContextRef, source, entityKey string) uciCodeReadArtifact {
@@ -791,4 +933,257 @@ func TestUCICodebaseReadPreservesPartialCoverageMiss(t *testing.T) {
 	require.Equal(t, uci.IndexCoveragePartial, released.Coverage.Structural)
 	require.Empty(t, *released.Items)
 	require.NotNil(t, released.Exposure)
+}
+
+func TestUCICodebaseReadCheckoutSearchAdmission(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		status  uci.QueryResponseStatus
+		item    bool
+		allowed bool
+	}{
+		{name: "successful hit", status: uci.QueryStatusOK, item: true, allowed: true},
+		{name: "partial hit", status: uci.QueryStatusPartial, item: true, allowed: true},
+		{name: "empty result", status: uci.QueryStatusEmpty},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newUCICheckoutCodeReadFixture(t)
+			artifact := uciCodeReadArtifactFor(fixture.refA, uciCodeReadTestStoredArtifact, "fixture.StoredVersion")
+			binding := uciCodeIntelCheckoutBinding(fixture.refA, &fixture.refA)
+			fixture.catalog.bindings[fixture.refA.CheckoutID] = binding
+			fixture.catalog.historicalBindings = map[string]uci.IndexBinding{fixture.refA.ViewID: binding}
+			handle := fixture.selectCheckout(t, fixture.clientA, binding)
+			var hit *uciCodeReadArtifact
+			if test.item {
+				hit = &artifact
+			}
+			fixture.application.queryResponses[fixture.refA.CheckoutID] = uciCodeReadQueryResponse(t, fixture.refA, hit, test.status, "", nil, false)
+			search := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_search", map[string]any{"context_handle": handle, "query": "StoredVersion"})
+			var result uci.QueryResponse
+			require.NoError(t, json.Unmarshal([]byte(uciCodeIntelToolText(t, search)), &result))
+			require.NoError(t, result.Validate())
+			require.Equal(t, test.status, result.Status)
+			require.NotNil(t, result.Exposure)
+			require.NotNil(t, result.Items)
+			require.Equal(t, test.item, len(*result.Items) > 0)
+			advanced := fixture.refA
+			advanced.ViewID = fixture.refB.ViewID
+			advanced.Generation++
+			fixture.catalog.bindings[fixture.refA.CheckoutID] = uciCodeIntelCheckoutBinding(advanced, &advanced)
+			fixture.application.readResponse = func(_ uci.AuthorizedContext, _ CodebaseReadInput) (uci.QueryResponse, error) {
+				return uciCodeReadQueryResponse(t, fixture.refA, &artifact, uci.QueryStatusOK, "", nil, false), nil
+			}
+			before := fixture.exposureStore.exposureCount()
+			response := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_read", uciCodeReadArguments(handle, artifact))
+			if test.allowed {
+				requireUCICodeReadResponse(t, response, fixture.refA, artifact, "", nil)
+				require.Equal(t, before+1, fixture.exposureStore.exposureCount())
+			} else {
+				requireUCICodeReadSuppressed(t, response, uci.QueryStatusContextRequired, uci.QueryErrorContextMismatch, fixture, artifact.Excerpt)
+				require.Empty(t, fixture.application.readCalls)
+				require.Equal(t, before, fixture.exposureStore.exposureCount())
+			}
+		})
+	}
+}
+
+func TestUCICodebaseReadDefaultReplacementDoesNotInvalidateExplicitHandle(t *testing.T) {
+	fixture := newUCICheckoutCodeReadFixture(t)
+	artifact := uciCodeReadArtifactFor(fixture.refA, uciCodeReadTestStoredArtifact, "fixture.StoredVersion")
+	binding := uciCodeIntelCheckoutBinding(fixture.refA, &fixture.refA)
+	fixture.catalog.bindings[fixture.refA.CheckoutID] = binding
+	fixture.catalog.historicalBindings = map[string]uci.IndexBinding{fixture.refA.ViewID: binding}
+	handle := fixture.selectCheckout(t, fixture.clientA, binding)
+	fixture.application.queryResponses[fixture.refA.CheckoutID] = uciCodeReadQueryResponse(t, fixture.refA, &artifact, uci.QueryStatusOK, "", nil, false)
+	for _, args := range []map[string]any{{"query": "StoredVersion"}, {"context_handle": handle, "query": "StoredVersion"}} {
+		search := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_search", args)
+		var result uci.QueryResponse
+		require.NoError(t, json.Unmarshal([]byte(uciCodeIntelToolText(t, search)), &result))
+		require.NoError(t, result.Validate())
+		require.Equal(t, uci.QueryStatusOK, result.Status)
+		require.NotNil(t, result.Exposure)
+		require.NotNil(t, result.Items)
+		require.Len(t, *result.Items, 1)
+	}
+	advanced := fixture.refA
+	advanced.ViewID = fixture.refB.ViewID
+	advanced.Generation++
+	fixture.catalog.bindings[fixture.refA.CheckoutID] = uciCodeIntelCheckoutBinding(advanced, &advanced)
+	fixture.authorizer.allowed["agent/a"][fixture.refB.CheckoutID] = true
+	fixture.selectContext(t, fixture.clientA, fixture.refB)
+	fixture.selectCheckout(t, fixture.clientA, uciCodeIntelCheckoutBinding(advanced, &advanced))
+	fixture.application.readResponse = func(_ uci.AuthorizedContext, _ CodebaseReadInput) (uci.QueryResponse, error) {
+		return uciCodeReadQueryResponse(t, fixture.refA, &artifact, uci.QueryStatusOK, "", nil, false), nil
+	}
+	args := uciCodeReadArguments(handle, artifact)
+	delete(args, "context_handle")
+	before := fixture.exposureStore.exposureCount()
+	response := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_read", args)
+	requireUCICodeReadSuppressed(t, response, uci.QueryStatusContextRequired, uci.QueryErrorContextMismatch, fixture, artifact.Excerpt)
+	require.Equal(t, before, fixture.exposureStore.exposureCount())
+	require.Empty(t, fixture.application.readCalls)
+	response = callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_read", uciCodeReadArguments(handle, artifact))
+	requireUCICodeReadResponse(t, response, fixture.refA, artifact, "", nil)
+}
+
+func TestUCICodebaseReadCheckoutEvictionDuringReadSuppressesRelease(t *testing.T) {
+	fixture := newUCICheckoutCodeReadFixture(t)
+	artifact := uciCodeReadArtifactFor(fixture.refA, uciCodeReadTestStoredArtifact, "fixture.StoredVersion")
+	binding := uciCodeIntelCheckoutBinding(fixture.refA, &fixture.refA)
+	fixture.catalog.bindings[fixture.refA.CheckoutID] = binding
+	fixture.catalog.historicalBindings = map[string]uci.IndexBinding{fixture.refA.ViewID: binding}
+	handle := fixture.selectCheckout(t, fixture.clientA, binding)
+	fixture.application.queryResponses[fixture.refA.CheckoutID] = uciCodeReadQueryResponse(t, fixture.refA, &artifact, uci.QueryStatusOK, "", nil, false)
+	search := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_search", map[string]any{"context_handle": handle, "query": "StoredVersion"})
+	var result uci.QueryResponse
+	require.NoError(t, json.Unmarshal([]byte(uciCodeIntelToolText(t, search)), &result))
+	require.NoError(t, result.Validate())
+	require.NotNil(t, result.Exposure)
+	advanced := fixture.refA
+	advanced.ViewID = fixture.refB.ViewID
+	advanced.Generation++
+	fixture.catalog.bindings[fixture.refA.CheckoutID] = uciCodeIntelCheckoutBinding(advanced, &advanced)
+	fixture.application.readResponse = func(_ uci.AuthorizedContext, _ CodebaseReadInput) (uci.QueryResponse, error) {
+		fixture.server.codebaseContextMu.Lock()
+		if client := fixture.server.codebaseContextHandles["mcp-client-a"]; client != nil {
+			fixture.server.codebaseContextRemoveEntry(client, handle)
+		}
+		fixture.server.codebaseContextMu.Unlock()
+		return uciCodeReadQueryResponse(t, fixture.refA, &artifact, uci.QueryStatusOK, "", nil, false), nil
+	}
+	before := fixture.exposureStore.exposureCount()
+	response := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_read", uciCodeReadArguments(handle, artifact))
+	requireUCICodeReadSuppressed(t, response, uci.QueryStatusContextRequired, uci.QueryErrorContextMismatch, fixture, artifact.Excerpt)
+	require.Len(t, fixture.application.readCalls, 1)
+	require.Equal(t, before, fixture.exposureStore.exposureCount())
+}
+
+func TestUCICodebaseReadDefaultReplacementDuringReadSuppressesRelease(t *testing.T) {
+	fixture := newUCICheckoutCodeReadFixture(t)
+	artifact := uciCodeReadArtifactFor(fixture.refA, uciCodeReadTestStoredArtifact, "fixture.StoredVersion")
+	binding := uciCodeIntelCheckoutBinding(fixture.refA, &fixture.refA)
+	fixture.catalog.bindings[fixture.refA.CheckoutID] = binding
+	fixture.catalog.historicalBindings = map[string]uci.IndexBinding{fixture.refA.ViewID: binding}
+	handle := fixture.selectCheckout(t, fixture.clientA, binding)
+	fixture.application.queryResponses[fixture.refA.CheckoutID] = uciCodeReadQueryResponse(t, fixture.refA, &artifact, uci.QueryStatusOK, "", nil, false)
+	search := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_search", map[string]any{"query": "StoredVersion"})
+	var result uci.QueryResponse
+	require.NoError(t, json.Unmarshal([]byte(uciCodeIntelToolText(t, search)), &result))
+	require.NoError(t, result.Validate())
+	require.NotNil(t, result.Exposure)
+	require.NotNil(t, result.Items)
+	require.Len(t, *result.Items, 1)
+	advanced := fixture.refA
+	advanced.ViewID = fixture.refB.ViewID
+	advanced.Generation++
+	fixture.catalog.bindings[fixture.refA.CheckoutID] = uciCodeIntelCheckoutBinding(advanced, &advanced)
+	fixture.authorizer.allowed["agent/a"][fixture.refB.CheckoutID] = true
+	fixture.application.readResponse = func(_ uci.AuthorizedContext, _ CodebaseReadInput) (uci.QueryResponse, error) {
+		fixture.selectContext(t, fixture.clientA, fixture.refB)
+		fixture.selectCheckout(t, fixture.clientA, uciCodeIntelCheckoutBinding(advanced, &advanced))
+		return uciCodeReadQueryResponse(t, fixture.refA, &artifact, uci.QueryStatusOK, "", nil, false), nil
+	}
+	args := uciCodeReadArguments(handle, artifact)
+	delete(args, "context_handle")
+	before := fixture.exposureStore.exposureCount()
+	response := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_read", args)
+	requireUCICodeReadSuppressed(t, response, uci.QueryStatusContextRequired, uci.QueryErrorContextMismatch, fixture, artifact.Excerpt)
+	require.Len(t, fixture.application.readCalls, 1)
+	require.Equal(t, before, fixture.exposureStore.exposureCount())
+}
+
+func TestUCICodebaseReadSuppressedSearchDoesNotAdmitView(t *testing.T) {
+	fixture := newUCICheckoutCodeReadFixture(t)
+	artifact := uciCodeReadArtifactFor(fixture.refA, uciCodeReadTestStoredArtifact, "fixture.StoredVersion")
+	binding := uciCodeIntelCheckoutBinding(fixture.refA, &fixture.refA)
+	fixture.catalog.bindings[fixture.refA.CheckoutID] = binding
+	fixture.catalog.historicalBindings = map[string]uci.IndexBinding{fixture.refA.ViewID: binding}
+	handle := fixture.selectCheckout(t, fixture.clientA, binding)
+	fixture.application.queryResponses[fixture.refA.CheckoutID] = uciCodeReadQueryResponse(t, fixture.refA, &artifact, uci.QueryStatusOK, "", nil, false)
+	fixture.application.afterAliasResolution = func() {
+		fixture.server.codebaseContextMu.Lock()
+		if client := fixture.server.codebaseContextHandles["mcp-client-a"]; client != nil {
+			fixture.server.codebaseContextRemoveEntry(client, handle)
+		}
+		fixture.server.codebaseContextMu.Unlock()
+	}
+	search := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_search", uciCodeIntelCompatibilitySearchArguments(handle, uciCodeIntelCompatibilityProject, 10))
+	requireUCICodeIntelSuppressedQueryError(t, search, "CONTEXT_MISMATCH", fixture.uciCodeIntelCompatibilityFixture)
+	require.Len(t, fixture.application.searchCalls, 1)
+	require.Zero(t, fixture.exposureStore.exposureCount())
+	fixture.application.afterAliasResolution = nil
+	newHandle := fixture.selectCheckout(t, fixture.clientA, binding)
+	advanced := fixture.refA
+	advanced.ViewID = fixture.refB.ViewID
+	advanced.Generation++
+	fixture.catalog.bindings[fixture.refA.CheckoutID] = uciCodeIntelCheckoutBinding(advanced, &advanced)
+	fixture.application.readResponse = func(_ uci.AuthorizedContext, _ CodebaseReadInput) (uci.QueryResponse, error) {
+		return uciCodeReadQueryResponse(t, fixture.refA, &artifact, uci.QueryStatusOK, "", nil, false), nil
+	}
+	response := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_read", uciCodeReadArguments(newHandle, artifact))
+	requireUCICodeReadSuppressed(t, response, uci.QueryStatusContextRequired, uci.QueryErrorContextMismatch, fixture, artifact.Excerpt)
+	require.Empty(t, fixture.application.readCalls)
+	require.Zero(t, fixture.exposureStore.exposureCount())
+}
+
+func TestUCICodebaseReadCheckoutCitationDoesNotCrossSessions(t *testing.T) {
+	fixture := newUCICheckoutCodeReadFixture(t)
+	artifact := uciCodeReadArtifactFor(fixture.refA, uciCodeReadTestStoredArtifact, "fixture.StoredVersion")
+	binding := uciCodeIntelCheckoutBinding(fixture.refA, &fixture.refA)
+	fixture.catalog.bindings[fixture.refA.CheckoutID] = binding
+	fixture.catalog.historicalBindings = map[string]uci.IndexBinding{fixture.refA.ViewID: binding}
+	other := uciCodebaseContextClient("mcp-client-other", "keycard-a", "agent/a")
+	handleA := fixture.selectCheckout(t, fixture.clientA, binding)
+	handleOther := fixture.selectCheckout(t, other, binding)
+	fixture.application.queryResponses[fixture.refA.CheckoutID] = uciCodeReadQueryResponse(t, fixture.refA, &artifact, uci.QueryStatusOK, "", nil, false)
+	search := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_search", map[string]any{"context_handle": handleA, "query": "StoredVersion"})
+	var result uci.QueryResponse
+	require.NoError(t, json.Unmarshal([]byte(uciCodeIntelToolText(t, search)), &result))
+	require.NoError(t, result.Validate())
+	require.NotNil(t, result.Exposure)
+	require.NotNil(t, result.Items)
+	require.Len(t, *result.Items, 1)
+	advanced := fixture.refA
+	advanced.ViewID = fixture.refB.ViewID
+	advanced.Generation++
+	fixture.catalog.bindings[fixture.refA.CheckoutID] = uciCodeIntelCheckoutBinding(advanced, &advanced)
+	fixture.application.readResponse = func(_ uci.AuthorizedContext, _ CodebaseReadInput) (uci.QueryResponse, error) {
+		return uciCodeReadQueryResponse(t, fixture.refA, &artifact, uci.QueryStatusOK, "", nil, false), nil
+	}
+	before := fixture.exposureStore.exposureCount()
+	response := callUCICodeIntel(t, fixture.server, other, "codebase_read", uciCodeReadArguments(handleOther, artifact))
+	requireUCICodeReadSuppressed(t, response, uci.QueryStatusContextRequired, uci.QueryErrorContextMismatch, fixture, artifact.Excerpt)
+	require.Empty(t, fixture.application.readCalls)
+	require.Equal(t, before, fixture.exposureStore.exposureCount())
+	response = callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_read", uciCodeReadArguments(handleA, artifact))
+	requireUCICodeReadResponse(t, response, fixture.refA, artifact, "", nil)
+}
+
+func TestUCICodebaseReadDefaultResolveKeepsCitation(t *testing.T) {
+	fixture := newUCICheckoutCodeReadFixture(t)
+	artifact := uciCodeReadArtifactFor(fixture.refA, uciCodeReadTestStoredArtifact, "fixture.StoredVersion")
+	binding := uciCodeIntelCheckoutBinding(fixture.refA, &fixture.refA)
+	fixture.catalog.bindings[fixture.refA.CheckoutID] = binding
+	fixture.catalog.historicalBindings = map[string]uci.IndexBinding{fixture.refA.ViewID: binding}
+	handle := fixture.selectCheckout(t, fixture.clientA, binding)
+	fixture.application.queryResponses[fixture.refA.CheckoutID] = uciCodeReadQueryResponse(t, fixture.refA, &artifact, uci.QueryStatusOK, "", nil, false)
+	search := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_search", map[string]any{"query": "StoredVersion"})
+	var result uci.QueryResponse
+	require.NoError(t, json.Unmarshal([]byte(uciCodeIntelToolText(t, search)), &result))
+	require.NoError(t, result.Validate())
+	require.NotNil(t, result.Exposure)
+	require.NotNil(t, result.Items)
+	require.Len(t, *result.Items, 1)
+	decodeUCICodebaseContextResponse(t, callUCICodebaseContext(t, fixture.server, fixture.clientA, map[string]any{"action": "resolve"}))
+	advanced := fixture.refA
+	advanced.ViewID = fixture.refB.ViewID
+	advanced.Generation++
+	fixture.catalog.bindings[fixture.refA.CheckoutID] = uciCodeIntelCheckoutBinding(advanced, &advanced)
+	fixture.application.readResponse = func(_ uci.AuthorizedContext, _ CodebaseReadInput) (uci.QueryResponse, error) {
+		return uciCodeReadQueryResponse(t, fixture.refA, &artifact, uci.QueryStatusOK, "", nil, false), nil
+	}
+	args := uciCodeReadArguments(handle, artifact)
+	delete(args, "context_handle")
+	response := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_read", args)
+	requireUCICodeReadResponse(t, response, fixture.refA, artifact, "", nil)
 }

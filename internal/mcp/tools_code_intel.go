@@ -611,12 +611,16 @@ func (s *Server) handleUCICodebaseSearch(ctx context.Context, raw json.RawMessag
 	if err != nil {
 		return "", fmt.Errorf("codebase_search: invalid args: %w", err)
 	}
+	stamp := s.codebaseSelectionSnapshot(ctx, args.ContextHandle)
 	application, authorized, epoch, refusal, err := s.prepareCodebaseSearch(ctx, args)
 	if err != nil {
 		return "", err
 	}
 	if refusal != "" {
 		return refusal, nil
+	}
+	if codebaseMissingSelectionStamp(ctx, application, args.ContextHandle, stamp) {
+		return codebaseSearchContextRefusal(uci.ContextMismatch)
 	}
 	freshness, disposition, refusal, err := s.codebaseSearchFreshness(ctx, application, authorized, epoch, args.AfterBarrier)
 	if err != nil {
@@ -637,7 +641,7 @@ func (s *Server) handleUCICodebaseSearch(ctx context.Context, raw json.RawMessag
 		return "", err
 	}
 	return s.releaseCodebaseQueryResponse(codebaseQueryReleaseInput{
-		ctx: ctx, epoch: epoch, authorized: authorized, contextHandle: args.ContextHandle, operation: uci.ExposureOperationCodeSearch, response: response,
+		ctx: ctx, epoch: epoch, authorized: authorized, contextHandle: args.ContextHandle, operation: uci.ExposureOperationCodeSearch, response: response, selection: stamp,
 		matches: func(candidate uci.QueryResponse) bool {
 			return codebaseQueryResponseHasExactContext(candidate, authorized)
 		}, tool: "codebase_search",
@@ -880,14 +884,17 @@ func (s *Server) hasLegacyUnscopedCodeChunkStore() bool {
 // codebaseQueryReleaseInput keeps one completed query release together so the
 // epoch, authorization, and pre-exposure matcher cannot drift at call sites.
 type codebaseQueryReleaseInput struct {
-	ctx           context.Context
-	epoch         uint64
-	authorized    uci.AuthorizedContext
-	contextHandle *string
-	operation     uci.ExposureOperation
-	response      uci.QueryResponse
-	matches       func(uci.QueryResponse) bool
-	tool          string
+	ctx             context.Context
+	epoch           uint64
+	authorized      uci.AuthorizedContext
+	contextHandle   *string
+	operation       uci.ExposureOperation
+	response        uci.QueryResponse
+	matches         func(uci.QueryResponse) bool
+	selection       *codebaseSelectionStamp
+	requireCitation bool
+	reauthorize     func(context.Context) (uci.AuthorizedContext, uci.ContextErrorCode)
+	tool            string
 }
 
 func (s *Server) releaseCodebaseQueryResponse(input codebaseQueryReleaseInput) (string, error) {
@@ -931,10 +938,15 @@ func (s *Server) releaseCodebaseQueryResponse(input codebaseQueryReleaseInput) (
 		Response:             &response,
 		RecordedAt:           exposureInput.RecordedAt,
 	}, codebaseQueryReleaseGate{
-		server:        s,
-		epoch:         epoch,
-		authorized:    authorized,
-		contextHandle: contextHandle,
+		server:          s,
+		epoch:           epoch,
+		authorized:      authorized,
+		contextHandle:   contextHandle,
+		reauthorize:     input.reauthorize,
+		selection:       input.selection,
+		requireCitation: input.requireCitation,
+		response:        response,
+		operation:       operation,
 	})
 	if err := released.Validate(); err != nil {
 		return "", fmt.Errorf("%s: invalid released UCI response", tool)
@@ -943,17 +955,28 @@ func (s *Server) releaseCodebaseQueryResponse(input codebaseQueryReleaseInput) (
 }
 
 type codebaseQueryReleaseGate struct {
-	server        *Server
-	epoch         uint64
-	authorized    uci.AuthorizedContext
-	contextHandle *string
+	server          *Server
+	epoch           uint64
+	authorized      uci.AuthorizedContext
+	contextHandle   *string
+	reauthorize     func(context.Context) (uci.AuthorizedContext, uci.ContextErrorCode)
+	selection       *codebaseSelectionStamp
+	requireCitation bool
+	response        uci.QueryResponse
+	operation       uci.ExposureOperation
 }
 
 func (gate codebaseQueryReleaseGate) Reauthorize(ctx context.Context) (uci.AuthorizedContext, uci.ReleaseFailureCode) {
 	if gate.server == nil || !gate.server.codebaseContextEpochCurrent(gate.epoch) {
 		return uci.AuthorizedContext{}, uci.ReleaseFailureContextMismatch
 	}
-	reauthorized, contextCode := gate.server.reauthorizeCodebaseContext(ctx, gate.epoch, gate.authorized, gate.contextHandle)
+	var reauthorized uci.AuthorizedContext
+	var contextCode uci.ContextErrorCode
+	if gate.reauthorize != nil {
+		reauthorized, contextCode = gate.reauthorize(ctx)
+	} else {
+		reauthorized, contextCode = gate.server.reauthorizeCodebaseContext(ctx, gate.epoch, gate.authorized, gate.contextHandle)
+	}
 	if contextCode != "" {
 		return uci.AuthorizedContext{}, codebaseReleaseFailure(contextCode)
 	}
@@ -964,7 +987,7 @@ func (gate codebaseQueryReleaseGate) Reauthorize(ctx context.Context) (uci.Autho
 }
 
 func (gate codebaseQueryReleaseGate) AppendExposure(ctx context.Context, authorized uci.AuthorizedContext, input uci.ExposureInput) (uci.QueryExposure, uci.ReleaseFailureCode) {
-	receipt, current, err := gate.server.recordCodebaseExposure(ctx, gate.epoch, authorized, input)
+	receipt, current, err := gate.server.recordCodebaseExposure(ctx, gate.epoch, authorized, input, gate.selection, gate.response, gate.operation, gate.requireCitation)
 	if !current {
 		return uci.QueryExposure{}, uci.ReleaseFailureContextMismatch
 	}
@@ -1027,7 +1050,7 @@ func (s *Server) reauthorizeCodebaseContext(ctx context.Context, epoch uint64, a
 
 // recordCodebaseExposure establishes the release linearization point: replacing
 // the context application cannot race an already re-authorized durable append.
-func (s *Server) recordCodebaseExposure(ctx context.Context, epoch uint64, authorized uci.AuthorizedContext, input uci.ExposureInput) (uci.QueryExposure, bool, error) {
+func (s *Server) recordCodebaseExposure(ctx context.Context, epoch uint64, authorized uci.AuthorizedContext, input uci.ExposureInput, stamp *codebaseSelectionStamp, response uci.QueryResponse, operation uci.ExposureOperation, requireCitation bool) (uci.QueryExposure, bool, error) {
 	s.codebaseContextMu.Lock()
 	defer s.codebaseContextMu.Unlock()
 	if s.codebaseContextApplication == nil || s.codebaseContextEpoch != epoch {
@@ -1036,7 +1059,34 @@ func (s *Server) recordCodebaseExposure(ctx context.Context, epoch uint64, autho
 	if s.uciExposureRecorder == nil {
 		return uci.QueryExposure{}, true, uci.ErrExposureUnavailable
 	}
-	receipt, err := s.uciExposureRecorder.Record(ctx, authorized, input)
+	var receipt uci.QueryExposure
+	var err error
+	appendExposure := func(client *codebaseContextClientHandles, entry codebaseContextHandleEntry) bool {
+		if requireCitation && !codebaseHasCitation(client, entry, stamp, authorized.Ref()) {
+			return false
+		}
+		receipt, err = s.uciExposureRecorder.Record(ctx, authorized, input)
+		if err == nil && receipt.Validate() == nil && operation == uci.ExposureOperationCodeSearch && (response.Status == uci.QueryStatusOK || response.Status == uci.QueryStatusPartial) && response.Items != nil && len(*response.Items) > 0 {
+			candidate := response
+			candidate.Exposure = &receipt
+			if candidate.Validate() == nil {
+				if checkout, ok := stamp.selector.Checkout(); ok && checkout.Scope.SourceID == authorized.Ref().SourceID && checkout.Scope.CheckoutID == authorized.Ref().CheckoutID && checkout.ProfileID == authorized.Ref().AnalysisProfileID {
+					codebaseRecordCitation(client, entry, stamp, authorized.Ref())
+				}
+			}
+		}
+		return true
+	}
+	if stamp != nil {
+		if !s.withCodebaseSelection(stamp, appendExposure) {
+			return uci.QueryExposure{}, false, nil
+		}
+	} else {
+		if requireCitation {
+			return uci.QueryExposure{}, false, nil
+		}
+		receipt, err = s.uciExposureRecorder.Record(ctx, authorized, input)
+	}
 	return receipt, true, err
 }
 

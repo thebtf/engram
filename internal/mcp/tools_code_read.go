@@ -160,12 +160,27 @@ func (s *Server) handleCodebaseRead(ctx context.Context, raw json.RawMessage) (s
 		return "", fmt.Errorf("codebase_read: invalid args: %w", err)
 	}
 	input := args.readInput()
+	stamp := s.codebaseSelectionSnapshot(ctx, args.ContextHandle)
 
 	application, authorized, epoch, contextCode := s.resolveCodebaseReadContext(ctx, args.ContextHandle)
 	if contextCode != "" {
 		return codebaseSearchContextRefusal(contextCode)
 	}
-	if !codebaseReadInputMatchesContext(input, authorized) {
+	if codebaseMissingSelectionStamp(ctx, application, args.ContextHandle, stamp) {
+		return codebaseSearchContextRefusal(uci.ContextMismatch)
+	}
+	var reauthorize func(context.Context) (uci.AuthorizedContext, uci.ContextErrorCode)
+	historical := !codebaseReadInputMatchesContext(input, authorized)
+	if stamp != nil {
+		if _, following := stamp.selector.Checkout(); following && authorized.Ref().SpaceID == nil {
+			authorized, reauthorize, contextCode = s.resolveCheckoutCitation(ctx, application, authorized, epoch, input, stamp, historical)
+			if contextCode != "" {
+				return codebaseSearchContextRefusal(contextCode)
+			}
+		} else if historical {
+			return codebaseSearchContextRefusal(uci.ContextMismatch)
+		}
+	} else if historical {
 		return codebaseSearchContextRefusal(uci.ContextMismatch)
 	}
 	if contextCode = resolveCodebaseReadCompatibilityEvidence(ctx, application, authorized, args.Project); contextCode != "" {
@@ -192,7 +207,7 @@ func (s *Server) handleCodebaseRead(ctx context.Context, raw json.RawMessage) (s
 		return codebaseSearchContextRefusal(uci.ContextMismatch)
 	}
 	return s.releaseCodebaseQueryResponse(codebaseQueryReleaseInput{
-		ctx: ctx, epoch: epoch, authorized: authorized, contextHandle: args.ContextHandle, operation: uci.ExposureOperationVersionedRead, response: response,
+		ctx: ctx, epoch: epoch, authorized: authorized, contextHandle: args.ContextHandle, operation: uci.ExposureOperationVersionedRead, response: response, reauthorize: reauthorize, selection: stamp, requireCitation: historical,
 		matches: func(candidate uci.QueryResponse) bool {
 			return validCodebaseReadPreExposureResponse(candidate, authorized, input)
 		}, tool: "codebase_read",
@@ -307,6 +322,80 @@ func (s *Server) resolveCodebaseReadContext(ctx context.Context, contextHandle *
 		return nil, uci.AuthorizedContext{}, 0, uci.ContextRequired
 	}
 	return reader, authorized, epoch, ""
+}
+
+type codebaseCheckoutCitationApplication interface {
+	codebaseContextIndexApplication
+	BoundSelectorSnapshot(string) (uci.IndexBindingSelector, uint64, bool)
+	LoadCheckoutCitation(context.Context, uci.IndexBinding, string) (uci.ContextRef, error)
+	Authorize(context.Context, uci.ResolveContextInput) (uci.AuthorizedContext, error)
+}
+
+func (s *Server) resolveCheckoutCitation(ctx context.Context, application CodebaseReadApplication, current uci.AuthorizedContext, epoch uint64, input CodebaseReadInput, stamp *codebaseSelectionStamp, historical bool) (uci.AuthorizedContext, func(context.Context) (uci.AuthorizedContext, uci.ContextErrorCode), uci.ContextErrorCode) {
+	caller, err := codebaseContextCallerInput(ctx)
+	if err != nil || input.Ref.SourceID != current.Ref().SourceID || current.Ref().SpaceID != nil {
+		return uci.AuthorizedContext{}, nil, uci.ContextMismatch
+	}
+	app, ok := application.(codebaseCheckoutCitationApplication)
+	if !ok {
+		return uci.AuthorizedContext{}, nil, uci.ContextMismatch
+	}
+	selector := stamp.selector
+	checkout, following := selector.Checkout()
+	if stamp.epoch != epoch || !following || checkout.Scope.SourceID != input.Ref.SourceID || checkout.Scope.CheckoutID != current.Ref().CheckoutID || checkout.ProfileID != current.Ref().AnalysisProfileID {
+		return uci.AuthorizedContext{}, nil, uci.ContextMismatch
+	}
+	check := func(ctx context.Context, want *uci.ContextRef) (uci.AuthorizedContext, uci.ContextErrorCode) {
+		if !s.codebaseContextEpochCurrent(epoch) {
+			return uci.AuthorizedContext{}, uci.ContextMismatch
+		}
+		bindingAuth, err := app.AuthorizeIndexBinding(ctx, codebaseContextIndexInput(caller, &selector))
+		if err != nil {
+			return uci.AuthorizedContext{}, codebaseContextFailureCode(err)
+		}
+		binding := bindingAuth.Binding()
+		if !codebaseContextBindingMatchesSelector(binding, selector) || binding.Context == nil || binding.Context.SpaceID != nil {
+			return uci.AuthorizedContext{}, uci.ContextMismatch
+		}
+		ref := current.Ref()
+		if historical {
+			ref, err = app.LoadCheckoutCitation(ctx, binding, input.Ref.ViewID)
+		}
+		if err != nil || ref.SourceID != checkout.Scope.SourceID || ref.CheckoutID != checkout.Scope.CheckoutID || ref.AnalysisProfileID != checkout.ProfileID || ref.ViewID != input.Ref.ViewID || ref.SpaceID != nil || (want != nil && !codebaseContextRefsEqual(ref, *want)) {
+			return uci.AuthorizedContext{}, uci.ContextMismatch
+		}
+		if historical && !s.codebaseCitationAdmitted(stamp, binding, ref) {
+			return uci.AuthorizedContext{}, uci.ContextMismatch
+		}
+		authorizeInput := caller
+		authorizeInput.Ref = &ref
+		authorized, err := app.Authorize(ctx, authorizeInput)
+		if err != nil {
+			return uci.AuthorizedContext{}, codebaseContextFailureCode(err)
+		}
+		if !codebaseContextRefsEqual(authorized.Ref(), ref) || !s.codebaseContextEpochCurrent(epoch) {
+			return uci.AuthorizedContext{}, uci.ContextMismatch
+		}
+		if !historical {
+			s.codebaseContextMu.Lock()
+			valid := s.withCodebaseSelection(stamp, func(_ *codebaseContextClientHandles, entry codebaseContextHandleEntry) bool {
+				return entry.scope != nil && *entry.scope == codebaseContextScopeKeyForBinding(binding)
+			})
+			s.codebaseContextMu.Unlock()
+			if !valid {
+				return uci.AuthorizedContext{}, uci.ContextMismatch
+			}
+		}
+		return authorized, ""
+	}
+	authorized, code := check(ctx, nil)
+	if code != "" {
+		return uci.AuthorizedContext{}, nil, code
+	}
+	want := authorized.Ref()
+	return authorized, func(ctx context.Context) (uci.AuthorizedContext, uci.ContextErrorCode) {
+		return check(ctx, &want)
+	}, ""
 }
 
 func resolveCodebaseReadCompatibilityEvidence(ctx context.Context, application CodebaseReadApplication, authorized uci.AuthorizedContext, project *string) uci.ContextErrorCode {

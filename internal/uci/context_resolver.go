@@ -6,9 +6,30 @@ import (
 	"sync"
 )
 
+// Binding values are immutable after publication. The per-binding gate
+// serializes actions with replacement or removal; resolver.mu only protects
+// the map and version counter and is never held while waiting for that gate.
 type clientContextBinding struct {
+	gate     chan struct{}
 	selector IndexBindingSelector
 	version  uint64
+}
+
+func (binding *clientContextBinding) lock(ctx context.Context) error {
+	select {
+	case binding.gate <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			<-binding.gate
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (binding *clientContextBinding) unlock() {
+	<-binding.gate
 }
 
 // ContextResolver validates, authorizes, and binds closed context selectors per
@@ -20,7 +41,7 @@ type ContextResolver struct {
 	authorizer   ContextAuthorizer
 
 	mu                 sync.Mutex
-	bindings           map[string]clientContextBinding
+	bindings           map[string]*clientContextBinding
 	nextBindingVersion uint64
 }
 
@@ -32,7 +53,7 @@ func NewContextResolver(catalog ContextCatalog, authorizer ContextAuthorizer, in
 		catalog:      catalog,
 		indexCatalog: indexCatalog,
 		authorizer:   authorizer,
-		bindings:     make(map[string]clientContextBinding),
+		bindings:     make(map[string]*clientContextBinding),
 	}
 }
 
@@ -144,21 +165,21 @@ func (resolver *ContextResolver) resolveIndexBinding(ctx context.Context, input 
 		reusingBinding = true
 	}
 	if err := selector.Validate(); err != nil {
-		resolver.clearReuse(input.ClientSessionID, reusingBinding, bindingVersion)
+		resolver.clearReuse(ctx, input.ClientSessionID, reusingBinding, bindingVersion)
 		return AuthorizedIndexBinding{}, newContextError(ContextMismatch, nil)
 	}
 	if resolver == nil || resolver.indexCatalog == nil {
-		resolver.clearReuse(input.ClientSessionID, reusingBinding, bindingVersion)
+		resolver.clearReuse(ctx, input.ClientSessionID, reusingBinding, bindingVersion)
 		return AuthorizedIndexBinding{}, newContextError(ContextMismatch, nil)
 	}
 
 	binding, err := resolver.indexCatalog.LoadIndexBinding(ctx, selector.Clone())
 	if err != nil || !indexBindingMatchesSelector(binding, selector) {
-		resolver.clearReuse(input.ClientSessionID, reusingBinding, bindingVersion)
+		resolver.clearReuse(ctx, input.ClientSessionID, reusingBinding, bindingVersion)
 		return AuthorizedIndexBinding{}, newContextError(ContextMismatch, err)
 	}
 	if resolver.authorizer == nil {
-		resolver.clearReuse(input.ClientSessionID, reusingBinding, bindingVersion)
+		resolver.clearReuse(ctx, input.ClientSessionID, reusingBinding, bindingVersion)
 		return AuthorizedIndexBinding{}, newContextError(PermissionDenied, nil)
 	}
 	if err := resolver.authorizer.AuthorizeContext(ctx, ContextAccess{
@@ -167,37 +188,39 @@ func (resolver *ContextResolver) resolveIndexBinding(ctx context.Context, input 
 		SourceID:   binding.Scope.SourceID,
 		CheckoutID: binding.Scope.CheckoutID,
 	}); err != nil {
-		resolver.clearReuse(input.ClientSessionID, reusingBinding, bindingVersion)
+		resolver.clearReuse(ctx, input.ClientSessionID, reusingBinding, bindingVersion)
 		return AuthorizedIndexBinding{}, newContextError(PermissionDenied, err)
 	}
 	if binding.WorkstationID != input.WorkstationID {
-		resolver.clearReuse(input.ClientSessionID, reusingBinding, bindingVersion)
+		resolver.clearReuse(ctx, input.ClientSessionID, reusingBinding, bindingVersion)
 		return AuthorizedIndexBinding{}, newContextError(PermissionDenied, nil)
 	}
 
 	if bind {
-		resolver.bindSelector(input.ClientSessionID, selector)
+		if err := resolver.bindSelector(ctx, input.ClientSessionID, selector); err != nil {
+			return AuthorizedIndexBinding{}, err
+		}
 	}
 	return newAuthorizedIndexBinding(binding), nil
 }
 
 func (resolver *ContextResolver) authorizeContextRef(ctx context.Context, input ResolveContextInput, ref ContextRef, bind, reusingBinding bool, bindingVersion uint64) (AuthorizedContext, error) {
 	if !ref.valid() {
-		resolver.clearReuse(input.ClientSessionID, reusingBinding, bindingVersion)
+		resolver.clearReuse(ctx, input.ClientSessionID, reusingBinding, bindingVersion)
 		return AuthorizedContext{}, newContextError(ContextMismatch, nil)
 	}
 	if resolver == nil || resolver.catalog == nil {
-		resolver.clearReuse(input.ClientSessionID, reusingBinding, bindingVersion)
+		resolver.clearReuse(ctx, input.ClientSessionID, reusingBinding, bindingVersion)
 		return AuthorizedContext{}, newContextError(ContextMismatch, nil)
 	}
 
 	record, err := resolver.catalog.LoadContext(ctx, ref.clone())
 	if err != nil || !contextRefsEqual(record.Ref, ref) || record.AuthRealm != input.AuthRealm {
-		resolver.clearReuse(input.ClientSessionID, reusingBinding, bindingVersion)
+		resolver.clearReuse(ctx, input.ClientSessionID, reusingBinding, bindingVersion)
 		return AuthorizedContext{}, newContextError(ContextMismatch, err)
 	}
 	if resolver.authorizer == nil {
-		resolver.clearReuse(input.ClientSessionID, reusingBinding, bindingVersion)
+		resolver.clearReuse(ctx, input.ClientSessionID, reusingBinding, bindingVersion)
 		return AuthorizedContext{}, newContextError(PermissionDenied, nil)
 	}
 	if err := resolver.authorizer.AuthorizeContext(ctx, ContextAccess{
@@ -206,7 +229,7 @@ func (resolver *ContextResolver) authorizeContextRef(ctx context.Context, input 
 		SourceID:   ref.SourceID,
 		CheckoutID: ref.CheckoutID,
 	}); err != nil {
-		resolver.clearReuse(input.ClientSessionID, reusingBinding, bindingVersion)
+		resolver.clearReuse(ctx, input.ClientSessionID, reusingBinding, bindingVersion)
 		return AuthorizedContext{}, newContextError(PermissionDenied, err)
 	}
 
@@ -215,7 +238,9 @@ func (resolver *ContextResolver) authorizeContextRef(ctx context.Context, input 
 		if err != nil {
 			return AuthorizedContext{}, newContextError(ContextMismatch, err)
 		}
-		resolver.bindSelector(input.ClientSessionID, selector)
+		if err := resolver.bindSelector(ctx, input.ClientSessionID, selector); err != nil {
+			return AuthorizedContext{}, err
+		}
 	}
 	return newAuthorizedContext(ref), nil
 }
@@ -238,15 +263,43 @@ func (resolver *ContextResolver) BoundSelector(clientSessionID string) (IndexBin
 	return selector, found
 }
 
+// BoundSelectorSnapshot identifies the current client selection, including replacement.
+func (resolver *ContextResolver) BoundSelectorSnapshot(clientSessionID string) (IndexBindingSelector, uint64, bool) {
+	return resolver.boundSelector(clientSessionID)
+}
+
+// WithBoundSelector holds a selection stable while its owner commits an action.
+// The callback must not reenter the resolver.
+func (resolver *ContextResolver) WithBoundSelector(clientSessionID string, version uint64, action func() bool) bool {
+	if resolver == nil || action == nil {
+		return false
+	}
+	resolver.mu.Lock()
+	binding := resolver.bindings[clientSessionID]
+	resolver.mu.Unlock()
+	if binding == nil || binding.version != version {
+		return false
+	}
+	_ = binding.lock(context.Background())
+	defer binding.unlock()
+	resolver.mu.Lock()
+	current := resolver.bindings[clientSessionID] == binding
+	resolver.mu.Unlock()
+	return current && action()
+}
+
+// ForgetClientVersion removes only the observed selection.
+func (resolver *ContextResolver) ForgetClientVersion(clientSessionID string, version uint64) {
+	resolver.clearBinding(clientSessionID, version)
+}
+
 // ForgetClient removes every in-memory default for one expired or evicted
 // transport client. Durable contexts, builds, and views remain untouched.
 func (resolver *ContextResolver) ForgetClient(clientSessionID string) {
 	if resolver == nil || !validContextIdentityText(clientSessionID) {
 		return
 	}
-	resolver.mu.Lock()
-	delete(resolver.bindings, clientSessionID)
-	resolver.mu.Unlock()
+	resolver.removeBinding(context.Background(), clientSessionID, 0, false)
 }
 
 func (resolver *ContextResolver) validCaller(ctx context.Context, clientSessionID, authRealm, principal string) bool {
@@ -269,34 +322,101 @@ func (resolver *ContextResolver) boundSelector(clientSessionID string) (IndexBin
 	return binding.selector.Clone(), binding.version, true
 }
 
-func (resolver *ContextResolver) bindSelector(clientSessionID string, selector IndexBindingSelector) {
-	resolver.mu.Lock()
-	defer resolver.mu.Unlock()
-	if resolver.bindings == nil {
-		resolver.bindings = make(map[string]clientContextBinding)
-	}
-	resolver.nextBindingVersion++
-	resolver.bindings[clientSessionID] = clientContextBinding{
-		selector: selector.Clone(),
-		version:  resolver.nextBindingVersion,
+func (resolver *ContextResolver) bindSelector(ctx context.Context, clientSessionID string, selector IndexBindingSelector) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		resolver.mu.Lock()
+		if err := ctx.Err(); err != nil {
+			resolver.mu.Unlock()
+			return err
+		}
+		if resolver.bindings == nil {
+			resolver.bindings = make(map[string]*clientContextBinding)
+		}
+		current := resolver.bindings[clientSessionID]
+		if current == nil {
+			resolver.nextBindingVersion++
+			resolver.bindings[clientSessionID] = &clientContextBinding{gate: make(chan struct{}, 1), selector: selector.Clone(), version: resolver.nextBindingVersion}
+			resolver.mu.Unlock()
+			return nil
+		}
+		resolver.mu.Unlock()
+
+		if err := current.lock(ctx); err != nil {
+			return err
+		}
+		resolver.mu.Lock()
+		if err := ctx.Err(); err != nil {
+			resolver.mu.Unlock()
+			current.unlock()
+			return err
+		}
+		if resolver.bindings[clientSessionID] != current {
+			resolver.mu.Unlock()
+			current.unlock()
+			continue
+		}
+		if !sameIndexBindingSelector(current.selector, selector) {
+			resolver.nextBindingVersion++
+			resolver.bindings[clientSessionID] = &clientContextBinding{gate: make(chan struct{}, 1), selector: selector.Clone(), version: resolver.nextBindingVersion}
+		}
+		resolver.mu.Unlock()
+		current.unlock()
+		return nil
 	}
 }
 
-func (resolver *ContextResolver) clearReuse(clientSessionID string, reusingBinding bool, version uint64) {
+func sameIndexBindingSelector(left, right IndexBindingSelector) bool {
+	if l, ok := left.Checkout(); ok {
+		r, ok := right.Checkout()
+		return ok && l == r
+	}
+	l, ok := left.Context()
+	r, other := right.Context()
+	return ok && other && contextRefsEqual(l, r)
+}
+
+func (resolver *ContextResolver) clearReuse(ctx context.Context, clientSessionID string, reusingBinding bool, version uint64) {
 	if reusingBinding {
-		resolver.clearBinding(clientSessionID, version)
+		resolver.removeBinding(ctx, clientSessionID, version, true)
 	}
 }
 
 func (resolver *ContextResolver) clearBinding(clientSessionID string, version uint64) {
+	resolver.removeBinding(context.Background(), clientSessionID, version, true)
+}
+
+func (resolver *ContextResolver) removeBinding(ctx context.Context, clientSessionID string, version uint64, matchVersion bool) {
 	if resolver == nil {
 		return
 	}
-	resolver.mu.Lock()
-	defer resolver.mu.Unlock()
-	binding, found := resolver.bindings[clientSessionID]
-	if found && binding.version == version {
+	for {
+		resolver.mu.Lock()
+		binding := resolver.bindings[clientSessionID]
+		resolver.mu.Unlock()
+		if binding == nil || (matchVersion && binding.version != version) {
+			return
+		}
+		if binding.lock(ctx) != nil {
+			return
+		}
+		resolver.mu.Lock()
+		if ctx.Err() != nil {
+			resolver.mu.Unlock()
+			binding.unlock()
+			return
+		}
+		if resolver.bindings[clientSessionID] != binding {
+			resolver.mu.Unlock()
+			binding.unlock()
+			continue
+		}
 		delete(resolver.bindings, clientSessionID)
+		resolver.mu.Unlock()
+		binding.unlock()
+		return
 	}
 }
 
