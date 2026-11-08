@@ -1351,6 +1351,13 @@ func main() {
 	}
 
 	if !daemonMode {
+		// An absent host session must override any ambient value in the shared daemon.
+		if _, present := os.LookupEnv(config.EnvClaudeSessionID); !present {
+			if err := os.Setenv(config.EnvClaudeSessionID, ""); err != nil {
+				fmt.Fprintf(os.Stderr, "[engram] FATAL: cannot isolate host session: %v\n", err)
+				os.Exit(1)
+			}
+		}
 		eng, err := engine.New(muxcoreShimConfig())
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[engram] FATAL: muxcore shim setup failed: %v\n", err)

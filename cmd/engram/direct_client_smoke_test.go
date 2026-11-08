@@ -25,6 +25,7 @@ import (
 type directDiscoveryFixture struct {
 	pb.UnimplementedEngramServiceServer
 	requests chan *pb.InitializeRequest
+	calls    chan *pb.CallToolRequest
 }
 
 func (f *directDiscoveryFixture) Initialize(_ context.Context, request *pb.InitializeRequest) (*pb.InitializeResponse, error) {
@@ -34,6 +35,7 @@ func (f *directDiscoveryFixture) Initialize(_ context.Context, request *pb.Initi
 	f.requests <- request
 	return &pb.InitializeResponse{
 		Tools: []*pb.ToolDefinition{
+			{Name: "issues", Description: "issue fixture", InputSchemaJson: []byte(`{"type":"object"}`)},
 			{Name: "codebase_context", Description: "select authorized checkout", InputSchemaJson: []byte(`{"type":"object"}`)},
 			{Name: "codebase_index", Description: "index selected checkout", InputSchemaJson: []byte(`{"type":"object"}`)},
 			{Name: "codebase_status", Description: "read selected index status", InputSchemaJson: []byte(`{"type":"object"}`)},
@@ -42,6 +44,11 @@ func (f *directDiscoveryFixture) Initialize(_ context.Context, request *pb.Initi
 			{Name: "codebase_graph", Description: "explore authorized graph", InputSchemaJson: []byte(`{"type":"object"}`)},
 		},
 	}, nil
+}
+
+func (f *directDiscoveryFixture) CallTool(_ context.Context, request *pb.CallToolRequest) (*pb.CallToolResponse, error) {
+	f.calls <- request
+	return &pb.CallToolResponse{ContentJson: []byte(`{"ok":true}`)}, nil
 }
 
 func directFixtureTempRoot(t *testing.T, cwd, physicalRoot string) string {
@@ -84,12 +91,20 @@ func TestDirectFixtureTempRoot(t *testing.T) {
 }
 
 func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
+	directBinaryStdioFixture(t, false)
+}
+
+func TestDirectBinaryIssueSessionsDoNotInheritDaemonEnvironment(t *testing.T) {
+	directBinaryStdioFixture(t, true)
+}
+
+func directBinaryStdioFixture(t *testing.T, issueSessions bool) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	fixture := grpc.NewServer()
-	discovery := &directDiscoveryFixture{requests: make(chan *pb.InitializeRequest, 2)}
+	discovery := &directDiscoveryFixture{requests: make(chan *pb.InitializeRequest, 16), calls: make(chan *pb.CallToolRequest, 8)}
 	pb.RegisterEngramServiceServer(fixture, discovery)
 	go func() { _ = fixture.Serve(listener) }()
 	defer fixture.Stop()
@@ -140,18 +155,28 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	daemonMayHaveStarted := false
+	daemonStopped := false
+	t.Cleanup(func() {
+		if daemonMayHaveStarted && !daemonStopped {
+			t.Errorf("retain direct fixture state %s: daemon closure is not verified", state)
+			return
+		}
+		if err := os.RemoveAll(state); err != nil {
+			t.Error(err)
+		}
+	})
+	clientRoot := root
+	if issueSessions {
+		clientRoot = memoryTestRepository(t, state, "session-project", memoryTestProjectA)
+	}
 	// Use the shortest real pathname from each caller cwd. Relative paths are
 	// not always shorter than the absolute private primary scratch path.
 	physicalTempRoot := filepath.Join(state, "temp")
 	if err := os.Mkdir(physicalTempRoot, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	tempRoot := directFixtureTempRoot(t, root, physicalTempRoot)
-	t.Cleanup(func() {
-		if err := os.RemoveAll(state); err != nil {
-			t.Error(err)
-		}
-	})
+	tempRoot := directFixtureTempRoot(t, clientRoot, physicalTempRoot)
 	probeRoot := directFixtureTempRoot(t, filepath.Join(root, "cmd", "engram"), physicalTempRoot)
 	namespace := muxcoreInstallationNamespace(strings.Repeat("0", 32))
 	if runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
@@ -195,7 +220,7 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 		t.Fatalf("build direct binary: %v: %s", err, out)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Second)
-	defer cancel()
+	t.Cleanup(cancel)
 	env := make([]string, 0)
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")
@@ -213,6 +238,9 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 	}
 	controlRoot := directFixtureTempRoot(t, commandDir, physicalTempRoot)
 	t.Cleanup(func() {
+		if !daemonMayHaveStarted {
+			return
+		}
 		identity, err := os.ReadFile(filepath.Join(state, "installation", "client-instance-id"))
 		if err != nil {
 			t.Error(err)
@@ -238,12 +266,17 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 		}
 		if err := uciWaitInstalledAcceptanceProcessExit(pid, 5*time.Second); err != nil {
 			t.Error(err)
+			return
 		}
+		daemonStopped = true
 	})
-	run := func(offline bool) {
+	run := func(offline bool, session string, args map[string]any, keepAlive bool) *pb.CallToolRequest {
 		command := exec.CommandContext(ctx, binary)
-		command.Dir = root
-		command.Env = env
+		command.Dir = clientRoot
+		command.Env = append([]string(nil), env...)
+		if session != "" {
+			command.Env = append(command.Env, "CLAUDE_SESSION_ID="+session)
+		}
 		stdin, err := command.StdinPipe()
 		if err != nil {
 			t.Fatal(err)
@@ -257,11 +290,16 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 		if err := command.Start(); err != nil {
 			t.Fatal(err)
 		}
+		daemonMayHaveStarted = true
 		var waited sync.Once
 		finish := func() {
 			waited.Do(func() { _ = stdin.Close(); _ = command.Wait() })
 		}
-		defer finish()
+		if keepAlive {
+			t.Cleanup(finish)
+		} else {
+			defer finish()
+		}
 		scanner := bufio.NewScanner(stdout)
 		scanner.Buffer(make([]byte, 64*1024), 16<<20)
 		encoder := json.NewEncoder(stdin)
@@ -269,10 +307,16 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 		if offline {
 			methods = methods[:1]
 		}
+		if args != nil {
+			methods = append(methods, "tools/call")
+		}
 		for _, method := range methods {
 			params := map[string]any{}
 			if method == "initialize" {
 				params = map[string]any{"protocolVersion": "2025-11-25", "capabilities": map[string]any{}, "clientInfo": map[string]string{"name": "direct-fixture", "version": "1"}}
+			}
+			if method == "tools/call" {
+				params = map[string]any{"name": "issues", "arguments": args}
 			}
 			if err := encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": method, "method": method, "params": params}); err != nil {
 				t.Fatal(err)
@@ -338,10 +382,65 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 				t.Fatalf("%s timed out: %v stderr %s", method, ctx.Err(), stderr.String())
 			}
 		}
+		if args != nil {
+			select {
+			case request := <-discovery.calls:
+				return request
+			case <-ctx.Done():
+				t.Fatalf("issue call did not reach gRPC fixture: %v", ctx.Err())
+			}
+		}
+		return nil
+	}
+	if issueSessions {
+		const hostA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+		const hostB = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+		const reportedB = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+		cases := []struct {
+			name, session, expected string
+			args                    map[string]any
+		}{
+			{"host_a_create", hostA, hostA, map[string]any{"action": "create", "title": "Synthetic A", "request_key": "session-a", "format": "json"}},
+			{"absent_b_create", "", "", map[string]any{"action": "create", "title": "Synthetic B", "request_key": "session-b", "format": "json"}},
+			{"absent_b_reported_comment", "", "", map[string]any{"action": "comment", "id": 1, "body": "Synthetic B comment", "created_by_session": reportedB, "format": "json"}},
+			{"host_b_material_update", hostB, hostB, map[string]any{"action": "update", "id": 1, "expected_revision": "1", "title": "Synthetic B update", "created_by_session": reportedB, "format": "json"}},
+		}
+		var owner muxcoreDaemonStatusIdentity
+		for index, tc := range cases {
+			request := run(false, tc.session, tc.args, index == 0)
+			identity, err := os.ReadFile(filepath.Join(state, "installation", "client-instance-id"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			control := muxserverid.DaemonControlPath(controlRoot, muxcoreInstallationNamespace(strings.TrimSpace(string(identity))))
+			status, ok := readMuxcoreDaemonStatusIdentity(control)
+			marker, markerErr := readMuxcoreDaemonVersionMarker(control + ".marker.json")
+			if !ok || markerErr != nil || status.PID <= 0 || status.DaemonGeneration == "" || status.ShuttingDown || marker.PID != status.PID || marker.DaemonGeneration != status.DaemonGeneration {
+				t.Fatalf("%s: private daemon status/marker mismatch: status=%+v marker=%+v err=%v", tc.name, status, marker, markerErr)
+			}
+			if index == 0 {
+				owner = status
+			} else if status.PID != owner.PID || status.DaemonGeneration != owner.DaemonGeneration {
+				t.Fatalf("%s: client did not join the same private daemon", tc.name)
+			}
+			if request.GetToolName() != "issues" || request.GetProject() != memoryTestProjectA {
+				t.Errorf("%s: wrong tool or canonical project: %s %s", tc.name, request.GetToolName(), request.GetProject())
+			}
+			if request.GetSessionId() != tc.expected {
+				t.Errorf("%s: forwarded host session %q, want %q; absent must not inherit another client or use a correlation tag", tc.name, request.GetSessionId(), tc.expected)
+			}
+			if expected, ok := tc.args["created_by_session"].(string); ok {
+				var arguments map[string]any
+				if err := json.Unmarshal(request.GetArgumentsJson(), &arguments); err != nil || arguments["created_by_session"] != expected {
+					t.Errorf("%s: reported session did not survive stdio forwarding", tc.name)
+				}
+			}
+		}
+		return
 	}
 	var first string
 	for client := 0; client < 2; client++ {
-		run(false)
+		run(false, "", nil, false)
 		id, err := os.ReadFile(filepath.Join(state, "installation", "client-instance-id"))
 		if err != nil || !strings.HasPrefix(string(id), "engram-") {
 			t.Fatalf("direct installation identity absent: %v", err)
@@ -362,5 +461,5 @@ func TestDirectBinaryStdioListsCodeToolsWithoutManualIdentity(t *testing.T) {
 		first = string(id)
 	}
 	fixture.Stop()
-	run(true)
+	run(true, "", nil, false)
 }

@@ -210,6 +210,54 @@ func TestIssue513NativeWireReviewRed(t *testing.T) {
 	t.Run("ordinary_mux_historical_record_has_safe_rest_guidance", func(t *testing.T) {
 		issue513NativeIPCReviewCase(t, fixture, native, validator)
 	})
+	t.Run("grpc_absent_host_reported_comment_and_host_update", func(t *testing.T) {
+		const reported = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+		const hostB = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+		const hostA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+		id := create(t, "native-absent-host-create")
+		row, _, err := service.issueStore.GetIssue(t.Context(), id)
+		require.NoError(t, err)
+		assert.Empty(t, row.CreatedBySession)
+		assert.Equal(t, identity.KeycardID, row.CreatorKeycardID)
+		assert.Equal(t, issue513Source, row.SourceProject)
+		comment, err := json.Marshal(map[string]any{"action": "comment", "id": id, "body": "Synthetic reported comment", "created_by_session": reported, "format": "json"})
+		require.NoError(t, err)
+		response, err := invokeGRPC(t, comment)
+		require.NoError(t, err)
+		decodeGRPC(t, response)
+		_, comments, err := service.issueStore.GetIssue(t.Context(), id)
+		require.NoError(t, err)
+		require.Len(t, comments, 1)
+		assert.Equal(t, reported, comments[0].AuthorSession)
+		assert.Equal(t, "reported", comments[0].AuthorSessionSource)
+		assert.Equal(t, issue513Source, comments[0].AuthorProject)
+		assert.Equal(t, "client:"+identity.KeycardID, issue513ActorReference(comments[0].Actor.Reference))
+		update, err := json.Marshal(map[string]any{"action": "update", "id": id, "expected_revision": "1", "title": "Synthetic host B update", "created_by_session": reported, "format": "json"})
+		require.NoError(t, err)
+		response, err = client.CallTool(grpcContext, &pb.CallToolRequest{ToolName: "issues", Project: issue513Source, SessionId: hostB, ArgumentsJson: update})
+		require.NoError(t, err)
+		assert.JSONEq(t, `"2"`, string(decodeGRPC(t, response)["revision"]))
+		var change gormdb.IssueChange
+		require.NoError(t, service.store.GetDB().Where("issue_id = ? AND revision = 2", id).First(&change).Error)
+		require.NotNil(t, change.Attribution.Session)
+		assert.Equal(t, hostB, *change.Attribution.Session)
+		assert.Equal(t, "client:"+identity.KeycardID, issue513ActorReference(change.Actor.Reference))
+		for _, candidate := range []string{hostA, hostB, reported} {
+			args, marshalErr := json.Marshal(map[string]any{"action": "list", "participant_session": candidate, "format": "json"})
+			require.NoError(t, marshalErr)
+			listed, callErr := invokeGRPC(t, args)
+			require.NoError(t, callErr)
+			var rows []struct {
+				ID int64 `json:"id"`
+			}
+			require.NoError(t, json.Unmarshal(decodeGRPC(t, listed)["issues"], &rows))
+			found := false
+			for _, item := range rows {
+				found = found || item.ID == id
+			}
+			assert.Equal(t, candidate != hostA, found, "participant filters reflect committed provenance only")
+		}
+	})
 	t.Run("grpc_material_session_precedence_and_participant_filter", func(t *testing.T) {
 		for _, tc := range []struct{ name, transport, sessionID, reported, expected string }{
 			{"reported_fallback", "", "", "reported-only-513", "reported-only-513"},
