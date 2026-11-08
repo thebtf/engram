@@ -1,12 +1,13 @@
 /**
  * EngramRestClient — typed REST client for the engram HTTP API.
  *
- * Read methods return null on error; memory writes return explicit per-input outcomes.
- * No method ever throws to its caller — engram failures must not block agent operation.
+ * General reads retain null-on-error behavior; memory writes return explicit outcomes.
+ * Issue endpoints preserve typed safe failures without logging private bodies or retrying mutations.
  */
 
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import { IntegerSchema, StringArraySchema } from './validation.js';
 import { AvailabilityTracker } from './availability.js';
 import type { PluginConfig } from './config.js';
 import { resolveIdentity, validateProjectID, type ProjectIdentity } from './identity.js';
@@ -224,63 +225,186 @@ export interface DecisionSearchResponse {
 // Issue types
 // ---------------------------------------------------------------------------
 
-export interface Issue {
- id: number;
- title: string;
- body: string;
- status: string;
- priority: string;
- source_project: string;
- target_project: string;
- source_agent: string;
- labels: string[];
- comment_count?: number;
- created_at: string;
- updated_at: string;
+export interface IssueErrorResponse {
+ error: { code: string; message: string; current_revision?: string };
+}
+export type IssueResult<T> = T | IssueErrorResponse;
+
+export const IssueRevisionSchema = z.string().regex(/^[1-9][0-9]*$/).refine(
+ value => value.length < 19 || (value.length === 19 && value <= '9223372036854775807'),
+ { error: 'Revision must be a canonical positive int64 decimal string' },
+);
+export const IssuePrioritySchema = z.enum(['critical', 'high', 'medium', 'low']);
+export const IssueTypeSchema = z.enum(['bug', 'feature', 'improvement', 'task']);
+export const IssueStatusSchema = z.enum(['open', 'acknowledged', 'resolved', 'reopened', 'closed', 'rejected']);
+const IssueActorSchema = z.object({ kind: z.enum(['client', 'operator', 'system', 'unknown']), reference: z.string().nullable() });
+const IssueExpectedActorSchema = z.object({ kind: z.enum(['client', 'operator', 'unknown']), reference: z.string().nullable() });
+const IssueReadMetadataSchema = z.record(z.string(), z.json());
+export type IssueMetadata = z.infer<typeof IssueReadMetadataSchema>;
+
+function issueMetadataProblem(value: unknown): 'INVALID_ARGUMENT' | 'PAYLOAD_TOO_LARGE' | null {
+ if (value === null || typeof value !== 'object' || Array.isArray(value)) return 'INVALID_ARGUMENT';
+ const ancestors = new Set<object>();
+ function visit(node: unknown, depth: number): 'INVALID_ARGUMENT' | 'PAYLOAD_TOO_LARGE' | null {
+  if (node === null || typeof node === 'string' || typeof node === 'boolean') return null;
+  if (typeof node === 'number') return Number.isFinite(node) && (!Number.isInteger(node) || Number.isSafeInteger(node)) ? null : 'INVALID_ARGUMENT';
+  if (typeof node !== 'object' || ancestors.has(node)) return 'INVALID_ARGUMENT';
+  if (depth > 256) return 'PAYLOAD_TOO_LARGE';
+  const prototype = Object.getPrototypeOf(node);
+  if (!Array.isArray(node) && prototype !== Object.prototype && prototype !== null) return 'INVALID_ARGUMENT';
+  if (Object.getOwnPropertySymbols(node).length !== 0) return 'INVALID_ARGUMENT';
+  const serializer = Object.getOwnPropertyDescriptor(node, 'toJSON');
+  if (serializer && (!('value' in serializer) || typeof serializer.value === 'function')) return 'INVALID_ARGUMENT';
+  if (Array.isArray(node) && Object.keys(node).length !== node.length) return 'INVALID_ARGUMENT';
+  ancestors.add(node);
+  if (Array.isArray(node)) {
+   for (let index = 0; index < node.length; index++) {
+    const descriptor = Object.getOwnPropertyDescriptor(node, index);
+    if (!descriptor || !('value' in descriptor)) return 'INVALID_ARGUMENT';
+    const problem = visit(descriptor.value, depth + 1);
+    if (problem) return problem;
+   }
+  } else {
+   for (const key of Object.keys(node)) {
+    const descriptor = Object.getOwnPropertyDescriptor(node, key);
+    if (!descriptor || !('value' in descriptor)) return 'INVALID_ARGUMENT';
+    const problem = visit(descriptor.value, depth + 1);
+    if (problem) return problem;
+   }
+  }
+  ancestors.delete(node);
+  return null;
+ }
+ try {
+  const problem = visit(value, 1);
+  if (problem) return problem;
+  return Buffer.byteLength(JSON.stringify(value), 'utf8') > 1024 * 1024 ? 'PAYLOAD_TOO_LARGE' : null;
+ } catch {
+  return 'INVALID_ARGUMENT';
+ }
 }
 
-export interface IssueComment {
- id: number;
- issue_id: number;
- author_project: string;
- author_agent: string;
- body: string;
- created_at: string;
+const IssueWriteMetadataSchema = z.unknown().transform((value, ctx): IssueMetadata => {
+ const problem = issueMetadataProblem(value);
+ if (problem) {
+  ctx.addIssue({ code: 'custom', message: 'Metadata must be an admitted JSON object within 1 MiB and 256 nested containers', params: { issueCode: problem } });
+  return z.NEVER;
+ }
+ // Validate the actual JS value; earlier duplicate members and numeric spellings cannot be recovered.
+ return value as IssueMetadata;
+});
+
+function hasLoneSurrogate(value: string): boolean {
+ for (let index = 0; index < value.length; index++) {
+  const code = value.charCodeAt(index);
+  if (code >= 0xd800 && code <= 0xdbff) {
+   const next = value.charCodeAt(++index);
+   if (!(next >= 0xdc00 && next <= 0xdfff)) return true;
+  } else if (code >= 0xdc00 && code <= 0xdfff) return true;
+ }
+ return false;
+}
+const IssueRequestKeySchema = z.string().superRefine((value, ctx) => {
+ if (value.length === 0 || value.includes('\0') || hasLoneSurrogate(value)) {
+  ctx.addIssue({ code: 'custom', message: 'request_key must be nonempty valid UTF-8 without NUL' });
+ } else if (Buffer.byteLength(value, 'utf8') > 512) {
+  ctx.addIssue({ code: 'custom', message: 'request_key exceeds 512 UTF-8 bytes', params: { issueCode: 'PAYLOAD_TOO_LARGE' } });
+ }
+});
+
+export const IssueCreateRequestSchema = z.object({
+ title: z.string().min(1), body: z.string().optional(), priority: IssuePrioritySchema.optional(), type: IssueTypeSchema.optional(),
+ labels: StringArraySchema.optional(), metadata: IssueWriteMetadataSchema.optional(),
+ owner_label: z.string().min(1).nullable().optional(), recipient_label: z.string().min(1).nullable().optional(),
+ request_key: IssueRequestKeySchema.optional(), expected_actor: IssueExpectedActorSchema.optional(), target_project: z.string(),
+ source_project: z.string().optional(), source_agent: z.string().optional(), created_by_session: z.string().optional(),
+});
+export type CreateIssueRequest = z.infer<typeof IssueCreateRequestSchema>;
+
+export const IssueUpdateRequestSchema = z.object({
+ expected_revision: IssueRevisionSchema.optional(), title: z.string().min(1).optional(), body: z.string().optional(),
+ priority: IssuePrioritySchema.optional(), type: IssueTypeSchema.optional(), labels: StringArraySchema.optional(),
+ metadata: IssueWriteMetadataSchema.optional(), owner_label: z.string().min(1).nullable().optional(), recipient_label: z.string().min(1).nullable().optional(),
+ status: IssueStatusSchema.optional(), comment: z.string().min(1).optional(), comment_metadata: IssueWriteMetadataSchema.optional(),
+ source_project: z.string().optional(), source_agent: z.string().optional(),
+}).superRefine((value, ctx) => {
+ const material = value.title !== undefined || value.body !== undefined || value.priority !== undefined || value.type !== undefined ||
+  value.labels !== undefined || value.metadata !== undefined || value.owner_label !== undefined || value.recipient_label !== undefined || value.status !== undefined;
+ if (material && value.expected_revision === undefined) ctx.addIssue({ code: 'custom', path: ['expected_revision'], message: 'Material mutation requires expected_revision', params: { issueCode: 'REVISION_REQUIRED' } });
+ if (!material && value.comment === undefined) ctx.addIssue({ code: 'custom', message: 'At least one edit, state change or comment is required' });
+ if (value.comment_metadata !== undefined && value.comment === undefined) ctx.addIssue({ code: 'custom', path: ['comment_metadata'], message: 'comment_metadata requires a comment' });
+});
+export type UpdateIssueRequest = z.infer<typeof IssueUpdateRequestSchema>;
+
+export const IssueOffsetSchema = z.number().int().nonnegative();
+export const IssuePageLimitSchema = IntegerSchema.positive().max(200);
+export const IssueListRequestSchema = z.object({
+ project: z.string().optional(), source_project: z.string().optional(), source_agent: z.string().optional(), status: z.string().optional(),
+ type: IssueTypeSchema.optional(), q: z.string().optional(), owner_label: z.string().optional(), recipient_label: z.string().optional(),
+ resolved_since: z.string().optional(), limit: IssuePageLimitSchema.default(20), offset: IssueOffsetSchema.default(0),
+});
+export type IssueListRequest = z.input<typeof IssueListRequestSchema>;
+export const IssueDetailRequestSchema = z.object({
+ detail_mode: z.literal('paged').default('paged'), comments_offset: IssueOffsetSchema.default(0), comments_limit: IssuePageLimitSchema.default(50),
+ history_offset: IssueOffsetSchema.default(0), history_limit: IssuePageLimitSchema.default(50),
+});
+export type IssueDetailRequest = z.input<typeof IssueDetailRequestSchema>;
+
+const IssueSummarySchema = z.object({
+ id: IntegerSchema.positive(), revision: IssueRevisionSchema, title: z.string(), status: z.string(), priority: z.string(), type: z.string(),
+ source_project: z.string(), target_project: z.string(), source_agent: z.string(), labels: z.array(z.string()),
+ owner_label: z.string().nullable(), recipient_label: z.string().nullable(), comment_count: IssueOffsetSchema,
+ created_at: z.string(), updated_at: z.string(),
+}).passthrough();
+const IssueSchema = IssueSummarySchema.extend({ body: z.string(), metadata: IssueReadMetadataSchema, actor: IssueActorSchema.optional(), comment_count: IssueOffsetSchema.optional() });
+export type Issue = z.infer<typeof IssueSchema>;
+const IssueCommentSchema = z.object({
+ id: IntegerSchema.positive(), issue_id: IntegerSchema.positive(), author_project: z.string(), author_agent: z.string(), body: z.string(),
+ metadata: IssueReadMetadataSchema, actor: IssueActorSchema.optional(), created_at: z.string(),
+}).passthrough();
+export type IssueComment = z.infer<typeof IssueCommentSchema>;
+const IssueHistorySchema = z.object({
+ revision: IssueRevisionSchema, previous_revision: IssueRevisionSchema.nullable(), action: z.string(), changed_fields: z.array(z.string()), actor: IssueActorSchema,
+ attribution: z.object({ source_project: z.string().nullable(), source_agent: z.string().nullable(), session: z.string().nullable() }).passthrough(),
+ created_at: z.string(), changes: IssueReadMetadataSchema,
+}).passthrough();
+const IssueListResponseSchema = z.object({
+ issues: z.array(IssueSummarySchema), total: IssueOffsetSchema, limit: IssuePageLimitSchema, offset: IssueOffsetSchema,
+ next_offset: IssueOffsetSchema.nullable(), project_names: z.record(z.string(), z.string()),
+}).passthrough();
+export type IssueListResponse = z.infer<typeof IssueListResponseSchema>;
+const IssueDetailResponseSchema = z.object({
+ issue: IssueSchema, comments: z.array(IssueCommentSchema), history: z.array(IssueHistorySchema), comment_count: IssueOffsetSchema, history_count: IssueOffsetSchema,
+ comments_offset: IssueOffsetSchema, comments_limit: IssuePageLimitSchema, history_offset: IssueOffsetSchema, history_limit: IssuePageLimitSchema,
+ comments_next_offset: IssueOffsetSchema.nullable(), history_next_offset: IssueOffsetSchema.nullable(),
+ comments_complete: z.boolean(), history_complete: z.boolean(), comments_oversized: z.boolean(), history_oversized: z.boolean(),
+}).passthrough().refine(value =>
+ value.comments_complete === (value.comments_next_offset === null) && value.history_complete === (value.history_next_offset === null) &&
+ (value.comments_next_offset === null || (value.comments.length > 0 && value.comments_next_offset === value.comments_offset + value.comments.length)) &&
+ (value.history_next_offset === null || (value.history.length > 0 && value.history_next_offset === value.history_offset + value.history.length)),
+ { error: 'Inconsistent issue detail continuation' },
+);
+export type IssueDetailResponse = z.infer<typeof IssueDetailResponseSchema>;
+const CreateIssueResponseSchema = z.object({ id: IntegerSchema.positive(), revision: IssueRevisionSchema, replayed: z.boolean(), message: z.string() }).passthrough();
+export type CreateIssueResponse = z.infer<typeof CreateIssueResponseSchema>;
+const UpdateIssueResponseSchema = z.object({ id: IntegerSchema.positive(), revision: IssueRevisionSchema, changed: z.boolean(), comment_id: IntegerSchema.positive().nullable(), message: z.string() }).passthrough();
+export type UpdateIssueResponse = z.infer<typeof UpdateIssueResponseSchema>;
+const IssueErrorResponseSchema = z.object({ error: z.object({ code: z.string().regex(/^[A-Z][A-Z0-9_]*$/), message: z.string(), current_revision: IssueRevisionSchema.optional() }).passthrough() }).passthrough();
+
+export function issueValidationFailure(error: z.ZodError): IssueErrorResponse {
+ const classified = error.issues.find(issue => issue.code === 'custom' && typeof issue.params?.issueCode === 'string');
+ const code = classified?.code === 'custom' ? String(classified.params?.issueCode) : 'INVALID_ARGUMENT';
+ return { error: { code, message: code === 'REVISION_REQUIRED' ? 'Material mutation requires expected_revision' : code === 'PAYLOAD_TOO_LARGE' ? 'Issue input exceeds an admitted bound' : 'Invalid issue parameters' } };
 }
 
-export interface IssueListResponse {
- issues: Issue[];
- total: number;
+export function isIssueError(value: unknown): value is IssueErrorResponse {
+ return IssueErrorResponseSchema.safeParse(value).success;
 }
 
-export interface IssueDetailResponse {
- issue: Issue;
- comments: IssueComment[];
- comment_count: number;
-}
-
-export interface CreateIssueRequest {
- title: string;
- body?: string;
- priority?: string;
- source_project?: string;
- target_project: string;
- source_agent?: string;
- created_by_session?: string;
- labels?: string[];
-}
-
-export interface CreateIssueResponse {
- id: number;
- message: string;
-}
-
-export interface UpdateIssueRequest {
- status?: string;
- comment?: string;
- source_project?: string;
- source_agent?: string;
-}
+const IssueHTTPErrorCodes: Readonly<Record<number, string>> = {
+ 400: 'INVALID_ARGUMENT', 401: 'UNAUTHENTICATED', 403: 'FORBIDDEN', 404: 'ISSUE_NOT_FOUND',
+ 410: 'ISSUE_GONE', 413: 'PAYLOAD_TOO_LARGE', 428: 'REVISION_REQUIRED',
+};
 
 // ---------------------------------------------------------------------------
 // Client
@@ -685,33 +809,89 @@ export class EngramRestClient {
  // Issues — cross-project agent issue tracking
  // ---------------------------------------------------------------------------
 
- async listIssues(params: {
-  project?: string;
-  source_project?: string;
-  status?: string;
-  limit?: number;
-  offset?: number;
- }): Promise<IssueListResponse | null> {
-  const qs = new URLSearchParams();
-  if (params.project) qs.set('project', params.project);
-  if (params.source_project) qs.set('source_project', params.source_project);
-  if (params.status) qs.set('status', params.status);
-  if (params.limit) qs.set('limit', String(params.limit));
-  if (params.offset) qs.set('offset', String(params.offset));
-  const query = qs.toString();
-  return this.get<IssueListResponse>(`/api/issues${query ? `?${query}` : ''}`);
+ async listIssues(params: IssueListRequest): Promise<IssueResult<IssueListResponse>> {
+  const parsed = IssueListRequestSchema.safeParse(params);
+  if (!parsed.success) return issueValidationFailure(parsed.error);
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(parsed.data)) {
+   if (value !== undefined) query.set(key, String(value));
+  }
+  return this.issueRequest('GET', `/api/issues?${query}`, undefined, IssueListResponseSchema);
  }
 
- async getIssue(id: number): Promise<IssueDetailResponse | null> {
-  return this.get<IssueDetailResponse>(`/api/issues/${id}`);
+ async getIssue(id: number, params: IssueDetailRequest = {}): Promise<IssueResult<IssueDetailResponse>> {
+  const identifier = IntegerSchema.positive().safeParse(id);
+  if (!identifier.success) return issueValidationFailure(identifier.error);
+  const parsed = IssueDetailRequestSchema.safeParse(params);
+  if (!parsed.success) return issueValidationFailure(parsed.error);
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(parsed.data)) query.set(key, String(value));
+  return this.issueRequest('GET', `/api/issues/${id}?${query}`, undefined, IssueDetailResponseSchema);
  }
 
- async createIssue(body: CreateIssueRequest): Promise<CreateIssueResponse | null> {
-  return this.post<CreateIssueResponse>('/api/issues', body);
+ async createIssue(body: CreateIssueRequest): Promise<IssueResult<CreateIssueResponse>> {
+  const parsed = IssueCreateRequestSchema.safeParse(body);
+  if (!parsed.success) return issueValidationFailure(parsed.error);
+  return this.issueRequest('POST', '/api/issues', parsed.data, CreateIssueResponseSchema);
  }
 
- async updateIssue(id: number, body: UpdateIssueRequest): Promise<{ message: string } | null> {
-  return this.request<{ message: string }>('PATCH', `/api/issues/${id}`, body);
+ async updateIssue(id: number, body: UpdateIssueRequest): Promise<IssueResult<UpdateIssueResponse>> {
+  const identifier = IntegerSchema.positive().safeParse(id);
+  if (!identifier.success) return issueValidationFailure(identifier.error);
+  const parsed = IssueUpdateRequestSchema.safeParse(body);
+  if (!parsed.success) return issueValidationFailure(parsed.error);
+  return this.issueRequest('PATCH', `/api/issues/${id}`, parsed.data, UpdateIssueResponseSchema);
+ }
+
+ private async issueRequest<T>(method: string, path: string, body: unknown, schema: z.ZodType<T>): Promise<IssueResult<T>> {
+  const unavailable: IssueErrorResponse = { error: { code: 'UNAVAILABLE', message: 'Issue service unavailable; reconcile the original intent before retrying' } };
+  if (!this.availability.isAvailable()) return unavailable;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), this.defaultTimeoutMs);
+  try {
+   const headers: Record<string, string> = {
+    Authorization: `Bearer ${this.token}`,
+    'X-Engram-Project-Identity-Adapter': 'openclaw',
+    'X-Request-ID': randomUUID(),
+   };
+   if (body !== undefined) headers['Content-Type'] = 'application/json';
+   const response = await fetch(this.baseUrl + path, {
+    method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal: controller.signal,
+   });
+   let payload: unknown;
+   try {
+    payload = JSON.parse(await response.text());
+   } catch {
+    if (response.ok) {
+     this.availability.recordFailure();
+     return unavailable;
+    }
+   }
+   const failure = IssueErrorResponseSchema.safeParse(payload);
+   if (!response.ok || failure.success) {
+    if (response.status >= 500) this.availability.recordFailure();
+    else this.availability.recordSuccess();
+    if (failure.success) return payload as IssueErrorResponse;
+    if (response.status === 409) {
+     return { error: { code: 'UNAVAILABLE', message: 'HTTP 409 conflict has no typed reason; the outcome is unconfirmed. Preserve the original intent and reconcile explicitly before any deliberate retry.' } };
+    }
+    return { error: { code: IssueHTTPErrorCodes[response.status] ?? 'UNAVAILABLE', message: 'Issue request refused; no successful result was received' } };
+   }
+   const parsed = schema.safeParse(payload);
+   if (!parsed.success) {
+    this.availability.recordFailure();
+    return unavailable;
+   }
+   this.availability.recordSuccess();
+   // Schema admission does not authorize rewriting historical bytes or dropping unknown response keys.
+   return payload as T;
+  } catch {
+   this.availability.recordFailure();
+   // Issue URLs, response bodies and exception messages can contain private work-item data.
+   return unavailable;
+  } finally {
+   clearTimeout(timer);
+  }
  }
 
  /** Returns true if the server is currently considered reachable. */

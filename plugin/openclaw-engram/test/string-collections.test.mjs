@@ -29,7 +29,7 @@ function createClient() {
       },
       async createIssue(issue) {
         calls.push({ method: 'createIssue', issue });
-        return { id: 1 };
+        return { id: 1, revision: '1', replayed: false, message: 'issue created' };
       },
     },
   };

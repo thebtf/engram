@@ -203,6 +203,20 @@ Available to the agent during a session:
 | `engram_suppress` | Suppress a retained memory by ID; `action: "unsuppress"` restores a flagged memory |
 | `memory_forget` | Suppress by default; `permanent: true` archives without erasing the memory |
 | `memory_migrate` | Import local `MEMORY.md` / `memory/**/*.md` files into engram |
+| `engram_issues` | Create and manage resumable internal or cross-project issues |
+
+`engram_issues` supports `create`, `list`, `get`, `update`, `comment`, `reopen`
+and `close`. Use `format: "json"` for the complete result or typed error. A keyed
+create retains its original `request_key`, payload and optional `expected_actor`;
+the actor expectation is a server precondition, not a credential. Material updates,
+reopen and close require the current `expected_revision`. On a conflict or an
+unconfirmed outcome, preserve the draft and reconcile explicitly; the adapter does
+not blindly retry mutations. Metadata and labels are data, not authorization.
+
+Issue detail uses independent paged comments and history, with explicit continuation
+offsets. List paging is live rather than a snapshot: retain filters and de-duplicate
+IDs while browsing. Explicitly filtered list and get can read without a current
+project; mutations and the default inbox require verified project identity.
 
 All explicit writers, file migration and file synchronization use the canonical
 `POST /api/memories`. The retired observations import endpoint is not retried or
