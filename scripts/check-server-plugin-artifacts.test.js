@@ -9,7 +9,7 @@ const root = path.resolve(__dirname, "..");
 const manifestPath = path.join(root, "plugin", "engram", "package.json");
 const extensionPath = path.join(root, "plugin", "engram", "extensions", "engram-memory.mjs");
 const workerPath = path.join(root, 'plugin', 'engram', 'scripts', 'task-context-worker.js');
-const version = JSON.parse(fs.readFileSync(manifestPath, "utf8")).version;
+const version = JSON.parse(fs.readFileSync(path.join(root, 'plugin', 'engram', 'bootstrap-targets.json'), 'utf8')).package_version;
 function expectedArchives(expectedVersion = version) {
   const normalizedVersion = expectedVersion.replace(/^v/, "");
   return [

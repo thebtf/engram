@@ -899,13 +899,14 @@ type memoryTransitionResponse struct {
 // browser selection state. An omitted project resolves the ID's live canonical
 // membership; an explicit project can only narrow that existing authority.
 // @Summary Transition a retained memory by ID
-// @Description Requires a JSON action: suppress changes active to flagged, unsuppress changes flagged to active, and archive changes active or flagged to archived without erasure. The optional project query parameter must occur once with a canonical UUID and only narrows the memory's existing live canonical membership; omission does not bypass caller visibility or domain-manage authorization. Missing or denied memories return 404. State/version conflicts return 409 and roll back the transaction. The receipt contains id, action, resulting status, incremented version and canonical project. An ambiguous transport failure leaves the outcome unknown; do not automatically retry.
+// @Description Requires a JSON action: suppress changes active to flagged, unsuppress changes flagged to active, and archive changes active or flagged to archived without erasure. An enrolled owner keycard may archive its own self card with project omitted and context omitted or self; other self actions are not supported. The optional project query parameter must occur once with a canonical UUID and only narrows that existing project membership; omission does not bypass caller visibility or domain-manage authorization. Invalid or conflicting contexts fail without fallback. Missing or denied memories return 404. State/version conflicts return 409 and roll back the transaction. The receipt contains id, action, resulting status, incremented version and project (empty for self). An ambiguous transport failure leaves the outcome unknown; do not automatically retry.
 // @Tags Memories
 // @Accept json
 // @Produce json
 // @Security ApiKeyAuth
 // @Param id path int64 true "Positive memory ID"
 // @Param project query string false "Optional single canonical project UUID; narrows existing membership only"
+// @Param context query string false "Self archive only; omit or use self without project" Enums(self)
 // @Param body body memoryTransitionRequest true "Required lifecycle action"
 // @Success 200 {object} memoryTransitionResponse
 // @Failure 400 {string} string "invalid memory id, project selector, JSON or action"
@@ -938,6 +939,11 @@ func (s *Service) handleTransitionMemoryByID(w http.ResponseWriter, r *http.Requ
 		}
 		project = selectors[0]
 	}
+	contexts, contextSupplied := query["context"]
+	if contextSupplied && (len(contexts) != 1 || contexts[0] != models.MemoryContextSelf || project != "") {
+		http.Error(w, "invalid memory context", http.StatusBadRequest)
+		return
+	}
 	var request memoryTransitionRequest
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		http.Error(w, "invalid memory transition", http.StatusBadRequest)
@@ -946,6 +952,34 @@ func (s *Service) handleTransitionMemoryByID(w http.ResponseWriter, r *http.Requ
 	if _, allowed := memoryCollectionNextStatus(request.Action, "active"); !allowed && request.Action != "unsuppress" {
 		http.Error(w, "invalid memory transition", http.StatusBadRequest)
 		return
+	}
+	identity, isClient := auth.IdentityFrom(r.Context())
+	_, explicitIdentity := r.Header["X-Engram-Identity"]
+	if contextSupplied && request.Action != "archive" {
+		http.Error(w, "invalid memory context", http.StatusBadRequest)
+		return
+	}
+	if project == "" && request.Action == "archive" && (contextSupplied || (isClient && identity.Source == auth.SourceClient && identity.KeycardID != "")) {
+		owning, selectErr := s.resolveMemoryOwningContext(r, models.MemoryContextSelf, true, "", false)
+		if selectErr != nil && (!errors.Is(selectErr, gormdb.ErrMemoryPrincipalRequired) || contextSupplied || explicitIdentity) {
+			writeMemoryContextError(w, selectErr)
+			return
+		}
+		if selectErr == nil {
+			archived, archiveErr := s.memoryStore.ArchiveSelfInContext(r.Context(), id, owning, memoryVisibilityCaller(r.Context(), ""))
+			if archiveErr == nil {
+				writeJSON(w, memoryTransitionResponse{ID: id, Action: request.Action, Status: archived.Status, Version: archived.Version, Project: archived.Project})
+				return
+			}
+			if !errors.Is(archiveErr, gormlib.ErrRecordNotFound) || contextSupplied || explicitIdentity {
+				if errors.Is(archiveErr, gormdb.ErrMemoryVersionConflict) {
+					http.Error(w, "memory transition conflicts with current state", http.StatusConflict)
+				} else {
+					writeMemoryContextError(w, archiveErr)
+				}
+				return
+			}
+		}
 	}
 	ctx := r.Context()
 	access := gormdb.MemoryMutationAccess{

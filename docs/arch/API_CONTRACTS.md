@@ -425,6 +425,13 @@ retry to the authenticated principal, owning context and project. An equivalent
 retry returns the existing active record; a changed command or retired target
 returns 409. Without a key a repeated create is not automatically idempotent.
 
+An enrolled owner keycard can archive its own self card with
+`POST /api/memories/{id}/transition` and `{"action":"archive"}`, omitting
+`project` or explicitly selecting `context=self`. The transition retains the
+body and revisions, advances the version, and excludes the card from active
+self search. An invalid or conflicting selector fails without falling back.
+Project-card transitions retain their existing canonical membership checks.
+
 Self-memory cards can be linked with `POST /api/memories/{source_id}/links`.
 Supply `target_id`, `relation` (`related_to` or `references`), an optional
 `target_version` for `references`, an optional `request_key`, and an optional
@@ -507,11 +514,12 @@ context grants access by itself. Synthetic auth-disabled identity is not a
 registered keycard.
 
 With authentication disabled, explicit bearer or `X-Auth-Token` credentials are
-validated on `POST /api/memories`, `GET` and `PATCH /api/memories/{id}`, and
-`GET /api/memories/{id}/revisions` for numeric IDs. A rejected credential does
-not fall back to a cookie or the synthetic identity; token-store failures fail
-closed. HAP and read-only restrictions still apply. Unkeyed requests, other
-routes, and `/api/auth/me` retain their existing synthetic identity behavior.
+validated on `POST /api/memories`, `GET /api/memories/principal`, `GET` and
+`PATCH /api/memories/{id}`, `GET /api/memories/{id}/revisions`,
+`POST /api/memories/{id}/transition`, and the self-link routes. A rejected
+credential does not fall back to a cookie or the synthetic identity; token-store
+failures fail closed. HAP and read-only restrictions still apply. Unkeyed
+requests, other routes, and `/api/auth/me` retain their existing synthetic identity behavior.
 Disabled authentication does **not** provide privacy isolation: other routes
 may still admit synthetic administrative access. Do not use this mode as a
 security boundary between users or principals.

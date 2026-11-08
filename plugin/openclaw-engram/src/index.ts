@@ -59,7 +59,7 @@ const plugin: OpenClawPluginDefinition = {
  id: 'engram',
  name: 'Engram Memory',
  description: 'Persistent shared memory via engram server',
- version: '7.0.28',
+ version: '7.1.0',
  kind: 'memory',
  configSchema: getJsonSchema(),
 

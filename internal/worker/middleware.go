@@ -453,6 +453,9 @@ func disabledIdentityRoute(method, path string) (memory, administration bool) {
 			return false, true
 		}
 	}
+	if method == http.MethodGet && path == "/api/memories/principal" {
+		return true, false
+	}
 	if method == http.MethodDelete {
 		if id, ok := strings.CutPrefix(path, "/api/memory-links/"); ok {
 			parsed, err := strconv.ParseInt(id, 10, 64)
@@ -463,7 +466,7 @@ func disabledIdentityRoute(method, path string) (memory, administration bool) {
 		if rest, ok := strings.CutPrefix(path, "/api/memories/"); ok {
 			id, suffix, found := strings.Cut(rest, "/")
 			parsed, err := strconv.ParseInt(id, 10, 64)
-			return found && suffix == "links" && err == nil && parsed > 0, false
+			return found && (suffix == "links" || suffix == "transition") && err == nil && parsed > 0, false
 		}
 	}
 	if method != http.MethodGet && method != http.MethodPatch {
