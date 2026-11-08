@@ -71,6 +71,7 @@ var consolidationRoles = []consolidationRole{
 	{"issues", "source_project", "tenant"},
 	{"issues", "target_project", "tenant"},
 	{"issue_comments", "author_project", "tenant"},
+	{"issue_history_events", "author_project", "tenant"},
 	{"credentials", "project", "tenant"},
 	{"memories", "project", "tenant"},
 	{"behavioral_rules", "project", "tenant"},

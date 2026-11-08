@@ -2,6 +2,7 @@ package gorm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -9,8 +10,30 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
+	issues "github.com/thebtf/engram/internal/issues/contract"
 	"github.com/thebtf/engram/pkg/models"
 )
+
+type selectionFixtureIdentity struct{ actor IssueSelectionActor }
+
+func (i selectionFixtureIdentity) IssueActor() (issues.Actor, error) {
+	return selectionFixtureActor{i.actor}, nil
+}
+
+type selectionFixtureActor struct{ IssueSelectionActor }
+
+func (a selectionFixtureActor) Descriptor() issues.ActorDescriptor {
+	if a.IsOperator() {
+		ref := "operator:master"
+		return issues.ActorDescriptor{Kind: "operator", Reference: &ref}
+	}
+	ref := "client:" + a.KeycardID()
+	return issues.ActorDescriptor{Kind: "client", Reference: &ref}
+}
+func (a selectionFixtureActor) Namespace() string { return *a.Descriptor().Reference }
+func (a selectionFixtureActor) KeycardID() string { return a.IssueSelectionActor.KeycardID }
+func (a selectionFixtureActor) IsOperator() bool  { return a.IssueSelectionActor.IsOperator }
+func (a selectionFixtureActor) CanWrite() bool    { return a.IsOperator() || a.KeycardID() != "" }
 
 func TestIssueStoreApplySelectionOperationPostgres(t *testing.T) {
 	db := openCandidateTestDB(t)
@@ -20,25 +43,23 @@ func TestIssueStoreApplySelectionOperationPostgres(t *testing.T) {
 	t.Cleanup(func() {
 		require.NoError(t, db.Where("source_project = ?", project).Delete(&Issue{}).Error)
 	})
+	apply := func(ctx context.Context, operation IssueSelectionOperation) (IssueSelectionOperationResult, error) {
+		return store.ApplyIssueSelectionOperation(context.WithValue(ctx, issues.ActorIdentityKey, selectionFixtureIdentity{operation.Actor}), operation)
+	}
 
 	ids := make([]int64, 101)
 	for index := range ids {
-		id, err := store.CreateIssue(ctx, &Issue{
-			Title:            fmt.Sprintf("selection fixture %03d", index),
-			Body:             "must not appear in selection results",
-			SourceProject:    project,
-			TargetProject:    project,
-			CreatorKeycardID: "issue-selection-owner",
-			Type:             "task",
-			Labels:           models.JSONStringArray{"selection"},
+		created, err := store.CreateTaskIssue(ctx, issueSelectionTestActor{keycard: "issue-selection-owner"}, issues.Scope{SourceProject: project}, issues.CreateCommand{
+			Title: fmt.Sprintf("selection fixture %03d", index), Body: "must not appear in selection results", TargetProject: project,
+			Type: "task", Priority: "medium", Labels: []string{"selection"}, Metadata: json.RawMessage(`{}`),
 		})
 		require.NoError(t, err)
-		ids[index] = id
+		ids[index] = created.ID
 	}
 
 	rows := issueSelectionTestRows(t, db, ids)
 	priority := "high"
-	updated, err := store.ApplyIssueSelectionOperation(ctx, IssueSelectionOperation{
+	updated, err := apply(ctx, IssueSelectionOperation{
 		Action:  IssueSelectionAction{Kind: IssueSelectionPriority, Priority: &priority},
 		Actor:   IssueSelectionActor{KeycardID: "issue-selection-owner"},
 		Targets: issueSelectionTargets(rows...),
@@ -59,7 +80,7 @@ func TestIssueStoreApplySelectionOperationPostgres(t *testing.T) {
 	stale := rows[0]
 	require.NoError(t, db.Model(&Issue{}).Where("id = ?", stale.ID).Update("updated_at", time.Now().UTC().Add(time.Second)).Error)
 	clearLabels := []string{}
-	staleResult, err := store.ApplyIssueSelectionOperation(ctx, IssueSelectionOperation{
+	staleResult, err := apply(ctx, IssueSelectionOperation{
 		Action:  IssueSelectionAction{Kind: IssueSelectionLabels, Labels: &clearLabels},
 		Actor:   IssueSelectionActor{KeycardID: "issue-selection-owner"},
 		Targets: issueSelectionTargets(stale, beforeUntouched),
@@ -72,7 +93,7 @@ func TestIssueStoreApplySelectionOperationPostgres(t *testing.T) {
 	require.True(t, beforeUntouched.UpdatedAt.Equal(unchanged.UpdatedAt), "a stale target must abort the whole operation before any mutation")
 
 	rows = issueSelectionTestRows(t, db, ids)
-	permissionResult, err := store.ApplyIssueSelectionOperation(ctx, IssueSelectionOperation{
+	permissionResult, err := apply(ctx, IssueSelectionOperation{
 		Action:  IssueSelectionAction{Kind: IssueSelectionPriority, Priority: &priority},
 		Actor:   IssueSelectionActor{KeycardID: "other-keycard"},
 		Targets: issueSelectionTargets(rows[2], rows[3]),
@@ -85,12 +106,16 @@ func TestIssueStoreApplySelectionOperationPostgres(t *testing.T) {
 	require.Equal(t, priority, unchanged.Priority, "a permission conflict must leave all selected rows unchanged")
 
 	resolved := rows[4]
-	require.NoError(t, store.UpdateIssueStatus(ctx, resolved.ID, "resolved"))
+	ownerActor := issueSelectionTestActor{keycard: "issue-selection-owner"}
+	resolvedRevision := fmt.Sprint(resolved.Revision)
+	resolvedStatus := "resolved"
+	_, err = store.MutateTaskIssue(ctx, ownerActor, issues.Scope{SourceProject: project}, resolved.ID, issues.MutationCommand{ExpectedRevision: &resolvedRevision, Status: &resolvedStatus})
+	require.NoError(t, err)
 	resolvedCurrent, _, getErr := store.GetIssue(ctx, resolved.ID)
 	require.NoError(t, getErr)
 	resolved = *resolvedCurrent
 	open := rows[5]
-	acknowledgeResult, err := store.ApplyIssueSelectionOperation(ctx, IssueSelectionOperation{
+	acknowledgeResult, err := apply(ctx, IssueSelectionOperation{
 		Action:  IssueSelectionAction{Kind: IssueSelectionAcknowledge},
 		Actor:   IssueSelectionActor{IsOperator: true},
 		Targets: issueSelectionTargets(resolved, open),
@@ -104,7 +129,7 @@ func TestIssueStoreApplySelectionOperationPostgres(t *testing.T) {
 	openCurrent, _, getErr := store.GetIssue(ctx, open.ID)
 	require.NoError(t, getErr)
 	open = *openCurrent
-	acknowledged, err := store.ApplyIssueSelectionOperation(ctx, IssueSelectionOperation{
+	acknowledged, err := apply(ctx, IssueSelectionOperation{
 		Action:  IssueSelectionAction{Kind: IssueSelectionAcknowledge},
 		Actor:   IssueSelectionActor{IsOperator: true},
 		Targets: issueSelectionTargets(open),
@@ -114,7 +139,7 @@ func TestIssueStoreApplySelectionOperationPostgres(t *testing.T) {
 
 	labelTarget := issueSelectionTestRows(t, db, []int64{ids[8]})[0]
 	labels := []string{"current", "selected"}
-	labeled, err := store.ApplyIssueSelectionOperation(ctx, IssueSelectionOperation{
+	labeled, err := apply(ctx, IssueSelectionOperation{
 		Action:  IssueSelectionAction{Kind: IssueSelectionLabels, Labels: &labels},
 		Actor:   IssueSelectionActor{KeycardID: "issue-selection-owner"},
 		Targets: issueSelectionTargets(labelTarget),
@@ -125,7 +150,7 @@ func TestIssueStoreApplySelectionOperationPostgres(t *testing.T) {
 	require.NoError(t, getErr)
 	require.Equal(t, models.JSONStringArray(labels), labeledCurrent.Labels)
 	clearedLabels := []string{}
-	cleared, err := store.ApplyIssueSelectionOperation(ctx, IssueSelectionOperation{
+	cleared, err := apply(ctx, IssueSelectionOperation{
 		Action:  IssueSelectionAction{Kind: IssueSelectionLabels, Labels: &clearedLabels},
 		Actor:   IssueSelectionActor{KeycardID: "issue-selection-owner"},
 		Targets: issueSelectionTargets(*labeledCurrent),
@@ -137,14 +162,20 @@ func TestIssueStoreApplySelectionOperationPostgres(t *testing.T) {
 	require.Empty(t, clearedCurrent.Labels)
 
 	directLabelTarget := issueSelectionTestRows(t, db, []int64{ids[10]})[0]
-	require.NoError(t, store.UpdateIssueFields(ctx, directLabelTarget.ID, "", "", "", "", []string{}))
+	require.Error(t, store.UpdateIssueFields(ctx, directLabelTarget.ID, "", "", "", "", []string{}), "legacy unconditional material writes must be refused")
+	legacyUnchanged, _, getErr := store.GetIssue(ctx, directLabelTarget.ID)
+	require.NoError(t, getErr)
+	require.Equal(t, directLabelTarget.Labels, legacyUnchanged.Labels)
+	directRevision := fmt.Sprint(directLabelTarget.Revision)
+	_, err = store.MutateTaskIssue(ctx, ownerActor, issues.Scope{SourceProject: project}, directLabelTarget.ID, issues.MutationCommand{ExpectedRevision: &directRevision, Labels: &clearedLabels})
+	require.NoError(t, err)
 	directCleared, _, getErr := store.GetIssue(ctx, directLabelTarget.ID)
 	require.NoError(t, getErr)
 	require.Equal(t, models.JSONStringArray{}, directCleared.Labels)
 
 	statusTarget := issueSelectionTestRows(t, db, []int64{ids[9]})[0]
 	status := "resolved"
-	resolvedResult, err := store.ApplyIssueSelectionOperation(ctx, IssueSelectionOperation{
+	resolvedResult, err := apply(ctx, IssueSelectionOperation{
 		Action:  IssueSelectionAction{Kind: IssueSelectionStatus, Status: &status},
 		Actor:   IssueSelectionActor{KeycardID: "issue-selection-owner"},
 		Targets: issueSelectionTargets(statusTarget),
@@ -153,7 +184,7 @@ func TestIssueStoreApplySelectionOperationPostgres(t *testing.T) {
 	require.Equal(t, status, resolvedResult.Items[0].Readback.Status)
 
 	deleteOne, deleteTwo := issueSelectionTestRows(t, db, []int64{ids[6], ids[7]})[0], issueSelectionTestRows(t, db, []int64{ids[6], ids[7]})[1]
-	deleted, err := store.ApplyIssueSelectionOperation(ctx, IssueSelectionOperation{
+	deleted, err := apply(ctx, IssueSelectionOperation{
 		Action:  IssueSelectionAction{Kind: IssueSelectionDelete},
 		Actor:   IssueSelectionActor{IsOperator: true},
 		Targets: issueSelectionTargets(deleteOne, deleteTwo),
@@ -289,8 +320,6 @@ func TestIssueSelectionAuthorizationAndTransitions(t *testing.T) {
 	for _, action := range []IssueSelectionAction{
 		{Kind: IssueSelectionPriority, Priority: stringPtr("high")},
 		{Kind: IssueSelectionLabels, Labels: &labels},
-		{Kind: IssueSelectionStatus, Status: stringPtr("reopened")},
-		{Kind: IssueSelectionStatus, Status: stringPtr("closed")},
 	} {
 		require.ErrorIs(t, authorizeIssueSelectionRow(row, action, IssueSelectionActor{KeycardID: "other"}), ErrIssueForbidden)
 	}
@@ -305,6 +334,10 @@ func TestIssueSelectionAuthorizationAndTransitions(t *testing.T) {
 		require.ErrorIs(t, authorizeIssueSelectionRow(row, action, owner), ErrIssueForbidden)
 	}
 	require.NoError(t, authorizeIssueSelectionRow(row, IssueSelectionAction{Kind: IssueSelectionStatus, Status: stringPtr("resolved")}, IssueSelectionActor{KeycardID: "other"}))
+	for _, status := range []string{"closed", "reopened"} {
+		require.NoError(t, authorizeIssueSelectionRow(row, IssueSelectionAction{Kind: IssueSelectionStatus, Status: stringPtr(status)}, IssueSelectionActor{KeycardID: "other"}))
+		require.ErrorIs(t, authorizeIssueSelectionRow(row, IssueSelectionAction{Kind: IssueSelectionStatus, Status: stringPtr(status)}, IssueSelectionActor{}), ErrIssueForbidden)
+	}
 
 	for _, scenario := range []struct {
 		name     string
@@ -316,6 +349,7 @@ func TestIssueSelectionAuthorizationAndTransitions(t *testing.T) {
 		{"acknowledge open", "open", IssueSelectionAction{Kind: IssueSelectionAcknowledge}, operator, false},
 		{"acknowledge resolved", "resolved", IssueSelectionAction{Kind: IssueSelectionAcknowledge}, operator, true},
 		{"reopen resolved", "resolved", IssueSelectionAction{Kind: IssueSelectionStatus, Status: stringPtr("reopened")}, owner, false},
+		{"participant reopens closed", "closed", IssueSelectionAction{Kind: IssueSelectionStatus, Status: stringPtr("reopened")}, IssueSelectionActor{KeycardID: "other"}, false},
 		{"reopen open", "open", IssueSelectionAction{Kind: IssueSelectionStatus, Status: stringPtr("reopened")}, owner, true},
 		{"operator closes open", "open", IssueSelectionAction{Kind: IssueSelectionStatus, Status: stringPtr("closed")}, operator, false},
 		{"owner closes resolved", "resolved", IssueSelectionAction{Kind: IssueSelectionStatus, Status: stringPtr("closed")}, owner, false},

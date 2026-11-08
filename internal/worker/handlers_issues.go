@@ -20,6 +20,7 @@ import (
 
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/issues"
 	"github.com/thebtf/engram/internal/projectidentity"
 )
 
@@ -119,143 +120,19 @@ func writeIssueStoreError(w http.ResponseWriter, err error) {
 
 // handleListIssues handles GET /api/issues with optional filters.
 func (s *Service) handleListIssues(w http.ResponseWriter, r *http.Request) {
-	project := r.URL.Query().Get("project")
-	sourceProject := r.URL.Query().Get("source_project")
-	sourceAgent := r.URL.Query().Get("source_agent")
-	for _, selector := range []string{project, sourceProject} {
-		if selector == "" {
-			continue
-		}
-		if !projectidentity.ValidProjectID(selector) {
-			writeDocumentError(w, http.StatusBadRequest, "an exact canonical project ID is required")
-			return
-		}
-	}
-	statusParam := r.URL.Query().Get("status")
-	typeParam := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("type")))
-	limitStr := r.URL.Query().Get("limit")
-	offsetStr := r.URL.Query().Get("offset")
-	resolvedSinceStr := r.URL.Query().Get("resolved_since")
-
-	var statuses []string
-	if statusParam != "" {
-		for _, s := range strings.Split(statusParam, ",") {
-			if s = strings.TrimSpace(s); s != "" {
-				statuses = append(statuses, s)
-			}
-		}
-	}
-
-	limit := 50
-	if v, err := strconv.Atoi(limitStr); err == nil && v > 0 {
-		limit = v
-	}
-	offset := 0
-	if v, err := strconv.Atoi(offsetStr); err == nil && v >= 0 {
-		offset = v
-	}
-
-	params := gormdb.IssueListParams{
-		TargetProject: project,
-		SourceProject: sourceProject,
-		SourceAgent:   sourceAgent,
-		Statuses:      statuses,
-		Type:          typeParam,
-		Limit:         limit,
-		Offset:        offset,
-	}
-	if resolvedSinceStr != "" {
-		if ms, err := strconv.ParseInt(resolvedSinceStr, 10, 64); err == nil {
-			t := time.UnixMilli(ms)
-			params.ResolvedSince = &t
-		}
-	}
-
-	issues, total, err := s.issueStore.ListIssuesEx(r.Context(), params)
-	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error": %q}`, err.Error()), http.StatusInternalServerError)
-		return
-	}
-
-	ids := make([]int64, len(issues))
-	for i := range issues {
-		ids[i] = issues[i].ID
-	}
-	roles, err := s.issueStore.ProjectRoles(r.Context(), ids)
-	if err != nil {
-		writeIssueStoreError(w, err)
-		return
-	}
-	items := make([]issueListReadItem, len(issues))
-	projectNames := make(map[string]string)
-	for i, issue := range issues {
-		resolved := roles[issue.ID]
-		items[i] = issueListReadItem{issueReadProjection(issue.Issue, resolved), issue.CommentCount}
-		for _, project := range []*string{resolved.SourceProjectID, resolved.TargetProjectID} {
-			if project != nil {
-				if _, exists := projectNames[*project]; !exists {
-					projectNames[*project] = s.getProjectDisplayName(r.Context(), *project)
-				}
-			}
-		}
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"issues":        items,
-		"total":         total,
-		"project_names": projectNames,
-	})
+	s.listIssueTasks(w, r)
 }
 
 // handleGetIssue handles GET /api/issues/{id}.
 func (s *Service) handleGetIssue(w http.ResponseWriter, r *http.Request) {
-	idStr := chi.URLParam(r, "id")
-	id, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil {
-		http.Error(w, `{"error": "invalid issue id"}`, http.StatusBadRequest)
-		return
-	}
-
-	params, err := urlParseIssueDetail(r)
-	if err != nil {
-		writeDocumentError(w, http.StatusBadRequest, "an exact canonical project ID is required")
-		return
-	}
-	var issue *gormdb.Issue
-	var comments []gormdb.IssueComment
-	if params != "" {
-		issue, comments, err = s.issueStore.GetIssueForProject(r.Context(), id, params)
-	} else {
-		issue, comments, err = s.issueStore.GetIssue(r.Context(), id)
-	}
-	if err != nil {
-		if errors.Is(err, gormdb.ErrIssueNotFound) || strings.Contains(err.Error(), "not found") {
-			http.Error(w, `{"error": "issue not found"}`, http.StatusNotFound)
-			return
-		}
-		http.Error(w, fmt.Sprintf(`{"error": %q}`, err.Error()), http.StatusInternalServerError)
-		return
-	}
-
-	roles, err := s.issueStore.ProjectRoles(r.Context(), []int64{id})
-	if err != nil {
-		writeIssueStoreError(w, err)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"issue":                       issueReadProjection(*issue, roles[id]),
-		"comments":                    comments,
-		"comment_count":               len(comments),
-		"source_project_display_name": s.getProjectDisplayName(r.Context(), issue.SourceProject),
-		"target_project_display_name": s.getProjectDisplayName(r.Context(), issue.TargetProject),
-	})
+	s.getIssueTask(w, r)
 }
 
 func urlParseIssueDetail(r *http.Request) (string, error) {
 	query, err := url.ParseQuery(r.URL.RawQuery)
-	if err != nil { return "", err }
+	if err != nil {
+		return "", err
+	}
 	if !query.Has("project") {
 		return "", nil
 	}
@@ -267,139 +144,46 @@ func urlParseIssueDetail(r *http.Request) (string, error) {
 
 // handleCreateIssue handles POST /api/issues.
 func (s *Service) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Title            string   `json:"title"`
-		Body             string   `json:"body"`
-		Priority         string   `json:"priority"`
-		Type             string   `json:"type"`
-		SourceProject    string   `json:"source_project"`
-		TargetProject    string   `json:"target_project"`
-		SourceAgent      string   `json:"source_agent"`
-		CreatedBySession string   `json:"created_by_session"`
-		Labels           []string `json:"labels"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, `{"error": "invalid JSON body"}`, http.StatusBadRequest)
-		return
-	}
-
-	if req.Title == "" {
-		http.Error(w, `{"error": "title is required"}`, http.StatusBadRequest)
-		return
-	}
-	req.Type = strings.ToLower(strings.TrimSpace(req.Type))
-	if req.TargetProject == "" && req.SourceProject != "" {
-		req.TargetProject = req.SourceProject
-	}
-	if req.TargetProject == "" {
-		http.Error(w, `{"error": "target_project is required"}`, http.StatusBadRequest)
-		return
-	}
-
-	keycardID, isOperator, err := issueMutationActor(r.Context())
+	raw, scope, err := readIssueTaskWrite(w, r)
 	if err != nil {
-		writeIssueAuthorizationError(w, err)
+		writeIssueTaskError(w, err)
 		return
 	}
-	if isOperator {
-		keycardID = ""
-	}
-	issue := &gormdb.Issue{
-		Title:            req.Title,
-		Body:             req.Body,
-		Priority:         req.Priority,
-		Type:             req.Type,
-		SourceProject:    req.SourceProject,
-		TargetProject:    req.TargetProject,
-		SourceAgent:      req.SourceAgent,
-		CreatedBySession: req.CreatedBySession,
-		CreatorKeycardID: keycardID,
-		Labels:           req.Labels,
-	}
-
-	id, err := s.issueStore.CreateIssue(r.Context(), issue)
+	result, err := issues.New(s.issueStore, s.redactionRules).Create(r.Context(), scope, raw)
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error": %q}`, err.Error()), http.StatusInternalServerError)
+		writeIssueTaskError(w, err)
 		return
 	}
-
-	log.Info().
-		Int64("issue_id", id).
-		Str("title", req.Title).
-		Str("source", req.SourceProject).
-		Str("target", req.TargetProject).
-		Msg("Issue created")
-
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"id":      id,
-		"message": "issue created",
-	})
+	if !result.Replayed {
+		w.WriteHeader(http.StatusCreated)
+	}
+	_ = json.NewEncoder(w).Encode(result)
 }
 
 // handleUpdateIssue handles PATCH /api/issues/{id}.
 func (s *Service) handleUpdateIssue(w http.ResponseWriter, r *http.Request) {
-	idStr := chi.URLParam(r, "id")
-	id, err := strconv.ParseInt(idStr, 10, 64)
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil || id < 1 {
+		writeIssueTaskError(w, issues.Failure("INVALID_ARGUMENT"))
+		return
+	}
+	raw, scope, err := readIssueTaskWrite(w, r)
 	if err != nil {
-		http.Error(w, `{"error": "invalid issue id"}`, http.StatusBadRequest)
+		writeIssueTaskError(w, err)
 		return
 	}
-
-	var req struct {
-		Status        string   `json:"status"`
-		Comment       string   `json:"comment"`
-		SourceProject string   `json:"source_project"`
-		SourceAgent   string   `json:"source_agent"`
-		Title         string   `json:"title"`
-		Body          string   `json:"body"`
-		Priority      string   `json:"priority"`
-		Type          string   `json:"type"`
-		Labels        []string `json:"labels"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, `{"error": "invalid JSON body"}`, http.StatusBadRequest)
-		return
-	}
-
-	// Normalize type before validation and storage.
-	req.Type = strings.ToLower(strings.TrimSpace(req.Type))
-
-	update := gormdb.IssueUpdate{
-		Status:        req.Status,
-		Comment:       req.Comment,
-		AuthorProject: req.SourceProject,
-		AuthorAgent:   req.SourceAgent,
-		Title:         req.Title,
-		Body:          req.Body,
-		Priority:      req.Priority,
-		Type:          req.Type,
-		Labels:        req.Labels,
-	}
-	// Field edits and source-terminal actions require the creator keycard or an
-	// operator. Comment-only and resolved progression require only a RW keycard.
-	var isOperator bool
-	if update.HasSourceAuthorityAction() {
-		isOperator, err = s.authorizeIssueSourceMutation(r.Context(), id)
-	} else {
-		isOperator, err = s.authorizeIssueProgression(r.Context())
-	}
+	scope.ReadProject, err = urlParseIssueDetail(r)
 	if err != nil {
-		writeIssueAuthorizationError(w, err)
+		writeIssueTaskError(w, issues.Failure("INVALID_ARGUMENT"))
 		return
 	}
-
-	if err := s.issueStore.UpdateIssueAtomically(r.Context(), id, update, isOperator); err != nil {
-		writeIssueStoreError(w, err)
+	result, err := issues.New(s.issueStore, s.redactionRules).Mutate(r.Context(), scope, id, raw)
+	if err != nil {
+		writeIssueTaskError(w, err)
 		return
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"message": "issue updated",
-	})
+	writeJSON(w, result)
 }
 
 type issueAcknowledgeRequest struct {
@@ -439,6 +223,17 @@ func issueMutationAudit(ctx context.Context, action, sourceProject, sourceAgent 
 	}
 }
 
+func issueMutationAttribution(ctx context.Context, sourceProject, sourceAgent string) gormdb.IssueChangeAttribution {
+	optional := func(value string) *string {
+		if value == "" {
+			return nil
+		}
+		return &value
+	}
+	_, session := configAuditIdentity(ctx)
+	return gormdb.IssueChangeAttribution{SourceProject: optional(sourceProject), SourceAgent: optional(sourceAgent), Session: optional(session)}
+}
+
 // handleAcknowledgeIssues handles POST /api/issues/acknowledge.
 func (s *Service) handleAcknowledgeIssues(w http.ResponseWriter, r *http.Request) {
 	if err := requireIssueOperator(r.Context()); err != nil {
@@ -455,7 +250,7 @@ func (s *Service) handleAcknowledgeIssues(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	acknowledged, err := s.issueStore.AcknowledgeIssuesAtomically(r.Context(), req.IDs, issueMutationAudit(r.Context(), "acknowledge", req.SourceProject, req.SourceAgent, req.IDs))
+	acknowledged, err := s.issueStore.AcknowledgeIssuesAtomically(r.Context(), req.IDs, issueMutationAudit(r.Context(), "acknowledge", req.SourceProject, req.SourceAgent, req.IDs), issueMutationAttribution(r.Context(), req.SourceProject, req.SourceAgent))
 	if err != nil {
 		writeIssueStoreError(w, err)
 		return
@@ -770,10 +565,11 @@ func (s *Service) HandleIssueSelectionOperation(w http.ResponseWriter, r *http.R
 		ids[index] = target.ID
 	}
 	result, err := s.issueStore.ApplyIssueSelectionOperation(r.Context(), gormdb.IssueSelectionOperation{
-		Action:  action,
-		Actor:   gormdb.IssueSelectionActor{KeycardID: keycardID, IsOperator: isOperator},
-		Targets: targets,
-		Audit:   issueMutationAudit(r.Context(), request.Action, request.SourceProject, request.SourceAgent, ids),
+		Action:      action,
+		Actor:       gormdb.IssueSelectionActor{KeycardID: keycardID, IsOperator: isOperator},
+		Targets:     targets,
+		Audit:       issueMutationAudit(r.Context(), request.Action, request.SourceProject, request.SourceAgent, ids),
+		Attribution: issueMutationAttribution(r.Context(), request.SourceProject, request.SourceAgent),
 	})
 	if err != nil {
 		writeIssueSelectionError(w, err)

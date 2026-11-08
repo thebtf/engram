@@ -21,6 +21,7 @@ import (
 	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/hostadvisor"
 	"github.com/thebtf/engram/internal/intervention"
+	"github.com/thebtf/engram/internal/issues"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/internal/taskcontext"
@@ -300,6 +301,14 @@ func (s *Server) CallTool(ctx context.Context, req *pb.CallToolRequest) (*pb.Cal
 
 	argumentsJSON, err := canonicalizeProjectArgument(req.ToolName, req.ArgumentsJson, canonicalProject)
 	if err != nil {
+		var issueError *issues.Error
+		if req.ToolName == "issues" && errors.As(err, &issueError) {
+			resultJSON, marshalErr := json.Marshal(&mcp.Error{Code: -32000, Message: issueError.Error(), Data: map[string]any{"error": issueError}})
+			if marshalErr != nil {
+				return nil, status.Error(codes.Internal, "issue error encoding failed")
+			}
+			return &pb.CallToolResponse{IsError: true, ContentJson: resultJSON, CanonicalProject: canonicalProject}, nil
+		}
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
@@ -333,6 +342,11 @@ func requiresUCIRequestCorrelation(req *pb.CallToolRequest) bool {
 // canonicalizeProjectArgument pins caller-scoped fields while preserving explicit
 // administrative targets and cross-project reader filters.
 func canonicalizeProjectArgument(toolName string, args []byte, canonicalProject string) ([]byte, error) {
+	if toolName == "issues" && len(bytes.TrimSpace(args)) != 0 {
+		if _, err := issues.DecodeReceivedObject(args); err != nil {
+			return nil, err
+		}
+	}
 	if canonicalProject == "" || len(bytes.TrimSpace(args)) == 0 {
 		return args, nil
 	}
@@ -343,7 +357,7 @@ func canonicalizeProjectArgument(toolName string, args []byte, canonicalProject 
 	if !found || input.project == "" || preservesTargetProjectArgument(toolName, input.action) {
 		return args, nil
 	}
-	return replaceCanonicalProjectArguments(args, input, canonicalProject)
+	return replaceCanonicalProjectArguments(args, input, canonicalProject, toolName == "issues")
 }
 
 type canonicalProjectArguments struct {
@@ -423,7 +437,7 @@ func preservesTargetProjectArgument(toolName, action string) bool {
 	}
 }
 
-func replaceCanonicalProjectArguments(args []byte, input canonicalProjectArguments, canonicalProject string) ([]byte, error) {
+func replaceCanonicalProjectArguments(args []byte, input canonicalProjectArguments, canonicalProject string, isIssue bool) ([]byte, error) {
 	encodedProject, err := json.Marshal(canonicalProject)
 	if err != nil {
 		return nil, err
@@ -435,6 +449,9 @@ func replaceCanonicalProjectArguments(args []byte, input canonicalProjectArgumen
 	}
 	if !changed {
 		return args, nil
+	}
+	if isIssue {
+		return issues.EncodeReceivedObject(input.values)
 	}
 	return json.Marshal(input.values)
 }

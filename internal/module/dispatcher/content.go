@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"time"
 
+	issuecontract "github.com/thebtf/engram/internal/issues/contract"
 	"github.com/thebtf/engram/internal/module"
 	"github.com/thebtf/engram/internal/module/obs"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
 )
+
+const issueIPCScannerBytes = 1 << 20
 
 // handleToolsList processes the MCP "tools/list" request.
 //
@@ -212,16 +215,22 @@ func (d *Dispatcher) handleToolsCall(ctx context.Context, p muxcore.ProjectConte
 		return marshalError(req.ID, -32603, callErr.Error()), nil
 	}
 
-	// Success path — record ok status.
-	obs.RecordHandleTool(ctx, moduleName, params.Name, "ok", durationMs)
-
-	// Success: wrap the raw module result in the MCP content envelope.
 	content := []json.RawMessage{raw}
-	result := map[string]any{
-		"content": content,
-		"isError": false,
+	result := map[string]any{"content": content, "isError": false}
+	response := marshalResult(req.ID, result)
+	if params.Name == "issues" && len(response) >= issueIPCScannerBytes {
+		obs.RecordHandleTool(ctx, moduleName, params.Name, "module_error", durationMs)
+		obs.RecordHandleToolError(ctx, moduleName, params.Name, "TRANSPORT_RECORD_TOO_LARGE")
+		return issueIPCOverflowResponse(req.ID), nil
 	}
-	return marshalResult(req.ID, result), nil
+	obs.RecordHandleTool(ctx, moduleName, params.Name, "ok", durationMs)
+	return response, nil
+}
+
+func issueIPCOverflowResponse(id json.RawMessage) []byte {
+	failure := issuecontract.Failure("TRANSPORT_RECORD_TOO_LARGE")
+	errJSON, _ := json.Marshal(map[string]any{"code": -32000, "message": failure.Error(), "data": map[string]any{"error": failure}})
+	return marshalResult(id, map[string]any{"content": []map[string]any{{"type": "text", "text": string(errJSON)}}, "isError": true})
 }
 
 // isModuleError checks whether err is a *module.ModuleError and assigns it to

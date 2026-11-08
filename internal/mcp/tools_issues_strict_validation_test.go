@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/issues"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	_ "modernc.org/sqlite"
@@ -93,6 +94,11 @@ func TestIssueCreateRecoveryIdentifiesKnownRolesAndPreservesAmbiguity(t *testing
 			t.Cleanup(func() { _ = sqlDB.Close() })
 			db, err := gorm.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gorm.Config{DisableAutomaticPing: true, SkipDefaultTransaction: true})
 			require.NoError(t, err)
+			require.NoError(t, db.Exec(`CREATE TABLE projects (id TEXT PRIMARY KEY, removed_at TEXT, identity_status TEXT)`).Error)
+			require.NoError(t, db.Exec(`INSERT INTO projects (id, identity_status) VALUES (?, 'active')`, canonical).Error)
+			require.NoError(t, db.Callback().Query().Before("gorm:query").Register("test:sqlite-admission-lock", func(tx *gorm.DB) {
+				delete(tx.Statement.Clauses, "FOR")
+			}))
 			require.NoError(t, db.Callback().Row().Before("gorm:row").Register("test:empty-redirects", func(tx *gorm.DB) {
 				tx.Statement.SQL.Reset()
 				tx.Statement.SQL.WriteString("SELECT '' WHERE 0")
@@ -117,9 +123,9 @@ func TestIssueCreateRecoveryIdentifiesKnownRolesAndPreservesAmbiguity(t *testing
 			}
 			if tc.wantInsert {
 				require.Equal(t, 1, inserts)
-				var pgErr *pgconn.PgError
-				require.ErrorAs(t, err, &pgErr)
-				require.Equal(t, refusal, pgErr.Message)
+				var safe *issues.Error
+				require.ErrorAs(t, err, &safe)
+				require.Equal(t, refusal, safe.Code)
 			} else {
 				require.Zero(t, inserts)
 				var hold *gormdb.ConsolidationError
@@ -166,4 +172,65 @@ func TestIssueSchemaExplainsExactProjectFilters(t *testing.T) {
 	description := properties["target_project"].(map[string]any)["description"].(string)
 	require.Contains(t, description, "canonical project UUID")
 	require.Contains(t, description, "authorized target")
+}
+
+func TestIssuesPublicListBoundsAndGetAuthPrecedence(t *testing.T) {
+	server := NewServer(ServerOptions{Version: "issue-bounds"})
+	server.SetIssueStore(&gormdb.IssueStore{})
+	ctx := auth.WithIdentity(context.Background(), auth.Client("read-only", "keycard-read-only"))
+
+	for _, tc := range []struct {
+		name  string
+		limit any
+	}{
+		{"above maximum", 201},
+		{"fraction", 1.5},
+		{"string", "1"},
+		{"boolean", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			response := callIssues513Native(t, server, ctx, map[string]any{"action": "list", "limit": tc.limit})
+			text := issues513NativeText(t, response)
+			require.Contains(t, text, "INVALID_ARGUMENT")
+			require.Contains(t, text, "limit must be between 1 and 200")
+		})
+	}
+
+	withoutStore := NewServer(ServerOptions{Version: "issue-bounds"})
+	_, err := withoutStore.handleIssues(context.Background(), json.RawMessage(`{"action":"get","id":1}`))
+	require.ErrorContains(t, err, "UNAUTHENTICATED")
+	_, err = withoutStore.handleIssues(ctx, json.RawMessage(`{"action":"get","id":1}`))
+	require.ErrorContains(t, err, "UNAVAILABLE")
+	_, err = server.handleIssues(ctx, json.RawMessage(`{"action":"get","id":1.5}`))
+	require.ErrorContains(t, err, "INVALID_ARGUMENT")
+}
+
+func TestIssuesTargetSessionSchemaAndAdmission(t *testing.T) {
+	server := NewServer(ServerOptions{Version: "issue-session"})
+	properties := findToolProperties(t, server.primaryTools(), "issues")
+	field := properties["target_session"].(map[string]any)
+	require.Equal(t, []string{"string", "null"}, field["type"])
+	description := field["description"].(string)
+	for _, phrase := range []string{"Create/update", "update may use null", "List", "null is invalid for create and list", "provenance", "not authentication or authority"} {
+		require.Contains(t, description, phrase)
+	}
+
+	ctx := auth.WithIdentity(context.Background(), auth.Client("read-write", "keycard-read-write"))
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{"create string", `{"action":"create","title":"task","target_session":"session"}`, "UNAVAILABLE"},
+		{"update string", `{"action":"update","id":1,"target_session":"session"}`, "UNAVAILABLE"},
+		{"update clear", `{"action":"update","id":1,"target_session":null}`, "UNAVAILABLE"},
+		{"list string", `{"action":"list","target_session":"session"}`, "UNAVAILABLE"},
+		{"create null", `{"action":"create","title":"task","target_session":null}`, "INVALID_ARGUMENT"},
+		{"list null", `{"action":"list","target_session":null}`, "INVALID_ARGUMENT"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := server.handleIssues(ctx, json.RawMessage(tc.raw))
+			require.ErrorContains(t, err, tc.want)
+		})
+	}
 }
