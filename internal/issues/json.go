@@ -82,7 +82,7 @@ func decodeObject(raw []byte, target any, rules []redaction.CompiledRule) (map[s
 }
 
 var requestMembers = []string{
-	"title", "body", "priority", "type", "status", "target_project", "source_project", "source_agent", "created_by_session",
+	"title", "body", "priority", "type", "status", "target_project", "target_session", "source_project", "source_agent", "created_by_session", "session_id", "client",
 	"labels", "metadata", "owner_label", "recipient_label", "request_key", "expected_revision", "comment", "comment_metadata", "expected_actor",
 	"action", "id", "format", "project",
 }
@@ -243,6 +243,11 @@ func validateMetadata(raw json.RawMessage) error {
 	return nil
 }
 
+// ValidateLabelsPrivacy applies the ordinary issue request privacy policy to selection labels.
+func ValidateLabelsPrivacy(labels []string, rules []redaction.CompiledRule) error {
+	return refusePrivate(map[string]any{"labels": labels}, rules)
+}
+
 func refusePrivate(value any, rules []redaction.CompiledRule) error {
 	check := func(text string) error {
 		if privacy.ContainsSecrets(text) {
@@ -260,6 +265,12 @@ func refusePrivate(value any, rules []redaction.CompiledRule) error {
 	case string:
 		return check(value)
 	case []any:
+		for _, child := range value {
+			if err := refusePrivate(child, rules); err != nil {
+				return err
+			}
+		}
+	case []string:
 		for _, child := range value {
 			if err := refusePrivate(child, rules); err != nil {
 				return err

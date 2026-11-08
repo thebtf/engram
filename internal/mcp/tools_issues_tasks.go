@@ -143,18 +143,14 @@ func (s *Server) executeNativeIssues(ctx context.Context, raw json.RawMessage) (
 		}
 		return "", &projectidentity.LogicalError{Code: "PROJECT_IDENTITY_INVALID"}
 	}
-	// These submitted fields cannot select identity or override transport source.
+	// The submitted source project cannot select identity or override transport source.
 	delete(members, "source_project")
-	delete(members, "created_by_session")
 	ctx = issuecontract.WithTransportSession(ctx, sessionFromContext(ctx))
 	if legacy, exists := members["agent_source"]; exists {
 		if _, both := members["source_agent"]; both {
 			return "", nativeIssueArgument("source_agent")
 		}
 		members["source_agent"] = legacy
-	}
-	if _, present := members["source_agent"]; !present {
-		members["source_agent"] = json.RawMessage(`"claude-code"`)
 	}
 	for _, field := range []string{"action", "format", "project", "agent_source", "id"} {
 		delete(members, field)

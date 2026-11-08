@@ -1,10 +1,13 @@
 package worker
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"reflect"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
@@ -150,4 +153,48 @@ func TestIssue513SessionProvenanceAndParticipantFilterPostgres(t *testing.T) {
 	require.NotEqual(t, http.StatusOK, response.Code)
 	require.NotContains(t, response.Body.String(), "material edited")
 	require.NotContains(t, response.Body.String(), "not-in-list")
+}
+
+func TestIssue513HTTPRejectsSessionFieldCaseAliases(t *testing.T) {
+	f := issue513T017Fixture(t)
+	for _, tc := range []struct{ name, fields string }{
+		{"target_with_canonical", `"target_session":"original-target","TARGET_SESSION":null`},
+		{"target_alias_only", `"TARGET_SESSION":null`},
+		{"session_with_canonical", `"session_id":"reported","SESSION_ID":"alternate"`},
+		{"session_alias_only", `"SESSION_ID":"alternate"`},
+		{"client_with_canonical", `"client":"original-client","CLIENT":"alternate"`},
+		{"client_alias_only", `"CLIENT":"alternate"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			create := fmt.Sprintf(`{"source_project":%q,"target_project":%q,"title":%q,"target_session":"original-target","metadata":{"Unknown":{"Key":"upper","key":"lower"}}}`, issue513Source, issue513Source, "case alias "+tc.name)
+			id := issue513CreatedID(t, f.call(t, f.browser, http.MethodPost, "/api/issues", create))
+			before := issue513T017StateOf(t, f)
+			body := fmt.Sprintf(`{"expected_revision":"1","title":"must-not-commit",%s}`, tc.fields)
+			require.True(t, json.Valid([]byte(body)))
+			response := f.call(t, f.browser, http.MethodPatch, fmt.Sprintf("/api/issues/%d", id), body)
+			assert.Equal(t, http.StatusBadRequest, response.Code, "alternate-cased DTO member must be refused before mutation")
+			if response.Code == http.StatusBadRequest {
+				var failure struct {
+					Error struct {
+						Code string `json:"code"`
+					} `json:"error"`
+				}
+				require.NoError(t, json.Unmarshal(response.Body.Bytes(), &failure))
+				assert.Equal(t, "INVALID_ARGUMENT", failure.Error.Code)
+			}
+			after := issue513T017StateOf(t, f)
+			assert.True(t, reflect.DeepEqual(before, after), "alias refusal must preserve target, revision, history and all other issue state")
+		})
+	}
+	t.Run("unknown_metadata_case_is_preserved", func(t *testing.T) {
+		create := fmt.Sprintf(`{"source_project":%q,"target_project":%q,"title":"metadata case control","target_session":"original-target","metadata":{"Unknown":{"Key":"upper","key":"lower"}}}`, issue513Source, issue513Source)
+		id := issue513CreatedID(t, f.call(t, f.browser, http.MethodPost, "/api/issues", create))
+		response := f.call(t, f.browser, http.MethodPatch, fmt.Sprintf("/api/issues/%d", id), `{"expected_revision":"1","title":"metadata case retained","metadata":{"Unknown":{"Key":"upper","key":"lower"}}}`)
+		require.Equal(t, http.StatusOK, response.Code)
+		row, _, err := f.service.issueStore.GetIssue(t.Context(), id)
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"Unknown":{"Key":"upper","key":"lower"}}`, string(row.Metadata))
+		assert.Equal(t, "original-target", row.TargetSession)
+		assert.EqualValues(t, 2, row.Revision)
+	})
 }

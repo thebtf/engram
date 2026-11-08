@@ -637,6 +637,12 @@ func (s *Service) HandleIssueSelectionOperation(w http.ResponseWriter, r *http.R
 		writeIssueSelectionError(w, err)
 		return
 	}
+	if action.Kind == gormdb.IssueSelectionLabels && action.Labels != nil {
+		if err := issues.ValidateLabelsPrivacy(*action.Labels, s.redactionRules); err != nil {
+			operatorCodeWriteBodyless(w, http.StatusBadRequest)
+			return
+		}
+	}
 	selection, err := issueOperationSelection(r.Context(), selections, scope, request.Selection)
 	if err != nil {
 		writeIssueSelectionError(w, err)

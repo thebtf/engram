@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,8 @@ import (
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/issues"
+	"github.com/thebtf/engram/internal/privacy"
+	"github.com/thebtf/engram/internal/redaction"
 	gormlib "gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -501,6 +504,55 @@ func TestIssue513T017Selection(t *testing.T) {
 		require.NoError(t, db.Order("issue_id, revision").Where("issue_id IN ?", []int64{first, second}).Find(&changes).Error)
 		assert.Len(t, changes, 3, "only initial rows and real competing winner remain")
 	})
+}
+
+func TestIssue513SelectionPrivacyAdmission(t *testing.T) {
+	fixture := issue513T017Fixture(t)
+	service := fixture.service
+	for _, tc := range []struct {
+		name, kind, value string
+		configured        bool
+	}{
+		{"recognized_label", "labels", "api_key=" + strings.Repeat("x", 32), false},
+		{"configured_label", "labels", "synthetic-blocked-selection-label", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			first, _ := issue513T017Create(t, fixture, fixture.client, tc.name+"-first")
+			second, _ := issue513T017Create(t, fixture, fixture.client, tc.name+"-second")
+			control := issue513T017Snapshot(t, fixture, first, second)
+			benign := issue513T017Operation(t, fixture, control, "labels", map[string]any{"labels": []string{"synthetic-benign-control"}})
+			require.Equal(t, http.StatusOK, benign.Code, "authorized selection control must reach the real writer")
+			selection := issue513T017Snapshot(t, fixture, first, second)
+			if tc.configured {
+				var err error
+				service.redactionRules, err = redaction.CompileRules([]redaction.Rule{{ID: "synthetic-selection-rule", Pattern: tc.value, Replacement: "[removed]"}})
+				require.NoError(t, err)
+				defer func() { service.redactionRules = nil }()
+				scrubbed, matched, err := redaction.ScrubCompiled(tc.value, service.redactionRules)
+				require.NoError(t, err)
+				require.True(t, scrubbed != tc.value && len(matched) == 1, "actual configured protection must match")
+			} else {
+				require.True(t, privacy.ContainsSecrets(tc.value), "recognized synthetic control must match")
+			}
+			before := issue513T017StateOf(t, fixture)
+			selectionState := func() string {
+				t.Helper()
+				var value string
+				require.NoError(t, service.store.GetDB().Raw(`SELECT COALESCE(jsonb_agg(to_jsonb(s) ORDER BY to_jsonb(s)::text),'[]'::jsonb)::text FROM collection_selections s`).Scan(&value).Error)
+				return value
+			}
+			beforeSelection := selectionState()
+			logStart := fixture.capturedLogs.Len()
+			response := issue513T017Operation(t, fixture, selection, tc.kind, map[string]any{"labels": []string{tc.value}})
+			assert.Equal(t, http.StatusBadRequest, response.Code, "privacy rejection must be a safe client refusal")
+			assert.True(t, response.Body.Len() == 0, "selection failure must remain body-free")
+			assert.False(t, strings.Contains(response.Body.String(), tc.value), "response must not disclose the submitted value")
+			assert.False(t, strings.Contains(fixture.capturedLogs.String()[logStart:], tc.value), "logs must not disclose the submitted value")
+			after := issue513T017StateOf(t, fixture)
+			assert.True(t, reflect.DeepEqual(before, after), "refusal must preserve issues, comments, history and audits")
+			assert.True(t, beforeSelection == selectionState(), "refusal must preserve saved selection state")
+		})
+	}
 }
 
 func TestIssue513T017Delete(t *testing.T) {
