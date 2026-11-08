@@ -900,6 +900,57 @@ definitions:
       version:
         type: integer
     type: object
+  worker.modelHealthResponse:
+    properties:
+      generated_at:
+        type: string
+      rows:
+        items:
+          $ref: '#/definitions/worker.modelHealthRow'
+        type: array
+      summary:
+        $ref: '#/definitions/worker.modelHealthSummary'
+    type: object
+  worker.modelHealthRow:
+    properties:
+      configured:
+        type: boolean
+      endpoint:
+        type: string
+      evidence:
+        items:
+          type: string
+        type: array
+      health:
+        type: string
+      id:
+        type: string
+      message:
+        type: string
+      model:
+        type: string
+      provider:
+        type: string
+      role:
+        type: string
+      secret_set:
+        type: boolean
+      source:
+        type: string
+    type: object
+  worker.modelHealthSummary:
+    properties:
+      configured:
+        type: integer
+      degraded:
+        type: integer
+      ok:
+        type: integer
+      standby:
+        type: integer
+      total:
+        type: integer
+    type: object
   worker.operatorCollectionFilterRequest:
     properties:
       scope:
@@ -3460,6 +3511,41 @@ paths:
       summary: Match memory triggers
       tags:
       - Context
+  /api/model-health:
+    get:
+      description: |-
+        Reports configuration and initialized clients, not provider availability; it makes no upstream probes. Health is standby or degraded, not an upstream health verdict. See API_CONTRACTS.md for row and source semantics and redaction limits.
+        Authentication is required when enabled; X-Auth-Token, Bearer, or authorized session cookies are accepted. HAP keycard classes are forbidden on this route. ApiKeyAuth describes only X-Auth-Token. The route requires database readiness.
+        Success is application/json; authentication, readiness, and handler errors are text/plain. Swagger 2 lists media types for the entire operation, not individual statuses.
+      produces:
+      - application/json
+      - text/plain
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/worker.modelHealthResponse'
+        "401":
+          description: unauthorized
+          schema:
+            type: string
+        "403":
+          description: HAP keycard class is not allowed on this route
+          schema:
+            type: string
+        "500":
+          description: auth store unavailable or settings read failed
+          schema:
+            type: string
+        "503":
+          description: service not ready or store not initialized
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Model configuration and client initialization snapshot
+      tags:
+      - System
   /api/models:
     get:
       description: Returns available embedding models with default and current model

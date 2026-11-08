@@ -7,9 +7,12 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/thebtf/engram/internal/config"
+	dbgorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/llm"
 	"github.com/thebtf/engram/pkg/models"
 )
@@ -124,4 +127,33 @@ func TestBuildModelHealthResponse_LLMUsesStoredConfigurationAndStartupModel(t *t
 	payload, err := json.Marshal(response)
 	require.NoError(t, err)
 	assert.NotContains(t, string(payload), "https://synthetic-provider.invalid")
+}
+
+func TestModelHealthHTTPWithSyntheticSettings(t *testing.T) {
+	for _, key := range []string{"ENGRAM_EMBEDDING_URL", "ENGRAM_EMBEDDING_MODEL", "ENGRAM_EMBEDDING_API_KEY", "ENGRAM_RERANK_URL", "ENGRAM_RERANK_MODEL", "ENGRAM_RERANK_API_KEY", "ENGRAM_LLM_URL", "ENGRAM_LLM_MODEL", "ENGRAM_LLM_API_KEY"} {
+		t.Setenv(key, "")
+	}
+	t.Setenv("ENGRAM_AUTH_DISABLED", "true")
+	db := knowledgeSQLiteDB(t)
+	require.NoError(t, db.Exec(`CREATE TABLE model_settings (id INTEGER PRIMARY KEY, key TEXT, value TEXT, encrypted_value BLOB, encrypted BOOLEAN, encryption_key_fingerprint TEXT, description TEXT, edited_by TEXT, created_at DATETIME, updated_at DATETIME, deleted_at DATETIME, version INTEGER)`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO model_settings (key, value, encrypted) VALUES (?, ?, false), (?, ?, false)`, "embedder.url", "https://synthetic.invalid", "embedder.model", "synthetic-model").Error)
+	svc := &Service{router: chi.NewRouter(), store: &dbgorm.Store{DB: db}, config: &config.Config{}}
+	svc.setupMiddleware()
+	svc.setupRoutes()
+	svc.ready.Store(true)
+	server := httptest.NewServer(svc.router)
+	defer server.Close()
+	response, err := server.Client().Get(server.URL + "/api/model-health")
+	require.NoError(t, err)
+	defer response.Body.Close()
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	require.Equal(t, "application/json", response.Header.Get("Content-Type"))
+	var snapshot modelHealthResponse
+	require.NoError(t, json.NewDecoder(response.Body).Decode(&snapshot))
+	require.Len(t, snapshot.Rows, 3)
+	assert.Equal(t, "recall/embedder", snapshot.Rows[0].ID)
+	assert.Equal(t, "settings", snapshot.Rows[0].Source)
+	assert.Equal(t, "synthetic-model", snapshot.Rows[0].Model)
+	assert.Equal(t, "degraded", snapshot.Rows[0].Health)
+	assert.Equal(t, 1, snapshot.Summary.Configured)
 }

@@ -3069,6 +3069,56 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/model-health": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Reports configuration and initialized clients, not provider availability; it makes no upstream probes. Health is standby or degraded, not an upstream health verdict. See API_CONTRACTS.md for row and source semantics and redaction limits.\nAuthentication is required when enabled; X-Auth-Token, Bearer, or authorized session cookies are accepted. HAP keycard classes are forbidden on this route. ApiKeyAuth describes only X-Auth-Token. The route requires database readiness.\nSuccess is application/json; authentication, readiness, and handler errors are text/plain. Swagger 2 lists media types for the entire operation, not individual statuses.",
+                "produces": [
+                    "application/json",
+                    "text/plain"
+                ],
+                "tags": [
+                    "System"
+                ],
+                "summary": "Model configuration and client initialization snapshot",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/worker.modelHealthResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "HAP keycard class is not allowed on this route",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "auth store unavailable or settings read failed",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "service not ready or store not initialized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/api/models": {
             "get": {
                 "security": [
@@ -6539,6 +6589,84 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "worker.modelHealthResponse": {
+            "type": "object",
+            "properties": {
+                "generated_at": {
+                    "type": "string"
+                },
+                "rows": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/worker.modelHealthRow"
+                    }
+                },
+                "summary": {
+                    "$ref": "#/definitions/worker.modelHealthSummary"
+                }
+            }
+        },
+        "worker.modelHealthRow": {
+            "type": "object",
+            "properties": {
+                "configured": {
+                    "type": "boolean"
+                },
+                "endpoint": {
+                    "type": "string"
+                },
+                "evidence": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "health": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "model": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "role": {
+                    "type": "string"
+                },
+                "secret_set": {
+                    "type": "boolean"
+                },
+                "source": {
+                    "type": "string"
+                }
+            }
+        },
+        "worker.modelHealthSummary": {
+            "type": "object",
+            "properties": {
+                "configured": {
+                    "type": "integer"
+                },
+                "degraded": {
+                    "type": "integer"
+                },
+                "ok": {
+                    "type": "integer"
+                },
+                "standby": {
+                    "type": "integer"
+                },
+                "total": {
                     "type": "integer"
                 }
             }
