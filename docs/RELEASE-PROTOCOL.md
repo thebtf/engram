@@ -102,6 +102,8 @@ Acquire the exact SDK through the existing `golang.org/toolchain@v0.0.1-go1.26.1
 
 The Docker Go builder pin and the matching `scripts/production-gates/build-and-scan-images.ps1` evidence pin must advance together through the existing protected-maintenance route. `.github/workflows/*` continues to select Go from `go.mod`; changing the module version requires no workflow rewrite. A source security repair is not complete release acceptance while protected producer integration or canonical asset regeneration remains outstanding.
 
+The runtime Dockerfile's Node builder pin and the matching image-gate `pinned_sources.node_builder` evidence pin must also advance together. The image-gate critical runtime fixture uses the scoped `10.240.251.0/24` subnet; Docker rejects overlaps without removing existing networks.
+
 ## CI Compute Boundaries
 
 GitHub-hosted CI is reserved for the smallest lane that can prove the current stage. The 2026-09-19 cost incident exhausted Engram's 2,000 included minutes and attributed $93.07 gross to 902 September runs with no product result; macOS was about 10.33x the Linux rate. Do not create a no-op/amended commit or repeat remote work simply to probe an unavailable external service.
