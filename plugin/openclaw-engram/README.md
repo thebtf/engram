@@ -213,10 +213,18 @@ reopen and close require the current `expected_revision`. On a conflict or an
 unconfirmed outcome, preserve the draft and reconcile explicitly; the adapter does
 not blindly retry mutations. Metadata and labels are data, not authorization.
 
+For issue writes, the adapter reports `client: "openclaw"` and the host's
+nonempty conversation `sessionId` as `session_id`. If the host supplies no
+session ID, it is omitted; `sessionKey` and project identity are not substitutes.
+An explicitly supplied `created_by_session` remains separate. These body fields
+are reported provenance, not authentication or authorization.
+
 Issue detail uses independent paged comments and history, with explicit continuation
 offsets. List paging is live rather than a snapshot: retain filters and de-duplicate
 IDs while browsing. Explicitly filtered list and get can read without a current
 project; mutations and the default inbox require verified project identity.
+Optional `source_session` and `participant_session` list filters are explicit;
+the adapter does not default them to the current conversation.
 
 All explicit writers, file migration and file synchronization use the canonical
 `POST /api/memories`. The retired observations import endpoint is not retried or

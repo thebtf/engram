@@ -318,6 +318,7 @@ export const IssueCreateRequestSchema = z.object({
  owner_label: z.string().min(1).nullable().optional(), recipient_label: z.string().min(1).nullable().optional(),
  request_key: IssueRequestKeySchema.optional(), expected_actor: IssueExpectedActorSchema.optional(), target_project: z.string(),
  source_project: z.string().optional(), source_agent: z.string().optional(), created_by_session: z.string().optional(),
+ session_id: z.string().min(1).optional(), client: z.string().optional(),
 });
 export type CreateIssueRequest = z.infer<typeof IssueCreateRequestSchema>;
 
@@ -326,7 +327,7 @@ export const IssueUpdateRequestSchema = z.object({
  priority: IssuePrioritySchema.optional(), type: IssueTypeSchema.optional(), labels: StringArraySchema.optional(),
  metadata: IssueWriteMetadataSchema.optional(), owner_label: z.string().min(1).nullable().optional(), recipient_label: z.string().min(1).nullable().optional(),
  status: IssueStatusSchema.optional(), comment: z.string().min(1).optional(), comment_metadata: IssueWriteMetadataSchema.optional(),
- source_project: z.string().optional(), source_agent: z.string().optional(),
+ source_project: z.string().optional(), source_agent: z.string().optional(), session_id: z.string().min(1).optional(), client: z.string().optional(),
 }).superRefine((value, ctx) => {
  const material = value.title !== undefined || value.body !== undefined || value.priority !== undefined || value.type !== undefined ||
   value.labels !== undefined || value.metadata !== undefined || value.owner_label !== undefined || value.recipient_label !== undefined || value.status !== undefined;
@@ -340,6 +341,7 @@ export const IssueOffsetSchema = z.number().int().nonnegative();
 export const IssuePageLimitSchema = IntegerSchema.positive().max(200);
 export const IssueListRequestSchema = z.object({
  project: z.string().optional(), source_project: z.string().optional(), source_agent: z.string().optional(), status: z.string().optional(),
+ source_session: z.string().optional(), participant_session: z.string().optional(),
  type: IssueTypeSchema.optional(), q: z.string().optional(), owner_label: z.string().optional(), recipient_label: z.string().optional(),
  resolved_since: z.string().optional(), limit: IssuePageLimitSchema.default(20), offset: IssueOffsetSchema.default(0),
 });

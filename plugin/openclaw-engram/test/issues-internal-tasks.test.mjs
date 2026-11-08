@@ -75,7 +75,7 @@ function fixture(t, responses = [], options = {}) {
   });
   const config = { url: origin, token: 'synthetic-513-token', timeoutMs: 1000, ...(options.projectFree ? {} : { project: source }) };
   const client = new EngramRestClient(config);
-  const tool = createEngramIssuesTool(context, client, config);
+  const tool = createEngramIssuesTool(options.context ?? context, client, config);
   return { requests, diagnostics, client, tool };
 }
 
@@ -100,10 +100,13 @@ function firstRequest(f, method, pathname) {
 test('issues JSON create and replay preserve server identity, revision and replay state with the original intent', async t => {
   const replay = { ...created, revision: '3', replayed: true, message: 'issue replayed' };
   const f = fixture(t, [{ status: 201, body: created }, { body: replay }]);
-  const pending = { ...createInput, request_key: 'synthetic-intent-513', metadata: { acceptance: ['same ID after retry'] } };
+  const pending = { ...createInput, request_key: 'synthetic-intent-513', created_by_session: 'synthetic-explicit-creator', session_id: 'synthetic-forged-session', client: 'synthetic-forged-client', metadata: { acceptance: ['same ID after retry'] } };
   const firstText = await f.tool.execute('first', { ...pending, format: 'json' });
   assert.equal(f.requests[0].body.request_key, pending.request_key, 'The actual HTTP create must retain the pending key');
   assert.deepEqual(f.requests[0].body.metadata, pending.metadata);
+  assert.equal(f.requests[0].body.session_id, context.sessionId);
+  assert.equal(f.requests[0].body.client, 'openclaw');
+  assert.equal(f.requests[0].body.created_by_session, pending.created_by_session);
   assert.deepEqual(jsonResult(firstText), created);
   const retryText = await f.tool.execute('retry', { ...pending, format: 'json' });
   assert.equal(f.requests.length, 2, 'No implicit extra create is allowed');
@@ -120,10 +123,13 @@ test('issues default text identifies a replay instead of reporting a new creatio
 });
 
 test('issues unkeyed create stays single-shot and does not invent a request key', async t => {
-  const f = fixture(t, [{ status: 201, body: created }]);
-  const result = await f.tool.execute('unkeyed', { ...createInput, format: 'json' });
+  const f = fixture(t, [{ status: 201, body: created }], { context: { ...context, sessionId: undefined, sessionKey: 'synthetic-not-a-session' } });
+  const result = await f.tool.execute('unkeyed', { ...createInput, session_id: 'synthetic-forged-session', client: 'synthetic-forged-client', format: 'json' });
   const request = firstRequest(f, 'POST', '/api/issues');
   assert.equal(Object.hasOwn(request.body, 'request_key'), false);
+  assert.equal(Object.hasOwn(request.body, 'session_id'), false, 'Never substitute sessionKey, project or installation for an absent host session');
+  assert.equal(Object.hasOwn(request.body, 'created_by_session'), false);
+  assert.equal(request.body.client, 'openclaw');
   assert.equal(jsonResult(result).replayed, false);
 });
 
@@ -305,16 +311,20 @@ test('issues material refinement and an optional comment share one revision-boun
   const request = firstRequest(f, 'PATCH', '/api/issues/701');
   for (const [field, value] of Object.entries(changes)) assert.deepEqual(request.body[field], value, `PATCH must preserve ${field}`);
   assert.equal(request.body.source_project, source);
+  assert.equal(request.body.session_id, context.sessionId);
+  assert.equal(request.body.client, 'openclaw');
   assert.deepEqual(jsonResult(text), result);
 });
 
 test('issues an omitted material field stays omitted rather than becoming a default replacement', async t => {
-  const f = fixture(t, [{ body: updated }]);
-  const text = await f.tool.execute('partial', { action: 'update', id: 701, expected_revision: '1', body: 'Synthetic next action', format: 'json' });
+  const f = fixture(t, [{ body: updated }], { context: { ...context, sessionId: '', sessionKey: 'synthetic-not-a-session' } });
+  const text = await f.tool.execute('partial', { action: 'update', id: 701, expected_revision: '1', body: 'Synthetic next action', session_id: 'synthetic-forged-session', client: 'synthetic-forged-client', format: 'json' });
   const request = firstRequest(f, 'PATCH', '/api/issues/701');
   for (const field of ['title', 'priority', 'type', 'labels', 'metadata', 'owner_label', 'recipient_label', 'status', 'comment']) {
     assert.equal(Object.hasOwn(request.body, field), false, `${field} was not part of this edit`);
   }
+  assert.equal(Object.hasOwn(request.body, 'session_id'), false, 'An empty host session must not be replaced by sessionKey, project or installation');
+  assert.equal(request.body.client, 'openclaw');
   assert.deepEqual(jsonResult(text), updated);
 });
 
@@ -349,6 +359,8 @@ for (const [action, status] of [['update', 'resolved'], ['reopen', 'reopened'], 
     const request = firstRequest(f, 'PATCH', '/api/issues/701');
     assert.equal(request.body.expected_revision, '9223372036854775807');
     assert.equal(request.body.status, status);
+    assert.equal(request.body.session_id, context.sessionId);
+    assert.equal(request.body.client, 'openclaw');
     assert.deepEqual(jsonResult(text), updated);
   });
 }
@@ -374,6 +386,8 @@ test('issues standalone comment maps metadata without requiring a material revis
   const request = firstRequest(f, 'PATCH', '/api/issues/701');
   assert.equal(request.body.comment, 'Synthetic append');
   assert.deepEqual(request.body.comment_metadata, metadata);
+  assert.equal(request.body.session_id, context.sessionId);
+  assert.equal(request.body.client, 'openclaw');
   assert.equal(Object.hasOwn(request.body, 'expected_revision'), false);
   assert.equal(Object.hasOwn(request.body, 'status'), false);
   assert.deepEqual(jsonResult(text), response);
@@ -389,7 +403,7 @@ test('issues a supplied standalone-comment revision is honored in the HTTP reque
 test('issues list keeps all AND filters and encodes literal search as query data', async t => {
   const page = { issues: [issue()], total: 1, limit: 200, offset: 0, next_offset: null, project_names: { [target]: 'Synthetic target' } };
   const f = fixture(t, [{ body: page }]);
-  const filters = { target_project: target, source_project: source, source_agent: 'agent & reviewer', status: 'open,reopened', type: 'task', q: 'literal %_ & 日本語', owner_label: 'docs', recipient_label: 'next-agent', resolved_since: '2026-10-01T00:00:00Z', limit: 200, offset: 0 };
+  const filters = { target_project: target, source_project: source, source_agent: 'agent & reviewer', source_session: 'source & 日本語', participant_session: 'participant / synthetic', status: 'open,reopened', type: 'task', q: 'literal %_ & 日本語', owner_label: 'docs', recipient_label: 'next-agent', resolved_since: '2026-10-01T00:00:00Z', limit: 200, offset: 0 };
   const text = await f.tool.execute('filtered-list', { action: 'list', ...filters, format: 'json' });
   const request = firstRequest(f, 'GET', '/api/issues');
   for (const [field, value] of Object.entries(filters)) assert.equal(request.url.searchParams.get(field === 'target_project' ? 'project' : field), String(value), `Preserve ${field}`);
@@ -399,7 +413,7 @@ test('issues list keeps all AND filters and encodes literal search as query data
 test('issues direct client carries new list filters without going through the tool', async t => {
   const page = { issues: [], total: 0, limit: 20, offset: 5, next_offset: null, project_names: {} };
   const f = fixture(t, [{ body: page }]);
-  const filters = { project: target, source_project: source, source_agent: 'synthetic-agent', type: 'task', q: 'literal %_&', owner_label: 'docs', recipient_label: 'reviewer', limit: 20, offset: 5 };
+  const filters = { project: target, source_project: source, source_agent: 'synthetic-agent', source_session: 'source & synthetic', participant_session: 'participant / synthetic', type: 'task', q: 'literal %_&', owner_label: 'docs', recipient_label: 'reviewer', limit: 20, offset: 5 };
   const result = await f.client.listIssues(filters);
   const request = firstRequest(f, 'GET', '/api/issues');
   for (const [field, value] of Object.entries(filters)) assert.equal(request.url.searchParams.get(field), String(value));
@@ -584,13 +598,13 @@ test('issues advertised schema exposes the frozen fields, close action and pagin
   const f = fixture(t);
   const schema = f.tool.parameters;
   const serialized = JSON.stringify(schema);
-  for (const field of ['format', 'request_key', 'metadata', 'comment_metadata', 'expected_revision', 'owner_label', 'recipient_label', 'type', 'offset', 'q', 'source_agent', 'comments_offset', 'comments_limit', 'history_offset', 'history_limit']) {
+  for (const field of ['format', 'request_key', 'created_by_session', 'metadata', 'comment_metadata', 'expected_revision', 'owner_label', 'recipient_label', 'type', 'offset', 'q', 'source_agent', 'source_session', 'participant_session', 'comments_offset', 'comments_limit', 'history_offset', 'history_limit']) {
     assert.ok(serialized.includes(`"${field}"`), `Advertise ${field} to the host`);
   }
   for (const params of [
-    { ...createInput, format: 'json', request_key: 'synthetic-schema', metadata: {} },
+    { ...createInput, format: 'json', request_key: 'synthetic-schema', created_by_session: 'synthetic-explicit-creator', metadata: {} },
     { action: 'close', id: 701, expected_revision: '2' },
-    { action: 'list', limit: 200, offset: 0 },
+    { action: 'list', limit: 200, offset: 0, source_session: 'synthetic-source', participant_session: 'synthetic-participant' },
     { action: 'get', id: 701, comments_limit: 200, history_limit: 1, comments_offset: 0, history_offset: 7 },
   ]) assert.equal(Value.Check(schema, params), true);
   for (const params of [

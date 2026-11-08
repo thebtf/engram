@@ -75,10 +75,13 @@ const issueParameters = Type.Object({
  target_project: Type.Optional(Type.String({ description: 'Explicit canonical target/filter; omission uses the existing verified source default' })),
  source_project: Type.Optional(Type.String({ description: 'Source-project list filter only; never overrides write identity' })),
  source_agent: Type.Optional(Type.String({ description: 'Exact source-agent list filter, not a principal' })),
+ source_session: Type.Optional(Type.String({ description: 'Explicit source-session list filter; reported provenance, not authorization' })),
+ participant_session: Type.Optional(Type.String({ description: 'Explicit participant-session list filter; reported provenance, not authorization' })),
  status: Type.Optional(Type.String({ description: 'Comma-separated list filter or existing authorized mutation state' })),
  labels: Type.Optional(Type.Array(Type.String())), metadata: Type.Optional(metadataParameter),
  owner_label: Type.Optional(nullableLabel), recipient_label: Type.Optional(nullableLabel),
  request_key: Type.Optional(Type.String({ minLength: 1, description: 'Opaque valid UTF-8, <=512 bytes, no NUL or lone surrogate; retain with original pending intent on retry' })),
+ created_by_session: Type.Optional(Type.String({ description: 'Explicit reported creation provenance, not identity or authorization' })),
  expected_actor: Type.Optional(Type.Object({
   kind: Type.Union([Type.Literal('client'), Type.Literal('operator'), Type.Literal('unknown')]),
   reference: Type.Union([Type.String(), Type.Null()]),
@@ -242,7 +245,8 @@ export function createEngramIssuesTool(
 
   async execute(_toolCallId: string, params: Record<string, unknown>): Promise<string> {
    const json = params.format === 'json';
-   const parsed = IssueParamsSchema.safeParse(params);
+   const { session_id: _sessionId, client: _client, ...toolParams } = params;
+   const parsed = IssueParamsSchema.safeParse(toolParams);
    if (!parsed.success) {
     const failure = issueValidationFailure(parsed.error);
     if (json) return formatIssueFailure(failure, true);
@@ -256,6 +260,7 @@ export function createEngramIssuesTool(
     return json ? formatIssueFailure(unavailable, true) : `engram is currently unreachable — issues unavailable. ${formatIssueFailure(unavailable, false)}`;
    }
    const sourceAgent = ctx.agentId || 'openclaw';
+   const provenance = { client: 'openclaw', ...(ctx.sessionId ? { session_id: ctx.sessionId } : {}) };
    const projectFreeRead = data.action === 'get' || (data.action === 'list' && Boolean(data.target_project || data.source_project));
    let project = '';
    if (!projectFreeRead) {
@@ -270,9 +275,10 @@ export function createEngramIssuesTool(
 
    switch (data.action) {
     case 'create': {
-     const { title, body, priority, target_project, labels, type, metadata, owner_label, recipient_label, request_key, expected_actor } = data;
+     const { title, body, priority, target_project, labels, type, metadata, owner_label, recipient_label, request_key, expected_actor, created_by_session } = data;
      const resp = await client.createIssue({
       title, body, priority, source_project: project, target_project: target_project ?? project, source_agent: sourceAgent, labels,
+      ...provenance, ...(created_by_session !== undefined ? { created_by_session } : {}),
       ...(type !== undefined ? { type } : {}), ...(metadata !== undefined ? { metadata } : {}),
       ...(owner_label !== undefined ? { owner_label } : {}), ...(recipient_label !== undefined ? { recipient_label } : {}),
       ...(request_key !== undefined ? { request_key } : {}), ...(expected_actor !== undefined ? { expected_actor } : {}),
@@ -314,7 +320,7 @@ export function createEngramIssuesTool(
     }
     case 'update': {
      const { action: _action, format: _format, id, source_project: _source, source_agent: _agent, ...edits } = data;
-     const resp = await client.updateIssue(id, { ...edits, source_project: project, source_agent: sourceAgent });
+     const resp = await client.updateIssue(id, { ...edits, source_project: project, source_agent: sourceAgent, ...provenance });
      if (!resp) return formatIssueFailure(unavailable, json);
      if (isIssueError(resp)) return formatIssueFailure(resp, json);
      return json ? JSON.stringify(resp)
@@ -323,6 +329,7 @@ export function createEngramIssuesTool(
     case 'comment': {
      const body: UpdateIssueRequest = {
       comment: data.body, source_project: project, source_agent: sourceAgent,
+      ...provenance,
       ...(data.metadata !== undefined ? { comment_metadata: data.metadata } : {}),
       ...(data.expected_revision !== undefined ? { expected_revision: data.expected_revision } : {}),
      };
@@ -336,6 +343,7 @@ export function createEngramIssuesTool(
      const resp = await client.updateIssue(data.id, {
       status: data.action === 'reopen' ? 'reopened' : 'closed', expected_revision: data.expected_revision,
       comment: data.body ?? (data.action === 'reopen' ? 'Reopened' : 'Closed'), source_project: project, source_agent: sourceAgent,
+      ...provenance,
       ...(data.metadata !== undefined ? { metadata: data.metadata } : {}),
       ...(data.comment_metadata !== undefined ? { comment_metadata: data.comment_metadata } : {}),
      });
