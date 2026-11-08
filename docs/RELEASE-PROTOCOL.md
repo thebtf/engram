@@ -64,6 +64,7 @@ obligations remain binding.
 | Server / daemon | `internal/version/version.go` | annotated `vX.Y.Z` tag triggers `.github/workflows/release.yaml` | `git ls-remote --tags origin refs/tags/vX.Y.Z`; release workflow success |
 | Claude plugin | `plugin/engram/.claude-plugin/plugin.json` | included in repository tag / plugin package | JSON `version` equals tag without `v` |
 | Codex plugin | `plugin/engram/.codex-plugin/plugin.json` | included in repository tag / plugin package | JSON `version` equals tag without `v` |
+| OMP loaded hook | `plugin/engram/package.json` and `plugin/engram/.omp-plugin/plugin.json` | included in repository tag / plugin package | both JSON versions equal the policy and tag without `v`; the loaded hook binds the package version to the policy |
 | OpenClaw npm plugin | `plugin/openclaw-engram/package.json` + `openclaw.plugin.json` | merge to `main` triggers `.github/workflows/plugin-publish.yml` | both JSON versions match; local stable version is greater than `npm view openclaw-engram version`; publish workflow succeeds; registry serves the new version |
 | Changelog | `CHANGELOG.md` | release commit | top entry for `X.Y.Z` exists and names merged PRs |
 
@@ -182,6 +183,7 @@ Project default: `auto_private_patch_minor` for reviewed PRs and active-goal mil
 - `internal/version/version.go` stores the daemon/server version with `v` prefix.
 - `plugin/engram/.claude-plugin/plugin.json` stores the same version without `v`.
 - `plugin/engram/.codex-plugin/plugin.json` stores the same version without `v`.
+- `plugin/engram/package.json` stores the same version without `v`. Bump it for every release alongside the client manifests, before generating or checking the bootstrap policy: the OMP default hook factory imports this field and binds it to the policy. The release archive checker validates the package against the release version.
 - `plugin/engram/.omp-plugin/plugin.json`, root `.claude-plugin/plugin.json`, and root `.claude-plugin/marketplace.json` (`version` and `plugins[0].version`) use the same source package version without `v`. The root Claude marketplace descriptor is a source input; external marketplace sync follows publication. The root `.omp-plugin/marketplace.json` instead tracks the last published direct OMP release and advances only after publication.
 - `plugin/openclaw-engram/package.json`, `plugin/openclaw-engram/openclaw.plugin.json`, and the runtime plugin definition in `plugin/openclaw-engram/src/index.ts` use the same version as the main Engram release, without `v`; OpenClaw has no separate version line. Previously published versions remain historical releases.
 - Every OpenClaw source change that triggers the publish workflow must advance that package version beyond the registry version; equality is a failed release gate, not a no-op.

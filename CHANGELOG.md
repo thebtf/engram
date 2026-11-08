@@ -8,7 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - Display operator-web rules from the bare-array API. The unselected scope shows global rules only; a selected project includes its rules and global rules. Counts describe loaded rows, and invalid responses surface as errors.
+
+## [7.1.0] - 2026-11-07
+
+Source: PRs #656, #657, #664, #665, #666 and #667. This candidate includes the accepted own/self memory and linked-card work, bounded task-note search, and project-resolution recovery fixes. It does not claim complete Feature011 or Feature012 acceptance.
+
+- Permit an enrolled owner to archive a projectless self card through the existing transition API; preserve project membership checks, explicit-context refusals, revision history and active-search exclusion.
+
 - Display legacy Rules from the bare-array API. The unselected scope shows global rules only; a selected project includes its rules and global rules. Invalid responses surface as errors.
+
+## [7.0.28] - 2026-11-07
+
+The published `v7.0.28` source is `be74d290be0690024e9cea0db414165f0ef69bc8`. It retains validated bootstrap metadata for loaded OMP hooks when a package directory is retired, while continuing to verify policy and client bytes. It also corrects the Claude Code adapter guide. The source's original unclassified notes are preserved below; they are not a claim that later changes shipped in v7.0.28.
+
+## Historical unclassified notes
+
+These notes were carried under Unreleased across earlier release cuts. They are retained for provenance, not as a complete or precisely dated release allocation.
 
 - Keep `project resolve --check` client selection read-only: require a verified cached client and never acquire or quarantine it. Check the existing 15-second budget between local filesystem operations and pass the remaining time to the native process; a kernel-blocked filesystem call is not preempted by this budget, so the external limit depends on the invoking tool's deadline.
 
@@ -28,7 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Enforce current domain ownership policy on typed memory revisions: reject mode records a denial and returns 403 without revising; an audit failure leaves the card unchanged; warn mode permits the revision with its warning and audit status. Document the response in the generated API schema.
 
-- In auth-disabled mode, validate explicit credentials on the scoped typed-memory HTTP routes and accept an existing persisted admin browser session for principal enrollment and keycard issuance. Keep invalid credentials fail-closed and preserve synthetic identity on unrelated and unkeyed routes; disabled authentication does not provide privacy isolation. Disabled-mode gRPC behavior is unchanged.
+- In auth-disabled mode, validate explicit credentials on the scoped typed-memory HTTP routes, including own-card search and lifecycle transitions, and accept an existing persisted admin browser session for principal enrollment and keycard issuance. Keep invalid credentials fail-closed and preserve synthetic identity on unrelated and unkeyed routes; disabled authentication does not provide privacy isolation. Disabled-mode gRPC behavior is unchanged.
 
 - Apply builtin and configured redaction to REST memory creates and revisions, including newly captured prior bodies; refuse fully redacted content without advancing history. Preserve nonempty whitespace-only input and leave existing history unchanged. Invalidate stale revision vectors and attempt re-embedding asynchronously when configured, without claiming provider-error retry. Prevent invalid backfill vectors from spinning; preserve scoped private-query and telemetry filtering, and exclude memory context metadata from consolidation selectors while retaining project membership.
 

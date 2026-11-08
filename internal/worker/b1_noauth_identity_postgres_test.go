@@ -38,6 +38,7 @@ func TestB1AuthDisabledVerifiedIdentityPostgres(t *testing.T) {
 	card := f.publicKeycard(t, identity)
 	baseline := f.create(t, card, ownCardContextPayload("synthetic authenticated baseline"))
 	path := "/api/memories/" + strconv.FormatInt(baseline.ID, 10)
+	foreign := f.registered(t, "disabled-foreign")
 	revoked := f.publicKeycard(t, identity)
 	require.NoError(t, f.tokens.Revoke(t.Context(), revoked.id))
 	expired := f.publicKeycard(t, identity)
@@ -79,7 +80,6 @@ func TestB1AuthDisabledVerifiedIdentityPostgres(t *testing.T) {
 
 	t.Run("excluded_routes_keep_synthetic_identity", func(t *testing.T) {
 		routes := []struct{ method, path string }{
-			{http.MethodGet, "/api/memories/principal"},
 			{http.MethodPost, "/api/memories/suppress"},
 			{http.MethodGet, path + "/audit"},
 			{http.MethodPatch, path + "/revisions"},
@@ -159,6 +159,31 @@ func TestB1AuthDisabledVerifiedIdentityPostgres(t *testing.T) {
 		updated := ownCardContextDecode(t, f.call(t, http.MethodPatch, selfPath, map[string]any{"version": created.Version, "content": "synthetic revised"}, card.caller()), http.StatusOK)
 		require.Equal(t, created.Version+1, updated.Version)
 		require.Equal(t, http.StatusOK, f.call(t, http.MethodGet, selfPath+"/revisions", nil, card.caller()).Code)
+	})
+	t.Run("self_search_and_archive", func(t *testing.T) {
+		created := f.create(t, card, ownCardContextPayload("disabledpostgresselfmarker"))
+		transition := "/api/memories/" + strconv.FormatInt(created.ID, 10) + "/transition"
+		search := "/api/memories/principal?q=disabledpostgresselfmarker"
+		found := f.call(t, http.MethodGet, search, nil, card.caller())
+		require.Equal(t, http.StatusOK, found.Code)
+		require.Contains(t, found.Body.String(), "disabledpostgresselfmarker")
+		for _, caller := range []ownCardContextCaller{foreign.caller(), {}, readonly.caller(), hap.caller()} {
+			denied := f.call(t, http.MethodPost, transition+"?context=self", map[string]any{"action": "archive"}, caller)
+			require.Contains(t, []int{http.StatusForbidden, http.StatusNotFound}, denied.Code)
+		}
+		for _, caller := range []ownCardContextCaller{{token: "invalid-synthetic-key"}, revoked.caller(), expired.caller()} {
+			require.Equal(t, http.StatusUnauthorized, f.call(t, http.MethodPost, transition, map[string]any{"action": "archive"}, caller).Code)
+			require.Equal(t, http.StatusUnauthorized, f.call(t, http.MethodGet, search, nil, caller).Code)
+		}
+		require.Equal(t, http.StatusForbidden, f.call(t, http.MethodGet, search, nil, ownCardContextCaller{}).Code)
+		require.Equal(t, http.StatusForbidden, f.call(t, http.MethodGet, search, nil, hap.caller()).Code)
+		require.Equal(t, http.StatusOK, f.call(t, http.MethodGet, search, nil, readonly.caller()).Code)
+		archived := f.call(t, http.MethodPost, transition, map[string]any{"action": "archive"}, card.caller())
+		require.Equal(t, http.StatusOK, archived.Code, archived.Body.String())
+		require.Contains(t, archived.Body.String(), `"status":"archived"`)
+		after := f.call(t, http.MethodGet, search, nil, card.caller())
+		require.Equal(t, http.StatusOK, after.Code)
+		require.NotContains(t, after.Body.String(), "disabledpostgresselfmarker")
 	})
 	t.Run("unkeyed_preserves_synthetic_behavior", func(t *testing.T) {
 		before := f.state(t)

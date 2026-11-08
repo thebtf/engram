@@ -253,6 +253,38 @@ func memoryInContext(ctx context.Context, db *gormlib.DB, id int64, owning model
 	return memory, nil
 }
 
+func (s *MemoryStore) ArchiveSelfInContext(ctx context.Context, id int64, owning models.MemoryContext, caller scope.KeycardContext) (*models.Memory, error) {
+	if owning.Kind != models.MemoryContextSelf || owning.Principal == "" || owning.Principal != caller.Principal || owning.PrincipalKind != caller.PrincipalKind {
+		return nil, gormlib.ErrRecordNotFound
+	}
+	var result *models.Memory
+	err := s.db.WithContext(ctx).Transaction(func(tx *gormlib.DB) error {
+		current, err := memoryInContext(ctx, tx, id, owning, "", caller, true)
+		if err != nil {
+			return err
+		}
+		if current.OwnerPrincipal != caller.Principal || current.OwnerPrincipalKind != caller.PrincipalKind || !scope.ResolveMemoryManage(caller, current) {
+			return gormlib.ErrRecordNotFound
+		}
+		if current.Status != "active" && current.Status != "flagged" {
+			return ErrMemoryVersionConflict
+		}
+		update := tx.WithContext(ctx).Model(&Memory{}).Where("id = ? AND deleted_at IS NULL AND version = ? AND status = ?", id, current.Version, current.Status).
+			Updates(map[string]any{"status": "archived", "updated_at": time.Now().UTC(), "version": gormlib.Expr("version + 1")})
+		if update.Error != nil {
+			return update.Error
+		}
+		if update.RowsAffected != 1 {
+			return ErrMemoryVersionConflict
+		}
+		current.Status = "archived"
+		current.Version++
+		result = current
+		return nil
+	})
+	return result, err
+}
+
 func memoryCommandDigest(mem *models.Memory) (string, error) {
 	row := memoryRowForCreate(mem, time.Time{}, false)
 	copyPrivacyFields(row, mem)
