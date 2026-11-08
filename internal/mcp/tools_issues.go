@@ -20,8 +20,9 @@ import (
 // validateIssueActionParams() with clear error messages showing the full signature.
 func issuesToolSchema() map[string]any {
 	schema := map[string]any{
-		"type":     "object",
-		"required": []string{"action"},
+		"x-engram-caller-context": "issues/v1",
+		"type":                    "object",
+		"required":                []string{"action"},
 		"properties": map[string]any{
 			"action": map[string]any{
 				"type":        "string",
