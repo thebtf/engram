@@ -179,6 +179,42 @@ const deleteMutation = useMutation({
   },
 })
 
+function discardQuarantinedDrafts() {
+  if (!draftQuarantined.value || readDenied.value || !issue.value || issueQuery.isFetching.value || issueQuery.isError.value
+    || issueMutation.isPending.value || deleteMutation.isPending.value || readingCurrent.value) return
+  editing.value = false
+  editTitle.value = ''
+  editBody.value = ''
+  editPriority.value = 'medium'
+  editType.value = 'task'
+  editLabels.value = '[]'
+  editMetadata.value = '{}'
+  editOwner.value = ''
+  editRecipient.value = ''
+  editBase.value = null
+  editSource.value = ''
+  editComment.value = ''
+  editCommentMetadata.value = '{}'
+  statusComment.value = ''
+  statusCommentMetadata.value = '{}'
+  mutationSession.value = ''
+  newComment.value = ''
+  commentMetadata.value = '{}'
+  commentNeedsReview.value = false
+  commentRead.value = false
+  rejectReason.value = ''
+  showRejectPanel.value = false
+  rejectBase.value = null
+  rejectSource.value = ''
+  showDeleteConfirm.value = false
+  losingDraft.value = null
+  reconciliationRead.value = false
+  reconciledStatus.value = null
+  actionError.value = ''
+  actionMessage.value = ''
+  draftQuarantined.value = false
+}
+
 function statusBadgeClass(status: string): string {
   switch (status) {
     case 'open':
@@ -511,6 +547,12 @@ function confirmDelete() {
         </template>
       </div>
       <div v-if="issue" class="space-y-5">
+        <div v-if="draftQuarantined" class="surface-panel-warm space-y-3 p-4" role="status">
+          <p>{{ t('issueFlow.quarantineWarning') }}</p>
+          <button class="rounded border px-3 py-2 text-sm"
+            :disabled="issueQuery.isFetching.value || issueQuery.isError.value || issueMutation.isPending.value || deleteMutation.isPending.value || readingCurrent"
+            @click="discardQuarantinedDrafts">{{ t('issueFlow.discardQuarantined') }}</button>
+        </div>
         <NuxtLink :to="{ path: '/issues', query: route.query }"
           class="inline-flex text-sm font-semibold text-[var(--accent)] hover:underline">
           ← {{ t('issueFlow.backIssues') }}
@@ -702,18 +744,18 @@ function confirmDelete() {
             </div>
 
             <label class="block"><span class="mb-1 block text-xs text-[var(--muted)]">{{ t('issueFlow.labelsJson')
-            }}</span><textarea v-model="editLabels" rows="2"
+                }}</span><textarea v-model="editLabels" rows="2"
                 class="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm" /></label>
             <label class="block"><span class="mb-1 block text-xs text-[var(--muted)]">{{ t('issueFlow.metadataJson')
-            }}</span><textarea v-model="editMetadata" rows="5"
+                }}</span><textarea v-model="editMetadata" rows="5"
                 class="mono-data w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm" /><span
                 class="text-xs text-[var(--muted)]">{{ t('issueFlow.editMetadataHelp') }}</span></label>
             <div class="grid gap-3 sm:grid-cols-2">
               <label class="block"><span class="mb-1 block text-xs text-[var(--muted)]">{{ t('issueFlow.ownerLabel')
-              }}</span><input v-model="editOwner"
+                  }}</span><input v-model="editOwner"
                   class="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm" /></label>
               <label class="block"><span class="mb-1 block text-xs text-[var(--muted)]">{{ t('issueFlow.recipientLabel')
-              }}</span><input v-model="editRecipient"
+                  }}</span><input v-model="editRecipient"
                   class="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm" /></label>
             </div>
             <p class="text-xs text-[var(--muted)]">{{ t('issueFlow.editOwnerHelp') }}</p>

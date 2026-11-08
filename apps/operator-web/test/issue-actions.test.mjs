@@ -574,6 +574,75 @@ async function fillCreate(page) {
 }
 function createRequest(fields = {}) { return { title: 'Synthetic pending intent', body: 'Synthetic pending description', source_project: sourceProject, target_project: targetProject, ...fields } }
 
+test('after denial and a fresh authorized read, explicitly discard quarantined local state and start fresh', async t => {
+  const f = await fixture(t)
+  const page = await f.mount('[id]')
+  const discard = /discard.*(?:draft|local)|(?:start|begin).*fresh/i
+  const bodyField = /^(?!.*(?:metadata|метадан|status|статус|edit|редакт)).*(?:comment|коммент)/i
+  const metadataField = /^(?!.*(?:status|статус|edit|редакт))(?=.*(?:comment|коммент))(?=.*(?:metadata|метадан))/i
+  await page.field('Change session (optional)', 'private-old-session')
+  await page.field('Status outcome comment (optional)', 'private-old-status')
+  await page.field(bodyField, 'private-old-comment')
+  await page.field(metadataField, '{"private-old-metadata":true}')
+  await page.click('Edit')
+  await page.field('Title', 'private-old-title')
+  f.setResponder(call => call.method === 'GET' && call.url.pathname === '/api/issues/701'
+    ? json({ error: { code: 'FORBIDDEN', message: 'Denied' } }, 403) : undefined)
+  f.setAuthState({ phase: 'authenticated', user: { id: 'other-user' }, authDisabled: false })
+  await f.settle()
+  assert.doesNotMatch(rawText(page.tree()), /private-old-/)
+  assert.equal(page.hasEnabledAction(discard), false, 'discard must not be offered while the read is denied')
+  assert.equal(f.writes().length, 0)
+
+  f.setResponder(() => undefined)
+  f.setDetail(detail({ issue: row({ title: 'Fresh authorized issue' }) }))
+  await page.click('Read current issue again')
+  assert.match(page.text(), /Fresh authorized issue/)
+  assert.doesNotMatch(rawText(page.tree()), /private-old-/)
+  assert.ok(page.hasEnabledAction(discard), 'a fresh authorized read must offer explicit discard')
+  await page.click(discard)
+  assert.equal(f.writes().length, 0, 'discard must not submit or replay anything')
+  assert.doesNotMatch(rawText(page.tree()), /private-old-/)
+  assert.equal(page.fieldValue('Change session (optional)'), '')
+  assert.equal(page.fieldValue('Status outcome comment (optional)'), '')
+  assert.equal(page.fieldValue(bodyField), '')
+  assert.equal(page.fieldValue(metadataField), '{}')
+  await page.click('Edit')
+  assert.equal(page.fieldValue('Title'), 'Fresh authorized issue')
+  assert.equal(f.writes().length, 0, 'starting a fresh edit must not submit the old draft')
+})
+
+test('quarantined state cannot be discarded while its mutation is pending', async t => {
+  const f = await fixture(t)
+  const page = await f.mount('[id]')
+  const discard = /discard.*(?:draft|local)|(?:start|begin).*fresh/i
+  let release, started
+  const dispatched = new Promise(resolve => { started = resolve })
+  f.setResponder(call => {
+    if (call.method === 'PATCH') {
+      started()
+      return new Promise(resolve => { release = resolve })
+    }
+  })
+  await page.click('Edit')
+  await page.field('Title', 'private-pending-title')
+  const saving = page.click('Save edit')
+  try {
+    await dispatched
+    f.setDetail(detail({ issue: row({ title: 'Fresh authorized issue' }) }))
+    f.setAuthState({ phase: 'authenticated', user: { id: 'other-user' }, authDisabled: false })
+    await new Promise(setImmediate)
+    await vue.nextTick()
+    assert.match(page.text(), /Fresh authorized issue/)
+    assert.doesNotMatch(rawText(page.tree()), /private-pending-title/)
+    assert.equal(page.hasEnabledAction(discard), false, 'discard is unavailable until the in-flight mutation settles')
+    assert.equal(f.writes().length, 1, 'the auth transition must not replay the mutation')
+  } finally {
+    release(json({ error: { code: 'REVISION_CONFLICT', message: 'Conflict' } }, 409))
+    await saving
+  }
+})
+
 test('initial issue read failure offers explicit retry and displays only the fresh result', async t => {
   const f = await fixture(t, { sharedCache: true })
   f.setDetail(detail({ issue: row({ title: 'Stale issue detail' }) }))

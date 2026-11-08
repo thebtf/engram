@@ -138,6 +138,8 @@ export interface UiCatalog {
     readReconcile: string
     useRevision: string
     discardDraft: string
+    quarantineWarning: string
+    discardQuarantined: string
     submitStatus: string
     commentUnknown: string
     readComments: string
@@ -815,6 +817,8 @@ export const messages: Record<SupportedLocale, UiCatalog> = {
       readReconcile: "Загрузить текущую задачу для сверки",
       useRevision: "Использовать загруженную ревизию для сохранённого черновика (без отправки)",
       discardDraft: "Принять загруженное состояние и отбросить сохранённое действие",
+      quarantineWarning: "После смены контекста локальные черновики скрыты. Их удаление затрагивает только локальное состояние; предыдущее действие могло быть выполнено на сервере. Повтора не будет.",
+      discardQuarantined: "Отбросить локальные черновики и начать заново",
       submitStatus: "Отправить сверенное изменение статуса",
       commentUnknown: "Результат отправки комментария неизвестен. Черновик сохранён. Комментарии только добавляются, дубликаты не удаляются: проверьте страницы комментариев перед повторной отправкой.",
       readComments: "Загрузить текущие комментарии для сверки",
@@ -1481,6 +1485,8 @@ export const messages: Record<SupportedLocale, UiCatalog> = {
       readReconcile: "Read current issue to reconcile",
       useRevision: "Use read revision for retained draft (do not submit)",
       discardDraft: "Accept current read and discard retained action",
+      quarantineWarning: "Local drafts are hidden after the context changed. Discarding removes them only here; an earlier action may already have completed on the server. Nothing will be replayed.",
+      discardQuarantined: "Discard local drafts and start fresh",
       submitStatus: "Submit reconciled status action",
       commentUnknown: "Comment outcome unknown. The draft is retained. Comments are append-only, not deduplicated: inspect comment pages before another send.",
       readComments: "Read current comments to reconcile",
@@ -2148,6 +2154,8 @@ export const issueFlowZh: UiCatalog['issueFlow'] = {
   "readReconcile": "读取当前问题以核对",
   "useRevision": "将读取的修订版本用于保留草稿（不提交）",
   "discardDraft": "接受当前读取结果并丢弃保留的操作",
+  "quarantineWarning": "上下文更改后，本地草稿已隐藏。丢弃只会清除本地草稿；先前的操作可能已在服务器上完成。不会重放任何操作。",
+  "discardQuarantined": "丢弃本地草稿并重新开始",
   "submitStatus": "提交已核对的状态操作",
   "commentUnknown": "评论结果未知。草稿已保留。评论只能追加且不去重；再次发送前请检查评论页面。",
   "readComments": "读取当前评论以核对",
