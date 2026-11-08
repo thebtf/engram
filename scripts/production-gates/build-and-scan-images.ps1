@@ -2006,7 +2006,7 @@ try {
     # later runtime exercises unpack the locally stored images while release provenance stays immutable.
     Invoke-LoggedNative -File 'docker' -Arguments @(
         'buildx', 'build', '--pull', '--no-cache', '--provenance=false', '--output', 'type=docker,rewrite-timestamp=true,unpack=false', '--platform', $Platform,
-        '--target', 'server', '--build-arg', "VERSION=$buildVersion",
+        '--target', 'server', '--build-arg', "VERSION=$buildVersion", '--build-arg', "SOURCE_COMMIT=$sourceCommit",
         '--label', 'org.opencontainers.image.source=https://github.com/thebtf/engram',
         '--label', "org.opencontainers.image.revision=$sourceCommit",
         '--label', "org.opencontainers.image.version=$buildVersion",
@@ -2015,7 +2015,7 @@ try {
 
     Invoke-LoggedNative -File 'docker' -Arguments @(
         'buildx', 'build', '--pull', '--no-cache', '--provenance=false', '--output', 'type=docker,rewrite-timestamp=true,unpack=false', '--platform', $Platform,
-        '--target', 'operator-console', '--build-arg', "VERSION=$buildVersion",
+        '--target', 'operator-console', '--build-arg', "VERSION=$buildVersion", '--build-arg', "SOURCE_COMMIT=$sourceCommit",
         '--label', 'org.opencontainers.image.source=https://github.com/thebtf/engram',
         '--label', "org.opencontainers.image.revision=$sourceCommit",
         '--label', "org.opencontainers.image.version=$buildVersion",
