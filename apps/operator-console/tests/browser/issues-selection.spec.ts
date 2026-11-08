@@ -18,6 +18,10 @@ const frozenSelection = {
 function issue(id: number) {
  return {
   id,
+  revision: '1',
+  metadata: {},
+  owner_label: null,
+  recipient_label: null,
   title: `matching issue ${id}`,
   body: '',
   status: 'open',
@@ -32,6 +36,14 @@ function issue(id: number) {
   created_at: '2026-09-16T12:00:00.000Z',
   updated_at: '2026-09-16T12:00:00.000Z',
   comment_count: 0,
+ }
+}
+
+function pagedIssueDetail(row: Record<string, unknown> | null) {
+ return {
+  issue: row, comments: [], history: [], comment_count: 0, history_count: 0,
+  comments_offset: 0, comments_limit: 50, comments_next_offset: null, comments_complete: true, comments_oversized: false,
+  history_offset: 0, history_limit: 50, history_next_offset: null, history_complete: true, history_oversized: false,
  }
 }
 
@@ -130,15 +142,18 @@ test('human issue create and scoped detail links retain source UUID and explicit
  let created: Record<string, unknown> | null = null
  let requested: Record<string, unknown> | null = null
  const detailProjects: Array<string | null> = []
+ await page.route('**/api/auth/me', route => route.fulfill({ json: { authenticated: false, auth_disabled: true, actor: { kind: 'operator', reference: 'operator:auth-disabled' }, user: { name: 'admin', initials: 'A', role: 'admin' } } }))
  await page.route('**/api/issues?**', route => route.fulfill({ json: { issues: created ? [created] : [], total: created ? 1 : 0 } }))
  await page.route('**/api/issues', async route => {
   requested = route.request().postDataJSON()
   created = { ...issue(99), title: 'Synthetic cross-project handoff', source_project: targetProject, target_project: sourceProject, source_project_id: targetProject, target_project_id: sourceProject, project_origin: { source_project: targetProject, target_project: sourceProject }, priority: 'high', type: 'bug', labels: ['operator-created'] }
-  await route.fulfill({ json: { id: 99, operation_state: 'completed' } })
+  await route.fulfill({ status: 201, json: { id: 99, revision: '1', replayed: false, message: 'issue created' } })
  })
  await page.route('**/api/issues/99**', route => {
-  detailProjects.push(new URL(route.request().url()).searchParams.get('project'))
-  return route.fulfill({ json: { issue: created, comments: [] } })
+  const params = new URL(route.request().url()).searchParams
+  expect(params.get('detail_mode')).toBe('paged')
+  detailProjects.push(params.get('project'))
+  return route.fulfill({ json: pagedIssueDetail(created) })
  })
  await page.goto(`/issues?project=${targetProject}`)
  await page.locator('.issue-create-strip button').click()
@@ -148,6 +163,8 @@ test('human issue create and scoped detail links retain source UUID and explicit
  await page.locator('.issue-create-modal .tbtn.primary').click()
  await expect(page.getByTestId('mutation-result')).toHaveAttribute('data-kind', 'committed_verified')
  expect(requested).toMatchObject({ source_project: targetProject, target_project: sourceProject, source_agent: 'human' })
+ expect(requested).toMatchObject({ expected_actor: { kind: 'operator', reference: 'operator:auth-disabled' } })
+ expect(requested).toEqual(expect.objectContaining({ request_key: expect.stringMatching(/^.+$/) }))
  await page.goto(`/issues/99?project=${targetProject}`)
  await expect(page.locator('.issues-page h1')).toContainText('99')
  await expect(page.locator('.issues-page')).toContainText('Synthetic cross-project handoff')
@@ -184,7 +201,10 @@ test('all-project issue browsing keeps detail readable but disables every issue 
   listScopes.push(new URL(route.request().url()).searchParams.get('project'))
   return route.fulfill({ json: { issues: [issue(7)], total: 1 } })
  })
- await page.route('**/api/issues/7**', route => route.fulfill({ json: { issue: issue(7), comments: [] } }))
+ await page.route('**/api/issues/7**', route => {
+  expect(new URL(route.request().url()).searchParams.get('detail_mode')).toBe('paged')
+  return route.fulfill({ json: pagedIssueDetail(issue(7)) })
+ })
  await page.route('**/api/issues/selection', route => route.fulfill({ json: { selection: { ...frozenSelection, target_count: 1 } } }))
  page.on('request', request => {
   if (request.method() !== 'GET' && /^\/api\/issues(?:\/(?:acknowledge|operations|selection(?:\/(?:current|page))?|7))?$/.test(new URL(request.url()).pathname)) mutations.push(request.method())
@@ -212,19 +232,21 @@ test('all-project issue browsing keeps detail readable but disables every issue 
  expect(mutations).toEqual([])
 })
 
-test('detail acknowledgement sends one atomic human-source payload and verifies server readback', async ({ page }) => {
+test('detail acknowledgement sends one revision-aware atomic human-source payload and verifies server readback', async ({ page }) => {
  let current = issue(7)
  const mutations: Array<{ method: string; path: string; body: unknown }> = []
  let detailReads = 0
  await page.route('**/api/issues?**', route => route.fulfill({ json: { issues: [current], total: 1 } }))
- await page.route('**/api/issues/7**', route => {
+ await page.route('**/api/issues/7**', async route => {
+  if (route.request().method() === 'PATCH') {
+   mutations.push({ method: route.request().method(), path: new URL(route.request().url()).pathname, body: route.request().postDataJSON() })
+   current = { ...current, status: 'acknowledged', revision: '2' }
+   return route.fulfill({ json: { id: 7, revision: '2', changed: true, comment_id: null, message: 'issue updated' } })
+  }
+  expect(route.request().method()).toBe('GET')
+  expect(new URL(route.request().url()).searchParams.get('detail_mode')).toBe('paged')
   detailReads++
-  return route.fulfill({ json: { issue: current, comments: [] } })
- })
- await page.route('**/api/issues/acknowledge', async route => {
-  mutations.push({ method: route.request().method(), path: new URL(route.request().url()).pathname, body: route.request().postDataJSON() })
-  current = { ...current, status: 'acknowledged' }
-  await route.fulfill({ json: { operation_state: 'completed' } })
+  return route.fulfill({ json: pagedIssueDetail(current) })
  })
  await page.goto(`/issues/7?project=${targetProject}`)
  await expect(page.locator('.issue-workspace')).toContainText('matching issue 7')
@@ -232,6 +254,6 @@ test('detail acknowledgement sends one atomic human-source payload and verifies 
  await page.locator('.issue-rail .issue-card').first().locator('.dactions .act').click()
  await expect(page.getByTestId('mutation-result')).toHaveAttribute('data-kind', 'committed_verified')
  await expect(page.locator('select[name="issue-status"]')).toHaveValue('acknowledged')
- expect(mutations).toEqual([{ method: 'POST', path: '/api/issues/acknowledge', body: { ids: [7], source_project: targetProject, source_agent: 'human' } }])
+ expect(mutations).toEqual([{ method: 'PATCH', path: '/api/issues/7', body: { expected_revision: '1', status: 'acknowledged', source_project: targetProject, source_agent: 'human' } }])
  expect(detailReads).toBeGreaterThan(before)
 })
