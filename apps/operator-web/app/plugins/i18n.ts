@@ -12,6 +12,13 @@ const messages = {
       refresh: 'Обновить',
       none: '—',
     },
+    rules: {
+      scope: 'Область правил',
+      globalOnly: 'Только глобальные правила',
+      projectAndGlobal: 'Правила выбранного проекта и глобальные правила',
+      loadedRows: 'загружено строк',
+      loadedRules: 'Загруженные правила',
+    },
   },
   en: {
     projectCatalog: sharedMessages.en.projectCatalog,
@@ -21,6 +28,13 @@ const messages = {
       allProjects: 'All projects',
       refresh: 'Refresh',
       none: '—',
+    },
+    rules: {
+      scope: 'Rules scope',
+      globalOnly: 'Global rules only',
+      projectAndGlobal: 'Selected project and global rules',
+      loadedRows: 'rows loaded',
+      loadedRules: 'Loaded rules',
     },
   },
 }
