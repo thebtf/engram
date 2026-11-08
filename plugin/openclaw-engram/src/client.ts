@@ -311,11 +311,38 @@ const IssueRequestKeySchema = z.string().superRefine((value, ctx) => {
   ctx.addIssue({ code: 'custom', message: 'request_key exceeds 512 UTF-8 bytes', params: { issueCode: 'PAYLOAD_TOO_LARGE' } });
  }
 });
+function resolvedSinceMillis(value: string): string | undefined {
+ if (/^[+-]?[0-9]+$/.test(value)) {
+  const negative = value.startsWith('-');
+  const digits = value.replace(/^[+-]?0*/, '') || '0';
+  const limit = negative ? '9223372036854775808' : '9223372036854775807';
+  return digits.length < limit.length || (digits.length === limit.length && digits <= limit) ? value : undefined;
+ }
+ const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,3})?(Z|[+-]\d{2}:\d{2})$/.exec(value);
+ if (!match) return undefined;
+ const [, year, month, day, hour, minute, second, zone] = match;
+ const y = Number(year), m = Number(month), d = Number(day);
+ const leap = y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0);
+ const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+ if (m < 1 || m > 12 || d < 1 || d > days[m - 1] || Number(hour) > 23 || Number(minute) > 59 || Number(second) > 59 ||
+  zone === '-00:00' || (zone !== 'Z' && (Number(zone.slice(1, 3)) > 23 || Number(zone.slice(4)) > 59))) return undefined;
+ const millis = Date.parse(value);
+ return Number.isFinite(millis) ? String(millis) : undefined;
+}
+const IssueResolvedSinceSchema = z.string().transform((value, ctx) => {
+ const millis = resolvedSinceMillis(value);
+ if (millis === undefined) {
+  ctx.addIssue({ code: 'custom', message: 'resolved_since must be a signed int64 epoch-millisecond string or a valid ISO timestamp with explicit offset and at most millisecond precision' });
+  return z.NEVER;
+ }
+ return millis;
+});
 
 export const IssueCreateRequestSchema = z.object({
  title: z.string().min(1), body: z.string().optional(), priority: IssuePrioritySchema.optional(), type: IssueTypeSchema.optional(),
  labels: StringArraySchema.optional(), metadata: IssueWriteMetadataSchema.optional(),
  owner_label: z.string().min(1).nullable().optional(), recipient_label: z.string().min(1).nullable().optional(),
+ target_session: z.string().min(1).optional(),
  request_key: IssueRequestKeySchema.optional(), expected_actor: IssueExpectedActorSchema.optional(), target_project: z.string(),
  source_project: z.string().optional(), source_agent: z.string().optional(), created_by_session: z.string().optional(),
  session_id: z.string().min(1).optional(), client: z.string().optional(),
@@ -326,11 +353,12 @@ export const IssueUpdateRequestSchema = z.object({
  expected_revision: IssueRevisionSchema.optional(), title: z.string().min(1).optional(), body: z.string().optional(),
  priority: IssuePrioritySchema.optional(), type: IssueTypeSchema.optional(), labels: StringArraySchema.optional(),
  metadata: IssueWriteMetadataSchema.optional(), owner_label: z.string().min(1).nullable().optional(), recipient_label: z.string().min(1).nullable().optional(),
+ target_session: z.string().min(1).nullable().optional(),
  status: IssueStatusSchema.optional(), comment: z.string().min(1).optional(), comment_metadata: IssueWriteMetadataSchema.optional(),
  source_project: z.string().optional(), source_agent: z.string().optional(), session_id: z.string().min(1).optional(), client: z.string().optional(),
 }).superRefine((value, ctx) => {
  const material = value.title !== undefined || value.body !== undefined || value.priority !== undefined || value.type !== undefined ||
-  value.labels !== undefined || value.metadata !== undefined || value.owner_label !== undefined || value.recipient_label !== undefined || value.status !== undefined;
+  value.labels !== undefined || value.metadata !== undefined || value.owner_label !== undefined || value.recipient_label !== undefined || value.target_session !== undefined || value.status !== undefined;
  if (material && value.expected_revision === undefined) ctx.addIssue({ code: 'custom', path: ['expected_revision'], message: 'Material mutation requires expected_revision', params: { issueCode: 'REVISION_REQUIRED' } });
  if (!material && value.comment === undefined) ctx.addIssue({ code: 'custom', message: 'At least one edit, state change or comment is required' });
  if (value.comment_metadata !== undefined && value.comment === undefined) ctx.addIssue({ code: 'custom', path: ['comment_metadata'], message: 'comment_metadata requires a comment' });
@@ -341,9 +369,9 @@ export const IssueOffsetSchema = z.number().int().nonnegative();
 export const IssuePageLimitSchema = IntegerSchema.positive().max(200);
 export const IssueListRequestSchema = z.object({
  project: z.string().optional(), source_project: z.string().optional(), source_agent: z.string().optional(), status: z.string().optional(),
- source_session: z.string().optional(), participant_session: z.string().optional(),
+ source_session: z.string().optional(), target_session: z.string().min(1).optional(), participant_session: z.string().optional(),
  type: IssueTypeSchema.optional(), q: z.string().optional(), owner_label: z.string().optional(), recipient_label: z.string().optional(),
- resolved_since: z.string().optional(), limit: IssuePageLimitSchema.default(20), offset: IssueOffsetSchema.default(0),
+ resolved_since: IssueResolvedSinceSchema.optional(), limit: IssuePageLimitSchema.default(20), offset: IssueOffsetSchema.default(0),
 });
 export type IssueListRequest = z.input<typeof IssueListRequestSchema>;
 export const IssueDetailRequestSchema = z.object({
@@ -396,7 +424,8 @@ const IssueErrorResponseSchema = z.object({ error: z.object({ code: z.string().r
 export function issueValidationFailure(error: z.ZodError): IssueErrorResponse {
  const classified = error.issues.find(issue => issue.code === 'custom' && typeof issue.params?.issueCode === 'string');
  const code = classified?.code === 'custom' ? String(classified.params?.issueCode) : 'INVALID_ARGUMENT';
- return { error: { code, message: code === 'REVISION_REQUIRED' ? 'Material mutation requires expected_revision' : code === 'PAYLOAD_TOO_LARGE' ? 'Issue input exceeds an admitted bound' : 'Invalid issue parameters' } };
+ const timestamp = error.issues.some(issue => issue.path[0] === 'resolved_since');
+ return { error: { code, message: code === 'REVISION_REQUIRED' ? 'Material mutation requires expected_revision' : code === 'PAYLOAD_TOO_LARGE' ? 'Issue input exceeds an admitted bound' : timestamp ? 'resolved_since must be a signed int64 epoch-millisecond string or a valid ISO timestamp with explicit offset and at most millisecond precision' : 'Invalid issue parameters' } };
 }
 
 export function isIssueError(value: unknown): value is IssueErrorResponse {

@@ -77,6 +77,7 @@ const issueParameters = Type.Object({
  source_agent: Type.Optional(Type.String({ description: 'Exact source-agent list filter, not a principal' })),
  source_session: Type.Optional(Type.String({ description: 'Explicit source-session list filter; reported provenance, not authorization' })),
  participant_session: Type.Optional(Type.String({ description: 'Explicit participant-session list filter; reported provenance, not authorization' })),
+ target_session: Type.Optional(Type.Union([Type.String({ minLength: 1 }), Type.Null()], { description: 'Explicit reported recipient: nonempty on create/list; update may set or clear with null and requires expected_revision. Not authorization.' })),
  status: Type.Optional(Type.String({ description: 'Comma-separated list filter or existing authorized mutation state' })),
  labels: Type.Optional(Type.Array(Type.String())), metadata: Type.Optional(metadataParameter),
  owner_label: Type.Optional(nullableLabel), recipient_label: Type.Optional(nullableLabel),
@@ -88,7 +89,7 @@ const issueParameters = Type.Object({
  }, { description: 'Optional keyed-create server precondition, not a credential/grant. Unknown/null comparison remains server-owned; no automatic auth-me fetch or rebinding.' })),
  expected_revision: Type.Optional(Type.String({ pattern: '^[1-9][0-9]*$', maxLength: 19, description: 'Canonical decimal 1..9223372036854775807; required for material update/reopen/close' })),
  comment: Type.Optional(Type.String({ minLength: 1 })), comment_metadata: Type.Optional(metadataParameter),
- q: Type.Optional(Type.String({ description: 'Literal case-insensitive title/body substring' })), resolved_since: Type.Optional(Type.String()),
+ q: Type.Optional(Type.String({ description: 'Literal case-insensitive title/body substring' })), resolved_since: Type.Optional(Type.String({ description: 'Inclusive signed int64 epoch milliseconds as a string, or ISO timestamp with explicit offset and at most millisecond precision' })),
  limit: Type.Optional(pageLimitParameter), offset: Type.Optional(offsetParameter),
  detail_mode: Type.Optional(Type.Literal('paged')),
  comments_offset: Type.Optional(offsetParameter), comments_limit: Type.Optional(pageLimitParameter),
@@ -275,10 +276,11 @@ export function createEngramIssuesTool(
 
    switch (data.action) {
     case 'create': {
-     const { title, body, priority, target_project, labels, type, metadata, owner_label, recipient_label, request_key, expected_actor, created_by_session } = data;
+     const { title, body, priority, target_project, target_session, labels, type, metadata, owner_label, recipient_label, request_key, expected_actor, created_by_session } = data;
      const resp = await client.createIssue({
       title, body, priority, source_project: project, target_project: target_project ?? project, source_agent: sourceAgent, labels,
       ...provenance, ...(created_by_session !== undefined ? { created_by_session } : {}),
+      ...(target_session !== undefined ? { target_session } : {}),
       ...(type !== undefined ? { type } : {}), ...(metadata !== undefined ? { metadata } : {}),
       ...(owner_label !== undefined ? { owner_label } : {}), ...(recipient_label !== undefined ? { recipient_label } : {}),
       ...(request_key !== undefined ? { request_key } : {}), ...(expected_actor !== undefined ? { expected_actor } : {}),

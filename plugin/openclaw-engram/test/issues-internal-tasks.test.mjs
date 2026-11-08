@@ -100,9 +100,14 @@ function firstRequest(f, method, pathname) {
 test('issues JSON create and replay preserve server identity, revision and replay state with the original intent', async t => {
   const replay = { ...created, revision: '3', replayed: true, message: 'issue replayed' };
   const f = fixture(t, [{ status: 201, body: created }, { body: replay }]);
-  const pending = { ...createInput, request_key: 'synthetic-intent-513', created_by_session: 'synthetic-explicit-creator', session_id: 'synthetic-forged-session', client: 'synthetic-forged-client', metadata: { acceptance: ['same ID after retry'] } };
+  const pending = { ...createInput, request_key: 'synthetic-intent-513', target_session: 'recipient & 日本語', created_by_session: 'synthetic-explicit-creator', session_id: 'synthetic-forged-session', client: 'synthetic-forged-client', metadata: { acceptance: ['same ID after retry'] } };
+  const original = structuredClone(pending);
   const firstText = await f.tool.execute('first', { ...pending, format: 'json' });
   assert.equal(f.requests[0].body.request_key, pending.request_key, 'The actual HTTP create must retain the pending key');
+  assert.equal(f.requests[0].body.target_session, original.target_session);
+  assert.equal(f.requests[0].body.source_project, source);
+  assert.equal(f.requests[0].body.source_agent, context.agentId);
+  assert.equal(f.requests[0].headers.get('authorization'), 'Bearer synthetic-513-token');
   assert.deepEqual(f.requests[0].body.metadata, pending.metadata);
   assert.equal(f.requests[0].body.session_id, context.sessionId);
   assert.equal(f.requests[0].body.client, 'openclaw');
@@ -111,6 +116,7 @@ test('issues JSON create and replay preserve server identity, revision and repla
   const retryText = await f.tool.execute('retry', { ...pending, format: 'json' });
   assert.equal(f.requests.length, 2, 'No implicit extra create is allowed');
   assert.deepEqual(f.requests[1].body, f.requests[0].body, 'A retry must not rewrite the original intent or key');
+  assert.deepEqual(pending, original, 'A retry must not mutate caller-owned intent');
   assert.deepEqual(jsonResult(retryText), replay);
 });
 
@@ -302,7 +308,7 @@ test('issues validates only the available parsed numeric value, not an unrecover
 test('issues material refinement and an optional comment share one revision-bound PATCH', async t => {
   const changes = {
     expected_revision: '1', title: 'Synthetic refined task', body: '', type: 'improvement', priority: 'high',
-    labels: [], metadata: {}, owner_label: null, recipient_label: 'reviewer',
+    labels: [], metadata: {}, owner_label: null, recipient_label: 'reviewer', target_session: 'recipient / next',
     comment: 'Synthetic refinement note', comment_metadata: { outcome: { state: 'partial' } },
   };
   const result = { ...updated, comment_id: 901 };
@@ -320,7 +326,7 @@ test('issues an omitted material field stays omitted rather than becoming a defa
   const f = fixture(t, [{ body: updated }], { context: { ...context, sessionId: '', sessionKey: 'synthetic-not-a-session' } });
   const text = await f.tool.execute('partial', { action: 'update', id: 701, expected_revision: '1', body: 'Synthetic next action', session_id: 'synthetic-forged-session', client: 'synthetic-forged-client', format: 'json' });
   const request = firstRequest(f, 'PATCH', '/api/issues/701');
-  for (const field of ['title', 'priority', 'type', 'labels', 'metadata', 'owner_label', 'recipient_label', 'status', 'comment']) {
+  for (const field of ['title', 'priority', 'type', 'labels', 'metadata', 'owner_label', 'recipient_label', 'target_session', 'status', 'comment']) {
     assert.equal(Object.hasOwn(request.body, field), false, `${field} was not part of this edit`);
   }
   assert.equal(Object.hasOwn(request.body, 'session_id'), false, 'An empty host session must not be replaced by sessionKey, project or installation');
@@ -328,8 +334,29 @@ test('issues an omitted material field stays omitted rather than becoming a defa
   assert.deepEqual(jsonResult(text), updated);
 });
 
+for (const [name, target_session] of [['set', 'recipient & 日本語'], ['clear', null]]) {
+  test(`issues target session ${name} retains the revision and trusted provenance`, async t => {
+    const f = fixture(t, [{ body: updated }]);
+    const input = { action: 'update', id: 701, expected_revision: '1', target_session, source_project: target, source_agent: 'forged', session_id: 'forged', client: 'forged', format: 'json' };
+    const original = structuredClone(input);
+    const result = await f.tool.execute('target-session', input);
+    const request = firstRequest(f, 'PATCH', '/api/issues/701');
+    assert.equal(Object.hasOwn(request.body, 'target_session'), true);
+    assert.equal(request.body.target_session, target_session);
+    assert.equal(request.body.expected_revision, '1');
+    assert.equal(request.body.source_project, source);
+    assert.equal(request.body.source_agent, context.agentId);
+    assert.equal(request.body.session_id, context.sessionId);
+    assert.equal(request.body.client, 'openclaw');
+    assert.deepEqual(input, original);
+    assert.deepEqual(jsonResult(result), updated);
+  });
+}
+
 for (const [name, params, code] of [
   ['missing revision', { action: 'update', status: 'resolved' }, 'REVISION_REQUIRED'],
+  ['target session without revision', { action: 'update', target_session: 'recipient' }, 'REVISION_REQUIRED'],
+  ['target session clear without revision', { action: 'update', target_session: null }, 'REVISION_REQUIRED'],
   ['numeric revision', { action: 'update', status: 'resolved', expected_revision: 1 }, 'INVALID_ARGUMENT'],
   ['zero revision', { action: 'update', status: 'resolved', expected_revision: '0' }, 'INVALID_ARGUMENT'],
   ['signed revision', { action: 'update', status: 'resolved', expected_revision: '+1' }, 'INVALID_ARGUMENT'],
@@ -349,6 +376,23 @@ for (const [name, params, code] of [
     const text = await f.tool.execute('invalid-edit', { id: 701, ...params, format: 'json' });
     assert.equal(f.requests.length, 0);
     assert.equal(jsonResult(text).error.code, code);
+  });
+}
+
+for (const params of [
+  { ...createInput, target_session: '' },
+  { action: 'list', target_project: target, target_session: '' },
+]) {
+  test(`issues rejects an empty target session on ${params.action} without dropping it`, async t => {
+    const failure = { error: { code: 'INVALID_ARGUMENT', message: 'Invalid target session' } };
+    const f = fixture(t, [{ status: 400, body: failure }]);
+    const result = await executeJson(f.tool, params);
+    assert.equal(result.error.code, 'INVALID_ARGUMENT');
+    if (f.requests.length !== 0) {
+      const request = firstRequest(f, params.action === 'create' ? 'POST' : 'GET', '/api/issues');
+      if (params.action === 'create') assert.equal(request.body.target_session, '');
+      else assert.equal(request.url.searchParams.get('target_session'), '');
+    }
   });
 }
 
@@ -403,17 +447,50 @@ test('issues a supplied standalone-comment revision is honored in the HTTP reque
 test('issues list keeps all AND filters and encodes literal search as query data', async t => {
   const page = { issues: [issue()], total: 1, limit: 200, offset: 0, next_offset: null, project_names: { [target]: 'Synthetic target' } };
   const f = fixture(t, [{ body: page }]);
-  const filters = { target_project: target, source_project: source, source_agent: 'agent & reviewer', source_session: 'source & 日本語', participant_session: 'participant / synthetic', status: 'open,reopened', type: 'task', q: 'literal %_ & 日本語', owner_label: 'docs', recipient_label: 'next-agent', resolved_since: '2026-10-01T00:00:00Z', limit: 200, offset: 0 };
+  const filters = { target_project: target, source_project: source, source_agent: 'agent & reviewer', source_session: 'source & 日本語', target_session: 'recipient & 日本語', participant_session: 'participant / synthetic', status: 'open,reopened', type: 'task', q: 'literal %_ & 日本語', owner_label: 'docs', recipient_label: 'next-agent', limit: 200, offset: 0 };
   const text = await f.tool.execute('filtered-list', { action: 'list', ...filters, format: 'json' });
   const request = firstRequest(f, 'GET', '/api/issues');
   for (const [field, value] of Object.entries(filters)) assert.equal(request.url.searchParams.get(field === 'target_project' ? 'project' : field), String(value), `Preserve ${field}`);
   assert.deepEqual(jsonResult(text), page);
 });
 
+for (const [input, wire] of [
+  ['1970-01-02T00:00:00.000Z', '86400000'],
+  ['1970-01-02T01:00:00+01:00', '86400000'],
+  ['-9223372036854775808', '-9223372036854775808'],
+  ['9223372036854775807', '9223372036854775807'],
+  ['-1000', '-1000'],
+]) {
+  test(`issues list sends resolved_since ${input} as signed epoch milliseconds`, async t => {
+    const page = { issues: [], total: 0, limit: 20, offset: 0, next_offset: null, project_names: {} };
+    const f = fixture(t, [{ body: page }]);
+    const params = { action: 'list', target_project: target, resolved_since: input, format: 'json' };
+    const original = structuredClone(params);
+    const text = await f.tool.execute('resolved-since', params);
+    const request = firstRequest(f, 'GET', '/api/issues');
+    assert.equal(request.url.searchParams.get('resolved_since'), wire);
+    assert.deepEqual(params, original);
+    assert.deepEqual(jsonResult(text), page);
+  });
+}
+
+for (const input of [
+  '-9223372036854775809', '9223372036854775808',
+  'not-a-timestamp', '2026-02-30T00:00:00Z',
+  '1970-01-02T00:00:00', '1970-01-02T00:00:00.0001Z',
+]) {
+  test(`issues rejects invalid resolved_since ${input} without a request`, async t => {
+    const f = fixture(t);
+    const result = await executeJson(f.tool, { action: 'list', target_project: target, resolved_since: input });
+    assert.equal(f.requests.length, 0);
+    assert.equal(result.error.code, 'INVALID_ARGUMENT');
+  });
+}
+
 test('issues direct client carries new list filters without going through the tool', async t => {
   const page = { issues: [], total: 0, limit: 20, offset: 5, next_offset: null, project_names: {} };
   const f = fixture(t, [{ body: page }]);
-  const filters = { project: target, source_project: source, source_agent: 'synthetic-agent', source_session: 'source & synthetic', participant_session: 'participant / synthetic', type: 'task', q: 'literal %_&', owner_label: 'docs', recipient_label: 'reviewer', limit: 20, offset: 5 };
+  const filters = { project: target, source_project: source, source_agent: 'synthetic-agent', source_session: 'source & synthetic', target_session: 'recipient & synthetic', participant_session: 'participant / synthetic', type: 'task', q: 'literal %_&', owner_label: 'docs', recipient_label: 'reviewer', limit: 20, offset: 5 };
   const result = await f.client.listIssues(filters);
   const request = firstRequest(f, 'GET', '/api/issues');
   for (const [field, value] of Object.entries(filters)) assert.equal(request.url.searchParams.get(field), String(value));
@@ -598,11 +675,14 @@ test('issues advertised schema exposes the frozen fields, close action and pagin
   const f = fixture(t);
   const schema = f.tool.parameters;
   const serialized = JSON.stringify(schema);
-  for (const field of ['format', 'request_key', 'created_by_session', 'metadata', 'comment_metadata', 'expected_revision', 'owner_label', 'recipient_label', 'type', 'offset', 'q', 'source_agent', 'source_session', 'participant_session', 'comments_offset', 'comments_limit', 'history_offset', 'history_limit']) {
+  for (const field of ['format', 'request_key', 'created_by_session', 'target_session', 'metadata', 'comment_metadata', 'expected_revision', 'owner_label', 'recipient_label', 'type', 'offset', 'q', 'source_agent', 'source_session', 'participant_session', 'comments_offset', 'comments_limit', 'history_offset', 'history_limit']) {
     assert.ok(serialized.includes(`"${field}"`), `Advertise ${field} to the host`);
   }
   for (const params of [
     { ...createInput, format: 'json', request_key: 'synthetic-schema', created_by_session: 'synthetic-explicit-creator', metadata: {} },
+    { ...createInput, target_session: 'synthetic-target' },
+    { action: 'update', id: 701, expected_revision: '1', target_session: null },
+    { action: 'list', target_session: 'synthetic-target', resolved_since: '-1000' },
     { action: 'close', id: 701, expected_revision: '2' },
     { action: 'list', limit: 200, offset: 0, source_session: 'synthetic-source', participant_session: 'synthetic-participant' },
     { action: 'get', id: 701, comments_limit: 200, history_limit: 1, comments_offset: 0, history_offset: 7 },

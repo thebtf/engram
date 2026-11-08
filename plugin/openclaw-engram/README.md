@@ -219,6 +219,23 @@ session ID, it is omitted; `sessionKey` and project identity are not substitutes
 An explicitly supplied `created_by_session` remains separate. These body fields
 are reported provenance, not authentication or authorization.
 
+`target_session` is an explicitly supplied recipient, not authorization or an
+inferred current session. On create, supply a nonempty string or omit it. On
+update, a nonempty string sets it and `null` clears it; either is a material
+change requiring `expected_revision`, while omission leaves it unchanged. On
+list, a nonempty string is an exact filter.
+
+The inclusive `resolved_since` list filter accepts a string containing signed
+64-bit epoch milliseconds, including optional sign and leading zeros, without
+numeric conversion. It also accepts an ISO timestamp in the form
+`YYYY-MM-DDTHH:mm:ss[.sss]Z` or with an explicit `+HH:mm`/`-HH:mm` offset;
+the fractional part may have one to three digits and the year has four digits
+(`0000`–`9999`). Calendar dates must be valid; offsets range from `-23:59` to
+`+23:59`, except `-00:00`, which is rejected as an unknown offset. Leap seconds and
+sub-millisecond precision are not supported. ISO values are converted to epoch
+milliseconds for the server. Numeric inputs, local times without offsets and
+other ambiguous or malformed values are rejected.
+
 Issue detail uses independent paged comments and history, with explicit continuation
 offsets. List paging is live rather than a snapshot: retain filters and de-duplicate
 IDs while browsing. Explicitly filtered list and get can read without a current
