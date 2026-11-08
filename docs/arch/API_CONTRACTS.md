@@ -94,13 +94,36 @@ race:
    response has `binding_kind: "context"` and the intended context. Never invent
    a handle or mix fields from different contexts.
 3. Pass that same returned handle to search, graph and read in the same client
-   session. If resolution, selection or a later call is refused, including
-   `CONTEXT_REQUIRED`, `CONTEXT_MISMATCH`, `PERMISSION_DENIED` or `VIEW_RETIRED`,
-   stop. Use the supported context recovery path to establish the intended
-   authorized context; a denial is not permission to switch identity or Source.
-   If the original View is unavailable, obtain another authorized View and repeat
-   the search; never reuse its citation against a different View or bypass the
-   refusal.
+   session. If resolution, selection or a later call is refused, stop; a denial
+   is not permission to switch identity or Source. For a `CONTEXT_MISMATCH` on
+   a citation read, the bounded recovery below may apply. Otherwise use the
+   supported context recovery path to establish the intended authorized context.
+
+**Recovering an existing citation after `CONTEXT_MISMATCH`:** This is a
+manual recovery, not an automatic fix for the checkout-bound race. It is only
+possible when the original search response contains its complete `contexts`
+entry. Historical View availability and authorization are not guaranteed.
+
+1. If you need to restore the current selection afterward, call
+   `codebase_context` with `action: "resolve"` first and retain the returned
+   `context_handle` for this client. Do not invent or borrow a handle.
+2. From the original search response's `contexts` entry, copy `source_id`,
+   `checkout_id`, `view_id`, `generation`, and `space_id` if present into a
+   `codebase_context` call with `action: "select"`. Copy the entry's `profile_id`
+   as the select argument `analysis_profile_id`. Do not use fields from the
+   citation alone, another response, or a guessed identity. Selection changes
+   this client's default. Use the returned `context_handle` only if
+   `binding_kind` is `"context"` and the returned context matches the original.
+3. If you retained the prior selection, restore it with `action: "select"` and
+   that own `context_handle`; it remains subject to authorization. Then retry
+   `codebase_read` once with the newly returned pinned handle and the original
+   citation unchanged (`ref`, `membership_id`, `span`, and `content_digest`,
+   including `indexed_span` when applicable).
+
+If the original response lacks the complete context, or authorization or the
+original View is unavailable, stop this recovery. Establish an explicitly
+authorized context and run a new search there; use its new citation. Never alter
+the original citation to fit another View, invent identities, or bypass a refusal.
 
 With the pinned handle:
 
