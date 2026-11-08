@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Restart the operator-web Vault auto-hide period on each successful reveal, even when the credential value is unchanged.
+
 ## [7.1.0] - 2026-11-07
 
 Source: PRs #656, #657, #664, #665, #666, #667, #669, #670, #671 and #672. This candidate includes the accepted own/self memory and linked-card work, bounded task-note search, and project-resolution recovery fixes. It does not claim complete Feature011 or Feature012 acceptance.
