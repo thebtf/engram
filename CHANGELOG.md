@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Correct operator-web Rules and shared request body types, and safely access revealed Vault values when a credential entry is absent.
 - Display operator-web rules from the bare-array API. The unselected scope shows global rules only; a selected project includes its rules and global rules. Counts describe loaded rows, and invalid responses surface as errors.
 
 ## [7.1.0] - 2026-11-07
