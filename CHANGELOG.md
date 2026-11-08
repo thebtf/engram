@@ -9,16 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Add issue-backed resumable tasks: create and resume a task with actor/source/key-bound replay, refine it with revision-checked edits and preserved drafts, attach opaque metadata, and read bounded comments and history. Preserve existing authorization and privacy, and require a fail-safe writer cutover.
 
-- Correct operator-web Rules and shared request body types, and safely access revealed Vault values when a credential entry is absent.
-- Display operator-web rules from the bare-array API. The unselected scope shows global rules only; a selected project includes its rules and global rules. Counts describe loaded rows, and invalid responses surface as errors.
+- Restart the operator-web Vault auto-hide period on each successful reveal, even when the credential value is unchanged.
 
 ## [7.1.0] - 2026-11-07
 
-Source: PRs #656, #657, #664, #665, #666 and #667. This candidate includes the accepted own/self memory and linked-card work, bounded task-note search, and project-resolution recovery fixes. It does not claim complete Feature011 or Feature012 acceptance.
+Source: PRs #656, #657, #664, #665, #666, #667, #669, #670, #671 and #672. This candidate includes the accepted own/self memory and linked-card work, bounded task-note search, and project-resolution recovery fixes. It does not claim complete Feature011 or Feature012 acceptance.
 
 - Permit an enrolled owner to archive a projectless self card through the existing transition API; preserve project membership checks, explicit-context refusals, revision history and active-search exclusion.
 
 - Display legacy Rules from the bare-array API. The unselected scope shows global rules only; a selected project includes its rules and global rules. Invalid responses surface as errors.
+
+- Correct operator-web Rules and shared request body types, and safely access revealed Vault values when a credential entry is absent.
+- Display operator-web rules from the bare-array API. The unselected scope shows global rules only; a selected project includes its rules and global rules. Counts describe loaded rows, and invalid responses surface as errors.
 
 ## [7.0.28] - 2026-11-07
 
