@@ -1553,6 +1553,624 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/issues": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns {issues,total,limit,offset,next_offset,project_names}; summaries include project_origin and decimal-string revision, not body, metadata or history. Filters combine with AND and are not access grants. Each query parameter may occur at most once. Order is priority rank ascending, created_at descending, id descending. Offset paging is live, not a snapshot; retain filters, deduplicate IDs and restart after material refresh. next_offset is the first unreturned row or null. Project names cover returned authorized project roles only.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Issues"
+                ],
+                "summary": "List issue-backed tasks",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Canonical target-project UUID filter, not caller identity",
+                        "name": "project",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Independent canonical source-project UUID filter",
+                        "name": "source_project",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Exact source-agent attribution label, not a principal",
+                        "name": "source_agent",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Exact creator session attribution, not authentication or authority",
+                        "name": "source_session",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Exact recipient session attribution, not authentication or authority",
+                        "name": "target_session",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Exact recorded creator, comment, lifecycle event or material revision session attribution",
+                        "name": "participant_session",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Comma-separated open, acknowledged, resolved, reopened, closed, rejected; OR within this filter",
+                        "name": "status",
+                        "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "bug",
+                            "feature",
+                            "improvement",
+                            "task"
+                        ],
+                        "type": "string",
+                        "description": "Issue type, trimmed and lowercased",
+                        "name": "type",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Case-insensitive literal title OR body substring; not metadata, comments or history",
+                        "name": "q",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Exact non-authoritative owner label",
+                        "name": "owner_label",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Exact non-authoritative recipient label",
+                        "name": "recipient_label",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "format": "int64",
+                        "description": "Inclusive resolved_at lower bound in signed epoch milliseconds",
+                        "name": "resolved_since",
+                        "in": "query"
+                    },
+                    {
+                        "maximum": 200,
+                        "minimum": 1,
+                        "type": "integer",
+                        "default": 50,
+                        "description": "Maximum summaries",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "minimum": 0,
+                        "type": "integer",
+                        "default": 0,
+                        "description": "Nonnegative in-range offset",
+                        "name": "offset",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Authorized summary page; next_offset may be null",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "issues": {
+                                    "type": "array",
+                                    "items": {
+                                        "allOf": [
+                                            {
+                                                "$ref": "#/definitions/gorm.IssueTaskSummary"
+                                            },
+                                            {
+                                                "type": "object",
+                                                "properties": {
+                                                    "project_origin": {
+                                                        "$ref": "#/definitions/worker.issueProjectOrigin"
+                                                    }
+                                                }
+                                            }
+                                        ]
+                                    }
+                                },
+                                "limit": {
+                                    "type": "integer"
+                                },
+                                "next_offset": {
+                                    "type": "integer"
+                                },
+                                "offset": {
+                                    "type": "integer"
+                                },
+                                "project_names": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                        "type": "string"
+                                    }
+                                },
+                                "total": {
+                                    "type": "integer"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "INVALID_ARGUMENT; invalid or repeated query parameter or bound",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/issues.Error"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Authentication required; middleware may return plain text, issue-owner UNAUTHENTICATED uses a JSON error envelope"
+                    },
+                    "403": {
+                        "description": "Authentication middleware may return plain text; filters do not grant access"
+                    },
+                    "404": {
+                        "description": "ISSUE_NOT_FOUND; canonical filter project unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/issues.Error"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Authentication infrastructure failure"
+                    },
+                    "503": {
+                        "description": "UNAVAILABLE; dependency failure, not an empty page",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/issues.Error"
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "JSON fields include required nonempty title and active canonical source_project; optional target_project defaults to source only when omitted, and optional nonempty target_session is recipient provenance, not authority. body defaults to empty, type to task, priority to medium, labels to [], metadata to {}, and owner_label/recipient_label to null. Labels and attribution are not credentials or access grants. Metadata is an object with compact size at most 1 MiB and at most 256 nested containers. Raw duplicate members, invalid Unicode and unpreservable numbers are rejected before mutation. Applicable recognized-secret protection rejects atomically without rewriting; detection is not comprehensive. The request ceiling is 10 MiB.\nAn optional nonempty UTF-8 request_key of at most 512 bytes without NUL is scoped by authenticated actor and canonical source. Retain the original actor, source, key and logical payload after an unknown outcome. Same-key same-payload retry returns the original ID and current authorized revision; a changed payload conflicts and a deleted receipt cannot resurrect an issue. expected_actor is an optional keyed-create precondition obtained from auth-me, never a credential; mismatch or non-comparable identity returns ACTOR_CHANGED before receipt lookup. Unkeyed create is single-shot and has no replay guarantee. The result is {id,revision,replayed,changed,comment_id,message}; receipt payloads, digests and credentials are not returned. Swagger 2 cannot faithfully express all object, null and conditional rules.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Issues"
+                ],
+                "summary": "Create or reconcile an issue-backed task",
+                "parameters": [
+                    {
+                        "description": "Create object as described; metadata is an object and expected_actor is a precondition only",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Original authorized intent replayed; replayed=true",
+                        "schema": {
+                            "$ref": "#/definitions/issues.Result"
+                        }
+                    },
+                    "201": {
+                        "description": "New issue committed; replayed=false",
+                        "schema": {
+                            "$ref": "#/definitions/issues.Result"
+                        }
+                    },
+                    "400": {
+                        "description": "INVALID_ARGUMENT or PRIVACY_REJECTED; no write",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/issues.Error"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Authentication required; middleware may return plain text, issue-owner UNAUTHENTICATED uses a JSON error envelope"
+                    },
+                    "403": {
+                        "description": "FORBIDDEN in the issue JSON envelope or plain-text middleware refusal"
+                    },
+                    "404": {
+                        "description": "ISSUE_NOT_FOUND; canonical scope or replay target unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/issues.Error"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "ACTOR_CHANGED or IDEMPOTENCY_CONFLICT; retain and reconcile the original intent",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/issues.Error"
+                            }
+                        }
+                    },
+                    "410": {
+                        "description": "ISSUE_GONE; a retained receipt cannot create a replacement",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/issues.Error"
+                            }
+                        }
+                    },
+                    "413": {
+                        "description": "PAYLOAD_TOO_LARGE in the issue JSON envelope; outer request-size middleware may return plain text"
+                    },
+                    "500": {
+                        "description": "Authentication infrastructure failure"
+                    },
+                    "503": {
+                        "description": "UNAVAILABLE; reconcile keyed intent before retry, never blindly retry unkeyed create",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/issues.Error"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/issues/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns authorized issue, comments and material revision history, their counts, effective offsets and limits, nullable next offsets, complete and oversized flags, and source/target display names. Issue detail includes decimal-string revision, object metadata, nullable labels, actor and project roles; creator credentials are excluded. Comments are ordered by created_at/id and material history by revision. History contains field names and admitted changes; absent historical values are not invented.\ndetail_mode=paged requests independent comments and material-history pages, each default 50 and maximum 200, targeting 4 MiB serialized bytes. An intact oversized singleton is flagged. A next offset identifies the first unreturned record; complete means no later records, not that earlier pages were loaded. Pages are live, not a frozen snapshot. Without detail_mode, complete comments exceeding 200 records or 4 MiB fail DETAIL_PAGING_REQUIRED without partial success. Lifecycle history_events are separate from material revisions: history_after_id is an exclusive ID cursor, event count is bounded by history_limit and capped at 100, and history_has_more, history_next_after_id and history_events_oversized describe continuation. No project filter grants access. Swagger 2 cannot express all nullable and conditional fields.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Issues"
+                ],
+                "summary": "Read issue detail and independent comment and history pages",
+                "parameters": [
+                    {
+                        "minimum": 1,
+                        "type": "integer",
+                        "format": "int64",
+                        "description": "Positive issue ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Optional canonical source/target-role read narrowing, not an access grant",
+                        "name": "project",
+                        "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "paged"
+                        ],
+                        "type": "string",
+                        "description": "Explicit paging; omission requests legacy complete comments",
+                        "name": "detail_mode",
+                        "in": "query"
+                    },
+                    {
+                        "minimum": 0,
+                        "type": "integer",
+                        "default": 0,
+                        "description": "Nonnegative comment offset",
+                        "name": "comments_offset",
+                        "in": "query"
+                    },
+                    {
+                        "maximum": 200,
+                        "minimum": 1,
+                        "type": "integer",
+                        "default": 50,
+                        "description": "Comment page limit",
+                        "name": "comments_limit",
+                        "in": "query"
+                    },
+                    {
+                        "minimum": 0,
+                        "type": "integer",
+                        "default": 0,
+                        "description": "Independent material history offset",
+                        "name": "history_offset",
+                        "in": "query"
+                    },
+                    {
+                        "maximum": 200,
+                        "minimum": 1,
+                        "type": "integer",
+                        "default": 50,
+                        "description": "Material history page limit",
+                        "name": "history_limit",
+                        "in": "query"
+                    },
+                    {
+                        "minimum": 0,
+                        "type": "integer",
+                        "default": 0,
+                        "description": "Exclusive lifecycle event ID cursor, separate from history_offset",
+                        "name": "history_after_id",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Authorized intact detail; continuation offsets and cursor may be null",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "comment_count": {
+                                    "type": "integer"
+                                },
+                                "comments": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object"
+                                    }
+                                },
+                                "comments_complete": {
+                                    "type": "boolean"
+                                },
+                                "comments_limit": {
+                                    "type": "integer"
+                                },
+                                "comments_next_offset": {
+                                    "type": "integer"
+                                },
+                                "comments_offset": {
+                                    "type": "integer"
+                                },
+                                "comments_oversized": {
+                                    "type": "boolean"
+                                },
+                                "history": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object"
+                                    }
+                                },
+                                "history_complete": {
+                                    "type": "boolean"
+                                },
+                                "history_count": {
+                                    "type": "integer"
+                                },
+                                "history_events": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object"
+                                    }
+                                },
+                                "history_events_oversized": {
+                                    "type": "boolean"
+                                },
+                                "history_has_more": {
+                                    "type": "boolean"
+                                },
+                                "history_limit": {
+                                    "type": "integer"
+                                },
+                                "history_next_after_id": {
+                                    "type": "integer"
+                                },
+                                "history_next_offset": {
+                                    "type": "integer"
+                                },
+                                "history_offset": {
+                                    "type": "integer"
+                                },
+                                "history_oversized": {
+                                    "type": "boolean"
+                                },
+                                "issue": {
+                                    "type": "object"
+                                },
+                                "source_project_display_name": {
+                                    "type": "string"
+                                },
+                                "target_project_display_name": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "INVALID_ARGUMENT; invalid ID, query, mode or bounds",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/issues.Error"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Authentication required; middleware may return plain text, issue-owner UNAUTHENTICATED uses a JSON error envelope"
+                    },
+                    "403": {
+                        "description": "Authentication middleware may return plain text"
+                    },
+                    "404": {
+                        "description": "ISSUE_NOT_FOUND; missing or unreadable issue or project",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/issues.Error"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "DETAIL_PAGING_REQUIRED; use detail_mode=paged with separate continuations",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/issues.Error"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Authentication infrastructure failure"
+                    },
+                    "503": {
+                        "description": "UNAVAILABLE; read failure, not empty history",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/issues.Error"
+                            }
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Presence-sensitive JSON fields include expected_revision, title, body, priority, type, status, labels, metadata, owner_label, recipient_label, target_session, comment and comment_metadata. A revision is a canonical decimal string from 1 through 9223372036854775807. Omitted fields stay unchanged; empty body and labels are permitted, empty metadata replaces the object, and null clears an owner label, recipient label or target session. Empty title or an empty non-null owner/recipient label is invalid. comment must be nonempty; comment_metadata requires comment and defaults to {}. Source/target/creator attribution is not editable. Optional source_project/source_agent/session fields are provenance, not authentication or authority; omitted source is admitted from the locked issue without inventing caller attribution.\nMaterial fields and status require expected_revision; comment-only append may omit it, but a supplied revision is checked. A material change, its revision/history and optional comment commit atomically; a stale revision commits none of the request. Retain the draft and base, reread and explicitly reconcile. A same-value material request at the current revision is a no-op unless a comment is added. Comments do not advance revision and are not deduplicated. Protected material fields require creator-keycard or operator authority. Authorized read-write participants may resolve, close or reopen; acknowledged, rejected and open transitions remain operator-only. Rejection requires a nonempty comment. Mixed requests apply the strictest required authority.\nRequest ceiling is 10 MiB; admitted metadata objects are limited to 1 MiB compact JSON and 256 nested containers. Duplicate raw members, invalid Unicode and unpreservable numbers are rejected. Applicable recognized-secret protection rejects atomically without rewriting and is not comprehensive detection. The result is {id,revision,replayed,changed,comment_id,message}, not a data wrapper; comment_id may be null. Issue-owner errors use {error:{code,message,current_revision?}}; outer middleware may return plain text. Swagger 2 cannot encode all presence, null and conditional rules.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Issues"
+                ],
+                "summary": "Atomically edit an issue or append a comment",
+                "parameters": [
+                    {
+                        "minimum": 1,
+                        "type": "integer",
+                        "format": "int64",
+                        "description": "Positive issue ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Optional canonical source/target-role read narrowing, not actor identity",
+                        "name": "project",
+                        "in": "query"
+                    },
+                    {
+                        "description": "Presence-sensitive mutation; material edits require expected_revision",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Atomic update, comment append or current-revision no-op",
+                        "schema": {
+                            "$ref": "#/definitions/issues.Result"
+                        }
+                    },
+                    "400": {
+                        "description": "INVALID_ARGUMENT or PRIVACY_REJECTED; no write",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/issues.Error"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Authentication required; middleware may return plain text, issue-owner UNAUTHENTICATED uses a JSON error envelope"
+                    },
+                    "403": {
+                        "description": "FORBIDDEN in the issue JSON envelope or plain-text middleware refusal"
+                    },
+                    "404": {
+                        "description": "ISSUE_NOT_FOUND; missing or unreadable issue or canonical scope",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/issues.Error"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "REVISION_CONFLICT or INVALID_TRANSITION; no compound comment committed",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/issues.Error"
+                            }
+                        }
+                    },
+                    "413": {
+                        "description": "PAYLOAD_TOO_LARGE in the issue JSON envelope; outer request-size middleware may return plain text"
+                    },
+                    "428": {
+                        "description": "REVISION_REQUIRED; read current revision before material mutation",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/issues.Error"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Authentication infrastructure failure"
+                    },
+                    "503": {
+                        "description": "UNAVAILABLE; reconcile outcome before retrying",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/issues.Error"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/logs": {
             "get": {
                 "security": [
@@ -5254,6 +5872,90 @@ const docTemplate = `{
                 "CollectionSelectionFrozenFilter"
             ]
         },
+        "gorm.IssueTaskSummary": {
+            "type": "object",
+            "properties": {
+                "acknowledged_at": {
+                    "type": "string"
+                },
+                "closed_at": {
+                    "type": "string"
+                },
+                "comment_count": {
+                    "type": "integer"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "created_by_session": {
+                    "type": "string"
+                },
+                "created_by_session_source": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "labels": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "owner_label": {
+                    "type": "string"
+                },
+                "priority": {
+                    "type": "string"
+                },
+                "recipient_label": {
+                    "type": "string"
+                },
+                "reopened_at": {
+                    "type": "string"
+                },
+                "resolved_at": {
+                    "type": "string"
+                },
+                "revision": {
+                    "type": "string",
+                    "example": "1"
+                },
+                "source_agent": {
+                    "type": "string"
+                },
+                "source_client": {
+                    "type": "string"
+                },
+                "source_project": {
+                    "type": "string"
+                },
+                "source_project_id": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "target_project": {
+                    "type": "string"
+                },
+                "target_project_id": {
+                    "type": "string"
+                },
+                "target_session": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
         "gorm.LogicalProjectGroup": {
             "type": "object",
             "properties": {
@@ -5372,6 +6074,43 @@ const docTemplate = `{
                     ]
                 },
                 "table_name": {
+                    "type": "string"
+                }
+            }
+        },
+        "issues.Error": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string"
+                },
+                "current_revision": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                }
+            }
+        },
+        "issues.Result": {
+            "type": "object",
+            "properties": {
+                "changed": {
+                    "type": "boolean"
+                },
+                "comment_id": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "replayed": {
+                    "type": "boolean"
+                },
+                "revision": {
                     "type": "string"
                 }
             }
@@ -6298,6 +7037,17 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "model": {
+                    "type": "string"
+                }
+            }
+        },
+        "worker.issueProjectOrigin": {
+            "type": "object",
+            "properties": {
+                "source_project": {
+                    "type": "string"
+                },
+                "target_project": {
                     "type": "string"
                 }
             }

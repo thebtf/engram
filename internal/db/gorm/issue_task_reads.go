@@ -29,7 +29,7 @@ type IssueTaskListParams struct {
 // body/metadata and creator keycard fields are never selected into this page.
 type IssueTaskSummary struct {
 	ID                     int64                  `json:"id"`
-	Revision               int64                  `json:"revision,string"`
+	Revision               int64                  `json:"revision,string" example:"1"`
 	Title                  string                 `json:"title"`
 	Status                 string                 `json:"status"`
 	Priority               string                 `json:"priority"`
