@@ -129,6 +129,41 @@ test("concurrent no-overwrite publication accepts only an independently verified
   assert.equal(hashFile(second, target, roots.objects), true);
 });
 
+test("direct and release API requests use the configured HTTPS global agent", async () => {
+  const https = require("node:https");
+  const originalAgent = https.globalAgent;
+  const originalAddRequest = Object.getOwnPropertyDescriptor(https.Agent.prototype, "addRequest");
+  const configuredAgent = new https.Agent();
+  const hosts = [];
+  let freshAgentCalls = 0;
+  configuredAgent.addRequest = (req, options) => {
+    hosts.push(options.hostname);
+    process.nextTick(() => req.emit("error", new Error("configured agent sentinel")));
+  };
+  https.Agent.prototype.addRequest = (req) => {
+    freshAgentCalls++;
+    process.nextTick(() => req.emit("error", new Error("unexpected fresh agent sentinel")));
+  };
+  https.globalAgent = configuredAgent;
+  try {
+    const target = selected().target.desired;
+    for (const [url, releaseApi] of [
+      [`https://github.com/thebtf/engram/releases/download/v${target.version}/${target.asset}`, undefined],
+      [`https://api.github.com/repos/thebtf/engram/releases/tags/v${target.version}`, "metadata"],
+      ["https://api.github.com/repos/thebtf/engram/releases/assets/12345", "asset"],
+    ]) {
+      await assert.rejects(requestStream(url, target, https.request, 0, { releaseApi }), /download request failed/);
+    }
+    assert.deepEqual(hosts, ["github.com", "api.github.com", "api.github.com"]);
+    assert.equal(freshAgentCalls, 0);
+  } finally {
+    https.globalAgent = originalAgent;
+    if (originalAddRequest) Object.defineProperty(https.Agent.prototype, "addRequest", originalAddRequest);
+    else delete https.Agent.prototype.addRequest;
+    configuredAgent.destroy();
+  }
+});
+
 test("redirect escape and loop fail before bytes are accepted", async () => {
   const target = selected().target.desired;
   const fakeRequest = (url, _options, callback) => {
@@ -161,6 +196,134 @@ test("bounded acquisition rejects contradictory, truncated, and one-byte oversiz
   const tampered = Buffer.from(fixture().bytes);
   tampered[0] ^= 1;
   await assert.rejects(downloadObject(roots, target, { request: makeRequest(tampered) }), /digest differs/);
+  assert.deepEqual(fs.readdirSync(roots.staging), []);
+});
+
+function releaseApiFixture(target, options = {}) {
+  const direct = `https://github.com/thebtf/engram/releases/download/v${target.version}/${target.asset}`;
+  const metadataUrl = `https://api.github.com/repos/thebtf/engram/releases/tags/v${target.version}`;
+  const assetUrl = "https://api.github.com/repos/thebtf/engram/releases/assets/12345";
+  const cdnUrl = "https://release-assets.githubusercontent.com/fixture?signature=fixture-secret";
+  const metadata = {
+    tag_name: `v${target.version}`,
+    assets: [{ id: 12345, name: target.asset, size: target.size, digest: null, url: assetUrl }],
+  };
+  options.mutateMetadata?.(metadata);
+  const metadataBytes = options.metadataBytes ?? Buffer.from(JSON.stringify(metadata));
+  const payload = options.payload ?? fixture().bytes;
+  const calls = [];
+  const request = (url, requestOptions, callback) => {
+    const href = url.href;
+    calls.push(href);
+    assert.equal(url.username, "");
+    assert.equal(url.password, "");
+    assert.equal(requestOptions.auth, undefined);
+    const headers = Object.fromEntries(Object.entries(requestOptions.headers || {}).map(([key, value]) => [key.toLowerCase(), value]));
+    assert.equal(headers.authorization, undefined);
+    assert.equal(headers.cookie, undefined);
+    assert.equal(headers["proxy-authorization"], undefined);
+    const req = new EventEmitter();
+    req.end = () => {
+      let statusCode;
+      let headers = {};
+      let bytes = Buffer.alloc(0);
+      if (href === direct) {
+        statusCode = options.directStatus ?? 504;
+      } else if (href === metadataUrl) {
+        statusCode = 200;
+        bytes = metadataBytes;
+        headers = { "content-length": String(bytes.length), "content-type": "application/json" };
+      } else if (href === assetUrl) {
+        assert.match(String(requestOptions.headers?.Accept ?? requestOptions.headers?.accept ?? ""), /application\/octet-stream/i);
+        statusCode = options.assetRedirect === undefined ? 200 : 302;
+        if (statusCode === 302) headers = { location: options.assetRedirect };
+        else { bytes = payload; headers = { "content-length": String(target.size) }; }
+      } else if (href === cdnUrl) {
+        statusCode = 200;
+        bytes = payload;
+        headers = { "content-length": String(target.size) };
+      } else {
+        throw new Error("unexpected request destination");
+      }
+      callback(Object.assign(Readable.from([bytes]), { statusCode, headers }));
+    };
+    return req;
+  };
+  return { request, calls, direct, metadataUrl, assetUrl, cdnUrl };
+}
+
+test("release API fallback publishes policy-verified bytes after gateway 504", async (t) => {
+  for (const transport of ["asset 200", "asset 302", "asset 200 with digest"]) {
+    await t.test(transport, async () => {
+      const roots = objectRoots(tempRoot());
+      const target = selected().target.desired;
+      const options = transport === "asset 302" ? { assetRedirect: "https://release-assets.githubusercontent.com/fixture?signature=fixture-secret" } : {};
+      if (transport === "asset 200 with digest") options.mutateMetadata = (data) => { data.assets[0].digest = `sha256:${target.sha256}`; };
+      const api = releaseApiFixture(target, options);
+      const published = await downloadObject(roots, target, { request: api.request });
+      assert.equal(published, objectPath(roots, target));
+      assert.deepEqual(fs.readFileSync(published), fixture().bytes);
+      assert.equal(hashFile(published, target, roots.objects), true);
+      assert.deepEqual(fs.readdirSync(roots.staging), []);
+      assert.deepEqual(api.calls, transport === "asset 302" ? [api.direct, api.metadataUrl, api.assetUrl, api.cdnUrl] : [api.direct, api.metadataUrl, api.assetUrl]);
+    });
+  }
+});
+
+test("release API fallback fails closed on invalid metadata, bytes and redirects", async (t) => {
+  const tampered = Buffer.from(fixture().bytes);
+  tampered[0] ^= 1;
+  const cases = [
+    ["wrong tag", { mutateMetadata: (data) => { data.tag_name = "v6.47.1"; } }, false],
+    ["wrong asset name", { mutateMetadata: (data) => { data.assets[0].name = "other"; } }, false],
+    ["wrong asset size", { mutateMetadata: (data) => { data.assets[0].size++; } }, false],
+    ["contradictory digest", { mutateMetadata: (data) => { data.assets[0].digest = `sha256:${"0".repeat(64)}`; } }, false],
+    ["malformed metadata", { metadataBytes: Buffer.from('{"url":"https://release-assets.githubusercontent.com/file?signature=fixture-secret"') }, false],
+    ["oversized metadata", { mutateMetadata: (data) => { data.padding = "x".repeat(8 * 1024 * 1024); } }, false],
+    ["tampered bytes with null digest", { payload: tampered }, true],
+    ["untrusted redirect", { assetRedirect: "https://evil.invalid/file?signature=fixture-secret" }, true],
+    ["malformed redirect", { assetRedirect: "http://[invalid?signature=fixture-secret" }, true],
+  ];
+  for (const [name, options, reachesAsset] of cases) {
+    await t.test(name, async () => {
+      const roots = objectRoots(tempRoot());
+      const target = selected().target.desired;
+      const api = releaseApiFixture(target, options);
+      let failure;
+      try { await downloadObject(roots, target, { request: api.request }); }
+      catch (error) { failure = error; }
+      assert.ok(failure, "acquisition must fail");
+      assert.notEqual(failure.code, "ERR_ASSERTION", "fixture assertions must not be mistaken for safe refusal");
+      assert.doesNotMatch(String(failure.message), /unexpected request destination/);
+      assert.doesNotMatch(String(failure.stack || failure), /fixture-secret/);
+      assert.equal(fs.existsSync(objectPath(roots, target)), false);
+      assert.deepEqual(fs.readdirSync(roots.staging), []);
+      assert.equal(api.calls[0], api.direct);
+      assert.ok(api.calls.includes(api.metadataUrl), "metadata must be reached before refusal");
+      assert.equal(api.calls.includes(api.assetUrl), reachesAsset);
+      assert.equal(api.calls.length, reachesAsset ? 3 : 2);
+    });
+  }
+});
+
+test("release API fallback does not retry non-retryable status or cancelled input", async () => {
+  for (const status of [400, 401, 403, 404]) {
+    const roots = objectRoots(tempRoot());
+    const target = selected().target.desired;
+    const api = releaseApiFixture(target, { directStatus: status });
+    await assert.rejects(downloadObject(roots, target, { request: api.request }), BootstrapError);
+    assert.deepEqual(api.calls, [api.direct]);
+    assert.equal(fs.existsSync(objectPath(roots, target)), false);
+    assert.deepEqual(fs.readdirSync(roots.staging), []);
+  }
+  const roots = objectRoots(tempRoot());
+  const target = selected().target.desired;
+  const api = releaseApiFixture(target);
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(downloadObject(roots, target, { request: api.request, signal: controller.signal }), BootstrapError);
+  assert.deepEqual(api.calls, []);
+  assert.equal(fs.existsSync(objectPath(roots, target)), false);
   assert.deepEqual(fs.readdirSync(roots.staging), []);
 });
 test("cold-cache stream outlives the old limit but not the bounded bootstrap deadline", async (t) => {

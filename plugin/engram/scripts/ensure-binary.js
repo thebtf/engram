@@ -10,6 +10,8 @@ const path = require("node:path");
 const REPO = "thebtf/engram";
 const MAX_REDIRECTS = 5;
 const DOWNLOAD_DEADLINE_MS = 360_000;
+const MAX_RELEASE_METADATA_BYTES = 1024 * 1024;
+const RETRYABLE_DOWNLOAD_STATUS = Symbol("retryable download status");
 const RELEASE_HOSTS = new Set([
   "github.com",
   "objects.githubusercontent.com",
@@ -220,7 +222,7 @@ function writeVerified(fd, source, target, options = {}) {
         fs.writeSync(fd, chunk);
       } catch (error) { source.destroy(error); }
     });
-    source.once("error", finish(reject));
+    source.once("error", finish((error) => reject(error instanceof BootstrapError ? error : new BootstrapError("download stream failed"))));
     source.once("end", finish(() => {
       try {
         checkAcquisition(options);
@@ -238,44 +240,118 @@ function requestStream(url, target, request = https.request, redirects = 0, opti
   return new Promise((resolve, reject) => {
     checkAcquisition(options);
     let parsed;
-    try { parsed = new URL(url); } catch { reject(new BootstrapError("download URL is invalid")); return; }
-    if (parsed.protocol !== "https:" || !RELEASE_HOSTS.has(parsed.hostname) || parsed.username || parsed.password) {
+    try {
+      const authority = /^(?:https?:)?\/\/([^/?#]*)/i.exec(url);
+      if (authority && /[%\\]/.test(authority[1])) throw new Error();
+      parsed = new URL(url);
+    } catch { reject(new BootstrapError("download URL is invalid")); return; }
+    const apiRequest = redirects === 0 && (options.releaseApi === "metadata" || options.releaseApi === "asset");
+    const allowedHost = apiRequest ? parsed.hostname === "api.github.com" :
+      RELEASE_HOSTS.has(parsed.hostname) && (options.releaseApi !== "asset" || parsed.hostname !== "github.com");
+    if (parsed.protocol !== "https:" || !allowedHost || parsed.username || parsed.password || parsed.port) {
       reject(new BootstrapError("download URL violates HTTPS host policy")); return;
     }
-    const req = request(parsed, { headers: { "User-Agent": "engram-plugin" }, timeout: 30_000, signal: options.signal }, (response) => {
+    const headers = { "User-Agent": "engram-plugin" };
+    if (apiRequest) headers.Accept = options.releaseApi === "asset" ? "application/octet-stream" : "application/vnd.github+json";
+    let deadline;
+    const req = request(parsed, { headers, timeout: 30_000, signal: options.signal }, (response) => {
+      clearTimeout(deadline);
       try { checkAcquisition(options); }
       catch (error) { response.destroy(); reject(error); return; }
       const status = response.statusCode || 0;
       if (status >= 300 && status < 400) {
         const location = response.headers.location;
         response.destroy();
-        if (!location || redirects >= MAX_REDIRECTS) { reject(new BootstrapError("download redirect limit reached")); return; }
-        resolve(requestStream(new URL(location, parsed).href, target, request, redirects + 1, options));
+        if (options.releaseApi === "metadata" || !location || redirects >= MAX_REDIRECTS ||
+          (options.releaseApi === "asset" && status !== 302)) {
+          reject(new BootstrapError("download redirect limit reached")); return;
+        }
+        let next;
+        try {
+          if (typeof location !== "string" || /[\x00-\x20\x7f\\]/.test(location) ||
+            !/^(?:https:\/\/|\/)/i.test(location)) throw new Error();
+          const authority = /^(?:https:)?\/\/([^/?#]*)/i.exec(location);
+          if (authority && (!authority[1] || /%/.test(authority[1]))) throw new Error();
+          next = new URL(location, parsed).href;
+        } catch { reject(new BootstrapError("download redirect is invalid")); return; }
+        resolve(requestStream(next, target, request, redirects + 1, options));
         return;
       }
-      if (status !== 200) { response.destroy(); reject(new BootstrapError(`download returned HTTP ${status}`)); return; }
+      if (status !== 200) {
+        response.destroy();
+        const error = new BootstrapError(`download returned HTTP ${status}`);
+        if (!options.releaseApi && [502, 503, 504].includes(status)) error[RETRYABLE_DOWNLOAD_STATUS] = true;
+        reject(error); return;
+      }
       const length = response.headers["content-length"];
-      if (length === undefined || !/^\d+$/.test(String(length)) || Number(length) !== target.size) {
+      if (options.releaseApi === "metadata") {
+        if (length !== undefined && (!/^\d+$/.test(String(length)) || Number(length) > MAX_RELEASE_METADATA_BYTES)) {
+          response.destroy(); reject(new BootstrapError("release metadata exceeds size limit")); return;
+        }
+      } else if (length === undefined || !/^\d+$/.test(String(length)) || Number(length) !== target.size) {
         response.destroy(); reject(new BootstrapError("download Content-Length differs from policy")); return;
       }
       resolve(response);
     });
-    const deadline = options.deadlineAt === undefined ? undefined : setTimeout(
+    deadline = options.deadlineAt === undefined ? undefined : setTimeout(
       () => req.destroy(new BootstrapError("client acquisition deadline exceeded")), Math.max(0, options.deadlineAt - Date.now()));
     req.once("close", () => clearTimeout(deadline));
     req.once("timeout", () => req.destroy(new BootstrapError("download connection timed out")));
-    req.once("error", (error) => { clearTimeout(deadline); reject(error); });
+    req.once("error", (error) => { clearTimeout(deadline); reject(error instanceof BootstrapError ? error : new BootstrapError("download request failed")); });
     req.end();
   });
 }
 
+async function requestReleaseAsset(target, request, options) {
+  const metadataUrl = `https://api.github.com/repos/${REPO}/releases/tags/v${target.version}`;
+  const response = await requestStream(metadataUrl, target, request, 0, { ...options, releaseApi: "metadata" });
+  const chunks = [];
+  let size = 0;
+  const deadline = setTimeout(() => response.destroy(new BootstrapError("client acquisition deadline exceeded")),
+    Math.max(0, options.deadlineAt - Date.now()));
+  const onAbort = () => response.destroy(new BootstrapError("client acquisition aborted"));
+  options.signal?.addEventListener("abort", onAbort, { once: true });
+  if (options.signal?.aborted) onAbort();
+  try {
+    for await (const chunk of response) {
+      checkAcquisition(options);
+      size += chunk.length;
+      if (size > MAX_RELEASE_METADATA_BYTES) fail("release metadata exceeds size limit");
+      chunks.push(chunk);
+    }
+    checkAcquisition(options);
+  } catch (error) {
+    response.destroy();
+    throw error instanceof BootstrapError ? error : new BootstrapError("release metadata stream failed");
+  } finally {
+    clearTimeout(deadline);
+    options.signal?.removeEventListener("abort", onAbort);
+  }
+  let metadata;
+  try { metadata = JSON.parse(Buffer.concat(chunks, size).toString("utf8")); }
+  catch { fail("release metadata is invalid"); }
+  if (!metadata || metadata.tag_name !== `v${target.version}` || !Array.isArray(metadata.assets)) fail("release metadata does not match policy");
+  const assets = metadata.assets.filter((asset) => asset && asset.name === target.asset);
+  if (assets.length !== 1 || assets[0].size !== target.size || !Number.isSafeInteger(assets[0].id) || assets[0].id <= 0 ||
+    (assets[0].digest != null && assets[0].digest !== `sha256:${target.sha256}`)) fail("release asset metadata does not match policy");
+  const assetUrl = `https://api.github.com/repos/${REPO}/releases/assets/${assets[0].id}`;
+  return requestStream(assetUrl, target, request, 0, { ...options, releaseApi: "asset" });
+}
+
 async function downloadObject(roots, target, options = {}) {
-  options = { ...options, deadlineAt: options.deadlineAt ?? (options.timeoutMs === undefined ? undefined : Date.now() + options.timeoutMs) };
+  const deadlineAt = Math.min(options.deadlineAt ?? Infinity, Date.now() + (options.timeoutMs ?? DOWNLOAD_DEADLINE_MS), Date.now() + DOWNLOAD_DEADLINE_MS);
+  options = { ...options, deadlineAt };
   checkAcquisition(options);
   const stage = uniqueStage(roots);
   try {
     const url = `https://github.com/${REPO}/releases/download/v${target.version}/${target.asset}`;
-    const response = await requestStream(url, target, options.request || https.request, 0, options);
+    let response;
+    try { response = await requestStream(url, target, options.request || https.request, 0, options); }
+    catch (error) {
+      checkAcquisition(options);
+      if (!error[RETRYABLE_DOWNLOAD_STATUS]) throw error;
+      response = await requestReleaseAsset(target, options.request || https.request, options);
+    }
     await writeVerified(stage.fd, response, target, options);
     fs.closeSync(stage.fd);
     stage.fd = undefined;

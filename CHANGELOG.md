@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Recover cold plugin client and parser acquisition after a 502, 503 or 504 from the official release download with one bounded anonymous GitHub release API lookup. Validate the pinned tag, asset metadata, size and SHA-256 before publishing the staged object; other failures remain closed.
+
 - Document the model-health configuration snapshot and expose its existing response and error contract in generated Swagger.
 
 - Embed the source commit in release-image health and version responses when the build supplies it, while retaining SHA-version build compatibility and an empty value when provenance is unavailable.
