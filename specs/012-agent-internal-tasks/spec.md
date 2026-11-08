@@ -1,0 +1,82 @@
+# Feature Specification: Agent internal tasks on existing issues
+
+**Feature Branch**: `engram-dev/issue-513-contract-01a18a3b`
+**Created**: 2026-10-30
+**Status**: Main-reviewed P1; documentation-only reconciliation of the tested source input recorded in [tasks.md](tasks.md#current-focused-guard-restore-and-consumer-evidence). Recorded RED/GREEN and isolated adapter contributions do not complete the user journey. T019–T022 and issue #513 remain open; Main owns integration, real-consumer acceptance and release.
+**Input**: Issue #513 comments 1730/1739 define the accepted contract/refinements. Main message 39669b21-48b8-43c1-9544-c0cd0a7c94be/comment 1742 accepted P1 and authorized this lane to choose T001/T002; it did not specify the numeric/representation details. Engram session 01a18a3b made those bounded engineering choices from the cited owners and observed the Node 24.22.1 numeric/depth diagnostics. The earlier provenance-only revision ran no code/tests/build/commit; later source/proof milestones are reconciled in [tasks.md](tasks.md), without changing acceptance criteria.
+
+**Evidence boundary**: T019 retains bounded native developer/transport proof and focused consumer rechecks, not installed UI/OpenClaw or real-data acceptance. T020 now includes focused guard/restore checks and an actual unmodified v7.0.16 reader with three SQL-backed write refusals after migration 190. That old binary is deliberately incompatible as a writer; fully compatible earlier-binary rollback remains NOT_PROVEN. Earlier unexplained restore failures remain historical evidence. [tasks.md](tasks.md#current-focused-guard-restore-and-consumer-evidence) owns exact source bindings, receipts, preservation/sequence limits and held fixtures; [quickstart.md](quickstart.md) retains the acceptance procedure. T021 documentation source is generated/compiled/consumer-checked, not integrated acceptance. Main owns qualified local-mirror migration/integration and ordinary-consumer proof; none of this is installed, real-data or production acceptance.
+
+## User Scenarios & Testing *(mandatory)*
+
+### User Story 1 - Resume and complete one internal task (Priority: P1)
+
+An agent records a concrete task in the existing issue tracker, finds it after a session change, refines it without overwriting another writer, records an outcome in comments, and completes it through the existing authorized lifecycle. An operator can inspect and refine the same card in either current UI. There is one issue ID and one lifecycle, not a second task registry.
+
+**Why this priority**: Durable intent and a recoverable outcome are useful before dependency graphs, scheduling, or automatic delivery. Metadata alone is not the outcome: a later consumer must find and continue the same task.
+
+**Independent Test**: On an isolated authorized fixture, run the whole journey through ordinary issue consumers, including a fresh agent connection and both UI writers. Use more records than one list page. [quickstart.md](quickstart.md) retains the complete procedure and distinguishes bounded executed proof from the still-open integrated journey; this reconciliation runs no scenario.
+
+**Acceptance Scenarios**:
+
+1. **Given** an ordinary native locally resolved source (or admitted canonical source on another caller path) and an existing authenticated actor with create authority, **When** it creates a task with stable key/target/title/body/type/priority/labels/optional owner-recipient/object metadata, **Then** the existing tracker returns one ID/revision. Server canonical existence/admission, authenticated actor and submitted source/agent authorship are distinct, not a claimed authenticity proof.
+2. **Given** the first response was lost, **When** the same authenticated actor in the same admitted canonical source retries the same key and normalized original payload after current authorization/visibility checks, **Then** it receives the same ID without another issue/history/comment. Different payload conflicts without disclosure. A different actor has an isolated key namespace: it receives no other actor result; independent creation follows existing create authority.
+3. **Given** the task is beyond the first page, **When** a permitted consumer combines text, target/source project, state and exact owner-label filters and follows continuation, **Then** it finds the task. Text search covers title and body, not arbitrary metadata. Counts and continuation disclose only readable records.
+4. **Given** two writers read the same revision, **When** both refine a material field, **Then** one commit wins and advances the revision with its attributed history. The loser changes nothing, including any attached comment; its UI draft remains available beside a fresh authorized read. The system does not claim that both conflicting proposals were saved.
+5. **Given** a permitted collaborator has an outcome to report, **When** it appends a comment with object metadata, **Then** the original comment IDs and text remain unchanged and the new comment has its own actor and attribution. Comment metadata does not grant edit or lifecycle authority.
+6. **Given** a different fresh session has a relevant task and read authority, **When** it explicitly lists and opens this card, **Then** it sees current fields, revision, bounded change history and paged comments with metadata, and can resume without a hidden local note or automatic backlog injection.
+7. **Given** a permitted collaborator reports an outcome, **When** they resolve the current revision with a comment, **Then** the state, history and comment commit together and the issue awaits verification. An authorized read-write participant may close it after checks or reopen it from resolved or closed. Acknowledged remains active backlog, not completion.
+8. **Given** pre-feature issues and comments, **When** the additive migration and supported writer cutover occur, **Then** every existing ID, comment, lifecycle value and known attribution survives. Unknown historical actor stays unknown; the baseline is not invented edit history.
+
+### Edge Cases
+
+- Concurrent identical creates, response loss before/after commit, same key from another verified source, altered defaults or JSON member order, and same-key retry after the issue was edited or deleted.
+- Revoked read/write access before receipt lookup/replay; forged source/owner/recipient/agent labels; inactive or missing canonical-source existence/admission in the existing actor context; migration-held identity. Native locally resolved origin is not server-proven source ownership.
+- Stale revision mixed with fields, state and comment; history/comment persistence failure; source field edits attempted by a collaborator; forged actor or creator keycard.
+- Non-object, null, oversized or excessively nested metadata; explicit empty body, empty labels or empty metadata versus an omitted patch field; unknown metadata keys survive round trip.
+- Empty last page, changed filters, concurrent insertion during offset paging, invalid limits, inaccessible rows affecting totals, and metadata/history containing hostile instruction-like text.
+- Old UI/native/OpenClaw edit without revision fails explicitly rather than applying an unconditional write. Existing automatic acknowledgment remains only its existing conditional transition, with revision/history in the same transaction.
+
+## Requirements *(mandatory)*
+
+### Functional Requirements
+
+- **FR-001**: Reuse Issue and append-only IssueComment, their IDs, project roles, readers and lifecycle. Do not introduce a second task store, account, tenant or identity scheme.
+- **FR-002**: Persist/return arbitrary-key issue/comment JSON-object metadata within the accepted consumer-preservable value domain: compact JSON ≤1 MiB, ≤256 nested containers, finite binary64-preservable decimal values and safe-range integers, rejecting unsupported numbers or duplicate received raw members before mutation. Preserve unknown admitted keys/values without silent redaction/truncation. Already-parsed TypeScript input cannot reveal duplicates/rounding lost before transport; the contract is honest about that wire boundary.
+- **FR-003**: Namespace each nonempty opaque UTF-8 request key (≤512 bytes, no invalid UTF-8/NUL) by existing authenticated actor plus canonical source. Actor is client KeycardID, validated persisted browser user ID, otherwise a source-qualified master/HMAC-session/auth-disabled synthetic operator singleton, never a fabricated human or new per-agent key. Native source is locally resolved; server uses SessionStore.CanonicalProjectExists for active canonical existence/admission in actor context, preserving ordinary issue auth/read scope without claiming ownership/authentic attribution or adding an ACL. Authorize/read before receipt lookup/replay/comparison. Original v1 logical payload’s server-normalized SHA-256 receipt binding, not later edited fields, governs equal retry versus safe conflict; no original value/hash/ID disclosure on mismatch. Different actors stay isolated.
+- **FR-004**: Keep authenticated actor, verified canonical source context, submitted source/agent/session attribution, and owner/recipient labels distinct. Preserve unknowns. Protected field edits require creator-keycard/operator authority; authorized read-write participants may resolve, close, reopen and comment. Attribution grants no authority.
+- **FR-005**: Give every issue a monotonic revision. A material edit must compare the revision read by its caller and atomically commit fields, state/timestamps, attributed change history and any attached comment. A stale revision, denied authority or failed persistence commits none of that request. History records actual changes, not a claim of preserving the loser's proposal.
+- **FR-006**: Authorize/filter/count before bounded list/detail/history/comment paging. List range 1–200, HTTP default 50 and native/OpenClaw 20; comments/history default 50, maximum 200 each, targeting 4 MiB serialized per page with explicit continuation. Return a larger historical single record intact with oversized indication where transport permits; native 16 MiB failure is explicit and preserves authorized REST access. Legacy unpaged comments are complete only within 200 records/4 MiB or require paging, never silently first-page detail. Text/UI shows range/total/completeness/continuation. Preserve existing reader/lifecycle scope, all historical bytes and no metadata-wide search.
+- **FR-007**: Make current HTTP, native MCP, OpenClaw and both UI writers obey the same mutation rules. Add revision-aware UI drafts and conflict recovery. Missing revision on a material edit fails explicitly; no permanent unconditional-write compatibility route or rollout flag is allowed.
+- **FR-008**: Preserve old rows additively with an explicit revision baseline and unchanged issue/comment IDs, contents, states and known provenance. Activate only when all current writers can preserve revision/history. Preserve data and reject incompatible old writes on rollback; do not silently resume a bypassing server.
+- **FR-009**: A fresh relevant consumer can explicitly discover, read, refine, append an outcome and finish the existing card. No scheduler, polling, automatic new backlog injection, DAG/subtask/dependency UI or new host-session automation is included.
+- **FR-010**: Accepted narrow retry policy permits original logical-payload comparison after ordinary auth/visibility solely for same-result retry; store v1 SHA-256 binding only in the issue receipt, never export private payload/digest or use them for knowledge/similarity processing. Secrets/vault are outside permission. At the design baseline, issue routes lacked issue-specific secret detection/redaction; memory protection was not a global issue guard. Implementation reuses applicable existing protections for recognized classes and rejects affected new writes safely, without silently modifying promised metadata or claiming all secrets are detected. Protect private title/body/metadata and fix only the touched create-title log with synthetic RED/GREEN; evidence contains outcomes, not content/digests. No new scanner/framework, per-retry consent/global framework or new grant for private-history snapshots.
+
+### Key Entities *(include if feature involves data)*
+
+- **Issue**: The existing durable task card, project attribution, lifecycle, editable fields, object metadata, owner/recipient labels and monotonic revision.
+- **IssueComment**: The existing append-only dialogue/outcome record, with object metadata and distinct actor/author attribution.
+- **Create receipt**: Existing authenticated-actor plus canonical-source scoped request identity and original logical-payload binding to one issue; not another tracker, grant, attribution proof or comparison with later edits.
+- **Issue change**: An attributed, revision-linked record of committed material changes, readable under the issue's policy; historical baseline explicitly has unknown actor.
+
+## Success Criteria *(mandatory)*
+
+### Measurable Outcomes
+
+- **SC-001**: One issue ID survives first create, same-actor/canonical-source lost-response retry, refinement, fresh-session resume and authorized completion; ten concurrent equal creates in that exact namespace yield one card. A different actor never receives that receipt/result, and its independently authorized create is isolated.
+- **SC-002**: With at least 205 readable cards, a task outside page one is found through the combined filters and continuation; a consumer never mistakes a partial page for the full matching set.
+- **SC-003**: In a two-writer same-revision race, exactly one material proposal commits, exactly one revision advance/history change appears, and the losing proposal and attached comment produce no durable changes. The losing UI retains its draft.
+- **SC-004**: Every named active writer passes the shared authorization/revision/history cases. Forbidden replay/search/history requests expose zero protected IDs, payloads, counts or actor credentials.
+- **SC-005**: Migration conservation preserves 100% of pre-existing issue/comment IDs and contents and all known provenance. Fresh reads return new and old metadata correctly; historical unknowns remain unknown.
+
+## Assumptions
+
+The following two assumptions preserve the wording and ownership of the historical source `e9930bdfec26ab511add9c48144f703abdaec63a`; they do not assign current candidate ownership or establish current acceptance.
+
+- This package defines one complete P1 product slice; technical tasks are not separately accepted releases. Main retains contract review, integration/default-branch commits, product acceptance, release and communication. This lane commits its own focused verified candidate slices on its assigned branch.
+- Main accepted P1 and authorized this lane to choose T001/T002 in message 39669b21-48b8-43c1-9544-c0cd0a7c94be/comment 1742; Engram session 01a18a3b selected and recorded the bounded engineering details from cited owners. The historical #514/#515 priority pause ended when Main consumed the separate repair candidate (issue #513's 2026-10-30 11:17 milestone; `.agent/runs/core-repair-01a18a3b/ROOT-ACCEPTANCE.json`); it is not a current instruction to restart T003 or wait. The lane owns focused candidate slices; Main owns integration/default-branch commits, product acceptance and release. This reconciliation records existing evidence and claims no new runtime proof or release.
+
+**Current carry-forward, 2026-11-08:** The backend writer uses a separate candidate; Main retains integration, product acceptance and release. This port claims no new runtime proof or release.
+
+- A legacy create without a request key may remain a single-shot create with no retry guarantee. Updated consumers supply a key for this journey. Legacy material edits without a revision are deliberately refused.
+- DAG/subtask/dependency work is deferred until actual issue-based use demonstrates a blocked dependency that labels/comments cannot express, with a separately accepted caller contract and preserved IDs.

@@ -29,7 +29,7 @@ These are the stable entry points. Action enums list only routes that have live 
 | `settings` | set, get, list, delete | Manage recall model settings |
 | `docs` | create, read, list, history, comment, collections, documents, get_doc, remove, ingest | Manage versioned documents and collections |
 | `admin` | stats; purge_project when enabled | Read administrative telemetry or perform gated project purge |
-| `issues` | create, list, get, update, comment, reopen, close | Cross-project issue tracker |
+| `issues` | create, list, get, update, comment, reopen, close | Cross-project issue tracker; the pending issue-backed task contract is documented in [Issues contract](../../specs/012-agent-internal-tasks/contracts/issues.md) and the [operating guide](../operating-engram.md#задачи-в-issues-создание-продолжение-и-конфликты) |
 | `check_system_health` | none | Report subsystem health |
 
 ### Expanded Tools
@@ -712,6 +712,10 @@ guarantee that arbitrary application logs contain no other secrets.
 | `GET` | `/api/tokens` | List API tokens. |
 | `POST` | `/api/tokens` | Create worker keycard. |
 | `DELETE` | `/api/tokens/:id` | Revoke token. |
+
+**Pending Feature012, issue #513:** The accepted [task contract](../../specs/012-agent-internal-tasks/contracts/issues.md) specifies filtered, bounded list reads; keyed create/replay; authorized detail with independent comments/history pages; and revision-checked atomic edits or comment-only append. Its `GET /api/issues/{id}` detail and expanded contracts are not a claim that this candidate's backend is integrated or shipped. Same-result create replay is scoped to authenticated actor, canonical source, key and original intent; `expected_actor` is a precondition, not a credential. A stale material revision fails without applying its attached comment. Raw metadata is preserved only when admitted; existing authorization, privacy and secret restrictions remain. Consult the [recovery guide](../operating-engram.md#задачи-в-issues-создание-продолжение-и-конфликты) before retrying an unknown outcome.
+
+The historical documentation commit `831b228a55df53e4e30281696f717a52463ebdce` generated Swagger from its issue handler annotations. Those historical artifacts are not ported here; regenerate the current Swagger only after compatible backend annotations are integrated. Swagger 2 cannot express all presence-sensitive null/omission, material-versus-comment revision, actor-precondition or raw JSON rules. Issue-owner error envelopes and outer authentication/request middleware may differ; do not assume a uniform schema. Historical generation does not prove current behavior, browser/OpenClaw acceptance, real-data conservation or rollback.
 
 For `POST /api/update/apply`, an available update without an asset URL for the
 current platform returns HTTP 200 with `success: false` and an error message.
