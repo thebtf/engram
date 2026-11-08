@@ -695,6 +695,19 @@ guarantee that arbitrary application logs contain no other secrets.
 
 ### Core Endpoints
 
+`GET /api/version` and `GET /api/health` include `source_commit` as a string:
+exactly 40 lowercase hexadecimal characters when valid build provenance is
+available, or `""` when it is unavailable or invalid. The JSON response from
+`GET /health` uses the same health handler; HTML requests can receive the
+operator console instead. This field does not establish readiness.
+
+Docker builds accept optional `SOURCE_COMMIT` as a build argument. It must be
+empty or exactly 40 lowercase hexadecimal characters; with a `sha-<commit>`
+VERSION it must match that commit, which is used when the argument is omitted.
+Compose exposes this argument as optional `ENGRAM_SOURCE_COMMIT`. A SemVer build
+without it retains the empty value. Existing images are not changed by this source
+update.
+
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/context/inject` | Context injection for session-start. Params: `project`, `cwd`. Returns memories as JSON. |
