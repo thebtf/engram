@@ -134,6 +134,9 @@ func TestIssueHTTPInternalTaskPagingContract(t *testing.T) {
 	// consolidationTestDatabaseConfig; its run name and loopback port are dynamic.
 	// The existing worker fixture then owns schema creation, migration and cleanup.
 	rawDSN := os.Getenv("DATABASE_DSN")
+	if rawDSN == "" {
+		t.Skip("DATABASE_DSN not set; PostgreSQL paging proof not exercised")
+	}
 	target, err := url.Parse(rawDSN)
 	require.True(t, err == nil && (target.Scheme == "postgres" || target.Scheme == "postgresql"), "paging proof requires an explicit PostgreSQL URL for the disposable test database")
 	dsn, err := pgx.ParseConfig(rawDSN)

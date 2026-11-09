@@ -1,6 +1,8 @@
 package migrationmeta
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -86,4 +88,29 @@ func TestExtractCreateTablesIncompleteGuardAndIdentifier(t *testing.T) {
 	require.Equal(t, []string{"if"}, extractCreateTables("CREATE TABLE if (id INT)"))
 	require.Equal(t, []string{"if"}, extractCreateTables(`CREATE TABLE IF NOT EXISTS "public"."if" (id INT)`))
 	require.Equal(t, []string{"ordinary"}, extractCreateTables("CREATE TABLE IF NOT EXISTS ordinary (id INT)"))
+}
+
+func TestParseRegisteredFileRejectsUnknownMigrationIDs(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		declaration string
+		id          string
+	}{
+		{"undefined", "", "missingID"},
+		{"variable", `var migrationID = "001_variable"`, "migrationID"},
+		{"nonliteral constant", `const migrationID = unknownID`, "migrationID"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "migrations.go")
+			src := `package gorm
+` + tc.declaration + `
+func run() { gormigrate.New(db, options, []*gormigrate.Migration{migration()}) }
+func migration() *gormigrate.Migration {
+	return &gormigrate.Migration{ID: ` + tc.id + `, Migrate: func(tx *DB) error { return nil }}
+}`
+			require.NoError(t, os.WriteFile(path, []byte(src), 0o600))
+			_, err := ParseRegisteredFile(path)
+			require.ErrorContains(t, err, "migration literal missing")
+		})
+	}
 }

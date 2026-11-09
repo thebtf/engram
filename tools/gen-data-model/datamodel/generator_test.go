@@ -23,8 +23,9 @@ func runMigrations() {
 	})
 }`,
 		filepath.Join(dir, "migration_second.go"): `package gorm
+const secondMigrationID = "002_second"
 func secondMigration() *gormigrate.Migration {
-	return &gormigrate.Migration{ID: "002_second", Migrate: func(tx *DB) error {
+	return &gormigrate.Migration{ID: secondMigrationID, Migrate: func(tx *DB) error {
 		return tx.Exec("CREATE TABLE second_table (id INT)").Error
 	}}
 }
@@ -63,6 +64,12 @@ func unregisteredMigration() *gormigrate.Migration {
 	}
 	if !foundCatalog {
 		t.Fatal("registered migration 182 from the separate workspace catalog file was omitted")
+	}
+	for _, name := range []string{"issue_create_receipts", "issue_changes"} {
+		table, ok := actual.Table(name)
+		if !ok || table.CreatingMigrationID != "193_issue_internal_tasks" || table.CreateSQL == "" {
+			t.Fatalf("registered migration 193 table %s missing or incorrect: %+v", name, table)
+		}
 	}
 	t.Logf("registered migrations: %d; highest numeric ID: %d; workspace catalog 182: present", len(actual.Migrations), maxID)
 }
