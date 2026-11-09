@@ -345,6 +345,43 @@ func TestNoAuthCodeContextReconnectBoundsOwnersAndClearsDefaults(t *testing.T) {
 	decodeUCICodebaseContextResponse(t, callUCICodebaseContext(t, fixture.server, caller("reconnect-0"), map[string]any{"action": "select", "context_handle": activeHandle}))
 }
 
+func TestUCICodebaseContextForgetVersionPreservesReplacement(t *testing.T) {
+	fixture := newUCICodebaseContextFixture(t)
+	fixture.authorizer.allowed["agent/a"][fixture.refB.CheckoutID] = true
+	decodeUCICodebaseContextResponse(t, callUCICodebaseContext(t, fixture.server, fixture.clientA, uciCodebaseContextSelectArgs(fixture.refA)))
+	_, oldVersion, found := fixture.application.BoundSelectorSnapshot("mcp-client-a")
+	require.True(t, found)
+	decodeUCICodebaseContextResponse(t, callUCICodebaseContext(t, fixture.server, fixture.clientA, uciCodebaseContextSelectArgs(fixture.refB)))
+	fixture.application.ForgetClientVersion("mcp-client-a", oldVersion)
+	selector, newVersion, found := fixture.application.BoundSelectorSnapshot("mcp-client-a")
+	require.True(t, found)
+	require.NotEqual(t, oldVersion, newVersion)
+	ref, pinned := selector.Context()
+	require.True(t, pinned)
+	require.Equal(t, fixture.refB, ref)
+}
+
+func TestUCICodebaseCitationEvidenceIsBoundedPerHandle(t *testing.T) {
+	client := &codebaseContextClientHandles{}
+	scope := codebaseContextScopeKey{sourceID: "source", checkoutID: "checkout", incarnationID: "incarnation", profileID: "profile"}
+	entry := codebaseContextHandleEntry{scope: &scope}
+	stamp := &codebaseSelectionStamp{handle: "handle", realm: "realm", principal: "principal", workstation: "workstation"}
+	ref := uci.ContextRef{SourceID: "source", CheckoutID: "checkout", AnalysisProfileID: "profile"}
+	for index := range 32 {
+		ref.ViewID = fmt.Sprintf("view-%d", index)
+		codebaseRecordCitation(client, entry, stamp, ref)
+	}
+	ref.ViewID = "view-0"
+	codebaseRecordCitation(client, entry, stamp, ref)
+	ref.ViewID = "view-32"
+	codebaseRecordCitation(client, entry, stamp, ref)
+	require.Len(t, client.citations, 32)
+	ref.ViewID = "view-0"
+	require.True(t, codebaseHasCitation(client, entry, stamp, ref))
+	ref.ViewID = "view-1"
+	require.False(t, codebaseHasCitation(client, entry, stamp, ref))
+}
+
 func uciCodebaseContextClient(sessionID, keycardID, principal string) context.Context {
 	return auth.WithIdentity(
 		ContextWithSession(context.Background(), sessionID),
@@ -566,6 +603,30 @@ func (application *uciCodebaseContextApplicationFake) BoundSelector(clientSessio
 	return application.resolver.BoundSelector(clientSessionID)
 }
 
+func (application *uciCodebaseContextApplicationFake) BoundSelectorSnapshot(clientSessionID string) (uci.IndexBindingSelector, uint64, bool) {
+	return application.resolver.BoundSelectorSnapshot(clientSessionID)
+}
+
+func (application *uciCodebaseContextApplicationFake) WithBoundSelector(clientSessionID string, version uint64, action func() bool) bool {
+	return application.resolver.WithBoundSelector(clientSessionID, version, action)
+}
+
+func (application *uciCodebaseContextApplicationFake) ForgetClientVersion(clientSessionID string, version uint64) {
+	application.resolver.ForgetClientVersion(clientSessionID, version)
+}
+
+func (application *uciCodebaseContextApplicationFake) LoadCheckoutCitation(_ context.Context, binding uci.IndexBinding, viewID string) (uci.ContextRef, error) {
+	retained, found := application.catalog.historicalBindings[viewID]
+	if !found {
+		retained, found = application.catalog.bindings[binding.Scope.CheckoutID]
+		found = found && retained.Context != nil && retained.Context.ViewID == viewID
+	}
+	if !found || retained.Context == nil || retained.Scope != binding.Scope || retained.ProfileID != binding.ProfileID || retained.Context.SpaceID != nil {
+		return uci.ContextRef{}, errors.New("fixture checkout citation not found")
+	}
+	return cloneCodebaseContextRef(*retained.Context), nil
+}
+
 func (application *uciCodebaseContextApplicationFake) ForgetClient(clientSessionID string) {
 	application.resolver.ForgetClient(clientSessionID)
 }
@@ -628,6 +689,9 @@ func (catalog *uciCodebaseContextCatalogFake) LoadIndexBinding(_ context.Context
 		return uci.IndexBinding{}, err
 	}
 	if ref, pinned := selector.Context(); pinned {
+		if binding, found := catalog.historicalBindings[ref.ViewID]; found && binding.Context != nil && codebaseContextRefsEqual(*binding.Context, ref) {
+			return binding.Clone(), nil
+		}
 		binding, found := catalog.bindings[ref.CheckoutID]
 		if !found || binding.Context == nil || !codebaseContextRefsEqual(*binding.Context, ref) {
 			return uci.IndexBinding{}, errors.New("fixture index binding not found")
@@ -651,14 +715,21 @@ func (discovery *uciCodebaseContextDiscoveryFake) Discover(_ context.Context, in
 }
 
 type uciCodebaseContextCatalogFake struct {
-	records      map[string]uci.ContextRecord
-	bindings     map[string]uci.IndexBinding
-	calls        []uci.ContextRef
-	bindingCalls []uci.IndexBindingSelector
+	records            map[string]uci.ContextRecord
+	bindings           map[string]uci.IndexBinding
+	historicalBindings map[string]uci.IndexBinding
+	calls              []uci.ContextRef
+	bindingCalls       []uci.IndexBindingSelector
 }
 
 func (catalog *uciCodebaseContextCatalogFake) LoadContext(_ context.Context, ref uci.ContextRef) (uci.ContextRecord, error) {
 	catalog.calls = append(catalog.calls, ref)
+	if binding, found := catalog.historicalBindings[ref.ViewID]; found && binding.Context != nil && codebaseContextRefsEqual(*binding.Context, ref) {
+		return uci.ContextRecord{Ref: cloneCodebaseContextRef(ref), AuthRealm: uciCodebaseContextTestRealm}, nil
+	}
+	if binding, found := catalog.bindings[ref.CheckoutID]; found && binding.Context != nil && codebaseContextRefsEqual(*binding.Context, ref) && ref.SpaceID == nil {
+		return uci.ContextRecord{Ref: cloneCodebaseContextRef(ref), AuthRealm: uciCodebaseContextTestRealm}, nil
+	}
 	record, found := catalog.records[ref.CheckoutID]
 	if !found {
 		return uci.ContextRecord{}, errors.New("fixture context record not found")

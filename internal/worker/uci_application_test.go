@@ -208,6 +208,213 @@ func TestUCIApplicationMCPUsesExactPostgreSQLViews(t *testing.T) {
 	require.Equal(t, beforeFailure, workerUCIApplicationExposureCount(t, store.GetDB()))
 }
 
+func TestUCIApplicationCheckoutCitationSurvivesViewAdvance(t *testing.T) {
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
+	t.Setenv("ENGRAM_EMBEDDING_URL", "")
+	t.Setenv("ENGRAM_EMBEDDING_MODEL", "")
+	store := openWorkerUCIContextCompositionStore(t)
+	server := mcp.NewServer(mcp.ServerOptions{Version: "uci-citation-continuity"})
+	composition, err := composeUCIContext(true, store.GetDB(), server, workerUCISemanticConfig())
+	require.NoError(t, err)
+	fixture := newWorkerUCIApplicationFixture(t, composition)
+	identity := auth.ClientWithPrincipal("read-write", fixture.workstationID, fixture.principal, auth.PrincipalKindAgent)
+	caller := auth.WithIdentity(mcp.ContextWithSession(context.Background(), fixture.clientSessionID), identity)
+	handle := workerUCISelectCheckout(t, server, caller, fixture.source.SourceID, fixture.checkout, fixture.profile.ProfileID)
+
+	search := workerUCIApplicationQueryResponse(t, workerUCIApplicationToolResponse(t, server, caller, "codebase_search", map[string]any{
+		"query": "SearchNeedle", "path_prefix": "internal/", "limit": 10,
+	}))
+	require.Equal(t, uci.QueryStatusOK, search.Status)
+	require.NotNil(t, search.Contexts)
+	require.Equal(t, fixture.current.Context.ViewID, (*search.Contexts)[0].ViewID)
+	require.NotNil(t, search.Items)
+	item := workerUCIApplicationItemAtPath(t, *search.Items, "internal/alpha.go")
+	require.Contains(t, item.Excerpt, "current-published-body")
+	explicitSearch := workerUCIApplicationQueryResponse(t, workerUCIApplicationToolResponse(t, server, caller, "codebase_search", map[string]any{
+		"context_handle": handle, "query": "SearchNeedle", "path_prefix": "internal/", "limit": 10,
+	}))
+	require.Equal(t, uci.QueryStatusOK, explicitSearch.Status)
+	require.NotNil(t, explicitSearch.Exposure)
+	require.NotNil(t, explicitSearch.Items)
+	explicitItem := workerUCIApplicationItemAtPath(t, *explicitSearch.Items, "internal/alpha.go")
+	require.Equal(t, item.Ref, explicitItem.Ref)
+	require.Equal(t, item.MembershipID, explicitItem.MembershipID)
+
+	publisher, err := composition.projectionStore.Publisher(composition.authorizer, uci.IndexPublicationConfig{Limits: uci.DefaultIndexPublicationLimits()})
+	require.NoError(t, err)
+	changed := workerUCIApplicationAddArtifact(t, composition.projectionStore, workerUCIApplicationArtifactInput{
+		sourceID: fixture.source.SourceID, profileDigest: fixture.profile.ParserBundleDigest,
+		label: "citation-continuity-advance", name: "Alpha", symbol: "alpha",
+		source: "func Alpha() { _ = \"advanced-published-body SearchNeedle\" }\n",
+	})
+	memberships := []uci.IndexMembership{workerUCIApplicationMembership("internal/alpha.go", changed)}
+	replacements := []uci.IndexEdgeReplacement{{SourcePath: "internal/alpha.go"}}
+	parent := fixture.current.Context
+	advanced := workerUCIApplicationPublish(t, publisher, uci.IndexCaller{
+		AuthRealm: string(auth.SourceClient), Principal: fixture.principal, OwnerInstance: "citation-continuity",
+	}, workerUCIApplicationPublicationInput{
+		checkout: fixture.checkout, profileID: fixture.profile.ProfileID, key: "citation-continuity-advance",
+		jobKind: uci.IndexJobReconcile, parent: &parent,
+		part:        workerUCIApplicationPart([]workerUCIApplicationArtifact{changed}, memberships, replacements),
+		memberships: memberships, replacements: replacements, sequence: 13,
+	})
+	require.NotEqual(t, fixture.current.Context.ViewID, advanced.Context.ViewID)
+
+	readArgs := map[string]any{"ref": item.Ref, "membership_id": item.MembershipID, "span": item.Span, "content_digest": item.ContentDigest}
+	resolve := func() string {
+		response := workerUCIApplicationToolResponse(t, server, caller, "codebase_context", map[string]any{"action": "resolve"})
+		var payload struct {
+			Context *struct {
+				ViewID string `json:"view_id"`
+			} `json:"context"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(workerUCIApplicationToolText(t, response)), &payload))
+		require.NotNil(t, payload.Context)
+		return payload.Context.ViewID
+	}
+	require.Equal(t, advanced.Context.ViewID, resolve(), "checkout selection must follow the advance")
+
+	other := auth.WithIdentity(mcp.ContextWithSession(context.Background(), fixture.clientSessionID+"-other"), identity)
+	before := workerUCIApplicationExposureCount(t, store.GetDB())
+	foreignHandleArgs := map[string]any{"context_handle": handle, "ref": item.Ref, "membership_id": item.MembershipID, "span": item.Span, "content_digest": item.ContentDigest}
+	foreignHandle := workerUCIApplicationQueryResponse(t, workerUCIApplicationToolResponse(t, server, other, "codebase_read", foreignHandleArgs))
+	require.NotEqual(t, uci.QueryStatusOK, foreignHandle.Status)
+	require.Nil(t, foreignHandle.Exposure)
+	require.Nil(t, foreignHandle.Items)
+	require.Equal(t, before, workerUCIApplicationExposureCount(t, store.GetDB()))
+
+	workerUCISelectCheckout(t, server, other, fixture.source.SourceID, fixture.checkout, fixture.profile.ProfileID)
+	borrowedView := workerUCIApplicationToolResponse(t, server, other, "codebase_read", readArgs)
+	borrowedResponse := workerUCIApplicationQueryResponse(t, borrowedView)
+	require.Equal(t, uci.QueryStatusContextRequired, borrowedResponse.Status)
+	require.Equal(t, uci.QueryErrorContextMismatch, borrowedResponse.Error.Code)
+	require.Nil(t, borrowedResponse.Exposure)
+	require.Nil(t, borrowedResponse.Items)
+	require.NotContains(t, workerUCIApplicationToolText(t, borrowedView), item.Excerpt)
+	require.Equal(t, before, workerUCIApplicationExposureCount(t, store.GetDB()))
+
+	foreignRef := item.Ref
+	foreignRef.SourceID = uuid.NewString()
+	foreignSourceArgs := map[string]any{"ref": foreignRef, "membership_id": item.MembershipID, "span": item.Span, "content_digest": item.ContentDigest}
+	foreignSource := workerUCIApplicationQueryResponse(t, workerUCIApplicationToolResponse(t, server, caller, "codebase_read", foreignSourceArgs))
+	require.NotEqual(t, uci.QueryStatusOK, foreignSource.Status)
+	require.Nil(t, foreignSource.Exposure)
+	require.Nil(t, foreignSource.Items)
+	require.Equal(t, before, workerUCIApplicationExposureCount(t, store.GetDB()))
+
+	foreignFixture := newWorkerUCIApplicationFixture(t, composition)
+	foreignIdentity := auth.ClientWithPrincipal("read-write", foreignFixture.workstationID, foreignFixture.principal, auth.PrincipalKindAgent)
+	foreignCaller := auth.WithIdentity(mcp.ContextWithSession(context.Background(), foreignFixture.clientSessionID), foreignIdentity)
+	workerUCISelectCheckout(t, server, foreignCaller, foreignFixture.source.SourceID, foreignFixture.checkout, foreignFixture.profile.ProfileID)
+	foreignCheckout := workerUCIApplicationQueryResponse(t, workerUCIApplicationToolResponse(t, server, foreignCaller, "codebase_read", readArgs))
+	require.NotEqual(t, uci.QueryStatusOK, foreignCheckout.Status)
+	require.Nil(t, foreignCheckout.Exposure)
+	require.Nil(t, foreignCheckout.Items)
+	require.Equal(t, before, workerUCIApplicationExposureCount(t, store.GetDB()))
+
+	pinnedCaller := auth.WithIdentity(mcp.ContextWithSession(context.Background(), fixture.clientSessionID+"-pinned"), identity)
+	pinned := workerUCIApplicationSelectContext(t, server, pinnedCaller, advanced.Context)
+	pinnedArgs := map[string]any{"context_handle": pinned, "ref": item.Ref, "membership_id": item.MembershipID, "span": item.Span, "content_digest": item.ContentDigest}
+	pinnedRead := workerUCIApplicationQueryResponse(t, workerUCIApplicationToolResponse(t, server, pinnedCaller, "codebase_read", pinnedArgs))
+	require.NotEqual(t, uci.QueryStatusOK, pinnedRead.Status)
+	require.Nil(t, pinnedRead.Exposure)
+	require.Nil(t, pinnedRead.Items)
+	require.Equal(t, before, workerUCIApplicationExposureCount(t, store.GetDB()))
+
+	read := workerUCIApplicationQueryResponse(t, workerUCIApplicationToolResponse(t, server, caller, "codebase_read", readArgs))
+	require.Equal(t, uci.QueryStatusOK, read.Status, "original search citation must remain readable after checkout View advances")
+	require.NotNil(t, read.Contexts)
+	require.Equal(t, fixture.current.Context.ViewID, (*read.Contexts)[0].ViewID)
+	require.NotNil(t, read.Exposure)
+	require.NotNil(t, read.Items)
+	require.Len(t, *read.Items, 1)
+	require.Equal(t, item.Ref, (*read.Items)[0].Ref)
+	require.Equal(t, item.MembershipID, (*read.Items)[0].MembershipID)
+	require.Equal(t, item.Excerpt, (*read.Items)[0].Excerpt)
+	require.NotContains(t, (*read.Items)[0].Excerpt, "advanced-published-body")
+	handleRead := workerUCIApplicationQueryResponse(t, workerUCIApplicationToolResponse(t, server, caller, "codebase_read", foreignHandleArgs))
+	require.Equal(t, uci.QueryStatusOK, handleRead.Status)
+	require.NotNil(t, handleRead.Exposure)
+	require.NotNil(t, handleRead.Items)
+	require.Len(t, *handleRead.Items, 1)
+	require.Equal(t, item.Excerpt, (*handleRead.Items)[0].Excerpt)
+
+	window := item.Span
+	require.GreaterOrEqual(t, window.ByteEnd-window.ByteStart, int64(4))
+	require.GreaterOrEqual(t, len(item.Excerpt), 4)
+	window.ByteEnd = window.ByteStart + 4
+	windowArgs := map[string]any{"ref": item.Ref, "membership_id": item.MembershipID, "span": window, "indexed_span": item.Span, "content_digest": item.ContentDigest}
+	windowRead := workerUCIApplicationQueryResponse(t, workerUCIApplicationToolResponse(t, server, caller, "codebase_read", windowArgs))
+	require.Equal(t, uci.QueryStatusOK, windowRead.Status)
+	require.NotNil(t, windowRead.Exposure)
+	require.NotNil(t, windowRead.Items)
+	require.Len(t, *windowRead.Items, 1)
+	require.Equal(t, item.Excerpt[:4], (*windowRead.Items)[0].Excerpt)
+	windowItem := (*windowRead.Items)[0]
+	require.Equal(t, item.ContentDigest, windowItem.ContentDigest)
+	require.Equal(t, uci.QuerySpan{
+		ByteStart: window.ByteStart, ByteEnd: window.ByteEnd,
+		LineStart: item.Span.LineStart,
+		LineEnd:   item.Span.LineStart + int64(strings.Count(item.Excerpt[:4], "\n")),
+	}, windowItem.Span)
+
+	forgedSpan := item.Span
+	forgedSpan.ByteEnd++
+	for _, args := range []map[string]any{
+		{"ref": item.Ref, "membership_id": item.MembershipID, "span": window, "indexed_span": forgedSpan, "content_digest": item.ContentDigest},
+		{"ref": item.Ref, "membership_id": item.MembershipID, "span": window, "indexed_span": item.Span, "content_digest": strings.TrimPrefix(workerUCIApplicationDigest("forged digest"), "sha256:")},
+	} {
+		forged := workerUCIApplicationQueryResponse(t, workerUCIApplicationToolResponse(t, server, caller, "codebase_read", args))
+		require.NotEqual(t, uci.QueryStatusOK, forged.Status)
+		if forged.Status == uci.QueryStatusEmpty {
+			require.NotNil(t, forged.Exposure)
+			require.NotNil(t, forged.Items)
+			require.Empty(t, *forged.Items)
+		} else {
+			require.Equal(t, uci.QueryStatusContextRequired, forged.Status)
+			require.NotNil(t, forged.Error)
+			require.Equal(t, uci.QueryErrorContextMismatch, forged.Error.Code)
+			require.Nil(t, forged.Exposure)
+			require.Nil(t, forged.Items)
+		}
+	}
+
+	missingArgs := map[string]any{"ref": item.Ref, "membership_id": uuid.NewString(), "span": item.Span, "content_digest": item.ContentDigest}
+	missing := workerUCIApplicationQueryResponse(t, workerUCIApplicationToolResponse(t, server, caller, "codebase_read", missingArgs))
+	require.Equal(t, uci.QueryStatusEmpty, missing.Status)
+	require.NotNil(t, missing.Exposure)
+	require.NotNil(t, missing.Items)
+	require.Empty(t, *missing.Items)
+	require.Equal(t, advanced.Context.ViewID, resolve(), "historical read must not change checkout default")
+
+	var originalState gormstore.UCIViewState
+	require.NoError(t, store.GetDB().Model(&gormstore.UCIView{}).Select("state").Where("view_id = ?", fixture.current.Context.ViewID).Scan(&originalState).Error)
+	require.NoError(t, store.GetDB().Model(&gormstore.UCIView{}).
+		Where("view_id = ?", fixture.current.Context.ViewID).Update("state", gormstore.UCIViewRetired).Error)
+	beforeRetired := workerUCIApplicationExposureCount(t, store.GetDB())
+	retired := workerUCIApplicationToolResponse(t, server, caller, "codebase_read", readArgs)
+	retiredResponse := workerUCIApplicationQueryResponse(t, retired)
+	require.NotEqual(t, uci.QueryStatusOK, retiredResponse.Status)
+	require.Nil(t, retiredResponse.Exposure)
+	require.Nil(t, retiredResponse.Items)
+	require.NotContains(t, workerUCIApplicationToolText(t, retired), item.Excerpt)
+	require.Equal(t, beforeRetired, workerUCIApplicationExposureCount(t, store.GetDB()))
+	require.NoError(t, store.GetDB().Model(&gormstore.UCIView{}).
+		Where("view_id = ?", fixture.current.Context.ViewID).Update("state", originalState).Error)
+
+	workerUCIApplicationSelectContext(t, server, caller, advanced.Context)
+	workerUCISelectCheckout(t, server, caller, fixture.source.SourceID, fixture.checkout, fixture.profile.ProfileID)
+	beforeReplacement := workerUCIApplicationExposureCount(t, store.GetDB())
+	replaced := workerUCIApplicationToolResponse(t, server, caller, "codebase_read", readArgs)
+	replacedResponse := workerUCIApplicationQueryResponse(t, replaced)
+	require.Equal(t, uci.QueryStatusContextRequired, replacedResponse.Status)
+	require.Equal(t, uci.QueryErrorContextMismatch, replacedResponse.Error.Code)
+	require.Nil(t, replacedResponse.Items)
+	require.Nil(t, replacedResponse.Exposure)
+	require.NotContains(t, workerUCIApplicationToolText(t, replaced), item.Excerpt)
+	require.Equal(t, beforeReplacement, workerUCIApplicationExposureCount(t, store.GetDB()))
+}
+
 func TestUCIApplicationFTSSearchDoesNotWaitForQueuedEmbedding(t *testing.T) {
 	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
 	const model = "worker-uci-fts-first"
