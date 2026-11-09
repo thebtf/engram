@@ -9,6 +9,47 @@ import (
 	"gorm.io/gorm"
 )
 
+// SeedHistoricalCompatible also accepts a pre-actor fixture schema, as used by
+// the recovery fixture when compiled against an older baseline.
+func SeedHistoricalCompatible(db *gorm.DB, seed func(*gorm.DB) error) error {
+	return db.Transaction(func(tx *gorm.DB) error {
+		var schema string
+		if err := tx.Raw("SELECT current_schema()").Row().Scan(&schema); err != nil {
+			return err
+		}
+		if schema == "" {
+			return fmt.Errorf("historical issue fixture requires a schema")
+		}
+		prefix := pq.QuoteIdentifier(schema) + "."
+		if err := tx.Exec("LOCK TABLE " + prefix + "issue_comments, " + prefix + "issues IN ACCESS EXCLUSIVE MODE").Error; err != nil {
+			return err
+		}
+		var columns int64
+		if err := tx.Raw(`SELECT count(*) FROM information_schema.columns
+			WHERE table_schema=? AND table_name IN ('issues','issue_comments') AND column_name='actor_kind'`, schema).Scan(&columns).Error; err != nil {
+			return err
+		}
+		switch columns {
+		case 0:
+			var guards int64
+			if err := tx.Raw(`SELECT count(*) FROM pg_trigger t
+				JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace
+				WHERE n.nspname=? AND c.relname IN ('issues','issue_comments')
+				AND t.tgname='engram_issue_insert_actor_required'`, schema).Scan(&guards).Error; err != nil {
+				return err
+			}
+			if guards != 0 {
+				return fmt.Errorf("historical issue fixture has guards without actor columns")
+			}
+			return seed(tx)
+		case 2:
+			return SeedHistorical(tx, seed)
+		default:
+			return fmt.Errorf("historical issue fixture has incomplete actor columns")
+		}
+	})
+}
+
 // SeedHistorical preserves unknown historical attribution without inventing an
 // actor. Only the two exact INSERT guards are suspended in the caller's fixture
 // schema; data and original trigger modes commit together or roll back together.

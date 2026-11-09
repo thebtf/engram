@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
@@ -138,7 +139,7 @@ func TestIssueInternalTasksConstraints(t *testing.T) {
 					seedFailure := errors.New("synthetic historical fixture seed failure")
 					issue := Issue{Title: "Synthetic historical fixture transaction", SourceProject: source, TargetProject: source}
 					comment := IssueComment{AuthorProject: source, Body: "Synthetic historical unknown actor"}
-					err := issuefixture.SeedHistorical(tx, func(seed *gormlib.DB) error {
+					err := issuefixture.SeedHistoricalCompatible(tx, func(seed *gormlib.DB) error {
 						if err := seed.Create(&issue).Error; err != nil {
 							return err
 						}
@@ -171,6 +172,78 @@ func TestIssueInternalTasksConstraints(t *testing.T) {
 				}()
 			}
 		}
+	})
+
+	t.Run("historical_compatibility_pre_actor_and_refusals", func(t *testing.T) {
+		for _, tc := range []struct {
+			name       string
+			setup      []string
+			failSeed   bool
+			wantError  string
+			wantRows   int64
+			wantCalled bool
+		}{
+			{name: "pre_actor", wantRows: 1, wantCalled: true},
+			{name: "pre_actor_rollback", failSeed: true, wantError: "synthetic seed failure", wantCalled: true},
+			{name: "partial_actor_columns", setup: []string{"ALTER TABLE issues ADD COLUMN actor_kind text"}, wantError: "incomplete actor columns"},
+			{name: "missing_guards", setup: []string{"ALTER TABLE issues ADD COLUMN actor_kind text", "ALTER TABLE issue_comments ADD COLUMN actor_kind text"}, wantError: "requires both INSERT guards"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				tx := db.Begin()
+				require.NoError(t, tx.Error)
+				defer func() { require.NoError(t, tx.Rollback().Error) }()
+				schema := "issuefixture_compat_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+				require.NoError(t, tx.Exec(`CREATE SCHEMA `+pq.QuoteIdentifier(schema)).Error)
+				require.NoError(t, tx.Exec(`SET LOCAL search_path TO `+pq.QuoteIdentifier(schema)).Error)
+				require.NoError(t, tx.Exec(`CREATE TABLE issues (id integer PRIMARY KEY)`).Error)
+				require.NoError(t, tx.Exec(`CREATE TABLE issue_comments (id integer PRIMARY KEY)`).Error)
+				for _, statement := range tc.setup {
+					require.NoError(t, tx.Exec(statement).Error)
+				}
+				called := false
+				err := issuefixture.SeedHistoricalCompatible(tx, func(seed *gormlib.DB) error {
+					called = true
+					if err := seed.Exec(`INSERT INTO issues (id) VALUES (1)`).Error; err != nil {
+						return err
+					}
+					if err := seed.Exec(`INSERT INTO issue_comments (id) VALUES (1)`).Error; err != nil {
+						return err
+					}
+					if tc.failSeed {
+						return errors.New("synthetic seed failure")
+					}
+					return nil
+				})
+				if tc.wantError == "" {
+					require.NoError(t, err)
+				} else {
+					require.ErrorContains(t, err, tc.wantError)
+				}
+				assert.Equal(t, tc.wantCalled, called)
+				for _, table := range []string{"issues", "issue_comments"} {
+					var count int64
+					require.NoError(t, tx.Table(table).Count(&count).Error)
+					assert.Equal(t, tc.wantRows, count, "table %s", table)
+				}
+			})
+		}
+	})
+
+	t.Run("historical_compatibility_missing_one_guard", func(t *testing.T) {
+		tx := db.Begin()
+		require.NoError(t, tx.Error)
+		defer func() { require.NoError(t, tx.Rollback().Error) }()
+		require.NoError(t, tx.Exec(`DROP TRIGGER engram_issue_insert_actor_required ON issue_comments`).Error)
+		called := false
+		err := issuefixture.SeedHistoricalCompatible(tx, func(*gormlib.DB) error {
+			called = true
+			return nil
+		})
+		require.ErrorContains(t, err, "requires both INSERT guards")
+		assert.False(t, called)
+		var mode string
+		require.NoError(t, tx.Raw(`SELECT t.tgenabled::text FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema() AND c.relname='issues' AND t.tgname='engram_issue_insert_actor_required'`).Row().Scan(&mode))
+		assert.Equal(t, "O", mode)
 	})
 
 	t.Run("metadata_actor_label_and_revision_constraints_reject_invalid_storage", func(t *testing.T) {

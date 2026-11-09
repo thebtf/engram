@@ -10,16 +10,18 @@ import (
 	"os"
 	"strings"
 
+	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
 	"github.com/thebtf/engram/internal/config"
 	engramcrypto "github.com/thebtf/engram/internal/crypto"
 	engramgorm "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/issuefixture"
 	"github.com/thebtf/engram/pkg/models"
 )
 
 const (
-	project                         = "recovery-fixture"
+	project                         = "51300000-0000-4000-8000-000000000097"
 	memoryContent                   = "Durable recovery memory sentinel remains recallable after restore"
 	ruleContent                     = "Always preserve the recovery sentinel during PostgreSQL recovery"
 	credentialKey                   = "recovery.api_key"
@@ -96,6 +98,10 @@ func main() {
 }
 
 func seed(ctx context.Context, store *engramgorm.Store, vault *engramcrypto.Vault) error {
+	if err := store.DB.WithContext(ctx).Create(&engramgorm.Project{ID: project}).Error; err != nil {
+		return fmt.Errorf("seed canonical project: %w", err)
+	}
+
 	memoryStore := engramgorm.NewMemoryStore(store)
 	if _, err := memoryStore.Create(ctx, &models.Memory{
 		Project: project, Content: memoryContent, Tags: []string{"recovery", "backup"},
@@ -122,10 +128,12 @@ func seed(ctx context.Context, store *engramgorm.Store, vault *engramcrypto.Vaul
 		return fmt.Errorf("seed credential: %w", err)
 	}
 
-	issueStore := engramgorm.NewIssueStore(store.DB)
-	if _, err := issueStore.CreateIssue(ctx, &engramgorm.Issue{
-		Title: issueTitle, Body: "Recovery issue body", Status: "open", Priority: "high", Type: "task",
-		SourceProject: project, TargetProject: project, SourceAgent: "recovery-fixture",
+	if err := issuefixture.SeedHistoricalCompatible(store.DB.WithContext(ctx), func(tx *gorm.DB) error {
+		_, err := engramgorm.NewIssueStore(tx).CreateIssue(ctx, &engramgorm.Issue{
+			Title: issueTitle, Body: "Recovery issue body", Status: "open", Priority: "high", Type: "task",
+			SourceProject: project, TargetProject: project, SourceAgent: "recovery-fixture",
+		})
+		return err
 	}); err != nil {
 		return fmt.Errorf("seed issue: %w", err)
 	}
