@@ -501,6 +501,98 @@ func TestSharedIssueOwnerPostgres(t *testing.T) {
 		errorCode(t, err, "REVISION_CONFLICT")
 	})
 
+	t.Run("concurrent_progress_appends_preserve_statement_and_resume", func(t *testing.T) {
+		first := create(t, intent("concurrent-progress", `{}`))
+		before := domainCounts(t, db)
+		writers := []context.Context{
+			contract.WithTransportSession(ctx, "progress-session-a"),
+			contract.WithTransportSession(other, "progress-session-b"),
+		}
+		var results [2]issues.Result
+		var failures [2]error
+		start := make(chan struct{})
+		var group sync.WaitGroup
+		for index := range writers {
+			group.Add(1)
+			go func(index int) {
+				defer group.Done()
+				<-start
+				raw := json.RawMessage(fmt.Sprintf(`{"comment":"Synthetic progress %d","comment_metadata":{"writer":%d}}`, index, index))
+				results[index], failures[index] = application.Mutate(writers[index], scope, first.ID, raw)
+			}(index)
+		}
+		close(start)
+		group.Wait()
+		for index := range writers {
+			require.NoError(t, failures[index])
+			assert.Equal(t, first.ID, results[index].ID)
+			assert.Equal(t, "1", results[index].Revision)
+			assert.False(t, results[index].Changed)
+			require.NotNil(t, results[index].CommentID)
+		}
+		assert.NotEqual(t, *results[0].CommentID, *results[1].CommentID)
+		assert.Equal(t, []int64{before[0], before[1] + 2, before[2], before[3]}, domainCounts(t, db))
+		page, err := store.ReadTaskIssue(t.Context(), first.ID, gormdb.IssueTaskDetailParams{ReadProject: source, Paged: true, CommentsLimit: 20, HistoryLimit: 20})
+		require.NoError(t, err)
+		assert.Equal(t, "Synthetic shared task", page.Issue.Title)
+		assert.Equal(t, "Synthetic outcome", page.Issue.Body)
+		assert.EqualValues(t, 1, page.Issue.Revision)
+		require.Len(t, page.Comments, 2)
+		require.Len(t, page.History, 1)
+		byID := make(map[int64]gormdb.IssueComment, len(page.Comments))
+		for _, comment := range page.Comments {
+			byID[comment.ID] = comment
+		}
+		for index, result := range results {
+			comment, ok := byID[*result.CommentID]
+			require.True(t, ok)
+			assert.Equal(t, fmt.Sprintf("Synthetic progress %d", index), comment.Body)
+			assert.JSONEq(t, fmt.Sprintf(`{"writer":%d}`, index), string(comment.Metadata))
+			assert.Equal(t, "client", comment.Actor.Kind)
+			require.NotNil(t, comment.Actor.Reference)
+			assert.Equal(t, []string{"client:synthetic-shared-a", "client:synthetic-shared-b"}[index], *comment.Actor.Reference)
+			assert.Equal(t, []string{"progress-session-a", "progress-session-b"}[index], comment.AuthorSession)
+			assert.Equal(t, "transport", comment.AuthorSessionSource)
+		}
+		_, err = store.ReadTaskIssue(t.Context(), first.ID, gormdb.IssueTaskDetailParams{ReadProject: hiddenSource, Paged: true, CommentsLimit: 20, HistoryLimit: 20})
+		errorCode(t, err, "ISSUE_NOT_FOUND")
+	})
+
+	t.Run("lifecycle_without_revision_keeps_explicit_conflicts_and_authority", func(t *testing.T) {
+		first := create(t, intent("lifecycle-compatibility", `{}`))
+		readonly := auth.WithIdentity(t.Context(), auth.Client("read-only", "synthetic-readonly"))
+		_, err := application.Mutate(readonly, scope, first.ID, json.RawMessage(`{"status":"resolved"}`))
+		errorCode(t, err, "FORBIDDEN")
+		_, err = application.Mutate(t.Context(), scope, first.ID, json.RawMessage(`{"status":"resolved"}`))
+		errorCode(t, err, "UNAUTHENTICATED")
+		_, err = application.Mutate(other, scope, first.ID, json.RawMessage(`{"status":"closed"}`))
+		errorCode(t, err, "INVALID_TRANSITION")
+		_, err = application.Mutate(other, scope, first.ID, json.RawMessage(`{"status":"resolved","body":"forbidden"}`))
+		errorCode(t, err, "FORBIDDEN")
+		_, err = application.Mutate(ctx, scope, first.ID, json.RawMessage(`{"status":"resolved","body":"edit needs revision"}`))
+		errorCode(t, err, "REVISION_REQUIRED")
+		resolved, err := application.Mutate(other, scope, first.ID, json.RawMessage(`{"status":"resolved","comment":"Synthetic outcome"}`))
+		require.NoError(t, err)
+		assert.Equal(t, "2", resolved.Revision)
+		require.NotNil(t, resolved.CommentID)
+		_, err = application.Mutate(other, scope, first.ID, json.RawMessage(`{"status":"closed","expected_revision":"1","comment":"stale"}`))
+		errorCode(t, err, "REVISION_CONFLICT")
+		closed, err := application.Mutate(other, scope, first.ID, json.RawMessage(`{"status":"closed"}`))
+		require.NoError(t, err)
+		assert.Equal(t, "3", closed.Revision)
+		reopened, err := application.Mutate(other, scope, first.ID, json.RawMessage(`{"status":"reopened"}`))
+		require.NoError(t, err)
+		assert.Equal(t, "4", reopened.Revision)
+		row, comments := read(t, first.ID)
+		assert.Equal(t, "reopened", row.Status)
+		assert.Equal(t, "Synthetic outcome", row.Body)
+		require.Len(t, comments, 1)
+		assert.Equal(t, "Synthetic outcome", comments[0].Body)
+		var history []gormdb.IssueChange
+		require.NoError(t, db.Where("issue_id = ?", first.ID).Order("revision").Find(&history).Error)
+		require.Len(t, history, 4)
+	})
+
 	t.Run("noop_comments_nullable_labels_and_revision_requirements", func(t *testing.T) {
 		first := create(t, intent("noop", `{"n":1}`))
 		before, comments := read(t, first.ID)

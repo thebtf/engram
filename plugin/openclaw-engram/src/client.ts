@@ -357,10 +357,11 @@ export const IssueUpdateRequestSchema = z.object({
  status: IssueStatusSchema.optional(), comment: z.string().min(1).optional(), comment_metadata: IssueWriteMetadataSchema.optional(),
  source_project: z.string().optional(), source_agent: z.string().optional(), session_id: z.string().min(1).optional(), client: z.string().optional(),
 }).superRefine((value, ctx) => {
- const material = value.title !== undefined || value.body !== undefined || value.priority !== undefined || value.type !== undefined ||
-  value.labels !== undefined || value.metadata !== undefined || value.owner_label !== undefined || value.recipient_label !== undefined || value.target_session !== undefined || value.status !== undefined;
- if (material && value.expected_revision === undefined) ctx.addIssue({ code: 'custom', path: ['expected_revision'], message: 'Material mutation requires expected_revision', params: { issueCode: 'REVISION_REQUIRED' } });
- if (!material && value.comment === undefined) ctx.addIssue({ code: 'custom', message: 'At least one edit, state change or comment is required' });
+ const fields = value.title !== undefined || value.body !== undefined || value.priority !== undefined || value.type !== undefined ||
+  value.labels !== undefined || value.metadata !== undefined || value.owner_label !== undefined || value.recipient_label !== undefined || value.target_session !== undefined;
+ const lifecycle = value.status === 'resolved' || value.status === 'reopened' || value.status === 'closed';
+ if ((fields || (value.status !== undefined && !lifecycle)) && value.expected_revision === undefined) ctx.addIssue({ code: 'custom', path: ['expected_revision'], message: 'Material mutation requires expected_revision', params: { issueCode: 'REVISION_REQUIRED' } });
+ if (!fields && value.status === undefined && value.comment === undefined) ctx.addIssue({ code: 'custom', message: 'At least one edit, state change or comment is required' });
  if (value.comment_metadata !== undefined && value.comment === undefined) ctx.addIssue({ code: 'custom', path: ['comment_metadata'], message: 'comment_metadata requires a comment' });
 });
 export type UpdateIssueRequest = z.infer<typeof IssueUpdateRequestSchema>;

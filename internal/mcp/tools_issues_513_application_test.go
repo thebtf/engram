@@ -80,11 +80,11 @@ func TestIssues513NativeApplication(t *testing.T) {
 		comment := callIssues513Native(t, server, other, map[string]any{"action": "comment", "id": id, "body": "Synthetic collaborator outcome", "metadata": map[string]any{"outcome": "partial"}, "format": "json"})
 		require.Nil(t, comment.Error)
 		assert.JSONEq(t, `"2"`, string(issues513NativeJSON(t, comment)["revision"]))
-		resolved := invoke(t, map[string]any{"action": "update", "id": id, "expected_revision": "2", "status": "resolved"})
+		resolved := invoke(t, map[string]any{"action": "update", "id": id, "status": "resolved"})
 		assert.JSONEq(t, `"3"`, string(resolved["revision"]))
-		reopened := invoke(t, map[string]any{"action": "reopen", "id": id, "expected_revision": "3", "body": "Synthetic reason", "metadata": map[string]any{"reason": "retained"}})
+		reopened := invoke(t, map[string]any{"action": "reopen", "id": id, "body": "Synthetic reason", "metadata": map[string]any{"reason": "retained"}})
 		assert.JSONEq(t, `"4"`, string(reopened["revision"]))
-		closed := invoke(t, map[string]any{"action": "close", "id": id, "expected_revision": "4"})
+		closed := invoke(t, map[string]any{"action": "close", "id": id})
 		assert.JSONEq(t, `"5"`, string(closed["revision"]))
 		detail := invoke(t, map[string]any{"action": "get", "id": id, "detail_mode": "paged"})
 		var row gormdb.Issue
@@ -134,7 +134,7 @@ func TestIssues513NativeApplication(t *testing.T) {
 		assert.Equal(t, before, after)
 	})
 	t.Run("missing_revision_and_changed_actor_fail_without_new_intent", func(t *testing.T) {
-		for _, args := range []map[string]any{{"action": "close", "id": id, "format": "json"}, {"action": "create", "title": "Synthetic actor guard", "request_key": "guarded", "expected_actor": map[string]any{"kind": "operator", "reference": "operator:master"}, "format": "json"}} {
+		for _, args := range []map[string]any{{"action": "update", "id": id, "title": "Synthetic changed title", "format": "json"}, {"action": "create", "title": "Synthetic actor guard", "request_key": "guarded", "expected_actor": map[string]any{"kind": "operator", "reference": "operator:master"}, "format": "json"}} {
 			response := callIssues513Native(t, server, owner, args)
 			require.NotNil(t, response.Error)
 			failure := issues513NativeJSON(t, response)

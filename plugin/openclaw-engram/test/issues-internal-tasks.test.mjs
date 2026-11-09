@@ -354,9 +354,10 @@ for (const [name, target_session] of [['set', 'recipient & 日本語'], ['clear'
 }
 
 for (const [name, params, code] of [
-  ['missing revision', { action: 'update', status: 'resolved' }, 'REVISION_REQUIRED'],
+  ['missing revision', { action: 'update', body: 'explicit edit' }, 'REVISION_REQUIRED'],
   ['target session without revision', { action: 'update', target_session: 'recipient' }, 'REVISION_REQUIRED'],
   ['target session clear without revision', { action: 'update', target_session: null }, 'REVISION_REQUIRED'],
+  ['lifecycle with field edit without revision', { action: 'update', status: 'resolved', metadata: { outcome: 'needs-cas' } }, 'REVISION_REQUIRED'],
   ['numeric revision', { action: 'update', status: 'resolved', expected_revision: 1 }, 'INVALID_ARGUMENT'],
   ['zero revision', { action: 'update', status: 'resolved', expected_revision: '0' }, 'INVALID_ARGUMENT'],
   ['signed revision', { action: 'update', status: 'resolved', expected_revision: '+1' }, 'INVALID_ARGUMENT'],
@@ -368,8 +369,6 @@ for (const [name, params, code] of [
   ['empty owner', { action: 'update', expected_revision: '1', owner_label: '' }, 'INVALID_ARGUMENT'],
   ['empty recipient', { action: 'update', expected_revision: '1', recipient_label: '' }, 'INVALID_ARGUMENT'],
   ['empty comment', { action: 'comment', body: '' }, 'INVALID_ARGUMENT'],
-  ['reopen without revision', { action: 'reopen' }, 'REVISION_REQUIRED'],
-  ['close without revision', { action: 'close' }, 'REVISION_REQUIRED'],
 ]) {
   test(`issues rejects ${name} without a mutation`, async t => {
     const f = fixture(t);
@@ -406,6 +405,18 @@ for (const [action, status] of [['update', 'resolved'], ['reopen', 'reopened'], 
     assert.equal(request.body.session_id, context.sessionId);
     assert.equal(request.body.client, 'openclaw');
     assert.deepEqual(jsonResult(text), updated);
+  });
+}
+
+for (const [action, status] of [['update', 'resolved'], ['reopen', 'reopened'], ['close', 'closed']]) {
+  test(`issues ${action} accepts an unconditioned lifecycle-only request`, async t => {
+    const f = fixture(t, [{ body: updated }]);
+    const result = await executeJson(f.tool, { action, id: 701, ...(action === 'update' ? { status } : {}) });
+    const request = firstRequest(f, 'PATCH', '/api/issues/701');
+    assert.equal(request.body.status, status);
+    assert.equal(Object.hasOwn(request.body, 'expected_revision'), false);
+    assert.equal(request.body.session_id, context.sessionId);
+    assert.deepEqual(result, updated);
   });
 }
 
@@ -891,7 +902,7 @@ test('issues advertised schema includes the optional authenticated actor expecta
 for (const [name, params, code, field, recovery] of [
   ['invalid metadata', { ...createInput, metadata: null }, 'INVALID_ARGUMENT', 'metadata', /\b(?:correct|fix|revise)\b/i],
   ['oversized key', { ...createInput, request_key: 'x'.repeat(513) }, 'PAYLOAD_TOO_LARGE', 'request_key', /\b(?:reduce|shorten|lower|use)\b/i],
-  ['missing material revision', { action: 'update', id: 701, status: 'resolved' }, 'REVISION_REQUIRED', 'expected_revision', /\b(?:get|read|fetch)\b/i],
+  ['missing material revision', { action: 'update', id: 701, body: 'explicit edit' }, 'REVISION_REQUIRED', 'expected_revision', /\b(?:get|read|fetch)\b/i],
 ]) {
   test(`issues default-text ${name} keeps the legacy JSON array and adds ${code} recovery`, async t => {
     const f = fixture(t);

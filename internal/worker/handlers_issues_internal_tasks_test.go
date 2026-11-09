@@ -113,6 +113,31 @@ func issue513Detail(t *testing.T, router http.Handler, actor auth.Identity, id i
 	return issue513JSON(t, response)
 }
 
+func TestIssueHTTPLifecycleWithoutRevision(t *testing.T) {
+	_, router := newIssue513HTTPFixture(t)
+	owner := auth.Client("read-write", "synthetic-lifecycle-owner")
+	participant := auth.Client("read-write", "synthetic-lifecycle-participant")
+	id := issue513CreatedID(t, issue513HTTPCall(t, router, owner, http.MethodPost, "/api/issues", issue513CreateBody(issue513Source, "lifecycle-no-revision", "Synthetic lifecycle", `{}`)))
+	path := fmt.Sprintf("/api/issues/%d", id)
+	for _, status := range []string{"resolved", "closed", "reopened"} {
+		response := issue513HTTPCall(t, router, participant, http.MethodPatch, path, fmt.Sprintf(`{"status":%q}`, status))
+		require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	}
+	stale := issue513HTTPCall(t, router, participant, http.MethodPatch, path, `{"status":"resolved","expected_revision":"1","comment":"must not commit"}`)
+	require.Equal(t, http.StatusConflict, stale.Code, stale.Body.String())
+	issue := issue513Detail(t, router, participant, id)
+	var detail struct {
+		Status string `json:"status"`
+		Body   string `json:"body"`
+	}
+	require.NoError(t, json.Unmarshal(issue["issue"], &detail))
+	assert.Equal(t, "reopened", detail.Status)
+	assert.Equal(t, "Record a resumable synthetic outcome.", detail.Body)
+	var comments []json.RawMessage
+	require.NoError(t, json.Unmarshal(issue["comments"], &comments))
+	assert.Empty(t, comments)
+}
+
 func TestIssueHTTPInternalTaskContract(t *testing.T) {
 	service, router := newIssue513HTTPFixture(t)
 	actor := auth.Client("read-write", "synthetic-issue-513-actor-a")

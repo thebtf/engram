@@ -22,6 +22,8 @@
 
 ### R3 — One revision transaction, all writers
 
+The R3/R4 decision text below records the earlier design. Main's later accepted clarification permits standalone resolve/reopen/close without a caller revision under the locked transition rules in `contracts/issues.md`; field edits and supplied revision preconditions remain strict. Unconditioned lifecycle calls cannot prevent an intervening-state-cycle ambiguity.
+
 **Decision**: Material updates require an expected integer revision (wire decimal string), authorization rechecked under lock, and one fields/state/history/optional-comment commit. A comment-only append is independent and does not increment issue revision. Existing bulk/selection actions retain their atomic set semantics while adopting per-target issue revisions. Internal conditional acknowledgment records its actual system actor; no new producer is introduced.
 **Rationale**: `issue_store.go:297–377` already groups PATCH effects but has no CAS; `492–630` shows acknowledgment and selection as real alternative writers. Selection currently checks timestamps, so a field-only CAS patch would leave a bypass.
 **Alternatives considered**: Timestamp-only general CAS is weaker than the accepted monotonic revision contract. Retrying a losing edit with an automatically refreshed revision silently overwrites the winner. Appending a losing compound comment violates the requested no-op.

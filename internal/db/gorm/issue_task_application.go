@@ -320,7 +320,8 @@ func mutateLockedTaskIssueTx(tx *gormlib.DB, row *Issue, actor issues.Actor, sco
 		reported = command.CreatedBySession
 	}
 	attribution := selectIssueAttribution(command.TransportSession, reported, command.Client)
-	if command.Material() && command.ExpectedRevision == nil {
+	conditionalLifecycle := command.Status != nil && !command.SourceAuthority() && (*command.Status == "resolved" || *command.Status == "reopened" || *command.Status == "closed")
+	if command.Material() && command.ExpectedRevision == nil && !conditionalLifecycle {
 		return result, issues.Failure("REVISION_REQUIRED")
 	}
 	if command.ExpectedRevision != nil {

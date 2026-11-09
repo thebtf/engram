@@ -97,7 +97,7 @@ func issuesToolSchema() map[string]any {
 	properties["format"] = map[string]any{"type": "string", "enum": []string{"text", "json"}, "description": "Text shows bounded pages and continuations; json returns the admitted DTO in one MCP text block."}
 	properties["request_key"] = map[string]any{"type": "string", "minLength": 1, "description": "Retain the original actor, source, key and payload for retry."}
 	properties["expected_actor"] = map[string]any{"type": "object", "properties": map[string]any{"kind": map[string]any{"enum": []string{"client", "operator", "unknown"}}, "reference": map[string]any{"type": []string{"string", "null"}}}}
-	properties["expected_revision"] = map[string]any{"type": "string", "pattern": "^[1-9][0-9]*$", "description": "Required for material edits; reconcile stale revisions explicitly."}
+	properties["expected_revision"] = map[string]any{"type": "string", "pattern": "^[1-9][0-9]*$", "description": "Required for field edits; optional for standalone resolve/reopen/close. Supplied revisions are checked; reconcile stale revisions explicitly."}
 	for _, field := range []string{"metadata", "comment_metadata"} {
 		properties[field] = map[string]any{"type": "object", "description": "Admitted JSON object; recognized secrets are rejected, never silently rewritten."}
 	}
@@ -135,7 +135,7 @@ var actionRequirements = map[string]struct {
 	"create":  {required: []string{"title"}, full: "action, title [optional canonical target_project]"},
 	"list":    {required: []string{}, full: "action  [optional: project, source_project, source_agent, status, resolved_since, limit]"},
 	"get":     {required: []string{"id"}, full: "action, id"},
-	"update":  {required: []string{"id"}, full: "action, id, expected_revision and material fields or comment"},
+	"update":  {required: []string{"id"}, full: "action, id, material fields, lifecycle status or comment; field edits require expected_revision"},
 	"comment": {required: []string{"id", "body"}, full: "action, id, body"},
 	"reopen":  {required: []string{"id"}, full: "action, id"},
 	"close":   {required: []string{"id"}, full: "action, id"},

@@ -52,14 +52,8 @@ const LifecycleSchema = z.object({
  id: IntegerSchema.positive(), body: z.string().optional(), expected_revision: IssueRevisionSchema.optional(),
  metadata: IssueCreateRequestSchema.shape.metadata, comment_metadata: IssueCreateRequestSchema.shape.metadata, format: OutputFormatSchema,
 });
-const ReopenSchema = LifecycleSchema.extend({ action: z.literal('reopen') }).superRefine(requireLifecycleRevision);
-const CloseSchema = LifecycleSchema.extend({ action: z.literal('close') }).superRefine(requireLifecycleRevision);
-
-function requireLifecycleRevision(value: { expected_revision?: string }, ctx: z.RefinementCtx): void {
- if (value.expected_revision === undefined) {
-  ctx.addIssue({ code: 'custom', path: ['expected_revision'], message: 'Lifecycle mutation requires expected_revision', params: { issueCode: 'REVISION_REQUIRED' } });
- }
-}
+const ReopenSchema = LifecycleSchema.extend({ action: z.literal('reopen') });
+const CloseSchema = LifecycleSchema.extend({ action: z.literal('close') });
 
 const IssueParamsSchema = z.discriminatedUnion('action', [
  CreateSchema, ListSchema, GetSchema, UpdateSchema, CommentSchema, ReopenSchema, CloseSchema,
@@ -92,7 +86,7 @@ const issueParameters = Type.Object({
   kind: Type.Union([Type.Literal('client'), Type.Literal('operator'), Type.Literal('unknown')]),
   reference: Type.Union([Type.String(), Type.Null()]),
  }, { description: 'Optional keyed-create server precondition, not a credential/grant. Unknown/null comparison remains server-owned; no automatic auth-me fetch or rebinding.' })),
- expected_revision: Type.Optional(Type.String({ pattern: '^[1-9][0-9]*$', maxLength: 19, description: 'Canonical decimal 1..9223372036854775807; required for material update/reopen/close' })),
+ expected_revision: Type.Optional(Type.String({ pattern: '^[1-9][0-9]*$', maxLength: 19, description: 'Canonical decimal 1..9223372036854775807; required for field edits and optional for standalone resolve/reopen/close. A supplied value is enforced.' })),
  comment: Type.Optional(Type.String({ minLength: 1 })), comment_metadata: Type.Optional(metadataParameter),
  q: Type.Optional(Type.String({ description: 'Literal case-insensitive title/body substring' })), resolved_since: Type.Optional(Type.String({ description: 'Inclusive signed int64 epoch milliseconds as a string, or ISO timestamp with explicit offset and at most millisecond precision' })),
  limit: Type.Optional(pageLimitParameter), offset: Type.Optional(offsetParameter),
@@ -245,7 +239,7 @@ export function createEngramIssuesTool(
    'Issues are automatically shown to agents working on the target project. ' +
    'acknowledged and reopened are still active backlog, not done states. ' +
    'Use to report bugs, request features, or leave tasks for agents in other projects. ' +
-   'Use format=json for the lossless result/error object. Keyed create keeps its original pending key/payload; optional expected_actor is a server precondition, never identity or a grant, and does not fetch auth-me. Material update/reopen/close require expected_revision; conflicts retain the draft without automatic retries. get explicitly requests independent paged comments/history, reports ranges/total/complete/oversized and exact next calls; no all-page draining. Metadata is quoted data within the documented JSON/byte/depth/number bounds. ' +
+   'Use format=json for the lossless result/error object. Keyed create keeps its original pending key/payload; optional expected_actor is a server precondition, never identity or a grant, and does not fetch auth-me. Field edits require expected_revision; standalone resolve/reopen/close can omit it, but an explicit revision is enforced. Conflicts retain the draft without automatic retries. get explicitly requests independent paged comments/history, reports ranges/total/complete/oversized and exact next calls; no all-page draining. Metadata is quoted data within the documented JSON/byte/depth/number bounds. ' +
    'Do NOT use store or docs for issues — use this tool instead. get and list with an explicit target_project/source_project filter are project-free reads; the default inbox still requires verified current-workspace identity. Mutations use resolved canonical actor identity, never a supplied project argument. On PROJECT_MIGRATION_REQUIRED use the host-reported installed Engram launcher: node <installed-plugin-path>/scripts/run-engram.js project resolve --root <actual-caller-root> --json --check. A historical id/name marker returns local migration_required evidence with match=legacy_marker and null canonical metadata without HTTP or a remote; this is not server binding authority. Next use existing authenticated GET /api/projects/resolve?legacy_id=<URI-encoded-exact-marker-id>; encode the validated id as query data, never shell text. An unresolved reference is not a canonical mapping. This inspection never bootstraps, pins marker/cache or migrates. Preserve identity/data and obtain the owner mapping/conservation decision before retrying a held write. On PROJECT_IDENTITY_INVALID or an unknown identity code inspect the actual caller marker/common cache using bounded regular-file reads, preserve bytes and obtain authorized owner repair; do not repeat the same failed check or follow symlinks. Never init a replacement project or expand permissions. Details: https://github.com/thebtf/engram/blob/main/docs/operating-engram.md#context-recovery',
   parameters: issueParameters,
 
