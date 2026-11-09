@@ -143,6 +143,36 @@ func (application *UCIContextApplication) BoundSelector(clientSessionID string) 
 	return application.resolver.BoundSelector(clientSessionID)
 }
 
+func (application *UCIContextApplication) BoundSelectorSnapshot(clientSessionID string) (uci.IndexBindingSelector, uint64, bool) {
+	if application == nil || application.resolver == nil {
+		return uci.IndexBindingSelector{}, 0, false
+	}
+	return application.resolver.BoundSelectorSnapshot(clientSessionID)
+}
+
+func (application *UCIContextApplication) WithBoundSelector(clientSessionID string, version uint64, action func() bool) bool {
+	return application != nil && application.resolver != nil && application.resolver.WithBoundSelector(clientSessionID, version, action)
+}
+
+func (application *UCIContextApplication) ForgetClientVersion(clientSessionID string, version uint64) {
+	if application != nil && application.resolver != nil {
+		application.resolver.ForgetClientVersion(clientSessionID, version)
+	}
+}
+
+func (application *UCIContextApplication) LoadCheckoutCitation(ctx context.Context, binding uci.IndexBinding, viewID string) (uci.ContextRef, error) {
+	if application == nil {
+		return uci.ContextRef{}, errors.New("checkout citation catalog unavailable")
+	}
+	catalog, ok := application.directory.(interface {
+		LoadCheckoutCitation(context.Context, uci.IndexBinding, string) (uci.ContextRef, error)
+	})
+	if !ok {
+		return uci.ContextRef{}, errors.New("checkout citation catalog unavailable")
+	}
+	return catalog.LoadCheckoutCitation(ctx, binding, viewID)
+}
+
 func (application *UCIContextApplication) ForgetClient(clientSessionID string) {
 	if application != nil && application.resolver != nil {
 		application.resolver.ForgetClient(clientSessionID)
@@ -205,12 +235,43 @@ type codebaseContextHandleEntry struct {
 	scope    *codebaseContextScopeKey
 }
 
+type codebaseCitationEvidence struct {
+	handle      string
+	realm       string
+	principal   string
+	workstation string
+	revision    uint64
+	selector    codebaseContextSelectorKey
+	scope       codebaseContextScopeKey
+	ref         codebaseContextRefKey
+}
+
+type codebaseSelectionStamp struct {
+	client      string
+	realm       string
+	principal   string
+	workstation string
+	handle      string
+	revision    uint64
+	selector    uci.IndexBindingSelector
+	scope       *codebaseContextScopeKey
+	epoch       uint64
+}
+
+type codebaseAtomicBindings interface {
+	BoundSelectorSnapshot(string) (uci.IndexBindingSelector, uint64, bool)
+	WithBoundSelector(string, uint64, func() bool) bool
+	ForgetClientVersion(string, uint64)
+}
+
 type codebaseContextClientHandles struct {
-	byHandle   map[string]codebaseContextHandleEntry
-	bySelector map[codebaseContextSelectorKey]string
-	byScope    map[codebaseContextScopeKey]uint32
-	order      []string
-	lastUsed   uint64
+	byHandle       map[string]codebaseContextHandleEntry
+	bySelector     map[codebaseContextSelectorKey]string
+	byScope        map[codebaseContextScopeKey]uint32
+	order          []string
+	lastUsed       uint64
+	bindingVersion uint64
+	citations      []codebaseCitationEvidence
 }
 
 type codebaseContextRefPayload struct {
@@ -976,20 +1037,9 @@ func (s *Server) codebaseContextHandleForSelector(clientSessionID string, select
 	}
 
 	s.codebaseContextMu.Lock()
-	application := s.codebaseContextApplication
+	defer s.codebaseContextMu.Unlock()
+	atomic, _ := s.codebaseContextApplication.(codebaseAtomicBindings)
 	evictedSession := ""
-	forgotten := false
-	defer func() {
-		s.codebaseContextMu.Unlock()
-		if indexApplication, ok := application.(codebaseContextIndexApplication); ok {
-			if evictedSession != "" {
-				indexApplication.ForgetClient(evictedSession)
-			}
-			if forgotten {
-				indexApplication.ForgetClient(clientSessionID)
-			}
-		}
-	}()
 	if s.codebaseContextEpoch != epoch {
 		return "", false
 	}
@@ -1006,6 +1056,11 @@ func (s *Server) codebaseContextHandleForSelector(clientSessionID string, select
 					evictedSession, oldestUse = session, handles.lastUsed
 				}
 			}
+			if atomic != nil {
+				if version := s.codebaseContextHandles[evictedSession].bindingVersion; version != 0 {
+					atomic.ForgetClientVersion(evictedSession, version)
+				}
+			}
 			delete(s.codebaseContextHandles, evictedSession)
 		}
 		client = &codebaseContextClientHandles{
@@ -1016,6 +1071,21 @@ func (s *Server) codebaseContextHandleForSelector(clientSessionID string, select
 		s.codebaseContextHandles[clientSessionID] = client
 	}
 	s.codebaseContextTouchClient(client)
+	if atomic != nil {
+		selected, version, found := atomic.BoundSelectorSnapshot(clientSessionID)
+		if found && codebaseContextSelectorsEqual(selected, selector) {
+			if client.bindingVersion != version {
+				kept := client.citations[:0]
+				for _, evidence := range client.citations {
+					if evidence.handle != "" {
+						kept = append(kept, evidence)
+					}
+				}
+				client.citations = kept
+			}
+			client.bindingVersion = version
+		}
+	}
 	if handle, found := client.bySelector[key]; found {
 		if binding != nil {
 			s.codebaseContextSetEntryScope(client, handle, *binding)
@@ -1026,8 +1096,13 @@ func (s *Server) codebaseContextHandleForSelector(clientSessionID string, select
 	if len(client.order) >= codebaseContextMaxHandlesPerClient {
 		oldest := client.order[0]
 		client.order = client.order[1:]
+		if atomic != nil {
+			selected, version, found := atomic.BoundSelectorSnapshot(clientSessionID)
+			if entry, exists := client.byHandle[oldest]; found && exists && version == client.bindingVersion && codebaseContextSelectorsEqual(selected, entry.selector) {
+				atomic.ForgetClientVersion(clientSessionID, version)
+			}
+		}
 		s.codebaseContextRemoveEntry(client, oldest)
-		forgotten = true
 	}
 	handle, err := newCodebaseContextHandle(client.byHandle)
 	if err != nil {
@@ -1047,6 +1122,160 @@ func (s *Server) codebaseContextHandleForSelector(clientSessionID string, select
 func (s *Server) codebaseContextTouchClient(client *codebaseContextClientHandles) {
 	s.codebaseContextUseCounter++
 	client.lastUsed = s.codebaseContextUseCounter
+}
+
+func (s *Server) codebaseSelectionSnapshot(ctx context.Context, handle *string) *codebaseSelectionStamp {
+	caller, err := codebaseContextCallerInput(ctx)
+	if err != nil {
+		return nil
+	}
+	s.codebaseContextMu.Lock()
+	defer s.codebaseContextMu.Unlock()
+	client := s.codebaseContextHandles[caller.ClientSessionID]
+	if client == nil {
+		return nil
+	}
+	stamp := &codebaseSelectionStamp{client: caller.ClientSessionID, realm: caller.AuthRealm, principal: caller.Principal, workstation: caller.WorkstationID, epoch: s.codebaseContextEpoch}
+	if handle != nil {
+		entry, found := client.byHandle[*handle]
+		if !found {
+			return nil
+		}
+		stamp.handle, stamp.selector = *handle, entry.selector.Clone()
+	} else {
+		atomic, ok := s.codebaseContextApplication.(codebaseAtomicBindings)
+		if !ok {
+			return nil
+		}
+		var found bool
+		stamp.selector, stamp.revision, found = atomic.BoundSelectorSnapshot(caller.ClientSessionID)
+		if !found {
+			return nil
+		}
+	}
+	key, ok := codebaseContextSelectorKeyFor(stamp.selector)
+	if !ok {
+		return nil
+	}
+	selectedHandle := stamp.handle
+	if selectedHandle == "" {
+		selectedHandle = client.bySelector[key]
+	}
+	entry, found := client.byHandle[selectedHandle]
+	if !found || entry.key != key {
+		return nil
+	}
+	if entry.scope != nil {
+		scope := *entry.scope
+		stamp.scope = &scope
+	}
+	return stamp
+}
+
+func codebaseMissingSelectionStamp(ctx context.Context, application any, handle *string, stamp *codebaseSelectionStamp) bool {
+	if stamp != nil {
+		return false
+	}
+	if handle != nil {
+		return true
+	}
+	caller, err := codebaseContextCallerInput(ctx)
+	if err != nil {
+		return true
+	}
+	bindings, ok := application.(codebaseAtomicBindings)
+	if !ok {
+		return false
+	}
+	_, _, found := bindings.BoundSelectorSnapshot(caller.ClientSessionID)
+	return found
+}
+
+// The registry mutex is held by the caller; default binding checks additionally
+// hold the selected binding lock across the action, in registry-then-binding order.
+func (s *Server) withCodebaseSelection(stamp *codebaseSelectionStamp, action func(*codebaseContextClientHandles, codebaseContextHandleEntry) bool) bool {
+	if stamp == nil || s.codebaseContextEpoch != stamp.epoch || s.codebaseContextApplication == nil {
+		return false
+	}
+	client := s.codebaseContextHandles[stamp.client]
+	if client == nil {
+		return false
+	}
+	key, ok := codebaseContextSelectorKeyFor(stamp.selector)
+	if !ok {
+		return false
+	}
+	handle := stamp.handle
+	if handle == "" {
+		handle = client.bySelector[key]
+	}
+	entry, found := client.byHandle[handle]
+	if !found || entry.key != key || (stamp.scope != nil && (entry.scope == nil || *entry.scope != *stamp.scope)) {
+		return false
+	}
+	if stamp.handle != "" {
+		return action(client, entry)
+	}
+	atomic, ok := s.codebaseContextApplication.(codebaseAtomicBindings)
+	return ok && atomic.WithBoundSelector(stamp.client, stamp.revision, func() bool { return action(client, entry) })
+}
+
+func (s *Server) codebaseCitationAdmitted(stamp *codebaseSelectionStamp, binding uci.IndexBinding, ref uci.ContextRef) bool {
+	s.codebaseContextMu.Lock()
+	defer s.codebaseContextMu.Unlock()
+	return s.withCodebaseSelection(stamp, func(client *codebaseContextClientHandles, entry codebaseContextHandleEntry) bool {
+		if entry.scope == nil || *entry.scope != codebaseContextScopeKeyForBinding(binding) {
+			return false
+		}
+		return codebaseHasCitation(client, entry, stamp, ref)
+	})
+}
+
+func codebaseHasCitation(client *codebaseContextClientHandles, entry codebaseContextHandleEntry, stamp *codebaseSelectionStamp, ref uci.ContextRef) bool {
+	if entry.scope == nil {
+		return false
+	}
+	key := codebaseContextKey(ref)
+	for _, evidence := range client.citations {
+		if evidence.handle == stamp.handle && evidence.realm == stamp.realm && evidence.principal == stamp.principal && evidence.workstation == stamp.workstation && evidence.revision == stamp.revision && evidence.selector == entry.key && evidence.scope == *entry.scope && evidence.ref == key {
+			return true
+		}
+	}
+	return false
+}
+
+func codebaseRecordCitation(client *codebaseContextClientHandles, entry codebaseContextHandleEntry, stamp *codebaseSelectionStamp, ref uci.ContextRef) {
+	if entry.scope == nil || ref.SpaceID != nil {
+		return
+	}
+	evidence := codebaseCitationEvidence{handle: stamp.handle, realm: stamp.realm, principal: stamp.principal, workstation: stamp.workstation, revision: stamp.revision, selector: entry.key, scope: *entry.scope, ref: codebaseContextKey(ref)}
+	for index, prior := range client.citations {
+		if prior == evidence {
+			copy(client.citations[index:], client.citations[index+1:])
+			client.citations[len(client.citations)-1] = evidence
+			return
+		}
+	}
+	kept := client.citations[:0]
+	count, oldest := 0, -1
+	for _, prior := range client.citations {
+		if prior.handle == "" && stamp.handle == "" && prior.revision != stamp.revision {
+			continue
+		}
+		if prior.handle == stamp.handle && prior.revision == stamp.revision {
+			if oldest < 0 {
+				oldest = len(kept)
+			}
+			count++
+		}
+		kept = append(kept, prior)
+	}
+	client.citations = kept
+	if count >= 32 {
+		copy(client.citations[oldest:], client.citations[oldest+1:])
+		client.citations = client.citations[:len(client.citations)-1]
+	}
+	client.citations = append(client.citations, evidence)
 }
 
 func (s *Server) codebaseContextSetEntryScope(client *codebaseContextClientHandles, handle string, binding uci.IndexBinding) {
@@ -1073,6 +1302,13 @@ func (s *Server) codebaseContextRemoveEntry(client *codebaseContextClientHandles
 	}
 	delete(client.byHandle, handle)
 	delete(client.bySelector, entry.key)
+	kept := client.citations[:0]
+	for _, evidence := range client.citations {
+		if evidence.handle != handle {
+			kept = append(kept, evidence)
+		}
+	}
+	client.citations = kept
 	if entry.scope != nil {
 		s.codebaseContextRemoveScope(client, *entry.scope)
 	}

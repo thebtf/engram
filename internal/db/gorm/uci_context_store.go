@@ -79,6 +79,44 @@ func (s *UCIContextStore) LoadContext(ctx context.Context, ref uci.ContextRef) (
 	return uci.ContextRecord{Ref: cloneUCIContextRef(ref), AuthRealm: row.AuthRealm}, nil
 }
 
+// LoadCheckoutCitation resolves only a retained View in the authorized checkout incarnation.
+func (s *UCIContextStore) LoadCheckoutCitation(ctx context.Context, binding uci.IndexBinding, viewID string) (uci.ContextRef, error) {
+	if err := s.requireDB("load checkout citation"); err != nil {
+		return uci.ContextRef{}, err
+	}
+	if err := requireUCIContextRequest(ctx, "load checkout citation"); err != nil {
+		return uci.ContextRef{}, err
+	}
+	if binding.Validate() != nil || binding.Context == nil || binding.Context.SpaceID != nil {
+		return uci.ContextRef{}, errUCIContextCatalogNotFound
+	}
+	var row uciAuthorizedContextRow
+	result := s.db.WithContext(ctx).Raw(`
+		SELECT view_row.source_id, view_row.checkout_id, view_row.view_id, view_row.profile_id, view_row.generation
+		FROM ci_views AS view_row
+		JOIN ci_checkouts AS checkout ON checkout.checkout_id = view_row.checkout_id
+			AND checkout.source_id = view_row.source_id AND checkout.incarnation_id = view_row.incarnation_id
+		JOIN sources AS source ON source.source_id = checkout.source_id
+		JOIN ci_profiles AS profile ON profile.profile_id = view_row.profile_id
+		WHERE view_row.view_id = ? AND view_row.source_id = ? AND view_row.checkout_id = ?
+			AND view_row.incarnation_id = ? AND view_row.profile_id = ?
+			AND source.state = ? AND checkout.state IN (?, ?, ?) AND view_row.state IN (?, ?)
+		LIMIT 1`, viewID, binding.Scope.SourceID, binding.Scope.CheckoutID, binding.Scope.IncarnationID,
+		binding.ProfileID, UCISourceActive, UCICheckoutRegistered, UCICheckoutWatching, UCICheckoutCatchingUp,
+		UCIViewPublished, UCIViewSuperseded).Scan(&row)
+	if result.Error != nil {
+		return uci.ContextRef{}, result.Error
+	}
+	if result.RowsAffected != 1 {
+		return uci.ContextRef{}, errUCIContextCatalogNotFound
+	}
+	ref := uci.ContextRef{SourceID: row.SourceID, CheckoutID: row.CheckoutID, ViewID: row.ViewID, AnalysisProfileID: row.ProfileID, Generation: row.Generation}
+	if err := validateUCIContextRef(ref); err != nil {
+		return uci.ContextRef{}, err
+	}
+	return ref, nil
+}
+
 // ListAuthorizedContexts returns current published ContextRefs for exactly one
 // active realm/principal owner in stable source, checkout, then view ID order.
 // Limits must be within [1, uciContextListMax] and are rejected rather than clamped.
