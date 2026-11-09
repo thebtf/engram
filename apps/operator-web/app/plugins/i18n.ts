@@ -1,9 +1,10 @@
 import { createI18n } from 'vue-i18n'
 import { watch } from 'vue'
-import { messages as sharedMessages } from '../../../../ui/src/i18n/messages'
+import { messages as sharedMessages, issueFlowZh, projectCatalogZh } from '../../../../ui/src/i18n/messages'
 
 const messages = {
   ru: {
+    issueFlow: sharedMessages.ru.issueFlow,
     projectCatalog: sharedMessages.ru.projectCatalog,
     common: {
       loading: 'Загрузка...',
@@ -21,6 +22,7 @@ const messages = {
     },
   },
   en: {
+    issueFlow: sharedMessages.en.issueFlow,
     projectCatalog: sharedMessages.en.projectCatalog,
     common: {
       loading: 'Loading...',
@@ -36,6 +38,11 @@ const messages = {
       loadedRows: 'rows loaded',
       loadedRules: 'Loaded rules',
     },
+  },
+  zh: {
+    issueFlow: issueFlowZh,
+    projectCatalog: projectCatalogZh,
+    common: { loading: '加载中…', empty: '空', allProjects: '所有项目', refresh: '刷新', none: '—' },
   },
 }
 

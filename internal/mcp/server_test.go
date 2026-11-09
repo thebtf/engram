@@ -17,6 +17,7 @@ import (
 	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/collections"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/issues"
 )
 
 const expectedReadOnlyMutationError = "read_only: action is not permitted"
@@ -902,9 +903,11 @@ func TestCallTool_ReadOnlyClientAllowsDocsAndIssuesReads(t *testing.T) {
 	server := NewServer(ServerOptions{Version: "test"})
 
 	for _, testCase := range []struct {
-		tool   string
-		action string
-		error  string
+		tool      string
+		action    string
+		args      map[string]any
+		error     string
+		issueCode string
 	}{
 		{tool: "docs", action: "read", error: "versioned document store not available"},
 		{tool: "docs", action: "list", error: "versioned document store not available"},
@@ -912,11 +915,20 @@ func TestCallTool_ReadOnlyClientAllowsDocsAndIssuesReads(t *testing.T) {
 		{tool: "docs", action: "collections"},
 		{tool: "docs", action: "documents", error: "document store not available"},
 		{tool: "docs", action: "get_doc", error: "document store not available"},
-		{tool: "issues", action: "list", error: "issue store not available"},
-		{tool: "issues", action: "get", error: "issue store not available"},
+		{tool: "issues", action: "list", issueCode: "UNAVAILABLE"},
+		{tool: "issues", action: "get", args: map[string]any{"id": 1}, issueCode: "UNAVAILABLE"},
 	} {
 		t.Run(testCase.tool+"/"+testCase.action, func(t *testing.T) {
-			result, err := server.callTool(ctx, testCase.tool, mustJSON(t, map[string]any{"action": testCase.action}))
+			args := map[string]any{"action": testCase.action}
+			for key, value := range testCase.args {
+				args[key] = value
+			}
+			result, err := server.callTool(ctx, testCase.tool, mustJSON(t, args))
+			if testCase.issueCode != "" {
+				requireIssueErrorCode(t, err, testCase.issueCode)
+				require.Empty(t, result)
+				return
+			}
 			if testCase.error != "" {
 				require.EqualError(t, err, testCase.error)
 				require.Empty(t, result)
@@ -939,8 +951,9 @@ func TestCallTool_WritableIdentitiesBypassReadOnlyGuard(t *testing.T) {
 		_, err := server.callTool(ctx, "docs", json.RawMessage(`{"action":"create"}`))
 		require.EqualError(t, err, "versioned document store not available")
 
-		_, err = server.callTool(ctx, "issues", json.RawMessage(`{"action":"create"}`))
-		require.EqualError(t, err, "issue store not available")
+		result, err := server.callTool(ctx, "issues", json.RawMessage(`{"action":"create","title":"test issue"}`))
+		requireIssueErrorCode(t, err, "UNAVAILABLE")
+		require.Empty(t, result)
 	}
 }
 
@@ -953,8 +966,45 @@ func TestCallTool_ReadOnlyMalformedAndMissingActionsAreDeniedUnlessTheyDefaultTo
 		require.EqualError(t, err, expectedReadOnlyMutationError)
 	}
 
-	_, err := server.callTool(ctx, "issues", json.RawMessage(`{}`))
-	require.EqualError(t, err, "issue store not available")
+	result, err := server.callTool(ctx, "issues", json.RawMessage(`{}`))
+	requireIssueErrorCode(t, err, "UNAVAILABLE")
+	require.Empty(t, result)
+
+	for _, raw := range []json.RawMessage{
+		json.RawMessage(`{invalid}`),
+		json.RawMessage(`{"action":"future"}`),
+		json.RawMessage(`{"action":"create","title":"test issue"}`),
+		json.RawMessage(`{"action":"update","id":1}`),
+		json.RawMessage(`{"action":"comment","id":1,"body":"test"}`),
+		json.RawMessage(`{"action":"reopen","id":1}`),
+		json.RawMessage(`{"action":"close","id":1}`),
+	} {
+		result, err := server.callTool(ctx, "issues", raw)
+		requireIssueErrorCode(t, err, "FORBIDDEN")
+		require.Empty(t, result)
+	}
+	for _, testCase := range []struct {
+		name string
+		raw  json.RawMessage
+		code string
+	}{
+		{name: "null", raw: json.RawMessage(`{"action":null}`), code: "INVALID_ARGUMENT"},
+		{name: "number", raw: json.RawMessage(`{"action":42}`), code: "FORBIDDEN"},
+		{name: "empty", raw: json.RawMessage(`{"action":""}`), code: "INVALID_ARGUMENT"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			result, err := server.callTool(ctx, "issues", testCase.raw)
+			requireIssueErrorCode(t, err, testCase.code)
+			require.Empty(t, result)
+		})
+	}
+}
+
+func requireIssueErrorCode(t *testing.T, err error, code string) {
+	t.Helper()
+	var issueErr *issues.Error
+	require.ErrorAs(t, err, &issueErr)
+	require.Equal(t, code, issueErr.Code)
 }
 
 func TestHandleToolsCall_ReadOnlyMutationReturnsToolError(t *testing.T) {

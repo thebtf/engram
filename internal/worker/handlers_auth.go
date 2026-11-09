@@ -21,6 +21,7 @@ import (
 
 	authpkg "github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/issues"
 )
 
 // isAuthDisabled returns true when ENGRAM_AUTH_DISABLED enables disabled-auth mode.
@@ -162,22 +163,38 @@ func (s *Service) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 func (s *Service) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 	authDisabled := isAuthDisabled()
 	if authDisabled {
+		ctx := r.Context()
+		if _, present := authpkg.IdentityFrom(ctx); !present {
+			ctx = authpkg.WithIdentity(ctx, authpkg.AuthDisabled())
+		}
+		actor, err := issues.CaptureActor(ctx)
+		if err != nil {
+			writeAuthUnauthorized(w, r, authDisabled)
+			return
+		}
 		writeJSON(w, map[string]any{
 			"authenticated": true,
 			"role":          "admin",
 			"auth_disabled": true,
 			"source":        "auth-disabled",
 			"synthetic":     true,
+			"actor":         actor.Descriptor(),
 		})
 		return
 	}
 
 	role := getAuthRole(r)
 	if role != "" {
+		actor, err := issues.CaptureActor(r.Context())
+		if err != nil {
+			writeAuthUnauthorized(w, r, authDisabled)
+			return
+		}
 		body := map[string]any{
 			"authenticated": true,
 			"role":          role,
 			"auth_disabled": authDisabled,
+			"actor":         actor.Descriptor(),
 		}
 		if user, ok := r.Context().Value(authenticatedBrowserUserKey{}).(*gormdb.User); ok {
 			body["user"] = map[string]any{"id": user.ID, "email": user.Email, "role": user.Role}

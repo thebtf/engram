@@ -29,7 +29,7 @@ function createClient() {
       },
       async createIssue(issue) {
         calls.push({ method: 'createIssue', issue });
-        return { id: 1 };
+        return { id: 1, revision: '1', replayed: false, message: 'issue created' };
       },
     },
   };
@@ -68,7 +68,7 @@ const cases = [
     success: /^Issue created:/,
     expected: (labels) => ({
       method: 'createIssue',
-      issue: { title: 'Collection title', body: undefined, priority: 'medium', source_project: project, target_project: project, source_agent: ctx.agentId, labels },
+      issue: { title: 'Collection title', body: undefined, priority: 'medium', source_project: project, target_project: project, source_agent: ctx.agentId, labels, client: 'openclaw', session_id: ctx.sessionId },
     }),
   },
 ];

@@ -904,6 +904,10 @@ func (s *ProjectConsolidationStore) VerifyBackup(ctx context.Context, token, fin
 }
 
 func (s *ProjectConsolidationStore) restoreStored(tx *gormlib.DB, id string, state consolidationPlanState) error {
+	restoreIssueGuards, err := consolidationSuspendIssueRestoreGuards(tx, state.Census.Tables)
+	if err != nil {
+		return err
+	}
 	var fks []struct {
 		TableName, ConstraintName     string
 		Deferrable, InitiallyDeferred bool
@@ -931,6 +935,9 @@ func (s *ProjectConsolidationStore) restoreStored(tx *gormlib.DB, id string, sta
 	}
 	if err := tx.Exec(`SET CONSTRAINTS ALL IMMEDIATE`).Error; err != nil {
 		return consolidationHold("RESTORE_CONSTRAINT_FAILED")
+	}
+	if err := restoreIssueGuards(); err != nil {
+		return err
 	}
 	if err := restoreGuards(); err != nil {
 		return err

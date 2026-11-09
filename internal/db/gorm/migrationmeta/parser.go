@@ -349,7 +349,7 @@ func migrationLiteral(fset *token.FileSet, lit *ast.CompositeLit) (MigrationInfo
 		}
 		switch key.Name {
 		case "ID":
-			if parsed, ok := literalString(kv.Value); ok {
+			if parsed, ok := migrationIDString(kv.Value); ok {
 				id = parsed
 			}
 		case "Migrate":
@@ -372,6 +372,25 @@ func migrationLiteral(fset *token.FileSet, lit *ast.CompositeLit) (MigrationInfo
 		NumericID: numericID,
 		Line:      fset.Position(lit.Pos()).Line,
 	}, migrate.Body, true
+}
+
+func migrationIDString(expr ast.Expr) (string, bool) {
+	if id, ok := expr.(*ast.Ident); ok {
+		if id.Obj == nil || id.Obj.Kind != ast.Con {
+			return "", false
+		}
+		spec, ok := id.Obj.Decl.(*ast.ValueSpec)
+		if !ok || len(spec.Names) != len(spec.Values) {
+			return "", false
+		}
+		for i, name := range spec.Names {
+			if name.Name == id.Name {
+				return literalString(spec.Values[i])
+			}
+		}
+		return "", false
+	}
+	return literalString(expr)
 }
 
 func selectorName(expr ast.Expr) string {

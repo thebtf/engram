@@ -1380,11 +1380,24 @@ test('canonical retained SFC renders decoded records without page provenance', a
   })
 })
 
+function pagedIssueDetail(issue, comments) {
+  return {
+    issue: { revision: '1', metadata: {}, ...issue },
+    comments: comments.map(comment => ({ metadata: {}, actor: null, ...comment })), history: [],
+    comment_count: comments.length, history_count: 0,
+    comments_offset: 0, comments_limit: 50, comments_next_offset: null, comments_complete: true, comments_oversized: false,
+    history_offset: 0, history_limit: 50, history_next_offset: null, history_complete: true, history_oversized: false,
+  }
+}
+
 test('canonical issue roles: compiled ordinary detail renders migrated content and explicit raw provenance', async t => {
   const issue = { id: 7, title: 'Migrated canonical issue', body: 'Preserved migrated body', status: 'open', priority: 'medium', type: 'task', source_project: 'old-source-slug', target_project: 'old-target-slug', source_project_id: projectID, target_project_id: otherProjectID, project_origin: { source_project: 'old-source-slug', target_project: 'old-target-slug' }, labels: [] }
   const consumer = session(t, undefined, url => {
     if (url.pathname === '/api/issues') return Response.json({ issues: [], total: 0 })
-    if (url.pathname === '/api/issues/7') return Response.json({ issue, comments: [{ id: 71, issue_id: 7, body: 'Preserved discussion', author_project: 'historical-comment-origin' }] })
+    if (url.pathname === '/api/issues/7') {
+      assert.equal(url.searchParams.get('detail_mode'), 'paged')
+      return Response.json(pagedIssueDetail(issue, [{ id: 71, issue_id: 7, body: 'Preserved discussion', author_project: 'historical-comment-origin' }]))
+    }
   }, undefined, [{ project_id: projectID, name: 'Canonical source' }, { project_id: otherProjectID, name: 'Canonical target' }])
   await consumer.shell.refresh()
   const mounted = await mountRecovery(t, consumer, `/issues/7?project=${otherProjectID}`, 'issues')
@@ -1407,7 +1420,10 @@ test('canonical issue roles: compiled detail clears unrelated body/comments and 
   const issue = { id: 7, title: 'Canonical target issue', body: 'Scope-bound migrated body', status: 'open', priority: 'medium', type: 'task', source_project: unrelated, target_project: 'old-target', source_project_id: null, target_project_id: otherProjectID, project_origin: { source_project: unrelated, target_project: 'old-target' }, labels: [] }
   const consumer = session(t, undefined, url => {
     if (url.pathname === '/api/issues') return Response.json({ issues: [], total: 0 })
-    if (url.pathname === '/api/issues/7') return Response.json({ issue, comments: [{ id: 71, issue_id: 7, body: 'Scope-bound discussion' }] })
+    if (url.pathname === '/api/issues/7') {
+      assert.equal(url.searchParams.get('detail_mode'), 'paged')
+      return Response.json(pagedIssueDetail(issue, [{ id: 71, issue_id: 7, body: 'Scope-bound discussion' }]))
+    }
   }, undefined, [{ project_id: otherProjectID, name: 'Canonical target' }, { project_id: unrelated, name: 'Unrelated canonical project' }])
   await consumer.shell.refresh()
   const mounted = await mountRecovery(t, consumer, `/issues/7?project=${otherProjectID}`, 'issues')

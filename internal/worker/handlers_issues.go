@@ -20,6 +20,7 @@ import (
 
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/issues"
 	"github.com/thebtf/engram/internal/projectidentity"
 )
 
@@ -117,145 +118,71 @@ func writeIssueStoreError(w http.ResponseWriter, err error) {
 	}
 }
 
-// handleListIssues handles GET /api/issues with optional filters.
+// handleListIssues godoc
+// @Summary List issue-backed tasks
+// @Description Returns {issues,total,limit,offset,next_offset,project_names}; summaries include project_origin and decimal-string revision, not body, metadata or history. Filters combine with AND and are not access grants. Each query parameter may occur at most once. Order is priority rank ascending, created_at descending, id descending. Offset paging is live, not a snapshot; retain filters, deduplicate IDs and restart after material refresh. next_offset is the first unreturned row or null. Project names cover returned authorized project roles only.
+// @Tags Issues
+// @Produce json
+// @Security ApiKeyAuth
+// @Param project query string false "Canonical target-project UUID filter, not caller identity"
+// @Param source_project query string false "Independent canonical source-project UUID filter"
+// @Param source_agent query string false "Exact source-agent attribution label, not a principal"
+// @Param source_session query string false "Exact creator session attribution, not authentication or authority"
+// @Param target_session query string false "Exact recipient session attribution, not authentication or authority"
+// @Param participant_session query string false "Exact recorded creator, comment, lifecycle event or material revision session attribution"
+// @Param status query string false "Comma-separated open, acknowledged, resolved, reopened, closed, rejected; OR within this filter"
+// @Param type query string false "Issue type, trimmed and lowercased" Enums(bug,feature,improvement,task)
+// @Param q query string false "Case-insensitive literal title OR body substring; not metadata, comments or history"
+// @Param owner_label query string false "Exact non-authoritative owner label"
+// @Param recipient_label query string false "Exact non-authoritative recipient label"
+// @Param resolved_since query int64 false "Inclusive resolved_at lower bound in signed epoch milliseconds"
+// @Param limit query int false "Maximum summaries" default(50) minimum(1) maximum(200)
+// @Param offset query int false "Nonnegative in-range offset" default(0) minimum(0)
+// @Success 200 {object} object{issues=[]gormdb.IssueTaskSummary{project_origin=issueProjectOrigin},total=integer,limit=integer,offset=integer,next_offset=integer,project_names=map[string]string} "Authorized summary page; next_offset may be null"
+// @Failure 400 {object} map[string]issues.Error "INVALID_ARGUMENT; invalid or repeated query parameter or bound"
+// @Failure 401 "Authentication required; middleware may return plain text, issue-owner UNAUTHENTICATED uses a JSON error envelope"
+// @Failure 403 "Authentication middleware may return plain text; filters do not grant access"
+// @Failure 404 {object} map[string]issues.Error "ISSUE_NOT_FOUND; canonical filter project unavailable"
+// @Failure 500 "Authentication infrastructure failure"
+// @Failure 503 {object} map[string]issues.Error "UNAVAILABLE; dependency failure, not an empty page"
+// @Router /api/issues [get]
 func (s *Service) handleListIssues(w http.ResponseWriter, r *http.Request) {
-	project := r.URL.Query().Get("project")
-	sourceProject := r.URL.Query().Get("source_project")
-	sourceAgent := r.URL.Query().Get("source_agent")
-	for _, selector := range []string{project, sourceProject} {
-		if selector == "" {
-			continue
-		}
-		if !projectidentity.ValidProjectID(selector) {
-			writeDocumentError(w, http.StatusBadRequest, "an exact canonical project ID is required")
-			return
-		}
-	}
-	statusParam := r.URL.Query().Get("status")
-	typeParam := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("type")))
-	limitStr := r.URL.Query().Get("limit")
-	offsetStr := r.URL.Query().Get("offset")
-	resolvedSinceStr := r.URL.Query().Get("resolved_since")
-
-	var statuses []string
-	if statusParam != "" {
-		for _, s := range strings.Split(statusParam, ",") {
-			if s = strings.TrimSpace(s); s != "" {
-				statuses = append(statuses, s)
-			}
-		}
-	}
-
-	limit := 50
-	if v, err := strconv.Atoi(limitStr); err == nil && v > 0 {
-		limit = v
-	}
-	offset := 0
-	if v, err := strconv.Atoi(offsetStr); err == nil && v >= 0 {
-		offset = v
-	}
-
-	params := gormdb.IssueListParams{
-		TargetProject: project,
-		SourceProject: sourceProject,
-		SourceAgent:   sourceAgent,
-		Statuses:      statuses,
-		Type:          typeParam,
-		Limit:         limit,
-		Offset:        offset,
-	}
-	if resolvedSinceStr != "" {
-		if ms, err := strconv.ParseInt(resolvedSinceStr, 10, 64); err == nil {
-			t := time.UnixMilli(ms)
-			params.ResolvedSince = &t
-		}
-	}
-
-	issues, total, err := s.issueStore.ListIssuesEx(r.Context(), params)
-	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error": %q}`, err.Error()), http.StatusInternalServerError)
-		return
-	}
-
-	ids := make([]int64, len(issues))
-	for i := range issues {
-		ids[i] = issues[i].ID
-	}
-	roles, err := s.issueStore.ProjectRoles(r.Context(), ids)
-	if err != nil {
-		writeIssueStoreError(w, err)
-		return
-	}
-	items := make([]issueListReadItem, len(issues))
-	projectNames := make(map[string]string)
-	for i, issue := range issues {
-		resolved := roles[issue.ID]
-		items[i] = issueListReadItem{issueReadProjection(issue.Issue, resolved), issue.CommentCount}
-		for _, project := range []*string{resolved.SourceProjectID, resolved.TargetProjectID} {
-			if project != nil {
-				if _, exists := projectNames[*project]; !exists {
-					projectNames[*project] = s.getProjectDisplayName(r.Context(), *project)
-				}
-			}
-		}
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"issues":        items,
-		"total":         total,
-		"project_names": projectNames,
-	})
+	s.listIssueTasks(w, r)
 }
 
-// handleGetIssue handles GET /api/issues/{id}.
+// handleGetIssue godoc
+// @Summary Read issue detail and independent comment and history pages
+// @Description Returns authorized issue, comments and material revision history, their counts, effective offsets and limits, nullable next offsets, complete and oversized flags, and source/target display names. Issue detail includes decimal-string revision, object metadata, nullable labels, actor and project roles; creator credentials are excluded. Comments are ordered by created_at/id and material history by revision. History contains field names and admitted changes; absent historical values are not invented.
+// @Description detail_mode=paged requests independent comments and material-history pages, each default 50 and maximum 200, targeting 4 MiB serialized bytes. An intact oversized singleton is flagged. A next offset identifies the first unreturned record; complete means no later records, not that earlier pages were loaded. Pages are live, not a frozen snapshot. Without detail_mode, complete comments exceeding 200 records or 4 MiB fail DETAIL_PAGING_REQUIRED without partial success. Lifecycle history_events are separate from material revisions: history_after_id is an exclusive ID cursor, event count is bounded by history_limit and capped at 100, and history_has_more, history_next_after_id and history_events_oversized describe continuation. No project filter grants access. Swagger 2 cannot express all nullable and conditional fields.
+// @Tags Issues
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path int64 true "Positive issue ID" minimum(1)
+// @Param project query string false "Optional canonical source/target-role read narrowing, not an access grant"
+// @Param detail_mode query string false "Explicit paging; omission requests legacy complete comments" Enums(paged)
+// @Param comments_offset query int false "Nonnegative comment offset" default(0) minimum(0)
+// @Param comments_limit query int false "Comment page limit" default(50) minimum(1) maximum(200)
+// @Param history_offset query int false "Independent material history offset" default(0) minimum(0)
+// @Param history_limit query int false "Material history page limit" default(50) minimum(1) maximum(200)
+// @Param history_after_id query int false "Exclusive lifecycle event ID cursor, separate from history_offset" default(0) minimum(0)
+// @Success 200 {object} object{issue=object,comments=[]object,history=[]object,history_events=[]object,history_has_more=boolean,history_next_after_id=integer,history_events_oversized=boolean,comment_count=integer,history_count=integer,comments_offset=integer,comments_limit=integer,history_offset=integer,history_limit=integer,comments_next_offset=integer,history_next_offset=integer,comments_complete=boolean,history_complete=boolean,comments_oversized=boolean,history_oversized=boolean,source_project_display_name=string,target_project_display_name=string} "Authorized intact detail; continuation offsets and cursor may be null"
+// @Failure 400 {object} map[string]issues.Error "INVALID_ARGUMENT; invalid ID, query, mode or bounds"
+// @Failure 401 "Authentication required; middleware may return plain text, issue-owner UNAUTHENTICATED uses a JSON error envelope"
+// @Failure 403 "Authentication middleware may return plain text"
+// @Failure 404 {object} map[string]issues.Error "ISSUE_NOT_FOUND; missing or unreadable issue or project"
+// @Failure 409 {object} map[string]issues.Error "DETAIL_PAGING_REQUIRED; use detail_mode=paged with separate continuations"
+// @Failure 500 "Authentication infrastructure failure"
+// @Failure 503 {object} map[string]issues.Error "UNAVAILABLE; read failure, not empty history"
+// @Router /api/issues/{id} [get]
 func (s *Service) handleGetIssue(w http.ResponseWriter, r *http.Request) {
-	idStr := chi.URLParam(r, "id")
-	id, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil {
-		http.Error(w, `{"error": "invalid issue id"}`, http.StatusBadRequest)
-		return
-	}
-
-	params, err := urlParseIssueDetail(r)
-	if err != nil {
-		writeDocumentError(w, http.StatusBadRequest, "an exact canonical project ID is required")
-		return
-	}
-	var issue *gormdb.Issue
-	var comments []gormdb.IssueComment
-	if params != "" {
-		issue, comments, err = s.issueStore.GetIssueForProject(r.Context(), id, params)
-	} else {
-		issue, comments, err = s.issueStore.GetIssue(r.Context(), id)
-	}
-	if err != nil {
-		if errors.Is(err, gormdb.ErrIssueNotFound) || strings.Contains(err.Error(), "not found") {
-			http.Error(w, `{"error": "issue not found"}`, http.StatusNotFound)
-			return
-		}
-		http.Error(w, fmt.Sprintf(`{"error": %q}`, err.Error()), http.StatusInternalServerError)
-		return
-	}
-
-	roles, err := s.issueStore.ProjectRoles(r.Context(), []int64{id})
-	if err != nil {
-		writeIssueStoreError(w, err)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"issue":                       issueReadProjection(*issue, roles[id]),
-		"comments":                    comments,
-		"comment_count":               len(comments),
-		"source_project_display_name": s.getProjectDisplayName(r.Context(), issue.SourceProject),
-		"target_project_display_name": s.getProjectDisplayName(r.Context(), issue.TargetProject),
-	})
+	s.getIssueTask(w, r)
 }
 
 func urlParseIssueDetail(r *http.Request) (string, error) {
 	query, err := url.ParseQuery(r.URL.RawQuery)
-	if err != nil { return "", err }
+	if err != nil {
+		return "", err
+	}
 	if !query.Has("project") {
 		return "", nil
 	}
@@ -265,141 +192,90 @@ func urlParseIssueDetail(r *http.Request) (string, error) {
 	return query.Get("project"), nil
 }
 
-// handleCreateIssue handles POST /api/issues.
+// handleCreateIssue godoc
+// @Summary Create or reconcile an issue-backed task
+// @Description JSON fields include required nonempty title and active canonical source_project; optional target_project defaults to source only when omitted, and optional nonempty target_session is recipient provenance, not authority. body defaults to empty, type to task, priority to medium, labels to [], metadata to {}, and owner_label/recipient_label to null. Labels and attribution are not credentials or access grants. Metadata is an object with compact size at most 1 MiB and at most 256 nested containers. Raw duplicate members, invalid Unicode and unpreservable numbers are rejected before mutation. Applicable recognized-secret protection rejects atomically without rewriting; detection is not comprehensive. The request ceiling is 10 MiB.
+// @Description An optional nonempty UTF-8 request_key of at most 512 bytes without NUL is scoped by authenticated actor and canonical source. Retain the original actor, source, key and logical payload after an unknown outcome. Same-key same-payload retry returns the original ID and current authorized revision; a changed payload conflicts and a deleted receipt cannot resurrect an issue. expected_actor is an optional keyed-create precondition obtained from auth-me, never a credential; mismatch or non-comparable identity returns ACTOR_CHANGED before receipt lookup. Unkeyed create is single-shot and has no replay guarantee. The result is {id,revision,replayed,changed,comment_id,message}; receipt payloads, digests and credentials are not returned. Swagger 2 cannot faithfully express all object, null and conditional rules.
+// @Tags Issues
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param body body object true "Create object as described; metadata is an object and expected_actor is a precondition only"
+// @Success 201 {object} issues.Result "New issue committed; replayed=false"
+// @Success 200 {object} issues.Result "Original authorized intent replayed; replayed=true"
+// @Failure 400 {object} map[string]issues.Error "INVALID_ARGUMENT or PRIVACY_REJECTED; no write"
+// @Failure 401 "Authentication required; middleware may return plain text, issue-owner UNAUTHENTICATED uses a JSON error envelope"
+// @Failure 403 "FORBIDDEN in the issue JSON envelope or plain-text middleware refusal"
+// @Failure 404 {object} map[string]issues.Error "ISSUE_NOT_FOUND; canonical scope or replay target unavailable"
+// @Failure 409 {object} map[string]issues.Error "ACTOR_CHANGED or IDEMPOTENCY_CONFLICT; retain and reconcile the original intent"
+// @Failure 410 {object} map[string]issues.Error "ISSUE_GONE; a retained receipt cannot create a replacement"
+// @Failure 413 "PAYLOAD_TOO_LARGE in the issue JSON envelope; outer request-size middleware may return plain text"
+// @Failure 500 "Authentication infrastructure failure"
+// @Failure 503 {object} map[string]issues.Error "UNAVAILABLE; reconcile keyed intent before retry, never blindly retry unkeyed create"
+// @Router /api/issues [post]
 func (s *Service) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Title            string   `json:"title"`
-		Body             string   `json:"body"`
-		Priority         string   `json:"priority"`
-		Type             string   `json:"type"`
-		SourceProject    string   `json:"source_project"`
-		TargetProject    string   `json:"target_project"`
-		SourceAgent      string   `json:"source_agent"`
-		CreatedBySession string   `json:"created_by_session"`
-		Labels           []string `json:"labels"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, `{"error": "invalid JSON body"}`, http.StatusBadRequest)
-		return
-	}
-
-	if req.Title == "" {
-		http.Error(w, `{"error": "title is required"}`, http.StatusBadRequest)
-		return
-	}
-	req.Type = strings.ToLower(strings.TrimSpace(req.Type))
-	if req.TargetProject == "" && req.SourceProject != "" {
-		req.TargetProject = req.SourceProject
-	}
-	if req.TargetProject == "" {
-		http.Error(w, `{"error": "target_project is required"}`, http.StatusBadRequest)
-		return
-	}
-
-	keycardID, isOperator, err := issueMutationActor(r.Context())
+	raw, scope, err := readIssueTaskWrite(w, r)
 	if err != nil {
-		writeIssueAuthorizationError(w, err)
+		writeIssueTaskError(w, err)
 		return
 	}
-	if isOperator {
-		keycardID = ""
-	}
-	issue := &gormdb.Issue{
-		Title:            req.Title,
-		Body:             req.Body,
-		Priority:         req.Priority,
-		Type:             req.Type,
-		SourceProject:    req.SourceProject,
-		TargetProject:    req.TargetProject,
-		SourceAgent:      req.SourceAgent,
-		CreatedBySession: req.CreatedBySession,
-		CreatorKeycardID: keycardID,
-		Labels:           req.Labels,
-	}
-
-	id, err := s.issueStore.CreateIssue(r.Context(), issue)
+	result, err := issues.New(s.issueStore, s.redactionRules).Create(r.Context(), scope, raw)
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error": %q}`, err.Error()), http.StatusInternalServerError)
+		writeIssueTaskError(w, err)
 		return
 	}
-
-	log.Info().
-		Int64("issue_id", id).
-		Str("title", req.Title).
-		Str("source", req.SourceProject).
-		Str("target", req.TargetProject).
-		Msg("Issue created")
-
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"id":      id,
-		"message": "issue created",
-	})
+	if !result.Replayed {
+		w.WriteHeader(http.StatusCreated)
+	}
+	_ = json.NewEncoder(w).Encode(result)
 }
 
-// handleUpdateIssue handles PATCH /api/issues/{id}.
+// handleUpdateIssue godoc
+// @Summary Atomically edit an issue or append a comment
+// @Description Presence-sensitive JSON fields include expected_revision, title, body, priority, type, status, labels, metadata, owner_label, recipient_label, target_session, comment and comment_metadata. A revision is a canonical decimal string from 1 through 9223372036854775807. Omitted fields stay unchanged; empty body and labels are permitted, empty metadata replaces the object, and null clears an owner label, recipient label or target session. Empty title or an empty non-null owner/recipient label is invalid. comment must be nonempty; comment_metadata requires comment and defaults to {}. Source/target/creator attribution is not editable. Optional source_project/source_agent/session fields are provenance, not authentication or authority; omitted source is admitted from the locked issue without inventing caller attribution.
+// @Description Field edits require expected_revision; comment-only append and standalone resolve, reopen or close may omit it, but a supplied revision is checked. A lifecycle without a caller precondition may apply after an intervening state cycle. A material change, its revision/history and optional comment commit atomically; a stale revision commits none of the request. Retain the draft and base, reread and explicitly reconcile. A same-value material request at the current revision is a no-op unless a comment is added. Comments do not advance revision and are not deduplicated. Protected material fields require creator-keycard or operator authority. Authorized read-write participants may resolve, close or reopen; acknowledged, rejected and open transitions remain operator-only. Rejection requires a nonempty comment. Mixed requests apply the strictest required authority.
+// @Description Request ceiling is 10 MiB; admitted metadata objects are limited to 1 MiB compact JSON and 256 nested containers. Duplicate raw members, invalid Unicode and unpreservable numbers are rejected. Applicable recognized-secret protection rejects atomically without rewriting and is not comprehensive detection. The result is {id,revision,replayed,changed,comment_id,message}, not a data wrapper; comment_id may be null. Issue-owner errors use {error:{code,message,current_revision?}}; outer middleware may return plain text. Swagger 2 cannot encode all presence, null and conditional rules.
+// @Tags Issues
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path int64 true "Positive issue ID" minimum(1)
+// @Param project query string false "Optional canonical source/target-role read narrowing, not actor identity"
+// @Param body body object true "Presence-sensitive mutation; material edits require expected_revision"
+// @Success 200 {object} issues.Result "Atomic update, comment append or current-revision no-op"
+// @Failure 400 {object} map[string]issues.Error "INVALID_ARGUMENT or PRIVACY_REJECTED; no write"
+// @Failure 401 "Authentication required; middleware may return plain text, issue-owner UNAUTHENTICATED uses a JSON error envelope"
+// @Failure 403 "FORBIDDEN in the issue JSON envelope or plain-text middleware refusal"
+// @Failure 404 {object} map[string]issues.Error "ISSUE_NOT_FOUND; missing or unreadable issue or canonical scope"
+// @Failure 409 {object} map[string]issues.Error "REVISION_CONFLICT or INVALID_TRANSITION; no compound comment committed"
+// @Failure 413 "PAYLOAD_TOO_LARGE in the issue JSON envelope; outer request-size middleware may return plain text"
+// @Failure 428 {object} map[string]issues.Error "REVISION_REQUIRED; read current revision before material mutation"
+// @Failure 500 "Authentication infrastructure failure"
+// @Failure 503 {object} map[string]issues.Error "UNAVAILABLE; reconcile outcome before retrying"
+// @Router /api/issues/{id} [patch]
 func (s *Service) handleUpdateIssue(w http.ResponseWriter, r *http.Request) {
-	idStr := chi.URLParam(r, "id")
-	id, err := strconv.ParseInt(idStr, 10, 64)
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil || id < 1 {
+		writeIssueTaskError(w, issues.Failure("INVALID_ARGUMENT"))
+		return
+	}
+	raw, scope, err := readIssueTaskWrite(w, r)
 	if err != nil {
-		http.Error(w, `{"error": "invalid issue id"}`, http.StatusBadRequest)
+		writeIssueTaskError(w, err)
 		return
 	}
-
-	var req struct {
-		Status        string   `json:"status"`
-		Comment       string   `json:"comment"`
-		SourceProject string   `json:"source_project"`
-		SourceAgent   string   `json:"source_agent"`
-		Title         string   `json:"title"`
-		Body          string   `json:"body"`
-		Priority      string   `json:"priority"`
-		Type          string   `json:"type"`
-		Labels        []string `json:"labels"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, `{"error": "invalid JSON body"}`, http.StatusBadRequest)
-		return
-	}
-
-	// Normalize type before validation and storage.
-	req.Type = strings.ToLower(strings.TrimSpace(req.Type))
-
-	update := gormdb.IssueUpdate{
-		Status:        req.Status,
-		Comment:       req.Comment,
-		AuthorProject: req.SourceProject,
-		AuthorAgent:   req.SourceAgent,
-		Title:         req.Title,
-		Body:          req.Body,
-		Priority:      req.Priority,
-		Type:          req.Type,
-		Labels:        req.Labels,
-	}
-	// Field edits and source-terminal actions require the creator keycard or an
-	// operator. Comment-only and resolved progression require only a RW keycard.
-	var isOperator bool
-	if update.HasSourceAuthorityAction() {
-		isOperator, err = s.authorizeIssueSourceMutation(r.Context(), id)
-	} else {
-		isOperator, err = s.authorizeIssueProgression(r.Context())
-	}
+	scope.ReadProject, err = urlParseIssueDetail(r)
 	if err != nil {
-		writeIssueAuthorizationError(w, err)
+		writeIssueTaskError(w, issues.Failure("INVALID_ARGUMENT"))
 		return
 	}
-
-	if err := s.issueStore.UpdateIssueAtomically(r.Context(), id, update, isOperator); err != nil {
-		writeIssueStoreError(w, err)
+	result, err := issues.New(s.issueStore, s.redactionRules).Mutate(r.Context(), scope, id, raw)
+	if err != nil {
+		writeIssueTaskError(w, err)
 		return
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"message": "issue updated",
-	})
+	writeJSON(w, result)
 }
 
 type issueAcknowledgeRequest struct {
@@ -439,6 +315,17 @@ func issueMutationAudit(ctx context.Context, action, sourceProject, sourceAgent 
 	}
 }
 
+func issueMutationAttribution(ctx context.Context, sourceProject, sourceAgent string) gormdb.IssueChangeAttribution {
+	optional := func(value string) *string {
+		if value == "" {
+			return nil
+		}
+		return &value
+	}
+	_, session := configAuditIdentity(ctx)
+	return gormdb.IssueChangeAttribution{SourceProject: optional(sourceProject), SourceAgent: optional(sourceAgent), Session: optional(session)}
+}
+
 // handleAcknowledgeIssues handles POST /api/issues/acknowledge.
 func (s *Service) handleAcknowledgeIssues(w http.ResponseWriter, r *http.Request) {
 	if err := requireIssueOperator(r.Context()); err != nil {
@@ -455,7 +342,7 @@ func (s *Service) handleAcknowledgeIssues(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	acknowledged, err := s.issueStore.AcknowledgeIssuesAtomically(r.Context(), req.IDs, issueMutationAudit(r.Context(), "acknowledge", req.SourceProject, req.SourceAgent, req.IDs))
+	acknowledged, err := s.issueStore.AcknowledgeIssuesAtomically(r.Context(), req.IDs, issueMutationAudit(r.Context(), "acknowledge", req.SourceProject, req.SourceAgent, req.IDs), issueMutationAttribution(r.Context(), req.SourceProject, req.SourceAgent))
 	if err != nil {
 		writeIssueStoreError(w, err)
 		return
@@ -750,6 +637,12 @@ func (s *Service) HandleIssueSelectionOperation(w http.ResponseWriter, r *http.R
 		writeIssueSelectionError(w, err)
 		return
 	}
+	if action.Kind == gormdb.IssueSelectionLabels && action.Labels != nil {
+		if err := issues.ValidateLabelsPrivacy(*action.Labels, s.redactionRules); err != nil {
+			operatorCodeWriteBodyless(w, http.StatusBadRequest)
+			return
+		}
+	}
 	selection, err := issueOperationSelection(r.Context(), selections, scope, request.Selection)
 	if err != nil {
 		writeIssueSelectionError(w, err)
@@ -770,10 +663,11 @@ func (s *Service) HandleIssueSelectionOperation(w http.ResponseWriter, r *http.R
 		ids[index] = target.ID
 	}
 	result, err := s.issueStore.ApplyIssueSelectionOperation(r.Context(), gormdb.IssueSelectionOperation{
-		Action:  action,
-		Actor:   gormdb.IssueSelectionActor{KeycardID: keycardID, IsOperator: isOperator},
-		Targets: targets,
-		Audit:   issueMutationAudit(r.Context(), request.Action, request.SourceProject, request.SourceAgent, ids),
+		Action:      action,
+		Actor:       gormdb.IssueSelectionActor{KeycardID: keycardID, IsOperator: isOperator},
+		Targets:     targets,
+		Audit:       issueMutationAudit(r.Context(), request.Action, request.SourceProject, request.SourceAgent, ids),
+		Attribution: issueMutationAttribution(r.Context(), request.SourceProject, request.SourceAgent),
 	})
 	if err != nil {
 		writeIssueSelectionError(w, err)

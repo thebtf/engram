@@ -6879,7 +6879,11 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 		issueProjectWriteScopeMigration189(),
 		browserSessionPublicHandleMigration190(),
 		memoryContextMigration191(),
+		issueAttributionMigration192(),
+		issueInternalTasksMigration193(),
+		issueReceiptPayloadV2Migration194(),
 		memoryLinksMigration195(),
+		issueTargetSessionRevisionGuardMigration196(),
 	})
 	if target != "" {
 		return m.MigrateTo(target)

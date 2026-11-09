@@ -530,6 +530,9 @@ try {
     $legacyFixture = Join-Path $legacyRoot "tests\fixtures\recovery\fixture"
     New-Item -ItemType Directory -Path $legacyFixture -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $repoRoot "tests\fixtures\recovery\fixture\main.go") -Destination $legacyFixture
+    $legacyIssueFixture = Join-Path $legacyRoot "internal\issuefixture"
+    New-Item -ItemType Directory -Path $legacyIssueFixture -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $repoRoot "internal\issuefixture\historical.go") -Destination $legacyIssueFixture
 
     [void](Invoke-Fixture -SourceRoot $legacyRoot -Action "seed" -DSNFile $sourceDSNFile -KeyFile $vaultKeyFile)
     # Opening with the candidate source runs all pending migrations and proves the

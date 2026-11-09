@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
+	issues "github.com/thebtf/engram/internal/issues/contract"
 	"github.com/thebtf/engram/pkg/models"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"gorm.io/gorm/logger"
 )
 
 var (
@@ -73,10 +76,11 @@ type IssueSelectionAction struct {
 // IssueSelectionOperation is a bounded handler-resolved selected-issue mutation.
 // Selection tokens stay at the handler boundary; this store receives only exact targets.
 type IssueSelectionOperation struct {
-	Action  IssueSelectionAction
-	Actor   IssueSelectionActor
-	Targets []IssueSelectionTarget
-	Audit   *AuditLogEntry
+	Action      IssueSelectionAction
+	Actor       IssueSelectionActor
+	Targets     []IssueSelectionTarget
+	Audit       *AuditLogEntry
+	Attribution IssueChangeAttribution
 }
 
 // IssueSelectionReadback contains only fields permitted in a committed selected-issue result.
@@ -180,14 +184,17 @@ func (s *IssueStore) CreateIssue(ctx context.Context, issue *Issue) (int64, erro
 
 // IssueListParams holds optional filters for ListIssues.
 type IssueListParams struct {
-	TargetProject string
-	SourceProject string
-	SourceAgent   string
-	Statuses      []string
-	ResolvedSince *time.Time
-	Type          string
-	Limit         int
-	Offset        int
+	TargetProject      string
+	SourceProject      string
+	SourceAgent        string
+	SourceSession      string
+	TargetSession      string
+	ParticipantSession string
+	Statuses           []string
+	ResolvedSince      *time.Time
+	Type               string
+	Limit              int
+	Offset             int
 }
 
 // ListIssues returns issues matching the filters with comment counts, stale_days, and total count.
@@ -203,6 +210,9 @@ func (s *IssueStore) ListIssues(ctx context.Context, targetProject string, statu
 
 // ListIssuesEx applies exact project and actor filters before counting and pagination.
 func (s *IssueStore) ListIssuesEx(ctx context.Context, params IssueListParams) ([]IssueWithCount, int64, error) {
+	if !ValidIssueSessionSelector(params.SourceSession) || !ValidIssueSessionSelector(params.TargetSession) || !ValidIssueSessionSelector(params.ParticipantSession) {
+		return nil, 0, fmt.Errorf("%w: invalid issue session selector", ErrIssueInvalidInput)
+	}
 	limit := params.Limit
 	if limit <= 0 {
 		limit = 50
@@ -217,6 +227,15 @@ func (s *IssueStore) ListIssuesEx(ctx context.Context, params IssueListParams) (
 	}
 	if params.SourceAgent != "" {
 		query = query.Where("source_agent = ?", params.SourceAgent)
+	}
+	if params.SourceSession != "" {
+		query = query.Where("issues.created_by_session = ?", params.SourceSession)
+	}
+	if params.TargetSession != "" {
+		query = query.Where("issues.target_session = ?", params.TargetSession)
+	}
+	if params.ParticipantSession != "" {
+		query = query.Where(issueParticipantSessionPredicate, params.ParticipantSession, params.ParticipantSession, params.ParticipantSession, params.ParticipantSession)
 	}
 	if len(params.Statuses) > 0 {
 		query = query.Where("status IN ?", params.Statuses)
@@ -489,32 +508,9 @@ func addIssueCommentTx(tx *gorm.DB, issueID int64, comment *IssueComment, now ti
 	return created.ID, nil
 }
 
-// AcknowledgeIssues bulk-transitions issues from open to acknowledged.
-// Only affects issues with status='open'. Returns count of updated rows.
-func (s *IssueStore) AcknowledgeIssues(ctx context.Context, ids []int64) (int64, error) {
-	if len(ids) == 0 {
-		return 0, nil
-	}
-
-	now := time.Now()
-	result := s.db.WithContext(ctx).
-		Model(&Issue{}).
-		Where("id IN ? AND status = ?", ids, "open").
-		Updates(map[string]interface{}{
-			"status":          "acknowledged",
-			"acknowledged_at": now,
-			"updated_at":      now,
-		})
-
-	if result.Error != nil {
-		return 0, fmt.Errorf("acknowledge issues: %w", result.Error)
-	}
-	return result.RowsAffected, nil
-}
-
 // AcknowledgeIssuesAtomically requires every requested issue to exist and be
 // open before transitioning the complete set in one transaction.
-func (s *IssueStore) AcknowledgeIssuesAtomically(ctx context.Context, ids []int64, audit *AuditLogEntry) (int64, error) {
+func (s *IssueStore) AcknowledgeIssuesAtomically(ctx context.Context, ids []int64, audit *AuditLogEntry, attribution IssueChangeAttribution) (int64, error) {
 	if len(ids) == 0 {
 		return 0, fmt.Errorf("%w: issue ids are required", ErrIssueInvalidInput)
 	}
@@ -529,37 +525,54 @@ func (s *IssueStore) AcknowledgeIssuesAtomically(ctx context.Context, ids []int6
 		seen[id] = struct{}{}
 	}
 
-	var acknowledged int64
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var count int64
-		if err := tx.Model(&Issue{}).Where("id IN ? AND status = ?", ids, "open").Count(&count).Error; err != nil {
+	actor, err := issues.CaptureActor(ctx)
+	if err != nil || !actor.CanWrite() || !actor.IsOperator() {
+		return 0, ErrIssueForbidden
+	}
+	scope, command := issueAttributedMutation(attribution)
+	status := "acknowledged"
+	command.Status = &status
+	err = s.db.WithContext(ctx).Session(&gorm.Session{Logger: logger.Discard}).Transaction(func(tx *gorm.DB) error {
+		if scope.SourceProject != "" {
+			if err := admitTaskScope(ctx, tx, scope); err != nil {
+				return err
+			}
+		}
+		var rows []Issue
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id IN ?", ids).Order("id ASC").Find(&rows).Error; err != nil {
 			return err
 		}
-		if count != int64(len(ids)) {
+		if len(rows) != len(ids) {
 			return fmt.Errorf("%w: all requested issues must exist and be open", ErrIssueInvalidTransition)
 		}
-		now := time.Now()
-		result := tx.Model(&Issue{}).Where("id IN ? AND status = ?", ids, "open").Updates(map[string]any{
-			"status":          "acknowledged",
-			"acknowledged_at": now,
-			"updated_at":      now,
-		})
-		if result.Error != nil {
-			return result.Error
+		for _, row := range rows {
+			if row.Status != "open" {
+				return fmt.Errorf("%w: all requested issues must exist and be open", ErrIssueInvalidTransition)
+			}
 		}
-		if result.RowsAffected != int64(len(ids)) {
-			return fmt.Errorf("%w: issue acknowledgement changed concurrently", ErrIssueInvalidTransition)
+		if scope.SourceProject == "" {
+			if err := admitTaskRowSources(ctx, tx, ids); err != nil {
+				return err
+			}
 		}
-		acknowledged = result.RowsAffected
+		now := time.Now().UTC().Truncate(time.Microsecond)
+		for index := range rows {
+			// This endpoint is conditional: both state and revision are owned by this lock.
+			expected := strconv.FormatInt(rows[index].Revision, 10)
+			command.ExpectedRevision = &expected
+			if _, err := mutateLockedTaskIssueTx(tx, &rows[index], actor, scope, command, now); err != nil {
+				return err
+			}
+		}
 		if audit != nil {
 			return NewAuditStore(tx).LogTx(ctx, tx, *audit)
 		}
 		return nil
 	})
 	if err != nil {
-		return 0, fmt.Errorf("acknowledge issues: %w", err)
+		return 0, issueWriterError(err)
 	}
-	return acknowledged, nil
+	return int64(len(ids)), nil
 }
 
 // ApplyIssueSelectionOperation locks every handler-authorized target, rechecks its
@@ -576,7 +589,7 @@ func (s *IssueStore) ApplyIssueSelectionOperation(ctx context.Context, operation
 
 	var failure IssueSelectionOperationResult
 	items := make([]IssueSelectionOperationItem, 0, len(targets))
-	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = s.db.WithContext(ctx).Session(&gorm.Session{Logger: logger.Discard}).Transaction(func(tx *gorm.DB) error {
 		ids := make([]int64, len(targets))
 		for index, target := range targets {
 			ids[index] = target.id
@@ -609,11 +622,28 @@ func (s *IssueStore) ApplyIssueSelectionOperation(ctx context.Context, operation
 				return err
 			}
 		}
+		var actor issues.Actor
+		scope, command := issueSelectionMutation(operation)
+		if operation.Action.Kind != IssueSelectionDelete {
+			actor, err = issues.CaptureActor(ctx)
+			if err != nil || !actor.CanWrite() || actor.IsOperator() != operation.Actor.IsOperator || actor.KeycardID() != operation.Actor.KeycardID {
+				failure.Items = []IssueSelectionOperationItem{{TargetID: targets[0].id, Outcome: IssueSelectionDenied}}
+				return ErrIssueForbidden
+			}
+			if scope.SourceProject != "" {
+				if err := admitTaskScope(ctx, tx, scope); err != nil {
+					return err
+				}
+			} else if err := admitTaskRowSources(ctx, tx, ids); err != nil {
+				return err
+			}
+		}
 
 		now := time.Now().UTC().Truncate(time.Microsecond)
 		for _, target := range targets {
-			item, err := applyIssueSelectionActionTx(tx, byID[target.id], operation.Action, operation.Actor.IsOperator, now)
+			item, err := applyIssueSelectionActionTx(tx, byID[target.id], operation.Action.Kind, actor, scope, command, now)
 			if err != nil {
+				err = issueWriterError(err)
 				failure.Items = []IssueSelectionOperationItem{{TargetID: target.id, Outcome: issueSelectionFailureOutcome(err)}}
 				return err
 			}
@@ -625,7 +655,7 @@ func (s *IssueStore) ApplyIssueSelectionOperation(ctx context.Context, operation
 		return nil
 	})
 	if err != nil {
-		return failure, err
+		return failure, issueWriterError(err)
 	}
 	return IssueSelectionOperationResult{Items: items}, nil
 }
@@ -718,8 +748,7 @@ func authorizeIssueSelectionRow(row *Issue, action IssueSelectionAction, actor I
 		return fmt.Errorf("%w: authenticated client keycard is required", ErrIssueForbidden)
 	}
 
-	sourceAuthority := action.Kind == IssueSelectionPriority || action.Kind == IssueSelectionLabels ||
-		(action.Kind == IssueSelectionStatus && action.Status != nil && (*action.Status == "reopened" || *action.Status == "closed"))
+	sourceAuthority := action.Kind == IssueSelectionPriority || action.Kind == IssueSelectionLabels
 	if sourceAuthority && (row.CreatorKeycardID == "" || row.CreatorKeycardID != actor.KeycardID) {
 		return fmt.Errorf("%w: issue mutation forbidden", ErrIssueForbidden)
 	}
@@ -739,7 +768,7 @@ func validateIssueSelectionCurrentRow(row *Issue, action IssueSelectionAction, a
 	case IssueSelectionStatus:
 		switch *action.Status {
 		case "reopened":
-			if row.Status != "resolved" {
+			if row.Status != "resolved" && row.Status != "closed" {
 				return ErrIssueSelectionConflict
 			}
 		case "closed":
@@ -751,9 +780,9 @@ func validateIssueSelectionCurrentRow(row *Issue, action IssueSelectionAction, a
 	return nil
 }
 
-func applyIssueSelectionActionTx(tx *gorm.DB, row *Issue, action IssueSelectionAction, isOperator bool, now time.Time) (IssueSelectionOperationItem, error) {
+func applyIssueSelectionActionTx(tx *gorm.DB, row *Issue, kind IssueSelectionActionKind, actor issues.Actor, scope issues.Scope, command issues.MutationCommand, now time.Time) (IssueSelectionOperationItem, error) {
 	item := IssueSelectionOperationItem{TargetID: row.ID, Outcome: IssueSelectionCommitted}
-	if action.Kind == IssueSelectionDelete {
+	if kind == IssueSelectionDelete {
 		if err := deleteIssueTx(tx, row.ID); err != nil {
 			return IssueSelectionOperationItem{}, err
 		}
@@ -761,34 +790,10 @@ func applyIssueSelectionActionTx(tx *gorm.DB, row *Issue, action IssueSelectionA
 		return item, nil
 	}
 
-	var err error
-	switch action.Kind {
-	case IssueSelectionAcknowledge:
-		err = updateIssueStatusTx(tx, row.ID, "acknowledged", now)
-	case IssueSelectionPriority:
-		err = updateIssueFieldsTx(tx, row.ID, "", "", *action.Priority, "", nil, now)
-	case IssueSelectionLabels:
-		labels := append([]string{}, (*action.Labels)...)
-		err = updateIssueFieldsTx(tx, row.ID, "", "", "", "", labels, now)
-	case IssueSelectionStatus:
-		switch *action.Status {
-		case "reopened":
-			err = reopenIssueTx(tx, row.ID, now)
-		case "closed":
-			err = closeIssueTx(tx, row.ID, isOperator, now)
-		case "rejected":
-			err = rejectIssueTx(tx, row.ID, *action.Comment, action.AuthorProject, action.AuthorAgent, now)
-		default:
-			err = updateIssueStatusTx(tx, row.ID, *action.Status, now)
-		}
-		if err == nil && *action.Status != "rejected" && action.Comment != nil && *action.Comment != "" {
-			_, err = addIssueCommentTx(tx, row.ID, &IssueComment{
-				AuthorProject: action.AuthorProject,
-				AuthorAgent:   action.AuthorAgent,
-				Body:          *action.Comment,
-			}, now)
-		}
-	}
+	// Bind the material revision only after matching the selected timestamp under lock.
+	expected := strconv.FormatInt(row.Revision, 10)
+	command.ExpectedRevision = &expected
+	_, err := mutateLockedTaskIssueTx(tx, row, actor, scope, command, now)
 	if err != nil {
 		return IssueSelectionOperationItem{}, err
 	}

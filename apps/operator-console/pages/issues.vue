@@ -6,6 +6,8 @@ import {
   useOperatorIssues,
   type IssueSelectionAction,
   type IssueUpdateInput,
+  type IssueCreateInput,
+  type IssueDetailPage,
   type OperatorIssue,
   type OperatorIssuePriority,
   type OperatorIssueStatus,
@@ -14,7 +16,7 @@ import {
 import { createOperatorSelection, type OperatorSelectionTarget } from '../composables/useOperatorSelection'
 import type { MutationResult } from '../composables/useApi'
 
-type IssueFilter = 'all' | 'open' | 'work' | 'closed' | 'rejected'
+type IssueFilter = 'all' | 'open' | 'work' | 'resolved' | 'closed' | 'rejected'
 type BulkField = 'status' | 'priority'
 type CreateTemplate = 'bug' | 'handoff' | 'question' | 'improvement'
 
@@ -33,18 +35,40 @@ const filterStatuses: Record<IssueFilter, OperatorIssueStatus[]> = {
   all: [],
   open: ['open'],
   work: ['acknowledged', 'reopened'],
-  closed: ['resolved', 'closed'],
+  resolved: ['resolved'],
+  closed: ['closed'],
   rejected: ['rejected'],
 }
 const { pageSize, pageSizeOptions } = usePersistentPageSize('issues', 10)
 const page = ref(1)
 const filter = ref<IssueFilter>('all')
 const projectRole = ref<'target' | 'source'>('target')
+const query = ref('')
+const ownerFilter = ref('')
+const sourceSessionFilter = ref('')
+const participantSessionFilter = ref('')
+const targetSessionFilter = ref('')
+const extraFilters = computed(() => Boolean(query.value || ownerFilter.value || sourceSessionFilter.value || participantSessionFilter.value || targetSessionFilter.value))
 const effectivePageSize = computed(() => pageSize.value === 'all' ? 200 : pageSize.value)
-const listOptions = computed(() => ({ limit: effectivePageSize.value, offset: (page.value - 1) * effectivePageSize.value, role: projectRole.value, statuses: filterStatuses[filter.value] }))
+const listOptions = computed(() => ({ limit: effectivePageSize.value, offset: (page.value - 1) * effectivePageSize.value, role: projectRole.value, statuses: filterStatuses[filter.value], q: query.value, ownerLabel: ownerFilter.value, sourceSession: sourceSessionFilter.value, participantSession: participantSessionFilter.value, targetSession: targetSessionFilter.value }))
 const {
   rows,
   comments,
+  history,
+  commentsPage,
+  historyPage,
+  pageLoading,
+  pageError,
+  loadMoreComments,
+  loadMoreHistory,
+  pendingCreate,
+  hasCreateIntent,
+  createPending,
+  createRecoveryError,
+  createResolution,
+  restoreCreateIntent,
+  reconcileCreate,
+  finishRejectedCreate,
   trackedProjects,
   registryTotal,
   detail,
@@ -57,9 +81,6 @@ const {
   openIssue,
   createIssue: runCreateIssue,
   updateIssue,
-  commentIssue,
-  rejectIssue,
-  acknowledgeIssue,
   deleteIssue,
   saveIssueSelection,
   freezeIssueSelection,
@@ -70,7 +91,7 @@ const priorityOptions: OperatorIssuePriority[] = ['critical', 'high', 'medium', 
 const typeOptions: OperatorIssueType[] = ['bug', 'feature', 'improvement', 'task']
 const statusOptions: OperatorIssueStatus[] = ['open', 'acknowledged', 'reopened', 'resolved', 'closed', 'rejected']
 const bulkStatusOptions = statusOptions.filter((status) => status !== 'rejected')
-const filterOptions: IssueFilter[] = ['all', 'open', 'work', 'closed', 'rejected']
+const filterOptions: IssueFilter[] = ['all', 'open', 'work', 'resolved', 'closed', 'rejected']
 const templateOptions: CreateTemplate[] = ['bug', 'handoff', 'question', 'improvement']
 
 const selection = createOperatorSelection('issues')
@@ -100,6 +121,11 @@ const createTargetProject = ref('')
 const createPriority = ref<OperatorIssuePriority>('high')
 const createType = ref<OperatorIssueType>('bug')
 const createLabels = ref<string[]>(['operator-created'])
+const createMetadata = ref('')
+const createOwnerLabel = ref('')
+const createRecipientLabel = ref('')
+const createSourceSession = ref('')
+const createTargetSession = ref('')
 
 const statusDraft = ref<OperatorIssueStatus>('open')
 const priorityDraft = ref<OperatorIssuePriority>('medium')
@@ -107,10 +133,29 @@ const typeDraft = ref<OperatorIssueType>('task')
 const labelDraft = ref<string[]>([])
 const commentDraft = ref('')
 const rejectComment = ref('')
+const titleDraft = ref('')
+const bodyDraft = ref('')
+const metadataDraft = ref('')
+const ownerDraft = ref('')
+const recipientDraft = ref('')
+const targetSessionDraft = ref('')
+const writeSession = ref('')
+const commentMetadataDraft = ref('')
+const editBase = ref<OperatorIssue | null>(null)
+const editSourceProject = ref('')
+const losingBase = ref<OperatorIssue | null>(null)
+const losingPatch = ref<IssueUpdateInput | null>(null)
+const losingComment = ref<{ body: string; rawMetadata?: string; sessionId?: string } | null>(null)
+const editNeedsReconciliation = ref(false)
+const freshEditRead = ref(false)
+const mutationBusy = ref(false)
+const inputError = ref('')
+const savedDrafts = new Map<number, { base: OperatorIssue; source: string; losingBase: OperatorIssue | null; title: string; body: string; metadata: string; owner: string; recipient: string; targetSession: string; writeSession: string; status: OperatorIssueStatus; priority: OperatorIssuePriority; type: OperatorIssueType; labels: string[]; comment: string; commentMetadata: string; reject: string; losing: IssueUpdateInput | null; losingComment: { body: string; rawMetadata?: string; sessionId?: string } | null; reconcile: boolean }>()
 const bulkField = ref<BulkField>('status')
 const bulkValue = ref<string>('acknowledged')
 const bulkLabelValue = ref('operator-created')
-const mutationResult = ref<MutationResult | null>(null)
+const createMutationResult = ref<MutationResult | null>(null)
+const otherMutationResult = ref<MutationResult | null>(null)
 let scopeGeneration = 0
 
 const activeIssue = computed(() => {
@@ -144,9 +189,10 @@ const pageRange = computed(() => {
   return { from, to }
 })
 const pageRows = filteredRows
-const canCreate = computed(() => scopeReady.value && createTitle.value.trim().length > 0 && isCatalogProject(createSourceProject.value) && isCatalogProject(createTargetProject.value) && (context.project.value === 'all' || createSourceProject.value === context.project.value) && !pending.value)
-const canComment = computed(() => humanSourceReady.value && Boolean(activeIssue.value) && commentDraft.value.trim().length > 0 && !pending.value)
-const canReject = computed(() => humanSourceReady.value && Boolean(activeIssue.value) && rejectComment.value.trim().length > 0 && !pending.value)
+const canCreate = computed(() => scopeReady.value && !hasCreateIntent.value && !createPending.value && createTitle.value.trim().length > 0 && isCatalogProject(createSourceProject.value) && isCatalogProject(createTargetProject.value) && (context.project.value === 'all' || createSourceProject.value === context.project.value) && !pending.value)
+const writeReady = computed(() => humanSourceReady.value && editSourceProject.value === context.project.value && detailState.value.kind === 'live' && activeIssue.value?.id === editBase.value?.id && !pending.value && !mutationBusy.value && !editNeedsReconciliation.value)
+const canComment = computed(() => writeReady.value && commentDraft.value.trim().length > 0)
+const canReject = computed(() => writeReady.value && rejectComment.value.trim().length > 0)
 const projectOptions = trackedProjects
 const pageTitle = computed(() => activeIssue.value ? t('issues.detail.title', { id: activeIssue.value.id }) : t('issues.title'))
 const pageSubtitle = computed(() => activeIssue.value ? t('issues.detail.subtitle') : t('issues.subtitle'))
@@ -182,7 +228,8 @@ watch([context.project, context.selectionPending, scopeError, requestedId], () =
   activeId.value = null
   selection.invalidate('filter_changed')
   notice.value = ''
-  mutationResult.value = null
+  createMutationResult.value = null
+  otherMutationResult.value = null
   showCreate.value = false
   showReject.value = false
   showDelete.value = false
@@ -195,7 +242,7 @@ watch([context.project, context.selectionPending, scopeError, requestedId], () =
     void openIssue(requestedId.value)
   }
 }, { immediate: true, flush: 'sync' })
-watch([filter, projectRole], () => {
+watch([filter, projectRole, query, ownerFilter, sourceSessionFilter, participantSessionFilter, targetSessionFilter], () => {
   scopeGeneration += 1
   page.value = 1
   activeId.value = null
@@ -213,12 +260,30 @@ watch(filteredRows, () => {
 })
 
 watch(activeIssue, (issue) => {
-  statusDraft.value = issue?.status || 'open'
-  priorityDraft.value = issue?.priority || 'medium'
-  typeDraft.value = issue?.type || 'task'
-  labelDraft.value = issue ? [...issue.labels] : []
-  commentDraft.value = ''
-  rejectComment.value = ''
+  if (!issue || detailState.value.kind !== 'live' || detail.value?.id !== issue.id || editBase.value?.id === issue.id) return
+  if (editBase.value) savedDrafts.set(editBase.value.id, { base: editBase.value, source: editSourceProject.value, losingBase: losingBase.value, title: titleDraft.value, body: bodyDraft.value, metadata: metadataDraft.value, owner: ownerDraft.value, recipient: recipientDraft.value, targetSession: targetSessionDraft.value, writeSession: writeSession.value, status: statusDraft.value, priority: priorityDraft.value, type: typeDraft.value, labels: [...labelDraft.value], comment: commentDraft.value, commentMetadata: commentMetadataDraft.value, reject: rejectComment.value, losing: losingPatch.value, losingComment: losingComment.value, reconcile: editNeedsReconciliation.value })
+  const saved = savedDrafts.get(issue.id)
+  editBase.value = saved?.base ?? issue
+  editSourceProject.value = saved?.source ?? context.project.value
+  losingBase.value = saved?.losingBase ?? null
+  titleDraft.value = saved?.title ?? issue.title
+  bodyDraft.value = saved?.body ?? issue.body
+  metadataDraft.value = saved?.metadata ?? JSON.stringify(issue.metadata, null, 2)
+  ownerDraft.value = saved?.owner ?? issue.ownerLabel ?? ''
+  recipientDraft.value = saved?.recipient ?? issue.recipientLabel ?? ''
+  targetSessionDraft.value = saved?.targetSession ?? issue.targetSession ?? ''
+  writeSession.value = saved?.writeSession ?? ''
+  statusDraft.value = saved?.status ?? issue.status
+  priorityDraft.value = saved?.priority ?? issue.priority
+  typeDraft.value = saved?.type ?? issue.type
+  labelDraft.value = saved ? [...saved.labels] : [...issue.labels]
+  commentDraft.value = saved?.comment ?? ''
+  commentMetadataDraft.value = saved?.commentMetadata ?? ''
+  rejectComment.value = saved?.reject ?? ''
+  losingPatch.value = saved?.losing ?? null
+  losingComment.value = saved?.losingComment ?? null
+  editNeedsReconciliation.value = saved?.reconcile ?? false
+  freshEditRead.value = false
   selectedCommentKeys.value = []
   hideIssueHover()
   showReject.value = false
@@ -229,6 +294,12 @@ watch(() => activeIssue.value?.id, (id) => {
   if (id) detailHeading.value?.scrollIntoView({ block: 'start' })
 }, { flush: 'post' })
 
+watch([createRecoveryError, inputError], (messages) => {
+  if (!hasCreateIntent.value || !messages.some((message) => /^CREATE_(IDENTITY_RECHECK_REQUIRED|ACTOR_MISMATCH|IDENTITY_UNAVAILABLE):/.test(message))) return
+  showCreate.value = false
+  resetCreate()
+}, { flush: 'sync' })
+
 function resetCreate() {
   createTitle.value = ''
   createBody.value = ''
@@ -238,6 +309,11 @@ function resetCreate() {
   createType.value = 'bug'
   createLabels.value = ['operator-created']
   activeTemplate.value = 'bug'
+  createMetadata.value = ''
+  createOwnerLabel.value = ''
+  createRecipientLabel.value = ''
+  createSourceSession.value = ''
+  createTargetSession.value = ''
 }
 
 function setNotice(key: string, params: Record<string, unknown> = {}) {
@@ -314,7 +390,7 @@ async function toggleSelection(issue: OperatorIssue) {
 }
 
 async function selectAllFiltered() {
-  if (!humanSourceReady.value) return
+  if (!humanSourceReady.value || extraFilters.value) return
   const generation = scopeGeneration
   try {
     const snapshot = await freezeIssueSelection(selectionFilter(), [])
@@ -331,11 +407,16 @@ function clearSelection() {
 function resetFilter() {
   filter.value = 'all'
   projectRole.value = 'target'
+  query.value = ''
+  ownerFilter.value = ''
+  sourceSessionFilter.value = ''
+  participantSessionFilter.value = ''
+  targetSessionFilter.value = ''
   page.value = 1
 }
 
 function hasFilter() {
-  return filter.value !== 'all' || projectRole.value !== 'target'
+  return filter.value !== 'all' || projectRole.value !== 'target' || extraFilters.value
 }
 
 async function selectIssue(issue: OperatorIssue) {
@@ -348,9 +429,26 @@ function closeWorkspace() {
   activeId.value = null
 }
 
-function openCreate() {
+async function openCreate() {
   if (!scopeReady.value) return
-  resetCreate()
+  inputError.value = ''
+  if (hasCreateIntent.value) await restoreCreateIntent()
+  const retained = pendingCreate.value
+  if (hasCreateIntent.value && !retained) { showCreate.value = false; return }
+  if (retained) {
+    createTitle.value = retained.title
+    createBody.value = retained.body ?? ''
+    createPriority.value = retained.priority
+    createType.value = retained.type
+    createSourceProject.value = retained.sourceProject
+    createTargetProject.value = retained.targetProject
+    createLabels.value = [...(retained.labels ?? [])]
+    createMetadata.value = retained.rawMetadata ?? JSON.stringify(retained.metadata ?? {}, null, 2)
+    createOwnerLabel.value = retained.ownerLabel ?? ''
+    createRecipientLabel.value = retained.recipientLabel ?? ''
+    createSourceSession.value = retained.createdBySession ?? ''
+    createTargetSession.value = retained.targetSession ?? ''
+  } else if (!hasCreateIntent.value) { createMutationResult.value = null; resetCreate() }
   showCreate.value = true
 }
 
@@ -405,40 +503,168 @@ function clearThreadSelection() {
   selectedCommentKeys.value = []
 }
 
-async function updateCurrentField(field: 'status' | 'priority' | 'type', value: string) {
-  if (!activeIssue.value || pending.value || !humanSourceReady.value) return
+function rawMetadataInput(value: string): string | undefined {
+  return value.trim() ? value : undefined
+}
+function presentInputFailure(cause: unknown) {
+  inputError.value = cause instanceof Error ? cause.message : 'The operation could not be dispatched.'
+}
+async function submitEdit(patch: IssueUpdateInput) {
+  if (!activeIssue.value || !writeReady.value || !editBase.value) return false
   const generation = scopeGeneration
   const id = activeIssue.value.id
-  const patch: IssueUpdateInput =
-    field === 'status'
-      ? { status: value as OperatorIssueStatus }
-      : field === 'priority'
-        ? { priority: value as OperatorIssuePriority }
-        : { type: value as OperatorIssueType }
-  const result = await updateIssue(id, {
-    ...patch,
-    comment: t('issues.detail.fieldChangeComment', { field: t(`issues.detail.${field}`) }),
-  })
-  if (generation !== scopeGeneration) return
-  mutationResult.value = result
-  if (result.kind === 'committed_verified') await reconcileIssue(id)
+  const base = editBase.value
+  if (base.revision === null) {
+    losingPatch.value = { ...patch, ...(patch.sessionId !== undefined ? {} : writeSession.value ? { sessionId: writeSession.value } : {}) }
+    losingBase.value = base
+    freshEditRead.value = false
+    editNeedsReconciliation.value = true
+    inputError.value = 'REVISION_REQUIRED: read the current issue and explicitly accept its revision before submitting this retained draft.'
+    return false
+  }
+  const input = { ...patch, ...(patch.sessionId !== undefined ? {} : writeSession.value ? { sessionId: writeSession.value } : {}), expectedRevision: base.revision }
+  losingPatch.value = input
+  losingBase.value = base
+  freshEditRead.value = false
+  inputError.value = ''
+  mutationBusy.value = true
+  try {
+    const result = await updateIssue(id, input)
+    if (generation !== scopeGeneration) return false
+    otherMutationResult.value = result
+    if (result.kind === 'committed_verified') {
+      losingPatch.value = null
+      losingBase.value = null
+      editNeedsReconciliation.value = false
+      await reconcileIssue(id)
+      if (activeIssue.value?.id === id) {
+        refreshUntouchedDrafts(base, activeIssue.value)
+        editBase.value = activeIssue.value
+      }
+      return true
+    }
+    editNeedsReconciliation.value = result.kind !== 'validation_error' || result.httpStatus === 428
+  } catch (cause) { presentInputFailure(cause); editNeedsReconciliation.value = !(cause instanceof TypeError && /^(INVALID_ARGUMENT|PAYLOAD_TOO_LARGE):/.test(cause.message)) }
+  finally { mutationBusy.value = false }
+  return false
+}
+async function readLatestIssue() {
+  const id = activeId.value
+  if (id === null || !scopeReady.value) return
+  await openIssue(id)
+  freshEditRead.value = detailState.value.kind === 'live' && detail.value?.id === id
+}
+function refreshUntouchedDrafts(base: OperatorIssue, current: OperatorIssue) {
+  if (titleDraft.value === base.title) titleDraft.value = current.title
+  if (bodyDraft.value === base.body) bodyDraft.value = current.body
+  if (metadataDraft.value === JSON.stringify(base.metadata, null, 2)) metadataDraft.value = JSON.stringify(current.metadata, null, 2)
+  if (ownerDraft.value === (base.ownerLabel ?? '')) ownerDraft.value = current.ownerLabel ?? ''
+  if (recipientDraft.value === (base.recipientLabel ?? '')) recipientDraft.value = current.recipientLabel ?? ''
+  if (targetSessionDraft.value === (base.targetSession ?? '')) targetSessionDraft.value = current.targetSession ?? ''
+  if (statusDraft.value === base.status) statusDraft.value = current.status
+  if (priorityDraft.value === base.priority) priorityDraft.value = current.priority
+  if (typeDraft.value === base.type) typeDraft.value = current.type
+  if (labelDraft.value.length === base.labels.length && labelDraft.value.every((label, index) => label === base.labels[index])) labelDraft.value = [...current.labels]
+}
+function acceptReadRevision() {
+  if (!freshEditRead.value || !activeIssue.value || !editBase.value || activeIssue.value.id !== editBase.value.id) return
+  refreshUntouchedDrafts(editBase.value, activeIssue.value)
+  editBase.value = activeIssue.value
+  editNeedsReconciliation.value = false
+  freshEditRead.value = false
+}
+async function submitRetainedEdit() {
+  if (losingPatch.value) await submitEdit({ ...losingPatch.value, expectedRevision: editBase.value?.revision ?? undefined })
+}
+async function saveIssueContent() {
+  if (!editBase.value) return
+  try {
+    const patch: IssueUpdateInput = {}
+    if (titleDraft.value !== editBase.value.title) patch.title = titleDraft.value
+    if (bodyDraft.value !== editBase.value.body) patch.body = bodyDraft.value
+    if (metadataDraft.value !== JSON.stringify(editBase.value.metadata, null, 2)) {
+      const value = rawMetadataInput(metadataDraft.value)
+      if (value !== undefined) patch.rawMetadata = value
+    }
+    if (ownerDraft.value !== (editBase.value.ownerLabel ?? '')) patch.ownerLabel = ownerDraft.value || null
+    if (recipientDraft.value !== (editBase.value.recipientLabel ?? '')) patch.recipientLabel = recipientDraft.value || null
+    if (targetSessionDraft.value !== (editBase.value.targetSession ?? '')) patch.targetSession = targetSessionDraft.value || null
+    if (!Object.keys(patch).length) return
+    await submitEdit(patch)
+  } catch (cause) { presentInputFailure(cause) }
+}
+async function updateCurrentField(field: 'status' | 'priority' | 'type', value: string) {
+  const patch: IssueUpdateInput = field === 'status' ? { status: value as OperatorIssueStatus } : field === 'priority' ? { priority: value as OperatorIssuePriority } : { type: value as OperatorIssueType }
+  await submitEdit({ ...patch, comment: t('issues.detail.fieldChangeComment', { field: t(`issues.detail.${field}`) }) })
+}
+async function toggleIssueLabel(label: string) {
+  if (!writeReady.value) return
+  const labels = labelDraft.value.includes(label) ? labelDraft.value.filter((item) => item !== label) : [...labelDraft.value, label]
+  labelDraft.value = labels
+  await submitEdit({ labels, comment: t('issues.detail.labelsComment') })
+}
+function pageDisclosure(page: IssueDetailPage | null) {
+  if (!page) return t('issues.feature012.pageNotLoaded')
+  const range = page.length ? t('issues.feature012.pageRange', { start: page.offset + 1, end: page.offset + page.length, total: page.total }) : t('issues.feature012.pageEmpty', { total: page.total })
+  const later = t(page.complete ? 'issues.feature012.noLater' : 'issues.feature012.moreAvailable')
+  return [range, later, ...(page.offset > 0 ? [t('issues.feature012.earlierExcluded')] : [])].join(' · ')
 }
 
-async function toggleIssueLabel(label: string) {
-  if (!activeIssue.value || pending.value || !humanSourceReady.value) return
-  const generation = scopeGeneration
-  const id = activeIssue.value.id
-  const labels = labelDraft.value.includes(label)
-    ? labelDraft.value.filter((item) => item !== label)
-    : [...labelDraft.value, label]
-  labelDraft.value = labels
-  const result = await updateIssue(id, {
-    labels,
-    comment: t('issues.detail.labelsComment'),
-  })
-  if (generation !== scopeGeneration) return
-  mutationResult.value = result
-  if (result.kind === 'committed_verified') await reconcileIssue(id)
+const inputErrorTranslationKeys: Readonly<Record<string, string>> = {
+    'INVALID_ARGUMENT: metadata contains an unsupported number': 'metadataNumber',
+    'INVALID_ARGUMENT: metadata must contain only JSON values': 'metadataJson',
+    'INVALID_ARGUMENT: metadata must contain plain JSON data': 'metadataPlain',
+    'INVALID_ARGUMENT: object and raw metadata are mutually exclusive': 'metadataExclusive',
+    'INVALID_ARGUMENT: object and raw comment metadata are mutually exclusive': 'commentMetadataExclusive',
+    'INVALID_ARGUMENT: comment metadata requires a comment': 'commentMetadataNeedsComment',
+    'REVISION_REQUIRED: a canonical decimal issue revision is required': 'revisionCanonical',
+    'INVALID_ARGUMENT: request_key must be valid nonempty UTF-8 within 512 bytes': 'requestKey',
+    'INVALID_ARGUMENT: raw metadata requires an object request': 'metadataRequest',
+    'The operation could not be dispatched.': 'dispatchFailed',
+    'REVISION_REQUIRED: read the current issue and explicitly accept its revision before submitting this retained draft.': 'revisionRequired',
+    'INVALID_ARGUMENT: raw metadata must be exactly one JSON object': 'rawMetadataObject',
+    'INVALID_ARGUMENT: raw metadata must be exactly one non-null JSON object': 'rawMetadataNonNull',
+    'INVALID_ARGUMENT: metadata must be an object': 'metadataObject',
+    'INVALID_ARGUMENT: invalid create fields': 'invalidCreate',
+    'INVALID_ARGUMENT: owner and recipient labels must be nonempty or null': 'invalidLabels',
+    'PAYLOAD_TOO_LARGE: metadata exceeds 1 MiB': 'metadataTooLarge',
+    'PAYLOAD_TOO_LARGE: metadata exceeds 256 nested containers': 'metadataTooDeep',
+    'CREATE_IDENTITY_RECHECK_REQUIRED: verify the original actor before showing or replaying its retained intent': 'identityRecheck',
+    'CREATE_IDENTITY_RECHECK_REQUIRED: authenticate the original actor again before resolving its retained intent': 'identityAuthenticate',
+    'CREATE_IDENTITY_UNAVAILABLE: confirm the original authenticated actor before creating or reconciling': 'identityUnavailable',
+    'CREATE_IDENTITY_UNAVAILABLE: the server must provide a trusted non-secret actor projection before this intent can be created or resumed': 'identityProjection',
+    'CREATE_ACTOR_MISMATCH: return to the original authenticated actor': 'actorMismatch',
+    'CREATE_STORAGE_UNAVAILABLE: intent could not be retained in this tab; do not create a replacement task': 'storageUnavailable',
+    'CREATE_SOURCE_MISMATCH: select the original catalog source and target before dispatch': 'sourceMismatch',
+    'CREATE_INTENT_INVALID: retained intent is unreadable; no replacement task was created': 'intentUnreadable',
+    'CREATE_INTENT_INVALID: retained intent needs recovery; no replacement task was created': 'intentInvalid',
+    'CREATE_ACTOR_MISMATCH: return to the original authenticated actor; retained payload is not displayed or replayed': 'actorMismatchRetained',
+    'CREATE_STORAGE_UNAVAILABLE: the task was verified, but its retained intent could not be cleared; reconcile before a new task': 'storageClear',
+    'CREATE_IN_PROGRESS: wait for the dispatched intent': 'inProgress',
+    'CREATE_RECONCILIATION_REQUIRED: reconcile the retained original task before a new create': 'reconcileRequired',
+    'CREATE_RECONCILIATION_REQUIRED: an intent is already retained': 'alreadyRetained',
+    'CREATE_SOURCE_MISMATCH: project or authentication scope changed before dispatch': 'scopeDispatch',
+    'CREATE_INTENT_UNAVAILABLE: no retained create can be reconciled': 'intentUnavailable',
+    'CREATE_SOURCE_MISMATCH: project or authentication scope changed before reconciliation': 'scopeReconcile',
+    'CREATE_RECONCILIATION_REQUIRED: an unknown create cannot be abandoned for a new key': 'unknownCreate',
+}
+
+function displayInputError(message: string) {
+  if (!Object.hasOwn(inputErrorTranslationKeys, message)) return message
+  const key = inputErrorTranslationKeys[message]
+  const code = message.match(/^[A-Z_]+:/)?.[0]
+  return code ? `${code} ${t(`issues.feature012.errors.${key}`)}` : t(`issues.feature012.errors.${key}`)
+}
+
+const historyActions = new Set(['created', 'updated', 'baseline'])
+const historyFields = new Set(['title', 'body', 'priority', 'type', 'target_session', 'labels', 'metadata', 'owner_label', 'recipient_label', 'status', 'resolved_at', 'acknowledged_at', 'reopened_at', 'closed_at'])
+
+function historyActionLabel(action: string) {
+  return historyActions.has(action) ? t(`issues.feature012.historyActions.${action}`) : action
+}
+
+function historyFieldLabel(field: string) {
+  return historyFields.has(field) ? t(`issues.feature012.historyFields.${field}`) : field
 }
 
 function showIssueHover(issue: OperatorIssue, event: MouseEvent) {
@@ -503,73 +729,64 @@ function hideIssueHover() {
 async function createNewIssue() {
   if (!canCreate.value) return
   const generation = scopeGeneration
-  const result = await runCreateIssue({
-    title: createTitle.value.trim(),
-    body: createBody.value.trim(),
-    priority: createPriority.value,
-    type: createType.value,
-    sourceProject: createSourceProject.value,
-    targetProject: createTargetProject.value.trim(),
-    labels: createLabels.value,
-  })
-  if (generation !== scopeGeneration) return
-
-  mutationResult.value = result
-  if (result.kind === 'committed_verified') {
-    showCreate.value = false
-    resetCreate()
-    await refresh()
-  }
+  inputError.value = ''
+  try {
+    const rawMetadata = rawMetadataInput(createMetadata.value)
+    const input: IssueCreateInput = { title: createTitle.value, body: createBody.value, priority: createPriority.value, type: createType.value, sourceProject: createSourceProject.value, targetProject: createTargetProject.value, labels: [...createLabels.value], ...(rawMetadata === undefined ? {} : { rawMetadata }), ...(createOwnerLabel.value ? { ownerLabel: createOwnerLabel.value } : {}), ...(createRecipientLabel.value ? { recipientLabel: createRecipientLabel.value } : {}), ...(createSourceSession.value ? { createdBySession: createSourceSession.value } : {}), ...(createTargetSession.value ? { targetSession: createTargetSession.value } : {}) }
+    const result = await runCreateIssue(input)
+    if (generation !== scopeGeneration) return
+    createMutationResult.value = result
+    if (result.kind === 'committed_verified' && !hasCreateIntent.value) { showCreate.value = false; resetCreate(); await refresh() }
+  } catch (cause) { presentInputFailure(cause) }
+}
+async function recoverCreate() {
+  inputError.value = ''
+  const generation = scopeGeneration
+  try {
+    const result = await reconcileCreate()
+    if (generation !== scopeGeneration) return
+    createMutationResult.value = result
+    if (result.kind === 'committed_verified' && !hasCreateIntent.value) { showCreate.value = false; resetCreate(); await refresh() }
+  } catch (cause) { presentInputFailure(cause) }
+}
+async function resolveRejectedCreate() {
+  try { await finishRejectedCreate(); createMutationResult.value = null; showCreate.value = false; resetCreate() } catch (cause) { presentInputFailure(cause) }
+}
+async function recheckCreateResult() {
+  await refresh()
+}
+async function recheckMutation() {
+  if (otherMutationResult.value?.request.action.startsWith('issues-')) await refresh()
+  else if (activeId.value !== null) await readLatestIssue()
+  else await refresh()
 }
 
 async function acknowledgeCurrent() {
-  if (!activeIssue.value || !humanSourceReady.value) return
-  const generation = scopeGeneration
-  const id = activeIssue.value.id
-  const result = await acknowledgeIssue(id, context.project.value)
-  if (generation !== scopeGeneration) return
-  mutationResult.value = result
-  if (result.kind === 'committed_verified') await reconcileIssue(id)
+  await submitEdit({ status: 'acknowledged' })
 }
-
 async function resolveCurrent() {
-  if (!activeIssue.value || !humanSourceReady.value) return
-  const generation = scopeGeneration
-  const id = activeIssue.value.id
-  const result = await updateIssue(id, {
-    status: 'resolved',
-    comment: t('issues.detail.resolveComment'),
-  })
-  if (generation !== scopeGeneration) return
-  mutationResult.value = result
-  if (result.kind === 'committed_verified') await reconcileIssue(id)
+  await submitEdit({ status: 'resolved', comment: t('issues.detail.resolveComment') })
 }
-
 async function addComment() {
   if (!activeIssue.value || !canComment.value) return
   const generation = scopeGeneration
   const id = activeIssue.value.id
-  const result = await commentIssue(id, commentDraft.value.trim())
-  if (generation !== scopeGeneration) return
-  mutationResult.value = result
-  if (result.kind === 'committed_verified') {
-    commentDraft.value = ''
-    await reconcileIssue(id)
-  }
+  inputError.value = ''
+  mutationBusy.value = true
+  try {
+    const body = commentDraft.value, rawMetadata = rawMetadataInput(commentMetadataDraft.value)
+    losingComment.value = { body, ...(rawMetadata === undefined ? {} : { rawMetadata }), ...(writeSession.value ? { sessionId: writeSession.value } : {}) }
+    const result = await updateIssue(id, { comment: body, ...(rawMetadata === undefined ? {} : { commentRawMetadata: rawMetadata }), ...(writeSession.value ? { sessionId: writeSession.value } : {}) })
+    if (generation !== scopeGeneration) return
+    otherMutationResult.value = result
+    if (result.kind === 'committed_verified') { losingComment.value = null; commentDraft.value = ''; commentMetadataDraft.value = ''; await reconcileIssue(id) }
+    else { editNeedsReconciliation.value = result.kind !== 'validation_error' || result.httpStatus === 428; freshEditRead.value = false; losingPatch.value = null }
+  } catch (cause) { presentInputFailure(cause) }
+  finally { mutationBusy.value = false }
 }
-
 async function rejectCurrent() {
-  if (!activeIssue.value || !canReject.value) return
-  const generation = scopeGeneration
-  const id = activeIssue.value.id
-  const result = await rejectIssue(id, rejectComment.value.trim())
-  if (generation !== scopeGeneration) return
-  mutationResult.value = result
-  if (result.kind === 'committed_verified') {
-    showReject.value = false
-    rejectComment.value = ''
-    await reconcileIssue(id)
-  }
+  if (!canReject.value) return
+  if (await submitEdit({ status: 'rejected', comment: rejectComment.value })) { showReject.value = false; rejectComment.value = '' }
 }
 
 async function deleteCurrent() {
@@ -578,7 +795,7 @@ async function deleteCurrent() {
   const id = activeIssue.value.id
   const result = await deleteIssue(id)
   if (generation !== scopeGeneration) return
-  mutationResult.value = result
+  otherMutationResult.value = result
   if (result.kind === 'committed_verified') {
     await refresh()
     if (generation !== scopeGeneration) return
@@ -618,7 +835,7 @@ async function applySelectedIssues(action: IssueSelectionAction) {
 
     const result = await runIssueSelectionOperation(current, action, sourceProject)
     if (generation !== scopeGeneration) return false
-    mutationResult.value = result
+    otherMutationResult.value = result
     if (result.kind !== 'committed_verified') return false
     clearSelection()
     return true
@@ -629,7 +846,7 @@ async function applySelectedIssues(action: IssueSelectionAction) {
 }
 
 async function applyBulkField() {
-  const action = bulkField.value === 'status'
+  const action: IssueSelectionAction | null = bulkField.value === 'status'
     ? isBulkStatus(bulkValue.value) ? { kind: 'status', status: bulkValue.value } : null
     : isBulkPriority(bulkValue.value) ? { kind: 'priority', priority: bulkValue.value } : null
   if (action && await applySelectedIssues(action)) {
@@ -698,14 +915,52 @@ function renderMarkdown(value: string) {
       <button v-if="scopeError" class="tbtn" @click="context.refresh">{{ t('issues.state.retry') }}</button>
       <button v-else-if="error || detailError" class="tbtn" @click="requestedId ? openIssue(requestedId) : refresh()">{{ t('issues.state.retry') }}</button>
     </section>
-    <MutationResultNotice :result="mutationResult" :recheck-label="t('issues.state.retry')" @recheck="refresh" />
+    <MutationResultNotice v-if="!showCreate" :result="otherMutationResult" :recheck-label="t('issues.feature012.readCurrent')"
+      @recheck="recheckMutation" />
+    <MutationResultNotice v-if="!showCreate" :result="createMutationResult" :recheck-label="hasCreateIntent ? undefined : t('issues.feature012.readCurrent')"
+      @recheck="recheckCreateResult" />
+    <p v-if="!showCreate && (inputError || createRecoveryError)" class="statebar" data-state="error" role="alert">{{ displayInputError(inputError || createRecoveryError) }}</p>
+    <section v-if="!showCreate && hasCreateIntent" class="statebar" role="status" :aria-label="t('issues.feature012.retainedIntent')">
+      <span v-if="pendingCreate">{{ t('issues.feature012.intentHeld') }}</span>
+      <span v-else>{{ t('issues.feature012.intentUnavailable') }}</span>
+      <button class="tbtn" :disabled="createPending || !scopeReady" @click="recoverCreate">{{ t('issues.feature012.reconcile') }}</button>
+      <button v-if="createResolution !== 'pending'" class="tbtn" :disabled="createPending"
+        @click="resolveRejectedCreate">{{ t('issues.feature012.confirmRejected') }}</button>
+      <button class="tbtn" :disabled="createPending" @click="restoreCreateIntent">{{ t('issues.feature012.checkIdentity') }}</button>
+    </section>
+    <section v-if="editBase && activeIssue && (editNeedsReconciliation || losingPatch || losingComment)" class="issue-card" role="status"
+      :aria-label="t('issues.feature012.retainedDraft')">
+      <p>{{ t('issues.feature012.originalRevision', { revision: losingPatch?.expectedRevision ?? editBase.revision ?? t('issues.feature012.unavailable') }) }}</p>
+      <button class="tbtn" :disabled="mutationBusy" @click="readLatestIssue">{{ t('issues.feature012.readRetain') }}</button>
+      <button v-if="freshEditRead" class="tbtn" @click="acceptReadRevision">{{ t('issues.feature012.acceptRevision') }}</button>
+      <button v-if="!editNeedsReconciliation && losingPatch" class="tbtn" :disabled="!writeReady"
+        @click="submitRetainedEdit">{{ t('issues.feature012.submitRetained') }}</button>
+      <details v-if="losingPatch">
+        <summary>{{ t('issues.feature012.inspectEdit') }}</summary>
+        <pre class="issue-json">{{ JSON.stringify(losingPatch, null, 2) }}</pre>
+        <pre v-if="losingPatch.rawMetadata !== undefined" class="issue-json">{{ losingPatch.rawMetadata }}</pre>
+      </details>
+      <details v-if="losingBase">
+        <summary>{{ t('issues.feature012.inspectBase') }}</summary>
+        <pre class="issue-json">{{ JSON.stringify(losingBase, null, 2) }}</pre>
+      </details>
+      <details v-if="losingComment">
+        <summary>{{ t('issues.feature012.inspectComment') }}</summary>
+        <pre class="issue-json">{{ losingComment.body }}</pre>
+        <pre v-if="losingComment.rawMetadata !== undefined" class="issue-json">{{ losingComment.rawMetadata }}</pre>
+        <pre v-if="losingComment.sessionId" class="issue-json">{{ losingComment.sessionId }}</pre>
+      </details>
+      <p v-if="!losingPatch">{{ t('issues.feature012.commentsNotDeduplicated') }}</p>
+    </section>
     <p v-if="hasLoadedRows && !listReady" class="statebar" role="status">{{ t('issues.state.stale') }}</p>
+    <p v-if="activeIssue && editSourceProject && editSourceProject !== context.project.value" class="statebar"
+      role="status">{{ t('issues.feature012.originalSource') }}</p>
 
     <section v-if="!activeIssue" class="area-body">
       <div class="pane">
         <div class="list-ops">
           <div class="op-left">
-            <button class="tbtn" :disabled="!filteredRows.length || !humanSourceReady" @click="selectAllFiltered">{{ t('issues.actions.selectAll') }}</button>
+            <button class="tbtn" :disabled="!filteredRows.length || !humanSourceReady || extraFilters" :title="extraFilters ? t('issues.feature012.bulkFilterUnavailable') : undefined" @click="selectAllFiltered">{{ t('issues.actions.selectAll') }}</button>
             <button class="tbtn" :disabled="!selectedCount" @click="clearSelection">{{ t('issues.actions.clearSelection') }}</button>
             <button class="tbtn" :disabled="!hasFilter()" @click="resetFilter">{{ t('issues.actions.resetFilter') }}</button>
             <span v-if="listReady" class="fcount">{{ t('issues.list.countInFilter', { shown: filteredRows.length, total: registryTotal }) }}</span>
@@ -753,6 +1008,11 @@ function renderMarkdown(value: string) {
             </select>
           </label>
           <span v-if="context.project.value === 'all'" class="fcount">{{ t('issues.filters.allProjectRoles') }}</span>
+          <label class="rows"><span>{{ t('issues.feature012.search') }}</span><input v-model="query" class="txt" name="issues-query" /></label>
+          <label class="rows"><span>{{ t('issues.feature012.ownerFilter') }}</span><input v-model="ownerFilter" class="txt" name="issues-owner-filter" /></label>
+          <label class="rows"><span>{{ t('issues.feature012.sourceSession') }}</span><input v-model="sourceSessionFilter" class="txt" name="issues-source-session-filter" /></label>
+          <label class="rows"><span>{{ t('issues.feature012.participantSession') }}</span><input v-model="participantSessionFilter" class="txt" name="issues-participant-session-filter" /></label>
+          <label class="rows"><span>{{ t('issues.feature012.targetSession') }}</span><input v-model="targetSessionFilter" class="txt" name="issues-target-session-filter" /></label>
           <button
             v-for="item in filterOptions"
             :key="item"
@@ -847,8 +1107,8 @@ function renderMarkdown(value: string) {
           </div>
         </div>
         <div class="dactions issue-danger-actions">
-          <button class="act" :disabled="pending || !humanSourceReady" @click="resolveCurrent">{{ t('issues.detail.resolve') }}</button>
-          <button class="act danger" :disabled="pending || !humanSourceReady" @click="showReject = true">{{ t('issues.detail.reject') }}</button>
+          <button class="act" :disabled="!writeReady" @click="resolveCurrent">{{ t('issues.detail.resolve') }}</button>
+          <button class="act danger" :disabled="!writeReady" @click="showReject = true">{{ t('issues.detail.reject') }}</button>
         </div>
       </div>
 
@@ -863,12 +1123,39 @@ function renderMarkdown(value: string) {
             <div class="dsh">{{ t('issues.detail.bodyMarkdown') }}</div>
             <div class="issue-body md" v-html="renderMarkdown(activeIssue.body || t('issues.detail.emptyBody'))"></div>
           </div>
+          <label class="field"><span>{{ t('issues.feature012.writeSession') }}</span><input v-model="writeSession" class="txt" name="issue-write-session" /></label>
 
-          <div class="issue-card">
+          <details class="issue-card">
+            <summary>{{ t('issues.feature012.editContent') }}</summary>
+            <p>{{ t('issues.feature012.draftRevision', { revision: editBase?.revision ?? t('issues.feature012.unavailable'), emptyObject: '{}' }) }}</p>
+            <label class="field"><span>{{ t('issues.feature012.title') }}</span><input v-model="titleDraft" class="txt" name="issue-title" /></label>
+            <label class="field"><span>{{ t('issues.feature012.body') }}</span><textarea v-model="bodyDraft" class="txt" name="issue-body" /></label>
+            <label class="field"><span>{{ t('issues.feature012.metadata') }}</span><textarea v-model="metadataDraft" class="txt"
+                name="issue-metadata" /></label>
+            <label class="field"><span>{{ t('issues.feature012.ownerClear') }}</span><input v-model="ownerDraft"
+                class="txt" name="issue-owner-label" /></label>
+            <label class="field"><span>{{ t('issues.feature012.recipientClear') }}</span><input v-model="recipientDraft"
+                class="txt" name="issue-recipient-label" /></label>
+            <label class="field"><span>{{ t('issues.feature012.targetSessionClear') }}</span><input v-model="targetSessionDraft" class="txt" name="issue-target-session" /></label>
+            <button class="act" :disabled="!writeReady" @click="saveIssueContent">{{ t('issues.feature012.saveContent') }}</button>
+          </details>
+          <details class="issue-card">
+            <summary>{{ t('issues.feature012.currentMetadata') }}</summary>
+            <pre class="issue-json">{{ JSON.stringify({
+              revision: activeIssue.revision, metadata: activeIssue.metadata,
+              owner_label: activeIssue.ownerLabel, recipient_label: activeIssue.recipientLabel, actor: activeIssue.actor,
+              created_by_session: activeIssue.createdBySession, target_session: activeIssue.targetSession
+            },
+              null, 2) }}</pre>
+          </details>
+
+          <div id="issue-comments" class="issue-card" :aria-label="t('issues.feature012.comments')">
             <div class="issue-thread-head">
               <div class="dsh">{{ t('issues.thread.title') }}</div>
               <span class="count">{{ t('issues.thread.count', comments.length, { count: comments.length }) }}</span>
             </div>
+            <p role="status" :aria-label="t('issues.feature012.commentsRange')">{{ t('issues.feature012.commentsDisclosure', { range: pageDisclosure(commentsPage) }) }}</p>
+            <p v-if="commentsPage?.oversized" role="status">{{ t('issues.feature012.commentsOversized') }}</p>
             <div class="thread-actions">
               <div class="left">
                 <button class="act" :disabled="!comments.length" @click="selectAllThread">{{ t('issues.thread.selectAll') }}</button>
@@ -899,9 +1186,18 @@ function renderMarkdown(value: string) {
                   <span>{{ comment.age }}</span>
                 </div>
                 <div class="body md" v-html="renderMarkdown(comment.body)"></div>
+              <details>
+                  <summary>{{ t('issues.feature012.commentMetadataActor') }}</summary>
+                  <pre class="issue-json">{{ JSON.stringify({ metadata: comment.metadata, actor: comment.actor }, null,
+                    2)
+                  }}</pre>
+                </details>
               </article>
               <div v-if="!comments.length" class="thread-empty">{{ t('issues.thread.empty') }}</div>
             </div>
+            <button v-if="commentsPage?.nextOffset !== null && commentsPage" class="act"
+              :disabled="Boolean(pageLoading)" aria-controls="issue-comments" @click="loadMoreComments">{{ t('issues.feature012.nextComments') }}</button>
+            <p v-if="pageError" role="alert">{{ pageError }}</p>
             <div class="composer">
               <div class="dsh">{{ t('issues.thread.operatorReply') }}</div>
               <label class="field comment-kind">
@@ -920,11 +1216,29 @@ function renderMarkdown(value: string) {
                 </div>
                 <textarea ref="commentInput" v-model="commentDraft" class="txt" name="issue-comment" :placeholder="t('issues.thread.placeholder')" />
               </div>
+              <label class="field"><span>{{ t('issues.feature012.commentMetadata') }}</span><textarea
+                  v-model="commentMetadataDraft" class="txt" name="issue-comment-metadata" /></label>
               <div class="dactions">
                 <button class="act primary" :disabled="!canComment" @click="addComment">{{ t('issues.thread.submit') }}</button>
               </div>
             </div>
           </div>
+          <section id="issue-history" class="issue-card" aria-labelledby="issue-history-title">
+            <h3 id="issue-history-title">{{ t('issues.feature012.history') }}</h3>
+            <p role="status" :aria-label="t('issues.feature012.historyRange')">{{ t('issues.feature012.historyDisclosure', { range: pageDisclosure(historyPage) }) }}</p>
+            <p v-if="historyPage?.oversized" role="status">{{ t('issues.feature012.historyOversized') }}</p>
+            <article v-for="record in history" :key="record.revision">
+              <p>{{ t('issues.feature012.historyRecord', { revision: record.revision, action: historyActionLabel(record.action), actor: record.actor?.label || record.actor?.reference || record.actor?.kind || t('issues.feature012.unknownActor'), date: record.createdAt }) }}</p>
+              <p>{{ record.changedFields.map(historyFieldLabel).join(', ') }}</p>
+              <details>
+                <summary>{{ t('issues.feature012.inspectHistory') }}</summary>
+                <pre class="issue-json">{{ JSON.stringify(record, null, 2) }}</pre>
+              </details>
+            </article>
+            <p v-if="!history.length">{{ t('issues.feature012.noHistory') }}</p>
+            <button v-if="historyPage && historyPage.nextOffset !== null" class="act" :disabled="Boolean(pageLoading)"
+              aria-controls="issue-history" @click="loadMoreHistory">{{ t('issues.feature012.nextHistory') }}</button>
+          </section>
         </section>
 
         <aside class="issue-rail">
@@ -933,19 +1247,22 @@ function renderMarkdown(value: string) {
             <div class="edit-grid">
               <label class="edit-field">
                 <span>{{ t('issues.detail.status') }}</span>
-                <select v-model="statusDraft" class="txt edit-select" name="issue-status" :disabled="pending || !humanSourceReady" @change="updateCurrentField('status', statusDraft)">
+                <select v-model="statusDraft" class="txt edit-select" name="issue-status" :disabled="!writeReady"
+                  @change="updateCurrentField('status', statusDraft)">
                   <option v-for="status in statusOptions" :key="status" :value="status">{{ t(`issues.status.${status}`) }}</option>
                 </select>
               </label>
               <label class="edit-field">
                 <span>{{ t('issues.detail.priority') }}</span>
-                <select v-model="priorityDraft" class="txt edit-select" name="issue-priority" :disabled="pending || !humanSourceReady" @change="updateCurrentField('priority', priorityDraft)">
+                <select v-model="priorityDraft" class="txt edit-select" name="issue-priority" :disabled="!writeReady"
+                  @change="updateCurrentField('priority', priorityDraft)">
                   <option v-for="priority in priorityOptions" :key="priority" :value="priority">{{ t(`issues.priority.${priority}`) }}</option>
                 </select>
               </label>
               <label class="edit-field">
                 <span>{{ t('issues.detail.type') }}</span>
-                <select v-model="typeDraft" class="txt edit-select" name="issue-type" :disabled="pending || !humanSourceReady" @change="updateCurrentField('type', typeDraft)">
+                <select v-model="typeDraft" class="txt edit-select" name="issue-type" :disabled="!writeReady"
+                  @change="updateCurrentField('type', typeDraft)">
                   <option v-for="kind in typeOptions" :key="kind" :value="kind">{{ t(`issues.type.${kind}`) }}</option>
                 </select>
               </label>
@@ -964,14 +1281,13 @@ function renderMarkdown(value: string) {
                 type="button"
                 class="tag-option"
                 :class="{ on: labelDraft.includes(label) }"
-                :disabled="pending || !humanSourceReady"
-                @click="toggleIssueLabel(label)"
+                :disabled="!writeReady" @click="toggleIssueLabel(label)"
               >
                 {{ label }}
               </button>
             </div>
             <div class="dactions">
-              <button class="act" :disabled="pending || !humanSourceReady" @click="acknowledgeCurrent">{{ t('issues.detail.acknowledge') }}</button>
+              <button class="act" :disabled="!writeReady" @click="acknowledgeCurrent">{{ t('issues.detail.acknowledge') }}</button>
             </div>
           </div>
 
@@ -1005,7 +1321,20 @@ function renderMarkdown(value: string) {
           </div>
           <button class="tbtn" @click="showCreate = false">{{ t('issues.modal.close') }}</button>
         </div>
-        <div class="issue-modal-body">
+        <p v-if="inputError || createRecoveryError" class="statebar issue-create-error" data-state="error" role="alert">{{ displayInputError(inputError || createRecoveryError) }}</p>
+        <div v-if="createMutationResult || hasCreateIntent" class="issue-create-outcome" tabindex="0">
+          <MutationResultNotice :result="createMutationResult" :recheck-label="hasCreateIntent ? undefined : t('issues.feature012.readCurrent')"
+            @recheck="recheckCreateResult" />
+          <section v-if="hasCreateIntent" class="statebar" role="status" :aria-label="t('issues.feature012.retainedIntent')">
+            <span v-if="pendingCreate">{{ t('issues.feature012.intentHeld') }}</span>
+            <span v-else>{{ t('issues.feature012.intentUnavailable') }}</span>
+            <button class="tbtn" :disabled="createPending || !scopeReady" @click="recoverCreate">{{ t('issues.feature012.reconcile') }}</button>
+            <button v-if="createResolution !== 'pending'" class="tbtn" :disabled="createPending"
+              @click="resolveRejectedCreate">{{ t('issues.feature012.confirmRejected') }}</button>
+            <button class="tbtn" :disabled="createPending" @click="restoreCreateIntent">{{ t('issues.feature012.checkIdentity') }}</button>
+          </section>
+        </div>
+        <fieldset class="issue-modal-body issue-create-fields" :disabled="hasCreateIntent || createPending">
           <div class="issue-draft-main">
             <div class="issue-draft-card issue-description-card">
               <label class="field">
@@ -1040,6 +1369,16 @@ function renderMarkdown(value: string) {
                 <textarea ref="createBodyInput" v-model="createBody" class="txt" name="new-issue-body" :placeholder="t('issues.create.bodyPlaceholder')" />
                 <div class="md-preview md" v-html="renderMarkdown(createBody || t('issues.create.previewEmpty'))"></div>
               </div>
+            </div>
+            <div class="issue-draft-card">
+              <label class="field"><span>{{ t('issues.feature012.optionalMetadata') }}</span><textarea v-model="createMetadata"
+                  class="txt" name="new-issue-metadata" /></label>
+              <label class="field"><span>{{ t('issues.feature012.optionalOwner') }}</span><input v-model="createOwnerLabel" class="txt"
+                  name="new-issue-owner-label" /></label>
+              <label class="field"><span>{{ t('issues.feature012.optionalRecipient') }}</span><input v-model="createRecipientLabel"
+                  class="txt" name="new-issue-recipient-label" /></label>
+              <label class="field"><span>{{ t('issues.feature012.sourceSession') }}</span><input v-model="createSourceSession" class="txt" name="new-issue-source-session" /></label>
+              <label class="field"><span>{{ t('issues.feature012.targetSession') }}</span><input v-model="createTargetSession" class="txt" name="new-issue-target-session" /></label>
             </div>
           </div>
           <div class="issue-draft-side">
@@ -1100,7 +1439,7 @@ function renderMarkdown(value: string) {
               </div>
             </div>
           </div>
-        </div>
+        </fieldset>
         <div class="issue-modal-foot">
           <span class="hint">{{ t('issues.create.footerHint') }}</span>
           <div class="dactions">
@@ -1211,6 +1550,20 @@ function renderMarkdown(value: string) {
 
 <style scoped>
 .issues-page { display:flex; flex-direction:column; gap:16px; min-width:0; }
+.issue-json {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-width: 100%;
+  font: var(--text-xs) var(--font-mono);
+}
+.issue-create-fields {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
 .head { padding-bottom:14px; border-bottom:1px solid var(--border); }
 .head h1 { margin:0 0 4px; font-size:var(--text-xl); font-weight:800; letter-spacing:var(--tracking-display); }
 .head p { margin:0; font-size:var(--text-sm); color:var(--muted); }
@@ -1329,12 +1682,15 @@ textarea.txt { min-height:130px; resize:vertical; line-height:1.5; font-family:v
 .overlay { position:fixed; inset:0; background:rgba(8,12,20,.55); z-index:60; display:none; align-items:center; justify-content:center; padding:var(--space-5); }
 .overlay.show { display:flex; }
 .modal { background:var(--surface); border:1px solid var(--border); border-radius:var(--r-lg); width:min(540px,100%); max-height:84vh; overflow:auto; box-shadow:var(--elev-raised); padding:var(--space-5); }
-.modal.issue-create-modal { width:min(1280px,calc(100vw - 32px)); height:min(920px,calc(100vh - 32px)); max-height:calc(100vh - 32px); overflow:hidden; padding:0; }
+.modal.issue-create-modal { display:flex; flex-direction:column; width:min(1280px,calc(100vw - 32px)); height:min(920px,calc(100vh - 32px)); max-height:calc(100vh - 32px); overflow:hidden; padding:0; }
 .issue-modal-head, .issue-modal-foot { display:flex; align-items:center; justify-content:space-between; gap:var(--space-3); padding:var(--space-4) var(--space-5); border-bottom:1px solid var(--border); }
 .issue-modal-foot { border-top:1px solid var(--border); border-bottom:0; }
+.modal .issue-create-error { flex:none; max-height:25%; overflow:auto; overflow-wrap:anywhere; }
+.issue-create-outcome { flex:none; max-height:35%; overflow:auto; display:grid; gap:8px; padding:var(--space-3) var(--space-5); }
+.issue-create-outcome .statebar { flex-wrap:wrap; overflow-wrap:anywhere; }
 .issue-modal-head h2, .modal h2 { margin:0 0 6px; }
 .issue-modal-head p, .modal p { margin:0; color:var(--muted); }
-.issue-modal-body { height:calc(100% - 142px); display:grid; grid-template-columns:minmax(0,1.2fr) minmax(320px,.8fr); gap:var(--space-4); padding:var(--space-4); overflow:hidden; }
+.issue-modal-body { flex:1 1 0; min-height:0; display:grid; grid-template-columns:minmax(0,1.2fr) minmax(320px,.8fr); gap:var(--space-4); padding:var(--space-4); overflow:hidden; }
 .issue-draft-main, .issue-draft-side { display:flex; flex-direction:column; gap:var(--space-3); min-width:0; overflow:auto; }
 .issue-draft-card { border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); padding:var(--space-4); }
 .issue-template-row { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; margin-top:12px; }

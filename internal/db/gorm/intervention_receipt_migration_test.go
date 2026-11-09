@@ -77,6 +77,10 @@ func waitForMigratedTestSessions(ctx context.Context, adminDB *gormlib.DB, fixtu
 }
 
 func openMigratedTestDBInSchema(t *testing.T, dsn, schema, applicationName string) *gormlib.DB {
+	return openMigratedTestDBInSchemaTo(t, dsn, schema, applicationName, "")
+}
+
+func openMigratedTestDBInSchemaTo(t *testing.T, dsn, schema, applicationName, target string) *gormlib.DB {
 	t.Helper()
 
 	adminConfig, err := pgx.ParseConfig(dsn)
@@ -141,7 +145,7 @@ func openMigratedTestDBInSchema(t *testing.T, dsn, schema, applicationName strin
 	db, err := gormlib.Open(postgres.New(postgres.Config{Conn: testSQL}), &gormlib.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	require.NoError(t, err, "open isolated receipt test pool")
 	require.NoError(t, testSQL.Ping(), "ping isolated receipt test pool")
-	require.NoError(t, runMigrations(db), "run migration chain in isolated receipt schema")
+	require.NoError(t, runMigrationsTo(db, target), "run migration chain in isolated receipt schema")
 
 	var actualSchema string
 	require.NoError(t, db.Raw(`SELECT current_schema()`).Scan(&actualSchema).Error)

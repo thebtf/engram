@@ -6,11 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/lib/pq"
-	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/projectidentity"
 )
@@ -21,9 +19,10 @@ import (
 // description (via REQUIRED_FOR: prefix) and enforced server-side by
 // validateIssueActionParams() with clear error messages showing the full signature.
 func issuesToolSchema() map[string]any {
-	return map[string]any{
-		"type":     "object",
-		"required": []string{"action"},
+	schema := map[string]any{
+		"x-engram-caller-context": "issues/v1",
+		"type":                    "object",
+		"required":                []string{"action"},
 		"properties": map[string]any{
 			"action": map[string]any{
 				"type":        "string",
@@ -48,7 +47,7 @@ func issuesToolSchema() map[string]any {
 			},
 			"body": map[string]any{
 				"type":        "string",
-				"description": "REQUIRED_FOR: comment. Comment text. For create: optional body/description. For reopen: optional reason.",
+				"description": "REQUIRED_FOR: comment. Comment text; create/update accept body, reopen/close accept an optional reason.",
 			},
 			"status": map[string]any{
 				"type":        "string",
@@ -59,7 +58,7 @@ func issuesToolSchema() map[string]any {
 				"type":        "string",
 				"enum":        []string{"critical", "high", "medium", "low"},
 				"default":     "medium",
-				"description": "OPTIONAL_FOR: create. Default: medium.",
+				"description": "OPTIONAL_FOR: create or protected material update. Default: medium.",
 			},
 			"labels": map[string]any{
 				"type":        "array",
@@ -70,7 +69,7 @@ func issuesToolSchema() map[string]any {
 				"type":        "string",
 				"enum":        []string{"bug", "feature", "improvement", "task"},
 				"default":     "task",
-				"description": "OPTIONAL_FOR: create. Issue type. Default: task.",
+				"description": "OPTIONAL_FOR: create, update, or list. Default: task.",
 			},
 			"source_project": map[string]any{
 				"type":        "string",
@@ -82,7 +81,7 @@ func issuesToolSchema() map[string]any {
 			},
 			"comment": map[string]any{
 				"type":        "string",
-				"description": "OPTIONAL_FOR: update|reopen. Add a comment when changing status.",
+				"description": "Optional atomic comment for update, reopen, or close.",
 			},
 			"resolved_since": map[string]any{
 				"type":        "integer",
@@ -94,6 +93,37 @@ func issuesToolSchema() map[string]any {
 			},
 		},
 	}
+	properties := schema["properties"].(map[string]any)
+	properties["format"] = map[string]any{"type": "string", "enum": []string{"text", "json"}, "description": "Text shows bounded pages and continuations; json returns the admitted DTO in one MCP text block."}
+	properties["request_key"] = map[string]any{"type": "string", "minLength": 1, "description": "Retain the original actor, source, key and payload for retry."}
+	properties["expected_actor"] = map[string]any{"type": "object", "properties": map[string]any{"kind": map[string]any{"enum": []string{"client", "operator", "unknown"}}, "reference": map[string]any{"type": []string{"string", "null"}}}}
+	properties["expected_revision"] = map[string]any{"type": "string", "pattern": "^[1-9][0-9]*$", "description": "Required for field edits; optional for standalone resolve/reopen/close. Supplied revisions are checked; reconcile stale revisions explicitly."}
+	for _, field := range []string{"metadata", "comment_metadata"} {
+		properties[field] = map[string]any{"type": "object", "description": "Admitted JSON object; recognized secrets are rejected, never silently rewritten."}
+	}
+	for _, field := range []string{"owner_label", "recipient_label"} {
+		properties[field] = map[string]any{"type": []string{"string", "null"}, "description": "Non-authoritative label; null unassigns."}
+	}
+	properties["detail_mode"] = map[string]any{"type": "string", "enum": []string{"paged"}}
+	for _, field := range []string{"comments_limit", "history_limit"} {
+		properties[field] = map[string]any{"type": "integer", "minimum": 1, "maximum": 200, "default": 50}
+	}
+	for _, field := range []string{"offset", "comments_offset", "history_offset"} {
+		properties[field] = map[string]any{"type": "integer", "minimum": 0, "default": 0}
+	}
+	properties["q"] = map[string]any{"type": "string", "description": "Literal title/body search."}
+	properties["agent_source"] = map[string]any{"type": "string", "description": "Compatibility attribution, not authority."}
+	properties["source_session"] = map[string]any{"type": "string", "description": "List filter: exact issue creator session, not authentication or authority."}
+	properties["target_session"] = map[string]any{"type": []string{"string", "null"}, "description": "Create/update: nonempty addressee session; update may use null to clear it. List: exact nonempty addressee session filter; null is invalid for create and list. Session is provenance, not authentication or authority."}
+	properties["participant_session"] = map[string]any{"type": "string", "description": "List filter: exact recorded creator, comment, lifecycle event or committed material revision session attribution; provenance only, not authentication or authority."}
+	properties["session_id"] = map[string]any{"type": "string", "description": "Reported host conversation session; provenance only."}
+	properties["client"] = map[string]any{"type": "string", "description": "Public client label; provenance only."}
+	properties["history_after_id"] = map[string]any{"type": "integer", "minimum": 0, "description": "Exclusive lifecycle event cursor; separate from revision history_offset."}
+	properties["limit"] = map[string]any{"type": "integer", "minimum": 1, "maximum": 200, "default": 20}
+	properties["status"] = map[string]any{"type": "string", "description": "List states or update status; rejection requires a comment and existing authority applies."}
+	properties["target_project"].(map[string]any)["description"] = "Existing canonical project UUID for the authorized target; only omission defaults to the verified source. Do not choose by display name."
+	properties["source_project"].(map[string]any)["description"] = "Exact canonical source-project filter, not name resolution; zero legacy-label results do not prove no canonical issues. It is not an authority grant."
+	return schema
 }
 
 // actionRequirements describes required parameters for each issues action.
@@ -102,10 +132,10 @@ var actionRequirements = map[string]struct {
 	required []string
 	full     string
 }{
-	"create":  {required: []string{"title", "target_project"}, full: "action, title, target_project"},
+	"create":  {required: []string{"title"}, full: "action, title [optional canonical target_project]"},
 	"list":    {required: []string{}, full: "action  [optional: project, source_project, source_agent, status, resolved_since, limit]"},
 	"get":     {required: []string{"id"}, full: "action, id"},
-	"update":  {required: []string{"id", "status"}, full: "action, id, status=resolved"},
+	"update":  {required: []string{"id"}, full: "action, id, material fields, lifecycle status or comment; field edits require expected_revision"},
 	"comment": {required: []string{"id", "body"}, full: "action, id, body"},
 	"reopen":  {required: []string{"id"}, full: "action, id"},
 	"close":   {required: []string{"id"}, full: "action, id"},
@@ -159,88 +189,31 @@ func validateIssueActionParams(action string, m map[string]any) error {
 
 // handleIssues dispatches issue actions: create, list, get, update, comment, reopen, close.
 func (s *Server) handleIssues(ctx context.Context, args json.RawMessage) (string, error) {
-	if s.issueStore == nil {
-		return "", fmt.Errorf("issue store not available")
-	}
-
-	m, err := parseArgs(args)
-	if err != nil {
-		return "", fmt.Errorf("issues: %w", err)
-	}
-
-	action := coerceString(m["action"], "list")
-
-	// Per-action required parameter validation with helpful error messages.
-	// Returns the full required list for the action when any param is missing.
-	if err := validateIssueActionParams(action, m); err != nil {
-		return "", err
-	}
-
-	switch action {
-	case "create":
-		return s.handleIssueCreate(ctx, m)
-	case "list":
-		return s.handleIssueList(ctx, m)
-	case "get":
-		return s.handleIssueGet(ctx, m)
-	case "update":
-		return s.handleIssueUpdate(ctx, m)
-	case "comment":
-		return s.handleIssueComment(ctx, m)
-	case "reopen":
-		return s.handleIssueReopen(ctx, m)
-	case "close":
-		return s.handleIssueClose(ctx, m)
-	default:
-		return "", fmt.Errorf("unknown issues action: %q (valid: create, list, get, update, comment, reopen, close)", action)
-	}
+	return s.executeNativeIssues(ctx, args)
 }
 
-// issueSourceProject returns transport-derived attribution only. It is never
-// used to authorize an issue mutation.
-func (s *Server) issueSourceProject(ctx context.Context) (string, error) {
-	if ProjectFromContext(ctx) == "" {
-		return "", &projectidentity.LogicalError{Code: "PROJECT_CONTEXT_REQUIRED"}
+const issueListMaxLimit = 200
+
+func parseIssueListLimit(m map[string]any) (int, error) {
+	limit, present, err := optionalInt64Arg(m, "limit")
+	if !present {
+		return 20, nil
 	}
-	return s.issueStore.ResolveProject(ctx, ProjectFromContext(ctx))
+	if err != nil || limit < 1 || limit > issueListMaxLimit {
+		return 0, fmt.Errorf("limit must be between 1 and %d", issueListMaxLimit)
+	}
+	return int(limit), nil
 }
 
-// issueMutationActor returns a trusted read-write keycard or non-client
-// operator. Project and agent request fields are attribution only.
-func issueMutationActor(ctx context.Context) (keycardID string, isOperator bool, err error) {
-	id, ok := auth.IdentityFrom(ctx)
-	if !ok {
-		return "", false, fmt.Errorf("issue mutation forbidden: authenticated identity is required")
+func parseIssueResolvedSince(m map[string]any) (int64, error) {
+	resolvedSince, present, err := optionalInt64Arg(m, "resolved_since")
+	if !present {
+		return 0, nil
 	}
-	if id.IsAdmin() && id.Source != auth.SourceClient {
-		return "", true, nil
+	if err != nil || resolvedSince < 1 {
+		return 0, fmt.Errorf("resolved_since must be a positive in-range integer")
 	}
-	if id.Source != auth.SourceClient || id.KeycardID == "" || id.Role != auth.RoleReadWrite {
-		return "", false, fmt.Errorf("issue mutation forbidden: authenticated read-write client keycard is required")
-	}
-	return id.KeycardID, false, nil
-}
-
-func (s *Server) authorizeIssueProgression(ctx context.Context) (bool, error) {
-	keycardID, isOperator, err := issueMutationActor(ctx)
-	if err != nil {
-		return false, err
-	}
-	if err := s.issueStore.AuthorizeIssueProgressionMutation(ctx, keycardID, isOperator); err != nil {
-		return false, err
-	}
-	return isOperator, nil
-}
-
-func (s *Server) authorizeIssueSourceMutation(ctx context.Context, id int64) (bool, error) {
-	keycardID, isOperator, err := issueMutationActor(ctx)
-	if err != nil {
-		return false, err
-	}
-	if err := s.issueStore.AuthorizeIssueSourceMutation(ctx, id, keycardID, isOperator); err != nil {
-		return false, err
-	}
-	return isOperator, nil
+	return resolvedSince, nil
 }
 
 type issueRecoveryError struct {
@@ -268,349 +241,4 @@ func issueAdoptionRefusal(err error) string {
 		return code
 	}
 	return ""
-}
-
-func (s *Server) handleIssueCreate(ctx context.Context, m map[string]any) (string, error) {
-	title, present, err := optionalStringArg(m, "title")
-	if err != nil {
-		return "", err
-	}
-	if !present || title == "" {
-		return "", fmt.Errorf("title is required for issues create")
-	}
-	body, _, err := optionalStringArg(m, "body")
-	if err != nil {
-		return "", err
-	}
-	priority, present, err := optionalStringArg(m, "priority")
-	if err != nil {
-		return "", err
-	}
-	if !present {
-		priority = "medium"
-	}
-	issueType, present, err := optionalStringArg(m, "type")
-	if err != nil {
-		return "", err
-	}
-	if !present {
-		issueType = "task"
-	}
-	targetProject, _, err := optionalStringArg(m, "target_project")
-	if err != nil {
-		return "", err
-	}
-	labels, _, err := optionalStringSliceArg(m, "labels")
-	if err != nil {
-		return "", err
-	}
-	sourceAgent, present, err := optionalStringArg(m, "agent_source")
-	if err != nil {
-		return "", err
-	}
-	if !present {
-		sourceAgent = "claude-code"
-	}
-	if targetProject != "" {
-		targetProject, err = s.issueStore.ResolveProject(ctx, targetProject)
-		if err != nil {
-			if code := issueAdoptionRefusal(err); code != "" {
-				return "", &issueRecoveryError{code: code, err: fmt.Errorf("target_project resolution failed; use an independently confirmed, authorized existing canonical target UUID, or resolve the exact verified legacy ID with authenticated GET /api/projects/resolve?legacy_id=<URI-encoded-exact-id>. Do not select by name or adopt unresolved membership: %w", err)}
-			}
-			return "", err
-		}
-	}
-	keycardID, isOperator, err := issueMutationActor(ctx)
-	if err != nil {
-		return "", err
-	}
-	sourceProject, err := s.issueSourceProject(ctx)
-	if err != nil {
-		if code := issueAdoptionRefusal(err); code != "" {
-			return "", &issueRecoveryError{code: code, err: fmt.Errorf("source_project (native caller) resolution failed; use project_context(action=\"repair\") and, if needed, project_context(action=\"choices\"). Follow its marker and caller-root hash preconditions; do not guess or adopt unresolved membership: %w", err)}
-		}
-		return "", err
-	}
-	if isOperator {
-		keycardID = ""
-	}
-	if targetProject == "" {
-		targetProject = sourceProject
-	}
-	if targetProject == "" {
-		return "", fmt.Errorf("target_project is required (or set project for current project)")
-	}
-
-	issue := &gormdb.Issue{
-		Title:            title,
-		Body:             body,
-		Priority:         priority,
-		Type:             issueType,
-		SourceProject:    sourceProject,
-		TargetProject:    targetProject,
-		SourceAgent:      sourceAgent,
-		CreatorKeycardID: keycardID,
-		Labels:           labels,
-	}
-
-	id, err := s.issueStore.CreateIssue(ctx, issue)
-	if err != nil {
-		if code := issueAdoptionRefusal(err); code != "" {
-			return "", &issueRecoveryError{code: code, err: fmt.Errorf("create issue: storage refusal does not identify whether source_project or target_project failed; preserve identity and data, and never replay a mutation with an unknown outcome: %w", err)}
-		}
-		return "", fmt.Errorf("create issue: %w", err)
-	}
-
-	return fmt.Sprintf("Issue #%d created: %s\nTarget: %s | Priority: %s | From: %s", id, title, targetProject, priority, sourceProject), nil
-}
-
-func (s *Server) handleIssueList(ctx context.Context, m map[string]any) (string, error) {
-	project := coerceString(m["project"], "")
-	sourceProject := coerceString(m["source_project"], "")
-	sourceAgent, _, err := optionalStringArg(m, "source_agent")
-	if err != nil {
-		return "", err
-	}
-	statusParam := coerceString(m["status"], "open,reopened")
-	limit, err := parseIssueListLimit(m)
-	if err != nil {
-		return "", err
-	}
-	resolvedSinceMs, err := parseIssueResolvedSince(m)
-	if err != nil {
-		return "", err
-	}
-	var statuses []string
-	for _, s := range strings.Split(statusParam, ",") {
-		s = strings.TrimSpace(s)
-		if s != "" {
-			statuses = append(statuses, s)
-		}
-	}
-
-	params := gormdb.IssueListParams{
-		TargetProject: project,
-		SourceProject: sourceProject,
-		SourceAgent:   sourceAgent,
-		Statuses:      statuses,
-		Limit:         limit,
-	}
-	if resolvedSinceMs > 0 {
-		t := time.UnixMilli(resolvedSinceMs)
-		params.ResolvedSince = &t
-	}
-
-	issues, total, err := s.issueStore.ListIssuesEx(ctx, params)
-	if err != nil {
-		return "", fmt.Errorf("list issues: %w", err)
-	}
-
-	if len(issues) == 0 {
-		if project != "" {
-			return fmt.Sprintf("No issues found for project %q with status %s.", project, statusParam), nil
-		}
-		return fmt.Sprintf("No issues found with status %s.", statusParam), nil
-	}
-
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Issues (%d of %d):\n\n", len(issues), total))
-
-	for _, issue := range issues {
-		status := issue.Status
-		comments := ""
-		if issue.CommentCount > 0 {
-			comments = fmt.Sprintf(" · %d comments", issue.CommentCount)
-		}
-		sb.WriteString(fmt.Sprintf("#%d [%s] [%s] %s\n  %s → %s%s\n\n",
-			issue.ID, strings.ToUpper(issue.Priority), status,
-			issue.Title, issue.SourceProject, issue.TargetProject, comments))
-	}
-
-	return sb.String(), nil
-}
-
-const issueListMaxLimit = 100
-
-func parseIssueListLimit(m map[string]any) (int, error) {
-	limit, present, err := optionalInt64Arg(m, "limit")
-	if !present {
-		return 20, nil
-	}
-	if err != nil || limit < 1 || limit > issueListMaxLimit {
-		return 0, fmt.Errorf("limit must be between 1 and %d", issueListMaxLimit)
-	}
-	return int(limit), nil
-}
-
-func parseIssueResolvedSince(m map[string]any) (int64, error) {
-	resolvedSince, present, err := optionalInt64Arg(m, "resolved_since")
-	if !present {
-		return 0, nil
-	}
-	if err != nil || resolvedSince < 1 {
-		return 0, fmt.Errorf("resolved_since must be a positive in-range integer")
-	}
-	return resolvedSince, nil
-}
-
-func (s *Server) handleIssueGet(ctx context.Context, m map[string]any) (string, error) {
-	id, err := requireInt64Arg(m, "id")
-	if err != nil || id <= 0 {
-		return "", fmt.Errorf("id is required for issues get")
-	}
-
-	issue, comments, err := s.issueStore.GetIssue(ctx, id)
-	if err != nil {
-		return "", err
-	}
-
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("# Issue #%d: %s\n", issue.ID, issue.Title))
-	sb.WriteString(fmt.Sprintf("Status: %s | Priority: %s\n", issue.Status, issue.Priority))
-	sb.WriteString(fmt.Sprintf("From: %s → %s\n", issue.SourceProject, issue.TargetProject))
-	sb.WriteString(fmt.Sprintf("Created: %s\n\n", issue.CreatedAt.Format("2006-01-02 15:04")))
-
-	if issue.Body != "" {
-		sb.WriteString(issue.Body)
-		sb.WriteString("\n\n")
-	}
-
-	if len(comments) > 0 {
-		sb.WriteString(fmt.Sprintf("--- Comments (%d) ---\n\n", len(comments)))
-		for _, c := range comments {
-			sb.WriteString(fmt.Sprintf("[%s] %s (%s):\n%s\n\n",
-				c.CreatedAt.Format("2006-01-02 15:04"), c.AuthorProject, c.AuthorAgent, c.Body))
-		}
-	}
-
-	return sb.String(), nil
-}
-
-func (s *Server) handleIssueUpdate(ctx context.Context, m map[string]any) (string, error) {
-	id, err := requireInt64Arg(m, "id")
-	if err != nil || id <= 0 {
-		return "", fmt.Errorf("id is required for issues update")
-	}
-	status, present, err := optionalStringArg(m, "status")
-	if err != nil {
-		return "", err
-	}
-	if !present || status == "" {
-		return "", fmt.Errorf("status is required for issues update")
-	}
-	comment, _, err := optionalStringArg(m, "comment")
-	if err != nil {
-		return "", err
-	}
-	sourceAgent, present, err := optionalStringArg(m, "agent_source")
-	if err != nil {
-		return "", err
-	}
-	if !present {
-		sourceAgent = "claude-code"
-	}
-	if _, err := s.authorizeIssueProgression(ctx); err != nil {
-		return "", err
-	}
-	sourceProject, err := s.issueSourceProject(ctx)
-	if err != nil {
-		return "", err
-	}
-
-	if status != "resolved" {
-		return "", fmt.Errorf("status can only be set to 'resolved' via update (use reopen action to reopen)")
-	}
-	if err := s.issueStore.UpdateIssueStatusWithComment(ctx, id, status, comment, sourceProject, sourceAgent); err != nil {
-		return "", err
-	}
-
-	return fmt.Sprintf("Issue #%d resolved.", id), nil
-}
-
-func (s *Server) handleIssueComment(ctx context.Context, m map[string]any) (string, error) {
-	id, err := requireInt64Arg(m, "id")
-	if err != nil || id <= 0 {
-		return "", fmt.Errorf("id is required for issues comment")
-	}
-	body, present, err := optionalStringArg(m, "body")
-	if err != nil {
-		return "", err
-	}
-	if !present || body == "" {
-		return "", fmt.Errorf("body is required for issues comment")
-	}
-	sourceAgent, present, err := optionalStringArg(m, "agent_source")
-	if err != nil {
-		return "", err
-	}
-	if !present {
-		sourceAgent = "claude-code"
-	}
-	if _, err := s.authorizeIssueProgression(ctx); err != nil {
-		return "", err
-	}
-	sourceProject, err := s.issueSourceProject(ctx)
-	if err != nil {
-		return "", err
-	}
-
-	commentID, err := s.issueStore.AddComment(ctx, id, &gormdb.IssueComment{
-		AuthorProject: sourceProject,
-		AuthorAgent:   sourceAgent,
-		Body:          body,
-	})
-	if err != nil {
-		return "", err
-	}
-
-	return fmt.Sprintf("Comment added to issue #%d (comment id: %d).", id, commentID), nil
-}
-
-func (s *Server) handleIssueReopen(ctx context.Context, m map[string]any) (string, error) {
-	id, err := requireInt64Arg(m, "id")
-	if err != nil || id <= 0 {
-		return "", fmt.Errorf("id is required for issues reopen")
-	}
-	comment, _, err := optionalStringArg(m, "comment")
-	if err != nil {
-		return "", err
-	}
-	sourceAgent, present, err := optionalStringArg(m, "agent_source")
-	if err != nil {
-		return "", err
-	}
-	if !present {
-		sourceAgent = "claude-code"
-	}
-	if _, err := s.authorizeIssueSourceMutation(ctx, id); err != nil {
-		return "", err
-	}
-	sourceProject, err := s.issueSourceProject(ctx)
-	if err != nil {
-		return "", err
-	}
-
-	if err := s.issueStore.ReopenIssue(ctx, id, comment, sourceProject, sourceAgent); err != nil {
-		return "", err
-	}
-
-	return fmt.Sprintf("Issue #%d reopened.", id), nil
-}
-
-func (s *Server) handleIssueClose(ctx context.Context, m map[string]any) (string, error) {
-	id, err := requireInt64Arg(m, "id")
-	if err != nil || id <= 0 {
-		return "", fmt.Errorf("id is required for issues close")
-	}
-
-	isOperator, err := s.authorizeIssueSourceMutation(ctx, id)
-	if err != nil {
-		return "", err
-	}
-
-	if err := s.issueStore.CloseIssue(ctx, id, isOperator); err != nil {
-		return "", err
-	}
-
-	return fmt.Sprintf("Issue #%d closed. The issue will no longer appear in any session injection.", id), nil
 }

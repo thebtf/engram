@@ -24,6 +24,7 @@ import (
 	gorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/internal/graph"
+	"github.com/thebtf/engram/internal/issues"
 	"github.com/thebtf/engram/internal/mcpinstructions"
 	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/internal/redaction"
@@ -859,7 +860,7 @@ func (s *Server) primaryTools() []Tool {
 				"Mutations act as the native caller's verified canonical project; the compatibility project argument cannot establish or replace that identity. For list, project/source_project are read filters; get needs only id. These reads are project-free and remain usable during an identity hold.\n" +
 				"`target_project` = project the issue is FOR (where it will be injected).\n" +
 				"Lifecycle: open → acknowledged (auto) → resolved → closed ⟲ reopened.\n" +
-				"Target agent resolves, source agent closes. Only source or dashboard operator can close.\n\n" +
+				"Resolved awaits verification. Authorized read-write participants may close after checks or reopen; reported provenance grants no authority.\n\n" +
 				"FORMATTING (body and comments support Markdown — rendered in dashboard):\n" +
 				"- Wrap code in fenced blocks: ```go\\nfunc main(){}\\n``` (with language tag)\n" +
 				"- Wrap terminal output: ```bash\\n$ command\\noutput\\n```\n" +
@@ -1154,6 +1155,19 @@ func (s *Server) handleToolsCall(ctx context.Context, req *Request) *Response {
 
 	result, err := s.callTool(contextWithUCIRequestIdentity(ctx, req.ID, params.Name, params.Arguments), params.Name, params.Arguments)
 	if err != nil {
+		if params.Name == "issues" {
+			var recovery *issueRecoveryError
+			var projectError *projectidentity.LogicalError
+			var contextError *uci.ContextError
+			var issueFailure *issues.Error
+			if errors.As(err, &issueFailure) && (issueFailure.Code == "PROJECT_ADOPTION_UNRESOLVED_MEMBERSHIP" || issueFailure.Code == "PROJECT_ADOPTION_CONFLICTING_MEMBERSHIP") {
+				return &Response{JSONRPC: "2.0", ID: req.ID, Error: &Error{Code: -32000, Message: issueFailure.Error(), Data: issueFailure.Code}}
+			}
+			if !errors.As(err, &recovery) && !errors.As(err, &projectError) && !errors.As(err, &contextError) {
+				failure := safeNativeIssueError(err)
+				return &Response{JSONRPC: "2.0", ID: req.ID, Error: &Error{Code: -32000, Message: failure.Error(), Data: map[string]any{"error": failure}}}
+			}
+		}
 		event := log.Error().Err(err).Str("tool", params.Name)
 		if identity, ok := auth.IdentityFrom(ctx); ok {
 			event = event.Str("auth_source", string(identity.Source)).Str("auth_role", string(identity.Role))
@@ -1190,7 +1204,7 @@ func (s *Server) handleToolsCall(ctx context.Context, req *Request) *Response {
 		}
 	}
 
-	return &Response{
+	response := &Response{
 		JSONRPC: "2.0",
 		ID:      req.ID,
 		Result: map[string]any{
@@ -1199,6 +1213,10 @@ func (s *Server) handleToolsCall(ctx context.Context, req *Request) *Response {
 			},
 		},
 	}
+	if params.Name == "issues" {
+		return guardNativeIssueEnvelope(ctx, response)
+	}
+	return response
 }
 
 const readOnlyMutationError = "read_only: action is not permitted"
@@ -1307,6 +1325,9 @@ func readOnlyDenial(ctx context.Context, name string, args json.RawMessage) erro
 // callTool dispatches to the appropriate tool handler.
 func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage) (string, error) {
 	if err := readOnlyDenial(ctx, name, args); err != nil {
+		if name == "issues" {
+			return "", issues.Failure("FORBIDDEN")
+		}
 		return "", err
 	}
 	// Primary consolidated tool handlers

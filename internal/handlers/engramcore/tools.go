@@ -238,6 +238,9 @@ func (m *Module) ConfigureRegistrationParser() {
 
 func (m *Module) proxyToolSession(ctx context.Context, project muxcore.ProjectContext, name string) (string, bool, error) {
 	uciTool := isUCIProxyTool(name)
+	if name == "issues" {
+		return project.Env[config.EnvClaudeSessionID], false, nil
+	}
 	if !uciTool {
 		return m.envFor(project, config.EnvClaudeSessionID), false, nil
 	}

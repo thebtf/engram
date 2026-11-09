@@ -30,6 +30,7 @@ import (
 	booksdomain "github.com/thebtf/engram/internal/books"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/graph"
+	"github.com/thebtf/engram/internal/issuefixture"
 	"github.com/thebtf/engram/internal/retrieval"
 	"github.com/thebtf/engram/pkg/models"
 	pb "github.com/thebtf/engram/proto/engram/v1"
@@ -378,7 +379,10 @@ func seedHistoricalFixture(ctx context.Context, store *gormdb.Store) (fixtureSta
 	if _, err := gormdb.NewBehavioralRulesStore(store).Create(ctx, &models.BehavioralRule{Project: &project, Content: state.ruleContent, Priority: 10, Enabled: true}); err != nil {
 		return state, fmt.Errorf("seed retained rule: %w", err)
 	}
-	if _, err := gormdb.NewIssueStore(store.DB).CreateIssue(ctx, &gormdb.Issue{Title: state.issueTitle, Body: "historical issue body", SourceProject: state.project, TargetProject: state.project, Type: "task", Priority: "medium"}); err != nil {
+	if err := issuefixture.SeedHistorical(store.DB.WithContext(ctx), func(tx *gorm.DB) error {
+		_, err := gormdb.NewIssueStore(tx).CreateIssue(ctx, &gormdb.Issue{Title: state.issueTitle, Body: "historical issue body", SourceProject: state.project, TargetProject: state.project, Type: "task", Priority: "medium"})
+		return err
+	}); err != nil {
 		return state, fmt.Errorf("seed retained issue: %w", err)
 	}
 	return state, nil

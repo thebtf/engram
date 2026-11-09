@@ -94,10 +94,15 @@ func TestIssueReadInputBounds(t *testing.T) {
 	}{
 		{name: "omitted defaults", raw: `{}`, limit: 20},
 		{name: "positive", raw: `{"limit":100,"resolved_since":1}`, limit: 100, since: 1},
+		{name: "above old maximum", raw: `{"limit":101}`, limit: 101},
+		{name: "maximum", raw: `{"limit":200}`, limit: 200},
 		{name: "zero limit", raw: `{"limit":0}`, wantErr: true},
 		{name: "negative limit", raw: `{"limit":-1}`, wantErr: true},
-		{name: "huge limit", raw: `{"limit":101}`, wantErr: true},
+		{name: "above maximum", raw: `{"limit":201}`, wantErr: true},
 		{name: "fraction limit", raw: `{"limit":1.5}`, wantErr: true},
+		{name: "string limit", raw: `{"limit":"1"}`, wantErr: true},
+		{name: "boolean limit", raw: `{"limit":true}`, wantErr: true},
+		{name: "overflow limit", raw: `{"limit":9223372036854775808}`, wantErr: true},
 		{name: "zero timestamp", raw: `{"resolved_since":0}`, wantErr: true},
 		{name: "negative timestamp", raw: `{"resolved_since":-1}`, wantErr: true},
 		{name: "overflow timestamp", raw: `{"resolved_since":9223372036854775808}`, wantErr: true},
@@ -119,7 +124,7 @@ func TestIssueReadInputBounds(t *testing.T) {
 
 	for _, raw := range []string{`{"id":1.5}`, `{"id":"1"}`, `{"id":true}`, `{"id":9223372036854775808}`} {
 		args := readBoundArgs(t, raw)
-		_, err := NewServer(ServerOptions{}).handleIssueGet(t.Context(), args)
-		require.Error(t, err)
+		_, err := NewServer(ServerOptions{}).getNativeIssueTask(t.Context(), args, "json")
+		require.ErrorContains(t, err, "id")
 	}
 }

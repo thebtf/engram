@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/vue-query'
 import type { Ref } from 'vue'
 import {
+  IssueApiError,
   checkForUpdate,
   fetchCredentials,
   fetchConfig,
@@ -14,6 +15,8 @@ import {
   fetchSelfCheck,
   fetchStats,
   fetchVaultStatus,
+  type IssueDetailPageOptions,
+  type IssueListOptions,
 } from '~/composables/useOperatorApi'
 
 export function useProjectsQuery() {
@@ -51,45 +54,90 @@ export function useRulesQuery(selectedProject: Ref<string>, ready: Ref<boolean>)
   }))
 }
 
-export function useIssuesQuery(filters: {
+export interface IssueQueryFilters {
   project: Ref<string>
   ready: Ref<boolean>
   status: Ref<string>
   type: Ref<string>
   sourceProject: Ref<string>
   sourceAgent: Ref<string>
-}) {
-  return useQuery(() => ({
-    queryKey: [
-      'issues',
-      filters.project.value || 'all',
-      filters.status.value || 'all',
-      filters.type.value || 'all',
-      filters.sourceProject.value || 'all',
-      filters.sourceAgent.value || 'all',
-    ],
-    enabled: filters.ready.value && filters.project.value !== '' && (filters.sourceAgent.value !== 'human' || filters.project.value !== 'all'),
-    queryFn: () =>
-      fetchIssues({
-        project: filters.project.value === 'all' || filters.sourceAgent.value === 'human' ? undefined : filters.project.value,
-        status: filters.status.value || undefined,
-        type: filters.type.value || undefined,
-        sourceProject: filters.sourceAgent.value === 'human' ? filters.project.value : filters.sourceProject.value || undefined,
-        sourceAgent: filters.sourceAgent.value || undefined,
-        limit: 50,
-        offset: 0,
-      }),
-    staleTime: 15_000,
-  }))
+  q?: Ref<string>
+  ownerLabel?: Ref<string>
+  recipientLabel?: Ref<string>
+  sourceSession?: Ref<string>
+  participantSession?: Ref<string>
+  targetSession?: Ref<string>
+  limit?: Ref<number>
+  offset?: Ref<number>
 }
 
-export function useIssueDetailQuery(issueId: Ref<number>) {
-  return useQuery(() => ({
-    queryKey: ['issue-detail', issueId.value],
-    queryFn: () => fetchIssue(issueId.value),
-    enabled: issueId.value > 0,
-    staleTime: 15_000,
-  }))
+export function useIssuesQuery(filters: IssueQueryFilters) {
+  return useQuery(() => {
+    const project = filters.project.value
+    const sourceAgent = filters.sourceAgent.value
+    const ownerLabel = filters.ownerLabel?.value
+    const recipientLabel = filters.recipientLabel?.value
+    const params: IssueListOptions = {
+      project: project === 'all' || sourceAgent === 'human' ? undefined : project,
+      status: filters.status.value || undefined,
+      type: filters.type.value || undefined,
+      sourceProject: sourceAgent === 'human' ? project : filters.sourceProject.value || undefined,
+      sourceAgent: sourceAgent || undefined,
+      q: filters.q?.value,
+      ownerLabel: ownerLabel === '' ? undefined : ownerLabel,
+      recipientLabel: recipientLabel === '' ? undefined : recipientLabel,
+      sourceSession: filters.sourceSession?.value || undefined,
+      participantSession: filters.participantSession?.value || undefined,
+      targetSession: filters.targetSession?.value || undefined,
+      limit: filters.limit === undefined ? 50 : filters.limit.value,
+      offset: filters.offset === undefined ? 0 : filters.offset.value,
+    }
+    return {
+      queryKey: ['issues', project, params],
+      enabled: filters.ready.value && project !== '' && (sourceAgent !== 'human' || project !== 'all'),
+      queryFn: () => fetchIssues(params),
+      retry: false,
+      staleTime: 15_000,
+    }
+  })
+}
+
+export function useIssueDetailQuery(issueId: Ref<number>, page?: Ref<IssueDetailPageOptions>, guard?: {
+  instance: string
+  scope: Ref<number>
+  start: (id: number, scope: number) => number
+  success: (id: number, scope: number, token: number) => boolean
+  failure: (id: number, scope: number, error: unknown) => void
+}) {
+  return useQuery(() => {
+    const id = issueId.value
+    const scope = guard?.scope.value ?? 0
+    const options = page?.value
+    const params: Required<IssueDetailPageOptions> = {
+      comments_offset: options?.comments_offset === undefined ? 0 : options.comments_offset,
+      comments_limit: options?.comments_limit === undefined ? 50 : options.comments_limit,
+      history_offset: options?.history_offset === undefined ? 0 : options.history_offset,
+      history_limit: options?.history_limit === undefined ? 50 : options.history_limit,
+    }
+    return {
+      queryKey: ['issue-detail', id, 'paged', params, scope, guard?.instance],
+      queryFn: async () => {
+        const token = guard?.start(id, scope) ?? 0
+        try {
+          const result = await fetchIssue(id, params)
+          if (guard && !guard.success(id, scope, token)) throw new IssueApiError('UNAVAILABLE', 'unknown')
+          return result
+        } catch (error) {
+          guard?.failure(id, scope, error)
+          throw error
+        }
+      },
+      enabled: id > 0,
+      retry: false,
+      refetchOnMount: 'always' as const,
+      staleTime: 15_000,
+    }
+  })
 }
 
 

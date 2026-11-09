@@ -54,9 +54,9 @@ The list below is generated. Do not edit it by hand; run `go run ./tools/gen-dat
 <!-- BEGIN GENERATED TABLES -->
 Generated from registered migrations in `internal/db/gorm/`.
 
-Migration count: **181**.
+Migration count: **185**.
 
-Live table count: **94**.
+Live table count: **97**.
 
 | Table | Creating migration |
 | --- | --- |
@@ -152,6 +152,9 @@ Live table count: **94**.
 | `memory_principals` | `191_memory_owning_context` |
 | `memory_request_keys` | `191_memory_owning_context` |
 | `memory_revisions` | `191_memory_owning_context` |
+| `issue_history_events` | `192_issue_session_attribution` |
+| `issue_changes` | `193_issue_internal_tasks` |
+| `issue_create_receipts` | `193_issue_internal_tasks` |
 | `memory_link_receipts` | `195_memory_links` |
 | `memory_links` | `195_memory_links` |
 <!-- END GENERATED TABLES -->

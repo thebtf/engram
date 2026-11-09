@@ -88,8 +88,8 @@ const numericTools = [
   [createEngramRateTool, { rating: 'useful' }, 'id'],
   [createEngramSuppressTool, {}, 'id'],
   [createEngramTimelineTool, { mode: 'anchor' }, 'anchor_id'],
-  ...['get', 'update', 'comment', 'reopen'].map(action => [issues.createEngramIssuesTool, { action, status: 'resolved', body: 'Comment' }, 'id']),
-  [issues.createEngramIssuesTool, { action: 'list' }, 'limit'],
+  ...['get', 'update', 'comment', 'reopen'].map(action => [issues.createEngramIssuesTool, { action, status: 'resolved', body: 'Comment', ...(['update', 'reopen'].includes(action) ? { expected_revision: '1' } : {}) }, 'id']),
+  [issues.createEngramIssuesTool, { action: 'list' }, 'limit', 200],
   [createEngramTimelineTool, {}, 'limit', 50],
   [createEngramSearchTool, { query: 'Query' }, 'limit', 50],
 ];

@@ -29,7 +29,7 @@ These are the stable entry points. Action enums list only routes that have live 
 | `settings` | set, get, list, delete | Manage recall model settings |
 | `docs` | create, read, list, history, comment, collections, documents, get_doc, remove, ingest | Manage versioned documents and collections |
 | `admin` | stats; purge_project when enabled | Read administrative telemetry or perform gated project purge |
-| `issues` | create, list, get, update, comment, reopen, close | Cross-project issue tracker |
+| `issues` | create, list, get, update, comment, reopen, close | Cross-project issue tracker; the Feature012 source contract is documented in the [Issues contract](../../specs/012-agent-internal-tasks/contracts/issues.md) and [operating guide](../operating-engram.md#задачи-в-issues-создание-продолжение-и-конфликты) |
 | `check_system_health` | none | Report subsystem health |
 
 ### Expanded Tools
@@ -894,12 +894,17 @@ update.
 | `PATCH` | `/api/memories/:id` | Update memory. |
 | `DELETE` | `/api/memories/:id` | Delete memory. |
 | `POST` | `/api/memories/:id/transition` | Suppress, unsuppress or archive a retained memory with optional canonical project narrowing. |
-| `GET` | `/api/issues` | List issues. |
-| `POST` | `/api/issues` | Create issue. |
-| `PATCH` | `/api/issues/:id` | Update issue (status, labels, etc.). |
+| `GET` | `/api/issues` | List issues; Feature012 adds filtered, bounded summaries. |
+| `POST` | `/api/issues` | Create issue; Feature012 supports actor/source/key-bound replay of the original intent. |
+| `GET` | `/api/issues/{id}` | Authorized issue detail; Feature012 supports independent comments/history pages. |
+| `PATCH` | `/api/issues/:id` | Update issue; Feature012 specifies revision-checked material edits or comment-only append. |
 | `GET` | `/api/tokens` | List API tokens. |
 | `POST` | `/api/tokens` | Create worker keycard. |
 | `DELETE` | `/api/tokens/:id` | Revoke token. |
+
+**Feature012 source contract, issue #513:** The issue-backed task path described in the [task contract](../../specs/012-agent-internal-tasks/contracts/issues.md) applies only to server and client versions that support Feature012. Same-result create replay is scoped to authenticated actor, canonical source, key and original intent; `expected_actor` is a precondition, not a credential. A stale material revision fails without applying its attached comment. Raw metadata is preserved only when admitted; existing authorization, privacy and secret restrictions remain. Consult the [recovery guide](../operating-engram.md#задачи-в-issues-создание-продолжение-и-конфликты) before retrying an unknown outcome. This documentation does not prove installation, target migration, acceptance or release.
+
+Swagger 2 cannot express all presence-sensitive null/omission, material-versus-comment revision, actor-precondition or raw JSON rules. Read the operation descriptions and task contract for those conditions and nullable continuations or labels; schemas are not complete input validators. Issue-owner errors use `{error:{code,message,current_revision?}}`, while outer authentication or request middleware can return plain text. Do not assume a uniform error envelope.
 
 For `POST /api/update/apply`, an available update without an asset URL for the
 current platform returns HTTP 200 with `success: false` and an error message.

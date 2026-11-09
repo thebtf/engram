@@ -43,6 +43,120 @@ function extension(overrides = {}) {
   return { adapter, calls };
 }
 
+function issueAttributionTool(name = 'mcp__engram_issues') {
+  return {
+    name,
+    description: 'Issue provenance fixture',
+    sourceInfo: { source: 'mcp', path: '<fixture>', scope: 'temporary', origin: 'top-level' },
+    parameters: {
+      type: 'object', 'x-engram-caller-context': 'issues/v1',
+      properties: { action: { type: 'string' }, session_id: { type: 'string' }, client: { type: 'string' } },
+    },
+  };
+}
+
+async function issueAttributionHook(getAllTools) {
+  const { adapter } = extension();
+  const handlers = new Map();
+  const host = {
+    on(name, handler) { assert.equal(handlers.has(name), false); handlers.set(name, handler); },
+    sendMessage() { assert.fail('issue attribution must not send memory context'); },
+    ...(getAllTools === undefined ? {} : { getAllTools }),
+  };
+  await adapter.install(host);
+  await adapter.install(host);
+  assert.equal(typeof handlers.get('tool_call'), 'function', 'install must register a tool_call handler');
+  return handlers.get('tool_call');
+}
+
+test('OMP issue tool call uses the current native host session for each marked instance', async () => {
+  const first = 'mcp__engram_issues', second = 'mcp__engram_secondary_issues';
+  const sessionA = '0192a352-1111-7111-8111-111111111111';
+  const sessionB = '0192a352-2222-7222-8222-222222222222';
+  const hook = await issueAttributionHook(() => [issueAttributionTool(first), issueAttributionTool(second)]);
+  for (const [index, [name, session]] of [[first, sessionA], [second, sessionB], [first, sessionB], [second, sessionA]].entries()) {
+    const input = Object.freeze({
+      action: 'comment', id: 42, project: projects['/session/a'], body: `User comment ${index}`,
+      session_id: '33333333-3333-4333-8333-333333333333', client: 'untrusted-client'
+    });
+    const event = Object.freeze({ type: 'tool_call', toolCallId: `issue-${index}`, toolName: name, input });
+    const ctx = {
+      cwd: '/session/a', sessionId: session === sessionA ? sessionB : sessionA,
+      sessionManager: { getSessionId: () => session }
+    };
+    assert.deepEqual(await hook(event, ctx), { input: { ...input, session_id: session, client: 'omp' } });
+    assert.equal(input.session_id, '33333333-3333-4333-8333-333333333333');
+    assert.equal(input.client, 'untrusted-client');
+    assert.equal(event.input, input, 'the raw host event must not be rewritten');
+  }
+});
+
+test('OMP issue tool call does not fabricate a missing or invalid native host session', async () => {
+  const session = '0192a352-1111-7111-8111-111111111111';
+  const hook = await issueAttributionHook(() => [issueAttributionTool()]);
+  const input = Object.freeze({ action: 'comment', id: 42, body: 'Original text', project: projects['/session/a'] });
+  const event = Object.freeze({
+    type: 'tool_call', toolCallId: 'issue', toolName: 'mcp__engram_issues', input,
+    sessionId: session, sessionKey: session
+  });
+  const context = {
+    cwd: '/session/a', sessionId: session, sessionKey: session, project: session,
+    agent: session, lane: session, connection: { session_id: session }, auth: { session_id: session }, keycard: session
+  };
+  const withSession = { ...context, sessionManager: { getSessionId: () => session } };
+  assert.deepEqual(await hook(event, withSession), { input: { ...input, session_id: session, client: 'omp' } });
+  for (const value of [undefined, null, '', ' ', 'not-a-uuid', 42, `${session}\n`, `${session}/lane`]) {
+    assert.equal(await hook(event, { ...context, sessionManager: { getSessionId: () => value } }), undefined);
+  }
+  assert.equal(await hook(event, context), undefined);
+  assert.equal(await hook(event, { ...context, sessionManager: { getSessionId() { throw new Error('not available'); } } }), undefined);
+  assert.deepEqual(input, { action: 'comment', id: 42, body: 'Original text', project: projects['/session/a'] });
+});
+
+test('OMP issue attribution requires an unambiguous selected MCP tool with its own versioned schema', async () => {
+  const input = Object.freeze({ action: 'get', id: 42, session_id: 'caller-reported', client: 'caller-client' });
+  const event = Object.freeze({ type: 'tool_call', toolCallId: 'issue', toolName: 'mcp__engram_issues', input });
+  const ctx = { sessionManager: { getSessionId: () => '0192a352-1111-7111-8111-111111111111' } };
+  const unmarked = issueAttributionTool();
+  delete unmarked.parameters['x-engram-caller-context'];
+  const wrongMarker = issueAttributionTool();
+  wrongMarker.parameters['x-engram-caller-context'] = 'issues/v2';
+  const noSession = issueAttributionTool();
+  delete noSession.parameters.properties.session_id;
+  const noClient = issueAttributionTool();
+  delete noClient.parameters.properties.client;
+  const wrongField = issueAttributionTool();
+  wrongField.parameters.properties.client = { type: 'integer' };
+  const nonMcp = issueAttributionTool();
+  nonMcp.sourceInfo.source = 'extension';
+  const another = issueAttributionTool('mcp__other_issues');
+  const cases = [undefined, () => { throw new Error('unavailable'); }, () => [], () => [unmarked],
+    () => [wrongMarker], () => [noSession], () => [noClient], () => [wrongField], () => [nonMcp],
+    () => [another], () => [unmarked, another], () => [issueAttributionTool(), issueAttributionTool()],
+    () => [issueAttributionTool(), unmarked]];
+  for (const getAllTools of cases) {
+    const hook = await issueAttributionHook(getAllTools);
+    assert.equal(await hook(event, ctx), undefined, 'absent, foreign or ambiguous capability must pass through');
+    assert.deepEqual(input, { action: 'get', id: 42, session_id: 'caller-reported', client: 'caller-client' });
+  }
+});
+
+test('OMP issue hook leaves outer write and unrelated tools unchanged and only rewrites the inner marked call', async () => {
+  const hook = await issueAttributionHook(() => [issueAttributionTool()]);
+  const session = '0192a352-2222-7222-8222-222222222222';
+  const ctx = { sessionManager: { getSessionId: () => session } };
+  const args = Object.freeze({ action: 'comment', id: 42, body: 'Preserve the user text' });
+  const content = JSON.stringify(args, null, 2);
+  for (const path of ['xd://mcp__engram_issues', 'xd://mcp__other_issues', 'local://issue.json']) {
+    const input = Object.freeze({ path, content });
+    assert.equal(await hook(Object.freeze({ type: 'tool_call', toolCallId: 'outer', toolName: 'write', input }), ctx), undefined);
+    assert.deepEqual(input, { path, content });
+  }
+  assert.equal(await hook({ type: 'tool_call', toolCallId: 'other', toolName: 'mcp__other_issues', input: args }, ctx), undefined);
+  assert.deepEqual(await hook({ type: 'tool_call', toolCallId: 'inner', toolName: 'mcp__engram_issues', input: args }, ctx),
+    { input: { ...args, session_id: session, client: 'omp' } });
+});
+
 test('OMP automatic callbacks use current root and one UUID without identity registration', async () => {
   const { adapter, calls } = extension();
   const handlers = new Map();
@@ -93,7 +207,7 @@ test('OMP binding shares one background preparation across repeated installation
   await Promise.all([adapter.install(pi), adapter.install(pi)]);
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(preparations, 1);
-  assert.equal(registrations, 2);
+  assert.equal(registrations, 3);
   await handlers.get('session_start')({ cwd: '/session/a', sessionId: 'early' }, {});
   assert.equal(await handlers.get('before_agent_start')({ cwd: '/session/a', sessionId: 'early', prompt: 'fixture' }, {}), undefined);
   assert.equal(configurations, 1, 'pending callbacks must not start their own configuration work');
@@ -191,7 +305,7 @@ test('OMP install registers before cold readiness without executing the first sh
   t.diagnostic(JSON.stringify({ installState, trustedCAS: fs.existsSync(object), requests, executions: executions.length, contextRequests: contextRequests.length }));
   assert.equal(fs.existsSync(object), false);
   assert.equal(installState, 'ready', 'cold acquisition must not block foreground installation');
-  assert.deepEqual([...handlers.keys()], ['session_start', 'before_agent_start']);
+  assert.deepEqual([...handlers.keys()], ['session_start', 'before_agent_start', 'tool_call']);
   await handlers.get('session_start')({ cwd: '/session/a', sessionId: 'early-skipped' }, {});
   t.mock.timers.tick(5001);
   await new Promise(resolve => setImmediate(resolve));
@@ -287,7 +401,7 @@ test('OMP background readiness handles offline, hash and cooperative abort failu
       await installing;
       await new Promise(resolve => setImmediate(resolve));
       assert.equal(installError, undefined, 'background failure must not reject foreground registration');
-      assert.deepEqual([...handlers.keys()], ['session_start', 'before_agent_start']);
+      assert.deepEqual([...handlers.keys()], ['session_start', 'before_agent_start', 'tool_call']);
       await handlers.get('session_start')({ cwd: '/session/a', sessionId: mode }, {});
       assert.equal(await handlers.get('before_agent_start')({ cwd: '/session/a', sessionId: mode, prompt: 'fixture' }, {}), undefined);
       await cleanup();
@@ -682,7 +796,7 @@ for (const mode of ['unconfigured', 'config-quiet']) {
     });
     await adapter.install({ on: (name, callback) => handlers.set(name, callback), sendMessage() { messages++; } });
     await new Promise(resolve => setImmediate(resolve));
-    assert.deepEqual([...handlers.keys()], ['session_start', 'before_agent_start']);
+    assert.deepEqual([...handlers.keys()], ['session_start', 'before_agent_start', 'tool_call']);
     assert.equal(await handlers.get('session_start')({ cwd: '/session/a', sessionId: mode }, {}), undefined);
     assert.equal(await handlers.get('before_agent_start')({ cwd: '/session/a', sessionId: mode, prompt: 'fixture' }, {}), undefined);
     const ineligibleDiagnostics = [...diagnostics];
@@ -772,7 +886,7 @@ test('OMP background readiness budget includes config and never trusts late prep
   await new Promise(resolve => setImmediate(resolve));
   t.mock.timers.tick(59999);
   assert.equal(preparedSignal.aborted, false);
-  assert.deepEqual([...handlers.keys()], ['session_start', 'before_agent_start']);
+  assert.deepEqual([...handlers.keys()], ['session_start', 'before_agent_start', 'tool_call']);
   t.mock.timers.tick(1);
   await installed;
   await new Promise(resolve => setImmediate(resolve));
@@ -783,7 +897,7 @@ test('OMP background readiness budget includes config and never trusts late prep
   assert.equal(calls.length, 0, 'late preparation completion must not replay any context request');
   assert.equal(preparations, 1, 'expired startup must not start a late preparation');
   assert.equal(sent.length, 0);
-  assert.deepEqual([...handlers.keys()], ['session_start', 'before_agent_start']);
+  assert.deepEqual([...handlers.keys()], ['session_start', 'before_agent_start', 'tool_call']);
   assert.equal(await handlers.get('session_start')({ cwd: '/session/a', sessionId: 'expired' }, {}), undefined);
   assert.equal(await handlers.get('before_agent_start')({ cwd: '/session/a', sessionId: 'expired', prompt: 'fixture' }, {}), undefined);
   assert.equal(calls.length, 0);
