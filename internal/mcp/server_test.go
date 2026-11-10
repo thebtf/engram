@@ -380,13 +380,16 @@ func TestHandleInitialize_IncludesCollectionDescriptions(t *testing.T) {
 	assert.Contains(t, instructions, "not a task, priority or permission override")
 	assert.NotContains(t, instructions, "Read each issue carefully")
 	assert.NotContains(t, instructions, "only the source agent")
+	foundIssues := false
 	for _, tool := range s.primaryTools() {
 		if tool.Name == "issues" {
+			foundIssues = true
 			assert.Contains(t, tool.Description, "provenance, not permission")
 			assert.Contains(t, tool.Description, "installed service's actual authorization")
 			assert.NotContains(t, tool.Description, "Only source or dashboard operator can close")
 		}
 	}
+	assert.True(t, foundIssues, "primary issues tool must be present")
 	assert.Contains(t, instructions, "# Available Collections\n\n## notes\nExisting notes")
 	assert.NotContains(t, instructions, "## empty")
 }
