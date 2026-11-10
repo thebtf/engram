@@ -623,6 +623,58 @@ function Assert-ArchiveEnvelope {
 }
 
 
+function Read-ImageArchiveMember {
+    param([string]$Path, [string]$Name, [switch]$Optional)
+    $file = [IO.File]::OpenRead($Path)
+    $reader = [System.Formats.Tar.TarReader]::new($file)
+    $found = $null
+    try {
+        while ($null -ne ($entry = $reader.GetNextEntry())) {
+            if ($entry.Name.TrimStart([char[]]'./') -cne $Name) { continue }
+            if ($null -ne $found -or $null -eq $entry.DataStream -or $entry.Length -gt 4194304) { throw "Duplicate or invalid archive member: $Name" }
+            $buffer = [IO.MemoryStream]::new()
+            try { $entry.DataStream.CopyTo($buffer); $found = $buffer.ToArray() } finally { $buffer.Dispose() }
+        }
+    } finally { $reader.Dispose(); $file.Dispose() }
+    if ($null -eq $found -and -not $Optional) { throw "Missing archive member: $Name" }
+    return ,$found
+}
+
+function Get-BytesDigest {
+    param([byte[]]$Bytes)
+    return 'sha256:' + [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($Bytes)).ToLowerInvariant()
+}
+
+function Get-ArchiveImageIdentity {
+    param([string]$Path, [string]$ImageID, [string]$Name)
+    $dockerBytes = Read-ImageArchiveMember -Path $Path -Name 'manifest.json'
+    $dockerManifests = @([Text.Encoding]::UTF8.GetString($dockerBytes) | ConvertFrom-Json -Depth 100)
+    if ($dockerManifests.Count -ne 1) { throw 'Image archive must contain exactly one Docker manifest.' }
+    $tags = @($dockerManifests[0].RepoTags)
+    if ($tags.Count -ne 1 -or [string]$tags[0] -cne (Get-PayloadImageTag -Name $Name -ImageID $ImageID)) { throw 'Image archive payload tag mismatch.' }
+    $configPath = [string]$dockerManifests[0].Config
+    if ($configPath -cnotmatch '^(?:blobs/sha256/)?[0-9a-f]{64}(?:\.json)?$') { throw 'Invalid image archive config path.' }
+    $configBytes = Read-ImageArchiveMember -Path $Path -Name $configPath
+    $configDigest = Get-BytesDigest -Bytes $configBytes
+    if ($configPath -cnotmatch $configDigest.Substring(7)) { throw 'Image archive config digest mismatch.' }
+    $indexBytes = Read-ImageArchiveMember -Path $Path -Name 'index.json' -Optional
+    $manifestDigest = $null
+    $manifestBase64 = $null
+    if ($null -ne $indexBytes) {
+        $index = [Text.Encoding]::UTF8.GetString($indexBytes) | ConvertFrom-Json -Depth 100
+        $descriptors = @($index.manifests)
+        if ($descriptors.Count -ne 1 -or [string]$descriptors[0].digest -cnotmatch '^sha256:[0-9a-f]{64}$') { throw 'Ambiguous image archive index.' }
+        $manifestDigest = [string]$descriptors[0].digest
+        $manifestBytes = Read-ImageArchiveMember -Path $Path -Name "blobs/sha256/$($manifestDigest.Substring(7))"
+        if ((Get-BytesDigest -Bytes $manifestBytes) -cne $manifestDigest -or [int64]$descriptors[0].size -ne $manifestBytes.Length) { throw 'Image archive manifest digest mismatch.' }
+        $manifest = [Text.Encoding]::UTF8.GetString($manifestBytes) | ConvertFrom-Json -Depth 100
+        if ([string]$manifest.config.digest -cne $configDigest -or [int64]$manifest.config.size -ne $configBytes.Length) { throw 'Image archive manifest/config mismatch.' }
+        $manifestBase64 = [Convert]::ToBase64String($manifestBytes)
+    }
+    if ($ImageID -cne $configDigest -and $ImageID -cne $manifestDigest) { throw 'Scanned image ID is not proven by its archive.' }
+    return [ordered]@{ image_id = $ImageID; config_digest = $configDigest; manifest_digest = $manifestDigest; manifest_base64 = $manifestBase64 }
+}
+
 function Assert-ExactObjectProperties {
     param(
         [Parameter(Mandatory = $true)]$Value,
@@ -802,7 +854,8 @@ function Read-AndValidatePayload {
             throw "Release bundle archive hash/size mismatch for $($definition.name)."
         }
         Assert-ArchiveEnvelope -Path $archivePath
-        $validatedImages += [ordered]@{ name = $definition.name; archive = $archivePath; image_id = $imageID }
+        $identity = Get-ArchiveImageIdentity -Path $archivePath -ImageID $imageID -Name $definition.name
+        $validatedImages += [ordered]@{ name = $definition.name; archive = $archivePath; image_id = $imageID; identity = $identity }
     }
     return [ordered]@{
         schema_version = 1
@@ -959,7 +1012,9 @@ function Assert-PublicationDestinationRecord {
     foreach ($expected in $expectedDestinations) {
         $actual = @($actualDestinations | Where-Object { [string]$_.reference -ceq [string]$expected.reference })[0]
         if ([string]$actual.image -cne [string]$expected.image -or
-            [string]$actual.config_digest -cne [string]$expected.config_digest) {
+            [string]$actual.image_id -cne [string]$expected.image_id -or
+            [string]$actual.config_digest -cne [string]$expected.config_digest -or
+            [string]$actual.expected_manifest_digest -cne [string]$expected.expected_manifest_digest) {
             throw "Publisher $Phase evidence is bound to the wrong image for $($expected.reference)."
         }
         if ($Phase -ceq 'preflight') {
@@ -968,7 +1023,8 @@ function Assert-PublicationDestinationRecord {
                 throw "Publisher preflight evidence is not an unmodified deferred plan for $($expected.reference)."
             }
         } elseif ($actual.action -cnotin @('pushed', 'verified-noop') -or
-            [string]$actual.manifest_digest -cnotmatch '^sha256:[0-9a-f]{64}$') {
+            [string]$actual.manifest_digest -cnotmatch '^sha256:[0-9a-f]{64}$' -or
+            ($null -ne $expected.expected_manifest_digest -and [string]$actual.manifest_digest -cne [string]$expected.expected_manifest_digest)) {
             throw "Publisher evidence contains an incomplete destination readback: $($expected.reference)"
         }
     }
@@ -1009,7 +1065,24 @@ function Invoke-ValidatePublicationEvidence {
             operator_console = Join-Path $root 'operator-console.trivy.sarif'
             postgres = Join-Path $root 'postgres.trivy.sarif'
         })
-    $expectedPlan = New-PublicationPlan -Manifest $manifest -ReleaseVersion $payloadVersion -DeferLiveRemoteInspection
+    $identities = @{}
+    if (@($payload.images).Count -ne 3) { throw 'Payload identity proof must contain three images.' }
+    foreach ($image in $payload.images) {
+        $name = [string]$image.name
+        if ($name -cnotin @('server', 'operator_console', 'postgres') -or $identities.ContainsKey($name)) { throw 'Payload identity proof contains unexpected or duplicate image.' }
+        $identity = $image.identity
+        $expectedID = [string]$manifest.image_ids.PSObject.Properties[$name].Value
+        if ($null -eq $identity -or [string]$identity.image_id -cne $expectedID -or [string]$image.image_id -cne $expectedID -or [string]$identity.config_digest -cnotmatch '^sha256:[0-9a-f]{64}$') { throw "Invalid payload identity for $name." }
+        if ($null -ne $identity.manifest_digest) {
+            $bytes = [Convert]::FromBase64String([string]$identity.manifest_base64)
+            if ($bytes.Length -gt 4194304 -or (Get-BytesDigest -Bytes $bytes) -cne [string]$identity.manifest_digest) { throw "Invalid payload manifest proof for $name." }
+            $proof = [Text.Encoding]::UTF8.GetString($bytes) | ConvertFrom-Json -Depth 100
+            if ([string]$proof.config.digest -cne [string]$identity.config_digest) { throw "Payload config identity mismatch for $name." }
+        } elseif ($null -ne $identity.manifest_base64) { throw "Unexpected payload manifest proof for $name." }
+        if ($expectedID -cne [string]$identity.config_digest -and $expectedID -cne [string]$identity.manifest_digest) { throw "Payload identity does not match scanned image for $name." }
+        $identities[$name] = $identity
+    }
+    $expectedPlan = New-PublicationPlan -Manifest $manifest -ReleaseVersion $payloadVersion -DeferLiveRemoteInspection -Identities $identities
     Assert-PublicationDestinationRecord -Record $preflight -ExpectedPlan $expectedPlan -Phase preflight
     Assert-PublicationDestinationRecord -Record $publication -ExpectedPlan $expectedPlan -Phase publication
     if ([string]$preflight.acceptance_manifest_sha256 -cnotmatch '^sha256:[0-9a-f]{64}$' -or
@@ -1152,7 +1225,8 @@ function New-PublicationPlan {
         [Parameter(Mandatory = $true)]$Manifest,
         [Parameter(Mandatory = $true)][string]$ReleaseVersion,
         $RegistryFixture,
-        [switch]$DeferLiveRemoteInspection
+        [switch]$DeferLiveRemoteInspection,
+        $Identities
     )
 
     if ($DeferLiveRemoteInspection -and $null -ne $RegistryFixture) {
@@ -1173,6 +1247,8 @@ function New-PublicationPlan {
         if ($image.id -cnotmatch '^sha256:[0-9a-f]{64}$') {
             throw "Manifest contains an invalid exact image ID for $($image.name): $($image.id)"
         }
+        $identity = if ($null -ne $Identities) { $Identities[$image.name] } else { @{ image_id = $image.id; config_digest = $image.id; manifest_digest = $null } }
+        if ([string]$identity.image_id -cne $image.id -or [string]$identity.config_digest -cnotmatch '^sha256:[0-9a-f]{64}$') { throw "Invalid archive identity for $($image.name)." }
         foreach ($tag in @($validatedVersion, "sha-$sourceCommit")) {
             $reference = "$($image.repository):$tag"
             $remote = if ($DeferLiveRemoteInspection) {
@@ -1182,7 +1258,7 @@ function New-PublicationPlan {
             } else {
                 Get-LiveRemoteIdentity -Reference $reference
             }
-            if ($remote.exists -and $remote.config_digest -cne $image.id) {
+            if ($remote.exists -and ($remote.config_digest -cne $identity.config_digest -or ($null -ne $identity.manifest_digest -and $remote.manifest_digest -cne $identity.manifest_digest))) {
                 throw "Destination $reference already resolves to $($remote.config_digest), not exact scanned image $($image.id); refusing every write."
             }
             $action = if ($DeferLiveRemoteInspection) {
@@ -1195,7 +1271,9 @@ function New-PublicationPlan {
             $destinations += [ordered]@{
                 image = $image.name
                 reference = $reference
-                config_digest = $image.id
+                image_id = $image.id
+                config_digest = $identity.config_digest
+                expected_manifest_digest = $identity.manifest_digest
                 action = $action
                 manifest_digest = $remote.manifest_digest
             }
@@ -1254,15 +1332,23 @@ function Read-PublicationInputs {
     } else {
         Get-Content -Raw -LiteralPath $RegistryFixturePath | ConvertFrom-Json -Depth 100
     }
-    return [ordered]@{ manifest = $manifest; fixture = $fixture; manifest_sha256 = "sha256:$manifestHash" }
+    $identities = $null
+    if ($null -eq $fixture -or (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $resolvedManifestPath) 'release-bundle.json') -PathType Leaf)) {
+        $PayloadRoot = Split-Path -Parent $resolvedManifestPath
+        $ExpectedSha = [string]$manifest.source_parent_commit
+        $validated = Read-AndValidatePayload
+        $identities = @{}
+        foreach ($image in $validated.images) { $identities[$image.name] = $image.identity }
+    }
+    return [ordered]@{ manifest = $manifest; fixture = $fixture; manifest_sha256 = "sha256:$manifestHash"; identities = $identities }
 }
 
 function Invoke-PlanPublication {
     $inputs = Read-PublicationInputs
     $plan = if ($null -eq $inputs.fixture) {
-        New-PublicationPlan -Manifest $inputs.manifest -ReleaseVersion $ReleaseVersion -DeferLiveRemoteInspection
+        New-PublicationPlan -Manifest $inputs.manifest -ReleaseVersion $ReleaseVersion -DeferLiveRemoteInspection -Identities $inputs.identities
     } else {
-        New-PublicationPlan -Manifest $inputs.manifest -ReleaseVersion $ReleaseVersion -RegistryFixture $inputs.fixture
+        New-PublicationPlan -Manifest $inputs.manifest -ReleaseVersion $ReleaseVersion -RegistryFixture $inputs.fixture -Identities $inputs.identities
     }
     $plan['acceptance_manifest_sha256'] = $inputs.manifest_sha256
     if (-not [string]::IsNullOrWhiteSpace($OutputPath)) {
@@ -1295,16 +1381,16 @@ function Invoke-Publish {
     }
     $publishFailure = $null
     try {
-        $plan = New-PublicationPlan -Manifest $inputs.manifest -ReleaseVersion $ReleaseVersion -RegistryFixture $null
+        $plan = New-PublicationPlan -Manifest $inputs.manifest -ReleaseVersion $ReleaseVersion -RegistryFixture $null -Identities $inputs.identities
         $plan['acceptance_manifest_sha256'] = $inputs.manifest_sha256
         $plan['status'] = 'RUNNING'
         $plan['failure'] = $null
         $localImageIdsByName = @{}
         foreach ($destination in $plan.destinations) {
             if (-not $localImageIdsByName.ContainsKey($destination.image)) {
-                $payloadTag = Get-PayloadImageTag -Name $destination.image -ImageID $destination.config_digest
+                $payloadTag = Get-PayloadImageTag -Name $destination.image -ImageID $destination.image_id
                 $localImageIdsByName[$destination.image] = Resolve-LocalImageId `
-                    -Tag $payloadTag -ExpectedConfigDigest $destination.config_digest
+                    -Tag $payloadTag -ExpectedConfigDigest $destination.image_id
             }
             $destination['local_id'] = $localImageIdsByName[$destination.image]
         }
@@ -1322,7 +1408,7 @@ function Invoke-Publish {
 
         foreach ($destination in $plan.destinations) {
             $remote = Get-LiveRemoteIdentity -Reference $destination.reference
-            if (-not $remote.exists -or $remote.config_digest -cne $destination.config_digest) {
+            if (-not $remote.exists -or $remote.config_digest -cne $destination.config_digest -or ($null -ne $destination.expected_manifest_digest -and $remote.manifest_digest -cne $destination.expected_manifest_digest)) {
                 throw "Post-write readback mismatch for $($destination.reference)."
             }
             $destination.manifest_digest = $remote.manifest_digest
