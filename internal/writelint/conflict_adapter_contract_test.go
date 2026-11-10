@@ -83,6 +83,7 @@ func TestConflictAdapter_Row04_Type(t *testing.T) {
 		{"experience", models.ObsTypeFeature},
 		{"opinion", models.ObsTypeDecision},
 		{"observation", models.ObsTypeChange},
+		{"unknown_type", models.ObsTypeChange},
 		{"", models.ObsTypeChange}, // default
 	}
 	for _, tc := range cases {
@@ -130,6 +131,9 @@ func TestConflictAdapter_Row05_TitleTruncatesAt100(t *testing.T) {
 	}
 	// 200-char string of 'x'
 	obs := writelint.ProjectMemoryToObservation(m)
+	if !obs.Title.Valid {
+		t.Error("Row 5 Title truncation: expected Valid=true")
+	}
 	if len(obs.Title.String) != 100 {
 		t.Errorf("Row 5 Title truncation: expected 100 chars, got %d", len(obs.Title.String))
 	}

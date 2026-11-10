@@ -218,21 +218,6 @@ func TestNodesStore_MetadataValidationRejectsInvalidValues(t *testing.T) {
 	}
 }
 
-// TestNodesStore_Get_IncludePrivateParam verifies that the Get method signature
-// includes the includePrivate bool parameter, consistent with ListByType
-// (7th-alternate-read-path bypass pattern fix, Finding 3).
-//
-// This is a compile-time shape test; live privacy filtering requires DATABASE_DSN.
-func TestNodesStore_Get_IncludePrivateParam(t *testing.T) {
-	// Verify the interface shape includes includePrivate via the getter interface
-	// defined in TestNodesStore_T012_UnitShape.
-	type privacyAwareGetter interface {
-		Get(ctx context.Context, id int64, includePrivate bool) (*models.KnowledgeNode, error)
-	}
-	var _ privacyAwareGetter = (*NodesStore)(nil)
-	t.Log("NodesStore.Get includePrivate parameter shape verified")
-}
-
 // TestNodesStore_SoftDelete_MethodShape verifies that SoftDelete has the
 // correct method signature (id int64) → error and reaches the DB call on
 // valid input (no early-return guard for non-zero IDs).
