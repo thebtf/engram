@@ -14,11 +14,12 @@ function cleanupSignals(sessionID) {
   try { fs.unlinkSync(p); } catch (_) {}
 }
 
-test('returns empty for unsupported tool', async () => {
+test('unsupported tools return empty without network requests', async () => {
   const originalRequestGet = lib.requestGet;
-  lib.requestGet = async () => {
-    throw new Error('requestGet should not be called');
-  };
+  const originalRequestPost = lib.requestPost;
+  const requests = [];
+  lib.requestGet = async () => { requests.push('GET'); return {}; };
+  lib.requestPost = async () => { requests.push('POST'); return {}; };
 
   try {
     const result = await preToolUse.handlePreToolUse({ Project: 'engram', SessionID: 's1' }, {
@@ -26,8 +27,10 @@ test('returns empty for unsupported tool', async () => {
       tool_input: { pattern: 'x' },
     });
     assert.equal(result, '');
+    assert.deepEqual(requests, []);
   } finally {
     lib.requestGet = originalRequestGet;
+    lib.requestPost = originalRequestPost;
   }
 });
 
