@@ -41,19 +41,26 @@ func governanceTestServer(t *testing.T) *Server {
 	return s
 }
 
-// TestGovernanceTools_NotAdvertisedWhenFlagOff verifies governance tools are NOT
-// in ListTools() when ENGRAM_VNEXT_F_ENABLED is absent/false.
-func TestGovernanceTools_NotAdvertisedWhenFlagOff(t *testing.T) {
+// TestGovernanceTools_AdvertisementRequiresSnapshotStore verifies the wiring gate.
+func TestGovernanceTools_AdvertisementRequiresSnapshotStore(t *testing.T) {
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "false")
 	s := NewServer(ServerOptions{Version: "test"})
-	// Even with a non-nil snapshotStore the flag gate prevents advertisement.
-	// We can't inject a real store without DB, so verify with nil store (same outcome).
-	tools := s.ListTools()
-	for _, tool := range tools {
-		assert.NotEqual(t, "list_snapshots", tool.Name, "list_snapshots must not appear when flag is off")
-		assert.NotEqual(t, "rollback_snapshot", tool.Name, "rollback_snapshot must not appear when flag is off")
-		assert.NotEqual(t, "pin_snapshot", tool.Name, "pin_snapshot must not appear when flag is off")
-		assert.NotEqual(t, "redaction_rules_status", tool.Name, "redaction_rules_status must not appear when flag is off")
+	names := func() map[string]bool {
+		result := make(map[string]bool)
+		for _, tool := range s.ListTools() {
+			result[tool.Name] = true
+		}
+		return result
+	}
+	governance := []string{"list_snapshots", "rollback_snapshot", "pin_snapshot", "redaction_rules_status"}
+	unwired := names()
+	for _, name := range governance {
+		assert.False(t, unwired[name], "%s must not be advertised without a snapshot store", name)
+	}
+	s.SetSnapshotStore(gormdb.NewSnapshotStore(nil))
+	wired := names()
+	for _, name := range governance {
+		assert.True(t, wired[name], "%s must be advertised when the snapshot store is wired", name)
 	}
 }
 
@@ -94,11 +101,10 @@ func TestGovernanceTools_AdminGate_ReadOnlyCaller(t *testing.T) {
 	assert.Contains(t, err.Error(), "admin_required")
 }
 
-// TestGovernanceTools_RedactionRulesStatus_NoAdminRequired_WithAdmin verifies that
-// redaction_rules_status returns a valid status report without error when an admin
-// calls it with no DB required. TG5 is now present (f0ae3f3); status is "inactive"
-// when no rules are loaded (ENGRAM_REDACTION_RULES_PATH not set in test).
+// TestGovernanceTools_RedactionRulesStatus_NoAdminRequired_WithAdmin verifies
+// the status of a server with no rules wired at startup.
 func TestGovernanceTools_RedactionRulesStatus_NoAdminRequired_WithAdmin(t *testing.T) {
+	t.Setenv("ENGRAM_REDACTION_RULES_PATH", "")
 	adminID := auth.Identity{Role: auth.RoleAdmin, Source: auth.SourceMaster}
 	ctx := auth.WithIdentity(context.Background(), adminID)
 	s := NewServer(ServerOptions{Version: "test"})
@@ -108,11 +114,8 @@ func TestGovernanceTools_RedactionRulesStatus_NoAdminRequired_WithAdmin(t *testi
 
 	var out map[string]any
 	require.NoError(t, json.Unmarshal([]byte(result), &out))
-	// TG5 present: "inactive" (no rules loaded) or "active" (rules loaded).
-	// Test environment has no ENGRAM_REDACTION_RULES_PATH so expect "inactive".
-	status, _ := out["status"].(string)
-	assert.Contains(t, []string{"inactive", "active"}, status, "status must be inactive or active (TG5 present)")
-	assert.NotNil(t, out["rule_count"], "rule_count must be present")
+	assert.Equal(t, "inactive", out["status"])
+	assert.Equal(t, float64(0), out["rule_count"])
 	assert.Equal(t, true, out["restart_required"], "restart_required must be true (EC-F9)")
 }
 
