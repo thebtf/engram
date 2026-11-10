@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.1.4] - 2026-11-10
+
+- Correct operator project selection and alias-aware Rules reads and atomic collection updates; retain native memory mutation bindings.
+- Preserve legacy document lineage and show exact Vault bindings in the operator interface.
+- Include test and documentation maintenance from merged PRs #703–#707 and #708–#723, #725–#749, and the canonical-project changes proposed in PR #750.
+
 ## [7.1.3] - 2026-11-10
 
 - Scope generated issue and memory guidance to the current task and authorization, without requiring unrelated inbox or memory-search sweeps.

@@ -173,6 +173,25 @@ func TestProjectAliasPreparedTransactionWorkflow(t *testing.T) {
 	for _, id := range []string{req.Target, req.Aliases[0].Source} {
 		require.NoError(t, db.Create(&Project{ID: id, CreatedAt: time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)}).Error)
 	}
+	_, err = store.ProjectAliasStatus(t.Context(), uuid.NewString())
+	require.ErrorIs(t, err, gormlib.ErrRecordNotFound)
+	censusCtx, cancelCensus := context.WithCancel(t.Context())
+	defer cancelCensus()
+	callback := "test:cancel_census_after_identity"
+	reached := false
+	require.NoError(t, db.Callback().Row().Before("gorm:row").Register(callback, func(tx *gormlib.DB) {
+		if strings.Contains(tx.Statement.SQL.String(), "txid_current_snapshot()") {
+			reached = true
+			cancelCensus()
+		}
+	}))
+	_, censusErr := NewProjectConsolidationStore(db, vault, nil).Census(censusCtx, "synthetic-census-before-alias")
+	require.NoError(t, db.Callback().Row().Remove(callback))
+	require.True(t, reached, "census must reach the query after identity before cancellation")
+	require.ErrorIs(t, censusErr, context.Canceled)
+	store = NewProjectConsolidationStore(db, vault, nil)
+	_, err = store.ProjectAliasStatus(t.Context(), uuid.NewString())
+	require.ErrorIs(t, err, gormlib.ErrRecordNotFound, "failed census must not poison a fresh status request")
 	plan, err := store.PrepareProjectAliases(t.Context(), req)
 	require.NoError(t, err)
 	apply := ProjectAliasApplyRequest{PlanReference: plan.Reference, PlanFingerprint: plan.Fingerprint, IdempotencyKey: uuid.NewString()}

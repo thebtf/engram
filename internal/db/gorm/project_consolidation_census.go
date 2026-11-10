@@ -211,7 +211,7 @@ func consolidationDatabaseIdentity(tx *gormlib.DB) (string, error) {
 	}
 	if err != nil {
 		var state interface{ SQLState() string }
-		event := log.Warn().Bool("deadline", errors.Is(err, context.DeadlineExceeded)).Bool("canceled", errors.Is(err, context.Canceled)).Bool("no_rows", errors.Is(err, sql.ErrNoRows)).Bool("transaction_done", errors.Is(err, sql.ErrTxDone)).Bool("bad_connection", errors.Is(err, driver.ErrBadConn)).Bool("statement_closed", err.Error() == "sql: statement is closed").Str("error_type", fmt.Sprintf("%T", err))
+		event := log.Warn().Bool("deadline", errors.Is(err, context.DeadlineExceeded)).Bool("canceled", errors.Is(err, context.Canceled)).Bool("caller_canceled", errors.Is(tx.Statement.Context.Err(), context.Canceled)).Bool("caller_deadline", errors.Is(tx.Statement.Context.Err(), context.DeadlineExceeded)).Bool("no_rows", errors.Is(err, sql.ErrNoRows)).Bool("transaction_done", errors.Is(err, sql.ErrTxDone)).Bool("bad_connection", errors.Is(err, driver.ErrBadConn)).Bool("statement_closed", err.Error() == "sql: statement is closed").Str("error_type", fmt.Sprintf("%T", err)).Str("connection_type", fmt.Sprintf("%T", tx.Statement.ConnPool))
 		if errors.As(err, &state) {
 			event = event.Str("sqlstate", state.SQLState())
 		}
