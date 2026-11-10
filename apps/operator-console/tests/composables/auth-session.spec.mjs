@@ -693,12 +693,14 @@ for (const change of ['project', 'record', 'all-detail-project']) test(`memory a
   let releaseOld
   let audits = 0
   const consumer = session(t, undefined, auditResponses((_url, id) => {
-    if (++audits === 1) return new Promise((resolve) => { releaseOld = () => resolve(Response.json(auditPayload(id, 'old-context'))) })
+    if (++audits === 2) return new Promise((resolve) => { releaseOld = () => resolve(Response.json(auditPayload(id, 'old-context'))) })
     return Response.json(auditPayload(id, 'current-context'))
   }), undefined, auditProjects)
   await consumer.shell.refresh()
   const location = change === 'all-detail-project' ? `/memory?project=all&memoryProject=${projectID}&memory=7` : `/memory?project=${projectID}&memory=7`
   const mounted = await mountRecovery(t, consumer, location, 'memory')
+  await tick()
+  const pendingOld = mounted.reader().readDetail()
   await tick()
   assert.ok(releaseOld)
   const next = { ...mounted.router.currentRoute.value.query }
@@ -709,7 +711,8 @@ for (const change of ['project', 'record', 'all-detail-project']) test(`memory a
   await tick()
   assert.ok(text(mounted.host).includes('synthetic reason current-context'))
   releaseOld()
-  await tick()
+  await pendingOld
+  await vue.nextTick()
   assert.ok(!text(mounted.host).includes('synthetic reason old-context'))
   assert.ok(text(mounted.host).includes('synthetic reason current-context'))
   const request = new URL(consumer.calls.filter((call) => call.path.includes('/audit?')).at(-1).path, 'http://synthetic.invalid')
@@ -719,21 +722,27 @@ for (const change of ['project', 'record', 'all-detail-project']) test(`memory a
 
 test('memory audit does not dispatch for a stale detail resolved after changing the open record', async (t) => {
   let releaseDetail
+  let details = 0
   const consumer = session(t, undefined, auditResponses((_url, id) => Response.json(auditPayload(id, 'current-detail')), (url, id) => {
-    if (id === 7) return new Promise((resolve) => { releaseDetail = () => resolve(Response.json({ id, project: url.searchParams.get('project'), content: 'synthetic old detail', status: 'active' })) })
+    if (id === 7 && ++details === 2) return new Promise((resolve) => { releaseDetail = () => resolve(Response.json({ id, project: url.searchParams.get('project'), content: 'synthetic old detail', status: 'active' })) })
     return Response.json({ id, project: url.searchParams.get('project'), content: 'synthetic new detail', status: 'active' })
   }))
   await consumer.shell.refresh()
   const mounted = await mountRecovery(t, consumer, `/memory?project=${projectID}&memory=7`, 'memory')
   await tick()
+  const pendingDetail = mounted.reader().readDetail()
+  await tick()
   assert.ok(releaseDetail)
   await mounted.router.push(`/memory?project=${projectID}&memory=8`)
   await tick()
+  const priorOldAudits = consumer.calls.filter((call) => call.path.includes('/7/audit?')).length
+  assert.equal(priorOldAudits, 1)
   releaseDetail()
-  await tick()
+  await pendingDetail
+  await vue.nextTick()
   assert.ok(text(mounted.host).includes('synthetic new detail'))
   assert.ok(!text(mounted.host).includes('synthetic old detail'))
-  assert.ok(!consumer.calls.some((call) => call.path.includes('/7/audit?')))
+  assert.equal(consumer.calls.filter((call) => call.path.includes('/7/audit?')).length, priorOldAudits)
   assert.equal(mounted.reader().auditState.data.memory_id, 8)
 })
 
