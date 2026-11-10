@@ -5,19 +5,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.opentelemetry.io/otel/metric"
 
 	"github.com/thebtf/engram/internal/module/obs"
 )
-
-// TestMeterFor_NonNil verifies that MeterFor returns a non-nil metric.Meter
-// for a valid module name.
-func TestMeterFor_NonNil(t *testing.T) {
-	t.Parallel()
-
-	var m metric.Meter = obs.MeterFor("test")
-	assert.NotNil(t, m)
-}
 
 // TestMeterFor_SameNameSameScope verifies that two calls with the same module
 // name both return usable meters: each can create an Int64Counter without error
