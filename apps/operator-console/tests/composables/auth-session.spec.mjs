@@ -1270,8 +1270,12 @@ for (const ordering of ['during identity readback', 'after identity readback']) 
   assert.equal(typeof releaseIdentity, 'function')
   let confirmed
   if (ordering === 'during identity readback') {
-    releaseStats(Response.json({}, { status: 401 }))
-    await tick()
+    let observedStatus
+    const statusObserved = new Promise(resolve => { observedStatus = resolve })
+    const staleResponse = Response.json({}, { status: 401 })
+    Object.defineProperty(staleResponse, 'status', { get() { observedStatus(); return 401 } })
+    releaseStats(staleResponse)
+    await statusObserved
     releaseIdentity(Response.json(verifiedUser))
     confirmed = await login
   } else {
