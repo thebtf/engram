@@ -109,6 +109,19 @@ async function mountConsumer(t, location, { storage = new Map(), rejectMemory = 
   return { router, context, host, chip, requests, storage, reader: () => reader }
 }
 
+test('principal scope shows a selected alias without offering it as an ordinary choice', async t => {
+  const alias = '22222222-2222-4222-8222-222222222222'
+  const catalogFetch = () => Response.json({ items: [{ project_id: projectID, name: 'Primary' }, { project_id: alias, name: 'Historical' }], unresolved: [], logical_groups: [{ primary_project_id: projectID, alias_project_ids: [alias] }] })
+  const consumer = await mountConsumer(t, `/memory?project=${projectID}&principal=person&principalProject=${alias}`, { catalogFetch })
+  const select = walk(consumer.host).find(node => node.props['data-testid'] === 'project-scope')
+  const options = walk(select).filter(node => node.tag === 'option')
+  const retained = options.filter(node => node.props.value === alias)
+  assert.equal(retained.length, 1)
+  assert.ok(retained[0].props.disabled !== undefined && retained[0].props.disabled !== false)
+  assert.deepEqual(consumer.context.projects.value, [projectID])
+  assert.equal(consumer.router.currentRoute.value.query.principalProject, alias)
+})
+
 test('combined filters survive scoped paging, navigation return and session reload', async (t) => {
   const consumer = await mountConsumer(t, `/memory?project=${projectID}&q=known&page=3&size=10&filter=low&filter=chain`)
   const request = consumer.requests.at(-1)

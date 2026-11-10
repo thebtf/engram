@@ -66,6 +66,23 @@ test('exact DTO rejects legacy shapes and duplicate IDs, but keeps equal names d
   assert.throws(() => core.parseProjectCatalog({ items: [{ project_id: 'Same name', name: 'Same name' }], unresolved: [] }), TypeError)
 })
 
+test('confirmed groups collapse choices without changing raw alias routes or equal-name identities', async t => {
+  const C = '33333333-3333-4333-8333-333333333333'
+  const items = [{ project_id: A, name: 'Same' }, { project_id: B, name: 'Old alias' }, { project_id: C, name: 'Same' }]
+  const { core, context, router } = await mount(t, `/documents?project=${B}&docProject=${B}&path=shared.md&document_id=101`, url => {
+    if (url.pathname === '/api/projects') return { items, unresolved: [], logical_groups: [{ primary_project_id: A, alias_project_ids: [B] }] }
+    throw new Error(`Unexpected request ${url}`)
+  })
+  assert.deepEqual([...context.projects.value].sort(), [A, C].sort())
+  assert.equal(core.isCatalogProject(B), true)
+  assert.equal(core.isCatalogProject('not-a-uuid'), false)
+  assert.equal(core.canonicalProjectName(B), core.canonicalProjectName(A))
+  assert.notEqual(core.canonicalProjectName(A), core.canonicalProjectName(C))
+  assert.equal(router.currentRoute.value.query.project, B)
+  assert.equal(router.currentRoute.value.query.docProject, B)
+  assert.equal(router.currentRoute.value.query.document_id, '101')
+})
+
 test('retained reader metadata is required, exact and does not turn metadata-only groups into projects', async (t) => {
   const { core } = await mount(t, '/', usual)
   const row = catalog.unresolved[0]

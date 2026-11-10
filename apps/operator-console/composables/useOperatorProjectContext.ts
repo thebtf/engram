@@ -22,14 +22,11 @@ const documentCapabilityActive = ref(false)
 let documentCapabilityObserved = false
 let documentCapabilityUncertain = false
 const uncertainDocumentProjects = ref<string[]>([])
-const projects = computed(() => descriptors.value.map((row) => row.project_id))
-const projectSections = computed(() => {
-  const used = new Set(logicalGroups.value.flatMap(group => [group.primary_project_id, ...group.alias_project_ids]))
-  const sections: Array<{ key: string; label: string; ids: string[] }> = logicalGroups.value.map(group => ({ key: group.primary_project_id, label: projectChoiceLabel(group.primary_project_id), ids: [group.primary_project_id, ...group.alias_project_ids] }))
-  const remaining = projects.value.filter(id => !used.has(id))
-  if (remaining.length) sections.push({ key: 'ungrouped', label: '', ids: remaining })
-  return sections
+const projects = computed(() => {
+  const aliases = new Set(logicalGroups.value.flatMap(group => group.alias_project_ids))
+  return descriptors.value.map(row => row.project_id).filter(id => !aliases.has(id))
 })
+const projectSections = computed(() => [{ key: 'projects', label: '', ids: projects.value }])
 const pending = ref(false)
 const error = ref<OperatorSourceError | null>(null)
 const selectionPending = ref(false)
@@ -182,6 +179,10 @@ export function catalogProjectName(id: string, items: OperatorProjectDescriptor[
 }
 
 export function projectName(id: string) { return catalogProjectName(id, descriptors.value) }
+export function canonicalProjectName(id: string) {
+  const primary = logicalGroups.value.find(group => group.alias_project_ids.includes(id))?.primary_project_id || id
+  return catalogProjectName(primary, descriptors.value.filter(row => projects.value.includes(row.project_id)))
+}
 export function projectChoiceLabel(id: string, reservedLabels: readonly string[] = []): string {
   const row = descriptors.value.find((item) => item.project_id === id)
   if (!row) return id
@@ -214,7 +215,7 @@ export function projectChoiceLabel(id: string, reservedLabels: readonly string[]
 export function localizedProjectChoiceLabel(id: string, translate: (key: string) => string): string {
   return projectChoiceLabel(id, [translate('knowledge.allProjects'), translate('knowledge.chooseProject'), translate('knowledge.browseAll')])
 }
-export function isCatalogProject(id: string): boolean { return projects.value.includes(id) }
+export function isCatalogProject(id: string): boolean { return isProjectUUID(id) && descriptors.value.some(row => row.project_id === id) }
 export function supportsDocumentLineage(id: string): boolean { return documentCapabilityActive.value && isCatalogProject(id) && !documentScopeUncertain(id) }
 export function documentScopeUncertain(id: string): boolean { return uncertainDocumentProjects.value.includes(id) }
 export function validDocumentID(value: unknown): value is string { return typeof value === 'string' && /^[1-9]\d*$/.test(value) && Number.isSafeInteger(Number(value)) }

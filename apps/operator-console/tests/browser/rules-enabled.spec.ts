@@ -122,3 +122,25 @@ test('Rules require an explicit scope and preserve its canonical ID through refr
   expect(reads.every((url) => url.searchParams.get('project') === project)).toBe(true)
   await expect(page.getByTestId('project-context-select')).toHaveValue(project)
 })
+
+test('Rules retain a selected alias in filter and create scopes', async ({ page }) => {
+  const primary = '11111111-1111-4111-8111-111111111111'
+  const alias = '22222222-2222-4222-8222-222222222222'
+  await page.route('**/api/projects', route => route.fulfill({ json: { items: [{ project_id: primary, name: 'Primary' }, { project_id: alias, name: 'Historical' }], unresolved: [], logical_groups: [{ primary_project_id: primary, alias_project_ids: [alias] }] } }))
+  const reads: URL[] = []
+  page.on('request', request => { const url = new URL(request.url()); if (request.method() === 'GET' && url.pathname === '/api/rules') reads.push(url) })
+  await page.goto(`/rules?project=${alias}`)
+  const filter = page.locator('.scope-filter select')
+  await expect(filter).toHaveValue(alias)
+  await expect(filter.locator(`option[value="${alias}"]`)).toHaveAttribute('disabled', '')
+  await expect.poll(() => reads.length).toBeGreaterThan(0)
+  expect(reads.every(url => url.searchParams.get('project') === alias)).toBe(true)
+  await page.locator('header button.primary').click()
+  const create = page.locator('[role="dialog"] select')
+  await expect(create).toHaveValue(alias)
+  await expect(create.locator(`option[value="${alias}"]`)).toHaveAttribute('disabled', '')
+  await create.selectOption(primary)
+  await expect(create).toHaveValue(primary)
+  await expect(create.locator(`option[value="${alias}"]`)).toHaveCount(0)
+  await expect(filter).toHaveValue(alias)
+})

@@ -1051,6 +1051,7 @@ function renderMarkdown(value: string) {
                   <span>{{ t('issues.create.sourceProject') }}</span>
                   <select v-model="createSourceProject" class="txt" name="new-issue-source-project" :disabled="context.project.value !== 'all' || !scopeReady">
                     <option value="" disabled>{{ t('knowledge.chooseProject') }}</option>
+                    <option v-if="isCatalogProject(createSourceProject) &amp;&amp; !projectOptions.includes(createSourceProject)" :value="createSourceProject" disabled>{{ projectName(createSourceProject) }}</option>
                     <option v-for="project in projectOptions" :key="project" :value="project">{{ projectName(project) }}</option>
                   </select>
                 </label>
@@ -1058,6 +1059,7 @@ function renderMarkdown(value: string) {
                   <span>{{ t('issues.create.targetProject') }}</span>
                   <select v-model="createTargetProject" class="txt" name="new-issue-target-project" :disabled="!scopeReady">
                     <option value="" disabled>{{ t('knowledge.chooseProject') }}</option>
+                    <option v-if="isCatalogProject(createTargetProject) &amp;&amp; !projectOptions.includes(createTargetProject)" :value="createTargetProject" disabled>{{ projectName(createTargetProject) }}</option>
                     <option v-for="project in projectOptions" :key="project" :value="project">{{ projectName(project) }}</option>
                   </select>
                 </label>

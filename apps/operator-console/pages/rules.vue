@@ -89,7 +89,7 @@ const canReorderScope = computed(() => {
 })
 
 watch(scopeOptions, (options) => {
-  if (!options.includes(createScope.value)) {
+  if (!options.includes(createScope.value) && !isCatalogProject(createScope.value)) {
     createScope.value = ''
   }
 }, { immediate: true })
@@ -511,6 +511,7 @@ function clearDrag() {
           <select v-model="scopeFilter" class="fsel" :disabled="busy">
             <option v-if="!scopeFilter" value="" disabled>{{ t('knowledge.chooseProject') }}</option>
             <option value="all">{{ t('rules.scope.all') }}</option>
+            <option v-if="isCatalogProject(scopeFilter) &amp;&amp; !createScopes.includes(scopeFilter)" :value="scopeFilter" disabled>{{ scopeLabel(scopeFilter) }}</option>
             <option v-for="scope in createScopes" :key="scope" :value="scope">{{ scopeLabel(scope) }}</option>
           </select>
         </label>
@@ -704,6 +705,7 @@ function clearDrag() {
           <label class="field">
             <span>{{ t('rules.create.project') }}</span>
             <select v-model="createScope" class="fsel">
+              <option v-if="isCatalogProject(createScope) &amp;&amp; !createScopes.includes(createScope)" :value="createScope" disabled>{{ scopeLabel(createScope) }}</option>
               <option v-for="scope in createScopes" :key="scope" :value="scope">{{ scopeLabel(scope) }}</option>
             </select>
           </label>

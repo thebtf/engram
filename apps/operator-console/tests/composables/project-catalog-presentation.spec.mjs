@@ -511,37 +511,20 @@ const realProjectOptions = host => walk(selector(host)).filter(item => item.tag 
 
 for (const path of ['/', '/projects']) {
   for (const language of ['en', 'ru', 'zh']) {
-    test(`${path} ${language}: verified logical groups retain individually selectable UUIDs`, async t => {
+    test(`${path} ${language}: verified logical groups offer only canonical UUIDs`, async t => {
       const items = [...logicalItems, { project_id: VERSION, name: 'North second alias' }]
       const logical_groups = [{ primary_project_id: SAME_A, alias_project_ids: [SAME_B, VERSION] }, logicalGroups[1]]
       const state = await mount(t, { path, language, items, unresolved: [], logical_groups })
-      const groups = walk(selector(state.host)).filter(item => item.tag === 'optgroup')
-      assert.equal(groups.length, 2, 'Each verified logical group has a non-selectable selector heading')
-      assert.ok(groups.every(group => typeof group.props.label === 'string' && group.props.label.trim()))
-      assert.notEqual(groups[0].props.label, groups[1].props.label, 'Distinct logical groups remain distinguishable')
-      for (const group of logical_groups) {
-        const expected = [group.primary_project_id, ...group.alias_project_ids]
-        assert.ok(groups.some(node => {
-          const children = walk(node).filter(item => item.tag === 'option').map(item => item.props.value)
-          return children.length === expected.length && expected.every(id => children.includes(id))
-        }), 'A group presents its primary and every alias as individual choices')
-      }
+      const expected = [SAME_A, QUALIFIED, GENERIC]
       const optionRows = realProjectOptions(state.host)
-      assert.deepEqual(optionRows.map(item => item.props.value).sort(), items.map(item => item.project_id).sort())
+      assert.deepEqual(optionRows.map(item => item.props.value).sort(), expected.sort())
       const page = walk(state.host).find(item => hasClass(item, path === '/' ? 'home-page' : 'projects-page'))
-      const headings = walk(page).filter(item => ['h2', 'h3', 'h4', 'legend'].includes(item.tag)).map(item => text(item).trim())
-      for (const group of groups) assert.ok(headings.includes(group.props.label), 'The page also shows a non-selectable group heading')
       for (const option of optionRows) {
         const row = walk(page).find(item => item.tag === 'button' && text(item).trim() === text(option).trim())
-        assert.ok(row, 'The page offers the same individual project as the selector')
-        await row.props.onClick()
-        await tick()
+        assert.ok(row)
+        await row.props.onClick(); await tick()
         assert.equal(state.router.currentRoute.value.query.project, option.props.value)
-        await state.router.push(path)
-        await tick()
-        await chooseOption(state, option.props.value)
-        await state.router.push(path)
-        await tick()
+        await state.router.push(path); await tick()
       }
       assert.ok(state.calls.filter(call => ['/api/memories', '/api/documents', '/api/sessions/list'].includes(call.url.pathname)).every(call => items.some(item => item.project_id === call.url.searchParams.get('project'))))
       assert.deepEqual(state.errors, [])
@@ -569,14 +552,10 @@ for (const path of ['/', '/projects']) {
       { primary_project_id: VERSION, alias_project_ids: [HASH] },
     ]
     const state = await mount(t, { path, language: 'en', items, unresolved: [], logical_groups })
-    const groups = walk(selector(state.host)).filter(item => item.tag === 'optgroup')
-    const grouped = groups.map(group => walk(group).filter(item => item.tag === 'option').map(item => item.props.value))
-    assert.ok(grouped.some(ids => ids.length === 2 && ids.includes(VERSION) && ids.includes(HASH)), 'An unrelated verified group remains available')
-    assert.ok(grouped.every(ids => !ids.includes(SAME_B) && !ids.includes(unknown)), 'Ambiguous or unknown aliases must not be asserted as group members')
     const values = realProjectOptions(state.host).map(item => item.props.value)
-    assert.deepEqual(values.sort(), items.map(item => item.project_id).sort())
+    assert.deepEqual(values.sort(), items.map(item => item.project_id).filter(id => id !== HASH).sort())
     assert.equal(new Set(values).size, values.length)
-    for (const item of items) await chooseOption(state, item.project_id)
+    for (const id of values) await chooseOption(state, id)
     assert.ok(!state.calls.some(call => call.url.searchParams.get('project') === unknown || call.url.pathname.includes('/resolve')))
     assert.deepEqual(state.errors, [])
   })
@@ -585,11 +564,8 @@ for (const path of ['/', '/projects']) {
 test('Malformed group implicating a known project cannot authorize its otherwise valid group', async t => {
   const logical_groups = [logicalGroups[0], logicalGroups[1], { primary_project_id: SAME_A, alias_project_ids: ['not-a-uuid'] }]
   const state = await mount(t, { path: '/documents', language: 'en', selected: SAME_A, items: logicalItems, unresolved: [], logical_groups, documentFetch: lineageResponses({ oldServer: true }), initialQuery: { path: lineagePath, document_id: '101' } })
-  const groups = walk(selector(state.host)).filter(item => item.tag === 'optgroup')
-  const grouped = groups.map(group => walk(group).filter(item => item.tag === 'option').map(item => item.props.value))
-  assert.ok(grouped.some(ids => ids.includes(QUALIFIED) && ids.includes(CONTROL)))
-  assert.ok(grouped.every(ids => !ids.includes(SAME_A) && !ids.includes(SAME_B)))
-  assert.deepEqual(realProjectOptions(state.host).map(item => item.props.value).sort(), logicalItems.map(item => item.project_id).sort())
+  const values = realProjectOptions(state.host).map(item => item.props.value)
+  assert.deepEqual(values.sort(), logicalItems.map(item => item.project_id).filter(id => id !== CONTROL).sort())
   assert.equal(documentReads(state).length, 0, 'Contradictory metadata must not grant lineage capability')
   assert.ok(text(state.host).includes(state.i18n.global.t('projectCatalog.lineageScopeUncertain')))
 })
@@ -616,7 +592,7 @@ for (const [name, logical_groups] of [
     assert.equal(state.router.currentRoute.value.query.document_id, '')
     assert.ok(text(state.host).includes(state.i18n.global.t('projectCatalog.lineageScopeUncertain')))
     assert.ok(!state.calls.some(call => ['/api/documents/read', '/api/documents/history', '/api/documents/comments'].includes(call.url.pathname)))
-    assert.deepEqual(realProjectOptions(state.host).map(item => item.props.value).sort(), logicalItems.map(item => item.project_id).sort())
+    assert.deepEqual(realProjectOptions(state.host).map(item => item.props.value).sort(), logicalItems.map(item => item.project_id).filter(id => name !== 'implicated project' || id !== CONTROL).sort())
   })
   test(`Home ${name} does not create a legacy path-only document link`, async t => {
     const state = await mount(t, { path: '/', language: 'en', selected: SAME_A, items: logicalItems, unresolved: [], logical_groups, documentFetch: lineageResponses({ oldServer: true }), homeDocuments: true })
@@ -649,7 +625,7 @@ for (const endpoint of ['/api/memories', '/api/documents']) {
     assert.deepEqual(pages.map(page => page.items.length), [2, 2, 0])
     assert.deepEqual(pages.flatMap(page => page.items.map(row => row.id)).sort(), [101, 102, 103, 104])
     assert.equal(new Set(pages.flatMap(page => page.items.map(row => row.id))).size, 4)
-    await chooseOption(state, SAME_B)
+    await state.router.push({ path: '/', query: { project: SAME_B } }); await tick()
     const before = state.calls.length
     const alias = await state.loadKnowledgePage(endpoint, SAME_B, new URLSearchParams({ offset: '0', limit: '2' }))
     assert.equal(alias.total, 3)

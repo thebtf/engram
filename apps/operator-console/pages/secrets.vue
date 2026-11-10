@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useOperatorSecrets, type OperatorCredential } from '../composables/useOperatorSecrets'
 import type { MutationResult } from '../composables/useApi'
-import { isCatalogProject, projectName, useOperatorProjectContext } from '../composables/useOperatorProjectContext'
+import { canonicalProjectName, isCatalogProject, useOperatorProjectContext } from '../composables/useOperatorProjectContext'
 import { authGeneration, operatorUnauthorizedRevision } from '../composables/useOperatorApi'
 
 const { t } = useI18n()
@@ -223,7 +223,8 @@ async function requestDelete(cred: OperatorCredential) {
           <span>{{ t('secrets.create.project') }}</span>
           <select v-model="createProject" class="input" data-testid="secret-create-project" :disabled="context.pending.value || context.selectionPending.value || Boolean(scopeError)">
             <option value="" disabled>{{ t('knowledge.chooseProject') }}</option>
-            <option v-for="project in context.projects.value" :key="project" :value="project">{{ projectName(project) }}</option>
+            <option v-if="createProject &amp;&amp; !context.projects.value.includes(createProject)" :value="createProject" disabled hidden>{{ canonicalProjectName(createProject) }}</option>
+            <option v-for="project in context.projects.value" :key="project" :value="project">{{ canonicalProjectName(project) }}</option>
           </select>
         </label>
         <label>
@@ -263,7 +264,7 @@ async function requestDelete(cred: OperatorCredential) {
                 <span v-if="revealError && openedName === c.id" class="err">{{ revealError }}</span>
               </div>
             </td>
-            <td><span class="vcol">{{ c.binding_error ? `Unavailable #${c.id}` : c.unresolved_reference ? `Retained #${c.id} · read-only` : c.scope === 'global' ? t('rules.scope.global') : projectName(c.project) }}</span><div v-if="c.binding_error" class="vcol">{{ c.binding_error === 'CREDENTIAL_BINDING_CONFLICT' ? 'Conflicting membership' : 'Membership unavailable' }}</div><div v-if="c.origin_project" class="vcol">Origin: {{ c.origin_project }}</div></td>
+            <td><span class="vcol">{{ c.binding_error ? `Unavailable #${c.id}` : c.unresolved_reference ? `Retained #${c.id} · read-only` : c.scope === 'global' ? t('rules.scope.global') : canonicalProjectName(c.project) }}</span><div v-if="c.binding_error" class="vcol">{{ c.binding_error === 'CREDENTIAL_BINDING_CONFLICT' ? 'Conflicting membership' : 'Membership unavailable' }}</div><div v-if="c.origin_project" class="vcol">Origin: {{ c.origin_project }}</div></td>
             <td><span class="bdg">{{ c.binding_error ? 'unavailable' : c.scope }}</span></td>
             <td><span class="vcol">{{ c.created }}</span></td>
             <td class="r">
