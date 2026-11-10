@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -144,8 +145,18 @@ func TestUCISecurityCorrectness(t *testing.T) {
 				t.Errorf("security behavioral group %q for scenarios %s failed: %v", group.name, scenarios, err)
 				return
 			}
-			if missing := uciSecurityCorrectnessMissingTests(output, group.testNames); len(missing) > 0 {
+			missing, failed, skipped := uciSecurityCorrectnessTestEvents(output, group.testNames)
+			if len(missing) > 0 {
 				t.Errorf("security behavioral group %q for scenarios %s did not run required tests: %s", group.name, scenarios, strings.Join(missing, ", "))
+			}
+			if len(failed) > 0 {
+				t.Errorf("security behavioral group %q for scenarios %s reported failed tests: %s", group.name, scenarios, strings.Join(failed, ", "))
+			}
+			if len(missing) > 0 || len(failed) > 0 {
+				return
+			}
+			if len(skipped) > 0 {
+				t.Skipf("security behavioral group %q incomplete; skipped tests: %s", group.name, strings.Join(skipped, ", "))
 			}
 		})
 	}
@@ -292,6 +303,42 @@ func uciSecurityCorrectnessMissingTests(output []byte, expected []string) []stri
 	return missing
 }
 
+// uciSecurityCorrectnessTestEvents classifies only required tests and their subtests.
+func uciSecurityCorrectnessTestEvents(output []byte, expected []string) (missing, failed, skipped []string) {
+	missing = uciSecurityCorrectnessMissingTests(output, expected)
+	failures := make(map[string]bool)
+	skips := make(map[string]bool)
+	for _, line := range bytes.Split(output, []byte{'\n'}) {
+		var event struct {
+			Action string
+			Test   string
+		}
+		if json.Unmarshal(line, &event) != nil || (event.Action != "fail" && event.Action != "skip") {
+			continue
+		}
+		for _, name := range expected {
+			if event.Test != name && !strings.HasPrefix(event.Test, name+"/") {
+				continue
+			}
+			if event.Action == "fail" {
+				failures[event.Test] = true
+			} else {
+				skips[event.Test] = true
+			}
+			break
+		}
+	}
+	for name := range failures {
+		failed = append(failed, name)
+	}
+	for name := range skips {
+		skipped = append(skipped, name)
+	}
+	sort.Strings(failed)
+	sort.Strings(skipped)
+	return missing, failed, skipped
+}
+
 func TestUCISecurityCorrectnessMissingTests(t *testing.T) {
 	expected := []string{"TestAlpha", "TestBeta"}
 	for _, test := range []struct {
@@ -300,8 +347,8 @@ func TestUCISecurityCorrectnessMissingTests(t *testing.T) {
 		missing []string
 	}{
 		{
-			name:    "all top-level tests in any order",
-			output:  "{\"Action\":\"run\",\"Test\":\"TestBeta/subtest\"}\n{\"Action\":\"run\",\"Test\":\"TestBeta\"}\n{\"Action\":\"run\",\"Test\":\"TestAlpha\"}\n",
+			name:   "all top-level tests in any order",
+			output: "{\"Action\":\"run\",\"Test\":\"TestBeta/subtest\"}\n{\"Action\":\"run\",\"Test\":\"TestBeta\"}\n{\"Action\":\"run\",\"Test\":\"TestAlpha\"}\n",
 		},
 		{
 			name:    "missing top-level test despite subtest",
@@ -317,6 +364,40 @@ func TestUCISecurityCorrectnessMissingTests(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			if got := uciSecurityCorrectnessMissingTests([]byte(test.output), expected); !slices.Equal(got, test.missing) {
 				t.Fatalf("missing = %v, want %v", got, test.missing)
+			}
+		})
+	}
+}
+
+func TestUCISecurityCorrectnessTestEvents(t *testing.T) {
+	expected := []string{"TestAlpha", "TestBeta"}
+	for _, test := range []struct {
+		name                     string
+		output                   string
+		missing, failed, skipped []string
+	}{
+		{
+			name: "all pass and unrelated skip",
+			output: "{\"Action\":\"run\",\"Test\":\"TestBeta\"}\n{\"Action\":\"run\",\"Test\":\"TestAlpha\"}\n" +
+				"{\"Action\":\"pass\",\"Test\":\"TestAlpha\"}\n{\"Action\":\"skip\",\"Test\":\"TestAlphaTypo/sub\"}\n",
+		},
+		{
+			name: "top-level and descendant skips",
+			output: "{\"Action\":\"run\",\"Test\":\"TestAlpha\"}\n{\"Action\":\"run\",\"Test\":\"TestBeta\"}\n" +
+				"{\"Action\":\"skip\",\"Test\":\"TestBeta/sub\"}\n{\"Action\":\"skip\",\"Test\":\"TestAlpha\"}\n",
+			skipped: []string{"TestAlpha", "TestBeta/sub"},
+		},
+		{
+			name: "missing and failure coexist with skip",
+			output: "{\"Action\":\"run\",\"Test\":\"TestAlpha\"}\n{\"Action\":\"fail\",\"Test\":\"TestAlpha/sub\"}\n" +
+				"{\"Action\":\"skip\",\"Test\":\"TestAlpha/other\"}\n",
+			missing: []string{"TestBeta"}, failed: []string{"TestAlpha/sub"}, skipped: []string{"TestAlpha/other"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			missing, failed, skipped := uciSecurityCorrectnessTestEvents([]byte(test.output), expected)
+			if !slices.Equal(missing, test.missing) || !slices.Equal(failed, test.failed) || !slices.Equal(skipped, test.skipped) {
+				t.Fatalf("missing=%v failed=%v skipped=%v; want %v %v %v", missing, failed, skipped, test.missing, test.failed, test.skipped)
 			}
 		})
 	}
