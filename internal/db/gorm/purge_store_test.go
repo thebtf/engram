@@ -626,6 +626,10 @@ func TestPurgeStore_PurgeProject_WaitsForConcurrentContinuitySet(t *testing.T) {
 	// A dedicated connection makes the purge's blocked SQL observable without
 	// confusing it with the setter or the test observer.
 	purgeDB := openCandidateTestDBInScope(t, db)
+	var schema, purgeApplicationName string
+	require.NoError(t, db.Raw(`SELECT current_schema()`).Scan(&schema).Error)
+	require.NoError(t, purgeDB.Raw(`SELECT current_setting('application_name')`).Scan(&purgeApplicationName).Error)
+	require.Equal(t, scopedTestApplicationName(candidateTestDBApplicationName, schema), purgeApplicationName)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -665,7 +669,7 @@ func TestPurgeStore_PurgeProject_WaitsForConcurrentContinuitySet(t *testing.T) {
 	// The unfixed implementation reaches DELETE memories while the setter holds
 	// its target lock. Completing the set at that point deterministically exposes
 	// the old SQLSTATE 23503 RESTRICT-FK failure as RED evidence.
-	if purgeRaceStatementObserved(t, db, 250*time.Millisecond, "DELETE FROM memories WHERE project =") {
+	if purgeRaceStatementObserved(t, db, purgeApplicationName, 250*time.Millisecond, "DELETE FROM memories WHERE project =") {
 		t.Log("observed legacy purge waiting on target delete; completing concurrent set")
 		require.NoError(t, slotStore.UpsertTx(ctx, setTx, ContinuitySlot{
 			Project:                     purgeProject,
@@ -685,7 +689,7 @@ func TestPurgeStore_PurgeProject_WaitsForConcurrentContinuitySet(t *testing.T) {
 		return
 	}
 
-	require.True(t, purgeRaceStatementObserved(t, db, time.Second, "SELECT 1 FROM memories WHERE project ="), "purge did not attempt target-memory FOR UPDATE")
+	require.True(t, purgeRaceStatementObserved(t, db, purgeApplicationName, time.Second, "SELECT 1 FROM memories WHERE project ="), "purge did not attempt target-memory FOR UPDATE")
 	select {
 	case err := <-purgeResult:
 		t.Fatalf("purge completed before the setter committed: %v", err)
@@ -720,7 +724,7 @@ func TestPurgeStore_PurgeProject_WaitsForConcurrentContinuitySet(t *testing.T) {
 	assert.Equal(t, int64(1), count, "unrelated slot must survive")
 }
 
-func purgeRaceStatementObserved(t *testing.T, db *gorm.DB, timeout time.Duration, statementPrefix string) bool {
+func purgeRaceStatementObserved(t *testing.T, db *gorm.DB, applicationName string, timeout time.Duration, statementPrefix string) bool {
 	t.Helper()
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
@@ -736,7 +740,7 @@ func purgeRaceStatementObserved(t *testing.T, db *gorm.DB, timeout time.Duration
 			  AND state = 'active'
 			  AND wait_event_type = 'Lock'
 			  AND query LIKE ?
-		`, candidateTestDBApplicationName, statementPrefix+"%").Scan(&count).Error)
+		`, applicationName, statementPrefix+"%").Scan(&count).Error)
 		if count > 0 {
 			return true
 		}
