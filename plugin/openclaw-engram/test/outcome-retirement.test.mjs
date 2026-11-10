@@ -41,16 +41,18 @@ test('versioned outcome retirement is surfaced without poisoning availability', 
 });
 
 test('automatic capture does not invent task outcome; explicit caller reports retirement', async () => {
-  const warnings = [];
+  const backfills = [];
+  const outcomes = [];
   const client = {
     isAvailable: () => true,
     resolveWorkspaceProject: async () => ({ projectId: '11111111-1111-4111-8111-111111111111', agentId: 'agent-a' }),
-    setSessionOutcome: async () => retirement,
+    backfillSession: async (payload) => { backfills.push(payload); },
+    setSessionOutcome: async (...args) => { outcomes.push(args); return retirement; },
   };
   const logger = {
     debug() { },
     info() { },
-    warn(message) { warnings.push(String(message)); },
+    warn() { },
     error() { },
   };
 
@@ -58,13 +60,17 @@ test('automatic capture does not invent task outcome; explicit caller reports re
     { messages: [{ role: 'assistant', content: 'completed' }], success: true },
     { agentId: 'agent-a', sessionId: 'openclaw-session' },
     client,
-    { autoExtract: false },
+    { autoExtract: true },
     logger,
   );
   await new Promise((resolve) => setImmediate(resolve));
 
-  const automatic = warnings.join('\n');
-  assert.equal(automatic, '', 'Agent execution success does not prove task acceptance');
+  assert.deepEqual(backfills, [{
+    session_id: 'openclaw-session',
+    project: '11111111-1111-4111-8111-111111111111',
+    content: '[assistant]: completed',
+  }], 'Automatic capture must submit the visible conversation');
+  assert.deepEqual(outcomes, [], 'Agent execution success does not prove task acceptance');
 
   const tool = createEngramOutcomeTool(
     { sessionId: 'openclaw-session' },
@@ -72,6 +78,7 @@ test('automatic capture does not invent task outcome; explicit caller reports re
     {},
   );
   const explicit = await tool.execute('outcome-retirement', { outcome: 'success', reason: 'must not be recorded' });
+  assert.deepEqual(outcomes, [['openclaw-session', 'success', 'must not be recorded']]);
   assert.match(explicit, /contract_version=engram\.outcome-retirement\.v1/);
   assert.match(explicit, /code=OUTCOME_CALLBACK_RETIRED/);
   assert.match(explicit, /action=upgrade_outcome_adapter/);
