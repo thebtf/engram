@@ -1,6 +1,7 @@
 package gorm
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgproto3"
 )
 
 func TestTransientPostgresConnectionError(t *testing.T) {
@@ -27,8 +29,14 @@ func TestTransientPostgresConnectionError(t *testing.T) {
 		{"attempt timeout", context.DeadlineExceeded, true},
 		{"wrapped temporary DNS SERVFAIL", fmt.Errorf("connect failed: %w", &net.OpError{Op: "dial", Net: "tcp", Err: &net.DNSError{Err: "server misbehaving", IsTemporary: true}}), true},
 		{"wrapped DNS not found with transient flags", fmt.Errorf("connect failed: %w", &net.OpError{Op: "dial", Net: "tcp", Err: &net.DNSError{Err: "no such host", IsNotFound: true, IsTemporary: true, IsTimeout: true}}), false},
+		{"missing DNS plus incomplete handshake", errors.Join(&net.DNSError{Err: "no such host", IsNotFound: true}, io.ErrUnexpectedEOF), true},
+		{"incomplete handshake plus missing DNS", errors.Join(io.ErrUnexpectedEOF, &net.DNSError{Err: "no such host", IsNotFound: true}), true},
+		{"authentication failure plus incomplete handshake", errors.Join(&pgconn.PgError{Code: "28P01"}, io.ErrUnexpectedEOF), false},
 		{"DNS timeout", &net.DNSError{Err: "i/o timeout", IsTimeout: true}, true},
 		{"database starting", &pgconn.PgError{Code: "57P03"}, true},
+		{"starting then invalid password", errors.Join(&pgconn.PgError{Code: "57P03"}, &pgconn.PgError{Code: "28P01"}), false},
+		{"invalid password then starting", errors.Join(&pgconn.PgError{Code: "28P01"}, &pgconn.PgError{Code: "57P03"}), false},
+		{"nested starting then invalid password", fmt.Errorf("connect failed: %w", errors.Join(&pgconn.PgError{Code: "57P03"}, fmt.Errorf("auth: %w", &pgconn.PgError{Code: "28P01"}))), false},
 		{"invalid password", &pgconn.PgError{Code: "28P01"}, false},
 		{"unknown database", &pgconn.PgError{Code: "3D000"}, false},
 		{"invalid config", errors.New("invalid configuration"), false},
@@ -38,6 +46,17 @@ func TestTransientPostgresConnectionError(t *testing.T) {
 				t.Fatalf("retry = %v, want %v", got, tc.retry)
 			}
 		})
+	}
+}
+
+func TestTransientPostgresPartialHandshake(t *testing.T) {
+	frontend := pgproto3.NewFrontend(bytes.NewReader([]byte{'R'}), io.Discard)
+	_, err := frontend.Receive()
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("partial PostgreSQL message error = %v, want unexpected EOF", err)
+	}
+	if !transientPostgresConnectionError(fmt.Errorf("failed to receive message: %w", err)) {
+		t.Fatal("partial PostgreSQL handshake must be retryable")
 	}
 }
 

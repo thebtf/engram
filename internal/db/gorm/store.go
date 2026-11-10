@@ -132,10 +132,37 @@ func NewStoreWhenAvailable(ctx context.Context, cfg Config) (*Store, error) {
 	return store, nil
 }
 
-func transientPostgresConnectionError(err error) bool {
+func postgresServerErrorDisposition(err error) (found, permanent bool) {
+	if err == nil {
+		return false, false
+	}
+	if pgErr, ok := err.(*pgconn.PgError); ok {
+		return true, pgErr.Code != "57P03"
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, child := range joined.Unwrap() {
+			childFound, childPermanent := postgresServerErrorDisposition(child)
+			found = found || childFound
+			permanent = permanent || childPermanent
+		}
+		return found, permanent
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return postgresServerErrorDisposition(wrapped.Unwrap())
+	}
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
-		return pgErr.Code == "57P03"
+		return true, pgErr.Code != "57P03"
+	}
+	return false, false
+}
+
+func transientPostgresConnectionError(err error) bool {
+	if found, permanent := postgresServerErrorDisposition(err); found {
+		return !permanent
+	}
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
 	}
 	var dnsErr *net.DNSError
 	if errors.As(err, &dnsErr) {
