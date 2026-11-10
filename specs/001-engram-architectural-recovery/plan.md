@@ -314,6 +314,18 @@ This annotation preserves the accepted AR-0 plan and its historical Constitution
 
 Feature 011's early Code/basic-collection milestone may admit Book Context planning. It does not complete Feature 011 or admit Book Context implementation. Full Feature 011 completion includes the named collection consumers and S4 daemon job control. Book Context implementation follows that completion, and Working Agent Memory R1 remains after the Book Context product result. All other core-only gates remain unchanged because they define AR scope, not the current cross-feature order.
 
+## Retained credential reader consistency (FR-007)
+
+The existing writer can assign a retained membership while preserving its original
+unresolved reference and reason. Verify witness provenance, current native row,
+authorization and conflicts before classifying an assigned credential for ordinary
+canonical metadata; never treat an old reference alone as proof of non-assignment or
+a matching UUID alone as proof of ownership. Preserve native credential namespace,
+IDs, ciphertext and all retained history. Exercise exact-namespace Vault access and
+the existing memory reader on the maintained copy, and cover unassigned, stale,
+foreign and conflicting cases on the isolated PostgreSQL fixture. No data mutation
+is needed for this reader repair. The full-census capacity limit remains separate.
+
 ## Project Structure
 
 ### Documentation (this feature)
