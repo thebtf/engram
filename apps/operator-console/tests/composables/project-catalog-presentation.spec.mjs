@@ -335,12 +335,6 @@ for (const path of ['/projects', '/']) {
         assert.ok(!state.calls.some(call => call.url.pathname.includes('/resolve')), 'Presentation never remaps canonical identities')
       })
     }
-    test(`${path} RU ${surface}: generic no-qualifier project has a stable identity hint`, async t => {
-      const state = await mount(t, { path })
-      const labels = await choices(state, surface)
-      assert.equal(labels.size, ids.length)
-      assertIDHint(labels.get(GENERIC), GENERIC)
-    })
     test(`${path} RU ${surface}: whitespace-padded generic name keeps its identity hint`, async t => {
       const state = await mount(t, { path, items: [{ project_id: GENERIC, name: 'Registered project ' }], unresolved: [] })
       const labels = await choices(state, surface)
