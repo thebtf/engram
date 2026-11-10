@@ -517,22 +517,26 @@ test("appendStartupDiagnosticLog trims oversized logs and retains the latest com
 
 test("trimStartupDiagnosticLog keeps complete log entries after truncation", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-trim-log-"));
-  const logPath = path.join(dir, "startup-env.log");
+  try {
+    const logPath = path.join(dir, "startup-env.log");
 
-  fs.writeFileSync(
-    logPath,
-    [
-      "2026-06-03T18:00:00.000Z pid=1 [engram] startup env: ENGRAM_URL=present(len=26)",
-      "2026-06-03T18:00:01.000Z pid=2 [engram] startup env: ENGRAM_URL=present(len=26)",
-      "2026-06-03T18:00:02.000Z pid=3 [engram] startup env: ENGRAM_URL=present(len=26)",
-    ].join("\n") + "\n",
-    "utf8"
-  );
+    fs.writeFileSync(
+      logPath,
+      [
+        "2026-06-03T18:00:00.000Z pid=1 [engram] startup env: ENGRAM_URL=present(len=26)",
+        "2026-06-03T18:00:01.000Z pid=2 [engram] startup env: ENGRAM_URL=present(len=26)",
+        "2026-06-03T18:00:02.000Z pid=3 [engram] startup env: ENGRAM_URL=present(len=26)",
+      ].join("\n") + "\n",
+      "utf8"
+    );
 
-  trimStartupDiagnosticLog(logPath, 220);
+    trimStartupDiagnosticLog(logPath, 220);
 
-  const content = fs.readFileSync(logPath, "utf8");
-  assert.match(content, /^2026-06-03T18:00:02\.000Z pid=3 /);
+    const content = fs.readFileSync(logPath, "utf8");
+    assert.match(content, /^2026-06-03T18:00:02\.000Z pid=3 /);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // ── Config file credential tests ─────────────────────────────────────────────
