@@ -84,6 +84,24 @@ test('confirmed groups canonicalize alias routes while retaining document identi
   assert.equal(router.currentRoute.value.query.document_id, '101')
 })
 
+test('common project labels exclude hidden aliases from duplicate-name numbering', async t => {
+  const C = '33333333-3333-4333-8333-333333333333'
+  const items = [A, B, C].map(project_id => ({ project_id, name: 'Same name' }))
+  const { core, context } = await mount(t, '/', url => {
+    if (url.pathname === '/api/projects') return { items: [...items].reverse(), unresolved: [], logical_groups: [{ primary_project_id: A, alias_project_ids: [B] }] }
+    throw new Error(`Unexpected request ${url}`)
+  })
+  assert.deepEqual([...context.projects.value].sort(), [A, C])
+  assert.equal(core.projectName(A), 'Same name #1')
+  assert.equal(core.canonicalProjectName(A), core.projectName(A))
+  assert.equal(core.projectName(B), core.projectName(A))
+  assert.equal(core.canonicalProjectName(B), core.projectName(A))
+  assert.equal(core.projectName(C), 'Same name #2')
+  assert.equal(core.canonicalProjectName(C), core.projectName(C))
+  assert.notEqual(core.projectName(A), core.projectName(C))
+  assert.equal(core.isCatalogProject(B), true)
+})
+
 test('retained reader metadata is required, exact and does not turn metadata-only groups into projects', async (t) => {
   const { core } = await mount(t, '/', usual)
   const row = catalog.unresolved[0]

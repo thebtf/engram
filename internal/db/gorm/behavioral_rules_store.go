@@ -625,10 +625,14 @@ func (s *BehavioralRulesStore) rulesReadTransaction(ctx context.Context, read fu
 
 func (s *BehavioralRulesStore) ListOperator(ctx context.Context, project *string, limit int) ([]*models.BehavioralRule, error) {
 	if project == nil {
-		return s.List(ctx, nil, limit)
+		return s.List(ctx, project, limit)
+	}
+	id, err := uuid.Parse(*project)
+	if err != nil || id == uuid.Nil || id.String() != *project {
+		return s.List(ctx, project, limit)
 	}
 	var result []*models.BehavioralRule
-	err := s.rulesReadTransaction(ctx, func(tx *gorm.DB) error {
+	err = s.rulesReadTransaction(ctx, func(tx *gorm.DB) error {
 		store := NewBehavioralRulesStoreFromDB(tx)
 		filter, err := store.resolveRulesFilter(ctx, *project)
 		if err != nil {

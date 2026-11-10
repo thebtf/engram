@@ -178,7 +178,7 @@ export function catalogProjectName(id: string, items: OperatorProjectDescriptor[
   return collisions.length > 1 ? `${text} #${collisions.findIndex((item) => item.project_id === id) + 1}` : text
 }
 
-export function projectName(id: string) { return catalogProjectName(id, descriptors.value) }
+export function projectName(id: string) { return canonicalProjectName(id) }
 export function canonicalProjectID(id: string) {
   return logicalGroups.value.find(group => group.alias_project_ids.includes(id))?.primary_project_id || id
 }

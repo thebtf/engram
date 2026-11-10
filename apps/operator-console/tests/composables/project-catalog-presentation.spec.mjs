@@ -762,13 +762,14 @@ test('Vault alias credentials show and delete the exact original binding', async
       return Response.json({ operation_state: 'completed', readback: { authoritative: true, kind: 'current', current_state: { deleted: true, name: 'same-key', project_id: project } } })
     }
   }
-  const state = await mount(t, { path: '/secrets', language: 'en', selected: SAME_A, items: logicalItems.slice(0, 2), unresolved: [], logical_groups: [logicalGroups[0]], vaultFetch, allowSyntheticMutations: true, capturePageState: true })
+  const items = [SAME_A, SAME_B, QUALIFIED].map(project_id => ({ project_id, name: 'Same name' }))
+  const state = await mount(t, { path: '/secrets', language: 'en', selected: SAME_A, items, unresolved: [], logical_groups: [logicalGroups[0]], vaultFetch, allowSyntheticMutations: true, capturePageState: true })
   await state.pageState().refresh(); await tick()
   const row = id => walk(state.host).find(item => item.props['data-testid'] === `secret-row-${id}`)
   const button = id => walk(state.host).find(item => item.props['data-testid'] === `secret-delete-${id}`)
   assert.ok(text(row(1)).includes(SAME_A) && text(row(1)).includes('ID: 1'))
   assert.ok(text(row(2)).includes(SAME_B) && text(row(2)).includes('ID: 2'))
-  assert.ok(text(row(1)).includes('North primary') && text(row(2)).includes('North primary'))
+  assert.ok(text(row(1)).includes('Same name #1') && text(row(2)).includes('Same name #1'))
   await button(2).props.onClick({ stopPropagation() { } }); await tick()
   assert.ok(text(button(2)).includes(SAME_B) && text(button(2)).includes('ID: 2'))
   assert.equal(state.calls.filter(call => call.method === 'DELETE').length, 0)

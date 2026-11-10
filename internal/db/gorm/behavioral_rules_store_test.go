@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -540,6 +541,59 @@ func assertBehavioralRuleOperationCommitted(t *testing.T, result BehavioralRuleS
 	for _, item := range result.Items {
 		assert.Equal(t, BehavioralRuleSelectionCommitted, item.Outcome)
 	}
+}
+
+func TestRulesOperatorLiteralProjectCompatibility(t *testing.T) {
+	store := openBehavioralRulesStore(t)
+	db := store.DB
+	rules := NewBehavioralRulesStore(store)
+	ctx := context.Background()
+	primary, alias, foreign := sessionTestProject(t, db), sessionTestProject(t, db), sessionTestProject(t, db)
+	selectors := []string{"all", "global", "legacy-project", strings.Repeat("x", 300), "00000000-0000-0000-0000-000000000000"}
+	for _, selector := range []string{primary, alias, foreign} {
+		row := BehavioralRule{Project: &selector, Content: "literal compatibility " + selector, Priority: 10, Version: 1, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+		require.NoError(t, db.Create(&row).Error)
+	}
+	global := BehavioralRule{Content: "literal compatibility global rule", Priority: 1, Version: 1, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	require.NoError(t, db.Create(&global).Error)
+	require.NoError(t, db.Exec(`INSERT INTO project_consolidation_redirects(selector,session_id,project_id,plan_fingerprint) VALUES (?, '', ?, 'test')`, alias, primary).Error)
+	var materialized int64
+	var sqlText string
+	const callbackName = "rules_operator_literal_limit_probe"
+	require.NoError(t, db.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table == "behavioral_rules" {
+			materialized = tx.RowsAffected
+			sqlText = tx.Statement.SQL.String()
+		}
+	}))
+	t.Cleanup(func() { _ = db.Callback().Query().Remove(callbackName) })
+	for _, selector := range selectors {
+		t.Run(selector[:min(len(selector), 32)], func(t *testing.T) {
+			want, err := rules.List(ctx, &selector, 50)
+			require.NoError(t, err)
+			got, err := rules.ListOperator(ctx, &selector, 50)
+			require.NoError(t, err)
+			require.Equal(t, want, got)
+			require.Len(t, got, 1)
+			require.Nil(t, got[0].Project)
+			limited, err := rules.ListOperator(ctx, &selector, 1)
+			require.NoError(t, err)
+			require.Equal(t, got[:1], limited)
+			require.EqualValues(t, 1, materialized)
+			require.Contains(t, sqlText, "LIMIT")
+		})
+	}
+	primaryRows, err := rules.ListOperator(ctx, &primary, 50)
+	require.NoError(t, err)
+	aliasRows, err := rules.ListOperator(ctx, &alias, 50)
+	require.NoError(t, err)
+	require.Equal(t, primaryRows, aliasRows)
+	require.Len(t, primaryRows, 3)
+	limited, err := rules.ListOperator(ctx, &primary, 1)
+	require.NoError(t, err)
+	require.Equal(t, primaryRows[:1], limited)
+	require.EqualValues(t, 1, materialized)
+	require.Contains(t, sqlText, "LIMIT")
 }
 
 func TestRulesAliasCollectionTransaction(t *testing.T) {
