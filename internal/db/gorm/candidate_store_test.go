@@ -154,6 +154,47 @@ func TestCandidateStore_CRUDRoundtrip(t *testing.T) {
 	require.True(t, found, "created candidate must appear in ListByStatus(pending)")
 }
 
+func TestCandidateStore_ListConfirmedProjectAliases(t *testing.T) {
+	db := openCandidateTestDB(t)
+	cs := NewCandidateStore(db, NewAuditStore(db))
+	ctx := context.Background()
+	primary, alias, foreign := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	for _, project := range []string{primary, alias, foreign} {
+		require.NoError(t, db.Create(&Project{ID: project}).Error)
+	}
+	create := func(project string, seconds int) *models.CrystallizationCandidate {
+		t.Helper()
+		candidate, err := models.NewCrystallizationCandidate(uuid.NewString(), "candidate "+project, "rule", models.CandidateOptions{AffectedProjects: []string{project}, PrivacyScope: "private"})
+		require.NoError(t, err)
+		row, err := cs.Create(ctx, candidate)
+		require.NoError(t, err)
+		require.NoError(t, db.Model(&candidateRow{}).Where("id = ?", row.ID).Update("created_at", time.Unix(int64(seconds), 0)).Error)
+		return row
+	}
+	primaryRow, aliasRow, foreignRow := create(primary, 1), create(alias, 2), create(foreign, 3)
+	require.NoError(t, db.Exec(`INSERT INTO project_consolidation_redirects(selector,session_id,project_id,plan_fingerprint) VALUES (?, '', ?, 'candidate-catalog-test')`, alias, primary).Error)
+	for _, selected := range []string{primary, alias} {
+		rows, err := cs.ListByStatus(ctx, selected, models.CandidateStatusPending, 10)
+		require.NoError(t, err)
+		require.Len(t, rows, 2)
+		require.Equal(t, []int64{aliasRow.ID, primaryRow.ID}, []int64{rows[0].ID, rows[1].ID})
+		require.Equal(t, []string{alias}, rows[0].AffectedProjects)
+		require.Equal(t, aliasRow.PrivacyScope, rows[0].PrivacyScope)
+		require.Equal(t, aliasRow.ProposedPromotionTarget, rows[0].ProposedPromotionTarget)
+		limited, err := cs.ListByStatus(ctx, selected, models.CandidateStatusPending, 1)
+		require.NoError(t, err)
+		require.Len(t, limited, 1)
+		require.Equal(t, aliasRow.ID, limited[0].ID)
+	}
+	all, err := cs.ListByStatus(ctx, "", models.CandidateStatusPending, 10)
+	require.NoError(t, err)
+	require.Len(t, all, 3)
+	require.Equal(t, foreignRow.ID, all[0].ID)
+	native, err := cs.Get(ctx, aliasRow.ID)
+	require.NoError(t, err)
+	require.Equal(t, []string{alias}, native.AffectedProjects)
+}
+
 // TestCandidateStore_StateMachine_AllTransitionsFromPending verifies all 4 terminal transitions.
 func TestCandidateStore_StateMachine_AllTransitionsFromPending(t *testing.T) {
 	db := openCandidateTestDB(t)

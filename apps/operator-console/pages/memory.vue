@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { isCatalogProject, useOperatorProjectContext, projectName } from '../composables/useOperatorProjectContext'
+import { canonicalProjectID, isCatalogProject, useOperatorProjectContext, projectName } from '../composables/useOperatorProjectContext'
 import { MEMORY_EPISTEMIC_TYPES, PRINCIPAL_CURRENT_PROJECT, useOperatorMemoryLab, useOperatorPrincipalMemorySurface, type MemoryAuditResponse } from '../composables/useOperatorMemoryLab'
 import { operatorDiagnosisKey, operatorUnauthorizedRevision, type OperatorLoadState, type OperatorSourceError, toOperatorSourceError } from '../composables/useOperatorApi'
 import type { Memory } from '../composables/useMockData'
@@ -28,7 +28,13 @@ const filterChoices = [
 const page = computed(() => Math.max(1, Number.parseInt(String(route.query.page || '1'), 10) || 1))
 const pageSize = computed(() => [10, 20, 50].includes(Number(route.query.size)) ? Number(route.query.size) : 20)
 const openId = computed(() => typeof route.query.memory === 'string' ? route.query.memory : '')
-const detailProject = computed(() => project.value === 'all' && typeof route.query.memoryProject === 'string' ? route.query.memoryProject : project.value)
+const detailProject = computed(() => {
+  const native = route.query.memoryProject
+  if (native === undefined) return project.value
+  if (typeof native !== 'string' || !isCatalogProject(native)) return ''
+  if (project.value === 'all') return native
+  return isCatalogProject(project.value) && canonicalProjectID(native) === canonicalProjectID(project.value) ? native : ''
+})
 const draft = ref(typeof route.query.draftQ === 'string' ? route.query.draftQ : query.value)
 const opened = ref<Memory | null>(null)
 const detailPending = ref(false)

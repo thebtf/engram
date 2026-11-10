@@ -1,6 +1,6 @@
 import { computed, onBeforeUnmount, watch, ref as sharedRef, type Ref as SharedRef } from 'vue'
 import { startedLoads } from './useConsolePreferences'
-import { isCatalogProject, useOperatorProjectContext } from './useOperatorProjectContext'
+import { canonicalProjectID, isCatalogProject, useOperatorProjectContext } from './useOperatorProjectContext'
 
 let sharedSearchNoiseProjects: SharedRef<string[]> | undefined
 let sharedSearchNoiseResults: SharedRef<OperatorSearchResult[]> | undefined
@@ -360,7 +360,7 @@ export function useOperatorSearchNoise(): {
       }
 
       const nextRows = contextRows(payload)
-      if ((payload.project !== undefined && payload.project !== trimmedProject) || nextRows.some((row) => row.project !== trimmedProject)) throw new TypeError('Search result project mismatch')
+      if ((payload.project !== undefined && payload.project !== trimmedProject) || nextRows.some((row) => !isCatalogProject(row.project) || canonicalProjectID(row.project) !== canonicalProjectID(trimmedProject))) throw new TypeError('Search result project mismatch')
       replaceArray(searchResults.value, nextRows)
       searchStateValue.value = nextRows.length
         ? liveState(evidence, searchResults.value)

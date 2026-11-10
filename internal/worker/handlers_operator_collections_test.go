@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -122,6 +123,42 @@ func TestOperatorCollectionHTTPAdapter_RejectsBoundsAndForeignSession(t *testing
 	adapter.HandleSnapshot(foreignBrowserRecorder, foreignBrowser)
 	require.Equal(t, http.StatusForbidden, foreignBrowserRecorder.Code)
 	require.Empty(t, store.saved, "a browser selection is bound to its exact authenticated owner as well as its session and domain")
+}
+
+type operatorRulesBridgeTestProvider struct {
+	operatorCollectionHTTPTestNormalizer
+	operatorCollectionHTTPTestFreezer
+	operatorCollectionHTTPTestPager
+	err error
+}
+
+func (provider *operatorRulesBridgeTestProvider) SaveRulesSelection(context.Context, gormdb.CollectionSelectionScope, string, gormdb.CollectionSelection) (gormdb.CollectionSelection, error) {
+	return gormdb.CollectionSelection{}, provider.err
+}
+
+func TestOperatorCollectionHTTPAdapter_RulesBridgeErrors(t *testing.T) {
+	tests := []struct {
+		name   string
+		err    error
+		status int
+	}{
+		{"invalid", fmt.Errorf("wrapped: %w", gormdb.ErrCollectionSelectionInvalid), http.StatusBadRequest},
+		{"stale", fmt.Errorf("wrapped: %w", gormdb.ErrCollectionSelectionReconfirmationRequired), http.StatusPreconditionFailed},
+		{"denied", fmt.Errorf("wrapped: %w", gormdb.ErrCollectionSelectionDenied), http.StatusForbidden},
+		{"storage", errors.New("secret SQL and connection details"), http.StatusServiceUnavailable},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			provider := &operatorRulesBridgeTestProvider{err: test.err}
+			router := operatorCollectionProviderRouter{"rules": provider}
+			adapter := NewOperatorCollectionHTTPAdapter(nil, &operatorCollectionHTTPTestResolver{scope: operatorCollectionTestScope("rules")}, router, router, router)
+			request := operatorCollectionHTTPTestRequest(t, http.MethodPost, `{"domain":"rules","filter":{"scope":"global"},"selection":{"kind":"none"}}`)
+			recorder := httptest.NewRecorder()
+			adapter.HandleSnapshot(recorder, request)
+			require.Equal(t, test.status, recorder.Code)
+			require.Empty(t, recorder.Body.String())
+		})
+	}
 }
 
 type operatorCollectionHTTPTestStore struct {

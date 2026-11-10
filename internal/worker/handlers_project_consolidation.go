@@ -60,6 +60,15 @@ func consolidationHTTPError(w http.ResponseWriter, err error) {
 		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 		return
 	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		status, code := http.StatusRequestTimeout, "PROJECT_ADOPTION_CANCELED"
+		if errors.Is(err, context.DeadlineExceeded) {
+			status, code = http.StatusGatewayTimeout, "PROJECT_ADOPTION_DEADLINE_EXCEEDED"
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSONStatus(w, status, map[string]string{"code": code, "message": "Migration request interrupted; no result was established. Retain the original inputs and check operation status before retrying any effect."})
+		return
+	}
 	var refusal *dbgorm.ConsolidationError
 	if !errors.As(err, &refusal) {
 		refusal = &dbgorm.ConsolidationError{Code: "PROJECT_ADOPTION_INVENTORY_INCOMPLETE"}
@@ -212,6 +221,9 @@ func (s *Service) handleProjectConsolidationCensus(w http.ResponseWriter, r *htt
 	defer cleanup()
 	census, err := store.Census(r.Context(), r.URL.Query().Get("source_version"))
 	if err != nil {
+		if contextErr := r.Context().Err(); contextErr != nil {
+			err = contextErr
+		}
 		consolidationHTTPError(w, err)
 		return
 	}
@@ -232,6 +244,9 @@ func (s *Service) handleProjectConsolidationPreflight(w http.ResponseWriter, r *
 	defer cleanup()
 	plan, err := store.Preflight(r.Context(), request)
 	if err != nil {
+		if contextErr := r.Context().Err(); contextErr != nil {
+			err = contextErr
+		}
 		consolidationHTTPError(w, err)
 		return
 	}

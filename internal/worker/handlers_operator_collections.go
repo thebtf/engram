@@ -146,7 +146,11 @@ func (adapter *OperatorCollectionHTTPAdapter) HandleSnapshot(w http.ResponseWrit
 			}); ok {
 				saved, err := bridge.SaveRulesSelection(r.Context(), resolved, request.Filter.Scope, selection)
 				if err != nil {
-					operatorCollectionWriteSnapshotError(w, err)
+					if errors.Is(err, gormdb.ErrCollectionSelectionInvalid) || errors.Is(err, gormdb.ErrCollectionSelectionReconfirmationRequired) || errors.Is(err, gormdb.ErrCollectionSelectionDenied) {
+						operatorCollectionWriteSnapshotError(w, err)
+					} else {
+						operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+					}
 					return
 				}
 				writeJSON(w, operatorCollectionSnapshotResponse{Selection: newOperatorCollectionSnapshotDTO(request.Domain, saved)})

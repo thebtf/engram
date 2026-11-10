@@ -293,7 +293,11 @@ func (s *SessionStore) CanonicalProjectExists(ctx context.Context, project strin
 func (s *SessionStore) ListSDKSessions(ctx context.Context, project string, limit, offset, minPrompts int, from, to int64) ([]*models.SDKSession, int64, error) {
 	q := s.db.WithContext(ctx).Model(&SDKSession{})
 	if project != "" {
-		q = q.Where("project = ?", project)
+		if projectidentity.ValidProjectID(project) {
+			q = q.Where(projectscope.MembershipPredicate("sdk_sessions", "project"), project, "sdk_sessions", "sdk_sessions", project)
+		} else {
+			q = q.Where("project = ?", project)
+		}
 	}
 	if minPrompts > 0 {
 		q = q.Where("prompt_counter >= ?", minPrompts)

@@ -1,6 +1,6 @@
 import { computed, onBeforeUnmount, onMounted, ref, unref, watch } from 'vue'
 import { operatorFetchResponse } from './useOperatorApi'
-import { isCatalogProject, isProjectUUID, useOperatorProjectContext } from './useOperatorProjectContext'
+import { canonicalProjectID, isCatalogProject, isProjectUUID, useOperatorProjectContext } from './useOperatorProjectContext'
 
 export type CodeBootstrapPhase = 'idle' | 'binding' | 'ready' | 'collision' | 'ambiguous' | 'reload-pending' | 'denied' | 'secure-origin-required' | 'identity-unavailable' | 'error'
 export type CodePresentationKind = 'idle' | 'loading' | 'ready' | 'empty' | 'partial' | 'stale' | 'denied' | 'unsupported' | 'timeout' | 'offline' | 'error'
@@ -1428,7 +1428,7 @@ export function useOperatorCode() {
       contextState.value = 'unavailable'
       return
     }
-    if (catalog.some((entry) => (project !== 'all' && entry.projectId !== project) || (entry.projectId !== null && !isCatalogProject(entry.projectId)))) {
+    if (catalog.some((entry) => (project !== 'all' && (entry.projectId === null || canonicalProjectID(entry.projectId) !== canonicalProjectID(project))) || (entry.projectId !== null && !isCatalogProject(entry.projectId)))) {
       clearPinnedContext()
       contextState.value = 'unavailable'
       return
@@ -1459,7 +1459,7 @@ export function useOperatorCode() {
   }
 
   function selectContext(context: CodeSafeContext | null): void {
-    if (context !== null && !contextCatalog.value.some((entry) => entry.projectId !== null && entry.view !== null && sameContext(entry.view, context) && (projectContext.project.value === 'all' || entry.projectId === projectContext.project.value))) return
+    if (context !== null && !contextCatalog.value.some((entry) => entry.projectId !== null && entry.view !== null && sameContext(entry.view, context) && (projectContext.project.value === 'all' || canonicalProjectID(entry.projectId) === canonicalProjectID(projectContext.project.value)))) return
     if (!sameContext(context, pinnedContext.value)) {
       if (pinnedContext.value !== null) suspendedContext.value = { pin: pinnedContext.value, response: pinnedResponseContext.value }
       pinnedContext.value = null

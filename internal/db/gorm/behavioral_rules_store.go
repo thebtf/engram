@@ -4,6 +4,7 @@ package gorm
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -317,12 +318,7 @@ func (s *BehavioralRulesStore) PageCollection(ctx context.Context, scope Collect
 		return CollectionPage{}, ErrCollectionSelectionDenied
 	}
 	var page CollectionPage
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if tx.Dialector.Name() == "postgres" {
-			if err := aliasLock(tx); err != nil {
-				return err
-			}
-		}
+	err := s.rulesReadTransaction(ctx, func(tx *gorm.DB) error {
 		var err error
 		page, err = NewBehavioralRulesStoreFromDB(tx).pageCollectionTx(ctx, scope, request)
 		return err
@@ -608,17 +604,31 @@ func (s *BehavioralRulesStore) List(ctx context.Context, project *string, limit 
 	return s.list(ctx, project, limit, false)
 }
 
+// rulesReadTransaction uses a snapshot for standalone reads. A caller-owned
+// transaction cannot change isolation after it has run queries, so retain the
+// alias lock there and execute on that same transaction, including its writes.
+func (s *BehavioralRulesStore) rulesReadTransaction(ctx context.Context, read func(*gorm.DB) error) error {
+	db := s.db.WithContext(ctx)
+	if _, nested := db.Statement.ConnPool.(gorm.TxCommitter); nested {
+		if db.Dialector.Name() == "postgres" {
+			if err := aliasLock(db); err != nil {
+				return err
+			}
+		}
+		return read(db)
+	}
+	if db.Dialector.Name() == "postgres" {
+		return db.Transaction(read, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	}
+	return db.Transaction(read)
+}
+
 func (s *BehavioralRulesStore) ListOperator(ctx context.Context, project *string, limit int) ([]*models.BehavioralRule, error) {
 	if project == nil {
 		return s.List(ctx, nil, limit)
 	}
 	var result []*models.BehavioralRule
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if tx.Dialector.Name() == "postgres" {
-			if err := aliasLock(tx); err != nil {
-				return err
-			}
-		}
+	err := s.rulesReadTransaction(ctx, func(tx *gorm.DB) error {
 		store := NewBehavioralRulesStoreFromDB(tx)
 		filter, err := store.resolveRulesFilter(ctx, *project)
 		if err != nil {

@@ -649,6 +649,121 @@ func TestRulesAliasCollectionTransaction(t *testing.T) {
 	require.ErrorIs(t, err, ErrCollectionSelectionReconfirmationRequired)
 }
 
+func TestRulesOperatorReadSnapshots(t *testing.T) {
+	store := openBehavioralRulesStore(t)
+	db := store.DB
+	pool, err := db.DB()
+	require.NoError(t, err)
+	pool.SetMaxOpenConns(4)
+	rules := NewBehavioralRulesStore(store)
+	ctx := context.Background()
+	primary, alias := sessionTestProject(t, db), sessionTestProject(t, db)
+	row := BehavioralRule{Project: &alias, Content: "snapshot alias rule", Version: 1, Enabled: false, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	require.NoError(t, db.Create(&row).Error)
+	require.NoError(t, db.Exec(`INSERT INTO project_consolidation_redirects(selector,session_id,project_id,plan_fingerprint) VALUES (?, '', ?, 'test')`, alias, primary).Error)
+	t.Cleanup(func() {
+		db.Exec("DELETE FROM project_consolidation_memberships WHERE reference = ?", fmt.Sprintf("urn:engram:test:rules:snapshot:%d", row.ID))
+		db.Exec("DELETE FROM project_consolidation_redirects WHERE selector = ?", alias)
+		db.Exec("DELETE FROM behavioral_rules WHERE id = ?", row.ID)
+	})
+	scope := behavioralRuleSelectionScope("rules-read-snapshot-" + strconv.FormatInt(time.Now().UnixNano(), 10))
+	filters := make(map[string]CollectionFilter)
+	for _, value := range []string{primary, "all", "global"} {
+		filters[value], err = rules.NormalizeCollectionFilter(ctx, scope, value)
+		require.NoError(t, err)
+	}
+
+	writer := db.Begin()
+	require.NoError(t, writer.Error)
+	t.Cleanup(func() { writer.Rollback() })
+	require.NoError(t, aliasLock(writer))
+	require.NoError(t, writer.Exec(`UPDATE projects SET display_name = display_name WHERE id = ?`, primary).Error)
+	readCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	_, err = rules.ListOperator(readCtx, &primary, 50)
+	require.NoError(t, err, "scoped list must not wait for an alias writer")
+	_, err = rules.ListOperator(readCtx, nil, 50)
+	require.NoError(t, err, "global list must not wait for an alias writer")
+	for _, value := range []string{primary, "all", "global"} {
+		_, err = rules.PageCollection(readCtx, scope, CollectionPageRequest{Domain: "rules", Filter: filters[value], Limit: 50})
+		require.NoError(t, err, "page %s must not wait for an alias writer", value)
+	}
+	require.NoError(t, writer.Rollback().Error)
+
+	// Pause after resolving the alias group but before fetching its rows.
+	// A concurrent commit changes both the mapping and the row's membership.
+	started, resume := make(chan struct{}), make(chan struct{})
+	resumed := false
+	defer func() {
+		if !resumed {
+			close(resume)
+		}
+	}()
+	type snapshotProbeKey struct{}
+	const callback = "rules_snapshot_interleave"
+	require.NoError(t, db.Callback().Query().Before("gorm:query").Register(callback, func(tx *gorm.DB) {
+		if tx.Statement.Table == "behavioral_rules" && tx.Statement.Context.Value(snapshotProbeKey{}) != nil {
+			close(started)
+			<-resume
+		}
+	}))
+	t.Cleanup(func() { _ = db.Callback().Query().Remove(callback) })
+	type pageResult struct {
+		page CollectionPage
+		err  error
+	}
+	result := make(chan pageResult, 1)
+	go func() {
+		page, err := rules.PageCollection(context.WithValue(ctx, snapshotProbeKey{}, true), scope, CollectionPageRequest{Domain: "rules", Filter: filters[primary], Limit: 50})
+		result <- pageResult{page, err}
+	}()
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		close(resume)
+		resumed = true
+		t.Fatal("page did not reach row query")
+	}
+	change := db.Begin()
+	require.NoError(t, change.Error)
+	t.Cleanup(func() { change.Rollback() })
+	require.NoError(t, aliasLock(change))
+	require.NoError(t, change.Exec(`DELETE FROM project_consolidation_redirects WHERE selector = ?`, alias).Error)
+	membership := ConsolidationMembership{Reference: fmt.Sprintf("urn:engram:test:rules:snapshot:%d", row.ID), Table: "behavioral_rules", RowKey: JSONRaw(fmt.Sprintf(`{"id":%d}`, row.ID)), FieldPath: JSONRaw(`["project"]`), ProjectID: nil, PlanFingerprint: "rules-snapshot"}
+	require.NoError(t, change.Create(&membership).Error)
+	require.NoError(t, change.Commit().Error)
+	close(resume)
+	resumed = true
+	got := <-result
+	require.NoError(t, got.err)
+	require.Contains(t, got.page.Targets, CollectionSelectionTarget{ID: strconv.FormatInt(row.ID, 10), ExpectedVersion: 1})
+	_, err = rules.PageCollection(ctx, scope, CollectionPageRequest{Domain: "rules", Filter: filters[primary], Limit: 50})
+	require.ErrorIs(t, err, ErrCollectionSelectionReconfirmationRequired)
+
+	// Caller-owned transactions keep their own uncommitted writes and connection.
+	tx := db.Begin()
+	require.NoError(t, tx.Error)
+	t.Cleanup(func() { tx.Rollback() })
+	private := BehavioralRule{Project: &primary, Content: "uncommitted rule", Version: 1, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	require.NoError(t, tx.Create(&private).Error)
+	nested := NewBehavioralRulesStoreFromDB(tx)
+	listed, err := nested.ListOperator(ctx, &primary, 50)
+	require.NoError(t, err)
+	var found bool
+	for _, item := range listed {
+		if item.ID == private.ID {
+			found = true
+		}
+	}
+	require.True(t, found)
+	filter, err := nested.NormalizeCollectionFilter(ctx, scope, primary)
+	require.NoError(t, err)
+	page, err := nested.PageCollection(ctx, scope, CollectionPageRequest{Domain: "rules", Filter: filter, Limit: 50})
+	require.NoError(t, err)
+	require.Contains(t, page.Targets, CollectionSelectionTarget{ID: strconv.FormatInt(private.ID, 10), ExpectedVersion: 1})
+	require.NoError(t, tx.Rollback().Error)
+}
+
 func TestRulesAliasCursorCarriesServerFingerprint(t *testing.T) {
 	scope := behavioralRuleSelectionScope("rules-cursor-fingerprint")
 	filter := CollectionFilter{Value: "all", Fingerprint: collectionSelectionTestDigest("a")}

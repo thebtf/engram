@@ -455,6 +455,37 @@ func TestSessionStore_ListSDKSessions(t *testing.T) {
 	assert.GreaterOrEqual(t, totalAll, int64(3))
 }
 
+func TestSessionStore_ListSDKSessionsConfirmedAlias(t *testing.T) {
+	ss, db, cleanup := openSessionTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+	primary, alias, foreign := sessionTestProject(t, db), sessionTestProject(t, db), sessionTestProject(t, db)
+	primarySession, aliasSession, foreignSession := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	for project, session := range map[string]string{primary: primarySession, alias: aliasSession, foreign: foreignSession} {
+		_, err := ss.CreateSDKSession(ctx, session, project, "native "+project)
+		require.NoError(t, err)
+	}
+	require.NoError(t, db.Exec(`INSERT INTO project_consolidation_redirects(selector,session_id,project_id,plan_fingerprint) VALUES (?, '', ?, 'session-catalog-test')`, alias, primary).Error)
+	for _, selected := range []string{primary, alias} {
+		rows, total, err := ss.ListSDKSessions(ctx, selected, 10, 0, 0, 0, 0)
+		require.NoError(t, err)
+		require.EqualValues(t, 2, total)
+		projects := map[string]string{}
+		for _, row := range rows {
+			projects[row.ClaudeSessionID] = row.Project
+		}
+		require.Equal(t, map[string]string{primarySession: primary, aliasSession: alias}, projects)
+		page, count, err := ss.ListSDKSessions(ctx, selected, 1, 1, 0, 0, 0)
+		require.NoError(t, err)
+		require.EqualValues(t, 2, count)
+		require.Len(t, page, 1)
+	}
+	row, err := ss.FindAnySDKSession(ctx, aliasSession)
+	require.NoError(t, err)
+	require.Equal(t, alias, row.Project)
+	require.Equal(t, aliasSession, row.ClaudeSessionID)
+}
+
 // TestSessionStore_UpdateInjectionStrategy verifies strategy field update.
 func TestSessionStore_UpdateInjectionStrategy(t *testing.T) {
 	ss, db, cleanup := openSessionTestDB(t)

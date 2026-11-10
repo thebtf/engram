@@ -55,7 +55,7 @@ function evaluate(source, dependency, globals) {
   return module.exports
 }
 
-async function mount(t, { path = '/projects', language = 'ru', items = catalog.items, unresolved = catalog.unresolved, selected = '', logical_groups, scopedRows, documentFetch, vaultFetch, catalogFetch, initialQuery = {}, homeDocuments = false, capturePageState = false, allowSyntheticMutations = false } = {}) {
+async function mount(t, { path = '/projects', language = 'ru', items = catalog.items, unresolved = catalog.unresolved, selected = '', logical_groups, scopedRows, documentFetch, vaultFetch, sessionFetch, catalogFetch, initialQuery = {}, homeDocuments = false, capturePageState = false, allowSyntheticMutations = false } = {}) {
   const modules = new Map(), storage = new Map(), calls = [], errors = []
   let context
   const globals = {
@@ -75,7 +75,11 @@ async function mount(t, { path = '/projects', language = 'ru', items = catalog.i
       if (url.pathname === '/api/selfcheck') return Response.json({ overall: 'healthy' })
       if (url.pathname === '/api/stats') return Response.json({ uptime: '1m' })
       if (url.pathname === '/api/stats/vnext') return Response.json({ embedding: { active_memory_count: 0 } })
-      if (url.pathname === '/api/sessions/list') return Response.json({ sessions: [], total: 0 })
+      if (url.pathname === '/api/sessions/list' || url.pathname === '/api/sessions') {
+        const response = sessionFetch?.(url, init)
+        if (response) return response
+        if (url.pathname === '/api/sessions/list') return Response.json({ sessions: [], total: 0 })
+      }
       const vaultResponse = vaultFetch?.(url, init)
       if (vaultResponse) return vaultResponse
       const documentResponse = documentFetch?.(url, init)
@@ -512,6 +516,30 @@ const logicalGroups = [
   { primary_project_id: QUALIFIED, alias_project_ids: [CONTROL] },
 ]
 const realProjectOptions = host => walk(selector(host)).filter(item => item.tag === 'option' && item.props.value && item.props.value !== 'all')
+
+for (const start of [SAME_A, SAME_B]) {
+  test(`Projects preserve alias session provenance from ${start} route`, async t => {
+    const native = { id: 42, claude_session_id: 'alias-session', project: SAME_B, status: 'active', user_prompt: 'Alias session prompt' }
+    const foreign = { id: 43, claude_session_id: 'foreign-session', project: GENERIC, status: 'active' }
+    const sessionFetch = url => {
+      if (url.pathname === '/api/sessions/list') return Response.json({ sessions: url.searchParams.get('project') === SAME_A ? [native] : [], total: 1 })
+      if (url.pathname === '/api/sessions') return Response.json(url.searchParams.get('claudeSessionId') === 'foreign-session' ? foreign : native)
+    }
+    const state = await mount(t, { path: '/projects', selected: start, items: logicalItems, unresolved: [], logical_groups: logicalGroups, sessionFetch, capturePageState: true })
+    await tick(); await tick()
+    assert.equal(state.context.project.value, SAME_A)
+    await state.pageState().openProject(SAME_A)
+    assert.equal(state.pageState().sessions[0].project, SAME_B)
+    await state.pageState().openSession(state.pageState().sessions[0]); await tick()
+    assert.equal(state.pageState().selectedSession.value.project, SAME_B)
+    assert.equal(state.pageState().selectedSession.value.claudeSessionId, 'alias-session')
+    assert.ok(text(state.host).includes('Alias session prompt'))
+    await state.pageState().openSessionByID('foreign-session'); await tick()
+    assert.equal(state.pageState().selectedSession.value, null)
+    assert.equal(state.pageState().detailState.value.kind, 'error')
+    assert.ok(state.calls.filter(call => call.url.pathname === '/api/sessions/list' && call.url.searchParams.has('project')).every(call => call.url.searchParams.get('project') === SAME_A))
+  })
+}
 
 for (const path of ['/', '/projects']) {
   for (const language of ['en', 'ru', 'zh']) {

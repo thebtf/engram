@@ -28,6 +28,65 @@ import (
 	"gorm.io/gorm/logger"
 )
 
+func TestProjectConsolidationCensusStreamsLegacyRevision(t *testing.T) {
+	dsn := os.Getenv("DATABASE_DSN")
+	if dsn == "" {
+		t.Skip("dedicated disposable PostgreSQL database required")
+	}
+	schema := "census_stream_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	db := openMigratedTestDBInSchema(t, dsn, schema, "engram_census_stream")
+	require.NoError(t, db.Exec(`CREATE TABLE census_stream_composite (a text, b int, PRIMARY KEY(a,b))`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO census_stream_composite VALUES ('z',2),('a',3),('a',1)`).Error)
+	require.NoError(t, db.Exec(`CREATE TABLE census_stream_nokey (value text)`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO census_stream_nokey VALUES ('first'),('second')`).Error)
+	require.NoError(t, db.Exec(`CREATE SEQUENCE census_stream_sequence START 7`).Error)
+	vault, err := vaultcrypto.OpenExistingVault(&config.Config{EncryptionKey: strings.Repeat("ab", 32)})
+	require.NoError(t, err)
+	store := NewProjectConsolidationStore(db, vault, nil)
+	tx := db.Begin(&sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	require.NoError(t, tx.Error)
+	defer tx.Rollback()
+	legacy, err := consolidationRevision(tx)
+	require.NoError(t, err)
+	duplicateRevisionQueries := 0
+	callback := "test:count_census_revision_scans"
+	require.NoError(t, db.Callback().Row().Before("gorm:row").Register(callback, func(query *gormlib.DB) {
+		if strings.Contains(query.Statement.SQL.String(), "::text,xmin::text FROM ") {
+			duplicateRevisionQueries++
+		}
+	}))
+	t.Cleanup(func() { _ = db.Callback().Row().Remove(callback) })
+	census, err := store.census(tx, "synthetic-stream-equivalence")
+	require.NoError(t, err)
+	require.Equal(t, legacy, census.Snapshot, "streamed digest must retain byte-exact ordered key/xmin and sequence semantics")
+	require.Zero(t, duplicateRevisionQueries, "census must not run a second revision scan")
+}
+
+func TestProjectConsolidationCensusPropagatesCanceledContext(t *testing.T) {
+	dsn := os.Getenv("DATABASE_DSN")
+	if dsn == "" {
+		t.Skip("dedicated disposable PostgreSQL database required")
+	}
+	schema := "census_cancel_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	db := openMigratedTestDBInSchema(t, dsn, schema, "engram_census_cancel")
+	vault, err := vaultcrypto.OpenExistingVault(&config.Config{EncryptionKey: strings.Repeat("ab", 32)})
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	reached := false
+	callback := "test:cancel_census_large_object_query"
+	require.NoError(t, db.Callback().Row().Before("gorm:row").Register(callback, func(query *gormlib.DB) {
+		if strings.Contains(query.Statement.SQL.String(), "pg_largeobject_metadata") {
+			reached = true
+			cancel()
+		}
+	}))
+	t.Cleanup(func() { _ = db.Callback().Row().Remove(callback) })
+	_, err = NewProjectConsolidationStore(db, vault, nil).Census(ctx, "synthetic-cancel")
+	require.True(t, reached, "must cancel at the legacy masked inventory boundary")
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 func TestProjectConsolidationOccurrencePreservesArrayAndHistory(t *testing.T) {
 	raw := json.RawMessage(`{"project":"mixed","content":"mixed","audit":{"project":"other"},"ids":["mixed","mixed"]}`)
 	moved, err := consolidationReplaceOccurrence(raw, []string{"ids", "1"}, "mixed", "canonical")

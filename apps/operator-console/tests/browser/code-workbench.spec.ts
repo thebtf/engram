@@ -329,6 +329,34 @@ test('logical project filtering preserves two worktrees and rejects late prior-p
   expect(state.pins).toEqual(['a'])
 })
 
+for (const start of ['primary', 'alias'] as const) {
+  test(`confirmed alias checkout is discoverable and explicitly pinned from ${start} route`, async ({ page }) => {
+    const alias = '44444444-4444-4444-8444-444444444444'
+    const catalogRequests: Array<string | null> = []
+    const pins: string[] = []
+    await page.route('**/api/auth/me', route => route.fulfill({ json: { auth_disabled: true } }))
+    await page.route('**/api/projects', route => route.fulfill({ json: { items: [{ project_id: projectID, name: 'Primary' }, { project_id: alias, name: 'Alias' }], unresolved: [], logical_groups: [{ primary_project_id: projectID, alias_project_ids: [alias] }] } }))
+    await page.route('**/api/code/**', route => {
+      const url = new URL(route.request().url())
+      if (url.pathname.endsWith('/tabs/handshake')) return route.fulfill({ json: binding })
+      if (url.pathname.endsWith('/contexts')) {
+        catalogRequests.push(url.searchParams.get('project'))
+        return route.fulfill({ json: { contexts: [{ project_id: alias, source_ref: 'alias-source', checkout_ref: 'alias-checkout', repository: 'Alias repository', working_copy: 'Alias checkout', indexed_snapshot: { label: 'Alias snapshot' }, view_ref: 'alias-view', selection_ref: 'exact-alias-selection', index_intent_available: false }] } })
+      }
+      if (url.pathname.endsWith('/context')) { pins.push(route.request().postDataJSON().selection_ref); return route.fulfill({ status: 204 }) }
+      if (url.pathname.endsWith('/status')) return route.fulfill({ json: { total_chunks: 1, embedded_chunks: 1, embedding: { coverage: 'complete' }, freshness: { state: 'observed_current' } } })
+      return route.fulfill({ status: 403 })
+    })
+    await page.goto(`/code?project=${start === 'alias' ? alias : projectID}`)
+    await expect(page.locator('main.code-page')).toHaveAttribute('data-catalog-state', 'ready')
+    expect(catalogRequests).toEqual([projectID])
+    await page.getByTestId('code-context-working-copy').selectOption('alias-checkout')
+    await page.getByTestId('code-context-snapshot').selectOption('exact-alias-selection')
+    await page.getByTestId('code-pin-context').click()
+    await expect.poll(() => pins).toEqual(['exact-alias-selection'])
+  })
+}
+
 test('unresolved code membership is readable provenance, never an empty success or pin choice', async ({ page }) => {
   let pins = 0
   await page.route('**/api/auth/me', (route) => route.fulfill({ json: { auth_disabled: true } }))
