@@ -4,9 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -15,30 +19,45 @@ import (
 	"github.com/thebtf/engram/pkg/models"
 )
 
-// TestSnapshotStore_CRUD tests Create/Get/List/MarkRolledBack/Pin/DeleteOlderThan.
-// Requires DATABASE_DSN. Skips in CI without it.
-// Engram vNext Milestone F TG6 / T040.
-func TestSnapshotStore_CRUD(t *testing.T) {
+// openSnapshotTestDB creates only the store's table in an owned schema.
+// It does not run migrations or install extensions in the target database.
+func openSnapshotTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
 	dsn := os.Getenv("DATABASE_DSN")
 	if dsn == "" {
 		t.Skip("DATABASE_DSN not set, skipping integration test")
 	}
-
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Warn),
-	})
+	config, err := pgx.ParseConfig(dsn)
 	require.NoError(t, err)
-
-	sqlDB, err := db.DB()
+	if config.RuntimeParams == nil {
+		config.RuntimeParams = make(map[string]string)
+	}
+	config.RuntimeParams["search_path"] = "pg_catalog"
+	adminSQL := stdlib.OpenDB(*config)
+	t.Cleanup(func() { require.NoError(t, adminSQL.Close()) })
+	admin, err := gorm.Open(postgres.New(postgres.Config{Conn: adminSQL}), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	require.NoError(t, err)
-	require.NoError(t, sqlDB.Ping())
-	require.NoError(t, runMigrations(db))
+	schema := "snapshot_test_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	require.NoError(t, admin.Exec("CREATE SCHEMA "+schema).Error)
+	t.Cleanup(func() { require.NoError(t, admin.Exec("DROP SCHEMA "+schema+" CASCADE").Error) })
 
-	require.NoError(t, db.Exec(`DELETE FROM bulk_op_snapshots WHERE snapshot_id LIKE 'test-store-%'`).Error)
-	t.Cleanup(func() {
-		_ = db.Exec(`DELETE FROM bulk_op_snapshots WHERE snapshot_id LIKE 'test-store-%'`).Error
-		_ = sqlDB.Close()
-	})
+	config.RuntimeParams["search_path"] = schema
+	sqlDB := stdlib.OpenDB(*config)
+	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
+	db, err := gorm.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	require.NoError(t, err)
+	var actualSchema string
+	require.NoError(t, db.Raw(`SELECT current_schema()`).Scan(&actualSchema).Error)
+	require.Equal(t, schema, actualSchema)
+	require.NoError(t, db.AutoMigrate(&snapshotRow{}))
+	return db
+}
+
+// TestSnapshotStore_CRUD tests Create/Get/List/MarkRolledBack/Pin/DeleteOlderThan.
+// Requires DATABASE_DSN. Skips in CI without it.
+// Engram vNext Milestone F TG6 / T040.
+func TestSnapshotStore_CRUD(t *testing.T) {
+	db := openSnapshotTestDB(t)
 
 	store := NewSnapshotStore(db)
 	ctx := context.Background()
@@ -109,19 +128,19 @@ func TestSnapshotStore_CRUD(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, pinned.Pinned, "snapshot must be pinned after Pin()")
 
-	// --- DeleteOlderThan: pinned snapshot must survive ---
-	// Use a far-future cutoff to delete all non-pinned test rows.
+	// --- DeleteOlderThan: old unpinned snapshot is deleted; old pinned snapshot survives ---
 	snap3, err := models.NewBulkOpSnapshot("test-store-003", models.SnapshotOpIngestDoc, "actor2", nil)
 	require.NoError(t, err)
 	_, err = store.Create(ctx, snap3)
 	require.NoError(t, err)
 
-	// Force created_at to be very old for test-store-003 by updating directly.
-	_ = db.Exec(`UPDATE bulk_op_snapshots SET created_at = '2000-01-01T00:00:00Z' WHERE snapshot_id = 'test-store-003'`).Error
-
-	deleted, err := store.DeleteOlderThan(ctx, time.Now())
+	require.NoError(t, db.Exec(`UPDATE bulk_op_snapshots SET created_at = '2000-01-01T00:00:00Z' WHERE snapshot_id IN ('test-store-002', 'test-store-003')`).Error)
+	cutoff := time.Date(2001, time.January, 1, 0, 0, 0, 0, time.UTC)
+	deleted, err := store.DeleteOlderThan(ctx, cutoff)
 	require.NoError(t, err)
-	require.GreaterOrEqual(t, deleted, int64(1), "at least 1 old non-pinned snap must be deleted")
+	require.Equal(t, int64(1), deleted, "only the old unpinned snapshot must be deleted")
+	_, err = store.Get(ctx, "test-store-003")
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 
 	// Pinned snap must still exist.
 	_, err = store.Get(ctx, "test-store-002")
@@ -130,18 +149,8 @@ func TestSnapshotStore_CRUD(t *testing.T) {
 
 // TestSnapshotStore_NilSnapshot ensures nil input is rejected.
 func TestSnapshotStore_NilSnapshot(t *testing.T) {
-	dsn := os.Getenv("DATABASE_DSN")
-	if dsn == "" {
-		t.Skip("DATABASE_DSN not set, skipping integration test")
-	}
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
-	require.NoError(t, err)
-	sqlDB, _ := db.DB()
-	defer sqlDB.Close()
-	require.NoError(t, runMigrations(db))
-
-	store := NewSnapshotStore(db)
-	_, err = store.Create(context.Background(), nil)
+	store := NewSnapshotStore(nil)
+	_, err := store.Create(context.Background(), nil)
 	require.Error(t, err, "Create with nil must return error")
 }
 
