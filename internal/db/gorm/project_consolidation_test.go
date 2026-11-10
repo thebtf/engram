@@ -1084,69 +1084,48 @@ func consolidationCompare(db *gormlib.DB, tables map[string]json.RawMessage) err
 	return nil
 }
 
-// Reuses only the already migrated owned Ops DB. All new objects and migration
-// metadata are rolled back; the failed public fixture remains byte-for-byte.
+// Run the legacy reader workflow only in an identity-verified disposable DB.
 func TestProjectConsolidationReaderStoreSlice(t *testing.T) {
-	dsnPath, output := os.Getenv("ENGRAM_CONSOLIDATION_FIXTURE_DSN_FILE"), os.Getenv("ENGRAM_CONSOLIDATION_TEST_OUTPUT")
-	if dsnPath == "" || output == "" {
-		t.Skip("exact admitted fixture binding absent")
-	}
-	deadline, err := time.Parse(time.RFC3339, os.Getenv("ENGRAM_CONSOLIDATION_FIXTURE_DEADLINE"))
-	require.NoError(t, err)
-	require.True(t, time.Now().Before(deadline), "exact fixture admission expired")
-	private, err := os.ReadFile(dsnPath)
-	require.NoError(t, err, "private fixture DSN unavailable")
-	cfg, err := pgx.ParseConfig(strings.TrimSpace(string(private)))
-	if err != nil || cfg.Host != "127.0.0.1" || cfg.Port != 22366 || cfg.Database != "identity_fixture" {
-		t.Fatal("fixture does not match admitted exact target")
-	}
-	cfg.Database = "ops_identity_census_01a11827"
-	cfg.RuntimeParams["search_path"] = "public"
-	cfg.RuntimeParams["application_name"] = "engram_ops_reader_slice"
-	pool := stdlib.OpenDB(*cfg)
-	pool.SetMaxOpenConns(1)
-	defer pool.Close()
-	db, err := gormlib.Open(postgres.New(postgres.Config{Conn: pool}), &gormlib.Config{Logger: logger.Default.LogMode(logger.Silent)})
-	require.NoError(t, err)
-	ctx, cancel := context.WithDeadline(context.Background(), deadline)
-	defer cancel()
-	db = db.WithContext(ctx)
+	db := openDockerMigrationDBTo(t, "185_local_git_registration_retry")
+	ctx := db.Statement.Context
 	original, err := consolidationSnapshot(db)
 	require.NoError(t, err)
-	v, err := vaultcrypto.OpenExistingVault(&config.Config{EncryptionKeyFile: filepath.Join(output, ".private", "vault.key")})
+	v, err := vaultcrypto.OpenExistingVault(&config.Config{EncryptionKey: strings.Repeat("ab", 32)})
 	require.NoError(t, err)
 	tx := db.Begin()
 	require.NoError(t, tx.Error)
 	defer tx.Rollback()
-	require.NoError(t, projectConsolidationMigration186().Migrate(tx), "exercise the current source SQL inside the rollback transaction")
 	s := NewProjectConsolidationStore(tx, v, nil)
 	a, b, selector := uuid.NewString(), uuid.NewString(), "reader-"+uuid.NewString()
-	require.NoError(t, tx.Create(&Project{ID: selector, DisplayName: sql.NullString{String: "Retained reader label", Valid: true}}).Error)
+	require.NoError(t, tx.Select("ID", "DisplayName").Create(&Project{ID: selector, DisplayName: sql.NullString{String: "Retained reader label", Valid: true}}).Error)
 	memories := []Memory{{Project: selector, Content: "reader a", PrivacyScope: "private", OwnerPrincipal: "retained-owner"}, {Project: selector, Content: "reader b", PrivacyScope: "project"}, {Project: selector, Content: "reader unresolved", PrivacyScope: "project"}}
 	for i := range memories {
-		require.NoError(t, tx.Create(&memories[i]).Error)
+		require.NoError(t, tx.Select("Project", "Content", "PrivacyScope", "OwnerPrincipal").Create(&memories[i]).Error)
 	}
 	sessionA, sessionB := "reader-sdk-"+uuid.NewString(), "reader-sdk-"+uuid.NewString()
 	sessions := []SDKSession{{ClaudeSessionID: sessionA, SDKSessionID: sql.NullString{String: sessionA, Valid: true}, Project: selector}, {ClaudeSessionID: sessionB, SDKSessionID: sql.NullString{String: sessionB, Valid: true}, Project: selector}}
 	for i := range sessions {
-		require.NoError(t, tx.Create(&sessions[i]).Error)
+		require.NoError(t, tx.Select("ClaudeSessionID", "SDKSessionID", "Project", "StartedAt", "StartedAtEpoch").Create(&sessions[i]).Error)
 	}
 	now, sourceID, unknownSourceID, profileID := time.Now().UTC(), uuid.NewString(), uuid.NewString(), uuid.NewString()
 	for _, id := range []string{sourceID, unknownSourceID} {
-		require.NoError(t, tx.Create(&UCISource{SourceID: id, AuthRealm: "fixture", Kind: UCISourceGit, DisplayName: "same reader source label", State: UCISourceActive, CreatedAt: now, UpdatedAt: now}).Error)
+		require.NoError(t, tx.Select("SourceID", "AuthRealm", "Kind", "DisplayName", "State", "CreatedAt", "UpdatedAt").Create(&UCISource{SourceID: id, AuthRealm: "fixture", Kind: UCISourceGit, DisplayName: "same reader source label", State: UCISourceActive, CreatedAt: now, UpdatedAt: now}).Error)
 	}
 	digest := "sha256:" + strings.Repeat("a", 64)
-	require.NoError(t, tx.Create(&UCIAnalysisProfile{ProfileID: profileID, ParserBundleDigest: digest, ResolverRevision: "fixture", ChunkerRevision: "fixture", IgnorePolicyDigest: digest, BuildContextJSON: `{}`, SecretPolicyRevision: "fixture", CreatedAt: now}).Error)
+	require.NoError(t, tx.Select("ProfileID", "ParserBundleDigest", "ResolverRevision", "ChunkerRevision", "IgnorePolicyDigest", "BuildContextJSON", "SecretPolicyRevision", "CreatedAt").Create(&UCIAnalysisProfile{ProfileID: profileID, ParserBundleDigest: digest, ResolverRevision: "fixture", ChunkerRevision: "fixture", IgnorePolicyDigest: digest, BuildContextJSON: `{}`, SecretPolicyRevision: "fixture", CreatedAt: now}).Error)
+	viewIDs := make(map[string]bool, 2)
 	for i := range 2 {
 		checkoutID, viewID, incarnationID := uuid.NewString(), uuid.NewString(), uuid.NewString()
-		require.NoError(t, tx.Create(&UCICheckout{CheckoutID: checkoutID, SourceID: sourceID, WorkstationID: "fixture", IncarnationID: incarnationID, Kind: UCICheckoutWorkingTree, OwnerPrincipal: "fixture-owner", LocatorRef: "urn:engram:fixture:" + checkoutID, State: UCICheckoutRegistered, LeaseEpoch: 1, CreatedAt: now, UpdatedAt: now}).Error)
-		require.NoError(t, tx.Create(&UCIView{ViewID: viewID, CheckoutID: checkoutID, SourceID: sourceID, IncarnationID: incarnationID, Generation: int64(i + 1), ProfileID: profileID, Dirty: true, ScanStart: now, ScanEnd: now, ManifestDigest: digest, CoverageJSON: `{}`, State: UCIViewStaging, CreatedAt: now, UpdatedAt: now}).Error)
+		viewIDs[viewID] = true
+		require.NoError(t, tx.Select("CheckoutID", "SourceID", "WorkstationID", "IncarnationID", "Kind", "OwnerPrincipal", "LocatorRef", "State", "LeaseEpoch", "CreatedAt", "UpdatedAt").Create(&UCICheckout{CheckoutID: checkoutID, SourceID: sourceID, WorkstationID: "fixture", IncarnationID: incarnationID, Kind: UCICheckoutWorkingTree, OwnerPrincipal: "fixture-owner", LocatorRef: "urn:engram:fixture:" + checkoutID, State: UCICheckoutRegistered, LeaseEpoch: 1, CreatedAt: now, UpdatedAt: now}).Error)
+		require.NoError(t, tx.Select("ViewID", "CheckoutID", "SourceID", "IncarnationID", "Generation", "ProfileID", "Dirty", "ScanStart", "ScanEnd", "ManifestDigest", "CoverageJSON", "State").Create(&UCIView{ViewID: viewID, CheckoutID: checkoutID, SourceID: sourceID, IncarnationID: incarnationID, Generation: int64(i + 1), ProfileID: profileID, Dirty: true, ScanStart: now, ScanEnd: now, ManifestDigest: digest, CoverageJSON: `{}`, State: UCIViewStaging, CreatedAt: now, UpdatedAt: now}).Error)
 	}
+	require.NoError(t, projectConsolidationMigration186().Migrate(tx), "exercise the current source SQL after seeding legacy rows")
 	before, err := consolidationSnapshot(tx)
 	require.NoError(t, err)
 	census, err := s.census(tx, "first-reader-slice")
 	require.NoError(t, err)
-	refsA, refsB := []string{}, []string{}
+	refsA, refsB, viewRefs := []string{}, []string{}, []string{}
 	for _, row := range census.Rows {
 		var key map[string]any
 		require.NoError(t, json.Unmarshal(row.Key, &key))
@@ -1156,8 +1135,16 @@ func TestProjectConsolidationReaderStoreSlice(t *testing.T) {
 		if (row.Table == "memories" && row.Column == "project" && key["id"] == float64(memories[1].ID)) || (row.Table == "sdk_sessions" && row.Column == "project" && key["id"] == float64(sessions[1].ID)) {
 			refsB = append(refsB, row.Reference)
 		}
+		if row.Table == "ci_views" && row.Kind == "inherited" && row.Column == "" {
+			if id, ok := key["view_id"].(string); ok && viewIDs[id] {
+				viewRefs = append(viewRefs, row.Reference)
+			}
+		}
 	}
-	mapping, err := s.buildMapping(census.Rows, []ConsolidationEvidence{{Reference: "urn:engram:fixture:a", Kind: "portable_marker", Group: "urn:engram:fixture:a", ProjectID: a, Rows: refsA}, {Reference: "urn:engram:fixture:b", Kind: "portable_marker", Group: "urn:engram:fixture:b", ProjectID: b, Rows: refsB}})
+	require.Len(t, viewRefs, 2, "both fixture views must be present in the census")
+	// ci_views also references an independent profile, so source ownership alone
+	// cannot establish every parent. Bind these known fixture views explicitly.
+	mapping, err := s.buildMapping(census.Rows, []ConsolidationEvidence{{Reference: "urn:engram:fixture:a", Kind: "portable_marker", Group: "urn:engram:fixture:a", ProjectID: a, Rows: refsA}, {Reference: "urn:engram:fixture:b", Kind: "portable_marker", Group: "urn:engram:fixture:b", ProjectID: b, Rows: refsB}, {Reference: "urn:engram:fixture:view-provenance", Kind: "source_provenance", Group: "urn:engram:fixture:a", ProjectID: a, Rows: viewRefs}})
 	require.NoError(t, err)
 	receipt, err := s.execute(tx, consolidationPlanState{ID: uuid.NewString(), Fingerprint: census.Fingerprint, Census: census, Mapping: mapping})
 	require.NoError(t, err)
@@ -1219,6 +1206,15 @@ func TestProjectConsolidationReaderStoreSlice(t *testing.T) {
 	views, err := s.CanonicalMembership(ctx, a, "ci_views")
 	require.NoError(t, err)
 	require.Len(t, views, 2)
+	for _, view := range views {
+		var key struct {
+			ViewID string `json:"view_id"`
+		}
+		require.NoError(t, json.Unmarshal(view.RowKey, &key))
+		require.True(t, viewIDs[key.ViewID], "canonical membership must identify a fixture view")
+		delete(viewIDs, key.ViewID)
+	}
+	require.Empty(t, viewIDs, "both fixture views must be returned exactly once")
 	_, err = s.ResolveLegacy(ctx, selector, "")
 	require.EqualError(t, err, "PROJECT_ADOPTION_UNRESOLVED_MEMBERSHIP")
 	var hold *ConsolidationError
@@ -1261,14 +1257,30 @@ func TestProjectConsolidationReaderStoreSlice(t *testing.T) {
 	require.NoError(t, tx.Table("projects").Count(&projectsAfter).Error)
 	require.Equal(t, projectsBefore, projectsAfter, "mixed misses must not register a legacy project")
 	legacy := "unmixed-" + uuid.NewString()
-	require.NoError(t, tx.Create(&Project{ID: legacy}).Error)
+	require.NoError(t, tx.Select("ID").Create(&Project{ID: legacy}).Error)
+	require.NoError(t, tx.Table("projects").Count(&projectsBefore).Error)
+	var legacyBefore string
+	require.NoError(t, tx.Raw(`SELECT to_jsonb(projects)::text FROM projects WHERE id = ?`, legacy).Scan(&legacyBefore).Error)
+	require.NotEmpty(t, legacyBefore)
 	for _, session := range []string{"", "reader-unknown-session"} {
-		require.NoError(t, tx.Raw(`SELECT engram_consolidation_scope(?, ?)`, legacy, session).Scan(&resolved).Error)
-		require.Equal(t, legacy, resolved)
+		var unmapped string
+		err = tx.Transaction(func(probe *gormlib.DB) error {
+			return probe.Raw(`SELECT engram_consolidation_scope(?, ?)`, legacy, session).Scan(&unmapped).Error
+		})
+		require.Empty(t, unmapped)
+		err = consolidationReadError(err)
+		require.EqualError(t, err, "PROJECT_ADOPTION_UNRESOLVED_MEMBERSHIP")
+		require.ErrorAs(t, err, &hold)
 	}
 	legacyResolution, err := RegisterAndResolve(ctx, tx, legacy, nil)
-	require.NoError(t, err)
-	require.Equal(t, legacy, legacyResolution.CanonicalProjectID)
+	require.Empty(t, legacyResolution.CanonicalProjectID)
+	require.EqualError(t, err, "PROJECT_ADOPTION_UNRESOLVED_MEMBERSHIP")
+	require.ErrorAs(t, err, &hold)
+	require.NoError(t, tx.Table("projects").Count(&projectsAfter).Error)
+	require.Equal(t, projectsBefore, projectsAfter, "unmapped reads must not register or remove projects")
+	var legacyAfter string
+	require.NoError(t, tx.Raw(`SELECT to_jsonb(projects)::text FROM projects WHERE id = ?`, legacy).Scan(&legacyAfter).Error)
+	require.JSONEq(t, legacyBefore, legacyAfter, "unmapped reads must leave the project unchanged")
 	alias := legacy + "-alias"
 	require.NoError(t, tx.Exec(`INSERT INTO project_consolidation_redirects(selector,session_id,project_id,plan_fingerprint) VALUES(?, '', ?, 'reader-unmixed')`, alias, a).Error)
 	for _, session := range []string{"", "reader-unknown-session"} {
@@ -1301,7 +1313,7 @@ func TestProjectConsolidationReaderStoreSlice(t *testing.T) {
 	_, err = s.UnresolvedMembership(ctx, codeRef, "code")
 	require.EqualError(t, err, "PROJECT_ADOPTION_STALE_REFERENCE")
 	require.NoError(t, tx.Rollback().Error)
-	require.NoError(t, consolidationCompare(db, original), "failed public corpus must remain unchanged")
+	require.NoError(t, consolidationCompare(db, original), "transactional changes must roll back in the owned fixture")
 }
 
 type consolidationQueryCounter struct {
