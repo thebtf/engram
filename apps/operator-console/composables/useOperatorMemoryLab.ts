@@ -1,6 +1,6 @@
 import { computed, onBeforeUnmount, ref as sharedRef, watch, type Ref as SharedRef } from 'vue'
 import { startedLoads } from './useConsolePreferences'
-import { isCatalogProject, loadKnowledgePage, useOperatorProjectContext } from './useOperatorProjectContext'
+import { canonicalProjectID, isCatalogProject, loadKnowledgePage, useOperatorProjectContext } from './useOperatorProjectContext'
 import { useRoute } from 'vue-router'
 
 let sharedPrincipalMemoryScope: SharedRef<PrincipalMemoryScope> | undefined
@@ -50,6 +50,7 @@ function submitMutation<TIntent, TCurrent = unknown>(
 interface ApiMemory {
   id: number | string
   project?: string
+  mutation_project?: string
   content?: string
   tags?: string[]
   tier?: string
@@ -641,6 +642,7 @@ function mapMemoryRow(row: ApiMemory): Memory {
     tier: mapTier(row.tier),
     type: row.epistemic_type || 'note',
     project: row.project || '',
+    mutationProject: row.mutation_project,
     conf: hasConfidence ? row.confidence as number : 1,
     confidenceKnown: hasConfidence,
     cite: typeof row.citation_count === 'number' ? row.citation_count : 0,
@@ -853,7 +855,7 @@ export function useOperatorMemoryLab(project?: Ref<string>, autoLoad = true): {
   refresh: () => Promise<void>
   loadMemoryByID: (id: string, project?: string) => Promise<Memory>
   storeMemory: (input: StoreMemoryInput) => Promise<MutationResult<StoreMemoryInput>>
-  deleteMemory: (id: string) => Promise<MutationResult<{ id: string }>>
+  deleteMemory: (id: string, mutationProject: string, browsingProject: string) => Promise<MutationResult<{ id: string }>>
   suppressMemory: (id: string, reason?: string) => Promise<MutationResult<MemoryCollectionOperationIntent, MemoryCollectionOperationReadback[]>>
   suppressMemories: (ids: string[], reason?: string) => Promise<MutationResult<MemoryCollectionOperationIntent, MemoryCollectionOperationReadback[]>>
   unsuppressMemory: (id: string) => Promise<MutationResult<MemoryCollectionOperationIntent, MemoryCollectionOperationReadback[]>>
@@ -943,10 +945,9 @@ export function useOperatorMemoryLab(project?: Ref<string>, autoLoad = true): {
     }), storeMemoryCurrentStateParser(input))
   }
 
-  async function deleteMemory(id: string) {
-    const scope = scopeForID(id)
-    if (!isCatalogProject(scope)) throw new TypeError('A canonical memory project is required')
-    return submitMutation('memory-delete', { id }, `/api/memories/${encodeURIComponent(id)}?project=${encodeURIComponent(scope)}`, jsonInit('DELETE'))
+  async function deleteMemory(id: string, mutationProject: string, browsingProject: string) {
+    if (!isCatalogProject(mutationProject) || !isCatalogProject(browsingProject) || canonicalProjectID(mutationProject) !== canonicalProjectID(browsingProject)) throw new TypeError('A verified native memory project is required')
+    return submitMutation('memory-delete', { id }, `/api/memories/${encodeURIComponent(id)}?project=${encodeURIComponent(mutationProject)}`, jsonInit('DELETE'))
   }
 
   function scopeForID(id: string) {

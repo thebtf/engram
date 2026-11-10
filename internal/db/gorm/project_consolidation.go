@@ -26,9 +26,13 @@ import (
 
 const consolidationDecodedMetadataBytes = 56 << 20
 
-type ConsolidationError struct{ Code string }
+type ConsolidationError struct {
+	Code  string
+	cause error
+}
 
 func (e *ConsolidationError) Error() string { return e.Code }
+func (e *ConsolidationError) Unwrap() error { return e.cause }
 func consolidationHold(code string) error {
 	return &ConsolidationError{Code: "PROJECT_ADOPTION_" + code}
 }

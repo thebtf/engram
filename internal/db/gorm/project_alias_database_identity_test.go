@@ -1,6 +1,7 @@
 package gorm
 
 import (
+	"context"
 	"os"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/thebtf/engram/internal/config"
 	vaultcrypto "github.com/thebtf/engram/internal/crypto"
 	gormlib "gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 func TestProjectAliasPhysicalDatabaseBinding(t *testing.T) {
@@ -135,4 +137,53 @@ func TestProjectAliasPhysicalDatabaseBinding(t *testing.T) {
 		_, err := consolidationDatabaseIdentity(tx)
 		require.EqualError(t, err, "PROJECT_ADOPTION_SOURCE_IDENTITY_UNAVAILABLE")
 	})
+}
+
+func TestProjectAliasIdentityRetainsCanceledCause(t *testing.T) {
+	dsn := os.Getenv("DATABASE_DSN")
+	if dsn == "" {
+		t.Skip("dedicated disposable PostgreSQL database required")
+	}
+	db, err := openGORM(Config{DSN: dsn, LogLevel: logger.Silent})
+	require.NoError(t, err)
+	pool, err := db.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, pool.Close()) })
+	tx := db.Begin()
+	require.NoError(t, tx.Error)
+	defer tx.Rollback()
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = consolidationDatabaseIdentity(tx.WithContext(ctx))
+	require.EqualError(t, err, "PROJECT_ADOPTION_SOURCE_IDENTITY_UNAVAILABLE")
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestProjectAliasPreparedTransactionWorkflow(t *testing.T) {
+	dsn := os.Getenv("DATABASE_DSN")
+	if dsn == "" {
+		t.Skip("dedicated disposable PostgreSQL database required")
+	}
+	schema := "alias_prepared_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	db := openMigratedTestDBInSchema(t, dsn, schema, "engram_alias_prepared").Session(&gormlib.Session{PrepareStmt: true})
+	vault, err := vaultcrypto.OpenExistingVault(&config.Config{EncryptionKey: strings.Repeat("ab", 32)})
+	require.NoError(t, err)
+	store := NewProjectConsolidationStore(db, vault, nil)
+	req := ProjectAliasAttachRequest{Target: uuid.NewString(), Aliases: []ProjectAliasExpected{{Source: uuid.NewString()}}, Reason: "synthetic prepared workflow"}
+	for _, id := range []string{req.Target, req.Aliases[0].Source} {
+		require.NoError(t, db.Create(&Project{ID: id, CreatedAt: time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)}).Error)
+	}
+	plan, err := store.PrepareProjectAliases(t.Context(), req)
+	require.NoError(t, err)
+	apply := ProjectAliasApplyRequest{PlanReference: plan.Reference, PlanFingerprint: plan.Fingerprint, IdempotencyKey: uuid.NewString()}
+	_, err = store.ApplyProjectAliases(t.Context(), apply, "synthetic")
+	require.NoError(t, err)
+	receipt, err := store.ProjectAliasStatus(t.Context(), apply.IdempotencyKey)
+	require.NoError(t, err)
+	require.Equal(t, "applied", receipt.Status)
+	_, err = store.RollbackProjectAliases(t.Context(), ProjectAliasRollbackRequest{ApplyKey: apply.IdempotencyKey, IdempotencyKey: uuid.NewString()}, "synthetic")
+	require.NoError(t, err)
+	receipt, err = store.ProjectAliasStatus(t.Context(), apply.IdempotencyKey)
+	require.NoError(t, err)
+	require.Equal(t, "rolled_back", receipt.Status)
 }

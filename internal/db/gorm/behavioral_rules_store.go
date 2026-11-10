@@ -431,6 +431,10 @@ func (s *BehavioralRulesStore) currentRulesFilter(ctx context.Context, filter Co
 }
 
 func (s *BehavioralRulesStore) behavioralRuleCollectionRows(ctx context.Context, filter behavioralRuleCollectionFilter) ([]BehavioralRule, error) {
+	return s.behavioralRuleCollectionRowsLimit(ctx, filter, 0)
+}
+
+func (s *BehavioralRulesStore) behavioralRuleCollectionRowsLimit(ctx context.Context, filter behavioralRuleCollectionFilter, limit int) ([]BehavioralRule, error) {
 	if s == nil || s.db == nil {
 		return nil, errors.New("behavioral rules store is not configured")
 	}
@@ -448,6 +452,9 @@ func (s *BehavioralRulesStore) behavioralRuleCollectionRows(ctx context.Context,
 		} else {
 			query = query.Where("project = ? OR project IS NULL", filter.scope)
 		}
+	}
+	if limit > 0 {
+		query = query.Limit(limit)
 	}
 	var rows []BehavioralRule
 	if err := query.Order("priority DESC").Order("created_at DESC").Order("id DESC").Find(&rows).Error; err != nil {
@@ -617,15 +624,12 @@ func (s *BehavioralRulesStore) ListOperator(ctx context.Context, project *string
 		if err != nil {
 			return err
 		}
-		rows, err := store.behavioralRuleCollectionRows(ctx, filter)
-		if err != nil {
-			return err
-		}
 		if limit <= 0 {
 			limit = 50
 		}
-		if len(rows) > limit {
-			rows = rows[:limit]
+		rows, err := store.behavioralRuleCollectionRowsLimit(ctx, filter, limit)
+		if err != nil {
+			return err
 		}
 		result = make([]*models.BehavioralRule, len(rows))
 		for i := range rows {

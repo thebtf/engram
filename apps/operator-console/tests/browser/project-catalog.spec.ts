@@ -32,6 +32,40 @@ test('old alias deep link preserves exact memory ID and search/filter return', a
   expect(reads.every((url) => url.searchParams.get('project') === CONSOLE)).toBe(true)
 })
 
+for (const entry of ['deep-link', 'all-list'] as const) {
+  test(`alias-native memory deletion keeps its server binding from ${entry}`, async ({ page }) => {
+    const native = '66666666-6666-4666-8666-666666666666'
+    const deletions: string[] = []
+    await page.route('**/api/projects', route => route.fulfill({
+      json: {
+        items: [{ project_id: CONSOLE, name: 'Primary' }, { project_id: native, name: 'Alias' }],
+        unresolved: [], logical_groups: [{ primary_project_id: CONSOLE, alias_project_ids: [native] }],
+      }
+    }))
+    await page.route('**/api/memories**', route => {
+      const request = route.request()
+      const url = new URL(request.url())
+      if (request.method() === 'DELETE') {
+        deletions.push(url.searchParams.get('project') || '')
+        return route.fulfill({ status: url.searchParams.get('project') === native ? 200 : 404, json: { status: 'ok' } })
+      }
+      if (url.pathname.endsWith('/audit')) return route.fulfill({ json: { entries: [] } })
+      const row = { id: 501, project: CONSOLE, mutation_project: native, content: 'alias-native fixture', status: 'active', version: 1, tags: [] }
+      if (url.pathname.endsWith('/501')) return route.fulfill({ json: row })
+      const limit = Number(url.searchParams.get('limit') || 20)
+      return route.fulfill({ json: { items: [row], total: 1, offset: 0, limit, has_more: false } })
+    })
+    await page.goto(entry === 'deep-link' ? `/memory?project=${native}&memory=501` : '/memory?project=all&allRead=1')
+    if (entry === 'all-list') await page.getByTestId('memory-row-501').click()
+    await expect(page.getByTestId('memory-content')).toHaveText('alias-native fixture')
+    await page.locator('details.actions summary').click()
+    const button = page.getByTestId('memory-delete-action')
+    await button.click()
+    await button.click()
+    await expect.poll(() => deletions).toEqual([native])
+  })
+}
+
 test('unresolved alias opens useful read-only knowledge/history and a stale reference is an error', async ({ page }) => {
   const reads: URL[] = []
   page.on('request', (request) => { const url = new URL(request.url()); if (url.pathname.includes('/unresolved/')) reads.push(url) })

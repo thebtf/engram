@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"os"
 
+	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/auth"
 	vaultcrypto "github.com/thebtf/engram/internal/crypto"
 	dbgorm "github.com/thebtf/engram/internal/db/gorm"
@@ -103,6 +105,14 @@ func projectAliasHTTPError(w http.ResponseWriter, err error) {
 		default:
 			status, message = http.StatusConflict, "Alias state changed or conflicts with this request; review the current catalog and prepare again. For an unknown operation outcome, retain its original key and check status."
 		}
+	}
+	if status == http.StatusServiceUnavailable && refusal == nil && !errors.Is(err, gormlib.ErrRecordNotFound) {
+		var state interface{ SQLState() string }
+		event := log.Warn().Str("error_type", fmt.Sprintf("%T", err)).Bool("deadline", errors.Is(err, context.DeadlineExceeded)).Bool("canceled", errors.Is(err, context.Canceled))
+		if errors.As(err, &state) {
+			event = event.Str("sqlstate", state.SQLState())
+		}
+		event.Msg("project alias operation failed")
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSONStatus(w, status, map[string]string{"code": code, "message": message})

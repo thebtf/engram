@@ -577,6 +577,22 @@ func TestRulesAliasCollectionTransaction(t *testing.T) {
 		require.Equal(t, 3, row.Version)
 		require.Contains(t, []string{primary, alias}, *row.Project)
 	}
+	var materialized int64 = -1
+	var sqlText string
+	const callbackName = "rules_operator_limit_probe"
+	require.NoError(t, db.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table == "behavioral_rules" {
+			materialized = tx.RowsAffected
+			sqlText = tx.Statement.SQL.String()
+		}
+	}))
+	t.Cleanup(func() { _ = db.Callback().Query().Remove(callbackName) })
+	limited, err := rules.ListOperator(ctx, &primary, 1)
+	require.NoError(t, err)
+	require.Equal(t, mainRows[:1], limited)
+	require.EqualValues(t, 1, materialized, "database must materialize at most the requested rows")
+	require.Contains(t, sqlText, "LIMIT")
+	require.NoError(t, db.Callback().Query().Remove(callbackName))
 	// A freeze cannot observe the temporary mapping while holding its old fingerprint.
 	tx := db.Begin()
 	require.NoError(t, tx.Error)

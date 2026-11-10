@@ -46,13 +46,14 @@ function walk(node) { return [node, ...node.children.flatMap(walk)] }
 async function mountConsumer(t, location, { storage = new Map(), rejectMemory = false, catalogReady = Promise.resolve(), resolveLegacy = false, catalogFetch, memoryFetch } = {}) {
   const requests = []
   let reader
-  const fetch = async (input) => {
+  const fetch = async (input, init) => {
     const url = new URL(input, 'http://synthetic.invalid')
     if (url.pathname === '/api/projects') { await catalogReady; return catalogFetch ? catalogFetch() : Response.json({ items: [{ project_id: projectID, name: 'Synthetic project' }], unresolved: [] }) }
     if (url.pathname === '/api/projects/resolve') return resolveLegacy ? Response.json({ status: 'resolved', project_id: projectID, name: 'Synthetic project' }) : Response.json({ error: 'Mapping unavailable' }, { status: 503 })
+    if (url.pathname.startsWith('/api/memories/') && memoryFetch) return memoryFetch(url, init)
     if (url.pathname === '/api/memories') {
       requests.push(url)
-      if (memoryFetch) return memoryFetch(url)
+      if (memoryFetch) return memoryFetch(url, init)
       return rejectMemory ? Response.json({ error: 'Synthetic request refusal' }, { status: 400 }) : Response.json({
         items: [], total: 0, offset: Number(url.searchParams.get('offset')), limit: Number(url.searchParams.get('limit')), has_more: false,
       })
@@ -119,6 +120,27 @@ test('principal scope resolves a confirmed alias to the canonical choice', async
   assert.equal(options.filter(node => node.props.value === projectID).length, 1)
   assert.deepEqual(consumer.context.projects.value, [projectID])
   assert.equal(consumer.router.currentRoute.value.query.principalProject, projectID)
+})
+
+test('detail mutation uses server-native binding after alias route and union list', async t => {
+  const alias = '22222222-2222-4222-8222-222222222222'
+  const catalogFetch = () => Response.json({ items: [{ project_id: projectID, name: 'Primary' }, { project_id: alias, name: 'Alias' }], unresolved: [], logical_groups: [{ primary_project_id: projectID, alias_project_ids: [alias] }] })
+  const deletes = []
+  const memoryFetch = (url, init) => {
+    if (init?.method === 'DELETE') { deletes.push(url.searchParams.get('project')); return Response.json({ status: 'ok' }) }
+    const row = { id: 501, project: projectID, mutation_project: alias, content: 'alias native', status: 'active', version: 1 }
+    if (url.pathname.endsWith('/501')) return Response.json(row)
+    return Response.json({ items: [row], total: 1, offset: Number(url.searchParams.get('offset')), limit: Number(url.searchParams.get('limit')), has_more: false })
+  }
+  const consumer = await mountConsumer(t, `/memory?project=${alias}`, { catalogFetch, memoryFetch })
+  const reader = consumer.reader()
+  const detail = await reader.loadMemoryByID('501', projectID)
+  await reader.deleteMemory(detail.id, detail.mutationProject, detail.project)
+  await consumer.router.push('/memory?project=all&allRead=1')
+  await tick()
+  const fromUnion = await reader.loadMemoryByID('501', projectID)
+  await reader.deleteMemory(fromUnion.id, fromUnion.mutationProject, fromUnion.project)
+  assert.deepEqual(deletes, [alias, alias])
 })
 
 test('combined filters survive scoped paging, navigation return and session reload', async (t) => {

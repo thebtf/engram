@@ -4,13 +4,17 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/lib/pq"
+	"github.com/rs/zerolog/log"
 	gormlib "gorm.io/gorm"
 )
 
@@ -194,8 +198,28 @@ func consolidationDatabaseIdentity(tx *gormlib.DB) (string, error) {
 		Database, SystemIdentifier string
 		OID                        int64
 	}
-	err := tx.Raw(`SELECT current_database(),(SELECT system_identifier::text FROM pg_control_system()),(SELECT oid::bigint FROM pg_database WHERE datname=current_database())`).Row().Scan(&binding.Database, &binding.SystemIdentifier, &binding.OID)
-	if err != nil || binding.Database == "" || binding.SystemIdentifier == "" || binding.OID <= 0 {
+	rows, err := tx.Raw(`SELECT current_database(),(SELECT system_identifier::text FROM pg_control_system()),(SELECT oid::bigint FROM pg_database WHERE datname=current_database())`).Rows()
+	if err == nil {
+		if rows.Next() {
+			err = rows.Scan(&binding.Database, &binding.SystemIdentifier, &binding.OID)
+		} else if err = rows.Err(); err == nil {
+			err = sql.ErrNoRows
+		}
+		if closeErr := rows.Close(); err == nil {
+			err = closeErr
+		}
+	}
+	if err != nil {
+		var state interface{ SQLState() string }
+		event := log.Warn().Bool("deadline", errors.Is(err, context.DeadlineExceeded)).Bool("canceled", errors.Is(err, context.Canceled)).Bool("no_rows", errors.Is(err, sql.ErrNoRows)).Bool("transaction_done", errors.Is(err, sql.ErrTxDone)).Bool("bad_connection", errors.Is(err, driver.ErrBadConn)).Bool("statement_closed", err.Error() == "sql: statement is closed").Str("error_type", fmt.Sprintf("%T", err))
+		if errors.As(err, &state) {
+			event = event.Str("sqlstate", state.SQLState())
+		}
+		event.Msg("consolidation database identity query failed")
+		return "", &ConsolidationError{Code: "PROJECT_ADOPTION_SOURCE_IDENTITY_UNAVAILABLE", cause: err}
+	}
+	if binding.Database == "" || binding.SystemIdentifier == "" || binding.OID <= 0 {
+		log.Warn().Bool("database_missing", binding.Database == "").Bool("system_identifier_missing", binding.SystemIdentifier == "").Bool("invalid_oid", binding.OID <= 0).Msg("consolidation database identity incomplete")
 		return "", consolidationHold("SOURCE_IDENTITY_UNAVAILABLE")
 	}
 	return structuralDigest(binding), nil
