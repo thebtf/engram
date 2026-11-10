@@ -210,34 +210,6 @@ func TestClassifyMemoryType_NonGuidanceUsesConceptMatch(t *testing.T) {
 	assert.Equal(t, MemTypeDecision, ClassifyMemoryType(obs))
 }
 
-// ---------------------------------------------------------------------------
-// ParsedObservation field access
-// ---------------------------------------------------------------------------
-
-func TestParsedObservation_Fields(t *testing.T) {
-	t.Parallel()
-	obs := &ParsedObservation{
-		Type:          ObsTypeBugfix,
-		Title:         "Fix connection leak",
-		Subtitle:      "In database pool",
-		Narrative:     "Connections were not returned after timeout",
-		Facts:         []string{"Added defer close", "Added test coverage"},
-		Concepts:      []string{"database", "reliability"},
-		FilesRead:     []string{"pool.go"},
-		FilesModified: []string{"pool.go", "pool_test.go"},
-		FileMtimes:    map[string]int64{"pool.go": 1700000000},
-	}
-
-	assert.Equal(t, ObsTypeBugfix, obs.Type)
-	assert.Equal(t, "Fix connection leak", obs.Title)
-	assert.Equal(t, "In database pool", obs.Subtitle)
-	assert.Len(t, obs.Facts, 2)
-	assert.Len(t, obs.Concepts, 2)
-	assert.Len(t, obs.FilesRead, 1)
-	assert.Len(t, obs.FilesModified, 2)
-	assert.Equal(t, int64(1700000000), obs.FileMtimes["pool.go"])
-}
-
 func TestParsedObservation_FileMtimesSerializable(t *testing.T) {
 	t.Parallel()
 	obs := &ParsedObservation{
@@ -283,40 +255,6 @@ func TestCheckStaleness_Table(t *testing.T) {
 			assert.Equal(t, tc.want, obs.CheckStaleness(tc.current))
 		})
 	}
-}
-
-// ---------------------------------------------------------------------------
-// Observation nullable fields
-// ---------------------------------------------------------------------------
-
-func TestObservation_NullFields(t *testing.T) {
-	t.Parallel()
-	obs := &Observation{
-		ID:        1,
-		Project:   "proj",
-		Type:      ObsTypeChange,
-		Title:     sql.NullString{Valid: false},
-		Subtitle:  sql.NullString{Valid: false},
-		Narrative: sql.NullString{Valid: false},
-	}
-	assert.False(t, obs.Title.Valid)
-	assert.False(t, obs.Subtitle.Valid)
-	assert.False(t, obs.Narrative.Valid)
-}
-
-func TestObservation_ValidFields(t *testing.T) {
-	t.Parallel()
-	obs := &Observation{
-		ID:        2,
-		Project:   "proj",
-		Type:      ObsTypeRefactor,
-		Title:     sql.NullString{String: "Rename package", Valid: true},
-		Subtitle:  sql.NullString{String: "From old to new", Valid: true},
-		Narrative: sql.NullString{String: "Renamed the package to align with conventions", Valid: true},
-	}
-	assert.True(t, obs.Title.Valid)
-	assert.Equal(t, "Rename package", obs.Title.String)
-	assert.True(t, obs.Subtitle.Valid)
 }
 
 // ---------------------------------------------------------------------------

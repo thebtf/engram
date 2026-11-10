@@ -290,74 +290,10 @@ func TestSessionSummary_JSONRoundTrip(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// Contract: ParsedSummary — plain value struct with six string fields.
-// All fields are independent; zero value is the empty string.
-// -----------------------------------------------------------------------------
-
-func TestParsedSummary_FieldAssignment(t *testing.T) {
-	p := &ParsedSummary{
-		Request:      "R",
-		Investigated: "I",
-		Learned:      "L",
-		Completed:    "C",
-		NextSteps:    "N",
-		Notes:        "No",
-	}
-	assert.Equal(t, "R", p.Request)
-	assert.Equal(t, "I", p.Investigated)
-	assert.Equal(t, "L", p.Learned)
-	assert.Equal(t, "C", p.Completed)
-	assert.Equal(t, "N", p.NextSteps)
-	assert.Equal(t, "No", p.Notes)
-}
-
-func TestParsedSummary_ZeroValue(t *testing.T) {
-	var p ParsedSummary
-	assert.Equal(t, "", p.Request)
-	assert.Equal(t, "", p.Investigated)
-	assert.Equal(t, "", p.Learned)
-	assert.Equal(t, "", p.Completed)
-	assert.Equal(t, "", p.NextSteps)
-	assert.Equal(t, "", p.Notes)
-}
-
-// -----------------------------------------------------------------------------
 // Contract: SessionSummaryJSON — JSON-serializable mirror of SessionSummary.
 // All fields are plain Go types (no sql.Null*). omitempty applies to optional
 // string and int64 fields, so zero values drop from output.
 // -----------------------------------------------------------------------------
-
-func TestSessionSummaryJSON_DirectFields(t *testing.T) {
-	j := SessionSummaryJSON{
-		ID:              7,
-		SDKSessionID:    "sdk-j",
-		Project:         "proj-j",
-		Request:         "req-j",
-		Investigated:    "inv-j",
-		Learned:         "lrn-j",
-		Completed:       "cmp-j",
-		NextSteps:       "nxt-j",
-		Notes:           "note-j",
-		PromptNumber:    4,
-		DiscoveryTokens: 128,
-		CreatedAt:       "2024-03-15T12:00:00Z",
-		CreatedAtEpoch:  1710504000000,
-	}
-
-	assert.Equal(t, int64(7), j.ID)
-	assert.Equal(t, "sdk-j", j.SDKSessionID)
-	assert.Equal(t, "proj-j", j.Project)
-	assert.Equal(t, "req-j", j.Request)
-	assert.Equal(t, "inv-j", j.Investigated)
-	assert.Equal(t, "lrn-j", j.Learned)
-	assert.Equal(t, "cmp-j", j.Completed)
-	assert.Equal(t, "nxt-j", j.NextSteps)
-	assert.Equal(t, "note-j", j.Notes)
-	assert.Equal(t, int64(4), j.PromptNumber)
-	assert.Equal(t, int64(128), j.DiscoveryTokens)
-	assert.Equal(t, "2024-03-15T12:00:00Z", j.CreatedAt)
-	assert.Equal(t, int64(1710504000000), j.CreatedAtEpoch)
-}
 
 func TestSessionSummaryJSON_OmitemptyZeroOptionals(t *testing.T) {
 	// Zero-value optional fields should be absent from JSON output due to omitempty.

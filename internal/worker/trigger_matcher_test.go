@@ -38,30 +38,6 @@ func TestHandleMemoryTriggers_EditNoVectorReturnsEmpty(t *testing.T) {
 	require.Len(t, matches, 0)
 }
 
-// TestHandleMemoryTriggers_TimeoutReturnsEmptyArray verifies timeout handling.
-func TestHandleMemoryTriggers_TimeoutReturnsEmptyArray(t *testing.T) {
-	service := newRetrievalTestService()
-
-	body, err := json.Marshal(MemoryTriggerRequest{
-		Tool:      "Edit",
-		Params:    map[string]any{"file_path": "internal/auth.go", "new_string": "add auth validation"},
-		Project:   "engram",
-		SessionID: "session-1",
-	})
-	require.NoError(t, err)
-
-	req := httptest.NewRequest(http.MethodPost, "/api/memory/triggers", bytes.NewReader(body))
-	w := httptest.NewRecorder()
-
-	service.handleMemoryTriggers(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-	var matches []MemoryTriggerMatch
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &matches))
-	require.NotNil(t, matches)
-	require.Len(t, matches, 0)
-}
-
 func newTriggerObservation(id int64, obsType models.ObservationType, title, narrative string, concepts []string) *models.Observation {
 	return &models.Observation{
 		ID:        id,

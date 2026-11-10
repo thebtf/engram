@@ -283,24 +283,6 @@ func TestDetectConflict_ExplicitCorrectionWins(t *testing.T) {
 	assert.Contains(t, result.Reason, "Explicit correction")
 }
 
-func TestDetectConflict_NoConflict(t *testing.T) {
-	t.Parallel()
-	newer := &Observation{
-		ID:        21,
-		Project:   "proj",
-		Narrative: sql.NullString{String: "Added retry logic to the HTTP client.", Valid: true},
-	}
-	older := &Observation{
-		ID:      11,
-		Project: "proj",
-		Title:   sql.NullString{String: "Initial HTTP client setup", Valid: true},
-	}
-
-	result := DetectConflict(newer, older)
-	// Neutral content — may or may not conflict; what matters is HasConflict==false for normal text
-	_ = result // result varies by implementation; just verify no panic
-}
-
 // ---------------------------------------------------------------------------
 // DetectConflictsWithExisting
 // ---------------------------------------------------------------------------
