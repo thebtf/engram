@@ -132,17 +132,44 @@ func NewStoreWhenAvailable(ctx context.Context, cfg Config) (*Store, error) {
 	return store, nil
 }
 
-func transientPostgresConnectionError(err error) bool {
+func postgresServerErrorDisposition(err error) (found, permanent bool) {
+	if err == nil {
+		return false, false
+	}
+	if pgErr, ok := err.(*pgconn.PgError); ok {
+		return true, pgErr.Code != "57P03"
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, child := range joined.Unwrap() {
+			childFound, childPermanent := postgresServerErrorDisposition(child)
+			found = found || childFound
+			permanent = permanent || childPermanent
+		}
+		return found, permanent
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return postgresServerErrorDisposition(wrapped.Unwrap())
+	}
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
-		return pgErr.Code == "57P03"
+		return true, pgErr.Code != "57P03"
+	}
+	return false, false
+}
+
+func transientPostgresConnectionError(err error) bool {
+	if found, permanent := postgresServerErrorDisposition(err); found {
+		return !permanent
+	}
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
 	}
 	var dnsErr *net.DNSError
 	if errors.As(err, &dnsErr) {
 		return !dnsErr.IsNotFound && (dnsErr.IsTemporary || dnsErr.IsTimeout)
 	}
 	var netErr net.Error
-	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.EOF) ||
 		errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNABORTED) ||
 		(runtime.GOOS == "windows" && (errors.Is(err, syscall.Errno(10053)) || errors.Is(err, syscall.Errno(10054)) || errors.Is(err, syscall.Errno(10061)))) ||
 		(errors.As(err, &netErr) && netErr.Timeout())
