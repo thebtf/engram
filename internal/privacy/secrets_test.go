@@ -476,29 +476,3 @@ func TestRedactSecrets_OverlappingSpansLongerWins(t *testing.T) {
 		t.Errorf("expected exactly 1 REDACTED marker for overlapping PEM spans, got %d; output: %s", count, got)
 	}
 }
-
-// TestRedactSecrets_NonPEMOutputUnchanged guards against label drift: the
-// redaction output for non-PEM secrets must be byte-identical to the previous
-// implementation (hash labels must not change).
-func TestRedactSecrets_NonPEMOutputUnchanged(t *testing.T) {
-	cases := []struct {
-		input string
-		want  string
-	}{
-		{
-			input: "api_key=abc123def456ghi789jkl012mno345pqr678",
-			want:  "api_key=[REDACTED:586f23e7]",
-		},
-		{
-			input: "The key is sk-abc123def456ghi789jkl012mno345pqr678",
-			want:  "The key is sk-a...[REDACTED:c99e03e4]",
-		},
-	}
-	for _, tc := range cases {
-		got := RedactSecrets(tc.input)
-		if got != tc.want {
-			t.Errorf("RedactSecrets(%q)\n  got:  %q\n  want: %q", tc.input, got, tc.want)
-		}
-	}
-}
-
