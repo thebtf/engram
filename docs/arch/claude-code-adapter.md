@@ -71,20 +71,17 @@ reads stdin, parses it, derives a context object, and calls the handler with
 |---|---|---|
 | `ctx.SessionID` | `input.session_id` | Claude Code session UUID |
 | `ctx.CWD` | `input.cwd` | Working directory of the Claude Code session |
-| `ctx.Project` | `lib.ProjectIDWithName(cwd)` | Stable project slug (git-remote SHA-256 or path hash) |
-| `ctx.LegacyProject` | `lib.LegacyProjectID(cwd)` | Path-based 6-char hash (migration compatibility) |
+| `ctx.Project` | `resolveHookProjectContext(cwd)` when resolution is attempted | Resolved canonical project ID, not a path or display name |
+| `ctx.LogicalProject` | `resolveHookProjectContext(cwd)` when resolution is attempted | Resolver result; not an independent authorization grant |
 | `ctx.PermissionMode` | `input.permission_mode` | Claude Code permission level |
 | `ctx.HookEventName` | `input.hook_event_name` or hook name | Discriminated event name |
-| `ctx.GitRemote` | `git remote get-url origin` | Remote URL if in a git repo |
-| `ctx.RelativePath` | `git rev-parse --show-prefix` | Path within the repo |
 | `ctx.RawInput` | stdin string | Original JSON stdin payload (for debugging or custom parsing) |
 
-The hash-based project fields above describe a historical adapter shape, not
-current project authority. The obsolete daemon raw-index/slug producer has been
-removed; normal operations use server-resolved canonical UUID identity through
-the V3 contract and never create or stage a hash-based `.engram-project` marker.
-Use [Context recovery](../operating-engram.md#context-recovery) for the current
-supported identity and existing-memory recovery procedure.
+`RunHook` does not resolve project context for `UserPromptSubmit`, and skips it
+for `SessionStart` without a configured server URL. Other applicable hooks use
+the existing logical-project resolver; resolution does not grant data access.
+For identity failures, use [Context recovery](../operating-engram.md#context-recovery)
+and preserve markers, caches and existing data.
 
 ---
 

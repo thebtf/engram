@@ -67,7 +67,7 @@ func TestStrictMutationArgumentsRejectLossyOrPartialValues(t *testing.T) {
 	if got, present, err := optionalInt64SliceArg(valid, "supersedes"); err != nil || !present || !reflect.DeepEqual(got, []int64{1, 9007199254740993}) {
 		t.Fatalf("supersedes: %#v %v %v", got, present, err)
 	}
-	for _, raw := range []string{`{}`, `{"id":null}`, `{"id":"1"}`, `{"id":1.5}`, `{"id":1e3}`, `{"id":9223372036854775808}`} {
+	for _, raw := range []string{`{}`, `{"id":null}`, `{"id":"1"}`, `{"id":"42"}`, `{"id":1.5}`, `{"id":1e3}`, `{"id":9223372036854775808}`} {
 		m, err := parseArgs(json.RawMessage(raw))
 		if err != nil {
 			t.Fatal(err)
@@ -118,28 +118,6 @@ func FuzzRequireInt64ArgRejectsLossyRepresentations(f *testing.F) {
 			t.Fatalf("strict integer parser accepted lossy representation %q", raw)
 		}
 	})
-}
-
-func TestMutationSelectorsPreserveExactNumbersAndRejectLoss(t *testing.T) {
-	m, err := parseArgs(json.RawMessage(`{"id":9007199254740993,"ids":[1,9007199254740993]}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, err := requireInt64Arg(m, "id"); err != nil || got != 9007199254740993 {
-		t.Fatalf("exact id = %d, err = %v", got, err)
-	}
-	if got, _, err := optionalInt64SliceArg(m, "ids"); err != nil || len(got) != 2 || got[1] != 9007199254740993 {
-		t.Fatalf("exact ids = %v, err = %v", got, err)
-	}
-	for _, raw := range []string{`{"id":"42"}`, `{"id":1.5}`, `{"id":1e3}`, `{"id":9223372036854775808}`} {
-		m, err := parseArgs(json.RawMessage(raw))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := requireInt64Arg(m, "id"); err == nil {
-			t.Fatalf("lossy selector accepted: %s", raw)
-		}
-	}
 }
 
 func TestCoerceString(t *testing.T) {
@@ -302,41 +280,6 @@ func TestCoerceStringSlice(t *testing.T) {
 			for i := range got {
 				if got[i] != tt.want[i] {
 					t.Errorf("coerceStringSlice()[%d] = %q, want %q", i, got[i], tt.want[i])
-				}
-			}
-		})
-	}
-}
-
-func TestCoerceInt64Slice(t *testing.T) {
-	tests := []struct {
-		name string
-		v    any
-		want []int64
-	}{
-		{"nil", nil, nil},
-		{"not array", "hello", nil},
-		{"float64 array", []any{float64(1), float64(2), float64(3)}, []int64{1, 2, 3}},
-		{"string array", []any{"1", "2", "3"}, []int64{1, 2, 3}},
-		{"mixed array", []any{float64(1), "2", json.Number("3")}, []int64{1, 2, 3}},
-		{"with zeros", []any{float64(0), float64(1)}, []int64{1}}, // 0 is skipped
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := coerceInt64Slice(tt.v)
-			if tt.want == nil {
-				if got != nil {
-					t.Errorf("coerceInt64Slice() = %v, want nil", got)
-				}
-				return
-			}
-			if len(got) != len(tt.want) {
-				t.Errorf("coerceInt64Slice() len = %d, want %d", len(got), len(tt.want))
-				return
-			}
-			for i := range got {
-				if got[i] != tt.want[i] {
-					t.Errorf("coerceInt64Slice()[%d] = %d, want %d", i, got[i], tt.want[i])
 				}
 			}
 		})

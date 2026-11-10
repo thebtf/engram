@@ -14,22 +14,18 @@ current project, or when you've found a new problem that should be filed.
 in a project that is NOT tracked by engram, use its native issue tracker
 (GitHub, Linear, Jira, etc.) — do NOT file engram issues for external projects.
 
-To check if a project is engram-tracked:
-```
-curl -s -H "Authorization: Bearer $ENGRAM_AUTH_ADMIN_TOKEN" \
-  http://$ENGRAM_HOST/api/issues/tracked-projects
-```
-Returns `{"projects": [...], "count": N}`. A project is tracked if it has
-observations OR existing issues in engram — meaning an agent working on it
-will actually see injected issues at session start.
+Use the authorized `GET /api/issues/tracked-projects` reader to check tracking.
+It returns `{"projects": [...], "count": N}`. Use the host's authorized
+connection; never place the server operator key on a workstation or in chat.
+A project is tracked if it has observations or issues in Engram.
 
-**Role discipline (NON-NEGOTIABLE):**
-- You are the TARGET agent when an issue's `target_project` matches your project.
-  Your job: resolve or comment. You do NOT close issues you didn't create.
-- You are the SOURCE agent when an issue's `source_project` matches your project.
-  Your job: verify fixes, then close (fix works) or reopen (fix failed).
-- Only the source agent (or dashboard operator) can close.
-- Only resolve an issue when the fix is actually deployed — not when you think it will work.
+**Task and authorization:** Issue project labels describe routing and provenance,
+not a permission grant. Triage the issues relevant to the current authorized task;
+an injected inbox does not require interrupting unrelated work. Verify a fix before
+closing or reopening, and distinguish a partial fix from a completed outcome.
+The installed service checks each action. Some deployed versions restrict close
+to the source project or an operator; respect actual refusals without assuming
+that restriction is permanent or that a future server change is already deployed.
 
 ## Workflow
 
@@ -43,13 +39,12 @@ Fetch active work assigned to you:
 issues(action="list", project="<your-project>", status="open,acknowledged,reopened", limit=20)
 ```
 
-For each returned issue:
+For each issue selected for this task:
 1. Read the title, body, and latest comments with `issues(action="get", id=N)`.
-2. Treat it as YOUR project's inbox and a direct work order: study the situation, verify the claim, decide whether to implement, reject, clarify, or comment with blocker/progress.
-3. `acknowledged` means delivered and accepted into your active backlog — not done.
-4. If resolved: `issues(action="update", project="<your-project>", id=N, status="resolved", comment="Fixed in <commit/version>: <explanation>")`.
-5. If the source project misunderstood the problem or requested the wrong change: comment with evidence and explain why; do not silently ignore it.
-6. Do NOT close — that's the source agent's job.
+2. Verify the claim and act within your assignment, or route it to its owner.
+3. `acknowledged` means delivered, not done.
+4. If the requirement is met, use the installed service's authorized resolution action and describe the observed fix; otherwise record the relevant blocker or progress.
+5. If the request is mistaken, explain with evidence rather than silently ignoring it.
 
 Report at the end: how many were actionable, which are blocked, which you resolved.
 
@@ -68,7 +63,7 @@ source agent added comments:
 issues(action="list", source_project="<your-project>", status="resolved", limit=20)
 ```
 
-For each reopened issue:
+For each relevant reopened issue:
 1. `issues(action="get", id=N)` — read the reopen reason carefully.
 2. Understand WHY the fix failed. Do not assume it's still fixed.
 3. If the reason is valid → plan another fix. If the reopener misunderstood → comment politely explaining.
@@ -76,20 +71,19 @@ For each reopened issue:
 
 ### Step 3 — Your cross-project issues (you as SOURCE)
 
-Issues YOU filed against OTHER projects that are now resolved — you must verify:
+For relevant resolved issues filed against other projects, verify the claimed fix:
 
 ```
 issues(action="list", source_project="<your-project>", status="resolved", limit=20)
 ```
 
-For each resolved issue you created:
+For each selected resolved issue:
 1. `issues(action="get", id=N)` — read the resolution comment.
-2. Treat this as YOUR follow-up inbox for cross-project dialogue: understand what the other project claims to have fixed or added, inspect comments/reports, and judge the quality of the result.
-3. **Actually verify the fix works.** Test the behavior, read the commit, check the deployed version.
-4. If the fix works and you're satisfied → `issues(action="close", project="<your-project>", id=N)`. This is terminal — the issue disappears from all injections.
-5. If the fix does NOT work, is incomplete, or the other project misunderstood the request → `issues(action="reopen", project="<your-project>", id=N, body="Tested X, still broken because Y")` with concrete evidence.
-6. If more discussion is needed before reopen/close → comment with precise feedback and what still needs verification.
-7. If you cannot verify (insufficient access, needs deploy) → comment with what's missing; do NOT close.
+2. Inspect the evidence and verify the actual behavior before taking a transition.
+3. If the fix works, use the installed service's authorized close action; if access is denied, retain the refusal and route it to an authorized actor.
+4. If the fix does not work, use the authorized reopen action with concrete evidence.
+5. If discussion is needed, comment with precise feedback and what remains unverified.
+6. If verification is unavailable, record the missing evidence; do not claim a successful fix.
 
 ### Step 4 — New problems discovered during this session
 
@@ -139,8 +133,6 @@ Engram issues triage for <your-project>:
 ## Anti-patterns (DO NOT)
 
 - Do NOT file engram issues for untracked projects — use their native tracker.
-- Do NOT close issues you didn't create. That's the source agent or operator.
 - Do NOT create duplicates — check existing issues first with `list`.
 - Do NOT resolve an issue while the fix is only half-done — comment with progress instead.
-- Do NOT decide unilaterally "my part is done, splitting into new issues for X" — comment your analysis and ask the operator.
 - Do NOT silently accept a reopen — understand the reason and either fix properly or explain why you think the original resolution was correct.

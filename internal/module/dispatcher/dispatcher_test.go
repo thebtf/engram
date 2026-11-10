@@ -189,11 +189,15 @@ func TestHandleRequest_InitializeProvidesGuidanceWithoutProviders(t *testing.T) 
 		"`user_input_required`",
 		"`project_context` is not advertised",
 		"never an unknown-outcome mutation",
-		"resolved (target agent) → closed (source confirms)",
+		"not a task, priority or permission override",
+		"Some deployed versions restrict closing",
 	} {
 		if !strings.Contains(result.Instructions, want) {
 			t.Errorf("initialize guidance missing %q", want)
 		}
+	}
+	if strings.Contains(result.Instructions, "Read each issue carefully") || strings.Contains(result.Instructions, "only the source agent") {
+		t.Error("initialize guidance must not require a blanket inbox sweep or permanent source-only closure")
 	}
 }
 
@@ -207,6 +211,9 @@ func TestHandleRequest_Ping_ReturnsEmptyResult(t *testing.T) {
 	r := parseResp(t, resp)
 	if r.Error != nil {
 		t.Fatalf("unexpected error: %+v", r.Error)
+	}
+	if string(r.Result) != "{}" {
+		t.Errorf("ping result = %s, want an empty object", r.Result)
 	}
 }
 

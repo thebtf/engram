@@ -126,18 +126,3 @@ func TestTokenStore_Concurrent_T031(t *testing.T) {
 	}
 	wg.Wait()
 }
-
-// TestTokenStore_NoLeakAfterClose_T031 verifies no goroutine leak.
-// goleak.VerifyTestMain in TestMain handles this implicitly; this test
-// explicitly calls Close and asserts the janitor goroutine has stopped.
-func TestTokenStore_NoLeakAfterClose_T031(t *testing.T) {
-	ts := writelint.NewTokenStore(writelint.TokenStoreConfig{
-		TTL:            5 * time.Second,
-		JanitorInterval: 50 * time.Millisecond,
-	})
-	// Close immediately — janitor must stop.
-	ts.Close()
-	// Give goroutine scheduler a moment to settle
-	time.Sleep(100 * time.Millisecond)
-	// goleak.VerifyTestMain will catch any lingering goroutines after all tests.
-}

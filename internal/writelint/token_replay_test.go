@@ -16,7 +16,9 @@ import (
 // buildReplayOrchestrator returns an orchestrator with a 10-second token TTL
 // and a duplicate seeded so Phase1 always returns a token (not stored=true).
 func buildReplayOrchestrator() (*writelint.Orchestrator, func()) {
-	ms := newConcMemStore(makeDupMemory())
+	duplicate := makeDupMemory()
+	duplicate.Project = "project-alpha"
+	ms := &stubMemoryLister{memories: []*models.Memory{duplicate}}
 	al := &concurrentAuditLogger{}
 	ts := writelint.NewTokenStore(writelint.TokenStoreConfig{
 		TTL:             10 * time.Second,
@@ -38,14 +40,19 @@ func TestTokenReplay_DifferentProject(t *testing.T) {
 	orch, closer := buildReplayOrchestrator()
 	defer closer()
 	ctx := context.Background()
+	store := orch.MemoryStore().(*stubMemoryLister)
+	original := *store.memories[0]
+	original.Tags = append([]string(nil), original.Tags...)
 
 	p1, err := orch.Phase1(ctx, &models.Memory{Content: dupContent, Project: "project-alpha"}, "agent")
 	if err != nil {
 		t.Fatalf("Phase1: %v", err)
 	}
-	if p1.Stored {
-		t.Skip("no signal fired — replay test requires token; check dupContent similarity")
+	if p1.Stored || p1.ResolutionToken == "" || len(p1.LintSignals) == 0 {
+		t.Fatalf("Phase1: expected a signal and token, got %+v", p1)
 	}
+	assertDuplicateSignal(t, p1.LintSignals, 42)
+	assertStubMemoryState(t, store, original, 0, 0, 0, 1)
 
 	_, p2Err := orch.Phase2(ctx, writelint.Phase2Request{
 		Token:   p1.ResolutionToken,
@@ -60,6 +67,7 @@ func TestTokenReplay_DifferentProject(t *testing.T) {
 	if !strings.Contains(p2Err.Error(), "resolution_token_project_mismatch") {
 		t.Errorf("TestTokenReplay_DifferentProject: expected 'resolution_token_project_mismatch' in error, got: %v", p2Err)
 	}
+	assertStubMemoryState(t, store, original, 0, 0, 0, 1)
 }
 
 // TestTokenReplay_DifferentContent verifies that Phase2 rejects a token when
@@ -69,14 +77,19 @@ func TestTokenReplay_DifferentContent(t *testing.T) {
 	orch, closer := buildReplayOrchestrator()
 	defer closer()
 	ctx := context.Background()
+	store := orch.MemoryStore().(*stubMemoryLister)
+	original := *store.memories[0]
+	original.Tags = append([]string(nil), original.Tags...)
 
 	p1, err := orch.Phase1(ctx, &models.Memory{Content: dupContent, Project: "project-alpha"}, "agent")
 	if err != nil {
 		t.Fatalf("Phase1: %v", err)
 	}
-	if p1.Stored {
-		t.Skip("no signal fired — replay test requires token; check dupContent similarity")
+	if p1.Stored || p1.ResolutionToken == "" || len(p1.LintSignals) == 0 {
+		t.Fatalf("Phase1: expected a signal and token, got %+v", p1)
 	}
+	assertDuplicateSignal(t, p1.LintSignals, 42)
+	assertStubMemoryState(t, store, original, 0, 0, 0, 1)
 
 	_, p2Err := orch.Phase2(ctx, writelint.Phase2Request{
 		Token:   p1.ResolutionToken,
@@ -91,6 +104,7 @@ func TestTokenReplay_DifferentContent(t *testing.T) {
 	if !strings.Contains(p2Err.Error(), "resolution_token_content_mismatch") {
 		t.Errorf("TestTokenReplay_DifferentContent: expected 'resolution_token_content_mismatch' in error, got: %v", p2Err)
 	}
+	assertStubMemoryState(t, store, original, 0, 0, 0, 1)
 }
 
 // TestTokenReplay_SameProjectAndContent verifies that Phase2 succeeds when
@@ -99,23 +113,32 @@ func TestTokenReplay_SameProjectAndContent(t *testing.T) {
 	orch, closer := buildReplayOrchestrator()
 	defer closer()
 	ctx := context.Background()
+	store := orch.MemoryStore().(*stubMemoryLister)
+	original := *store.memories[0]
+	original.Tags = append([]string(nil), original.Tags...)
 
 	p1, err := orch.Phase1(ctx, &models.Memory{Content: dupContent, Project: "project-alpha"}, "agent")
 	if err != nil {
 		t.Fatalf("Phase1: %v", err)
 	}
-	if p1.Stored {
-		t.Skip("no signal fired — replay test requires token; check dupContent similarity")
+	if p1.Stored || p1.ResolutionToken == "" || len(p1.LintSignals) == 0 {
+		t.Fatalf("Phase1: expected a signal and token, got %+v", p1)
 	}
+	assertDuplicateSignal(t, p1.LintSignals, 42)
+	assertStubMemoryState(t, store, original, 0, 0, 0, 1)
 
-	_, p2Err := orch.Phase2(ctx, writelint.Phase2Request{
+	p2, p2Err := orch.Phase2(ctx, writelint.Phase2Request{
 		Token:   p1.ResolutionToken,
 		Option:  "abort",
-		Content: dupContent, // same content
+		Content: dupContent,      // same content
 		Project: "project-alpha", // same project
 		Actor:   "agent",
 	})
 	if p2Err != nil {
-		t.Errorf("TestTokenReplay_SameProjectAndContent: expected no error for matching project+content, got: %v", p2Err)
+		t.Fatalf("TestTokenReplay_SameProjectAndContent: expected no error for matching project+content, got: %v", p2Err)
 	}
+	if p2.Stored || p2.ActionTaken != "write_lint_aborted" {
+		t.Errorf("expected successful abort, got %+v", p2)
+	}
+	assertStubMemoryState(t, store, original, 0, 0, 0, 1)
 }

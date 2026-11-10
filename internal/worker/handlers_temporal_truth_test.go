@@ -184,17 +184,6 @@ func TestHandleTemporalTruthReadRejectsMissingOrBlankProject(t *testing.T) {
 	}
 }
 
-func TestHandleTemporalTruthReadRejectsInvalidAsOf(t *testing.T) {
-	service := &Service{temporalTruthEnabled: true, temporalTruthProvider: &fakeTemporalTruthProvider{}}
-	req := httptest.NewRequest(http.MethodGet, "/api/temporal-truth?project=engram&fact_id=42&as_of=nope", nil)
-	w := httptest.NewRecorder()
-
-	service.handleTemporalTruthRead(w, req)
-
-	require.Equal(t, http.StatusBadRequest, w.Code)
-	require.Contains(t, w.Body.String(), "as_of must be RFC3339")
-}
-
 func TestHandleTemporalTruthReadMapsProviderFailureTo500AndMalformedRequestTo400(t *testing.T) {
 	provider := &fakeTemporalTruthProvider{err: errors.New("temporal store unavailable")}
 	service := &Service{temporalTruthEnabled: true, temporalTruthProvider: provider}

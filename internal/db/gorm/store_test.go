@@ -294,32 +294,6 @@ func TestStore_WithTimeout_CancelIdempotent(t *testing.T) {
 	_ = ctx
 }
 
-func TestStore_ExecWithTimeout(t *testing.T) {
-	store := openStoreForStoreTest(t)
-	ctx := context.Background()
-	err := store.ExecWithTimeout(ctx, 5*time.Second, "SET search_path TO public")
-	require.NoError(t, err)
-}
-
-func TestStore_QueryRowWithTimeout(t *testing.T) {
-	store := openStoreForStoreTest(t)
-	ctx := context.Background()
-	row := store.QueryRowWithTimeout(ctx, 5*time.Second, "SELECT 42")
-	var val int
-	require.NoError(t, row.Scan(&val))
-	assert.Equal(t, 42, val)
-}
-
-func TestStore_TransactionWithTimeout_Commit(t *testing.T) {
-	store := openStoreForStoreTest(t)
-	ctx := context.Background()
-	err := store.TransactionWithTimeout(ctx, 5*time.Second, func(tx *gormlib.DB) error {
-		var n int
-		return tx.Raw("SELECT 1").Scan(&n).Error
-	})
-	require.NoError(t, err)
-}
-
 func TestStore_TransactionWithTimeout_RollbackOnError(t *testing.T) {
 	store := openStoreForStoreTest(t)
 	ctx := context.Background()
@@ -348,17 +322,6 @@ func TestStore_Stats(t *testing.T) {
 	store := openStoreForStoreTest(t)
 	stats := store.Stats()
 	assert.GreaterOrEqual(t, stats.OpenConnections, 1)
-}
-
-func TestStore_Ping(t *testing.T) {
-	store := openStoreForStoreTest(t)
-	require.NoError(t, store.Ping())
-}
-
-func TestStore_GetRawDB_GetDB(t *testing.T) {
-	store := openStoreForStoreTest(t)
-	assert.NotNil(t, store.GetRawDB())
-	assert.NotNil(t, store.GetDB())
 }
 
 func TestStore_HealthCheck_Caching(t *testing.T) {

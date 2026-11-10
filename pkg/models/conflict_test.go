@@ -66,11 +66,6 @@ func TestCorrectionPatterns_MinimumCount(t *testing.T) {
 // OpposingChangePatterns
 // ---------------------------------------------------------------------------
 
-func TestOpposingChangePatterns_NotEmpty(t *testing.T) {
-	t.Parallel()
-	assert.NotEmpty(t, OpposingChangePatterns)
-}
-
 func TestOpposingChangePatterns_KnownPairs(t *testing.T) {
 	t.Parallel()
 	pairs := []struct{ key, val string }{
@@ -281,24 +276,6 @@ func TestDetectConflict_ExplicitCorrectionWins(t *testing.T) {
 	assert.Equal(t, ConflictContradicts, result.Type)
 	assert.Equal(t, ResolutionPreferNewer, result.Resolution)
 	assert.Contains(t, result.Reason, "Explicit correction")
-}
-
-func TestDetectConflict_NoConflict(t *testing.T) {
-	t.Parallel()
-	newer := &Observation{
-		ID:        21,
-		Project:   "proj",
-		Narrative: sql.NullString{String: "Added retry logic to the HTTP client.", Valid: true},
-	}
-	older := &Observation{
-		ID:      11,
-		Project: "proj",
-		Title:   sql.NullString{String: "Initial HTTP client setup", Valid: true},
-	}
-
-	result := DetectConflict(newer, older)
-	// Neutral content — may or may not conflict; what matters is HasConflict==false for normal text
-	_ = result // result varies by implementation; just verify no panic
 }
 
 // ---------------------------------------------------------------------------

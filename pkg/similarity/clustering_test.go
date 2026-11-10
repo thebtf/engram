@@ -206,43 +206,6 @@ func TestClusterObservations_AllUnique(t *testing.T) {
 	assert.Len(t, result, 5, "all unique observations should be preserved")
 }
 
-func TestClusterObservations_SimilarPairsClustered(t *testing.T) {
-	obs1 := &models.Observation{
-		ID:        1,
-		Title:     sql.NullString{String: "authentication system implementation", Valid: true},
-		Narrative: sql.NullString{String: "JWT-based authentication for API", Valid: true},
-	}
-	obs2 := &models.Observation{
-		ID:        2,
-		Title:     sql.NullString{String: "authentication system update", Valid: true},
-		Narrative: sql.NullString{String: "Updated JWT authentication logic", Valid: true},
-	}
-	obs3 := &models.Observation{
-		ID:        3,
-		Title:     sql.NullString{String: "Database migration strategy", Valid: true},
-		Narrative: sql.NullString{String: "PostgreSQL schema migrations", Valid: true},
-	}
-	obs4 := &models.Observation{
-		ID:        4,
-		Title:     sql.NullString{String: "Database migration guide", Valid: true},
-		Narrative: sql.NullString{String: "Running PostgreSQL migrations", Valid: true},
-	}
-
-	result := ClusterObservations([]*models.Observation{obs1, obs2, obs3, obs4}, 0.4)
-
-	t.Logf("Clustered 4 observations to %d", len(result))
-	assert.LessOrEqual(t, len(result), 4)
-	assert.GreaterOrEqual(t, len(result), 1)
-
-	ids := make(map[int64]bool)
-	for _, obs := range result {
-		ids[obs.ID] = true
-	}
-	if len(result) <= 3 {
-		assert.True(t, ids[1], "obs1 should be kept as the auth cluster representative")
-	}
-}
-
 func TestClusterObservations_PreservesFirstItem(t *testing.T) {
 	observations := []*models.Observation{
 		{ID: 10, Title: sql.NullString{String: "first authentication observation", Valid: true}},

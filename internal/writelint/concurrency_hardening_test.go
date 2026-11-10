@@ -95,6 +95,7 @@ func TestConcurrency_50Goroutines_SameContent_DistinctTokens(t *testing.T) {
 		wg       sync.WaitGroup
 		mu       sync.Mutex
 		tokens   []string
+		signaled int
 		errCount int
 	)
 
@@ -102,15 +103,18 @@ func TestConcurrency_50Goroutines_SameContent_DistinctTokens(t *testing.T) {
 	for i := 0; i < N; i++ {
 		go func() {
 			defer wg.Done()
-			resp, err := orch.Phase1(ctx, &models.Memory{Content: dupContent, Project: "testproj"}, "agent")
+			resp, err := orch.Phase1(ctx, &models.Memory{Content: dupContent, Project: "test"}, "agent")
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
 				errCount++
 				return
 			}
-			if !resp.Stored && resp.ResolutionToken != "" {
-				tokens = append(tokens, resp.ResolutionToken)
+			if !resp.Stored {
+				signaled++
+				if resp.ResolutionToken != "" {
+					tokens = append(tokens, resp.ResolutionToken)
+				}
 			}
 		}()
 	}
@@ -118,6 +122,12 @@ func TestConcurrency_50Goroutines_SameContent_DistinctTokens(t *testing.T) {
 
 	if errCount > 0 {
 		t.Errorf("finding 8 same-content: %d errors", errCount)
+	}
+	if signaled != N {
+		t.Errorf("same-content: expected %d signaled, got %d", N, signaled)
+	}
+	if len(tokens) != N {
+		t.Errorf("same-content: expected %d resolution tokens, got %d", N, len(tokens))
 	}
 
 	// All tokens minted for concurrent same-content writes must be distinct.
@@ -162,14 +172,17 @@ func TestToken_ExpiryContract(t *testing.T) {
 	})
 
 	ctx := context.Background()
-	p1, err := orch.Phase1(ctx, &models.Memory{Content: dupContent, Project: "testproj"}, "agent")
+	p1, err := orch.Phase1(ctx, &models.Memory{Content: dupContent, Project: "test"}, "agent")
 	if err != nil {
 		t.Fatalf("Phase1: %v", err)
 	}
 	if p1.Stored {
-		t.Skip("no signal fired — expiry contract test requires a token")
+		t.Fatal("no signal fired — expiry contract test requires a token")
 	}
 	token := p1.ResolutionToken
+	if token == "" {
+		t.Fatal("expiry contract requires a non-empty resolution token")
+	}
 
 	// Wait for TTL to elapse; janitor is on 10-minute interval so entry is
 	// still in the map (expired but not purged).
@@ -180,7 +193,7 @@ func TestToken_ExpiryContract(t *testing.T) {
 		Token:   token,
 		Option:  "abort",
 		Content: dupContent,
-		Project: "testproj",
+		Project: "test",
 		Actor:   "agent",
 	})
 	if err1 == nil {
@@ -196,7 +209,7 @@ func TestToken_ExpiryContract(t *testing.T) {
 		Token:   token,
 		Option:  "abort",
 		Content: dupContent,
-		Project: "testproj",
+		Project: "test",
 		Actor:   "agent",
 	})
 	if err2 == nil {

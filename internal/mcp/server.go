@@ -859,7 +859,7 @@ func (s *Server) primaryTools() []Tool {
 				"Mutations act as the native caller's verified canonical project; the compatibility project argument cannot establish or replace that identity. For list, project/source_project are read filters; get needs only id. These reads are project-free and remain usable during an identity hold.\n" +
 				"`target_project` = project the issue is FOR (where it will be injected).\n" +
 				"Lifecycle: open → acknowledged (auto) → resolved → closed ⟲ reopened.\n" +
-				"Target agent resolves, source agent closes. Only source or dashboard operator can close.\n\n" +
+				"Project and agent labels are provenance, not permission. Verify the fix and use the installed service's actual authorization for each transition; some deployed versions restrict closing to source or operator.\n\n" +
 				"FORMATTING (body and comments support Markdown — rendered in dashboard):\n" +
 				"- Wrap code in fenced blocks: ```go\\nfunc main(){}\\n``` (with language tag)\n" +
 				"- Wrap terminal output: ```bash\\n$ command\\noutput\\n```\n" +

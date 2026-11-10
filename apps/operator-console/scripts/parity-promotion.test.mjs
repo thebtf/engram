@@ -1,16 +1,13 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const repo = join(root, '..', '..')
-const check = join(root, 'scripts', 'parity-check.repo.mjs')
-const parityPath = join(root, 'PARITY.json')
-const mockupPath = join(repo, 'design', 'operator-console', 'mockups', 'index.html')
 const promotion = join(repo, 'scripts', 'promote-od-operator-console.ps1')
 const files = [
   ['PRODUCT.md', 'contracts/PRODUCT.md'], ['DESIGN.md', 'contracts/DESIGN.md'], ['DESIGN-SYNC-PROTOCOL.md', 'contracts/DESIGN-SYNC-PROTOCOL.md'],
@@ -20,9 +17,38 @@ const files = [
   ['index.html', 'mockups/index.html'], ['access-admin.html', 'mockups/access-admin.html'], ['saas-admin.html', 'mockups/saas-admin.html'], ['components.html', 'mockups/components.html']
 ]
 
-function run(...args) {
-  try { return { status: 0, output: execFileSync(process.execPath, [check, ...args], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }) } }
+function runAt(appRoot, ...args) {
+  const check = join(appRoot, 'scripts', 'parity-check.repo.mjs')
+  try { return { status: 0, output: execFileSync(process.execPath, [check, ...args], { cwd: appRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }) } }
   catch (error) { return { status: error.status ?? 1, output: `${error.stdout ?? ''}${error.stderr ?? ''}` } }
+}
+
+function run(...args) {
+  return runAt(root, ...args)
+}
+
+function withParityFixture(callback) {
+  const base = mkdtempSync(join(tmpdir(), 'engram-parity-'))
+  const appRoot = join(base, 'apps', 'operator-console')
+  const designRoot = join(base, 'design', 'operator-console')
+  try {
+    mkdirSync(join(appRoot, 'scripts'), { recursive: true })
+    cpSync(join(root, 'scripts', 'parity-check.repo.mjs'), join(appRoot, 'scripts', 'parity-check.repo.mjs'))
+    cpSync(join(root, 'PARITY.json'), join(appRoot, 'PARITY.json'))
+    cpSync(join(repo, 'design', 'operator-console'), designRoot, { recursive: true, dereference: true })
+    const parity = JSON.parse(readFileSync(join(appRoot, 'PARITY.json'), 'utf8'))
+    for (const row of parity.sections ?? []) {
+      if (typeof row.runtime !== 'string') continue
+      const source = resolve(root, row.runtime)
+      if ((source !== root && !source.startsWith(`${root}${sep}`)) || !existsSync(source)) continue
+      const destination = resolve(appRoot, row.runtime)
+      mkdirSync(dirname(destination), { recursive: true })
+      cpSync(source, destination, { recursive: true })
+    }
+    return callback({ base, appRoot, designRoot })
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+  }
 }
 
 function promote(source, destination, ...args) {
@@ -58,11 +84,18 @@ test('strict mode rejects acknowledged drift', () => {
 })
 
 test('mockup mutation and duplicate rows fail closed', () => {
-  const mockup = readFileSync(mockupPath)
-  const parity = readFileSync(parityPath)
-  try {
+  let base
+  withParityFixture((fixture) => {
+    const { appRoot, designRoot } = fixture
+    base = fixture.base
+    const baseline = runAt(appRoot)
+    assert.equal(baseline.status, 0, baseline.output)
+    const mockupPath = join(designRoot, 'mockups', 'index.html')
+    const parityPath = join(appRoot, 'PARITY.json')
+    const mockup = readFileSync(mockupPath)
+    const parity = readFileSync(parityPath)
     writeFileSync(mockupPath, `${mockup}\n<!-- hostile mutation -->\n`)
-    let result = run()
+    let result = runAt(appRoot)
     assert.notEqual(result.status, 0)
     assert.match(result.output, /hash mismatch/)
     writeFileSync(mockupPath, mockup)
@@ -70,13 +103,21 @@ test('mockup mutation and duplicate rows fail closed', () => {
     const mutated = JSON.parse(parity)
     mutated.sections.push(mutated.sections[0])
     writeFileSync(parityPath, `${JSON.stringify(mutated, null, 2)}\n`)
-    result = run()
+    result = runAt(appRoot)
     assert.notEqual(result.status, 0)
     assert.match(result.output, /duplicate parity row/)
-  } finally {
-    writeFileSync(mockupPath, mockup)
-    writeFileSync(parityPath, parity)
-  }
+  })
+  assert.equal(existsSync(base), false)
+})
+
+test('parity fixture is removed when its callback fails', () => {
+  let base
+  assert.throws(() => withParityFixture((fixture) => {
+    base = fixture.base
+    throw new Error('fixture failure')
+  }), /fixture failure/)
+  assert.ok(base)
+  assert.equal(existsSync(base), false)
 })
 
 test('promotion is idempotent, EOL-stable, and refuses runtime writes', () => {

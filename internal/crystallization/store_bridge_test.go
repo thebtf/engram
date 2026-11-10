@@ -32,6 +32,11 @@ func TestBuildMemories_Fields(t *testing.T) {
 		assert.Equal(t, "crystallization", mem.SourceAgent, "memory %d: wrong source_agent", i)
 		assert.Contains(t, mem.Tags, "crystallization", "memory %d: missing crystallization tag", i)
 		assert.Contains(t, mem.Tags, "session:test-session-id", "memory %d: missing session tag", i)
+		for _, tag := range mem.Tags {
+			if strings.HasPrefix(tag, "session:") {
+				assert.Equal(t, "session:test-session-id", tag)
+			}
+		}
 		assert.NotEmpty(t, mem.Content, "memory %d: content must not be empty", i)
 	}
 
@@ -53,22 +58,4 @@ func TestBuildMemories_PrivacyRedaction(t *testing.T) {
 		"raw secret must not appear in stored content")
 	assert.Contains(t, mems[0].Content, "[REDACTED",
 		"stored content must contain a redaction marker")
-}
-
-func TestBuildMemories_SessionTag(t *testing.T) {
-	decisions := []ExtractedDecision{
-		{Text: "going forward, use Redis for caching", Pattern: "going forward", Position: 0},
-	}
-
-	mems := BuildMemories(decisions, "my-session-42", "proj")
-	require.Len(t, mems, 1)
-
-	found := false
-	for _, tag := range mems[0].Tags {
-		if strings.HasPrefix(tag, "session:") {
-			assert.Equal(t, "session:my-session-42", tag)
-			found = true
-		}
-	}
-	assert.True(t, found, "session tag must be present")
 }

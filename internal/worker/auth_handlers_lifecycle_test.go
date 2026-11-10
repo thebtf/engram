@@ -571,7 +571,11 @@ func TestAuthHandlersLifecycle_DisabledAdminCanBeDemotedWithoutLastAdminError(t 
 	count, err := env.users.CountAdmins()
 	require.NoError(t, err)
 	require.Equal(t, int64(1), count)
-	require.Equal(t, active.ID, active.ID)
+	remaining, err := env.users.GetUserByID(active.ID)
+	require.NoError(t, err)
+	require.Equal(t, active.ID, remaining.ID)
+	require.Equal(t, gormdb.DashboardRoleAdmin, remaining.Role)
+	require.False(t, remaining.Disabled)
 }
 
 func TestAuthHandlersLifecycle_NormalizedAdminRoleIsNotDemotion(t *testing.T) {

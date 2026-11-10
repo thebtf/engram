@@ -104,6 +104,9 @@ func TestManager_SupportedExtensions_AggregatesAllChunkers(t *testing.T) {
 	}, DefaultChunkOptions())
 
 	exts := m.SupportedExtensions()
+	if len(exts) != 3 {
+		t.Errorf("expected exactly three supported extensions, got %d", len(exts))
+	}
 	want := map[string]bool{".go": false, ".py": false, ".pyw": false}
 
 	for _, ext := range exts {

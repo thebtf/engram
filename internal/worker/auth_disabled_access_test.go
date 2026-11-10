@@ -245,3 +245,14 @@ func TestAuthOnUsersWithoutAdminRoleStillForbidden(t *testing.T) {
 		t.Fatalf("users without admin role status=%d, want %d; body=%s", rec.Code, http.StatusForbidden, rec.Body.String())
 	}
 }
+
+func TestUsersHandlerRejectsAuthenticatedNonAdmin(t *testing.T) {
+	h := NewAuthHandlers(nil, nil, nil, nil)
+	ctx := buildAuthCtx(context.Background(), authpkg.Session("operator"))
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/users", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	h.handleListUsers(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("operator users status=%d, want %d; body=%s", rec.Code, http.StatusForbidden, rec.Body.String())
+	}
+}

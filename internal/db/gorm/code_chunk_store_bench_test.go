@@ -4,11 +4,9 @@ package gorm
 //
 // How to run:
 //
-//	DATABASE_DSN="host=localhost user=engram password=... dbname=engram_test sslmode=disable" \
-//	  go test ./internal/db/gorm/... -run TestCodeSearch -v
+//	ENGRAM_TEST_DOCKER_MIGRATIONS=1 go test ./internal/db/gorm/ -run 'TestCodeChunkStore_(SearchCodeFTS|FindSimilarCode)' -v
 //
-//	DATABASE_DSN="..." \
-//	  go test ./internal/db/gorm/... -bench BenchmarkCode -benchtime=10s -v
+//	ENGRAM_TEST_DOCKER_MIGRATIONS=1 go test ./internal/db/gorm/ -run '^$' -bench BenchmarkCode -benchtime=10s -v
 //
 // Interpreting benchmark results:
 //   - BenchmarkCodeSearchFTS: exercises the GIN tsvector index. Target p50 < 50ms
@@ -25,41 +23,19 @@ package gorm
 // and decides whether to enable the DenseOnly fallback in CodeHybridOptions.
 
 import (
-	"context"
 	"fmt"
 	"math/rand"
-	"os"
 	"testing"
 
 	"github.com/pgvector/pgvector-go"
 	"github.com/stretchr/testify/require"
-	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 )
 
-// openBenchDB opens a test DB and runs migrations. Skips when DATABASE_DSN unset.
+// openBenchDB runs migrations in a disposable PostgreSQL container.
 func openBenchDB(tb testing.TB) *gorm.DB {
 	tb.Helper()
-	dsn := os.Getenv("DATABASE_DSN")
-	if dsn == "" {
-		tb.Skip("DATABASE_DSN not set, skipping code_chunk search test/bench")
-	}
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Warn),
-	})
-	if err != nil {
-		tb.Fatalf("open bench DB: %v", err)
-	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		tb.Fatalf("get sql.DB: %v", err)
-	}
-	tb.Cleanup(func() { _ = sqlDB.Close() })
-	if err := runMigrations(db); err != nil {
-		tb.Fatalf("runMigrations: %v", err)
-	}
-	return db
+	return openDockerMigrationDB(tb)
 }
 
 // seedCodeChunks inserts n code chunks with embeddings into a unique project and
@@ -68,7 +44,7 @@ func seedCodeChunks(tb testing.TB, db *gorm.DB, n int) (projectID string, cleanu
 	tb.Helper()
 	projectID = fmt.Sprintf("bench-proj-%d", rand.Int63())
 	store := NewCodeChunkStore(db)
-	ctx := context.Background()
+	ctx := db.Statement.Context
 
 	// Vocabulary words used to build varied content so FTS has something to rank.
 	words := []string{
@@ -126,7 +102,7 @@ func randomVec(dim int) []float32 {
 func TestCodeChunkStore_SearchCodeFTS_FindsByKeyword(t *testing.T) {
 	db := openBenchDB(t)
 	store := NewCodeChunkStore(db)
-	ctx := context.Background()
+	ctx := db.Statement.Context
 
 	proj := fmt.Sprintf("test-fts-%d", rand.Int63())
 	t.Cleanup(func() {
@@ -173,7 +149,7 @@ func TestCodeChunkStore_SearchCodeFTS_FindsByKeyword(t *testing.T) {
 func TestCodeChunkStore_SearchCodeFTS_EmptyInputErrors(t *testing.T) {
 	db := openBenchDB(t)
 	store := NewCodeChunkStore(db)
-	ctx := context.Background()
+	ctx := db.Statement.Context
 
 	_, err := store.SearchCodeFTS(ctx, "", "query", 10)
 	require.Error(t, err, "empty projectID must return error")
@@ -188,7 +164,7 @@ func TestCodeChunkStore_SearchCodeFTS_EmptyInputErrors(t *testing.T) {
 func TestCodeChunkStore_FindSimilarCode_OrderedBySimilarity(t *testing.T) {
 	db := openBenchDB(t)
 	store := NewCodeChunkStore(db)
-	ctx := context.Background()
+	ctx := db.Statement.Context
 
 	proj := fmt.Sprintf("test-vec-%d", rand.Int63())
 	t.Cleanup(func() {
@@ -268,7 +244,7 @@ func TestCodeChunkStore_FindSimilarCode_OrderedBySimilarity(t *testing.T) {
 func TestCodeChunkStore_FindSimilarCode_EmptyInputErrors(t *testing.T) {
 	db := openBenchDB(t)
 	store := NewCodeChunkStore(db)
-	ctx := context.Background()
+	ctx := db.Statement.Context
 
 	_, err := store.FindSimilarCode(ctx, "", randomVec(1536), 10, 0.7)
 	require.Error(t, err, "empty projectID must return error")
@@ -284,37 +260,41 @@ func TestCodeChunkStore_FindSimilarCode_EmptyInputErrors(t *testing.T) {
 
 // BenchmarkCodeSearchFTS measures GIN-indexed tsvector search latency.
 // Target: p50 < 50ms (ADR-001 NFR; FTS alone uses half the 100ms hybrid budget).
-// Run: DATABASE_DSN=... go test ./internal/db/gorm/... -bench BenchmarkCodeSearchFTS -benchtime=10s
+// Run: ENGRAM_TEST_DOCKER_MIGRATIONS=1 go test ./internal/db/gorm/ -run '^$' -bench BenchmarkCodeSearchFTS -benchtime=10s
 func BenchmarkCodeSearchFTS(b *testing.B) {
 	db := openBenchDB(b)
 	proj, cleanup := seedCodeChunks(b, db, 500)
 	b.Cleanup(cleanup)
 
 	store := NewCodeChunkStore(db)
-	ctx := context.Background()
+	ctx := db.Statement.Context
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		words := []string{"function", "handler", "router", "middleware", "context"}
 		query := words[i%len(words)]
-		_, _ = store.SearchCodeFTS(ctx, proj, query, 20)
+		if _, err := store.SearchCodeFTS(ctx, proj, query, 20); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 
 // BenchmarkCodeFindSimilar measures HNSW vector index search latency.
 // Target: p50 < 50ms (ADR-001 NFR).
-// Run: DATABASE_DSN=... go test ./internal/db/gorm/... -bench BenchmarkCodeFindSimilar -benchtime=10s
+// Run: ENGRAM_TEST_DOCKER_MIGRATIONS=1 go test ./internal/db/gorm/ -run '^$' -bench BenchmarkCodeFindSimilar -benchtime=10s
 func BenchmarkCodeFindSimilar(b *testing.B) {
 	db := openBenchDB(b)
 	proj, cleanup := seedCodeChunks(b, db, 500)
 	b.Cleanup(cleanup)
 
 	store := NewCodeChunkStore(db)
-	ctx := context.Background()
+	ctx := db.Statement.Context
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = store.FindSimilarCode(ctx, proj, randomVec(1536), 10, 0.0)
+		if _, err := store.FindSimilarCode(ctx, proj, randomVec(1536), 10, 0.0); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 
@@ -324,20 +304,24 @@ func BenchmarkCodeFindSimilar(b *testing.B) {
 //
 // Interpretation: if this benchmark shows ns/op materially above 100ms, set
 // CodeHybridOptions.DenseOnly=true in production callers (ADR-001 risk-4 mitigation).
-// Run: DATABASE_DSN=... go test ./internal/db/gorm/... -bench BenchmarkCodeHybridCombined -benchtime=10s
+// Run: ENGRAM_TEST_DOCKER_MIGRATIONS=1 go test ./internal/db/gorm/ -run '^$' -bench BenchmarkCodeHybridCombined -benchtime=10s
 func BenchmarkCodeHybridCombined(b *testing.B) {
 	db := openBenchDB(b)
 	proj, cleanup := seedCodeChunks(b, db, 500)
 	b.Cleanup(cleanup)
 
 	store := NewCodeChunkStore(db)
-	ctx := context.Background()
+	ctx := db.Statement.Context
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		words := []string{"function", "handler", "router", "middleware", "context"}
 		query := words[i%len(words)]
-		_, _ = store.SearchCodeFTS(ctx, proj, query, 20)
-		_, _ = store.FindSimilarCode(ctx, proj, randomVec(1536), 10, 0.0)
+		if _, err := store.SearchCodeFTS(ctx, proj, query, 20); err != nil {
+			b.Fatal(err)
+		}
+		if _, err := store.FindSimilarCode(ctx, proj, randomVec(1536), 10, 0.0); err != nil {
+			b.Fatal(err)
+		}
 	}
 }

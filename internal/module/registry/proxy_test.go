@@ -3,7 +3,6 @@ package registry
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -232,26 +231,4 @@ func TestRegister_ProxyRejected_NoPartialRegistration(t *testing.T) {
 	// Only the first module is visible.
 	assert.Len(t, r.Entries(), 1)
 	assert.Equal(t, []string{"first"}, r.ListNames())
-}
-
-// TestGetProxyToolProvider_ErrorFromProxyToolsBubblesUp ensures the error
-// return from ProxyTools is observable by the caller (used by the dispatcher
-// graceful degradation test in dispatcher_test.go).
-func TestGetProxyToolProvider_ErrorFromProxyToolsBubblesUp(t *testing.T) {
-	t.Parallel()
-
-	r := New()
-	m := &proxyFake{
-		name:     "engramcore",
-		proxyErr: errors.New("backend unreachable"),
-	}
-	require.NoError(t, r.Register(m))
-
-	proxy, _, ok := r.GetProxyToolProvider()
-	require.True(t, ok)
-
-	_, err := proxy.ProxyTools(context.Background(), muxcore.ProjectContext{})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "backend unreachable")
-	assert.Equal(t, 1, m.proxyToolsCalls)
 }

@@ -112,7 +112,7 @@ test("installed-style launcher forwards tokenless and configured credentials to 
   const pluginData = fs.mkdtempSync(path.join(os.tmpdir(), "engram-tokenless-launch-"));
   const explicitConfig = path.join(pluginData, "explicit.json");
   fs.writeFileSync(path.join(pluginData, "config.json"), JSON.stringify({ server_url: "http://127.0.0.1:37777", api_token: "engram_plugin_fixture_secret" }));
-  fs.writeFileSync(explicitConfig, JSON.stringify({ server_url: "http://127.0.0.1:37777", api_token: "engram_file_fixture_secret" }));
+  fs.writeFileSync(explicitConfig, JSON.stringify({ server_url: "http://config-file:37777", api_token: "engram_file_fixture_secret" }));
   try {
     const wrapper = path.join(__dirname, "run-engram.js");
     const binaryResolver = path.join(__dirname, "ensure-binary.js");
@@ -133,18 +133,19 @@ test("installed-style launcher forwards tokenless and configured credentials to 
       } };
       require(${JSON.stringify(wrapper)}).main();
     `;
-    for (const [name, env, expected] of [
-      ["absent", { ENGRAM_CONFIG_FILE: path.join(pluginData, "absent.json") }, "absent"],
-      ["plugin data", {}, "plugin"],
-      ["explicit file", { ENGRAM_CONFIG_FILE: explicitConfig }, "file"],
-      ["environment", { ENGRAM_CONFIG_FILE: explicitConfig, ENGRAM_TOKEN: "engram_env_fixture_secret" }, "env"],
+    for (const [name, env, expectedToken, expectedURL] of [
+      ["absent", { ENGRAM_CONFIG_FILE: path.join(pluginData, "absent.json") }, "absent", "http://127.0.0.1:37777"],
+      ["plugin data", {}, "plugin", "http://127.0.0.1:37777"],
+      ["explicit file", { ENGRAM_CONFIG_FILE: explicitConfig }, "file", "http://127.0.0.1:37777"],
+      ["environment wins", { ENGRAM_CONFIG_FILE: explicitConfig, ENGRAM_URL: "http://env-wins:37777", ENGRAM_TOKEN: "engram_env_fixture_secret" }, "env", "http://env-wins:37777"],
+      ["placeholders use file", { ENGRAM_CONFIG_FILE: explicitConfig, ENGRAM_URL: "${user_config.server_url}", ENGRAM_TOKEN: "${user_config.api_token}" }, "file", "http://config-file:37777"],
     ]) {
       const result = spawnSync(process.execPath, ["-e", fixture], {
         encoding: "utf8",
         env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, PLUGIN_DATA: pluginData, ENGRAM_URL: "http://127.0.0.1:37777", ENGRAM_CLIENT_INSTANCE_ID: "fixture-client", ...env },
       });
       assert.equal(result.status, 0, `${name}: ${result.stderr}`);
-      assert.deepEqual(JSON.parse(result.stdout), { url: "http://127.0.0.1:37777", tokenSource: expected }, name);
+      assert.deepEqual(JSON.parse(result.stdout), { url: expectedURL, tokenSource: expectedToken }, name);
       assert.doesNotMatch(result.stderr, /FATAL|engram_(env|file|plugin)_fixture_secret/, name);
     }
   } finally {
@@ -497,14 +498,21 @@ test("describeEnvValue reports missing and placeholder states", () => {
   );
 });
 
-test("appendStartupDiagnosticLog writes bounded plugin-data log", () => {
+test("appendStartupDiagnosticLog trims oversized logs and retains the latest complete entry", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-startup-log-"));
-  appendStartupDiagnosticLog(dir, "[engram] startup env: ENGRAM_TOKEN=redacted(len=10)", new Date("2026-06-03T18:00:00Z"));
-
-  const logPath = path.join(dir, "logs", "startup-env.log");
-  const content = fs.readFileSync(logPath, "utf8");
-  assert.match(content, /2026-06-03T18:00:00\.000Z pid=\d+ \[engram\] startup env:/);
-  assert.doesNotMatch(content, /secret/);
+  try {
+    const logPath = path.join(dir, "logs", "startup-env.log");
+    appendStartupDiagnosticLog(dir, "first-entry", new Date("2026-06-03T17:59:59Z"));
+    assert.match(fs.readFileSync(logPath, "utf8"), /first-entry/);
+    fs.writeFileSync(logPath, "old-marker\n" + "old entry padded for truncation\n".repeat(10000));
+    appendStartupDiagnosticLog(dir, "[engram] startup env: ENGRAM_TOKEN=redacted(len=10)", new Date("2026-06-03T18:00:00Z"));
+    const content = fs.readFileSync(logPath, "utf8");
+    assert.ok(Buffer.byteLength(content) <= 128 * 1024);
+    assert.doesNotMatch(content, /old-marker|secret/);
+    assert.match(content, /2026-06-03T18:00:00\.000Z pid=\d+ \[engram\] startup env: ENGRAM_TOKEN=redacted\(len=10\)\n$/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("trimStartupDiagnosticLog keeps complete log entries after truncation", () => {
@@ -544,9 +552,7 @@ test("config file is read when env vars are absent", () => {
   }
 });
 
-test("env var wins over config file value", () => {
-  // isConfiguredValue returns true for a real env value, so the env-wins
-  // branch must be taken before touching the file.
+test("isConfiguredValue rejects placeholders and missing values", () => {
   assert.equal(isConfiguredValue("http://env-wins:37777"), true, "env value is configured");
   // A placeholder value is NOT configured — file would win for that case.
   assert.equal(isConfiguredValue("${user_config.server_url}"), false, "placeholder is not configured");

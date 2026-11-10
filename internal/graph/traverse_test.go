@@ -2,160 +2,40 @@ package graph
 
 import (
 	"context"
+	"database/sql"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
+	_ "modernc.org/sqlite"
 )
 
-// memStore is an in-memory edge store used exclusively for traverse unit tests.
-// It satisfies the same query surface as *Store without requiring a database
-// connection, letting the tests run without DATABASE_DSN.
-type memStore struct {
-	edges []Edge
-}
-
-func newMemStore(edges ...Edge) *memStore {
-	return &memStore{edges: edges}
-}
-
-// ListByMemory mirrors the real store's semantics: returns active edges where
-// the memory appears as source or target (direction Both), excluding superseded.
-func (m *memStore) ListByMemory(_ context.Context, memoryID int64, dir Direction, edgeType string) ([]Edge, error) {
-	var out []Edge
-	for _, e := range m.edges {
-		if e.SupersededAt != nil {
-			continue
-		}
-		// SourceID/TargetID are *int64; nil means node-typed endpoint (no memory ID).
-		var srcID, tgtID int64
-		if e.SourceID != nil {
-			srcID = *e.SourceID
-		}
-		if e.TargetID != nil {
-			tgtID = *e.TargetID
-		}
-		switch dir {
-		case Outgoing:
-			if srcID != memoryID {
-				continue
-			}
-		case Incoming:
-			if tgtID != memoryID {
-				continue
-			}
-		default: // Both
-			if srcID != memoryID && tgtID != memoryID {
-				continue
-			}
-		}
-		if edgeType != "" && e.EdgeType != edgeType {
-			continue
-		}
-		out = append(out, e)
+// newTraversalStore uses a private SQLite database with the production GORM query path.
+// It does not exercise PostgreSQL-specific behavior or the production migrations.
+func newTraversalStore(t *testing.T, edges ...Edge) *Store {
+	t.Helper()
+	sqlDB, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, sqlDB.Close()) })
+	sqlDB.SetMaxOpenConns(1)
+	db, err := gorm.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gorm.Config{DisableAutomaticPing: true})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(`CREATE TABLE knowledge_edges (
+		id INTEGER PRIMARY KEY, source_id INTEGER, target_id INTEGER,
+		edge_type TEXT NOT NULL, weight REAL NOT NULL, created_at DATETIME NOT NULL,
+		source_type TEXT NOT NULL, target_type TEXT NOT NULL, superseded_at DATETIME
+	)`).Error)
+	for i, e := range edges {
+		createdAt := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC).Add(-time.Duration(i) * time.Second)
+		require.NoError(t, db.Exec(`INSERT INTO knowledge_edges
+			(id, source_id, target_id, edge_type, weight, created_at, source_type, target_type, superseded_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			e.ID, e.SourceID, e.TargetID, e.EdgeType, e.Weight, createdAt, "memory", "memory", e.SupersededAt).Error)
 	}
-	return out, nil
-}
-
-// FindSynonyms mirrors the real store's synonym filter.
-func (m *memStore) FindSynonyms(_ context.Context, memoryID int64) ([]Edge, error) {
-	var out []Edge
-	for _, e := range m.edges {
-		if e.SupersededAt != nil {
-			continue
-		}
-		var srcID, tgtID int64
-		if e.SourceID != nil {
-			srcID = *e.SourceID
-		}
-		if e.TargetID != nil {
-			tgtID = *e.TargetID
-		}
-		isSynonymType := e.EdgeType == EdgeSynonymOf || e.EdgeType == EdgeSameConceptAs
-		touches := srcID == memoryID || tgtID == memoryID
-		if isSynonymType && touches {
-			out = append(out, e)
-		}
-	}
-	return out, nil
-}
-
-// traverseStore is the subset of *Store methods used by tests, backed by memStore.
-// We embed a real *Store but override the DB-touching methods via wrappers, so
-// we call the pure-logic Traverse/FindPath helpers through a thin adapter below.
-
-// traverseAdapter wraps memStore so the BFS functions can be exercised without
-// a real gorm.DB. It duplicates Traverse/FindPath logic from traverse.go using
-// the memStore's ListByMemory — this is intentional: the tests are black-box
-// against the documented BFS contract, not the implementation internals.
-//
-// Alternative: if gorm.DB were injectable via an interface, we could use *Store
-// directly. Since Store embeds a concrete *gorm.DB, we test via adapter here.
-// This approach is documented in the commit body as a simplification.
-type traverseAdapter struct {
-	ms *memStore
-}
-
-func (a *traverseAdapter) Traverse(ctx context.Context, startID int64, maxDepth int, edgeTypes []string) ([]TraversalResult, error) {
-	if maxDepth <= 0 || maxDepth > MaxTraverseDepth {
-		maxDepth = MaxTraverseDepth
-	}
-
-	visited := map[int64]bool{startID: true}
-	visitedEdges := map[int64]bool{}
-	var results []TraversalResult
-	frontier := []int64{startID}
-
-	for depth := 1; depth <= maxDepth; depth++ {
-		if len(frontier) == 0 {
-			break
-		}
-		var nextFrontier []int64
-		for _, nodeID := range frontier {
-			edges, err := a.ms.ListByMemory(ctx, nodeID, Both, "")
-			if err != nil {
-				return results, err
-			}
-			for _, e := range edges {
-				if visitedEdges[e.ID] {
-					continue
-				}
-				visitedEdges[e.ID] = true
-				if len(edgeTypes) > 0 && !containsStr(edgeTypes, e.EdgeType) {
-					continue
-				}
-				var srcID, tgtID int64
-				if e.SourceID != nil {
-					srcID = *e.SourceID
-				}
-				if e.TargetID != nil {
-					tgtID = *e.TargetID
-				}
-				neighborID := tgtID
-				if neighborID == nodeID {
-					neighborID = srcID
-				}
-				results = append(results, TraversalResult{
-					EdgeID:   e.ID,
-					SourceID: srcID,
-					TargetID: tgtID,
-					EdgeType: e.EdgeType,
-					Weight:   e.Weight,
-					Depth:    depth,
-				})
-				if !visited[neighborID] {
-					visited[neighborID] = true
-					nextFrontier = append(nextFrontier, neighborID)
-				}
-			}
-		}
-		frontier = nextFrontier
-	}
-	return results, nil
-}
-
-func (a *traverseAdapter) FindSynonyms(ctx context.Context, memoryID int64) ([]Edge, error) {
-	return a.ms.FindSynonyms(ctx, memoryID)
+	return NewStore(db, nil)
 }
 
 // edge is a helper to build a memory-typed test Edge with non-nil SourceID/TargetID.
@@ -170,11 +50,10 @@ func edge(id, src, tgt int64, t string) Edge {
 // TestTraverse_SimplePath verifies BFS returns direct neighbours in depth order.
 func TestTraverse_SimplePath(t *testing.T) {
 	// Graph: 1 --uses--> 2 --depends_on--> 3
-	ms := newMemStore(
+	ta := newTraversalStore(t,
 		edge(1, 1, 2, EdgeUses),
 		edge(2, 2, 3, EdgeDependsOn),
 	)
-	ta := &traverseAdapter{ms: ms}
 	ctx := context.Background()
 
 	results, err := ta.Traverse(ctx, 1, 2, nil)
@@ -196,11 +75,10 @@ func TestTraverse_SimplePath(t *testing.T) {
 // cause infinite traversal or duplicate edges.
 func TestTraverse_CycleDetection(t *testing.T) {
 	// Graph: 1 <--uses--> 2 (bidirectional = cycle if not guarded)
-	ms := newMemStore(
+	ta := newTraversalStore(t,
 		edge(1, 1, 2, EdgeUses),
 		edge(2, 2, 1, EdgeUses),
 	)
-	ta := &traverseAdapter{ms: ms}
 	ctx := context.Background()
 
 	results, err := ta.Traverse(ctx, 1, 3, nil)
@@ -220,13 +98,12 @@ func TestTraverse_CycleDetection(t *testing.T) {
 // TestTraverse_DepthLimit verifies maxDepth is respected.
 func TestTraverse_DepthLimit(t *testing.T) {
 	// Linear chain: 1->2->3->4->5
-	ms := newMemStore(
+	ta := newTraversalStore(t,
 		edge(1, 1, 2, EdgeUses),
 		edge(2, 2, 3, EdgeUses),
 		edge(3, 3, 4, EdgeUses),
 		edge(4, 4, 5, EdgeUses),
 	)
-	ta := &traverseAdapter{ms: ms}
 	ctx := context.Background()
 
 	results, err := ta.Traverse(ctx, 1, 2, nil)
@@ -240,8 +117,7 @@ func TestTraverse_DepthLimit(t *testing.T) {
 
 // TestTraverse_EmptyGraph verifies traversal of a node with no edges returns empty.
 func TestTraverse_EmptyGraph(t *testing.T) {
-	ms := newMemStore() // no edges at all
-	ta := &traverseAdapter{ms: ms}
+	ta := newTraversalStore(t) // no edges at all
 	ctx := context.Background()
 
 	results, err := ta.Traverse(ctx, 42, 3, nil)
@@ -252,13 +128,12 @@ func TestTraverse_EmptyGraph(t *testing.T) {
 // TestTraverse_DepthLimitClamping verifies that maxDepth <= 0 is clamped to MaxTraverseDepth (3).
 func TestTraverse_DepthLimitClamping(t *testing.T) {
 	// Chain of 4 hops; depth 0 should be clamped to 3, returning 3 edges.
-	ms := newMemStore(
+	ta := newTraversalStore(t,
 		edge(1, 1, 2, EdgeUses),
 		edge(2, 2, 3, EdgeUses),
 		edge(3, 3, 4, EdgeUses),
 		edge(4, 4, 5, EdgeUses),
 	)
-	ta := &traverseAdapter{ms: ms}
 	ctx := context.Background()
 
 	results, err := ta.Traverse(ctx, 1, 0, nil)
@@ -269,12 +144,11 @@ func TestTraverse_DepthLimitClamping(t *testing.T) {
 // TestSynonymLookup verifies that FindSynonyms returns synonym_of and
 // same_concept_as edges for a given memory and ignores other edge types.
 func TestSynonymLookup(t *testing.T) {
-	ms := newMemStore(
+	ta := newTraversalStore(t,
 		edge(1, 10, 20, EdgeSynonymOf),
 		edge(2, 10, 30, EdgeSameConceptAs),
 		edge(3, 10, 40, EdgeUses), // not a synonym edge — should be excluded
 	)
-	ta := &traverseAdapter{ms: ms}
 	ctx := context.Background()
 
 	synonyms, err := ta.FindSynonyms(ctx, 10)
@@ -292,14 +166,13 @@ func TestSynonymLookup(t *testing.T) {
 // TestTraverse_MaxDepthExceeded verifies that maxDepth > MaxTraverseDepth is clamped.
 func TestTraverse_MaxDepthExceeded(t *testing.T) {
 	// Chain of 5 hops; requesting depth 10 should be clamped to 3.
-	ms := newMemStore(
+	ta := newTraversalStore(t,
 		edge(1, 1, 2, EdgeUses),
 		edge(2, 2, 3, EdgeUses),
 		edge(3, 3, 4, EdgeUses),
 		edge(4, 4, 5, EdgeUses),
 		edge(5, 5, 6, EdgeUses),
 	)
-	ta := &traverseAdapter{ms: ms}
 	ctx := context.Background()
 
 	results, err := ta.Traverse(ctx, 1, 10, nil)

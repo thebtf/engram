@@ -134,7 +134,7 @@ func TestProjectIdentityV3ComparisonStoreRedactsAndReplaysReceipt(t *testing.T) 
 	var sensitiveColumns int
 	require.NoError(t, db.Raw(`
 		SELECT COUNT(*) FROM information_schema.columns
-		WHERE table_schema = 'public' AND table_name = 'project_identity_comparisons'
+		WHERE table_schema = current_schema() AND table_name = 'project_identity_comparisons'
 		  AND column_name IN ('descriptor', 'remote', 'path', 'credential', 'canonical_key', 'project_key', 'target_project_key')
 	`).Scan(&sensitiveColumns).Error)
 	require.Zero(t, sensitiveColumns, "comparison storage must not offer raw identity or authority columns")

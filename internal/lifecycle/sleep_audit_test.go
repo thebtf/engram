@@ -18,9 +18,30 @@ import (
 // Mocks
 // ---------------------------------------------------------------------------
 
+type promotionEvents struct {
+	mu     sync.Mutex
+	events []string
+}
+
+func (r *promotionEvents) record(event string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, event)
+}
+
+func (r *promotionEvents) snapshot() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.events...)
+}
+
 type mockPromoLogger struct {
 	mu      sync.Mutex
 	entries []promoEntry
+	events  *promotionEvents
 }
 
 type promoEntry struct {
@@ -32,6 +53,7 @@ type promoEntry struct {
 func (m *mockPromoLogger) LogPromotion(_ context.Context, memoryID int64, fromTier, toTier, reason string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.events.record(fmt.Sprintf("promotion:%d:%s", memoryID, toTier))
 	m.entries = append(m.entries, promoEntry{memoryID, fromTier, toTier, reason})
 	return nil
 }
@@ -39,6 +61,7 @@ func (m *mockPromoLogger) LogPromotion(_ context.Context, memoryID int64, fromTi
 type mockAuditLogger struct {
 	mu      sync.Mutex
 	actions []auditEntry
+	events  *promotionEvents
 }
 
 type auditEntry struct {
@@ -50,6 +73,7 @@ type auditEntry struct {
 func (m *mockAuditLogger) LogAudit(_ context.Context, memoryID int64, action, actor string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.events.record(fmt.Sprintf("audit:%d:%s", memoryID, action))
 	m.actions = append(m.actions, auditEntry{memoryID, action, actor})
 	return nil
 }
@@ -80,6 +104,7 @@ type mockMemStore struct {
 	memories  []*models.Memory
 	calls     int
 	updateErr error // if non-nil, UpdateLifecycleFields returns this error
+	events    *promotionEvents
 }
 
 func (m *mockMemStore) ListAllActive(_ context.Context, _ int, offset int) ([]*models.Memory, error) {
@@ -90,7 +115,12 @@ func (m *mockMemStore) ListAllActive(_ context.Context, _ int, offset int) ([]*m
 	return m.memories, nil
 }
 
-func (m *mockMemStore) UpdateLifecycleFields(_ context.Context, _ int64, _ map[string]any) error {
+func (m *mockMemStore) UpdateLifecycleFields(_ context.Context, id int64, fields map[string]any) error {
+	result := "ok"
+	if m.updateErr != nil {
+		result = "failed"
+	}
+	m.events.record(fmt.Sprintf("persist:%d:%v:%s", id, fields["tier"], result))
 	return m.updateErr
 }
 
@@ -157,19 +187,24 @@ func TestPromotion_AuditLogCalledOnDemotion(t *testing.T) {
 // TestPromotion_NilAuditLogNoPanic verifies nil auditLog causes no panic.
 func TestPromotion_NilAuditLogNoPanic(t *testing.T) {
 	mem := &models.Memory{
-		ID:             303,
-		Tier:           TierEpisodic,
-		AccessCount:    5,
-		Confidence:     0.9,
-		Retrievability: 0.95,
-		Stability:      30.0,
-		CreatedAt:      time.Now().Add(-24 * time.Hour),
+		ID:              303,
+		Tier:            TierEpisodic,
+		AccessCount:     5,
+		RecurrenceCount: 3,
+		Confidence:      0.9,
+		Retrievability:  0.95,
+		Stability:       30.0,
+		CreatedAt:       time.Now().Add(-24 * time.Hour),
 	}
 
-	store := &mockMemStore{memories: []*models.Memory{mem}}
+	events := &promotionEvents{}
+	store := &mockMemStore{memories: []*models.Memory{mem}, events: events}
+	promoLog := &mockPromoLogger{events: events}
 	assert.NotPanics(t, func() {
-		RunSleepCycle(context.Background(), store, nil, nil)
+		result := RunSleepCycle(context.Background(), store, promoLog, nil)
+		assert.Equal(t, 1, result.Promotions)
 	})
+	assert.Equal(t, []string{"persist:303:semantic:ok", "promotion:303:semantic"}, events.snapshot())
 }
 
 // TestPromotion_NoAuditOnNoTierChange verifies no audit entry when no tier change occurs.
@@ -213,17 +248,18 @@ func TestPromotion_AuditSkippedWhenPersistFails(t *testing.T) {
 		CreatedAt:       time.Now().Add(-24 * time.Hour),
 	}
 
+	events := &promotionEvents{}
 	store := &mockMemStore{
 		memories:  []*models.Memory{mem},
 		updateErr: fmt.Errorf("simulated db error"),
+		events:    events,
 	}
-	auditLog := &mockAuditLogger{}
+	auditLog := &mockAuditLogger{events: events}
 
 	RunSleepCycle(context.Background(), store, nil, auditLog)
 
-	time.Sleep(30 * time.Millisecond)
-	assert.Empty(t, auditLog.waitN(0),
-		"audit must NOT be written when UpdateLifecycleFields fails (Finding 5)")
+	assert.Equal(t, []string{"persist:505:semantic:failed"}, events.snapshot(), "failed promotion persist must be attempted before any audit")
+	assert.Empty(t, auditLog.waitN(0))
 }
 
 // TestPromotion_AuditWrittenAfterSuccessfulPersist verifies the normal path: when
@@ -240,11 +276,13 @@ func TestPromotion_AuditWrittenAfterSuccessfulPersist(t *testing.T) {
 		CreatedAt:       time.Now().Add(-24 * time.Hour),
 	}
 
+	events := &promotionEvents{}
 	store := &mockMemStore{
 		memories:  []*models.Memory{mem},
 		updateErr: nil, // success
+		events:    events,
 	}
-	auditLog := &mockAuditLogger{}
+	auditLog := &mockAuditLogger{events: events}
 
 	RunSleepCycle(context.Background(), store, nil, auditLog)
 
@@ -253,6 +291,7 @@ func TestPromotion_AuditWrittenAfterSuccessfulPersist(t *testing.T) {
 		"audit must be written after successful UpdateLifecycleFields (Finding 5)")
 	assert.Equal(t, int64(606), entries[0].memoryID)
 	assert.Equal(t, "promote", entries[0].action)
+	assert.Equal(t, []string{"persist:606:semantic:ok", "audit:606:promote"}, events.snapshot())
 }
 
 // ---------------------------------------------------------------------------
@@ -275,15 +314,17 @@ func TestPromotion_PromoLogSkippedWhenPersistFails(t *testing.T) {
 		CreatedAt:       time.Now().Add(-24 * time.Hour),
 	}
 
+	events := &promotionEvents{}
 	store := &mockMemStore{
 		memories:  []*models.Memory{mem},
 		updateErr: fmt.Errorf("simulated db error"),
+		events:    events,
 	}
-	promoLog := &mockPromoLogger{}
+	promoLog := &mockPromoLogger{events: events}
 
 	RunSleepCycle(context.Background(), store, promoLog, nil)
 
-	time.Sleep(30 * time.Millisecond)
+	assert.Equal(t, []string{"persist:707:semantic:failed"}, events.snapshot(), "failed promotion persist must be attempted before any promotion log")
 	promoLog.mu.Lock()
 	n := len(promoLog.entries)
 	promoLog.mu.Unlock()
@@ -305,11 +346,13 @@ func TestPromotion_PromoLogCalledAfterSuccessfulPersist(t *testing.T) {
 		CreatedAt:       time.Now().Add(-24 * time.Hour),
 	}
 
+	events := &promotionEvents{}
 	store := &mockMemStore{
 		memories:  []*models.Memory{mem},
 		updateErr: nil,
+		events:    events,
 	}
-	promoLog := &mockPromoLogger{}
+	promoLog := &mockPromoLogger{events: events}
 
 	RunSleepCycle(context.Background(), store, promoLog, nil)
 
@@ -335,4 +378,5 @@ func TestPromotion_PromoLogCalledAfterSuccessfulPersist(t *testing.T) {
 		"promotionLog must be called after successful UpdateLifecycleFields")
 	assert.Equal(t, int64(808), entries[0].memoryID)
 	assert.Equal(t, TierEpisodic, entries[0].fromTier)
+	assert.Equal(t, []string{"persist:808:semantic:ok", "promotion:808:semantic"}, events.snapshot())
 }

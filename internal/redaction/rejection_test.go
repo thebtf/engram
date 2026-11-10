@@ -1,22 +1,15 @@
 // Package redaction — rejection_test.go: T051 acceptance test for EC-F5 + EC-F9.
 //
 // EC-F5: Redaction rule matches but produces empty content.
-//   The write is rejected with error='content_fully_redacted' rather than
-//   storing an empty memory; the redaction attempt is still logged.
+//
+//	The write is rejected with error='content_fully_redacted' rather than
+//	storing an empty memory; the redaction attempt is still logged.
 //
 // EC-F9: Redaction rule file modified at runtime → server requires restart.
-//   Hot-reload without signal NOT supported in Milestone F to avoid mid-write
-//   rule mismatch. Admin docs (docs/operating-engram.md) document restart requirement.
-//   Server MUST log loaded rule file path + checksum at startup.
 //
-// TG5 NOTE: The full redaction implementation lives in TG5 (write-lint, PR #250,
-// NOT on this branch). Tests that require the TG5 API surface are skipped here
-// and will be activated when TG5 merges to main.
-//
-// What IS tested in this file (no TG5 dependency):
-//   - EC-F9 docs presence: docs/operating-engram.md exists and documents restart-required
-//   - EC-F5/EC-F9 sentinel error shapes (package-level constants)
-//   - Environment variable contract (ENGRAM_REDACTION_RULES_PATH)
+//	Hot-reload without signal NOT supported in Milestone F to avoid mid-write
+//	rule mismatch. Admin docs (docs/operating-engram.md) document restart requirement.
+//	Server MUST log loaded rule file path + checksum at startup.
 package redaction
 
 import (
@@ -78,15 +71,6 @@ func TestEC_F5_ErrorSentinel_Shape(t *testing.T) {
 
 // --- EC-F9: env var contract ---
 
-// TestEC_F9_EnvVar_NoOpWhenAbsent verifies the ENGRAM_REDACTION_RULES_PATH
-// no-op contract: when unset, redaction must be disabled (per ADR-F-004).
-// This test exercises only the env var reading contract — TG5 implementation is separate.
-func TestEC_F9_EnvVar_NoOpWhenAbsent(t *testing.T) {
-	t.Setenv("ENGRAM_REDACTION_RULES_PATH", "")
-	path := os.Getenv("ENGRAM_REDACTION_RULES_PATH")
-	assert.Empty(t, path, "when ENGRAM_REDACTION_RULES_PATH is empty, redaction is a no-op")
-}
-
 // TestEC_F9_EnvVar_PathSet verifies that when ENGRAM_REDACTION_RULES_PATH is set
 // to a non-existent path, LoadRulesFromPath returns an error (caller logs warning
 // and falls back to no-op per ADR-F-004).
@@ -96,34 +80,4 @@ func TestEC_F9_EnvVar_PathSet_MissingFile(t *testing.T) {
 	rules, err := LoadRulesFromPath(path)
 	require.Error(t, err, "LoadRulesFromPath must return error for missing file")
 	assert.Nil(t, rules, "no rules must be returned for missing file")
-}
-
-// --- TG5-gated tests (skipped until TG5 merges) ---
-
-// TestEC_F5_FullRedactionRejected is a placeholder for the TG5-dependent EC-F5 test.
-// Skipped until TG5 (write-lint, PR #250) merges to main.
-//
-// When TG5 is available, this test should:
-//  1. Configure a redaction rule matching the entire content (e.g., regex `.*`).
-//  2. Attempt to store a memory whose content matches the rule.
-//  3. Assert the write is rejected with error='content_fully_redacted'.
-//  4. Assert audit_log contains action='redacted' with the matched rule_id.
-//  5. Assert NO memory row was written (row count unchanged).
-func TestEC_F5_FullRedactionRejected(t *testing.T) {
-	t.Skip("TG5 (write-lint / internal/redaction) NOT on this branch — " +
-		"test activated when TG5 merges to main (PR #250)")
-}
-
-// TestEC_F9_HotReloadNotSupported is a placeholder for the TG5-dependent EC-F9 runtime test.
-// Skipped until TG5 merges.
-//
-// When TG5 is available, this test should:
-//  1. Start a test server with ENGRAM_REDACTION_RULES_PATH pointing to a rule file.
-//  2. Verify startup log contains rule file path + SHA-256 checksum.
-//  3. Modify the rule file on disk.
-//  4. Verify the server has NOT picked up the new rules (hot-reload not supported).
-//  5. Send SIGHUP (if implemented) or restart and verify new rules are active.
-func TestEC_F9_HotReloadNotSupported(t *testing.T) {
-	t.Skip("TG5 (write-lint / internal/redaction) NOT on this branch — " +
-		"test activated when TG5 merges to main (PR #250)")
 }

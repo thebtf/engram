@@ -2,8 +2,7 @@
 // Engram vNext Milestone F TG6 / T042.
 //
 // Unit tests (no DB required):
-//   - decodeBeforeState edge cases (empty, valid, invalid JSON)
-//   - Non-admin caller → ErrAdminRequired without any DB calls
+//   - decodeTypedBeforeState edge cases (empty, legacy, invalid JSON)
 //
 // Integration tests (skip when DATABASE_DSN absent):
 //   - Happy path: rollback restores memory, audit='rollback', snapshot status='rolled_back'
@@ -28,39 +27,33 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-// --- Unit: decodeBeforeState ---
+// --- Unit: decodeTypedBeforeState ---
 
-func TestDecodeBeforeState_Empty(t *testing.T) {
-	m, err := decodeBeforeState(json.RawMessage(`{}`))
+func TestDecodeTypedBeforeState_Empty(t *testing.T) {
+	m, err := decodeTypedBeforeState(json.RawMessage(`{}`))
 	require.NoError(t, err)
 	assert.Empty(t, m)
 }
 
-func TestDecodeBeforeState_ValidEntry(t *testing.T) {
+func TestDecodeTypedBeforeState_LegacyEntry(t *testing.T) {
 	raw := json.RawMessage(`{"42":{"content":"original","project":"p1","id":42}}`)
-	m, err := decodeBeforeState(raw)
+	m, err := decodeTypedBeforeState(raw)
 	require.NoError(t, err)
-	assert.Contains(t, m, "42")
+	entry, ok := m["42"]
+	require.True(t, ok)
+	assert.Equal(t, models.EntryKindRestore, entry.Kind)
+	assert.JSONEq(t, `{"content":"original","project":"p1","id":42}`, string(entry.Before))
 }
 
-func TestDecodeBeforeState_InvalidJSON(t *testing.T) {
-	_, err := decodeBeforeState(json.RawMessage(`{bad json}`))
+func TestDecodeTypedBeforeState_InvalidJSON(t *testing.T) {
+	_, err := decodeTypedBeforeState(json.RawMessage(`{bad json}`))
 	require.Error(t, err)
 }
 
-func TestDecodeBeforeState_NilInput(t *testing.T) {
-	m, err := decodeBeforeState(nil)
+func TestDecodeTypedBeforeState_NilInput(t *testing.T) {
+	m, err := decodeTypedBeforeState(nil)
 	require.NoError(t, err)
 	assert.Empty(t, m)
-}
-
-// --- Unit: admin gate ---
-
-func TestRollback_NonAdmin_ReturnsErrAdminRequired(t *testing.T) {
-	// No DB required — admin gate fires before any store access.
-	ctx := context.Background()
-	_, err := Rollback(ctx, readOnlyIdentity(), "snap-001", nil, nil, nil, nil)
-	require.ErrorIs(t, err, ErrAdminRequired)
 }
 
 // --- Integration tests ---

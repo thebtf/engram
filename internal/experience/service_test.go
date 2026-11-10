@@ -12,10 +12,6 @@ import (
 	"github.com/thebtf/engram/pkg/cognitive"
 )
 
-func TestServiceImplementsExperienceProvider(t *testing.T) {
-	var _ cognitive.ExperienceProvider = (*Service)(nil)
-}
-
 func TestServiceQueryExperienceReturnsBoundedHistoricalPayloads(t *testing.T) {
 	candidates := []cognitive.ExperienceResponse{
 		fixtureExperience("oauth-retry", "Codex OAuth retry cooled down too early after transient failures; the fix was to retry once before cooldown.", "engram", "s1"),

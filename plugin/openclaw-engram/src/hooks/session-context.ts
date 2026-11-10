@@ -10,11 +10,11 @@ export function buildStaticInstructions(project: string): string {
  return [
   '# Engram Persistent Memory',
   '',
-  'You have access to persistent memory via engram. Available tools:',
+  'Engram may provide persistent project memory when its tools are available:',
   '- `engram_search` — search prior observations, decisions, and patterns',
-  '- `engram_remember` — store new observations for future sessions',
-  '- `engram_decisions` — query architectural decisions',
+  '- `engram_remember` — store authorized, reusable observations',
+  '- `engram_decisions` — query prior architectural decisions',
   '',
-  `Memory is scoped to project ${quotedPromptScalar(project)}. Use \`engram_remember\` to store important insights, decisions, and discoveries.`,
+  `Memory is scoped to project ${quotedPromptScalar(project)}. Use delivered evidence first; look up additional context only when useful to the current task. Store only within the user's scope and authorization.`,
  ].join('\n');
 }

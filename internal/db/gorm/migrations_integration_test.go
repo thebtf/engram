@@ -170,115 +170,57 @@ func TestMigration125_AddPrivacyScope(t *testing.T) {
 	// Cleanup runs via t.Cleanup registered above — survives failure/panic.
 }
 
-// TestMigration125_TagDerivedBackfill_T006 verifies the T006 backfill step
-// inside migration 125: rows that carry the legacy `scope:global` tag are
-// promoted to privacy_scope='global' on migrate-up. Rows with `scope:project`
-// or without a scope tag stay at the column DEFAULT 'project'.
-//
-// Asserts (post-migration):
-//   - row with tags=['scope:global']  -> privacy_scope='global'
-//   - row with tags=['scope:project'] -> privacy_scope='project'
-//   - row with tags=[] (no scope tag) -> privacy_scope='project'
-//   - re-running the UPDATE (the migration body explicitly, not the
-//     gormigrate run loop which skips applied IDs) is a no-op — idempotent.
-//
-// Anti-stub: removing the `UPDATE memories SET privacy_scope='global' ...`
-// line from migration 125 stmts breaks the first assertion (the global-tagged
-// row would default to 'project').
-//
-// Engram vNext Milestone F TG1 / T006.
+// TestMigration125_TagDerivedBackfill_T006 exercises the actual migration
+// against legacy rows in an owned, disposable database.
 func TestMigration125_TagDerivedBackfill_T006(t *testing.T) {
-	db, cleanup := openTestDB(t)
-	t.Cleanup(cleanup)
-	project := sessionTestProject(t, db)
-
-	// Run the full migration chain — migration 125 with the T006 backfill
-	// statement is in the slice.
-	require.NoError(t, runMigrations(db), "full migration chain must succeed")
-
-	// Register cleanup BEFORE inserting fixtures so failure/panic still cleans.
-	t.Cleanup(func() {
-		if err := db.Exec(`DELETE FROM memories WHERE project = ?`, project).Error; err != nil {
-			t.Logf("TestMigration125_TagDerivedBackfill_T006 cleanup: %v", err)
-		}
-	})
-
-	// Pre-clean any residual rows from a prior aborted run (CodeRabbit fix-forward
-	// on bfae983): t.Cleanup is post-fact and does not fire on panic/SIGKILL.
-	// Without this, a stale row from an aborted previous run would make the
-	// `require.Len(..., 3)` assertion below flaky on shared staging DBs.
-	require.NoError(t, db.Exec(
-		`DELETE FROM memories WHERE project = ?`, project,
-	).Error, "pre-test cleanup of residual fixtures")
-
-	// Seed three fixture rows. Because migration 125 has already run on a
-	// fresh DB, ADD COLUMN + DEFAULT 'project' applies on insert and the
-	// tag-derived UPDATE has executed before any T006 rows existed. To
-	// exercise the UPDATE statement directly, insert fixtures THEN re-run
-	// only the UPDATE clause (the gormigrate run-loop skips applied
-	// migration IDs but the SQL itself is the contract under test).
-	require.NoError(t, db.Exec(
-		`INSERT INTO memories (project, content, tags) VALUES (?, ?, ?::jsonb)`,
-		project, "T006 fixture global-tagged", `["scope:global"]`,
-	).Error)
-	require.NoError(t, db.Exec(
-		`INSERT INTO memories (project, content, tags) VALUES (?, ?, ?::jsonb)`,
-		project, "T006 fixture project-tagged", `["scope:project"]`,
-	).Error)
-	require.NoError(t, db.Exec(
-		`INSERT INTO memories (project, content, tags) VALUES (?, ?, ?::jsonb)`,
-		project, "T006 fixture untagged", `[]`,
-	).Error)
-
-	// Force the freshly-inserted global-tagged row off the default so the
-	// backfill UPDATE has work to do on subsequent runs.
-	require.NoError(t, db.Exec(
-		`UPDATE memories SET privacy_scope = 'project'
-			WHERE project = ? AND tags ? 'scope:global'`, project,
-	).Error)
-
-	// Run the T006 backfill statement (mirroring the line in migration 125).
-	runBackfill := func() error {
-		return db.Exec(
-			`UPDATE memories
-				SET privacy_scope = 'global'
-				WHERE privacy_scope <> 'global'
-				  AND tags ? 'scope:global'`,
-		).Error
+	db := openDockerMigrationDBTo(t, "121_knowledge_edges_cascade")
+	const project = "migration-125-backfill-fixture"
+	var before int64
+	require.NoError(t, db.Raw(`SELECT COUNT(*) FROM migrations WHERE id = ?`, "125_privacy_scope_addition").Scan(&before).Error)
+	require.Zero(t, before)
+	require.NoError(t, db.Exec(`INSERT INTO projects (id) VALUES (?)`, project).Error)
+	for _, row := range []struct {
+		content string
+		tags    string
+	}{
+		{"T006 fixture global-tagged", `["scope:global"]`},
+		{"T006 fixture project-tagged", `["scope:project"]`},
+		{"T006 fixture untagged", `[]`},
+	} {
+		require.NoError(t, db.Exec(`INSERT INTO memories (project, content, tags) VALUES (?, ?, ?::jsonb)`, project, row.content, row.tags).Error)
 	}
-	require.NoError(t, runBackfill(), "first backfill run")
-
-	// Read back the three rows and assert the privacy_scope values.
-	type row struct {
+	require.NoError(t, runMigrationsTo(db, "125_privacy_scope_addition"))
+	var applied int64
+	require.NoError(t, db.Raw(`SELECT COUNT(*) FROM migrations WHERE id = ?`, "125_privacy_scope_addition").Scan(&applied).Error)
+	require.Equal(t, int64(1), applied)
+	type snapshot struct {
+		ID           int64
+		Content      string
 		Tags         string
 		PrivacyScope string
 	}
-	var rows []row
-	require.NoError(t, db.Raw(
-		`SELECT tags::text AS tags, privacy_scope FROM memories
-			WHERE project = ?
-			ORDER BY id`, project,
-	).Scan(&rows).Error)
-	require.Len(t, rows, 3, "expected 3 fixture rows")
+	var rows []snapshot
+	require.NoError(t, db.Raw(`SELECT id, content, tags::text AS tags, privacy_scope FROM memories WHERE project = ? ORDER BY id`, project).Scan(&rows).Error)
+	require.Len(t, rows, 3)
+	require.Equal(t, "global", rows[0].PrivacyScope)
+	require.Equal(t, "project", rows[1].PrivacyScope)
+	require.Equal(t, "project", rows[2].PrivacyScope)
 
-	require.Equal(t, "global", rows[0].PrivacyScope,
-		"scope:global-tagged row must be backfilled to privacy_scope='global'")
-	require.Equal(t, "project", rows[1].PrivacyScope,
-		"scope:project-tagged row must stay at privacy_scope='project' (default)")
-	require.Equal(t, "project", rows[2].PrivacyScope,
-		"untagged row must stay at privacy_scope='project' (default)")
-
-	// Idempotency: a second run must leave the same final state and report
-	// zero rows affected (the WHERE clause filters out already-global rows).
-	require.NoError(t, runBackfill(), "second backfill run")
-
-	var rowsAfter []row
-	require.NoError(t, db.Raw(
-		`SELECT tags::text AS tags, privacy_scope FROM memories
-			WHERE project = ?
-			ORDER BY id`, project,
-	).Scan(&rowsAfter).Error)
-	require.Equal(t, rows, rowsAfter, "backfill must be idempotent across runs")
+	// Reset only this disposable fixture's migration ledger entry so gormigrate
+	// executes the real 125 body again rather than skipping an applied ID.
+	removed := db.Exec(`DELETE FROM migrations WHERE id = ?`, "125_privacy_scope_addition")
+	require.NoError(t, removed.Error)
+	require.Equal(t, int64(1), removed.RowsAffected)
+	var pending int64
+	require.NoError(t, db.Raw(`SELECT COUNT(*) FROM migrations WHERE id = ?`, "125_privacy_scope_addition").Scan(&pending).Error)
+	require.Zero(t, pending)
+	require.NoError(t, runMigrationsTo(db, "125_privacy_scope_addition"))
+	var replayed int64
+	require.NoError(t, db.Raw(`SELECT COUNT(*) FROM migrations WHERE id = ?`, "125_privacy_scope_addition").Scan(&replayed).Error)
+	require.Equal(t, int64(1), replayed, "actual migration body must be applied again")
+	var after []snapshot
+	require.NoError(t, db.Raw(`SELECT id, content, tags::text AS tags, privacy_scope FROM memories WHERE project = ? ORDER BY id`, project).Scan(&after).Error)
+	require.Equal(t, rows, after, "replaying migration 125 must preserve legacy tags and privacy scopes")
 }
 
 // TestMigration130_AddSourceWorkstationID verifies migration
@@ -579,8 +521,10 @@ func TestMigration132_CrystallizationCandidates(t *testing.T) {
 		cols[name] = colInfo{DataType: dt, IsNullable: nullable}
 	}
 
-	for _, col := range []string{"id", "source_session_id", "proposed_content", "status", "fingerprint",
-		"created_at", "updated_at", "confidence", "recurrence_count"} {
+	for _, col := range []string{
+		"id", "source_session_id", "proposed_content", "status", "fingerprint",
+		"created_at", "updated_at", "confidence", "recurrence_count",
+	} {
 		_, ok := cols[col]
 		require.True(t, ok, "column %q must exist in crystallization_candidates", col)
 	}
@@ -697,8 +641,10 @@ func TestMigration133_BulkOpSnapshots(t *testing.T) {
 	require.Equal(t, 1, tableCount, "bulk_op_snapshots table must exist after migration 133")
 
 	// Assert all required columns exist.
-	for _, col := range []string{"id", "snapshot_id", "op_type", "actor", "source_session_id",
-		"parameters", "affected_memory_ids", "before_state", "status", "pinned", "created_at", "rolled_back_at"} {
+	for _, col := range []string{
+		"id", "snapshot_id", "op_type", "actor", "source_session_id",
+		"parameters", "affected_memory_ids", "before_state", "status", "pinned", "created_at", "rolled_back_at",
+	} {
 		var colCount int
 		require.NoError(t, db.Raw(`
 			SELECT COUNT(*) FROM information_schema.columns

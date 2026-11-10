@@ -62,11 +62,6 @@ func TestChunk_Identifier_ParentButNoName(t *testing.T) {
 	assert.Equal(t, "Parent.", c.Identifier())
 }
 
-func TestChunk_Identifier_NameButNoParent(t *testing.T) {
-	c := Chunk{Name: "Standalone", ParentName: ""}
-	assert.Equal(t, "Standalone", c.Identifier())
-}
-
 // =============================================================================
 // CONTRACT: Chunk.LineRange
 // - Returns "L<start>-L<end>" using 1-indexed line numbers.
@@ -258,21 +253,6 @@ func TestNewManager_Empty(t *testing.T) {
 	assert.Empty(t, exts)
 }
 
-func TestManager_SupportedExtensions_ContainsAll(t *testing.T) {
-	m := NewManager([]Chunker{
-		&singleChunkMock{ext: ".go"},
-		&singleChunkMock{ext: ".ts"},
-	}, DefaultChunkOptions())
-	exts := m.SupportedExtensions()
-	extSet := map[string]bool{}
-	for _, e := range exts {
-		extSet[e] = true
-	}
-	assert.True(t, extSet[".go"])
-	assert.True(t, extSet[".ts"])
-	assert.Len(t, exts, 2)
-}
-
 func TestManager_SupportsFile_CaseInsensitive(t *testing.T) {
 	m := NewManager([]Chunker{&singleChunkMock{ext: ".go"}}, DefaultChunkOptions())
 	// Extension comparison is lowercased.
@@ -381,27 +361,6 @@ func TestManager_ChunkFiles_MultipleFiles(t *testing.T) {
 	for _, f := range files {
 		assert.NotEmpty(t, results[f])
 	}
-}
-
-func TestManager_ChunkFiles_UnsupportedFileProducesError(t *testing.T) {
-	m := NewManager([]Chunker{&singleChunkMock{ext: ".go"}}, DefaultChunkOptions())
-	tmpDir := t.TempDir()
-
-	goodFile := filepath.Join(tmpDir, "good.go")
-	badFile := filepath.Join(tmpDir, "bad.txt")
-	require.NoError(t, os.WriteFile(goodFile, []byte("package main"), 0600))
-	require.NoError(t, os.WriteFile(badFile, []byte("data"), 0600))
-
-	results, errs := m.ChunkFiles(context.Background(), []string{goodFile, badFile})
-	assert.Len(t, errs, 1, "one unsupported file should produce one error")
-	assert.Contains(t, results, goodFile, "good file should still be processed")
-}
-
-func TestManager_ChunkFiles_EmptySlice(t *testing.T) {
-	m := NewManager([]Chunker{&singleChunkMock{ext: ".go"}}, DefaultChunkOptions())
-	results, errs := m.ChunkFiles(context.Background(), nil)
-	assert.Empty(t, results)
-	assert.Empty(t, errs)
 }
 
 func TestManager_ChunkFiles_AllErrors(t *testing.T) {

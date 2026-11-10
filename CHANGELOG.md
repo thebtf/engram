@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.1.3] - 2026-11-10
+
+- Scope generated issue and memory guidance to the current task and authorization, without requiring unrelated inbox or memory-search sweeps.
+
 ## [7.1.2] - 2026-11-10
 
 - Restore copying the complete revealed Vault credential value in the operator web interface.

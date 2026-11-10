@@ -77,43 +77,6 @@ func TestIntegration_StoreHealthCheck(t *testing.T) {
 	assert.False(t, info.Timestamp.IsZero())
 }
 
-// TestIntegration_StoreHealthCheckForce verifies HealthCheckForce bypasses cache.
-// CODE_PATH_COVERED: performHealthCheck without TTL guard.
-func TestIntegration_StoreHealthCheckForce(t *testing.T) {
-	store, cleanup := openIntegrationTestDB(t)
-	defer cleanup()
-
-	ctx := context.Background()
-	info := store.HealthCheckForce(ctx)
-	require.NotNil(t, info)
-	assert.NotEmpty(t, info.Status)
-}
-
-// TestIntegration_StoreMetrics verifies GetMetrics and ResetMetrics.
-// CODE_PATH_COVERED: ring-buffer metrics round-trip.
-func TestIntegration_StoreMetrics(t *testing.T) {
-	store, cleanup := openIntegrationTestDB(t)
-	defer cleanup()
-
-	metrics := store.GetMetrics()
-	assert.GreaterOrEqual(t, metrics.TotalQueries, int64(0))
-
-	store.ResetMetrics()
-	after := store.GetMetrics()
-	assert.Equal(t, int64(0), after.TotalQueries)
-}
-
-// TestIntegration_StoreOptimize verifies Optimize runs ANALYZE without error.
-// CODE_PATH_COVERED: Optimize → ANALYZE.
-func TestIntegration_StoreOptimize(t *testing.T) {
-	store, cleanup := openIntegrationTestDB(t)
-	defer cleanup()
-
-	ctx := context.Background()
-	err := store.Optimize(ctx)
-	require.NoError(t, err)
-}
-
 // TestIntegration_StoreTransactionWithTimeout verifies a successful transaction.
 // CODE_PATH_COVERED: TransactionWithTimeout happy path.
 func TestIntegration_StoreTransactionWithTimeout(t *testing.T) {
@@ -242,26 +205,27 @@ func TestIntegration_OpenGORM_InvalidDSN(t *testing.T) {
 	assert.Error(t, err, "NewStore should fail with unreachable DSN")
 }
 
-// TestIntegration_StoreStats verifies Stats returns a pool snapshot without error.
-// CODE_PATH_COVERED: Stats() accessor.
-func TestIntegration_StoreStats(t *testing.T) {
-	store, cleanup := openIntegrationTestDB(t)
-	defer cleanup()
-
-	stats := store.Stats()
-	assert.GreaterOrEqual(t, stats.OpenConnections, 0)
-}
-
-// TestIntegration_WithTimeout_ReturnsCancelPair verifies WithTimeout returns usable ctx/cancel.
-// CODE_PATH_COVERED: WithTimeout wrapper (no panic contract).
+// TestIntegration_WithTimeout_ReturnsCancelPair verifies the deadline and cancellation.
 func TestIntegration_WithTimeout_ReturnsCancelPair(t *testing.T) {
 	store, cleanup := openIntegrationTestDB(t)
 	defer cleanup()
 
-	ctx := context.Background()
-	tCtx, cancel := store.WithTimeout(ctx, FastQueryTimeout, "test-op")
+	before := time.Now()
+	tCtx, cancel := store.WithTimeout(context.Background(), time.Minute, "test-op")
+	after := time.Now()
 	defer cancel()
-	assert.NotNil(t, tCtx)
+	deadline, ok := tCtx.Deadline()
+	require.True(t, ok)
+	assert.False(t, deadline.Before(before.Add(time.Minute)))
+	assert.False(t, deadline.After(after.Add(time.Minute)))
+	assert.NoError(t, tCtx.Err())
+	cancel()
+	assert.ErrorIs(t, tCtx.Err(), context.Canceled)
+	select {
+	case <-tCtx.Done():
+	default:
+		t.Fatal("cancel must close the context's Done channel")
+	}
 }
 
 // TestIntegration_QueryRowWithTimeout verifies a scalar result via QueryRowWithTimeout.

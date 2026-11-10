@@ -27,7 +27,7 @@ export function createEngramDecisionsTool(
     name: 'engram_decisions',
     description:
       'Query architectural decisions and design choices stored in engram. ' +
-      'Use this before making architectural decisions to surface prior reasoning and constraints.',
+      'Consult prior reasoning when it can inform the current decision; verify its source and applicability.',
     parameters: decisionsParameters,
 
     async execute(_toolCallId: string, params: Record<string, unknown>): Promise<string> {

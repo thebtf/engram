@@ -27,11 +27,6 @@ func writeTemp(t *testing.T, src string) string {
 // - SupportedExtensions() returns exactly []string{".go"}.
 // -----------------------------------------------------------------------------
 
-func TestNewChunker_NotNil(t *testing.T) {
-	c := NewChunker(chunking.DefaultChunkOptions())
-	assert.NotNil(t, c)
-}
-
 func TestChunker_Language(t *testing.T) {
 	c := NewChunker(chunking.DefaultChunkOptions())
 	assert.Equal(t, chunking.LanguageGo, c.Language())
@@ -529,43 +524,12 @@ func (c *Counter) Value() int { return c.n }
 // - The FilePath field in every returned chunk equals the path argument.
 // -----------------------------------------------------------------------------
 
-func TestChunk_FilePathPreserved(t *testing.T) {
-	src := `package main
-
-func Hello() {}
-`
-	f := writeTemp(t, src)
-	c := NewChunker(chunking.DefaultChunkOptions())
-	chunks, err := c.Chunk(context.Background(), f)
-	require.NoError(t, err)
-	require.Len(t, chunks, 1)
-
-	assert.Equal(t, f, chunks[0].FilePath)
-}
-
 // -----------------------------------------------------------------------------
 // Contract: Chunk — line numbers
 // - StartLine is 1-indexed and >= 1.
 // - EndLine >= StartLine.
 // - For multi-line declarations the span covers the full declaration.
 // -----------------------------------------------------------------------------
-
-func TestChunk_LineNumbers_Positive(t *testing.T) {
-	src := `package main
-
-func Alpha() {}
-func Beta() {}
-`
-	f := writeTemp(t, src)
-	c := NewChunker(chunking.DefaultChunkOptions())
-	chunks, err := c.Chunk(context.Background(), f)
-	require.NoError(t, err)
-
-	for _, ch := range chunks {
-		assert.GreaterOrEqual(t, ch.StartLine, 1)
-		assert.GreaterOrEqual(t, ch.EndLine, ch.StartLine)
-	}
-}
 
 func TestChunk_LineNumbers_MultiLineFunction(t *testing.T) {
 	src := `package main

@@ -374,6 +374,14 @@ func TestWriteLint_T035_Phase1_NoSignal_Stored(t *testing.T) {
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal([]byte(result), &resp))
 	assert.Equal(t, true, resp["stored"], "stored must be true when no conflicts")
+	store := orch.MemoryStore().(*stubWriteLintMemStore)
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	require.Len(t, store.memories, 1, "no-signal path must create exactly one record")
+	require.Equal(t, int64(101), store.memories[0].ID)
+	assert.Equal(t, float64(store.memories[0].ID), resp["id"], "response must identify the stored record")
+	assert.Equal(t, "Totally unique memory about widget configuration 2026", store.memories[0].Content)
+	assert.Equal(t, "testproj", store.memories[0].Project)
 }
 
 // TestWriteLint_T035_Phase2_MergeWith verifies that providing a resolution_token

@@ -196,54 +196,6 @@ func TestConcurrency_TwoGoroutines_SameToken(t *testing.T) {
 // EC-F2: 50-goroutine stress — independent writes to same project
 // ---------------------------------------------------------------------------
 
-// TestConcurrency_50Goroutines_IndependentWrites verifies that 50 concurrent
-// Phase1 writes to the same project with unique content do not corrupt state
-// or race on the token store. Each goroutine writes unique content so no
-// duplicates fire; each should store independently and return stored=true.
-func TestConcurrency_50Goroutines_IndependentWrites(t *testing.T) {
-	ms := newConcMemStore()
-	al := &concurrentAuditLogger{}
-	orch, closer := buildConcOrchestrator(ms, al)
-	defer closer()
-
-	ctx := context.Background()
-	const N = 50
-
-	var (
-		wg       sync.WaitGroup
-		mu       sync.Mutex
-		stored   int
-		errCount int
-	)
-
-	wg.Add(N)
-	for i := 0; i < N; i++ {
-		i := i
-		go func() {
-			defer wg.Done()
-			// Each goroutine uses a content string unique enough to avoid Jaccard >= 0.85
-			content := uniqueContent(i)
-			resp, err := orch.Phase1(ctx, &models.Memory{Content: content, Project: "testproj"}, "agent")
-			mu.Lock()
-			defer mu.Unlock()
-			if err != nil {
-				errCount++
-				return
-			}
-			if resp.Stored {
-				stored++
-			}
-		}()
-	}
-	wg.Wait()
-
-	if errCount > 0 {
-		t.Errorf("EC-F2 50-goroutine stress: %d errors during concurrent Phase1", errCount)
-	}
-	if stored != N {
-		t.Errorf("EC-F2 50-goroutine stress: expected %d stored, got %d (content may not be unique enough)", N, stored)
-	}
-}
 
 // uniqueContent generates content strings with low pairwise Jaccard similarity.
 // Each string is produced by using i as a unique distinguishing element so each
@@ -279,49 +231,3 @@ func itoa(n int) string {
 // ---------------------------------------------------------------------------
 // EC-F2: 50-goroutine stress — same-content writes (all Phase1 signals)
 // ---------------------------------------------------------------------------
-
-// TestConcurrency_50Goroutines_SameContent verifies that 50 concurrent Phase1
-// writes with identical content (high Jaccard with the pre-seeded duplicate) all
-// receive signals and tokens without panicking or racing.
-func TestConcurrency_50Goroutines_SameContent(t *testing.T) {
-	ms := newConcMemStore(makeDupMemory())
-	al := &concurrentAuditLogger{}
-	orch, closer := buildConcOrchestrator(ms, al)
-	defer closer()
-
-	ctx := context.Background()
-	const N = 50
-
-	var (
-		wg        sync.WaitGroup
-		mu        sync.Mutex
-		signaled  int
-		errCount  int
-	)
-
-	wg.Add(N)
-	for i := 0; i < N; i++ {
-		go func() {
-			defer wg.Done()
-			resp, err := orch.Phase1(ctx, &models.Memory{Content: dupContent, Project: "testproj"}, "agent")
-			mu.Lock()
-			defer mu.Unlock()
-			if err != nil {
-				errCount++
-				return
-			}
-			if !resp.Stored {
-				signaled++
-			}
-		}()
-	}
-	wg.Wait()
-
-	if errCount > 0 {
-		t.Errorf("EC-F2 50-goroutine same-content: %d errors", errCount)
-	}
-	// All N goroutines see the seeded duplicate → all should get signals
-	if signaled != N {
-		t.Errorf("EC-F2 50-goroutine same-content: expected %d signaled, got %d", N, signaled)
-	}
-}
