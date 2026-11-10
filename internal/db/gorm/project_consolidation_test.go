@@ -122,6 +122,54 @@ func TestProjectConsolidationMixedBucketAndEvidenceConflict(t *testing.T) {
 	require.EqualError(t, err, "PROJECT_ADOPTION_INVALID_EVIDENCE")
 }
 
+func TestProjectConsolidationInheritancePreservesConflictingEvidence(t *testing.T) {
+	vault, err := vaultcrypto.OpenExistingVault(&config.Config{EncryptionKey: strings.Repeat("ab", 32)})
+	require.NoError(t, err)
+	store := NewProjectConsolidationStore(nil, vault, nil)
+	a, b := uuid.NewString(), uuid.NewString()
+	rows := []consolidationRow{
+		{Reference: "parent", Table: "memories", Column: "project", Kind: "tenant"},
+		{Reference: "conflicted", Table: "content_chunks", Kind: "inherited", Parents: []string{"parent"}},
+		{Reference: "descendant", Table: "content_chunks", Kind: "inherited", Parents: []string{"conflicted"}},
+		{Reference: "unambiguous", Table: "content_chunks", Kind: "inherited", Parents: []string{"parent"}},
+		{Reference: "global", Table: "content_chunks", Kind: "inherited", Parents: []string{"parent"}, Global: true},
+	}
+	evidence := []ConsolidationEvidence{
+		{Reference: "urn:engram:proof:a", Kind: "portable_marker", Group: "urn:engram:group:a", ProjectID: a, Rows: []string{"parent", "conflicted"}},
+		{Reference: "urn:engram:proof:b", Kind: "portable_marker", Group: "urn:engram:group:b", ProjectID: b, Rows: []string{"conflicted"}},
+	}
+	mapping, err := store.buildMapping(rows, evidence)
+	require.NoError(t, err)
+	require.Equal(t, a, mapping[0].ProjectID)
+	require.Empty(t, mapping[1].ProjectID)
+	require.Equal(t, "conflicting_membership_evidence", mapping[1].Reason)
+	require.NotEmpty(t, mapping[1].UnresolvedReference)
+	require.Empty(t, mapping[2].ProjectID)
+	require.Equal(t, "missing_membership_evidence", mapping[2].Reason)
+	require.Equal(t, a, mapping[3].ProjectID)
+	require.Empty(t, mapping[4].ProjectID)
+	require.Equal(t, "native_global_scope", mapping[4].Reason)
+
+	state := consolidationPlanState{Census: consolidationCensusState{Rows: rows, Fingerprint: "fixture-census"}, Evidence: evidence, Mapping: mapping}
+	state.Fingerprint = consolidationPlanFingerprint(state)
+	token, err := store.seal("plan", state)
+	require.NoError(t, err)
+	_, err = store.plan(token, state.Fingerprint)
+	require.NoError(t, err, "corrected sealed plans remain readable")
+	oldMapping := append([]ConsolidationMapping(nil), mapping...)
+	for _, i := range []int{1, 2, 4} {
+		oldMapping[i].ProjectID = a
+		oldMapping[i].Reason = ""
+		oldMapping[i].UnresolvedReference = ""
+	}
+	state.Mapping = oldMapping
+	state.Fingerprint = consolidationPlanFingerprint(state)
+	token, err = store.seal("plan", state)
+	require.NoError(t, err)
+	_, err = store.plan(token, state.Fingerprint)
+	require.EqualError(t, err, "PROJECT_ADOPTION_STALE_PLAN", "unsafe pre-fix mapping must not be replayed")
+}
+
 func TestProjectConsolidationExcludedNativeClassificationCompatibility(t *testing.T) {
 	legacy := consolidationCensusState{Rows: []consolidationRow{{Table: "memories", Key: JSONRaw(`{"id":1}`), NativeVersion: "7"}}, Gaps: []string{}}
 	previous := structuralDigest(struct {

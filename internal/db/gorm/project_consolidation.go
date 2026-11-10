@@ -489,7 +489,7 @@ func (s *ProjectConsolidationStore) buildMapping(rows []consolidationRow, eviden
 	for range len(rows) {
 		changed := false
 		for i, row := range rows {
-			if row.Kind != "inherited" || result[i].ProjectID != "" || len(row.Parents) == 0 {
+			if row.Kind != "inherited" || result[i].ProjectID != "" || result[i].Reason != "missing_membership_evidence" || len(row.Parents) == 0 {
 				continue
 			}
 			id := ""
