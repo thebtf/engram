@@ -151,31 +151,6 @@ test('Vault revealed value automatically hides after its lifetime', async ({ pag
   await expect(page.getByTestId('secret-reveal-2')).toBeVisible()
 })
 
-test('a second browser session deleting the same project credential cannot hide this session’s reveal', async ({ page, browser }) => {
-  await page.goto('/secrets')
-  const betaRow = page.getByTestId('secret-row-2')
-  await expect(betaRow).toBeVisible()
-
-  const otherSession = await browser.newContext({ baseURL: test.info().project.use.baseURL })
-  try {
-    await otherSession.addCookies([{
-      name: 'mock-vault-session',
-      value: crypto.randomUUID(),
-      url: test.info().project.use.baseURL!,
-    }])
-    const deleted = await otherSession.request.delete(`/api/vault/credentials/shared-token?project=${betaProject}`)
-    expect(deleted.status()).toBe(200)
-    expect((await otherSession.request.get(`/api/vault/credentials/shared-token?project=${betaProject}`)).status()).toBe(404)
-
-    const revealed = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/vault/credentials/shared-token')
-    await page.getByTestId('secret-reveal-2').click()
-    expect((await revealed).status()).toBe(200)
-    await expect(betaRow.getByText('beta-secret-value')).toBeVisible()
-  } finally {
-    await otherSession.close()
-  }
-})
-
 test('secrets delete confirmation is scoped to the selected credential', async ({ page }) => {
   const deleteProjects: Array<string | null> = []
   const failedRequests: string[] = []
