@@ -454,6 +454,7 @@ func TestContinuitySlot_DiscoveryWithoutStartupFlagsRetainsAuthorization(t *test
 	assert.False(t, hasContinuitySlotTool(srv.ListTools()), "unwired stores must not advertise a usable tool")
 	srv.SetMemoryStore(&dbgorm.MemoryStore{})
 	srv.SetContinuitySlotStore(&dbgorm.ContinuitySlotStore{})
+	assert.False(t, hasContinuitySlotTool(srv.ListTools()), "audit store is required before advertising the tool")
 	srv.SetAuditStore(&dbgorm.AuditStore{})
 	assert.True(t, hasContinuitySlotTool(srv.ListTools()))
 }
