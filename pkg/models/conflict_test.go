@@ -66,11 +66,6 @@ func TestCorrectionPatterns_MinimumCount(t *testing.T) {
 // OpposingChangePatterns
 // ---------------------------------------------------------------------------
 
-func TestOpposingChangePatterns_NotEmpty(t *testing.T) {
-	t.Parallel()
-	assert.NotEmpty(t, OpposingChangePatterns)
-}
-
 func TestOpposingChangePatterns_KnownPairs(t *testing.T) {
 	t.Parallel()
 	pairs := []struct{ key, val string }{

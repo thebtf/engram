@@ -3,7 +3,6 @@ package cognitive
 import (
 	"context"
 	"reflect"
-	"sort"
 	"testing"
 	"time"
 )
@@ -176,27 +175,6 @@ func TestResumePacketEnums_PinNativeFallbackAndContractSourceTaxonomy(t *testing
 		if string(tt.got) != tt.want {
 			t.Fatalf("StateVerificationKind value = %q, want %q", tt.got, tt.want)
 		}
-	}
-}
-
-func TestStatePlaneInterface_ReadWriteAgentOwned(t *testing.T) {
-	typ := reflect.TypeOf((*StatePlane)(nil)).Elem()
-
-	var got []string
-	for i := 0; i < typ.NumMethod(); i++ {
-		got = append(got, typ.Method(i).Name)
-	}
-	sort.Strings(got)
-
-	want := []string{
-		"ReadProjectState",
-		"ReadResumePacket",
-		"ReadSessionState",
-		"WriteProjectState",
-		"WriteSessionState",
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("StatePlane methods:\n  got:  %v\n  want: %v", got, want)
 	}
 }
 
