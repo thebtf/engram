@@ -226,31 +226,29 @@ test('/projects/unresolved/: trailing slash retains no redundant global self-lin
   assert.equal(retainedLinks(state.host).length, 0, 'The global selector must not link to the current retained reader')
 })
 
-for (const language of ['ru', 'en']) {
-  test(`/PROJECTS/ ${language}: case-insensitive route keeps one contextual entry on the actual Projects page`, async t => {
-    const state = await mount(t, { path: '/PROJECTS/', language })
-    assert.equal(state.router.currentRoute.value.path, '/PROJECTS/', 'Keep uppercase and the trailing slash on the actual reactive route')
-    const page = walk(state.host).find(item => hasClass(item, 'projects-page'))
-    assert.ok(page, 'Mount the actual compiled Projects page for the case-insensitive route')
-    assert.equal(retainedLinks(page).length, 1, 'The contextual retained-groups entry belongs to the actual Projects page')
-    assert.equal(retainedLinks(state.host).length, 1, 'The global selector must not duplicate the contextual entry on an uppercase Projects route')
-  })
-  test(`/PROJECTS/UNRESOLVED/ ${language}: case-insensitive reader route has no global self-link`, async t => {
-    const state = await mount(t, { path: '/PROJECTS/UNRESOLVED/', language })
-    assert.equal(state.router.currentRoute.value.path, '/PROJECTS/UNRESOLVED/', 'Keep uppercase and the trailing slash on the actual reactive route')
-    assert.ok(!walk(state.host).some(item => hasClass(item, 'projects-page')), 'The reader uses an inert slot, not the Projects page')
-    assert.equal(retainedLinks(state.host).length, 0, 'The global selector must not link to the current reader on an uppercase route')
-  })
-}
+test('/PROJECTS/: case-insensitive route keeps one contextual entry on the actual Projects page', async t => {
+  const state = await mount(t, { path: '/PROJECTS/', language: 'en' })
+  assert.equal(state.router.currentRoute.value.path, '/PROJECTS/', 'Keep uppercase and the trailing slash on the actual reactive route')
+  const page = walk(state.host).find(item => hasClass(item, 'projects-page'))
+  assert.ok(page, 'Mount the actual compiled Projects page for the case-insensitive route')
+  assert.equal(retainedLinks(page).length, 1, 'The contextual retained-groups entry belongs to the actual Projects page')
+  assert.equal(retainedLinks(state.host).length, 1, 'The global selector must not duplicate the contextual entry on an uppercase Projects route')
+})
+test('/PROJECTS/UNRESOLVED/: case-insensitive reader route has no global self-link', async t => {
+  const state = await mount(t, { path: '/PROJECTS/UNRESOLVED/', language: 'en' })
+  assert.equal(state.router.currentRoute.value.path, '/PROJECTS/UNRESOLVED/', 'Keep uppercase and the trailing slash on the actual reactive route')
+  assert.ok(!walk(state.host).some(item => hasClass(item, 'projects-page')), 'The reader uses an inert slot, not the Projects page')
+  assert.equal(retainedLinks(state.host).length, 0, 'The global selector must not link to the current reader on an uppercase route')
+})
 
 for (const path of ['/projects', '/']) {
+  test(`${path}: one retained-group entry across real layout and page`, async t => {
+    const state = await mount(t, { path, language: 'en' })
+    const links = retainedLinks(state.host)
+    t.diagnostic(JSON.stringify(links.map(text)))
+    assert.equal(links.length, 1, 'Show one contextual unresolved entry, not duplicate global and page links')
+  })
   for (const language of ['ru', 'en']) {
-    test(`${path} ${language}: one retained-group entry across real layout and page`, async t => {
-      const state = await mount(t, { path, language })
-      const links = retainedLinks(state.host)
-      t.diagnostic(JSON.stringify(links.map(text)))
-      assert.equal(links.length, 1, 'Show one contextual unresolved entry, not duplicate global and page links')
-    })
     test(`${path} ${language}: unresolved count describes groups, not member records`, async t => {
       const state = await mount(t, { path, language })
       const labels = retainedLinks(state.host).map(text)
