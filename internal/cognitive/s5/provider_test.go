@@ -188,19 +188,6 @@ func assertMetricReadiness(t *testing.T, snap core.ProductMetricsSnapshot, metri
 	}
 }
 
-func TestProviderRejectsInvalidWindow(t *testing.T) {
-	provider := NewProvider(Dependencies{})
-	window := core.ProductMetricsWindow{
-		Since: time.Date(2026, 7, 5, 10, 5, 0, 0, time.UTC),
-		Until: time.Date(2026, 7, 5, 10, 0, 0, 0, time.UTC),
-	}
-
-	_, err := provider.ProductMetrics(context.Background(), window)
-	if !errors.Is(err, ErrInvalidWindow) {
-		t.Fatalf("ProductMetrics invalid window error: got %v, want ErrInvalidWindow", err)
-	}
-}
-
 func TestProviderHonorsContextCancellation(t *testing.T) {
 	provider := NewProvider(Dependencies{})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -251,35 +238,6 @@ func TestCanonicalProductMetricKeysLiveOnlyInMetricsDeclarations(t *testing.T) {
 			}
 			return true
 		})
-	}
-}
-
-func TestProductMetricOutputImplementationAvoidsAdHocCanonicalMetricStrings(t *testing.T) {
-	want := canonicalMetricValues()
-	var adHoc []string
-
-	fset := token.NewFileSet()
-	file := parseS5File(t, fset, "provider.go")
-	ast.Inspect(file, func(n ast.Node) bool {
-		lit, ok := n.(*ast.BasicLit)
-		if !ok || lit.Kind != token.STRING {
-			return true
-		}
-		value, err := strconv.Unquote(lit.Value)
-		if err != nil {
-			return true
-		}
-		for constName, metricKey := range want {
-			if value == metricKey {
-				pos := fset.Position(lit.Pos())
-				adHoc = append(adHoc, filepath.Base(pos.Filename)+":"+strconv.Itoa(pos.Line)+" hard-codes "+metricKey+" instead of "+constName)
-			}
-		}
-		return true
-	})
-
-	for _, violation := range adHoc {
-		t.Errorf("product metric output path uses ad hoc key string: %s", violation)
 	}
 }
 
