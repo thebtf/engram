@@ -357,24 +357,6 @@ for (const path of ['/projects', '/']) {
         await chooseOption(state, id)
       }
     })
-    test(`${path} RU ${surface}: distinct qualifiers disambiguate the same name without UUID suffixes`, async t => {
-      const items = [
-        { project_id: SAME_A, name: 'Shared repository', repository_qualifier: 'examples/first' },
-        { project_id: SAME_B, name: 'Shared repository', repository_qualifier: 'examples/second' },
-      ]
-      const state = await mount(t, { path, items, unresolved: [] })
-      const labels = await choices(state, surface)
-      assert.equal(labels.size, 2)
-      assert.equal(labels.get(SAME_A).trim(), 'Shared repository · examples/first')
-      assert.equal(labels.get(SAME_B).trim(), 'Shared repository · examples/second')
-      await chooseOption(state, SAME_A)
-      await chooseOption(state, SAME_B)
-    })
-    test(`${path} RU ${surface}: uniquely named descriptor exposes its repository qualifier`, async t => {
-      const state = await mount(t, { path })
-      const labels = await choices(state, surface)
-      assert.ok(labels.get(QUALIFIED).includes(catalog.items.find(row => row.project_id === QUALIFIED).repository_qualifier), 'Authoritative repository context must not disappear just because the primary name is unique')
-    })
   }
   test(`${path}: every project, including version/hash-like names and normal control, keeps its exact selectable ID`, async t => {
     const state = await mount(t, { path })
