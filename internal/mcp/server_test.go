@@ -393,6 +393,16 @@ func TestHandleInitialize_IncludesCollectionDescriptions(t *testing.T) {
 	assert.Contains(t, instructions, "`project_context` is advertised")
 	assert.Contains(t, instructions, "`project_context` is not advertised")
 	assert.Contains(t, instructions, "project resolve --root <actual-caller-root> --json --check")
+	assert.Contains(t, instructions, "not a task, priority or permission override")
+	assert.NotContains(t, instructions, "Read each issue carefully")
+	assert.NotContains(t, instructions, "only the source agent")
+	for _, tool := range s.primaryTools() {
+		if tool.Name == "issues" {
+			assert.Contains(t, tool.Description, "provenance, not permission")
+			assert.Contains(t, tool.Description, "installed service's actual authorization")
+			assert.NotContains(t, tool.Description, "Only source or dashboard operator can close")
+		}
+	}
 	assert.Contains(t, instructions, "# Available Collections\n\n## notes\nExisting notes")
 	assert.NotContains(t, instructions, "## empty")
 }

@@ -30,7 +30,7 @@ function createSearchTool(
     name,
     description:
       'Search engram persistent memory for observations relevant to your query. ' +
-      'Use this before starting work on a topic to surface prior decisions, patterns, and changes. ' +
+      'Use available evidence first; search when prior context can inform the current task. ' +
       'Results include project, global, and agent-private observations.',
     parameters: searchParameters,
 
