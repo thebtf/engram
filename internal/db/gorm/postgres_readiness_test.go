@@ -1,6 +1,7 @@
 package gorm
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgproto3"
 )
 
 func TestTransientPostgresConnectionError(t *testing.T) {
@@ -38,6 +40,17 @@ func TestTransientPostgresConnectionError(t *testing.T) {
 				t.Fatalf("retry = %v, want %v", got, tc.retry)
 			}
 		})
+	}
+}
+
+func TestTransientPostgresPartialHandshake(t *testing.T) {
+	frontend := pgproto3.NewFrontend(bytes.NewReader([]byte{'R'}), io.Discard)
+	_, err := frontend.Receive()
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("partial PostgreSQL message error = %v, want unexpected EOF", err)
+	}
+	if !transientPostgresConnectionError(fmt.Errorf("failed to receive message: %w", err)) {
+		t.Fatal("partial PostgreSQL handshake must be retryable")
 	}
 }
 

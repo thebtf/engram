@@ -142,7 +142,7 @@ func transientPostgresConnectionError(err error) bool {
 		return !dnsErr.IsNotFound && (dnsErr.IsTemporary || dnsErr.IsTimeout)
 	}
 	var netErr net.Error
-	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.EOF) ||
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
 		errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNABORTED) ||
 		(runtime.GOOS == "windows" && (errors.Is(err, syscall.Errno(10053)) || errors.Is(err, syscall.Errno(10054)) || errors.Is(err, syscall.Errno(10061)))) ||
 		(errors.As(err, &netErr) && netErr.Timeout())
