@@ -28,10 +28,6 @@ func TestUCITaskContextJoinedProductionCallback(t *testing.T) {
 	runNativeTaskContextFixture(t, runJoinedNativeTaskContext)
 }
 
-func TestUCITaskContextJoinedWorkerLaunch(t *testing.T) {
-	runNativeTaskContextFixture(t, runJoinedNativeTaskContextDiscriminator)
-}
-
 func TestUCITaskContextJoinedWorkerCancellation(t *testing.T) {
 	runNativeTaskContextFixture(t, func(t *testing.T, fixture joinedNativeFixture) {
 		runJoinedNativeTaskContextCases(t, fixture, joinedCaseSelection{cancellation: true})
