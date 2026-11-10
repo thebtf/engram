@@ -309,7 +309,7 @@ test('canonical issue roles: unscoped all-project reading preserves two NULL rol
   assert.equal(state.calls.at(-1).url.searchParams.has('project'), false)
 })
 
-for (const status of [401, 403]) test(`canonical issue roles: real HTTP ${status} never exposes detail or comments`, async t => {
+for (const status of [401, 403]) test(`canonical issue roles: HTTP ${status} response never exposes detail or comments`, async t => {
   const state = await mount(t, targetProject)
   state.setResponder(call => call.url.pathname === '/api/issues/7' ? json({ error: 'Denied' }, status) : undefined)
   await state.issues.openIssue(7)
