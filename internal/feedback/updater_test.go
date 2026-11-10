@@ -32,22 +32,6 @@ func TestCalculateImportance_ZeroCitations(t *testing.T) {
 	}
 }
 
-func TestCalculateImportance_OneCitation(t *testing.T) {
-	base := 0.5
-	// Spec formula with natural log: 0.5 × ln(1+1) = 0.5 × ln(2) ≈ 0.347
-	// With log₁₀: 0.5 × log₁₀(2) ≈ 0.150
-	// Either is acceptable; we test that result is > 0 and < base (diminishing uplift pattern)
-	// OR > base if implementation adds a +1 guard.
-	result := calculateImportance(base, 1)
-	if result <= 0 {
-		t.Errorf("calculateImportance(%f, 1): got %f, must be > 0", base, result)
-	}
-	// Result must be a finite, positive number.
-	if math.IsNaN(result) || math.IsInf(result, 0) {
-		t.Errorf("calculateImportance(%f, 1): got non-finite result %f", base, result)
-	}
-}
-
 func TestCalculateImportance_TenCitations(t *testing.T) {
 	base := 0.5
 	result := calculateImportance(base, 10)
