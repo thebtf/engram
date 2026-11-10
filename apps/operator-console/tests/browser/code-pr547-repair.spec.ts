@@ -311,7 +311,7 @@ for (const boundary of ['resume', 'handshake', 'catalog'] as const) {
   })
 }
 
-for (const failure of ['unavailable', 'timeout', 'offline', 'malformed'] as const) {
+for (const failure of ['unavailable', 'http-408', 'offline', 'malformed'] as const) {
   test(`historical pin and released results survive ${failure} status until explicit retry`, async ({ page }) => {
     let published = false
     let failStatus = false
@@ -332,7 +332,7 @@ for (const failure of ['unavailable', 'timeout', 'offline', 'malformed'] as cons
         if (!failStatus) await route.fulfill({ json: { total_chunks: 1, embedded_chunks: 1, embedding: { coverage: 'complete' }, freshness: { state: published ? 'historical' : 'observed_current' } } })
         else if (failure === 'offline') await route.abort('internetdisconnected')
         else if (failure === 'malformed') await route.fulfill({ json: { total_chunks: 'invalid', embedded_chunks: 1, embedding: { coverage: 'complete' } } })
-        else await route.fulfill({ status: failure === 'timeout' ? 408 : 503 })
+        else await route.fulfill({ status: failure === 'http-408' ? 408 : 503 })
       } else if (path === '/api/code/structure' || path === '/api/code/search' || path === '/api/code/source') await route.fulfill({ json: envelope })
       else if (path === '/api/code/index-intents') await route.fulfill({ status: 202, json: intent })
       else if (path === '/api/code/index-intents/historical-intent') await route.fulfill({ json: intent })
