@@ -51,4 +51,3 @@ func newMemoryServerForT007(t *testing.T, project string) t007TestEnv {
 
 	return t007TestEnv{srv: srv, store: store}
 }
-
