@@ -544,14 +544,21 @@ func TestRequestDeduplicator_RecordStored(t *testing.T) {
 }
 
 func TestRequestDeduplicator_EvictionOnFullCapacity(t *testing.T) {
-	d := NewRequestDeduplicator(0, 2) // TTL=0 → all entries are "old"
-	d.Record("h1")
-	d.Record("h2")
-	d.Record("h3") // triggers eviction
+	d := NewRequestDeduplicator(300, 2)
+	d.Record("expired")
+	d.Record("live")
+	d.mu.Lock()
+	d.seen["expired"] = time.Now().Unix() - 301
+	d.mu.Unlock()
+	d.Record("new")
 	d.mu.RLock()
-	sz := len(d.seen)
+	_, expired := d.seen["expired"]
+	_, live := d.seen["live"]
+	_, added := d.seen["new"]
 	d.mu.RUnlock()
-	assert.LessOrEqual(t, sz, 3)
+	assert.False(t, expired)
+	assert.True(t, live)
+	assert.True(t, added)
 }
 
 func TestRequestDeduplicator_ExpiredNotDuplicate(t *testing.T) {

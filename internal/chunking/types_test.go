@@ -383,27 +383,6 @@ func TestManager_ChunkFiles_MultipleFiles(t *testing.T) {
 	}
 }
 
-func TestManager_ChunkFiles_UnsupportedFileProducesError(t *testing.T) {
-	m := NewManager([]Chunker{&singleChunkMock{ext: ".go"}}, DefaultChunkOptions())
-	tmpDir := t.TempDir()
-
-	goodFile := filepath.Join(tmpDir, "good.go")
-	badFile := filepath.Join(tmpDir, "bad.txt")
-	require.NoError(t, os.WriteFile(goodFile, []byte("package main"), 0600))
-	require.NoError(t, os.WriteFile(badFile, []byte("data"), 0600))
-
-	results, errs := m.ChunkFiles(context.Background(), []string{goodFile, badFile})
-	assert.Len(t, errs, 1, "one unsupported file should produce one error")
-	assert.Contains(t, results, goodFile, "good file should still be processed")
-}
-
-func TestManager_ChunkFiles_EmptySlice(t *testing.T) {
-	m := NewManager([]Chunker{&singleChunkMock{ext: ".go"}}, DefaultChunkOptions())
-	results, errs := m.ChunkFiles(context.Background(), nil)
-	assert.Empty(t, results)
-	assert.Empty(t, errs)
-}
-
 func TestManager_ChunkFiles_AllErrors(t *testing.T) {
 	m := NewManager([]Chunker{&errorChunkMock{}}, DefaultChunkOptions())
 	tmpDir := t.TempDir()

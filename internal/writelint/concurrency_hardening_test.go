@@ -95,6 +95,7 @@ func TestConcurrency_50Goroutines_SameContent_DistinctTokens(t *testing.T) {
 		wg       sync.WaitGroup
 		mu       sync.Mutex
 		tokens   []string
+		signaled int
 		errCount int
 	)
 
@@ -109,8 +110,11 @@ func TestConcurrency_50Goroutines_SameContent_DistinctTokens(t *testing.T) {
 				errCount++
 				return
 			}
-			if !resp.Stored && resp.ResolutionToken != "" {
-				tokens = append(tokens, resp.ResolutionToken)
+			if !resp.Stored {
+				signaled++
+				if resp.ResolutionToken != "" {
+					tokens = append(tokens, resp.ResolutionToken)
+				}
 			}
 		}()
 	}
@@ -118,6 +122,12 @@ func TestConcurrency_50Goroutines_SameContent_DistinctTokens(t *testing.T) {
 
 	if errCount > 0 {
 		t.Errorf("finding 8 same-content: %d errors", errCount)
+	}
+	if signaled != N {
+		t.Errorf("same-content: expected %d signaled, got %d", N, signaled)
+	}
+	if len(tokens) != N {
+		t.Errorf("same-content: expected %d resolution tokens, got %d", N, len(tokens))
 	}
 
 	// All tokens minted for concurrent same-content writes must be distinct.
