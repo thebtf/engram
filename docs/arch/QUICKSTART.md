@@ -58,7 +58,7 @@ Server starts on `:37777` (HTTP API + gRPC + dashboard, cmux multiplexed).
 
 ### 4. Install plugin
 
-Same as Option A step 4.
+Follow the [recommended plugin installation](../../README.md#plugin-install-recommended) in the README.
 
 ---
 
