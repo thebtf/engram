@@ -12,7 +12,7 @@ func TestTemporalTruthMigrationCreatesDedicatedTable(t *testing.T) {
 	var tableCount int
 	require.NoError(t, db.Raw(`
 		SELECT COUNT(*) FROM information_schema.tables
-		WHERE table_schema = 'public' AND table_name = 'temporal_truth_records'
+		WHERE table_schema = current_schema() AND table_name = 'temporal_truth_records'
 	`).Scan(&tableCount).Error)
 	require.Equal(t, 1, tableCount, "temporal_truth_records table must exist after migration 157")
 
@@ -20,7 +20,7 @@ func TestTemporalTruthMigrationCreatesDedicatedTable(t *testing.T) {
 		var colCount int
 		require.NoError(t, db.Raw(`
 			SELECT COUNT(*) FROM information_schema.columns
-			WHERE table_schema = 'public' AND table_name = 'temporal_truth_records' AND column_name = ?
+			WHERE table_schema = current_schema() AND table_name = 'temporal_truth_records' AND column_name = ?
 		`, col).Scan(&colCount).Error)
 		require.Equal(t, 1, colCount, "column %q must exist in temporal_truth_records", col)
 	}
