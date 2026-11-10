@@ -4,6 +4,7 @@ import test from 'node:test'
 import ts from 'typescript'
 import * as vue from 'vue'
 import * as routing from 'vue-router'
+import * as projectCatalog from '../../../../ui/src/utils/projectCatalog.ts'
 import { compileScript, compileTemplate, parse } from '@vue/compiler-sfc'
 import { createI18n, useI18n } from 'vue-i18n'
 
@@ -54,7 +55,7 @@ function evaluate(source, dependency, globals) {
   return module.exports
 }
 
-async function mount(t, { path = '/projects', language = 'ru', items = catalog.items, unresolved = catalog.unresolved, selected = '', logical_groups, scopedRows, documentFetch, catalogFetch, initialQuery = {}, homeDocuments = false, capturePageState = false, allowSyntheticMutations = false } = {}) {
+async function mount(t, { path = '/projects', language = 'ru', items = catalog.items, unresolved = catalog.unresolved, selected = '', logical_groups, scopedRows, documentFetch, vaultFetch, catalogFetch, initialQuery = {}, homeDocuments = false, capturePageState = false, allowSyntheticMutations = false } = {}) {
   const modules = new Map(), storage = new Map(), calls = [], errors = []
   let context
   const globals = {
@@ -75,6 +76,8 @@ async function mount(t, { path = '/projects', language = 'ru', items = catalog.i
       if (url.pathname === '/api/stats') return Response.json({ uptime: '1m' })
       if (url.pathname === '/api/stats/vnext') return Response.json({ embedding: { active_memory_count: 0 } })
       if (url.pathname === '/api/sessions/list') return Response.json({ sessions: [], total: 0 })
+      const vaultResponse = vaultFetch?.(url, init)
+      if (vaultResponse) return vaultResponse
       const documentResponse = documentFetch?.(url, init)
       if (documentResponse) return documentResponse
       if (['/api/memories', '/api/documents'].includes(url.pathname)) {
@@ -98,6 +101,7 @@ async function mount(t, { path = '/projects', language = 'ru', items = catalog.i
     // Unrelated preferences/navigation are host fixtures; catalog, shell, API and sessions are real.
     if (name.endsWith('useConsolePreferences')) return { density: vue.ref('comfortable'), theme: vue.ref('dark'), startedLoads: new Set() }
     if (name.endsWith('i18n.config')) return { locales: [{ code: language }], setLocale() { } }
+    if (name.endsWith('projectCatalog')) return projectCatalog
     if (name.endsWith('useNav')) return { useNav: () => ({ NAV: vue.ref([]) }) }
     const real = load(name.split('/').at(-1))
     if (name.endsWith('useOperatorProjectContext')) return { ...real, useOperatorProjectContext: () => { context = real.useOperatorProjectContext(); return context } }
@@ -115,8 +119,8 @@ async function mount(t, { path = '/projects', language = 'ru', items = catalog.i
   }
   const layout = component('layouts/default.vue')
   const pagePath = path.replace(/\/+$/, '').toLowerCase() || '/'
-  const pageClass = pagePath === '/' ? 'home-page' : pagePath === '/projects' ? 'projects-page' : pagePath === '/documents' ? 'documents-page' : 'inert-page'
-  const page = pagePath === '/' ? component('pages/index.vue') : pagePath === '/projects' ? component('pages/projects.vue') : pagePath === '/documents' ? component('pages/documents.vue') : { render: () => vue.h('main', { class: pageClass }) }
+  const pageClass = pagePath === '/' ? 'home-page' : pagePath === '/projects' ? 'projects-page' : pagePath === '/documents' ? 'documents-page' : pagePath === '/secrets' ? 'secrets-page' : 'inert-page'
+  const page = pagePath === '/' ? component('pages/index.vue') : pagePath === '/projects' ? component('pages/projects.vue') : pagePath === '/documents' ? component('pages/documents.vue') : pagePath === '/secrets' ? component('pages/secrets.vue') : { render: () => vue.h('main', { class: pageClass }) }
   let pageState
   if (capturePageState) {
     const setup = page.setup
@@ -127,7 +131,7 @@ async function mount(t, { path = '/projects', language = 'ru', items = catalog.i
   await router.push({ path, query: { ...initialQuery, ...(selected ? { project: selected } : {}) } })
   const app = renderer.createApp({ render: () => vue.h(layout, null, { default: () => vue.h(homeDocuments && router.currentRoute.value.path === '/documents' ? documentPage : page) }) })
   app.component('ProjectContext', component('components/ProjectContext.vue'))
-  for (const name of ['SettingsModal', 'ProfileModal', 'LoginModal', 'MutationResultNotice', 'HonestyBadge']) app.component(name, { render: () => null })
+  for (const name of ['SettingsModal', 'ProfileModal', 'LoginModal', 'MutationResultNotice', 'HonestyBadge', 'RevealSecret']) app.component(name, { render: () => null })
   const messages = Object.fromEntries(['ru', 'en', 'zh'].map(code => [code, JSON.parse(readFileSync(new URL(`i18n/locales/${code}.json`, root), 'utf8'))]))
   const i18n = createI18n({ legacy: false, locale: language, messages, missingWarn: false, fallbackWarn: false })
   app.use(router).use(i18n)
@@ -698,6 +702,56 @@ function lineageResponses({ oldServer = false, refusalStatus = 0 } = {}) {
 const documentReads = state => state.calls.filter(call => ['/api/documents/read', '/api/documents/history'].includes(call.url.pathname))
 const documentContent = state => walk(state.host).find(item => item.props['data-testid'] === 'document-content')
 
+test('Legacy alias path without a document ID retains its original native lineage', async t => {
+  const documentFetch = url => {
+    if (url.pathname === '/api/documents/comments') return Response.json({ comments: [] })
+    if (!['/api/documents/read', '/api/documents/history'].includes(url.pathname)) return undefined
+    const project = url.searchParams.get('project')
+    const beta = project === SAME_B
+    const id = beta ? 201 : 101
+    const content = beta ? 'Beta native history' : 'Alpha native history'
+    if (url.pathname === '/api/documents/history') return Response.json({ path: lineagePath, project, versions: [{ id, version: 1, author: content }] })
+    return Response.json({ id, path: lineagePath, project, version: 1, content, content_hash: content })
+  }
+  const state = await mount(t, { path: '/documents', language: 'en', selected: SAME_B, items: logicalItems.slice(0, 2), unresolved: [], logical_groups: [logicalGroups[0]], documentFetch, initialQuery: { path: lineagePath } })
+  await tick()
+  assert.equal(state.context.project.value, SAME_A)
+  assert.equal(state.router.currentRoute.value.query.docProject, SAME_B)
+  assert.equal(state.router.currentRoute.value.query.document_id, undefined)
+  assert.equal(text(documentContent(state)).trim(), 'Beta native history')
+  assert.ok(documentReads(state).length >= 2)
+  assert.ok(documentReads(state).every(call => call.url.searchParams.get('project') === SAME_B && !call.url.searchParams.has('document_id')))
+})
+
+test('Vault alias credentials show and delete the exact original binding', async t => {
+  let rows = [{ id: 1, name: 'same-key', project_id: SAME_A, scope: 'project' }, { id: 2, name: 'same-key', project_id: SAME_B, scope: 'project' }]
+  const vaultFetch = (url, init) => {
+    if (url.pathname === '/api/vault/status') return Response.json({ key_configured: true, credential_count: rows.length })
+    if (url.pathname === '/api/vault/credentials') return Response.json(rows)
+    if (url.pathname === '/api/vault/credentials/same-key' && init.method === 'DELETE') {
+      const project = url.searchParams.get('project')
+      rows = rows.filter(row => row.project_id !== project)
+      return Response.json({ operation_state: 'completed', readback: { authoritative: true, kind: 'current', current_state: { deleted: true, name: 'same-key', project_id: project } } })
+    }
+  }
+  const state = await mount(t, { path: '/secrets', language: 'en', selected: SAME_A, items: logicalItems.slice(0, 2), unresolved: [], logical_groups: [logicalGroups[0]], vaultFetch, allowSyntheticMutations: true, capturePageState: true })
+  await state.pageState().refresh(); await tick()
+  const row = id => walk(state.host).find(item => item.props['data-testid'] === `secret-row-${id}`)
+  const button = id => walk(state.host).find(item => item.props['data-testid'] === `secret-delete-${id}`)
+  assert.ok(text(row(1)).includes(SAME_A) && text(row(1)).includes('ID: 1'))
+  assert.ok(text(row(2)).includes(SAME_B) && text(row(2)).includes('ID: 2'))
+  assert.ok(text(row(1)).includes('North primary') && text(row(2)).includes('North primary'))
+  await button(2).props.onClick({ stopPropagation() { } }); await tick()
+  assert.ok(text(button(2)).includes(SAME_B) && text(button(2)).includes('ID: 2'))
+  assert.equal(state.calls.filter(call => call.method === 'DELETE').length, 0)
+  await button(2).props.onClick({ stopPropagation() { } }); await tick()
+  const deletes = state.calls.filter(call => call.method === 'DELETE')
+  assert.equal(deletes.length, 1)
+  assert.equal(deletes[0].url.searchParams.get('project'), SAME_B)
+  assert.ok(row(1))
+  assert.equal(row(2), undefined)
+})
+
 for (const source of ['Documents', 'Home']) {
   test(`${source} distinguishes same-path rows with otherwise identical metadata`, async t => {
     const base = lineageResponses()
@@ -1261,18 +1315,24 @@ for (const status of [403, 404, 409]) {
   })
 }
 
-test('SCOPED-ACTION alias comment resolves to the primary project and preserves lineage', async t => {
-  const documentFetch = scopedActionResponses()
+test('SCOPED-ACTION alias comment retains the source project and lineage', async t => {
+  const base = scopedActionResponses()
+  const documentFetch = (url, init) => {
+    if (!['/api/documents/read', '/api/documents/history'].includes(url.pathname)) return base(url, init)
+    const primaryUrl = new URL(url)
+    primaryUrl.searchParams.set('project', SAME_A)
+    return base(primaryUrl, init).json().then(body => Response.json({ ...body, project: SAME_B }))
+  }
   const state = await mount(t, { path: '/documents', language: 'en', selected: SAME_B, items: [logicalItems[0], logicalItems[1]], unresolved: [], logical_groups: [logicalGroups[0]], documentFetch, initialQuery: { path: lineagePath, document_id: '101' }, capturePageState: true, allowSyntheticMutations: true })
   await tick()
   assert.equal(text(documentContent(state)).trim(), 'Alpha body version 2')
   const comments = state.calls.filter(call => call.url.pathname === '/api/documents/comments')
-  assert.ok(comments.some(call => call.url.searchParams.get('project') === SAME_A && call.url.searchParams.get('document_id') === '101' && call.url.searchParams.get('expected_version') === '2'))
+  assert.ok(comments.some(call => call.url.searchParams.get('project') === SAME_B && call.url.searchParams.get('document_id') === '101' && call.url.searchParams.get('expected_version') === '2'))
   state.pageState().commentDraft.value = 'synthetic alias comment'
   await state.pageState().comment()
   const call = state.calls.find(item => item.method === 'POST' && item.url.pathname === '/api/documents/comment')
   assert.ok(call)
-  assert.equal(JSON.parse(call.body).project, SAME_A)
+  assert.equal(JSON.parse(call.body).project, SAME_B)
 })
 
 test('SCOPED-ACTION initial old-server omission retains legacy export policy', async t => {

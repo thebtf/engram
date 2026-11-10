@@ -225,7 +225,7 @@ export function validDocumentID(value: unknown): value is string { return typeof
 function knownProjectQuery(query: LocationQuery): boolean {
   return ['project', 'memoryProject', 'docProject', 'principalProject'].every((key) => {
     const value = query[key]
-    return value === undefined || (key === 'project' && (value === '' || value === 'all')) || (key === 'principalProject' && (value === 'all' || value === 'current')) || (typeof value === 'string' && isCatalogProject(value) && canonicalProjectID(value) === value)
+    return value === undefined || (key === 'project' && (value === '' || value === 'all')) || (key === 'principalProject' && (value === 'all' || value === 'current')) || (typeof value === 'string' && isCatalogProject(value) && (key === 'docProject' || canonicalProjectID(value) === value))
   })
 }
 
@@ -379,10 +379,12 @@ export function useOperatorProjectContext() {
       try {
         await ensureCatalog()
         if (!current()) return
+        if (path === '/documents' && typeof query.path === 'string' && query.path && query.docProject === undefined && typeof query.project === 'string' && isCatalogProject(query.project) && canonicalProjectID(query.project) !== query.project) query.docProject = query.project
         for (const key of ['project', ...anchors]) {
           const value = query[key]
           if (value === undefined || (key === 'project' && (value === '' || value === 'all')) || (key === 'principalProject' && (value === 'all' || value === 'current'))) continue
           if (typeof value !== 'string' || !value) throw new TypeError('Invalid project route value')
+          if (key === 'docProject' && isCatalogProject(value)) continue
           const resolution = await readProjectResolution(value)
           if (!current()) return
           if (resolution.status === 'unresolved') {

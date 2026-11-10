@@ -80,7 +80,7 @@ test('confirmed groups canonicalize alias routes while retaining document identi
   assert.notEqual(core.canonicalProjectName(A), core.canonicalProjectName(C))
   assert.equal(context.project.value, A)
   assert.equal(router.currentRoute.value.query.project, A)
-  assert.equal(router.currentRoute.value.query.docProject, A)
+  assert.equal(router.currentRoute.value.query.docProject, B)
   assert.equal(router.currentRoute.value.query.document_id, '101')
 })
 

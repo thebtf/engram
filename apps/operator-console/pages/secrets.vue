@@ -223,7 +223,7 @@ async function requestDelete(cred: OperatorCredential) {
           <span>{{ t('secrets.create.project') }}</span>
           <select v-model="createProject" class="input" data-testid="secret-create-project" :disabled="context.pending.value || context.selectionPending.value || Boolean(scopeError)">
             <option value="" disabled>{{ t('knowledge.chooseProject') }}</option>
-            <option v-if="createProject &amp;&amp; !context.projects.value.includes(createProject)" :value="createProject" disabled hidden>{{ canonicalProjectName(createProject) }}</option>
+            <option v-if="createProject ? !context.projects.value.includes(createProject) : false" :value="createProject" disabled hidden>{{ canonicalProjectName(createProject) }}</option>
             <option v-for="project in context.projects.value" :key="project" :value="project">{{ canonicalProjectName(project) }}</option>
           </select>
         </label>
@@ -264,12 +264,12 @@ async function requestDelete(cred: OperatorCredential) {
                 <span v-if="revealError && openedName === c.id" class="err">{{ revealError }}</span>
               </div>
             </td>
-            <td><span class="vcol">{{ c.binding_error ? `Unavailable #${c.id}` : c.unresolved_reference ? `Retained #${c.id} · read-only` : c.scope === 'global' ? t('rules.scope.global') : canonicalProjectName(c.project) }}</span><div v-if="c.binding_error" class="vcol">{{ c.binding_error === 'CREDENTIAL_BINDING_CONFLICT' ? 'Conflicting membership' : 'Membership unavailable' }}</div><div v-if="c.origin_project" class="vcol">Origin: {{ c.origin_project }}</div></td>
+            <td><span class="vcol">{{ c.binding_error ? `Unavailable #${c.id}` : c.unresolved_reference ? `Retained #${c.id} · read-only` : c.scope === 'global' ? t('rules.scope.global') : canonicalProjectName(c.project) }}</span><div v-if="!c.binding_error && !c.unresolved_reference" class="vcol">{{ t('secrets.colProject') }}: {{ c.scope === 'global' ? t('rules.scope.global') : c.project }} · ID: {{ c.id }}</div><div v-if="c.binding_error" class="vcol">{{ c.binding_error === 'CREDENTIAL_BINDING_CONFLICT' ? 'Conflicting membership' : 'Membership unavailable' }}</div><div v-if="c.origin_project" class="vcol">Origin: {{ c.origin_project }}</div></td>
             <td><span class="bdg">{{ c.binding_error ? 'unavailable' : c.scope }}</span></td>
             <td><span class="vcol">{{ c.created }}</span></td>
             <td class="r">
               <button v-if="revealed?.id !== c.id" class="act" :data-testid="`secret-reveal-${c.id}`" :disabled="Boolean(c.binding_error)" :title="c.binding_error ? 'Credential binding unavailable' : undefined" @click.stop="revealSecret(c)">{{ t('secrets.reveal') }}</button>
-              <button class="act danger" :data-testid="`secret-delete-${c.id}`" :disabled="Boolean(c.binding_error || c.unresolved_reference)" :title="c.binding_error ? 'Credential binding unavailable' : c.unresolved_reference ? 'Retained credential: read-only' : undefined" @click.stop="requestDelete(c)">{{ deleteConfirm && openedName === c.id ? t('secrets.confirmDelete') : t('secrets.delete') }}</button>
+              <button class="act danger" :data-testid="`secret-delete-${c.id}`" :disabled="Boolean(c.binding_error || c.unresolved_reference)" :title="c.binding_error ? 'Credential binding unavailable' : c.unresolved_reference ? 'Retained credential: read-only' : undefined" @click.stop="requestDelete(c)">{{ deleteConfirm && openedName === c.id ? `${t('secrets.confirmDelete')} · ${t('secrets.colProject')}: ${c.scope === 'global' ? t('rules.scope.global') : c.project} · ID: ${c.id}` : t('secrets.delete') }}</button>
             </td>
           </tr>
         </template>

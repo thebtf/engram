@@ -1,6 +1,6 @@
 import { computed, onBeforeUnmount, ref as sharedRef, type Ref as SharedRef } from 'vue'
 import { startedLoads } from './useConsolePreferences'
-import { documentScopeUncertain, isCatalogProject, loadKnowledgePage, safeNavigation, supportsDocumentLineage, validDocumentID, type OperatorKnowledgePage } from './useOperatorProjectContext'
+import { canonicalProjectID, documentScopeUncertain, isCatalogProject, loadKnowledgePage, safeNavigation, supportsDocumentLineage, validDocumentID, type OperatorKnowledgePage } from './useOperatorProjectContext'
 import { useRoute } from 'vue-router'
 
 let sharedDocumentsPageDocuments: SharedRef<OperatorDocumentSummary[]> | undefined
@@ -609,7 +609,7 @@ export function useOperatorDocuments(projectContext?: Ref<string>): {
   async function openDocument(doc: OperatorDocumentSummary, allowPathOnly = false) {
     clearDocumentDetail()
     const project = doc.project
-    if (!isCatalogProject(project) || (selectedProject.value !== 'all' && selectedProject.value !== project)) return
+    if (!isCatalogProject(project) || (selectedProject.value !== 'all' && canonicalProjectID(selectedProject.value) !== canonicalProjectID(project))) return
     if (documentScopeUncertain(project)) throw new TypeError('The document project scope is uncertain')
     if (supportsDocumentLineage(project) && !validDocumentID(doc.id) && !allowPathOnly) throw new TypeError('A valid document lineage is required')
     documentProject = project
@@ -710,7 +710,7 @@ export function useOperatorDocuments(projectContext?: Ref<string>): {
     if (!currentVersionEntry?.id) {
       throw new Error('No document version selected for comments')
     }
-    if (!validDocumentID(currentVersionEntry.id) || !primaryVersion.value || (selectedProject.value !== 'all' && selectedProject.value !== documentProject)) throw new TypeError('A valid scoped document version is required')
+    if (!validDocumentID(currentVersionEntry.id) || !primaryVersion.value || (selectedProject.value !== 'all' && canonicalProjectID(selectedProject.value) !== canonicalProjectID(documentProject))) throw new TypeError('A valid scoped document version is required')
 
     return executeMutation(
       { requestId: crypto.randomUUID(), action: 'document-comment', intent: input },
@@ -745,7 +745,7 @@ export function useOperatorDocuments(projectContext?: Ref<string>): {
     const auth = authGeneration.value
     const unauthorized = operatorUnauthorizedRevision.value
     const scoped = supportsDocumentLineage(scope)
-    const current = () => isCatalogProject(scope) && !documentScopeUncertain(scope) && supportsDocumentLineage(scope) === scoped && documentProject === scope && selectedProject.value === selectedScope && (selectedScope === 'all' || selectedScope === scope) && selectedPath.value === path && documentID === lineage && detailGeneration === detail && primaryGeneration === primary && route.fullPath === location && authGeneration.value === auth && operatorUnauthorizedRevision.value === unauthorized && primaryVersion.value === input.target.version && primaryDocumentValue.value?.id === String(input.target.documentId) && primaryDocumentValue.value?.version === input.target.version
+    const current = () => isCatalogProject(scope) && !documentScopeUncertain(scope) && supportsDocumentLineage(scope) === scoped && documentProject === scope && selectedProject.value === selectedScope && (selectedScope === 'all' || canonicalProjectID(selectedScope) === canonicalProjectID(scope)) && selectedPath.value === path && documentID === lineage && detailGeneration === detail && primaryGeneration === primary && route.fullPath === location && authGeneration.value === auth && operatorUnauthorizedRevision.value === unauthorized && primaryVersion.value === input.target.version && primaryDocumentValue.value?.id === String(input.target.documentId) && primaryDocumentValue.value?.version === input.target.version
     if (!current()) throw new TypeError('The selected document target is no longer current')
     const selectionRequestId = crypto.randomUUID()
     const selection = parseDocumentSelection(await operatorFetchJson<unknown>('/api/documents/selection', documentOperationInit({
