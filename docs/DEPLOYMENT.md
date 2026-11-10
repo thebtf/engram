@@ -1,9 +1,15 @@
 # Deployment Guide
 
-Engram production deployment is a three-image stack: `server`,
-`operator-console`, and `postgres`. Production Compose intentionally has no
-moving image default.
-Every deployment requires the retained post-readback `publication-result.json`
+This guide describes the separately configured three-image production Compose
+deployment: `server`, `operator-console`, and `postgres`. Its Compose files have
+no moving image default. For the owner's existing Unraid deployment, do not apply
+this guide's digest-pinned Compose commands or replace its `Repository`; use
+[Production latest channel](RELEASE-PROTOCOL.md#production-latest-channel) and
+the existing updater instead. The following publication-record requirements apply
+to this guide's Compose deployment, not as a substitute for Unraid's promotion
+and updater evidence.
+
+That Compose deployment requires the retained post-readback `publication-result.json`
 from the one release workflow execution that published the selected images. It
 is deployment authority, not merely release evidence.
 

@@ -4,49 +4,15 @@ Get engram running and integrated with Claude Code.
 
 ---
 
-## Option A: Docker (recommended for production)
+## Option A: Docker
 
-### 1. Pull and run
-
-```bash
-docker run -d \
-  --name engram \
-  -p 37777:37777 \
-  -e DATABASE_DSN="postgres://user:pass@db-host:5432/engram?sslmode=disable" \
-  -e ENGRAM_AUTH_ADMIN_TOKEN="your-operator-token" \
-  -e ENGRAM_WORKER_HOST="0.0.0.0" \
-  ghcr.io/thebtf/engram:latest
-```
-
-Migrations run automatically on first startup.
-
-### 2. Verify
-
-```bash
-curl http://localhost:37777/api/version
-# {"version":"v6.0.1"}
-```
-
-Dashboard at `http://localhost:37777`.
-
-### 3. Issue a worker keycard
-
-1. Open the dashboard → `/tokens` page.
-2. Create a new token for your workstation.
-3. Copy the token (shown once).
-
-### 4. Install the Claude Code plugin
-
-```bash
-# Add the marketplace
-/plugin marketplace add thebtf/engram-marketplace
-
-# Install engram
-/plugin install engram
-
-# Configure (paste server URL + worker keycard)
-/engram:setup
-```
+For a local development stack and current plugin setup, use the
+[README quick start](../../README.md#quick-start-server). It is not a production
+deployment or installed-consumer proof. For the owner's Unraid installation,
+keep the existing `:latest` Repository and follow the [production latest
+channel](../RELEASE-PROTOCOL.md#production-latest-channel); do not replace its
+updater with a direct `docker run`. A separately configured three-image Compose
+deployment follows the [deployment guide](../DEPLOYMENT.md).
 
 ---
 
@@ -56,7 +22,7 @@ Dashboard at `http://localhost:37777`.
 
 | Dependency | Version | Purpose |
 |------------|---------|---------|
-| Go | 1.25+ | Build from source |
+| Go | Version declared in `go.mod` | Build from source |
 | PostgreSQL | 17+ | Primary data store |
 | pgvector extension | latest | Vector similarity search |
 | pgvectorscale extension | latest | DiskANN indexes for 4096-dim embeddings (optional but recommended) |
