@@ -286,25 +286,25 @@ func TestClusterObservations_LargeSet_SimilarPairsReduced(t *testing.T) {
 		"profiling", "debugging", "tracing", "alerting", "reporting",
 	}
 
-	// 60 observations: 30 similar pairs, one per topic
-	observations := make([]*models.Observation, 60)
+	// Each pair has the same non-stopword term; different topics share no terms.
+	// Therefore pair similarity is 1 and cross-topic similarity is 0.
+	observations := make([]*models.Observation, 0, len(topics)*2)
+	expected := make([]*models.Observation, 0, len(topics))
 	for i, topic := range topics {
-		observations[i*2] = &models.Observation{
-			ID:        int64(i*2 + 1),
-			Title:     sql.NullString{String: topic + " implementation", Valid: true},
-			Narrative: sql.NullString{String: "Detailed " + topic + " system design", Valid: true},
+		first := &models.Observation{
+			ID:    int64(i*2 + 1),
+			Title: sql.NullString{String: topic, Valid: true},
 		}
-		observations[i*2+1] = &models.Observation{
-			ID:        int64(i*2 + 2),
-			Title:     sql.NullString{String: topic + " update", Valid: true},
-			Narrative: sql.NullString{String: "Updated " + topic + " logic", Valid: true},
+		duplicate := &models.Observation{
+			ID:    int64(i*2 + 2),
+			Title: sql.NullString{String: topic, Valid: true},
 		}
+		observations = append(observations, first, duplicate)
+		expected = append(expected, first)
 	}
 
 	result := ClusterObservations(observations, 0.4)
-	t.Logf("Clustered 60 observations down to %d", len(result))
-	assert.Less(t, len(result), 60, "similar pairs should be clustered")
-	assert.GreaterOrEqual(t, len(result), 1)
+	assert.Equal(t, expected, result, "each topic should retain its first observation in input order")
 }
 
 func TestClusterObservations_LargeSet_AllUnique(t *testing.T) {

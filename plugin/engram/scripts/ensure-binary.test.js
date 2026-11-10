@@ -88,14 +88,20 @@ test("OMP manifest wins over a skewed Codex fallback while loading strict policy
   assert.equal(loadPolicy(root, { platformKey: "win32-x64" }).package_version, "6.47.0");
 });
 
-test("object verification rejects poisoned, oversized, truncated, directory, and reparse objects", () => {
+test("object verification rejects poisoned, oversized, truncated, directory, and reparse objects", (t) => {
   const root = tempRoot();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const roots = objectRoots(root);
   const target = selected().target.desired;
   const object = objectPath(roots, target);
   fs.writeFileSync(object, "wrong");
   assert.equal(verifyObject(roots, target), "");
   assert.equal(fs.existsSync(object), false, "wrong object is quarantined rather than overwritten");
+  const tampered = Buffer.from(fixture().bytes);
+  tampered[0] ^= 1;
+  fs.writeFileSync(object, tampered);
+  assert.equal(verifyObject(roots, target), "", "same-length bytes with a different digest must be rejected");
+  assert.equal(fs.existsSync(object), false, "same-length poisoned object is quarantined");
   fs.writeFileSync(object, Buffer.concat([fixture().bytes, Buffer.from("x")]));
   assert.equal(verifyObject(roots, target), "");
   fs.mkdirSync(object);
@@ -104,11 +110,19 @@ test("object verification rejects poisoned, oversized, truncated, directory, and
   assert.throws(() => verifyObject(roots, target), BootstrapError);
 });
 
-test("legacy canonical bytes are imported only after exact hashing and are never authority", () => {
+test("legacy canonical bytes are imported only after exact hashing and are never authority", (t) => {
   const root = tempRoot();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const roots = objectRoots(root);
   const target = selected().target.desired;
   const legacy = path.join(roots.bin, process.platform === "win32" ? "engram.exe" : "engram");
+  const tampered = Buffer.from(fixture().bytes);
+  tampered[0] ^= 1;
+  fs.writeFileSync(legacy, tampered);
+  assert.equal(importLegacy(roots, target), "", "same-length legacy bytes with a different digest must be rejected");
+  assert.equal(fs.existsSync(objectPath(roots, target)), false, "invalid legacy bytes must not be published");
+  assert.deepEqual(fs.readdirSync(roots.staging), []);
+  assert.deepEqual(fs.readFileSync(legacy), tampered, "invalid legacy bytes must remain unchanged");
   fs.writeFileSync(legacy, fixture().bytes);
   fs.chmodSync(legacy, 0o444); // Models a legacy file the importer must only read.
   const imported = importLegacy(roots, target);
@@ -116,7 +130,7 @@ test("legacy canonical bytes are imported only after exact hashing and are never
   assert.equal(fs.readFileSync(legacy, "utf8"), "trusted client bytes");
 });
 
-test("concurrent no-overwrite publication accepts only an independently verified winner", () => {
+test("sequential publication of identical stages returns the same hash-verified object", () => {
   const root = tempRoot();
   const roots = objectRoots(root);
   const target = selected().target.desired;
