@@ -284,7 +284,7 @@ test('already-arrived operations for two files queue without dropping either eve
   assert.equal(fs.existsSync(markerPath + '.lock'), false, 'No persistent cross-process lock is created');
 });
 
-test('simultaneous real watcher callbacks persist progress for both different files', async t => {
+test('concurrent watcher syncFile calls persist progress for both different files', async t => {
   const root = workspace(t);
   const one = path.join(root, 'one.md');
   const two = path.join(root, 'two.md');

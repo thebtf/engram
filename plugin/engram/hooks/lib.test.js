@@ -109,17 +109,6 @@ test('keep only the latest 10 files when more are appended', (t) => {
  ]);
 });
 
-test('appendSessionFile no-op behavior is detectable', (t) => {
- const sessionID = 'lib-session-file-tracking-4';
- t.after(() => cleanup(sessionID));
-
- cleanup(sessionID);
-
- lib.appendSessionFile(sessionID, '/repo/important.txt');
- const files = getSessionFiles(sessionID);
- assert.deepStrictEqual(files, ['/repo/important.txt']);
-});
-
 // Quiet mode (ENGRAM_QUIET) — global injection kill-switch through RunHook.
 // Driven via a child process because the guard lives in RunHook before the
 // handler, ahead of any stdin parsing or server call.

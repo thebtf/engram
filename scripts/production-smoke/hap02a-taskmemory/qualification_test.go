@@ -112,7 +112,7 @@ func TestQualificationExpectationsAreDeterministicAndNonzero(t *testing.T) {
 			t.Fatalf("scenario %q has a zero expected denominator", scenario.Name)
 		}
 		if !equalReferenceTriples(scenario.ExpectedReferences, cloneReferenceTriples(scenario.ExpectedReferences)) {
-			t.Fatalf("scenario %q references are not deterministic", scenario.Name)
+			t.Fatalf("scenario %q cloned references differ from original", scenario.Name)
 		}
 	}
 }
