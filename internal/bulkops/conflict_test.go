@@ -13,7 +13,6 @@ package bulkops
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"testing"
@@ -36,28 +35,6 @@ func TestEC_F3_AdminGate_NoConflictCheck(t *testing.T) {
 	_, err := Rollback(ctx, readOnlyIdentity(), "snap-ec-f3-unit", nil, nil, nil, nil)
 	require.ErrorIs(t, err, ErrAdminRequired,
 		"non-admin must be rejected before conflict detection")
-}
-
-// TestEC_F3_SnapshotNotRollbackable verifies that a non-committed snapshot returns
-// ErrSnapshotNotRollbackable before any conflict detection.
-func TestEC_F3_SnapshotNotRollbackable_Status(t *testing.T) {
-	// This is a property of the domain spec — testable at Rollback level only with DB.
-	// Property: the status guard fires on 'rolled_back' status.
-	err := ErrSnapshotNotRollbackable
-	assert.True(t, errors.Is(err, ErrSnapshotNotRollbackable))
-	assert.False(t, errors.Is(err, ErrRollbackConflict), "status error must not be ErrRollbackConflict")
-}
-
-// TestEC_F3_ConflictResult_Structure verifies the RollbackResult shape when a conflict fires.
-func TestEC_F3_ConflictResult_Structure(t *testing.T) {
-	result := &RollbackResult{
-		SnapshotID:  "snap-ec-f3",
-		ConflictIDs: []int64{42, 99},
-	}
-	assert.Equal(t, "snap-ec-f3", result.SnapshotID)
-	assert.Contains(t, result.ConflictIDs, int64(42))
-	assert.Contains(t, result.ConflictIDs, int64(99))
-	assert.Equal(t, 0, result.RestoredCount, "no rows restored when conflict blocks rollback")
 }
 
 // TestEC_F3_ErrRollbackConflict_IsDistinct verifies the sentinel error is well-formed

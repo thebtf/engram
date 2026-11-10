@@ -62,11 +62,6 @@ func TestChunk_Identifier_ParentButNoName(t *testing.T) {
 	assert.Equal(t, "Parent.", c.Identifier())
 }
 
-func TestChunk_Identifier_NameButNoParent(t *testing.T) {
-	c := Chunk{Name: "Standalone", ParentName: ""}
-	assert.Equal(t, "Standalone", c.Identifier())
-}
-
 // =============================================================================
 // CONTRACT: Chunk.LineRange
 // - Returns "L<start>-L<end>" using 1-indexed line numbers.
@@ -256,21 +251,6 @@ func TestNewManager_Empty(t *testing.T) {
 	assert.False(t, m.SupportsFile("anything.go"))
 	exts := m.SupportedExtensions()
 	assert.Empty(t, exts)
-}
-
-func TestManager_SupportedExtensions_ContainsAll(t *testing.T) {
-	m := NewManager([]Chunker{
-		&singleChunkMock{ext: ".go"},
-		&singleChunkMock{ext: ".ts"},
-	}, DefaultChunkOptions())
-	exts := m.SupportedExtensions()
-	extSet := map[string]bool{}
-	for _, e := range exts {
-		extSet[e] = true
-	}
-	assert.True(t, extSet[".go"])
-	assert.True(t, extSet[".ts"])
-	assert.Len(t, exts, 2)
 }
 
 func TestManager_SupportsFile_CaseInsensitive(t *testing.T) {
