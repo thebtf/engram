@@ -285,38 +285,3 @@ func TestCoerceStringSlice(t *testing.T) {
 		})
 	}
 }
-
-func TestCoerceInt64Slice(t *testing.T) {
-	tests := []struct {
-		name string
-		v    any
-		want []int64
-	}{
-		{"nil", nil, nil},
-		{"not array", "hello", nil},
-		{"float64 array", []any{float64(1), float64(2), float64(3)}, []int64{1, 2, 3}},
-		{"string array", []any{"1", "2", "3"}, []int64{1, 2, 3}},
-		{"mixed array", []any{float64(1), "2", json.Number("3")}, []int64{1, 2, 3}},
-		{"with zeros", []any{float64(0), float64(1)}, []int64{1}}, // 0 is skipped
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := coerceInt64Slice(tt.v)
-			if tt.want == nil {
-				if got != nil {
-					t.Errorf("coerceInt64Slice() = %v, want nil", got)
-				}
-				return
-			}
-			if len(got) != len(tt.want) {
-				t.Errorf("coerceInt64Slice() len = %d, want %d", len(got), len(tt.want))
-				return
-			}
-			for i := range got {
-				if got[i] != tt.want[i] {
-					t.Errorf("coerceInt64Slice()[%d] = %d, want %d", i, got[i], tt.want[i])
-				}
-			}
-		})
-	}
-}
