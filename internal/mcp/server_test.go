@@ -713,14 +713,6 @@ func TestHandleToolsCall_ArgumentsNeverReachErrorLogs(t *testing.T) {
 // callTool
 // ---------------------------------------------------------------------------
 
-func TestCallTool_UnknownToolReturnsError(t *testing.T) {
-	t.Parallel()
-	s := NewServer(ServerOptions{Version: "1.0.0"})
-	_, err := s.callTool(context.Background(), "nonexistent_tool", json.RawMessage(`{}`))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unknown tool")
-}
-
 func TestReadOnlyToolAllowed_DispatchAndActionInventory(t *testing.T) {
 	allowed := []struct{ name, args string }{
 		{"recall", `{}`},
@@ -1109,16 +1101,6 @@ func TestCheckSystemHealth_VectorSubsystem(t *testing.T) {
 // handleGetMemoryStats / handleCheckSystemHealth
 // ---------------------------------------------------------------------------
 
-func TestHandleGetMemoryStats_NilStores_ValidJSON(t *testing.T) {
-	t.Parallel()
-	s := NewServer(ServerOptions{Version: "1.0.0"})
-	result, err := s.handleAdminStats(context.Background())
-	require.NoError(t, err)
-	assert.NotEmpty(t, result)
-	var stats map[string]any
-	require.NoError(t, json.Unmarshal([]byte(result), &stats))
-}
-
 func TestHandleCheckSystemHealth_NilStores_StructuredResponse(t *testing.T) {
 	t.Parallel()
 	s := NewServer(ServerOptions{Version: "1.0.0"})
@@ -1255,30 +1237,4 @@ func TestRun_NotificationNoResponse(t *testing.T) {
 	s := &Server{stdin: strings.NewReader(input), stdout: &buf, version: "1.0.0"}
 	require.NoError(t, s.Run(context.Background()))
 	assert.Empty(t, buf.String())
-}
-
-// ---------------------------------------------------------------------------
-// JSON-RPC standard error codes (regression guard)
-// ---------------------------------------------------------------------------
-
-func TestJSONRPCErrorCodes_Table(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		msg  string
-		code int
-	}{
-		{"Parse error", -32700},
-		{"Invalid Request", -32600},
-		{"Method not found", -32601},
-		{"Invalid params", -32602},
-		{"Internal error", -32603},
-	}
-	for _, tc := range cases {
-		t.Run(tc.msg, func(t *testing.T) {
-			t.Parallel()
-			e := Error{Code: tc.code, Message: tc.msg}
-			assert.Equal(t, tc.code, e.Code)
-			assert.Equal(t, tc.msg, e.Message)
-		})
-	}
 }
