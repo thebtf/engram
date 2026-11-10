@@ -116,7 +116,7 @@ test("legacy canonical bytes are imported only after exact hashing and are never
   assert.equal(fs.readFileSync(legacy, "utf8"), "trusted client bytes");
 });
 
-test("concurrent no-overwrite publication accepts only an independently verified winner", () => {
+test("sequential publication of identical stages returns the same hash-verified object", () => {
   const root = tempRoot();
   const roots = objectRoots(root);
   const target = selected().target.desired;
