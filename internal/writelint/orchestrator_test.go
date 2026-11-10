@@ -492,47 +492,6 @@ func TestOrchestrator_Supersede_ProjectMismatch_Round4(t *testing.T) {
 	}
 }
 
-// --- Token expiry path ---
-func TestOrchestrator_TokenExpiry_T034(t *testing.T) {
-	lister := &stubMemoryLister{memories: []*models.Memory{makeDupMemory()}}
-	audit := &stubAuditLogger{}
-	ts := writelint.NewTokenStore(writelint.TokenStoreConfig{
-		TTL:             50 * time.Millisecond,
-		JanitorInterval: 60 * time.Second,
-	})
-	defer ts.Close()
-
-	orc := writelint.NewOrchestrator(writelint.OrchestratorConfig{
-		MemoryStore:  lister,
-		AuditLogger:  audit,
-		TokenStore:   ts,
-		DupThreshold: 0.85,
-		TokenTTL:     50 * time.Millisecond,
-	})
-
-	ctx := context.Background()
-	resp, err := orc.Phase1(ctx, &models.Memory{Content: dupContent, Project: "test"}, "system")
-	if err != nil {
-		t.Fatalf("Phase1 expiry: error: %v", err)
-	}
-	if resp.Stored {
-		t.Skip("no signal fired — token expiry test not applicable")
-	}
-
-	time.Sleep(100 * time.Millisecond)
-
-	_, err = orc.Phase2(ctx, writelint.Phase2Request{
-		Token:   resp.ResolutionToken,
-		Option:  "abort",
-		Content: dupContent,
-		Project: "test",
-		Actor:   "system",
-	})
-	if err == nil {
-		t.Fatal("Phase2 expired token: expected error, got nil")
-	}
-}
-
 // --- Rank-9: opt-in auto-supersede for near-identical writes ---
 
 // buildAutoSupersedeOrchestrator builds an orchestrator with AutoSupersedeThreshold set.

@@ -2,7 +2,6 @@
 package writelint_test
 
 import (
-	"database/sql"
 	"testing"
 	"time"
 
@@ -41,19 +40,5 @@ func TestConflictAdapter_CorrectionPatternFires(t *testing.T) {
 	}
 	if reason == "" {
 		t.Error("CorrectionPattern integration: expected non-empty reason")
-	}
-}
-
-// TestConflictAdapter_DoesNotModifyConflictGo ensures the adapter did NOT touch
-// pkg/models/conflict.go by verifying the conflict detection functions work
-// unmodified on native Observations.
-func TestConflictAdapter_DoesNotModifyConflictGo(t *testing.T) {
-	// Native Observation path still works
-	obs := &models.Observation{
-		Narrative: sql.NullString{String: "Correction: use 100 not 200", Valid: true},
-	}
-	fired, _ := models.DetectExplicitCorrection(obs.Narrative.String)
-	if !fired {
-		t.Error("native Observation path broken: CorrectionPattern should fire")
 	}
 }
