@@ -47,6 +47,9 @@ func TestLRU_Eviction_AtCapacity(t *testing.T) {
 	if seen {
 		t.Error("expected false for brand-new entry beyond capacity, got true")
 	}
+	if l.Mark("removed", "proj-0") {
+		t.Error("expected least-recent proj-0 to be evicted at capacity")
+	}
 }
 
 func TestLRU_LeastRecentEvicted(t *testing.T) {
