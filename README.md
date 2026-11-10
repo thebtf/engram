@@ -286,13 +286,12 @@ required by this startup path.
 
 ### Docker Compose
 
-For a local source build, use the [server quick start](#quick-start-server), including required image names and build version. For a digest-pinned deployment, use the [deployment guide](docs/DEPLOYMENT.md). Do not run `docker compose up` without its image variables.
+For a local source build, use the [server quick start](#quick-start-server), including required image names and build version. The [deployment guide](docs/DEPLOYMENT.md) describes a separately configured digest-pinned Compose deployment. The owner's existing Unraid installation instead keeps its `:latest` Repository and follows the [production latest channel](docs/RELEASE-PROTOCOL.md#production-latest-channel). Do not run `docker compose up` without its image variables.
 
-**Existing PostgreSQL?** Run only the server container:
+**Existing PostgreSQL for local development?** After configuring the required image, authentication and database settings, verify the external database is reachable. To start only the server without Compose starting its declared PostgreSQL dependency, use:
 
 ```bash
-DATABASE_DSN="postgres://user:pass@your-pg:5432/engram?sslmode=disable" \
-  docker compose up -d server
+docker compose up -d --no-deps server
 ```
 
 ### Binary Installation (v4+)

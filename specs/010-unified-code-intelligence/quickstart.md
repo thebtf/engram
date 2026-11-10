@@ -131,7 +131,7 @@ Expected installed-path evidence is a redacted receipt containing built artifact
 
 ## Release Evidence Gate
 
-A UCI-1 claim requires one exact-head evidence package, not a collection of unrelated green unit logs:
+A UCI-1 claim requires one evidence package bound to the final candidate and its actual inputs, not a collection of unrelated green unit logs:
 
 - real PostgreSQL registry/publication/lease/replay evidence;
 - parser bundle, supported-language coverage, and structured/text minimum coverage evidence;
@@ -141,7 +141,7 @@ A UCI-1 claim requires one exact-head evidence package, not a collection of unre
 - authorized search/graph/read durable evidence, including canonical exact retry, no-record denial, recorder-unavailable body suppression, non-disclosing idempotency mismatches, a verified supported-host `partial` completion callback, a completion-write failure that preserves its parent, and an explicit `unknown` no-callback case;
 - all assigned UCI-1 acceptance scenarios and the 12-task baseline/value outcome;
 - restart/recovery and retention/rollback evidence;
-- exact candidate build/regression checks and the repository’s mandatory exact-head SonarQube Quality Gate `OK` before tag/publication;
+- applicable candidate build/regression checks; post-working-release SonarQube analysis follows the [release protocol](../../docs/RELEASE-PROTOCOL.md#sonarqube-post-release-analysis) and is not a tag/publication veto;
 - known limitations, visible coverage states, and explicit confirmation that UCI-2/3 were not claimed.
 
-If any release-facing byte changes after this evidence is collected, regenerate the affected evidence against the exact final candidate.
+If release-facing bytes change, compare the evidence inputs, environment and affected artifacts under the [release protocol](../../docs/RELEASE-PROTOCOL.md#release-convergence). Regenerate affected evidence and retain valid compatible proof with its original provenance; a changed commit alone is not a reason to rerun unrelated checks.

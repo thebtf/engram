@@ -31,10 +31,9 @@ parallel descriptions drifting apart.
 
 ## Scope and language status
 
-The English README is canonical. Existing Russian and Chinese README variants
-are intentionally not presented as synchronized instructions until their
-structure and technical claims have been refreshed from the accepted English
-source.
+The English README is canonical. The Russian README covers the Workspace path;
+the Chinese README remains stale and is not equivalent setup guidance. Check
+the current README and operator guide for claims outside that Russian scope.
 
 The ledger records only repository-relative evidence. It is a claim inventory,
 not a user journey: a page file proves a route exists in the Vue application,
