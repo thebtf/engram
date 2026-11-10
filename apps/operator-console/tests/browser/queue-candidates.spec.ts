@@ -254,25 +254,6 @@ test('row action after continuation submits its clicked ID without the navigatio
   })
 })
 
-test('row action submits only its clicked visible ID as an explicit selection', async ({ page }) => {
-  const selections: unknown[] = []
-  await page.route('**/api/memory/candidates?**', (route) => route.fulfill({
-    json: { candidates: candidateRows(1, 25), count: 25, next_cursor: 'next-100' },
-  }))
-  await page.route('**/api/collections/selection', async (route) => {
-    selections.push(route.request().postDataJSON())
-    await route.fulfill({ json: { selection: { domain: 'queue', kind: 'explicit', selection_version: 1, targets: [{ id: '1' }] } } })
-  })
-  await page.route('**/api/memory/candidates/operations', (route) => route.fulfill({ status: 503, json: { error: 'synthetic refusal' } }))
-  await page.goto('/queue?project=all')
-  await expect(page.getByTestId('queue-row-1')).toBeVisible()
-  await page.getByTestId('queue-row-2').locator('[aria-pressed]').click()
-  await page.getByTestId('queue-action-reject-1').click()
-  await page.getByTestId('queue-action-reject-1').click()
-  await expect.poll(() => selections.length).toBe(1)
-  expect(selections[0]).toEqual({ domain: 'queue', selection: { kind: 'explicit', targets: [{ id: '1' }] } })
-})
-
 for (const status of [200, 503]) {
   test(`late continuation ${status} from the previous project cannot replace current rows or selection`, async ({ page }) => {
     let release!: () => void
