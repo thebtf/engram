@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import type { Request } from '@playwright/test'
 const projectID = '11111111-1111-4111-8111-111111111111'
 const otherProjectID = '22222222-2222-4222-8222-222222222222'
 
@@ -73,38 +74,112 @@ test('memory deep link does not open an exact-ID row from another project', asyn
 })
 
 test('late exact-ID deep link response cannot override a newer route', async ({ page }) => {
-  let markStarted!: () => void
-  let release!: () => void
-  const started = new Promise<void>((resolve) => { markStarted = resolve })
-  const delayed = new Promise<void>((resolve) => { release = resolve })
+  const started = Promise.withResolvers<void>()
+  const delayed = Promise.withResolvers<void>()
+  let oldRequest: Request | undefined
+  let outcome: 'finished' | 'failed' | undefined
+  let fulfillmentFinished = false
+  let fulfillmentError: unknown
+  const onFinished = (request: Request) => {
+    if (request === oldRequest) outcome = 'finished'
+  }
+  const onFailed = (request: Request) => {
+    if (request === oldRequest) outcome = 'failed'
+  }
+  page.on('requestfinished', onFinished)
+  page.on('requestfailed', onFailed)
 
-  await page.route('**/api/memories/501?**', async (route) => {
-    markStarted()
-    await delayed
-    await route.fulfill({
-      json: {
-        id: 501,
-        project: projectID,
-        content: 'older memory omitted by the 500-row project list',
-        tags: ['deep-link'],
-        tier: 'semantic',
-        status: 'active',
+  await page.addInitScript(() => {
+    const originalFetch = window.fetch.bind(window)
+    // A message task runs after the body-consumer promise chain and Vue's queued microtasks.
+    const signalAfterMicrotasks = (result: string) => {
+      const channel = new MessageChannel()
+      channel.port1.onmessage = () => {
+        document.documentElement.dataset.oldMemoryProcessed = result
+        channel.port1.close()
+        channel.port2.close()
       }
-    })
+      channel.port2.postMessage(null)
+    }
+    window.fetch = async (...args: Parameters<typeof fetch>) => {
+      const input = args[0]
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (new URL(url, window.location.href).pathname !== '/api/memories/501') return originalFetch(...args)
+      try {
+        const response = await originalFetch(...args)
+        const originalText = response.text.bind(response)
+        response.text = async () => {
+          try {
+            const text = await originalText()
+            signalAfterMicrotasks('body')
+            return text
+          } catch (error) {
+            signalAfterMicrotasks('body-error')
+            throw error
+          }
+        }
+        return response
+      } catch (error) {
+        signalAfterMicrotasks('fetch-error')
+        throw error
+      }
+    }
   })
 
-  await page.goto(`/memory?project=${projectID}&memory=501`)
-  await started
-  await page.evaluate((project) => {
-    window.history.pushState({}, '', `/memory?project=${project}&memory=101`)
-    window.dispatchEvent(new PopStateEvent('popstate'))
-  }, projectID)
+  await page.route('**/api/memories/501?**', async (route) => {
+    oldRequest = route.request()
+    started.resolve()
+    await delayed.promise
+    try {
+      await route.fulfill({
+        json: {
+          id: 501,
+          project: projectID,
+          content: 'older memory omitted by the 500-row project list',
+          tags: ['deep-link'],
+          tier: 'semantic',
+          status: 'active',
+        }
+      })
+    } catch (error) {
+      fulfillmentError = error
+    } finally {
+      fulfillmentFinished = true
+    }
+  })
 
-  await expect(page.getByTestId('memory-row-101')).toHaveAttribute('aria-pressed', 'true')
-  release()
-  await expect(page.getByTestId('memory-row-101')).toHaveAttribute('aria-pressed', 'true')
-  await expect(page.getByTestId('memory-content')).not.toContainText('older memory omitted')
-  await expect(page.getByTestId('project-context-select')).toHaveValue(projectID)
+  try {
+    await page.goto(`/memory?project=${projectID}&memory=501`)
+    await started.promise
+    await page.evaluate((project) => {
+      window.history.pushState({}, '', `/memory?project=${project}&memory=101`)
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    }, projectID)
+
+    await expect(page.getByTestId('memory-row-101')).toHaveAttribute('aria-pressed', 'true')
+    await expect(page.getByTestId('memory-content')).toHaveText('operator console = data plane: manage memory PRODUCT, config one Settings tab')
+    delayed.resolve()
+    await expect.poll(() => outcome).toBeDefined()
+    const settledOutcome = (() => outcome)()
+    await expect(page.locator('html')).toHaveAttribute('data-old-memory-processed', settledOutcome === 'finished' ? 'body' : /^(fetch-error|body-error)$/)
+    if (settledOutcome === 'failed') {
+      expect(oldRequest?.failure()?.errorText).toContain('ERR_ABORTED')
+    } else {
+      await expect.poll(() => fulfillmentFinished).toBe(true)
+      expect(fulfillmentError).toBeUndefined()
+    }
+    await expect(page.getByTestId('memory-row-101')).toHaveAttribute('aria-pressed', 'true')
+    await expect(page.getByTestId('memory-content')).toHaveText('operator console = data plane: manage memory PRODUCT, config one Settings tab')
+    await expect(page.getByTestId('project-context-select')).toHaveValue(projectID)
+  } finally {
+    delayed.resolve()
+    try {
+      await page.unrouteAll({ behavior: 'wait' })
+    } finally {
+      page.off('requestfinished', onFinished)
+      page.off('requestfailed', onFailed)
+    }
+  }
 })
 
 test('search result actions require explicit memory discriminants', async ({ page }) => {
