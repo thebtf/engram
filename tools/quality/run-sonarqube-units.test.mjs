@@ -564,8 +564,6 @@ test("coverage normalization fails closed on corrupt or missing headers", () => 
   assert.throws(() => normalizeCoverage([{ source: "wrong-mode", contents: "mode: set\nexample/file.go:1.1,2.2 1 1\n" }]), /Coverage mode must be atomic/);
 });
 
-const r15SavedRun = "D:/Dev/engram/.agent/e/sonarqube/worktrees/634b6b14e6f9b058e723e998f9411b0357a430a06ba267336a6d6b712b27b8f9/runs/543a1e2a-2a95-4530-8c88-782824a71b3e";
-
 function r15Event(action, packageName, testName, output = null) {
   return `${JSON.stringify({ Action: action, Package: packageName, ...(testName ? { Test: testName } : {}), ...(output === null ? {} : { Output: output }) })}\n`;
 }
@@ -823,40 +821,46 @@ test("R15 unit rename preserves the full test identity and skip policy", async (
   }
 });
 
-test("R15 replays every saved failed unit log through execution and retained reload/reuse", async () => {
+test("R15 synthetic race and coverage logs preserve execution and owner-bound reuse", async () => {
   const root = temporaryDirectory();
   try {
-    const saved = JSON.parse(readFileSync(join(r15SavedRun, "manifest.json"), "utf8"));
-    const failedUnits = saved.profiles.find((profile) => profile.name === "base").units.filter((unit) => unit.status === "failed");
-    assert.equal(failedUnits.length, 12);
-    const actual = [];
-    for (const unitEntry of failedUnits) {
-      const events = readFileSync(join(r15SavedRun, unitEntry.test_events.path.replaceAll("\\", "/")), "utf8");
-      const replayRoot = join(root, unitEntry.id);
-      const replay = await r15Execute(replayRoot, r15UnitProfile(unitEntry.unit, `replay-${unitEntry.id}`), saved.candidate, unitEntry.expected_tests, events);
-      const owner = unitEntry.unit.importPath === "github.com/thebtf/engram/cmd/engram"
-        ? { state: "passed", packageName: unitEntry.unit.importPath, test: "TestUCIInstalledStandardClientsKeepDirtyViewsIsolated" }
-        : null;
-      const retained = r15Retained(replayRoot, saved.candidate, unitEntry.expected_tests, events, unitEntry.package_counts, owner);
-      actual.push({
-        id: unitEntry.id,
-        execution: replay.passed,
-        retained: Boolean(reusableProfile(retained.retained, retained.profile, saved.candidate, retained.environment)),
-        reload_reuse: Boolean(reusableProfile(retained.reloaded, retained.profile, saved.candidate, retained.environment)),
-      });
+    const packageName = "example/cmd/engram";
+    const ownerTest = "TestUCIInstalledStandardClientsKeepDirtyViewsIsolated";
+    const cases = [
+      {
+        name: "race-passing-tests",
+        sources: [["cmd/engram/race_test.go", "func TestFirst(t *testing.T) {}\nfunc TestSecond(t *testing.T) {}"]],
+        tests: ["TestFirst", "TestSecond"],
+        events: `${r15Event("run", packageName, "TestFirst")}${r15Event("run", packageName, "TestSecond")}${r15Event("pass", packageName, "TestSecond")}${r15Event("pass", packageName, "TestFirst")}${r15Event("pass", packageName, null)}`,
+        coverage: false,
+        reusable: true,
+      },
+      {
+        name: "coverage-pending-owner",
+        sources: [["cmd/engram/owner_test.go", 'func TestUCIInstalledStandardClientsKeepDirtyViewsIsolated(t *testing.T) { t.Skip("requires installed database") }']],
+        tests: [ownerTest],
+        events: `${r15Event("output", packageName, ownerTest, "requires installed database")}${r15Event("skip", packageName, ownerTest)}${r15Event("pass", packageName, null)}`,
+        coverage: true,
+        reusable: false,
+      },
+    ];
+    for (const item of cases) {
+      const caseRoot = join(root, item.name);
+      const currentCandidate = r15Candidate(caseRoot, item.sources);
+      const expected = item.tests.map((test) => ({ package: packageName, test }));
+      const unit = { id: item.name, importPath: packageName, directory: "cmd/engram", coverpkg: [packageName] };
+      const coverage = "mode: atomic\nfixture.go:1.1,1.2 1 1\n";
+      const profile = item.coverage ? r15CoverageProfile(unit) : r15UnitProfile(unit);
+      const execution = await r15Execute(caseRoot, profile, currentCandidate, expected, item.events, item.coverage ? { coverage } : {});
+      const retained = r15Retained(caseRoot, currentCandidate, expected, item.events, r15Counts(item.events));
+      assert.equal(execution.passed, true, item.name);
+      assert.equal(Boolean(reusableProfile(retained.retained, retained.profile, currentCandidate, retained.environment)), item.reusable, item.name);
+      assert.equal(Boolean(reusableProfile(retained.reloaded, retained.profile, currentCandidate, retained.environment)), item.reusable, item.name);
     }
-    assert.deepEqual(actual, failedUnits.map((unit) => ({
-      id: unit.id,
-      execution: true,
-      retained: unit.id !== "base-race-cdfda1f895eb3580" && unit.id !== "base-coverage-cdfda1f895eb3580",
-      reload_reuse: unit.id !== "base-race-cdfda1f895eb3580" && unit.id !== "base-coverage-cdfda1f895eb3580",
-    })));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
-
-const r15ZeroSavedRun = "D:/Dev/engram/.agent/e/sonarqube/worktrees/634b6b14e6f9b058e723e998f9411b0357a430a06ba267336a6d6b712b27b8f9/runs/89bfb55e-0bdb-467d-a5d8-08db3e6929b0";
 
 function r15CoverageProfile(unit) {
   return {
@@ -872,15 +876,17 @@ function r15ZeroEvents(packageName, test = "TestZero", action = "pass", marker =
   return `${r15Event("pass", packageName, test)}${r15Event("output", packageName, null, marker)}${r15Event(action, packageName, null)}`;
 }
 
-test("R15 replays saved header-only internal/version coverage as a completed zero-statement unit", async () => {
+test("R15 synthetic header-only coverage is reusable and merges with nonempty coverage", async () => {
   const root = temporaryDirectory();
   try {
-    const saved = JSON.parse(readFileSync(join(r15ZeroSavedRun, "manifest.json"), "utf8"));
-    const unit = saved.profiles.find((profile) => profile.name === "base").units.find((entry) => entry.id === "base-coverage-c65178eeb44dc297");
-    const header = readFileSync(join(r15ZeroSavedRun, unit.coverage.path.replaceAll("\\", "/")), "utf8");
-    const events = readFileSync(join(r15ZeroSavedRun, unit.test_events.path.replaceAll("\\", "/")), "utf8");
-    const execution = await r15Execute(root, r15CoverageProfile(unit.unit), saved.candidate, unit.expected_tests, events, { coverage: header });
-    const retained = r15Retained(root, saved.candidate, unit.expected_tests, events, unit.package_counts, null, "passed", header);
+    const packageName = "example/internal/version";
+    const unit = { id: "synthetic-zero", importPath: packageName, directory: "internal/version", coverpkg: [packageName] };
+    const currentCandidate = r15Candidate(root, [["internal/version/version_test.go", "func TestZero(t *testing.T) {}"]]);
+    const expected = [{ package: packageName, test: "TestZero" }];
+    const header = "mode: atomic\n";
+    const events = r15ZeroEvents(packageName);
+    const execution = await r15Execute(root, r15CoverageProfile(unit), currentCandidate, expected, events, { coverage: header });
+    const retained = r15Retained(root, currentCandidate, expected, events, r15Counts(events), null, "passed", header);
     const ordinary = join(root, "ordinary.out");
     const merged = join(root, "merged.out");
     write(ordinary, "mode: atomic\ninternal/other/other.go:1.1,1.2 1 1\n");
@@ -888,8 +894,8 @@ test("R15 replays saved header-only internal/version coverage as a completed zer
     assert.throws(() => mergeCoverProfiles([join(retained.retained.runDir, "coverage.out")], join(root, "all-zero.out")), /No Go coverage blocks/);
     assert.deepEqual({
       execution: execution.passed,
-      retained: Boolean(reusableProfile(retained.retained, retained.profile, saved.candidate, retained.environment)),
-      reload_reuse: Boolean(reusableProfile(retained.reloaded, retained.profile, saved.candidate, retained.environment)),
+      retained: Boolean(reusableProfile(retained.retained, retained.profile, currentCandidate, retained.environment)),
+      reload_reuse: Boolean(reusableProfile(retained.reloaded, retained.profile, currentCandidate, retained.environment)),
       merged: readFileSync(merged, "utf8"),
     }, {
       execution: true,
