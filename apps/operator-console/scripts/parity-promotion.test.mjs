@@ -23,9 +23,6 @@ function runAt(appRoot, ...args) {
   catch (error) { return { status: error.status ?? 1, output: `${error.stdout ?? ''}${error.stderr ?? ''}` } }
 }
 
-function run(...args) {
-  return runAt(root, ...args)
-}
 
 function withParityFixture(callback) {
   const base = mkdtempSync(join(tmpdir(), 'engram-parity-'))
@@ -72,9 +69,22 @@ function fixture(eol) {
 }
 
 test('strict mode rejects acknowledged drift', () => {
-  const result = run('--strict')
-  assert.notEqual(result.status, 0)
-  assert.match(result.output, /strict parity rejects/)
+  withParityFixture(({ appRoot }) => {
+    const parityPath = join(appRoot, 'PARITY.json')
+    const parity = JSON.parse(readFileSync(parityPath, 'utf8'))
+    assert.ok(parity.sections.length > 0, 'fixture needs a parity row')
+    parity.sections[0].sync = 'drifted'
+    parity.sections[0].synced_to = null
+    parity.sections[0].synced_snapshot = null
+    writeFileSync(parityPath, `${JSON.stringify(parity, null, 2)}\n`)
+
+    const normal = runAt(appRoot)
+    assert.equal(normal.status, 0, normal.output)
+    assert.match(normal.output, /Acknowledged drift:/)
+    const strict = runAt(appRoot, '--strict')
+    assert.notEqual(strict.status, 0)
+    assert.match(strict.output, /strict parity rejects/)
+  })
 })
 
 test('public manifest verifies without .od and mutations fail closed', () => {
