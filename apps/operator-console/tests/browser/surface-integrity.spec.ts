@@ -35,7 +35,7 @@ test('home exposes Workspace while primary navigation retires Graph and Books', 
   await expect(page).toHaveURL(/\/rules$/)
 })
 
-test('shell never fetches global memory or candidate bodies outside their reader surfaces', async ({ page }) => {
+test('shell startup on rules avoids global memory, candidate and settings requests', async ({ page }) => {
   const memoryBodyRequests: string[] = []
   const queueBodyRequests: string[] = []
   const flagRequests: string[] = []
@@ -55,6 +55,8 @@ test('shell never fetches global memory or candidate bodies outside their reader
 
   await expect(page.locator('#primary-navigation a[href="/queue"]')).toBeVisible()
   await expect.poll(() => flagRequests.length).toBeGreaterThan(0)
+  await expect(page.locator('.statusbar [data-state="ready"]')).toBeVisible()
+  await expect(page.locator('.rules-page')).toBeVisible()
   expect(memoryBodyRequests).toEqual([])
   expect(queueBodyRequests).toEqual([])
   expect(settingsOwnedRequests).toEqual([])
