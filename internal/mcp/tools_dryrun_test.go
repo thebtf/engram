@@ -273,15 +273,9 @@ func (d *dryRunServer) handleStoreMemory(ctx context.Context, args json.RawMessa
 
 func (d *dryRunServer) countMemories(t *testing.T, ctx context.Context) int {
 	t.Helper()
-	// Direct DB count via memoryStore.
-	if d.s.memoryStore == nil {
-		return 0
-	}
+	require.NotNil(t, d.s.memoryStore, "countMemories requires a wired memory store")
 	// Use List as a proxy count; limit=999999 to get all.
 	mems, err := d.s.memoryStore.List(ctx, "dryrun-test", 999999)
-	if err != nil {
-		t.Logf("countMemories: list error: %v", err)
-		return 0
-	}
+	require.NoError(t, err, "countMemories must read the store")
 	return len(mems)
 }

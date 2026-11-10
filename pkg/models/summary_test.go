@@ -204,7 +204,7 @@ func TestSessionSummary_MarshalJSON_InvalidFieldsOmitted(t *testing.T) {
 	assert.Contains(t, m, "created_at")
 
 	// Optional invalid fields must be absent.
-	for _, key := range []string{"investigated", "learned", "completed", "next_steps", "notes", "prompt_number"} {
+	for _, key := range []string{"request", "investigated", "learned", "completed", "next_steps", "notes", "prompt_number"} {
 		_, present := m[key]
 		assert.False(t, present, "field %q should be omitted when Invalid", key)
 	}
