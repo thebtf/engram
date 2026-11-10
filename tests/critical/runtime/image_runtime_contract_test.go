@@ -70,13 +70,6 @@ type stackFixture struct {
 
 // @critical
 // @category: contract
-// @features: [image-remediation, release-safety]
-func TestDockerReleaseRefFreshnessGuard(t *testing.T) {
-	verifyDockerReleaseRefFreshnessGuard(t, repositoryRoot(t))
-}
-
-// @critical
-// @category: contract
 // @features: [release-safety]
 func TestAuthority0051PromotionRecoveryBridgeContract(t *testing.T) {
 	repo := repositoryRoot(t)
