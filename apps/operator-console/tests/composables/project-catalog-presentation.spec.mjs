@@ -197,35 +197,34 @@ for (const language of ['ru', 'en']) {
     assert.doesNotMatch(label, /\b22\b/, 'Do not display the member-record total as the group count')
     assert.doesNotMatch(label, language === 'ru' ? /запис/i : /records?/i, 'A group count is not a record count')
   })
-  test(`/memory ${language}: zero retained groups hides the global shortcut and keeps canonical choices`, async t => {
-    const state = await mount(t, { path: '/memory', language, unresolved: [] })
-    assert.equal(retainedLinks(state.host).length, 0)
-    assert.deepEqual(options(state.host).map(item => item.props.value).sort(), [...ids].sort())
-    assert.deepEqual([...state.context.projects.value].sort(), [...ids].sort())
-  })
-  test(`/projects/unresolved ${language}: retained reader has no redundant global self-link`, async t => {
-    const state = await mount(t, { path: '/projects/unresolved', language })
-    assert.ok(!walk(state.host).some(item => hasClass(item, 'projects-page')), 'The reader uses an inert slot, not the Projects page')
-    assert.equal(retainedLinks(state.host).length, 0, 'The retained reader owns its navigation; the global selector must not link to the current reader')
-  })
 }
 
-for (const language of ['ru', 'en']) {
-  test(`/projects/ ${language}: trailing slash keeps one contextual entry on the actual Projects page`, async t => {
-    const state = await mount(t, { path: '/projects/', language })
-    assert.equal(state.router.currentRoute.value.path, '/projects/', 'Keep the trailing slash on the actual reactive route')
-    const page = walk(state.host).find(item => hasClass(item, 'projects-page'))
-    assert.ok(page, 'Mount the actual compiled Projects page, not an inert slot')
-    assert.equal(retainedLinks(state.host).length, 1, 'The global selector must not duplicate the contextual entry')
-    assert.equal(retainedLinks(page).length, 1, 'The retained-groups entry belongs to the actual Projects page')
-  })
-  test(`/projects/unresolved/ ${language}: trailing slash retains no redundant global self-link`, async t => {
-    const state = await mount(t, { path: '/projects/unresolved/', language })
-    assert.equal(state.router.currentRoute.value.path, '/projects/unresolved/', 'Keep the trailing slash on the actual reactive route')
-    assert.ok(!walk(state.host).some(item => hasClass(item, 'projects-page')), 'The reader uses an inert slot, not the Projects page')
-    assert.equal(retainedLinks(state.host).length, 0, 'The global selector must not link to the current retained reader')
-  })
-}
+test('/memory: zero retained groups hides the global shortcut and keeps canonical choices', async t => {
+  const state = await mount(t, { path: '/memory', language: 'en', unresolved: [] })
+  assert.equal(retainedLinks(state.host).length, 0)
+  assert.deepEqual(options(state.host).map(item => item.props.value).sort(), [...ids].sort())
+  assert.deepEqual([...state.context.projects.value].sort(), [...ids].sort())
+})
+test('/projects/unresolved: retained reader has no redundant global self-link', async t => {
+  const state = await mount(t, { path: '/projects/unresolved', language: 'en' })
+  assert.ok(!walk(state.host).some(item => hasClass(item, 'projects-page')), 'The reader uses an inert slot, not the Projects page')
+  assert.equal(retainedLinks(state.host).length, 0, 'The retained reader owns its navigation; the global selector must not link to the current reader')
+})
+
+test('/projects/: trailing slash keeps one contextual entry on the actual Projects page', async t => {
+  const state = await mount(t, { path: '/projects/', language: 'en' })
+  assert.equal(state.router.currentRoute.value.path, '/projects/', 'Keep the trailing slash on the actual reactive route')
+  const page = walk(state.host).find(item => hasClass(item, 'projects-page'))
+  assert.ok(page, 'Mount the actual compiled Projects page, not an inert slot')
+  assert.equal(retainedLinks(state.host).length, 1, 'The global selector must not duplicate the contextual entry')
+  assert.equal(retainedLinks(page).length, 1, 'The retained-groups entry belongs to the actual Projects page')
+})
+test('/projects/unresolved/: trailing slash retains no redundant global self-link', async t => {
+  const state = await mount(t, { path: '/projects/unresolved/', language: 'en' })
+  assert.equal(state.router.currentRoute.value.path, '/projects/unresolved/', 'Keep the trailing slash on the actual reactive route')
+  assert.ok(!walk(state.host).some(item => hasClass(item, 'projects-page')), 'The reader uses an inert slot, not the Projects page')
+  assert.equal(retainedLinks(state.host).length, 0, 'The global selector must not link to the current retained reader')
+})
 
 for (const language of ['ru', 'en']) {
   test(`/PROJECTS/ ${language}: case-insensitive route keeps one contextual entry on the actual Projects page`, async t => {
