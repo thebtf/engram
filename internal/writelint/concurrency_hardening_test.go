@@ -103,7 +103,7 @@ func TestConcurrency_50Goroutines_SameContent_DistinctTokens(t *testing.T) {
 	for i := 0; i < N; i++ {
 		go func() {
 			defer wg.Done()
-			resp, err := orch.Phase1(ctx, &models.Memory{Content: dupContent, Project: "testproj"}, "agent")
+			resp, err := orch.Phase1(ctx, &models.Memory{Content: dupContent, Project: "test"}, "agent")
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -172,14 +172,17 @@ func TestToken_ExpiryContract(t *testing.T) {
 	})
 
 	ctx := context.Background()
-	p1, err := orch.Phase1(ctx, &models.Memory{Content: dupContent, Project: "testproj"}, "agent")
+	p1, err := orch.Phase1(ctx, &models.Memory{Content: dupContent, Project: "test"}, "agent")
 	if err != nil {
 		t.Fatalf("Phase1: %v", err)
 	}
 	if p1.Stored {
-		t.Skip("no signal fired — expiry contract test requires a token")
+		t.Fatal("no signal fired — expiry contract test requires a token")
 	}
 	token := p1.ResolutionToken
+	if token == "" {
+		t.Fatal("expiry contract requires a non-empty resolution token")
+	}
 
 	// Wait for TTL to elapse; janitor is on 10-minute interval so entry is
 	// still in the map (expired but not purged).
@@ -190,7 +193,7 @@ func TestToken_ExpiryContract(t *testing.T) {
 		Token:   token,
 		Option:  "abort",
 		Content: dupContent,
-		Project: "testproj",
+		Project: "test",
 		Actor:   "agent",
 	})
 	if err1 == nil {
@@ -206,7 +209,7 @@ func TestToken_ExpiryContract(t *testing.T) {
 		Token:   token,
 		Option:  "abort",
 		Content: dupContent,
-		Project: "testproj",
+		Project: "test",
 		Actor:   "agent",
 	})
 	if err2 == nil {
