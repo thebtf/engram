@@ -10,7 +10,7 @@ async function workbench(page: Page, duplicateLocations = false, initialContext 
   let catalogCopies = ['a', 'b']
   let intent = { intent_ref: 'intent-a', state: 'queued', attempt: 1, retryable: false, created_at: '2026-10-09T00:00:00Z', updated_at: '2026-10-09T00:00:00Z' }
   let failure: { path: string; status: number } | null = null
-  let lostPinResponse: 'lost' | 'timeout' | null = null
+  let lostPinResponse: 'lost' | 'http-408' | null = null
   let structureOffline = !initialContext
   const contextualRequests: Array<{ path: string; view: string }> = []
   const pins: string[] = []
@@ -38,7 +38,7 @@ async function workbench(page: Page, duplicateLocations = false, initialContext 
       const lost = lostPinResponse
       lostPinResponse = null
       if (lost === 'lost') return route.abort('failed')
-      if (lost === 'timeout') return route.fulfill({ status: 408 })
+      if (lost === 'http-408') return route.fulfill({ status: 408 })
       return route.fulfill({ status: 204 })
     }
     if (path.endsWith('/structure') && structureOffline) return route.abort('failed')
@@ -84,7 +84,7 @@ async function workbench(page: Page, duplicateLocations = false, initialContext 
     pins,
     catalogProjects,
     selected() { return selected },
-    loseNextPinResponse(mode: 'lost' | 'timeout') { lostPinResponse = mode },
+    loseNextPinResponse(mode: 'lost' | 'http-408') { lostPinResponse = mode },
     runIntent() { intent = { ...intent, state: 'running' } },
     fail(path: string, status: number) { failure = { path, status } },
     publishOnlyB() { catalogCopies = ['b'] },
@@ -206,7 +206,7 @@ test('actual-current409 clears its authority and requires explicit catalogue sel
 })
 
 for (const initialContext of [false, true]) {
-  for (const response of ['lost', 'timeout'] as const) {
+  for (const response of ['lost', 'http-408'] as const) {
     test(`committed B with ${response} PUT response clears ${initialContext ? 'known' : 'unknown'} A authority until explicit confirmation`, async ({ page }) => {
       const state = await workbench(page, false, initialContext)
       await page.getByTestId('code-context-working-copy').selectOption('b')
