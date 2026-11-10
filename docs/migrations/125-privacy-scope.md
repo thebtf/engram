@@ -61,15 +61,13 @@ The backfill UPDATE is safe to run multiple times:
 
 ### Coverage
 
-`internal/db/gorm/migrations_integration_test.go::TestMigration125_TagDerivedBackfill_T006` exercises the backfill end-to-end:
+`internal/db/gorm/migrations_integration_test.go::TestMigration125_TagDerivedBackfill_T006` exercises the actual migration in an owned disposable Docker database:
 
-1. Seeds three rows (global-tagged, project-tagged, untagged), then forces the global-tagged row to `privacy_scope='project'` so the UPDATE has work to do.
-2. Runs the backfill statement.
-3. Asserts the three final `privacy_scope` values.
-4. Re-runs the backfill statement.
-5. Asserts the row state is identical (idempotency).
+1. Migrates through 121, confirms 125 is not recorded, and seeds global-tagged, project-tagged and untagged legacy rows.
+2. Runs the migration chain through 125 and checks the resulting privacy scopes.
+3. Removes only migration 125's ledger entry in the disposable fixture, reruns the real migration body through the runner, and checks that the entry is recorded again and the row snapshots are unchanged.
 
-The test is gated on `DATABASE_DSN` per existing convention; CI must set the env var to exercise the assertion.
+`internal/db/gorm/migration125_mcp_external_test.go::TestMigration125_TagDerivedBackfillMCPRecall` checks the migrated rows through `MemoryStore.List` and MCP recall on the same owned fixture. Both tests require `ENGRAM_TEST_DOCKER_MIGRATIONS=1` and a supported local Docker endpoint; otherwise the fixture reports a skip when opt-in is absent. They do not use `DATABASE_DSN`.
 
 ## RI-F2 dual-field response semantics
 
