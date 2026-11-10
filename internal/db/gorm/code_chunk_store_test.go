@@ -1,39 +1,19 @@
 package gorm
 
 import (
-	"context"
 	"fmt"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/pgvector/pgvector-go"
 	"github.com/stretchr/testify/require"
-	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 )
 
-// openCodeChunkTestDB opens a test PostgreSQL connection and applies all
-// migrations. Skips the test when DATABASE_DSN is not set.
+// openCodeChunkTestDB runs migrations in a disposable PostgreSQL container.
 func openCodeChunkTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	dsn := os.Getenv("DATABASE_DSN")
-	if dsn == "" {
-		t.Skip("DATABASE_DSN not set, skipping code_chunk_store integration test")
-	}
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Warn),
-	})
-	require.NoError(t, err, "open test DB")
-
-	sqlDB, err := db.DB()
-	require.NoError(t, err)
-	require.NoError(t, sqlDB.Ping())
-	t.Cleanup(func() { _ = sqlDB.Close() })
-
-	require.NoError(t, runMigrations(db), "runMigrations for code_chunk_store tests")
-	return db
+	return openDockerMigrationDB(t)
 }
 
 // testChunk builds a CodeChunk fixture for the given project/file with a
@@ -56,7 +36,7 @@ func testChunk(projectID, filePath, suffix string) *CodeChunk {
 func TestCodeChunkStore_Upsert_Inserts(t *testing.T) {
 	db := openCodeChunkTestDB(t)
 	store := NewCodeChunkStore(db)
-	ctx := context.Background()
+	ctx := db.Statement.Context
 
 	proj := fmt.Sprintf("proj-upsert-insert-%d", time.Now().UnixNano())
 	chunk := testChunk(proj, "pkg/foo/foo.go", "aaa")
@@ -77,7 +57,7 @@ func TestCodeChunkStore_Upsert_Inserts(t *testing.T) {
 func TestCodeChunkStore_Upsert_Idempotent(t *testing.T) {
 	db := openCodeChunkTestDB(t)
 	store := NewCodeChunkStore(db)
-	ctx := context.Background()
+	ctx := db.Statement.Context
 
 	proj := fmt.Sprintf("proj-upsert-idem-%d", time.Now().UnixNano())
 	chunk := testChunk(proj, "pkg/bar/bar.go", "bbb")
@@ -99,7 +79,7 @@ func TestCodeChunkStore_Upsert_Idempotent(t *testing.T) {
 func TestCodeChunkStore_DeleteByProjectFile(t *testing.T) {
 	db := openCodeChunkTestDB(t)
 	store := NewCodeChunkStore(db)
-	ctx := context.Background()
+	ctx := db.Statement.Context
 
 	proj := fmt.Sprintf("proj-del-file-%d", time.Now().UnixNano())
 	t.Cleanup(func() {
@@ -134,7 +114,7 @@ func TestCodeChunkStore_DeleteByProjectFile(t *testing.T) {
 func TestCodeChunkStore_DeleteStaleForProject_RemovesStale(t *testing.T) {
 	db := openCodeChunkTestDB(t)
 	store := NewCodeChunkStore(db)
-	ctx := context.Background()
+	ctx := db.Statement.Context
 
 	proj := fmt.Sprintf("proj-stale-%d", time.Now().UnixNano())
 	t.Cleanup(func() {
@@ -169,7 +149,7 @@ func TestCodeChunkStore_DeleteStaleForProject_RemovesStale(t *testing.T) {
 func TestCodeChunkStore_DeleteStaleForProject_EmptyKeepSet_IsNoop(t *testing.T) {
 	db := openCodeChunkTestDB(t)
 	store := NewCodeChunkStore(db)
-	ctx := context.Background()
+	ctx := db.Statement.Context
 
 	proj := fmt.Sprintf("proj-stale-noop-%d", time.Now().UnixNano())
 	t.Cleanup(func() {
@@ -191,7 +171,7 @@ func TestCodeChunkStore_DeleteStaleForProject_EmptyKeepSet_IsNoop(t *testing.T) 
 func TestCodeChunkStore_CountByProject(t *testing.T) {
 	db := openCodeChunkTestDB(t)
 	store := NewCodeChunkStore(db)
-	ctx := context.Background()
+	ctx := db.Statement.Context
 
 	proj := fmt.Sprintf("proj-count-%d", time.Now().UnixNano())
 	t.Cleanup(func() {
@@ -216,8 +196,7 @@ func TestCodeChunkStore_CountByProject(t *testing.T) {
 // Anti-stub: replacing the Migrate body with `return nil` causes the
 // table-existence assertion to fail.
 func TestMigration139_CodeChunksTable(t *testing.T) {
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openCodeChunkTestDB(t)
 
 	// Assert table exists.
 	var tableCount int
@@ -306,7 +285,7 @@ func TestMigration139_CodeChunksTable(t *testing.T) {
 func TestCodeChunkStore_UpdateEmbedding_SetsVector(t *testing.T) {
 	db := openCodeChunkTestDB(t)
 	store := NewCodeChunkStore(db)
-	ctx := context.Background()
+	ctx := db.Statement.Context
 
 	proj := fmt.Sprintf("proj-updemb-%d", time.Now().UnixNano())
 	t.Cleanup(func() {
@@ -355,7 +334,7 @@ func TestCodeChunkStore_UpdateEmbedding_SetsVector(t *testing.T) {
 func TestCodeChunkStore_UpdateEmbedding_InvalidID(t *testing.T) {
 	db := openCodeChunkTestDB(t)
 	store := NewCodeChunkStore(db)
-	ctx := context.Background()
+	ctx := db.Statement.Context
 
 	vec := pgvector.NewVector(make([]float32, 1536))
 	err := store.UpdateEmbedding(ctx, 0, vec)
@@ -371,7 +350,7 @@ func TestCodeChunkStore_UpdateEmbedding_InvalidID(t *testing.T) {
 func TestCodeChunkStore_UpdateEmbedding_MissingRow_IsNotError(t *testing.T) {
 	db := openCodeChunkTestDB(t)
 	store := NewCodeChunkStore(db)
-	ctx := context.Background()
+	ctx := db.Statement.Context
 
 	// Use an ID that is extremely unlikely to exist.
 	const ghostID = int64(999999999)
@@ -385,7 +364,7 @@ func TestCodeChunkStore_UpdateEmbedding_MissingRow_IsNotError(t *testing.T) {
 func TestCodeChunkStore_ListUnembedded_ReturnsOnlyNullEmbedding(t *testing.T) {
 	db := openCodeChunkTestDB(t)
 	store := NewCodeChunkStore(db)
-	ctx := context.Background()
+	ctx := db.Statement.Context
 
 	proj := fmt.Sprintf("proj-listunb-%d", time.Now().UnixNano())
 	t.Cleanup(func() {
@@ -429,7 +408,7 @@ func TestCodeChunkStore_ListUnembedded_ReturnsOnlyNullEmbedding(t *testing.T) {
 func TestCodeChunkStore_ListUnembedded_LimitRespected(t *testing.T) {
 	db := openCodeChunkTestDB(t)
 	store := NewCodeChunkStore(db)
-	ctx := context.Background()
+	ctx := db.Statement.Context
 
 	proj := fmt.Sprintf("proj-listlimit-%d", time.Now().UnixNano())
 	t.Cleanup(func() {
@@ -462,7 +441,7 @@ func TestCodeChunkStore_ListUnembedded_LimitRespected(t *testing.T) {
 func TestCodeChunkStore_ListUnembedded_OrderByIDAsc(t *testing.T) {
 	db := openCodeChunkTestDB(t)
 	store := NewCodeChunkStore(db)
-	ctx := context.Background()
+	ctx := db.Statement.Context
 
 	proj := fmt.Sprintf("proj-listord-%d", time.Now().UnixNano())
 	t.Cleanup(func() {
@@ -495,7 +474,7 @@ func TestCodeChunkStore_ListUnembedded_OrderByIDAsc(t *testing.T) {
 func TestCodeChunkStore_CountEmbeddedByProject(t *testing.T) {
 	db := openCodeChunkTestDB(t)
 	store := NewCodeChunkStore(db)
-	ctx := context.Background()
+	ctx := db.Statement.Context
 
 	proj := fmt.Sprintf("proj-count-emb-%d", time.Now().UnixNano())
 	t.Cleanup(func() {
@@ -525,7 +504,7 @@ func TestCodeChunkStore_CountEmbeddedByProject(t *testing.T) {
 func TestCodeChunkStore_CountEmbeddedByProject_EmptyProject(t *testing.T) {
 	db := openCodeChunkTestDB(t)
 	store := NewCodeChunkStore(db)
-	ctx := context.Background()
+	ctx := db.Statement.Context
 
 	proj := fmt.Sprintf("proj-emb-empty-%d", time.Now().UnixNano())
 	// No chunks inserted.
@@ -540,7 +519,7 @@ func TestCodeChunkStore_CountEmbeddedByProject_EmptyProject(t *testing.T) {
 func TestCodeChunkStore_MaxUpdatedAtByProject(t *testing.T) {
 	db := openCodeChunkTestDB(t)
 	store := NewCodeChunkStore(db)
-	ctx := context.Background()
+	ctx := db.Statement.Context
 
 	// Empty project — expect false.
 	proj := fmt.Sprintf("proj-maxat-%d", time.Now().UnixNano())
