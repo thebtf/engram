@@ -48,6 +48,9 @@ if (typeof route.query.principal === 'string') principalScope.value.principal = 
 if (route.query.principalKind === 'human' || route.query.principalKind === 'agent' || route.query.principalKind === 'service') principalScope.value.principalKind = route.query.principalKind
 if (typeof route.query.principalDomain === 'string') principalScope.value.domain = route.query.principalDomain
 if (typeof route.query.principalProject === 'string') principalScope.value.project = route.query.principalProject
+watch(() => route.query.principalProject, (next, previous) => {
+  if (typeof next === 'string' && principalScope.value.project === previous) principalScope.value.project = next
+})
 if (route.query.principalVisibility === 'all' || route.query.principalVisibility === 'shared' || route.query.principalVisibility === 'private') principalScope.value.visibility = route.query.principalVisibility
 principalScope.value.includePrivate = route.query.principalPrivate === '1'
 const principalAttribution = principal.attributionVisible

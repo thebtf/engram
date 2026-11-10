@@ -126,25 +126,22 @@ test('issue source and target choices use distinct catalog IDs, never row aliase
  expect(trackedReads).toBe(0)
 })
 
-test('issue draft retains selected alias in both project controls', async ({ page }) => {
+test('issue draft resolves a confirmed alias to its canonical source and target', async ({ page }) => {
  const alias = '22222222-2222-4222-8222-222222222222'
  await page.route('**/api/projects', route => route.fulfill({ json: { items: [{ project_id: sourceProject, name: 'Primary' }, { project_id: alias, name: 'Historical' }, { project_id: targetProject, name: 'Independent' }], unresolved: [], logical_groups: [{ primary_project_id: sourceProject, alias_project_ids: [alias] }] } }))
  const reads: URL[] = []
  await page.route('**/api/issues?**', route => { reads.push(new URL(route.request().url())); return route.fulfill({ json: { issues: [], total: 0 } }) })
  await page.goto(`/issues?project=${alias}`)
+ await expect(page.getByTestId('project-context-select')).toHaveValue(sourceProject)
  await page.locator('.issue-create-strip button').click()
  const source = page.locator('select[name="new-issue-source-project"]')
  const target = page.locator('select[name="new-issue-target-project"]')
- await expect(source).toHaveValue(alias)
- await expect(target).toHaveValue(alias)
- await expect(source.locator(`option[value="${alias}"]`)).toHaveAttribute('disabled', '')
- await expect(target.locator(`option[value="${alias}"]`)).toHaveAttribute('disabled', '')
- await expect.poll(() => reads.length).toBeGreaterThan(0)
- expect(reads.every(url => url.searchParams.get('project') === alias)).toBe(true)
- await target.selectOption(sourceProject)
+ await expect(source).toHaveValue(sourceProject)
  await expect(target).toHaveValue(sourceProject)
+ await expect(source.locator(`option[value="${alias}"]`)).toHaveCount(0)
  await expect(target.locator(`option[value="${alias}"]`)).toHaveCount(0)
- await expect(source).toHaveValue(alias)
+ await expect.poll(() => reads.length).toBeGreaterThan(0)
+ expect(reads.every(url => url.searchParams.get('project') === sourceProject)).toBe(true)
 })
 
 test('human issue create and scoped detail links retain source UUID and explicit cross-project target', async ({ page }) => {

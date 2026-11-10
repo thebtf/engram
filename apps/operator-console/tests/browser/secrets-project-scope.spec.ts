@@ -228,7 +228,7 @@ test('Vault create choices and same-name credential metadata keep canonical proj
   await expect(page.getByTestId('secret-row-2')).toBeVisible()
 })
 
-test('Vault shows canonical group labels without hiding binding errors or changing alias scope', async ({ page }) => {
+test('Vault shows canonical group labels without hiding binding errors or changing credential binding', async ({ page }) => {
   const independent = '66666666-6666-4666-8666-666666666666'
   const secondIndependent = '77777777-7777-4777-8777-777777777777'
   await page.route('**/api/projects', route => route.fulfill({
@@ -267,17 +267,12 @@ test('Vault shows canonical group labels without hiding binding errors or changi
   await expect(page.getByTestId('secret-reveal-3')).toBeDisabled()
   await expect(page.getByTestId('secret-delete-3')).toBeDisabled()
   await page.goto(`/secrets?project=${betaProject}`)
-  await expect(selector).toHaveValue(betaProject)
-  await expect(selector.locator(`option[value="${betaProject}"]`)).toHaveText('Shared project #1')
-  await expect(selector.locator(`option[value="${betaProject}"]`)).toHaveAttribute('disabled', '')
-  await expect(selector.locator(`option[value="${betaProject}"]`)).toHaveAttribute('hidden', '')
+  await expect(selector).toHaveValue(alphaProject)
+  await expect(selector.locator(`option[value="${betaProject}"]`)).toHaveCount(0)
   await page.getByTestId('secret-reveal-1').click()
   await expect(page.getByTestId('secret-row-1')).toContainText('synthetic-alias-value')
   expect(revealProjects).toEqual([betaProject])
-  await selector.selectOption(alphaProject)
-  await expect(selector).toHaveValue(alphaProject)
-  await expect(selector.locator(`option[value="${betaProject}"]`)).toHaveCount(0)
-  await expect(page).toHaveURL(new RegExp(`project=${betaProject}`))
+  await expect(page).toHaveURL(new RegExp(`project=${alphaProject}`))
 })
 
 for (const matchingScope of [true, false]) {

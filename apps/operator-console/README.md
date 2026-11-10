@@ -112,9 +112,10 @@ to the full UUID and, if necessary, repeats it until the displayed labels differ
 Global and page choices and selected Projects/Home headings use that same label.
 Ordinary choices contain one primary per validated logical group and retain every
 ungrouped catalog row, including version/hash-like names, with exact UUID values.
-Alias UUIDs remain valid for existing links, readers, and historical detail; a
-selected alias is displayed without offering it as a new ordinary choice. Project
-search matches names, full UUIDs and displayed repository qualifiers.
+Confirmed alias UUIDs in existing project and reader links resolve to the group's
+primary UUID while retaining record and lineage anchors. This does not rewrite
+historical provenance or change credential bindings. Project search matches names,
+full UUIDs and displayed repository qualifiers.
 
 Historical records have an explicit **Find saved records** view on the existing
 unresolved page: `view=retained_records&attribution_scope=unresolved_history`
@@ -467,8 +468,8 @@ not empty history. Existing query/filter/page and search return remain unchanged
 “All projects” is explicit. Home never fans out knowledge bodies. Inventories require
 an explicit Find submission before composing pages over canonical descriptor IDs.
 When valid groups are present, composition reads each group's primary once and skips
-its aliases, relying on the conditional union contract above; direct alias selection
-still reads that exact UUID. Invalid or conflicting group metadata fails closed for
+its aliases, relying on the conditional union contract above; confirmed alias links
+resolve to the primary before a scoped read. Invalid or conflicting group metadata fails closed for
 the all-project composition rather than claiming a complete total. With grouping
 initially absent, composition retains the legacy disjoint-reader behavior; an omission
 after feature detection is instead unknown and requires catalog recovery. Ordering is by

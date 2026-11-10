@@ -179,9 +179,11 @@ export function catalogProjectName(id: string, items: OperatorProjectDescriptor[
 }
 
 export function projectName(id: string) { return catalogProjectName(id, descriptors.value) }
+export function canonicalProjectID(id: string) {
+  return logicalGroups.value.find(group => group.alias_project_ids.includes(id))?.primary_project_id || id
+}
 export function canonicalProjectName(id: string) {
-  const primary = logicalGroups.value.find(group => group.alias_project_ids.includes(id))?.primary_project_id || id
-  return catalogProjectName(primary, descriptors.value.filter(row => projects.value.includes(row.project_id)))
+  return catalogProjectName(canonicalProjectID(id), descriptors.value.filter(row => projects.value.includes(row.project_id)))
 }
 export function projectChoiceLabel(id: string, reservedLabels: readonly string[] = []): string {
   const row = descriptors.value.find((item) => item.project_id === id)
@@ -189,7 +191,7 @@ export function projectChoiceLabel(id: string, reservedLabels: readonly string[]
   const display = row.repository_qualifier ? `${row.name} · ${row.repository_qualifier}` : row.name
   const visibleLabel = display.replace(/[ \t\r\n\f]+/g, ' ').replace(/^ | $/g, '')
   const reserved = reservedLabels.map((label) => label.replace(/[ \t\r\n\f]+/g, ' ').replace(/^ | $/g, ''))
-  const needsIdentity = reserved.includes(visibleLabel) || (visibleLabel === 'Registered project' && !row.repository_qualifier) || descriptors.value.some((item) => {
+  const needsIdentity = reserved.includes(visibleLabel) || (visibleLabel === 'Registered project' && !row.repository_qualifier) || descriptors.value.filter(item => projects.value.includes(item.project_id)).some((item) => {
     if (item.project_id === id) return false
     const itemLabel = item.repository_qualifier ? `${item.name} · ${item.repository_qualifier}` : item.name
     return itemLabel.replace(/[ \t\r\n\f]+/g, ' ').replace(/^ | $/g, '') === visibleLabel
@@ -199,7 +201,7 @@ export function projectChoiceLabel(id: string, reservedLabels: readonly string[]
   const normalizedPrefix = prefix.toLowerCase()
   const otherLabels = new Set<string>(reserved)
   let collision = false
-  for (const item of descriptors.value) {
+  for (const item of descriptors.value.filter(item => projects.value.includes(item.project_id))) {
     if (item.project_id === id) continue
     const itemLabel = item.repository_qualifier ? `${item.name} · ${item.repository_qualifier}` : item.name
     otherLabels.add(itemLabel.replace(/[ \t\r\n\f]+/g, ' ').replace(/^ | $/g, ''))
@@ -223,7 +225,7 @@ export function validDocumentID(value: unknown): value is string { return typeof
 function knownProjectQuery(query: LocationQuery): boolean {
   return ['project', 'memoryProject', 'docProject', 'principalProject'].every((key) => {
     const value = query[key]
-    return value === undefined || (key === 'project' && (value === '' || value === 'all')) || (key === 'principalProject' && (value === 'all' || value === 'current')) || (typeof value === 'string' && isCatalogProject(value))
+    return value === undefined || (key === 'project' && (value === '' || value === 'all')) || (key === 'principalProject' && (value === 'all' || value === 'current')) || (typeof value === 'string' && isCatalogProject(value) && canonicalProjectID(value) === value)
   })
 }
 
@@ -280,11 +282,14 @@ async function ensureCatalog() {
 async function readProjectResolution(id: string): Promise<OperatorProjectResolution> {
   await ensureCatalog()
   const row = descriptors.value.find((item) => item.project_id === id)
-  if (row) return { status: 'resolved', project_id: id, name: row.name }
+  if (row) {
+    const primary = canonicalProjectID(id)
+    return { status: 'resolved', project_id: primary, name: descriptors.value.find(item => item.project_id === primary)?.name || row.name }
+  }
   if (!id) throw new TypeError('Project selection is required')
   const payload = parseProjectResolution(await operatorFetchJson<unknown>(`/api/projects/resolve?${new URLSearchParams({ legacy_id: id })}`, undefined, 'project-resolution'))
   if (payload.status === 'resolved' && !isCatalogProject(payload.project_id)) throw new TypeError('Resolved project is absent from the catalog')
-  return payload
+  return payload.status === 'resolved' ? { ...payload, project_id: canonicalProjectID(payload.project_id) } : payload
 }
 
 export async function resolveCatalogProject(id: string): Promise<string | null> {

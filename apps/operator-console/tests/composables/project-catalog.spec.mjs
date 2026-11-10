@@ -66,7 +66,7 @@ test('exact DTO rejects legacy shapes and duplicate IDs, but keeps equal names d
   assert.throws(() => core.parseProjectCatalog({ items: [{ project_id: 'Same name', name: 'Same name' }], unresolved: [] }), TypeError)
 })
 
-test('confirmed groups collapse choices without changing raw alias routes or equal-name identities', async t => {
+test('confirmed groups canonicalize alias routes while retaining document identity and distinct equal-name projects', async t => {
   const C = '33333333-3333-4333-8333-333333333333'
   const items = [{ project_id: A, name: 'Same' }, { project_id: B, name: 'Old alias' }, { project_id: C, name: 'Same' }]
   const { core, context, router } = await mount(t, `/documents?project=${B}&docProject=${B}&path=shared.md&document_id=101`, url => {
@@ -78,8 +78,9 @@ test('confirmed groups collapse choices without changing raw alias routes or equ
   assert.equal(core.isCatalogProject('not-a-uuid'), false)
   assert.equal(core.canonicalProjectName(B), core.canonicalProjectName(A))
   assert.notEqual(core.canonicalProjectName(A), core.canonicalProjectName(C))
-  assert.equal(router.currentRoute.value.query.project, B)
-  assert.equal(router.currentRoute.value.query.docProject, B)
+  assert.equal(context.project.value, A)
+  assert.equal(router.currentRoute.value.query.project, A)
+  assert.equal(router.currentRoute.value.query.docProject, A)
   assert.equal(router.currentRoute.value.query.document_id, '101')
 })
 

@@ -236,6 +236,10 @@ guidance without that status.
   schema validation for anchor/merge/migration receipts.
 - **Integration**: real PostgreSQL fixture, job lease/crash/retry/replay, migration/backfill,
   consumer compatibility, and projection rebuild tests.
+- **Rules consolidation (FR-007a):** reuse the existing project membership and collection
+  fingerprint/snapshot owners for the authorized read projection and selection mutation guard.
+  Exercise alias rollback and ambiguous/foreign controls, disabled rows, global rules and exact
+  IDs/versions on a real isolated PostgreSQL fixture. No rule activation or injection change.
 - **Fault injection**: duplicate events, server restart, lease loss, provider timeout, malformed
   anchor, conflicting outcome, identity collision, interrupted backfill, and restore.
 - **Behavior corpus**: positive, negative, stale, superseded, cross-project, privacy, and empty

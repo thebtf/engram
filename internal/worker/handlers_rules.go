@@ -122,7 +122,7 @@ func (s *Service) handleListBehavioralRules(w http.ResponseWriter, r *http.Reque
 	if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("all")), "true") {
 		rules, err = s.behavioralRulesStore.ListAll(r.Context(), limit)
 	} else {
-		rules, err = s.behavioralRulesStore.List(r.Context(), normalizedOptionalString(ptrString(r.URL.Query().Get("project"))), limit)
+		rules, err = s.behavioralRulesStore.ListOperator(r.Context(), normalizedOptionalString(ptrString(r.URL.Query().Get("project"))), limit)
 	}
 	if err != nil {
 		log.Error().Err(err).Msg("list behavioral rules failed")
@@ -407,6 +407,7 @@ func (s *Service) handleBehavioralRuleSelectionOperation(w http.ResponseWriter, 
 		http.Error(w, "invalid rules projection", http.StatusBadRequest)
 		return
 	}
+	operation.ProjectionFilter = &filter
 	result, err := s.behavioralRulesStore.ApplySelectionOperation(r.Context(), scope, operation)
 	if err != nil {
 		writeBehavioralRuleSelectionOperationError(w, err)

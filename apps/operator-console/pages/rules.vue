@@ -8,7 +8,7 @@ import type {
 } from '../composables/useOperatorRules'
 import { useOperatorRules } from '../composables/useOperatorRules'
 import type { RuleRow } from '../composables/useMockData'
-import { isCatalogProject, useOperatorProjectContext, projectName } from '../composables/useOperatorProjectContext'
+import { canonicalProjectID, isCatalogProject, useOperatorProjectContext, projectName } from '../composables/useOperatorProjectContext'
 import {
   createOperatorSelection,
   type OperatorSelectionTarget,
@@ -54,7 +54,7 @@ const selection = createOperatorSelection('rules')
 const createScopes = computed(() => scopeOptions.value)
 const busy = computed(() => pending.value || selectionPending.value || projectContext.selectionPending.value || Boolean(scopeError.value))
 const selectionTargets = computed(() => selectionPage.value?.targets ?? [])
-const scopedRows = computed(() => rows.filter((rule) => scopeFilter.value === 'all' || rule.project === scopeFilter.value))
+const scopedRows = computed(() => rows.filter((rule) => scopeFilter.value === 'all' || canonicalProjectID(rule.project) === canonicalProjectID(scopeFilter.value)))
 const visibleRows = computed(() => {
   if (!selectionPage.value) return scopedRows.value
   const rowsByID = new Map(scopedRows.value.map((rule) => [String(rule.id), rule]))
@@ -123,7 +123,7 @@ function rowMeta(rule: RuleRow, index: number) {
 }
 
 function priorityForNewRule() {
-  const scoped = rows.filter((rule) => createScope.value === 'global' ? rule.project === 'global' : rule.project === createScope.value)
+  const scoped = rows.filter((rule) => createScope.value === 'global' ? rule.project === 'global' : canonicalProjectID(rule.project) === canonicalProjectID(createScope.value))
   const highest = scoped.reduce((max, rule) => Math.max(max, rule.priority), 0)
   return highest + 10
 }

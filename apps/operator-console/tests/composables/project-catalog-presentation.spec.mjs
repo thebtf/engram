@@ -1261,30 +1261,18 @@ for (const status of [403, 404, 409]) {
   })
 }
 
-test('SCOPED-ACTION alias comment uses the exact requested alias project', async t => {
-  const scoped = scopedActionResponses()
-  const documentFetch = (url, init) => {
-    if (['/api/documents/read', '/api/documents/history'].includes(url.pathname)) {
-      const forwarded = new URL(url)
-      forwarded.searchParams.set('project', SAME_A)
-      return Promise.resolve(scoped(forwarded, init)).then(async response => {
-        const body = await response.json()
-        return Response.json({ ...body, project: SAME_B }, { status: response.status })
-      })
-    }
-    if (url.pathname === '/api/documents' && (init.method || 'GET') === 'GET') return Response.json({ items: lineageItems.map(row => ({ ...row, project: SAME_B })), total: 2, offset: Number(url.searchParams.get('offset')), limit: Number(url.searchParams.get('limit')), has_more: false })
-    return scoped(url, init)
-  }
+test('SCOPED-ACTION alias comment resolves to the primary project and preserves lineage', async t => {
+  const documentFetch = scopedActionResponses()
   const state = await mount(t, { path: '/documents', language: 'en', selected: SAME_B, items: [logicalItems[0], logicalItems[1]], unresolved: [], logical_groups: [logicalGroups[0]], documentFetch, initialQuery: { path: lineagePath, document_id: '101' }, capturePageState: true, allowSyntheticMutations: true })
   await tick()
   assert.equal(text(documentContent(state)).trim(), 'Alpha body version 2')
   const comments = state.calls.filter(call => call.url.pathname === '/api/documents/comments')
-  assert.ok(comments.some(call => call.url.searchParams.get('project') === SAME_B && call.url.searchParams.get('document_id') === '101' && call.url.searchParams.get('expected_version') === '2'))
+  assert.ok(comments.some(call => call.url.searchParams.get('project') === SAME_A && call.url.searchParams.get('document_id') === '101' && call.url.searchParams.get('expected_version') === '2'))
   state.pageState().commentDraft.value = 'synthetic alias comment'
   await state.pageState().comment()
   const call = state.calls.find(item => item.method === 'POST' && item.url.pathname === '/api/documents/comment')
   assert.ok(call)
-  assert.equal(JSON.parse(call.body).project, SAME_B)
+  assert.equal(JSON.parse(call.body).project, SAME_A)
 })
 
 test('SCOPED-ACTION initial old-server omission retains legacy export policy', async t => {
