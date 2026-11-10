@@ -157,8 +157,9 @@ for (const consumer of ['Health', 'Settings']) {
     await vue.nextTick()
     const answer = updateAnswer(host, consumer)
     t.diagnostic(JSON.stringify({ consumer, case: name, transportStatus: payload instanceof Response ? payload.status : 200, stateKind: f.state.updateCheckState.value.kind, renderedAnswer: answer }))
+    assert.equal(f.state.updateCheckState.value.kind, expected ? 'live' : 'error')
     if (expected) assert.equal(answer, expected)
-    else assert.ok(answer !== 'common.no' && answer !== 'common.yes', `${name} is unknown, not a successful yes/no answer; rendered ${answer}`)
+    else assert.ok(answer.length > 0 && answer !== 'common.no' && answer !== 'common.yes', `${name} must render a readable unknown state`)
   })
 }
 
