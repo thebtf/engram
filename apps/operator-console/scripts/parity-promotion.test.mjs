@@ -23,9 +23,6 @@ function runAt(appRoot, ...args) {
   catch (error) { return { status: error.status ?? 1, output: `${error.stdout ?? ''}${error.stderr ?? ''}` } }
 }
 
-function run(...args) {
-  return runAt(root, ...args)
-}
 
 function withParityFixture(callback) {
   const base = mkdtempSync(join(tmpdir(), 'engram-parity-'))
@@ -71,25 +68,34 @@ function fixture(eol) {
   return { base, source, destination }
 }
 
-test('public manifest verifies without .od and reports acknowledged drift', () => {
-  const result = run()
-  assert.equal(result.status, 0, result.output)
-  assert.match(result.output, /Acknowledged drift:/)
-})
-
 test('strict mode rejects acknowledged drift', () => {
-  const result = run('--strict')
-  assert.notEqual(result.status, 0)
-  assert.match(result.output, /strict parity rejects/)
+  withParityFixture(({ appRoot }) => {
+    const parityPath = join(appRoot, 'PARITY.json')
+    const parity = JSON.parse(readFileSync(parityPath, 'utf8'))
+    assert.ok(parity.sections.length > 0, 'fixture needs a parity row')
+    parity.sections[0].sync = 'drifted'
+    parity.sections[0].synced_to = null
+    parity.sections[0].synced_snapshot = null
+    writeFileSync(parityPath, `${JSON.stringify(parity, null, 2)}\n`)
+
+    const normal = runAt(appRoot)
+    assert.equal(normal.status, 0, normal.output)
+    assert.match(normal.output, /Acknowledged drift:/)
+    const strict = runAt(appRoot, '--strict')
+    assert.notEqual(strict.status, 0)
+    assert.match(strict.output, /strict parity rejects/)
+  })
 })
 
-test('mockup mutation and duplicate rows fail closed', () => {
+test('public manifest verifies without .od and mutations fail closed', () => {
   let base
   withParityFixture((fixture) => {
     const { appRoot, designRoot } = fixture
     base = fixture.base
+    assert.equal(existsSync(join(base, '.od')), false)
     const baseline = runAt(appRoot)
     assert.equal(baseline.status, 0, baseline.output)
+    assert.match(baseline.output, /Acknowledged drift:/)
     const mockupPath = join(designRoot, 'mockups', 'index.html')
     const parityPath = join(appRoot, 'PARITY.json')
     const mockup = readFileSync(mockupPath)
