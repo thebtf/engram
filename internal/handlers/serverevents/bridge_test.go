@@ -110,7 +110,9 @@ type fakeEngramServer struct {
 	syncCalled atomic.Int32
 	// drop, when true, causes the next stream send to return an error
 	// (simulates server-side drop for reconnect tests).
-	drop atomic.Bool
+	drop         atomic.Bool
+	streamOpened chan struct{}
+	dropObserved chan struct{}
 
 	// syncStrict, when true, enables intersection semantics in SyncProjectState:
 	// only IDs present in BOTH the request's local_project_ids AND the
@@ -149,6 +151,13 @@ func (s *fakeEngramServer) syncSawProject(id string) bool {
 }
 
 func (s *fakeEngramServer) ProjectEvents(req *pb.ProjectEventsRequest, stream pb.EngramService_ProjectEventsServer) error {
+	if s.streamOpened != nil {
+		select {
+		case s.streamOpened <- struct{}{}:
+		case <-stream.Context().Done():
+			return nil
+		}
+	}
 	for {
 		select {
 		case <-stream.Context().Done():
@@ -158,6 +167,9 @@ func (s *fakeEngramServer) ProjectEvents(req *pb.ProjectEventsRequest, stream pb
 				return nil
 			}
 			if s.drop.Load() {
+				if s.dropObserved != nil {
+					s.dropObserved <- struct{}{}
+				}
 				return status.Error(codes.Unavailable, "simulated drop")
 			}
 			if err := stream.Send(ev); err != nil {
@@ -290,6 +302,8 @@ func TestBridge_Reconnect(t *testing.T) {
 	t.Parallel()
 
 	srv := newFakeServer()
+	srv.streamOpened = make(chan struct{}, 2)
+	srv.dropObserved = make(chan struct{}, 1)
 	mod := newFakeModule("loom")
 	reg := buildRegistry(mod)
 
@@ -303,6 +317,28 @@ func TestBridge_Reconnect(t *testing.T) {
 	defer cancel()
 
 	bridge.Start(ctx)
+	defer func() {
+		stopped := make(chan struct{})
+		go func() {
+			bridge.Stop()
+			close(stopped)
+		}()
+		select {
+		case <-stopped:
+			select {
+			case pid := <-mod.removals:
+				t.Errorf("unexpected additional callback: %s", pid)
+			default:
+			}
+		case <-time.After(5 * time.Second):
+			t.Error("bridge Stop timed out; shutdown goroutine may remain after server cleanup")
+		}
+	}()
+	select {
+	case <-srv.streamOpened:
+	case <-time.After(5 * time.Second):
+		t.Fatal("initial stream did not open")
+	}
 
 	// First event — delivered normally.
 	srv.eventCh <- &pb.ProjectEvent{
@@ -331,11 +367,19 @@ func TestBridge_Reconnect(t *testing.T) {
 		TimestampUnixMs: time.Now().UnixMilli(),
 	}
 
-	// Wait briefly for the stream to notice the error and start reconnecting.
-	time.Sleep(100 * time.Millisecond)
-
-	// Re-enable the server.
+	select {
+	case <-srv.dropObserved:
+	case <-time.After(5 * time.Second):
+		t.Fatal("server did not observe the drop trigger")
+	}
 	srv.drop.Store(false)
+	select {
+	case <-srv.streamOpened:
+	case pid := <-mod.removals:
+		t.Fatalf("unexpected callback before reconnect: %s", pid)
+	case <-time.After(5 * time.Second):
+		t.Fatal("replacement stream did not open")
+	}
 
 	// Send a new event — bridge should reconnect and deliver it within backoffMin + slack.
 	srv.eventCh <- &pb.ProjectEvent{
@@ -347,23 +391,12 @@ func TestBridge_Reconnect(t *testing.T) {
 
 	select {
 	case pid := <-mod.removals:
-		// May get proj-will-drop or proj-after-reconnect depending on timing.
-		t.Logf("got removal: %s", pid)
-		// Drain any remaining buffered events.
-	drain:
-		for {
-			select {
-			case extra := <-mod.removals:
-				t.Logf("got additional removal: %s", extra)
-			default:
-				break drain
-			}
+		if pid != "proj-after-reconnect" {
+			t.Fatalf("unexpected callback after reconnect: %s", pid)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("bridge did not reconnect and deliver event within 5 s")
+		t.Fatal("bridge did not deliver proj-after-reconnect within 5 s")
 	}
-
-	bridge.Stop()
 }
 
 // TestBridge_DedupAcrossStreamAndHeartbeat verifies that the same project

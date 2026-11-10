@@ -177,6 +177,11 @@ func TestAdminPurge_FlagOn_SchemaHasConfirm(t *testing.T) {
 
 	props, _ := tool.InputSchema["properties"].(map[string]any)
 	require.NotNil(t, props)
+	action, ok := props["action"].(map[string]any)
+	require.True(t, ok)
+	enum, ok := action["enum"].([]string)
+	require.True(t, ok)
+	assert.Contains(t, enum, "purge_project", "admin action enum must advertise purge_project")
 	_, hasConfirm := props["confirm"]
 	assert.True(t, hasConfirm,
 		"flag-on: admin tool schema must have confirm field")
