@@ -272,25 +272,6 @@ func TestRecallMemoryIncludePrincipals_ValidationAndPrivacy(t *testing.T) {
 		insertPrincipalMemoryWithTags(t, env, "bob widen marker private decision", "agent/bob", "agent", "private", `["type:fact","decision"]`)
 		ctx := auth.WithIdentity(context.Background(), auth.Admin())
 
-		out, err := env.srv.handleRecallMemory(ctx, mustRecallJSON(t, map[string]any{
-			"query":   "widen marker",
-			"project": env.project,
-			"format":  "items",
-			"tags":    []string{"decision"},
-			"limit":   5,
-			"include_principals": []map[string]any{
-				{"principal": "agent/bob", "principal_kind": "agent"},
-			},
-		}))
-		require.NoError(t, err)
-
-		rows := decodeRecallItems(t, out)
-		require.Len(t, rows, 1)
-		require.Equal(t, "bob widen marker private decision", rows[0]["content"])
-		require.Equal(t, []any{"type:fact", "decision"}, rows[0]["tags"])
-		require.Equal(t, "fact", rows[0]["type"])
-		require.Equal(t, "review-agent", rows[0]["source_agent"])
-
 		detailed, err := env.srv.handleRecallMemory(ctx, mustRecallJSON(t, map[string]any{
 			"query":   "widen marker",
 			"project": env.project,
@@ -315,6 +296,25 @@ func TestRecallMemoryIncludePrincipals_ValidationAndPrivacy(t *testing.T) {
 		require.InDelta(t, 0.77, detailedRows[0]["retrievability"], 0.0001)
 		require.Equal(t, float64(7), detailedRows[0]["version"])
 		require.Equal(t, float64(3), detailedRows[0]["citation_count"])
+
+		out, err := env.srv.handleRecallMemory(ctx, mustRecallJSON(t, map[string]any{
+			"query":   "widen marker",
+			"project": env.project,
+			"format":  "items",
+			"tags":    []string{"decision"},
+			"limit":   5,
+			"include_principals": []map[string]any{
+				{"principal": "agent/bob", "principal_kind": "agent"},
+			},
+		}))
+		require.NoError(t, err)
+
+		rows := decodeRecallItems(t, out)
+		require.Len(t, rows, 1)
+		require.Equal(t, "bob widen marker private decision", rows[0]["content"])
+		require.Equal(t, []any{"type:fact", "decision"}, rows[0]["tags"])
+		require.Equal(t, "fact", rows[0]["type"])
+		require.Equal(t, "review-agent", rows[0]["source_agent"])
 	})
 }
 
