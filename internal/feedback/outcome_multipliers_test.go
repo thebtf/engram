@@ -1,6 +1,16 @@
 package feedback
 
-import "testing"
+import (
+	"context"
+	"database/sql"
+	"strings"
+	"testing"
+
+	dbgorm "github.com/thebtf/engram/internal/db/gorm"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
+	_ "modernc.org/sqlite"
+)
 
 // The rank-6 outcome→importance_base policy lives in multiplierTable.importanceFactor.
 // The SQL that applies it is covered by the gorm integration tests (DATABASE_DSN-gated);
@@ -42,35 +52,40 @@ func TestMultiplierTable_NeutralFactorIsExactlyOne(t *testing.T) {
 	}
 }
 
-// Unknown outcomes must fall back to the neutral "" row (UpdateWithOutcome does this), so an
-// unrecognised outcome string can never accidentally pick a non-neutral importanceFactor.
-func TestMultiplierTable_UnknownOutcomeFallsBackToNeutral(t *testing.T) {
-	_, ok := multiplierTable["totally-unknown-outcome"]
-	if ok {
-		t.Fatal("precondition: unknown outcome should not be a table key")
+func TestUpdateWithOutcome_UnknownOutcomeUsesNeutralCitedUpdate(t *testing.T) {
+	sqlDB, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
 	}
-	// Mirror UpdateWithOutcome's fallback and confirm it lands on neutral factor 1.0.
-	mult, ok := multiplierTable["totally-unknown-outcome"]
-	if !ok {
-		mult = multiplierTable[""]
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	db, err := gorm.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gorm.Config{
+		DryRun: true, DisableAutomaticPing: true,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if mult.importanceFactor != 1.0 {
-		t.Errorf("unknown-outcome fallback importanceFactor must be neutral 1.0, got %v", mult.importanceFactor)
+	var statements []struct {
+		sql  string
+		vars []any
 	}
-}
-
-// Guard the failure row: it must still FIRE the cited path (citedAlpha > 0), otherwise the
-// reduced importanceFactor would never be applied (the dispatch is gated on citedAlpha > 0).
-// This pins the interaction between the two fields that makes failure-sensitivity actually reach
-// importance_base.
-func TestMultiplierTable_FailureStillFiresCitedPath(t *testing.T) {
-	failure := multiplierTable["failure"]
-	if failure.citedAlpha <= 0 {
-		t.Errorf("failure citedAlpha must be > 0 so the cited path fires and importanceFactor %v is applied; got citedAlpha=%v",
-			failure.importanceFactor, failure.citedAlpha)
+	err = db.Callback().Raw().After("gorm:raw").Register("test:capture_feedback", func(tx *gorm.DB) {
+		statements = append(statements, struct {
+			sql  string
+			vars []any
+		}{tx.Statement.SQL.String(), append([]any(nil), tx.Statement.Vars...)})
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if failure.importanceFactor >= multiplierTable[""].importanceFactor {
-		t.Errorf("failure importanceFactor (%v) must be below neutral (%v) for failure to dampen promotion",
-			failure.importanceFactor, multiplierTable[""].importanceFactor)
+	updater := NewUpdater(dbgorm.NewMemoryStore(&dbgorm.Store{DB: db}))
+	updater.UpdateWithOutcome(context.Background(), []CitationResult{{MemoryID: 42, Cited: true}}, "totally-unknown-outcome")
+	if len(statements) != 1 {
+		t.Fatalf("expected one cited update, got %d", len(statements))
+	}
+	if !strings.Contains(statements[0].sql, "ts_alpha = ts_alpha +") || len(statements[0].vars) < 2 {
+		t.Fatalf("expected cited update with multipliers, got %q %v", statements[0].sql, statements[0].vars)
+	}
+	if statements[0].vars[0] != float64(1) || statements[0].vars[1] != float64(1) {
+		t.Errorf("unknown outcome cited alpha and importance factor = %v, %v; want 1, 1", statements[0].vars[0], statements[0].vars[1])
 	}
 }

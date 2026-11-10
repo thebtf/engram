@@ -143,7 +143,10 @@ func TestDetectCitations_ExcerptPopulated(t *testing.T) {
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
-	if results[0].Cited && results[0].Excerpt == "" {
+	if !results[0].Cited {
+		t.Fatal("expected the matching title to be cited")
+	}
+	if results[0].Excerpt == "" {
 		t.Errorf("FR-A1: Cited=true but Excerpt is empty; spec requires a non-empty excerpt when a citation is detected")
 	}
 }

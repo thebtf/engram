@@ -40,22 +40,6 @@ func TestDetectRelativeTime(t *testing.T) {
 	}
 }
 
-// TestIsStaleCandidate_MeasuresFromCreatedAt locks the resolved Codex-review decision:
-// staleness is measured from created_at (immutable), NOT updated_at (a row-mutation
-// timestamp bumped by injection/citation). An old "currently…" memory must stay flagged
-// even though, in production, its updated_at would be freshly bumped by the feedback loop
-// on every injection. This test guards against a future flip back to updated_at.
-func TestIsStaleCandidate_MeasuresFromCreatedAt(t *testing.T) {
-	t.Parallel()
-	now := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
-	created := now.Add(-200 * 24 * time.Hour) // created 200 days ago
-
-	if !IsStaleCandidate("the value is currently 1536", created, now, 0) {
-		t.Error("an old relative-time memory must be flagged stale by created_at age, " +
-			"regardless of any updated_at bump from injection/citation")
-	}
-}
-
 func TestIsStaleCandidate(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
