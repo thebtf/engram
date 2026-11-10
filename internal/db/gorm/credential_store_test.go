@@ -1,7 +1,6 @@
 package gorm
 
 import (
-	"context"
 	"testing"
 
 	"github.com/google/uuid"
@@ -25,12 +24,11 @@ func openTestDB(t *testing.T) (*gorm.DB, func()) {
 // round-trip against a real PostgreSQL database.
 // Anti-stub contract: if any method body is replaced with `return nil` this test fails.
 func TestCredentialStore_CreateGetCountDelete(t *testing.T) {
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openDockerMigrationDB(t)
 
 	store := &Store{DB: db}
 	cs := NewCredentialStore(store)
-	ctx := context.Background()
+	ctx := db.Statement.Context
 
 	testProject := uuid.NewString()
 	const testKey = "api-key-smoke"
@@ -120,12 +118,11 @@ func TestCredentialStore_CreateGetCountDelete(t *testing.T) {
 }
 
 func TestCredentialStore_GlobalAndProjectSameNameCoexist(t *testing.T) {
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openDockerMigrationDB(t)
 
 	store := &Store{DB: db}
 	cs := NewCredentialStore(store)
-	ctx := context.Background()
+	ctx := db.Statement.Context
 
 	project := uuid.NewString()
 	const key = "global-project-coexist"
@@ -192,10 +189,9 @@ func TestCredentialStore_GlobalAndProjectSameNameCoexist(t *testing.T) {
 
 // Fingerprint mismatch is diagnostic, not proof that credential bytes may be erased.
 func TestCredentialStore_FingerprintMismatchIsReadOnly(t *testing.T) {
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openDockerMigrationDB(t)
 	cs := NewCredentialStore(&Store{DB: db})
-	ctx := context.Background()
+	ctx := db.Statement.Context
 	project := uuid.NewString()
 	for _, fingerprint := range []string{"current-fingerprint", "recoverable-old-fingerprint"} {
 		_, err := cs.Create(ctx, &models.Credential{
@@ -223,12 +219,11 @@ func TestCredentialStore_FingerprintMismatchIsReadOnly(t *testing.T) {
 
 // TestCredentialStore_Create_ValidationErrors verifies that Create rejects invalid input.
 func TestCredentialStore_Create_ValidationErrors(t *testing.T) {
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openDockerMigrationDB(t)
 
 	store := &Store{DB: db}
 	cs := NewCredentialStore(store)
-	ctx := context.Background()
+	ctx := db.Statement.Context
 
 	cases := []struct {
 		name string
