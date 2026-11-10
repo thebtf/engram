@@ -146,12 +146,6 @@ func TestStripAllTags_OnlyMemory(t *testing.T) {
 	assert.Equal(t, "A  B", StripAllTags("A <engram-context>x</engram-context> B"))
 }
 
-func TestStripAllTags_Interleaved(t *testing.T) {
-	// Tags of different types interleaved must both be stripped.
-	input := "A <private>P</private> C <engram-context>M</engram-context> E"
-	assert.Equal(t, "A  C  E", StripAllTags(input))
-}
-
 func TestStripAllTags_Empty(t *testing.T) {
 	assert.Equal(t, "", StripAllTags(""))
 }

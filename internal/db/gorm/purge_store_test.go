@@ -26,32 +26,22 @@ import (
 	"github.com/thebtf/engram/pkg/models"
 )
 
-// TestPurgeStore_PurgeProject_EmptyProject verifies that an empty project name is rejected.
-// No DATABASE_DSN required — validation fires before any DB call.
-func TestPurgeStore_PurgeProject_EmptyProject(t *testing.T) {
-	// openTestDB skips when DATABASE_DSN is absent; use a nil-DB store for pure-validation test.
-	ps := &PurgeStore{db: nil}
-	_, err := ps.PurgeProject(context.Background(), "")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "project must not be empty")
-}
-
-// TestPurgeStore_PurgeProject_WhitespaceOnlyProject verifies that a whitespace-only
-// project name is rejected (trimmed to empty). No DATABASE_DSN required.
-func TestPurgeStore_PurgeProject_WhitespaceOnlyProject(t *testing.T) {
-	ps := &PurgeStore{db: nil}
-	_, err := ps.PurgeProject(context.Background(), "   ")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "project must not be empty",
-		"whitespace-only project must be rejected after trimming")
-}
-
-// TestPurgeStore_PurgeProject_TabWhitespace verifies tab+space project name is rejected.
-func TestPurgeStore_PurgeProject_TabWhitespace(t *testing.T) {
-	ps := &PurgeStore{db: nil}
-	_, err := ps.PurgeProject(context.Background(), "\t \n")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "project must not be empty")
+func TestPurgeStore_PurgeProject_EmptyAfterTrimming(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		project string
+	}{
+		{name: "empty", project: ""},
+		{name: "spaces", project: "   "},
+		{name: "tab and newline", project: "\t \n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ps := &PurgeStore{db: nil}
+			_, err := ps.PurgeProject(context.Background(), tc.project)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "project must not be empty")
+		})
+	}
 }
 
 // TestPurgeStore_PurgeProject_DeletesMemoriesAndRules seeds memories and behavioral rules
