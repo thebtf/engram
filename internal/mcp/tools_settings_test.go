@@ -46,8 +46,11 @@ func TestSettings_SetRequiresAdmin(t *testing.T) {
 func TestSettings_DeleteRequiresAdmin(t *testing.T) {
 	srv := NewServer(ServerOptions{Version: "test"})
 	args := mustMarshalSettings(t, map[string]any{"action": "delete", "key": "reranker.url"})
+	_, err := srv.handleSettingsConsolidated(noIdentityCtx(), args)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "admin authorization required")
 
-	_, err := srv.handleSettingsConsolidated(readWriteCtx(), args)
+	_, err = srv.handleSettingsConsolidated(readWriteCtx(), args)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "admin authorization required")
 }
@@ -96,18 +99,5 @@ func TestIsSecretSettingKey(t *testing.T) {
 		if isSecretSettingKey(k) {
 			t.Errorf("isSecretSettingKey(%q) = true, want false", k)
 		}
-	}
-}
-
-// TestRequireAdmin verifies the gate: admin passes, read-write fails, no-identity fails closed.
-func TestRequireAdmin(t *testing.T) {
-	if err := requireAdmin(adminCtx(), "set"); err != nil {
-		t.Errorf("requireAdmin(admin) = %v, want nil", err)
-	}
-	if err := requireAdmin(readWriteCtx(), "set"); err == nil {
-		t.Error("requireAdmin(read-write) = nil, want error")
-	}
-	if err := requireAdmin(noIdentityCtx(), "delete"); err == nil {
-		t.Error("requireAdmin(no identity) = nil, want error (fail closed)")
 	}
 }
