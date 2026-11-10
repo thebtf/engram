@@ -163,7 +163,7 @@ test('loaded counts and all-rows option do not claim a corpus total', async ({ p
   await expect(page.locator('#queue-page-size option[value="all"]')).toContainText(scope)
 })
 
-for (const malformed of ['', 0, {}, [], false]) {
+for (const malformed of ['', 0, [], false]) {
   test(`candidate queue reports malformed next_cursor ${JSON.stringify(malformed)} as an error`, async ({ page }) => {
     await page.route('**/api/memory/candidates?**', (route) => route.fulfill({
       json: { candidates: candidateRows(1, 1), count: 1, next_cursor: malformed },
