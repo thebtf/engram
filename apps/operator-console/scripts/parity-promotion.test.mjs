@@ -71,25 +71,21 @@ function fixture(eol) {
   return { base, source, destination }
 }
 
-test('public manifest verifies without .od and reports acknowledged drift', () => {
-  const result = run()
-  assert.equal(result.status, 0, result.output)
-  assert.match(result.output, /Acknowledged drift:/)
-})
-
 test('strict mode rejects acknowledged drift', () => {
   const result = run('--strict')
   assert.notEqual(result.status, 0)
   assert.match(result.output, /strict parity rejects/)
 })
 
-test('mockup mutation and duplicate rows fail closed', () => {
+test('public manifest verifies without .od and mutations fail closed', () => {
   let base
   withParityFixture((fixture) => {
     const { appRoot, designRoot } = fixture
     base = fixture.base
+    assert.equal(existsSync(join(base, '.od')), false)
     const baseline = runAt(appRoot)
     assert.equal(baseline.status, 0, baseline.output)
+    assert.match(baseline.output, /Acknowledged drift:/)
     const mockupPath = join(designRoot, 'mockups', 'index.html')
     const parityPath = join(appRoot, 'PARITY.json')
     const mockup = readFileSync(mockupPath)
