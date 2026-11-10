@@ -25,12 +25,14 @@ import (
 
 // fakeCore is a typed UCI stand-in for the daemon module tests.
 type fakeCore struct {
-	mu          sync.Mutex
-	indexCalled int
-	indexDelay  time.Duration
-	indexErr    error
-	afterIndex  func()
-	indexGate   <-chan struct{}
+	mu            sync.Mutex
+	indexCalled   int
+	indexDelay    time.Duration
+	indexErr      error
+	afterIndex    func()
+	indexGate     <-chan struct{}
+	indexEntered  chan<- struct{}
+	indexFinished chan<- struct{}
 
 	statusResponse []byte
 	statusErr      error
@@ -124,6 +126,12 @@ func (f *fakeCore) IndexCodebase(ctx context.Context, target codeintel.ResolvedI
 	indexGate := f.indexGate
 	f.indexCalled++
 	f.mu.Unlock()
+	if f.indexEntered != nil {
+		close(f.indexEntered)
+	}
+	if f.indexFinished != nil {
+		defer close(f.indexFinished)
+	}
 
 	if indexGate != nil {
 		select {
@@ -346,35 +354,112 @@ func TestCodebaseIndexSchemaLeavesContextHandleOptional(t *testing.T) {
 // returns {status:"started",run_id:...} before the background goroutine finishes.
 func TestCodebaseIndex_ReturnsStartedImmediately(t *testing.T) {
 	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
-
-	core := &fakeCore{indexDelay: 50 * time.Millisecond}
+	gate := make(chan struct{})
+	entered := make(chan struct{})
+	finished := make(chan struct{})
+	requestDone := make(chan struct{})
+	daemonCtx, cancel := context.WithCancel(context.Background())
+	var release sync.Once
+	core := &fakeCore{indexGate: gate, indexEntered: entered, indexFinished: finished}
 	mod := newTestModule(core)
-
-	h := moduletest.New(t)
-	require.NoError(t, h.Register(mod))
-	h.Freeze()
-
 	p := testProjectContext("proj-1", t.TempDir())
+	var raw json.RawMessage
+	var callErr error
+	started := false
+	t.Cleanup(func() {
+		release.Do(func() { close(gate) })
+		cancel()
+		if !started {
+			return
+		}
+		select {
+		case <-requestDone:
+		case <-time.After(3 * time.Second):
+			t.Error("index request did not stop after cancellation")
+			return
+		}
+		workerEntered := false
+		select {
+		case <-entered:
+			workerEntered = true
+			select {
+			case <-finished:
+			case <-time.After(3 * time.Second):
+				t.Error("fake index worker did not stop after cancellation")
+			}
+		default:
+		}
+		var result map[string]any
+		if json.Unmarshal(raw, &result) != nil {
+			if workerEntered {
+				t.Error("index worker entered but request returned no readable run ID; daemon join is unproven")
+			}
+			return
+		}
+		runID, ok := result["run_id"].(string)
+		if !ok || runID == "" {
+			if workerEntered {
+				t.Error("index worker entered but request returned no run ID; daemon join is unproven")
+			}
+			return
+		}
+		ctx, stop := context.WithTimeout(context.Background(), 3*time.Second)
+		defer stop()
+		ctx = auditcontext.WithUCITransportSession(ctx, "transport-"+p.ID)
+		for ctx.Err() == nil {
+			response, err := mod.HandleTool(ctx, p, "codebase_status", testStatusArgsWithBarrier("handle-"+p.ID, runID, 500))
+			if err != nil {
+				if strings.Contains(err.Error(), "after_barrier run failed") || strings.Contains(err.Error(), "satisfied after_barrier requires a published View") {
+					return
+				}
+			} else {
+				var status map[string]any
+				if json.Unmarshal(response, &status) == nil && (status["status"] == "idle" || status["status"] == "error") {
+					return
+				}
+			}
+			select {
+			case <-ctx.Done():
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+		t.Error("index daemon worker did not reach terminal state")
+	})
+	require.NoError(t, mod.Init(daemonCtx, module.ModuleDeps{DaemonCtx: daemonCtx}))
 	args := testIndexArgs(p)
-
-	start := time.Now()
-	raw, err := h.CallToolWithProject(testTransportContext(p), p, "codebase_index", args)
-	elapsed := time.Since(start)
-
-	require.NoError(t, err)
-	require.NotNil(t, raw)
-
-	// Must return before the 50 ms delay completes — confirms background dispatch.
-	assert.Less(t, elapsed, 40*time.Millisecond, "handleIndex must return immediately (< delay)")
-
+	started = true
+	go func() {
+		defer close(requestDone)
+		requestCtx := auditcontext.WithUCITransportSession(daemonCtx, "transport-"+p.ID)
+		raw, callErr = mod.HandleTool(requestCtx, p, "codebase_index", args)
+	}()
+	timer := time.NewTimer(3 * time.Second)
+	defer timer.Stop()
+	workerReady, requestReturned := false, false
+	enteredSignal, returnedSignal := (<-chan struct{})(entered), (<-chan struct{})(requestDone)
+	for !workerReady || !requestReturned {
+		select {
+		case <-enteredSignal:
+			workerReady = true
+			enteredSignal = nil
+		case <-returnedSignal:
+			requestReturned = true
+			returnedSignal = nil
+		case <-timer.C:
+			t.Fatal("index request and worker must both reach their checkpoints while the gate is closed")
+		}
+	}
+	require.NoError(t, callErr)
 	var result map[string]any
 	require.NoError(t, json.Unmarshal(raw, &result))
 	assert.Equal(t, "started", result["status"])
 	assert.NotEmpty(t, result["run_id"])
-
-	// Drain the background goroutine before returning: it logs into the harness
-	// logger (t.Log-backed), which panics if invoked after the test exits.
-	drainIndex(t, h, p, result["run_id"].(string))
+	release.Do(func() { close(gate) })
+	select {
+	case <-finished:
+	case <-time.After(3 * time.Second):
+		t.Fatal("fake index worker did not finish after gate release")
+	}
 }
 
 // drainIndex polls codebase_status until the project's index run reaches idle (or
