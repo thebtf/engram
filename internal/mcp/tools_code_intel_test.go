@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/mcp"
 )
 
@@ -30,14 +31,13 @@ func buildCodeIntelToolNames(srv *mcp.Server) map[string]bool {
 	return names
 }
 
-// TestCodeIntelFlag_Off_ToolsAbsentFromList verifies that when
-// ENGRAM_CODE_INTEL_ENABLED is not "true", no codebase_* tools appear in
-// tools/list — the flag-off surface is byte-identical to pre-CR-006.
+// TestCodeIntelFlag_Off_ToolsAbsentFromList checks flag gating with a wired
+// legacy reader; listing tools does not invoke the reader's database.
 func TestCodeIntelFlag_Off_ToolsAbsentFromList(t *testing.T) {
 	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "false")
 
 	srv := mcp.NewServer(mcp.ServerOptions{Version: "test"})
-	// Do NOT call SetLegacyUnscopedCodeChunkStore — flag is off.
+	srv.SetLegacyUnscopedCodeChunkStore(&gorm.CodeChunkStore{})
 
 	req := &mcp.Request{
 		JSONRPC: "2.0",
@@ -56,6 +56,20 @@ func TestCodeIntelFlag_Off_ToolsAbsentFromList(t *testing.T) {
 		assert.NotEqual(t, "codebase_status", tool.Name, "codebase_status must not appear when flag is off")
 		assert.NotEqual(t, "codebase_index", tool.Name, "codebase_index must not appear in server tools/list")
 	}
+
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
+	resp = srv.HandleRequest(nil, req)
+	require.NotNil(t, resp)
+	require.Nil(t, resp.Error)
+	result = resp.Result.(map[string]any)
+	tools = result["tools"].([]mcp.Tool)
+	foundSearch := false
+	for _, tool := range tools {
+		if tool.Name == "codebase_search" {
+			foundSearch = true
+		}
+	}
+	assert.True(t, foundSearch, "codebase_search must appear when the flag is on and the store is wired")
 }
 
 // TestCodeIntelFlag_On_StoreNil_ToolsAbsentFromList verifies that when

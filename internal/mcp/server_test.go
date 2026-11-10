@@ -330,13 +330,6 @@ func TestTimelineParams_AllFields(t *testing.T) {
 // NewServer / Version / ServerOptions
 // ---------------------------------------------------------------------------
 
-func TestNewServer_CreatesWithVersion(t *testing.T) {
-	t.Parallel()
-	s := NewServer(ServerOptions{Version: "2.5.0"})
-	require.NotNil(t, s)
-	assert.Equal(t, "2.5.0", s.version)
-}
-
 func TestNewServer_HasStdinStdout(t *testing.T) {
 	t.Parallel()
 	s := NewServer(ServerOptions{Version: "1.0.0"})
@@ -348,15 +341,6 @@ func TestVersion_ReturnsVersion(t *testing.T) {
 	t.Parallel()
 	s := NewServer(ServerOptions{Version: "3.0.1"})
 	assert.Equal(t, "3.0.1", s.Version())
-}
-
-func TestServer_FieldsInjected(t *testing.T) {
-	t.Parallel()
-	var buf bytes.Buffer
-	s := &Server{stdin: strings.NewReader(""), stdout: &buf, version: "test"}
-	assert.Equal(t, "test", s.version)
-	assert.NotNil(t, s.stdin)
-	assert.Equal(t, &buf, s.stdout)
 }
 
 // ---------------------------------------------------------------------------
@@ -1287,15 +1271,4 @@ func TestJSONRPCErrorCodes_Table(t *testing.T) {
 			assert.Equal(t, tc.msg, e.Message)
 		})
 	}
-}
-
-// ---------------------------------------------------------------------------
-// Tier constants
-// ---------------------------------------------------------------------------
-
-func TestTierConstants(t *testing.T) {
-	t.Parallel()
-	assert.Equal(t, 1, tierCore)
-	assert.Equal(t, 2, tierUseful)
-	assert.Equal(t, 3, tierAdmin)
 }

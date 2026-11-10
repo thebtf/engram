@@ -13,4 +13,5 @@ func TestBoundedAdditionalContextCapsUTF8WithoutSplittingRune(t *testing.T) {
 	bounded := BoundedAdditionalContext(value)
 	require.LessOrEqual(t, len(bounded), MaxAdditionalContextBytes)
 	require.True(t, utf8.ValidString(bounded))
+	require.Equal(t, strings.Repeat("x", MaxAdditionalContextBytes-1), bounded)
 }
