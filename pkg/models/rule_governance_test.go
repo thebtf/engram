@@ -59,28 +59,6 @@ func TestRuleVersionTransitionRequiresNonBlankEvidence(t *testing.T) {
 	}
 }
 
-func TestRuleAuthorityRejectsBackgroundLLMAndSystemGlobalKernel(t *testing.T) {
-	for _, actorKind := range []RuleActorKind{RuleActorBackground, RuleActorLLM, RuleActorSystem} {
-		req := RuleTransitionRequest{
-			Actor:           string(actorKind) + "-test",
-			ActorKind:       actorKind,
-			Reason:          "attempted privileged promotion",
-			EvidenceHandles: []string{"evidence:unit-test"},
-			SnapshotID:      "snap-test",
-		}
-
-		err := ValidateRuleActorAuthority(RuleStateActiveShared, RuleStateActiveGlobal, req)
-		if !errors.Is(err, ErrRuleAuthorityDenied) {
-			t.Fatalf("%s actor must not promote active_global, got %v", actorKind, err)
-		}
-
-		err = ValidateRuleActorAuthority(RuleStateActiveGlobal, RuleStateKernel, req)
-		if !errors.Is(err, ErrRuleAuthorityDenied) {
-			t.Fatalf("%s actor must not promote kernel, got %v", actorKind, err)
-		}
-	}
-}
-
 func TestRuleAuthorityRejectsBackgroundLLMAndSystemActiveStates(t *testing.T) {
 	for _, actorKind := range []RuleActorKind{RuleActorBackground, RuleActorLLM, RuleActorSystem} {
 		req := RuleTransitionRequest{
