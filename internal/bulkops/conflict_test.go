@@ -40,7 +40,6 @@ func TestEC_F3_AdminGate_NoConflictCheck(t *testing.T) {
 // TestEC_F3_ErrRollbackConflict_IsDistinct verifies the sentinel error is well-formed
 // and distinct from other rollback errors.
 func TestEC_F3_ErrRollbackConflict_IsDistinct(t *testing.T) {
-	assert.ErrorIs(t, ErrRollbackConflict, ErrRollbackConflict)
 	assert.NotErrorIs(t, ErrRollbackConflict, ErrAdminRequired)
 	assert.NotErrorIs(t, ErrRollbackConflict, ErrSnapshotNotRollbackable)
 	assert.Equal(t, "rollback_conflict", ErrRollbackConflict.Error())
