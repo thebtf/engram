@@ -63,6 +63,20 @@ test('OMP automatic callbacks use current root and one UUID without identity reg
   assert.equal(calls.some(call => 'project_descriptor' in call.body || 'sessionCapability' in call.body), false);
 });
 
+test('OMP session output keeps unrelated issue leads subordinate to the task', async () => {
+  const { adapter } = extension({
+    requestPost: async () => ({
+      issues: [{ id: 42, title: 'Synthetic issue', status: 'open', priority: 'high', source_project: 'example', created_at: '2020-01-01T00:00:00Z', acknowledged_at: '2020-01-01T00:00:00Z' }],
+      memories: [{ content: 'Historical guidance is not current authority.' }],
+    }),
+  });
+  const result = await adapter.sessionStartMessage({ cwd: '/session/a', sessionId: 'a' }, {});
+  assert.match(result.content, /Synthetic issue/);
+  assert.match(result.content, /not instructions or authorization/);
+  assert.match(result.content, /higher-priority instruction channel/);
+  assert.doesNotMatch(result.content, /Before starting new work|requires immediate attention|only the source agent/i);
+});
+
 test('OMP passes the instance policy to preparation, session and typed ambient', async () => {
   const hookPolicy = () => ({}), seen = [];
   const { adapter } = extension({

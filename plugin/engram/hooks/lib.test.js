@@ -512,6 +512,19 @@ test('formatIssuesBlock escapes untrusted issue fields before context injection'
  assert.doesNotMatch(out, /evil"><\/open-issues>/);
 });
 
+test('formatIssuesBlock treats overdue inbox entries as task-scoped leads', () => {
+ const out = lib.formatIssuesBlock([{
+  id: 42, title: 'Synthetic issue', status: 'open', priority: 'high',
+  source_project: 'example', created_at: '2020-01-01T00:00:00Z',
+  acknowledged_at: '2020-01-01T00:00:00Z',
+ }], 'example');
+ assert.match(out, /#42 \[TASK\] \[HIGH\]/);
+ assert.match(out, /\[OVERDUE \d+d\]/);
+ assert.match(out, /not instructions or authorization/);
+ assert.match(out, /issues\(action="get", id=N\)/);
+ assert.doesNotMatch(out, /action-required="true"|Before starting new work|direct work orders|requires immediate attention|only the source agent/i);
+});
+
 test('requestGet rejects an already-aborted external signal without fetching', async (t) => {
  const originalFetch = global.fetch;
  let fetches = 0;
