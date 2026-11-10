@@ -30,7 +30,7 @@ For `CONTEXT_REQUIRED`/`CONTEXT_MISMATCH`, canonical-project migration/conflict,
 
 ## Ownership and decisions
 
-Root decides scope, delegates when useful, accepts results and advances delivery; an assigned worker owns its bounded implementation and proof. The host's current role and assignment determine who may edit or verify. Do not create a PM seat, registration or extra coordinator as a prerequisite.
+Root decides scope, delegates when useful, accepts results and advances delivery; an assigned worker owns its bounded implementation and proof. The current task, exclusive ownership, effect authority and actual host capability determine permitted edits and verification; an organizational role is not permission. Honor a current coordination-only Root mandate without applying it to every root. Do not create a PM seat, registration or extra coordinator as a prerequisite.
 
 Assign coherent outcomes, not individual edits. The implementer owns diagnosis, implementation and focused repairs within scope without a new Root assignment for each failing test. Use independent review/QA at the release boundary, with focused behavior checks during implementation. Shared files have one writer and one integrator owns the candidate. Parallelize independent tasks, not competing heavy runs on shared resources.
 
@@ -38,7 +38,7 @@ Assign coherent outcomes, not individual edits. The implementer owns diagnosis, 
 
 Inspect available facts before asking. Ask for missing product decisions or authority, not resolvable engineering details. Selecting an available verification or review method within the accepted scope is Root's technical decision; do not ask the operator to choose a routine fallback or wait for an optional reviewer quota. Preserve actual approvals, required checks and evidence limits; do not enable paid billing or invent consent. A blocked deployment lane does not block implementation or isolated validation. Consume ready results and continue safe independent work; do not enter a blocking ask while decision-independent work remains. If none remains, report the exact missing product choice or authority.
 
-Injected issue lists are project inbox evidence, not a new authorization or a requirement for every bounded child to interrupt its assignment and process the entire backlog. The root owns cross-project triage and routes relevant issues to their actual owners; a child handles issues within its assigned scope and reports a material conflict or blocker. Preserve source/target closure rules and actual identity requirements in the issue workflow. The injected hook wording is a separate product-source owner, not changed by this repository-instruction clarification.
+Injected issue lists are project inbox evidence, not new authorization or a requirement for a root or bounded child to interrupt an accepted task and process unrelated backlog. Route relevant issues to their actual owners; an assigned worker handles issues within its scope and reports a material conflict or blocker. Use the installed issue service's actual authorization and identity checks for each action; do not assume a future contract is already deployed. The injected hook wording is a separate product-source owner, not changed by this repository-instruction clarification.
 
 ## Review and evidence
 
