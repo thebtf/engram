@@ -31,7 +31,7 @@ func TestProjectIdentityV3Migration162(t *testing.T) {
 		require.NoError(t, db.Raw(`
 			SELECT data_type, is_nullable
 			FROM information_schema.columns
-			WHERE table_schema = 'public' AND table_name = 'projects' AND column_name = ?
+			WHERE table_schema = current_schema() AND table_name = 'projects' AND column_name = ?
 		`, column).Row().Scan(&actualType, &nullable))
 		require.Equal(t, dataType, actualType, "%s data type", column)
 		require.Equal(t, "YES", nullable, "%s must remain additive and nullable", column)
@@ -41,7 +41,7 @@ func TestProjectIdentityV3Migration162(t *testing.T) {
 		var count int
 		require.NoError(t, db.Raw(`
 			SELECT COUNT(*) FROM information_schema.tables
-			WHERE table_schema = 'public' AND table_name = ?
+			WHERE table_schema = current_schema() AND table_name = ?
 		`, table).Scan(&count).Error)
 		require.Equal(t, 1, count, "%s must exist", table)
 	}
@@ -59,7 +59,7 @@ func TestProjectIdentityV3Migration162(t *testing.T) {
 		"idx_projects_anchor_project_id": "where (anchor_project_id is not null)",
 	} {
 		var definition string
-		require.NoError(t, db.Raw(`SELECT indexdef FROM pg_indexes WHERE indexname = ?`, index).Row().Scan(&definition))
+		require.NoError(t, db.Raw(`SELECT indexdef FROM pg_indexes WHERE schemaname = current_schema() AND indexname = ?`, index).Row().Scan(&definition))
 		require.Contains(t, strings.ToLower(definition), predicate, "%s must be partial", index)
 	}
 
@@ -83,7 +83,7 @@ func TestProjectIdentityV3Migration162(t *testing.T) {
 			  ON ccu.constraint_catalog = tc.constraint_catalog
 			 AND ccu.constraint_schema = tc.constraint_schema
 			 AND ccu.constraint_name = tc.constraint_name
-			WHERE tc.table_schema = 'public'
+			WHERE tc.table_schema = current_schema()
 			  AND tc.table_name = ?
 			  AND tc.constraint_name = ?
 			  AND tc.constraint_type = 'FOREIGN KEY'

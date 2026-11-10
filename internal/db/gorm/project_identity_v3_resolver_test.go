@@ -180,7 +180,7 @@ func TestProjectIdentityV3ResolverStoreAuthorizationRedirectAndAudit(t *testing.
 	var sensitiveColumns int
 	require.NoError(t, db.Raw(`
 		SELECT COUNT(*) FROM information_schema.columns
-		WHERE table_schema = 'public' AND table_name = 'project_resolution_attempts'
+		WHERE table_schema = current_schema() AND table_name = 'project_resolution_attempts'
 		  AND column_name IN ('descriptor', 'authorization', 'target_reference', 'raw_payload', 'path', 'credential', 'project_key')
 	`).Scan(&sensitiveColumns).Error)
 	require.Zero(t, sensitiveColumns, "resolution-attempt storage must not retain raw/private inputs")

@@ -34,7 +34,7 @@ func TestMigrations_AccessMilestone(t *testing.T) {
 		require.NoError(t, db.Raw(`
 			SELECT COUNT(*)
 			FROM information_schema.columns
-			WHERE table_schema = 'public'
+			WHERE table_schema = current_schema()
 			  AND table_name = ?
 			  AND column_name = ?
 		`, tc.table, tc.column).Scan(&count).Error)
@@ -51,7 +51,7 @@ func TestMigrations_AccessMilestone(t *testing.T) {
 		require.NoError(t, db.Raw(`
 			SELECT COUNT(*)
 			FROM pg_indexes
-			WHERE schemaname = 'public'
+			WHERE schemaname = current_schema()
 			  AND indexname = ?
 		`, indexName).Scan(&count).Error)
 		require.Equalf(t, 1, count, "index %s must exist", indexName)
