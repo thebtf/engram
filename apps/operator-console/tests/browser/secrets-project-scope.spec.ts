@@ -49,6 +49,108 @@ test('secrets reveal uses project scope when credential names collide', async ({
   expect(pageErrors).toEqual([])
 })
 
+for (const clipboard of ['unavailable', 'rejected'] as const) {
+  test(`Vault copy reports ${clipboard} clipboard without claiming success`, async ({ page }) => {
+    await page.addInitScript((mode) => {
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: mode === 'unavailable' ? undefined : { writeText: async () => { throw new Error('denied') } },
+      })
+      document.execCommand = () => false
+    }, clipboard)
+    await page.goto('/secrets')
+    const row = page.getByTestId('secret-row-2')
+    await row.click()
+    await expect(row).toHaveClass(/open/)
+    await page.getByTestId('secret-reveal-2').click()
+    await expect(row.getByText('beta-secret-value')).toBeVisible()
+    await row.locator('.reveal button').first().click()
+    expect(await row.locator('.reveal button').first().locator('svg rect').count()).toBe(1)
+    await expect(row.locator('.reveal [role="alert"]')).toBeVisible()
+    await expect(row.getByText('beta-secret-value')).toBeVisible()
+  })
+}
+for (const clipboard of ['unavailable', 'rejected'] as const) {
+  test(`Vault copies the full value with DOM fallback when clipboard is ${clipboard}`, async ({ page }) => {
+    const sentinel = 'synthetic-fallback-value-'.repeat(80) + 'END'
+    await page.addInitScript((mode) => {
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: mode === 'unavailable' ? undefined : { writeText: async () => { throw new Error('denied') } },
+      })
+      document.addEventListener('copy', (event) => {
+        const input = document.activeElement as HTMLTextAreaElement
+        const selected = input.value.slice(input.selectionStart, input.selectionEnd)
+        document.documentElement.dataset.copiedSentinel = selected
+        event.clipboardData?.setData('text/plain', selected)
+        event.preventDefault()
+      })
+    }, clipboard)
+    await page.route('**/api/vault/credentials/shared-token?**', route => route.fulfill({
+      json: { id: 2, name: 'shared-token', project_id: betaProject, scope: 'project', value: sentinel },
+    }))
+    await page.goto('/secrets')
+    const row = page.getByTestId('secret-row-2')
+    await page.getByTestId('secret-reveal-2').click()
+    await expect(row.locator('.reveal code')).toHaveText(sentinel)
+    await row.locator('.reveal button').first().click()
+    expect(await page.evaluate(() => document.documentElement.dataset.copiedSentinel)).toBe(sentinel)
+    await expect(row.locator('.reveal button').first().locator('svg rect')).toHaveCount(0)
+    await expect(row.locator('.reveal [role="alert"]')).toHaveCount(0)
+    await expect(row.locator('.reveal textarea')).toHaveCount(0)
+  })
+}
+
+
+test('Vault reveal controls do not toggle the credential row', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async () => { } } })
+  })
+  await page.goto('/secrets')
+  const row = page.getByTestId('secret-row-2')
+  await row.click()
+  await expect(row).toHaveClass(/open/)
+  await page.getByTestId('secret-reveal-2').click()
+  await row.locator('.reveal button').first().click()
+  await expect(row).toHaveClass(/open/)
+  await row.locator('.reveal button').last().click()
+  await expect(row).toHaveClass(/open/)
+})
+
+test('Vault long revealed value remains accessible and selectable until hidden', async ({ page }) => {
+  const sentinel = 'synthetic-vault-value-'.repeat(80) + 'END'
+  await page.route('**/api/vault/credentials/shared-token?**', route => route.fulfill({
+    json: { id: 2, name: 'shared-token', project_id: betaProject, scope: 'project', value: sentinel },
+  }))
+  await page.goto('/secrets')
+  const row = page.getByTestId('secret-row-2')
+  await row.click()
+  await page.getByTestId('secret-reveal-2').click()
+  const value = row.locator('.reveal code')
+  await expect(value).toHaveText(sentinel)
+  expect(await value.evaluate((el) => {
+    const style = getComputedStyle(el)
+    return el.scrollWidth <= el.clientWidth || ['auto', 'scroll'].includes(style.overflowX)
+  })).toBe(true)
+  await value.click()
+  expect(await page.evaluate(() => window.getSelection()?.toString())).toBe(sentinel)
+  await expect(row).toHaveClass(/open/)
+  await row.locator('.reveal button').last().click()
+  await expect(value).toHaveCount(0)
+  await expect(page.getByTestId('secret-reveal-2')).toBeVisible()
+})
+
+test('Vault revealed value automatically hides after its lifetime', async ({ page }) => {
+  await page.clock.install()
+  await page.goto('/secrets')
+  const row = page.getByTestId('secret-row-2')
+  await page.getByTestId('secret-reveal-2').click()
+  await expect(row.getByText('beta-secret-value')).toBeVisible()
+  await page.clock.runFor(30_000)
+  await expect(row.getByText('beta-secret-value')).toHaveCount(0)
+  await expect(page.getByTestId('secret-reveal-2')).toBeVisible()
+})
+
 test('a second browser session deleting the same project credential cannot hide this session’s reveal', async ({ page, browser }) => {
   await page.goto('/secrets')
   const betaRow = page.getByTestId('secret-row-2')

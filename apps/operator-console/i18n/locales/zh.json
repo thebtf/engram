@@ -1751,6 +1751,7 @@
     "revealTitle": "一次性显示 — 值不会保存",
     "revealTimer": "{seconds} 秒后隐藏",
     "copySecret": "复制",
+    "copyFailed": "复制失败。请选中该值并手动复制。",
     "hideSecret": "隐藏"
   },
   "projects": {

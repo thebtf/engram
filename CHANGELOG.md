@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.1.2] - 2026-11-10
+
+- Restore copying the complete revealed Vault credential value in the operator web interface.
+
 ## [7.1.1] - 2026-11-08
 
 Source: PRs #678–#691 and #693, as present in the first-parent release range; #692 is not in that range. This release does not claim Feature012 acceptance.
