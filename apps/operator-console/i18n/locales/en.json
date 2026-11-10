@@ -1782,6 +1782,7 @@
     "revealTitle": "One-shot reveal — value is not stored",
     "revealTimer": "Hides in {seconds}s",
     "copySecret": "Copy",
+    "copyFailed": "Could not copy. Select the value to copy it manually.",
     "hideSecret": "Hide"
   },
   "projects": {
