@@ -506,9 +506,9 @@ func TestCodeIndexUpload_EmptySessionSafetyGuard(t *testing.T) {
 	require.Equal(t, int64(2), count, "existing chunk must not be swept by un-negotiated upload")
 }
 
-// TestCodeIndexUpload_MixedSessionRejects verifies that a mid-stream project_id
+// TestCodeIndexUpload_ChangedProjectRejects verifies that a mid-stream project_id
 // change returns InvalidArgument.
-func TestCodeIndexUpload_MixedSessionRejects(t *testing.T) {
+func TestCodeIndexUpload_ChangedProjectRejects(t *testing.T) {
 	db, cleanup := testCodeIndexDB(t)
 	defer cleanup()
 
