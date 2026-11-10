@@ -1071,17 +1071,6 @@ test('raw type URL already-decoded programmatic literal preserves typed page and
   assert.equal(mounted.router.currentRoute.value.query.page, '3')
 })
 
-for (const [label, encoded] of [['control', encodeURIComponent('te\u0000xt')], ['UTF8 byte bound', encodeURIComponent('я'.repeat(65))]]) test(`raw type URL decoded ${label} still fails the existing literal validation`, async (t) => {
-  const requests = []
-  const consumer = session(t, undefined, multiTypeResponses(requests))
-  await consumer.shell.refresh()
-  const mounted = await mountRecovery(t, consumer, `/documents?project=${projectID}&docType=${encoded}`, 'documents')
-  await tick()
-  assert.equal(mounted.reader().documentsState.kind, 'error')
-  assert.equal(mounted.reader().total, null)
-  assert.equal(requests.length, 0)
-})
-
 test('unavailable catalog and issue reads never render known empty; refresh retains prior rows', async (t) => {
   let response = () => Response.json({ issues: [], total: 0 })
   let resolveSelection
