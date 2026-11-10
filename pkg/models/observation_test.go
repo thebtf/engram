@@ -217,10 +217,12 @@ func TestParsedObservation_FileMtimesSerializable(t *testing.T) {
 		Title:      "Mtime check",
 		FileMtimes: map[string]int64{"handler.go": 9876543210},
 	}
-	data, err := json.Marshal(obs.FileMtimes)
+	stored := obs.ToStoredObservation()
+	value, err := stored.FileMtimes.Value()
 	require.NoError(t, err)
-	assert.Contains(t, string(data), "handler.go")
-	assert.Contains(t, string(data), "9876543210")
+	var restored JSONInt64Map
+	require.NoError(t, restored.Scan(value))
+	assert.Equal(t, JSONInt64Map(obs.FileMtimes), restored)
 }
 
 // ---------------------------------------------------------------------------
