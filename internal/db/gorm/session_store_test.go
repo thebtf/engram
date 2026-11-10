@@ -569,16 +569,20 @@ func TestSessionStore_GetLearningCurve(t *testing.T) {
 	_, err := ss.CreateSDKSession(ctx, "sst-curve-01", project, "")
 	require.NoError(t, err)
 	require.NoError(t, ss.UpdateSessionOutcome(ctx, "sst-curve-01", "success", "done"))
+	require.NoError(t, db.Model(&SDKSession{}).Where("claude_session_id = ?", "sst-curve-01").Update("outcome_recorded_at", gorm.Expr("NOW()")).Error)
 
 	rows, err := ss.GetLearningCurve(ctx, 30, "")
 	require.NoError(t, err)
-	// Result may be empty if today's row hasn't accumulated yet, but no error.
-	_ = rows
+	require.Len(t, rows, 1)
+	assert.NotEmpty(t, rows[0].Date)
+	assert.EqualValues(t, 1, rows[0].Sessions)
+	assert.EqualValues(t, 1, rows[0].Successes)
+	assert.Equal(t, 1.0, rows[0].OutcomeRate)
 
-	// Negative days defaults to 30.
+	// Negative days defaults to 30, and the project filter keeps the same row.
 	rows2, err := ss.GetLearningCurve(ctx, -1, project)
 	require.NoError(t, err)
-	_ = rows2
+	assert.Equal(t, rows, rows2)
 }
 
 // TestResolveClaudeSessionID_NotFound verifies the error wraps ErrSessionNotFound.
