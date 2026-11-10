@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.1.5] - 2026-11-11
+
+- Retry eligible incomplete PostgreSQL handshakes and joined fallback errors while preserving refusal for permanent authentication and configuration errors (PR #765). This does not establish full outage recovery or repair every session.
+- Prevent conflicting explicit or global scope evidence from being overridden by foreign-key inheritance; affected unsafe old plans require a fresh preflight, while unchanged mappings remain compatible (PR #767).
+
 ## [7.1.4] - 2026-11-10
 
 - Correct operator project selection and alias-aware Rules reads and atomic collection updates; retain native memory mutation bindings.
