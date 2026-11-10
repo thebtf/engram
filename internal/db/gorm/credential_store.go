@@ -164,6 +164,21 @@ type CredentialListBinding struct {
 	UnavailableReason   string
 }
 
+func resolvedCredentialRetainedWitness(verifier *ProjectConsolidationStore, credential *models.Credential, member *ConsolidationMembership) bool {
+	if verifier == nil || verifier.vault == nil || credential == nil || member == nil ||
+		credential.Scope != "project" || !projectidentity.ValidProjectID(credential.Project) ||
+		member.Table != "credentials" || member.ProjectID == nil || *member.ProjectID != credential.Project {
+		return false
+	}
+	path, key, err := verifier.unresolvedMembershipMetadata(member)
+	var id int64
+	if err != nil || len(path) != 1 || path[0] != "project" || len(key) != 1 ||
+		json.Unmarshal(key["id"], &id) != nil || id != credential.ID {
+		return false
+	}
+	return verifier.validateLoadedMembershipEvidence(*member, nil, make(map[string]bool)) == nil
+}
+
 // ListBindings validates stored membership envelopes without auditing native payloads.
 func (s *CredentialStore) ListBindings(ctx context.Context, credentials []*models.Credential, vault *crypto.Vault) (map[int64]CredentialListBinding, error) {
 	bindings := make(map[int64]CredentialListBinding)
@@ -202,7 +217,8 @@ func (s *CredentialStore) ListBindings(ctx context.Context, credentials []*model
 			if credential != nil && credential.Scope == "project" && credential.Project != "" && row.PlanFingerprint != "" &&
 				json.Unmarshal(row.FieldPath, &path) == nil && len(path) == 1 && path[0] == "project" &&
 				json.Unmarshal(row.RowKey, &key) == nil && len(key) == 1 && json.Unmarshal(key["id"], &id) == nil && id == credential.ID {
-				if row.ProjectID != nil && row.UnresolvedReference == "" && *row.ProjectID == credential.Project && projectidentity.ValidProjectID(*row.ProjectID) {
+				if row.ProjectID != nil && *row.ProjectID == credential.Project && projectidentity.ValidProjectID(*row.ProjectID) &&
+					(row.UnresolvedReference == "" || resolvedCredentialRetainedWitness(verifier, credential, &row.ConsolidationMembership)) {
 					binding = CredentialListBinding{ProjectID: *row.ProjectID}
 				} else if row.ProjectID == nil && vault != nil {
 					if _, _, err := verifier.unresolvedMembershipMetadata(&row.ConsolidationMembership); err == nil {
