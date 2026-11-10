@@ -139,7 +139,7 @@ test('Access 403 is forbidden with a distinct localized next action', async ({ p
  await expect(page.locator('.access-page')).toHaveAttribute('data-state', 'forbidden')
  const guard = page.getByRole('alert')
  await expect(guard).not.toContainText('does not have access')
- await expect(guard.locator('p')).not.toHaveText('')
+ await expect(guard.locator('p')).toHaveText('Эта поверхность возвращает 403, пока запрос не идёт из браузерной admin-сессии.')
  await expectShellReady(page)
  await evidenceShot(page, 'access-forbidden-1280.png')
 })
@@ -284,16 +284,18 @@ test('locale switch drives html lang and localized Settings copy', async ({ page
 
  await dialog.getByRole('button', { name: 'English' }).click()
  await expect(page.locator('html')).toHaveAttribute('lang', 'en')
+ await expect(page.getByRole('dialog', { name: 'Server settings' })).toBeVisible()
 
  await page.getByRole('dialog').getByRole('button', { name: '中文' }).click()
  await expect(page.locator('html')).toHaveAttribute('lang', 'zh-Hans')
+ await expect(page.getByRole('dialog', { name: '服务器设置' })).toBeVisible()
 
  await page.getByRole('dialog').getByRole('button', { name: 'Русский' }).click()
  await expect(page.locator('html')).toHaveAttribute('lang', 'ru')
  await expect(dialog).toBeVisible()
 })
 
-test('Settings stays reachable at 200% zoom without hidden focus targets or horizontal overflow', async ({ page }) => {
+test('Settings stays reachable at a narrow viewport without hidden focus targets or horizontal overflow', async ({ page }) => {
  // 640x512 logical viewport approximates a 1280x1024 desktop at 200% browser zoom.
  await page.setViewportSize({ width: 640, height: 512 })
  await page.goto('/settings')

@@ -1,0 +1,12 @@
+{
+  "positive": [
+    "Audit all tests one by one and explain why each exists; remove or merge the useless ones.",
+    "Составь чеклист всех тестов и последовательно проверь, какие из них полезны.",
+    "Continue the test-value audit from the next pending checklist entry."
+  ],
+  "near_miss": [
+    "Write a regression test for this one bug.",
+    "Debug this failing test without auditing the corpus.",
+    "Review this pull request for security issues."
+  ]
+}
