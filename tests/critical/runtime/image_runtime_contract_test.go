@@ -1837,6 +1837,81 @@ func createDirectoryLink(t *testing.T, target, link string) {
 	}
 }
 
+func TestPublisherIdentityDeterministic(t *testing.T) {
+	repo := repositoryRoot(t)
+	t.Run("artifact identity bridge", func(t *testing.T) { testArtifactBridgeMatrix(t, repo) })
+	t.Run("registry identity planner", func(t *testing.T) { testRegistryCASMatrix(t, repo) })
+	t.Run("six existing destinations are verified noops", func(t *testing.T) {
+		commit, version := strings.Repeat("c", 40), "v6.43.0-rc.1"
+		root := t.TempDir()
+		payload := filepath.Join(root, "payload")
+		if err := os.Mkdir(payload, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		source := writeReleasePayloadFixture(t, commit, version)
+		for _, name := range []string{"final-image-set.json", "release-bundle.json", "server.tar", "operator-console.tar", "postgres.tar", "server.trivy.sarif", "operator-console.trivy.sarif", "postgres.trivy.sarif"} {
+			data, err := os.ReadFile(filepath.Join(source, name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(payload, name), data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		refs := map[string]any{}
+		for _, item := range []struct{ name, repository string }{
+			{"server", "ghcr.io/thebtf/engram"}, {"operator_console", "ghcr.io/thebtf/engram-operator-console"}, {"postgres", "ghcr.io/thebtf/engram-postgres"},
+		} {
+			_, manifestID, configID := testIdentityTar(t, item.name)
+			for _, tag := range []string{version, "sha-" + commit} {
+				refs[item.repository+":"+tag] = map[string]string{"config_digest": configID, "manifest_digest": manifestID}
+			}
+		}
+		registry := filepath.Join(root, "registry.json")
+		writeJSONAt(t, registry, refs)
+		bin := filepath.Join(root, "bin")
+		if err := os.Mkdir(bin, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		writePublishedScanFixtureCommand(t, bin, "docker", `
+param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ToolArguments)
+if ($ToolArguments[0] -eq 'image' -and $ToolArguments[1] -eq 'inspect') {
+  $id = 'sha256:' + ($ToolArguments[2] -split ':')[-1]
+  @{ Id = $id } | ConvertTo-Json -Compress; exit 0
+}
+if ($ToolArguments[0] -eq 'buildx' -and $ToolArguments[1] -eq 'imagetools') {
+  $refs = Get-Content -Raw -LiteralPath $env:MOCK_REGISTRY | ConvertFrom-Json
+  $entry = $refs.PSObject.Properties[$ToolArguments[3]].Value
+  if ($ToolArguments -contains '--raw') { @{ config = @{ digest = $entry.config_digest } } | ConvertTo-Json -Compress }
+  else { @{ digest = $entry.manifest_digest } | ConvertTo-Json -Compress }
+  exit 0
+}
+'write or unexpected docker operation' | Set-Content -LiteralPath $env:MOCK_WRITE
+exit 97
+`)
+		out := filepath.Join(root, "publication.json")
+		args := []string{"-NoProfile", "-File", filepath.Join(repo, "scripts", "production-gates", "build-and-scan-images.ps1"), "-Mode", "Publish", "-ManifestPath", filepath.Join(payload, "final-image-set.json"), "-ReleaseVersion", version, "-ExpectedSha", commit, "-TrustedOutputRoot", root, "-OutputPath", out}
+		cmd := exec.Command("pwsh", args...)
+		cmd.Env = append(os.Environ(), "RUNNER_TEMP="+root, "MOCK_REGISTRY="+registry, "MOCK_WRITE="+filepath.Join(root, "write"), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("mock publication: %v\n%s", err, output)
+		}
+		result := readJSONMap(t, out)
+		if result["status"] != "PASS" || len(result["destinations"].([]any)) != 6 {
+			t.Fatalf("incomplete noop evidence: %v", result)
+		}
+		for _, v := range result["destinations"].([]any) {
+			if v.(map[string]any)["action"] != "verified-noop" {
+				t.Fatalf("not noop: %v", v)
+			}
+		}
+		if _, err := os.Stat(filepath.Join(root, "write")); !os.IsNotExist(err) {
+			t.Fatal("registry write attempted")
+		}
+	})
+}
+
 func testArtifactBridgeMatrix(t *testing.T, repo string) {
 	t.Helper()
 	const (
@@ -1978,6 +2053,15 @@ func testArtifactBridgeMatrix(t *testing.T, repo string) {
 		mutate func(string)
 	}{
 		{name: "exact regular-file envelope", pass: true},
+		{name: "wrong scanned identity", mutate: func(root string) {
+			manifest := readJSONMap(t, filepath.Join(root, "final-image-set.json"))
+			manifest["image_ids"].(map[string]any)["server"] = "sha256:" + strings.Repeat("f", 64)
+			writeJSONAt(t, filepath.Join(root, "final-image-set.json"), manifest)
+			updatePayloadManifestHash(t, root)
+			bundle := readJSONMap(t, filepath.Join(root, "release-bundle.json"))
+			bundle["images"].([]any)[0].(map[string]any)["image_id"] = "sha256:" + strings.Repeat("f", 64)
+			writeJSONAt(t, filepath.Join(root, "release-bundle.json"), bundle)
+		}},
 		{name: "extra file", mutate: func(root string) { _ = os.WriteFile(filepath.Join(root, "extra.txt"), []byte("extra"), 0o600) }},
 		{name: "archive checksum mismatch", mutate: func(root string) { _ = os.WriteFile(filepath.Join(root, "server.tar"), []byte("changed"), 0o600) }},
 		{name: "path traversal in bundle", mutate: func(root string) {
@@ -2090,6 +2174,23 @@ func testArtifactBridgeMatrix(t *testing.T, repo string) {
 				"-ReleaseVersion", "v6.43.0-rc.1")
 		})
 	}
+	t.Run("payload classic config store", func(t *testing.T) {
+		root := writeReleasePayloadFixture(t, sha, "v6.43.0-rc.1")
+		data, configID := testClassicImageTar(t)
+		if err := os.WriteFile(filepath.Join(root, "server.tar"), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		manifest := readJSONMap(t, filepath.Join(root, "final-image-set.json"))
+		manifest["image_ids"].(map[string]any)["server"] = configID
+		writeJSONAt(t, filepath.Join(root, "final-image-set.json"), manifest)
+		updatePayloadManifestHash(t, root)
+		updatePayloadArchiveHash(t, root, 0, data)
+		bundlePath := filepath.Join(root, "release-bundle.json")
+		bundle := readJSONMap(t, bundlePath)
+		bundle["images"].([]any)[0].(map[string]any)["image_id"] = configID
+		writeJSONAt(t, bundlePath, bundle)
+		runImageGate(t, repo, true, "-Mode", "ValidatePayload", "-PayloadRoot", root, "-ExpectedSha", sha, "-ReleaseVersion", "v6.43.0-rc.1")
+	})
 	t.Run("payload immutable commit identity", func(t *testing.T) {
 		version := "sha-" + sha
 		root := writeReleasePayloadFixture(t, sha, version)
@@ -2139,6 +2240,12 @@ func testArtifactBridgeMatrix(t *testing.T, repo string) {
 				writeJSONAt(t, path, record)
 			}
 		}},
+		{name: "wrong destination manifest digest", mutate: func(root string) {
+			path := filepath.Join(root, "publication-result.json")
+			record := readJSONMap(t, path)
+			record["destinations"].([]any)[0].(map[string]any)["manifest_digest"] = "sha256:" + strings.Repeat("f", 64)
+			writeJSONAt(t, path, record)
+		}},
 		{name: "wrong destination image digest", mutate: func(root string) {
 			path := filepath.Join(root, "publication-result.json")
 			record := readJSONMap(t, path)
@@ -2172,10 +2279,15 @@ func testArtifactBridgeMatrix(t *testing.T, repo string) {
 func writeReleasePayloadFixture(t *testing.T, commit, version string) string {
 	t.Helper()
 	root := t.TempDir()
-	ids := map[string]string{
-		"server":           "sha256:" + strings.Repeat("1", 64),
-		"operator_console": "sha256:" + strings.Repeat("2", 64),
-		"postgres":         "sha256:" + strings.Repeat("3", 64),
+	ids := make(map[string]string)
+	archives := make(map[string][]byte)
+	for _, name := range []string{"server", "operator_console", "postgres"} {
+		data, manifestID, configID := testIdentityTar(t, name)
+		archives[name] = data
+		ids[name] = configID
+		if name == "server" {
+			ids[name] = manifestID
+		}
 	}
 	sarifFiles := map[string]string{
 		"server":           "server.trivy.sarif",
@@ -2235,7 +2347,7 @@ func writeReleasePayloadFixture(t *testing.T, commit, version string) string {
 		{"operator_console", "operator-console.tar", ids["operator_console"]},
 		{"postgres", "postgres.tar", ids["postgres"]},
 	} {
-		data := testTarArchive(t, image.name)
+		data := archives[image.name]
 		path := filepath.Join(root, image.archive)
 		if err := os.WriteFile(path, data, 0o600); err != nil {
 			t.Fatal(err)
@@ -2302,12 +2414,17 @@ func writePublicationEvidenceFixture(t *testing.T, repo, commit, version string)
 	manifestDigest := payloadValidation["manifest_sha256"].(string)
 	manifest := readJSONMap(t, filepath.Join(evidenceRoot, "final-image-set.json"))
 	ids := manifest["image_ids"].(map[string]any)
+	identities := make(map[string]map[string]any)
+	for _, value := range payloadValidation["images"].([]any) {
+		image := value.(map[string]any)
+		identities[image["name"].(string)] = image["identity"].(map[string]any)
+	}
 	writeJSONAt(t, filepath.Join(evidenceRoot, "artifact-census.json"), map[string]any{
 		"artifact_count": 1,
 	})
 	preflightDestinations := make([]map[string]any, 0, 6)
 	publicationDestinations := make([]map[string]any, 0, 6)
-	for index, image := range []struct {
+	for _, image := range []struct {
 		name       string
 		repository string
 		digest     string
@@ -2318,13 +2435,16 @@ func writePublicationEvidenceFixture(t *testing.T, repo, commit, version string)
 	} {
 		for _, tag := range []string{version, "sha-" + commit} {
 			reference := image.repository + ":" + tag
+			identity := identities[image.name]
 			preflightDestinations = append(preflightDestinations, map[string]any{
-				"image": image.name, "reference": reference, "config_digest": image.digest,
+				"image": image.name, "reference": reference, "image_id": image.digest,
+				"config_digest": identity["config_digest"], "expected_manifest_digest": identity["manifest_digest"],
 				"action": "inspect-after-login", "manifest_digest": nil,
 			})
 			publicationDestinations = append(publicationDestinations, map[string]any{
-				"image": image.name, "reference": reference, "config_digest": image.digest,
-				"action": "pushed", "manifest_digest": fmt.Sprintf("sha256:%064x", index+1),
+				"image": image.name, "reference": reference, "image_id": image.digest,
+				"config_digest": identity["config_digest"], "expected_manifest_digest": identity["manifest_digest"],
+				"action": "verified-noop", "manifest_digest": identity["manifest_digest"],
 			})
 		}
 	}
@@ -2362,6 +2482,76 @@ func publicationEvidenceCredentialPath(evidenceRoot string) string {
 func sha256Hex(data []byte) string {
 	sum := sha256.Sum256(data)
 	return fmt.Sprintf("%x", sum)
+}
+
+func testClassicImageTar(t *testing.T) ([]byte, string) {
+	t.Helper()
+	config := []byte(`{"architecture":"amd64","name":"legacy"}`)
+	id := "sha256:" + sha256Hex(config)
+	manifest, err := json.Marshal([]any{map[string]any{"Config": id[7:] + ".json", "RepoTags": []string{"engram-release-payload-server:" + id[7:]}, "Layers": []any{}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	w := tar.NewWriter(&buf)
+	for _, entry := range []struct {
+		name string
+		data []byte
+	}{{"manifest.json", manifest}, {id[7:] + ".json", config}} {
+		if err := w.WriteHeader(&tar.Header{Name: entry.name, Mode: 0o600, Size: int64(len(entry.data))}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write(entry.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes(), id
+}
+
+func testIdentityTar(t *testing.T, name string) ([]byte, string, string) {
+	t.Helper()
+	config := []byte(`{"architecture":"amd64","name":"` + name + `"}`)
+	configID := "sha256:" + sha256Hex(config)
+	manifest, err := json.Marshal(map[string]any{"schemaVersion": 2, "config": map[string]any{"digest": configID, "size": len(config)}, "layers": []any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestID := "sha256:" + sha256Hex(manifest)
+	index, err := json.Marshal(map[string]any{"schemaVersion": 2, "manifests": []any{map[string]any{"digest": manifestID, "size": len(manifest)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	imageID := configID
+	if name == "server" {
+		imageID = manifestID
+	}
+	dockerManifest, err := json.Marshal([]any{map[string]any{"Config": "blobs/sha256/" + configID[7:], "RepoTags": []string{"engram-release-payload-" + strings.ReplaceAll(name, "_", "-") + ":" + imageID[7:]}, "Layers": []any{}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	w := tar.NewWriter(&buf)
+	for _, entry := range []struct {
+		name string
+		data []byte
+	}{
+		{"manifest.json", dockerManifest}, {"index.json", index},
+		{"blobs/sha256/" + manifestID[7:], manifest}, {"blobs/sha256/" + configID[7:], config},
+	} {
+		if err := w.WriteHeader(&tar.Header{Name: entry.name, Mode: 0o600, Size: int64(len(entry.data))}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write(entry.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes(), manifestID, configID
 }
 
 func testTarArchive(t *testing.T, name string) []byte {
@@ -2514,14 +2704,22 @@ func testLiveRulesetAPIArray(t *testing.T, repo string) {
 func testRegistryCASMatrix(t *testing.T, repo string) {
 	t.Helper()
 	commit := strings.Repeat("c", 40)
-	ids := map[string]string{
-		"server":           "sha256:" + strings.Repeat("1", 64),
-		"operator_console": "sha256:" + strings.Repeat("2", 64),
-		"postgres":         "sha256:" + strings.Repeat("3", 64),
-	}
-	manifest := writeJSONFixture(t, map[string]any{"source_parent_commit": commit, "image_ids": ids})
 	version := "v6.43.0-rc.1"
-	expectedRefs := expectedPublicationRefs("ghcr.io", "thebtf/engram", version, commit)
+	payloadRoot := writeReleasePayloadFixture(t, commit, version)
+	manifest := filepath.Join(payloadRoot, "final-image-set.json")
+	manifestObject := readJSONMap(t, manifest)
+	ids := map[string]string{}
+	for name, value := range manifestObject["image_ids"].(map[string]any) {
+		ids[name] = value.(string)
+	}
+	expectedRefs := expectedPublicationRefs("ghcr.io", "thebtf/engram", version, commit, ids)
+	configs := map[string]string{}
+	manifests := map[string]string{}
+	for _, name := range []string{"server", "operator_console", "postgres"} {
+		_, manifestID, configID := testIdentityTar(t, name)
+		configs[ids[name]] = configID
+		manifests[ids[name]] = manifestID
+	}
 	t.Run("credential-free plan defers registry inspection", func(t *testing.T) {
 		var requests atomic.Int64
 		registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -2538,7 +2736,7 @@ func testRegistryCASMatrix(t *testing.T, repo string) {
 			t.Fatalf("credential-free publication plan made %d registry requests, want 0", got)
 		}
 		assertDeferredPublicationPlan(t, outputPath,
-			expectedPublicationRefs(registry.URL, "thebtf/engram", version, commit))
+			expectedPublicationRefs(registry.URL, "thebtf/engram", version, commit, ids))
 	})
 
 	t.Run("all destinations absent", func(t *testing.T) {
@@ -2547,20 +2745,42 @@ func testRegistryCASMatrix(t *testing.T, repo string) {
 		runImageGate(t, repo, true,
 			"-Mode", "PlanPublication", "-ManifestPath", manifest, "-ReleaseVersion", version,
 			"-RegistryFixturePath", registry, "-OutputPath", outputPath)
-		assertPublicationPlan(t, outputPath, expectedRefs, 6)
+		configRefs := map[string]string{}
+		for ref, id := range expectedRefs {
+			configRefs[ref] = configs[id]
+		}
+		assertPublicationPlan(t, outputPath, configRefs, 6)
 	})
 
 	t.Run("idempotent exact protected tag", func(t *testing.T) {
 		refs := make(map[string]any)
 		for ref, id := range expectedRefs {
-			refs[ref] = map[string]any{"config_digest": id, "manifest_digest": "sha256:" + strings.Repeat("d", 64)}
+			refs[ref] = map[string]any{"config_digest": configs[id], "manifest_digest": manifests[id]}
 		}
 		registry := writeJSONFixture(t, map[string]any{"refs": refs})
 		outputPath := filepath.Join(t.TempDir(), "plan.json")
 		runImageGate(t, repo, true,
 			"-Mode", "PlanPublication", "-ManifestPath", manifest, "-ReleaseVersion", version,
 			"-RegistryFixturePath", registry, "-OutputPath", outputPath)
-		assertPublicationPlan(t, outputPath, expectedRefs, 0)
+		configRefs := map[string]string{}
+		for ref, id := range expectedRefs {
+			configRefs[ref] = configs[id]
+		}
+		assertPublicationPlan(t, outputPath, configRefs, 0)
+	})
+
+	t.Run("matching config but wrong manifest is refused", func(t *testing.T) {
+		refs := make(map[string]any)
+		for ref, id := range expectedRefs {
+			refs[ref] = map[string]any{"config_digest": configs[id], "manifest_digest": manifests[id]}
+		}
+		for ref, value := range refs {
+			value.(map[string]any)["manifest_digest"] = "sha256:" + strings.Repeat("f", 64)
+			refs[ref] = value
+			break
+		}
+		registry := writeJSONFixture(t, map[string]any{"refs": refs})
+		runImageGate(t, repo, false, "-Mode", "PlanPublication", "-ManifestPath", manifest, "-ReleaseVersion", version, "-RegistryFixturePath", registry)
 	})
 
 	for _, name := range []string{"same release different image", "existing registry mismatch"} {
@@ -2568,7 +2788,7 @@ func testRegistryCASMatrix(t *testing.T, repo string) {
 		t.Run(name, func(t *testing.T) {
 			refs := make(map[string]any)
 			for ref, id := range expectedRefs {
-				refs[ref] = map[string]any{"config_digest": id, "manifest_digest": "sha256:" + strings.Repeat("e", 64)}
+				refs[ref] = map[string]any{"config_digest": configs[id], "manifest_digest": manifests[id]}
 			}
 			for ref := range refs {
 				refs[ref] = map[string]any{"config_digest": "sha256:" + strings.Repeat("f", 64), "manifest_digest": "sha256:" + strings.Repeat("e", 64)}
@@ -2583,16 +2803,20 @@ func testRegistryCASMatrix(t *testing.T, repo string) {
 
 	t.Run("registry inspection failure retains completed evidence", func(t *testing.T) {
 		trustedRoot := t.TempDir()
-		manifestPath := filepath.Join(trustedRoot, "final-image-set.json")
-		manifestData, err := json.Marshal(map[string]any{
-			"status": "PASS", "source_parent_commit": commit, "image_ids": ids,
-		})
-		if err != nil {
+		payload := filepath.Join(trustedRoot, "payload")
+		if err := os.Mkdir(payload, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(manifestPath, manifestData, 0o600); err != nil {
-			t.Fatal(err)
+		for _, name := range []string{"final-image-set.json", "release-bundle.json", "server.tar", "operator-console.tar", "postgres.tar", "server.trivy.sarif", "operator-console.trivy.sarif", "postgres.trivy.sarif"} {
+			data, err := os.ReadFile(filepath.Join(payloadRoot, name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(payload, name), data, 0o600); err != nil {
+				t.Fatal(err)
+			}
 		}
+		manifestPath := filepath.Join(payload, "final-image-set.json")
 		stubDir := filepath.Join(trustedRoot, "bin")
 		if err := os.MkdirAll(stubDir, 0o700); err != nil {
 			t.Fatal(err)
@@ -3091,14 +3315,14 @@ func writeJSONFixture(t *testing.T, value any) string {
 	return path
 }
 
-func expectedPublicationRefs(registry, repository, version, commit string) map[string]string {
+func expectedPublicationRefs(registry, repository, version, commit string, imageIDs map[string]string) map[string]string {
 	ids := []struct {
 		repository string
 		id         string
 	}{
-		{registry + "/" + repository, "sha256:" + strings.Repeat("1", 64)},
-		{registry + "/" + repository + "-operator-console", "sha256:" + strings.Repeat("2", 64)},
-		{registry + "/" + repository + "-postgres", "sha256:" + strings.Repeat("3", 64)},
+		{registry + "/" + repository, imageIDs["server"]},
+		{registry + "/" + repository + "-operator-console", imageIDs["operator_console"]},
+		{registry + "/" + repository + "-postgres", imageIDs["postgres"]},
 	}
 	refs := make(map[string]string, 6)
 	for _, image := range ids {
@@ -3157,6 +3381,7 @@ func assertDeferredPublicationPlan(t *testing.T, path string, expected map[strin
 		RemoteInspection string `json:"remote_inspection"`
 		Destinations     []struct {
 			Reference    string `json:"reference"`
+			ImageID      string `json:"image_id"`
 			ConfigDigest string `json:"config_digest"`
 			Action       string `json:"action"`
 		} `json:"destinations"`
@@ -3177,7 +3402,7 @@ func assertDeferredPublicationPlan(t *testing.T, path string, expected map[strin
 			t.Fatalf("deferred publication plan repeated destination %q", destination.Reference)
 		}
 		seen[destination.Reference] = struct{}{}
-		if destination.ConfigDigest != want {
+		if destination.ImageID != want {
 			t.Fatalf("deferred publication plan changed exact image identity for %s", destination.Reference)
 		}
 		if destination.Action != "inspect-after-login" {
