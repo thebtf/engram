@@ -66,6 +66,87 @@ func TestBrowserCodeContextStore_CatalogDistinguishesPublishedAndInitialTargets(
 	require.NotContains(t, byCheckout, expiredCheckout.CheckoutID)
 }
 
+func TestBrowserCodeContextStore_CatalogConfirmedAliasPreservesAuthority(t *testing.T) {
+	fixture := newBrowserCodeContextFixture(t)
+	ctx := context.Background()
+	primary, alias, foreign := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	for _, id := range []string{primary, alias, foreign} {
+		require.NoError(t, fixture.db.Create(&Project{ID: id}).Error)
+	}
+	require.NoError(t, fixture.db.Model(&UCISource{}).Where("source_id = ?", fixture.source.SourceID).Update("project_id", alias).Error)
+	require.NoError(t, fixture.db.Exec(`INSERT INTO project_consolidation_redirects(selector,session_id,project_id,plan_fingerprint) VALUES (?, '', ?, 'catalog-test')`, alias, primary).Error)
+
+	other, err := NewUCIContextStore(fixture.db).CreateSource(ctx, CreateSourceInput{AuthRealm: fixture.source.AuthRealm, Kind: UCISourceGit, DisplayName: "foreign source"})
+	require.NoError(t, err)
+	require.NoError(t, fixture.db.Model(&UCISource{}).Where("source_id = ?", other.SourceID).Update("project_id", foreign).Error)
+	checkout, err := NewUCIContextStore(fixture.db).RegisterCheckout(ctx, RegisterCheckoutInput{SourceID: other.SourceID, WorkstationID: uuid.NewString(), Kind: UCICheckoutWorkingTree, OwnerPrincipal: browserReadGrantPrincipal(fixture.user.ID), LocatorRef: "file:///foreign/" + uuid.NewString()})
+	require.NoError(t, err)
+	_, err = NewBrowserReadGrantStore(fixture.db).Issue(ctx, BrowserReadGrantIssue{IssuerUserID: fixture.user.ID, IssuerPrincipal: browserReadGrantPrincipal(fixture.user.ID), TargetUserID: fixture.user.ID, SourceID: other.SourceID, CheckoutID: checkout.CheckoutID})
+	require.NoError(t, err)
+	primarySource, err := NewUCIContextStore(fixture.db).CreateSource(ctx, CreateSourceInput{AuthRealm: fixture.source.AuthRealm, Kind: UCISourceGit, DisplayName: "primary source"})
+	require.NoError(t, err)
+	require.NoError(t, fixture.db.Model(&UCISource{}).Where("source_id = ?", primarySource.SourceID).Update("project_id", primary).Error)
+	primaryCheckout, err := NewUCIContextStore(fixture.db).RegisterCheckout(ctx, RegisterCheckoutInput{SourceID: primarySource.SourceID, WorkstationID: uuid.NewString(), Kind: UCICheckoutWorkingTree, OwnerPrincipal: browserReadGrantPrincipal(fixture.user.ID), LocatorRef: "file:///primary/" + uuid.NewString()})
+	require.NoError(t, err)
+	_, err = NewBrowserReadGrantStore(fixture.db).Issue(ctx, BrowserReadGrantIssue{IssuerUserID: fixture.user.ID, IssuerPrincipal: browserReadGrantPrincipal(fixture.user.ID), TargetUserID: fixture.user.ID, SourceID: primarySource.SourceID, CheckoutID: primaryCheckout.CheckoutID})
+	require.NoError(t, err)
+	unauthorized, err := NewUCIContextStore(fixture.db).CreateSource(ctx, CreateSourceInput{AuthRealm: fixture.source.AuthRealm, Kind: UCISourceGit, DisplayName: "unauthorized alias source"})
+	require.NoError(t, err)
+	require.NoError(t, fixture.db.Model(&UCISource{}).Where("source_id = ?", unauthorized.SourceID).Update("project_id", alias).Error)
+	_, err = NewUCIContextStore(fixture.db).RegisterCheckout(ctx, RegisterCheckoutInput{SourceID: unauthorized.SourceID, WorkstationID: uuid.NewString(), Kind: UCICheckoutWorkingTree, OwnerPrincipal: browserReadGrantPrincipal(fixture.user.ID), LocatorRef: "file:///unauthorized/" + uuid.NewString()})
+	require.NoError(t, err)
+
+	for _, selected := range []string{primary, alias} {
+		entries, err := fixture.store.ListCatalog(ctx, fixture.user.ID, BrowserCodeCatalogFilter{ProjectID: selected})
+		require.NoError(t, err)
+		require.Len(t, entries, 2)
+		bySource := map[string]BrowserCodeContextCatalogEntry{}
+		for _, entry := range entries {
+			bySource[entry.SourceID] = entry
+		}
+		require.Equal(t, alias, *bySource[fixture.source.SourceID].ProjectID)
+		require.Equal(t, fixture.checkout.CheckoutID, bySource[fixture.source.SourceID].CheckoutID)
+		require.Equal(t, fixture.reference(), *bySource[fixture.source.SourceID].Context)
+		require.Equal(t, primary, *bySource[primarySource.SourceID].ProjectID)
+		require.NotContains(t, bySource, unauthorized.SourceID)
+		require.NotContains(t, bySource, other.SourceID)
+	}
+	entries, err := fixture.store.ListCatalog(ctx, fixture.user.ID, BrowserCodeCatalogFilter{ProjectID: foreign})
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, other.SourceID, entries[0].SourceID)
+	user := &User{Email: uuid.NewString() + "@example.test", PasswordHash: "fixture-password-hash", Role: DashboardRoleOperator, CreatedAt: time.Now().UTC()}
+	require.NoError(t, fixture.db.Create(user).Error)
+	entries, err = fixture.store.ListCatalog(ctx, user.ID, BrowserCodeCatalogFilter{ProjectID: primary})
+	require.NoError(t, err)
+	require.Empty(t, entries)
+	require.NoError(t, fixture.store.Pin(ctx, fixture.pin(fixture.reference())))
+	wrong := fixture.reference()
+	wrong.SourceID = other.SourceID
+	require.Error(t, fixture.store.Pin(ctx, fixture.pin(wrong)))
+	localSource, err := NewUCIContextStore(fixture.db).CreateSource(ctx, CreateSourceInput{AuthRealm: uci.NoAuthCodeRealm, Kind: UCISourceGit, DisplayName: "local alias source"})
+	require.NoError(t, err)
+	require.NoError(t, fixture.db.Model(&UCISource{}).Where("source_id = ?", localSource.SourceID).Update("project_id", alias).Error)
+	localCheckout, err := NewUCIContextStore(fixture.db).RegisterCheckout(ctx, RegisterCheckoutInput{SourceID: localSource.SourceID, WorkstationID: uuid.NewString(), Kind: UCICheckoutWorkingTree, OwnerPrincipal: uci.NoAuthCodePrincipal, LocatorRef: "file:///local/" + uuid.NewString()})
+	require.NoError(t, err)
+	localView := publishBrowserCodeContextView(t, fixture.db, localCheckout, fixture.profile)
+	for _, selected := range []string{primary, alias} {
+		local, err := fixture.store.ListNoAuthCatalog(ctx, BrowserCodeCatalogFilter{ProjectID: selected})
+		require.NoError(t, err)
+		require.Len(t, local, 1)
+		require.Equal(t, alias, *local[0].ProjectID)
+		require.Equal(t, localSource.SourceID, local[0].SourceID)
+		require.Equal(t, localCheckout.CheckoutID, local[0].Context.CheckoutID)
+		require.Equal(t, localView.ViewID, local[0].Context.ViewID)
+	}
+	require.NoError(t, fixture.db.Model(&UCICheckout{}).Where("checkout_id = ?", localCheckout.CheckoutID).Update("state", UCICheckoutOffline).Error)
+	local, err := fixture.store.ListNoAuthCatalog(ctx, BrowserCodeCatalogFilter{ProjectID: primary})
+	require.NoError(t, err)
+	require.Len(t, local, 1)
+	require.Equal(t, alias, *local[0].ProjectID)
+	require.False(t, local[0].IndexIntentAvailable)
+}
+
 func TestBrowserCodeContextCatalogRowUsesSafeOptionalWorkingCopyMetadata(t *testing.T) {
 	row := browserCodeContextCatalogRow{
 		SourceID:      uuid.NewString(),

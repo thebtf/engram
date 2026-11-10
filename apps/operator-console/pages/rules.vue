@@ -8,7 +8,7 @@ import type {
 } from '../composables/useOperatorRules'
 import { useOperatorRules } from '../composables/useOperatorRules'
 import type { RuleRow } from '../composables/useMockData'
-import { isCatalogProject, useOperatorProjectContext, projectName } from '../composables/useOperatorProjectContext'
+import { canonicalProjectID, isCatalogProject, useOperatorProjectContext, projectName } from '../composables/useOperatorProjectContext'
 import {
   createOperatorSelection,
   type OperatorSelectionTarget,
@@ -54,7 +54,7 @@ const selection = createOperatorSelection('rules')
 const createScopes = computed(() => scopeOptions.value)
 const busy = computed(() => pending.value || selectionPending.value || projectContext.selectionPending.value || Boolean(scopeError.value))
 const selectionTargets = computed(() => selectionPage.value?.targets ?? [])
-const scopedRows = computed(() => rows.filter((rule) => scopeFilter.value === 'all' || rule.project === scopeFilter.value))
+const scopedRows = computed(() => rows.filter((rule) => scopeFilter.value === 'all' || canonicalProjectID(rule.project) === canonicalProjectID(scopeFilter.value)))
 const visibleRows = computed(() => {
   if (!selectionPage.value) return scopedRows.value
   const rowsByID = new Map(scopedRows.value.map((rule) => [String(rule.id), rule]))
@@ -89,7 +89,7 @@ const canReorderScope = computed(() => {
 })
 
 watch(scopeOptions, (options) => {
-  if (!options.includes(createScope.value)) {
+  if (!options.includes(createScope.value) && !isCatalogProject(createScope.value)) {
     createScope.value = ''
   }
 }, { immediate: true })
@@ -123,7 +123,7 @@ function rowMeta(rule: RuleRow, index: number) {
 }
 
 function priorityForNewRule() {
-  const scoped = rows.filter((rule) => createScope.value === 'global' ? rule.project === 'global' : rule.project === createScope.value)
+  const scoped = rows.filter((rule) => createScope.value === 'global' ? rule.project === 'global' : canonicalProjectID(rule.project) === canonicalProjectID(createScope.value))
   const highest = scoped.reduce((max, rule) => Math.max(max, rule.priority), 0)
   return highest + 10
 }
@@ -511,6 +511,7 @@ function clearDrag() {
           <select v-model="scopeFilter" class="fsel" :disabled="busy">
             <option v-if="!scopeFilter" value="" disabled>{{ t('knowledge.chooseProject') }}</option>
             <option value="all">{{ t('rules.scope.all') }}</option>
+            <option v-if="isCatalogProject(scopeFilter) &amp;&amp; !createScopes.includes(scopeFilter)" :value="scopeFilter" disabled>{{ scopeLabel(scopeFilter) }}</option>
             <option v-for="scope in createScopes" :key="scope" :value="scope">{{ scopeLabel(scope) }}</option>
           </select>
         </label>
@@ -704,6 +705,7 @@ function clearDrag() {
           <label class="field">
             <span>{{ t('rules.create.project') }}</span>
             <select v-model="createScope" class="fsel">
+              <option v-if="isCatalogProject(createScope) &amp;&amp; !createScopes.includes(createScope)" :value="createScope" disabled>{{ scopeLabel(createScope) }}</option>
               <option v-for="scope in createScopes" :key="scope" :value="scope">{{ scopeLabel(scope) }}</option>
             </select>
           </label>

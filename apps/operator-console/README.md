@@ -110,11 +110,12 @@ entire catalog (case-insensitive), otherwise the full UUID. If a hinted label
 collides with another project's natural label or a localized control, it falls back
 to the full UUID and, if necessary, repeats it until the displayed labels differ.
 Global and page choices and selected Projects/Home headings use that same label.
-They keep every catalog row, including version/hash-like names, exact full-UUID
-option values and selection state. Project search still matches names and full
-UUIDs and now includes displayed repository qualifiers. Full selected-identity
-disclosures, retained-reader links and `projectName` semantics outside these
-display contexts remain unchanged.
+Ordinary choices contain one primary per validated logical group and retain every
+ungrouped catalog row, including version/hash-like names, with exact UUID values.
+Confirmed alias UUIDs in existing project and reader links resolve to the group's
+primary UUID while retaining record and lineage anchors. This does not rewrite
+historical provenance or change credential bindings. Project search matches names,
+full UUIDs and displayed repository qualifiers.
 
 Historical records have an explicit **Find saved records** view on the existing
 unresolved page: `view=retained_records&attribution_scope=unresolved_history`
@@ -251,8 +252,9 @@ or repository authority. An emitted group must mean that its primary and every a
 provide the same caller-authorized, deduplicated memory and document union, including
 correct totals and paging, with each row projected to the requested canonical UUID.
 The client validates membership, duplicates and overlap before presenting a group;
-malformed or contradictory entries do not grant group or lineage support, while
-unrelated valid groups and every individual UUID choice remain available. A valid
+malformed or contradictory entries do not grant group or lineage support. An
+unrelated valid group remains collapsed; implicated UUIDs remain individual choices.
+All raw catalog UUIDs remain valid for existing links and exact scoped readers. A valid
 present array, including `[]`, signals support for lineage selectors and scoped
 document actions for the live client. Initial absence retains legacy compatibility;
 after that signal has been observed, later omission is unknown, not a downgrade.
@@ -466,8 +468,8 @@ not empty history. Existing query/filter/page and search return remain unchanged
 “All projects” is explicit. Home never fans out knowledge bodies. Inventories require
 an explicit Find submission before composing pages over canonical descriptor IDs.
 When valid groups are present, composition reads each group's primary once and skips
-its aliases, relying on the conditional union contract above; direct alias selection
-still reads that exact UUID. Invalid or conflicting group metadata fails closed for
+its aliases, relying on the conditional union contract above; confirmed alias links
+resolve to the primary before a scoped read. Invalid or conflicting group metadata fails closed for
 the all-project composition rather than claiming a complete total. With grouping
 initially absent, composition retains the legacy disjoint-reader behavior; an omission
 after feature detection is instead unknown and requires catalog recovery. Ordering is by

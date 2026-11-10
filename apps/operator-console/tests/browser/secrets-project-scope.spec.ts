@@ -228,6 +228,53 @@ test('Vault create choices and same-name credential metadata keep canonical proj
   await expect(page.getByTestId('secret-row-2')).toBeVisible()
 })
 
+test('Vault shows canonical group labels without hiding binding errors or changing credential binding', async ({ page }) => {
+  const independent = '66666666-6666-4666-8666-666666666666'
+  const secondIndependent = '77777777-7777-4777-8777-777777777777'
+  await page.route('**/api/projects', route => route.fulfill({
+    json: {
+      items: [
+        { project_id: alphaProject, name: 'Shared project' },
+        { project_id: betaProject, name: 'Shared project' },
+        { project_id: independent, name: 'Shared project' },
+        { project_id: secondIndependent, name: 'Shared project' },
+      ], unresolved: [], logical_groups: [{ primary_project_id: alphaProject, alias_project_ids: [betaProject] }],
+    }
+  }))
+  await page.route('**/api/vault/credentials', route => route.fulfill({
+    json: [
+      { id: 1, name: 'alias-token', project_id: betaProject, scope: 'project' },
+      { id: 2, name: 'other-token', project_id: independent, scope: 'project' },
+      { id: 4, name: 'second-other-token', project_id: secondIndependent, scope: 'project' },
+      { id: 3, name: 'blocked-token', scope: 'project', project_id: null, binding_error: 'CREDENTIAL_BINDING_CONFLICT' },
+    ]
+  }))
+  const revealProjects: Array<string | null> = []
+  await page.route('**/api/vault/credentials/alias-token?**', route => {
+    revealProjects.push(new URL(route.request().url()).searchParams.get('project'))
+    return route.fulfill({ json: { id: 1, name: 'alias-token', project_id: betaProject, scope: 'project', value: 'synthetic-alias-value' } })
+  })
+  await page.goto(`/secrets?project=${alphaProject}`)
+  const selector = page.getByTestId('secret-create-project')
+  await expect(selector.locator(`option[value="${betaProject}"]`)).toHaveCount(0)
+  await expect(selector.locator(`option[value="${independent}"]`)).toHaveCount(1)
+  await expect(page.getByTestId('secret-row-1')).toContainText('Shared project #1')
+  await expect(page.getByTestId('secret-row-2')).toContainText('Shared project #2')
+  await expect(page.getByTestId('secret-row-4')).toContainText('Shared project #3')
+  await expect(selector.locator(`option[value="${independent}"]`)).toHaveText('Shared project #2')
+  await expect(selector.locator(`option[value="${secondIndependent}"]`)).toHaveText('Shared project #3')
+  await expect(page.getByTestId('secret-row-3')).toContainText('Conflicting membership')
+  await expect(page.getByTestId('secret-reveal-3')).toBeDisabled()
+  await expect(page.getByTestId('secret-delete-3')).toBeDisabled()
+  await page.goto(`/secrets?project=${betaProject}`)
+  await expect(selector).toHaveValue(alphaProject)
+  await expect(selector.locator(`option[value="${betaProject}"]`)).toHaveCount(0)
+  await page.getByTestId('secret-reveal-1').click()
+  await expect(page.getByTestId('secret-row-1')).toContainText('synthetic-alias-value')
+  expect(revealProjects).toEqual([betaProject])
+  await expect(page).toHaveURL(new RegExp(`project=${alphaProject}`))
+})
+
 for (const matchingScope of [true, false]) {
   test(`Vault create receipt without a project echo needs exact metadata scope: ${matchingScope}`, async ({ page }) => {
     let created = false

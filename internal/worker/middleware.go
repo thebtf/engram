@@ -211,15 +211,16 @@ const (
 )
 
 func isProjectConsolidationOperation(r *http.Request) bool {
-	if r.Method != http.MethodPost {
-		return false
-	}
-	switch r.URL.Path {
-	case "/api/projects/consolidation/backup", "/api/projects/consolidation/verify-backup", "/api/projects/consolidation/dry-run", "/api/projects/consolidation/apply":
+	switch {
+	case r.Method == http.MethodGet && r.URL.Path == "/api/projects/consolidation/census":
 		return true
-	default:
-		return false
+	case r.Method == http.MethodPost:
+		switch r.URL.Path {
+		case "/api/projects/consolidation/preflight", "/api/projects/consolidation/backup", "/api/projects/consolidation/verify-backup", "/api/projects/consolidation/dry-run", "/api/projects/consolidation/apply":
+			return true
+		}
 	}
+	return false
 }
 
 func requestTimeout(next http.Handler) http.Handler {

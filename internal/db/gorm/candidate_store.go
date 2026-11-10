@@ -14,6 +14,8 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
+	"github.com/thebtf/engram/internal/db/projectscope"
+	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -186,7 +188,11 @@ func (s *CandidateStore) ListByStatus(ctx context.Context, project string, statu
 		Order("id DESC").
 		Limit(limit)
 	if project != "" {
-		q = q.Where("? = ANY(affected_projects)", project)
+		if projectidentity.ValidProjectID(project) {
+			q = q.Where(`EXISTS (SELECT 1 FROM (SELECT ?::text AS chosen) selected_scope, unnest(affected_projects) AS member(project) WHERE `+projectscope.CanonicalReadProjectSQL("selected_scope.chosen")+` = `+projectscope.CanonicalReadProjectSQL("member.project")+`)`, project)
+		} else {
+			q = q.Where("? = ANY(affected_projects)", project)
+		}
 	}
 	var rows []candidateRow
 	if err := q.Find(&rows).Error; err != nil {

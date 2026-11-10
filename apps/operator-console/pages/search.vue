@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { operatorDiagnosisKey } from '../composables/useOperatorApi'
-import { isCatalogProject, useOperatorProjectContext, projectName } from '../composables/useOperatorProjectContext'
+import { canonicalProjectID, isCatalogProject, useOperatorProjectContext, projectName } from '../composables/useOperatorProjectContext'
 import { useOperatorSearchNoise } from '../composables/useOperatorSearchNoise'
 const { t } = useI18n()
 const route = useRoute()
@@ -59,8 +59,8 @@ async function submitSearch() {
 
 function openResult(resultProject: string, memory: string) {
   const project = selectedProject.value
-  if (!hasRequestedProject.value || resultProject !== project || !memory) return
-  void router.push({ path: '/memory', query: { ...context.to('/memory').query, project, memory, from: 'search', searchQuery: requestedQuery.value } })
+  if (!hasRequestedProject.value || !isCatalogProject(resultProject) || canonicalProjectID(resultProject) !== canonicalProjectID(project) || !memory) return
+  void router.push({ path: '/memory', query: { ...context.to('/memory').query, project, memoryProject: resultProject, memory, from: 'search', searchQuery: requestedQuery.value } })
 }
 onBeforeUnmount(() => {
   if (route.path === '/search') context.remember('/search', { ...route.query, draftQ: query.value })

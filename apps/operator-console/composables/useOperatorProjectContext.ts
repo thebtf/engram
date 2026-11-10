@@ -22,14 +22,11 @@ const documentCapabilityActive = ref(false)
 let documentCapabilityObserved = false
 let documentCapabilityUncertain = false
 const uncertainDocumentProjects = ref<string[]>([])
-const projects = computed(() => descriptors.value.map((row) => row.project_id))
-const projectSections = computed(() => {
-  const used = new Set(logicalGroups.value.flatMap(group => [group.primary_project_id, ...group.alias_project_ids]))
-  const sections: Array<{ key: string; label: string; ids: string[] }> = logicalGroups.value.map(group => ({ key: group.primary_project_id, label: projectChoiceLabel(group.primary_project_id), ids: [group.primary_project_id, ...group.alias_project_ids] }))
-  const remaining = projects.value.filter(id => !used.has(id))
-  if (remaining.length) sections.push({ key: 'ungrouped', label: '', ids: remaining })
-  return sections
+const projects = computed(() => {
+  const aliases = new Set(logicalGroups.value.flatMap(group => group.alias_project_ids))
+  return descriptors.value.map(row => row.project_id).filter(id => !aliases.has(id))
 })
+const projectSections = computed(() => [{ key: 'projects', label: '', ids: projects.value }])
 const pending = ref(false)
 const error = ref<OperatorSourceError | null>(null)
 const selectionPending = ref(false)
@@ -181,14 +178,20 @@ export function catalogProjectName(id: string, items: OperatorProjectDescriptor[
   return collisions.length > 1 ? `${text} #${collisions.findIndex((item) => item.project_id === id) + 1}` : text
 }
 
-export function projectName(id: string) { return catalogProjectName(id, descriptors.value) }
+export function projectName(id: string) { return canonicalProjectName(id) }
+export function canonicalProjectID(id: string) {
+  return logicalGroups.value.find(group => group.alias_project_ids.includes(id))?.primary_project_id || id
+}
+export function canonicalProjectName(id: string) {
+  return catalogProjectName(canonicalProjectID(id), descriptors.value.filter(row => projects.value.includes(row.project_id)))
+}
 export function projectChoiceLabel(id: string, reservedLabels: readonly string[] = []): string {
   const row = descriptors.value.find((item) => item.project_id === id)
   if (!row) return id
   const display = row.repository_qualifier ? `${row.name} · ${row.repository_qualifier}` : row.name
   const visibleLabel = display.replace(/[ \t\r\n\f]+/g, ' ').replace(/^ | $/g, '')
   const reserved = reservedLabels.map((label) => label.replace(/[ \t\r\n\f]+/g, ' ').replace(/^ | $/g, ''))
-  const needsIdentity = reserved.includes(visibleLabel) || (visibleLabel === 'Registered project' && !row.repository_qualifier) || descriptors.value.some((item) => {
+  const needsIdentity = reserved.includes(visibleLabel) || (visibleLabel === 'Registered project' && !row.repository_qualifier) || descriptors.value.filter(item => projects.value.includes(item.project_id)).some((item) => {
     if (item.project_id === id) return false
     const itemLabel = item.repository_qualifier ? `${item.name} · ${item.repository_qualifier}` : item.name
     return itemLabel.replace(/[ \t\r\n\f]+/g, ' ').replace(/^ | $/g, '') === visibleLabel
@@ -198,7 +201,7 @@ export function projectChoiceLabel(id: string, reservedLabels: readonly string[]
   const normalizedPrefix = prefix.toLowerCase()
   const otherLabels = new Set<string>(reserved)
   let collision = false
-  for (const item of descriptors.value) {
+  for (const item of descriptors.value.filter(item => projects.value.includes(item.project_id))) {
     if (item.project_id === id) continue
     const itemLabel = item.repository_qualifier ? `${item.name} · ${item.repository_qualifier}` : item.name
     otherLabels.add(itemLabel.replace(/[ \t\r\n\f]+/g, ' ').replace(/^ | $/g, ''))
@@ -214,7 +217,7 @@ export function projectChoiceLabel(id: string, reservedLabels: readonly string[]
 export function localizedProjectChoiceLabel(id: string, translate: (key: string) => string): string {
   return projectChoiceLabel(id, [translate('knowledge.allProjects'), translate('knowledge.chooseProject'), translate('knowledge.browseAll')])
 }
-export function isCatalogProject(id: string): boolean { return projects.value.includes(id) }
+export function isCatalogProject(id: string): boolean { return isProjectUUID(id) && descriptors.value.some(row => row.project_id === id) }
 export function supportsDocumentLineage(id: string): boolean { return documentCapabilityActive.value && isCatalogProject(id) && !documentScopeUncertain(id) }
 export function documentScopeUncertain(id: string): boolean { return uncertainDocumentProjects.value.includes(id) }
 export function validDocumentID(value: unknown): value is string { return typeof value === 'string' && /^[1-9]\d*$/.test(value) && Number.isSafeInteger(Number(value)) }
@@ -222,7 +225,7 @@ export function validDocumentID(value: unknown): value is string { return typeof
 function knownProjectQuery(query: LocationQuery): boolean {
   return ['project', 'memoryProject', 'docProject', 'principalProject'].every((key) => {
     const value = query[key]
-    return value === undefined || (key === 'project' && (value === '' || value === 'all')) || (key === 'principalProject' && (value === 'all' || value === 'current')) || (typeof value === 'string' && isCatalogProject(value))
+    return value === undefined || (key === 'project' && (value === '' || value === 'all')) || (key === 'principalProject' && (value === 'all' || value === 'current')) || (typeof value === 'string' && isCatalogProject(value) && (key === 'docProject' || key === 'memoryProject' || canonicalProjectID(value) === value))
   })
 }
 
@@ -279,11 +282,14 @@ async function ensureCatalog() {
 async function readProjectResolution(id: string): Promise<OperatorProjectResolution> {
   await ensureCatalog()
   const row = descriptors.value.find((item) => item.project_id === id)
-  if (row) return { status: 'resolved', project_id: id, name: row.name }
+  if (row) {
+    const primary = canonicalProjectID(id)
+    return { status: 'resolved', project_id: primary, name: descriptors.value.find(item => item.project_id === primary)?.name || row.name }
+  }
   if (!id) throw new TypeError('Project selection is required')
   const payload = parseProjectResolution(await operatorFetchJson<unknown>(`/api/projects/resolve?${new URLSearchParams({ legacy_id: id })}`, undefined, 'project-resolution'))
   if (payload.status === 'resolved' && !isCatalogProject(payload.project_id)) throw new TypeError('Resolved project is absent from the catalog')
-  return payload
+  return payload.status === 'resolved' ? { ...payload, project_id: canonicalProjectID(payload.project_id) } : payload
 }
 
 export async function resolveCatalogProject(id: string): Promise<string | null> {
@@ -373,10 +379,12 @@ export function useOperatorProjectContext() {
       try {
         await ensureCatalog()
         if (!current()) return
+        if (path === '/documents' && typeof query.path === 'string' && query.path && query.docProject === undefined && typeof query.project === 'string' && isCatalogProject(query.project) && canonicalProjectID(query.project) !== query.project) query.docProject = query.project
         for (const key of ['project', ...anchors]) {
           const value = query[key]
           if (value === undefined || (key === 'project' && (value === '' || value === 'all')) || (key === 'principalProject' && (value === 'all' || value === 'current'))) continue
           if (typeof value !== 'string' || !value) throw new TypeError('Invalid project route value')
+          if ((key === 'docProject' || key === 'memoryProject') && isCatalogProject(value)) continue
           const resolution = await readProjectResolution(value)
           if (!current()) return
           if (resolution.status === 'unresolved') {

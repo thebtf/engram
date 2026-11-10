@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -540,4 +541,293 @@ func assertBehavioralRuleOperationCommitted(t *testing.T, result BehavioralRuleS
 	for _, item := range result.Items {
 		assert.Equal(t, BehavioralRuleSelectionCommitted, item.Outcome)
 	}
+}
+
+func TestRulesOperatorLiteralProjectCompatibility(t *testing.T) {
+	store := openBehavioralRulesStore(t)
+	db := store.DB
+	rules := NewBehavioralRulesStore(store)
+	ctx := context.Background()
+	primary, alias, foreign := sessionTestProject(t, db), sessionTestProject(t, db), sessionTestProject(t, db)
+	selectors := []string{"all", "global", "legacy-project", strings.Repeat("x", 300), "00000000-0000-0000-0000-000000000000"}
+	for _, selector := range []string{primary, alias, foreign} {
+		row := BehavioralRule{Project: &selector, Content: "literal compatibility " + selector, Priority: 10, Version: 1, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+		require.NoError(t, db.Create(&row).Error)
+	}
+	global := BehavioralRule{Content: "literal compatibility global rule", Priority: 1, Version: 1, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	require.NoError(t, db.Create(&global).Error)
+	require.NoError(t, db.Exec(`INSERT INTO project_consolidation_redirects(selector,session_id,project_id,plan_fingerprint) VALUES (?, '', ?, 'test')`, alias, primary).Error)
+	var materialized int64
+	var sqlText string
+	const callbackName = "rules_operator_literal_limit_probe"
+	require.NoError(t, db.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table == "behavioral_rules" {
+			materialized = tx.RowsAffected
+			sqlText = tx.Statement.SQL.String()
+		}
+	}))
+	t.Cleanup(func() { _ = db.Callback().Query().Remove(callbackName) })
+	for _, selector := range selectors {
+		t.Run(selector[:min(len(selector), 32)], func(t *testing.T) {
+			want, err := rules.List(ctx, &selector, 50)
+			require.NoError(t, err)
+			got, err := rules.ListOperator(ctx, &selector, 50)
+			require.NoError(t, err)
+			require.Equal(t, want, got)
+			require.Len(t, got, 1)
+			require.Nil(t, got[0].Project)
+			limited, err := rules.ListOperator(ctx, &selector, 1)
+			require.NoError(t, err)
+			require.Equal(t, got[:1], limited)
+			require.EqualValues(t, 1, materialized)
+			require.Contains(t, sqlText, "LIMIT")
+		})
+	}
+	primaryRows, err := rules.ListOperator(ctx, &primary, 50)
+	require.NoError(t, err)
+	aliasRows, err := rules.ListOperator(ctx, &alias, 50)
+	require.NoError(t, err)
+	require.Equal(t, primaryRows, aliasRows)
+	require.Len(t, primaryRows, 3)
+	limited, err := rules.ListOperator(ctx, &primary, 1)
+	require.NoError(t, err)
+	require.Equal(t, primaryRows[:1], limited)
+	require.EqualValues(t, 1, materialized)
+	require.Contains(t, sqlText, "LIMIT")
+}
+
+func TestRulesAliasCollectionTransaction(t *testing.T) {
+	store := openBehavioralRulesStore(t)
+	db := store.DB
+	pool, err := db.DB()
+	require.NoError(t, err)
+	pool.SetMaxOpenConns(3)
+	rules := NewBehavioralRulesStore(store)
+	ctx := context.Background()
+	primary, alias, foreign := sessionTestProject(t, db), sessionTestProject(t, db), sessionTestProject(t, db)
+	for _, project := range []string{primary, alias, foreign} {
+		row := BehavioralRule{Project: &project, Content: "synthetic alias rule", Version: 3, Enabled: false, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+		require.NoError(t, db.Create(&row).Error)
+		require.NoError(t, db.Model(&BehavioralRule{}).Where("id = ?", row.ID).Update("enabled", false).Error)
+	}
+	ambiguous := BehavioralRule{Project: &alias, Content: "unresolved rule", Version: 1, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	require.NoError(t, db.Create(&ambiguous).Error)
+	membership := ConsolidationMembership{Reference: "urn:engram:test:rules:" + strconv.FormatInt(ambiguous.ID, 10), Table: "behavioral_rules", RowKey: JSONRaw(fmt.Sprintf(`{"id":%d}`, ambiguous.ID)), FieldPath: JSONRaw(`["project"]`), ProjectID: nil, PlanFingerprint: "rules-fixture"}
+	require.NoError(t, db.Create(&membership).Error)
+	t.Cleanup(func() {
+		db.Exec("DELETE FROM project_consolidation_redirects WHERE selector = ?", alias)
+		db.Exec("DELETE FROM behavioral_rules WHERE project IN ?", []string{primary, alias, foreign})
+	})
+	require.NoError(t, db.Exec(`INSERT INTO project_consolidation_redirects(selector,session_id,project_id,plan_fingerprint) VALUES (?, '', ?, 'test')`, alias, primary).Error)
+	scope := behavioralRuleSelectionScope("rules-alias-" + strconv.FormatInt(time.Now().UnixNano(), 10))
+	mainRows, err := rules.ListOperator(ctx, &primary, 100)
+	require.NoError(t, err)
+	aliasRows, err := rules.ListOperator(ctx, &alias, 100)
+	require.NoError(t, err)
+	require.Equal(t, mainRows, aliasRows)
+	require.Len(t, mainRows, 2)
+	for _, row := range mainRows {
+		require.False(t, row.Enabled)
+		require.Equal(t, 3, row.Version)
+		require.Contains(t, []string{primary, alias}, *row.Project)
+	}
+	var materialized int64 = -1
+	var sqlText string
+	const callbackName = "rules_operator_limit_probe"
+	require.NoError(t, db.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table == "behavioral_rules" {
+			materialized = tx.RowsAffected
+			sqlText = tx.Statement.SQL.String()
+		}
+	}))
+	t.Cleanup(func() { _ = db.Callback().Query().Remove(callbackName) })
+	limited, err := rules.ListOperator(ctx, &primary, 1)
+	require.NoError(t, err)
+	require.Equal(t, mainRows[:1], limited)
+	require.EqualValues(t, 1, materialized, "database must materialize at most the requested rows")
+	require.Contains(t, sqlText, "LIMIT")
+	require.NoError(t, db.Callback().Query().Remove(callbackName))
+	// A freeze cannot observe the temporary mapping while holding its old fingerprint.
+	tx := db.Begin()
+	require.NoError(t, tx.Error)
+	t.Cleanup(func() { tx.Rollback() })
+	require.NoError(t, aliasLock(tx))
+	require.NoError(t, tx.Exec(`DELETE FROM project_consolidation_redirects WHERE selector = ?`, alias).Error)
+	type freezeResult struct {
+		selection CollectionSelection
+		err       error
+	}
+	completed := make(chan freezeResult, 1)
+	go func() {
+		selection, err := rules.SaveRulesSelection(ctx, scope, primary, CollectionSelection{Kind: CollectionSelectionFrozenFilter})
+		completed <- freezeResult{selection, err}
+	}()
+	require.Eventually(t, func() bool {
+		var waiting int64
+		err := db.Raw(`SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE 'LOCK TABLE audit_log%'`).Scan(&waiting).Error
+		return err == nil && waiting > 0
+	}, 3*time.Second, 20*time.Millisecond, "freeze must actually wait for the alias lock")
+	require.NoError(t, tx.Rollback().Error)
+	outcome := <-completed
+	require.NoError(t, outcome.err)
+	require.Len(t, outcome.selection.Targets, 2)
+	filter, err := rules.NormalizeCollectionFilter(ctx, scope, primary)
+	require.NoError(t, err)
+	qualified, err := RulesProjectionScope(scope, filter)
+	require.NoError(t, err)
+	page, err := rules.PageCollection(ctx, qualified, CollectionPageRequest{Domain: "rules", Filter: filter, Limit: 50})
+	require.NoError(t, err)
+	require.Len(t, page.Targets, 2)
+	saved, err := rules.SaveRulesSelection(ctx, scope, primary, CollectionSelection{Kind: CollectionSelectionFrozenFilter})
+	require.NoError(t, err)
+	require.Equal(t, page.Targets, saved.Targets)
+	order := make([]BehavioralRuleOrder, 0, len(saved.Targets))
+	for _, target := range saved.Targets {
+		id, err := strconv.ParseInt(target.ID, 10, 64)
+		require.NoError(t, err)
+		order = append(order, BehavioralRuleOrder{RuleID: id, ExpectedVersion: target.ExpectedVersion})
+	}
+	reordered, err := rules.ApplySelectionOperation(ctx, qualified, BehavioralRuleSelectionOperation{Action: BehavioralRuleSelectionReorder, SelectionKind: saved.Kind, SelectionVersion: saved.Version, SelectionToken: saved.Token, Scope: &BehavioralRuleScope{Project: &primary}, Order: order, ProjectionFilter: &filter})
+	require.NoError(t, err)
+	require.Len(t, reordered.Items, 2)
+	for _, item := range reordered.Items {
+		require.False(t, item.Rule.Enabled)
+		require.Contains(t, []string{primary, alias}, *item.Rule.Project)
+	}
+	saved, err = rules.SaveRulesSelection(ctx, scope, primary, CollectionSelection{Kind: CollectionSelectionFrozenFilter})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(`DELETE FROM project_consolidation_redirects WHERE selector = ?`, alias).Error)
+	_, err = rules.ApplySelectionOperation(ctx, qualified, BehavioralRuleSelectionOperation{Action: BehavioralRuleSelectionDisable, SelectionKind: saved.Kind, SelectionVersion: saved.Version, SelectionToken: saved.Token, ProjectionFilter: &filter})
+	require.ErrorIs(t, err, ErrCollectionSelectionReconfirmationRequired)
+	_, err = rules.PageCollection(ctx, qualified, CollectionPageRequest{Domain: "rules", Filter: filter, Cursor: page.Cursor, Limit: 50})
+	require.ErrorIs(t, err, ErrCollectionSelectionReconfirmationRequired)
+}
+
+func TestRulesOperatorReadSnapshots(t *testing.T) {
+	store := openBehavioralRulesStore(t)
+	db := store.DB
+	pool, err := db.DB()
+	require.NoError(t, err)
+	pool.SetMaxOpenConns(4)
+	rules := NewBehavioralRulesStore(store)
+	ctx := context.Background()
+	primary, alias := sessionTestProject(t, db), sessionTestProject(t, db)
+	row := BehavioralRule{Project: &alias, Content: "snapshot alias rule", Version: 1, Enabled: false, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	require.NoError(t, db.Create(&row).Error)
+	require.NoError(t, db.Exec(`INSERT INTO project_consolidation_redirects(selector,session_id,project_id,plan_fingerprint) VALUES (?, '', ?, 'test')`, alias, primary).Error)
+	t.Cleanup(func() {
+		db.Exec("DELETE FROM project_consolidation_memberships WHERE reference = ?", fmt.Sprintf("urn:engram:test:rules:snapshot:%d", row.ID))
+		db.Exec("DELETE FROM project_consolidation_redirects WHERE selector = ?", alias)
+		db.Exec("DELETE FROM behavioral_rules WHERE id = ?", row.ID)
+	})
+	scope := behavioralRuleSelectionScope("rules-read-snapshot-" + strconv.FormatInt(time.Now().UnixNano(), 10))
+	filters := make(map[string]CollectionFilter)
+	for _, value := range []string{primary, "all", "global"} {
+		filters[value], err = rules.NormalizeCollectionFilter(ctx, scope, value)
+		require.NoError(t, err)
+	}
+
+	writer := db.Begin()
+	require.NoError(t, writer.Error)
+	t.Cleanup(func() { writer.Rollback() })
+	require.NoError(t, aliasLock(writer))
+	require.NoError(t, writer.Exec(`UPDATE projects SET display_name = display_name WHERE id = ?`, primary).Error)
+	readCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	_, err = rules.ListOperator(readCtx, &primary, 50)
+	require.NoError(t, err, "scoped list must not wait for an alias writer")
+	_, err = rules.ListOperator(readCtx, nil, 50)
+	require.NoError(t, err, "global list must not wait for an alias writer")
+	for _, value := range []string{primary, "all", "global"} {
+		_, err = rules.PageCollection(readCtx, scope, CollectionPageRequest{Domain: "rules", Filter: filters[value], Limit: 50})
+		require.NoError(t, err, "page %s must not wait for an alias writer", value)
+	}
+	require.NoError(t, writer.Rollback().Error)
+
+	// Pause after resolving the alias group but before fetching its rows.
+	// A concurrent commit changes both the mapping and the row's membership.
+	started, resume := make(chan struct{}), make(chan struct{})
+	resumed := false
+	defer func() {
+		if !resumed {
+			close(resume)
+		}
+	}()
+	type snapshotProbeKey struct{}
+	const callback = "rules_snapshot_interleave"
+	require.NoError(t, db.Callback().Query().Before("gorm:query").Register(callback, func(tx *gorm.DB) {
+		if tx.Statement.Table == "behavioral_rules" && tx.Statement.Context.Value(snapshotProbeKey{}) != nil {
+			close(started)
+			<-resume
+		}
+	}))
+	t.Cleanup(func() { _ = db.Callback().Query().Remove(callback) })
+	type pageResult struct {
+		page CollectionPage
+		err  error
+	}
+	result := make(chan pageResult, 1)
+	go func() {
+		page, err := rules.PageCollection(context.WithValue(ctx, snapshotProbeKey{}, true), scope, CollectionPageRequest{Domain: "rules", Filter: filters[primary], Limit: 50})
+		result <- pageResult{page, err}
+	}()
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		close(resume)
+		resumed = true
+		t.Fatal("page did not reach row query")
+	}
+	change := db.Begin()
+	require.NoError(t, change.Error)
+	t.Cleanup(func() { change.Rollback() })
+	require.NoError(t, aliasLock(change))
+	require.NoError(t, change.Exec(`DELETE FROM project_consolidation_redirects WHERE selector = ?`, alias).Error)
+	membership := ConsolidationMembership{Reference: fmt.Sprintf("urn:engram:test:rules:snapshot:%d", row.ID), Table: "behavioral_rules", RowKey: JSONRaw(fmt.Sprintf(`{"id":%d}`, row.ID)), FieldPath: JSONRaw(`["project"]`), ProjectID: nil, PlanFingerprint: "rules-snapshot"}
+	require.NoError(t, change.Create(&membership).Error)
+	require.NoError(t, change.Commit().Error)
+	close(resume)
+	resumed = true
+	got := <-result
+	require.NoError(t, got.err)
+	require.Contains(t, got.page.Targets, CollectionSelectionTarget{ID: strconv.FormatInt(row.ID, 10), ExpectedVersion: 1})
+	_, err = rules.PageCollection(ctx, scope, CollectionPageRequest{Domain: "rules", Filter: filters[primary], Limit: 50})
+	require.ErrorIs(t, err, ErrCollectionSelectionReconfirmationRequired)
+
+	// Caller-owned transactions keep their own uncommitted writes and connection.
+	tx := db.Begin()
+	require.NoError(t, tx.Error)
+	t.Cleanup(func() { tx.Rollback() })
+	private := BehavioralRule{Project: &primary, Content: "uncommitted rule", Version: 1, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	require.NoError(t, tx.Create(&private).Error)
+	nested := NewBehavioralRulesStoreFromDB(tx)
+	listed, err := nested.ListOperator(ctx, &primary, 50)
+	require.NoError(t, err)
+	var found bool
+	for _, item := range listed {
+		if item.ID == private.ID {
+			found = true
+		}
+	}
+	require.True(t, found)
+	filter, err := nested.NormalizeCollectionFilter(ctx, scope, primary)
+	require.NoError(t, err)
+	page, err := nested.PageCollection(ctx, scope, CollectionPageRequest{Domain: "rules", Filter: filter, Limit: 50})
+	require.NoError(t, err)
+	require.Contains(t, page.Targets, CollectionSelectionTarget{ID: strconv.FormatInt(private.ID, 10), ExpectedVersion: 1})
+	require.NoError(t, tx.Rollback().Error)
+}
+
+func TestRulesAliasCursorCarriesServerFingerprint(t *testing.T) {
+	scope := behavioralRuleSelectionScope("rules-cursor-fingerprint")
+	filter := CollectionFilter{Value: "all", Fingerprint: collectionSelectionTestDigest("a")}
+	qualified, err := RulesProjectionScope(scope, filter)
+	require.NoError(t, err)
+	require.NotEqual(t, scope.ContextFingerprint, qualified.ContextFingerprint)
+	cursor, err := encodeBehavioralRuleCollectionCursor(filter, collectionSelectionTestDigest("b"), 0, 50)
+	require.NoError(t, err)
+	state, parsed, err := decodeBehavioralRuleCollectionCursor(cursor)
+	require.NoError(t, err)
+	require.Equal(t, filter.Fingerprint, state.Fingerprint)
+	require.Equal(t, filter.Value, parsed.scope)
 }

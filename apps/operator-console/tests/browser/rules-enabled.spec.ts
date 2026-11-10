@@ -122,3 +122,25 @@ test('Rules require an explicit scope and preserve its canonical ID through refr
   expect(reads.every((url) => url.searchParams.get('project') === project)).toBe(true)
   await expect(page.getByTestId('project-context-select')).toHaveValue(project)
 })
+
+test('Rules resolve a confirmed alias to the primary filter and create scope', async ({ page }) => {
+  const primary = '11111111-1111-4111-8111-111111111111'
+  const alias = '22222222-2222-4222-8222-222222222222'
+  await page.route('**/api/projects', route => route.fulfill({ json: { items: [{ project_id: primary, name: 'Primary' }, { project_id: alias, name: 'Historical' }], unresolved: [], logical_groups: [{ primary_project_id: primary, alias_project_ids: [alias] }] } }))
+  await page.route('**/api/rules?**', route => route.fulfill({ json: [{ id: 991, project: alias, content: 'Retained disabled rule', priority: 10, version: 1, enabled: false }] }))
+  await page.route('**/api/collections/selection/page', route => route.fulfill({ json: { cursor: 'synthetic-page', next_cursor: '', filter_fingerprint: `sha256:${'a'.repeat(64)}`, targets: [{ id: '991', expected_version: 1 }], total: 1 } }))
+  const reads: URL[] = []
+  page.on('request', request => { const url = new URL(request.url()); if (request.method() === 'GET' && url.pathname === '/api/rules') reads.push(url) })
+  await page.goto(`/rules?project=${alias}`)
+  const filter = page.locator('.scope-filter select')
+  await expect(filter).toHaveValue(primary)
+  await expect(filter.locator(`option[value="${alias}"]`)).toHaveCount(0)
+  await expect(page.getByTestId('rule-status-991')).toBeVisible()
+  await expect(page.getByTestId('rule-enable-toggle-991')).toHaveAttribute('aria-checked', 'false')
+  await expect.poll(() => reads.length).toBeGreaterThan(0)
+  expect(reads.every(url => url.searchParams.get('project') === primary)).toBe(true)
+  await page.locator('header button.primary').click()
+  const create = page.locator('[role="dialog"] select')
+  await expect(create).toHaveValue(primary)
+  await expect(create.locator(`option[value="${alias}"]`)).toHaveCount(0)
+})

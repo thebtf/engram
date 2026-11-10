@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { isCatalogProject, useOperatorProjectContext, projectName } from '../composables/useOperatorProjectContext'
+import { canonicalProjectID, isCatalogProject, useOperatorProjectContext, projectName } from '../composables/useOperatorProjectContext'
 import { MEMORY_EPISTEMIC_TYPES, PRINCIPAL_CURRENT_PROJECT, useOperatorMemoryLab, useOperatorPrincipalMemorySurface, type MemoryAuditResponse } from '../composables/useOperatorMemoryLab'
 import { operatorDiagnosisKey, operatorUnauthorizedRevision, type OperatorLoadState, type OperatorSourceError, toOperatorSourceError } from '../composables/useOperatorApi'
 import type { Memory } from '../composables/useMockData'
@@ -28,7 +28,13 @@ const filterChoices = [
 const page = computed(() => Math.max(1, Number.parseInt(String(route.query.page || '1'), 10) || 1))
 const pageSize = computed(() => [10, 20, 50].includes(Number(route.query.size)) ? Number(route.query.size) : 20)
 const openId = computed(() => typeof route.query.memory === 'string' ? route.query.memory : '')
-const detailProject = computed(() => project.value === 'all' && typeof route.query.memoryProject === 'string' ? route.query.memoryProject : project.value)
+const detailProject = computed(() => {
+  const native = route.query.memoryProject
+  if (native === undefined) return project.value
+  if (typeof native !== 'string' || !isCatalogProject(native)) return ''
+  if (project.value === 'all') return native
+  return isCatalogProject(project.value) && canonicalProjectID(native) === canonicalProjectID(project.value) ? native : ''
+})
 const draft = ref(typeof route.query.draftQ === 'string' ? route.query.draftQ : query.value)
 const opened = ref<Memory | null>(null)
 const detailPending = ref(false)
@@ -48,6 +54,9 @@ if (typeof route.query.principal === 'string') principalScope.value.principal = 
 if (route.query.principalKind === 'human' || route.query.principalKind === 'agent' || route.query.principalKind === 'service') principalScope.value.principalKind = route.query.principalKind
 if (typeof route.query.principalDomain === 'string') principalScope.value.domain = route.query.principalDomain
 if (typeof route.query.principalProject === 'string') principalScope.value.project = route.query.principalProject
+watch(() => route.query.principalProject, (next, previous) => {
+  if (typeof next === 'string' && principalScope.value.project === previous) principalScope.value.project = next
+})
 if (route.query.principalVisibility === 'all' || route.query.principalVisibility === 'shared' || route.query.principalVisibility === 'private') principalScope.value.visibility = route.query.principalVisibility
 principalScope.value.includePrivate = route.query.principalPrivate === '1'
 const principalAttribution = principal.attributionVisible
@@ -161,7 +170,7 @@ async function act(action: 'suppress' | 'delete' | 'bulk' | 'restore' | 'archive
   const id = openId.value
   busy.value = true
   try {
-    const result = action === 'bulk' ? await suppressMemories([...selected.value]) : action === 'delete' ? await deleteMemory(memory!.id) : action === 'restore' ? await unsuppressMemory(memory!.id) : action === 'archive' ? await archiveMemory(memory!.id) : await suppressMemory(memory!.id)
+    const result = action === 'bulk' ? await suppressMemories([...selected.value]) : action === 'delete' ? await deleteMemory(memory!.id, memory!.mutationProject || '', memory!.project) : action === 'restore' ? await unsuppressMemory(memory!.id) : action === 'archive' ? await archiveMemory(memory!.id) : await suppressMemory(memory!.id)
     if (scope !== project.value || id !== openId.value) return
     mutationResult.value = result
     confirmation.value = ''
@@ -231,7 +240,7 @@ function time(value?: string) {
             <section class="provenance"><h3>{{ t('knowledge.origin') }}</h3><dl><dt>{{ t('knowledge.project') }}</dt><dd>{{ projectName(detailProject) }}</dd><dt>{{ t('knowledge.created') }}</dt><dd>{{ time(opened.createdAt) }}</dd><dt>{{ t('knowledge.updated') }}</dt><dd>{{ time(opened.updatedAt) }}</dd><dt>{{ t('knowledge.lastConfirmed') }}</dt><dd>{{ time(opened.lastConfirmed) }}</dd><dt>{{ t('knowledge.reviewAfter') }}</dt><dd>{{ time(opened.reviewAfter) }}</dd><dt>{{ t('knowledge.author') }}</dt><dd>{{ opened.sourceAgent || t('knowledge.notRecorded') }}</dd></dl><p v-if="!opened.sourceSessions.length">{{ t('knowledge.noOriginSession') }}</p><RouterLink v-for="session in opened.sourceSessions" :key="session" :to="{ path: '/projects', query: { ...context.to('/projects').query, project: detailProject, session } }">{{ t('knowledge.originSession') }} · {{ session.slice(0, 8) }}</RouterLink><RouterLink :to="context.to('/documents')">{{ t('knowledge.relatedDocuments') }}</RouterLink></section>
             <section class="history" data-testid="memory-audit-panel"><h3>{{ t('knowledge.history') }}</h3><p v-if="!auditState" role="status">{{ t('knowledge.loading') }}</p><div v-else-if="auditState.kind === 'error'" class="state error"><p>{{ t(operatorDiagnosisKey(auditState.error)) }}</p><button class="btn" @click="readDetail">{{ t('knowledge.retry') }}</button></div><p v-else-if="!auditState.data?.entries.length">{{ t('knowledge.noMemoryHistory') }}</p><ol v-else><li v-for="entry in auditState.data.entries" :key="entry.id"><strong>{{ t(`knowledge.audit.${entry.action}`, entry.action) }}</strong><time>{{ time(entry.created_at) }}</time><span>{{ entry.actor || t('knowledge.notRecorded') }}</span><p v-if="entry.reason">{{ entry.reason }}</p></li></ol><p>{{ t('knowledge.auditLimit') }}</p></section>
             <details class="technical"><summary>{{ t('knowledge.technical') }}</summary><dl><dt>ID</dt><dd>{{ opened.id }}</dd><dt>{{ t('knowledge.projectIdentity') }}</dt><dd>{{ opened.project }}</dd><dt>{{ t('memory.detail.tier') }}</dt><dd>{{ opened.tier }}</dd><dt>{{ t('memory.detail.confidence') }}</dt><dd>{{ opened.confidenceKnown ? `${Math.round(opened.conf * 100)}%` : t('knowledge.unknown') }}</dd><dt>{{ t('memory.detail.utility') }}</dt><dd>{{ opened.utilityKnown ? `${opened.cite} / ${opened.inj}` : t('knowledge.unknown') }}</dd><dt>{{ t('knowledge.version') }}</dt><dd>{{ opened.version || t('knowledge.unknown') }}</dd></dl></details>
-            <details class="actions"><summary>{{ t('knowledge.manageRecord') }}</summary><p>{{ t('knowledge.confirmAction') }}</p><div class="action-row"><button v-if="opened.noise || opened.status === 'flagged'" class="btn" :disabled="busy" @click="act('restore')">{{ t(confirmation.includes(':restore:') ? 'knowledge.confirmRestore' : 'knowledge.restore') }}</button><button v-else class="btn" data-testid="memory-suppress-action" :disabled="busy" @click="act('suppress')">{{ t(confirmation.includes(':suppress:') ? 'memory.detail.actions.confirmHideNoise' : 'memory.detail.actions.hideNoise') }}</button><button class="btn" :disabled="busy" @click="act('archive')">{{ t(confirmation.includes(':archive:') ? 'knowledge.confirmArchive' : 'knowledge.archive') }}</button><button class="btn danger" :disabled="busy" @click="act('delete')">{{ t(confirmation.includes(':delete:') ? 'memory.detail.actions.confirmDelete' : 'memory.detail.actions.delete') }}</button></div></details>
+            <details class="actions"><summary>{{ t('knowledge.manageRecord') }}</summary><p>{{ t('knowledge.confirmAction') }}</p><div class="action-row"><button v-if="opened.noise || opened.status === 'flagged'" class="btn" :disabled="busy" @click="act('restore')">{{ t(confirmation.includes(':restore:') ? 'knowledge.confirmRestore' : 'knowledge.restore') }}</button><button v-else class="btn" data-testid="memory-suppress-action" :disabled="busy" @click="act('suppress')">{{ t(confirmation.includes(':suppress:') ? 'memory.detail.actions.confirmHideNoise' : 'memory.detail.actions.hideNoise') }}</button><button class="btn" :disabled="busy" @click="act('archive')">{{ t(confirmation.includes(':archive:') ? 'knowledge.confirmArchive' : 'knowledge.archive') }}</button><button class="btn danger" data-testid="memory-delete-action" :disabled="busy || !opened.mutationProject" @click="act('delete')">{{ t(confirmation.includes(':delete:') ? 'memory.detail.actions.confirmDelete' : 'memory.detail.actions.delete') }}</button></div></details>
           </template>
         </article>
       </div>
@@ -242,7 +251,7 @@ function time(value?: string) {
           <label><span>{{ t('memory.principal.controls.principal') }}</span><input v-model.trim="principalScope.principal" autocomplete="off" data-testid="principal-select" /></label>
           <label><span>{{ t('memory.principal.controls.kind') }}</span><select v-model="principalScope.principalKind"><option value="human">{{ t('memory.principal.kinds.human') }}</option><option value="agent">{{ t('memory.principal.kinds.agent') }}</option><option value="service">{{ t('memory.principal.kinds.service') }}</option></select></label>
           <label><span>{{ t('memory.principal.controls.domain') }}</span><input v-model.trim="principalScope.domain" data-testid="domain-select" /></label>
-          <label><span>{{ t('memory.principal.controls.project') }}</span><select v-model="principalScope.project" data-testid="project-scope"><option :value="PRINCIPAL_CURRENT_PROJECT">{{ t('memory.principal.projects.current') }}</option><option v-for="id in context.projects.value" :key="id" :value="id">{{ projectName(id) }}</option><option value="all">{{ t('knowledge.allProjects') }}</option></select></label>
+          <label><span>{{ t('memory.principal.controls.project') }}</span><select v-model="principalScope.project" data-testid="project-scope"><option :value="PRINCIPAL_CURRENT_PROJECT">{{ t('memory.principal.projects.current') }}</option><option v-if="isCatalogProject(principalScope.project) &amp;&amp; !context.projects.value.includes(principalScope.project)" :value="principalScope.project" disabled>{{ projectName(principalScope.project) }}</option><option v-for="id in context.projects.value" :key="id" :value="id">{{ projectName(id) }}</option><option value="all">{{ t('knowledge.allProjects') }}</option></select></label>
           <label><span>{{ t('memory.principal.controls.visibility') }}</span><select v-model="principalScope.visibility"><option value="all">{{ t('memory.principal.visibility.all') }}</option><option value="shared">{{ t('memory.principal.visibility.shared') }}</option><option value="private">{{ t('memory.principal.visibility.private') }}</option></select></label>
           <label class="check"><input v-model="principalScope.includePrivate" type="checkbox" />{{ t('knowledge.includePrivate') }}</label>
           <label class="check"><input v-model="principalAttribution" type="checkbox" data-testid="attribution-toggle" />{{ t('memory.principal.controls.attribution') }}</label>

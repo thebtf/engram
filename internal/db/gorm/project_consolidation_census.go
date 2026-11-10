@@ -4,13 +4,17 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/lib/pq"
+	"github.com/rs/zerolog/log"
 	gormlib "gorm.io/gorm"
 )
 
@@ -194,8 +198,28 @@ func consolidationDatabaseIdentity(tx *gormlib.DB) (string, error) {
 		Database, SystemIdentifier string
 		OID                        int64
 	}
-	err := tx.Raw(`SELECT current_database(),(SELECT system_identifier::text FROM pg_control_system()),(SELECT oid::bigint FROM pg_database WHERE datname=current_database())`).Row().Scan(&binding.Database, &binding.SystemIdentifier, &binding.OID)
-	if err != nil || binding.Database == "" || binding.SystemIdentifier == "" || binding.OID <= 0 {
+	rows, err := tx.Raw(`SELECT current_database(),(SELECT system_identifier::text FROM pg_control_system()),(SELECT oid::bigint FROM pg_database WHERE datname=current_database())`).Rows()
+	if err == nil {
+		if rows.Next() {
+			err = rows.Scan(&binding.Database, &binding.SystemIdentifier, &binding.OID)
+		} else if err = rows.Err(); err == nil {
+			err = sql.ErrNoRows
+		}
+		if closeErr := rows.Close(); err == nil {
+			err = closeErr
+		}
+	}
+	if err != nil {
+		var state interface{ SQLState() string }
+		event := log.Warn().Bool("deadline", errors.Is(err, context.DeadlineExceeded)).Bool("canceled", errors.Is(err, context.Canceled)).Bool("caller_canceled", errors.Is(tx.Statement.Context.Err(), context.Canceled)).Bool("caller_deadline", errors.Is(tx.Statement.Context.Err(), context.DeadlineExceeded)).Bool("no_rows", errors.Is(err, sql.ErrNoRows)).Bool("transaction_done", errors.Is(err, sql.ErrTxDone)).Bool("bad_connection", errors.Is(err, driver.ErrBadConn)).Bool("statement_closed", err.Error() == "sql: statement is closed").Str("error_type", fmt.Sprintf("%T", err)).Str("connection_type", fmt.Sprintf("%T", tx.Statement.ConnPool))
+		if errors.As(err, &state) {
+			event = event.Str("sqlstate", state.SQLState())
+		}
+		event.Msg("consolidation database identity query failed")
+		return "", &ConsolidationError{Code: "PROJECT_ADOPTION_SOURCE_IDENTITY_UNAVAILABLE", cause: err}
+	}
+	if binding.Database == "" || binding.SystemIdentifier == "" || binding.OID <= 0 {
+		log.Warn().Bool("database_missing", binding.Database == "").Bool("system_identifier_missing", binding.SystemIdentifier == "").Bool("invalid_oid", binding.OID <= 0).Msg("consolidation database identity incomplete")
 		return "", consolidationHold("SOURCE_IDENTITY_UNAVAILABLE")
 	}
 	return structuralDigest(binding), nil
@@ -227,10 +251,7 @@ func consolidationRevisionFor(tx *gormlib.DB, tables []consolidationTable) (stri
 				rows.Close()
 				return "", err
 			}
-			if err := encoder.Encode(struct {
-				Key     string
-				Version string
-			}{string(key), version}); err != nil {
+			if err := consolidationRevisionEntry(encoder, key, version); err != nil {
 				rows.Close()
 				return "", err
 			}
@@ -249,6 +270,13 @@ func consolidationRevisionFor(tx *gormlib.DB, tables []consolidationTable) (stri
 		return "", err
 	}
 	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func consolidationRevisionEntry(encoder *json.Encoder, key []byte, version string) error {
+	return encoder.Encode(struct {
+		Key     string
+		Version string
+	}{string(key), version})
 }
 
 // Only structural projections cross the connection during census. Bodies,
@@ -312,6 +340,12 @@ func (s *ProjectConsolidationStore) Census(ctx context.Context, sourceVersion st
 		return err
 	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 	if err != nil {
+		if ctx.Err() != nil {
+			return ConsolidationCensus{}, ctx.Err()
+		}
+		return ConsolidationCensus{}, err
+	}
+	if err := ctx.Err(); err != nil {
 		return ConsolidationCensus{}, err
 	}
 	reference, err := s.seal("census", state)
@@ -341,10 +375,8 @@ func (s *ProjectConsolidationStore) census(tx *gormlib.DB, sourceVersion string)
 	if err != nil {
 		return state, err
 	}
-	state.Snapshot, err = consolidationRevision(tx)
-	if err != nil {
-		return state, err
-	}
+	revision := sha256.New()
+	revisionEncoder := json.NewEncoder(revision)
 	state.Tables, err = consolidationDataTables(tx)
 	if err != nil {
 		return state, err
@@ -361,7 +393,13 @@ func (s *ProjectConsolidationStore) census(tx *gormlib.DB, sourceVersion string)
 	parentObjects := map[string][]string{}
 	incompleteParents := map[string]bool{}
 	for ti := range state.Tables {
+		if err := tx.Statement.Context.Err(); err != nil {
+			return state, err
+		}
 		table := &state.Tables[ti]
+		if err := revisionEncoder.Encode(table.Name); err != nil {
+			return state, err
+		}
 		table.Kind = consolidationDomain(table.Name)
 		var projection []string
 		for _, column := range columns {
@@ -389,9 +427,17 @@ func (s *ProjectConsolidationStore) census(tx *gormlib.DB, sourceVersion string)
 			return state, err
 		}
 		for rows.Next() {
+			if err := tx.Statement.Context.Err(); err != nil {
+				rows.Close()
+				return state, err
+			}
 			var keyJSON, raw []byte
 			var version string
 			if err := rows.Scan(&keyJSON, &version, &raw); err != nil {
+				rows.Close()
+				return state, err
+			}
+			if err := consolidationRevisionEntry(revisionEncoder, keyJSON, version); err != nil {
 				rows.Close()
 				return state, err
 			}
@@ -515,9 +561,20 @@ func (s *ProjectConsolidationStore) census(tx *gormlib.DB, sourceVersion string)
 			state.Gaps = append(state.Gaps, table.Name+":physical_native_key_read_only")
 		}
 	}
+	sequences, err := consolidationSequences(tx)
+	if err != nil {
+		return state, err
+	}
+	if err := revisionEncoder.Encode(sequences); err != nil {
+		return state, err
+	}
+	state.Snapshot = "sha256:" + hex.EncodeToString(revision.Sum(nil))
 	// PostgreSQL joins resolve complete FK keys without retaining payloads or
 	// quadratic scans of parent objects in Go.
 	for _, fk := range fks {
+		if err := tx.Statement.Context.Err(); err != nil {
+			return state, err
+		}
 		var child, parent *consolidationTable
 		for i := range state.Tables {
 			if state.Tables[i].Name == fk.TableName {
@@ -674,6 +731,11 @@ func (s *ProjectConsolidationStore) census(tx *gormlib.DB, sourceVersion string)
 		queue = append(queue, key)
 	}
 	for i := 0; i < len(queue); i++ {
+		if i%1024 == 0 {
+			if err := tx.Statement.Context.Err(); err != nil {
+				return state, err
+			}
+		}
 		for _, child := range dependents[queue[i]] {
 			remaining[child]--
 			if remaining[child] == 0 && !nonProject[child] {

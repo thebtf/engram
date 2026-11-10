@@ -752,6 +752,23 @@ func memoryMutationCanonicalProject(ctx context.Context, tx *gorm.DB, id int64) 
 	return projects[0], nil
 }
 
+// MemoryMutationProject identifies the unique native membership usable by the
+// existing mutation authorization path. It does not grant mutation authority.
+func (s *MemoryStore) MemoryMutationProject(ctx context.Context, id int64, caller scope.KeycardContext) (string, error) {
+	project, err := memoryMutationCanonicalProject(ctx, s.db, id)
+	if err != nil {
+		return "", err
+	}
+	memory, err := s.GetAuthorized(ctx, id, MemoryMutationAccess{Project: project, Caller: caller, RequireCanonicalProject: true})
+	if err != nil {
+		return "", err
+	}
+	if !scope.ResolveMemoryManage(caller, memory) {
+		return "", gorm.ErrRecordNotFound
+	}
+	return project, nil
+}
+
 // lockMemoryMutationAuthority follows consolidationLock's ascending relation
 // order before any target row lock. The early audit/memory relation locks keep
 // its all-table EXCLUSIVE writer from holding a later dependency while waiting

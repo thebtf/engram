@@ -211,6 +211,8 @@ disposition and no new operator-surface implementation work exists.
 - [ ] T089 Maintain AR-2 independent checker, migration verifier, reviewer, and judge receipt references in `analysis/ar2-pipeline-receipt.json` while preserving the historical AR-0 `analysis/pipeline-receipt.json` — governance obligation.
 - [ ] T090 Run the exact integrated AR-2 candidate build, applicable tests, migration/vector/payload validation, locally staged dogfood, rollback rehearsal, and worktree housekeeping before any later tag authority — FR-028, SC-018.
 - [ ] T091 Enforce no new operator working-surface design through release-plan review that emits a read-only verdict; persist that output after analysis in `specs/001-engram-architectural-recovery/analysis/spec-kit-analysis-rN.md` — FR-027.
+- [ ] T092 Implement and prove FR-007a authorized Rules alias reads and mapping-bound selection
+  invalidation, preserving disabled states, attribution, global semantics and injection behavior.
 
 ## Parallel Opportunities
 

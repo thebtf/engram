@@ -4,6 +4,7 @@ package gorm
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -16,6 +17,8 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
+	"github.com/google/uuid"
+	"github.com/thebtf/engram/internal/db/projectscope"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -81,6 +84,7 @@ type BehavioralRuleOrder struct {
 // selection currently bound to one browser owner/session/domain scope.
 type BehavioralRuleSelectionOperation struct {
 	Action           BehavioralRuleSelectionAction
+	ProjectionFilter *CollectionFilter
 	SelectionKind    CollectionSelectionKind
 	SelectionVersion int64
 	SelectionToken   string
@@ -126,7 +130,9 @@ const (
 )
 
 type behavioralRuleCollectionFilter struct {
-	scope string
+	scope       string
+	projects    []string
+	fingerprint string
 }
 
 type behavioralRuleCollectionCursorState struct {
@@ -141,15 +147,114 @@ type behavioralRuleCollectionCursorState struct {
 // NormalizeCollectionFilter converts the Rules scope named by a browser into
 // one canonical filter. The fingerprint is server-derived and fixes the only
 // supported order: priority DESC, created_at DESC, id DESC.
-func (s *BehavioralRulesStore) NormalizeCollectionFilter(_ context.Context, scope CollectionSelectionScope, rawScope string) (CollectionFilter, error) {
-	if err := validateCollectionSelectionScope(scope); err != nil || scope.Domain != "rules" {
-		return CollectionFilter{}, ErrCollectionSelectionDenied
+func (s *BehavioralRulesStore) NormalizeCollectionFilter(ctx context.Context, scope CollectionSelectionScope, rawScope string) (CollectionFilter, error) {
+	if err := behavioralRuleCollectionScopeValid(scope); err != nil {
+		return CollectionFilter{}, err
 	}
-	filter, err := behavioralRuleCollectionFilterForScope(rawScope)
+	f, err := s.resolveRulesFilter(ctx, rawScope)
 	if err != nil {
 		return CollectionFilter{}, err
 	}
-	return filter.collectionFilter(), nil
+	return f.collectionFilter(), nil
+}
+
+func (s *BehavioralRulesStore) resolveRulesFilter(ctx context.Context, raw string) (behavioralRuleCollectionFilter, error) {
+	f, err := behavioralRuleCollectionFilterForScope(raw)
+	if err != nil {
+		return f, err
+	}
+	id, err := uuid.Parse(raw)
+	if err != nil || id.String() != raw || id == uuid.Nil || s == nil || s.db == nil || s.db.Dialector.Name() != "postgres" {
+		return f, nil
+	}
+	query := `SELECT p.id FROM projects p WHERE p.removed_at IS NULL AND (p.identity_status IS NULL OR p.identity_status = 'active') AND ` + projectscope.CanonicalReadProjectSQL("p.id") + ` = ` + projectscope.CanonicalReadProjectSQL("?") + ` ORDER BY p.id`
+	if err := s.db.WithContext(ctx).Raw(query, raw, raw).Scan(&f.projects).Error; err != nil {
+		return f, err
+	}
+	if len(f.projects) == 0 {
+		f.projects = []string{raw}
+	}
+	digest := sha256.Sum256([]byte("rules-collection-group/v1\x00" + raw + "\x00" + strings.Join(f.projects, "\x00")))
+	f.fingerprint = "sha256:" + hex.EncodeToString(digest[:])
+	return f, nil
+}
+
+func RulesProjectionScope(scope CollectionSelectionScope, filter CollectionFilter) (CollectionSelectionScope, error) {
+	if behavioralRuleCollectionScopeValid(scope) != nil || !filter.Valid() {
+		return scope, ErrCollectionSelectionInvalid
+	}
+	if filter.Value != "all" && filter.Value != "global" {
+		id, err := uuid.Parse(filter.Value)
+		if err != nil || id.String() != filter.Value {
+			return scope, ErrCollectionSelectionInvalid
+		}
+	}
+	digest := sha256.Sum256([]byte("rules-selection-projection/v1\x00" + scope.ContextFingerprint + "\x00" + filter.Fingerprint))
+	scope.ContextFingerprint = "sha256:" + hex.EncodeToString(digest[:])
+	return scope, nil
+}
+
+func (s *BehavioralRulesStore) SaveRulesSelection(ctx context.Context, scope CollectionSelectionScope, raw string, selection CollectionSelection) (CollectionSelection, error) {
+	var saved CollectionSelection
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if tx.Dialector.Name() == "postgres" {
+			if err := aliasLock(tx); err != nil {
+				return err
+			}
+		}
+		store := NewBehavioralRulesStoreFromDB(tx)
+		filter, err := store.NormalizeCollectionFilter(ctx, scope, raw)
+		if err != nil {
+			return err
+		}
+		qualified, err := RulesProjectionScope(scope, filter)
+		if err != nil {
+			return err
+		}
+		switch selection.Kind {
+		case CollectionSelectionFrozenFilter:
+			frozen, err := store.FreezeCollectionSelection(ctx, qualified, filter)
+			if err != nil {
+				return err
+			}
+			selection.FilterFingerprint = filter.Fingerprint
+			selection.Targets = frozen.Targets
+			selection.ExpiresAt = frozen.ExpiresAt
+		case CollectionSelectionPage:
+			state, _, err := decodeBehavioralRuleCollectionCursor(selection.Cursor)
+			if err != nil {
+				return err
+			}
+			if state.Scope != filter.Value || state.Fingerprint != filter.Fingerprint {
+				return ErrCollectionSelectionReconfirmationRequired
+			}
+			selection.Targets, err = store.FreezeCollectionPageSelection(ctx, qualified, selection.Cursor)
+			if err != nil {
+				return err
+			}
+		case CollectionSelectionExplicit:
+			resolved, err := store.resolveRulesFilter(ctx, raw)
+			if err != nil {
+				return err
+			}
+			rows, err := store.behavioralRuleCollectionRows(ctx, resolved)
+			if err != nil {
+				return err
+			}
+			allowed := map[string]uint64{}
+			for _, row := range rows {
+				allowed[strconv.FormatInt(row.ID, 10)] = uint64(row.Version)
+			}
+			for _, target := range selection.Targets {
+				if allowed[target.ID] == 0 || allowed[target.ID] != target.ExpectedVersion {
+					return ErrCollectionSelectionDenied
+				}
+			}
+		}
+		saved, err = NewCollectionSelectionStore(tx).Save(ctx, qualified, selection)
+		return err
+	})
+	return saved, err
 }
 
 // FreezeCollectionSelection resolves the entire current Rules filter into
@@ -158,7 +263,7 @@ func (s *BehavioralRulesStore) FreezeCollectionSelection(ctx context.Context, sc
 	if err := behavioralRuleCollectionScopeValid(scope); err != nil {
 		return CollectionFrozenSelection{}, err
 	}
-	resolved, err := behavioralRuleCollectionFilterFrom(filter)
+	resolved, err := s.currentRulesFilter(ctx, filter)
 	if err != nil {
 		return CollectionFrozenSelection{}, err
 	}
@@ -188,6 +293,10 @@ func (s *BehavioralRulesStore) FreezeCollectionPageSelection(ctx context.Context
 	if err != nil {
 		return nil, err
 	}
+	filter, err = s.currentRulesFilter(ctx, CollectionFilter{Value: state.Scope, Fingerprint: state.Fingerprint})
+	if err != nil {
+		return nil, err
+	}
 	rows, err := s.behavioralRuleCollectionRows(ctx, filter)
 	if err != nil {
 		return nil, err
@@ -205,13 +314,26 @@ func (s *BehavioralRulesStore) FreezeCollectionPageSelection(ctx context.Context
 // PageCollection returns a stable Rules page. The cursor binds the canonical
 // filter, fixed sort, observed membership revision, offset, and page size.
 func (s *BehavioralRulesStore) PageCollection(ctx context.Context, scope CollectionSelectionScope, request CollectionPageRequest) (CollectionPage, error) {
+	if s == nil || s.db == nil {
+		return CollectionPage{}, ErrCollectionSelectionDenied
+	}
+	var page CollectionPage
+	err := s.rulesReadTransaction(ctx, func(tx *gorm.DB) error {
+		var err error
+		page, err = NewBehavioralRulesStoreFromDB(tx).pageCollectionTx(ctx, scope, request)
+		return err
+	})
+	return page, err
+}
+
+func (s *BehavioralRulesStore) pageCollectionTx(ctx context.Context, scope CollectionSelectionScope, request CollectionPageRequest) (CollectionPage, error) {
 	if err := behavioralRuleCollectionScopeValid(scope); err != nil {
 		return CollectionPage{}, err
 	}
 	if !request.Valid() || request.Domain != "rules" {
 		return CollectionPage{}, ErrCollectionSelectionInvalid
 	}
-	filter, err := behavioralRuleCollectionFilterFrom(request.Filter)
+	filter, err := s.currentRulesFilter(ctx, request.Filter)
 	if err != nil {
 		return CollectionPage{}, err
 	}
@@ -272,6 +394,9 @@ func behavioralRuleCollectionFilterForScope(scope string) (behavioralRuleCollect
 }
 
 func (filter behavioralRuleCollectionFilter) collectionFilter() CollectionFilter {
+	if filter.fingerprint != "" {
+		return CollectionFilter{Fingerprint: filter.fingerprint, Value: filter.scope}
+	}
 	digest := sha256.Sum256([]byte("rules-collection-filter/v1\x00priority:desc\x00created_at:desc\x00id:desc\x00scope:" + filter.scope))
 	return CollectionFilter{Fingerprint: "sha256:" + hex.EncodeToString(digest[:]), Value: filter.scope}
 }
@@ -287,7 +412,25 @@ func behavioralRuleCollectionFilterFrom(filter CollectionFilter) (behavioralRule
 	return resolved, nil
 }
 
+func (s *BehavioralRulesStore) currentRulesFilter(ctx context.Context, filter CollectionFilter) (behavioralRuleCollectionFilter, error) {
+	if !filter.Valid() {
+		return behavioralRuleCollectionFilter{}, ErrCollectionSelectionInvalid
+	}
+	resolved, err := s.resolveRulesFilter(ctx, filter.Value)
+	if err != nil {
+		return resolved, err
+	}
+	if resolved.collectionFilter().Fingerprint != filter.Fingerprint {
+		return resolved, ErrCollectionSelectionReconfirmationRequired
+	}
+	return resolved, nil
+}
+
 func (s *BehavioralRulesStore) behavioralRuleCollectionRows(ctx context.Context, filter behavioralRuleCollectionFilter) ([]BehavioralRule, error) {
+	return s.behavioralRuleCollectionRowsLimit(ctx, filter, 0)
+}
+
+func (s *BehavioralRulesStore) behavioralRuleCollectionRowsLimit(ctx context.Context, filter behavioralRuleCollectionFilter, limit int) ([]BehavioralRule, error) {
 	if s == nil || s.db == nil {
 		return nil, errors.New("behavioral rules store is not configured")
 	}
@@ -297,7 +440,17 @@ func (s *BehavioralRulesStore) behavioralRuleCollectionRows(ctx context.Context,
 	case behavioralRuleCollectionGlobal:
 		query = query.Where(behavioralRuleGlobalProjectWhere)
 	default:
-		query = query.Where("project = ? OR project IS NULL", filter.scope)
+		if len(filter.projects) > 0 {
+			query = query.Where("project IN ? OR project IS NULL", filter.projects)
+			if s.db.Dialector.Name() == "postgres" {
+				query = query.Where(`project IS NULL OR NOT EXISTS (SELECT 1 FROM project_consolidation_memberships m WHERE m.table_name = 'behavioral_rules' AND m.field_path = '["project"]' AND m.row_key->>'id' = CAST(behavioral_rules.id AS text) AND (m.project_id IS NULL OR m.project_id NOT IN ?))`, filter.projects)
+			}
+		} else {
+			query = query.Where("project = ? OR project IS NULL", filter.scope)
+		}
+	}
+	if limit > 0 {
+		query = query.Limit(limit)
 	}
 	var rows []BehavioralRule
 	if err := query.Order("priority DESC").Order("created_at DESC").Order("id DESC").Find(&rows).Error; err != nil {
@@ -364,7 +517,7 @@ func decodeBehavioralRuleCollectionCursor(cursor string) (behavioralRuleCollecti
 		return behavioralRuleCollectionCursorState{}, behavioralRuleCollectionFilter{}, ErrCollectionSelectionInvalid
 	}
 	filter, err := behavioralRuleCollectionFilterForScope(state.Scope)
-	if err != nil || filter.collectionFilter().Fingerprint != state.Fingerprint {
+	if err != nil || !validCollectionSelectionFingerprint(state.Fingerprint) {
 		return behavioralRuleCollectionCursorState{}, behavioralRuleCollectionFilter{}, ErrCollectionSelectionInvalid
 	}
 	return state, filter, nil
@@ -449,6 +602,56 @@ func (s *BehavioralRulesStore) Get(ctx context.Context, id int64) (*models.Behav
 // limit must be > 0; if ≤ 0 it is clamped to 50.
 func (s *BehavioralRulesStore) List(ctx context.Context, project *string, limit int) ([]*models.BehavioralRule, error) {
 	return s.list(ctx, project, limit, false)
+}
+
+// rulesReadTransaction uses a snapshot for standalone reads. A caller-owned
+// transaction cannot change isolation after it has run queries, so retain the
+// alias lock there and execute on that same transaction, including its writes.
+func (s *BehavioralRulesStore) rulesReadTransaction(ctx context.Context, read func(*gorm.DB) error) error {
+	db := s.db.WithContext(ctx)
+	if _, nested := db.Statement.ConnPool.(gorm.TxCommitter); nested {
+		if db.Dialector.Name() == "postgres" {
+			if err := aliasLock(db); err != nil {
+				return err
+			}
+		}
+		return read(db)
+	}
+	if db.Dialector.Name() == "postgres" {
+		return db.Transaction(read, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	}
+	return db.Transaction(read)
+}
+
+func (s *BehavioralRulesStore) ListOperator(ctx context.Context, project *string, limit int) ([]*models.BehavioralRule, error) {
+	if project == nil {
+		return s.List(ctx, project, limit)
+	}
+	id, err := uuid.Parse(*project)
+	if err != nil || id == uuid.Nil || id.String() != *project {
+		return s.List(ctx, project, limit)
+	}
+	var result []*models.BehavioralRule
+	err = s.rulesReadTransaction(ctx, func(tx *gorm.DB) error {
+		store := NewBehavioralRulesStoreFromDB(tx)
+		filter, err := store.resolveRulesFilter(ctx, *project)
+		if err != nil {
+			return err
+		}
+		if limit <= 0 {
+			limit = 50
+		}
+		rows, err := store.behavioralRuleCollectionRowsLimit(ctx, filter, limit)
+		if err != nil {
+			return err
+		}
+		result = make([]*models.BehavioralRule, len(rows))
+		for i := range rows {
+			result[i] = behavioralRuleRowToModel(&rows[i])
+		}
+		return nil
+	})
+	return result, err
 }
 
 // ListEnabled returns only enabled active behavioral rules for injection paths.
@@ -639,9 +842,41 @@ func (s *BehavioralRulesStore) ApplySelectionOperation(ctx context.Context, scop
 
 	var result BehavioralRuleSelectionOperationResult
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if operation.ProjectionFilter != nil {
+			if tx.Dialector.Name() == "postgres" {
+				if err := aliasLock(tx); err != nil {
+					return err
+				}
+			}
+			store := NewBehavioralRulesStoreFromDB(tx)
+			_, err := store.currentRulesFilter(ctx, *operation.ProjectionFilter)
+			if err != nil {
+				return err
+			}
+		}
 		targets, err := behavioralRuleSelectionTargetsForOperation(tx, scope, operation)
 		if err != nil {
 			return err
+		}
+		if operation.ProjectionFilter != nil {
+			store := NewBehavioralRulesStoreFromDB(tx)
+			filter, err := store.currentRulesFilter(ctx, *operation.ProjectionFilter)
+			if err != nil {
+				return err
+			}
+			rows, err := store.behavioralRuleCollectionRows(ctx, filter)
+			if err != nil {
+				return err
+			}
+			permitted := make(map[int64]uint64, len(rows))
+			for _, row := range rows {
+				permitted[row.ID] = uint64(row.Version)
+			}
+			for _, target := range targets {
+				if permitted[target.id] != target.expectedVersion {
+					return ErrBehavioralRuleSelectionConflict
+				}
+			}
 		}
 		if operation.Action == BehavioralRuleSelectionReorder {
 			return applyBehavioralRuleReorder(tx, targets, operation, &result)
@@ -906,7 +1141,15 @@ func applyBehavioralRuleReorder(tx *gorm.DB, targets []behavioralRuleSelectionTa
 	if err != nil {
 		return err
 	}
-	rows, err := lockBehavioralRuleReorderRows(tx, operation.Scope.Project, ordered, len(operation.Order))
+	var projects []string
+	if operation.ProjectionFilter != nil && operation.Scope.Project != nil {
+		filter, err := NewBehavioralRulesStoreFromDB(tx).resolveRulesFilter(tx.Statement.Context, *operation.Scope.Project)
+		if err != nil {
+			return err
+		}
+		projects = filter.projects
+	}
+	rows, err := lockBehavioralRuleReorderRows(tx, operation.Scope.Project, projects, ordered, len(operation.Order))
 	if err != nil {
 		return err
 	}
@@ -945,10 +1188,15 @@ func behavioralRuleReorderOrders(targets []behavioralRuleSelectionTarget, order 
 	return ordered, nil
 }
 
-func lockBehavioralRuleReorderRows(tx *gorm.DB, project *string, ordered map[int64]BehavioralRuleOrder, count int) (map[int64]*BehavioralRule, error) {
+func lockBehavioralRuleReorderRows(tx *gorm.DB, project *string, projects []string, ordered map[int64]BehavioralRuleOrder, count int) (map[int64]*BehavioralRule, error) {
 	query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(behavioralRuleUndeletedWhere)
 	if project == nil {
 		query = query.Where(behavioralRuleGlobalProjectWhere)
+	} else if len(projects) > 0 {
+		query = query.Where("project IN ?", projects)
+		if tx.Dialector.Name() == "postgres" {
+			query = query.Where(`NOT EXISTS (SELECT 1 FROM project_consolidation_memberships m WHERE m.table_name = 'behavioral_rules' AND m.field_path = '["project"]' AND m.row_key->>'id' = CAST(behavioral_rules.id AS text) AND (m.project_id IS NULL OR m.project_id NOT IN ?))`, projects)
+		}
 	} else {
 		query = query.Where("project = ?", *project)
 	}

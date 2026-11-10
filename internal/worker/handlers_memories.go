@@ -662,7 +662,14 @@ func (s *Service) handleGetMemoryByID(w http.ResponseWriter, r *http.Request) {
 
 	safe := jsonSafeMemory(memory)
 	safe.Project = page.project
-	writeJSON(w, safe)
+	mutationProject := ""
+	if s.memoryStore != nil {
+		mutationProject, _ = s.memoryStore.MemoryMutationProject(r.Context(), id, memoryVisibilityCaller(r.Context(), ""))
+	}
+	writeJSON(w, struct {
+		*models.Memory
+		MutationProject string `json:"mutation_project,omitempty"`
+	}{Memory: safe, MutationProject: mutationProject})
 }
 
 // injectionCandidateStore is the subset of the MemoryStore surface that

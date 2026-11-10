@@ -47,6 +47,7 @@ export interface Memory {
  tier: 'semantic' | 'episodic' | 'procedural' | 'unknown'
  type: string
  project: string
+ mutationProject?: string
  conf: number
  confidenceKnown: boolean
  cite: number

@@ -6,7 +6,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/thebtf/engram/internal/auth"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -138,4 +142,52 @@ func TestCorrectionHTTPSelectsNativeBeforeLimitPostgres(t *testing.T) {
 		return ids
 	}(), "active").Count(&mutated).Error)
 	assert.Zero(t, mutated)
+}
+
+func TestMemoryAliasReadDeleteUsesNativeBindingPostgres(t *testing.T) {
+	store := openWorkerUCIContextCompositionStore(t)
+	ctx := auth.WithIdentity(context.Background(), auth.AuthDisabled())
+	native, primary := uuid.NewString(), uuid.NewString()
+	for _, id := range []string{native, primary} {
+		require.NoError(t, store.DB.Create(&gormdb.Project{ID: id}).Error)
+	}
+	memories := gormdb.NewMemoryStore(store)
+	row, err := memories.Create(ctx, &models.Memory{Project: native, Content: "synthetic alias deletion", SourceAgent: "fixture"})
+	require.NoError(t, err)
+	require.NoError(t, store.DB.Exec(`INSERT INTO project_consolidation_redirects(selector,session_id,project_id,plan_fingerprint) VALUES (?, '', ?, 'fixture')`, native, primary).Error)
+	svc := &Service{memoryStore: memories, sessionStore: gormdb.NewSessionStore(store)}
+	router := chi.NewRouter()
+	router.Get("/api/memories", svc.handleListMemories)
+	router.Get("/api/memories/{id}", svc.handleGetMemoryByID)
+	router.Delete("/api/memories/{id}", svc.handleDeleteMemoryByID)
+	call := func(method, path string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(method, path, nil).WithContext(ctx))
+		return rec
+	}
+	list := call(http.MethodGet, "/api/memories?project="+primary)
+	require.Equal(t, http.StatusOK, list.Code, list.Body.String())
+	var page struct {
+		Items []struct {
+			ID      int64  `json:"id"`
+			Project string `json:"project"`
+		} `json:"items"`
+	}
+	require.NoError(t, json.Unmarshal(list.Body.Bytes(), &page))
+	require.Len(t, page.Items, 1)
+	require.Equal(t, row.ID, page.Items[0].ID)
+	require.Equal(t, primary, page.Items[0].Project)
+	path := "/api/memories/" + strconv.FormatInt(row.ID, 10) + "?project="
+	detail := call(http.MethodGet, path+primary)
+	require.Equal(t, http.StatusOK, detail.Code, detail.Body.String())
+	var read struct {
+		Project         string `json:"project"`
+		MutationProject string `json:"mutation_project"`
+	}
+	require.NoError(t, json.Unmarshal(detail.Body.Bytes(), &read))
+	require.Equal(t, primary, read.Project)
+	require.Equal(t, native, read.MutationProject)
+	require.Equal(t, http.StatusNotFound, call(http.MethodDelete, path+primary).Code, "read alias alone must not grant mutation")
+	deleted := call(http.MethodDelete, path+read.MutationProject)
+	require.Equal(t, http.StatusOK, deleted.Code, deleted.Body.String())
 }

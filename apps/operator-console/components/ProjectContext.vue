@@ -17,6 +17,7 @@ function select(event: Event) { if (event.target instanceof HTMLSelectElement) v
       <span>{{ t('knowledge.contextProject') }}</span>
       <select :value="project" :aria-label="t('knowledge.contextProject')" :disabled="pending && !projects.length" @change="select" data-testid="project-context-select">
         <option value="" disabled>{{ t('knowledge.chooseProject') }}</option>
+        <option v-if="project &amp;&amp; project !== 'all' &amp;&amp; !projects.includes(project)" :value="project" disabled hidden>{{ projectChoiceLabel(project) }}</option>
         <template v-for="section in projectSections" :key="section.key">
           <option v-for="id in section.label ? [] : section.ids" :key="id" :value="id">{{ projectChoiceLabel(id) }}</option>
           <optgroup v-if="section.label" :label="section.label">

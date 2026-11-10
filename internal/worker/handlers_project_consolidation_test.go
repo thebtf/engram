@@ -441,6 +441,42 @@ func (response *consolidationDeadlineResponse) SetReadDeadline(deadline time.Tim
 	return nil
 }
 
+func TestProjectConsolidationCensusPreflightDeadlineOwner(t *testing.T) {
+	for _, tc := range []struct{ method, path string }{
+		{http.MethodGet, "/api/projects/consolidation/census"},
+		{http.MethodPost, "/api/projects/consolidation/preflight"},
+	} {
+		t.Run(tc.method+tc.path, func(t *testing.T) {
+			r := httptest.NewRequest(tc.method, tc.path, strings.NewReader("{}"))
+			r = r.WithContext(auth.WithIdentity(r.Context(), auth.Admin()))
+			w := &consolidationDeadlineResponse{ResponseRecorder: httptest.NewRecorder()}
+			requestTimeout(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				deadline, ok := r.Context().Deadline()
+				if !ok || time.Until(deadline) <= DefaultHTTPTimeout || time.Until(deadline) > projectConsolidationOperationTimeout {
+					t.Fatal("census/preflight must use the bounded consolidation deadline")
+				}
+			})).ServeHTTP(w, r)
+		})
+	}
+}
+
+func TestProjectConsolidationCancellationHTTPError(t *testing.T) {
+	for _, tc := range []struct {
+		err    error
+		status int
+		code   string
+	}{
+		{context.DeadlineExceeded, http.StatusGatewayTimeout, "PROJECT_ADOPTION_DEADLINE_EXCEEDED"},
+		{context.Canceled, http.StatusRequestTimeout, "PROJECT_ADOPTION_CANCELED"},
+	} {
+		w := httptest.NewRecorder()
+		consolidationHTTPError(w, tc.err)
+		if w.Code != tc.status || !strings.Contains(w.Body.String(), tc.code) {
+			t.Fatalf("context error = %d %s, expected %d %s", w.Code, w.Body.String(), tc.status, tc.code)
+		}
+	}
+}
+
 func TestProjectConsolidationOperationDeadline(t *testing.T) {
 	for _, path := range []string{"backup", "verify-backup", "dry-run", "apply"} {
 		t.Run("non-admin slow body/"+path, func(t *testing.T) {

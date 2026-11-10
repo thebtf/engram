@@ -214,6 +214,13 @@ its current supported contract and prove identity handling is consistent where i
   selector requires per-record mapping; unresolved rows remain accessible in an explicit review
   section under existing privacy checks, not normal project choices. Migration and restoration
   MUST account for writes after the snapshot; key changes alone MUST NOT reindex unchanged content.
+- **FR-007a (2026-11-10 Rules consolidation):** A confirmed current server-resolved UUID
+  redirect group may widen the authorized behavioral-rules collection consistently for list,
+  page, freeze, reorder and existing selected-collection mutations; a redirect grants no access.
+  Preserve original attribution, IDs, content, versions, enabled states and global-rule semantics.
+  Conflicting or unresolved memberships stay excluded and inspectable. Mapping change or rollback
+  invalidates earlier frozen selections before mutation. Do not rewrite rows or activate rules.
+  Automatic rule injection, ListEnabled and governance activation fallback are outside this cut.
 - **FR-008**: The product MUST accept supported session or task evidence durably before
   acknowledging it and must persist source, project, principal, privacy, provenance, timestamp,
   and idempotency fingerprint.

@@ -66,6 +66,42 @@ test('exact DTO rejects legacy shapes and duplicate IDs, but keeps equal names d
   assert.throws(() => core.parseProjectCatalog({ items: [{ project_id: 'Same name', name: 'Same name' }], unresolved: [] }), TypeError)
 })
 
+test('confirmed groups canonicalize alias routes while retaining document identity and distinct equal-name projects', async t => {
+  const C = '33333333-3333-4333-8333-333333333333'
+  const items = [{ project_id: A, name: 'Same' }, { project_id: B, name: 'Old alias' }, { project_id: C, name: 'Same' }]
+  const { core, context, router } = await mount(t, `/documents?project=${B}&docProject=${B}&path=shared.md&document_id=101`, url => {
+    if (url.pathname === '/api/projects') return { items, unresolved: [], logical_groups: [{ primary_project_id: A, alias_project_ids: [B] }] }
+    throw new Error(`Unexpected request ${url}`)
+  })
+  assert.deepEqual([...context.projects.value].sort(), [A, C].sort())
+  assert.equal(core.isCatalogProject(B), true)
+  assert.equal(core.isCatalogProject('not-a-uuid'), false)
+  assert.equal(core.canonicalProjectName(B), core.canonicalProjectName(A))
+  assert.notEqual(core.canonicalProjectName(A), core.canonicalProjectName(C))
+  assert.equal(context.project.value, A)
+  assert.equal(router.currentRoute.value.query.project, A)
+  assert.equal(router.currentRoute.value.query.docProject, B)
+  assert.equal(router.currentRoute.value.query.document_id, '101')
+})
+
+test('common project labels exclude hidden aliases from duplicate-name numbering', async t => {
+  const C = '33333333-3333-4333-8333-333333333333'
+  const items = [A, B, C].map(project_id => ({ project_id, name: 'Same name' }))
+  const { core, context } = await mount(t, '/', url => {
+    if (url.pathname === '/api/projects') return { items: [...items].reverse(), unresolved: [], logical_groups: [{ primary_project_id: A, alias_project_ids: [B] }] }
+    throw new Error(`Unexpected request ${url}`)
+  })
+  assert.deepEqual([...context.projects.value].sort(), [A, C])
+  assert.equal(core.projectName(A), 'Same name #1')
+  assert.equal(core.canonicalProjectName(A), core.projectName(A))
+  assert.equal(core.projectName(B), core.projectName(A))
+  assert.equal(core.canonicalProjectName(B), core.projectName(A))
+  assert.equal(core.projectName(C), 'Same name #2')
+  assert.equal(core.canonicalProjectName(C), core.projectName(C))
+  assert.notEqual(core.projectName(A), core.projectName(C))
+  assert.equal(core.isCatalogProject(B), true)
+})
+
 test('retained reader metadata is required, exact and does not turn metadata-only groups into projects', async (t) => {
   const { core } = await mount(t, '/', usual)
   const row = catalog.unresolved[0]

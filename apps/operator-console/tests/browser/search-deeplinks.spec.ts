@@ -21,7 +21,10 @@ test('search deep links preserve a q-only prefill and open the scoped memory row
   expect(searchRequests[0].searchParams.get('query')).toBe('operator console')
 
   await page.getByTestId('search-result-open-101').click()
-  await expect(page).toHaveURL(new RegExp(`/memory\\?project=${projectID}&memory=101`))
+  await expect.poll(() => {
+    const url = new URL(page.url())
+    return { path: url.pathname, project: url.searchParams.get('project'), memoryProject: url.searchParams.get('memoryProject'), memory: url.searchParams.get('memory') }
+  }).toEqual({ path: '/memory', project: projectID, memoryProject: projectID, memory: '101' })
   await expect(page.getByTestId('project-context-select')).toHaveValue(projectID)
   await expect(page.getByTestId('memory-row-101')).toHaveAttribute('aria-pressed', 'true')
   await expect(page.getByTestId('memory-content')).toHaveText('operator console = data plane: manage memory PRODUCT, config one Settings tab')
@@ -41,7 +44,10 @@ test('search deep link fetches and opens a memory omitted by the capped list', a
   await page.goto(`/search?q=older%20memory&project=${projectID}`)
   await page.getByTestId('search-result-open-501').click()
 
-  await expect(page).toHaveURL(new RegExp(`/memory\\?project=${projectID}&memory=501`))
+  await expect.poll(() => {
+    const url = new URL(page.url())
+    return { path: url.pathname, project: url.searchParams.get('project'), memoryProject: url.searchParams.get('memoryProject'), memory: url.searchParams.get('memory') }
+  }).toEqual({ path: '/memory', project: projectID, memoryProject: projectID, memory: '501' })
   await expect(page.getByTestId('memory-content')).toHaveText('older memory omitted by the 500-row project list')
   expect(exactRequests[0].searchParams.get('project')).toBe(projectID)
   expect(exactRequests).toHaveLength(1)

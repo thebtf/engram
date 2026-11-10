@@ -1,6 +1,6 @@
 import { onBeforeUnmount, ref as sharedRef, type Ref as SharedRef } from 'vue'
 import { startedLoads } from './useConsolePreferences'
-import { useOperatorProjectContext } from './useOperatorProjectContext'
+import { canonicalProjectID, isCatalogProject, useOperatorProjectContext } from './useOperatorProjectContext'
 
 let sharedProjectsPageProjects: SharedRef<string[]> | undefined
 let sharedProjectsPageRecentSessions: SharedRef<OperatorSessionRow[]> | undefined
@@ -308,7 +308,7 @@ export function useOperatorProjects(projectContext?: Ref<string>): {
     try {
       const row = await operatorFetchJson<ApiSessionRow>(path, undefined, 'sessions-detail')
       if (generation !== detailGeneration || project !== selectedProject.value) return
-      if (row.project !== project) throw new TypeError('Session detail scope mismatch')
+      if (!row.project || !isCatalogProject(row.project) || !isCatalogProject(project) || canonicalProjectID(row.project) !== canonicalProjectID(project) || (row.claude_session_id || row.claudeSessionId) !== id) throw new TypeError('Session detail scope mismatch')
       selectedSession.value = mapSession(row)
       detailStateValue.value = liveState(evidence, selectedSession.value)
     } catch (nextError) {
@@ -319,7 +319,7 @@ export function useOperatorProjects(projectContext?: Ref<string>): {
   }
 
   async function openSession(session: OperatorSessionRow) {
-    if (session.project !== selectedProject.value) return
+    if (!isCatalogProject(session.project) || !isCatalogProject(selectedProject.value) || canonicalProjectID(session.project) !== canonicalProjectID(selectedProject.value)) return
     if (session.claudeSessionId) await openSessionByID(session.claudeSessionId)
     else {
       selectedSession.value = session

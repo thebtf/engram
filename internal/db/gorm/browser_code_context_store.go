@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/thebtf/engram/internal/db/projectscope"
 	"github.com/thebtf/engram/internal/uci"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -142,6 +143,10 @@ func NewBrowserCodeContextStore(db *gorm.DB) *BrowserCodeContextStore {
 	}
 }
 
+// Affiliation only filters discovery; membership and exact code authority are unchanged.
+var browserCodeProjectAffiliation = `(? = '' OR EXISTS (SELECT 1 FROM (SELECT ?::text AS chosen) selected_scope WHERE ` +
+	projectscope.CanonicalReadProjectSQL("selected_scope.chosen") + ` = ` + projectscope.CanonicalReadProjectSQL("membership.project_id") + `))`
+
 // ListCatalog returns each active grant's exact published Views in stable
 // Source, Checkout, generation, and View order. A checkout without a View is
 // returned once with Context nil and IndexIntentAvailable true.
@@ -213,7 +218,7 @@ func (s *BrowserCodeContextStore) ListCatalog(ctx context.Context, subjectUserID
 			AND checkout.owner_principal = browser_grant.issuer_principal
 			AND source.state = ?
 			AND checkout.state IN (?, ?, ?)
-			AND (? = '' OR membership.project_id = ?)
+			AND `+browserCodeProjectAffiliation+`
 			AND (? = '' OR membership.unresolved_reference = ?)
 		ORDER BY browser_grant.source_id ASC, browser_grant.checkout_id ASC, view_row.generation DESC NULLS LAST, view_row.view_id ASC
 		LIMIT ?
@@ -274,7 +279,7 @@ func (s *BrowserCodeContextStore) ListNoAuthCatalog(ctx context.Context, filter 
 		) AS view_row ON TRUE
 		WHERE source.auth_realm = ? AND checkout.owner_principal = ?
 			AND source.state = ? AND checkout.state IN (?, ?, ?)
-			AND (? = '' OR membership.project_id = ?)
+			AND `+browserCodeProjectAffiliation+`
 			AND (? = '' OR membership.unresolved_reference = ?)
 		ORDER BY source.source_id, checkout.checkout_id, view_row.generation DESC NULLS LAST, view_row.view_id
 		LIMIT ?
@@ -300,7 +305,7 @@ func (s *BrowserCodeContextStore) ListNoAuthCatalog(ctx context.Context, filter 
 		`+browserCodeProjectMembershipJoin+`
 		WHERE source.auth_realm = ? AND checkout.owner_principal = ?
 			AND source.state = ? AND checkout.state = ?
-			AND (? = '' OR membership.project_id = ?)
+			AND `+browserCodeProjectAffiliation+`
 			AND (? = '' OR membership.unresolved_reference = ?)
 		ORDER BY checkout.updated_at DESC, checkout.checkout_id
 		LIMIT ?

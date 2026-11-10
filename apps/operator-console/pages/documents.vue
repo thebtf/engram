@@ -16,7 +16,7 @@ const prefix = computed(() => typeof route.query.pathPrefix === 'string' ? route
 const types = computed(() => { const value = safeNavigation(route.query, route.fullPath).docType; return value === undefined ? [] : Array.isArray(value) ? value : [value] })
 const hasTypes = computed(() => types.value.length > 0)
 const requestedPath = computed(() => typeof route.query.path === 'string' ? route.query.path : '')
-const documentProject = computed(() => project.value === 'all' && typeof route.query.docProject === 'string' ? route.query.docProject : project.value)
+const documentProject = computed(() => typeof route.query.docProject === 'string' ? route.query.docProject : project.value)
 const requestedDocumentID = computed(() => route.query.document_id)
 const lineageUnavailable = computed(() => documentScopeUncertain(documentProject.value) || (requestedDocumentID.value !== undefined && (!validDocumentID(requestedDocumentID.value) || !supportsDocumentLineage(documentProject.value))))
 const lineageActionsUnavailable = computed(() => documentScopeUncertain(documentProject.value))

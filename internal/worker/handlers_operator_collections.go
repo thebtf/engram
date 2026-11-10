@@ -2,13 +2,10 @@ package worker
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"net/http"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 )
@@ -132,6 +129,34 @@ func (adapter *OperatorCollectionHTTPAdapter) HandleSnapshot(w http.ResponseWrit
 	resolved, ok := adapter.resolveScope(w, r.Context(), identity, scope, request.Domain)
 	if !ok {
 		return
+	}
+	if request.Domain == operatorCollectionSelectionDomain {
+		if request.Filter == nil {
+			operatorCodeWriteBodyless(w, http.StatusBadRequest)
+			return
+		}
+		selection, err := request.selection()
+		if err != nil || (selection.Kind == gormdb.CollectionSelectionFrozenFilter && (request.Selection.Filter == nil || request.Selection.Filter.Scope != request.Filter.Scope)) {
+			operatorCodeWriteBodyless(w, http.StatusBadRequest)
+			return
+		}
+		if router, ok := adapter.normalizer.(operatorCollectionProviderRouter); ok {
+			if bridge, ok := router[operatorCollectionSelectionDomain].(interface {
+				SaveRulesSelection(context.Context, gormdb.CollectionSelectionScope, string, gormdb.CollectionSelection) (gormdb.CollectionSelection, error)
+			}); ok {
+				saved, err := bridge.SaveRulesSelection(r.Context(), resolved, request.Filter.Scope, selection)
+				if err != nil {
+					if errors.Is(err, gormdb.ErrCollectionSelectionInvalid) || errors.Is(err, gormdb.ErrCollectionSelectionReconfirmationRequired) || errors.Is(err, gormdb.ErrCollectionSelectionDenied) {
+						operatorCollectionWriteSnapshotError(w, err)
+					} else {
+						operatorCodeWriteBodyless(w, http.StatusServiceUnavailable)
+					}
+					return
+				}
+				writeJSON(w, operatorCollectionSnapshotResponse{Selection: newOperatorCollectionSnapshotDTO(request.Domain, saved)})
+				return
+			}
+		}
 	}
 	resolved, ok = adapter.resolveRulesProjection(w, r.Context(), resolved, request.Filter)
 	if !ok {
@@ -388,19 +413,7 @@ func (adapter *OperatorCollectionHTTPAdapter) resolveRulesProjection(w http.Resp
 }
 
 func rulesCollectionProjectionScope(scope gormdb.CollectionSelectionScope, filter gormdb.CollectionFilter) (gormdb.CollectionSelectionScope, error) {
-	if scope.Domain != operatorCollectionSelectionDomain || !filter.Valid() {
-		return gormdb.CollectionSelectionScope{}, gormdb.ErrCollectionSelectionInvalid
-	}
-	if filter.Value != "all" && filter.Value != "global" {
-		project, err := uuid.Parse(filter.Value)
-		if err != nil || project.String() != filter.Value {
-			return gormdb.CollectionSelectionScope{}, gormdb.ErrCollectionSelectionInvalid
-		}
-	}
-	// The browser supplies a projection, never its server-owned identity digest.
-	digest := sha256.Sum256([]byte("rules-selection-projection/v1\x00" + scope.ContextFingerprint + "\x00" + filter.Fingerprint))
-	scope.ContextFingerprint = "sha256:" + hex.EncodeToString(digest[:])
-	return scope, nil
+	return gormdb.RulesProjectionScope(scope, filter)
 }
 
 func operatorCollectionWriteSnapshotError(w http.ResponseWriter, err error) {
