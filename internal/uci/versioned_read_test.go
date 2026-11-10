@@ -276,32 +276,54 @@ func newVersionedReadTestFixture() versionedReadTestFixture {
 func TestUCIVersionedReadStaleOrForeignEvidenceCannotLeakFakeStoreBody(t *testing.T) {
 	fixture := newVersionedReadTestFixture()
 	for _, test := range []struct {
-		name   string
-		mutate func(*VersionedReadSpec)
+		name            string
+		mutate          func(*VersionedReadSpec)
+		matchForeignHit bool
+		wantError       string
 	}{
 		{
-			name: "stale digest",
+			name:      "stale digest",
+			wantError: "store returned a mismatched hit",
 			mutate: func(spec *VersionedReadSpec) {
 				spec.ContentDigest = QueryContentDigest(strings.Repeat("0", 64))
 			},
 		},
 		{
-			name: "foreign view",
+			name:      "foreign view",
+			wantError: "store returned a mismatched hit",
 			mutate: func(spec *VersionedReadSpec) {
 				spec.Entity.ViewID = "40000000-0000-4000-8000-000000000092"
 			},
+		},
+		{
+			name: "foreign view with matching forged hit",
+			mutate: func(spec *VersionedReadSpec) {
+				spec.Entity.ViewID = "40000000-0000-4000-8000-000000000092"
+			},
+			matchForeignHit: true,
+			wantError:       "store returned a hit outside the authorized view",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			spec := fixture.spec
 			test.mutate(&spec)
-			store := &versionedReadTestStore{result: VersionedReadStoreResult{Coverage: IndexCoverageComplete}}
-			response, err := NewVersionedReadService(store).Read(context.Background(), newAuthorizedContext(fixture.context), spec)
-			if err != nil {
-				t.Fatalf("Read() error = %v", err)
+			hit := fixture.hit
+			if test.matchForeignHit {
+				hit.Entity = spec.Entity
 			}
-			if response.Status != QueryStatusEmpty || response.Items == nil || len(*response.Items) != 0 || response.Exposure != nil {
-				t.Fatalf("response = %#v, want an exposure-free empty result", response)
+			store := &versionedReadTestStore{result: VersionedReadStoreResult{Hit: &hit, Coverage: IndexCoverageComplete}}
+			response, err := NewVersionedReadService(store).Read(context.Background(), newAuthorizedContext(fixture.context), spec)
+			if len(store.calls) != 1 || store.calls[0].spec != spec {
+				t.Fatalf("store calls = %#v, want the mutated exact-read request", store.calls)
+			}
+			if err == nil || response.Items != nil || response.Exposure != nil {
+				t.Fatalf("response = %#v, err = %v; want rejection without items or exposure", response, err)
+			}
+			if !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("Read() error = %v, want %q", err, test.wantError)
+			}
+			if strings.Contains(fmt.Sprintf("%#v %v", response, err), hit.Text) {
+				t.Fatal("rejected stale or foreign hit leaked the stored body")
 			}
 		})
 	}
