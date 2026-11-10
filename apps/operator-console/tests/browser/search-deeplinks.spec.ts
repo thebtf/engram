@@ -1,7 +1,100 @@
 import { expect, test } from '@playwright/test'
-import type { Request } from '@playwright/test'
+import type { Page, Request } from '@playwright/test'
 const projectID = '11111111-1111-4111-8111-111111111111'
 const otherProjectID = '22222222-2222-4222-8222-222222222222'
+
+async function holdOldResponse(page: Page, target: { pathname: string; query?: string }, json: object) {
+  const started = Promise.withResolvers<void>()
+  const delayed = Promise.withResolvers<void>()
+  let oldRequest: Request | undefined
+  let outcome: 'finished' | 'failed' | undefined
+  let fulfillmentFinished = false
+  let fulfillmentError: unknown
+  const onFinished = (request: Request) => {
+    if (request === oldRequest) outcome = 'finished'
+  }
+  const onFailed = (request: Request) => {
+    if (request === oldRequest) outcome = 'failed'
+  }
+  page.on('requestfinished', onFinished)
+  page.on('requestfailed', onFailed)
+
+  await page.addInitScript((match) => {
+    const originalFetch = window.fetch.bind(window)
+    // A message task runs after the body-consumer promise chain and Vue's queued microtasks.
+    const signalAfterMicrotasks = (result: string) => {
+      const channel = new MessageChannel()
+      channel.port1.onmessage = () => {
+        document.documentElement.dataset.oldResponseProcessed = result
+        channel.port1.close()
+        channel.port2.close()
+      }
+      channel.port2.postMessage(null)
+    }
+    window.fetch = async (...args: Parameters<typeof fetch>) => {
+      const input = args[0]
+      const inputUrl = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      const url = new URL(inputUrl, window.location.href)
+      if (url.pathname !== match.pathname || (match.query !== undefined && url.searchParams.get('query') !== match.query)) return originalFetch(...args)
+      try {
+        const response = await originalFetch(...args)
+        const originalText = response.text.bind(response)
+        response.text = async () => {
+          try {
+            const text = await originalText()
+            signalAfterMicrotasks('body')
+            return text
+          } catch (error) {
+            signalAfterMicrotasks('body-error')
+            throw error
+          }
+        }
+        return response
+      } catch (error) {
+        signalAfterMicrotasks('fetch-error')
+        throw error
+      }
+    }
+  }, target)
+
+  await page.route((url) => url.pathname === target.pathname && (target.query === undefined || url.searchParams.get('query') === target.query), async (route) => {
+    oldRequest = route.request()
+    started.resolve()
+    await delayed.promise
+    try {
+      await route.fulfill({ json })
+    } catch (error) {
+      fulfillmentError = error
+    } finally {
+      fulfillmentFinished = true
+    }
+  })
+
+  return {
+    started: started.promise,
+    async releaseAndWait() {
+      delayed.resolve()
+      await expect.poll(() => outcome).toBeDefined()
+      const settledOutcome = (() => outcome)()
+      await expect(page.locator('html')).toHaveAttribute('data-old-response-processed', settledOutcome === 'finished' ? 'body' : /^(fetch-error|body-error)$/)
+      if (settledOutcome === 'failed') {
+        expect(oldRequest?.failure()?.errorText).toContain('ERR_ABORTED')
+      } else {
+        await expect.poll(() => fulfillmentFinished).toBe(true)
+        expect(fulfillmentError).toBeUndefined()
+      }
+    },
+    async cleanup() {
+      delayed.resolve()
+      try {
+        await page.unrouteAll({ behavior: 'wait' })
+      } finally {
+        page.off('requestfinished', onFinished)
+        page.off('requestfailed', onFailed)
+      }
+    },
+  }
+}
 
 test('search deep links preserve a q-only prefill and open the scoped memory row', async ({ page }) => {
   const searchRequests: URL[] = []
@@ -74,83 +167,17 @@ test('memory deep link does not open an exact-ID row from another project', asyn
 })
 
 test('late exact-ID deep link response cannot override a newer route', async ({ page }) => {
-  const started = Promise.withResolvers<void>()
-  const delayed = Promise.withResolvers<void>()
-  let oldRequest: Request | undefined
-  let outcome: 'finished' | 'failed' | undefined
-  let fulfillmentFinished = false
-  let fulfillmentError: unknown
-  const onFinished = (request: Request) => {
-    if (request === oldRequest) outcome = 'finished'
-  }
-  const onFailed = (request: Request) => {
-    if (request === oldRequest) outcome = 'failed'
-  }
-  page.on('requestfinished', onFinished)
-  page.on('requestfailed', onFailed)
-
-  await page.addInitScript(() => {
-    const originalFetch = window.fetch.bind(window)
-    // A message task runs after the body-consumer promise chain and Vue's queued microtasks.
-    const signalAfterMicrotasks = (result: string) => {
-      const channel = new MessageChannel()
-      channel.port1.onmessage = () => {
-        document.documentElement.dataset.oldMemoryProcessed = result
-        channel.port1.close()
-        channel.port2.close()
-      }
-      channel.port2.postMessage(null)
-    }
-    window.fetch = async (...args: Parameters<typeof fetch>) => {
-      const input = args[0]
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
-      if (new URL(url, window.location.href).pathname !== '/api/memories/501') return originalFetch(...args)
-      try {
-        const response = await originalFetch(...args)
-        const originalText = response.text.bind(response)
-        response.text = async () => {
-          try {
-            const text = await originalText()
-            signalAfterMicrotasks('body')
-            return text
-          } catch (error) {
-            signalAfterMicrotasks('body-error')
-            throw error
-          }
-        }
-        return response
-      } catch (error) {
-        signalAfterMicrotasks('fetch-error')
-        throw error
-      }
-    }
+  const old = await holdOldResponse(page, { pathname: '/api/memories/501' }, {
+    id: 501,
+    project: projectID,
+    content: 'older memory omitted by the 500-row project list',
+    tags: ['deep-link'],
+    tier: 'semantic',
+    status: 'active',
   })
-
-  await page.route('**/api/memories/501?**', async (route) => {
-    oldRequest = route.request()
-    started.resolve()
-    await delayed.promise
-    try {
-      await route.fulfill({
-        json: {
-          id: 501,
-          project: projectID,
-          content: 'older memory omitted by the 500-row project list',
-          tags: ['deep-link'],
-          tier: 'semantic',
-          status: 'active',
-        }
-      })
-    } catch (error) {
-      fulfillmentError = error
-    } finally {
-      fulfillmentFinished = true
-    }
-  })
-
   try {
     await page.goto(`/memory?project=${projectID}&memory=501`)
-    await started.promise
+    await old.started
     await page.evaluate((project) => {
       window.history.pushState({}, '', `/memory?project=${project}&memory=101`)
       window.dispatchEvent(new PopStateEvent('popstate'))
@@ -158,27 +185,12 @@ test('late exact-ID deep link response cannot override a newer route', async ({ 
 
     await expect(page.getByTestId('memory-row-101')).toHaveAttribute('aria-pressed', 'true')
     await expect(page.getByTestId('memory-content')).toHaveText('operator console = data plane: manage memory PRODUCT, config one Settings tab')
-    delayed.resolve()
-    await expect.poll(() => outcome).toBeDefined()
-    const settledOutcome = (() => outcome)()
-    await expect(page.locator('html')).toHaveAttribute('data-old-memory-processed', settledOutcome === 'finished' ? 'body' : /^(fetch-error|body-error)$/)
-    if (settledOutcome === 'failed') {
-      expect(oldRequest?.failure()?.errorText).toContain('ERR_ABORTED')
-    } else {
-      await expect.poll(() => fulfillmentFinished).toBe(true)
-      expect(fulfillmentError).toBeUndefined()
-    }
+    await old.releaseAndWait()
     await expect(page.getByTestId('memory-row-101')).toHaveAttribute('aria-pressed', 'true')
     await expect(page.getByTestId('memory-content')).toHaveText('operator console = data plane: manage memory PRODUCT, config one Settings tab')
     await expect(page.getByTestId('project-context-select')).toHaveValue(projectID)
   } finally {
-    delayed.resolve()
-    try {
-      await page.unrouteAll({ behavior: 'wait' })
-    } finally {
-      page.off('requestfinished', onFinished)
-      page.off('requestfailed', onFailed)
-    }
+    await old.cleanup()
   }
 })
 
@@ -190,33 +202,28 @@ test('search result actions require explicit memory discriminants', async ({ pag
 })
 
 test('newer scoped route owns results over a delayed older search response', async ({ page }) => {
-  let markOlderStarted!: () => void
-  let releaseOlder!: () => void
-  const olderStarted = new Promise<void>((resolve) => { markOlderStarted = resolve })
-  const olderReleased = new Promise<void>((resolve) => { releaseOlder = resolve })
-
-  await page.route('**/api/context/search**', async (route) => {
-    const query = new URL(route.request().url()).searchParams.get('query')
-    if (query === 'older') {
-      markOlderStarted()
-      await olderReleased
-      await route.fulfill({ json: { observations: [{ id: 701, project: projectID, title: 'older scoped result', type: 'discovery', memory_type: 'context' }] } })
-      return
-    }
-    await route.fulfill({ json: { observations: [{ id: 702, project: projectID, title: 'newer scoped result', type: 'discovery', memory_type: 'context' }] } })
+  await page.route('**/api/context/search**', (route) => route.fulfill({
+    json: { observations: [{ id: 702, project: projectID, title: 'newer scoped result', type: 'discovery', memory_type: 'context' }] },
+  }))
+  const old = await holdOldResponse(page, { pathname: '/api/context/search', query: 'older' }, {
+    observations: [{ id: 701, project: projectID, title: 'older scoped result', type: 'discovery', memory_type: 'context' }],
   })
 
-  await page.goto(`/search?q=older&project=${projectID}`)
-  await olderStarted
-  await page.evaluate((project) => {
-    window.history.pushState({}, '', `/search?q=newer&project=${project}`)
-    window.dispatchEvent(new PopStateEvent('popstate'))
-  }, projectID)
+  try {
+    await page.goto(`/search?q=older&project=${projectID}`)
+    await old.started
+    await page.evaluate((project) => {
+      window.history.pushState({}, '', `/search?q=newer&project=${project}`)
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    }, projectID)
 
-  await expect(page.getByText('newer scoped result')).toBeVisible()
-  releaseOlder()
-  await expect(page.getByText('newer scoped result')).toBeVisible()
-  await expect(page.getByText('older scoped result')).toHaveCount(0)
+    await expect(page.getByText('newer scoped result')).toBeVisible()
+    await old.releaseAndWait()
+    await expect(page.getByText('newer scoped result')).toBeVisible()
+    await expect(page.getByText('older scoped result')).toHaveCount(0)
+  } finally {
+    await old.cleanup()
+  }
 })
 
 test('legacy all-project document anchor resolves before content and history reads', async ({ page }) => {
