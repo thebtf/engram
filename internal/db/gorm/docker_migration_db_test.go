@@ -37,6 +37,11 @@ func fixtureDockerCommand(ctx context.Context, endpoint string, args ...string) 
 
 // openDockerMigrationDB owns a disposable PostgreSQL container, never DATABASE_DSN.
 func openDockerMigrationDB(tb testing.TB) *gormlib.DB {
+	return openDockerMigrationDBTo(tb, "")
+}
+
+// openDockerMigrationDBTo leaves a fixture at a specified migration for upgrade tests.
+func openDockerMigrationDBTo(tb testing.TB, target string) *gormlib.DB {
 	tb.Helper()
 	if os.Getenv("ENGRAM_TEST_DOCKER_MIGRATIONS") != "1" {
 		tb.Skip("set ENGRAM_TEST_DOCKER_MIGRATIONS=1 to run disposable Docker migration tests; coverage not exercised")
@@ -209,7 +214,7 @@ func openDockerMigrationDB(tb testing.TB) *gormlib.DB {
 	fixtureCtx, fixtureCancel := context.WithTimeout(workCtx, 5*time.Minute)
 	tb.Cleanup(fixtureCancel)
 	db = db.WithContext(fixtureCtx)
-	if err := runMigrations(db); err != nil {
+	if err := runMigrationsTo(db, target); err != nil {
 		tb.Fatalf("run migrations in disposable PostgreSQL: %v", err)
 	}
 	return db
