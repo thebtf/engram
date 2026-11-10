@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -22,7 +24,7 @@ type uciSecurityCorrectnessGroup struct {
 	name        string
 	scenarioIDs []string
 	packagePath string
-	testPattern string
+	testNames   []string
 }
 
 var uciSecurityCorrectnessAssignedScenarioIDs = []string{
@@ -38,20 +40,20 @@ var uciSecurityCorrectnessGroups = []uciSecurityCorrectnessGroup{
 		name:        "handler-lifecycle",
 		scenarioIDs: []string{"U07", "U08", "U10", "U11", "U12", "U25"},
 		packagePath: "./internal/handlers/codeintel",
-		testPattern: uciSecurityCorrectnessPattern(
+		testNames: []string{
 			"TestUCILocalRegistryCoalescesDirtyStateAndTracksReconciliation",
 			"TestUCILocalRegistryRecoversCurrentStateAcrossCrashWithoutEventRetention",
 			"TestUCILocalRegistryUpdatesOnlyLocalRootPathForVerifiedMove",
 			"TestUCILocalRegistryRefusesMismatchedEvidenceForSameServerIncarnation",
 			"TestUCIPreparedIndexForwardsDirtyAndUnbornWorktreeObservations",
 			"TestUCIPreparedIndexPublishesTreeSitterFactsWithPinnedProfile",
-		),
+		},
 	},
 	{
 		name:        "persistence-lifecycle",
 		scenarioIDs: []string{"U03", "U04", "U05", "U06", "U17", "U18", "U24"},
 		packagePath: "./internal/db/gorm",
-		testPattern: uciSecurityCorrectnessPattern(
+		testNames: []string{
 			"TestUCIPublishStagingInvisibleAndHistoricalIntervals",
 			"TestUCIPublishIncompletePartsAndEOF",
 			"TestUCIReplayFinalizeAfterLostACKAndLaterPublish",
@@ -59,13 +61,13 @@ var uciSecurityCorrectnessGroups = []uciSecurityCorrectnessGroup{
 			"TestUCIProjectionStoreSemanticMethodsKeepVectorsScopedAndCovered",
 			"TestUCIVersionedReadStoreReportsPartialAndUnavailableCoverage",
 			"TestUCIEmbeddingReusesUnchangedInputAcrossCheckouts",
-		),
+		},
 	},
 	{
 		name:        "uci-core",
 		scenarioIDs: []string{"U02", "U13", "U14", "U15", "U16", "U19", "U20", "U21", "U37", "U38", "U39"},
 		packagePath: "./internal/uci",
-		testPattern: uciSecurityCorrectnessPattern(
+		testNames: []string{
 			"TestUCIContextResolverKeepsClientBindingsIsolated",
 			"TestUCIScannerUsesGitNULCandidateCensusAndNestedIgnores",
 			"TestUCIScannerRefusesReparseEscapesAndUnsupportedTypes",
@@ -78,13 +80,13 @@ var uciSecurityCorrectnessGroups = []uciSecurityCorrectnessGroup{
 			"TestUCIScannerPreservesWindowsUnicodeCaseAndCRLFBytes",
 			"TestUCIScannerExcludesNestedRepositoriesAndDeclaredSubmodules",
 			"TestUCIScannerExcludesOversizedSecretAndProtectedFiles",
-		),
+		},
 	},
 	{
 		name:        "mcp-boundaries",
 		scenarioIDs: []string{"U01", "U09", "U23", "U36", "U40", "U43", "U44"},
 		packagePath: "./internal/mcp",
-		testPattern: uciSecurityCorrectnessPattern(
+		testNames: []string{
 			"TestUCICodeIntelCompatibilitySearchAndStatusKeepClientContextsDistinct",
 			"TestUCICodeIntelStatusRejectsContinuousCheckoutViewDrift",
 			"TestHandleToolsCall_ArgumentsNeverReachErrorLogs",
@@ -93,16 +95,16 @@ var uciSecurityCorrectnessGroups = []uciSecurityCorrectnessGroup{
 			"TestUCINilExposureRecorderSuppressesAuthorizedResultAndReportsUnavailable",
 			"TestUCIExposureSearchAppendsOneOpaqueReceiptAndExactRetryReusesIt",
 			"TestUCICompletionAcceptsVerifiedCallbackAndKeepsMismatchClosed",
-		),
+		},
 	},
 	{
 		name:        "acceptance-authorization-and-rollback",
 		scenarioIDs: []string{"U22", "U42", "U45", "U46"},
 		packagePath: "./tests/uci/acceptance",
-		testPattern: uciSecurityCorrectnessPattern(
+		testNames: []string{
 			"TestUCIAuthorizationMatrix",
 			"TestUCIMigrationRollbackLegacyOnlyAcceptance",
-		),
+		},
 	},
 }
 
@@ -123,7 +125,7 @@ func TestUCISecurityCorrectness(t *testing.T) {
 				"test",
 				group.packagePath,
 				"-run",
-				group.testPattern,
+				uciSecurityCorrectnessPattern(group.testNames...),
 				"-count=1",
 				"-timeout="+uciSecurityCorrectnessChildTimeout.String(),
 				"-json",
@@ -142,8 +144,8 @@ func TestUCISecurityCorrectness(t *testing.T) {
 				t.Errorf("security behavioral group %q for scenarios %s failed: %v", group.name, scenarios, err)
 				return
 			}
-			if !uciSecurityCorrectnessRanBehavioralTest(output) {
-				t.Errorf("security behavioral group %q for scenarios %s ran no behavioral test", group.name, scenarios)
+			if missing := uciSecurityCorrectnessMissingTests(output, group.testNames); len(missing) > 0 {
+				t.Errorf("security behavioral group %q for scenarios %s did not run required tests: %s", group.name, scenarios, strings.Join(missing, ", "))
 			}
 		})
 	}
@@ -156,7 +158,11 @@ func TestUCISecurityCorrectness(t *testing.T) {
 }
 
 func uciSecurityCorrectnessPattern(testNames ...string) string {
-	return "^(" + strings.Join(testNames, "|") + ")$"
+	quoted := make([]string, len(testNames))
+	for i, name := range testNames {
+		quoted[i] = regexp.QuoteMeta(name)
+	}
+	return "^(" + strings.Join(quoted, "|") + ")$"
 }
 
 func uciSecurityCorrectnessRoot(t *testing.T) string {
@@ -193,19 +199,26 @@ func uciSecurityCorrectnessValidateMatrix(t *testing.T, root string) map[string]
 	groupNames := make(map[string]struct{}, len(uciSecurityCorrectnessGroups))
 	scenarioGroups := make(map[string]string, len(uciSecurityCorrectnessAssignedScenarioIDs))
 	for _, group := range uciSecurityCorrectnessGroups {
-		if group.name == "" || group.packagePath == "" || group.testPattern == "" {
+		if group.name == "" || group.packagePath == "" || len(group.testNames) == 0 {
 			t.Fatal("security behavioral group has an empty name, package, or test pattern")
 		}
 		if !strings.HasPrefix(group.packagePath, "./") {
 			t.Fatalf("security behavioral group %q package path %q is not repository-relative", group.name, group.packagePath)
 		}
-		if !strings.HasPrefix(group.testPattern, "^") || !strings.HasSuffix(group.testPattern, "$") {
-			t.Fatalf("security behavioral group %q test pattern %q is not anchored", group.name, group.testPattern)
-		}
 		if _, duplicate := groupNames[group.name]; duplicate {
 			t.Fatalf("security behavioral group name %q is duplicated", group.name)
 		}
 		groupNames[group.name] = struct{}{}
+		testNames := make(map[string]struct{}, len(group.testNames))
+		for _, name := range group.testNames {
+			if name == "" || strings.Contains(name, "/") {
+				t.Fatalf("security behavioral group %q has invalid top-level test name %q", group.name, name)
+			}
+			if _, duplicate := testNames[name]; duplicate {
+				t.Fatalf("security behavioral group %q repeats test name %q", group.name, name)
+			}
+			testNames[name] = struct{}{}
+		}
 		if len(group.scenarioIDs) == 0 {
 			t.Fatalf("security behavioral group %q has no assigned scenarios", group.name)
 		}
@@ -259,15 +272,52 @@ func uciSecurityCorrectnessPlannedScenarioIDs(t *testing.T, root string) map[str
 	return ids
 }
 
-func uciSecurityCorrectnessRanBehavioralTest(output []byte) bool {
+func uciSecurityCorrectnessMissingTests(output []byte, expected []string) []string {
+	seen := make(map[string]bool, len(expected))
 	for _, line := range bytes.Split(output, []byte{'\n'}) {
 		var event struct {
 			Action string
 			Test   string
 		}
-		if json.Unmarshal(line, &event) == nil && event.Action == "run" && event.Test != "" {
-			return true
+		if json.Unmarshal(line, &event) == nil && event.Action == "run" {
+			seen[event.Test] = true
 		}
 	}
-	return false
+	var missing []string
+	for _, name := range expected {
+		if !seen[name] {
+			missing = append(missing, name)
+		}
+	}
+	return missing
+}
+
+func TestUCISecurityCorrectnessMissingTests(t *testing.T) {
+	expected := []string{"TestAlpha", "TestBeta"}
+	for _, test := range []struct {
+		name    string
+		output  string
+		missing []string
+	}{
+		{
+			name:    "all top-level tests in any order",
+			output:  "{\"Action\":\"run\",\"Test\":\"TestBeta/subtest\"}\n{\"Action\":\"run\",\"Test\":\"TestBeta\"}\n{\"Action\":\"run\",\"Test\":\"TestAlpha\"}\n",
+		},
+		{
+			name:    "missing top-level test despite subtest",
+			output:  "{\"Action\":\"run\",\"Test\":\"TestAlpha\"}\n{\"Action\":\"run\",\"Test\":\"TestBeta/subtest\"}\n",
+			missing: []string{"TestBeta"},
+		},
+		{
+			name:    "wrong name and non-run event",
+			output:  "{\"Action\":\"run\",\"Test\":\"TestAlphaTypo\"}\n{\"Action\":\"pass\",\"Test\":\"TestBeta\"}\n",
+			missing: []string{"TestAlpha", "TestBeta"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := uciSecurityCorrectnessMissingTests([]byte(test.output), expected); !slices.Equal(got, test.missing) {
+				t.Fatalf("missing = %v, want %v", got, test.missing)
+			}
+		})
+	}
 }
