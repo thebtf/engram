@@ -690,7 +690,7 @@ test('dispatcher fails open when a child hook exits nonzero', () => {
   }
 });
 
-test('release archives include scripts required by hooks and MCP wrapper', () => {
+test('release configuration and hook sources reference plugin scripts and binary artifacts', () => {
   const goreleaser = readRepoFile('.goreleaser.yaml');
   const claudeMcp = JSON.parse(readRepoFile('plugin', 'engram', 'claude', '.mcp.json'));
   const dispatcher = fs.readFileSync(path.join(hooksDir, 'dispatcher.cjs'), 'utf8');
@@ -704,7 +704,7 @@ test('release archives include scripts required by hooks and MCP wrapper', () =>
   assert.match(dispatcher, /\.\.\/scripts\/ensure-binary\.js/);
 });
 
-test('release installers copy plugin scripts from archives', () => {
+test('installer source contains plugin copy and cache-preservation directives', () => {
   const installSh = readRepoFile('scripts', 'install.sh');
   const installPs1 = readRepoFile('scripts', 'install.ps1');
   const registerPluginSh = readRepoFile('scripts', 'register-plugin.sh');

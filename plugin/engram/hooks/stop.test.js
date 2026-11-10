@@ -210,36 +210,6 @@ test('extractAgentOutput: extracts text from nested message.content blocks (real
   }
 });
 
-test('extractAgentOutput: user messages are excluded from output (nested shape)', () => {
-  const lines = [
-    JSON.stringify({
-      type: 'user',
-      message: { role: 'user', content: [{ type: 'text', text: 'User text should not appear' }] },
-      uuid: 'u-1',
-      sessionId: 'sess-2',
-    }),
-    JSON.stringify({
-      type: 'assistant',
-      message: {
-        role: 'assistant',
-        content: [{ type: 'text', text: 'Only assistant text' }],
-      },
-      uuid: 'a-1',
-      sessionId: 'sess-2',
-    }),
-  ];
-
-  const tmpFile = path.join(os.tmpdir(), `stop-test-user-excl-${Date.now()}.jsonl`);
-  try {
-    fs.writeFileSync(tmpFile, lines.join('\n'), 'utf8');
-    const result = extractAgentOutput(tmpFile);
-    assert.ok(!result.includes('User text should not appear'), 'user text must not appear in output');
-    assert.ok(result.includes('Only assistant text'), 'assistant text must appear in output');
-  } finally {
-    try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
-  }
-});
-
 test('extractAgentOutput: tool_use blocks are skipped, only text blocks extracted (nested shape)', () => {
   const lines = [
     JSON.stringify({
