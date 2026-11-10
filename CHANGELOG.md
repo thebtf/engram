@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.1.6] - 2026-11-11
+
+- Apply Alpine 3.24 security fixes `krb5-libs` 1.22.3-r0 and `libxslt` 1.1.43-r4 to the PostgreSQL 17.11 image. The 7.1.5 binaries and npm package were published, but canonical-image publication was refused after 18 HIGH findings in those two packages. This successor includes the 7.1.5 source corrections; it does not claim full project adoption or complete outage or session recovery.
+
 ## [7.1.5] - 2026-11-11
 
 - Retry eligible incomplete PostgreSQL handshakes and joined fallback errors while preserving refusal for permanent PostgreSQL server errors and invalid connection-string settings detected during parsing (PR #765). This does not establish full outage recovery or repair every session.

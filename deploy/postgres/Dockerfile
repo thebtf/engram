@@ -20,6 +20,7 @@ RUN mkdir /src \
   && install -Dm0644 README.md /out/usr/share/doc/pgvector/README.md
 
 FROM docker.io/library/postgres:17.11-alpine3.24@sha256:e4cb93687b062cd25a0e8f672d85a7708235009d70d31f8a7698d9370092a9c4
+RUN apk add --no-cache krb5-libs=1.22.3-r0 libxslt=1.1.43-r4
 COPY --from=gosu-build /out/gosu /usr/local/bin/gosu
 COPY --from=gosu-build /src/gosu/LICENSE /usr/share/doc/gosu/LICENSE
 COPY --from=pgvector-build /out/usr/local/lib/postgresql/ /usr/local/lib/postgresql/
