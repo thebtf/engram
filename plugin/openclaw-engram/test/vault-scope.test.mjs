@@ -1,8 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
-import fs from 'node:fs/promises';
 import http from 'node:http';
-import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import test from 'node:test';
@@ -13,10 +11,8 @@ const toolModule = await import(compiled ? pathToFileURL(path.join(compiled, 'to
 const configModule = await import(compiled ? pathToFileURL(path.join(compiled, 'config.js')).href : '../dist/config.js');
 
 test('Vault client and explicit global tool preserve exact namespace selectors', async () => {
-  const privateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'vault-scope-'));
   const project = randomUUID();
   const value = randomBytes(24).toString('hex');
-  await fs.writeFile(path.join(privateDir, 'value'), value, { mode: 0o600 });
   const requests = [];
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1');
@@ -44,7 +40,6 @@ test('Vault client and explicit global tool preserve exact namespace selectors',
     assert.equal(requests[2].searchParams.has('project'), false);
   } finally {
     await new Promise((resolve, reject) => server.close((err) => err ? reject(err) : resolve()));
-    await fs.rm(privateDir, { recursive: true, force: true });
   }
 });
 
