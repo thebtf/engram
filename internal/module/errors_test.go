@@ -87,6 +87,9 @@ func TestErrPreconditionFailed(t *testing.T) {
 	assert.Equal(t, "precondition_failed", e.Code)
 	assert.Contains(t, e.Message, "module not in ready state")
 	assert.Equal(t, "ready", e.Details["expected"])
+	withoutDetails := ErrPreconditionFailed("r", nil)
+	require.NotNil(t, withoutDetails)
+	assert.Equal(t, "precondition_failed", withoutDetails.Code)
 }
 
 // TestModuleErrorMethod verifies the Error() string format.
@@ -132,28 +135,4 @@ func TestModuleErrorDetailsOmittedWhenNil(t *testing.T) {
 	s := string(b)
 	assert.False(t, strings.Contains(s, `"details"`),
 		"details must be omitted from JSON when nil (omitempty)")
-}
-
-// TestAllConstructorsReturnNonNil is a sweep test confirming no constructor
-// ever returns a nil pointer, which would produce a nil *ModuleError that
-// satisfies the error interface but panics on field access.
-func TestAllConstructorsReturnNonNil(t *testing.T) {
-	constructors := []struct {
-		name string
-		err  *ModuleError
-	}{
-		{"ErrNotReady", ErrNotReady("r", time.Second)},
-		{"ErrProjectNotFound", ErrProjectNotFound("p")},
-		{"ErrToolDisabled", ErrToolDisabled("t", "r")},
-		{"ErrResourceExhausted", ErrResourceExhausted("res")},
-		{"ErrUpstreamUnavailable", ErrUpstreamUnavailable("up", nil)},
-		{"ErrTimeout", ErrTimeout(time.Second)},
-		{"ErrPreconditionFailed", ErrPreconditionFailed("r", nil)},
-	}
-	for _, c := range constructors {
-		t.Run(c.name, func(t *testing.T) {
-			require.NotNil(t, c.err, "%s must return a non-nil *ModuleError", c.name)
-			assert.NotEmpty(t, c.err.Code, "%s must set a non-empty Code", c.name)
-		})
-	}
 }

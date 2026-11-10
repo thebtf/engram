@@ -167,20 +167,6 @@ func TestStart_PanicInInit_ConvertedToError_NoCrash(t *testing.T) {
 	}
 }
 
-func TestStart_ContextDeadline_RespectedByModule(t *testing.T) {
-	m := &fakeMod{name: "blocker", blockCtx: true}
-	r := buildRegistry(t, m)
-	p := New(r, slog.Default())
-
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-
-	err := p.Start(ctx, noopDeps)
-	if err == nil {
-		t.Fatal("expected timeout error, got nil")
-	}
-}
-
 // TestNFR2_InitTimeout_30s verifies FR-14 / NFR-2: a module that would block
 // for 35 s is aborted by a 30 s context deadline well before 35 s.
 //

@@ -212,6 +212,9 @@ func TestHandleRequest_Ping_ReturnsEmptyResult(t *testing.T) {
 	if r.Error != nil {
 		t.Fatalf("unexpected error: %+v", r.Error)
 	}
+	if string(r.Result) != "{}" {
+		t.Errorf("ping result = %s, want an empty object", r.Result)
+	}
 }
 
 func TestHandleRequest_NotificationsCancelled_ReturnsNil(t *testing.T) {
