@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "package_version": "7.1.6",
+  "package_version": "7.1.7",
   "targets": {
     "win32-x64": {
-      "version": "7.1.6",
+      "version": "7.1.7",
       "asset": "uci-parser-windows-amd64.exe",
       "size": 7946240,
       "sha256": "4dd7c85e85a6db14ff5a3877c6ed1a3ad85568e0d21b43bffbfd848520ccb49b"

@@ -289,6 +289,9 @@ func loadKeyFromFile(path string) ([]byte, error) {
 	if decoded, err := hex.DecodeString(hexStr); err == nil && len(decoded) == 32 {
 		return decoded, nil
 	}
+	if len(data) == 32 {
+		return data, nil
+	}
 	// Fall back to raw bytes (trimmed — file may have trailing newline that would
 	// cause a 32-byte key to appear as 33 bytes and fail the length check).
 	raw := bytes.TrimRight(data, "\r\n \t")
