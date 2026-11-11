@@ -40,7 +40,7 @@ func TestMuxcoreInstallationNamespaceIsolatesTwoClientProcesses(t *testing.T) {
 
 func TestMuxcoreInstallationNamespaceProcess(t *testing.T) {
 	if os.Getenv("ENGRAM_NAMESPACE_TEST_HELPER") == "" {
-		return
+		t.Skip("subprocess namespace helper runs only when invoked by its parent test")
 	}
 	if err := configureMuxcoreInstallation(); err != nil {
 		t.Fatal(err)
