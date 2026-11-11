@@ -1220,11 +1220,16 @@ func TestReconcileMuxcoreDaemonVersionDoesNotFailSuccessfulRestartOnUnlockError(
 	stubReconciliation(t, muxcoreDaemonStatusIdentity{PID: 42, DaemonGeneration: "daemon-old"}, daemonConvergenceReplace, nil)
 	currentExecutable = func() (string, error) { return filepath.Join(t.TempDir(), "engram.exe"), nil }
 	acquireRestartLock = func() (io.Closer, error) { return failingCloser{}, nil }
+	restarts := 0
 	restartMuxcoreDaemon = func(context.Context, muxcoreDaemonStatusIdentity, string) error {
+		restarts++
 		return nil
 	}
 	if err := reconcileMuxcoreDaemonVersion(context.Background()); err != nil {
 		t.Fatalf("successful restart was reported failed after unlock error: %v", err)
+	}
+	if restarts != 1 {
+		t.Fatalf("restart calls = %d, want one successful restart", restarts)
 	}
 }
 
