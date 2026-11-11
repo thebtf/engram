@@ -134,16 +134,9 @@ test('bare successful receipts remain pending until authoritative readback', asy
  assert.deepEqual(result.request, request)
 })
 
-test('unverified receipts retain the request without replaying or fabricating completed state', async () => {
- let transportAttempts = 0
- const response = new Promise<Response>((resolve) => {
-  transportAttempts += 1
-  resolve(jsonResponse(200, { id: 'rule-1' }))
- })
+test('executeMutation preserves an unverified receipt and its original request', async () => {
+ const result = await executeMutation(request, Promise.resolve(jsonResponse(200, { id: 'rule-1' })), parseRuleState)
 
- const result = await executeMutation(request, response, parseRuleState)
-
- assert.equal(transportAttempts, 1)
  assertMutationKind(result, 'committed_verification_pending')
  assert.deepEqual(result.request, request)
 })
@@ -196,7 +189,7 @@ test('pre-dispatch failures remain known network or offline outcomes', () => {
  assert.strictEqual(network.request, request)
 })
 
-test('an explicit timeout before a response remains timeout after dispatch', async () => {
+test('executeMutation classifies a rejected AbortError as timeout', async () => {
  const result = await executeMutation(
   request,
   Promise.reject(new DOMException('Request timed out', 'AbortError')),
@@ -331,7 +324,6 @@ test('bare, action, and 202 responses remain pending despite direct parser suppo
  for (const result of results) {
   assertMutationKind(result, 'committed_verification_pending')
  }
- assertMutationKind(results[3], 'committed_verification_pending')
 })
 
 test('one-time keycard and invitation receipts expose only validated create-response secrets', async () => {

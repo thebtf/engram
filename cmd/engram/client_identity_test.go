@@ -71,7 +71,7 @@ func clientIdentityTempDir(t *testing.T) string {
 	return dir
 }
 
-func TestDirectClientIdentityCanonicalizesTempAliasBeforeInstall(t *testing.T) {
+func TestDirectClientIdentityRejectsSymlinkAndAcceptsPhysicalPath(t *testing.T) {
 	root := clientIdentityTempDir(t)
 	alias := filepath.Join(root, "temp-alias")
 	if err := os.Symlink(root, alias); err != nil {

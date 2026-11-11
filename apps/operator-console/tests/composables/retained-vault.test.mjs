@@ -105,7 +105,7 @@ test('console loads same-name canonical/global/retained metadata and reveals eac
   ])
 })
 
-test('console canonical/global deletes remain scoped and cannot affect a same-name sibling', async t => {
+test('console canonical/global deletes use exact scoped selectors and verified readback', async t => {
   const { secrets, calls } = await mount(t, rows.slice(0, 3))
   assert.equal(secrets.loadState.value.kind, 'live')
   const selected = [...secrets.creds]
@@ -128,13 +128,13 @@ test('console retained Delete clearly refuses before any mutating request', asyn
   assert.equal(calls.some(call => call.method !== 'GET'), false)
 })
 
-for (const changed of [
-  { ...rows[3], id: 5 },
-  { ...rows[3], unresolved_reference: otherReference },
-  { ...rows[3], unresolved_reference: undefined },
-  { ...rows[3], project_id: first },
-  { ...rows[3], scope: 'global' },
-]) test(`console retained Reveal rejects mismatched ${Object.keys(changed).filter(key => changed[key] !== rows[3][key]).join(',')}`, async t => {
+for (const [label, changed] of [
+  ['id', { ...rows[3], id: 5 }],
+  ['foreign unresolved_reference', { ...rows[3], unresolved_reference: otherReference }],
+  ['missing unresolved_reference', { ...rows[3], unresolved_reference: undefined }],
+  ['project_id', { ...rows[3], project_id: first }],
+  ['scope', { ...rows[3], scope: 'global' }],
+]) test(`console retained Reveal rejects mismatched ${label}`, async t => {
   const { secrets } = await mount(t, rows, { response: { ...changed, value: randomUUID() } })
   assert.equal(secrets.loadState.value.kind, 'live')
   await assert.rejects(() => secrets.revealSecret(secrets.creds.find(row => row.id === '4')))

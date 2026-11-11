@@ -48,7 +48,7 @@ function payload(reference, kind) {
         : { id: 901, content: 'Memory retained body', source_project: 'historical-owner-not-canonical-id' }
   return { reference, ...(kind === 'code' ? {} : { kind }), items: [item], total: 1, next_cursor: null }
 }
-async function mount(t, { location = '/projects/unresolved', catalogResponse = catalog, catalogStatus = 200, contentStatus = 200, emptyContent = false, language = 'en', respond } = {}) {
+async function mount(t, { location = '/projects/unresolved', catalogResponse = catalog, catalogStatus = 200, contentStatus = 200, emptyContent = false, language = 'en', respond, observation } = {}) {
   const calls = [], errors = [], modules = new Map(), storage = new Map()
   let context, reader
   const globals = {
@@ -73,8 +73,20 @@ async function mount(t, { location = '/projects/unresolved', catalogResponse = c
       throw new Error(`Unexpected request: ${url.pathname}`)
     },
   }
+  const observedVue = observation ? {
+    ...vue, watch(source, callback, options) {
+      return vue.watch(source, (...args) => {
+        const result = callback(...args)
+        if (result && typeof result.then === 'function') {
+          observation.pending.add(result)
+          result.then(() => observation.pending.delete(result), () => observation.pending.delete(result))
+        }
+        return result
+      }, options)
+    }
+  } : vue
   function load(name) {
-    if (!modules.has(name)) modules.set(name, evaluate(readFileSync(join(root, `composables/${name}.ts`), 'utf8'), dependency, globals))
+    if (!modules.has(name)) modules.set(name, evaluate(readFileSync(join(root, `composables/${name}.ts`), 'utf8'), name === 'useOperatorUnresolved' ? dep => dep === 'vue' ? observedVue : dependency(dep) : dependency, globals))
     return modules.get(name)
   }
   function dependency(name) {
@@ -525,8 +537,9 @@ test('historical records C1: discovery selectors and retry still refresh while a
   const delayed = new Promise(resolve => { release = resolve })
   t.after(() => release())
   const stale = savedRecord('document', 901), current = savedRecord('document', 902), memory = savedRecord('memory', 903)
+  const observation = { pending: new Set() }
   const state = await mount(t, {
-    location: discoveryLocation('document'), catalogResponse: { items: catalog.items, unresolved: [] },
+    location: discoveryLocation('document'), catalogResponse: { items: catalog.items, unresolved: [] }, observation,
     respond: async (url, init) => {
       if (url.pathname !== '/api/projects' || !url.searchParams.has('view')) return
       if (url.searchParams.get('q') === 'slow-query') {
@@ -544,10 +557,12 @@ test('historical records C1: discovery selectors and retry still refresh while a
   }
   await update({ q: 'slow-query' })
   assert.equal(state.reader.recordsPending.value, true)
+  const oldConsumers = [...observation.pending]
+  assert.equal(oldConsumers.length, 1, 'The slow discovery watcher must still be consuming its response')
   await update({ q: 'current-query' })
   assert.equal(slowSignal.aborted, true, 'A new discovery query must abort its predecessor')
   assert.equal(state.reader.records.value.items[0].content, 'Saved document 902')
-  release(); await tick()
+  release(); await Promise.all(oldConsumers); await vue.nextTick()
   assert.equal(state.reader.records.value.items[0].content, 'Saved document 902', 'An aborted late discovery response must not overwrite newer results')
   await update({ kind: 'memory' })
   assert.ok(text(state.host).includes('Saved memory 903'))
@@ -604,9 +619,11 @@ test('historical records C1: a late historical body cannot overwrite a newer iss
   const slow = opaque(90000), current = opaque(90001)
   let release
   const delayed = new Promise(resolve => { release = resolve })
+  t.after(() => release())
+  const observation = { pending: new Set() }
   const state = await mount(t, {
     location: discoveryLocation('memory', { reference: slow, id: '901' }),
-    catalogResponse: { items: catalog.items, unresolved: [slow, current].map(reference => ({ reference, name: 'Synthetic memory group', reason: 'unproven', reader_kinds: ['memory'] })) },
+    catalogResponse: { items: catalog.items, unresolved: [slow, current].map(reference => ({ reference, name: 'Synthetic memory group', reason: 'unproven', reader_kinds: ['memory'] })) }, observation,
     respond: async url => {
       if (url.pathname === '/api/projects' && url.searchParams.has('view')) return Response.json(savedPage('memory', [savedRecord('memory', 901, slow), savedRecord('memory', 902, current)]))
       if (!url.pathname.startsWith('/api/projects/unresolved/')) return
@@ -616,10 +633,12 @@ test('historical records C1: a late historical body cannot overwrite a newer iss
       return Response.json({ reference, kind: 'memory', attribution_scope: historicalScope, ...(url.pathname.endsWith('/history') ? { id } : {}), items: [{ id, content: `Historical body ${id}`, action: 'memory.store', attribution_scope: historicalScope }], next_cursor: null })
     },
   })
+  const oldConsumers = [...observation.pending]
+  assert.equal(oldConsumers.length, 2, 'Both slow historical watchers must still be consuming their responses')
   await state.router.push(discoveryLocation('memory', { reference: current, id: '902' })); await tick()
   assert.equal(state.reader.content.value?.reference, current)
   assert.equal(state.reader.history.value?.reference, current)
-  release(); await tick()
+  release(); await Promise.all(oldConsumers); await vue.nextTick()
   assert.equal(state.reader.content.value?.reference, current)
   assert.equal(state.reader.history.value?.reference, current)
   assert.ok(text(state.host).includes('Historical body 902'))
