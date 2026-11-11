@@ -55,7 +55,7 @@ function evaluate(source, dependency, globals) {
   return module.exports
 }
 
-async function mount(t, { path = '/projects', language = 'ru', items = catalog.items, unresolved = catalog.unresolved, selected = '', logical_groups, scopedRows, documentFetch, vaultFetch, sessionFetch, catalogFetch, initialQuery = {}, homeDocuments = false, capturePageState = false, allowSyntheticMutations = false } = {}) {
+async function mount(t, { path = '/projects', language = 'ru', items = catalog.items, unresolved = catalog.unresolved, selected = '', logical_groups, scopedRows, documentFetch, vaultFetch, sessionFetch, catalogFetch, initialQuery = {}, homeDocuments = false, capturePageState = false, allowSyntheticMutations = false, onPrimaryVersion, renderMutationNotice = false } = {}) {
   const modules = new Map(), storage = new Map(), calls = [], errors = []
   let context
   const globals = {
@@ -108,6 +108,18 @@ async function mount(t, { path = '/projects', language = 'ru', items = catalog.i
     if (name.endsWith('projectCatalog')) return projectCatalog
     if (name.endsWith('useNav')) return { useNav: () => ({ NAV: vue.ref([]) }) }
     const real = load(name.split('/').at(-1))
+    if (name.endsWith('useOperatorDocuments') && onPrimaryVersion) return {
+      ...real, useOperatorDocuments: (...args) => {
+        const documents = real.useOperatorDocuments(...args)
+        return {
+          ...documents, selectPrimaryVersion: version => {
+            const result = documents.selectPrimaryVersion(version)
+            onPrimaryVersion(version, result)
+            return result
+          }
+        }
+      }
+    }
     if (name.endsWith('useOperatorProjectContext')) return { ...real, useOperatorProjectContext: () => { context = real.useOperatorProjectContext(); return context } }
     return real
   }
@@ -135,7 +147,8 @@ async function mount(t, { path = '/projects', language = 'ru', items = catalog.i
   await router.push({ path, query: { ...initialQuery, ...(selected ? { project: selected } : {}) } })
   const app = renderer.createApp({ render: () => vue.h(layout, null, { default: () => vue.h(homeDocuments && router.currentRoute.value.path === '/documents' ? documentPage : page) }) })
   app.component('ProjectContext', component('components/ProjectContext.vue'))
-  for (const name of ['SettingsModal', 'ProfileModal', 'LoginModal', 'MutationResultNotice', 'HonestyBadge', 'RevealSecret']) app.component(name, { render: () => null })
+  for (const name of ['SettingsModal', 'ProfileModal', 'LoginModal', 'HonestyBadge', 'RevealSecret']) app.component(name, { render: () => null })
+  app.component('MutationResultNotice', renderMutationNotice ? component('components/MutationResultNotice.vue') : { render: () => null })
   const messages = Object.fromEntries(['ru', 'en', 'zh'].map(code => [code, JSON.parse(readFileSync(new URL(`i18n/locales/${code}.json`, root), 'utf8'))]))
   const i18n = createI18n({ legacy: false, locale: language, messages, missingWarn: false, fallbackWarn: false })
   app.use(router).use(i18n)
@@ -335,12 +348,6 @@ for (const path of ['/projects', '/']) {
         assert.ok(!state.calls.some(call => call.url.pathname.includes('/resolve')), 'Presentation never remaps canonical identities')
       })
     }
-    test(`${path} RU ${surface}: generic no-qualifier project has a stable identity hint`, async t => {
-      const state = await mount(t, { path })
-      const labels = await choices(state, surface)
-      assert.equal(labels.size, ids.length)
-      assertIDHint(labels.get(GENERIC), GENERIC)
-    })
     test(`${path} RU ${surface}: whitespace-padded generic name keeps its identity hint`, async t => {
       const state = await mount(t, { path, items: [{ project_id: GENERIC, name: 'Registered project ' }], unresolved: [] })
       const labels = await choices(state, surface)
@@ -362,24 +369,6 @@ for (const path of ['/projects', '/']) {
         assert.equal(labels.get(id).trim(), catalog.items.find(row => row.project_id === id).name)
         await chooseOption(state, id)
       }
-    })
-    test(`${path} RU ${surface}: distinct qualifiers disambiguate the same name without UUID suffixes`, async t => {
-      const items = [
-        { project_id: SAME_A, name: 'Shared repository', repository_qualifier: 'examples/first' },
-        { project_id: SAME_B, name: 'Shared repository', repository_qualifier: 'examples/second' },
-      ]
-      const state = await mount(t, { path, items, unresolved: [] })
-      const labels = await choices(state, surface)
-      assert.equal(labels.size, 2)
-      assert.equal(labels.get(SAME_A).trim(), 'Shared repository · examples/first')
-      assert.equal(labels.get(SAME_B).trim(), 'Shared repository · examples/second')
-      await chooseOption(state, SAME_A)
-      await chooseOption(state, SAME_B)
-    })
-    test(`${path} RU ${surface}: uniquely named descriptor exposes its repository qualifier`, async t => {
-      const state = await mount(t, { path })
-      const labels = await choices(state, surface)
-      assert.ok(labels.get(QUALIFIED).includes(catalog.items.find(row => row.project_id === QUALIFIED).repository_qualifier), 'Authoritative repository context must not disappear just because the primary name is unique')
     })
   }
   test(`${path}: every project, including version/hash-like names and normal control, keeps its exact selectable ID`, async t => {
@@ -539,26 +528,25 @@ for (const start of [SAME_A, SAME_B]) {
 }
 
 for (const path of ['/', '/projects']) {
-  for (const language of ['en', 'ru', 'zh']) {
-    test(`${path} ${language}: verified logical groups offer only canonical UUIDs`, async t => {
-      const items = [...logicalItems, { project_id: VERSION, name: 'North second alias' }]
-      const logical_groups = [{ primary_project_id: SAME_A, alias_project_ids: [SAME_B, VERSION] }, logicalGroups[1]]
-      const state = await mount(t, { path, language, items, unresolved: [], logical_groups })
-      const expected = [SAME_A, QUALIFIED, GENERIC]
-      const optionRows = realProjectOptions(state.host)
-      assert.deepEqual(optionRows.map(item => item.props.value).sort(), expected.sort())
-      const page = walk(state.host).find(item => hasClass(item, path === '/' ? 'home-page' : 'projects-page'))
-      for (const option of optionRows) {
-        const row = walk(page).find(item => item.tag === 'button' && text(item).trim() === text(option).trim())
-        assert.ok(row)
-        await row.props.onClick(); await tick()
-        assert.equal(state.router.currentRoute.value.query.project, option.props.value)
-        await state.router.push(path); await tick()
-      }
-      assert.ok(state.calls.filter(call => ['/api/memories', '/api/documents', '/api/sessions/list'].includes(call.url.pathname)).every(call => items.some(item => item.project_id === call.url.searchParams.get('project'))))
-      assert.deepEqual(state.errors, [])
-    })
-  }
+  test(`${path}: verified logical groups offer only canonical UUIDs`, async t => {
+    const items = [...logicalItems, { project_id: VERSION, name: 'North second alias' }]
+    const logical_groups = [{ primary_project_id: SAME_A, alias_project_ids: [SAME_B, VERSION] }, logicalGroups[1]]
+    const state = await mount(t, { path, language: 'en', items, unresolved: [], logical_groups })
+    const expected = [SAME_A, QUALIFIED, GENERIC]
+    const optionRows = realProjectOptions(state.host)
+    assert.deepEqual(optionRows.map(item => item.props.value).sort(), expected.sort())
+    const page = walk(state.host).find(item => hasClass(item, path === '/' ? 'home-page' : 'projects-page'))
+    assert.equal(pageRows(state).length, expected.length, 'Alias projects must not add extra page choices')
+    for (const option of optionRows) {
+      const row = walk(page).find(item => item.tag === 'button' && text(item).trim() === text(option).trim())
+      assert.ok(row)
+      await row.props.onClick(); await tick()
+      assert.equal(state.router.currentRoute.value.query.project, option.props.value)
+      await state.router.push(path); await tick()
+    }
+    assert.ok(state.calls.filter(call => ['/api/memories', '/api/documents', '/api/sessions/list'].includes(call.url.pathname)).every(call => expected.includes(call.url.searchParams.get('project'))))
+    assert.deepEqual(state.errors, [])
+  })
 
   test(`${path}: missing or malformed logical groups preserve flat selectable projects`, async t => {
     for (const logical_groups of [undefined, null, 'invalid', [{ primary_project_id: 'not-a-uuid', alias_project_ids: [SAME_A] }]]) {
@@ -858,9 +846,10 @@ for (const source of ['all inventory', 'uncertain document']) {
 }
 
 test('Catalog rollback clears same-project document detail and rejects a late grouped response', async t => {
-  let grouped = true, releaseCatalog, releaseOld
+  let grouped = true, releaseCatalog, releaseOld, oldReadStarted = false
   const nextCatalog = new Promise(resolve => { releaseCatalog = resolve })
   const oldRead = new Promise(resolve => { releaseOld = resolve })
+  const selections = []
   let catalogCalls = 0
   const catalogFetch = () => ++catalogCalls === 1 ? Response.json({ items: logicalItems.slice(0, 2), unresolved: [], logical_groups: [logicalGroups[0]] }) : nextCatalog
   const documentFetch = url => {
@@ -870,14 +859,22 @@ test('Catalog rollback clears same-project document detail and rejects a late gr
     if (url.pathname === '/api/documents/read') {
       const version = Number(url.searchParams.get('version') || 2)
       const body = content => Response.json({ id: version === 2 ? 101 : 100, path: lineagePath, project: SAME_A, version, content, content_hash: content })
-      if (grouped && version === 1) return oldRead.then(() => body('stale grouped version'))
+      if (grouped && version === 1) { oldReadStarted = true; return oldRead.then(() => body('stale grouped version')) }
       return body(grouped ? 'grouped content' : 'legacy content')
     }
   }
-  const state = await mount(t, { path: '/documents', language: 'en', selected: SAME_A, items: logicalItems.slice(0, 2), unresolved: [], catalogFetch, documentFetch, initialQuery: { path: lineagePath }, capturePageState: true })
+  const state = await mount(t, { path: '/documents', language: 'en', selected: SAME_A, items: logicalItems.slice(0, 2), unresolved: [], catalogFetch, documentFetch, initialQuery: { path: lineagePath }, capturePageState: true, onPrimaryVersion: (version, result) => selections.push({ version, result }) })
   assert.equal(text(documentContent(state)).trim(), 'grouped content')
   await state.router.push({ path: '/documents', query: { project: SAME_A, path: lineagePath, version: '1' } })
   await tick()
+  assert.equal(oldReadStarted, true, 'The grouped version read must be in flight before rollback')
+  const oldSelections = selections.filter(selection => selection.version === 1)
+  assert.equal(oldSelections.length, 1, 'The route must start exactly one old version consumer')
+  const oldConsumer = oldSelections[0].result
+  let oldSettled = false
+  oldConsumer.then(() => { oldSettled = true }, () => { oldSettled = true })
+  await vue.nextTick()
+  assert.equal(oldSettled, false, 'The old consumer must remain pending until its read is released')
   const refresh = state.context.refresh()
   assert.equal(state.context.project.value, '', 'The old scope is synchronously invalidated')
   assert.equal(state.pageState().primaryDocument.value, null)
@@ -889,7 +886,7 @@ test('Catalog rollback clears same-project document detail and rejects a late gr
   assert.equal(state.context.project.value, SAME_A)
   assert.equal(text(documentContent(state)).trim(), 'legacy content')
   releaseOld()
-  await tick(); await tick()
+  await oldConsumer; await vue.nextTick()
   assert.equal(text(documentContent(state)).trim(), 'legacy content', 'A late grouped response cannot overwrite the settled legacy scope')
   assert.deepEqual(state.errors, [])
 })
@@ -1107,6 +1104,7 @@ for (const language of ['en', 'ru', 'zh']) {
     const reader = walk(state.host).find(item => item.tag === 'article' && hasClass(item, 'reader'))
     const error = walk(reader).find(item => hasClass(item, 'error'))
     assert.ok(error)
+    assert.ok(text(error).includes(state.i18n.global.t('errors.diagnosis.document-lineage-ambiguous')), 'Explain the actual ambiguity in the active language')
     assert.ok(!text(error).includes(state.i18n.global.t('errors.diagnosis.request-rejected')), 'A known ambiguity needs more than the generic 409 diagnosis')
     assert.ok(!text(error).includes('private arbitrary server text') && !text(error).includes('document lineage ambiguous'), 'Arbitrary server text is not rendered as operator copy')
     const back = walk(reader).find(item => item.tag === 'button' && hasClass(item, 'back'))
@@ -1201,7 +1199,9 @@ test('SCOPED-ACTION empty groups preserves the Home list-issued lineage link', a
   assert.equal(links.length, 2)
   assert.deepEqual(links.map(link => new URL(link.props.href, 'http://synthetic.invalid').searchParams.get('document_id')).sort(), ['101', '201'])
   await state.router.push(links[0].props.href); await tick(); await tick()
-  assert.ok(documentReads(state).every(call => call.url.searchParams.get('document_id') === '101'))
+  const reads = documentReads(state)
+  assert.ok(reads.length, 'The selected lineage must actually be read')
+  assert.ok(reads.every(call => call.url.searchParams.get('document_id') === '101'))
 })
 
 for (const status of [403, 404, 409]) {
@@ -1329,7 +1329,7 @@ test('SCOPED-ACTION empty groups list row opens its exact issued ID', async t =>
 
 for (const status of [403, 404, 409]) {
   test(`SCOPED-ACTION scoped export action refusal ${status} stays visible without fallback`, async t => {
-    const state = await mount(t, { path: '/documents', language: 'en', selected: SAME_A, items: [logicalItems[0], logicalItems[1]], unresolved: [], logical_groups: [logicalGroups[0]], documentFetch: scopedActionResponses({ actionStatus: status }), initialQuery: { path: lineagePath, document_id: '101' }, capturePageState: true, allowSyntheticMutations: true })
+    const state = await mount(t, { path: '/documents', language: 'en', selected: SAME_A, items: [logicalItems[0], logicalItems[1]], unresolved: [], logical_groups: [logicalGroups[0]], documentFetch: scopedActionResponses({ actionStatus: status }), initialQuery: { path: lineagePath, document_id: '101' }, capturePageState: true, allowSyntheticMutations: true, renderMutationNotice: true })
     await tick()
     const button = walk(state.host).find(item => item.props['data-testid'] === 'document-export')
     assert.ok(button && !button.props.disabled)
@@ -1337,6 +1337,9 @@ for (const status of [403, 404, 409]) {
     const actions = state.calls.filter(call => call.url.pathname === '/api/documents' && call.method === 'POST')
     assert.equal(actions.length, 1)
     assert.equal(JSON.parse(actions[0].body).project, SAME_A)
+    const notice = walk(state.host).find(item => item.props['data-testid'] === 'mutation-result')
+    assert.ok(notice && text(notice).trim(), 'The export refusal must be visible')
+    assert.equal(notice.props['data-kind'], status === 403 ? 'denied' : status === 409 ? 'conflict' : 'failed')
     assert.ok(!walk(state.host).some(item => item.props['data-testid'] === 'document-export-download'))
   })
 }

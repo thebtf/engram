@@ -25,13 +25,25 @@ const renderer = vue.createRenderer({
   createElement: () => ({}), createText: () => ({}), createComment: () => ({}),
   setText: () => { }, setElementText: () => { }, patchProp: () => { }, parentNode: () => null, nextSibling: () => null, insert: () => { }, remove: () => { },
 })
-async function mount(t, location, respond) {
+async function mount(t, location, respond, observation) {
   const calls = []
   const api = {
     operatorFetchJson: async (path) => { const url = new URL(path, 'http://synthetic.invalid'); calls.push(url); return respond(url) },
     toOperatorSourceError: (cause, fallback) => ({ ...fallback, message: cause.message || 'fixture failure', retryable: true, category: 'transport', status: cause.status }),
   }
-  const dependencies = (name) => name === 'vue' ? vue : name === 'vue-router' ? routing : api
+  const observedVue = observation ? {
+    ...vue, watch(source, callback, options) {
+      return vue.watch(source, (...args) => {
+        const result = callback(...args)
+        if (result && typeof result.then === 'function') {
+          observation.pending.add(result)
+          result.then(() => observation.pending.delete(result), () => observation.pending.delete(result))
+        }
+        return result
+      }, options)
+    }
+  } : vue
+  const dependencies = (name) => name === 'vue' ? observedVue : name === 'vue-router' ? routing : api
   const core = evaluate('useOperatorProjectContext', dependencies)
   const unresolved = evaluate('useOperatorUnresolved', (name) => name === './useOperatorProjectContext' ? core : dependencies(name))
   const router = routing.createRouter({ history: routing.createMemoryHistory(), routes: [...['/', '/memory', '/documents', '/projects', '/projects/unresolved', '/code'].map((path) => ({ path, component: { render: () => null } })), { name: 'issues', path: '/issues/:id(\\d+)?', component: { render: () => null } }] })
@@ -278,19 +290,22 @@ test('incoming Back targets cannot re-enter unresolved, leave the app, or traver
   assert.equal(router.currentRoute.value.fullPath, safe)
 })
 
-test('a delayed mapping cannot overwrite a newer canonical route, including changes to the same alias query', async (t) => {
+test('a delayed mapping cannot overwrite a newer canonical route', async (t) => {
   let release, started
   const begun = new Promise((resolve) => { started = resolve })
   const delayed = new Promise((resolve) => { release = resolve })
+  const observation = { pending: new Set() }
   const { context, router } = await mount(t, '/memory?project=slow&memory=501&q=old', async (url) => {
     if (url.searchParams.get('legacy_id') === 'slow') { started(); await delayed; return { status: 'resolved', project_id: A, name: 'Same name' } }
     return usual(url)
-  })
+  }, observation)
   await begun
+  const oldConsumers = [...observation.pending]
+  assert.equal(oldConsumers.length, 1)
   assert.equal(context.project.value, '')
   assert.equal(context.selectionPending.value, true)
   await router.push(`/memory?project=${B}&memory=102&q=new`); await tick()
-  release(); await tick(); await tick()
+  release(); await Promise.all(oldConsumers); await vue.nextTick()
   assert.equal(context.project.value, B)
   assert.equal(router.currentRoute.value.query.memory, '102')
   assert.equal(router.currentRoute.value.query.q, 'new')
@@ -302,6 +317,7 @@ test('catalog refresh invalidates an in-flight resolver for the unchanged legacy
   const oldStarted = new Promise(resolve => { started = resolve })
   const oldResolution = new Promise(resolve => { releaseOld = resolve })
   const newCatalog = new Promise(resolve => { releaseCatalog = resolve })
+  const observation = { pending: new Set() }
   const route = '/memory?project=slow&memory=501&q=original'
   const { context, router } = await mount(t, route, async url => {
     if (url.pathname === '/api/projects') return ++catalogCalls === 1 ? catalog : newCatalog
@@ -310,11 +326,13 @@ test('catalog refresh invalidates an in-flight resolver for the unchanged legacy
       return { status: 'resolved', project_id: B, name: 'Same name' }
     }
     return usual(url)
-  })
+  }, observation)
   await oldStarted
+  const oldConsumers = [...observation.pending]
+  assert.equal(oldConsumers.length, 1)
   const refresh = context.refresh()
   releaseOld()
-  await tick(); await tick()
+  await Promise.all(oldConsumers); await vue.nextTick()
   assert.equal(context.project.value, '', 'The old resolution cannot rebind while the refreshed catalog is pending')
   assert.equal(context.selectionPending.value, true)
   assert.equal(router.currentRoute.value.fullPath, route, 'The stale resolver cannot rewrite the unchanged route')
@@ -368,6 +386,7 @@ test('retained reader decodes canonical Go content pages without page provenance
 test('unresolved content/history are bound to reference, kind and original IDs; stale and failed readers remain errors', async (t) => {
   let release
   const delayed = new Promise((resolve) => { release = resolve })
+  const observation = { pending: new Set() }
   const { core, reader, router, calls } = await mount(t, '/projects/unresolved?reference=slow&kind=memory&id=901', async (url) => {
     if (url.pathname === '/api/projects') return { ...catalog, unresolved: ['slow', 'new', 'stale'].map(reference => ({ ...catalog.unresolved[0], reference })) }
     const reference = url.pathname.split('/')[4]
@@ -376,11 +395,14 @@ test('unresolved content/history are bound to reference, kind and original IDs; 
     if (reference === 'stale') throw Object.assign(new Error('Unknown retained membership'), { status: 404 })
     if (url.pathname.endsWith('/history')) return { reference, kind, id: url.searchParams.get('id'), items: [{ id: 9901, action: 'memory.store', actor: reference, created_at: '2026-01-01' }], next_cursor: null }
     return { reference, kind, items: [{ id: 901, content: `${reference} retained content` }], next_cursor: null }
-  })
+  }, observation)
+  const oldConsumers = [...observation.pending]
+  assert.equal(oldConsumers.length, 2)
+  assert.equal(calls.filter(url => url.pathname.includes('/unresolved/slow/')).length, 2)
   await router.push('/projects/unresolved?reference=new&kind=memory&id=901&q=known'); await tick()
   assert.equal(reader.content.value.items[0].content, 'new retained content')
   assert.equal(reader.history.value.id, '901')
-  release(); await tick()
+  release(); await Promise.all(oldConsumers); await vue.nextTick()
   assert.equal(reader.content.value.reference, 'new')
   assert.equal(reader.history.value.reference, 'new')
   assert.ok(calls.every((url) => !url.pathname.includes('/unresolved/') || !url.searchParams.has('project')))
@@ -397,18 +419,24 @@ test('a later query on the same alias owns the translated deep link', async (t) 
   let release
   let mappingReads = 0
   const delayed = new Promise((resolve) => { release = resolve })
+  let started
+  const begun = new Promise(resolve => { started = resolve })
+  const observation = { pending: new Set() }
   const { context, router } = await mount(t, '/memory?project=slow&memory=501&q=old', async (url) => {
     if (url.searchParams.get('legacy_id') === 'slow') {
       mappingReads += 1
-      if (mappingReads === 1) await delayed
+      if (mappingReads === 1) { started(); await delayed }
       return { status: 'resolved', project_id: A, name: 'Same name' }
     }
     return usual(url)
-  })
+  }, observation)
+  await begun
+  const oldConsumers = [...observation.pending]
+  assert.equal(oldConsumers.length, 1)
   await router.push('/memory?project=slow&memory=102&q=new'); await tick(); await tick()
   assert.equal(context.project.value, A)
   assert.equal(router.currentRoute.value.query.q, 'new')
-  release(); await tick()
+  release(); await Promise.all(oldConsumers); await vue.nextTick()
   assert.equal(router.currentRoute.value.query.q, 'new')
   assert.equal(router.currentRoute.value.query.memory, '102')
 })
