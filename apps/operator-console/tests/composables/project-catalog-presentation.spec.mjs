@@ -55,7 +55,7 @@ function evaluate(source, dependency, globals) {
   return module.exports
 }
 
-async function mount(t, { path = '/projects', language = 'ru', items = catalog.items, unresolved = catalog.unresolved, selected = '', logical_groups, scopedRows, documentFetch, vaultFetch, sessionFetch, catalogFetch, initialQuery = {}, homeDocuments = false, capturePageState = false, allowSyntheticMutations = false } = {}) {
+async function mount(t, { path = '/projects', language = 'ru', items = catalog.items, unresolved = catalog.unresolved, selected = '', logical_groups, scopedRows, documentFetch, vaultFetch, sessionFetch, catalogFetch, initialQuery = {}, homeDocuments = false, capturePageState = false, allowSyntheticMutations = false, onPrimaryVersion } = {}) {
   const modules = new Map(), storage = new Map(), calls = [], errors = []
   let context
   const globals = {
@@ -108,6 +108,18 @@ async function mount(t, { path = '/projects', language = 'ru', items = catalog.i
     if (name.endsWith('projectCatalog')) return projectCatalog
     if (name.endsWith('useNav')) return { useNav: () => ({ NAV: vue.ref([]) }) }
     const real = load(name.split('/').at(-1))
+    if (name.endsWith('useOperatorDocuments') && onPrimaryVersion) return {
+      ...real, useOperatorDocuments: (...args) => {
+        const documents = real.useOperatorDocuments(...args)
+        return {
+          ...documents, selectPrimaryVersion: version => {
+            const result = documents.selectPrimaryVersion(version)
+            onPrimaryVersion(version, result)
+            return result
+          }
+        }
+      }
+    }
     if (name.endsWith('useOperatorProjectContext')) return { ...real, useOperatorProjectContext: () => { context = real.useOperatorProjectContext(); return context } }
     return real
   }
@@ -833,9 +845,10 @@ for (const source of ['all inventory', 'uncertain document']) {
 }
 
 test('Catalog rollback clears same-project document detail and rejects a late grouped response', async t => {
-  let grouped = true, releaseCatalog, releaseOld
+  let grouped = true, releaseCatalog, releaseOld, oldReadStarted = false
   const nextCatalog = new Promise(resolve => { releaseCatalog = resolve })
   const oldRead = new Promise(resolve => { releaseOld = resolve })
+  const selections = []
   let catalogCalls = 0
   const catalogFetch = () => ++catalogCalls === 1 ? Response.json({ items: logicalItems.slice(0, 2), unresolved: [], logical_groups: [logicalGroups[0]] }) : nextCatalog
   const documentFetch = url => {
@@ -845,14 +858,22 @@ test('Catalog rollback clears same-project document detail and rejects a late gr
     if (url.pathname === '/api/documents/read') {
       const version = Number(url.searchParams.get('version') || 2)
       const body = content => Response.json({ id: version === 2 ? 101 : 100, path: lineagePath, project: SAME_A, version, content, content_hash: content })
-      if (grouped && version === 1) return oldRead.then(() => body('stale grouped version'))
+      if (grouped && version === 1) { oldReadStarted = true; return oldRead.then(() => body('stale grouped version')) }
       return body(grouped ? 'grouped content' : 'legacy content')
     }
   }
-  const state = await mount(t, { path: '/documents', language: 'en', selected: SAME_A, items: logicalItems.slice(0, 2), unresolved: [], catalogFetch, documentFetch, initialQuery: { path: lineagePath }, capturePageState: true })
+  const state = await mount(t, { path: '/documents', language: 'en', selected: SAME_A, items: logicalItems.slice(0, 2), unresolved: [], catalogFetch, documentFetch, initialQuery: { path: lineagePath }, capturePageState: true, onPrimaryVersion: (version, result) => selections.push({ version, result }) })
   assert.equal(text(documentContent(state)).trim(), 'grouped content')
   await state.router.push({ path: '/documents', query: { project: SAME_A, path: lineagePath, version: '1' } })
   await tick()
+  assert.equal(oldReadStarted, true, 'The grouped version read must be in flight before rollback')
+  const oldSelections = selections.filter(selection => selection.version === 1)
+  assert.equal(oldSelections.length, 1, 'The route must start exactly one old version consumer')
+  const oldConsumer = oldSelections[0].result
+  let oldSettled = false
+  oldConsumer.then(() => { oldSettled = true }, () => { oldSettled = true })
+  await vue.nextTick()
+  assert.equal(oldSettled, false, 'The old consumer must remain pending until its read is released')
   const refresh = state.context.refresh()
   assert.equal(state.context.project.value, '', 'The old scope is synchronously invalidated')
   assert.equal(state.pageState().primaryDocument.value, null)
@@ -864,7 +885,7 @@ test('Catalog rollback clears same-project document detail and rejects a late gr
   assert.equal(state.context.project.value, SAME_A)
   assert.equal(text(documentContent(state)).trim(), 'legacy content')
   releaseOld()
-  await tick(); await tick()
+  await oldConsumer; await vue.nextTick()
   assert.equal(text(documentContent(state)).trim(), 'legacy content', 'A late grouped response cannot overwrite the settled legacy scope')
   assert.deepEqual(state.errors, [])
 })
