@@ -145,6 +145,7 @@ func TestRollback_HappyPath(t *testing.T) {
 	restored, err := memStore.GetForSnapshot(ctx, created.ID)
 	require.NoError(t, err)
 	assert.Nil(t, restored.DeletedAt, "rollback must clear the soft-delete marker")
+	assert.Equal(t, before.Version, restored.Version)
 	assert.Equal(t, before.PrivacyScope, restored.PrivacyScope)
 	assert.Equal(t, before.SourceWorkstationID, restored.SourceWorkstationID)
 	assert.Equal(t, before.SourceSessions, restored.SourceSessions)
@@ -180,79 +181,6 @@ func TestLegacyMemoryProofRejectsEqualVersionMutation(t *testing.T) {
 	current.DeletedAt = &now
 	current.PrivacyScope = "global" // Same version, but not the deterministic delete state.
 	assert.False(t, legacyMemoryPostStateMatches(models.SnapshotOpBulkDelete, models.SnapshotEntry{Kind: models.EntryKindRestore, Before: beforeJSON, ExpectedVersion: &current.Version}, &current))
-}
-
-// TestRollback_Conflict_EC_F3 verifies that when a memory is modified after the snapshot,
-// the rollback is refused, the memory is unchanged, and audit='rollback_attempted_with_conflict'.
-func TestRollback_Conflict_EC_F3(t *testing.T) {
-	db, store := openRollbackTestDB(t)
-	memStore := gormdb.NewMemoryStore(store)
-	snapStore := gormdb.NewSnapshotStore(db)
-	auditStore := gormdb.NewAuditStore(db)
-	ctx := context.Background()
-	admin := adminIdentity()
-
-	// Create a test memory.
-	mem := &models.Memory{
-		Content:     "content to preserve",
-		Project:     newBulkTestProject(t, db),
-		SourceAgent: "claude-code",
-	}
-	created, err := memStore.Create(ctx, mem)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		_ = db.Exec("DELETE FROM memories WHERE id = ?", created.ID).Error
-	})
-
-	// Build before_state capturing the original memory.
-	beforeStateMap := map[string]any{
-		fmt.Sprintf("%d", created.ID): created,
-	}
-	beforeStateBytes, _ := json.Marshal(beforeStateMap)
-
-	// Persist a past boundary; SnapshotStore assigns created_at during insertion.
-	snap, err := models.NewBulkOpSnapshot("rollback-conflict-"+uuid.NewString(), models.SnapshotOpBulkDelete, "master", json.RawMessage(beforeStateBytes))
-	require.NoError(t, err)
-	snap.AffectedMemoryIDs = []int64{created.ID}
-	createdSnap, err := snapStore.Create(ctx, snap)
-	require.NoError(t, err)
-	cleanupRollbackSnapshot(t, db, createdSnap.SnapshotID)
-	snapshotTime := time.Now().UTC().Add(-2 * time.Second)
-	require.NoError(t, db.Exec("UPDATE bulk_op_snapshots SET created_at = ? WHERE snapshot_id = ?", snapshotTime, createdSnap.SnapshotID).Error)
-	entries, err := decodeTypedBeforeState(createdSnap.BeforeState)
-	require.NoError(t, err)
-	assert.Empty(t, entries[fmt.Sprintf("%d", created.ID)].PostStateToken, "legacy snapshots have no captured post-state token")
-
-	// Simulate a post-snapshot durable mutation.
-	require.NoError(t, db.Exec(
-		`UPDATE memories SET updated_at = NOW(), content = 'post-snapshot modification' WHERE id = ?`,
-		created.ID,
-	).Error)
-
-	// Rollback must fail with ErrRollbackConflict (EC-F3).
-	result, err := Rollback(ctx, admin, createdSnap.SnapshotID, snapStore, memStore, auditStore, nil)
-	require.Error(t, err)
-	require.ErrorIs(t, err, ErrRollbackConflict, "expected ErrRollbackConflict for modified memory")
-	require.NotNil(t, result)
-	assert.Contains(t, result.ConflictIDs, created.ID)
-
-	// Memory must NOT be reverted — still has the post-snapshot content.
-	afterAttempt, err := memStore.Get(ctx, created.ID)
-	require.NoError(t, err)
-	assert.Equal(t, "post-snapshot modification", afterAttempt.Content,
-		"memory content must not be changed when conflict is detected")
-
-	// Snapshot must still be 'committed' (not rolled back).
-	stillCommitted, err := snapStore.Get(ctx, createdSnap.SnapshotID)
-	require.NoError(t, err)
-	assert.Equal(t, models.SnapshotStatusCommitted, stillCommitted.Status)
-
-	// Audit must contain 'rollback_attempted_with_conflict'.
-	var count int64
-	require.NoError(t, db.Model(&gormdb.AuditLogEntry{}).
-		Where("action = ? AND actor = ? AND reason LIKE ?", "rollback_attempted_with_conflict", "master", "snapshot="+createdSnap.SnapshotID+" %").
-		Count(&count).Error)
-	assert.GreaterOrEqual(t, count, int64(1))
 }
 
 func TestRollback_LegacyBulkDeleteRollsBackWithoutClockComparison(t *testing.T) {
@@ -532,6 +460,10 @@ func TestRollback_CandidateReviewRejectAndSupersedeSnapshots(t *testing.T) {
 				stillSuperseded, getErr := candidates.Get(ctx, candidate.ID)
 				require.NoError(t, getErr)
 				require.Equal(t, models.CandidateStatusSuperseded, stillSuperseded.Status)
+				require.Equal(t, "edited after supersede", stillSuperseded.ProposedContent)
+				unchangedSnapshot, getErr := snapshots.Get(ctx, snapshot.SnapshotID)
+				require.NoError(t, getErr)
+				require.Equal(t, models.SnapshotStatusCommitted, unchangedSnapshot.Status)
 				return
 			}
 			require.NoError(t, err)
@@ -574,6 +506,13 @@ func TestRollback_LegacyTokenlessCandidateReviewEditConflicts(t *testing.T) {
 	require.ErrorIs(t, err, ErrRollbackConflict)
 	require.Equal(t, []int64{candidate.ID}, result.ConflictIDs)
 	require.Equal(t, []RollbackConflictRef{{Entity: snapshotEntryEntityCandidate, ID: candidate.ID}}, result.ConflictRefs)
+	unchanged, err := candidates.Get(ctx, candidate.ID)
+	require.NoError(t, err)
+	require.Equal(t, models.CandidateStatusRejected, unchanged.Status)
+	require.Equal(t, "edited after legacy transition", unchanged.ProposedContent)
+	unchangedSnapshot, err := snapshots.Get(ctx, snapshot.SnapshotID)
+	require.NoError(t, err)
+	require.Equal(t, models.SnapshotStatusCommitted, unchangedSnapshot.Status)
 }
 
 func TestRollback_ConflictDetectedAfterStalePreTransactionRead(t *testing.T) {
@@ -749,6 +688,9 @@ func TestRollback_MissingPromotedMemoryIsAnIdempotentDelete(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, models.CandidateStatusPending, restored.Status)
 	require.Nil(t, restored.PromotedMemoryID)
+	var memoryCount int64
+	require.NoError(t, db.Unscoped().Model(&gormdb.Memory{}).Where("id = ?", memory.ID).Count(&memoryCount).Error)
+	require.Zero(t, memoryCount)
 }
 
 func TestRollback_LegacyUnprefixedPromotionCollisionFailsClosed(t *testing.T) {
@@ -820,11 +762,21 @@ func TestRollback_LegacyPromotionParametersIgnoreUnrelatedEqualMemoryID(t *testi
 	candidate, err := candidates.Create(ctx, &models.CrystallizationCandidate{SourceSessionID: "legacy-parameter", ProposedContent: "parameter-owned candidate", ProposedTier: "semantic", ProposedPromotionTarget: "semantic", PrivacyScope: "project", Status: models.CandidateStatusPending, Fingerprint: fmt.Sprintf("legacy-parameter-%d", time.Now().UnixNano()), AffectedProjects: []string{newBulkTestProject(t, db)}, Confidence: 0.9, RecurrenceCount: 1})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Exec("DELETE FROM crystallization_candidates WHERE id = ?", candidate.ID).Error })
-	promotedID := candidate.ID + 1000
-	require.NoError(t, db.Create(&gormdb.Memory{ID: candidate.ID, Content: "unrelated equal id", Project: candidate.AffectedProjects[0], SourceAgent: "test", Status: "active", Tags: models.JSONStringArray{}}).Error)
-	t.Cleanup(func() { _ = db.Unscoped().Delete(&gormdb.Memory{}, "id = ?", candidate.ID).Error })
-	require.NoError(t, db.Create(&gormdb.Memory{ID: promotedID, Content: "promoted memory", Project: candidate.AffectedProjects[0], SourceAgent: "test", Status: "active", Tags: models.JSONStringArray{}}).Error)
-	t.Cleanup(func() { _ = db.Unscoped().Delete(&gormdb.Memory{}, "id = ?", promotedID).Error })
+	promotedMemory, err := memories.Create(ctx, &models.Memory{Content: "promoted memory", Project: candidate.AffectedProjects[0], SourceAgent: "test", Status: "active", Tags: models.JSONStringArray{}})
+	require.NoError(t, err)
+	firstMemoryID := promotedMemory.ID
+	t.Cleanup(func() { _ = db.Unscoped().Delete(&gormdb.Memory{}, "id = ?", firstMemoryID).Error })
+	if firstMemoryID == candidate.ID {
+		require.NoError(t, db.Exec("UPDATE memories SET content = ? WHERE id = ?", "unrelated equal id", firstMemoryID).Error)
+		promotedMemory, err = memories.Create(ctx, &models.Memory{Content: "promoted memory", Project: candidate.AffectedProjects[0], SourceAgent: "test", Status: "active", Tags: models.JSONStringArray{}})
+		require.NoError(t, err)
+		secondMemoryID := promotedMemory.ID
+		t.Cleanup(func() { _ = db.Unscoped().Delete(&gormdb.Memory{}, "id = ?", secondMemoryID).Error })
+	} else {
+		require.NoError(t, db.Create(&gormdb.Memory{ID: candidate.ID, Content: "unrelated equal id", Project: candidate.AffectedProjects[0], SourceAgent: "test", Status: "active", Tags: models.JSONStringArray{}}).Error)
+		t.Cleanup(func() { _ = db.Unscoped().Delete(&gormdb.Memory{}, "id = ?", candidate.ID).Error })
+	}
+	promotedID := promotedMemory.ID
 
 	before, err := json.Marshal(candidate)
 	require.NoError(t, err)
@@ -852,6 +804,11 @@ func TestRollback_LegacyPromotionParametersIgnoreUnrelatedEqualMemoryID(t *testi
 	result, err := Rollback(ctx, adminIdentity(), created.SnapshotID, snapshots, memories, gormdb.NewAuditStore(db), candidates)
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.RestoredCount)
+	restored, err := candidates.Get(ctx, candidate.ID)
+	require.NoError(t, err)
+	assert.Equal(t, models.CandidateStatusPending, restored.Status)
+	assert.Nil(t, restored.PromotedMemoryID)
+	assert.Equal(t, candidate.ProposedContent, restored.ProposedContent)
 	unrelated, err := memories.Get(ctx, candidate.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "unrelated equal id", unrelated.Content)
@@ -901,6 +858,18 @@ func TestRollback_PrefixedPromotionSameIDReturnsTypedConflicts(t *testing.T) {
 	require.ErrorIs(t, err, ErrRollbackConflict)
 	require.Equal(t, []int64{candidate.ID, candidate.ID}, result.ConflictIDs)
 	require.Equal(t, []RollbackConflictRef{{Entity: snapshotEntryEntityCandidate, ID: candidate.ID}, {Entity: snapshotEntryEntityMemory, ID: candidate.ID}}, result.ConflictRefs)
+	unchangedCandidate, err := candidates.Get(ctx, candidate.ID)
+	require.NoError(t, err)
+	require.Equal(t, models.CandidateStatusPromoted, unchangedCandidate.Status)
+	require.Equal(t, "edited candidate", unchangedCandidate.ProposedContent)
+	require.NotNil(t, unchangedCandidate.PromotedMemoryID)
+	require.Equal(t, candidate.ID, *unchangedCandidate.PromotedMemoryID)
+	unchangedMemory, err := memories.GetForSnapshot(ctx, candidate.ID)
+	require.NoError(t, err)
+	require.Equal(t, "edited memory", unchangedMemory.Content)
+	unchangedSnapshot, err := snapshots.Get(ctx, created.SnapshotID)
+	require.NoError(t, err)
+	require.Equal(t, models.SnapshotStatusCommitted, unchangedSnapshot.Status)
 }
 
 func TestRollback_LegacyPromotionParametersSameIDCollisionFailsClosed(t *testing.T) {
@@ -950,10 +919,21 @@ func TestRollback_LegacyPromotionMissingPromotedMemoryEntryFailsClosed(t *testin
 	t.Cleanup(func() { _ = db.Exec("DELETE FROM crystallization_candidates WHERE id = ?", candidate.ID).Error })
 	before, err := json.Marshal(candidate)
 	require.NoError(t, err)
+	memory, err := memories.Create(context.Background(), &models.Memory{Content: "legacy promoted memory", Project: candidate.AffectedProjects[0], SourceAgent: "test", Status: "active", Tags: models.JSONStringArray{}})
+	require.NoError(t, err)
+	firstMemoryID := memory.ID
+	t.Cleanup(func() { _ = db.Unscoped().Delete(&gormdb.Memory{}, "id = ?", firstMemoryID).Error })
+	if memory.ID == candidate.ID {
+		memory, err = memories.Create(context.Background(), &models.Memory{Content: "legacy promoted memory", Project: candidate.AffectedProjects[0], SourceAgent: "test", Status: "active", Tags: models.JSONStringArray{}})
+		require.NoError(t, err)
+		secondMemoryID := memory.ID
+		t.Cleanup(func() { _ = db.Unscoped().Delete(&gormdb.Memory{}, "id = ?", secondMemoryID).Error })
+	}
+	require.NoError(t, db.Exec("UPDATE crystallization_candidates SET status = ?, promoted_memory_id = ? WHERE id = ?", models.CandidateStatusPromoted, memory.ID, candidate.ID).Error)
 	snap, err := models.NewBulkOpSnapshot("legacy-missing-memory-"+uuid.NewString(), models.SnapshotOpBulkPromote, "master", json.RawMessage(fmt.Sprintf(`{"%d":%s}`, candidate.ID, before)))
 	require.NoError(t, err)
 	snap.Parameters = json.RawMessage(fmt.Sprintf(`{"candidate_ids":[%d]}`, candidate.ID))
-	snap.AffectedMemoryIDs = []int64{candidate.ID + 1000}
+	snap.AffectedMemoryIDs = []int64{memory.ID}
 	created, err := snapshots.Create(context.Background(), snap)
 	require.NoError(t, err)
 	cleanupRollbackSnapshot(t, db, created.SnapshotID)
@@ -961,4 +941,16 @@ func TestRollback_LegacyPromotionMissingPromotedMemoryEntryFailsClosed(t *testin
 	result, err := Rollback(context.Background(), adminIdentity(), created.SnapshotID, snapshots, memories, gormdb.NewAuditStore(db), candidates)
 	require.ErrorIs(t, err, ErrLegacySnapshotAmbiguous)
 	assert.Nil(t, result)
+	unchangedCandidate, err := candidates.Get(context.Background(), candidate.ID)
+	require.NoError(t, err)
+	require.Equal(t, models.CandidateStatusPromoted, unchangedCandidate.Status)
+	require.Equal(t, candidate.ProposedContent, unchangedCandidate.ProposedContent)
+	require.NotNil(t, unchangedCandidate.PromotedMemoryID)
+	require.Equal(t, memory.ID, *unchangedCandidate.PromotedMemoryID)
+	unchangedMemory, err := memories.GetForSnapshot(context.Background(), memory.ID)
+	require.NoError(t, err)
+	require.Equal(t, "legacy promoted memory", unchangedMemory.Content)
+	unchangedSnapshot, err := snapshots.Get(context.Background(), created.SnapshotID)
+	require.NoError(t, err)
+	require.Equal(t, models.SnapshotStatusCommitted, unchangedSnapshot.Status)
 }

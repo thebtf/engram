@@ -31,6 +31,7 @@ import (
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"gorm.io/gorm/logger"
 )
 
@@ -456,24 +457,43 @@ func TestFacade_BulkSupersedeRollback_ConflictsAfterVersionAdvance(t *testing.T)
 func TestFacade_BulkDelete_CaptureFailureDoesNotMutate(t *testing.T) {
 	db, store := openTestDB(t)
 	memStore := gormdb.NewMemoryStore(store)
-	before, err := memStore.Create(context.Background(), &models.Memory{Content: "capture failure source", Project: newBulkTestProject(t, db), SourceAgent: "test"})
+	project := newBulkTestProject(t, db)
+	before, err := memStore.Create(context.Background(), &models.Memory{Content: "capture failure source", Project: project, SourceAgent: "test"})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Unscoped().Delete(&gormdb.Memory{}, "id = ?", before.ID).Error })
+	second, err := memStore.Create(context.Background(), &models.Memory{Content: "capture failure second", Project: project, SourceAgent: "test"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Unscoped().Delete(&gormdb.Memory{}, "id = ?", second.ID).Error })
 
-	callbackName := fmt.Sprintf("bulkops_capture_failure_%d", time.Now().UnixNano())
+	callbackName := "bulkops_capture_failure_" + uuid.NewString()
+	var reads, updates atomic.Int32
 	require.NoError(t, db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
-		tx.AddError(errors.New("forced snapshot read failure"))
+		if tx.Statement.Table == "memories" && reads.Add(1) == 2 {
+			tx.AddError(errors.New("forced second snapshot read failure"))
+		}
 	}))
 	t.Cleanup(func() { _ = db.Callback().Query().Remove(callbackName) })
+	require.NoError(t, db.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table == "memories" {
+			updates.Add(1)
+		}
+	}))
+	t.Cleanup(func() { _ = db.Callback().Update().Remove(callbackName) })
 	facade := NewFacade(gormdb.NewSnapshotStore(db), nil, memStore, gormdb.NewAuditStore(db))
-	_, err = facade.Execute(context.Background(), adminIdentity(), BulkOp{Type: models.SnapshotOpBulkDelete, MemoryIDs: []int64{before.ID}})
+	_, err = facade.Execute(context.Background(), adminIdentity(), BulkOp{Type: models.SnapshotOpBulkDelete, MemoryIDs: []int64{before.ID, second.ID}})
 	require.NoError(t, db.Callback().Query().Remove(callbackName))
-	require.Error(t, err)
+	require.NoError(t, db.Callback().Update().Remove(callbackName))
+	require.ErrorContains(t, err, "snapshot capture")
+	require.ErrorContains(t, err, "forced second snapshot read failure")
+	assert.Equal(t, int32(2), reads.Load())
+	assert.Zero(t, updates.Load(), "capture must finish before any memory update is attempted")
 
-	after, err := memStore.Get(context.Background(), before.ID)
-	require.NoError(t, err)
-	assert.Nil(t, after.DeletedAt)
-	assert.Equal(t, before.Version, after.Version)
+	for _, original := range []*models.Memory{before, second} {
+		after, err := memStore.Get(context.Background(), original.ID)
+		require.NoError(t, err)
+		assert.Nil(t, after.DeletedAt)
+		assert.Equal(t, original.Version, after.Version)
+	}
 }
 
 func TestFacade_BulkDelete_PartialSuccessSnapshotExcludesFailedRows(t *testing.T) {
@@ -488,10 +508,15 @@ func TestFacade_BulkDelete_PartialSuccessSnapshotExcludesFailedRows(t *testing.T
 
 	facade := NewFacade(snapStore, nil, memStore, auditStore)
 	result, err := facade.Execute(ctx, adminIdentity(), BulkOp{Type: models.SnapshotOpBulkDelete, MemoryIDs: []int64{before.ID, before.ID}})
+	if result != nil && result.SnapshotID != "" {
+		t.Cleanup(func() {
+			_ = db.Exec("DELETE FROM audit_log WHERE reason LIKE ? OR reason LIKE ?", "bulk_delete snapshot="+result.SnapshotID+" %", "snapshot="+result.SnapshotID+" %").Error
+			_ = db.Exec("DELETE FROM bulk_op_snapshots WHERE snapshot_id = ?", result.SnapshotID).Error
+		})
+	}
 	require.NoError(t, err)
 	require.Equal(t, 1, result.AffectedCount)
 	require.Len(t, result.Errors, 1)
-	t.Cleanup(func() { _ = db.Exec("DELETE FROM bulk_op_snapshots WHERE snapshot_id = ?", result.SnapshotID).Error })
 
 	snap, err := snapStore.Get(ctx, result.SnapshotID)
 	require.NoError(t, err)
@@ -504,6 +529,61 @@ func TestFacade_BulkDelete_PartialSuccessSnapshotExcludesFailedRows(t *testing.T
 	restored, err := memStore.GetForSnapshot(ctx, before.ID)
 	require.NoError(t, err)
 	assert.Equal(t, before.Version, restored.Version)
+}
+
+func TestFacade_BulkSupersede_PartialSuccessExcludesDistinctFailedRow(t *testing.T) {
+	db, store := openTestDB(t)
+	memories := gormdb.NewMemoryStore(store)
+	snapshots := gormdb.NewSnapshotStore(db)
+	audits := gormdb.NewAuditStore(db)
+	ctx := context.Background()
+	project := newBulkTestProject(t, db)
+	successful, err := memories.Create(ctx, &models.Memory{Content: "partial success", Project: project, SourceAgent: "test", Status: "active"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Unscoped().Delete(&gormdb.Memory{}, "id = ?", successful.ID).Error })
+	failed, err := memories.Create(ctx, &models.Memory{Content: "partial failure", Project: project, SourceAgent: "test", Status: "active"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Unscoped().Delete(&gormdb.Memory{}, "id = ?", failed.ID).Error })
+	_, err = memories.Supersede(ctx, failed.ID)
+	require.NoError(t, err)
+	failedBefore, err := memories.GetForSnapshot(ctx, failed.ID)
+	require.NoError(t, err)
+
+	facade := NewFacade(snapshots, nil, memories, audits)
+	result, err := facade.Execute(ctx, adminIdentity(), BulkOp{Type: models.SnapshotOpBulkSupersede, MemoryIDs: []int64{failed.ID, successful.ID}})
+	if result != nil && result.SnapshotID != "" {
+		t.Cleanup(func() {
+			_ = db.Exec("DELETE FROM audit_log WHERE reason LIKE ? OR reason LIKE ?", "bulk_supersede snapshot="+result.SnapshotID+" %", "snapshot="+result.SnapshotID+" %").Error
+			_ = db.Exec("DELETE FROM bulk_op_snapshots WHERE snapshot_id = ?", result.SnapshotID).Error
+		})
+	}
+	require.NoError(t, err)
+	require.Equal(t, 1, result.AffectedCount)
+	require.Len(t, result.Errors, 1)
+	assert.Contains(t, result.Errors[0], fmt.Sprintf("memory %d:", failed.ID))
+	snap, err := snapshots.Get(ctx, result.SnapshotID)
+	require.NoError(t, err)
+	assert.Equal(t, []int64{successful.ID}, snap.AffectedMemoryIDs)
+	entries, err := decodeTypedBeforeState(snap.BeforeState)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Contains(t, entries, fmt.Sprint(successful.ID))
+	assert.NotContains(t, entries, fmt.Sprint(failed.ID))
+	changed, err := memories.GetForSnapshot(ctx, successful.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "superseded", changed.Status)
+	assert.Greater(t, changed.Version, successful.Version)
+	_, err = Rollback(ctx, adminIdentity(), result.SnapshotID, snapshots, memories, audits, nil)
+	require.NoError(t, err)
+	restored, err := memories.GetForSnapshot(ctx, successful.ID)
+	require.NoError(t, err)
+	assert.Equal(t, successful.Status, restored.Status)
+	assert.Equal(t, successful.Version, restored.Version)
+	failedAfter, err := memories.GetForSnapshot(ctx, failed.ID)
+	require.NoError(t, err)
+	assert.Equal(t, failedBefore.Status, failedAfter.Status)
+	assert.Equal(t, failedBefore.Version, failedAfter.Version)
+	assert.Equal(t, failedBefore.Content, failedAfter.Content)
 }
 
 func TestFacade_BulkPromote_AmendFailureRollsBack(t *testing.T) {
@@ -587,6 +667,7 @@ func TestFacade_BulkPromote_PreservesCandidateAuditAndSeparatesIDs(t *testing.T)
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
+		_ = db.Exec("DELETE FROM audit_log WHERE action = ? AND actor = ? AND reason LIKE ?", "promote_candidate", "master", fmt.Sprintf("candidate %d promoted%%", candidate.ID)).Error
 		_ = db.Exec("DELETE FROM crystallization_candidates WHERE id = ?", candidate.ID).Error
 		_ = db.Exec("DELETE FROM memories WHERE project = ?", project).Error
 	})
@@ -594,6 +675,12 @@ func TestFacade_BulkPromote_PreservesCandidateAuditAndSeparatesIDs(t *testing.T)
 	var auditsBefore int64
 	require.NoError(t, db.Model(&gormdb.AuditLogEntry{}).Where("action = ? AND actor = ? AND reason LIKE ?", "promote_candidate", "master", fmt.Sprintf("candidate %d promoted%%", candidate.ID)).Count(&auditsBefore).Error)
 	result, err := f.Execute(context.Background(), adminIdentity(), BulkOp{Type: models.SnapshotOpBulkPromote, CandidateIDs: []int64{candidate.ID}})
+	if result != nil && result.SnapshotID != "" {
+		t.Cleanup(func() {
+			_ = db.Exec("DELETE FROM audit_log WHERE action = ? AND actor = ? AND reason LIKE ?", "bulk_promote", "master", "bulk_promote snapshot="+result.SnapshotID+" %").Error
+			_ = db.Exec("DELETE FROM bulk_op_snapshots WHERE snapshot_id = ?", result.SnapshotID).Error
+		})
+	}
 	require.NoError(t, err)
 	require.Len(t, result.Promoted, 1)
 
@@ -603,12 +690,19 @@ func TestFacade_BulkPromote_PreservesCandidateAuditAndSeparatesIDs(t *testing.T)
 
 	snap, err := snapStore.Get(context.Background(), result.SnapshotID)
 	require.NoError(t, err)
-	assert.Equal(t, result.Promoted, snap.AffectedMemoryIDs,
-		"affected IDs must be exactly the promoted memory IDs even when candidate and memory sequences collide")
+	assert.Equal(t, result.Promoted, snap.AffectedMemoryIDs)
 	entries, err := decodeTypedBeforeState(snap.BeforeState)
 	require.NoError(t, err)
-	assert.Contains(t, entries, fmt.Sprintf("candidate:%d", candidate.ID))
-	assert.Contains(t, entries, fmt.Sprintf("memory:%d", result.Promoted[0]))
+	require.Len(t, entries, 2)
+	candidateEntry, ok := entries[fmt.Sprintf("candidate:%d", candidate.ID)]
+	require.True(t, ok)
+	assert.Equal(t, models.EntryKindRestore, candidateEntry.Kind)
+	assert.NotEmpty(t, candidateEntry.Before)
+	assert.NotEmpty(t, candidateEntry.PostStateToken)
+	memoryEntry, ok := entries[fmt.Sprintf("memory:%d", result.Promoted[0])]
+	require.True(t, ok)
+	assert.Equal(t, models.EntryKindDelete, memoryEntry.Kind)
+	assert.NotEmpty(t, memoryEntry.PostStateToken)
 }
 
 func TestFacade_BulkPromote_RollbackExcludesFailedCandidates(t *testing.T) {
@@ -770,8 +864,10 @@ func TestFacade_BulkSupersedeReverseOrderDoesNotDeadlock(t *testing.T) {
 	project := newBulkTestProject(t, db)
 	first, err := memories.Create(ctx, &models.Memory{Content: "reverse lock first", Project: project, SourceAgent: "test", Status: "active", Tags: models.JSONStringArray{}})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Exec("DELETE FROM memories WHERE id = ?", first.ID).Error })
 	second, err := memories.Create(ctx, &models.Memory{Content: "reverse lock second", Project: project, SourceAgent: "test", Status: "active", Tags: models.JSONStringArray{}})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Exec("DELETE FROM memories WHERE id = ?", second.ID).Error })
 
 	callbackName := fmt.Sprintf("bulk_reverse_lock_barrier_%d", time.Now().UnixNano())
 	release := make(chan struct{})
@@ -795,7 +891,6 @@ func TestFacade_BulkSupersedeReverseOrderDoesNotDeadlock(t *testing.T) {
 	}))
 	t.Cleanup(func() {
 		_ = db.Callback().Query().Remove(callbackName)
-		_ = db.Exec("DELETE FROM memories WHERE id IN ?", []int64{first.ID, second.ID}).Error
 	})
 
 	orders := [][]int64{{first.ID, second.ID}, {second.ID, first.ID}}
@@ -828,4 +923,51 @@ func TestFacade_BulkSupersedeReverseOrderDoesNotDeadlock(t *testing.T) {
 		require.NoError(t, err)
 	}
 	require.Equal(t, 2, results[0].AffectedCount+results[1].AffectedCount)
+	for _, id := range []int64{first.ID, second.ID} {
+		row, err := memories.GetForSnapshot(ctx, id)
+		require.NoError(t, err)
+		assert.Equal(t, "superseded", row.Status)
+	}
+}
+
+func TestFacade_BulkSupersede_CapturesLocksInAscendingOrder(t *testing.T) {
+	db, store := openTestDB(t)
+	memories := gormdb.NewMemoryStore(store)
+	snapshots := gormdb.NewSnapshotStore(db)
+	audits := gormdb.NewAuditStore(db)
+	ctx := context.Background()
+	project := newBulkTestProject(t, db)
+	first, err := memories.Create(ctx, &models.Memory{Content: "lock order first", Project: project, SourceAgent: "test", Status: "active"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Exec("DELETE FROM memories WHERE id = ?", first.ID).Error })
+	second, err := memories.Create(ctx, &models.Memory{Content: "lock order second", Project: project, SourceAgent: "test", Status: "active"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Exec("DELETE FROM memories WHERE id = ?", second.ID).Error })
+	require.Less(t, first.ID, second.ID)
+
+	callbackName := "bulk_capture_order_" + uuid.NewString()
+	var captured []int64
+	var lockStrengths []string
+	require.NoError(t, db.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table == "memories" && tx.Error == nil && len(captured) < 2 {
+			if row, ok := tx.Statement.Dest.(*gormdb.Memory); ok {
+				captured = append(captured, row.ID)
+				locking, _ := tx.Statement.Clauses["FOR"].Expression.(clause.Locking)
+				lockStrengths = append(lockStrengths, locking.Strength)
+			}
+		}
+	}))
+	t.Cleanup(func() { _ = db.Callback().Query().Remove(callbackName) })
+	result, err := NewFacade(snapshots, nil, memories, audits).Execute(ctx, adminIdentity(), BulkOp{Type: models.SnapshotOpBulkSupersede, MemoryIDs: []int64{second.ID, first.ID}})
+	if result != nil && result.SnapshotID != "" {
+		t.Cleanup(func() {
+			_ = db.Exec("DELETE FROM audit_log WHERE action = ? AND actor = ? AND reason LIKE ?", "bulk_supersede", "master", "bulk_supersede snapshot="+result.SnapshotID+" %").Error
+			_ = db.Exec("DELETE FROM bulk_op_snapshots WHERE snapshot_id = ?", result.SnapshotID).Error
+		})
+	}
+	require.NoError(t, err)
+	require.Equal(t, 2, result.AffectedCount)
+	require.Empty(t, result.Errors)
+	assert.Equal(t, []int64{first.ID, second.ID}, captured)
+	assert.Equal(t, []string{"UPDATE", "UPDATE"}, lockStrengths)
 }
