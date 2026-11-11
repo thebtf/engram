@@ -134,16 +134,9 @@ test('bare successful receipts remain pending until authoritative readback', asy
  assert.deepEqual(result.request, request)
 })
 
-test('unverified receipts retain the request without replaying or fabricating completed state', async () => {
- let transportAttempts = 0
- const response = new Promise<Response>((resolve) => {
-  transportAttempts += 1
-  resolve(jsonResponse(200, { id: 'rule-1' }))
- })
+test('executeMutation preserves an unverified receipt and its original request', async () => {
+ const result = await executeMutation(request, Promise.resolve(jsonResponse(200, { id: 'rule-1' })), parseRuleState)
 
- const result = await executeMutation(request, response, parseRuleState)
-
- assert.equal(transportAttempts, 1)
  assertMutationKind(result, 'committed_verification_pending')
  assert.deepEqual(result.request, request)
 })
