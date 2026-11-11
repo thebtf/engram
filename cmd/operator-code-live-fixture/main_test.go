@@ -48,7 +48,7 @@ func TestParseInvocationRequiresNoViewFixtureKeycardFile(t *testing.T) {
 	}
 }
 
-func TestFixtureSourceForReadsTheDeclaredWorktreeFile(t *testing.T) {
+func TestFixtureSourceForReadsRequiredBasename(t *testing.T) {
 	path := filepath.Join(t.TempDir(), fixtureSourcePath)
 	want := []byte(`package fixture
 
