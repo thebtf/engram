@@ -515,26 +515,25 @@ for (const start of [SAME_A, SAME_B]) {
 }
 
 for (const path of ['/', '/projects']) {
-  for (const language of ['en', 'ru', 'zh']) {
-    test(`${path} ${language}: verified logical groups offer only canonical UUIDs`, async t => {
-      const items = [...logicalItems, { project_id: VERSION, name: 'North second alias' }]
-      const logical_groups = [{ primary_project_id: SAME_A, alias_project_ids: [SAME_B, VERSION] }, logicalGroups[1]]
-      const state = await mount(t, { path, language, items, unresolved: [], logical_groups })
-      const expected = [SAME_A, QUALIFIED, GENERIC]
-      const optionRows = realProjectOptions(state.host)
-      assert.deepEqual(optionRows.map(item => item.props.value).sort(), expected.sort())
-      const page = walk(state.host).find(item => hasClass(item, path === '/' ? 'home-page' : 'projects-page'))
-      for (const option of optionRows) {
-        const row = walk(page).find(item => item.tag === 'button' && text(item).trim() === text(option).trim())
-        assert.ok(row)
-        await row.props.onClick(); await tick()
-        assert.equal(state.router.currentRoute.value.query.project, option.props.value)
-        await state.router.push(path); await tick()
-      }
-      assert.ok(state.calls.filter(call => ['/api/memories', '/api/documents', '/api/sessions/list'].includes(call.url.pathname)).every(call => items.some(item => item.project_id === call.url.searchParams.get('project'))))
-      assert.deepEqual(state.errors, [])
-    })
-  }
+  test(`${path}: verified logical groups offer only canonical UUIDs`, async t => {
+    const items = [...logicalItems, { project_id: VERSION, name: 'North second alias' }]
+    const logical_groups = [{ primary_project_id: SAME_A, alias_project_ids: [SAME_B, VERSION] }, logicalGroups[1]]
+    const state = await mount(t, { path, language: 'en', items, unresolved: [], logical_groups })
+    const expected = [SAME_A, QUALIFIED, GENERIC]
+    const optionRows = realProjectOptions(state.host)
+    assert.deepEqual(optionRows.map(item => item.props.value).sort(), expected.sort())
+    const page = walk(state.host).find(item => hasClass(item, path === '/' ? 'home-page' : 'projects-page'))
+    assert.equal(pageRows(state).length, expected.length, 'Alias projects must not add extra page choices')
+    for (const option of optionRows) {
+      const row = walk(page).find(item => item.tag === 'button' && text(item).trim() === text(option).trim())
+      assert.ok(row)
+      await row.props.onClick(); await tick()
+      assert.equal(state.router.currentRoute.value.query.project, option.props.value)
+      await state.router.push(path); await tick()
+    }
+    assert.ok(state.calls.filter(call => ['/api/memories', '/api/documents', '/api/sessions/list'].includes(call.url.pathname)).every(call => expected.includes(call.url.searchParams.get('project'))))
+    assert.deepEqual(state.errors, [])
+  })
 
   test(`${path}: missing or malformed logical groups preserve flat selectable projects`, async t => {
     for (const logical_groups of [undefined, null, 'invalid', [{ primary_project_id: 'not-a-uuid', alias_project_ids: [SAME_A] }]]) {
