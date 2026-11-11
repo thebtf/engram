@@ -75,6 +75,7 @@ func TestHAPPrincipalIssuanceRequiresClassAndExpiry(t *testing.T) {
 		{name: "malformed reserved principal", principal: "agent/omp-legacy/", kind: auth.PrincipalKindAgent, expiresAt: &future, wantError: true},
 		{name: "nested reserved subject", principal: auth.ProjectServicePrincipal("project/nested"), kind: auth.PrincipalKindService, wantError: true},
 		{name: "control character subject", principal: auth.RegistrationServicePrincipal("workstation\nother"), kind: auth.PrincipalKindService, wantError: true},
+		{name: "non-whitespace control character subject", principal: auth.RegistrationServicePrincipal("workstation\x00other"), kind: auth.PrincipalKindService, wantError: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			err := auth.ValidateHAPPrincipalForIssuance(test.principal, test.kind, test.expiresAt, now)
@@ -99,8 +100,23 @@ func TestValidatorRejectsExpiredKeycardBeforeReturningIdentity(t *testing.T) {
 	identity, err := validator.Validate(context.Background(), raw)
 	require.ErrorIs(t, err, auth.ErrInvalidCredentials)
 	require.Equal(t, auth.Identity{}, identity)
-
+	ordinary := expired
+	ordinary.Principal = "agent/codex"
+	ordinaryValidator := auth.NewValidator("master-secret", &stubStore{byPrefix: map[string][]gormdb.APIToken{
+		"deafbeef": {ordinary},
+	}})
+	identity, err = ordinaryValidator.Validate(context.Background(), raw)
+	require.ErrorIs(t, err, auth.ErrInvalidCredentials)
+	require.Equal(t, auth.Identity{}, identity)
 	futureAt := time.Now().UTC().Add(time.Hour)
+	ordinary.ExpiresAt = &futureAt
+	ordinaryValidator = auth.NewValidator("master-secret", &stubStore{byPrefix: map[string][]gormdb.APIToken{
+		"deafbeef": {ordinary},
+	}})
+	identity, err = ordinaryValidator.Validate(context.Background(), raw)
+	require.NoError(t, err)
+	require.Equal(t, "agent/codex", identity.Principal)
+
 	future := expired
 	future.ExpiresAt = &futureAt
 	validator = auth.NewValidator("master-secret", &stubStore{byPrefix: map[string][]gormdb.APIToken{

@@ -11,13 +11,13 @@ import (
 
 func TestWithIdentity_RoundTrip(t *testing.T) {
 	t.Parallel()
-	ctx := auth.WithIdentity(context.Background(), auth.Client("read-write", "uuid-1"))
+	want := auth.ClientWithPrincipal("read-write", "uuid-1", "agent/alice", auth.PrincipalKindAgent)
+	ctx := auth.WithIdentity(context.Background(), want)
 
 	got, ok := auth.IdentityFrom(ctx)
 
 	assert.True(t, ok)
-	assert.Equal(t, auth.RoleReadWrite, got.Role)
-	assert.Equal(t, auth.SourceClient, got.Source)
+	assert.Equal(t, want, got)
 }
 
 func TestIdentityFrom_NoIdentity(t *testing.T) {
@@ -88,6 +88,9 @@ func TestIdentity_IsSessionAdmin_RejectsClient(t *testing.T) {
 
 	assert.False(t, id.IsSessionAdmin())
 	assert.False(t, id.IsAdmin(), "read-write client is not admin")
+	adminClient := auth.Client("admin", "uuid-admin")
+	assert.True(t, adminClient.IsAdmin())
+	assert.False(t, adminClient.IsSessionAdmin())
 }
 
 func TestIdentity_IsSessionAdmin_RejectsSessionNonAdmin(t *testing.T) {
@@ -130,17 +133,17 @@ func TestIdentity_WorkstationID_T003b(t *testing.T) {
 		},
 		{
 			name: "SourceMaster returns empty",
-			id:   auth.Admin(),
+			id:   auth.Identity{Source: auth.SourceMaster, Role: auth.RoleAdmin, KeycardID: "foreign-master-keycard"},
 			want: "",
 		},
 		{
 			name: "SourceSession admin returns empty",
-			id:   auth.Session("admin"),
+			id:   auth.Identity{Source: auth.SourceSession, Role: auth.RoleAdmin, KeycardID: "foreign-session-keycard"},
 			want: "",
 		},
 		{
 			name: "SourceSession non-admin returns empty",
-			id:   auth.Session("user"),
+			id:   auth.Identity{Source: auth.SourceSession, Role: auth.RoleReadOnly, KeycardID: "foreign-user-keycard"},
 			want: "",
 		},
 		{
