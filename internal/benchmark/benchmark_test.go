@@ -149,7 +149,7 @@ func TestBenchmarkSuite(t *testing.T) {
 	pool := openBenchmarkFixture(t)
 	ctx := context.Background()
 
-	t.Log("Seeding 1M observations, 5M relations, 1M vectors (this takes a few minutes)...")
+	t.Log("Seeding 1M observations, up to 5M relation attempts, and 1M vectors (this takes a few minutes)...")
 	seedStart := time.Now()
 	if err := SeedData(ctx, pool); err != nil {
 		t.Fatalf("seed data: %v", err)
