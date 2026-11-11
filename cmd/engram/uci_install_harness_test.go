@@ -267,8 +267,13 @@ func TestUCIInstallHarnessBoundsReadinessAndPropagatesCancellation(t *testing.T)
 			t.Fatal("install harness did not reach its readiness driver")
 		}
 
-		err := <-done
-		completed = true
+		var err error
+		select {
+		case err = <-done:
+			completed = true
+		case <-time.After(request.ReadinessTimeout + uciInstallHarnessWindowsStartupTimeout):
+			t.Fatal("install harness did not stop after its readiness deadline")
+		}
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("unready stdio harness error = %v, want wrapped context deadline", err)
 		}
@@ -345,17 +350,20 @@ func TestUCIInstallHarnessRejectsUnversionedOrDriverlessRequest(t *testing.T) {
 	}
 
 	for _, test := range []struct {
-		name   string
-		mutate func(*uciInstallHarnessRequest)
+		name      string
+		mutate    func(*uciInstallHarnessRequest)
+		wantError string
 	}{
 		{
-			name: "unversioned request",
+			name:      "unversioned request",
+			wantError: "UCI install harness version =",
 			mutate: func(request *uciInstallHarnessRequest) {
 				request.Version = "uci-install-harness/v0"
 			},
 		},
 		{
-			name: "missing standard stdio driver",
+			name:      "missing standard stdio driver",
+			wantError: "UCI install harness MCP driver is nil",
 			mutate: func(request *uciInstallHarnessRequest) {
 				request.MCPDriver = nil
 			},
@@ -363,11 +371,16 @@ func TestUCIInstallHarnessRejectsUnversionedOrDriverlessRequest(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			installRoot := filepath.Join(t.TempDir(), "UCI rejected request Кириллица")
-			request := uciInstallHarnessTestRequest(t, installRoot, t.TempDir(), "serve", time.Second)
+			auditDir := t.TempDir()
+			request := uciInstallHarnessTestRequest(t, installRoot, auditDir, "serve", time.Second)
 			test.mutate(&request)
 
-			if _, err := runUCIInstallHarness(context.Background(), request); err == nil {
-				t.Fatal("invalid request was accepted; an in-process/package-direct substitute must not bypass the versioned stdio driver")
+			if _, err := runUCIInstallHarness(context.Background(), request); err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("invalid request error = %v, want %q", err, test.wantError)
+			}
+			entries, err := os.ReadDir(auditDir)
+			if err != nil || len(entries) != 0 {
+				t.Fatalf("invalid request started fixture components: entries=%v error=%v", entries, err)
 			}
 			uciRequireInstallRootRemoved(t, installRoot)
 		})
@@ -380,7 +393,7 @@ func TestUCIInstallHarnessRejectsUnversionedOrDriverlessRequest(t *testing.T) {
 // T046 owns parser behavior and JS/TS/TSX claims.
 func TestUCIInstallHarnessProcessHelper(t *testing.T) {
 	if *uciInstallHarnessHelperRole == "" {
-		return
+		t.Skip("subprocess install helper runs only when invoked by its parent tests")
 	}
 
 	audit := uciInstallHarnessChildAudit{

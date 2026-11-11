@@ -599,7 +599,7 @@ func (receiver *missingSuccessorReceiver) HandleGracefulRestartWithOptions(optio
 
 func TestMissingSuccessorReceiverProcess(t *testing.T) {
 	if os.Getenv("ENGRAM_TEST_MISSING_RECEIVER") != "1" {
-		return
+		t.Skip("subprocess receiver helper runs only when invoked by its parent test")
 	}
 	if err := configureMuxcoreInstallation(); err != nil {
 		t.Fatal(err)
