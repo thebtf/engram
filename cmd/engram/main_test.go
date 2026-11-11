@@ -668,7 +668,7 @@ func TestWriteMuxcoreDaemonVersionMarkerWaitsForPredecessorLock(t *testing.T) {
 
 func TestMuxcoreDaemonLockHolderProcess(t *testing.T) {
 	if os.Getenv("ENGRAM_TEST_MUXCORE_LOCK_HOLDER") != "1" {
-		return
+		t.Skip("subprocess lock-holder helper runs only when invoked by its parent test")
 	}
 	root := os.Getenv(muxcoreLockTestRootEnv)
 	if root == "" {
