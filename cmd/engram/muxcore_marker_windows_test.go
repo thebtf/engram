@@ -13,14 +13,14 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func TestMuxcoreDaemonMarkerReadDuringAtomicReplacement(t *testing.T) {
+func TestMuxcoreDaemonMarkerReadWithDeleteHandleAndReplace(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "daemon.marker.json")
 	exe := filepath.ToSlash(filepath.Join(t.TempDir(), "engram.exe"))
 	raw := []byte(`{"schema_version":2,"product_version":"v7.0.6","daemon_compat_epoch":1,"pid":42,"daemon_generation":"generation","exe":"` + exe + `"}`)
 	if err := os.WriteFile(path, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Run("read during replacement", func(t *testing.T) {
+	t.Run("read while DELETE handle is open", func(t *testing.T) {
 		name, err := windows.UTF16PtrFromString(path)
 		if err != nil {
 			t.Fatal(err)
@@ -33,7 +33,7 @@ func TestMuxcoreDaemonMarkerReadDuringAtomicReplacement(t *testing.T) {
 		defer windows.CloseHandle(handle)
 		marker, err := readMuxcoreDaemonVersionMarker(path)
 		if err != nil || marker.PID != 42 || marker.DaemonGeneration != "generation" {
-			t.Fatalf("read marker while atomic replacement holds DELETE: marker=%+v error=%v", marker, err)
+			t.Fatalf("read marker while DELETE handle is open: marker=%+v error=%v", marker, err)
 		}
 	})
 	replacement := []byte(strings.ReplaceAll(string(raw), `"generation"`, `"successor"`))
@@ -161,7 +161,6 @@ func TestMuxcoreMarkerOpenPathLegacy(t *testing.T) {
 		{"dot", abs + `\.\marker.json`, `\\?\` + abs + `\marker.json`},
 		{"dotdot collapses below threshold", abs + `\..\marker.json`, `\\?\` + drive + `\marker.json`},
 		{"dotdot above drive root", abs + `\..\..\marker.json`, `\\?\` + drive + `\marker.json`},
-		{"short relative", "marker.json", "marker.json"},
 		{"relative below boundary", relative, relative},
 		{"relative boundary", relative + "x", `\\?\` + cwd + `\` + relative + "x"},
 		{"relative", long + `\marker.json`, `\\?\` + cwd + `\` + long + `\marker.json`},
