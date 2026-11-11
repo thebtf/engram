@@ -544,7 +544,11 @@ for (const path of ['/', '/projects']) {
       assert.equal(state.router.currentRoute.value.query.project, option.props.value)
       await state.router.push(path); await tick()
     }
-    assert.ok(state.calls.filter(call => ['/api/memories', '/api/documents', '/api/sessions/list'].includes(call.url.pathname)).every(call => expected.includes(call.url.searchParams.get('project'))))
+    const scopedCalls = state.calls.filter(call => ['/api/memories', '/api/documents', '/api/sessions/list'].includes(call.url.pathname))
+    for (const endpoint of path === '/' ? ['/api/memories', '/api/documents'] : ['/api/sessions/list']) {
+      assert.ok(scopedCalls.some(call => call.url.pathname === endpoint), `Expected a scoped ${endpoint} request`)
+    }
+    assert.ok(scopedCalls.every(call => expected.includes(call.url.searchParams.get('project'))))
     assert.deepEqual(state.errors, [])
   })
 

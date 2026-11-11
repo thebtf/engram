@@ -44,7 +44,7 @@ func TestProjectPartitionRepairCLIRequiresDistinctExplicitStages(t *testing.T) {
 	}
 }
 
-func TestProjectPartitionRepairCLIHelpAndRefusalNeverStartService(t *testing.T) {
+func TestProjectPartitionRepairCLIHelpAndMissingPlanIDRefusal(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	require.Zero(t, runProjectPartitionRepairOutput([]string{"plan", "--help"}, &stdout, &stderr))
 	require.Contains(t, stdout.String(), "repair-project-partitions plan|dry-run|apply")

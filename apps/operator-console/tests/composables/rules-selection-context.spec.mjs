@@ -215,7 +215,9 @@ for (const action of ['enable', 'disable', 'delete']) {
     assert.deepEqual(state.visibleRows.map((row) => row.id), [403], 'Refresh must visibly load B, not A')
     assert.equal(state.busy, false)
     const operationsBefore = consumer.writes.length
+    const actionRequestsBefore = consumer.calls.filter((call) => call.path === '/api/rules' && call.method === 'POST').length
     await state.runSelectionAction(action)
+    assert.equal(consumer.calls.filter((call) => call.path === '/api/rules' && call.method === 'POST').length, actionRequestsBefore, 'stale selection must be blocked before mutation dispatch')
     t.diagnostic(JSON.stringify({ action, savedVersion, visibleProject: B, selectedKind: state.selection.current.value.kind, mutation: state.mutationResult?.kind, writes: consumer.writes.slice(operationsBefore) }))
     assert.deepEqual(consumer.rows.get(401), beforeA, `bulk ${action} under visible B must not mutate restored A without a deliberate new selection/scope`)
     assert.deepEqual(consumer.rows.get(403), beforeB, 'a refused stale action must not silently retarget B either')
@@ -290,7 +292,9 @@ for (const kind of ['explicit', 'page', 'frozen_filter']) {
     assert.equal(state.selectionActionReady, false)
     if (kind === 'frozen_filter') assert.equal(state.selection.current.value.reconfirmationRequired, true)
     else assert.equal(state.selection.current.value.kind, 'none')
+    const actionRequestsBefore = consumer.calls.filter((call) => call.path === '/api/rules' && call.method === 'POST').length
     await state.runSelectionAction('delete')
+    assert.equal(consumer.calls.filter((call) => call.path === '/api/rules' && call.method === 'POST').length, actionRequestsBefore, 'invalidated selection must be blocked before mutation dispatch')
     assert.deepEqual(consumer.writes, [])
     await state.clearSelection()
     await state.toggleRuleSelection(state.visibleRows[0])
