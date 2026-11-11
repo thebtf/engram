@@ -818,8 +818,12 @@ func TestSessionMemoryTransport(t *testing.T) {
 
 			t.Run("frame_overflow", func(t *testing.T) {
 				client := startMemoryTestClient(t, binary, rootA, installationA, backend.url, memoryTestTokenA)
+				memoryTestInitialize(t, client)
 				_, _ = io.WriteString(client.input, strings.Repeat("x", sessionMemoryFrameBytes+3)+"\n")
 				client.close(t, true)
+				if !strings.Contains(client.stderr.String(), "bufio.Scanner: token too long") {
+					t.Fatalf("frame overflow exited for another reason: %s", client.stderr.String())
+				}
 			})
 			t.Run("output_failure", func(t *testing.T) {
 				client := startMemoryTestClient(t, binary, rootA, installationA, backend.url, memoryTestTokenA)
