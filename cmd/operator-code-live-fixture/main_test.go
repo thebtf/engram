@@ -281,6 +281,15 @@ func newPostgresFixtureEnvironment(t *testing.T) *postgresFixtureEnvironment {
 	if err != nil {
 		t.Fatal("open disposable fixture database")
 	}
+	var existingVector bool
+	if err := adminConn.QueryRow(t.Context(), "SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname IN ('vector', 'vectorscale'))").Scan(&existingVector); err != nil {
+		_ = adminConn.Close(context.Background())
+		t.Fatal("inspect disposable database extensions")
+	}
+	if existingVector {
+		_ = adminConn.Close(context.Background())
+		t.Fatal("fixture requires a fresh database without preinstalled vector extensions")
+	}
 	if _, err := adminConn.Exec(t.Context(), "CREATE SCHEMA "+schema); err != nil {
 		_ = adminConn.Close(context.Background())
 		t.Fatal("create isolated fixture schema")
