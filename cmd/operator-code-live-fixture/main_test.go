@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/uci"
@@ -48,7 +49,7 @@ func TestParseInvocationRequiresNoViewFixtureKeycardFile(t *testing.T) {
 	}
 }
 
-func TestFixtureSourceForReadsTheDeclaredWorktreeFile(t *testing.T) {
+func TestFixtureSourceForReadsRequiredBasename(t *testing.T) {
 	path := filepath.Join(t.TempDir(), fixtureSourcePath)
 	want := []byte(`package fixture
 
@@ -187,7 +188,7 @@ func TestRunProvisionsIsolatedPostgresFixture(t *testing.T) {
 }
 
 type postgresFixtureEnvironment struct {
-	adminStore       *gormdb.Store
+	adminConn        *pgx.Conn
 	store            *gormdb.Store
 	schema           string
 	scopedDSN        string
@@ -209,27 +210,95 @@ type fixtureRunReceipt struct {
 	stderr string
 }
 
+func fixtureTestDatabaseAllowed(dsn string) bool {
+	parsed, err := url.Parse(dsn)
+	if err != nil || (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") {
+		return false
+	}
+	if parsed.User == nil || parsed.User.Username() == "" || parsed.Port() == "" {
+		return false
+	}
+	if password, present := parsed.User.Password(); !present || password == "" {
+		return false
+	}
+	query, err := url.ParseQuery(parsed.RawQuery)
+	if err != nil || parsed.Fragment != "" {
+		return false
+	}
+	for key, values := range query {
+		if key != "sslmode" || len(values) != 1 {
+			return false
+		}
+	}
+	host := strings.ToLower(parsed.Hostname())
+	database := strings.ToLower(strings.TrimPrefix(parsed.Path, "/"))
+	return (host == "127.0.0.1" || host == "::1") && !strings.Contains(database, "/") && strings.HasSuffix(database, "_test") && !strings.Contains(database, "prod") && !strings.Contains(database, "staging")
+}
+
+func TestFixtureTestDatabaseAllowed(t *testing.T) {
+	for _, tc := range []struct {
+		dsn  string
+		want bool
+	}{
+		{"postgres://fixture:fixture@127.0.0.1:54329/engram_test", true},
+		{"postgres://127.0.0.1/latest", false},
+		{"postgres://fixture:fixture@remote:54329/engram_test", false},
+		{"postgres://fixture:fixture@127.0.0.1:54329/production", false},
+		{"postgres://fixture:fixture@127.0.0.1:54329/production_test", false},
+		{"postgres://fixture:fixture@127.0.0.1:54329/staging_test", false},
+		{"postgres://fixture:fixture@127.0.0.1:54329/engram_test?host=remote", false},
+		{"postgres://fixture:fixture@127.0.0.1:54329/engram_test?dbname=production", false},
+		{"postgres://fixture:fixture@127.0.0.1:54329/engram_test?sslmode=disable", true},
+		{"postgres://fixture:fixture@127.0.0.1:54329/a/b_test", false},
+		{"postgres://fixture:fixture@127.0.0.1/engram_test", false},
+		{"postgres://fixture@127.0.0.1:54329/engram_test", false},
+		{"postgres://fixture:fixture@localhost:54329/engram_test", false},
+	} {
+		if got := fixtureTestDatabaseAllowed(tc.dsn); got != tc.want {
+			t.Errorf("fixture database allowed = %t, want %t", got, tc.want)
+		}
+	}
+}
+
 func newPostgresFixtureEnvironment(t *testing.T) *postgresFixtureEnvironment {
 	t.Helper()
-	dsn := strings.TrimSpace(os.Getenv("DATABASE_DSN"))
+	dsn := strings.TrimSpace(os.Getenv("ENGRAM_OPERATOR_CODE_FIXTURE_TEST_DSN"))
 	if dsn == "" {
-		t.Skip("DATABASE_DSN is required for the PostgreSQL fixture integration test")
+		t.Skip("ENGRAM_OPERATOR_CODE_FIXTURE_TEST_DSN must explicitly name a disposable loopback test database")
+	}
+	if !fixtureTestDatabaseAllowed(dsn) {
+		t.Fatal("fixture requires an explicitly designated loopback database ending in _test")
+	}
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if strings.HasPrefix(strings.ToUpper(key), "PG") {
+			t.Setenv(key, "")
+		}
 	}
 
 	schema := fmt.Sprintf("operator_code_fixture_%x", time.Now().UnixNano())
-	adminStore, err := gormdb.NewStore(gormdb.Config{DSN: dsn, MaxConns: 2, LogLevel: logger.Silent})
+	adminConn, err := pgx.Connect(t.Context(), dsn)
 	if err != nil {
-		t.Fatalf("open fixture database: %v", err)
+		t.Fatal("open disposable fixture database")
 	}
-	if err := adminStore.DB.Exec("CREATE SCHEMA " + schema).Error; err != nil {
-		adminStore.Close()
-		t.Fatalf("create isolated fixture schema: %v", err)
+	var existingVector bool
+	if err := adminConn.QueryRow(t.Context(), "SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname IN ('vector', 'vectorscale'))").Scan(&existingVector); err != nil {
+		_ = adminConn.Close(context.Background())
+		t.Fatal("inspect disposable database extensions")
+	}
+	if existingVector {
+		_ = adminConn.Close(context.Background())
+		t.Fatal("fixture requires a fresh database without preinstalled vector extensions")
+	}
+	if _, err := adminConn.Exec(t.Context(), "CREATE SCHEMA "+schema); err != nil {
+		_ = adminConn.Close(context.Background())
+		t.Fatal("create isolated fixture schema")
 	}
 
 	fixture := &postgresFixtureEnvironment{
-		adminStore: adminStore,
-		schema:     schema,
-		root:       t.TempDir(),
+		adminConn: adminConn,
+		schema:    schema,
+		root:      t.TempDir(),
 	}
 	t.Cleanup(func() { fixture.cleanup(t) })
 
@@ -433,8 +502,8 @@ func (fixture *postgresFixtureEnvironment) verificationStore(t *testing.T) *gorm
 
 func (fixture *postgresFixtureEnvironment) cleanup(t *testing.T) {
 	t.Helper()
-	defer fixture.adminStore.Close()
-	if err := fixture.adminStore.DB.Exec("DROP SCHEMA " + fixture.schema + " CASCADE").Error; err != nil {
+	defer fixture.adminConn.Close(context.Background())
+	if _, err := fixture.adminConn.Exec(context.Background(), "DROP SCHEMA "+fixture.schema+" CASCADE"); err != nil {
 		t.Errorf("drop isolated fixture schema: %v", err)
 	}
 	if err := os.RemoveAll(fixture.root); err != nil {
@@ -446,7 +515,7 @@ func (fixture *postgresFixtureEnvironment) cleanup(t *testing.T) {
 func (fixture *postgresFixtureEnvironment) assertCleanedUp(t *testing.T) {
 	t.Helper()
 	var remaining int64
-	if err := fixture.adminStore.DB.Raw("SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name = ?", fixture.schema).Scan(&remaining).Error; err != nil || remaining != 0 {
+	if err := fixture.adminConn.QueryRow(context.Background(), "SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name = $1", fixture.schema).Scan(&remaining); err != nil || remaining != 0 {
 		t.Errorf("isolated fixture schema remains after cleanup: %d, %v", remaining, err)
 	}
 	if _, err := os.Stat(fixture.root); !errors.Is(err, os.ErrNotExist) {
@@ -469,7 +538,7 @@ func fixtureSchemaDSN(dsn, schema string) (string, error) {
 		return "", fmt.Errorf("parse fixture DSN: %w", err)
 	}
 	query := parsed.Query()
-	query.Set("search_path", schema+",public")
+	query.Set("search_path", schema)
 	parsed.RawQuery = query.Encode()
 	return parsed.String(), nil
 }

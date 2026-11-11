@@ -1854,8 +1854,13 @@ func TestUCIRealCorpusCapacityPartSequenceDigestIsReceiptSafe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !uciInstalledAcceptanceIsSHA256(digest) {
-		t.Fatalf("capacity receipt digest = %q, want bare SHA-256", digest)
+	const want = "00d872a4f3a6e0374a385b9c1f6aa57b49cd4b9ee047bd5a14c66e118171c813"
+	if digest != want {
+		t.Fatalf("capacity receipt digest = %q, want %q", digest, want)
+	}
+	other, err := uciRealCorpusCapacityPartSequenceDigest([]uci.IndexPartAck{{Sequence: 0, Digest: uci.IndexDigest(uciRealCorpusSHA256([]byte("other")))}})
+	if err != nil || other == digest {
+		t.Fatalf("different part digest = %q, error = %v; want a different digest", other, err)
 	}
 }
 
@@ -1886,6 +1891,17 @@ func TestUCIRealCorpusFrozenManifestSeparatesCanaryDelta(t *testing.T) {
 	}
 	if manifest.ManifestDigest == manifest.BaselineManifestDigest || manifest.ManifestDigest == manifest.CanaryDeltaDigest || manifest.BaselineManifestDigest == manifest.CanaryDeltaDigest {
 		t.Fatal("full, baseline, and canary digests must remain distinct")
+	}
+	baselineDigest, err := uciRealCorpusFrozenEntriesDigest(entries[:1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	canaryDigest, err := uciRealCorpusFrozenEntriesDigest(entries[1:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.BaselineManifestDigest != baselineDigest || manifest.CanaryDeltaDigest != canaryDigest {
+		t.Fatal("manifest subset digests do not match the explicit baseline and canary entries")
 	}
 	if manifest.BaselineStateHistogram[string(uci.IndexFilePresent)] != 1 || manifest.CanaryStateHistogram[string(uci.IndexFilePresent)] != uint64(len(uciRealCorpusCanaries)) {
 		t.Fatalf("manifest state histograms = %#v / %#v", manifest.BaselineStateHistogram, manifest.CanaryStateHistogram)
@@ -2037,6 +2053,22 @@ func TestUCIRealCorpusMembershipProjectionRejectsStateArtifactAndDigestMismatch(
 			name: "extra path",
 			mutate: func(staged map[string]uci.IndexMembership, _ map[string]uciRealCorpusCompositionMembershipRow, _ map[string]uci.IndexArtifactProof) {
 				staged["extra.go"] = uci.IndexMembership{PathKey: "extra.go", DisplayPath: "extra.go", Mode: uciRealCorpusPreparedMembershipMode, State: uci.IndexFileExcluded}
+			},
+		},
+		{
+			name: "wrong persisted state",
+			mutate: func(_ map[string]uci.IndexMembership, persisted map[string]uciRealCorpusCompositionMembershipRow, _ map[string]uci.IndexArtifactProof) {
+				value := persisted["fixture.go"]
+				value.FileState = string(uci.IndexFileExcluded)
+				persisted["fixture.go"] = value
+			},
+		},
+		{
+			name: "wrong persisted artifact",
+			mutate: func(_ map[string]uci.IndexMembership, persisted map[string]uciRealCorpusCompositionMembershipRow, _ map[string]uci.IndexArtifactProof) {
+				value := persisted["fixture.go"]
+				value.ArtifactID = sql.NullString{String: "22222222-2222-4222-8222-222222222222", Valid: true}
+				persisted["fixture.go"] = value
 			},
 		},
 	} {

@@ -2129,7 +2129,7 @@ func TestUCIWatcherSLOAttemptPersistsTerminalFailure(t *testing.T) {
 	if err := json.Unmarshal([]byte(lines[2]), &terminal); err != nil {
 		t.Fatalf("decode terminal attempt: %v", err)
 	}
-	if terminal.SchemaVersion != uciWatcherSLOStageDiagnosticsSchemaVersion || terminal.Record != "attempt_end" || terminal.Attempt == nil || terminal.Attempt.Status != "failed" || terminal.Attempt.FailureClass != "embedding_terminal_failure" || terminal.Attempt.CompleteV2Batch {
+	if terminal.SchemaVersion != uciWatcherSLOStageDiagnosticsSchemaVersion || terminal.Record != "attempt_end" || terminal.Attempt == nil || terminal.Attempt.Status != "failed" || terminal.Attempt.FailingStage != "embedding" || terminal.Attempt.FailureClass != "embedding_terminal_failure" || terminal.Attempt.CompleteV2Batch {
 		t.Fatalf("terminal journal record = %#v", terminal)
 	}
 	if uciWatcherSLOEvent(terminal.Attempt.Events, "save_begin") == nil || uciWatcherSLOEvent(terminal.Attempt.Events, "embedding_status_observed") == nil || uciWatcherSLOEvent(terminal.Attempt.Events, "embedding_ready_first_seen") != nil {
