@@ -68,41 +68,21 @@ func uci1RunInstalledScenarioProbeSequence(
 		}
 	}
 
-	// Scanner fixture cleanup may publish a restored View after its last scenario.
-	// Refresh those map-backed handoff values before restart consumes them.
+	// Scanner cleanup may publish a restored View. Verify that status and
+	// publication remain readable before accepting the scenario evidence.
 	if _, err := refresh(ctx, runtime); err != nil {
 		return nil, fmt.Errorf("refresh after installed UCI scenario probes: %w", err)
 	}
 	return merged, nil
 }
 
-func TestUCI1ScenarioProbeRunnerRefreshesFinalScannerPublication(t *testing.T) {
-	const client = uciInstalledAcceptanceClientA
-	baselineSelection := uciInstalledAcceptanceSelection{contextHandle: "context-a", viewID: "view-before", runID: "run-before"}
-	finalSelection := uciInstalledAcceptanceSelection{contextHandle: "context-a", viewID: "view-after", runID: "run-after"}
-	baselinePublication := uciInstalledAcceptancePublication{
-		sourceID:       "source-a",
-		checkoutID:     "checkout-a",
-		viewID:         baselineSelection.viewID,
-		profileID:      "profile-a",
-		runID:          baselineSelection.runID,
-		generation:     20,
-		freshnessState: "observed_current",
-	}
-	finalPublication := baselinePublication
-	finalPublication.viewID = finalSelection.viewID
-	finalPublication.runID = finalSelection.runID
-	finalPublication.generation = 38
-	runtime := uciInstalledAcceptanceScenarioRuntime{
-		Selections:   map[string]uciInstalledAcceptanceSelection{client: baselineSelection},
-		Publications: map[string]uciInstalledAcceptancePublication{client: baselinePublication},
-	}
-
+func TestUCI1ScenarioProbeRunnerRejectsFailedPostProbeRefresh(t *testing.T) {
+	want := errors.New("post-probe status unavailable")
 	scannerCompleted := false
 	refreshCalls := 0
-	evidence, err := uci1RunInstalledScenarioProbeSequence(
+	_, err := uci1RunInstalledScenarioProbeSequence(
 		context.Background(),
-		runtime,
+		uciInstalledAcceptanceScenarioRuntime{},
 		[]uci1InstalledScenarioProbeDefinition{{
 			name: "scanner",
 			run: func(context.Context, uciInstalledAcceptanceScenarioRuntime) (map[string]uciInstalledAcceptanceScenarioEvidence, error) {
@@ -112,29 +92,16 @@ func TestUCI1ScenarioProbeRunnerRefreshesFinalScannerPublication(t *testing.T) {
 				}, nil
 			},
 		}},
-		func(_ context.Context, refreshed uciInstalledAcceptanceScenarioRuntime) (uciInstalledAcceptanceScenarioRuntime, error) {
+		func(_ context.Context, runtime uciInstalledAcceptanceScenarioRuntime) (uciInstalledAcceptanceScenarioRuntime, error) {
 			refreshCalls++
 			if scannerCompleted {
-				refreshed.Selections[client] = finalSelection
-				refreshed.Publications[client] = finalPublication
+				return runtime, want
 			}
-			return refreshed, nil
+			return runtime, nil
 		},
 	)
-	if err != nil {
-		t.Fatalf("run scanner probe sequence: %v", err)
-	}
-	if len(evidence) != 1 {
-		t.Fatalf("scanner evidence count = %d, want 1", len(evidence))
-	}
-	if refreshCalls != 2 {
-		t.Fatalf("scenario refresh calls = %d, want refresh before and after scanner", refreshCalls)
-	}
-	if got := runtime.Selections[client]; got != finalSelection {
-		t.Fatalf("restart selection = %#v, want %#v", got, finalSelection)
-	}
-	if got := runtime.Publications[client]; got != finalPublication {
-		t.Fatalf("restart publication = %#v, want %#v", got, finalPublication)
+	if !errors.Is(err, want) || refreshCalls != 2 {
+		t.Fatalf("post-probe refresh error = %v, calls = %d; want %v after two calls", err, refreshCalls, want)
 	}
 }
 
