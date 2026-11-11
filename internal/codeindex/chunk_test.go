@@ -55,6 +55,7 @@ func TestDetectLanguage(t *testing.T) {
 func TestChunkIDStability(t *testing.T) {
 	c1 := Chunk{FilePath: "pkg/foo.go", ByteStart: 42}
 	c2 := Chunk{FilePath: "pkg/foo.go", ByteStart: 42}
+	c2.Content = "changed content"
 	if c1.ChunkID() != c2.ChunkID() {
 		t.Errorf("ChunkID not stable: %s != %s", c1.ChunkID(), c2.ChunkID())
 	}
@@ -68,10 +69,9 @@ func TestChunkIDStability(t *testing.T) {
 	if c1.ChunkID() == c4.ChunkID() {
 		t.Errorf("ChunkID should differ for different byteStarts")
 	}
-	// ID is 16 hex chars (8 bytes).
-	id := c1.ChunkID()
-	if len(id) != 16 {
-		t.Errorf("ChunkID length = %d; want 16", len(id))
+	// The identifier is the first eight bytes of SHA-256("pkg/foo.go:42").
+	if id := c1.ChunkID(); id != "c4e1d2e063d09e5c" {
+		t.Errorf("ChunkID = %q; want %q", id, "c4e1d2e063d09e5c")
 	}
 }
 
@@ -115,6 +115,9 @@ func TestChunkFileEmpty(t *testing.T) {
 	chunks, err := ChunkFile("empty.go", []byte{}, DefaultOptions())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if chunks == nil {
+		t.Fatal("expected a non-nil empty slice for an empty file")
 	}
 	if len(chunks) != 0 {
 		t.Errorf("expected 0 chunks for empty file, got %d", len(chunks))
@@ -223,11 +226,9 @@ func TestChunkFileCharCapSplitsAtRuneBoundary(t *testing.T) {
 		if !utf8.ValidString(c.Content) {
 			t.Errorf("chunk %d content is not valid UTF-8", i)
 		}
-		// No chunk should exceed MaxChunkBytes + 2 (at most 2 extra bytes to
-		// complete a rune).
-		if len(c.Content) > opts.MaxChunkBytes+2 {
-			t.Errorf("chunk %d size=%d exceeds MaxChunkBytes+2=%d",
-				i, len(c.Content), opts.MaxChunkBytes+2)
+		if len(c.Content) > opts.MaxChunkBytes {
+			t.Errorf("chunk %d size=%d exceeds MaxChunkBytes=%d",
+				i, len(c.Content), opts.MaxChunkBytes)
 		}
 	}
 	// All chunks together cover every byte.
@@ -264,12 +265,14 @@ func TestChunkFileCRLF(t *testing.T) {
 	// body. A small CRLF file must still produce contiguous coverage of every
 	// byte (the \r bytes belong to their line's chunk).
 	content := []byte("line one\r\nline two\r\nline three\r\n")
-	chunks, err := ChunkFile("src/crlf.go", content, DefaultOptions())
+	opts := DefaultOptions()
+	opts.LinesPerBlock = 1
+	chunks, err := ChunkFile("src/crlf.go", content, opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(chunks) == 0 {
-		t.Fatal("expected at least 1 chunk for a CRLF file")
+	if len(chunks) != 3 {
+		t.Fatalf("expected 3 CRLF line chunks, got %d", len(chunks))
 	}
 	for i, c := range chunks {
 		if !utf8.ValidString(c.Content) {
@@ -311,6 +314,7 @@ func TestChunkFileMinifiedAvgLineLen(t *testing.T) {
 func TestChunkFileMinifiedSingleLongLine(t *testing.T) {
 	opts := DefaultOptions()
 	opts.MinifiedSingleLineBytes = 100
+	opts.MinifiedAvgLineLen = 1000
 	// One very long line.
 	longLine := strings.Repeat("a", 200) + "\n"
 	content := []byte(longLine)
