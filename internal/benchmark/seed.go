@@ -129,12 +129,17 @@ func formatVector(v []float32) string {
 	return builder.String()
 }
 
-func CreateBenchTables(ctx context.Context, pool *pgxpool.Pool) error {
-	if _, err := pool.Exec(ctx, `CREATE EXTENSION IF NOT EXISTS vector`); err != nil {
-		return err
-	}
+func benchSQL(pool *pgxpool.Pool, query string) string {
+	schema := pool.Config().ConnConfig.RuntimeParams["search_path"]
+	return strings.NewReplacer(
+		"bench_observations", pgx.Identifier{schema, "bench_observations"}.Sanitize(),
+		"bench_relations", pgx.Identifier{schema, "bench_relations"}.Sanitize(),
+		"bench_vectors", pgx.Identifier{schema, "bench_vectors"}.Sanitize(),
+	).Replace(query)
+}
 
-	if _, err := pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS bench_observations(
+func CreateBenchTables(ctx context.Context, pool *pgxpool.Pool) error {
+	if _, err := pool.Exec(ctx, benchSQL(pool, `CREATE TABLE bench_observations(
 		id BIGINT PRIMARY KEY,
 		project TEXT,
 		type TEXT,
@@ -149,11 +154,11 @@ func CreateBenchTables(ctx context.Context, pool *pgxpool.Pool) error {
 		is_superseded INT DEFAULT 0,
 		memory_type TEXT,
 		created_at TEXT
-	)`); err != nil {
+	)`)); err != nil {
 		return err
 	}
 
-	if _, err := pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS bench_relations(
+	if _, err := pool.Exec(ctx, benchSQL(pool, `CREATE TABLE bench_relations(
 		id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
 		source_id BIGINT NOT NULL,
 		target_id BIGINT NOT NULL,
@@ -163,48 +168,31 @@ func CreateBenchTables(ctx context.Context, pool *pgxpool.Pool) error {
 		created_at TEXT NOT NULL,
 		created_at_epoch BIGINT NOT NULL,
 		CONSTRAINT bench_rel_unique UNIQUE(source_id,target_id,relation_type)
-	)`); err != nil {
+	)`)); err != nil {
 		return err
 	}
 
-	if _, err := pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS bench_vectors(
+	if _, err := pool.Exec(ctx, benchSQL(pool, `CREATE TABLE bench_vectors(
 		observation_id BIGINT PRIMARY KEY,
 		embedding vector(384) NOT NULL
-	)`); err != nil {
+	)`)); err != nil {
 		return err
 	}
 
-	if _, err := pool.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_bench_rel_source ON bench_relations(source_id)`); err != nil {
+	if _, err := pool.Exec(ctx, benchSQL(pool, `CREATE INDEX idx_bench_rel_source ON bench_relations(source_id)`)); err != nil {
 		return err
 	}
-	if _, err := pool.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_bench_rel_target ON bench_relations(target_id)`); err != nil {
+	if _, err := pool.Exec(ctx, benchSQL(pool, `CREATE INDEX idx_bench_rel_target ON bench_relations(target_id)`)); err != nil {
 		return err
 	}
-	if _, err := pool.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_bench_vec_hnsw ON bench_vectors USING hnsw(embedding vector_cosine_ops) WITH (m=16, ef_construction=128)`); err != nil {
+	if _, err := pool.Exec(ctx, benchSQL(pool, `CREATE INDEX idx_bench_vec_hnsw ON bench_vectors USING hnsw(embedding vector_cosine_ops) WITH (m=16, ef_construction=128)`)); err != nil {
 		return err
 	}
 
-	return nil
-}
-
-func DropBenchTables(ctx context.Context, pool *pgxpool.Pool) error {
-	if _, err := pool.Exec(ctx, `DROP TABLE IF EXISTS bench_vectors CASCADE`); err != nil {
-		return err
-	}
-	if _, err := pool.Exec(ctx, `DROP TABLE IF EXISTS bench_relations CASCADE`); err != nil {
-		return err
-	}
-	if _, err := pool.Exec(ctx, `DROP TABLE IF EXISTS bench_observations CASCADE`); err != nil {
-		return err
-	}
 	return nil
 }
 
 func SeedData(ctx context.Context, pool *pgxpool.Pool) error {
-	if _, err := pool.Exec(ctx, `TRUNCATE bench_observations, bench_relations, bench_vectors RESTART IDENTITY CASCADE`); err != nil {
-		return err
-	}
-
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	baseEpoch := time.Now().UnixMilli()
 
@@ -317,9 +305,9 @@ func seedRelations(ctx context.Context, pool *pgxpool.Pool, rng *rand.Rand) erro
 }
 
 func sendRelationBatch(ctx context.Context, pool *pgxpool.Pool, rows []relationRecord) error {
-	insertStmt := `INSERT INTO bench_relations(source_id,target_id,relation_type,confidence,detection_source,created_at,created_at_epoch)
+	insertStmt := benchSQL(pool, `INSERT INTO bench_relations(source_id,target_id,relation_type,confidence,detection_source,created_at,created_at_epoch)
 	VALUES($1,$2,$3,$4,$5,$6,$7)
-	ON CONFLICT ON CONSTRAINT bench_rel_unique DO NOTHING`
+	ON CONFLICT ON CONSTRAINT bench_rel_unique DO NOTHING`)
 
 	batch := &pgx.Batch{}
 	for _, row := range rows {
@@ -380,7 +368,7 @@ func seedVectors(ctx context.Context, pool *pgxpool.Pool, rng *rand.Rand) error 
 }
 
 func copyFromRows(ctx context.Context, pool *pgxpool.Pool, table string, columns []string, rows [][]any) error {
-	if _, err := pool.CopyFrom(ctx, pgx.Identifier{table}, columns, pgx.CopyFromRows(rows)); err != nil {
+	if _, err := pool.CopyFrom(ctx, pgx.Identifier{pool.Config().ConnConfig.RuntimeParams["search_path"], table}, columns, pgx.CopyFromRows(rows)); err != nil {
 		return err
 	}
 	return nil
