@@ -88,12 +88,14 @@ func TestIdentity_ClientPrincipalKinds(t *testing.T) {
 
 func TestValidate_EmptyToken(t *testing.T) {
 	t.Parallel()
-	v := auth.NewValidator("master-secret", &stubStore{})
-
-	id, err := v.Validate(context.Background(), "")
-
-	assert.True(t, errors.Is(err, auth.ErrEmptyToken), "expected ErrEmptyToken")
-	assert.Equal(t, auth.Identity{}, id)
+	for _, master := range []string{"master-secret", ""} {
+		store := &stubStore{}
+		v := auth.NewValidator(master, store)
+		id, err := v.Validate(context.Background(), "")
+		assert.ErrorIs(t, err, auth.ErrEmptyToken)
+		assert.Equal(t, auth.Identity{}, id)
+		assert.Zero(t, store.prefixCalls)
+	}
 }
 
 func TestValidate_MasterMatch(t *testing.T) {
@@ -111,28 +113,16 @@ func TestValidate_MasterMatch(t *testing.T) {
 		"NFR-2: master path MUST NOT touch token store")
 }
 
-func TestValidate_MasterEmpty_FallthroughToTier2(t *testing.T) {
-	t.Parallel()
-	// Server with auth disabled (master == "") should NOT match an empty
-	// bearer; FR-1 storage disjointness is preserved by ErrEmptyToken
-	// short-circuiting before tier-1.
-	v := auth.NewValidator("", &stubStore{})
-
-	_, err := v.Validate(context.Background(), "")
-
-	assert.True(t, errors.Is(err, auth.ErrEmptyToken))
-}
-
 func TestValidate_RawGarbage_NoTier2Lookup(t *testing.T) {
 	t.Parallel()
 	store := &stubStore{}
 	v := auth.NewValidator("master-secret", store)
 
-	_, err := v.Validate(context.Background(), "not-a-token")
-
-	assert.True(t, errors.Is(err, auth.ErrInvalidCredentials))
-	assert.Equal(t, 0, store.prefixCalls,
-		"prefix lookup MUST be skipped for tokens that don't match engram_<8hex>... shape")
+	for _, token := range []string{"not-a-token", "garbage" + strings.Repeat("a", 32), "engram_" + strings.Repeat("a", 31) + "g"} {
+		_, err := v.Validate(context.Background(), token)
+		assert.ErrorIs(t, err, auth.ErrInvalidCredentials)
+		assert.Zero(t, store.prefixCalls, "malformed token must not reach the store")
+	}
 }
 
 func TestValidate_TooShortToken_NoTier2Lookup(t *testing.T) {
@@ -140,10 +130,11 @@ func TestValidate_TooShortToken_NoTier2Lookup(t *testing.T) {
 	store := &stubStore{}
 	v := auth.NewValidator("master-secret", store)
 
-	_, err := v.Validate(context.Background(), "engram_abc") // 10 chars; need ≥ 15
-
-	assert.True(t, errors.Is(err, auth.ErrInvalidCredentials))
-	assert.Equal(t, 0, store.prefixCalls)
+	for _, token := range []string{"engram_abc", "engram_" + strings.Repeat("a", 31), "engram_" + strings.Repeat("a", 33)} {
+		_, err := v.Validate(context.Background(), token)
+		assert.ErrorIs(t, err, auth.ErrInvalidCredentials)
+		assert.Zero(t, store.prefixCalls, "incorrect token length must not reach the store")
+	}
 }
 
 func TestValidate_ValidPrefix_NoMatchInStore(t *testing.T) {
@@ -219,6 +210,10 @@ func TestValidate_PrefixCollision_TwoCandidates_OneMatches(t *testing.T) {
 	require.NoError(t, errB)
 	assert.Equal(t, "uuid-a", idA.KeycardID)
 	assert.Equal(t, "uuid-b", idB.KeycardID)
+	assert.Equal(t, auth.RoleReadWrite, idA.Role)
+	assert.Equal(t, auth.RoleReadOnly, idB.Role)
+	assert.Equal(t, auth.SourceClient, idA.Source)
+	assert.Equal(t, auth.SourceClient, idB.Source)
 	assert.Equal(t, 2, store.prefixCalls)
 }
 
@@ -296,15 +291,14 @@ func TestValidate_PrefixCollision_NeitherMatches(t *testing.T) {
 
 func TestValidate_StoreError_PropagatesAsAuthFailure(t *testing.T) {
 	t.Parallel()
-	store := &stubStore{returnErr: errors.New("db down")}
+	storeErr := errors.New("db down")
+	store := &stubStore{returnErr: storeErr}
 	v := auth.NewValidator("master-secret", store)
 
-	_, err := v.Validate(context.Background(), "engram_abcd1234000000000000000000000000")
-
-	require.Error(t, err)
-	// Adapters expect ErrInvalidCredentials OR a wrapped store error; the
-	// validator MUST NOT silently succeed on store failures.
-	assert.False(t, errors.Is(err, auth.ErrEmptyToken))
+	id, err := v.Validate(context.Background(), "engram_abcd1234000000000000000000000000")
+	assert.ErrorIs(t, err, storeErr)
+	assert.Equal(t, auth.Identity{}, id)
+	assert.Equal(t, 1, store.prefixCalls)
 }
 
 func TestValidate_EmptyMaster_KeycardStillWorks(t *testing.T) {
@@ -323,25 +317,6 @@ func TestValidate_EmptyMaster_KeycardStillWorks(t *testing.T) {
 	assert.Equal(t, auth.SourceClient, id.Source)
 	assert.Equal(t, auth.RoleReadWrite, id.Role)
 	assert.Equal(t, "uuid-em", id.KeycardID)
-}
-
-func TestValidate_MasterAndKeycardDistinguishable(t *testing.T) {
-	t.Parallel()
-	// Verifies FR-1 storage disjointness from the validator's perspective:
-	// the master path produces SourceMaster; the keycard path produces
-	// SourceClient. There is no fallback that conflates them.
-	rawClient := "engram_aaaa1111000000000000000000000004"
-	keycard := makeKeycard(t, "uuid-c", rawClient, "read-write", false)
-	store := &stubStore{byPrefix: map[string][]gormdb.APIToken{"aaaa1111": {keycard}}}
-	v := auth.NewValidator("master-secret", store)
-
-	idMaster, _ := v.Validate(context.Background(), "master-secret")
-	idClient, _ := v.Validate(context.Background(), rawClient)
-
-	assert.NotEqual(t, idMaster.Source, idClient.Source,
-		"FR-1: master and client identities MUST be distinguishable by Source")
-	assert.Equal(t, auth.SourceMaster, idMaster.Source)
-	assert.Equal(t, auth.SourceClient, idClient.Source)
 }
 
 // Compile-time assertion: gormdb.TokenStore must satisfy auth.TokenStoreReader.

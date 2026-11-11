@@ -2,6 +2,7 @@ package auditcontext
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -93,6 +94,13 @@ func assertUCIRequestCorrelationMetadata(t *testing.T, correlation UCIRequestCor
 			t.Fatalf("metadata value %q is not ASCII", metadataValue)
 		}
 	}
+	decoded, err := base64.RawURLEncoding.DecodeString(metadataValue)
+	if err != nil || string(decoded) != `"client-operation-42"` {
+		t.Fatalf("metadata decoded = %q, error = %v; want canonical JSON ID", decoded, err)
+	}
+	if metadataValue != base64.RawURLEncoding.EncodeToString([]byte(`"client-operation-42"`)) {
+		t.Fatalf("metadata value %q is not canonical base64url", metadataValue)
+	}
 	parsed, ok := ParseUCIRequestCorrelation(metadataValue)
 	if !ok || parsed != correlation {
 		t.Fatalf("ParseUCIRequestCorrelation(%q) = %#v, %t; want %#v, true", metadataValue, parsed, ok, correlation)
@@ -183,6 +191,8 @@ func TestUCIRequestCorrelationRejectsInvalidValues(t *testing.T) {
 		`"client-operation-42"`,
 		"%%%",
 		"YQ",
+		base64.RawURLEncoding.EncodeToString([]byte(` "client-operation-42" `)),
+		base64.RawURLEncoding.EncodeToString([]byte(`"client-operation-\u0034\u0032"`)),
 		strings.Repeat("a", maxUCIRequestCorrelationMetadataBytes+1),
 	} {
 		if correlation, ok := ParseUCIRequestCorrelation(value); ok || correlation.Valid() {
