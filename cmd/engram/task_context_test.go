@@ -42,7 +42,7 @@ func TestTaskContextClosedInputAndMissingInstallation(t *testing.T) {
 	require.True(t, os.IsNotExist(err), "read-only native path created installation state")
 }
 
-func TestTaskContextExpiredDeadlineDoesNoInstallationWork(t *testing.T) {
+func TestTaskContextExpiredDeadlineReturnsBoundedResponse(t *testing.T) {
 	input, err := json.Marshal(map[string]any{"schema": 1, "host_session_id": "host", "query": "Alpha", "deadline_unix_ms": time.Now().Add(-time.Second).UnixMilli(), "max_bytes": 1024})
 	require.NoError(t, err)
 	var output bytes.Buffer
@@ -51,7 +51,7 @@ func TestTaskContextExpiredDeadlineDoesNoInstallationWork(t *testing.T) {
 	require.LessOrEqual(t, output.Len(), 1024)
 }
 
-func TestTaskContextOldDaemonDoesNotReconcile(t *testing.T) {
+func TestTaskContextOldMarkerReturnsNotReadyWithoutRewrite(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("TEMP", root)
 	t.Setenv("TMP", root)
