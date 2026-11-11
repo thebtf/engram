@@ -155,15 +155,39 @@ func validFixtureDSN(raw string) bool {
 	if err != nil || (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") {
 		return false
 	}
+	if parsed.User == nil || parsed.User.Username() == "" || parsed.Port() == "" {
+		return false
+	}
+	if password, present := parsed.User.Password(); !present || password == "" {
+		return false
+	}
+	query, err := url.ParseQuery(parsed.RawQuery)
+	if err != nil || parsed.Fragment != "" {
+		return false
+	}
+	for key, values := range query {
+		if key != "sslmode" || len(values) != 1 {
+			return false
+		}
+	}
 	host := strings.ToLower(parsed.Hostname())
-	if host != "127.0.0.1" && host != "localhost" && host != "::1" {
+	if host != "127.0.0.1" && host != "::1" {
 		return false
 	}
 	database := strings.ToLower(strings.TrimPrefix(parsed.Path, "/"))
-	return database != "" && !strings.Contains(database, "/") && strings.Contains(database, "test") && !strings.Contains(database, "prod") && !strings.Contains(database, "staging")
+	return !strings.Contains(database, "/") && strings.HasSuffix(database, "_test") && !strings.Contains(database, "prod") && !strings.Contains(database, "staging")
 }
 
 func execute(ctx context.Context, rawDSN, serverBinary string) (result receipt, retErr error) {
+	if !validFixtureDSN(rawDSN) {
+		return result, errors.New("retirement fixture requires an explicit disposable loopback test database")
+	}
+	for _, entry := range os.Environ() {
+		key, value, _ := strings.Cut(entry, "=")
+		if strings.HasPrefix(strings.ToUpper(key), "PG") && value != "" {
+			return result, errors.New("retirement fixture refuses inherited PostgreSQL settings")
+		}
+	}
 	schema, err := retirementSchemaName()
 	if err != nil {
 		return result, err
@@ -176,14 +200,20 @@ func execute(ctx context.Context, rawDSN, serverBinary string) (result receipt, 
 	if err := admin.PingContext(ctx); err != nil {
 		return result, fmt.Errorf("ping disposable PostgreSQL administration: %w", err)
 	}
+	var existingVector bool
+	if err := admin.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname IN ('vector', 'vectorscale'))").Scan(&existingVector); err != nil {
+		return result, fmt.Errorf("inspect disposable database extensions: %w", err)
+	}
+	if existingVector {
+		return result, errors.New("retirement fixture requires a fresh database without preinstalled vector extensions")
+	}
 	if _, err := admin.ExecContext(ctx, "CREATE SCHEMA "+schema); err != nil {
 		return result, fmt.Errorf("create disposable schema: %w", err)
 	}
 	schemaRemoved := false
 	defer func() {
-		if _, err := admin.ExecContext(context.Background(), "DROP SCHEMA "+schema+" CASCADE"); err == nil {
-			schemaRemoved = true
-		}
+		_, err := admin.ExecContext(context.Background(), "DROP SCHEMA "+schema+" CASCADE")
+		recordRetirementCleanup(&schemaRemoved, &retErr, "drop fixture schema", err)
 		result.Cleanup.SchemaRemoved = schemaRemoved
 	}()
 
@@ -213,9 +243,7 @@ func execute(ctx context.Context, rawDSN, serverBinary string) (result receipt, 
 	}
 	temporaryRootRemoved := false
 	defer func() {
-		if err := os.RemoveAll(root); err == nil {
-			temporaryRootRemoved = true
-		}
+		recordRetirementCleanup(&temporaryRootRemoved, &retErr, "remove fixture root", os.RemoveAll(root))
 		result.Cleanup.TemporaryRootRemoved = temporaryRootRemoved
 	}()
 	masterToken, err := randomSecret()
@@ -230,9 +258,7 @@ func execute(ctx context.Context, rawDSN, serverBinary string) (result receipt, 
 	serverStopped := false
 	defer func() {
 		if server != nil {
-			if stopErr := server.stop(); stopErr == nil {
-				serverStopped = true
-			}
+			recordRetirementCleanup(&serverStopped, &retErr, "stop fixture server", server.stop())
 		}
 		result.Cleanup.ServerProcessesStopped = serverStopped
 	}()
@@ -286,6 +312,15 @@ func execute(ctx context.Context, rawDSN, serverBinary string) (result receipt, 
 	return result, nil
 }
 
+func recordRetirementCleanup(completed *bool, retErr *error, action string, err error) {
+	if err != nil {
+		*completed = false
+		*retErr = errors.Join(*retErr, fmt.Errorf("%s: %w", action, err))
+		return
+	}
+	*completed = true
+}
+
 func retirementSchemaName() (string, error) {
 	bytes := make([]byte, 12)
 	if _, err := cryptorand.Read(bytes); err != nil {
@@ -300,7 +335,7 @@ func schemaDSN(raw, schema string) (string, error) {
 		return "", fmt.Errorf("parse fixture DSN: %w", err)
 	}
 	query := parsed.Query()
-	query.Set("search_path", schema+",public")
+	query.Set("search_path", schema)
 	parsed.RawQuery = query.Encode()
 	return parsed.String(), nil
 }
@@ -458,7 +493,7 @@ func cleanEnvironment(values []string, names ...string) []string {
 		name, _, found := strings.Cut(value, "=")
 		if found {
 			name = strings.ToUpper(name)
-			if strings.HasPrefix(name, "ENGRAM_") || strings.HasPrefix(name, "DATABASE_") {
+			if strings.HasPrefix(name, "ENGRAM_") || strings.HasPrefix(name, "DATABASE_") || strings.HasPrefix(name, "PG") {
 				continue
 			}
 			if _, blocked := blocked[name]; blocked {
