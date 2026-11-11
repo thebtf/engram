@@ -15,6 +15,8 @@ func TestLoadKeyFromFileBytes(t *testing.T) {
 	for i := range binaryKey {
 		binaryKey[i] = byte(i + 2)
 	}
+	mixedSuffixKey := append(bytes.Clone(binaryKey[:28]), '\r', '\n', ' ', '\t')
+	allWhitespaceKey := bytes.Repeat([]byte("\r\n \t"), 8)
 
 	tests := []struct {
 		name    string
@@ -23,6 +25,8 @@ func TestLoadKeyFromFileBytes(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "raw_binary", data: bytes.Clone(binaryKey), want: binaryKey},
+		{name: "raw_mixed_whitespace_suffix", data: mixedSuffixKey, want: mixedSuffixKey},
+		{name: "raw_all_whitespace", data: allWhitespaceKey, want: allWhitespaceKey},
 		{name: "raw_with_LF", data: append(bytes.Clone(binaryKey), '\n'), want: binaryKey},
 		{name: "raw_with_CRLF", data: append(bytes.Clone(binaryKey), '\r', '\n'), want: binaryKey},
 		{name: "hex", data: []byte(hex.EncodeToString(binaryKey)), want: binaryKey},
