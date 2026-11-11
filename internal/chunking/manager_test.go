@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -25,7 +26,7 @@ func (m *mgTestChunker) Chunk(_ context.Context, filePath string) ([]Chunk, erro
 	}, nil
 }
 
-func (m *mgTestChunker) Language() Language          { return LanguageGo }
+func (m *mgTestChunker) Language() Language            { return LanguageGo }
 func (m *mgTestChunker) SupportedExtensions() []string { return []string{".go", ".py", ".ts"} }
 
 // mgMultiExtChunker registers a configurable set of extensions.
@@ -43,7 +44,7 @@ func (m *mgMultiExtChunker) Chunk(_ context.Context, _ string) ([]Chunk, error) 
 	return nil, nil
 }
 
-func (m *mgMultiExtChunker) Language() Language          { return LanguageGo }
+func (m *mgMultiExtChunker) Language() Language            { return LanguageGo }
 func (m *mgMultiExtChunker) SupportedExtensions() []string { return m.exts }
 
 // =============================================================================
@@ -59,7 +60,7 @@ func TestManager_ChunkFiles_MultiExtensionIntegration(t *testing.T) {
 	pyFile := filepath.Join(tmpDir, "script.py")
 	tsFile := filepath.Join(tmpDir, "app.ts")
 	for _, f := range []string{goFile, pyFile, tsFile} {
-		if err := os.WriteFile(f, []byte("content"), 0600); err != nil {
+		if err := os.WriteFile(f, []byte("content"), 0o600); err != nil {
 			t.Fatalf("create %s: %v", f, err)
 		}
 	}
@@ -168,16 +169,18 @@ func TestManager_ChunkFiles_UnrecognizedFilesProduceErrors(t *testing.T) {
 	goFile := filepath.Join(tmpDir, "ok.go")
 	txtFile := filepath.Join(tmpDir, "bad.txt")
 	for _, f := range []string{goFile, txtFile} {
-		if err := os.WriteFile(f, []byte("x"), 0600); err != nil {
+		if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	m := NewManager([]Chunker{&mgTestChunker{}}, DefaultChunkOptions())
-	results, errs := m.ChunkFiles(context.Background(), []string{goFile, txtFile})
+	results, errs := m.ChunkFiles(context.Background(), []string{txtFile, goFile})
 
 	if len(errs) != 1 {
 		t.Errorf("want 1 error, got %d: %v", len(errs), errs)
+	} else if !strings.Contains(errs[0].Error(), txtFile) {
+		t.Errorf("error should identify %q, got %v", txtFile, errs[0])
 	}
 	if _, ok := results[goFile]; !ok {
 		t.Error("goFile should appear in results despite error on txtFile")
@@ -192,7 +195,7 @@ func TestManager_ChunkFiles_UnrecognizedFilesProduceErrors(t *testing.T) {
 func TestManager_ChunkFiles_FilesWithNoChunksAreExcluded(t *testing.T) {
 	tmpDir := t.TempDir()
 	f := filepath.Join(tmpDir, "empty.go")
-	if err := os.WriteFile(f, []byte(""), 0600); err != nil {
+	if err := os.WriteFile(f, []byte(""), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

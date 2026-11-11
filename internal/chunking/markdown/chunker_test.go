@@ -38,35 +38,18 @@ It contains several sentences that form a paragraph.
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(chunks) == 0 {
-		t.Fatal("expected at least one chunk, got none")
+	if len(chunks) != 1 {
+		t.Fatalf("expected exactly one chunk, got %d: %v", len(chunks), chunkNames(chunks))
 	}
-
-	// The first (and dominant) chunk must be named after the H1 heading.
-	found := false
-	for _, ch := range chunks {
-		if ch.Name == "Introduction" {
-			found = true
-			if ch.Language != LanguageMarkdown {
-				t.Errorf("expected language %q, got %q", LanguageMarkdown, ch.Language)
-			}
-			if ch.Type != ChunkTypeSection {
-				t.Errorf("expected type %q, got %q", ChunkTypeSection, ch.Type)
-			}
-			if ch.FilePath != "doc.md" {
-				t.Errorf("expected filePath %q, got %q", "doc.md", ch.FilePath)
-			}
-			if ch.StartLine < 1 {
-				t.Errorf("StartLine must be >= 1, got %d", ch.StartLine)
-			}
-			if ch.Content == "" {
-				t.Error("Content must not be empty")
-			}
-			break
-		}
+	ch := chunks[0]
+	if ch.Name != "Introduction" || ch.Language != LanguageMarkdown || ch.Type != ChunkTypeSection || ch.FilePath != "doc.md" {
+		t.Errorf("unexpected chunk metadata: %+v", ch)
 	}
-	if !found {
-		t.Errorf("expected a chunk named %q; chunks returned: %v", "Introduction", chunkNames(chunks))
+	if ch.StartLine != 1 || ch.EndLine != 4 {
+		t.Errorf("expected lines 1–4, got %d–%d", ch.StartLine, ch.EndLine)
+	}
+	if want := strings.TrimSuffix(content, "\n"); ch.Content != want {
+		t.Errorf("chunk content = %q, want %q", ch.Content, want)
 	}
 }
 
@@ -106,46 +89,66 @@ func TestChunkContentMultipleSections(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(chunks) < 2 {
-		t.Errorf("expected multiple chunks for a 3-section document, got %d", len(chunks))
+		t.Fatalf("expected multiple chunks for a 3-section document, got %d", len(chunks))
 	}
 
-	// At least two of the three heading names must appear among chunk names.
+	want := strings.TrimSuffix(content, "\n")
+	lines := strings.Split(want, "\n")
 	nameSet := make(map[string]bool)
+	contents := make([]string, 0, len(chunks))
+	nextLine := 1
 	for _, ch := range chunks {
 		nameSet[ch.Name] = true
+		if ch.StartLine != nextLine || ch.EndLine < ch.StartLine {
+			t.Errorf("non-contiguous or invalid chunk range: got %d–%d, expected start %d", ch.StartLine, ch.EndLine, nextLine)
+		}
+		if ch.StartLine >= 1 && ch.EndLine >= ch.StartLine && ch.EndLine <= len(lines) {
+			if expected := strings.Join(lines[ch.StartLine-1:ch.EndLine], "\n"); ch.Content != expected {
+				t.Errorf("content does not match lines %d–%d", ch.StartLine, ch.EndLine)
+			}
+		} else {
+			t.Errorf("chunk range %d–%d outside document of %d lines", ch.StartLine, ch.EndLine, len(lines))
+		}
+		nextLine = ch.EndLine + 1
+		contents = append(contents, ch.Content)
 	}
-	matched := 0
 	for _, s := range sections {
-		if nameSet[s.heading] {
-			matched++
+		if !nameSet[s.heading] {
+			t.Errorf("missing section %q; names: %v", s.heading, chunkNames(chunks))
 		}
 	}
-	if matched < 2 {
-		t.Errorf("expected at least 2 section headings among chunk names, got %d; names: %v", matched, chunkNames(chunks))
+	if got := strings.Join(contents, "\n"); got != want {
+		t.Errorf("reassembled content = %q, want %q", got, want)
+	}
+	if wantEnd := len(lines); nextLine != wantEnd+1 {
+		t.Errorf("final line = %d, want %d", nextLine-1, wantEnd)
 	}
 }
 
 // TestCodeFenceGuard verifies that headings inside a code fence do NOT create
 // a break point, i.e. the fence content is treated as opaque text.
 func TestCodeFenceGuard(t *testing.T) {
-	lines := []string{
-		"# Real Heading",
-		"",
-		"Some text before the fence.",
-		"```markdown",
-		"## This heading is inside a fence and must be ignored",
-		"```",
-		"",
-		"Text after the fence.",
-	}
-
-	points := scanBreakPoints(lines, 20)
-
-	// Verify that line 4 (the "## " inside the fence) is NOT a break point.
-	for _, bp := range points {
-		if bp.line == 4 {
-			t.Errorf("line 4 (inside code fence) must not be a break point, but got score=%.2f", bp.score)
-		}
+	for _, fence := range []string{"```", "~~~"} {
+		t.Run(fence, func(t *testing.T) {
+			lines := []string{
+				"# Before", "", fence + "markdown", "## Inside", "", fence, "## After",
+			}
+			points := scanBreakPoints(lines, 20)
+			lineSet := make(map[int]bool)
+			for _, bp := range points {
+				lineSet[bp.line] = true
+			}
+			for _, line := range []int{0, 1, 5, 6} {
+				if !lineSet[line] {
+					t.Errorf("expected break point at line %d, got %v", line, points)
+				}
+			}
+			for _, line := range []int{2, 3, 4} {
+				if lineSet[line] {
+					t.Errorf("unexpected break point at fence line %d: %v", line, points)
+				}
+			}
+		})
 	}
 }
 
@@ -154,16 +157,18 @@ func TestSupportedExtensions(t *testing.T) {
 	c := newChunker()
 	exts := c.SupportedExtensions()
 
-	want := map[string]bool{".md": false, ".mdx": false}
-	for _, ext := range exts {
-		if _, ok := want[ext]; ok {
-			want[ext] = true
-		}
+	want := map[string]bool{".md": true, ".mdx": true}
+	if len(exts) != len(want) {
+		t.Errorf("expected exactly %d extensions, got %v", len(want), exts)
 	}
-	for ext, found := range want {
-		if !found {
-			t.Errorf("expected extension %q to be in SupportedExtensions(), got: %v", ext, exts)
+	for _, ext := range exts {
+		if !want[ext] {
+			t.Errorf("unexpected or duplicate extension %q in %v", ext, exts)
 		}
+		delete(want, ext)
+	}
+	for ext := range want {
+		t.Errorf("missing extension %q in %v", ext, exts)
 	}
 }
 
@@ -278,11 +283,37 @@ func TestScanBreakPointsNoFence(t *testing.T) {
 		t.Errorf("line 2 (plain text) must not be a break point")
 	}
 
-	// Scores for headings must be higher than for blank lines.
-	h1Score := lineSet[0]
-	blankScore, hasBlank := lineSet[1]
-	if hasBlank && h1Score <= blankScore {
-		t.Errorf("H1 score (%.2f) should be > blank score (%.2f)", h1Score, blankScore)
+	for _, line := range []int{1, 3, 6} {
+		if _, ok := lineSet[line]; !ok {
+			t.Errorf("line %d (blank) should be a break point; got %v", line, lineSet)
+		}
+	}
+	if h1Score, ok := lineSet[0]; ok {
+		if blankScore, ok := lineSet[1]; ok && h1Score <= blankScore {
+			t.Errorf("H1 score (%.2f) should be > blank score (%.2f)", h1Score, blankScore)
+		}
+	}
+}
+
+func TestApplyDecay(t *testing.T) {
+	tests := []struct {
+		name         string
+		line, target int
+		window, want float64
+	}{
+		{"boundary", 10, 10, 5, 100},
+		{"half window", 2, 8, 4, 82.5},
+		{"nearest next boundary", 7, 8, 4, 95.625},
+		{"window edge", 4, 8, 4, 30},
+		{"clamped", 4, 8, 2, 30},
+		{"zero window", 4, 8, 0, 100},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := applyDecay(100, tt.line, tt.target, tt.window); !(got >= tt.want-1e-9 && got <= tt.want+1e-9) {
+				t.Errorf("applyDecay = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/require"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
@@ -34,10 +35,12 @@ func TestRollback_ConcurrentOverlappingEntriesCompleteWithoutDeadlock(t *testing
 				SourceSessions: pq.StringArray{"rollback-concurrency"},
 			})
 			require.NoError(t, err)
+			memoryID := memory.ID
+			t.Cleanup(func() { _ = db.Exec("DELETE FROM memories WHERE id = ?", memoryID).Error })
 			ids = append(ids, memory.ID)
 		}
 
-		createSnapshot := func(suffix string, orderedIDs []int64) string {
+		createSnapshot := func(orderedIDs []int64) string {
 			entries := make(map[string]models.SnapshotEntry, len(orderedIDs))
 			for _, id := range orderedIDs {
 				memory, err := memories.GetForSnapshot(ctx, id)
@@ -48,10 +51,11 @@ func TestRollback_ConcurrentOverlappingEntriesCompleteWithoutDeadlock(t *testing
 			}
 			raw, err := json.Marshal(entries)
 			require.NoError(t, err)
-			snapshot, err := models.NewBulkOpSnapshot(fmt.Sprintf("rollback-concurrency-%d-%s", iteration, suffix), models.SnapshotOpBulkDelete, "master", raw)
+			snapshot, err := models.NewBulkOpSnapshot("rollback-concurrency-"+uuid.NewString(), models.SnapshotOpBulkDelete, "master", raw)
 			require.NoError(t, err)
 			created, err := snapshots.Create(ctx, snapshot)
 			require.NoError(t, err)
+			cleanupRollbackSnapshot(t, db, created.SnapshotID)
 			return created.SnapshotID
 		}
 
@@ -59,15 +63,8 @@ func TestRollback_ConcurrentOverlappingEntriesCompleteWithoutDeadlock(t *testing
 		for left, right := 0, len(reversedIDs)-1; left < right; left, right = left+1, right-1 {
 			reversedIDs[left], reversedIDs[right] = reversedIDs[right], reversedIDs[left]
 		}
-		snapshotA := createSnapshot("a", ids)
-		snapshotB := createSnapshot("b", reversedIDs)
-		cleanupIDs := append([]int64(nil), ids...)
-		cleanupSnapshots := []string{snapshotA, snapshotB}
-		t.Cleanup(func() {
-			_ = db.Exec("DELETE FROM memories WHERE id IN ?", cleanupIDs).Error
-			_ = db.Exec("DELETE FROM bulk_op_snapshots WHERE snapshot_id IN ?", cleanupSnapshots).Error
-			_ = db.Exec("DELETE FROM audit_log WHERE action = 'rollback' AND actor = 'master' AND reason LIKE ?", fmt.Sprintf("snapshot=rollback-concurrency-%d-%%", iteration)).Error
-		})
+		snapshotA := createSnapshot(ids)
+		snapshotB := createSnapshot(reversedIDs)
 
 		start := make(chan struct{})
 		errs := make([]error, 2)

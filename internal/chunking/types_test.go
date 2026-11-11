@@ -100,13 +100,7 @@ func TestChunk_SearchableContent_AllFields(t *testing.T) {
 		DocComment: "ProcessData handles incoming data",
 		Content:    "func ProcessData(input []byte) error {\n\treturn nil\n}",
 	}
-	result := c.SearchableContent()
-	assert.Contains(t, result, "func ProcessData(input []byte) error")
-	assert.Contains(t, result, "ProcessData handles incoming data")
-	assert.Contains(t, result, "return nil")
-	// Sections separated by "\n\n"
-	parts := strings.Split(result, "\n\n")
-	assert.Len(t, parts, 3)
+	assert.Equal(t, "func ProcessData(input []byte) error\n\nProcessData handles incoming data\n\nfunc ProcessData(input []byte) error {\n\treturn nil\n}", c.SearchableContent())
 }
 
 func TestChunk_SearchableContent_SignatureOnly(t *testing.T) {
@@ -132,9 +126,7 @@ func TestChunk_SearchableContent_Empty(t *testing.T) {
 
 func TestChunk_SearchableContent_SignatureAndContent(t *testing.T) {
 	c := Chunk{Signature: "func Foo()", Content: "func Foo() {}"}
-	result := c.SearchableContent()
-	assert.Contains(t, result, "func Foo()")
-	assert.Contains(t, result, "func Foo() {}")
+	assert.Equal(t, "func Foo()\n\nfunc Foo() {}", c.SearchableContent())
 }
 
 // =============================================================================
@@ -148,16 +140,11 @@ func TestChunk_SearchableContent_SignatureAndContent(t *testing.T) {
 func TestDefaultChunkOptions(t *testing.T) {
 	opts := DefaultChunkOptions()
 	assert.Greater(t, opts.MaxChunkSize, 0, "MaxChunkSize must be positive")
+	assert.GreaterOrEqual(t, opts.MaxChunkSize, 1024)
+	assert.LessOrEqual(t, opts.MaxChunkSize, 1024*1024)
 	assert.True(t, opts.IncludeDocComments, "IncludeDocComments must default to true")
 	assert.True(t, opts.IncludePrivate, "IncludePrivate must default to true")
 	assert.Equal(t, 0, opts.MinLines, "MinLines must default to 0")
-}
-
-func TestDefaultChunkOptions_MaxChunkSize_Reasonable(t *testing.T) {
-	opts := DefaultChunkOptions()
-	// Documented as ~8KB; must be at least 1 KB and no more than 1 MB.
-	assert.GreaterOrEqual(t, opts.MaxChunkSize, 1024)
-	assert.LessOrEqual(t, opts.MaxChunkSize, 1024*1024)
 }
 
 // =============================================================================
@@ -182,17 +169,28 @@ func (m *singleChunkMock) Chunk(_ context.Context, filePath string) ([]Chunk, er
 		},
 	}, nil
 }
-func (m *singleChunkMock) Language() Language          { return LanguageGo }
+func (m *singleChunkMock) Language() Language            { return LanguageGo }
 func (m *singleChunkMock) SupportedExtensions() []string { return []string{m.ext} }
 
 // errorChunkMock always returns an error.
-type errorChunkMock struct{}
+type errorChunkMock struct{ err error }
 
 func (e *errorChunkMock) Chunk(_ context.Context, _ string) ([]Chunk, error) {
-	return nil, errors.New("mock chunker error")
+	return nil, e.err
 }
-func (e *errorChunkMock) Language() Language          { return LanguageGo }
+func (e *errorChunkMock) Language() Language            { return LanguageGo }
 func (e *errorChunkMock) SupportedExtensions() []string { return []string{".err"} }
+
+type fixedChunksMock struct {
+	ext    string
+	chunks []Chunk
+}
+
+func (m *fixedChunksMock) Chunk(_ context.Context, _ string) ([]Chunk, error) {
+	return m.chunks, nil
+}
+func (m *fixedChunksMock) Language() Language            { return LanguageGo }
+func (m *fixedChunksMock) SupportedExtensions() []string { return []string{m.ext} }
 
 // largeMock returns one chunk whose Content exceeds MaxChunkSize.
 type largeMock struct{}
@@ -210,7 +208,7 @@ func (l *largeMock) Chunk(_ context.Context, filePath string) ([]Chunk, error) {
 		},
 	}, nil
 }
-func (l *largeMock) Language() Language          { return LanguageGo }
+func (l *largeMock) Language() Language            { return LanguageGo }
 func (l *largeMock) SupportedExtensions() []string { return []string{".large"} }
 
 // shortMock returns a chunk that is fewer than MinLines.
@@ -229,7 +227,7 @@ func (s *shortMock) Chunk(_ context.Context, filePath string) ([]Chunk, error) {
 		},
 	}, nil
 }
-func (s *shortMock) Language() Language          { return LanguageGo }
+func (s *shortMock) Language() Language            { return LanguageGo }
 func (s *shortMock) SupportedExtensions() []string { return []string{".short"} }
 
 // =============================================================================
@@ -273,64 +271,88 @@ func TestManager_SupportsFile_CaseInsensitive(t *testing.T) {
 func TestManager_ChunkFile_UnsupportedExtension(t *testing.T) {
 	m := NewManager([]Chunker{&singleChunkMock{ext: ".go"}}, DefaultChunkOptions())
 	tmpFile := filepath.Join(t.TempDir(), "file.txt")
-	require.NoError(t, os.WriteFile(tmpFile, []byte("data"), 0600))
+	require.NoError(t, os.WriteFile(tmpFile, []byte("data"), 0o600))
 	_, err := m.ChunkFile(context.Background(), tmpFile)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), ".txt")
 }
 
 func TestManager_ChunkFile_ChunkerError(t *testing.T) {
-	m := NewManager([]Chunker{&errorChunkMock{}}, DefaultChunkOptions())
+	cause := errors.New("mock chunker error")
+	m := NewManager([]Chunker{&errorChunkMock{err: cause}}, DefaultChunkOptions())
 	tmpFile := filepath.Join(t.TempDir(), "file.err")
-	require.NoError(t, os.WriteFile(tmpFile, []byte("data"), 0600))
-	_, err := m.ChunkFile(context.Background(), tmpFile)
-	assert.Error(t, err)
+	require.NoError(t, os.WriteFile(tmpFile, []byte("data"), 0o600))
+	chunks, err := m.ChunkFile(context.Background(), tmpFile)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, cause)
+	assert.Contains(t, err.Error(), tmpFile)
+	assert.Empty(t, chunks)
 }
 
 func TestManager_ChunkFile_Success(t *testing.T) {
 	m := NewManager([]Chunker{&singleChunkMock{ext: ".go"}}, DefaultChunkOptions())
 	tmpFile := filepath.Join(t.TempDir(), "file.go")
-	require.NoError(t, os.WriteFile(tmpFile, []byte("package main"), 0600))
+	require.NoError(t, os.WriteFile(tmpFile, []byte("package main"), 0o600))
 	chunks, err := m.ChunkFile(context.Background(), tmpFile)
 	require.NoError(t, err)
-	assert.Len(t, chunks, 1)
+	assert.Equal(t, []Chunk{{
+		FilePath: tmpFile, Language: LanguageGo, Type: ChunkTypeFunction,
+		Name: "MockFunc", StartLine: 1, EndLine: 10, Content: strings.Repeat("x", 20),
+	}}, chunks)
 }
 
 func TestManager_ChunkFile_FilterByMinLines(t *testing.T) {
-	opts := ChunkOptions{MinLines: 5} // chunk has 1 line → filtered out
-	m := NewManager([]Chunker{&shortMock{}}, opts)
+	input := []Chunk{
+		{Name: "one", StartLine: 1, EndLine: 1, Content: "x"},
+		{Name: "below", StartLine: 2, EndLine: 5, Content: "x"},
+		{Name: "at", StartLine: 2, EndLine: 6, Content: "x"},
+		{Name: "above", StartLine: 2, EndLine: 7, Content: "x"},
+	}
+	m := NewManager([]Chunker{&fixedChunksMock{ext: ".short", chunks: input}}, ChunkOptions{MinLines: 5})
 	tmpFile := filepath.Join(t.TempDir(), "file.short")
-	require.NoError(t, os.WriteFile(tmpFile, []byte("x"), 0600))
+	require.NoError(t, os.WriteFile(tmpFile, []byte("x"), 0o600))
 	chunks, err := m.ChunkFile(context.Background(), tmpFile)
 	require.NoError(t, err)
-	assert.Empty(t, chunks, "chunk below MinLines should be filtered out")
+	assert.ElementsMatch(t, []Chunk{
+		{Name: "at", StartLine: 2, EndLine: 6, Content: "x"},
+		{Name: "above", StartLine: 2, EndLine: 7, Content: "x"},
+	}, chunks)
 }
 
 func TestManager_ChunkFile_MinLines_ZeroMeansNoFilter(t *testing.T) {
 	opts := ChunkOptions{MinLines: 0}
 	m := NewManager([]Chunker{&shortMock{}}, opts)
 	tmpFile := filepath.Join(t.TempDir(), "file.short")
-	require.NoError(t, os.WriteFile(tmpFile, []byte("x"), 0600))
+	require.NoError(t, os.WriteFile(tmpFile, []byte("x"), 0o600))
 	chunks, err := m.ChunkFile(context.Background(), tmpFile)
 	require.NoError(t, err)
 	assert.Len(t, chunks, 1, "MinLines=0 means no filtering")
 }
 
 func TestManager_ChunkFile_FilterByMaxChunkSize(t *testing.T) {
-	opts := ChunkOptions{MaxChunkSize: 100} // largeMock returns 5000-byte content
-	m := NewManager([]Chunker{&largeMock{}}, opts)
+	input := []Chunk{
+		{Name: "below", Content: strings.Repeat("x", 99)},
+		{Name: "at", Content: strings.Repeat("x", 100)},
+		{Name: "above", Content: strings.Repeat("x", 101)},
+		{Name: "unicode", Content: strings.Repeat("é", 51)},
+		{Name: "large", Content: strings.Repeat("y", 5000)},
+	}
+	m := NewManager([]Chunker{&fixedChunksMock{ext: ".large", chunks: input}}, ChunkOptions{MaxChunkSize: 100})
 	tmpFile := filepath.Join(t.TempDir(), "file.large")
-	require.NoError(t, os.WriteFile(tmpFile, []byte("x"), 0600))
+	require.NoError(t, os.WriteFile(tmpFile, []byte("x"), 0o600))
 	chunks, err := m.ChunkFile(context.Background(), tmpFile)
 	require.NoError(t, err)
-	assert.Empty(t, chunks, "oversized chunk should be filtered out")
+	assert.ElementsMatch(t, []Chunk{
+		{Name: "below", Content: strings.Repeat("x", 99)},
+		{Name: "at", Content: strings.Repeat("x", 100)},
+	}, chunks)
 }
 
 func TestManager_ChunkFile_MaxChunkSize_ZeroMeansNoFilter(t *testing.T) {
 	opts := ChunkOptions{MaxChunkSize: 0}
 	m := NewManager([]Chunker{&largeMock{}}, opts)
 	tmpFile := filepath.Join(t.TempDir(), "file.large")
-	require.NoError(t, os.WriteFile(tmpFile, []byte("x"), 0600))
+	require.NoError(t, os.WriteFile(tmpFile, []byte("x"), 0o600))
 	chunks, err := m.ChunkFile(context.Background(), tmpFile)
 	require.NoError(t, err)
 	assert.Len(t, chunks, 1, "MaxChunkSize=0 means no filtering")
@@ -352,7 +374,7 @@ func TestManager_ChunkFiles_MultipleFiles(t *testing.T) {
 		filepath.Join(tmpDir, "b.go"),
 	}
 	for _, f := range files {
-		require.NoError(t, os.WriteFile(f, []byte("package main"), 0600))
+		require.NoError(t, os.WriteFile(f, []byte("package main"), 0o600))
 	}
 
 	results, errs := m.ChunkFiles(context.Background(), files)
@@ -364,12 +386,44 @@ func TestManager_ChunkFiles_MultipleFiles(t *testing.T) {
 }
 
 func TestManager_ChunkFiles_AllErrors(t *testing.T) {
-	m := NewManager([]Chunker{&errorChunkMock{}}, DefaultChunkOptions())
+	cause := errors.New("mock chunker error")
+	m := NewManager([]Chunker{&errorChunkMock{err: cause}, &singleChunkMock{ext: ".go"}}, DefaultChunkOptions())
 	tmpDir := t.TempDir()
-	f := filepath.Join(tmpDir, "file.err")
-	require.NoError(t, os.WriteFile(f, []byte("data"), 0600))
+	first := filepath.Join(tmpDir, "first.err")
+	second := filepath.Join(tmpDir, "second.err")
+	success := filepath.Join(tmpDir, "success.go")
+	for _, f := range []string{first, second, success} {
+		require.NoError(t, os.WriteFile(f, []byte("data"), 0o600))
+	}
+	checkErrors := func(t *testing.T, errs []error) {
+		t.Helper()
+		require.Len(t, errs, 2)
+		paths := make([]string, 0, len(errs))
+		for _, err := range errs {
+			require.Error(t, err)
+			assert.ErrorIs(t, err, cause)
+			for _, path := range []string{first, second} {
+				if strings.Contains(err.Error(), path) {
+					paths = append(paths, path)
+				}
+			}
+		}
+		assert.ElementsMatch(t, []string{first, second}, paths)
+	}
 
-	results, errs := m.ChunkFiles(context.Background(), []string{f})
-	assert.Empty(t, results)
-	assert.Len(t, errs, 1)
+	t.Run("all errors", func(t *testing.T) {
+		results, errs := m.ChunkFiles(context.Background(), []string{first, second})
+		assert.Empty(t, results)
+		checkErrors(t, errs)
+	})
+	t.Run("continues after errors", func(t *testing.T) {
+		results, errs := m.ChunkFiles(context.Background(), []string{first, second, success})
+		checkErrors(t, errs)
+		require.Len(t, results, 1)
+		require.Contains(t, results, success)
+		assert.Equal(t, []Chunk{{
+			FilePath: success, Language: LanguageGo, Type: ChunkTypeFunction,
+			Name: "MockFunc", StartLine: 1, EndLine: 10, Content: strings.Repeat("x", 20),
+		}}, results[success])
+	})
 }
