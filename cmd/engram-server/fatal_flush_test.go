@@ -29,7 +29,7 @@ func (r *fatalFlushMetricReceiver) Export(_ context.Context, req *collector.Expo
 
 func TestSourceCommitBuildMetadata(t *testing.T) {
 	if SourceCommit == "" {
-		return
+		t.Skip("SourceCommit not provided via linker flags")
 	}
 	if len(SourceCommit) != 40 {
 		t.Fatalf("SourceCommit length = %d, want 40", len(SourceCommit))
