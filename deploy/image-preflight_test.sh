@@ -106,7 +106,7 @@ start_wrapper() {
     local source="$1" output="$2" mock_bin="$3"
     shift 3
     (
-        PATH="${mock_bin}:${PATH}" env -u COMPOSE_FILE -u COMPOSE_PATH_SEPARATOR -u COMPOSE_PROJECT_NAME -u COMPOSE_PROFILES -u COMPOSE_ENV_FILES -u COMPOSE_DISABLE_ENV_FILE -u COMPOSE_PROJECT_DIRECTORY "${@}" timeout 15s bash "${PREFLIGHT}" --publication-result "${PUBLICATION_RESULT}" --env-file "${source}"
+        PATH="${mock_bin}:${PATH}" env -u COMPOSE_FILE -u COMPOSE_PATH_SEPARATOR -u COMPOSE_PROJECT_NAME -u COMPOSE_PROFILES -u COMPOSE_ENV_FILES -u COMPOSE_DISABLE_ENV_FILE -u COMPOSE_PROJECT_DIRECTORY "${@}" timeout --kill-after=2s 15s bash "${PREFLIGHT}" --publication-result "${PUBLICATION_RESULT}" --env-file "${source}"
     ) >"${output}" 2>&1 &
     STARTED_WRAPPER_PID=$!
 }
