@@ -4,37 +4,106 @@ package benchmark
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
-	"math/rand"
+	mathrand "math/rand"
+	"net"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func TestBenchmarkSuite(t *testing.T) {
+func benchmarkConfig(dsn string) (*pgxpool.Config, string, error) {
+	if os.Getenv("ENGRAM_BENCH_DISPOSABLE_DB") != "yes" {
+		return nil, "", fmt.Errorf("ENGRAM_BENCH_DISPOSABLE_DB=yes is required for an exclusively disposable database")
+	}
+	for _, entry := range os.Environ() {
+		name, _, _ := strings.Cut(entry, "=")
+		if strings.HasPrefix(strings.ToUpper(name), "PG") {
+			return nil, "", fmt.Errorf("unset PostgreSQL environment variable %s", name)
+		}
+	}
+	u, err := url.Parse(dsn)
+	if err != nil || u == nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") || u.User == nil || u.User.Username() == "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Opaque != "" {
+		return nil, "", fmt.Errorf("benchmark DSN must be a PostgreSQL URL without query parameters or fragment")
+	}
+	password, hasPassword := u.User.Password()
+	host, port, hostErr := net.SplitHostPort(u.Host)
+	portNumber, portErr := strconv.Atoi(port)
+	if !hasPassword || password == "" || hostErr != nil || host == "" || portErr != nil || portNumber < 1 || portNumber > 65535 || strings.ContainsAny(u.Host, ",/") || len(u.Path) < 2 || strings.Contains(u.Path[1:], "/") {
+		return nil, "", fmt.Errorf("benchmark DSN must specify one host, port, user, password and database")
+	}
+	var random [16]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		return nil, "", fmt.Errorf("generate schema name: %w", err)
+	}
+	schema := "engram_bench_" + hex.EncodeToString(random[:])
+	config, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, "", fmt.Errorf("invalid benchmark DSN")
+	}
+	config.ConnConfig.RuntimeParams["search_path"] = schema
+	return config, schema, nil
+}
+
+func openBenchmarkFixture(t *testing.T) *pgxpool.Pool {
+	t.Helper()
 	dsn := os.Getenv("ENGRAM_BENCH_DSN")
 	if dsn == "" {
 		t.Skip("ENGRAM_BENCH_DSN not set, skipping benchmark")
 	}
 
+	config, schema, err := benchmarkConfig(dsn)
+	if err != nil {
+		t.Fatalf("benchmark configuration: %v", err)
+	}
 	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, dsn)
+	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		t.Fatalf("create pool: %v", err)
 	}
-
+	t.Cleanup(pool.Close)
+	if _, err := pool.Exec(ctx, "CREATE SCHEMA "+pgx.Identifier{schema}.Sanitize()); err != nil {
+		t.Fatalf("create benchmark schema: %v", err)
+	}
 	t.Cleanup(func() {
-		_ = DropBenchTables(ctx, pool)
-		pool.Close()
+		if _, err := pool.Exec(ctx, "DROP SCHEMA "+pgx.Identifier{schema}.Sanitize()+" CASCADE"); err != nil {
+			t.Errorf("drop benchmark schema %s: %v", schema, err)
+		}
 	})
+	if _, err := pool.Exec(ctx, "CREATE EXTENSION vector WITH SCHEMA "+pgx.Identifier{schema}.Sanitize()); err != nil {
+		t.Fatalf("create benchmark vector extension (requires an empty disposable database): %v", err)
+	}
 
 	if err := CreateBenchTables(ctx, pool); err != nil {
 		t.Fatalf("create bench tables: %v", err)
 	}
+	return pool
+}
+
+func TestBenchmarkFixtureIsolation(t *testing.T) {
+	pool := openBenchmarkFixture(t)
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, benchSQL(pool, `INSERT INTO bench_observations(id, project) VALUES (1, 'fixture')`)); err != nil {
+		t.Fatalf("insert isolated benchmark row: %v", err)
+	}
+	var count int
+	if err := pool.QueryRow(ctx, benchSQL(pool, `SELECT count(*) FROM bench_observations WHERE project = 'fixture'`)).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("isolated benchmark row count = %d, error = %v", count, err)
+	}
+}
+
+func TestBenchmarkSuite(t *testing.T) {
+	pool := openBenchmarkFixture(t)
+	ctx := context.Background()
 
 	t.Log("Seeding 1M observations, 5M relations, 1M vectors (this takes a few minutes)...")
 	seedStart := time.Now()
@@ -48,7 +117,7 @@ func TestBenchmarkSuite(t *testing.T) {
 		t.Fatalf("no observation ids loaded")
 	}
 
-	rng := rand.New(rand.NewSource(42))
+	rng := mathrand.New(mathrand.NewSource(42))
 
 	t.Run("Q1_1hop", func(t *testing.T) {
 		h := NewHistogram()
@@ -101,7 +170,7 @@ func TestBenchmarkSuite(t *testing.T) {
 
 	t.Run("Q4_hybrid", func(t *testing.T) {
 		h := NewHistogram()
-		localRng := rand.New(rand.NewSource(99))
+		localRng := mathrand.New(mathrand.NewSource(99))
 		for i := 0; i < 100; i++ {
 			hybridQuery(ctx, pool, randomUnitVec(localRng))
 		}
@@ -148,7 +217,7 @@ func TestBenchmarkSuite(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				localRng := rand.New(rand.NewSource(int64(workerID) * 1000))
+				localRng := mathrand.New(mathrand.NewSource(int64(workerID) * 1000))
 				for {
 					select {
 					case <-done:
@@ -167,7 +236,7 @@ func TestBenchmarkSuite(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			localRng := rand.New(rand.NewSource(9999))
+			localRng := mathrand.New(mathrand.NewSource(9999))
 			for {
 				select {
 				case <-done:
@@ -179,9 +248,9 @@ func TestBenchmarkSuite(t *testing.T) {
 						continue
 					}
 					_, _ = pool.Exec(ctx,
-						`INSERT INTO bench_relations(source_id, target_id, relation_type, confidence, detection_source, created_at, created_at_epoch)
+						benchSQL(pool, `INSERT INTO bench_relations(source_id, target_id, relation_type, confidence, detection_source, created_at, created_at_epoch)
 						 VALUES($1, $2, 'relates_to', 0.5, 'embedding_similarity', $3, $4)
-						 ON CONFLICT ON CONSTRAINT bench_rel_unique DO NOTHING`,
+						 ON CONFLICT ON CONSTRAINT bench_rel_unique DO NOTHING`),
 						src,
 						tgt,
 						time.Now().UTC().Format(time.RFC3339),
