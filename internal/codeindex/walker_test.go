@@ -1,9 +1,11 @@
 package codeindex
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -29,24 +31,50 @@ func sourceLines(n int) string {
 	return sb.String()
 }
 
+func assertManifestPaths(t *testing.T, manifest Manifest, chunks []Chunk, present, absent []string) {
+	t.Helper()
+	manifestPaths := make(map[string]int)
+	chunkPaths := make(map[string]int)
+	for _, entry := range manifest {
+		manifestPaths[entry.FilePath]++
+	}
+	for _, chunk := range chunks {
+		chunkPaths[chunk.FilePath]++
+	}
+	for _, path := range present {
+		if manifestPaths[path] != 1 || chunkPaths[path] != 1 {
+			t.Errorf("%s: manifest count=%d, chunk count=%d; want one each", path, manifestPaths[path], chunkPaths[path])
+		}
+	}
+	for _, path := range absent {
+		if manifestPaths[path] != 0 || chunkPaths[path] != 0 {
+			t.Errorf("%s: manifest count=%d, chunk count=%d; want neither", path, manifestPaths[path], chunkPaths[path])
+		}
+	}
+}
+
 // TestBuildManifestBasic verifies that a small tree is chunked and the
 // manifest has the expected number of entries.
 func TestBuildManifestBasic(t *testing.T) {
 	dir := t.TempDir()
-	content := sourceLines(10)
-	writeTempFile(t, dir, "pkg/a.go", content)
-	writeTempFile(t, dir, "pkg/b.go", content)
+	want := map[string]string{"pkg/a.go": sourceLines(10), "pkg/b.go": sourceLines(5)}
+	for path, content := range want {
+		writeTempFile(t, dir, path, content)
+	}
 
 	opts := DefaultOptions()
 	manifest, chunks, err := BuildManifest(dir, opts)
 	if err != nil {
 		t.Fatalf("BuildManifest: %v", err)
 	}
-	if len(manifest) == 0 {
-		t.Fatal("expected non-empty manifest")
+	if len(manifest) != 2 || len(chunks) != 2 {
+		t.Fatalf("manifest len=%d, chunks len=%d; want 2 each", len(manifest), len(chunks))
 	}
-	if len(manifest) != len(chunks) {
-		t.Errorf("manifest len=%d != chunks len=%d", len(manifest), len(chunks))
+	assertManifestPaths(t, manifest, chunks, []string{"pkg/a.go", "pkg/b.go"}, nil)
+	for _, chunk := range chunks {
+		if chunk.Content != want[chunk.FilePath] {
+			t.Errorf("%s: content does not match source", chunk.FilePath)
+		}
 	}
 }
 
@@ -60,15 +88,11 @@ func TestBuildManifestGitignoreHonored(t *testing.T) {
 	writeTempFile(t, dir, ".gitignore", "ignored_gen.go\n")
 
 	opts := DefaultOptions()
-	manifest, _, err := BuildManifest(dir, opts)
+	manifest, chunks, err := BuildManifest(dir, opts)
 	if err != nil {
 		t.Fatalf("BuildManifest: %v", err)
 	}
-	for _, entry := range manifest {
-		if strings.Contains(entry.FilePath, "ignored_gen.go") {
-			t.Errorf("gitignore-matched file appeared in manifest: %s", entry.FilePath)
-		}
-	}
+	assertManifestPaths(t, manifest, chunks, []string{"included.go"}, []string{"ignored_gen.go"})
 }
 
 // TestBuildManifestEngramignoreHonored verifies .engramignore works the same way.
@@ -80,15 +104,11 @@ func TestBuildManifestEngramignoreHonored(t *testing.T) {
 	writeTempFile(t, dir, ".engramignore", "scratch.go\n")
 
 	opts := DefaultOptions()
-	manifest, _, err := BuildManifest(dir, opts)
+	manifest, chunks, err := BuildManifest(dir, opts)
 	if err != nil {
 		t.Fatalf("BuildManifest: %v", err)
 	}
-	for _, entry := range manifest {
-		if strings.Contains(entry.FilePath, "scratch.go") {
-			t.Errorf(".engramignore-matched file appeared in manifest: %s", entry.FilePath)
-		}
-	}
+	assertManifestPaths(t, manifest, chunks, []string{"keep.go"}, []string{"scratch.go"})
 }
 
 // TestBuildManifestBinarySkipped verifies that files with NUL bytes are skipped.
@@ -129,23 +149,20 @@ func TestBuildManifestBinarySkipped(t *testing.T) {
 	}
 }
 
-// TestBuildManifestBinaryExtensionSkipped verifies that files with known
-// binary extensions are skipped without reading content.
+// TestBuildManifestBinaryExtensionSkipped verifies that known binary extensions
+// are excluded even when the files contain text.
 func TestBuildManifestBinaryExtensionSkipped(t *testing.T) {
 	dir := t.TempDir()
 	writeTempFile(t, dir, "image.png", "not really a png\n")
 	writeTempFile(t, dir, "lib.dll", "not really a dll\n")
+	writeTempFile(t, dir, "upper.PNG", "also text\n")
 	writeTempFile(t, dir, "real.go", sourceLines(3))
 
-	manifest, _, err := BuildManifest(dir, DefaultOptions())
+	manifest, chunks, err := BuildManifest(dir, DefaultOptions())
 	if err != nil {
 		t.Fatalf("BuildManifest: %v", err)
 	}
-	for _, entry := range manifest {
-		if strings.HasSuffix(entry.FilePath, ".png") || strings.HasSuffix(entry.FilePath, ".dll") {
-			t.Errorf("binary-extension file appeared in manifest: %s", entry.FilePath)
-		}
-	}
+	assertManifestPaths(t, manifest, chunks, []string{"real.go"}, []string{"image.png", "lib.dll", "upper.PNG"})
 }
 
 // TestBuildManifestDirSkipList verifies that node_modules and .git are pruned.
@@ -153,46 +170,23 @@ func TestBuildManifestDirSkipList(t *testing.T) {
 	dir := t.TempDir()
 	writeTempFile(t, dir, "node_modules/lodash/index.js", sourceLines(5))
 	writeTempFile(t, dir, ".git/HEAD", "ref: refs/heads/main\n")
+	writeTempFile(t, dir, "src/node_modules/hidden.js", sourceLines(5))
 	writeTempFile(t, dir, "src/main.go", sourceLines(5))
 
-	manifest, _, err := BuildManifest(dir, DefaultOptions())
+	manifest, chunks, err := BuildManifest(dir, DefaultOptions())
 	if err != nil {
 		t.Fatalf("BuildManifest: %v", err)
 	}
-	for _, entry := range manifest {
-		if strings.HasPrefix(entry.FilePath, "node_modules/") {
-			t.Errorf("node_modules file in manifest: %s", entry.FilePath)
-		}
-		if strings.HasPrefix(entry.FilePath, ".git/") {
-			t.Errorf(".git file in manifest: %s", entry.FilePath)
-		}
-	}
+	assertManifestPaths(t, manifest, chunks, []string{"src/main.go"},
+		[]string{"node_modules/lodash/index.js", ".git/HEAD", "src/node_modules/hidden.js"})
 }
 
-// TestBuildManifestValidChunkIDs verifies that all manifest entries have
-// non-empty 16-char ChunkIDs.
-func TestBuildManifestValidChunkIDs(t *testing.T) {
-	dir := t.TempDir()
-	writeTempFile(t, dir, "a.go", sourceLines(5))
-
-	manifest, _, err := BuildManifest(dir, DefaultOptions())
-	if err != nil {
-		t.Fatalf("BuildManifest: %v", err)
-	}
-	for _, entry := range manifest {
-		if len(entry.ChunkID) != 16 {
-			t.Errorf("ChunkID=%q has length %d; want 16", entry.ChunkID, len(entry.ChunkID))
-		}
-	}
-}
-
-// TestBuildManifestDeterminism verifies that two calls on the same tree
-// produce byte-identical manifests.
+// TestBuildManifestDeterminism verifies stable metadata and sorted positions.
 func TestBuildManifestDeterminism(t *testing.T) {
 	dir := t.TempDir()
-	for _, name := range []string{"a.go", "b.ts", "c.py"} {
-		writeTempFile(t, dir, name, sourceLines(30))
-	}
+	writeTempFile(t, dir, "a.go", sourceLines(100))
+	writeTempFile(t, dir, "b.ts", sourceLines(10))
+	writeTempFile(t, dir, "c.py", sourceLines(5))
 
 	opts := DefaultOptions()
 	m1, _, err := BuildManifest(dir, opts)
@@ -204,14 +198,17 @@ func TestBuildManifestDeterminism(t *testing.T) {
 		t.Fatalf("BuildManifest second: %v", err)
 	}
 
-	if len(m1) != len(m2) {
-		t.Fatalf("manifest lengths differ: %d vs %d", len(m1), len(m2))
+	if len(m1) != 4 || len(m2) != 4 {
+		t.Fatalf("manifest lengths: %d and %d; want 4 each", len(m1), len(m2))
 	}
-	for i := range m1 {
-		e1, e2 := m1[i], m2[i]
-		if e1.ChunkID != e2.ChunkID || e1.ContentSHA256 != e2.ContentSHA256 ||
-			e1.FilePath != e2.FilePath || e1.ByteStart != e2.ByteStart {
-			t.Errorf("entry %d differs: %+v vs %+v", i, e1, e2)
+	if !reflect.DeepEqual(m1, m2) {
+		t.Errorf("manifests differ: %+v vs %+v", m1, m2)
+	}
+	wantPaths := []string{"a.go", "a.go", "b.ts", "c.py"}
+	wantStarts := []int{0, len(sourceLines(70)), 0, 0}
+	for i, entry := range m1 {
+		if entry.FilePath != wantPaths[i] || entry.ByteStart != wantStarts[i] {
+			t.Errorf("entry %d: path=%q start=%d; want %q start=%d", i, entry.FilePath, entry.ByteStart, wantPaths[i], wantStarts[i])
 		}
 	}
 }
@@ -222,59 +219,60 @@ func TestBuildManifestPathsNormalized(t *testing.T) {
 	dir := t.TempDir()
 	writeTempFile(t, dir, "sub/dir/main.go", sourceLines(5))
 
-	manifest, _, err := BuildManifest(dir, DefaultOptions())
+	manifest, chunks, err := BuildManifest(dir, DefaultOptions())
 	if err != nil {
 		t.Fatalf("BuildManifest: %v", err)
 	}
-	for _, entry := range manifest {
-		if strings.Contains(entry.FilePath, "\\") {
-			t.Errorf("FilePath contains backslash: %s", entry.FilePath)
-		}
+	if len(manifest) != 1 || len(chunks) != 1 {
+		t.Fatalf("manifest len=%d, chunks len=%d; want 1 each", len(manifest), len(chunks))
 	}
-}
-
-// TestBuildManifestSubsetChunking verifies that ChunkFile can be called
-// directly on a subset of files, enabling delta-only uploads for CR-003.
-func TestBuildManifestSubsetChunking(t *testing.T) {
-	dir := t.TempDir()
-	contentA := sourceLines(5)
-	contentB := sourceLines(20)
-	writeTempFile(t, dir, "a.go", contentA)
-	writeTempFile(t, dir, "b.go", contentB)
-
-	// Simulate CR-003: only re-chunk b.go.
-	chunks, err := ChunkFile("b.go", []byte(contentB), DefaultOptions())
-	if err != nil {
-		t.Fatalf("ChunkFile: %v", err)
+	assertManifestPaths(t, manifest, chunks, []string{"sub/dir/main.go"}, nil)
+	id := sha256.Sum256([]byte("sub/dir/main.go:0"))
+	if want := fmt.Sprintf("%x", id[:8]); manifest[0].ChunkID != want || chunks[0].ChunkID() != want {
+		t.Errorf("normalized path ID: manifest=%q chunk=%q; want %q", manifest[0].ChunkID, chunks[0].ChunkID(), want)
 	}
-	if len(chunks) == 0 {
-		t.Error("expected at least 1 chunk for b.go")
-	}
-	// Verify byte coverage.
-	assertContiguous(t, []byte(contentB), chunks)
 }
 
 // TestBuildManifestManifestContentAbsent verifies that manifest entries do NOT
 // carry Content (it stays in the Chunk slice only).
 func TestBuildManifestManifestContentAbsent(t *testing.T) {
 	dir := t.TempDir()
-	writeTempFile(t, dir, "x.go", sourceLines(5))
+	sources := map[string]string{"x.go": sourceLines(75), "y.ts": sourceLines(5)}
+	for path, content := range sources {
+		writeTempFile(t, dir, path, content)
+	}
 
 	manifest, chunks, err := BuildManifest(dir, DefaultOptions())
 	if err != nil {
 		t.Fatalf("BuildManifest: %v", err)
 	}
-	// ManifestEntry has no Content field by design; just verify alignment.
-	if len(manifest) != len(chunks) {
-		t.Errorf("manifest(%d) and chunks(%d) must have the same length", len(manifest), len(chunks))
+	if len(manifest) != 3 || len(chunks) != 3 {
+		t.Fatalf("manifest len=%d, chunks len=%d; want 3 each", len(manifest), len(chunks))
 	}
+	if _, ok := reflect.TypeOf(ManifestEntry{}).FieldByName("Content"); ok {
+		t.Error("ManifestEntry must not contain a Content field")
+	}
+	wantPaths := []string{"x.go", "x.go", "y.ts"}
+	wantStarts := []int{0, len(sourceLines(70)), 0}
+	wantEnds := []int{len(sourceLines(70)), len(sources["x.go"]), len(sources["y.ts"])}
+	wantLanguages := []string{"go", "go", "typescript"}
 	for i, entry := range manifest {
-		if entry.ChunkID != chunks[i].ChunkID() {
-			t.Errorf("manifest[%d].ChunkID=%s != chunks[%d].ChunkID()=%s",
-				i, entry.ChunkID, i, chunks[i].ChunkID())
+		path, start, end := wantPaths[i], wantStarts[i], wantEnds[i]
+		content := sources[path][start:end]
+		id := sha256.Sum256([]byte(fmt.Sprintf("%s:%d", path, start)))
+		digest := sha256.Sum256([]byte(content))
+		want := ManifestEntry{
+			FilePath: path, ChunkID: fmt.Sprintf("%x", id[:8]), ContentSHA256: fmt.Sprintf("%x", digest),
+			ByteStart: start, ByteEnd: end, Language: wantLanguages[i], ChunkType: ChunkTypeLineBlock,
 		}
-		if entry.ContentSHA256 != chunks[i].ContentSHA256 {
-			t.Errorf("manifest[%d].ContentSHA256 mismatch", i)
+		if entry != want {
+			t.Errorf("manifest[%d]=%+v; want %+v", i, entry, want)
+		}
+		chunk := chunks[i]
+		if chunk.FilePath != path || chunk.ByteStart != start || chunk.ByteEnd != end ||
+			chunk.Language != want.Language || chunk.ChunkType != want.ChunkType ||
+			chunk.Content != content || chunk.ContentSHA256 != want.ContentSHA256 || chunk.ChunkID() != want.ChunkID {
+			t.Errorf("chunks[%d]=%+v; want metadata %+v and source content", i, chunk, want)
 		}
 	}
 }
