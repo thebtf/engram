@@ -292,7 +292,9 @@ for (const kind of ['explicit', 'page', 'frozen_filter']) {
     assert.equal(state.selectionActionReady, false)
     if (kind === 'frozen_filter') assert.equal(state.selection.current.value.reconfirmationRequired, true)
     else assert.equal(state.selection.current.value.kind, 'none')
+    const actionRequestsBefore = consumer.calls.filter((call) => call.path === '/api/rules' && call.method === 'POST').length
     await state.runSelectionAction('delete')
+    assert.equal(consumer.calls.filter((call) => call.path === '/api/rules' && call.method === 'POST').length, actionRequestsBefore, 'invalidated selection must be blocked before mutation dispatch')
     assert.deepEqual(consumer.writes, [])
     await state.clearSelection()
     await state.toggleRuleSelection(state.visibleRows[0])
