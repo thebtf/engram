@@ -309,7 +309,7 @@ test('canonical issue roles: unscoped all-project reading preserves two NULL rol
   assert.equal(state.calls.at(-1).url.searchParams.has('project'), false)
 })
 
-for (const status of [401, 403]) test(`canonical issue roles: real HTTP ${status} never exposes detail or comments`, async t => {
+for (const status of [401, 403]) test(`canonical issue roles: HTTP ${status} response never exposes detail or comments`, async t => {
   const state = await mount(t, targetProject)
   state.setResponder(call => call.url.pathname === '/api/issues/7' ? json({ error: 'Denied' }, status) : undefined)
   await state.issues.openIssue(7)
@@ -338,14 +338,14 @@ test('canonical issue roles: NULL target is not inferred from a source role or r
   assert.equal(state.issues.detail.value.targetDisplayName, '')
 })
 
-for (const fields of [
-  { source_project_id: undefined },
-  { source_project_id: 'historical-source-slug' },
-  { target_project_id: undefined },
-  { target_project_id: 'urn:engram:migration:unresolved:not-a-project' },
-  { project_origin: undefined },
-  { project_origin: { source_project: null, target_project: '' } },
-]) test(`canonical issue roles: malformed role/origin ${JSON.stringify(fields)} is a visible refusal, not a raw fallback`, async t => {
+for (const [label, fields] of [
+  ['missing source ID', { source_project_id: undefined }],
+  ['source ID is a historical slug', { source_project_id: 'historical-source-slug' }],
+  ['missing target ID', { target_project_id: undefined }],
+  ['target ID is an unresolved reference', { target_project_id: 'urn:engram:migration:unresolved:not-a-project' }],
+  ['missing origin', { project_origin: undefined }],
+  ['invalid origin fields', { project_origin: { source_project: null, target_project: '' } }],
+]) test(`canonical issue roles: malformed ${label} is a visible refusal, not a raw fallback`, async t => {
   const state = await mount(t, issueSourceProject)
   const row = { ...migratedIssue, ...fields }
   state.setResponder(call => call.url.pathname === '/api/issues/7' ? json({ issue: row, comments: [] }) : call.url.pathname === '/api/issues' ? json({ issues: [row], total: 1 }) : undefined)
