@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.1.7] - 2026-11-11
+
+- Preserve every byte in exact 32-byte raw Vault key files, including trailing CR, LF, space and tab; retain 64-character hex keys and existing raw-trailer compatibility (native Engram issue #606). Synthetic regression coverage and the existing public loading entry were checked. This does not rotate or create keys, change authentication, namespaces, AAD or APIs, or claim historical project adoption.
+
 ## [7.1.6] - 2026-11-11
 
 - Apply Alpine 3.24 security fixes `krb5-libs` 1.22.3-r0 and `libxslt` 1.1.43-r4 to the PostgreSQL 17.11 image. The 7.1.5 binaries and npm package were published, but canonical-image publication was refused after 18 HIGH findings in those two packages. This successor includes the 7.1.5 source corrections; it does not claim full project adoption or complete outage or session recovery.
