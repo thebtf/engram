@@ -55,7 +55,7 @@ function evaluate(source, dependency, globals) {
   return module.exports
 }
 
-async function mount(t, { path = '/projects', language = 'ru', items = catalog.items, unresolved = catalog.unresolved, selected = '', logical_groups, scopedRows, documentFetch, vaultFetch, sessionFetch, catalogFetch, initialQuery = {}, homeDocuments = false, capturePageState = false, allowSyntheticMutations = false, onPrimaryVersion } = {}) {
+async function mount(t, { path = '/projects', language = 'ru', items = catalog.items, unresolved = catalog.unresolved, selected = '', logical_groups, scopedRows, documentFetch, vaultFetch, sessionFetch, catalogFetch, initialQuery = {}, homeDocuments = false, capturePageState = false, allowSyntheticMutations = false, onPrimaryVersion, renderMutationNotice = false } = {}) {
   const modules = new Map(), storage = new Map(), calls = [], errors = []
   let context
   const globals = {
@@ -147,7 +147,8 @@ async function mount(t, { path = '/projects', language = 'ru', items = catalog.i
   await router.push({ path, query: { ...initialQuery, ...(selected ? { project: selected } : {}) } })
   const app = renderer.createApp({ render: () => vue.h(layout, null, { default: () => vue.h(homeDocuments && router.currentRoute.value.path === '/documents' ? documentPage : page) }) })
   app.component('ProjectContext', component('components/ProjectContext.vue'))
-  for (const name of ['SettingsModal', 'ProfileModal', 'LoginModal', 'MutationResultNotice', 'HonestyBadge', 'RevealSecret']) app.component(name, { render: () => null })
+  for (const name of ['SettingsModal', 'ProfileModal', 'LoginModal', 'HonestyBadge', 'RevealSecret']) app.component(name, { render: () => null })
+  app.component('MutationResultNotice', renderMutationNotice ? component('components/MutationResultNotice.vue') : { render: () => null })
   const messages = Object.fromEntries(['ru', 'en', 'zh'].map(code => [code, JSON.parse(readFileSync(new URL(`i18n/locales/${code}.json`, root), 'utf8'))]))
   const i18n = createI18n({ legacy: false, locale: language, messages, missingWarn: false, fallbackWarn: false })
   app.use(router).use(i18n)
@@ -1103,6 +1104,7 @@ for (const language of ['en', 'ru', 'zh']) {
     const reader = walk(state.host).find(item => item.tag === 'article' && hasClass(item, 'reader'))
     const error = walk(reader).find(item => hasClass(item, 'error'))
     assert.ok(error)
+    assert.ok(text(error).includes(state.i18n.global.t('errors.diagnosis.document-lineage-ambiguous')), 'Explain the actual ambiguity in the active language')
     assert.ok(!text(error).includes(state.i18n.global.t('errors.diagnosis.request-rejected')), 'A known ambiguity needs more than the generic 409 diagnosis')
     assert.ok(!text(error).includes('private arbitrary server text') && !text(error).includes('document lineage ambiguous'), 'Arbitrary server text is not rendered as operator copy')
     const back = walk(reader).find(item => item.tag === 'button' && hasClass(item, 'back'))
@@ -1197,7 +1199,9 @@ test('SCOPED-ACTION empty groups preserves the Home list-issued lineage link', a
   assert.equal(links.length, 2)
   assert.deepEqual(links.map(link => new URL(link.props.href, 'http://synthetic.invalid').searchParams.get('document_id')).sort(), ['101', '201'])
   await state.router.push(links[0].props.href); await tick(); await tick()
-  assert.ok(documentReads(state).every(call => call.url.searchParams.get('document_id') === '101'))
+  const reads = documentReads(state)
+  assert.ok(reads.length, 'The selected lineage must actually be read')
+  assert.ok(reads.every(call => call.url.searchParams.get('document_id') === '101'))
 })
 
 for (const status of [403, 404, 409]) {
@@ -1325,7 +1329,7 @@ test('SCOPED-ACTION empty groups list row opens its exact issued ID', async t =>
 
 for (const status of [403, 404, 409]) {
   test(`SCOPED-ACTION scoped export action refusal ${status} stays visible without fallback`, async t => {
-    const state = await mount(t, { path: '/documents', language: 'en', selected: SAME_A, items: [logicalItems[0], logicalItems[1]], unresolved: [], logical_groups: [logicalGroups[0]], documentFetch: scopedActionResponses({ actionStatus: status }), initialQuery: { path: lineagePath, document_id: '101' }, capturePageState: true, allowSyntheticMutations: true })
+    const state = await mount(t, { path: '/documents', language: 'en', selected: SAME_A, items: [logicalItems[0], logicalItems[1]], unresolved: [], logical_groups: [logicalGroups[0]], documentFetch: scopedActionResponses({ actionStatus: status }), initialQuery: { path: lineagePath, document_id: '101' }, capturePageState: true, allowSyntheticMutations: true, renderMutationNotice: true })
     await tick()
     const button = walk(state.host).find(item => item.props['data-testid'] === 'document-export')
     assert.ok(button && !button.props.disabled)
@@ -1333,6 +1337,9 @@ for (const status of [403, 404, 409]) {
     const actions = state.calls.filter(call => call.url.pathname === '/api/documents' && call.method === 'POST')
     assert.equal(actions.length, 1)
     assert.equal(JSON.parse(actions[0].body).project, SAME_A)
+    const notice = walk(state.host).find(item => item.props['data-testid'] === 'mutation-result')
+    assert.ok(notice && text(notice).trim(), 'The export refusal must be visible')
+    assert.equal(notice.props['data-kind'], status === 403 ? 'denied' : status === 409 ? 'conflict' : 'failed')
     assert.ok(!walk(state.host).some(item => item.props['data-testid'] === 'document-export-download'))
   })
 }
