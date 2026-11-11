@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -79,7 +80,6 @@ func TestContainerReadiness_NonReadyResponsesFailClosed(t *testing.T) {
 		{name: "malformed json", status: http.StatusOK, body: `{"status":`},
 		{name: "trailing json", status: http.StatusOK, body: `{"status":"ready"}{}`},
 		{name: "http failure", status: http.StatusServiceUnavailable, body: `{"status":"ready"}`},
-		{name: "oversized body", status: http.StatusOK, body: `{"status":"ready","padding":"` + strings.Repeat("x", 8192) + `"}`},
 	}
 
 	for _, test := range tests {
@@ -98,6 +98,36 @@ func TestContainerReadiness_NonReadyResponsesFailClosed(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("oversized body", func(t *testing.T) {
+		t.Parallel()
+
+		const ready = `{"status":"ready"}`
+		body := ready + strings.Repeat(" ", maxResponseBody-len(ready))
+		for _, test := range []struct {
+			name    string
+			body    string
+			wantErr string
+		}{
+			{name: "at limit", body: body},
+			{name: "over limit", body: body + " ", wantErr: "response exceeds size limit"},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					_, _ = w.Write([]byte(test.body))
+				}))
+				t.Cleanup(server.Close)
+				err := checkReady(context.Background(), server.URL+"/api/ready")
+				if test.wantErr == "" {
+					if err != nil {
+						t.Fatalf("valid readiness response at size limit: %v", err)
+					}
+				} else if err == nil || err.Error() != test.wantErr {
+					t.Fatalf("oversized valid readiness response: got %v, want %q", err, test.wantErr)
+				}
+			})
+		}
+	})
 
 	t.Run("redirect", func(t *testing.T) {
 		t.Parallel()
@@ -127,17 +157,30 @@ func TestContainerReadiness_NonReadyResponsesFailClosed(t *testing.T) {
 	t.Run("invalid endpoint", func(t *testing.T) {
 		t.Parallel()
 
-		for _, endpoint := range []string{
-			"file:///tmp/ready",
-			"http://user:secret@example.test/api/ready",
-			"http://example.test/health",
-			"http://example.test/api/ready?token=secret",
+		for _, test := range []struct {
+			endpoint string
+			wantErr  string
+		}{
+			{endpoint: "file:///tmp/ready", wantErr: "endpoint must be an absolute HTTP(S) URL"},
+			{endpoint: "http://user:secret@example.test/api/ready", wantErr: "endpoint must contain only the /api/ready path"},
+			{endpoint: "http://example.test/health", wantErr: "endpoint must contain only the /api/ready path"},
+			{endpoint: "http://example.test/api/ready?token=secret", wantErr: "endpoint must contain only the /api/ready path"},
 		} {
-			endpoint := endpoint
-			t.Run(fmt.Sprintf("%x", endpoint), func(t *testing.T) {
+			test := test
+			t.Run(fmt.Sprintf("%x", test.endpoint), func(t *testing.T) {
 				t.Parallel()
-				if err := checkReady(context.Background(), endpoint); err == nil {
-					t.Fatal("invalid endpoint must fail before a request")
+				var requests atomic.Int64
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					requests.Add(1)
+					_, _ = w.Write([]byte(`{"status":"ready"}`))
+				}))
+				t.Cleanup(server.Close)
+				endpoint := strings.ReplaceAll(test.endpoint, "example.test", strings.TrimPrefix(server.URL, "http://"))
+				if err := checkReady(context.Background(), endpoint); err == nil || err.Error() != test.wantErr {
+					t.Fatalf("invalid endpoint: got %v, want %q", err, test.wantErr)
+				}
+				if got := requests.Load(); got != 0 {
+					t.Fatalf("invalid endpoint sent %d requests", got)
 				}
 			})
 		}
