@@ -224,7 +224,7 @@ test('invariant: empty reader kinds never dispatch content/history or advertise 
   assert.equal(article(state.host), undefined)
 })
 
-for (const status of [401, 403]) test(`invariant: real HTTP ${status} remains a reader refusal, not a 200 body or grant`, async t => {
+for (const status of [401, 403]) test(`invariant: HTTP ${status} response remains a reader refusal, not a 200 body or grant`, async t => {
   const state = await mount(t, { location: { path: '/projects/unresolved', query: { reference: readable[0].reference } }, contentStatus: status })
   assert.equal(state.reader.error.value.status, status)
   assert.equal(state.reader.error.value.category, status === 401 ? 'unauthorized' : 'forbidden')
