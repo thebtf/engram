@@ -300,7 +300,10 @@ func TestLifecycleLegacyAuthorization(t *testing.T) {
 				if err != nil {
 					t.Fatal("transport failed before actual MCP authorization")
 				}
-				if r == nil || r.IsError {
+				if r == nil {
+					t.Fatal("missing MCP response cannot establish authorization denial")
+				}
+				if r.IsError {
 					return
 				}
 				b := body(t, r, nil)
@@ -352,7 +355,7 @@ func TestLifecycleLegacyAuthorization(t *testing.T) {
 			}
 			contentStable := before.Content == after.Content && before.OwnerPrincipal == after.OwnerPrincipal && before.AgentVisibility == after.AgentVisibility && before.Project == after.Project
 			t.Logf("OBSERVED action=%s accepted=%t persisted_change=%t unrelated_fields_preserved=%t promotion_delta=%d", c.action, r != nil && !r.IsError, changed, contentStable, historyAfter-historyBefore)
-			if r == nil || !r.IsError || changed || historyAfter != historyBefore {
+			if r == nil || !r.IsError || changed || !contentStable || historyAfter != historyBefore {
 				t.Error("foreign writable principal bypassed private-record lifecycle authorization")
 			}
 		})
