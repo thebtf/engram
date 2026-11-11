@@ -189,7 +189,7 @@ test('pre-dispatch failures remain known network or offline outcomes', () => {
  assert.strictEqual(network.request, request)
 })
 
-test('an explicit timeout before a response remains timeout after dispatch', async () => {
+test('executeMutation classifies a rejected AbortError as timeout', async () => {
  const result = await executeMutation(
   request,
   Promise.reject(new DOMException('Request timed out', 'AbortError')),
@@ -324,7 +324,6 @@ test('bare, action, and 202 responses remain pending despite direct parser suppo
  for (const result of results) {
   assertMutationKind(result, 'committed_verification_pending')
  }
- assertMutationKind(results[3], 'committed_verification_pending')
 })
 
 test('one-time keycard and invitation receipts expose only validated create-response secrets', async () => {
