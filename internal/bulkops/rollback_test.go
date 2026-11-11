@@ -4,7 +4,7 @@
 // Unit tests (no DB required):
 //   - decodeTypedBeforeState edge cases (empty, legacy, invalid JSON)
 //
-// Integration tests (skip when DATABASE_DSN absent):
+// Integration tests require an explicitly designated disposable database:
 //   - Happy path: rollback restores memory, audit='rollback', snapshot status='rolled_back'
 //   - Conflict path: a durable post-snapshot row mutation returns ErrRollbackConflict,
 //     audit='rollback_attempted_with_conflict', memory NOT modified
@@ -14,10 +14,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -60,10 +60,7 @@ func TestDecodeTypedBeforeState_NilInput(t *testing.T) {
 
 func openRollbackTestDB(t *testing.T) (*gorm.DB, *gormdb.Store) {
 	t.Helper()
-	dsn := os.Getenv("DATABASE_DSN")
-	if dsn == "" {
-		t.Skip("DATABASE_DSN not set, skipping integration test")
-	}
+	dsn := bulkDisposableTestDSN(t)
 	store, err := gormdb.NewStore(gormdb.Config{DSN: dsn, LogLevel: logger.Warn})
 	require.NoError(t, err)
 	db := store.DB
@@ -71,6 +68,14 @@ func openRollbackTestDB(t *testing.T) (*gorm.DB, *gormdb.Store) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = sqlDB.Close() })
 	return db, store
+}
+
+func cleanupRollbackSnapshot(t *testing.T, db *gorm.DB, snapshotID string) {
+	t.Helper()
+	t.Cleanup(func() {
+		_ = db.Exec(`DELETE FROM audit_log WHERE action IN ('rollback','rollback_attempted_with_conflict') AND actor = 'master' AND reason LIKE ?`, "snapshot="+snapshotID+" %").Error
+		_ = db.Exec("DELETE FROM bulk_op_snapshots WHERE snapshot_id = ?", snapshotID).Error
+	})
 }
 
 // TestRollback_HappyPath verifies that a committed snapshot can be rolled back:
@@ -101,8 +106,6 @@ func TestRollback_HappyPath(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_ = db.Exec("DELETE FROM memories WHERE id = ?", created.ID).Error
-		_ = db.Exec(`DELETE FROM bulk_op_snapshots WHERE snapshot_id LIKE 'rollback-test-%'`).Error
-		_ = db.Exec(`DELETE FROM audit_log WHERE action IN ('rollback','rollback_attempted_with_conflict') AND actor = 'master'`).Error
 	})
 
 	// Capture the typed before_state used by new bulk delete/supersede snapshots.
@@ -121,11 +124,12 @@ func TestRollback_HappyPath(t *testing.T) {
 	beforeStateBytes, err := json.Marshal(beforeStateMap)
 	require.NoError(t, err)
 
-	snap, err := models.NewBulkOpSnapshot("rollback-test-001", models.SnapshotOpBulkDelete, "master", json.RawMessage(beforeStateBytes))
+	snap, err := models.NewBulkOpSnapshot("rollback-test-"+uuid.NewString(), models.SnapshotOpBulkDelete, "master", json.RawMessage(beforeStateBytes))
 	require.NoError(t, err)
 	snap.AffectedMemoryIDs = []int64{created.ID}
 	createdSnap, err := snapStore.Create(ctx, snap)
 	require.NoError(t, err)
+	cleanupRollbackSnapshot(t, db, createdSnap.SnapshotID)
 
 	// Simulate the bulk_delete op: soft-delete the memory.
 	require.NoError(t, memStore.Delete(ctx, created.ID))
@@ -159,9 +163,9 @@ func TestRollback_HappyPath(t *testing.T) {
 
 	// Audit must contain 'rollback'.
 	var count int64
-	db.Model(&gormdb.AuditLogEntry{}).
-		Where("action = ? AND actor = ?", "rollback", "master").
-		Count(&count)
+	require.NoError(t, db.Model(&gormdb.AuditLogEntry{}).
+		Where("action = ? AND actor = ? AND reason LIKE ?", "rollback", "master", "snapshot="+createdSnap.SnapshotID+" %").
+		Count(&count).Error)
 	assert.GreaterOrEqual(t, count, int64(1), "audit log must have rollback entry")
 }
 
@@ -198,8 +202,6 @@ func TestRollback_Conflict_EC_F3(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_ = db.Exec("DELETE FROM memories WHERE id = ?", created.ID).Error
-		_ = db.Exec(`DELETE FROM bulk_op_snapshots WHERE snapshot_id LIKE 'rollback-conflict-%'`).Error
-		_ = db.Exec(`DELETE FROM audit_log WHERE action = 'rollback_attempted_with_conflict' AND actor = 'master'`).Error
 	})
 
 	// Build before_state capturing the original memory.
@@ -209,11 +211,12 @@ func TestRollback_Conflict_EC_F3(t *testing.T) {
 	beforeStateBytes, _ := json.Marshal(beforeStateMap)
 
 	// Persist a past boundary; SnapshotStore assigns created_at during insertion.
-	snap, err := models.NewBulkOpSnapshot("rollback-conflict-001", models.SnapshotOpBulkDelete, "master", json.RawMessage(beforeStateBytes))
+	snap, err := models.NewBulkOpSnapshot("rollback-conflict-"+uuid.NewString(), models.SnapshotOpBulkDelete, "master", json.RawMessage(beforeStateBytes))
 	require.NoError(t, err)
 	snap.AffectedMemoryIDs = []int64{created.ID}
 	createdSnap, err := snapStore.Create(ctx, snap)
 	require.NoError(t, err)
+	cleanupRollbackSnapshot(t, db, createdSnap.SnapshotID)
 	snapshotTime := time.Now().UTC().Add(-2 * time.Second)
 	require.NoError(t, db.Exec("UPDATE bulk_op_snapshots SET created_at = ? WHERE snapshot_id = ?", snapshotTime, createdSnap.SnapshotID).Error)
 	entries, err := decodeTypedBeforeState(createdSnap.BeforeState)
@@ -246,9 +249,9 @@ func TestRollback_Conflict_EC_F3(t *testing.T) {
 
 	// Audit must contain 'rollback_attempted_with_conflict'.
 	var count int64
-	db.Model(&gormdb.AuditLogEntry{}).
-		Where("action = ? AND actor = ?", "rollback_attempted_with_conflict", "master").
-		Count(&count)
+	require.NoError(t, db.Model(&gormdb.AuditLogEntry{}).
+		Where("action = ? AND actor = ? AND reason LIKE ?", "rollback_attempted_with_conflict", "master", "snapshot="+createdSnap.SnapshotID+" %").
+		Count(&count).Error)
 	assert.GreaterOrEqual(t, count, int64(1))
 }
 
@@ -260,10 +263,9 @@ func TestRollback_LegacyBulkDeleteRollsBackWithoutClockComparison(t *testing.T) 
 
 	before, err := memStore.Create(ctx, &models.Memory{Content: "legacy delete source", Project: newBulkTestProject(t, db), SourceAgent: "test"})
 	require.NoError(t, err)
-	snapshotID := fmt.Sprintf("rollback-legacy-delete-%d", time.Now().UnixNano())
+	snapshotID := "rollback-legacy-delete-" + uuid.NewString()
 	t.Cleanup(func() {
 		_ = db.Unscoped().Delete(&gormdb.Memory{}, "id = ?", before.ID).Error
-		_ = db.Exec("DELETE FROM bulk_op_snapshots WHERE snapshot_id = ?", snapshotID).Error
 	})
 
 	beforeState, err := json.Marshal(map[string]*models.Memory{fmt.Sprintf("%d", before.ID): before})
@@ -273,6 +275,7 @@ func TestRollback_LegacyBulkDeleteRollsBackWithoutClockComparison(t *testing.T) 
 	snap.AffectedMemoryIDs = []int64{before.ID}
 	created, err := snapStore.Create(ctx, snap)
 	require.NoError(t, err)
+	cleanupRollbackSnapshot(t, db, created.SnapshotID)
 
 	require.NoError(t, memStore.Delete(ctx, before.ID))
 	// A database clock earlier than the application-side snapshot timestamp must
@@ -313,9 +316,6 @@ func TestRollback_CandidateReviewPromoteDeletesMemoryAndRestoresPending(t *testi
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_ = db.Exec("DELETE FROM crystallization_candidates WHERE id = ?", candidate.ID).Error
-		_ = db.Exec("DELETE FROM memories WHERE project = ?", candidate.AffectedProjects[0]).Error
-		_ = db.Exec(`DELETE FROM bulk_op_snapshots WHERE snapshot_id LIKE 'rollback-candidate-review-%'`).Error
-		_ = db.Exec(`DELETE FROM audit_log WHERE action = 'rollback' AND actor = 'master'`).Error
 	})
 
 	candidateBefore, err := json.Marshal(candidate)
@@ -329,7 +329,7 @@ func TestRollback_CandidateReviewPromoteDeletesMemoryAndRestoresPending(t *testi
 	require.NoError(t, err)
 
 	snap, err := models.NewBulkOpSnapshot(
-		"rollback-candidate-review-promote-001",
+		"rollback-candidate-review-promote-"+uuid.NewString(),
 		models.SnapshotOpCandidateReviewAction,
 		"master",
 		json.RawMessage(beforeState),
@@ -339,6 +339,7 @@ func TestRollback_CandidateReviewPromoteDeletesMemoryAndRestoresPending(t *testi
 	snap.CreatedAt = time.Now().UTC().Add(-time.Second)
 	createdSnap, err := snapStore.Create(ctx, snap)
 	require.NoError(t, err)
+	cleanupRollbackSnapshot(t, db, createdSnap.SnapshotID)
 
 	updatedCandidate, createdMemory, err := candidateStore.PromoteWithMemory(ctx, candidate.ID, &models.Memory{
 		Content:       candidate.ProposedContent,
@@ -349,6 +350,7 @@ func TestRollback_CandidateReviewPromoteDeletesMemoryAndRestoresPending(t *testi
 		SourceAgent:   "crystallization",
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Exec("DELETE FROM memories WHERE id = ?", createdMemory.ID).Error })
 	require.Equal(t, models.CandidateStatusPromoted, updatedCandidate.Status)
 	require.NotNil(t, updatedCandidate.PromotedMemoryID)
 	require.Equal(t, createdMemory.ID, *updatedCandidate.PromotedMemoryID)
@@ -398,9 +400,6 @@ func TestRollback_CandidateReviewPromoteEditedMemoryConflicts(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_ = db.Exec("DELETE FROM crystallization_candidates WHERE id = ?", candidate.ID).Error
-		_ = db.Exec("DELETE FROM memories WHERE project = ?", candidate.AffectedProjects[0]).Error
-		_ = db.Exec(`DELETE FROM bulk_op_snapshots WHERE snapshot_id LIKE 'rollback-candidate-review-edited-%'`).Error
-		_ = db.Exec(`DELETE FROM audit_log WHERE action IN ('rollback','rollback_attempted_with_conflict') AND actor = 'master'`).Error
 	})
 
 	candidateBefore, err := json.Marshal(candidate)
@@ -414,7 +413,7 @@ func TestRollback_CandidateReviewPromoteEditedMemoryConflicts(t *testing.T) {
 	require.NoError(t, err)
 
 	snap, err := models.NewBulkOpSnapshot(
-		"rollback-candidate-review-edited-001",
+		"rollback-candidate-review-edited-"+uuid.NewString(),
 		models.SnapshotOpCandidateReviewAction,
 		"master",
 		json.RawMessage(beforeState),
@@ -424,6 +423,7 @@ func TestRollback_CandidateReviewPromoteEditedMemoryConflicts(t *testing.T) {
 	snap.CreatedAt = time.Now().UTC().Add(time.Second)
 	createdSnap, err := snapStore.Create(ctx, snap)
 	require.NoError(t, err)
+	cleanupRollbackSnapshot(t, db, createdSnap.SnapshotID)
 
 	updatedCandidate, createdMemory, err := candidateStore.PromoteWithMemory(ctx, candidate.ID, &models.Memory{
 		Content:       candidate.ProposedContent,
@@ -434,6 +434,7 @@ func TestRollback_CandidateReviewPromoteEditedMemoryConflicts(t *testing.T) {
 		SourceAgent:   "crystallization",
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Exec("DELETE FROM memories WHERE id = ?", createdMemory.ID).Error })
 	require.Equal(t, models.CandidateStatusPromoted, updatedCandidate.Status)
 	require.NotNil(t, updatedCandidate.PromotedMemoryID)
 	require.Equal(t, createdMemory.ID, *updatedCandidate.PromotedMemoryID)
@@ -505,7 +506,7 @@ func TestRollback_CandidateReviewRejectAndSupersedeSnapshots(t *testing.T) {
 			})
 			require.NoError(t, err)
 			snapshot, err := models.NewBulkOpSnapshot(
-				fmt.Sprintf("rollback-candidate-transition-%s-%d", test.name, time.Now().UnixNano()),
+				"rollback-candidate-transition-"+uuid.NewString(),
 				models.SnapshotOpCandidateReviewAction,
 				"master",
 				beforeState,
@@ -518,6 +519,7 @@ func TestRollback_CandidateReviewRejectAndSupersedeSnapshots(t *testing.T) {
 				_, snapshot, err = candidates.TransitionToRejectedWithSnapshot(ctx, snapshots, candidate.ID, "not durable", snapshot, "master")
 			}
 			require.NoError(t, err)
+			cleanupRollbackSnapshot(t, db, snapshot.SnapshotID)
 			if test.postEdit {
 				require.NoError(t, db.Exec("UPDATE crystallization_candidates SET proposed_content = ?, updated_at = NOW() WHERE id = ?", "edited after supersede", candidate.ID).Error)
 			}
@@ -553,20 +555,18 @@ func TestRollback_LegacyTokenlessCandidateReviewEditConflicts(t *testing.T) {
 	candidate.PrivacyScope = "project"
 	candidate, err = candidates.Create(ctx, candidate)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Exec("DELETE FROM crystallization_candidates WHERE id = ?", candidate.ID).Error })
 	before, err := json.Marshal(candidate)
 	require.NoError(t, err)
 	beforeState, err := json.Marshal(map[string]models.SnapshotEntry{fmt.Sprintf("candidate:%d", candidate.ID): {Kind: models.EntryKindRestore, Before: before}})
 	require.NoError(t, err)
-	snapshot, err := models.NewBulkOpSnapshot(fmt.Sprintf("legacy-review-reject-%d", time.Now().UnixNano()), models.SnapshotOpCandidateReviewAction, "master", beforeState)
+	snapshot, err := models.NewBulkOpSnapshot("legacy-review-reject-"+uuid.NewString(), models.SnapshotOpCandidateReviewAction, "master", beforeState)
 	require.NoError(t, err)
 	snapshot.Parameters, err = json.Marshal(map[string]any{"action": "reject", "candidate_id": candidate.ID})
 	require.NoError(t, err)
 	snapshot, err = snapshots.Create(ctx, snapshot)
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		_ = db.Exec("DELETE FROM crystallization_candidates WHERE id = ?", candidate.ID).Error
-		_ = db.Exec("DELETE FROM bulk_op_snapshots WHERE snapshot_id = ?", snapshot.SnapshotID).Error
-	})
+	cleanupRollbackSnapshot(t, db, snapshot.SnapshotID)
 	_, err = candidates.TransitionToRejected(ctx, candidate.ID, "legacy rejection")
 	require.NoError(t, err)
 	require.NoError(t, db.Exec("UPDATE crystallization_candidates SET proposed_content = ? WHERE id = ?", "edited after legacy transition", candidate.ID).Error)
@@ -591,7 +591,6 @@ func TestRollback_ConflictDetectedAfterStalePreTransactionRead(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_ = db.Exec("DELETE FROM memories WHERE id = ?", mem.ID).Error
-		_ = db.Exec(`DELETE FROM bulk_op_snapshots WHERE snapshot_id = 'rollback-stale-read-001'`).Error
 	})
 	require.NoError(t, db.Exec(`UPDATE memories SET updated_at = NOW() - INTERVAL '2 seconds' WHERE id = ?`, mem.ID).Error)
 	beforeState, err := json.Marshal(map[string]any{fmt.Sprintf("%d", mem.ID): &models.Memory{
@@ -605,15 +604,17 @@ func TestRollback_ConflictDetectedAfterStalePreTransactionRead(t *testing.T) {
 		Tags:        []string{},
 	}})
 	require.NoError(t, err)
-	snap, err := models.NewBulkOpSnapshot("rollback-stale-read-001", models.SnapshotOpBulkDelete, "master", beforeState)
+	snap, err := models.NewBulkOpSnapshot("rollback-stale-read-"+uuid.NewString(), models.SnapshotOpBulkDelete, "master", beforeState)
 	require.NoError(t, err)
 	snap.AffectedMemoryIDs = []int64{mem.ID}
 	snap.CreatedAt = time.Now().UTC().Add(-time.Second)
 	createdSnap, err := snapStore.Create(ctx, snap)
 	require.NoError(t, err)
+	cleanupRollbackSnapshot(t, db, createdSnap.SnapshotID)
 
 	writer := db.Begin()
 	require.NoError(t, writer.Error)
+	defer writer.Rollback()
 	require.NoError(t, writer.Exec(`UPDATE memories SET content = 'concurrent edit', updated_at = ? WHERE id = ?`, createdSnap.CreatedAt.Add(time.Second), mem.ID).Error)
 
 	type rollbackOutcome struct {
@@ -656,13 +657,10 @@ func TestRollback_LegacyTokenlessPromotionFailsClosedWithoutMemoryProof(t *testi
 	project := newBulkTestProject(t, db)
 	candidate, err := candidates.Create(ctx, &models.CrystallizationCandidate{SourceSessionID: "legacy-tokenless-promote", ProposedContent: "legacy tokenless candidate", ProposedTier: "semantic", ProposedPromotionTarget: "semantic", PrivacyScope: "project", Status: models.CandidateStatusPending, Fingerprint: project, AffectedProjects: []string{project}, Confidence: 0.9, RecurrenceCount: 1})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Exec("DELETE FROM crystallization_candidates WHERE id = ?", candidate.ID).Error })
 	memory, err := memories.Create(ctx, &models.Memory{Content: "legacy promoted memory", Project: project, SourceAgent: "test", Status: "active", Tags: models.JSONStringArray{}})
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		_ = db.Exec("DELETE FROM crystallization_candidates WHERE id = ?", candidate.ID).Error
-		_ = db.Unscoped().Delete(&gormdb.Memory{}, "id = ?", memory.ID).Error
-		_ = db.Exec("DELETE FROM bulk_op_snapshots WHERE source_session_id = ?", "legacy-tokenless-promote").Error
-	})
+	t.Cleanup(func() { _ = db.Unscoped().Delete(&gormdb.Memory{}, "id = ?", memory.ID).Error })
 	before, err := json.Marshal(candidate)
 	require.NoError(t, err)
 	require.NoError(t, db.Exec("UPDATE crystallization_candidates SET status = ?, promoted_memory_id = ? WHERE id = ?", models.CandidateStatusPromoted, memory.ID, candidate.ID).Error)
@@ -671,13 +669,14 @@ func TestRollback_LegacyTokenlessPromotionFailsClosedWithoutMemoryProof(t *testi
 		fmt.Sprintf("memory:%d", memory.ID):       {Kind: models.EntryKindDelete},
 	})
 	require.NoError(t, err)
-	snapshot, err := models.NewBulkOpSnapshot(fmt.Sprintf("legacy-tokenless-promote-%d", time.Now().UnixNano()), models.SnapshotOpBulkPromote, "master", beforeState)
+	snapshot, err := models.NewBulkOpSnapshot("legacy-tokenless-promote-"+uuid.NewString(), models.SnapshotOpBulkPromote, "master", beforeState)
 	require.NoError(t, err)
 	snapshot.SourceSessionID = "legacy-tokenless-promote"
 	snapshot.Parameters = json.RawMessage(fmt.Sprintf(`{"candidate_ids":[%d]}`, candidate.ID))
 	snapshot.AffectedMemoryIDs = []int64{memory.ID}
 	created, err := snapshots.Create(ctx, snapshot)
 	require.NoError(t, err)
+	cleanupRollbackSnapshot(t, db, created.SnapshotID)
 	result, err := Rollback(ctx, adminIdentity(), created.SnapshotID, snapshots, memories, gormdb.NewAuditStore(db), candidates)
 	require.ErrorIs(t, err, ErrRollbackConflict)
 	require.Equal(t, []int64{memory.ID}, result.ConflictIDs)
@@ -709,13 +708,10 @@ func TestRollback_MissingPromotedMemoryIsAnIdempotentDelete(t *testing.T) {
 		RecurrenceCount:         1,
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Exec("DELETE FROM crystallization_candidates WHERE id = ?", candidate.ID).Error })
 	memory, err := memories.Create(ctx, &models.Memory{Content: "already removed promoted memory", Project: project, SourceAgent: "test", Status: "active", Tags: models.JSONStringArray{}})
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		_ = db.Exec("DELETE FROM crystallization_candidates WHERE id = ?", candidate.ID).Error
-		_ = db.Unscoped().Delete(&gormdb.Memory{}, "id = ?", memory.ID).Error
-		_ = db.Exec("DELETE FROM bulk_op_snapshots WHERE source_session_id = ?", "missing-promoted-memory").Error
-	})
+	t.Cleanup(func() { _ = db.Unscoped().Delete(&gormdb.Memory{}, "id = ?", memory.ID).Error })
 
 	before, err := json.Marshal(candidate)
 	require.NoError(t, err)
@@ -733,13 +729,14 @@ func TestRollback_MissingPromotedMemoryIsAnIdempotentDelete(t *testing.T) {
 		fmt.Sprintf("memory:%d", memory.ID):       {Kind: models.EntryKindDelete, PostStateToken: memoryToken},
 	})
 	require.NoError(t, err)
-	snapshot, err := models.NewBulkOpSnapshot(fmt.Sprintf("missing-promoted-memory-%d", time.Now().UnixNano()), models.SnapshotOpBulkPromote, "master", beforeState)
+	snapshot, err := models.NewBulkOpSnapshot("missing-promoted-memory-"+uuid.NewString(), models.SnapshotOpBulkPromote, "master", beforeState)
 	require.NoError(t, err)
 	snapshot.SourceSessionID = "missing-promoted-memory"
 	snapshot.Parameters = json.RawMessage(fmt.Sprintf(`{"candidate_ids":[%d]}`, candidate.ID))
 	snapshot.AffectedMemoryIDs = []int64{memory.ID}
 	created, err := snapshots.Create(ctx, snapshot)
 	require.NoError(t, err)
+	cleanupRollbackSnapshot(t, db, created.SnapshotID)
 	require.NoError(t, db.Exec("DELETE FROM memories WHERE id = ?", memory.ID).Error)
 	orphaned, err := candidates.Get(ctx, candidate.ID)
 	require.NoError(t, err)
@@ -774,6 +771,7 @@ func TestRollback_LegacyUnprefixedPromotionCollisionFailsClosed(t *testing.T) {
 		RecurrenceCount:         1,
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Exec("DELETE FROM crystallization_candidates WHERE id = ?", candidate.ID).Error })
 	row := &gormdb.Memory{
 		ID:          candidate.ID,
 		Content:     "memory must remain untouched",
@@ -783,22 +781,19 @@ func TestRollback_LegacyUnprefixedPromotionCollisionFailsClosed(t *testing.T) {
 		Tags:        models.JSONStringArray{},
 	}
 	require.NoError(t, db.Create(row).Error)
+	t.Cleanup(func() { _ = db.Exec("DELETE FROM memories WHERE id = ?", row.ID).Error })
 	memory, err := memStore.Get(ctx, candidate.ID)
 	require.NoError(t, err)
 	require.Equal(t, candidate.ID, memory.ID, "fixture requires equal candidate and memory IDs")
 
-	snapshotID := fmt.Sprintf("rollback-legacy-collision-%d", time.Now().UnixNano())
-	t.Cleanup(func() {
-		_ = db.Exec("DELETE FROM bulk_op_snapshots WHERE snapshot_id = ?", snapshotID).Error
-		_ = db.Exec("DELETE FROM memories WHERE id = ?", memory.ID).Error
-		_ = db.Exec("DELETE FROM crystallization_candidates WHERE id = ?", candidate.ID).Error
-	})
+	snapshotID := "rollback-legacy-collision-" + uuid.NewString()
 	before, err := json.Marshal(candidate)
 	require.NoError(t, err)
 	snap, err := models.NewBulkOpSnapshot(snapshotID, models.SnapshotOpBulkPromote, "master", json.RawMessage(fmt.Sprintf(`{"%d":%s}`, candidate.ID, before)))
 	require.NoError(t, err)
 	created, err := snapStore.Create(ctx, snap)
 	require.NoError(t, err)
+	cleanupRollbackSnapshot(t, db, created.SnapshotID)
 
 	result, err := Rollback(ctx, adminIdentity(), created.SnapshotID, snapStore, memStore, gormdb.NewAuditStore(db), candidateStore)
 	require.ErrorIs(t, err, ErrLegacySnapshotAmbiguous)
@@ -824,13 +819,12 @@ func TestRollback_LegacyPromotionParametersIgnoreUnrelatedEqualMemoryID(t *testi
 	ctx := context.Background()
 	candidate, err := candidates.Create(ctx, &models.CrystallizationCandidate{SourceSessionID: "legacy-parameter", ProposedContent: "parameter-owned candidate", ProposedTier: "semantic", ProposedPromotionTarget: "semantic", PrivacyScope: "project", Status: models.CandidateStatusPending, Fingerprint: fmt.Sprintf("legacy-parameter-%d", time.Now().UnixNano()), AffectedProjects: []string{newBulkTestProject(t, db)}, Confidence: 0.9, RecurrenceCount: 1})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Exec("DELETE FROM crystallization_candidates WHERE id = ?", candidate.ID).Error })
 	promotedID := candidate.ID + 1000
 	require.NoError(t, db.Create(&gormdb.Memory{ID: candidate.ID, Content: "unrelated equal id", Project: candidate.AffectedProjects[0], SourceAgent: "test", Status: "active", Tags: models.JSONStringArray{}}).Error)
+	t.Cleanup(func() { _ = db.Unscoped().Delete(&gormdb.Memory{}, "id = ?", candidate.ID).Error })
 	require.NoError(t, db.Create(&gormdb.Memory{ID: promotedID, Content: "promoted memory", Project: candidate.AffectedProjects[0], SourceAgent: "test", Status: "active", Tags: models.JSONStringArray{}}).Error)
-	t.Cleanup(func() {
-		_ = db.Exec("DELETE FROM crystallization_candidates WHERE id = ?", candidate.ID).Error
-		_ = db.Unscoped().Delete(&gormdb.Memory{}, "id IN ?", []int64{candidate.ID, promotedID}).Error
-	})
+	t.Cleanup(func() { _ = db.Unscoped().Delete(&gormdb.Memory{}, "id = ?", promotedID).Error })
 
 	before, err := json.Marshal(candidate)
 	require.NoError(t, err)
@@ -845,13 +839,14 @@ func TestRollback_LegacyPromotionParametersIgnoreUnrelatedEqualMemoryID(t *testi
 	require.NoError(t, err)
 	parameters, err := json.Marshal(map[string]any{"candidate_id": candidate.ID})
 	require.NoError(t, err)
-	snapshotID := fmt.Sprintf("legacy-parameter-%d", time.Now().UnixNano())
+	snapshotID := "legacy-parameter-" + uuid.NewString()
 	snap, err := models.NewBulkOpSnapshot(snapshotID, models.SnapshotOpBulkPromote, "master", beforeState)
 	require.NoError(t, err)
 	snap.Parameters = parameters
 	snap.AffectedMemoryIDs = []int64{promotedID}
 	created, err := snapshots.Create(ctx, snap)
 	require.NoError(t, err)
+	cleanupRollbackSnapshot(t, db, created.SnapshotID)
 	require.NoError(t, db.Exec("UPDATE crystallization_candidates SET status = ?, promoted_memory_id = ? WHERE id = ?", models.CandidateStatusPromoted, promotedID, candidate.ID).Error)
 
 	result, err := Rollback(ctx, adminIdentity(), created.SnapshotID, snapshots, memories, gormdb.NewAuditStore(db), candidates)
@@ -873,11 +868,9 @@ func TestRollback_PrefixedPromotionSameIDReturnsTypedConflicts(t *testing.T) {
 	ctx := context.Background()
 	candidate, err := candidates.Create(ctx, &models.CrystallizationCandidate{SourceSessionID: "prefixed-same-id", ProposedContent: "prefixed candidate", ProposedTier: "semantic", ProposedPromotionTarget: "semantic", PrivacyScope: "project", Status: models.CandidateStatusPending, Fingerprint: fmt.Sprintf("prefixed-same-id-%d", time.Now().UnixNano()), AffectedProjects: []string{newBulkTestProject(t, db)}, Confidence: 0.9, RecurrenceCount: 1})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Exec("DELETE FROM crystallization_candidates WHERE id = ?", candidate.ID).Error })
 	require.NoError(t, db.Create(&gormdb.Memory{ID: candidate.ID, Content: "prefixed promoted memory", Project: candidate.AffectedProjects[0], SourceAgent: "test", Status: "active", Tags: models.JSONStringArray{}}).Error)
-	t.Cleanup(func() {
-		_ = db.Exec("DELETE FROM crystallization_candidates WHERE id = ?", candidate.ID).Error
-		_ = db.Unscoped().Delete(&gormdb.Memory{}, "id = ?", candidate.ID).Error
-	})
+	t.Cleanup(func() { _ = db.Unscoped().Delete(&gormdb.Memory{}, "id = ?", candidate.ID).Error })
 	before, err := json.Marshal(candidate)
 	require.NoError(t, err)
 	require.NoError(t, db.Exec("UPDATE crystallization_candidates SET status = ?, promoted_memory_id = ? WHERE id = ?", models.CandidateStatusPromoted, candidate.ID, candidate.ID).Error)
@@ -894,12 +887,13 @@ func TestRollback_PrefixedPromotionSameIDReturnsTypedConflicts(t *testing.T) {
 		fmt.Sprintf("memory:%d", candidate.ID):    {Kind: models.EntryKindDelete, PostStateToken: promotedToken},
 	})
 	require.NoError(t, err)
-	snap, err := models.NewBulkOpSnapshot(fmt.Sprintf("prefixed-same-id-%d", time.Now().UnixNano()), models.SnapshotOpBulkPromote, "master", beforeState)
+	snap, err := models.NewBulkOpSnapshot("prefixed-same-id-"+uuid.NewString(), models.SnapshotOpBulkPromote, "master", beforeState)
 	require.NoError(t, err)
 	snap.Parameters = json.RawMessage(fmt.Sprintf(`{"candidate_ids":[%d]}`, candidate.ID))
 	snap.AffectedMemoryIDs = []int64{candidate.ID}
 	created, err := snapshots.Create(ctx, snap)
 	require.NoError(t, err)
+	cleanupRollbackSnapshot(t, db, created.SnapshotID)
 
 	require.NoError(t, db.Exec("UPDATE crystallization_candidates SET proposed_content = ? WHERE id = ?", "edited candidate", candidate.ID).Error)
 	require.NoError(t, db.Exec("UPDATE memories SET content = ? WHERE id = ?", "edited memory", candidate.ID).Error)
@@ -917,23 +911,22 @@ func TestRollback_LegacyPromotionParametersSameIDCollisionFailsClosed(t *testing
 	ctx := context.Background()
 	candidate, err := candidates.Create(ctx, &models.CrystallizationCandidate{SourceSessionID: "legacy-parameter-collision", ProposedContent: "candidate remains promoted", ProposedTier: "semantic", ProposedPromotionTarget: "semantic", PrivacyScope: "project", Status: models.CandidateStatusPending, Fingerprint: fmt.Sprintf("legacy-parameter-collision-%d", time.Now().UnixNano()), AffectedProjects: []string{newBulkTestProject(t, db)}, Confidence: 0.9, RecurrenceCount: 1})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Exec("DELETE FROM crystallization_candidates WHERE id = ?", candidate.ID).Error })
 	row := &gormdb.Memory{ID: candidate.ID, Content: "promoted memory remains", Project: candidate.AffectedProjects[0], SourceAgent: "test", Status: "active", Tags: models.JSONStringArray{}}
 	require.NoError(t, db.Create(row).Error)
-	t.Cleanup(func() {
-		_ = db.Exec("DELETE FROM crystallization_candidates WHERE id = ?", candidate.ID).Error
-		_ = db.Unscoped().Delete(&gormdb.Memory{}, "id = ?", candidate.ID).Error
-	})
+	t.Cleanup(func() { _ = db.Unscoped().Delete(&gormdb.Memory{}, "id = ?", candidate.ID).Error })
 	before, err := json.Marshal(candidate)
 	require.NoError(t, err)
 	parameters, err := json.Marshal(map[string]any{"candidate_ids": []int64{candidate.ID}})
 	require.NoError(t, err)
-	snapshotID := fmt.Sprintf("legacy-parameter-collision-%d", time.Now().UnixNano())
+	snapshotID := "legacy-parameter-collision-" + uuid.NewString()
 	snap, err := models.NewBulkOpSnapshot(snapshotID, models.SnapshotOpBulkPromote, "master", json.RawMessage(fmt.Sprintf(`{"%d":%s}`, candidate.ID, before)))
 	require.NoError(t, err)
 	snap.Parameters = parameters
 	snap.AffectedMemoryIDs = []int64{candidate.ID}
 	created, err := snapshots.Create(ctx, snap)
 	require.NoError(t, err)
+	cleanupRollbackSnapshot(t, db, created.SnapshotID)
 	require.NoError(t, db.Exec("UPDATE crystallization_candidates SET status = ?, promoted_memory_id = ? WHERE id = ?", models.CandidateStatusPromoted, candidate.ID, candidate.ID).Error)
 
 	result, err := Rollback(ctx, adminIdentity(), created.SnapshotID, snapshots, memories, gormdb.NewAuditStore(db), candidates)
@@ -957,12 +950,13 @@ func TestRollback_LegacyPromotionMissingPromotedMemoryEntryFailsClosed(t *testin
 	t.Cleanup(func() { _ = db.Exec("DELETE FROM crystallization_candidates WHERE id = ?", candidate.ID).Error })
 	before, err := json.Marshal(candidate)
 	require.NoError(t, err)
-	snap, err := models.NewBulkOpSnapshot(fmt.Sprintf("legacy-missing-memory-%d", time.Now().UnixNano()), models.SnapshotOpBulkPromote, "master", json.RawMessage(fmt.Sprintf(`{"%d":%s}`, candidate.ID, before)))
+	snap, err := models.NewBulkOpSnapshot("legacy-missing-memory-"+uuid.NewString(), models.SnapshotOpBulkPromote, "master", json.RawMessage(fmt.Sprintf(`{"%d":%s}`, candidate.ID, before)))
 	require.NoError(t, err)
 	snap.Parameters = json.RawMessage(fmt.Sprintf(`{"candidate_ids":[%d]}`, candidate.ID))
 	snap.AffectedMemoryIDs = []int64{candidate.ID + 1000}
 	created, err := snapshots.Create(context.Background(), snap)
 	require.NoError(t, err)
+	cleanupRollbackSnapshot(t, db, created.SnapshotID)
 
 	result, err := Rollback(context.Background(), adminIdentity(), created.SnapshotID, snapshots, memories, gormdb.NewAuditStore(db), candidates)
 	require.ErrorIs(t, err, ErrLegacySnapshotAmbiguous)
