@@ -238,9 +238,12 @@ func TestUCIInstalledAcceptanceRefusesNonTestPostgresBeforeMaterialization(t *te
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	_, err := runUCIInstalledAcceptance(ctx, request)
+	result, err := runUCIInstalledAcceptance(ctx, request)
 	if !errors.Is(err, errUCIInstalledAcceptanceNonTestPostgres) {
 		t.Fatal("installed acceptance accepted or failed to identify a non-test PostgreSQL target")
+	}
+	if result.Cleanup != (uciInstalledAcceptanceCleanup{}) {
+		t.Fatalf("non-test database reached runtime cleanup: %#v", result.Cleanup)
 	}
 }
 
