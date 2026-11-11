@@ -63,7 +63,9 @@ func TestFatalStartupFlush(t *testing.T) {
 	defer server.Stop()
 
 	home := t.TempDir()
-	cmd := exec.Command(os.Args[0], "-test.run=^TestFatalStartupFlush$")
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestFatalStartupFlush$")
 	cmd.Env = append(os.Environ(),
 		"ENGRAM_FATAL_FLUSH_CHILD=1",
 		"ENGRAM_AUTH_ADMIN_TOKEN=",
@@ -77,6 +79,9 @@ func TestFatalStartupFlush(t *testing.T) {
 	)
 	started := time.Now()
 	output, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		t.Fatalf("fatal startup flush did not finish before deadline: %v", ctx.Err())
+	}
 	if err == nil {
 		t.Fatal("fatal startup child unexpectedly exited successfully")
 	}
