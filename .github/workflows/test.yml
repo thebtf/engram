@@ -113,6 +113,26 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Credential store tests on disposable PostgreSQL
+        if: runner.os == 'Linux' && needs.classify.outputs.prose_only != 'true'
+        shell: bash
+        env:
+          ENGRAM_TEST_DOCKER_MIGRATIONS: "1"
+        run: |
+          set -euo pipefail
+          go test -json -count=1 -timeout=10m ./internal/db/gorm -run '^(TestCredentialStore_CreateGetCountDelete|TestCredentialStore_GlobalAndProjectSameNameCoexist|TestCredentialStore_FingerprintMismatchIsReadOnly|TestCredentialStore_Create_ValidationErrors)$' | tee "$RUNNER_TEMP/credential-store-tests.jsonl"
+          jq -s -e '
+            ["TestCredentialStore_CreateGetCountDelete", "TestCredentialStore_GlobalAndProjectSameNameCoexist", "TestCredentialStore_FingerprintMismatchIsReadOnly", "TestCredentialStore_Create_ValidationErrors"] as $expected |
+            . as $events |
+            "github.com/thebtf/engram/internal/db/gorm" as $package |
+            all($expected[]; . as $name |
+              any($events[]; .Package == $package and .Test == $name and .Action == "run") and
+              any($events[]; .Package == $package and .Test == $name and .Action == "pass") and
+              (any($events[]; .Package == $package and ((.Test // "") | . == $name or startswith($name + "/")) and (.Action == "skip" or .Action == "fail")) | not)
+            ) and
+            any($events[]; .Package == $package and (.Test // "") == "" and .Action == "pass")
+          ' "$RUNNER_TEMP/credential-store-tests.jsonl"
+
       - name: Build
         if: needs.classify.outputs.prose_only != 'true'
         run: go build ./...
